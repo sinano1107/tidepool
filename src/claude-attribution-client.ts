@@ -87,8 +87,9 @@ const responseFields = (
   "never answer agent_definition when agent_definition is null; workspace_document is when a document " +
   "placed in the task's workspace (AGENTS.md, a README) was itself wrong and the worker followed " +
   `it — name it only when ${w.cites} that document; ` +
-  // ADR 0325 決定3: skill は呼び出しで注入される文面で、持ち主は scope の欄で引く —— board_text と同じ型。名指しの門は置かない
-  `a skill is text the CLI the worker ran in gave it when it invoked the skill — ${f.skills_followed}, and ${f.skills}: ` +
+  // ADR 0325 決定3: skill は呼び出しで注入される文面で、持ち主は scope の欄で引く —— board_text と同じ型。名指しの門は置かない。
+  // ADR 0337 決定4: Codex では本文は注入でなく worker が読んだ文面なので、Harness に依らない言い方にする
+  `a skill is text the worker received when it used the skill, whether its CLI supplied it or the worker read the skill's file — ${f.skills_followed}, and ${f.skills}: ` +
   "following a skill in skills_followed as written is environment when its name is in skills.host and workspace_document when it is in " +
   "skills.workspace, while misreading the skill's text is capability; skills and skills_followed are null when the session's record " +
   "could not be read: judge from the rest; use uncertain when the evidence does " +

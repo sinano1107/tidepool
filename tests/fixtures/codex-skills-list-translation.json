@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "cwd": "/board/fixture/ws/T",
+      "skills": [
+        { "name": "flat", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/flat/SKILL.md", "scope": "repo", "enabled": false },
+        { "name": "inner", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/pack/inner/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "linked", "description": "d", "path": "/board/fixture/ws/T/vendor/linked/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "outside-link", "description": "d", "path": "/board/fixture/elsewhere/outside-link/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "via-dir-link", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/via-dir-link/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "gone", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/gone/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "ancestor", "description": "d", "path": "/board/fixture/ws/.agents/skills/ancestor/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "home-skill", "description": "d", "path": "/board/fixture/home/.agents/skills/home-skill/SKILL.md", "scope": "user", "enabled": true },
+        { "name": "shared", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/shared/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "dupname", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/dup-a/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "dupname", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/dup-b/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "odd", "description": "d", "path": "/board/fixture/odd/SKILL.md", "scope": "admin", "enabled": true },
+        { "name": "shared", "description": "d", "path": "/board/fixture/codex-home/skills/.system/shared/SKILL.md", "scope": "system", "enabled": true },
+        { "name": "skill-creator", "description": "d", "path": "/board/fixture/codex-home/skills/.system/skill-creator/SKILL.md", "scope": "system", "enabled": false }
+      ],
+      "errors": []
+    }
+  ]
+}

@@ -245,6 +245,7 @@ describe("loadRegistry", () => {
     expect(agent.provider).toEqual([
       { name: "anthropic", advisor: false },
       { name: "moonshot", advisor: false },
+      { name: "openai", advisor: false },
     ]);
     expect(registry.agents.crab!.unknownFields).toEqual(["provider.advisors"]);
     expect(loadRegistry(await makeRegistry(), "purely-local").agents.deckhand!.unknownFields).toEqual([]);
@@ -289,16 +290,6 @@ describe("loadRegistry", () => {
   });
 
   // ADR 0116 決定1: 省略の展開は agent の skills 宣言を読む —— parse が skills を渡す
-  it("frontmatter の provider の省略は skills を満たす経路の Provider に advisor なしで展開される(ADR 0116 決定1)", async () => {
-    const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
-    });
-    expect(loadRegistry(dir, "purely-local").agents.deckhand!.provider).toEqual([
-      { name: "anthropic", advisor: false },
-      { name: "moonshot", advisor: false },
-    ]);
-  });
-
   it("frontmatter の provider は entry の配列でもよく、advisor は entry ごとに書く(ADR 0116 決定2)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider:\n  - name: anthropic\n    advisor: true\n  - openai\n---\nYou are Deckhand.\n`,

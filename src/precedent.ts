@@ -106,10 +106,11 @@ export interface SubagentUsage {
   duration_ms: number;
 }
 
-/** skill の呼び出し1回(ADR 0325 決定3)。本文は写さず、harness が本文を渡した合成 user 行の参照だけを持つ —— その行が無い呼び出し
- *  (subagent の呼び出しは親の stream に本文の行を出さない、固定版 2.1.286 の実測)は null。 */
+/** skill の呼び出し1回(ADR 0325 決定3)。本文は写さず、本文を持つ行の参照だけを持つ —— Claude は harness が本文を渡した合成 user 行で、
+ *  その行が無い呼び出し(subagent の呼び出しは親の stream に本文の行を出さない、固定版 2.1.286 の実測)は null。Codex は許した path を
+ *  読んだ `command_execution` の完了行の item id(ADR 0337 決定4)。 */
 export interface SkillCall {
-  /** `Skill` の行動行の位置(`EpisodeAction.index`)。 */
+  /** `Skill` の行動行(Codex は `command_execution` の行動行)の位置(`EpisodeAction.index`)。 */
   position: number;
   name: string;
   transcriptUuid: string | null;
@@ -183,7 +184,7 @@ export interface Episode {
    *  Episode にもトークンは写さない(ADR 0083 追記 2)。 */
   workerExitedEventId: number | null;
   lines: EpisodeLineStats;
-  /** worker が見た skill の集合 —— Claude は init 行の `skills`、Codex は空(ADR 0325 決定2・6)。 */
+  /** worker が見た skill の集合 —— Claude は init 行の `skills`(ADR 0325 決定2)、Codex は spawn 記録の `permitted`(ADR 0337 決定4)。 */
   skillsSeen: string[];
   skillCalls: SkillCall[];
   /** tool 呼び出し 0 件かつ未知行あり = この transcript は読めていない。
@@ -374,9 +375,11 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
 /** `codex exec --json` の stdout の行の読み手(ADR 0083 追記10)。構造マーカーは持たない —— compaction は stdout に
  *  出ず、commit の専用 item は無く、advisor は Codex に無い。subagent の中の行動は親 stdout に出ないので
  *  `subagent` は常に false。CLI の版は stdout に無く、`worker_spawned` の固定版の値を刻む。 */
-function readCodexLines(transcriptLines: string[], cliVersion: string): LineReading {
-  const reading = { ...emptyReading(), cliVersion };
+function readCodexLines(transcriptLines: string[], spawned: Extract<EventPayload, { kind: "worker_spawned" }>): LineReading {
+  // ADR 0337 決定4: init 行相当は無いので、見た集合は spawn 記録の許可(同じ spawn 設定を当てた観測で確かめた集合)
+  const reading = { ...emptyReading(), cliVersion: spawned.cli_version, skillsSeen: spawned.skills.permitted };
   const { actions, lines } = reading;
+  const paths = Object.entries(spawned.skills.paths ?? {});
   for (const line of transcriptLines) {
     if (!line.trim()) continue;
     lines.total += 1;
@@ -416,6 +419,13 @@ function readCodexLines(transcriptLines: string[], cliVersion: string): LineRead
     };
     actions.push(action);
     bindEventId(reading, action, (item.result as { content?: unknown } | null)?.content, id);
+    // ADR 0337 決定4: 従った skill は許した path を command に含む完了・exit 0 の command_execution —— 結ぶ鍵は記録の path だけ
+    if (itemType === "command_execution" && item.status === "completed" && item.exit_code === 0 && typeof item.command === "string") {
+      const command = item.command;
+      for (const [name, path] of paths) {
+        if (command.includes(path)) reading.skillCalls.push({ position: action.index, name, transcriptUuid: id, subagent: false });
+      }
+    }
   }
   return reading;
 }
@@ -430,7 +440,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
   }
   const { actions, markers, loggedAt, pulledAt, wroteAt, lines, cliVersion, skillsSeen, skillCalls } =
     spawned.payload.harness === "codex"
-      ? readCodexLines(input.transcriptLines, spawned.payload.cli_version)
+      ? readCodexLines(input.transcriptLines, spawned.payload)
       : readClaudeLines(input.transcriptLines);
 
   // anchor が spawn 自身なら sessionOf はその session を返す(窓の外になりえない)
@@ -534,7 +544,7 @@ const WRITE_TOOL = new RegExp(
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "8";
+export const EXTRACTOR_VERSION = "9";
 
 /** 投影待ちの session(issue #2570): transcript を開いた時点から、その投影が決着する(行を書いた・書かなかった・throw した)まで立つ印。
  *  停止の帰責の門はこの間開かない。開いた書き込みストリームはこのプロセスにしか無いので in-memory —— 再起動で消えてよい。
@@ -682,7 +692,8 @@ function pullsBefore(
 }
 
 /** 判事と self RCA に渡す、従った skill 1つ(ADR 0325 決定3)。`position` が null = 異議された行を行動列に置けず、呼び出しを全部渡した印。
- *  `text` は harness が渡した本文(`Base directory` の見出しを除く —— path はベンダーの綴り)で、transcript に無ければ null。 */
+ *  `text` は Claude では harness が渡した本文(`Base directory` の見出しを除く —— path はベンダーの綴り)、Codex では worker が読んだ行の
+ *  `aggregated_output`(ADR 0337 決定4)で、transcript に無ければ null。 */
 export interface FollowedSkill {
   name: string;
   position: number | null;
@@ -709,6 +720,9 @@ export function skillsFollowed(episode: Pick<Episode, "skillCalls" | "markers">,
     const parsed = parseStreamLine(line);
     const text = (parsed?.message as { content?: Array<{ text?: unknown }> } | undefined)?.content?.[0]?.text;
     if (parsed?.isSynthetic === true && typeof parsed.uuid === "string" && typeof text === "string") texts.set(parsed.uuid, text.replace(/^Base directory for this skill: [^\n]*\n\n/, ""));
+    // ADR 0337 決定4: Codex の本文は worker が読んだその行の出力
+    const item = parsed?.type === "item.completed" ? (parsed.item as { type?: unknown; id?: unknown; aggregated_output?: unknown } | undefined) : undefined;
+    if (item?.type === "command_execution" && typeof item.id === "string" && typeof item.aggregated_output === "string") texts.set(item.id, item.aggregated_output);
   }
   return episode.skillCalls
     .filter((c) => cut === null || c.position < cut)

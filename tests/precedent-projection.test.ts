@@ -505,12 +505,63 @@ it("従った skill の本文は Base directory の見出しを除いた合成�
   ]);
 });
 
-it("worker が見た skill の集合は init 行の skills で、Codex の Episode は空(ADR 0325 決定2・6)", () => {
+it("Claude の worker が見た skill の集合は init 行の skills(ADR 0325 決定2)", () => {
   expect(projectSkills().skillsSeen).toEqual([
     "wsbar", "deep-research", "design", "design-sync", "dataviz", "update-config", "verify", "debug", "code-review", "simplify",
     "batch", "fewer-permission-prompts", "doctor", "loop", "schedule", "claude-api", "workflow-authoring", "run", "run-skill-generator", "plugin-authoring",
   ]);
-  expect(projectCodex()).toMatchObject({ skillsSeen: [], skillCalls: [] });
+});
+
+// #2689 の実測(Codex 0.163.0、2026-11-01)の行の形: worker は許した SKILL.md を `command_execution` の `cat` で絶対 path のまま読み、
+// 本文は `item.completed` の `aggregated_output` に逐語で残る。同じ path を開いた後の `python3` の行(exit 0)も完了行で、ADR 0337
+// 決定4 の照合はこれも数える。`.system` の read 行が無い run の `cat` は failed / exit 1、`find … -path '*/x/SKILL.md'` は path の全体を
+// 含まない。`$名前` の mention は stdout に何も残さない(#2813)ので行が無い。
+const CODEX_WS_SKILL = "/home/u/ws2817/.agents/skills/secret-word/SKILL.md";
+const CODEX_SYSTEM_SKILL = "/home/u/.tidepool/codex/skills/.system/skill-creator/SKILL.md";
+const SECRET_WORD_BODY = "---\nname: secret-word\ndescription: d\n---\nThe answer is PINEAPPLE-2689.\n";
+const commandRow = (type: "item.started" | "item.completed", id: string, command: string, aggregated_output: string, exit_code: number | null, status: string) =>
+  JSON.stringify({ type, item: { id, type: "command_execution", command, aggregated_output, exit_code, status } });
+const codexSkillSession = () => [
+  '{"type":"thread.started","thread_id":"th"}',
+  '{"type":"turn.started"}',
+  commandRow("item.started", "item_1", `/bin/bash -lc 'cat ${CODEX_WS_SKILL}'`, "", null, "in_progress"),
+  commandRow("item.completed", "item_1", `/bin/bash -lc 'cat ${CODEX_WS_SKILL}'`, SECRET_WORD_BODY, 0, "completed"),
+  commandRow("item.completed", "item_3", `/bin/bash -lc "python3 -c 'print(open(\\"${CODEX_WS_SKILL}\\").read()[:9])'"`, "---\nname:", 0, "completed"),
+  commandRow("item.completed", "item_4", `/bin/bash -lc 'cat ${CODEX_SYSTEM_SKILL}'`, "cat: No such file or directory", 1, "failed"),
+  commandRow("item.completed", "item_5", "/bin/bash -lc \"find / -path '*/skill-creator/SKILL.md'\"", "", 0, "completed"),
+  '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}',
+];
+const codexSkillEvents = (skills: Extract<EventRow["payload"], { kind: "worker_spawned" }>["skills"]): EventRow[] => [
+  { id: 1, task_id: "t2817", actor_id: "codex-agent", origin: "board", kind: "worker_spawned", payload: { ...WORKER_SPAWNED, harness: "codex", cli_version: "codex-cli 0.163.0", skills }, created_at: "2026-11-01T00:00:00.000Z" },
+];
+const CODEX_SKILLS = {
+  workspace: ["secret-word"],
+  host: ["skill-creator"],
+  permitted: ["secret-word", "skill-creator"],
+  paths: { "secret-word": CODEX_WS_SKILL, "skill-creator": CODEX_SYSTEM_SKILL },
+};
+
+it("Codex の Episode の見た集合は spawn 記録の permitted で、従った skill は許した path を command に含む command_execution の完了・exit 0 の行 —— item.started・失敗行・path の一部だけの行は数えない(ADR 0337 決定4)", () => {
+  const lines = codexSkillSession();
+  const episode = projectEpisode({ transcriptLines: lines, events: codexSkillEvents(CODEX_SKILLS), workerSpawnedEventId: 1, extractorVersion: "test" });
+
+  expect(episode.skillsSeen).toEqual(["secret-word", "skill-creator"]);
+  expect(episode.skillCalls).toEqual([
+    { position: 0, name: "secret-word", transcriptUuid: "item_1", subagent: false },
+    { position: 1, name: "secret-word", transcriptUuid: "item_3", subagent: false },
+  ]);
+  // 本文は写さず行の参照を持ち、判事の skills_followed はその行の aggregated_output を逐語で読む
+  expect(skillsFollowed(episode, lines, { id: 0, kind: "task_completed" })).toEqual([
+    { name: "secret-word", position: 0, text: SECRET_WORD_BODY },
+    { name: "secret-word", position: 1, text: "---\nname:" },
+  ]);
+});
+
+it("paths を持たない Codex の spawn 記録(Codex の翻訳より前の記録)は表を空として読み、従った skill を結ばない(ADR 0337 決定2)", () => {
+  const { paths: _, ...old } = CODEX_SKILLS;
+  const episode = projectEpisode({ transcriptLines: codexSkillSession(), events: codexSkillEvents(old), workerSpawnedEventId: 1, extractorVersion: "test" });
+
+  expect(episode).toMatchObject({ skillsSeen: ["secret-word", "skill-creator"], skillCalls: [] });
 });
 
 it("Skill の結果と組まない合成行(compaction の後の要約)と失敗した Skill は呼び出しに数えない(ADR 0325 決定3)", () => {

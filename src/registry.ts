@@ -35,9 +35,9 @@ export interface AgentDefinition {
    *  **正規化された entry の配列**であり、agent.md 側の3つの綴り(省略 / 単一
    *  文字列 / 配列)は `normalizeProviderEntries` が1つのこの形へ畳む —— 読み手
    *  (selector・門・spawn)が綴りの分岐を持たないための正規形である。
-   *  省略の意味は「盤面が知る Provider のうち、正準経路がこの agent の宣言
-   *  (`skills`)を満たすものを advisor なしの床の構成で」(ADR 0116 決定1)で、
-   *  ADR 0097 決定1 の「必須」は ADR 0110 決定1 で撤回された。
+   *  省略の意味は「盤面が知る Provider 全部を advisor なしの床の構成で」
+   *  (ADR 0116 決定1、ADR 0337 決定1 の縮約)で、ADR 0097 決定1 の「必須」は
+   *  ADR 0110 決定1 で撤回された。
    *
    *  値の列挙と検証は registry 側(`PROVIDER_VALUES` / `assertValidAgentDefinition`)、
    *  値が意味するもの(エンドポイント・env 名・モデル表記)はアダプタ側の定数
@@ -180,21 +180,14 @@ export interface AgentProviderEntry {
  *  parse が同じこの1本を通る** —— 2箇所で畳めば、フォームから来た定義と手で
  *  commit された定義が別の形になり、門が別々の判定に至る。
  *
- *  - 省略 → 盤面が知る Provider(`PROVIDER_VALUES` の宣言順)のうち、正準経路が
- *    `skills` を満たすものを advisor なしの床の構成で(ADR 0116 決定1)。適合0なら
- *    空の列になり、門が「宣言を満たす経路が無い」として拒む
+ *  - 省略 → 盤面が知る Provider 全部(`PROVIDER_VALUES` の宣言順)を advisor なしの床の構成で
+ *    (ADR 0116 決定1 / ADR 0337 決定1: skill の提供は経路の能力ではない)
  *  - 単一文字列 → advisor なしの長さ1の entry
  *  - 配列 → 要素は文字列または `{name, advisor?}`。advisor は entry にだけ書く
  *    (ADR 0116 決定2) */
-export function normalizeProviderEntries(
-  provider: unknown,
-  skills: readonly string[],
-): AgentProviderEntry[] {
+export function normalizeProviderEntries(provider: unknown): AgentProviderEntry[] {
   if (provider === undefined || provider === null || provider === "") {
-    return PROVIDER_VALUES.filter((name) => routeSatisfiesSkills(name, skills)).map((name) => ({
-      name,
-      advisor: false,
-    }));
+    return PROVIDER_VALUES.map((name) => ({ name, advisor: false }));
   }
   const written = Array.isArray(provider) ? provider : [provider];
   return written.map((entry) =>
@@ -208,17 +201,13 @@ export function normalizeProviderEntries(
  *  0098). This is board-owned routing state, never registry frontmatter. */
 export type Harness = "claude-code" | "codex";
 
-/** 正準経路の能力表(ADR 0098 / ADR 0116 決定1)。登録の門と省略の展開が同じこの表を
- *  読む。`skills` は「非空の skill allowlist を提供するか」(Codex は v1 で持たない)。 */
-const CANONICAL_ROUTES: Record<Provider, { harness: Harness; advisor: boolean; skills: boolean }> = {
-  anthropic: { harness: "claude-code", advisor: true, skills: true },
-  moonshot: { harness: "claude-code", advisor: false, skills: true },
-  openai: { harness: "codex", advisor: false, skills: false },
+/** 正準経路の能力表(ADR 0098 / ADR 0116 決定1)。登録の門がこの表を読む。skill の列は
+ *  持たない —— skill の提供は経路の能力ではない(ADR 0337 決定1)。 */
+const CANONICAL_ROUTES: Record<Provider, { harness: Harness; advisor: boolean }> = {
+  anthropic: { harness: "claude-code", advisor: true },
+  moonshot: { harness: "claude-code", advisor: false },
+  openai: { harness: "codex", advisor: false },
 };
-
-function routeSatisfiesSkills(provider: Provider, skills: readonly string[]): boolean {
-  return skills.length === 0 || CANONICAL_ROUTES[provider].skills;
-}
 
 /** Provider -> Harness is a total, one-to-one-at-use mapping with no fallback
  *  (ADR 0098). A second Harness for a Provider is a new recorded decision. */
@@ -251,25 +240,23 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
 /** 組み込み agent の定義(GLOSSARY.md「組み込み agent」/ ADR 0117 決定1): 盤面の
  *  code が frontmatter 相当を運び、registry にファイルを持たない。名前は Auditor
  *  ポインタの既定と**同じ1つの定数**から組む —— 組み込みの名前と既定の指し先は
- *  drift できない。`provider` は省略の展開そのもの(ADR 0116 決定1)で、非空の
- *  `skills` を満たす正準経路だけが残る。`authority` は ADR 0013 の reviewer 定数の
+ *  drift できない。`provider` は省略の展開そのもの(ADR 0116 決定1)で、Codex にも
+ *  乗る(ADR 0337 決定1)。`authority` は ADR 0013 の reviewer 定数の
  *  名前だが、profile map は引かれない(`resolveExecutionAgent` の1分岐)——
  *  組み込みは授権を増やさないので、profile を registry にも map にも生やさない。
  *  `version` は本文の内容 hash で、spawn 記録の `definition_version` がこれを運ぶ
  *  (ADR 0270 決定1)。当時の本文は spawn で記録した prompt が持つ(ADR 0314 決定1)。 */
-const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
-
 const BUILT_IN_AUDITOR: AgentDefinition = {
   name: DEFAULT_AUDITOR_NAME,
   systemPrompt: "",
   version: createHash("sha256").update("").digest("hex").slice(0, 16),
   authority: REVIEWER_AUTHORITY_PROFILE.name,
   description: "Reviews work independently against its completion criteria.",
-  provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
+  provider: normalizeProviderEntries(undefined),
   retiredFields: [],
   unknownFields: [],
   icon: "🐡",
-  skills: BUILT_IN_AUDITOR_SKILLS,
+  skills: ["@workspace"],
   builtin: true,
 };
 
@@ -331,7 +318,6 @@ export interface AgentDefinitionCheck {
    *  `normalizeProviderEntries` を通した値を渡す —— 門が綴りの分岐を持たない。 */
   provider: readonly AgentProviderEntry[];
   tier?: string;
-  skills?: readonly string[];
   retiredFields?: readonly string[];
   unknownFields?: readonly string[];
 }
@@ -346,7 +332,7 @@ export function assertValidAgentDefinition(
   /** 盤面の段の名前(ADR 0200 決定2): agent.md の `tier` はこの一覧に対して検査する。 */
   tiers: readonly Tier[],
 ): void {
-  const { provider: entries, tier, skills = [], retiredFields = [], unknownFields = [] } = definition;
+  const { provider: entries, tier, retiredFields = [], unknownFields = [] } = definition;
   // 拒否文は盤面のコードが発する文なので、ADR の引用は文でなくここに置く(ADR 0207)
   if (retiredFields.length > 0) {
     // ADR 0110 決定1(実行設定は表へ)/ ADR 0116 決定2(advisor は entry の性質)
@@ -394,18 +380,11 @@ export function assertValidAgentDefinition(
       );
     }
     const route = CANONICAL_ROUTES[name as Provider];
-    // advisor・skill を持たない正準経路は ADR 0098
+    // advisor を持たない正準経路は ADR 0098
     if (advisor && !route.advisor) {
       throw new InvalidAgentDefinitionError(
         agentName,
         `canonical route "${name} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand`,
-      );
-    }
-    if (!routeSatisfiesSkills(name as Provider, skills)) {
-      throw new InvalidAgentDefinitionError(
-        agentName,
-        `canonical route "${name} -> ${route.harness}" does not offer skills in v1 — ` +
-          "a definition declaring a non-empty allowlist does not stand",
       );
     }
   }
@@ -910,7 +889,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     version: meta.version,
     authority: meta.authority,
     description: meta.description,
-    provider: normalizeProviderEntries(meta.provider, meta.skills),
+    provider: normalizeProviderEntries(meta.provider),
     tier: isWritten(meta.tier) ? (meta.tier as string) : undefined,
     retiredFields: retiredExecutionFields(parsed),
     unknownFields: unknownFrontmatterFields(parsed),

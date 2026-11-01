@@ -30,7 +30,7 @@ function makeRegistry(
           version: "0.0.1",
           authority: a.authority,
           description: `${name} agent`,
-          provider: normalizeProviderEntries(a.entries ?? a.providers ?? a.provider ?? "anthropic", a.skills ?? ["*"]),
+          provider: normalizeProviderEntries(a.entries ?? a.providers ?? a.provider ?? "anthropic"),
           tier: a.tier,
           retiredFields: a.retiredFields ?? [],
           unknownFields: a.unknownFields ?? [],
@@ -166,15 +166,6 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
       { name: "anthropic", advisor: true },
       { name: "openai", advisor: false },
     ]);
-  });
-
-  it("OpenAI / Codex v1 に無い skill allowlist は pickup 解決でも拒否される(ADR 0098)", () => {
-    const registry = makeRegistry({
-      deckhand: { authority: "standard", provider: "openai", skills: ["tdd"] },
-    });
-    expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
-      InvalidAgentDefinitionError,
-    );
   });
 
   it("moonshot でも advisor を持たない定義は従来どおり解決される", () => {

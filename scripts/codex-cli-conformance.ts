@@ -152,7 +152,8 @@ async function skillClosure(): Promise<SkillClosureObservation> {
 
       const freshEnv = probeEnv(home);
       const loaded = [...closedSurfaceConfig(), 'developer_instructions=""', FORCED_LOGIN_METHOD];
-      const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, config: (skills) => [...loaded, skills] });
+      // ADR 0337 決定3: 適合試験は agent に依らない placeholder —— 列挙の全部を閉じる
+      const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, allowlist: [], config: (skills) => [...loaded, skills] });
       const provider = "tidepool_conformance";
       const { port } = endpoint.address() as AddressInfo;
       // worker と同じ exec の flag(hook を付けないので --dangerously-bypass-hook-trust は要らない)
