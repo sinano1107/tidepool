@@ -17,6 +17,7 @@ export class Slot {
   private teardown = false;
   private taskContent: TaskContent | undefined;
   private parentContent: ParentBriefing | undefined;
+  private held: { taskId: string; steps: Array<() => unknown> } | undefined;
 
   get currentTaskId(): string | null {
     return this.taskId;
@@ -53,7 +54,21 @@ export class Slot {
     this.teardown = true;
   }
 
+  /** 投げた後始末の step から先(ADR 0342 決定6)。落ちた後始末の受理が撃ち直す —— memory なので再起動を越えず、
+   *  越えた受理は後始末そのものを撃ち直す。枠を握っている session の分だけ持つ。 */
+  holdTeardown(taskId: string, steps: Array<() => unknown>): void {
+    this.held = { taskId, steps };
+  }
+
+  takeHeldTeardown(taskId: string): Array<() => unknown> | undefined {
+    if (this.held?.taskId !== taskId) return undefined;
+    const { steps } = this.held;
+    this.held = undefined;
+    return steps;
+  }
+
   release(): void {
+    this.held = undefined;
     this.taskId = null;
     this.teardown = false;
     this.taskContent = undefined;

@@ -15,14 +15,14 @@ import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type In
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, listEpisodes, projectionPending } from "../src/precedent.js";
 import { type ContainerSpawn, ProcessContainers } from "../src/process-container.js";
-import { openQuarantineValues } from "../src/quarantine.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { RECLAIM_TIMEOUT, startWatchdog } from "../src/watchdog.js";
+import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import {
   answerSkillsList,
@@ -41,6 +41,7 @@ import {
   decomposeTaskViaWorker,
   examineeRootId,
   FULL_HANDOFF,
+  failTeardownMark,
   HUMAN_WEBUI,
   judgmentRepairTask,
   markPickedUp,
@@ -836,6 +837,46 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(rejections).toEqual([expect.objectContaining({ message: "spawn_failed write failed" })]);
     expect(listEvents(f.db, value.id).filter((event) => event.kind === "spawn_failed")).toEqual([]);
     expect(calls).toEqual([]);
+  });
+
+  /** skill の検査が落ちる pickup に、盤面の本物の一撃(`spawnFailureHandler`)を繋ぐ。`wrap` は一撃の前に盤面を壊す lever。 */
+  async function skillCheckFailsOnBoard(wrap: (db: ReturnType<typeof openDb>) => void = () => {}) {
+    const slot = new Slot();
+    let board: NonNullable<CodexWorkerOptions["onSpawnFailed"]> = () => {};
+    const f = await fixture((taskId, failure) => board(taskId, failure), undefined, undefined, undefined, { appServer: () => null });
+    const handler = spawnFailureHandler({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, f.containers);
+    board = (taskId, failure) => {
+      wrap(f.db);
+      handler(taskId, failure);
+    };
+    const value = pickupTask(f.db, task(f.db), "codex-agent", f.clock.now())!;
+    slot.occupy(value.id);
+    return { ...f, slot, value };
+  }
+
+  it("skill の検査の失敗で盤面側の一撃の記録が盤面のバグで投げると、落ちた後始末が立ち未処理の reject は出ない(ADR 0342 決定6 / #2036)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const f = await skillCheckFailsOnBoard();
+    failTeardownMark(f.db);
+
+    const rejections = await unhandledRejectionsDuring(() => f.start(f.value)!);
+
+    expect(rejections).toEqual([]);
+    expect(listBoard(f.db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+    expect(f.slot.currentTaskId).toBe(f.value.id);
+  });
+
+  it("skill の検査の失敗で盤面側の一撃が盤面 DB の拒否で投げたら、外の catch は記録済みの印で飲まず未処理の reject へ上げる(ADR 0342 決定4)", async () => {
+    const f = await skillCheckFailsOnBoard((db) => db.pragma("query_only = 1"));
+
+    const rejections = await unhandledRejectionsDuring(async () => {
+      void f.start(f.value);
+      await vi.waitFor(() => expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false));
+    });
+    f.db.pragma("query_only = 0");
+
+    expect(rejections).toEqual([expect.objectContaining({ code: "SQLITE_READONLY" })]);
+    expect(listBoard(f.db).filter((t) => t.type === "question")).toEqual([]);
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、complete_task を complete_memory_review に替え、分解の verb を伏せ、普通の task は変わらない(ADR 0122 決定2 / ADR 0278 決定1 / ADR 0301 決定3)", async () => {

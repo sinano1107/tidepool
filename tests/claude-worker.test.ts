@@ -31,6 +31,7 @@ import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type In
 import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes, projectionPending } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import {
   loadRegistry,
   REVIEWER_AUTHORITY_PROFILE,
@@ -66,7 +67,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -5126,6 +5127,26 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       startedAt: clock.now().toISOString(),
       settlement: "never_ran",
     });
+  });
+
+  it("spawn の失敗で盤面側の一撃の記録が盤面のバグで投げても、listener の外へ抜けず落ちた後始末が立つ(ADR 0342 決定6 / #2036)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
+    const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
+      onSpawnFailed: (taskId, failure) => onSpawnFailed(taskId, failure),
+    });
+    onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
+    const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
+    slot.occupy(task.id);
+    worker.start(task, setting(task));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    failTeardownMark(db);
+
+    expect(() => emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }))).not.toThrow();
+
+    expect(listBoard(db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+    expect(slot.currentTaskId).toBe(task.id);
   });
 });
 

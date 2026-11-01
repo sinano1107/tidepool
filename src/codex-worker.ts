@@ -57,6 +57,7 @@ import { liveSession } from "./teardown.js";
 
 import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
@@ -1645,8 +1646,9 @@ export class CodexWorker implements WorkerAdapter {
       // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない
       // 器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       this.running.delete(task.id);
-      // 書けなかった spawn_failed は今日の void の鎖の throw と同じく未処理の reject へ上げる(ADR 0342 決定5)
-      if (error === writeFailure) throw error;
+      // 書けなかった spawn_failed は今日の void の鎖の throw と同じく未処理の reject へ上げる(ADR 0342 決定5)。
+      // 盤面 DB の拒否も飲まない —— 一撃が投げた後は `recorded` が立っていて、下の spawnFailed では黙って消える(ADR 0342 決定4)
+      if (error === writeFailure || isBoardDbRefusal(error)) throw error;
       if (error instanceof RecordContainerError) {
         removeTaskTemp();
         this.options.onRecordContainerFailed?.(task.id, error);

@@ -6,10 +6,11 @@ import { enumerateHostSkills } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { listEpisodes } from "../src/precedent.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { getTask, listBoard } from "../src/tasks.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -142,6 +143,33 @@ it("後始末の印が書けなかった起動は、再起動中断の failure q
   expect(getTask(db, task.id)?.status).toBe("in_progress");
   expect(listBoard(db).filter((x) => x.type === "question")).toEqual([]);
   db.close();
+});
+
+it("後始末の step が盤面のバグで投げたまま再起動すると、掃き出しの question と落ちた後始末の question の2枚が開き、受理は後始末を撃ち直して枠を空ける(ADR 0342 決定6)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = queueWork(t, "throws while deciding");
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
+  writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  failTeardownMark(t.db);
+  t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: 1 });
+  expect((await questions(t)).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  t.db.exec("DROP TRIGGER fail_teardown_mark");
+  await t.stopServer();
+
+  t = await bootTidepool({ dir: t.dir, workspace: ws });
+
+  const open = await questions(t);
+  expect(open.map((q) => q.title).sort()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE, `restart interrupted task: ${task.title}`].sort());
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id });
+  const failed = open.find((q) => q.title === FAILED_TEARDOWN_QUESTION_TITLE)!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${failed.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+
+  expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("unfinished work");
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+  expect((await questions(t)).map((q) => q.title)).toEqual([`restart interrupted task: ${task.title}`]);
 });
 
 // ── 前の盤面が閉じ切らなかった session(issue #2600 / ADR 0315)──────────────────

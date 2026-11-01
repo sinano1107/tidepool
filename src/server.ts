@@ -893,7 +893,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 検査が上で bind した人間面の実ポートを撃ち、上の Harness の起動時検査と並走しないため。
   //
   // ADR 0240 決定3 / ADR 0241 決定5: 起動完了の契機は後始末の復旧の後に撃つ —— その収束が復旧した後始末の根を着地させ、
-  // 最初の pickup はその回が終わってから判定する。`runTeardown` は投げない
+  // 最初の pickup はその回が終わってから判定する。`runTeardown` が投げるのは盤面 DB の拒否だけで、それは起動を落とす(ADR 0342 決定2)
   await teardownRecovery;
   startedScheduler = scheduler;
   pollNow();

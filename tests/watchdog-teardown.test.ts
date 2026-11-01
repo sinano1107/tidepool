@@ -26,7 +26,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -402,7 +402,7 @@ it("資源の停止と上限到達の分類の Promise が同じ束で届くと�
   expect(questions(f.db)).toEqual([]);
 });
 
-it("行の拒否で後始末の印の書き込みが落ちると、行の Quarantine も row_refused も残らず、タスクは in_progress のまま(issue #1935)", () => {
+it("行の拒否で後始末の印の書き込みが落ちると、行の Quarantine も row_refused も残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", () => {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -415,11 +415,11 @@ it("行の拒否で後始末の印の書き込みが落ちると、行の Quaran
 
   expect(() =>
     exitToWatchdog({ db, clock, slot, containers }, task.id, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false }),
-  ).toThrow("teardown mark failed");
+  ).not.toThrow();
 
   expect(getTask(db, task.id)?.status).toBe("in_progress");
   expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(false);
-  expect(questions(db)).toEqual([]);
+  expect(questions(db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
 /** 準備まで済んで worker を起動する前に資源が止めた pickup(ADR 0274)。容器は盤面が開いたまま空 —— process は1つも無い。
@@ -758,7 +758,7 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
 it.each([
   { kind: "pickup_stopped", quarantine: "agent", value: "ghost", reason: "unknown agent" },
   { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: 1 },
-] as const)("資源の停止で後始末の印の書き込みが落ちると、$kind は残らず、タスクは in_progress のまま(issue #1935)", async (payload) => {
+] as const)("資源の停止で後始末の印の書き込みが落ちると、$kind は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async (payload) => {
   const f = await stoppedBeforeSpawn();
   failTeardownMark(f.db);
 
@@ -766,10 +766,11 @@ it.each([
     payload.kind === "pickup_stopped"
       ? f.handler(f.task.id, payload)
       : exitToWatchdog({ ...f, resolveWorkspace: f.resolve, pollNow: () => f.triggered.push("pollNow") }, f.task.id, { turnRan: false, stop: { registered: payload }, capInterrupted: false }),
-  ).toThrow("teardown mark failed");
+  ).not.toThrow();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
   expect(listEvents(f.db, f.task.id).map((e) => e.kind)).not.toContain(payload.kind);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
 it.each([
@@ -1039,30 +1040,28 @@ it("回収 timeout に落ちた watchdog の session は後始末へ入り、続
   expect(f.runtime.forceReclaims).toEqual([f.task.id]);
 });
 
-it("回収 timeout で後始末の印の書き込みが落ちると、failure question も Containment quarantine も残らず、タスクは in_progress のまま(issue #1935)", async () => {
+it("回収 timeout で後始末の印の書き込みが落ちると、failure question も Containment quarantine も残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async () => {
   const f = await sessionInTeardown("watchdog");
   failTeardownMark(f.db);
 
-  await expect(f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout)).rejects.toThrow("teardown mark failed");
+  await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout);
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(questions(f.db)).toEqual([]);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
-it("1度も走らなかった pickup で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+it("1度も走らなかった pickup で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async () => {
   const f = await sessionInTeardown("watchdog");
   const deps = { db: f.db, clock: f.clock, slot: f.slot, resolve: () => f.ws, pollNow: () => {} };
   failTeardownMark(f.db);
 
-  expect(() => spawnFailureHandler(deps, f.containers)(f.task.id, { error_code: "ENOENT", message: "spawn claude ENOENT" })).toThrow(
-    "teardown mark failed",
-  );
+  expect(() => spawnFailureHandler(deps, f.containers)(f.task.id, { error_code: "ENOENT", message: "spawn claude ENOENT" })).not.toThrow();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(questions(f.db)).toEqual([]);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
-it("transcript が書けなくなった session で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+it("transcript が書けなくなった session で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async () => {
   const f = await sessionInTeardown("watchdog");
   const deps = { db: f.db, clock: f.clock, slot: f.slot, resolve: () => f.ws, pollNow: () => {} };
   // handler は worker_spawned の worker id を引くだけなので、pickup の event で足りる
@@ -1071,35 +1070,37 @@ it("transcript が書けなくなった session で後始末の印の書き込�
 
   expect(() =>
     transcriptFailureHandler(deps, f.containers)({ taskId: f.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" }),
-  ).toThrow("teardown mark failed");
+  ).not.toThrow();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(questions(f.db)).toEqual([]);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
-it("報告なき exit で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+it("報告なき exit で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async () => {
   const f = await sessionInTeardown("watchdog");
   failTeardownMark(f.db);
 
-  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, capInterrupted: false })).toThrow("teardown mark failed");
+  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, capInterrupted: false })).not.toThrow();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(questions(f.db)).toEqual([]);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
-it("時間制限の梯子で容器の空を観測したときに後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+it("時間制限の梯子で容器の空を観測したときに後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async () => {
   const f = await sessionInTeardown("watchdog");
   await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
   expect(f.runtime.forceReclaims).toEqual([f.task.id]);
   failTeardownMark(f.db);
 
-  // 観測は `void reclaimed.then(...)` の先に届くので、落ちた書き込みは未処理の reject として上がる
-  const raised = new Promise<unknown>((resolve) => process.once("unhandledRejection", resolve));
-  f.runtime.fireEmpty(f.task.id);
-  expect(String(await raised)).toContain("teardown mark failed");
+  // 観測は `void reclaimed.then(...)` の先に届く —— 落ちた書き込みは runner が受け、未処理の reject に上げない
+  const rejections = await unhandledRejectionsDuring(async () => {
+    f.runtime.fireEmpty(f.task.id);
+    await settle();
+  });
+  expect(rejections).toEqual([]);
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(questions(f.db)).toEqual([]);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
 });
 
 /** 盤面の再起動: 同じ DB に新しい watchdog と空の `Slot` を作る。前提検査が落ちた起動を表す
