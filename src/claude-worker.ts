@@ -2156,7 +2156,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         removeTaskTemp,
         () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id }),
       );
-      // ADR 0338 決定1: 停止は1 session に1つ。行の拒否の帰属は spawn 時の行で、Provider では分岐しない(moonshot の 404 もこの1本を通る)。
+      // ADR 0338 決定1: 停止は1 session に1つ。ADR 0184 決定3: 行の拒否の帰属は spawn 時の行で、Provider では分岐しない(moonshot の 404 もこの1本を通る)。
       // shortcut: 404 と 401 / init の停止が同じ session に重なる形は未実測で、重なれば未登録の行の拒否を残す側を取る。観測されたら束に2つ載せる
       const resourceStop = authStop ?? initStop;
       const stop = streamObserved.refusalCause

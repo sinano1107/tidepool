@@ -213,7 +213,7 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, payload: QueueReturnPayload) => void {
+): (taskId: string, payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>) => void {
   return (taskId, payload) => {
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
     const task = getTask(deps.db, taskId);
@@ -554,43 +554,45 @@ export function startWatchdog(deps: {
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
     const rec = syncPickup(taskId);
     rec.exit = exit;
-    const { turnRan, stop } = facts;
+    const { turnRan, stop, capInterrupted } = facts;
     const decide = (cap: boolean) => {
       if (rec.humanStop) return;
       if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return;
       const task = getTask(db, taskId);
       if (task?.status !== "in_progress") return;
-      // ADR 0338 決定2: 人間の停止 > 停止(ターンが走っていない)> 上限到達 > 時間制限の停止の梯子 > 報告なき exit の failure question
-      const stoppedBeforeTurn = stop !== undefined && !turnRan;
-      // 畳み込み停止の結果は梯子が受ける
-      const toLadder = !stoppedBeforeTurn && !cap && rec.stopSentAt !== undefined;
       const now = clock.now();
       // 登録・status の決着・後始末の印は1 transaction —— 間で落ちると後始末の印の無い todo が残る(issue #1935)
-      db.transaction(() => {
+      const settled = db.transaction(() => {
         // ADR 0338 決定3・4: 行の拒否はターンに関わらず盤面が登録する。資源の停止は adapter が登録済み
         const queueReturn = stop && ("refusal" in stop ? registerRowRefusal(db, task, stop.refusal, now) : stop.registered);
-        if (toLadder) return;
-        if (queueReturn && stoppedBeforeTurn) {
+        // ADR 0338 決定2: 人間の停止 > 停止(ターンが走っていない)> 上限到達 > 時間制限の停止の梯子 > 報告なき exit の failure question
+        if (queueReturn && !turnRan) {
           returnToQueue(db, task, queueReturn, now);
-        } else if (!cap) {
-          const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
-          registerFailureQuestion(
-            db,
-            task,
-            `worker exited without reporting: ${task.title}`,
-            `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
-              "it did not complete, decompose, or escalate. No self-report is possible." +
-              exitSections(exit),
-            now,
-          );
+        } else {
+          // 戻らない session でも対象の拒否は証拠に残す —— 子の拒否の種類はこの event から引かれる(ADR 0199 決定4)
+          if (queueReturn?.kind === "target_refused") appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: queueReturn, at: now });
+          // 畳み込み停止の結果は梯子が受ける
+          if (!cap && rec.stopSentAt !== undefined) return false;
+          if (!cap) {
+            const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
+            registerFailureQuestion(
+              db,
+              task,
+              `worker exited without reporting: ${task.title}`,
+              `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
+                "it did not complete, decompose, or escalate. No self-report is possible." +
+                exitSections(exit),
+              now,
+            );
+          }
         }
         markTeardown(db, taskId, now);
+        return true;
       })();
-      if (toLadder) return;
+      if (!settled) return;
       slot.enterTeardown();
       void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
     };
-    const { capInterrupted } = facts;
     if (typeof capInterrupted === "boolean") decide(capInterrupted);
     else rec.classification = capInterrupted.then((cap) => {
       delete rec.classification;

@@ -24,6 +24,7 @@ import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
 import { moonshotKeyAbsence } from "../src/claude-worker.js";
 import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
+import type { Clock } from "../src/clock.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
@@ -35,7 +36,7 @@ import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
-import type { ContainerRuntime } from "../src/process-container.js";
+import type { ContainerRuntime, ProcessContainers } from "../src/process-container.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
@@ -51,6 +52,7 @@ import { completeRoutingReview, judgmentKey, type RegistryAgent, type RoutingObj
 import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import type { Slot } from "../src/slot.js";
 import {
   answerQuestion,
   completeAudit,
@@ -78,8 +80,8 @@ import { tierIdOf } from "../src/tier.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import type { WatchdogConfig } from "../src/watchdog.js";
-import type { WorkerExit } from "../src/worker.js";
+import { startWatchdog, type WatchdogConfig } from "../src/watchdog.js";
+import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import { openInterviewRoom, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
@@ -1504,6 +1506,17 @@ export const QUIET_EXIT: WorkerExit = {
   reported_error: null,
   last_message: null,
 };
+
+/** setup のみ: 時限の無い watchdog へ root の exit を束付きで渡す —— adapter と同じく、exit で強制回収を撃ってから渡す
+ *  (ADR 0109 決定4 / ADR 0201 決定1)。 */
+export function exitToWatchdog(
+  deps: { db: Db; clock: Clock; slot: Slot; containers: ProcessContainers; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig; pollNow?: () => void },
+  taskId: string,
+  facts: WorkerExitClassification,
+): void {
+  deps.containers.forceReclaim(taskId);
+  startWatchdog({ ...deps, worker: new ScriptedWorker(deps.clock), pollNow: deps.pollNow ?? (() => {}) }).onWorkerExited(taskId, QUIET_EXIT, facts);
+}
 
 /** agent 名と workspace 名の集合を registry として注入する boot の欄(集合を後から減らすと削除を模せる)。null の workspace は盤面の既定。 */
 export function registryOf(agents: Set<string>, workspaces: Set<string>, path = "/workspaces/known"): Pick<BootOptions, "agentRegistered" | "workspace" | "resolveWorkspace"> {

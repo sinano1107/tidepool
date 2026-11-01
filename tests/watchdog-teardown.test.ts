@@ -13,7 +13,7 @@ import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task, unrowedTarget } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { queueReturnHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
@@ -26,7 +26,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { answerQuestionViaWebui, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -296,8 +296,7 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
 
   const containers = new ProcessContainers(new FakeContainerRuntime());
   containers.open(task.id);
-  startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), pollNow: () => {} })
-    .onWorkerExited(task.id, QUIET_EXIT, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false });
+  exitToWatchdog({ db, clock, slot, containers }, task.id, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false });
   await settle();
 
   expect(openQuarantineValues(db, "tableRow")).toEqual([]);
@@ -317,8 +316,43 @@ it("ターンが走った後の 404 は行の Quarantine を立て、todo へ戻
   expect(openQuarantineValues(f.db, "tableRow")).toEqual([`${provider}/${model}`]);
   expect(questions(f.db).map((q) => q.title)).toContain("worker exited without reporting: one");
   expect(questions(f.db)).toHaveLength(2);
+  expect(listBoard(f.db).find((t) => t.id === f.task.id)?.status).toBe("blocked");
   // todo へ戻っていないので、戻りの event(row_refused)は書かない
   expect(listEvents(f.db, f.task.id).map((e) => e.kind)).not.toContain("row_refused");
+});
+
+it("時間制限の停止の梯子の途中でターンが走った session が 404 で終わると、行の Quarantine だけを先に立て、失敗の記録は梯子に任せる(ADR 0338 決定2・3)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  const { provider, model } = loadExecutionSettingTable(f.db)[0]!;
+  await f.clock.advance(CONFIG.timeLimits.work);
+  expect(f.worker.gracefulStops).toEqual([f.task.id]);
+
+  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false });
+  await settle();
+
+  expect(openQuarantineValues(f.db, "tableRow")).toEqual([`${provider}/${model}`]);
+  expect(questions(f.db).map((q) => q.title)).not.toContain("worker exited without reporting: one");
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+});
+
+it("ターンが走った後に行でない Interview の対象が 404 で断られると、対象の question と failure question の2枚になり、todo へ戻らず target_refused を証拠に残す(ADR 0338 決定3 / ADR 0199 決定4)", () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
+  const containers = new ProcessContainers(new FakeContainerRuntime());
+  const examinee = pickupTask(db, interviewExaminee(db, clock.now()), "deckhand", clock.now())!;
+  // 対象の行を表から外す —— 行でない対象になる(ADR 0199 決定2)
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, "webui", clock.now());
+  const target = unrowedTarget(db, examinee)!;
+  slot.occupy(examinee.id);
+  containers.open(examinee.id);
+
+  exitToWatchdog({ db, clock, slot, containers }, examinee.id, { turnRan: true, stop: { refusal: { provider: target.provider, model: target.model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false });
+
+  expect(questions(db).map((q) => q.question_quarantine_kind ?? q.title)).toEqual(expect.arrayContaining(["interviewTarget", `worker exited without reporting: ${examinee.title}`]));
+  expect(questions(db)).toHaveLength(2);
+  expect(listBoard(db).find((t) => t.id === examinee.id)?.status).toBe("blocked");
+  expect(listEvents(db, examinee.id).find((e) => e.kind === "target_refused")?.payload).toMatchObject({ cause: "api_404" });
 });
 
 it("資源の停止と上限到達の分類の Promise が同じ束で届くと、Promise の解決後に1度だけ決め、0ターンの session は todo へ戻る(ADR 0338 決定2)", async () => {
@@ -347,10 +381,10 @@ it("行の拒否で後始末の印の書き込みが落ちると、行の Quaran
   slot.occupy(task.id);
   failTeardownMark(db);
 
-  const watchdog = startWatchdog({ db, clock, slot, containers: new ProcessContainers(new FakeContainerRuntime()), worker: new ScriptedWorker(clock), pollNow: () => {} });
+  const containers = new ProcessContainers(new FakeContainerRuntime());
 
   expect(() =>
-    watchdog.onWorkerExited(task.id, QUIET_EXIT, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false }),
+    exitToWatchdog({ db, clock, slot, containers }, task.id, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false }),
   ).toThrow("teardown mark failed");
 
   expect(getTask(db, task.id)?.status).toBe("in_progress");
@@ -698,7 +732,11 @@ it.each([
   const f = await stoppedBeforeSpawn();
   failTeardownMark(f.db);
 
-  expect(() => f.handler(f.task.id, payload)).toThrow("teardown mark failed");
+  expect(() =>
+    payload.kind === "pickup_stopped"
+      ? f.handler(f.task.id, payload)
+      : exitToWatchdog({ ...f, resolveWorkspace: f.resolve, pollNow: () => f.triggered.push("pollNow") }, f.task.id, { turnRan: false, stop: { registered: payload }, capInterrupted: false }),
+  ).toThrow("teardown mark failed");
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
   expect(listEvents(f.db, f.task.id).map((e) => e.kind)).not.toContain(payload.kind);
@@ -717,7 +755,7 @@ it.each([
   const question = openQuarantineQuestion(f.db, "providerAuth", "anthropic")!;
   if (restart) f.runtime.hold(f.task.id);
 
-  f.handler(f.task.id, { kind: "session_stopped_by_resource", ...stop, worker_spawned_event_id: spawnedId });
+  exitToWatchdog({ ...f, resolveWorkspace: f.resolve, pollNow: () => f.triggered.push("pollNow") }, f.task.id, { turnRan: false, stop: { registered: { kind: "session_stopped_by_resource", ...stop, worker_spawned_event_id: spawnedId } }, capInterrupted: false });
   await settle();
   const slot = restart ? restartMidTeardown(f, f.resolve) : f.slot;
   await settle();

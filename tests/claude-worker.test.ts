@@ -308,7 +308,8 @@ async function makeWorker(
     logDir,
     transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
-    onWorkerExited: (taskId, exit, facts) => { if (facts.capInterrupted) watchdog.onWorkerExited(taskId, exit, facts); },
+    // Claude の分類は解決済みの値で渡る(ADR 0309)ので、Promise を真と読まないよう値で比べる
+    onWorkerExited: (taskId, exit, facts) => { if (facts.capInterrupted === true) watchdog.onWorkerExited(taskId, exit, facts); },
     onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
     enumerateSkills: enumeration.enumerateSkills,
     enumerateHostSkills: bundled.enumerateHostSkills,
