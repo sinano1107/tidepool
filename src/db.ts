@@ -493,8 +493,8 @@ export function openDb(path: string): Db {
       UNIQUE (worker_spawned_event_id, extractor_version)
     );
 
-    -- skill の呼び出し1回 = 1行(ADR 0325 決定3)。本文は写さず、本文を持つ行を参照する —— Claude は本文を渡した合成 user 行の uuid、
-    -- Codex は許した SKILL.md を読んだ command_execution の完了行の item id(ADR 0337 決定4)。
+    -- skill の呼び出し1回 = 1行(ADR 0325 決定3)。届いた文は写さず、それを持つ行を参照する —— Claude は文を渡した合成 user 行の uuid、
+    -- Codex は許した path を command に含む完了・exit 0 の command_execution の item id(ADR 0340 決定1・4)。
     -- transcript_ref が null = その行が stream に無い呼び出し(Claude の subagent の呼び出しなど)。
     CREATE TABLE IF NOT EXISTS episode_skill_calls (
       episode_id      INTEGER NOT NULL REFERENCES episodes(id),

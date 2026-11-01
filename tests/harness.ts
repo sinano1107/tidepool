@@ -35,7 +35,7 @@ import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
-import { EXTRACTOR_VERSION } from "../src/precedent.js";
+import { EXTRACTOR_VERSION, type FollowedSkill } from "../src/precedent.js";
 import type { ContainerRuntime, ProcessContainers } from "../src/process-container.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
@@ -1497,6 +1497,9 @@ export const skillCall = (n: number, name: string, body: string) => [
   `{"type":"user","uuid":"r${n}","tool_use_result":{"success":true,"commandName":"${name}"},"message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":"Launching skill: ${name}"}]}}`,
   JSON.stringify({ type: "user", uuid: `s${n}`, isSynthetic: true, message: { content: [{ type: "text", text: `Base directory for this skill: /w/.claude/skills/${name}\n\n${body}` }] } }),
 ];
+
+/** 従った skill の行から出所の行動を落とした形 —— tool / args の釘は tests/precedent-projection.test.ts にだけ置く(ADR 0107 決定3)。 */
+export const followedRows = (rows: FollowedSkill[] | null) => rows?.map(({ name, position, text }) => ({ name, position, text })) ?? null;
 
 /** 何も観測しなかった exit(exit 0・signal なし・表示用の欄はすべて null)。各テストは上書きする欄だけを書く(issue #1333)。 */
 export const QUIET_EXIT: WorkerExit = {

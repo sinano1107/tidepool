@@ -29,7 +29,7 @@ const NOT_SPLIT =
   "This task is not split: complete it in this session. If it is larger than one session can finish, finish what you can and state in the handoff what remains.";
 const words = (text: string) => text.replace(/\s+/g, " ");
 /** adapter と同じく、文面を描く session の `worker_spawned` を先に刻んでその id を返す(ADR 0295 決定3)。 */
-const spawn = (db: Db, task: Task, at: Date, actorId = "deckhand") => appendEvent(db, { taskId: task.id, actorId, origin: "board", at, payload: WORKER_SPAWNED });
+const spawn = (db: Db, task: Task, at: Date, actorId = "deckhand", payload = WORKER_SPAWNED) => appendEvent(db, { taskId: task.id, actorId, origin: "board", at, payload });
 /** task ごとの verb の差し替え(taskVerbSwap の値): 普通の task、分けない task(pin の子)、出題前と出題済みの Interview の root。 */
 const SPLIT = { withheld: [], added: [] };
 const NOT_SPLIT_SWAP = { withheld: ["decompose", "redecompose"] as const, added: [] };
@@ -142,8 +142,16 @@ const boardDirs = async (): Promise<BoardDirs> => ({ registryDir: await makeRegi
 
 /** adapter と同じく、`task` の `actorId` の spawn を刻んでその文面を組み、記録の器に prompt を書く(ADR 0313 決定1)。定義と profile は
  *  registry のもの(組み込みは reviewer 定数)。 */
-function recordedSpawn(db: Db, { registryDir, recordDir }: BoardDirs, task: Task, at: Date, actorId = "deckhand", harness: "claude-code" | "codex" = "claude-code"): number {
-  const spawnedEventId = spawn(db, task, at, actorId);
+function recordedSpawn(
+  db: Db,
+  { registryDir, recordDir }: BoardDirs,
+  task: Task,
+  at: Date,
+  actorId = "deckhand",
+  harness: "claude-code" | "codex" = "claude-code",
+  payload = WORKER_SPAWNED,
+): number {
+  const spawnedEventId = spawn(db, task, at, actorId, payload);
   const registry = loadRegistry(registryDir, "purely-local");
   const definition = registry.agents[actorId]!;
   const verbs = taskVerbSwap(db, task.id);
@@ -421,13 +429,13 @@ it("異議された entry が別の actor の行だけなら、この worker の
 });
 
 /** self RCA の材料: deckhand の session で、transcript `lines(entry, second)` の判断の行に異議を打つ(`second` は異議を打つ2つ目の判断の行で、
- *  `objectSecond` のときだけ異議を打つ)。session は閉じない(走行中)。 */
-async function skillRca(lines: (entryId: number, second: number) => string[], objectSecond = false) {
+ *  `objectSecond` のときだけ異議を打つ)。`spawned` は材料の session の spawn 記録。session は閉じない(走行中)。 */
+async function skillRca(lines: (entryId: number, second: number) => string[], objectSecond = false, spawned_ = WORKER_SPAWNED) {
   const db = openDb(":memory:");
   const at = new Date("2026-10-29T00:00:00.000Z");
   const dirs = await boardDirs();
   const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
-  const spawned = recordedSpawn(db, dirs, objected, at);
+  const spawned = recordedSpawn(db, dirs, objected, at, "deckhand", spawned_.harness === "codex" ? "codex" : "claude-code", spawned_);
   const entryId = logDecision(db, objected, "ran make deploy", "deckhand", at, "worker");
   const second = logDecision(db, objected, "pushed the tag", "deckhand", at, "worker");
   const stream = join(dirs.recordDir, `${objected.id}.${spawned}.stream.jsonl`);
@@ -469,6 +477,17 @@ it("self RCA の従った skill の節は、同じ名前と届いた文の行を
   expect(history).toContain(`#### deploy\n\n- Skill: deploy\n- Skill: deploy\n\n${fenced("Run make deploy.")}\n\n#### deploy\n\n- Skill: deploy\n\n${fenced(notice)}`);
   expect(history.split(fenced("Run make deploy."))).toHaveLength(2);
   expect(history).toContain("the output of your own command — not necessarily the skill's own text");
+});
+
+it("self RCA の従った skill の節は、改行を含む出所の command を1行に収めずに囲む(ADR 0340 決定7)", async () => {
+  const path = "/w/.agents/skills/deploy/SKILL.md";
+  const command = `/bin/bash -lc 'cat ${path}\necho done'`;
+  // 判断の行はこの transcript に置けないので、session の呼び出しが全部並ぶ
+  const b = await skillRca(() => [
+    JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command, aggregated_output: "Run make deploy.", exit_code: 0, status: "completed" } }),
+  ], false, { ...WORKER_SPAWNED, harness: "codex", skills: { workspace: ["deploy"], host: [], permitted: ["deploy"], paths: { deploy: path } } });
+
+  expect(b.history()).toContain(`#### deploy\n\n- command_execution:\n${fenced(command)}\n\n${fenced("Run make deploy.")}`);
 });
 
 it("self RCA の従った skill の節は、同じ session の2つの異議された行より前の同じ呼び出しを、出所の行動として1度だけ並べる(ADR 0340 決定7)", async () => {

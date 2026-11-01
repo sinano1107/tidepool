@@ -89,7 +89,7 @@ const responseFields = (
   `it — name it only when ${w.cites} that document; ` +
   // ADR 0325 決定3: skill の持ち主は scope の欄で引く —— board_text と同じ型。名指しの門は置かない。
   // ADR 0340 決定3: 届いた文が skill の文面とは限らないことは欄の文が言い、規則は文面どおり / 読み違えのまま足さない
-  `a skill is text that reached the worker when it used the skill — ${f.skills_followed}, and ${f.skills}: ` +
+  `a followed skill row carries the text that reached the worker when it used the skill — ${f.skills_followed}, and ${f.skills}: ` +
   "following a skill in skills_followed as written is environment when its name is in skills.host and workspace_document when it is in " +
   "skills.workspace, while misreading the skill's text is capability; skills and skills_followed are null when the session's record " +
   "could not be read: judge from the rest; use uncertain when the evidence does " +

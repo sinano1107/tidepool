@@ -333,14 +333,19 @@ it("停止と異議の判事・Behavior の起草の prompt は、従った skil
         "output of the worker's own command — the whole skill, a part, or a transformation of it — so not necessarily the skill's own text;",
     );
   }
-  expect(prompts[0]).toContain("a skill is text that reached the worker when it used the skill — the skills the worker invoked before the objected entry");
+  for (const [prompt, followed] of [
+    [prompts[0]!, "the skills the worker used before the objected entry"],
+    [prompts[1]!, "the skills the worker used in the session"],
+  ]) {
+    expect(prompt).toContain(`a followed skill row carries the text that reached the worker when it used the skill — ${followed}`);
+  }
 });
 
 it("帰責の prompt の skill の節は、capability を文面の読み違えにだけ結び、加工した読みに結ぶ規則を持たない(ADR 0340 決定3)", async () => {
   const [objection, stop] = await skillPrompts();
 
   for (const prompt of [objection!, stop!]) {
-    const start = prompt.indexOf("a skill is ");
+    const start = prompt.indexOf("a followed skill row carries ");
     const clause = prompt.slice(start, prompt.indexOf("judge from the rest", start));
     expect(clause.match(/capability/g)).toEqual(["capability"]);
     expect(clause).toContain("while misreading the skill's text is capability");

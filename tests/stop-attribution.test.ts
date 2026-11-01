@@ -15,7 +15,7 @@ import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, l
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls, recordPrompt } from "./fakes.js";
-import { api, bootTidepool, HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, registerWork, skillCall, skillsInit, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, followedRows, HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, registerWork, skillCall, skillsInit, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const at = new Date("2026-10-25T00:00:00Z");
@@ -308,8 +308,8 @@ it("the stop judge reads every skill the session followed from its projected Epi
 
   await b.sweep(at, { ...b.deps, recordDir });
 
-  expect(b.stopInputs().map((i) => [i.skills, i.skills_followed, i.actions?.calls.map((c) => c.args)])).toEqual([
-    [{ workspace: ["deploy"], host: ["dataviz"] }, [{ name: "deploy", position: 0, tool: "Skill", args: "deploy", text: "Run make deploy." }, { name: "dataviz", position: 2, tool: "Skill", args: "dataviz", text: "Chart it." }], ["deploy", null, "dataviz"]],
+  expect(b.stopInputs().map((i) => [i.skills, followedRows(i.skills_followed), i.actions?.calls.map((c) => c.args)])).toEqual([
+    [{ workspace: ["deploy"], host: ["dataviz"] }, [{ name: "deploy", position: 0, text: "Run make deploy." }, { name: "dataviz", position: 2, text: "Chart it." }], ["deploy", null, "dataviz"]],
   ]);
 });
 
@@ -320,7 +320,7 @@ it("a stop whose session's transcript is gone after projection still gets the fo
 
   await b.sweep(at, { ...b.deps, recordDir });
 
-  expect(b.stopInputs().map((i) => [i.skills, i.skills_followed])).toEqual([[{ workspace: [], host: ["deploy"] }, [{ name: "deploy", position: 0, tool: "Skill", args: "deploy", text: null }]]]);
+  expect(b.stopInputs().map((i) => [i.skills, followedRows(i.skills_followed)])).toEqual([[{ workspace: [], host: ["deploy"] }, [{ name: "deploy", position: 0, text: null }]]]);
 });
 
 it.each([

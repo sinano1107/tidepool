@@ -247,10 +247,10 @@ export const ATTRIBUTION_INPUT_FIELDS = {
   human_stop: OBJECTION_HUMAN_STOP_RULE,
   written: OBJECTION_WRITTEN_RULE,
   skills_followed:
-    "the skills the worker invoked before the objected entry, or in the whole session when the entry is its completion report (skills_followed), " +
+    "the skills the worker used before the objected entry, or in the whole session when the entry is its completion report (skills_followed), " +
     followedSkill(
       "its index among the session's tool calls; null when the objected entry could not be placed among them, and the list then holds " +
-        "every skill the session invoked",
+        "every skill the session used",
     ),
 } satisfies Record<keyof AttributionInput, string>;
 
@@ -260,7 +260,7 @@ export const STOP_ATTRIBUTION_INPUT_FIELDS = {
   decision_log: `decision_log is the session's whole decision log. ${LOG_ROW_RULE}`,
   memory_read: memoryRead("the stop"),
   actions: `its action sequence (actions): actions.calls lists ${ACTIONS_FIELDS.calls}; actions.decisions ${ACTIONS_FIELDS.decisions}`,
-  skills_followed: `the skills the worker invoked in the session (skills_followed), ${followedSkill("its index in actions.calls")}`,
+  skills_followed: `the skills the worker used in the session (skills_followed), ${followedSkill("its index in actions.calls")}`,
 } satisfies Record<keyof StopAttributionInput, string>;
 
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。

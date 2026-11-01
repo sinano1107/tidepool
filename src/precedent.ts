@@ -106,9 +106,9 @@ export interface SubagentUsage {
   duration_ms: number;
 }
 
-/** skill の呼び出し1回(ADR 0325 決定3)。本文は写さず、本文を持つ行の参照だけを持つ —— Claude は harness が本文を渡した合成 user 行で、
- *  その行が無い呼び出し(subagent の呼び出しは親の stream に本文の行を出さない、固定版 2.1.286 の実測)は null。Codex は許した path を
- *  読んだ `command_execution` の完了行の item id(ADR 0337 決定4)。 */
+/** skill の呼び出し1回(ADR 0325 決定3)。届いた文は写さず、それを持つ行の参照だけを持つ —— Claude は harness が文を渡した合成 user 行で、
+ *  その行が無い呼び出し(subagent の呼び出しは親の stream に文の行を出さない、固定版 2.1.286 の実測)は null。Codex は許した path を
+ *  `command` に含む完了・exit 0 の `command_execution` の item id(ADR 0340 決定1・4)。 */
 export interface SkillCall {
   /** `Skill` の行動行(Codex は `command_execution` の行動行)の位置(`EpisodeAction.index`)。 */
   position: number;
@@ -697,11 +697,9 @@ function pullsBefore(
  *  `tool` / `args` は出所の行動で、行動列の欄と同じ(ADR 0340 決定2)。`text` はその呼び出しで worker に届いた文で、skill の文面との一致は
  *  主張しない(ADR 0340 決定1)—— Claude では harness が渡した文(`Base directory` の見出しを除く —— path はベンダーの綴り)、Codex では
  *  その行の `aggregated_output`(ADR 0337 決定4)で、transcript に無ければ null。 */
-export interface FollowedSkill {
+export interface FollowedSkill extends Pick<EpisodeAction, "tool" | "args"> {
   name: string;
   position: number | null;
-  tool: string;
-  args: string | null;
   text: string | null;
 }
 
@@ -715,7 +713,7 @@ export function projectSession(recordDir: string | undefined, events: EventRow[]
 }
 
 /** `anchor` の行より前に従った skill(ADR 0325 決定3、`memory_read` と同じ線): 判断の行は decision、記憶の書き込みの行は memory_write の
- *  マーカーで切り、完了の行と停止は session の全部。マーカーの位置が置けない行は全部を position null で返す。本文は `lines` から読む。 */
+ *  マーカーで切り、完了の行と停止は session の全部。マーカーの位置が置けない行は全部を position null で返す。届いた文は `lines` から読む。 */
 export function skillsFollowed(episode: Pick<Episode, "actions" | "skillCalls" | "markers">, lines: string[] | null, anchor: Pick<EventRow, "id" | "kind">): FollowedSkill[] {
   const all = anchor.kind === "task_completed" || anchor.kind === "session_stopped_by_human";
   // 判断の行の decision / 記憶の書き込みの行の memory_write マーカーは、その行の event id で引ける(他の種別の行はマーカーを持たない)
@@ -725,7 +723,7 @@ export function skillsFollowed(episode: Pick<Episode, "actions" | "skillCalls" |
     const parsed = parseStreamLine(line);
     const text = (parsed?.message as { content?: Array<{ text?: unknown }> } | undefined)?.content?.[0]?.text;
     if (parsed?.isSynthetic === true && typeof parsed.uuid === "string" && typeof text === "string") texts.set(parsed.uuid, text.replace(/^Base directory for this skill: [^\n]*\n\n/, ""));
-    // ADR 0337 決定4: Codex の本文は worker が読んだその行の出力
+    // ADR 0340 決定1: Codex の届いた文はその行の出力
     const item = parsed?.type === "item.completed" ? (parsed.item as { type?: unknown; id?: unknown; aggregated_output?: unknown } | undefined) : undefined;
     if (item?.type === "command_execution" && typeof item.id === "string" && typeof item.aggregated_output === "string") texts.set(item.id, item.aggregated_output);
   }
