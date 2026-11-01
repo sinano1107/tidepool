@@ -43,6 +43,7 @@ import {
   examineeRootId,
   FULL_HANDOFF,
   failTeardownMark,
+  failWorkerExited,
   fireWrites,
   HUMAN_WEBUI,
   judgmentRepairTask,
@@ -1650,7 +1651,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(calls).toEqual([value.id]);
   });
 
-  it("root の exit は worker_exited を書いて強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す(ADR 0145)", async () => {
+  it("root の exit は強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す —— この fixture は書く step を撃ってから観測する(ADR 0145 / ADR 0342 決定6)", async () => {
     const calls: Array<[string, WorkerExit, { exitedRecorded: boolean; forced: boolean }]> = [];
     const f = await fixture(undefined, undefined, (taskId, exit) =>
       calls.push([taskId, exit, {
@@ -1794,7 +1795,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     expect(exitedOf(f, value.id)).toMatchObject({ exit_code: 0, output_closed: true });
   });
 
-  it("読み切りが回収 timeout までに来なければ、それまでに読めた分で worker_exited を書き、盤面側の一撃を呼ぶ", async () => {
+  it("読み切りが回収 timeout までに来なければ、それまでに読めた分で書く step と盤面側の一撃を渡す", async () => {
     const exits: WorkerExit[] = [];
     const f = await fixture(undefined, undefined, (_taskId, exit) => exits.push(exit));
     const value = task(f.db, "codex-never-closed");
@@ -1838,7 +1839,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     const f = await fixture(undefined, undefined, undefined, undefined, { exitBoard: (_taskId, _exit, facts) => bundles.push(facts), usageProbe: observed(windowAt("primary", 40)) });
     const value = task(f.db, "codex-exit-write-fails");
     await f.start(value);
-    f.db.exec("CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END");
+    const repair = failWorkerExited(f.db);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
 
     expect(() => f.process.emitExit(1, null)).not.toThrow();
@@ -1849,7 +1850,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     expect(exited()).toEqual([]);
     expect(() => bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
 
-    f.db.exec("DROP TRIGGER fail_exited");
+    repair();
     for (const write of bundles[0]!.writes) write();
     expect(exited()).toHaveLength(1);
     expect(exited()[0]!.payload).toMatchObject({ usage_recheck: { result: "not_full" } });
@@ -1860,17 +1861,40 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     const f = await fixture(undefined, undefined, undefined, undefined, { exitBoard: (_taskId, _exit, facts) => bundles.push(facts) });
     const value = task(f.db, "codex-exit-write-fails-sync");
     await f.start(value);
-    f.db.exec("CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END");
+    const repair = failWorkerExited(f.db);
 
     expect(() => f.process.emitExit(1, null)).not.toThrow();
 
     expect(bundles[0]!.capInterrupted).toBe(false);
     expect(() => bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
-    f.db.exec("DROP TRIGGER fail_exited");
+    repair();
     for (const write of bundles[0]!.writes) write();
   });
 
-  it("probe 保留中に exit を即時通知し、分類の解決時には worker_exited が読める(ADR 0309)", async () => {
+  it("書く step の順は worker_exited → 一時領域の削除 → 投影で、worker_exited の時刻は撃った時でなく exit の観測の時刻(ADR 0315 決定1・2 / ADR 0338 決定4)", async () => {
+    const bundles: WorkerExitClassification[] = [];
+    const f = await fixture(undefined, undefined, undefined, undefined, { exitBoard: (_taskId, _exit, facts) => bundles.push(facts) });
+    const value = task(f.db, "codex-exit-write-order");
+    await f.start(value);
+    const temp = f.process.calls[0]!.env.TMPDIR!;
+    const seen = () => ({ exited: listEvents(f.db, value.id).filter((event) => event.kind === "worker_exited").length, temp: existsSync(temp), episodes: listEpisodes(f.db, {}).length });
+    f.process.processes[0]!.stdout.end();
+    f.process.emitExit(0, null);
+    const observedAt = f.clock.now().toISOString();
+    await f.clock.advance(60_000);
+    expect(seen()).toEqual({ exited: 0, temp: true, episodes: 0 });
+
+    const [exit, removeTemp, project] = bundles[0]!.writes;
+    exit!();
+    expect(seen()).toEqual({ exited: 1, temp: true, episodes: 0 });
+    removeTemp!();
+    expect(seen()).toEqual({ exited: 1, temp: false, episodes: 0 });
+    project!();
+    await vi.waitFor(() => expect(seen()).toEqual({ exited: 1, temp: false, episodes: 1 }));
+    expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")!.created_at).toBe(observedAt);
+  });
+
+  it("probe 保留中に exit を即時通知し、分類は probe の解決で値に解決する(ADR 0309)", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     const calls: Array<boolean | Promise<boolean>> = [];
@@ -1887,7 +1911,6 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     let resolved = false;
     const classification = Promise.resolve(calls[0]).then((cap) => {
       resolved = true;
-      expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({ usage_recheck: { result: "full" } });
       return cap;
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -2052,14 +2075,16 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
 
   it("worker_exited の INSERT が投げると落ちた後始末で止まり、trigger を外して受理すると worker_exited → 一時領域の削除 → 投影の順に書いて枠が空く", async () => {
     const j = await joined("codex-joined-exit");
-    j.f.db.exec("CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END");
+    const repair = failWorkerExited(j.f.db);
+    const observedAt = j.f.clock.now().toISOString();
 
     j.failedExit();
     await vi.waitFor(() => expect(j.questions()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]));
     expect(j.slot.currentTaskId).toBe(j.value.id);
     expect(j.snapshot()).toMatchObject({ exited: 0, temp: true, episodes: 0 });
 
-    j.f.db.exec("DROP TRIGGER fail_exited");
+    repair();
+    await j.f.clock.advance(60_000);
     await j.accept();
 
     expect(j.after.slice(0, 2)).toEqual([
@@ -2068,6 +2093,8 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
     ]);
     await vi.waitFor(() => expect(j.snapshot()).toEqual({ exited: 1, temp: false, episodes: 1 }));
     expect(j.exitedEvents()[0]!.payload).toMatchObject({ usage_recheck: { result: "not_full" } });
+    // ADR 0315 決定2: 所要時間はこの時刻から導く(`src/learner.ts`)—— 受理の時刻を書かない
+    expect(j.exitedEvents()[0]!.created_at).toBe(observedAt);
     expect(j.questions()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE, `worker exited without reporting: ${j.value.title}`]);
     await vi.waitFor(() => expect(j.slot.currentTaskId).toBeNull());
   });

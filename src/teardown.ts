@@ -124,10 +124,7 @@ export async function runTeardown(
   // ADR 0112 決定4 / ADR 0342 決定6: 落ちた後始末の残りを持つ session は、受理の撃ち直しのほかに後始末を走らせない ——
   // 遅れた回収済み観測や MCP の verb が枠を空けると、残りの手も question も宙に浮く。届いた後始末は残りの後ろに継ぐ ——
   // 捨てると受理の後に撃つ者が無く枠が空かない。受理は残りを取り出してから撃つ
-  if (deps.slot.hasFailedTeardownRest(taskId)) {
-    deps.slot.keepFailedTeardownRest(taskId, [() => teardown(deps, taskId, step)]);
-    return;
-  }
+  if (deps.slot.deferToFailedTeardownRest(taskId, () => teardown(deps, taskId, step))) return;
   await runTeardownSteps(deps, taskId, () => teardown(deps, taskId, step));
 }
 
@@ -153,8 +150,9 @@ let driving = 0;
  *  (ADR 0342 決定2・3)。
  *
  *  枠を握ったままの throw だけが落ちた後始末である。`slot.release()` より後 —— pickup の契機 ——
- *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: 再実行すべき後始末が
- *  無いので question は立てない。 */
+ *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: question は立てない。枠の主が替わった後に投げた
+ *  adapter の書く step(`worker_exited` など)は再実行すべきものが残るが、次の session の枠を止めないので log に残し、
+ *  次の起動の復旧(ADR 0315)に任せる。 */
 export function runTeardownSteps(
   deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
   taskId: string,
@@ -167,7 +165,7 @@ export function runTeardownSteps(
     console.error(`[teardown] task ${taskId}:`, cause);
     if (deps.slot.currentTaskId !== taskId) return;
     quarantineFailedTeardown(deps.db, taskId, cause, deps.clock.now());
-    deps.slot.keepFailedTeardownRest(taskId, rest);
+    deps.slot.appendFailedTeardownRest(taskId, rest);
   };
   try {
     return drive(actions)?.catch(fail);
@@ -233,18 +231,19 @@ export type FailedTeardownCheck = (taskId: string) => Promise<void>;
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<void> {
   // ADR 0342 決定6: process が生きていれば投げた手から、再起動を跨げば後始末そのものを撃ち直す
-  const actions = deps.slot.takeFailedTeardownRest(taskId) ?? [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
-  if (deps.slot.currentTaskId === null) {
+  const rest = deps.slot.takeFailedTeardownRest(taskId);
+  // 枠を取り直すのは再起動を跨いだ受理だけ —— 残りを持つ受理で枠が空いているのは先の受理の後始末が既に解放した後で、取り直すと解放する者が無い
+  if (!rest && deps.slot.currentTaskId === null) {
     deps.slot.occupy(taskId);
     deps.slot.enterTeardown();
   }
   try {
-    await drive(actions);
+    await drive(rest ?? [() => teardown(deps, taskId, teardownStep(deps.db, taskId))]);
   } catch (err) {
     const { cause, rest } = err as TeardownThrew;
     // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
     if (isBoardDbRefusal(cause)) throw cause;
-    deps.slot.keepFailedTeardownRest(taskId, rest);
+    deps.slot.appendFailedTeardownRest(taskId, rest);
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
         (cause instanceof Error ? cause.message : String(cause)),
@@ -286,6 +285,8 @@ async function teardown(
   }
   // その await を跨ぐ間に枠の主が変わる / 梯子の底へ落ちることがありうるので、門をもう一度読む
   if (!releasable()) return;
+  // 同じ await の間に別の手が落ちた後始末を立てたなら解放しない —— 解放すると残りの手が消え、受理が2度目の後始末を撃つ(ADR 0342 決定6)
+  if (slot.deferToFailedTeardownRest(taskId, () => teardown(deps, taskId, step))) return;
   const now = clock.now();
   if (workspace) {
     releaseWorkspace(

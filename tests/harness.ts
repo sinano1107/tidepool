@@ -596,6 +596,12 @@ export function failTeardownMark(db: Db): () => void {
   return () => db.exec("DROP TRIGGER fail_teardown_mark");
 }
 
+/** exit の記録(`worker_exited` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
+export function failWorkerExited(db: Db): () => void {
+  db.exec("CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END");
+  return () => db.exec("DROP TRIGGER fail_exited");
+}
+
 /** quarantine の question の登録(`registerTask` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
 export function failQuarantineQuestion(db: Db): () => void {
   db.exec(

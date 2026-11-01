@@ -10,7 +10,7 @@ import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./chi
 import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
-import { cliAuthStop, quarantineCliAuthForProvider } from "./cli-auth.js";
+import { cliAuthStop } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -33,7 +33,7 @@ import {
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   workspaceSettingsDisposition,
 } from "./sandbox.js";
-import { closeSessionSteps, taskTempPrefix } from "./session-close.js";
+import { closeSessionActions, taskTempPrefix } from "./session-close.js";
 import { type CheckoutSkills, resolveSkillAllowlist } from "./skill-allowlist.js";
 import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServers } from "./stream-json.js";
 import {
@@ -2116,13 +2116,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // the envelope — every provider, the board's own included (ADR 0098 決定6),
       // quarantines only its own agents' pickup.
       const authStop = streamObserved.cliAuthFailed ? cliAuthStop(routing.provider) : undefined;
+      // ADR 0315 決定2: 所要時間はこの時刻から導く —— 受理の撃ち直しが受理の時刻を書かないよう、ここで1度だけ読む
+      const exitedAt = this.options.clock.now();
       // ADR 0342 決定6: 中身と順序は adapter が持ち(ADR 0338 決定4)、盤面の runner が撃つ。
       // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
       // 盤面は決定より先に撃つ。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
       // (`sessionWindow`)ので、決定が後から書く event は元から Episode に入らない
       const writes: TeardownAction[] = [
-        ...(authStop ? [() => quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now())] : []),
-        ...closeSessionSteps(
+        ...(authStop ? [() => registerResourceStop(this.options.db, authStop.quarantine, authStop.value, authStop.reason, this.options.clock.now())] : []),
+        ...closeSessionActions(
           this.options.db,
           () => ({
             taskId: task.id,
@@ -2134,7 +2136,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
               output_closed: outputClosed,
               ...fields,
             },
-            at: this.options.clock.now(),
+            at: exitedAt,
           }),
           removeTaskTemp,
           () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id }),
@@ -2149,6 +2151,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           ? { registered: { kind: "session_stopped_by_resource" as const, ...resourceStop, worker_spawned_event_id: spawnedEventId } }
           : undefined;
       // ADR 0309: Claude の分類は解決済み。束は読み手の出力の転送で、帰結は exit を受けた盤面が決める(ADR 0338 決定2)
+      // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。else は盤面の一撃を持たない構成のため
       if (this.options.onWorkerExited) {
         this.options.onWorkerExited(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
           turnRan: streamObserved.turnRan,

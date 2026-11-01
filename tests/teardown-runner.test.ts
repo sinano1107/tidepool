@@ -9,9 +9,10 @@ import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/q
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, markTeardown, runTeardown, type TeardownAction, type TeardownDeps, teardownStep } from "../src/teardown.js";
-import { spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { FULL_HANDOFF, failTeardownMark, HUMAN_WEBUI, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 
 /** 後始末の runner(ADR 0342 決定6 / ADR 0112): 後始末のどの step で盤面のバグが投げても落ちた後始末の question が1枚立ち、
  *  梯子は進まず、受理は投げた step を撃ち直す。workspace を持たない盤面(tree rule は no-op)で、step と枠だけを見る。 */
@@ -36,7 +37,7 @@ interface Board {
 }
 
 /** 走っている session 1つ。`hold` した容器は強制回収では空にならない。 */
-function board({ hold = false } = {}): Board {
+function board({ hold = false, workspace }: { hold?: boolean; workspace?: WorkspaceConfig } = {}): Board {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -46,8 +47,8 @@ function board({ hold = false } = {}): Board {
   slot.occupy(task.id);
   containers.open(task.id);
   if (hold) runtime.hold(task.id);
-  const deps: TeardownDeps = { db, clock, slot, resolve: undefined, pollNow: () => {} };
-  const watchdog = startWatchdog({ db, clock, slot, worker: new ScriptedWorker(clock), containers, pollNow: () => {}, config: CONFIG });
+  const deps: TeardownDeps = { db, clock, slot, resolve: workspace && (() => workspace), pollNow: () => {} };
+  const watchdog = startWatchdog({ db, clock, slot, worker: new ScriptedWorker(clock), containers, workspace, pollNow: () => {}, config: CONFIG });
   return { db, clock, slot, runtime, containers, task, deps, watchdog };
 }
 
@@ -281,7 +282,7 @@ it("runner の中で盤面 DB が書きを拒めば(A)、question を立てず�
   expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
 });
 
-it("分類の Promise が reject すると(adapter の記録の書き込みが投げた)、slot を黙って握り続けず落ちた後始末が立ち、梯子は進まず未処理の reject も出ない(#2822)", async () => {
+it("破られた契約への備え: 分類の Promise が reject しても(adapter の書き込みは束の step へ移ったのでそこからは来ない)、slot を黙って握り続けず落ちた後始末が立ち、梯子は進まず未処理の reject も出ない(#2822)", async () => {
   const b = board({ hold: true });
 
   const rejections = await unhandledRejectionsDuring(async () => {
@@ -353,7 +354,7 @@ it("直さずに受理すると書く step の撃ち直しが拒まれ、直し�
   expect(b.slot.currentTaskId).toBeNull();
 });
 
-it("書く step は分類が揃ってから撃ち、決定はその後ろ —— Promise の分類の間は何も書かない(ADR 0309 決定3 / ADR 0342 決定6)", async () => {
+it("書く step は分類が揃ってから撃ち、決定はその後ろ —— Promise の分類の間は何も書かない(ADR 0342 決定6、ADR 0309 決定3 の Status 追記)", async () => {
   const b = board();
   const order: string[] = [];
   let classify!: (cap: boolean) => void;
@@ -458,6 +459,78 @@ it("先に落ちた後始末の残りを持つ枠で書く step が投げても�
   expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed")).toHaveLength(1);
   expect(steps.fired).toEqual(["exit", "temp", "project"]);
   expect(questions(b.db)).toEqual(["worker transcript could not be written: one", "the board's record container cannot be written — pickup is stopped"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it("走っている後始末の await の間に書く step が投げても、後始末は枠を空けず残りの後ろに回る —— 受理は残りの手を撃ち、偽の workspace question を立てずに枠を空ける(ADR 0342 決定6)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  const b = board({ workspace: ws });
+  await prepareWorkspaceAtPickup(b.db, ws, b.task);
+  commitWork(ws.path, "deliverable.txt", "work\n");
+  completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
+  markTeardown(b.db, b.task.id, b.clock.now());
+  b.slot.enterTeardown();
+  const steps = writeSteps();
+
+  // 後始末は `ensureWorkspaceToken` の await まで同期に走り、exit の settle はその中に着く
+  const running = runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  await running;
+  await settle();
+
+  expectHeld(b);
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual([]);
+  expect(b.slot.currentTaskId).toBeNull();
+}, GIT_FIXTURE_TEST_TIMEOUT);
+
+it("残りが [後始末, 書く step] のとき、受理で後始末が枠を空けた後に step がまた投げても、次の受理は枠を取り直さず step だけ撃つ —— question なしで枠を握らない(ADR 0342 決定6 / ADR 0112 決定3)", async () => {
+  const b = board({ hold: true });
+  completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
+  markTeardown(b.db, b.task.id, b.clock.now());
+  b.slot.enterTeardown();
+  let broken = true;
+  await runTeardown(b.deps, b.task.id, {
+    transition: () => {
+      if (broken) throw new Error("teardown bug");
+    },
+  });
+  const steps = writeSteps();
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  broken = false;
+
+  await expect(answer(b)).rejects.toThrow("write step bug");
+  expect(b.slot.currentTaskId).toBeNull();
+
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual([]);
+  expect(b.slot.currentTaskId).toBeNull();
+  expect(b.slot.inTeardown).toBe(false);
+});
+
+it("飲まれた回収済み観測の後で人間が止めると、受理の後ろで人間の停止の後始末が枠を空ける —— 偽の Containment question を立てない(ADR 0112 決定4 / ADR 0305)", async () => {
+  const b = board({ hold: true });
+  const steps = writeSteps();
+  await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.runtime.fireEmpty(b.task.id);
+  await settle();
+
+  expect(b.watchdog.stopSession(b.task.id, () => recordHumanStop(b.db, b.task.id, "stop now", b.clock.now(), "webui"))).toBeUndefined();
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  await b.clock.advance(CONFIG.reclaimTimeout * 2);
+  await settle();
+
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual(["stopped by human: one"]);
   expect(b.slot.currentTaskId).toBeNull();
 });
 

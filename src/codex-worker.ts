@@ -47,7 +47,7 @@ import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
-import { closeSessionSteps, taskTempPrefix } from "./session-close.js";
+import { closeSessionActions, taskTempPrefix } from "./session-close.js";
 import { resolveSkillAllowlist } from "./skill-allowlist.js";
 
 
@@ -1588,9 +1588,11 @@ export class CodexWorker implements WorkerAdapter {
             ? { quarantine: "workerMcpReachability", value: "codex", reason: `this Codex worker session exited with code 1: ${exit.stderr_tail}` }
             : undefined;
         // ADR 0083 追記10: Claude adapter と同じ閉じる1本で、worker_exited を書いたあとに Precedent を投影する(ADR 0315 決定1)。
+        // ADR 0315 決定2: 所要時間はこの時刻から導く —— 受理の撃ち直しが受理の時刻を書かないよう、撃つ時には読まない
+        let exitedAt = this.options.clock.now();
         // ADR 0342 決定6: 中身と順序は adapter が持ち(ADR 0338 決定4)、盤面の runner が撃つ。exit は撃つ時に読む —— `usage_recheck` は分類の解決で入る
         const writes: TeardownAction[] = [
-          ...closeSessionSteps(
+          ...closeSessionActions(
             this.options.db,
             () => ({
               taskId: task.id,
@@ -1602,13 +1604,14 @@ export class CodexWorker implements WorkerAdapter {
                 output_closed: outputClosed,
                 ...fields,
               },
-              at: this.options.clock.now(),
+              at: exitedAt,
             }),
             removeTaskTemp,
             () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id }),
           ),
           ...(mcpStop ? [() => registerResourceStop(this.options.db, mcpStop.quarantine, mcpStop.value, mcpStop.reason, this.options.clock.now())] : []),
         ];
+        // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。これは盤面の一撃を持たない構成のため
         const fire = () => {
           for (const write of writes) write();
         };
@@ -1629,6 +1632,7 @@ export class CodexWorker implements WorkerAdapter {
         // ADR 0309: exit の逐語は即時に渡す。分類は値だけを運び、書き込みは運ばない(決定4 / ADR 0342 決定6)
         const classification = recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => {
           exit.usage_recheck = usage_recheck;
+          exitedAt = this.options.clock.now();
           return usage_recheck.result === "full";
         });
         if (onWorkerExited) onWorkerExited(task.id, exit, facts(classification));
@@ -1649,8 +1653,6 @@ export class CodexWorker implements WorkerAdapter {
       // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない
       // 器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       this.running.delete(task.id);
-      // ADR 0342 決定4: 盤面 DB の拒否は spawn_failed の原因に書き直さず、未処理の reject として底へ上げる
-      if (isBoardDbRefusal(error)) throw error;
       if (error instanceof RecordContainerError) {
         removeTaskTemp();
         this.options.onRecordContainerFailed?.(task.id, error);

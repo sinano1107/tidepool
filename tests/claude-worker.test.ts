@@ -67,7 +67,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, failTeardownMark, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -3303,22 +3303,40 @@ describe("ClaudeCodeWorker", () => {
   });
 
   describe("exit の記録は束の書く step で、close listener / timeout の中では書かない(ADR 0342 決定6 / ADR 0338 決定4)", () => {
-    const FAIL_EXITED = "CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END";
-
     /** 束を受け取るだけで撃たない盤面。trigger を張った session を1つ走らせる。 */
     async function session(id: string) {
       const bundles: WorkerExitClassification[] = [];
       const f = await makeWorker({}, { onWorkerExited: (_taskId, _exit, facts) => bundles.push(facts) });
       f.start(id);
       await vi.waitFor(() => expect(f.calls).toHaveLength(1));
-      f.db.exec(FAIL_EXITED);
-      return { f, bundles };
+      return { f, bundles, repair: failWorkerExited(f.db) };
     }
     /** 残りの step を撃って一時領域を消す。 */
-    const finish = ({ f, bundles }: Awaited<ReturnType<typeof session>>) => {
-      f.db.exec("DROP TRIGGER fail_exited");
+    const finish = ({ bundles, repair }: Awaited<ReturnType<typeof session>>) => {
+      repair();
       for (const write of bundles[0]!.writes) write();
     };
+
+    it("step の順は worker_exited → 一時領域の削除 → 投影で、worker_exited の時刻は撃った時でなく exit の観測の時刻(ADR 0315 決定1・2 / ADR 0338 決定4)", async () => {
+      const s = await session("task-exit-write-order");
+      s.repair();
+      const temp = s.f.calls[0]!.env.TMPDIR!;
+      const seen = () => ({ exited: listEvents(s.f.db, "task-exit-write-order").filter((e) => e.kind === "worker_exited").length, temp: existsSync(temp), episodes: listEpisodes(s.f.db, {}).length });
+      s.f.processes[0]!.stdout.end();
+      s.f.emitExit(0, null);
+      const observedAt = s.f.clock.now().toISOString();
+      await s.f.clock.advance(60_000);
+      expect(seen()).toEqual({ exited: 0, temp: true, episodes: 0 });
+
+      const [exit, removeTemp, project] = s.bundles[0]!.writes;
+      exit!();
+      expect(seen()).toEqual({ exited: 1, temp: true, episodes: 0 });
+      removeTemp!();
+      expect(seen()).toEqual({ exited: 1, temp: false, episodes: 0 });
+      project!();
+      await vi.waitFor(() => expect(seen()).toEqual({ exited: 1, temp: false, episodes: 1 }));
+      expect(listEvents(s.f.db, "task-exit-write-order").find((e) => e.kind === "worker_exited")!.created_at).toBe(observedAt);
+    });
 
     it("worker_exited の INSERT が落ちても close listener は投げず、step は撃ったときだけ投げる", async () => {
       const s = await session("task-exit-write-close");
@@ -5349,7 +5367,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     expect(exitedOf(f.db, "task-force-at-exit")).toMatchObject({ exit_code: 0, output_closed: true });
   });
 
-  it("読み切りが回収 timeout までに来なければ、それまでに読めた分で worker_exited を書き、盤面側の一撃を呼ぶ", async () => {
+  it("読み切りが回収 timeout までに来なければ、それまでに読めた分で書く step と盤面側の一撃を渡す", async () => {
     const exits: WorkerExit[] = [];
     const f = await makeWorker({}, { onWorkerExited: (_taskId, exit, facts) => { exits.push(exit); fireWrites(facts); } });
     f.start("task-never-closed");

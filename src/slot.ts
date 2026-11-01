@@ -57,9 +57,16 @@ export class Slot {
 
   /** 落ちた後始末の残り —— 投げた手から先(ADR 0342 決定6)。受理が撃ち直す。memory なので再起動を越えず、
    *  越えた受理は後始末そのものを撃ち直す。枠を握っている session の分だけ持つ。先に残った手は捨てず、その後ろに継ぐ。 */
-  keepFailedTeardownRest(taskId: string, actions: TeardownAction[]): void {
+  appendFailedTeardownRest(taskId: string, actions: TeardownAction[]): void {
     const earlier = this.failedTeardownRest?.taskId === taskId ? this.failedTeardownRest.actions : [];
     this.failedTeardownRest = { taskId, actions: [...earlier, ...actions] };
+  }
+
+  /** 落ちた後始末の残りを持っていれば `action` をその後ろに継いで true —— 呼び手は自分では撃たず、受理に任せる(ADR 0112 決定4)。 */
+  deferToFailedTeardownRest(taskId: string, action: TeardownAction): boolean {
+    if (!this.hasFailedTeardownRest(taskId)) return false;
+    this.appendFailedTeardownRest(taskId, [action]);
+    return true;
   }
 
   hasFailedTeardownRest(taskId: string): boolean {

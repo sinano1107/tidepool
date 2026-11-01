@@ -18,7 +18,7 @@ export const taskTempPrefix = (harness: "claude" | "codex", taskId: string) => `
  *  投影は `worker_exited_event_id` を写し、同じ版では作り直せない。手に分けて返す: adapter は束に乗せて runner に撃たせ、投げた手から
  *  撃ち直す(ADR 0342 決定6)—— 1手に畳むと受理が `worker_exited` を2行書く。起動時の復旧はその場で順に撃つ。
  *  `exit` は撃つ時に読む —— Codex の読み直しの結果は分類の解決で入る。 */
-export function closeSessionSteps(
+export function closeSessionActions(
   db: Db,
   exit: () => { taskId: string; actorId: string; at: Date; payload: Extract<EventPayload, { kind: "worker_exited" }> },
   removeTaskTemp: () => void,
@@ -60,7 +60,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
         project();
         continue;
       }
-      const steps = closeSessionSteps(
+      const actions = closeSessionActions(
         db,
         () => ({
           taskId,
@@ -80,7 +80,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
         () => removeTaskTemps(opts.tmpDir, taskId),
         project,
       );
-      for (const step of steps) step();
+      for (const action of actions) action();
     } catch (err) {
       // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
       if (isBoardDbRefusal(err)) throw err;
