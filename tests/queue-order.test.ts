@@ -8,9 +8,9 @@ import { Slot } from "../src/slot.js";
 import { getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { RecordContainerError } from "../src/transcript-store.js";
-import { queueReturnHandler, recordContainerHaltHandler, rowRefusalHandler } from "../src/watchdog.js";
+import { queueReturnHandler, recordContainerHaltHandler } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime } from "./fakes.js";
-import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { exitToWatchdog, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 
 /** キュー順(GLOSSARY.md / ADR 0333 決定1・2): 盤面が自分の都合で todo へ戻す task は位置を変えない —— 順を動かすのは登録と人間の行為だけ。 */
 
@@ -24,12 +24,12 @@ const RETURNS: [string, BoardReturn][] = [
   ["record_container_unwritable", (deps, containers, task) => recordContainerHaltHandler(deps, containers)(task.id, new RecordContainerError(task.id, "/logs", "EACCES"))],
   ["session_stopped_by_resource", (deps, containers, task) => {
     const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });
-    queueReturnHandler(deps, containers)(task.id, { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: spawned });
+    exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { registered: { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: spawned } }, capInterrupted: false });
   }],
-  ["row_refused", (deps, _, task) => {
+  ["row_refused", (deps, containers, task) => {
     const { provider, model } = loadExecutionSettingTable(deps.db)[0]!;
     const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });
-    rowRefusalHandler(deps)(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: spawned }, Promise.resolve());
+    exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: spawned } }, capInterrupted: false });
   }],
 ];
 

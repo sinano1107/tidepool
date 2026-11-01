@@ -150,7 +150,7 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
 
   const options = buildWorkerOptions(
     { ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "tidepool" },
-    { db: openDb(":memory:"), clock, reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onSessionStoppedByResource: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
+    { db: openDb(":memory:"), clock, reclaimTimeout: 1, ...containerHarness(fakeContainers()), onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
   );
 
   expect(options.registry.mode).toBe("remote-backed");
@@ -349,7 +349,7 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
 
   const registryDir = await makeRegistry();
   const emitted = new Set(
-    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onSessionStoppedByResource: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
+    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
   );
   // 不在が正当なのは注入 seam の3つだけ(同梱集合の ping は ADR 0335 決定2)—— そこでの不在は「機能が静かに切れる」
   // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。#463 で
@@ -369,7 +369,7 @@ it("CodexWorkerOptions の任意フィールドは全て組み立てられ、使
   const harness = containerHarness(fakeContainers());
   const onWorkerExited = () => {};
   const openaiUsage: CodexAppServerProbe = async () => ({ status: "unobservable", provider: "openai", cliVersion: null, reason: "fake" });
-  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, openaiUsage, onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onSessionStoppedByResource: () => {}, onWorkerExited, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
+  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, openaiUsage, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
   expect(optional.filter((key) => !Object.keys(options).includes(key))).toEqual([]);
   expect(options.onWorkerExited).toBe(onWorkerExited);
   expect(options.usageProbe).toBe(openaiUsage);
@@ -407,7 +407,7 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
     logDir,
     boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
   };
-  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onSessionStoppedByResource: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
+  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
 
   expect(options.logDir).toBe(logDir);
   expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);

@@ -70,8 +70,8 @@ export interface Watchdog extends PendingReclaim {
    *  遅れて届いた回収済み観測はこの述語で弾かれる。`pendingReclaim` では代われない:
    *  あちらは容器の側も読むので、空が観測された瞬間に false になる。 */
   heldForContainment: (taskId: string) => boolean;
-  /** exit は即時に保持し、上限到達の分類が揃ってから盤面が決める(ADR 0309)。 */
-  onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
+  /** exit は即時に保持し、事実の束が揃ってから盤面が1度だけ決める(ADR 0309 / ADR 0338)。 */
+  onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
 }
 
 /** watchdog が持つ、今 slot にいるタスクの今の pickup の記録。taskId か pickup が替われば
@@ -188,36 +188,18 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
   })();
 }
 
-/** 行の拒否(GLOSSARY.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
- *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
- *  Quarantine(行が表に残っているときだけ)・`row_refused`・位置を変えない `todo` への復帰(ADR 0333 決定1。行でない Interview の
- *  対象なら対象の question と `target_refused`)を1 transaction で済ませてから後始末に入るので、
- *  後始末中の status は `todo` で、経路は解放の step に読まれる(ADR 0113 決定3)—— `in_progress` の
- *  まま入れば中断と読まれ `cap_interrupted` が書かれる。slot の解放は回収済み観測の後ろ。 */
-export function rowRefusalHandler(
-  deps: TeardownDeps,
-): (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void {
-  return (taskId, refusal, reclaimed) => {
-    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
-    const task = getTask(deps.db, taskId);
-    if (task?.status !== "in_progress") return;
-    const now = deps.clock.now();
-    // 行でない Interview の対象(ADR 0199 決定4): pin の子には別の候補が無いので、行の Quarantine でなく対象の question を立てる
-    const target = unrowedTarget(deps.db, task);
-    deps.db.transaction(() => {
-      if (target) {
-        questionRefusedTarget(deps.db, task, { ...target, cause: refusal.cause }, `ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`, now);
-        returnToQueue(deps.db, task, { kind: "target_refused", ...refusal }, now);
-      } else {
-        quarantineRefusedRow(deps.db, refusal, `The worker session for task ${taskId}`, now);
-        returnToQueue(deps.db, task, { kind: "row_refused", ...refusal }, now);
-      }
-      // 同じ transaction に置く —— 間で落ちると後始末の印の無い todo が残り、起動時の復旧が後始末を走らせない
-      markTeardown(deps.db, taskId, now);
-    })();
-    deps.slot.enterTeardown();
-    void reclaimed.then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
-  };
+/** 行の拒否(GLOSSARY.md / ADR 0184 決定4)を盤面が登録し、`todo` へ戻すときに刻む event を返す: 行の Quarantine(行が表に
+ *  残っているときだけ)か、行でない Interview の対象なら対象の question(ADR 0199 決定4)。ターンが走ったかに関わらず登録する
+ *  (ADR 0338 決定3・4)—— 呼び手が `todo` への復帰か failure question と同じ transaction に置く。 */
+function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date): QueueReturnPayload {
+  // pin の子には別の候補が無いので、行の Quarantine でなく対象の question を立てる
+  const target = unrowedTarget(db, task);
+  if (target) {
+    questionRefusedTarget(db, task, { ...target, cause: refusal.cause }, `ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`, now);
+    return { kind: "target_refused", ...refusal };
+  }
+  quarantineRefusedRow(db, refusal, `The worker session for task ${task.id}`, now);
+  return { kind: "row_refused", ...refusal };
 }
 
 /** process を1つも持たないまま失敗にせず位置を変えずに `todo` へ戻す pickup の盤面側の一撃(ADR 0274 決定3・4 / ADR 0333 決定1)。入口は資源の停止で worker が
@@ -226,13 +208,12 @@ export function rowRefusalHandler(
  *  形は行の拒否(ADR 0184 決定4)と同じ: `todo` への復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
  *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— drift で解決できない
  *  workspace の Quarantine を撃ち直さず、動いていない checkout に触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。
- *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。3つ目の入口は process は起きたが0ターンで終わった session
- *  (`session_stopped_by_resource`、ADR 0331 決定2・9)で、`worker_exited` が先に書かれているので後始末は走った session の step
- *  (退避・tree rule・休止位置)に読む。強制回収は exit の時点で送達済みで、2度目の送達は回収の意味を変えない。 */
+ *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。process が起きた session の `todo` への復帰は exit の決定
+ *  (`onWorkerExited`)が持つ(ADR 0338 決定2)。 */
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, payload: QueueReturnPayload) => void {
+): (taskId: string, payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>) => void {
   return (taskId, payload) => {
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
     const task = getTask(deps.db, taskId);
@@ -568,32 +549,47 @@ export function startWatchdog(deps: {
     return undefined;
   };
 
-  /** exit の事実と分類を分けて受け、分類が揃った時点で slot・後始末・status を読み直す(ADR 0309)。 */
-  function onWorkerExited(taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification): void {
+  /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
+  function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
     const rec = syncPickup(taskId);
     rec.exit = exit;
+    const { turnRan, stop, capInterrupted } = facts;
     const decide = (cap: boolean) => {
       if (rec.humanStop) return;
       if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return;
       const task = getTask(db, taskId);
       if (task?.status !== "in_progress") return;
-      if (cap) {
-        markTeardown(db, taskId, clock.now());
-      } else {
-        // 畳み込み停止の結果は梯子が受ける。満杯だけは時間制限の停止より優先する。
-        if (rec.stopSentAt !== undefined) return;
-        const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
-        registerFailureAndMarkTeardown(
-          db,
-          task,
-          `worker exited without reporting: ${task.title}`,
-          `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
-            "it did not complete, decompose, or escalate. No self-report is possible." +
-            exitSections(exit),
-          clock.now(),
-        );
-      }
+      const now = clock.now();
+      // 登録・status の決着・後始末の印は1 transaction —— 間で落ちると後始末の印の無い todo が残る(issue #1935)
+      const settled = db.transaction(() => {
+        // ADR 0338 決定3・4: 行の拒否はターンに関わらず盤面が登録する。資源の停止は adapter が登録済み
+        const queueReturn = stop && ("refusal" in stop ? registerRowRefusal(db, task, stop.refusal, now) : stop.registered);
+        // ADR 0338 決定2: 人間の停止 > 停止(ターンが走っていない)> 上限到達 > 時間制限の停止の梯子 > 報告なき exit の failure question
+        if (queueReturn && !turnRan) {
+          returnToQueue(db, task, queueReturn, now);
+        } else {
+          // 戻らない session でも対象の拒否は証拠に残す —— 子の拒否の種類はこの event から引かれる(ADR 0199 決定4)
+          if (queueReturn?.kind === "target_refused") appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: queueReturn, at: now });
+          // 畳み込み停止の結果は梯子が受ける
+          if (!cap && rec.stopSentAt !== undefined) return false;
+          if (!cap) {
+            const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
+            registerFailureQuestion(
+              db,
+              task,
+              `worker exited without reporting: ${task.title}`,
+              `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
+                "it did not complete, decompose, or escalate. No self-report is possible." +
+                exitSections(exit),
+              now,
+            );
+          }
+        }
+        markTeardown(db, taskId, now);
+        return true;
+      })();
+      if (!settled) return;
       slot.enterTeardown();
       void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
     };

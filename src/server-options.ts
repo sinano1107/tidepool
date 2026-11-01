@@ -56,7 +56,6 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
-import type { RowRefusal } from "./events.js";
 import { executionSettingsFor } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -91,7 +90,7 @@ import {
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
-import { type PickupStopped, resolveTaskAgent, type SessionStoppedByResource, type Task, type TaskType } from "./tasks.js";
+import { type PickupStopped, resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -267,12 +266,10 @@ export function buildWorkerOptions(
     reclaimTimeout: number;
     containers: ProcessContainers;
     boardCall: BoardCall;
-    onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
     onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
     onPickupStopped: (taskId: string, payload: PickupStopped) => void;
-    onSessionStoppedByResource: (taskId: string, payload: SessionStoppedByResource) => void;
-    onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
+    onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
     transcripts: TranscriptStore;
   },
 ): ClaudeWorkerOptions {
@@ -304,17 +301,14 @@ export function buildWorkerOptions(
     boardState: board.boardState,
     // ADR 0097 決定4: Moonshot キーの置き場。アダプタが spawn 時にだけ読む
     moonshotApiKeyFile: board.moonshotApiKeyFile,
-    // ADR 0184 決定4: 渡し忘れは「404 で断られた session が報告なき exit の failure question になる」形で静かに fail する
-    onRowRefused: session.onRowRefused,
     // ADR 0118: 渡し忘れは「spawn に失敗した pickup が in_progress のまま枠を握る」形で静かに fail する
     onSpawnFailed: session.onSpawnFailed,
     // ADR 0266 決定4: 渡し忘れは「transcript を開けない pickup が in_progress のまま枠を握る」形で静かに fail する
     onRecordContainerFailed: session.onRecordContainerFailed,
     // ADR 0274: 渡し忘れは「資源の Quarantine が止めた pickup が in_progress のまま枠を握る」形で静かに fail する
     onPickupStopped: session.onPickupStopped,
-    // ADR 0331 決定2: 渡し忘れは「資源の署名を持つ0ターンの session が判断の無い failure question になる」形で静かに fail する
-    onSessionStoppedByResource: session.onSessionStoppedByResource,
-    // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する
+    // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する。行の拒否と0ターンの
+    // 資源の停止もこの束に乗る(ADR 0338 決定1)
     onWorkerExited: session.onWorkerExited,
     // ADR 0149: transcript は盤面側の器が開く
     transcripts: session.transcripts,
@@ -348,7 +342,6 @@ export function buildCodexWorkerOptions(
     onSpawnFailed: session.onSpawnFailed,
     onRecordContainerFailed: session.onRecordContainerFailed,
     onPickupStopped: session.onPickupStopped,
-    onSessionStoppedByResource: session.onSessionStoppedByResource,
     onWorkerExited: session.onWorkerExited,
     // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
     // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない

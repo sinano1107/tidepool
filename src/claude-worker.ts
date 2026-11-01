@@ -14,7 +14,7 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { appendEvent, type ResourceStop, type RowRefusal } from "./events.js";
+import { appendEvent, type ResourceStop } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
@@ -39,7 +39,6 @@ import {
   carriesReadOnly,
   type PickupStopped,
   resolveTaskAgent,
-  type SessionStoppedByResource,
   type Task,
   taskVerbSwap,
 } from "./tasks.js";
@@ -874,9 +873,6 @@ export interface ClaudeWorkerOptions {
   /** ADR 0335 決定2: the bundled-set ping, the same one the skills picker reads. Absent → `enumerateHostSkills`
    *  over `boardCall`; injected for the same reason as `enumerateSkills`. */
   enumerateHostSkills?: () => Promise<string[] | null>;
-  /** 行の拒否(ADR 0184 決定4)の盤面側の一撃 —— `rowRefusalHandler` 製。
-   *  `onWorkerExited` と同じ機能フィールドで、渡すのは spawn 時の行と回収済み観測だけ。 */
-  onRowRefused?: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
    *  `onWorkerExited` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
@@ -886,12 +882,9 @@ export interface ClaudeWorkerOptions {
   /** 資源の Quarantine が spawn の前に pickup を止めた(ADR 0274)盤面側の一撃 —— `queueReturnHandler` 製。
    *  `onWorkerExited` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
-  /** 0ターンで終わった session が資源の署名(401 / drift)を持った(ADR 0331 決定2・4)盤面側の一撃 —— `onPickupStopped` と同じ
-   *  `queueReturnHandler` 製。不在 → その session は報告なき exit の failure question に落ちる。 */
-  onSessionStoppedByResource?: (taskId: string, payload: SessionStoppedByResource) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
-   *  分類も同じ通知で渡す(ADR 0309)。報告なき exit かどうかの判定は盤面側が持つ。 */
-  onWorkerExited?: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
+   *  帰結に要る事実の束も同じ通知で渡す(ADR 0309 / ADR 0338 決定1)。報告なき exit かどうかの判定は盤面側が持つ。 */
+  onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。`containers` と同じく**省略できない**。 */
   transcripts: TranscriptStore;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
@@ -2144,7 +2137,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         ? quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now())
         : undefined;
       // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
-      // 下の一撃たちより先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
+      // 下の exit の一撃より先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
       // (`sessionWindow`)ので、一撃が後から書く event は元から Episode に入らない
       closeSession(
         this.options.db,
@@ -2163,23 +2156,20 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         removeTaskTemp,
         () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id }),
       );
-      // ADR 0184 決定4: 行の拒否も同じ位置で exit の一撃より先に渡す。帰属は spawn 時の行で、
-      // Provider では分岐しない(moonshot の 404 もこの1本を通る)。
-      if (streamObserved.refusalCause) {
-        this.options.onRowRefused?.(
-          task.id,
-          { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId, cause: streamObserved.refusalCause },
-          this.containers.reclaimed(task.id),
-        );
-      }
-      // ADR 0331 決定2・4: 資源の署名を持つ0ターンの session は、止めた資源を上で登録済みのまま、ここで `todo` へ戻す。
-      // ターンが走った session は下の exit の一撃(failure question)へ —— 資源の question と2枚になる
+      // ADR 0338 決定1: 停止は1 session に1つ。ADR 0184 決定3: 行の拒否の帰属は spawn 時の行で、Provider では分岐しない(moonshot の 404 もこの1本を通る)。
+      // shortcut: 404 と 401 / init の停止が同じ session に重なる形は未実測で、重なれば未登録の行の拒否を残す側を取る。観測されたら束に2つ載せる
       const resourceStop = authStop ?? initStop;
-      if (resourceStop && !streamObserved.turnRan) {
-        this.options.onSessionStoppedByResource?.(task.id, { kind: "session_stopped_by_resource", ...resourceStop, worker_spawned_event_id: spawnedEventId });
-      }
-      // ADR 0309: Claude の分類は解決済み。cap の後始末も exit を受けた盤面が決める。
-      this.options.onWorkerExited?.(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, streamObserved.capInterrupted);
+      const stop = streamObserved.refusalCause
+        ? { refusal: { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId, cause: streamObserved.refusalCause } }
+        : resourceStop
+          ? { registered: { kind: "session_stopped_by_resource" as const, ...resourceStop, worker_spawned_event_id: spawnedEventId } }
+          : undefined;
+      // ADR 0309: Claude の分類は解決済み。束は読み手の出力の転送で、帰結は exit を受けた盤面が決める(ADR 0338 決定2)
+      this.options.onWorkerExited?.(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
+        turnRan: streamObserved.turnRan,
+        ...(stop && { stop }),
+        capInterrupted: streamObserved.capInterrupted,
+      });
     };
     // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
     // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても
