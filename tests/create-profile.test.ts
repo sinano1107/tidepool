@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createProfile, listProfileViews, ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAuthorityProfileNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -143,7 +143,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
 
   it("push が失敗すると致命 — リモートにもコミットが残らない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
-    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    rejectRegistryPushes(registryDir);
     const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(

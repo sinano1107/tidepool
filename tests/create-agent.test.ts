@@ -10,7 +10,7 @@ import {
 import { InvalidAgentDefinitionError, InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -204,7 +204,7 @@ describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052
 
   it("push が失敗すると致命 — リモートにもローカルの追跡 ref にもコミットが残らず、worktree も残らない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
-    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    rejectRegistryPushes(registryDir);
     const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(

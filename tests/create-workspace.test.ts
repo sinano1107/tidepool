@@ -14,10 +14,11 @@ import {
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
+  RelativeClonePathError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { startGitHttpRemote } from "./git-http-remote.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { startGitHttpRemote, startRecordingHttpRemote } from "./git-http-remote.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.mock("../src/github-auth.js", async (importOriginal) => ({
@@ -33,7 +34,7 @@ it("clone が無音なら中断し、宛先を残さない(ADR 0334)", async () 
   const repo = await startGitHttpRemote(remote, "stall-info");
 
   await expect(createWorkspace({ mode: "clone", name: "lagoon", repo }, deps)).rejects.toThrow(
-    "`git clone` stalled: no bytes for 1 s (in " + deps.workspacesBaseDir + ")",
+    "`git clone` stalled: no bytes for 1 s (in " + join(deps.workspacesBaseDir, "lagoon") + ")",
   );
   expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
 }, 15_000);
@@ -57,6 +58,27 @@ it("registry の push が無音なら RegistryPushFailedError に中断理由を
   expect(failure).toBeInstanceOf(RegistryPushFailedError);
   expect(failure).toHaveProperty("message", expect.stringContaining("`git push` stalled: no bytes for 1 s"));
 }, 15_000);
+
+// ADR 0052 Status 追記: 盤面所有の repo からの push は registry clone の写しを動かさない —— 写しは push の成功を見て盤面が書く
+it("registry の push が拒まれれば写し origin/main は動かず、通れば着地した commit を指す", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
+  const registry = { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced };
+  const remote = git(registryDir, "config", "remote.origin.url");
+  const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+  rejectRegistryPushes(registryDir);
+  const write = (body: string) => commitToRegistry(registry, undefined, (dir) => writeFileSync(join(dir, "notes.txt"), body), body);
+
+  expect(() => write("rejected")).toThrow(RegistryPushFailedError);
+  const rejected = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+  writeFileSync(join(remote, "hooks", "pre-receive"), "#!/bin/sh\nexit 0\n");
+  const landed = write("landed");
+
+  expect({ rejected, copy: git(registryDir, "rev-parse", "refs/remotes/origin/main"), remote: git(remote, "rev-parse", "main") }).toEqual({
+    rejected: before,
+    copy: landed,
+    remote: landed,
+  });
+});
 
 it("健全な遅い clone は stall の間隔より長く転送しても完走する(ADR 0334)", async () => {
   const registryDir = await makeMainRegistry();
@@ -594,6 +616,52 @@ describe("createWorkspace: clone モード(issue #57)", () => {
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
   });
+
+  // 盤面の clone の origin は盤面が組んだ https(ADR 0339 決定4)なので、ssh 綴りの再送も同じ repo の孤児を流用する
+  it("リトライの孤児は、要求と origin の両方が GitHub に解けるなら綴りが違っても repo key で同じと読んで流用する", async () => {
+    const registryDir = await makeMainRegistry();
+    const { github: _github, ...deps } = await makeDeps(registryDir);
+    placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", await makeUpstream(), "https://github.com/sinano1107/tidepool.git");
+
+    await createWorkspace({ mode: "clone", name: "lagoon", repo: "git@github.com:sinano1107/tidepool.git" }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: "git@github.com:sinano1107/tidepool.git" });
+  });
+
+  // ADR 0339 決定5: clone は盤面所有の HOME から撃つので、相対 path は workspacesBaseDir ではない場所に解ける
+  it("非 GitHub の clone 入力が相対 path なら、clone を撃たずに絶対 path を求めて拒否する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+
+    await expect(createWorkspace({ mode: "clone", name: "lagoon", repo: "upstream-checkout" }, deps)).rejects.toThrow(
+      RelativeClonePathError,
+    );
+    expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
+  });
+
+  // ADR 0339 決定5 / #2828: clone の cwd は workspacesBaseDir でなく盤面所有の HOME —— 親 checkout の config は読まれない
+  it("workspacesBaseDir の親に cookieFile と URL 付き extraHeader を持つ checkout があっても、clone は拒まれず Cookie も出ない", async () => {
+    const registryDir = await makeMainRegistry();
+    const upstream = await makeUpstream();
+    const remote = join(await tempDir("tidepool-clone-src-"), "remote.git");
+    git(upstream, "clone", "--quiet", "--bare", ".", remote);
+    const reached = await startRecordingHttpRemote(remote);
+    const parent = await tempDir("tidepool-parent-checkout-");
+    git(parent, "init", "-b", "main");
+    const cookies = join(parent, "cookies.txt");
+    await writeFile(cookies, "127.0.0.1\tFALSE\t/\tFALSE\t0\tsession\tcookie-secret\n");
+    git(parent, "config", "http.cookieFile", cookies);
+    git(parent, "config", `http.${reached.url}.extraHeader`, "X-Leak: header-secret");
+    const deps = { ...(await makeDeps(registryDir)), workspacesBaseDir: join(parent, "workspaces") };
+    await mkdir(deps.workspacesBaseDir);
+
+    const path = await createWorkspace({ mode: "clone", name: "lagoon", repo: reached.url }, deps);
+
+    expect({
+      head: git(path, "rev-parse", "HEAD"),
+      leaked: reached.requests().filter((r) => r.headers.cookie !== undefined || r.headers["x-leak"] !== undefined),
+    }).toEqual({ head: git(upstream, "rev-parse", "HEAD"), leaked: [] });
+  });
 });
 
 describe("createWorkspace: 名前検証(#68 の assertValidWorkspaceName が入口で効く)", () => {
@@ -720,7 +788,7 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
 
   it("push が失敗すると致命 — リモートにもコミットが残らない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
-    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    rejectRegistryPushes(registryDir);
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
     const path = await makeLocalOnlyCheckout();
 

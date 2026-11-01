@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { git } from "./git.js";
 import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, originRepo } from "./github-auth.js";
+import { remoteTrackingRef } from "./registry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -244,7 +246,9 @@ export class GhCliClient implements GitHubClient {
     const repo = originRepo(cwd);
     await this.auth.ensureToken(repo);
     try {
-      return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
+      // ADR 0339 決定4: repo は盤面が origin の値から解き、cwd の remote(checkout の insteadOf 適用後)から解かせない
+      const named = repo === undefined ? args : [...args, "-R", repo];
+      return (await execFileAsync("gh", named, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
       // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
       if ((err as { killed?: boolean }).killed) {
@@ -257,7 +261,12 @@ export class GhCliClient implements GitHubClient {
   async preparePush(input: PushBranchInput): Promise<() => void> {
     const repo = originRepo(input.path);
     await this.auth.ensureToken(repo);
-    return () => authedGitBounded(this.auth, input.path, repo, this.timeoutMs, "push", "-u", "origin", input.branch);
+    return () => {
+      const sha = git(input.path, "rev-parse", `refs/heads/${input.branch}`);
+      authedGitBounded(this.auth, input.path, this.timeoutMs, "push", `${sha}:refs/heads/${input.branch}`);
+      // ADR 0052 Status 追記: 写しは push の成功を見て盤面が書く(呼び手が口で包む)
+      git(input.path, "update-ref", remoteTrackingRef(input.branch), sha);
+    };
   }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {

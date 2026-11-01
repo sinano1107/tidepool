@@ -182,6 +182,22 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     );
   });
 
+  // ADR 0052 Status 追記: 盤面所有の repo からの push は checkout の写しを動かさない —— 押した N 本の写しは push の成功を見て盤面が書く
+  it.each([
+    ["通れば、押した各ブランチの写しは押した sha を指す", false],
+    ["拒まれれば、写しは1本も作られない", true],
+  ])("publish の push が%s", async (_, rejected) => {
+    const { deps, checkout } = await makeBoard();
+    git(checkout, "branch", "task/abc123");
+    const dest = await makeDestination();
+    if (rejected) await seedDestination(dest);
+
+    await publishWorkspace({ name: "sandbox", repo: dest }, deps).catch(() => {});
+
+    const refs = (prefix: string) => git(checkout, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", prefix);
+    expect(refs("refs/remotes/origin")).toBe(rejected ? "" : git(checkout, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads"));
+  });
+
   // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、`remote remove` が写しを消した後に畳むので、
   // 基準は予告の前(行が無い)へ戻る
   it("push が通った後に registry のコミットが落ちて巻き戻っても、走っているセッションの解放は違反にならない", async () => {

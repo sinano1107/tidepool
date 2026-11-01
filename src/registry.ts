@@ -694,10 +694,10 @@ export interface WritableRegistry extends RegistrySource {
  *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
 export type RefWriter = (ref: string, newSha: string, write: () => void) => void;
 
-/** origin から commit を sha で1つ取る。`refs/` には何も書かない(FETCH_HEAD だけ)—— merge の門が head を取る fetch
- *  (ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
+/** origin から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
+ *  head を取る fetch(ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
 export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: string): void {
-  authedGitBounded(auth, dir, originRepo(dir), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", sha);
+  authedGitBounded(auth, dir, GIT_NETWORK_TIMEOUT_MS, "fetch", sha);
 }
 
 /** ADR 0243 決定3: 写し `refs/remotes/origin/<branch>` を原本へ進める。`ls-remote` で原本の sha を知ってから口に予告し、
@@ -705,7 +705,7 @@ export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: stri
  *  token は呼び手が温めておく。 */
 export function fetchBranchCopy(dir: string, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
   const head = `refs/heads/${branch}`;
-  const sha = authedGitBounded(auth, dir, originRepo(dir), GIT_NETWORK_TIMEOUT_MS, "ls-remote", "origin", head)
+  const sha = authedGitBounded(auth, dir, GIT_NETWORK_TIMEOUT_MS, "ls-remote", head)
     .split("\n")
     .map((line) => line.split("\t"))
     .find(([, name]) => name === head)?.[0];

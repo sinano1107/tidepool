@@ -8,7 +8,8 @@ import { tempDir } from "./temp-dir.js";
 /** A separate process keeps HTTP moving while the board runs synchronous git (ADR 0334). */
 export async function startGitHttpRemote(
   remote: string,
-  mode: "stall-info" | "stall-push" | "slow-clone",
+  mode: "stall-info" | "stall-push" | "slow-clone" | "record",
+  log = "",
 ): Promise<string> {
   execFileSync("git", ["config", "http.receivepack", "true"], { cwd: remote });
   const hookPid = join(remote, "hook.pid");
@@ -20,10 +21,15 @@ export async function startGitHttpRemote(
   const server = spawn(process.execPath, ["--input-type=module", "-e", `
     import { createServer } from 'node:http';
     import { spawn } from 'node:child_process';
-    const [root, name, mode] = process.argv.slice(1);
+    import { appendFileSync } from 'node:fs';
+    const [root, name, mode, log] = process.argv.slice(1);
     const children = new Set();
     const server = createServer((req, res) => {
       const url = new URL(req.url, 'http://localhost');
+      let bytes = 0;
+      const write = res.write.bind(res);
+      res.write = (chunk, ...rest) => { bytes += chunk.length; return write(chunk, ...rest); };
+      if (log) res.on('finish', () => appendFileSync(log, JSON.stringify({ path: url.pathname, headers: req.headers, bytes }) + '\\n'));
       // Also bounds a broken implementation during the red test.
       const watchdog = mode === 'slow-clone' ? undefined : setTimeout(() => res.destroy(), 8000);
       res.on('close', () => clearTimeout(watchdog));
@@ -84,12 +90,29 @@ export async function startGitHttpRemote(
     server.listen(0, '127.0.0.1', () => {
       process.stdout.write('http://127.0.0.1:' + server.address().port + '/' + name + '\\n');
     });
-  `, dirname(remote), basename(remote), mode], { stdio: ["ignore", "pipe", "pipe"] });
+  `, dirname(remote), basename(remote), mode, log], { stdio: ["ignore", "pipe", "pipe"] });
   return listeningUrl(server, () => {
     if (existsSync(hookPid)) {
       try { process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL"); } catch { /* Hook already exited. */ }
     }
   });
+}
+
+/** One request the recording remote answered: its path, the headers git sent, and the response body bytes. */
+export interface RecordedRequest {
+  path: string;
+  headers: Record<string, string>;
+  bytes: number;
+}
+
+/** A working `git http-backend` over `remote` that records every request (ADR 0339 決定5: what reached the network). */
+export async function startRecordingHttpRemote(remote: string): Promise<{ url: string; requests: () => RecordedRequest[] }> {
+  const log = join(await tempDir("tidepool-http-log-"), "requests.jsonl");
+  writeFileSync(log, "");
+  const url = await startGitHttpRemote(remote, "record", log);
+  const requests = () =>
+    readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as RecordedRequest);
+  return { url, requests };
 }
 
 /** Stops the server process when the test finishes and resolves the URL it prints once listening. */

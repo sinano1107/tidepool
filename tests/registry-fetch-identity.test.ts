@@ -15,21 +15,21 @@ import { tempDir } from "./temp-dir.js";
  *  **成功してしまう**。したがって「Pi で通った」は合格の証拠にならず、証明できるのは
  *  「盤面がどの名義で撃ったか」を直接見ることだけである。 */
 async function gitShim(): Promise<{ cwd: string; record: string; restore: () => void }> {
+  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
   const dir = await tempDir("tidepool-git-shim-");
-  // git は実在する cwd でしか起動できない: 観測したいのは argv と env なので
-  // registry の中身は要らず、空のディレクトリで足りる
+  // 観測したいのは argv と env なので registry の中身は要らない —— github.com の origin を持つ空の checkout で足りる
+  // (`remote.origin.url` は盤面が URL と token の宛先を決める読み取り、ADR 0093 / ADR 0339 決定4)
   const cwd = await tempDir("tidepool-git-shim-cwd-");
+  gitOut(cwd, "init", "-b", "main");
+  gitOut(cwd, "remote", "add", "origin", "https://github.com/acme/registry.git");
   const record = join(dir, "record.txt");
   writeFileSync(record, "");
-  // `git config remote.origin.url` は盤面が「どの repo 宛ての installation token
-  // を要求するか」を決める読み取り(ADR 0093)なので、shim は本物と同じ答えを
-  // 返すだけで記録しない —— 観測したいのは fetch のほうである。それ以外の `git config`
-  // (ADR 0339 決定5 の extraHeader の述語)には「該当なし」(exit 1)を答える
   writeFileSync(
     join(dir, "git"),
-    // 呼び出しごとに区切り、`ls-remote` には原本の sha を答える(ADR 0243 決定3: fetch はその sha を取る)。
+    // 網に出る verb(と、偽の sha を書く update-ref)だけを偽装して記録し、盤面所有の repo の作成や checkout を読む local の git は本物へ渡す。
+    // `ls-remote` には原本の sha を答える(ADR 0243 決定3: fetch はその sha を取る)。
     // 子の env は盤面が組み立てる(ADR 0339 決定1)ので、記録先は env でなく script に焼く
-    `#!/bin/sh\nif [ "$1" = "config" ]; then [ "$2" = "remote.origin.url" ] || exit 1; echo "https://github.com/acme/registry.git"; exit 0; fi\necho "---" >> "${record}"\nfor arg in "$@"; do echo "arg=$arg" >> "${record}"; [ "$arg" = "ls-remote" ] && printf '${ORIGIN_SHA}\\trefs/heads/main\\n'; done\necho "GH_TOKEN=\${GH_TOKEN-}" >> "${record}"\necho "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}" >> "${record}"\nexit 0\n`,
+    `#!/bin/sh\ncase " $* " in *" ls-remote "*|*" fetch "*|*" push "*|*" update-ref "*) ;; *) exec "${real}" "$@";; esac\necho "---" >> "${record}"\nfor arg in "$@"; do echo "arg=$arg" >> "${record}"; [ "$arg" = "ls-remote" ] && printf '${ORIGIN_SHA}\\trefs/heads/main\\n'; done\necho "GH_TOKEN=\${GH_TOKEN-}" >> "${record}"\necho "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}" >> "${record}"\nexit 0\n`,
   );
   chmodSync(join(dir, "git"), 0o755);
   const path = process.env.PATH;
@@ -101,7 +101,9 @@ async function tokenFile(token: string): Promise<string> {
 // 書いており、registry の refresh は盤面が執行する読み取りである(ADR 0024)。
 // ADR 0093 で名義は App になり、子プロセスが運ぶのは**仲介が発行した repo 単位の
 // installation token** —— ファイルの中身(user token)ではない。
-it("盤面の registry fetch は仲介の installation token で撃たれ、ホストの helper を先に消す(ADR 0093)", async () => {
+// ADR 0339: 人間の helper が届かないのは組み立てた env と checkout の外の盤面所有 repo による(github-auth.test.ts が持つ)——
+// ここが見るのは、registry の網の2往復が盤面の token と盤面が組んだ URL で出る配線である。
+it("盤面の registry fetch は仲介の installation token で、盤面が組んだ URL へ撃たれる(ADR 0093 / ADR 0339 決定4)", async () => {
   const shim = await gitShim();
   restoreShim = shim.restore;
   const broker = await openBroker(() => issuedToken("installation-token"));
@@ -110,23 +112,17 @@ it("盤面の registry fetch は仲介の installation token で撃たれ、ホ�
 
   // 網に出る2つ(原本の sha を読む ls-remote と、その sha の fetch)がどちらも同じ名義で撃たれる
   for (const [verb, command] of [
-    ["ls-remote", ["ls-remote", "origin", "refs/heads/main"]],
-    ["fetch", ["fetch", "--quiet", "origin", ORIGIN_SHA]],
+    ["ls-remote", ["ls-remote", "https://github.com/acme/registry.git", "refs/heads/main"]],
+    ["fetch", ["fetch", "--quiet", "https://github.com/acme/registry.git", `${ORIGIN_SHA}:refs/board/fetched`]],
   ] as const) {
     const { args, env } = observed(shim.record, verb);
-    // 空の helper が先頭に来ることが要点である。これは「認証を足す」だけでなく
-    // osxkeychain や `gh auth setup-git` —— Pi に実在する人間の identity —— を
-    // **消す**引数であり、独立性はこれ1つに掛かっている。
-    expect(args.indexOf("credential.helper=")).toBeLessThan(args.indexOf(verb));
     expect({
-      clearsAmbientHelper: args.includes("credential.helper="),
       servesToken: args.some((a) => a.includes("password=$GH_TOKEN")),
       command: args.slice(args.indexOf(verb)),
       token: env.GH_TOKEN,
       // 悪い token を「ユーザ名プロンプトで固まる」ではなく即座の失敗にする
       noPrompt: env.GIT_TERMINAL_PROMPT,
     }).toEqual({
-      clearsAmbientHelper: true,
       servesToken: true,
       command,
       token: "installation-token",
@@ -135,18 +131,10 @@ it("盤面の registry fetch は仲介の installation token で撃たれ、ホ�
   }
 });
 
-// 身元の不在は宣言であって暗黙のフォールバックではない(ADR 0041)。ADR 0339 決定2: 床は
-// 認証の無い分岐にも掛かる —— 注入 helper は無く、host と checkout の身元の経路は reset で消える
-// (旧形の「ホストの helper を残す」は人間の `gh` ログインに乗っていた)。
+// 身元の不在は宣言であって暗黙のフォールバックではない(ADR 0041)。ADR 0339 決定1・2: 床は認証の無い分岐にも掛かり、
+// 盤面の `-c` は stall と auto maintenance の停止だけ —— 打ち消しの reset は1つも無い。
 it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さない(ADR 0024)", async () => {
-  const floor = [
-    "-c", "credential.helper=",
-    "-c", "core.askPass=",
-    "-c", "http.extraHeader=",
-    "-c", "http.sslVerify=true",
-    "-c", "url.https://github.com/.insteadOf=git@github.com:",
-    "-c", "url.https://github.com/.insteadOf=ssh://git@github.com/",
-  ];
+  const own = ["-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "-c", "maintenance.auto=false", "-c", "gc.auto=0"];
   const shim = await gitShim();
   restoreShim = shim.restore;
 
@@ -155,12 +143,13 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
   const lsRemote = observed(shim.record, "ls-remote");
   const fetch = observed(shim.record, "fetch");
   expect([
-    { args: lsRemote.args, token: lsRemote.env.GH_TOKEN },
-    { args: fetch.args, token: fetch.env.GH_TOKEN },
+    { args: lsRemote.args.slice(1), token: lsRemote.env.GH_TOKEN },
+    { args: fetch.args.slice(1), token: fetch.env.GH_TOKEN },
   ]).toEqual([
-    { args: [...floor, "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "ls-remote", "origin", "refs/heads/main"], token: "" },
-    { args: [...floor, "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", "origin", ORIGIN_SHA], token: "" },
+    { args: [...own, "ls-remote", "https://github.com/acme/registry.git", "refs/heads/main"], token: "" },
+    { args: [...own, "fetch", "--quiet", "https://github.com/acme/registry.git", `${ORIGIN_SHA}:refs/board/fetched`], token: "" },
   ]);
+  expect([lsRemote.args[0], fetch.args[0]]).toEqual([expect.stringMatching(/^--git-dir=/), expect.stringMatching(/^--git-dir=/)]);
 });
 
 // 実物の git でも通ること。ローカル remote は GitHub ではないので token は要求

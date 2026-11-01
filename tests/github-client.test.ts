@@ -495,6 +495,45 @@ it("preparePush が返す push はタスクブランチを origin へ push す�
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });
 
+// ADR 0052 Status 追記: 盤面所有の repo からの push は checkout の写しを動かさない —— 写しは push の成功を見て盤面が書く
+it("preparePush の push は成功したときだけ、写し refs/remotes/origin/<branch> を push した sha へ書く", async () => {
+  repoPath = await tempDir("tidepool-repo-");
+  remotePath = await tempDir("tidepool-remote-");
+  repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
+  const push = await new GhCliClient(await makeAuth()).preparePush({ path: repoPath, branch: "task/abc" });
+  const hook = join(remotePath, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+  chmodSync(hook, 0o755);
+
+  expect(push).toThrow();
+  const rejectedCopy = git(repoPath, "for-each-ref", "refs/remotes/origin/task/abc");
+  writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+  push();
+
+  expect({ rejectedCopy, copy: git(repoPath, "rev-parse", "refs/remotes/origin/task/abc") }).toEqual({
+    rejectedCopy: "",
+    copy: git(repoPath, "rev-parse", "task/abc"),
+  });
+});
+
+// ADR 0339 決定4: gh は cwd の remote(checkout の insteadOf 適用後)から repo を解かず、盤面が origin の値から解いた repo を受ける
+it("gh は checkout の origin の値から解いた repo を -R で受け、checkout の insteadOf に向けられない", async () => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+  repoPath = await tempDir("tidepool-repo-");
+  git(repoPath, "init", "-b", "main");
+  git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
+  git(repoPath, "config", "url.https://github.com/evil/elsewhere.git.insteadOf", "https://github.com/acme/widget.git");
+
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: repoPath, number: 7 }, "abc123");
+
+  expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
+});
+
 /** 返らない `gh` の代役(ADR 0330): `exec` で sleep そのものを子にする —— sh の下に sleep を残すと、殺した後も
  *  孫が stdout を握り、非同期 execFile の close が sleep の終わりまで来ない。 */
 async function withSleepingGh(): Promise<void> {

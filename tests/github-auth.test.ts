@@ -1,18 +1,21 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  authedClone,
   authedGitBounded,
   GIT_CREDENTIAL_ARGS,
   GIT_NETWORK_TIMEOUT_MS,
   GitHubAuth,
   githubLoggedIn,
   loadGitHubAuth,
+  networkUrl,
   originRepo,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { startDenyingHttpRemote } from "./git-http-remote.js";
+import { startDenyingHttpRemote, startRecordingHttpRemote } from "./git-http-remote.js";
 import { git } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -268,40 +271,28 @@ describe("originRepo: 呼び出し元 checkout の origin から repo を決め�
   });
 });
 
-describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入経路)", () => {
-  it("キャッシュ済みの installation token を子プロセスに渡し、ホストの helper を先に消す", async () => {
-    const remote = await tempDir("tidepool-remote-");
-    git(remote, "init", "--bare", "-b", "main");
-    const repo = await tempDir("tidepool-repo-");
-    git(repo, "init", "-b", "main");
-    writeFileSync(join(repo, "readme.md"), "hello\n");
-    git(repo, "add", "-A");
-    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "initial");
-    git(repo, "remote", "add", "origin", remote);
+describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339)", () => {
+  it("installation token を持つ盤面の push もローカル remote に届き、token は process.env に残らない", async () => {
+    const { remote, repo } = await checkoutOfBareRemote();
+    git(repo, "commit", "--allow-empty", "-m", "next");
 
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
     await auth.ensureToken("acme/widget");
-    // ローカル remote では credential helper は無害(実物の git で通ることを見る)
-    authedGitBounded(auth, repo, "acme/widget", GIT_NETWORK_TIMEOUT_MS, "push", "origin", "main");
+    authedGitBounded(auth, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${git(repo, "rev-parse", "HEAD")}:refs/heads/main`);
 
     expect(git(remote, "rev-parse", "main")).toBe(git(repo, "rev-parse", "main"));
     expect(process.env.GH_TOKEN).toBeUndefined();
   });
 
-  it("repo を名指しできない呼び出しは素の git で走る — 非 GitHub の remote に credential を渡さない", async () => {
-    const upstream = await tempDir("tidepool-upstream-");
-    git(upstream, "init", "-b", "main");
-    writeFileSync(join(upstream, "readme.md"), "hi\n");
-    git(upstream, "add", "-A");
-    git(upstream, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "initial");
-
+  it("repo を名指しできない clone は素の git で走る — 非 GitHub の remote に credential を渡さない", async () => {
+    const { remote } = await checkoutOfBareRemote();
     const base = await tempDir("tidepool-ws-base-");
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
-    authedGitBounded(auth, base, undefined, GIT_NETWORK_TIMEOUT_MS, "clone", upstream, join(base, "ws"));
+    authedClone(auth, remote, join(base, "ws"), GIT_NETWORK_TIMEOUT_MS);
 
-    expect(git(join(base, "ws"), "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
+    expect(git(join(base, "ws"), "rev-parse", "HEAD")).toBe(git(remote, "rev-parse", "main"));
     expect(broker.requests.length).toBe(0);
   });
 
@@ -311,6 +302,27 @@ describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入�
     git(repo, "init", "-b", "main");
     git(repo, "remote", "add", "origin", origin);
     return repo;
+  }
+
+  /** 1 commit の main を持つ bare remote と、それを origin に持つ checkout。 */
+  async function checkoutOfBareRemote(): Promise<{ remote: string; repo: string; sha: string }> {
+    const remote = join(await tempDir("tidepool-remote-"), "remote.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remote]);
+    const repo = await checkoutWithOrigin(remote);
+    writeFileSync(join(repo, "readme.md"), "hello\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "initial");
+    git(repo, "push", "origin", "main");
+    return { remote, repo, sha: git(repo, "rev-parse", "HEAD") };
+  }
+
+  /** remote の main に別の clone から 1 commit 足す(= GitHub 上の merge)。足した sha を返す。 */
+  async function commitOnRemote(remote: string): Promise<string> {
+    const publisher = await tempDir("tidepool-publisher-");
+    execFileSync("git", ["clone", "--quiet", remote, publisher]);
+    git(publisher, "commit", "--allow-empty", "-m", "merged on remote");
+    git(publisher, "push", "origin", "main");
+    return git(publisher, "rev-parse", "HEAD");
   }
 
   /** 401 を返す loopback remote を origin に持つ checkout —— git が差し出した身元を remote 側の記録で見る。 */
@@ -327,17 +339,159 @@ describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入�
     return { path, tripped: () => existsSync(`${path}.called`) };
   }
 
-  // ADR 0339 決定4: 人間の checkout の ssh 綴りの origin は盤面の https に解決し、綴りの記録は変えない
+  /** 本物の git の前に置く記録係 —— 呼び出しごとの argv、`--git-dir` の repo の alternates、GIT_OBJECT_DIRECTORY を残して本物へ渡す。 */
+  async function recordGitCalls(): Promise<() => { args: string[]; alternates?: string; objectDirectory: string }[]> {
+    const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    const dir = await tempDir("tidepool-git-record-");
+    const log = join(dir, "calls.log");
+    writeFileSync(log, "");
+    writeFileSync(
+      join(dir, "git"),
+      `#!/bin/sh\nalt=\nfor a in "$@"; do case "$a" in --git-dir=*) alt="\${a#--git-dir=}/objects/info/alternates";; esac; done\n` +
+        `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; echo "objectDirectory=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
+        `exec "${real}" "$@"\n`,
+    );
+    chmodSync(join(dir, "git"), 0o755);
+    vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
+    return () =>
+      readFileSync(log, "utf8")
+        .split("---\n")
+        .filter(Boolean)
+        .map((block) => {
+          const lines = block.split("\n").filter(Boolean);
+          const value = (key: string) => lines.find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1);
+          return {
+            args: lines.filter((l) => l.startsWith("arg=")).map((l) => l.slice("arg=".length)),
+            alternates: value("alternates"),
+            objectDirectory: value("objectDirectory") ?? "",
+          };
+        });
+  }
+
+  /** 盤面の子の HOME —— 盤面所有の repo はその下に作られ、呼び出しの終わりに消える。 */
+  function boardHomeEntries(): string[] {
+    return readdirSync(new GitHubAuth("/unused").env(undefined).HOME!);
+  }
+
+  // ADR 0339 決定4: 人間の checkout の ssh 綴りの origin は盤面の https に解決する(綴りの記録は変えない)
   it.each([
     ["git@github.com:o/r.git", "https://github.com/o/r.git"],
-    ["ssh://git@github.com/o/r", "https://github.com/o/r"],
-  ])("ssh 綴りの GitHub origin %s は https の %s に書き換えて撃つ", async (origin, resolved) => {
-    const repo = await checkoutWithOrigin(origin);
+    ["ssh://git@github.com/o/r", "https://github.com/o/r.git"],
+    ["https://github.com/o/r", "https://github.com/o/r.git"],
+    ["http://127.0.0.1:8080/o/r.git", "http://127.0.0.1:8080/o/r.git"],
+    ["/srv/mirrors/r.git", "/srv/mirrors/r.git"],
+  ])("origin の値 %s から盤面が組む URL は %s", (origin, url) => {
+    expect(networkUrl(origin)).toBe(url);
+  });
 
+  // ADR 0339 決定4・5: 網に出る git は checkout の中で走らず、URL は盤面が組む —— checkout の config は身元も経路も運ばない
+  it("checkout の cookieFile・include・extraHeader・insteadOf・pushurl があっても、fetch / ls-remote / push は盤面が組んだ URL に Cookie 無しで届く", async () => {
+    const { remote, repo } = await checkoutOfBareRemote();
+    const merged = await commitOnRemote(remote);
+    const reached = await startRecordingHttpRemote(remote);
+    const decoy = await startDenyingHttpRemote();
+    git(repo, "remote", "set-url", "origin", reached.url);
+    const cookies = join(await tempDir("tidepool-cookies-"), "cookies.txt");
+    writeFileSync(cookies, "127.0.0.1\tFALSE\t/\tFALSE\t0\tsession\tcookie-secret\n");
+    const included = join(await tempDir("tidepool-include-"), "host.gitconfig");
+    writeFileSync(included, `[http]\n\tcookieFile = ${cookies}\n`);
+    git(repo, "config", "http.cookieFile", cookies);
+    git(repo, "config", "include.path", included);
+    git(repo, "config", "http.extraHeader", "X-Leak: header-secret");
+    git(repo, "config", `http.${reached.url}.extraHeader`, "X-Leak: header-secret");
+    git(repo, "config", `url.${decoy.url}.insteadOf`, reached.url);
+    git(repo, "config", "remote.origin.pushurl", decoy.url);
+    git(repo, "commit", "--allow-empty", "-m", "topic");
+    const topic = git(repo, "rev-parse", "HEAD");
+
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${topic}:refs/heads/topic`);
+
+    const requests = reached.requests();
     expect({
-      resolved: authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "--get-url", "origin"),
-      recorded: git(repo, "config", "remote.origin.url"),
-    }).toEqual({ resolved, recorded: origin });
+      pushed: git(remote, "rev-parse", "topic"),
+      decoy: decoy.requests(),
+      verbs: [...new Set(requests.map((r) => r.path.split("/").pop()))].sort(),
+      leaked: requests.filter((r) => r.headers.cookie !== undefined || r.headers["x-leak"] !== undefined),
+    }).toEqual({ pushed: topic, decoy: [], verbs: ["git-receive-pack", "git-upload-pack", "refs"], leaked: [] });
+  });
+
+  // ADR 0339 決定5: fetch は盤面所有の repo の refs/board/fetched に落ち、checkout は local に取る(hop2)
+  it("fetch の後、want した commit は checkout の object store にあり、checkout の ref は動かない", async () => {
+    const { remote, repo } = await checkoutOfBareRemote();
+    const merged = await commitOnRemote(remote);
+    const refs = git(repo, "for-each-ref");
+
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+
+    expect({ type: git(repo, "cat-file", "-t", merged), refs: git(repo, "for-each-ref") }).toEqual({ type: "commit", refs });
+  });
+
+  // ADR 0339 帰結: 空の盤面 repo は have を言えない —— checkout の写しの sha を交渉の tip に渡さなければ、1 commit の fetch が全履歴を受ける
+  it("200 commit の履歴に 1 commit 増えた fetch の upload-pack 応答は、全履歴の pack の 10% 未満", async () => {
+    const remote = join(await tempDir("tidepool-remote-"), "remote.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remote]);
+    const stream = Array.from({ length: 200 }, (_, i) => {
+      const body = `${randomBytes(1024).toString("hex")}\n`;
+      return `commit refs/heads/main\ncommitter t <t@example.com> ${1_700_000_000 + i} +0000\ndata 2\nc\nM 644 inline file.txt\ndata ${body.length}\n${body}`;
+    }).join("");
+    execFileSync("git", ["fast-import", "--quiet"], { cwd: remote, input: stream });
+    const repo = await tempDir("tidepool-repo-");
+    execFileSync("git", ["clone", "--quiet", remote, repo]);
+    const merged = await commitOnRemote(remote);
+    const reached = await startRecordingHttpRemote(remote);
+    git(repo, "remote", "set-url", "origin", reached.url);
+    const empty = await checkoutWithOrigin(reached.url);
+    const packBytes = (from: number) =>
+      reached.requests().slice(from).filter((r) => r.path.endsWith("/git-upload-pack")).reduce((sum, r) => sum + r.bytes, 0);
+
+    authedGitBounded(undefined, empty, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+    const seen = reached.requests().length;
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+
+    const [whole, incremental] = [packBytes(0) - packBytes(seen), packBytes(seen)];
+    expect({ whole: whole > 200 * 1024, ratio: incremental / whole < 0.1 }).toEqual({ whole: true, ratio: true });
+  }, 20_000);
+
+  it("fetch / ls-remote / push は成功でも失敗でも盤面所有の repo を残さない", async () => {
+    const { repo, sha } = await checkoutOfBareRemote();
+    // 全 0 の oid は push では「消す」と読まれるので、どこにも無い別の oid を使う
+    const missing = "1".repeat(40);
+
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", sha);
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${sha}:refs/heads/copy`);
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", missing)).toThrow();
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${missing}:refs/heads/copy`)).toThrow();
+    git(repo, "remote", "set-url", "origin", (await startDenyingHttpRemote()).url);
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main")).toThrow();
+
+    expect(boardHomeEntries()).toEqual([]);
+  });
+
+  // ADR 0339 決定1・5: GIT_OBJECT_DIRECTORY で借りると盤面 repo の gc が checkout の objects を消す。fetch が起こす auto maintenance は上限の外に出る
+  it("盤面所有の repo は alternates で checkout の objects を借り、GIT_OBJECT_DIRECTORY を使わず、hop1 の fetch は写しの sha を交渉の tip に渡し auto maintenance と gc を止める", async () => {
+    const { repo, sha } = await checkoutOfBareRemote();
+    const calls = await recordGitCalls();
+
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", sha);
+
+    const hop1 = calls().find(({ args }) => args.some((a) => a.startsWith("--git-dir=")) && args.includes("fetch"))!;
+    const flags = hop1.args.join(" ");
+    expect({
+      alternates: realpathSync(hop1.alternates!),
+      objectDirectory: calls().map((c) => c.objectDirectory).filter(Boolean),
+      tips: hop1.args.filter((a) => a.startsWith("--negotiation-tip=")),
+      maintenance: flags.includes("-c maintenance.auto=false"),
+      gc: flags.includes("-c gc.auto=0"),
+    }).toEqual({
+      alternates: realpathSync(join(repo, ".git", "objects")),
+      objectDirectory: [],
+      tips: [`--negotiation-tip=${sha}`],
+      maintenance: true,
+      gc: true,
+    });
   });
 
   // ADR 0339 決定1: 転送の床 —— ssh 鍵という身元では網に出ない(checkout の core.sshCommand があっても)
@@ -346,19 +500,19 @@ describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入�
     const ssh = tripwire(repo, "fake-ssh");
     git(repo, "config", "core.sshCommand", ssh.path);
 
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "origin")).toThrow(
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main")).toThrow(
       /transport 'ssh' not allowed/,
     );
     expect(ssh.tripped()).toBe(false);
   });
 
-  // ADR 0339 決定1(転送の床)/ #2801: checkout の insteadOf が https を ssh にしても床で止まり、人間が直す場所を文で名指す
-  it("https を ssh へ書き換える checkout の insteadOf は ssh を撃たずに止まり、insteadOf と origin の綴りを確かめよと言う", async () => {
-    const repo = await checkoutWithOrigin("https://github.com/o/r.git");
-    git(repo, "config", "url.git@github.com:.insteadOf", "https://github.com/");
+  // ADR 0339 決定4: insteadOf はもう読まれない —— ssh が出る出所は非 GitHub の origin の値だけなので、文はその値を名指す
+  it("非 GitHub の ssh origin で止まった文は、人間が直す origin の値を名指す", async () => {
+    const repo = await checkoutWithOrigin("git@example.com:o/r");
 
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow(
-      `\`git fetch\` failed with \`transport 'ssh' not allowed\` (in ${repo}): the board reaches GitHub only over https as itself — check this checkout's \`url.*.insteadOf\` rules and the spelling of its origin`,
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow(
+      `\`git fetch\` failed with \`transport 'ssh' not allowed\` (in ${repo}): the board reaches a remote only over https or a local path — ` +
+        "the origin `git@example.com:o/r` is an ssh remote outside GitHub",
     );
   });
 
@@ -368,20 +522,20 @@ describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入�
     const askpass = tripwire(repo, "askpass");
     vi.stubEnv("GIT_ASKPASS", askpass.path);
 
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow();
     expect({ askpass: askpass.tripped(), offered: requests().map((r) => r.authorization) }).toEqual({
       askpass: false,
       offered: [undefined],
     });
   });
 
-  // GIT_TERMINAL_PROMPT=0 は askpass を止めない —— checkout の core.askPass は reset で消す
+  // GIT_TERMINAL_PROMPT=0 は askpass を止めない —— checkout の core.askPass は、網に出る git が checkout の config を読まないので届かない
   it("checkout の core.askPass は 401 にも呼ばれない", async () => {
     const { repo, requests } = await checkoutOfDenyingRemote();
     const askpass = tripwire(repo, "askpass");
     git(repo, "config", "core.askPass", askpass.path);
 
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow();
     expect({ askpass: askpass.tripped(), offered: requests().map((r) => r.authorization) }).toEqual({
       askpass: false,
       offered: [undefined],
@@ -394,80 +548,33 @@ describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入�
     writeFileSync(join(hostHome, ".netrc"), "machine 127.0.0.1 login u password netrc-secret\n", { mode: 0o600 });
     vi.stubEnv("HOME", hostHome);
 
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow();
     expect(requests().map((r) => r.authorization)).toEqual([undefined]);
-  });
-
-  it("checkout の http.extraHeader は reset されて届かない", async () => {
-    const { repo, requests } = await checkoutOfDenyingRemote();
-    git(repo, "config", "http.extraHeader", "X-Leak: header-secret");
-
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
-    expect(requests().map((r) => r["x-leak"])).toEqual([undefined]);
-  });
-
-  // ADR 0339 決定5: URL 付きの extraHeader は reset より特定度が高く勝つので、撃つ前に述語で拒む
-  it("checkout の URL 付き http.<url>.extraHeader があれば撃たずに投げ、理由に key を載せる", async () => {
-    const { repo, url, requests } = await checkoutOfDenyingRemote();
-    git(repo, "config", `http.${url}.extraHeader`, "X-Leak: header-secret");
-
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow(
-      `http.${url}.extraheader`,
-    );
-    expect(requests()).toEqual([]);
-  });
-
-  it("worktree 単位の設定にある URL 付き http.<url>.extraHeader も撃たずに投げる", async () => {
-    const { repo, url, requests } = await checkoutOfDenyingRemote();
-    git(repo, "config", "extensions.worktreeConfig", "true");
-    git(repo, "config", "--worktree", `http.${url}.extraHeader`, "X-Leak: header-secret");
-
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow(
-      `http.${url}.extraheader`,
-    );
-    expect(requests()).toEqual([]);
-  });
-
-  // ADR 0339 帰結: token は検証済みの TLS にだけ —— URL 付きの sslVerify は -c http.sslVerify=true に勝つ
-  it("checkout の URL 付き http.<url>.sslVerify があれば撃たずに投げ、理由に key を載せる", async () => {
-    const { repo, requests } = await checkoutOfDenyingRemote();
-    git(repo, "config", "http.https://github.com/.sslVerify", "false");
-
-    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow(
-      "http.https://github.com/.sslverify",
-    );
-    expect(requests()).toEqual([]);
   });
 
   // ADR 0339 決定3: 注入 helper は https の github.com にだけ token を答える
-  it("注入 helper は https の github.com には token を答える", async () => {
+  it.each([
+    ["https の github.com", "github.com", true],
+    ["github.com 以外の host", "127.0.0.1", false],
+  ])("注入 helper は %s に token を答えるか", async (_name, host, answers) => {
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
     await auth.ensureToken("acme/widget");
 
-    const answer = execFileSync("git", [...GIT_CREDENTIAL_ARGS, "credential", "fill"], {
+    // 答えが無ければ GIT_TERMINAL_PROMPT=0 の fill は非ゼロで終わる —— stdout だけを見る
+    const { stdout } = spawnSync("git", [...GIT_CREDENTIAL_ARGS, "credential", "fill"], {
       cwd: await tempDir("tidepool-cred-"),
       env: auth.env("acme/widget"),
-      input: "protocol=https\nhost=github.com\n\n",
-    }).toString();
+      input: `protocol=https\nhost=${host}\n\n`,
+    });
 
-    expect(answer).toContain("password=inst-token");
-  });
-
-  it("注入 helper は github.com 以外の host には token を答えない", async () => {
-    const { repo, requests } = await checkoutOfDenyingRemote();
-    const broker = await openBroker(() => issuedToken("inst-token", 60));
-    const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
-    await auth.ensureToken("acme/widget");
-
-    expect(() => authedGitBounded(auth, repo, "acme/widget", GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
-    expect(requests().map((r) => r.authorization)).toEqual([undefined]);
+    expect(stdout.toString().includes("password=inst-token")).toBe(answers);
   });
 
   it("cwd が無い呼び出しは上限つきの面でも subcommand と在り処を名指して投げる(issue #2722)", async () => {
     const missing = join(await tempDir("tidepool-authed-"), "gone");
     const expected = `\`git fetch\` cannot run: the directory ${missing} does not exist`;
 
-    expect(() => authedGitBounded(undefined, missing, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch")).toThrow(expected);
+    expect(() => authedGitBounded(undefined, missing, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow(expected);
   });
 });

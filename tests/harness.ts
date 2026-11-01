@@ -693,6 +693,21 @@ export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
   return initWorkspaceCheckout(path, name);
 }
 
+/** 盤面が組んだ URL `from` への git の往復を local の `to` へ回す(実ネットワークへは出ない)。盤面の網に出る git は
+ *  checkout の insteadOf を読まない(ADR 0339 決定5)ので、PATH の git の前で引数を書き換える。テストの終わりに戻す。 */
+export async function routeGitUrl(from: string, to: string): Promise<void> {
+  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  const dir = await tempDir("tidepool-git-route-");
+  writeFileSync(join(dir, "git"), `#!/bin/sh\nfor a; do shift; [ "$a" = "${from}" ] && a="${to}"; set -- "$@" "$a"; done\nexec "${real}" "$@"\n`, {
+    mode: 0o755,
+  });
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  onTestFinished(() => {
+    process.env.PATH = path;
+  });
+}
+
 /** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
  *  持つ checkout と、そこへ**人間の merge を模して**書き込む publisher を組む。
  *  返す `WorkspaceConfig` の `repo` が「この workspace はリモートの正本を持つ」の
