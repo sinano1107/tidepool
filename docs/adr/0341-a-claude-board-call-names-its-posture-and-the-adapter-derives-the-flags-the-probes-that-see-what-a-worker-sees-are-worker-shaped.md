@@ -1,5 +1,10 @@
 # Claude の Board call は姿勢を名指し、フラグは adapter が導く —— worker が見るものを観測する probe は worker の形で撃つ
 
+**Status 追記: 決定2 の入口は runner の module でなく、import を持たない adapter 側の独立 module `src/claude-board-call-spec.ts` に置く**
+—— runner(`src/claude-board-call-runner.ts`)は `claude-worker.ts` から値を import しており、`claude-worker.ts` が runner の入口を
+import すると循環になり Biome の `noImportCycles`(error)が落とす(#2809 の実装で実測)。写像が adapter 側に1つで、口がフラグを組まない
+という決定は変わらない。原語が runner へ移ったあと入口を runner へ寄せるかは #2472 が問う。
+
 2026-11-01 の grilling(issue #2809、#2798 のレビューの派生)で決定。workspace を cwd にする skill 列挙の ping は tier フラグも
 `--strict-mcp-config` も運ばず、workspace が commit した `.mcp.json` の MCP server をホスト上・sandbox の外・盤面の権限で起動していた
 (固定版 2.1.286 の実測は #2809 のコメント)。#2798 が `*` の agent にもこの ping を撃たせたので、露出は `[]` 以外の allowlist の
