@@ -105,6 +105,7 @@ import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
 import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
@@ -468,6 +469,7 @@ export async function registerThroughHumanDoor(
           try {
             inspection = await recordedAnswer(deps.db, "issue_inspection", now(), deps.draftClient.inspectIssue(issue));
           } catch (err) {
+            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: inspection_unavailable の応答にせず底へ
             quarantineBoardCallRefusal(deps.db, err, "issue_inspection", undefined, now());
             const fullError = err instanceof Error ? err.message : String(err);
             console.warn("[issue inspection] LLM inspection failed", fullError);
@@ -618,6 +620,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         try {
           await check();
         } catch (err) {
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
@@ -629,6 +632,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
             githubAuth: deps.githubAuth, fresh: true, writeRef: (place) => boardRefWriter(deps.db, place),
           });
         } catch (err) {
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
           let message = err instanceof Error ? err.message : String(err);
           const ref = parseGitHubRepo(err instanceof PickupGateError ? err.place.repo : target.repo);
           if (phase === "after-open" && deps.github && ref) {
@@ -732,6 +736,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         try {
           await recheckIssueExpansion();
         } catch (err) {
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
           throw new DomainError(`the board cannot confirm it reads GitHub issues again: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
@@ -1203,6 +1208,7 @@ export async function submitAnswer(
             const sha = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id);
             rootRecord = { root: kind.task_id, payload: { kind: "local_merge_executed", sha } };
           } catch (err) {
+            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
             // ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも
             // 汚れたツリーも git の不調も、着地が失敗しただけでは資源が実行不能だと証明
             // しない —— question は開いたまま残り、人間は直してもう一度答えられる

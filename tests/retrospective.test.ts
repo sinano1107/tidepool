@@ -1,5 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
@@ -48,6 +49,7 @@ import {
   skillsInit,
   type Tidepool,
   toolCall,
+  unhandledRejectionsDuring,
   WORKER_SPAWNED,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -1568,6 +1570,21 @@ it("帰責の第2回の答えが schema に合わなくても attribution の行
   expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "objection_attribution_failed").map((e) => e.payload)).toEqual([
     expect.objectContaining({ round: "after_rca", reason: "Board call failed: answer did not match the schema" }),
   ]);
+});
+
+// ADR 0342 決定4: 撃つ区間と sweep の鎖の末尾は境界 —— 盤面 DB の拒否は失敗 event にも log にもせず床へ届ける
+it("撃ち直しの区間で盤面 DB が拒めば、失敗 event を書かず unhandled rejection として底へ届く", async () => {
+  const b = awaitingSecondRound();
+  const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, refusal);
+
+  const rejections = await unhandledRejectionsDuring(async () => {
+    refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+  });
+
+  expect(rejections).toEqual([refusal]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "objection_attribution_failed")).toEqual([]);
 });
 
 /** 初回の帰責が preference で確定した異議に、起草の Board call を撃つ(`draft` は起草 client の答え)。 */

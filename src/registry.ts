@@ -20,6 +20,7 @@ import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
 import { findSkillAllowlistError, whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 import type { Tier } from "./tier.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -774,6 +775,7 @@ export async function refreshRegistry(
     fetchBranchCopy(dir, auth, REGISTRY_BRANCH, writeRef);
     return { available: true };
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 到達できない registry の data にせず底へ
     return {
       available: false,
       reason: `the registry remote main could not be refreshed (${String(err)})`,

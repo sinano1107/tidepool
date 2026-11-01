@@ -7,6 +7,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineValues } from "./quarantine.js";
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueue, type Task } from "./tasks.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
   onTaskBranch,
@@ -109,7 +110,7 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *  保証する)。梯子の底で保留されている session(`heldForContainment`)も同じ点で
  *  弾く —— そこでの解放の門は確認 question ただ1つである(ADR 0099 決定3)。
  *
- *  **投げない。** 呼び口は全部 fire-and-forget の `void` である(回収済み観測の
+ *  **投げない**(盤面 DB の拒否は別 —— 投げて床が process を終える、ADR 0342 決定4)。呼び口は全部 fire-and-forget の `void` である(回収済み観測の
  *  `.then`、adapter の中断ハンドラ、起動時の復旧)—— 解放が同期だった頃は例外が
  *  MCP 呼び出しの返り値になったが、今ここで投げれば unhandled rejection として盤面
  *  ごと落ち、しかも未了は行に残るので次の起動でも同じ所で落ちる。個々の失敗は
@@ -130,6 +131,7 @@ export async function runTeardown(
   try {
     await teardown(deps, taskId, step);
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 落ちた後始末にせず底へ
     console.error(`[teardown] task ${taskId}:`, err);
     if (deps.slot.currentTaskId === taskId) {
       quarantineFailedTeardown(deps.db, taskId, err, deps.clock.now());
@@ -171,6 +173,7 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
   try {
     await teardown(deps, taskId, teardownStep(deps.db, taskId));
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
         (err instanceof Error ? err.message : String(err)),

@@ -46,6 +46,7 @@ import {
 import { liveSession } from "./teardown.js";
 import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type Transcript, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
@@ -1492,6 +1493,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       try {
         materializeWorkspaceProjectSettings(this.options.db, workspace);
       } catch (err) {
+        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
       }
     });
@@ -1593,6 +1595,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         excludeWorkspaceProjectSettings(this.options.db, place);
         this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
+        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
@@ -1600,6 +1603,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       try {
         materializeWorkspaceProjectSettings(this.options.db, place);
       } catch (err) {
+        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
@@ -1703,6 +1707,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           skills: { workspace: checkout.carried, host, permitted },
         }, routing, query);
       } catch (err) {
+        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: spawn_failed も同じ器に書くので、書かずに底へ
         if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, err);
         this.recordSpawnFailed(task, agent, {
           error_code: (err as NodeJS.ErrnoException).code ?? null,

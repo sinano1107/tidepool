@@ -49,6 +49,7 @@ import {
   readableInterviewRooms,
   type Task,
 } from "./tasks.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
  *  branch discipline and the slot-release tree rule (issue #8) act on it —
@@ -245,6 +246,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       await firePickupPredicates(place, list, "before-open", { live });
       checks.push({ place, predicates: list });
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       if (err instanceof PickupGateError) throw err;
       throw new PickupGateError(place, err);
     }
@@ -274,6 +276,7 @@ export async function firePickupPredicates(
       if (predicate.phase === "before-open") predicate.check();
       else await predicate.check(fire);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       throw new PickupGateError(predicate.phase === "after-open" ? predicate.place : place, err, predicate.describe);
     }
   }
@@ -652,6 +655,7 @@ export function restoreWorkspaceProjectSettingsAtBoot(
     try {
       materializeWorkspaceProjectSettings(db, workspace);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
       quarantineWorkspace(db, workspace.name, err, now);
     }
   }
@@ -883,6 +887,7 @@ export function writeBoardRefs(
     try {
       fold();
     } catch (foldErr) {
+      if (isBoardDbRefusal(foldErr)) throw foldErr; // ADR 0342 決定4: 盤面 DB の拒否は書き込みの失敗の陰に隠さない
       console.warn(`[workspace] ${workspace.name}: folding the announced baseline failed after the write failed`, foldErr);
     }
     throw err;
@@ -1077,6 +1082,7 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter):
   try {
     writeRef(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
   } catch (cause) {
+    if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (git(workspace.path, "rev-parse", "HEAD") === remoteSha) return;
@@ -1274,6 +1280,7 @@ export function releaseWorkspace(
     if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
     parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, workspace.name, err, now);
   }
 }
@@ -1365,7 +1372,7 @@ export async function redoMergeBacks(
   try {
     parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (parkError) {
-    if (!failure) throw parkError;
+    if (!failure || isBoardDbRefusal(parkError)) throw parkError; // ADR 0342 決定4: 盤面 DB の拒否は先の理由の陰に隠さない
   }
   if (failure) throw failure.error;
 }

@@ -8,6 +8,7 @@ import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } fr
 import { parseStreamLine, readAdvisorOutcome, readInitField, readInitVersion } from "./stream-json.js";
 import { TranscriptStore } from "./transcript-store.js";
 import { entryObjections } from "./triage.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
  *  Episode を決定論的に組む(ADR 0083 決定8 / 追記 / 追記 2、issue #356)。
@@ -577,6 +578,7 @@ export function projectWhenTranscriptCloses(
     try {
       projectAndPersist(db, opts);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 投影の失敗として log に流さない
       console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
     } finally {
       pendingProjections.get(db)?.delete(opts.workerSpawnedEventId);

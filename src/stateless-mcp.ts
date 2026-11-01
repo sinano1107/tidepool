@@ -6,12 +6,13 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { floorResponse, type ResponseSurface } from "./response-budget.js";
 import { sendJson } from "./send-json.js";
+import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** issue #1075: 登録の入口で inputSchema を strict にし、未知の引数を tool error にする。
  *  schema の無い verb も空の strict object を持つ。共有 schema は `.strict()` の複製なので変わらない。
  *  shortcut: top-level のキーだけ —— 入れ子の object(decompose の children など)は strict にしない。
  *  入れ子のキーの綴り違いが観測されたら shape を辿って strict にする */
-export function rejectUnknownArguments(server: McpServer): McpServer {
+function rejectUnknownArguments(server: McpServer): McpServer {
   const register = server.registerTool.bind(server) as (...args: any[]) => any;
   server.registerTool = ((name: string, config: { inputSchema?: z.ZodObject | z.ZodRawShape }, cb: unknown) => {
     const schema = config.inputSchema;
@@ -22,7 +23,7 @@ export function rejectUnknownArguments(server: McpServer): McpServer {
 }
 
 /** ADR 0195 決定5: 全 verb の応答を出口の床に掛ける。verb の名前を知っているのは登録の層だけなので、ここで callback を包む。 */
-export function floorEveryResponse(
+function floorEveryResponse(
   server: McpServer,
   context: { db: Db; clock: Clock; surface: ResponseSurface; taskId?: string | null },
 ): McpServer {
@@ -32,6 +33,34 @@ export function floorEveryResponse(
       floorResponse(await cb(...args), { ...context, verb: name, at: context.clock.now() }),
     )) as McpServer["registerTool"];
   return server;
+}
+
+/** ADR 0342 決定4: SDK は投げた verb を tool error にするので、再 throw は底に届かない —— 盤面 DB の拒否は終了の関数を直接呼び、
+ *  何も答えない(process は終わる途中で、tool error を読んだ worker が続けない)。`terminate` が無ければ包まない(再 throw)。 */
+function endOnBoardDbRefusal(server: McpServer, terminate: TerminateOnBoardDbRefusal | undefined, taskId?: string | null): McpServer {
+  if (!terminate) return server;
+  const register = server.registerTool.bind(server) as (...args: any[]) => any;
+  server.registerTool = ((name: string, config: unknown, cb: (...args: any[]) => any) =>
+    register(name, config, async (...args: any[]) => {
+      try {
+        return await cb(...args);
+      } catch (err) {
+        if (!isBoardDbRefusal(err)) throw err;
+        terminate(err, { operation: name, ...(taskId && { taskId }) });
+        return new Promise(() => {});
+      }
+    })) as McpServer["registerTool"];
+  return server;
+}
+
+/** 全 verb の包みを1つの順で掛ける口(stateless な MCP の2面が使う)。後に掛けた包みほど内側で走るので、終了の包みは
+ *  床より先に掛ける —— 床の記録(`response_truncated`)の拒否も終了が受ける(ADR 0342 決定4)。 */
+export function wrapEveryVerb(
+  server: McpServer,
+  context: { db: Db; clock: Clock; surface: ResponseSurface; taskId?: string | null; terminate?: TerminateOnBoardDbRefusal },
+): McpServer {
+  const { terminate, ...floor } = context;
+  return floorEveryResponse(endOnBoardDbRefusal(rejectUnknownArguments(server), terminate, floor.taskId), floor);
 }
 
 /** The shared per-request Streamable HTTP lifecycle for stateless MCP servers.

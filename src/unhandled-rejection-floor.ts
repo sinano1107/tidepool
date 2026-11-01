@@ -6,6 +6,9 @@ export type SqliteError = InstanceType<typeof Database.SqliteError>;
 /** 拒まれた書き込みを投げた操作と task id(分かる範囲)。 */
 export type BoardDbRefusalSite = { operation?: string; taskId?: string };
 
+/** 再 throw が底に届かない口が呼ぶ終了(ADR 0342 決定4)。本番は `terminateOnBoardDbRefusal`、テストは fake。 */
+export type TerminateOnBoardDbRefusal = (error: SqliteError, where?: BoardDbRefusalSite) => void;
+
 /** stderr への1行。`done` は書き込みの完了で撃つ —— macOS の pipe では `process.stderr` が非同期なので、
  *  直後に exit すると1行が落ちうる(#2853)。 */
 type WriteLine = (line: string, done: () => void) => void;

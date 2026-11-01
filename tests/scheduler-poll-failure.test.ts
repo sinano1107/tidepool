@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
@@ -285,6 +286,90 @@ describe("撃ち直しの口(ADR 0294 決定2 の受理の検査)", () => {
     release();
     expect(await first).toEqual({ outcome: "succeeded" });
     scheduler.stop();
+  });
+});
+
+/** ADR 0342 決定4: poll 失敗の行の guard は境界 —— 盤面 DB の拒否は行にも question にもせず投げる(床が process を終える)。 */
+describe("盤面 DB が書きを拒んだ poll", () => {
+  beforeEach(() => void quietErrors());
+  const refusal = () => new Database.SqliteError("database or disk is full", "SQLITE_FULL");
+
+  it("候補の読みで拒まれれば poll は投げ、最後の poll の失敗の行は残らない", async () => {
+    const error = refusal();
+    const { scheduler } = board({
+      taskExecutionCandidates: () => {
+        throw error;
+      },
+    });
+
+    await expect(scheduler.rerunPoll()).rejects.toBe(error);
+    expect(scheduler.lastPollFailure()).toBeUndefined();
+    scheduler.stop();
+  });
+
+  it("pickup の契機の poll が拒まれれば、鎖の末尾で飲まず unhandled rejection として床へ届く", async () => {
+    const error = refusal();
+    const { clock, scheduler } = board({
+      taskExecutionCandidates: () => {
+        throw error;
+      },
+    });
+
+    const rejections = await unhandledRejectionsDuring(() => clock.advance(HOURLY));
+
+    expect(rejections).toEqual([error]);
+    scheduler.stop();
+  });
+
+  it("後始末の一撃で拒まれれば poll は投げ、行は残らない", async () => {
+    const error = refusal();
+    const { scheduler, state, worker } = board({
+      onSpawnFailed: () => {
+        throw error;
+      },
+    });
+    state.broken = false;
+    worker.scriptStartFailure(new Error("spawn blew up"));
+
+    await expect(scheduler.rerunPoll()).rejects.toBe(error);
+    expect(scheduler.lastPollFailure()).toBeUndefined();
+    scheduler.stop();
+  });
+
+  it("続く poll の失敗の question の登録で拒まれれば poll は投げる", async () => {
+    let readonly = false;
+    const b = board({
+      taskExecutionCandidates: () => {
+        if (readonly) b.db.pragma("query_only = 1");
+        throw new Error("registry is broken");
+      },
+    });
+    await b.scheduler.rerunPoll();
+    await b.clock.advance(10 * MINUTE);
+    readonly = true;
+
+    await expect(b.scheduler.rerunPoll()).rejects.toThrow("attempt to write a readonly database");
+    b.scheduler.stop();
+  });
+
+  it("開いた question の観測での決着で拒まれれば poll は投げる", async () => {
+    let readonly = false;
+    const b = board({
+      converge: async () => {
+        if (readonly) b.db.pragma("query_only = 1");
+        return [];
+      },
+    });
+    await b.scheduler.rerunPoll();
+    await b.clock.advance(10 * MINUTE);
+    await b.scheduler.rerunPoll();
+    expect(quarantineQuestion(b.db, "pollFailure", null)).toBeDefined();
+    // queue を空にする —— 本体は書かずに成功し、finally の決着だけが書く
+    cancelTaskDirectly(b.db, b.head, null, b.clock.now(), {}, "webui");
+    readonly = true;
+
+    await expect(b.scheduler.rerunPoll()).rejects.toThrow("attempt to write a readonly database");
+    b.scheduler.stop();
   });
 });
 

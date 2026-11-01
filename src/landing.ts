@@ -37,6 +37,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { LandingState, RootSettledByObservation, SettledByObservation } from "./wire-contract.js";
 import {
   boardRefWriter,
@@ -1271,6 +1272,7 @@ export function createLanding(deps: LandingDeps): Landing {
       );
       return await afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
+      if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: 昇格の失敗 question も同じ器に書くので、書かずに底へ
       // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
       if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
         return quarantined("workspace", resolvedWorkspace);
@@ -1297,6 +1299,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const verdict = root && (await landRoot(root, answering));
         if (verdict) verdicts.push({ taskId: id, verdict });
       } catch (error) {
+        if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: 根ごとの失敗として log に流さない
         console.error(`[landing] landing root ${id} failed; the pass goes on with the rest:`, error);
       }
     }
@@ -1397,6 +1400,7 @@ export function createLanding(deps: LandingDeps): Landing {
               settleObserved({ id, workspace: taskWorkspace }, pr_number, prOutcomeKind(read.state, read.mergedBy), now);
             }
           } catch (error) {
+            if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: その question の失敗として log に流さない
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
             console.error(`[landing] outside-merge scan of PR #${pr_number} (question ${id}) failed; it stays open:`, error);
           }
@@ -1512,6 +1516,7 @@ export function createLanding(deps: LandingDeps): Landing {
             })();
           });
         } catch (error) {
+          if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: その PR の失敗として log に流さない
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         } finally {
           release?.();
