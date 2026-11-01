@@ -1,5 +1,7 @@
 # 盤面 DB が書きを拒んだ記録の書き込みは床から process を終え、後始末の step の中の盤面のバグは落ちた後始末である —— memory の印は書き込みの後
 
+**Status 追記: 決定5 の列挙から「帳簿」(board-call の `unreclaimed`)を外す。帳簿は記録に書けたことの印ではなく「回収 timeout まで空を観測できなかった容器」という盤面の観測で、投げた手を撃ち直す runner の無い箇所では唯一の写しになるので、観測の時点(書き込みの前)に置く。pickup の門と読み口もそれを読む([ADR 0347](0347-the-board-call-reclaim-ledger-is-set-at-observation-and-the-pickup-gate-and-queue-read-it.md)、2026-11-02、issue #2859)。**
+
 **Status 追記: 決定6 の「受理の再実行は後始末の再実行のまま」が乗る前提 —— 後始末の step は再実行安全である —— の持ち主は [ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定1(2026-11-01、issue #2889)。`teardown()` は1つの手で、tree rule の後の tx が投げると tree rule から走り直す —— tree rule は同 決定2・3 で基準を読んで2度目を飛ばす。**
 
 **Status 追記: 決定1 の「後始末の step の中なら ADR 0112 の落ちた後始末」のうち、session の `writes` の束の手は後始末の外(枠の移動の後)にも届くので、その throw は別名の停止 `unclosedSession` になる。決定6 の残りは枠ではなく session ごとに持ち、枠の解放で消えない。再入の門は `failedTeardown` / `unclosedSession` の行で、読むのは枠の主の session の行([ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定1〜4、2026-11-01、issue #2876)。**
