@@ -23,23 +23,23 @@ async function gitShim(): Promise<{ cwd: string; record: string; restore: () => 
   writeFileSync(record, "");
   // `git config remote.origin.url` は盤面が「どの repo 宛ての installation token
   // を要求するか」を決める読み取り(ADR 0093)なので、shim は本物と同じ答えを
-  // 返すだけで記録しない —— 観測したいのは fetch のほうである
+  // 返すだけで記録しない —— 観測したいのは fetch のほうである。それ以外の `git config`
+  // (ADR 0339 決定5 の extraHeader の述語)には「該当なし」(exit 1)を答える
   writeFileSync(
     join(dir, "git"),
-    // 呼び出しごとに区切り、`ls-remote` には原本の sha を答える(ADR 0243 決定3: fetch はその sha を取る)
-    `#!/bin/sh\nif [ "$1" = "config" ]; then echo "https://github.com/acme/registry.git"; exit 0; fi\necho "---" >> "$TIDEPOOL_GIT_SHIM_RECORD"\nfor arg in "$@"; do echo "arg=$arg" >> "$TIDEPOOL_GIT_SHIM_RECORD"; [ "$arg" = "ls-remote" ] && printf '${ORIGIN_SHA}\\trefs/heads/main\\n'; done\necho "GH_TOKEN=\${GH_TOKEN-}" >> "$TIDEPOOL_GIT_SHIM_RECORD"\necho "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}" >> "$TIDEPOOL_GIT_SHIM_RECORD"\nexit 0\n`,
+    // 呼び出しごとに区切り、`ls-remote` には原本の sha を答える(ADR 0243 決定3: fetch はその sha を取る)。
+    // 子の env は盤面が組み立てる(ADR 0339 決定1)ので、記録先は env でなく script に焼く
+    `#!/bin/sh\nif [ "$1" = "config" ]; then [ "$2" = "remote.origin.url" ] || exit 1; echo "https://github.com/acme/registry.git"; exit 0; fi\necho "---" >> "${record}"\nfor arg in "$@"; do echo "arg=$arg" >> "${record}"; [ "$arg" = "ls-remote" ] && printf '${ORIGIN_SHA}\\trefs/heads/main\\n'; done\necho "GH_TOKEN=\${GH_TOKEN-}" >> "${record}"\necho "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}" >> "${record}"\nexit 0\n`,
   );
   chmodSync(join(dir, "git"), 0o755);
   const path = process.env.PATH;
   process.env.PATH = `${dir}:${path ?? ""}`;
-  process.env.TIDEPOOL_GIT_SHIM_RECORD = record;
   return {
     cwd,
     record,
     restore: () => {
       if (path === undefined) delete process.env.PATH;
       else process.env.PATH = path;
-      delete process.env.TIDEPOOL_GIT_SHIM_RECORD;
     },
   };
 }
@@ -135,10 +135,17 @@ it("盤面の registry fetch は仲介の installation token で撃たれ、ホ�
   }
 });
 
-// 身元の不在は宣言であって暗黙のフォールバックではない(ADR 0041)。ここで credential
-// 引数を付けてしまうと、token を持たない盤面が「空の helper」だけを渡すことになり、
-// ホストの正当な設定を消したうえで何も渡さない —— 一番悪い形になる。
+// 身元の不在は宣言であって暗黙のフォールバックではない(ADR 0041)。ADR 0339 決定2: 床は
+// 認証の無い分岐にも掛かる —— 注入 helper は無く、host と checkout の身元の経路は reset で消える
+// (旧形の「ホストの helper を残す」は人間の `gh` ログインに乗っていた)。
 it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さない(ADR 0024)", async () => {
+  const floor = [
+    "-c", "credential.helper=",
+    "-c", "http.extraHeader=",
+    "-c", "http.sslVerify=true",
+    "-c", "url.https://github.com/.insteadOf=git@github.com:",
+    "-c", "url.https://github.com/.insteadOf=ssh://git@github.com/",
+  ];
   const shim = await gitShim();
   restoreShim = shim.restore;
 
@@ -150,8 +157,8 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
     { args: lsRemote.args, token: lsRemote.env.GH_TOKEN },
     { args: fetch.args, token: fetch.env.GH_TOKEN },
   ]).toEqual([
-    { args: ["-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "ls-remote", "origin", "refs/heads/main"], token: "" },
-    { args: ["-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", "origin", ORIGIN_SHA], token: "" },
+    { args: [...floor, "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "ls-remote", "origin", "refs/heads/main"], token: "" },
+    { args: [...floor, "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", "origin", ORIGIN_SHA], token: "" },
   ]);
 });
 

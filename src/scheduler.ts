@@ -357,7 +357,7 @@ export function startScheduler(deps: {
   cliAuth?: CliAuthCheck;
   /** ADR 0024 / issue #211: 盤面の GitHub 身元。remote 正本を宣言した workspace の
    *  pickup 直前の fetch(ADR 0052 決定2)がこの名義で撃つ。Absent → 盤面が GitHub
-   *  身元を持たない宣言なので fetch は素の git に委ねる —— private な remote なら
+   *  身元を持たない宣言なので fetch は匿名で撃つ(ADR 0339 決定2)—— private な remote なら
    *  そこで失敗し、その workspace の quarantine が人間を呼ぶ。 */
   githubAuth?: GitHubAuth;
   /** ADR 0052 決定3 / issue #211: どの registry clone を読むか + その remote 正本の

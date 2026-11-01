@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { onTestFinished } from "vitest";
+import { tempDir } from "./temp-dir.js";
 
 /** A separate process keeps HTTP moving while the board runs synchronous git (ADR 0334). */
 export async function startGitHttpRemote(
@@ -97,4 +98,37 @@ export async function startGitHttpRemote(
     server.once("exit", (code) => reject(new Error(`git HTTP remote exited before listening: ${code}`)));
     server.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().trim()));
   });
+}
+
+/** ADR 0339: a remote that answers every request 401 (Basic) and records each request's headers, so a
+ *  test sees what identity git offered — git sends credentials only after a 401. */
+export async function startDenyingHttpRemote(): Promise<{ url: string; requests: () => Record<string, string>[] }> {
+  const log = join(await tempDir("tidepool-401-"), "requests.jsonl");
+  writeFileSync(log, "");
+  const server = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { createServer } from 'node:http';
+    import { appendFileSync } from 'node:fs';
+    const server = createServer((req, res) => {
+      appendFileSync(process.argv[1], JSON.stringify(req.headers) + '\\n');
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="t"' }).end();
+    });
+    process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => process.exit(0)); });
+    server.listen(0, '127.0.0.1', () => {
+      process.stdout.write('http://127.0.0.1:' + server.address().port + '/o/r.git\\n');
+    });
+  `, log], { stdio: ["ignore", "pipe", "pipe"] });
+  onTestFinished(async () => {
+    if (server.exitCode !== null || server.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
+    server.kill();
+    await exited;
+  });
+  const url = await new Promise<string>((resolve, reject) => {
+    server.once("error", reject);
+    server.once("exit", (code) => reject(new Error(`401 remote exited before listening: ${code}`)));
+    server.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().trim()));
+  });
+  const requests = () =>
+    readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, string>);
+  return { url, requests };
 }

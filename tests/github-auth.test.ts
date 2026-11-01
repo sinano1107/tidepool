@@ -1,15 +1,17 @@
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
   GitHubAuth,
+  githubChildEnv,
   githubLoggedIn,
   loadGitHubAuth,
   originRepo,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
+import { startDenyingHttpRemote } from "./git-http-remote.js";
 import { git } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -36,6 +38,7 @@ afterEach(async () => {
     delete process.env.GH_TOKEN;
   }
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const broker of brokers.splice(0)) await broker.close();
 });
 
@@ -129,6 +132,30 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
       bearer: "gho_user",
       leaked: undefined,
       noPrompt: "0",
+    });
+  });
+
+  // ADR 0339 決定1: 子の env は継承ではなく組み立てる —— host の ambient な身元の経路を子に見せない
+  it("子の env は組み立てたもので、process.env の askpass・ssh・git 設定・gh の host を運ばない(認証の有無で違うのは GH_TOKEN だけ)", async () => {
+    for (const name of ["GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_CONFIG_PARAMETERS", "GH_HOST"]) {
+      vi.stubEnv(name, "ambient");
+    }
+    const broker = await openBroker(() => issuedToken("inst", 60));
+    const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
+    await auth.ensureToken("acme/one");
+
+    const built = githubChildEnv();
+    expect({ built, authed: auth.env("acme/one"), home: readdirSync(built.HOME!) }).toEqual({
+      built: {
+        PATH: process.env.PATH,
+        HOME: expect.any(String),
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ALLOW_PROTOCOL: "file:http:https",
+      },
+      authed: { ...built, GH_TOKEN: "inst" },
+      home: [],
     });
   });
 
@@ -268,6 +295,116 @@ describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入�
 
     expect(git(join(base, "ws"), "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
     expect(broker.requests.length).toBe(0);
+  });
+
+  // ADR 0339 決定4: 人間の checkout の ssh 綴りの origin は盤面の https に解決し、綴りの記録は変えない
+  it.each([
+    ["git@github.com:o/r.git", "https://github.com/o/r.git"],
+    ["ssh://git@github.com/o/r", "https://github.com/o/r"],
+  ])("ssh 綴りの GitHub origin %s は https の %s に書き換えて撃つ", async (origin, resolved) => {
+    const repo = await tempDir("tidepool-repo-");
+    git(repo, "init", "-b", "main");
+    git(repo, "remote", "add", "origin", origin);
+
+    expect({
+      resolved: authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "--get-url", "origin"),
+      recorded: git(repo, "config", "remote.origin.url"),
+    }).toEqual({ resolved, recorded: origin });
+  });
+
+  // ADR 0339 決定1: 転送の床 —— ssh 鍵という身元では網に出ない(checkout の core.sshCommand があっても)
+  it("非 GitHub の ssh 綴りの remote は ssh を起こさずに止まる", async () => {
+    const repo = await tempDir("tidepool-repo-");
+    git(repo, "init", "-b", "main");
+    git(repo, "remote", "add", "origin", "git@example.com:o/r");
+    const called = join(repo, "ssh-called");
+    const fakeSsh = join(repo, "fake-ssh");
+    writeFileSync(fakeSsh, `#!/bin/sh\ntouch "${called}"\nexit 1\n`);
+    chmodSync(fakeSsh, 0o755);
+    git(repo, "config", "core.sshCommand", fakeSsh);
+
+    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "origin")).toThrow(
+      /transport 'ssh' not allowed/,
+    );
+    expect(existsSync(called)).toBe(false);
+  });
+
+  // #2801: checkout の insteadOf が https を ssh にしても床で止まり、人間が直す場所を文で名指す
+  it("https を ssh へ書き換える checkout の insteadOf は ssh を撃たずに止まり、insteadOf と origin の綴りを確かめよと言う", async () => {
+    const repo = await tempDir("tidepool-repo-");
+    git(repo, "init", "-b", "main");
+    git(repo, "remote", "add", "origin", "https://github.com/o/r.git");
+    git(repo, "config", "url.git@github.com:.insteadOf", "https://github.com/");
+
+    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow(
+      `\`git fetch\` failed with \`transport 'ssh' not allowed\` (in ${repo}): the board reaches GitHub only over https as itself — check this checkout's \`url.*.insteadOf\` rules and the spelling of its origin`,
+    );
+  });
+
+  /** 401 を返す loopback remote を origin に持つ checkout —— git が差し出した身元を remote 側の記録で見る。 */
+  async function checkoutOfDenyingRemote(): Promise<{ repo: string; url: string; requests: () => Record<string, string>[] }> {
+    const remote = await startDenyingHttpRemote();
+    const repo = await tempDir("tidepool-repo-");
+    git(repo, "init", "-b", "main");
+    git(repo, "remote", "add", "origin", remote.url);
+    return { repo, ...remote };
+  }
+
+  // ADR 0339 決定1: VS Code が立てる GIT_ASKPASS は保存済みの GitHub 資格情報を答えうる
+  it("process.env の GIT_ASKPASS は子に届かず、401 にも呼ばれない", async () => {
+    const { repo, requests } = await checkoutOfDenyingRemote();
+    const called = join(repo, "askpass-called");
+    const askpass = join(repo, "askpass");
+    writeFileSync(askpass, `#!/bin/sh\ntouch "${called}"\necho ambient-secret\n`);
+    chmodSync(askpass, 0o755);
+    vi.stubEnv("GIT_ASKPASS", askpass);
+
+    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect({ askpass: existsSync(called), offered: requests().map((r) => r.authorization) }).toEqual({
+      askpass: false,
+      offered: [undefined],
+    });
+  });
+
+  it("host の HOME の ~/.netrc は子に届かず、Authorization を出さない", async () => {
+    const { repo, requests } = await checkoutOfDenyingRemote();
+    const hostHome = await tempDir("tidepool-home-");
+    writeFileSync(join(hostHome, ".netrc"), "machine 127.0.0.1 login u password netrc-secret\n");
+    chmodSync(join(hostHome, ".netrc"), 0o600);
+    vi.stubEnv("HOME", hostHome);
+
+    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect(requests().map((r) => r.authorization)).toEqual([undefined]);
+  });
+
+  it("checkout の http.extraHeader は reset されて届かない", async () => {
+    const { repo, requests } = await checkoutOfDenyingRemote();
+    git(repo, "config", "http.extraHeader", "X-Leak: header-secret");
+
+    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect(requests().map((r) => r["x-leak"])).toEqual([undefined]);
+  });
+
+  // ADR 0339 決定5: URL 付きの extraHeader は reset より特定度が高く勝つので、撃つ前に述語で拒む
+  it("checkout の URL 付き http.<url>.extraHeader があれば撃たずに投げ、理由に key を載せる", async () => {
+    const { repo, url, requests } = await checkoutOfDenyingRemote();
+    git(repo, "config", `http.${url}.extraHeader`, "X-Leak: header-secret");
+
+    expect(() => authedGitBounded(undefined, repo, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow(
+      `http.${url}.extraheader`,
+    );
+    expect(requests()).toEqual([]);
+  });
+
+  // ADR 0339 決定3: 注入 helper は https の github.com にだけ token を答える
+  it("注入 helper は github.com 以外の host には token を答えない", async () => {
+    const { repo, requests } = await checkoutOfDenyingRemote();
+    const broker = await openBroker(() => issuedToken("inst-token", 60));
+    const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
+    await auth.ensureToken("acme/widget");
+
+    expect(() => authedGitBounded(auth, repo, "acme/widget", GIT_NETWORK_TIMEOUT_MS, "fetch", "origin")).toThrow();
+    expect(requests().map((r) => r.authorization)).toEqual([undefined]);
   });
 
   it("cwd が無い呼び出しは上限つきの面でも subcommand と在り処を名指して投げる(issue #2722)", async () => {

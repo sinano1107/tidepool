@@ -100,7 +100,7 @@ export interface WorkspaceAdminDeps {
  *  `clone`(ADR 0067 決定2 の登録の門)と `publish`(決定8)がこれを共有する。 */
 export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
   /** Absent(盤面が GitHub 身元を持たない、ADR 0024)→ ADR 0067 の到達性 probe は
-   *  撃たれず、今日の挙動のまま —— clone は素の git に委ね、publish は push が落ちる
+   *  撃たれず、clone は匿名で撃ち(ADR 0339 決定2)、publish は push が落ちる
    *  だけになる。`create` は GitHub に一切出ないので、そもそもこれを読まない
    *  (ADR 0066 決定1)。 */
   github?: GitHubClient;
