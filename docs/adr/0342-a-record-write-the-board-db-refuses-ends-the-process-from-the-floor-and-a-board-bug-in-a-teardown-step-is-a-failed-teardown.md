@@ -16,8 +16,9 @@ question の登録・quarantine・`closeSession`・`markTeardown`)が投げた�
    ADR 0112 の落ちた後始末、spawn 前の窓なら ADR 0294 決定3。後始末は GLOSSARY の定義どおり**決着から**で、ADR 0112 の実装が
    `runTeardown` の catch だけに掛かっていたのは写しの範囲の問題である。
 2. **(A) の行き先は process の終了である。** 原因(SQLite の code・投げた操作・task id)を stderr に固定の1行で出し、通常の 1 と別の
-   exit code で終える。人間が器を直して立て直し(ADR 0318 決定3)、起動時の掃き出しと ADR 0315 の復旧が閉じる。器が書けない間は
-   起動も拒まれる(決定4)。盤面全体の停止の列挙には入れない —— 列挙は生きている盤面の pickup を止める状態の集合で、process の
+   exit code で終える。人間が器を直して立て直し(ADR 0318 決定3)、起動時の掃き出しと ADR 0315 の復旧が閉じる。器が書けない間、盤面は
+   起動の掃き出しか最初の書き込み(pickup の `UPDATE`)で同じ終わり方をする —— 起動は既存 DB に無条件の書き込みをしないので、
+   `in_progress` 行の無い盤面は起動が通る。先行の検査は足さない(ADR 0266 決定3 の線、書き込みそのものが検査)。盤面全体の停止の列挙には入れない —— 列挙は生きている盤面の pickup を止める状態の集合で、process の
    終わりはそこに無い。反対側の ADR の前提は (A) に当たらない: ADR 0294 決定1「盤面を落とさない」は次の poll が自分で直る例外の話、
    ADR 0036 / 0294 決定4「人間面が開いたままなのが復旧経路」は人間の verb も全部書き込みなので面が開いていても操作できず、走っている
    worker の verb も失敗して token を燃やし、梯子も書けないので止められない。cgroup ごと殺せる終了だけがきれいに止まる。ADR 0112 が
@@ -29,13 +30,18 @@ question の登録・quarantine・`closeSession`・`markTeardown`)が投げた�
    理路。書き手側の扉(記録を書く1関数)は退ける(退けた形)。
 4. **fire-and-forget の境界の catch は (A) を飲まず再 throw する。** 境界とは、投げた例外を底へ渡さずに自分で受けて続ける catch のこと
    —— 起動時の復旧の session ごとの catch、cliAuth の probe、poll 失敗の行の guard、retrospective の sweep がその例で、`pollNow` の
-   `.catch(console.error)` のような鎖の末尾の catch も含む。どれも1つの判定 helper を通す。列挙は実装 issue が持つ(数はこの grilling
+   `.catch(console.error)` のような鎖の末尾の catch、人間の verb の HTTP の error handler と worker の verb の MCP tool error の
+   wrapper も含む —— 残すと worker の verb が tool error を返し続け、escalate も書けず、時間制限の梯子が (A) に当たるまで token を
+   燃やす(決定2 が memory の停止を退けた理由そのもの)。どれも1つの判定 helper を通す。列挙は実装 issue が持つ(数はこの grilling
    では測っていない)。起動時の復旧が (A) に当たれば起動を拒む形にここで入る。
 5. **記録に書けたことを前提にする process memory の印(settled / recorded / reported / pending / 帳簿)は、その書き込みの tx が返った後に
    置く。** 先に置くと rollback の後に再試行も鳴り直しも起きず、行の無い回収を報せる。決定6 の再実行の門が効く前提でもある。
-6. **(B) の後始末の step の持ち主は watchdog の runner 1本である。** 分類の `.then` の3箇所と `runTeardown` の呼び口は、throw を受けて
-   ADR 0112 の failedTeardown を立てる runner を通す。受理の再実行は、process が生きていれば memory に残る同じ step、再起動を跨げば
-   起動時の掃き出しが step を置き換えるので後始末の再実行のまま。ADR 0112 決定3 の対象は `runTeardown` から「投げた後始末の step」に
+6. **(B) の後始末の step の持ち主は watchdog の runner 1本である。** 分類の `.then` の3箇所、`runTeardown` の呼び口、spawn 前の窓の一撃
+   (`afterPoll` の `onSpawnFailed`、adapter の `spawnFailed`)は、throw を受けて ADR 0112 の failedTeardown を立てる runner を通す。
+   adapter の鎖の中の書き込み(`closeSession`・資源の停止の登録)は、書く内容の持ち主を adapter に残したまま(ADR 0338 決定4)、書く行為を
+   束の中の step として盤面へ渡し、runner がその step を撃つ —— 盤面が撃ち直せない step を残すと、受理が再起動まで通らない。
+   受理の再実行は、process が生きていれば memory に残る同じ step、再起動を跨げば起動時の掃き出しが step を置き換えるので後始末の
+   再実行のまま。再入の門は failedTeardown の行(ADR 0112 決定4)で、決定5 が印を後ろへ動かしても tick ごとの再 throw にはならない。ADR 0112 決定3 の対象は `runTeardown` から「投げた後始末の step」に
    広がる。ADR 0309 決定4「分類の Promise は reject しない」は値の読みの契約で、鎖の中の記録の書き込みは対象外になる。
 
 ## 退けた形
