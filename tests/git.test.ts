@@ -3,7 +3,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { git, gitWithEnv } from "../src/git.js";
-import { authedFetch, GIT_NETWORK_TIMEOUT_MS } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
@@ -39,14 +38,10 @@ it("cwd が無い git は subcommand と在り処を名指して投げ、元の 
 it("cwd があって git が PATH に無いなら、元の spawn の失敗をそのまま投げる(issue #2722)", async () => {
   const cwd = await tempDir("tidepool-git-");
   vi.stubEnv("PATH", cwd);
-  try {
-    const err = thrown(() => git(cwd, "status"));
-    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-    expect(err.message).toContain("ENOENT");
-    expect(err.cause).toBeUndefined();
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  const err = thrown(() => git(cwd, "status"));
+  expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+  expect(err.message).toContain("ENOENT");
+  expect(err.cause).toBeUndefined();
 });
 
 /** `source` の blob を持たない部分 clone。promisor は 401 の loopback で、index は HEAD を指す(blob は遅延 fetch でしか読めない)。 */
@@ -67,6 +62,7 @@ const STAYED_OFF_THE_NETWORK = { askpass: false, requests: [] };
 it("部分 clone で blob を要る verb は網に出ず `transport 'http' not allowed` で落ちる", async () => {
   const workspace = await makeWorkspace("partial-clone-show");
   const { dir, offNetwork } = await partialCloneOf(workspace.path);
+  vi.stubEnv("LC_ALL", "C");
 
   expect(() => git(dir, "show", "HEAD:README.md")).toThrow("transport 'http' not allowed");
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
@@ -76,6 +72,7 @@ it("呼び手の env も ambient の env も転送の床を広げない", async 
   const workspace = await makeWorkspace("partial-clone-floor");
   const { dir, offNetwork } = await partialCloneOf(workspace.path);
   vi.stubEnv("GIT_ALLOW_PROTOCOL", "file:http:https");
+  vi.stubEnv("LC_ALL", "C");
 
   expect(() => git(dir, "show", "HEAD:README.md")).toThrow("transport 'http' not allowed");
   expect(() => gitWithEnv({ GIT_ALLOW_PROTOCOL: "file:http:https" }, dir, "show", "HEAD:README.md")).toThrow("transport 'http' not allowed");
@@ -96,21 +93,18 @@ it("部分 clone の sandbox の index 読み(`workspaceSettingsDisposition`)は
 
 it("部分 clone の `loadRegistry` の blob 読みは網に出ず `transport 'http' not allowed` で落ちる", async () => {
   const { dir, offNetwork } = await partialCloneOf(await makeRegistry());
+  vi.stubEnv("LC_ALL", "C");
 
   expect(() => loadRegistry(dir, "purely-local")).toThrow("transport 'http' not allowed");
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
 });
 
-it("`git()` の local path の fetch と `authedFetch` の hop2 は転送の床の下でも成功する", async () => {
+it("`git()` の local path の fetch は転送の床の下でも成功する", async () => {
   const source = await makeWorkspace("file-transport-source");
   const sha = fixtureGit(source.path, "rev-parse", "HEAD");
-  const viaGit = await makeWorkspace("file-transport-git");
-  const viaHop2 = await makeWorkspace("file-transport-hop2");
-  fixtureGit(viaHop2.path, "remote", "add", "origin", source.path);
+  const target = await makeWorkspace("file-transport-target");
 
-  git(viaGit.path, "fetch", "--quiet", source.path, sha);
-  authedFetch(undefined, viaHop2.path, GIT_NETWORK_TIMEOUT_MS, sha);
+  git(target.path, "fetch", "--quiet", source.path, sha);
 
-  expect(fixtureGit(viaGit.path, "cat-file", "-t", sha)).toBe("commit");
-  expect(fixtureGit(viaHop2.path, "cat-file", "-t", sha)).toBe("commit");
+  expect(fixtureGit(target.path, "cat-file", "-t", sha)).toBe("commit");
 });

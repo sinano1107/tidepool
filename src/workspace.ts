@@ -180,7 +180,7 @@ export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: 
   openRecordedPlace(db, examinee.id, "examinee_checkout_opened", workspacesBaseDir, now, (path) => {
     const head = resolvablePosedHead(db, room, examinee);
     git(path, "init", "--quiet", "--initial-branch=main");
-    // FETCH_HEAD に面接室の在り処を残さない(ADR 0276 決定1)
+    // FETCH_HEAD に面接室の在り処を残さない(ADR 0276 決定1)。submodule も辿らない
     git(path, "fetch", "--quiet", "--no-write-fetch-head", "--no-recurse-submodules", room.path, head);
     git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
   });

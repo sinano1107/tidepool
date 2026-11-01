@@ -4964,12 +4964,18 @@ it("保護ブランチがタスクブランチの祖先へ巻き戻されてい�
 // ADR 0243 決定4 / ADR 0339 Status 追記: 着地は転送を起こさないので checkout の config が転送を書き換えていても網に出ない。記録の基準は帯域外の文で読む
 it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf と fetch.recurseSubmodules があっても網に出ずに成功し、保護ブランチと記録の基準が landed に揃う", async () => {
   const workspace = await makeWorkspace("landing-off-head-offline");
+  const remote = await startDenyingHttpRemote();
+  // 登録済みの submodule の remote が網を向く: `fetch.recurseSubmodules` はこれを辿る
+  git(workspace.path, "-c", "protocol.file.allow=always", "submodule", "add", (await makeWorkspace("landing-off-head-submodule")).path, "sub");
+  git(workspace.path, "config", "-f", ".gitmodules", "submodule.sub.url", remote.url);
+  git(workspace.path, "submodule", "sync");
+  git(workspace.path, "add", ".gitmodules");
+  git(workspace.path, "commit", "-m", "register the submodule");
   const { db, clock } = await openBoard();
   const work = await recordedWork(db, clock, workspace);
   const before = git(workspace.path, "rev-parse", "refs/heads/main");
   const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
   git(workspace.path, "checkout", `task/${work.id}`);
-  const remote = await startDenyingHttpRemote();
   git(workspace.path, "config", `url.${remote.url}.insteadOf`, ".");
   git(workspace.path, "config", "fetch.recurseSubmodules", "true");
   const askpass = await humanAskpass();
@@ -4986,7 +4992,7 @@ it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`the board recorded it at ${tip} and it now sits at ${before}`);
 });
 
-// ADR 0243 決定4: `update-ref` の旧 sha が CAS。タスクブランチの途中へ動いた枝は `fetch .` なら ff で黙って飲まれる位置なので、そこへ動かす
+// `update-ref` の旧 sha が CAS。動いた先がタスクブランチの途中でまだ ff できる位置でも、動いたというだけで落ちる
 it("記録との突き合わせから書き込みまでに保護ブランチが動いていれば、ff の着地は書き込みで落ち、記録の基準は元の位置に畳まれる", async () => {
   const workspace = await makeWorkspace("landing-off-head-cas");
   const { db, clock } = await openBoard();
@@ -4996,6 +5002,7 @@ it("記録との突き合わせから書き込みまでに保護ブランチが�
   const moved = git(workspace.path, "rev-parse", "HEAD");
   commitWork(workspace.path, "second.txt", "the second commit\n");
   await moveRefBeforeTheLandingWrite(workspace.path, "refs/heads/main", moved);
+  vi.stubEnv("LC_ALL", "C");
 
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`but expected ${before}`);
 

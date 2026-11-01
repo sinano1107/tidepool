@@ -258,6 +258,7 @@ it("global の insteadOf が面接室の path を http へ書き換えていれ�
   const globalConfig = join(await tempDir("tidepool-global-config-"), "gitconfig");
   writeFileSync(globalConfig, `[url "${remote.url}"]\n\tinsteadOf = ${room.path}\n`);
   vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+  vi.stubEnv("LC_ALL", "C");
   const askpass = await humanAskpass();
 
   try {
