@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import { atNeutralCwd, type BoardCall, type BoardCallSpec, type ClaudeBoardCallPosture, readOutput } from "./board-call.js";
+import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
@@ -885,7 +885,7 @@ export type EnumerateSkillsFn = (cwd: string) => Promise<string[] | null>;
 // 0, num_turns 0, ~2s natural exit (verified, CLI 2.1.210). Guardrails mirror
 // checkUsage's old cost ceiling; --safe-mode is deliberately absent (it would
 // hide the very skills being enumerated). Which tiers and MCP servers the ping
-// reads is the call's posture, not these args (ADR 0341 決定4).
+// reads is the call's posture, not these args (ADR 0341 決定2・4).
 const SKILL_ENUM_ARGS = [
   "-p",
   "/usage",
@@ -945,13 +945,13 @@ function enumerateSkillsThrough(
   cwd: string,
   { awaitReclaimed }: { awaitReclaimed: boolean },
 ): Promise<string[] | null> {
-  return call(skillEnumerationSpec(cwd, awaitReclaimed), (proc) =>
+  return call(skillEnumerationSpec(cwd, { awaitReclaimed }), (proc) =>
     readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
   );
 }
 
 /** skill 列挙の Board call の注文。適合試験(ADR 0186 決定7)の `.mcp.json` の面も同じこれで撃つ(ADR 0341 決定6)。 */
-export const skillEnumerationSpec = (cwd: string, awaitReclaimed: boolean): BoardCallSpec =>
+export const skillEnumerationSpec = (cwd: string, { awaitReclaimed }: { awaitReclaimed: boolean }): BoardCallSpec =>
   claudeBoardCallSpec({
     kind: "skill enumeration",
     posture: "worker-shaped",
@@ -1281,7 +1281,7 @@ function isDirInsideCheckout(entry: string, checkout: string): boolean {
 
 // 答えを取りに行く呼び出し(下書き・翻訳・配分評価・帰責・Behavior candidate の起草)の
 // 上限 —— 表の economy の行で長い dump を下書きする呼び出しも収まる幅に取る(行が high effort のときも、下書き3種の所要は最長 27 秒だった —— #1350 の実測)。
-const ANSWER_CALL_LIMIT_MS = 300_000;
+export const ANSWER_CALL_LIMIT_MS = 300_000;
 
 /** `ExecFn` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。`kind` は回収の
  *  不成立を人間が読むときの呼び出しの名前。
@@ -1289,13 +1289,12 @@ const ANSWER_CALL_LIMIT_MS = 300_000;
  *  非ゼロ終了は `stdout` を付けて reject する —— `runClaudeBoardCallJson` がその
  *  stdout の 401 envelope を読んで provider quarantine を撃つ(ADR 0070)。口が答えを
  *  返さなかった(上限・spawn 失敗・容器の前提不成立)ときは stdout 無しで reject する。
- *  `cwd` は盤面自身の cwd が既定で、渡すのは適合試験が用意した neutral cwd で撃つときだけ(ADR 0303 決定4)。
- *  姿勢は答えの形(`answer`)が既定で、`worker-shaped` を渡すのは適合試験が worker の形の1ターンを撃つときだけ。 */
+ *  `cwd` は盤面自身の cwd が既定で、渡すのは適合試験が用意した neutral cwd で撃つときだけ(ADR 0303 決定4)。 */
 export const execThrough =
-  (call: BoardCall, kind: string, cwd?: string, posture: ClaudeBoardCallPosture = "answer"): ExecFn =>
+  (call: BoardCall, kind: string, cwd?: string): ExecFn =>
   async (command, args, env, input) => {
     const output = await call(
-      claudeBoardCallSpec({ kind, posture, command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS, input }),
+      claudeBoardCallSpec({ kind, posture: "answer", command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS, input }),
       readOutput,
     );
     if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);

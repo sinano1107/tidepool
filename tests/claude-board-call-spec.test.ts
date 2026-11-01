@@ -20,3 +20,9 @@ it("claude-code の spec は姿勢を省けない(ADR 0341 決定1)", () => {
   const codex: BoardCallSpec = { ...order, harness: "codex" };
   expect([missing.harness, codex.harness]).toEqual(["claude-code", "codex"]);
 });
+
+it("Claude の spec は入口を通らずには組めない —— 姿勢を書いた literal でも型が通らない(ADR 0341 決定2)", () => {
+  // @ts-expect-error —— 姿勢のフラグを導くのは claudeBoardCallSpec だけ
+  const literal: BoardCallSpec = { ...order, harness: "claude-code", posture: "answer" };
+  expect(literal.args).toEqual(["-p", "/usage"]);
+});

@@ -11,10 +11,16 @@ import type { Harness } from "./registry.js";
  *  Claude の adapter(`claudeBoardCallSpec`)だけが導く(ADR 0341 決定2)。 */
 export type ClaudeBoardCallPosture = "answer" | "worker-shaped" | "ambient";
 
+declare const claudeBoardCallBrand: unique symbol;
+/** `claudeBoardCallSpec` だけが付ける印: 姿勢を書いた literal では Claude の注文にならない —— 姿勢のフラグを導く
+ *  入口を迂回させない(ADR 0341 決定2)。型だけの印で、実行時の値は無い。 */
+export type ClaudeBoardCallBrand = { readonly [claudeBoardCallBrand]: true };
+
 /** 1回の Board call の注文(ADR 0136 決定4)。「何を・どの cwd で・どの env で
  *  起こすか」と「時間上限」「結果をいつ返すか」だけを言い、容器・force・観測の
  *  順序は口の中にある。Claude の注文は姿勢を必須で名指す —— 口はそれを読まない(ADR 0341 決定1・2)。 */
-export type BoardCallSpec = BoardCallOrder & ({ harness: "claude-code"; posture: ClaudeBoardCallPosture } | { harness: Exclude<Harness, "claude-code"> });
+export type BoardCallSpec = BoardCallOrder &
+  ((ClaudeBoardCallBrand & { harness: "claude-code"; posture: ClaudeBoardCallPosture }) | { harness: Exclude<Harness, "claude-code"> });
 
 interface BoardCallOrder {
   /** 呼び出しの種類。回収済み観測が不成立になったときの確認 question から

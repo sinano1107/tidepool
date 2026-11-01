@@ -1322,6 +1322,13 @@ export const CLI_ENVELOPE_USAGE = {
   usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
 };
 
+/** 口へ出た注文を写し取り、答えを返さない(null)偽の口。 */
+export function specRecordingCall() {
+  const specs: BoardCallSpec[] = [];
+  const call = (async (spec: BoardCallSpec) => (specs.push(spec), null)) as BoardCall;
+  return { call, specs };
+}
+
 /** `exec` を `execThrough` 越しに呼ぶ ExecFn —— `exec` が受け取る args は、答えの姿勢を足して口へ出る最終の argv(ADR 0341 決定2)。 */
 export const answerExec = (exec: ExecFn): ExecFn =>
   execThrough(

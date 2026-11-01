@@ -9,6 +9,7 @@ import { agentNeedsHuman } from "../src/agent.js";
 import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import { boardHalts } from "../src/board-halt.js";
 import { boardDoctrine, fenced, type PromptPart } from "../src/board-prose.js";
+import { POSTURE_FLAGS } from "../src/claude-board-call-spec.js";
 import {
   agentGitIdentityEnv,
   ClaudeCodeWorker,
@@ -62,6 +63,7 @@ import {
   recordingSpawn,
   recordPrompt,
   ScriptedWorker,
+  specRecordingCall,
 } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
@@ -5233,12 +5235,10 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
 
   // ADR 0335 決定2: 同梱集合は worker と同じ tier フラグで撃つ —— user 層の skill は同梱に数えない
   it("ホストの skill 列挙(同梱集合)は --setting-sources project と --strict-mcp-config で撃つ(ADR 0341 決定4)", async () => {
-    let args: string[] = [];
-    await enumerateHostSkills((async (spec: BoardCallSpec) => {
-      args = spec.args;
-      return null;
-    }) as BoardCall);
+    const { call, specs } = specRecordingCall();
+    await enumerateHostSkills(call);
 
+    const { args } = specs[0]!;
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
     expect(args).toContain("--strict-mcp-config");
   });
@@ -5253,12 +5253,16 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
 });
 
 describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
-  /** 口へ出た注文を写し取る偽の口。 */
-  function specRecordingCall() {
-    const specs: BoardCallSpec[] = [];
-    const call = (async (spec: BoardCallSpec) => (specs.push(spec), null)) as BoardCall;
-    return { call, specs };
-  }
+  // worker-shaped の probe が見るものは worker が見るもの —— 姿勢の一覧と worker 本体の spawn をずらさない(決定4)
+  it("worker 本体の spawn の argv は worker-shaped の姿勢のフラグをどれも運ぶ", async () => {
+    const { start, calls } = await makeWorker();
+    start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    const { args } = calls[0]!;
+    for (const flag of POSTURE_FLAGS["worker-shaped"]) expect(args).toContain(flag);
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+  });
 
   it("workspace を cwd にする skill 列挙は worker の形で撃ち、sandbox の profile は運ばず、回収済み観測を待つ(決定3・4・5)", async () => {
     const { call, specs } = specRecordingCall();

@@ -90,7 +90,7 @@ async function inDisposable<T>(run: (dirs: { home: string; workspace: string; te
 }
 
 /** Board call を1回撃つ。口が答えを返さなければ投げる —— その面の不合格になる。 */
-async function run(spec: Omit<BoardCallSpec, "harness" | "command">) {
+async function run(spec: Omit<Extract<BoardCallSpec, { harness: "codex" }>, "harness" | "command">) {
   const result = await call({ ...spec, harness: "codex", command: executable }, readOutput);
   if (result === null) throw new Error(`the ${spec.kind} Board call did not complete (limit, spawn failure, or no container)`);
   return result;

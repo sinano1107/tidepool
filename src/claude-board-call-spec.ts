@@ -1,8 +1,8 @@
-import type { BoardCallSpec, ClaudeBoardCallPosture } from "./board-call.js";
+import type { BoardCallSpec, ClaudeBoardCallBrand, ClaudeBoardCallPosture } from "./board-call.js";
 
 /** 姿勢 → フラグの唯一の写像(ADR 0341 決定2)。runner の module に置かないのは、runner が claude-worker.ts から原語を
  *  import していて、claude-worker.ts がここを引くと import の循環になるから(原語の移設は #2472)。 */
-const POSTURE_FLAGS: Record<ClaudeBoardCallPosture, readonly string[]> = {
+export const POSTURE_FLAGS: Record<ClaudeBoardCallPosture, readonly string[]> = {
   // the board's own cwd, not a task workspace: --safe-mode keeps the board repo's CLAUDE.md/skills/MCP config,
   // hooks and plugins out of what must stay a bare answer, without --bare's API-key-only auth. It does **not**
   // keep an advisor out (measured, issue #174) — that is the env's job. --safe-mode still reads `language`
@@ -19,8 +19,8 @@ type ClaudeBoardCallSpec = Extract<BoardCallSpec, { harness: "claude-code" }>;
 
 /** Claude の Board call の注文を組む唯一の入口(ADR 0341 決定2): 姿勢のフラグを呼び出し側の `args` の前に置く。
  *  `args` は呼び出しが測るもの(`--settings` / `--permission-mode` / `--mcp-config` / `--tools` を含む)だけを運ぶ。 */
-export const claudeBoardCallSpec = <S extends Omit<ClaudeBoardCallSpec, "harness">>(spec: S): S & { harness: "claude-code" } => ({
-  ...spec,
-  harness: "claude-code",
-  args: [...POSTURE_FLAGS[spec.posture], ...spec.args],
-});
+export const claudeBoardCallSpec = <S extends Omit<ClaudeBoardCallSpec, "harness" | keyof ClaudeBoardCallBrand>>(
+  spec: S,
+): S & { harness: "claude-code" } & ClaudeBoardCallBrand =>
+  // 印は型だけにある(board-call.ts)—— 付けられるのはこの cast だけ
+  ({ ...spec, harness: "claude-code", args: [...POSTURE_FLAGS[spec.posture], ...spec.args] }) as S & { harness: "claude-code" } & ClaudeBoardCallBrand;

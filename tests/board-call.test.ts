@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec, readOutput } from "../src/board-call.js";
+import { claudeBoardCallSpec } from "../src/claude-board-call-spec.js";
 import { execThrough } from "../src/claude-worker.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import type { ContainedProcess, PtyFn, PtyProcess } from "../src/process-container.js";
@@ -14,17 +15,16 @@ import { FakeClock, FakeContainerRuntime, recordingPty, recordingSpawn } from ".
 
 const LIMIT = 15_000;
 
-const spec: BoardCallSpec = {
+// 口は姿勢を読まない(ADR 0341 決定2)—— Claude の注文は入口だけが組める
+const spec: BoardCallSpec = claudeBoardCallSpec({
   kind: "skill enumeration",
-  harness: "claude-code",
-  // 口は姿勢を読まない(ADR 0341 決定2)
   posture: "worker-shaped",
   command: "claude",
   args: ["-p", "/usage"],
   cwd: "/workspaces/sandbox",
   env: { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1" },
   limitMs: LIMIT,
-};
+});
 
 /** stdout を読み切って返す reader。口は答えの形を知らないので、テストは
  *  「口が root の exit のあとに1度だけ読む」ことだけを使う。 */

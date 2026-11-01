@@ -1,7 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import {
   type CliAuthCommand,
   cliAuthCommandThrough,
@@ -21,6 +20,7 @@ import {
   PROBE_ENVELOPES,
   probeCommand,
   recordingSpawn,
+  specRecordingCall,
 } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -324,7 +324,7 @@ for (const [name, probe] of Object.entries(cappedProbes)) {
   });
 }
 
-/** 4本の probe は口へ `ambient` の姿勢で出る —— `--safe-mode` は姿勢が1度だけ運ぶ(ADR 0341 決定1・4)。 */
+/** 4本の probe は口へ `ambient` の姿勢で出る —— `--safe-mode` は姿勢が1度だけ運ぶ(ADR 0341 決定1・2)。 */
 for (const [name, probe] of Object.entries({
   "Claude の認証 probe": async (command: CliAuthCommand) => createClaudeCliAuthCheck(command)(),
   "Claude の model probe": async (command: CliAuthCommand) => createClaudeModelProbe(command)("claude-fable-5-1"),
@@ -332,8 +332,8 @@ for (const [name, probe] of Object.entries({
   "Moonshot の model probe": async (command: CliAuthCommand) => createMoonshotModelProbe(await moonshotKeyFile(), command)("kimi-k2-5"),
 })) {
   it(`${name}は ambient の姿勢で撃つ`, async () => {
-    const specs: BoardCallSpec[] = [];
-    await probe(cliAuthCommandThrough((async (spec: BoardCallSpec) => (specs.push(spec), null)) as BoardCall, name));
+    const { call, specs } = specRecordingCall();
+    await probe(cliAuthCommandThrough(call, name));
     expect(specs).toHaveLength(1);
     expect(specs[0]).toMatchObject({ harness: "claude-code", posture: "ambient" });
     expect(specs[0]!.args[0]).toBe("--safe-mode");

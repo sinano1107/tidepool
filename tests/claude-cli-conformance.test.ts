@@ -1,20 +1,19 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import { BOARD_CALL_ONE_TURN_FLAGS } from "../src/claude-board-call-runner.js";
 import { createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import {
-  boardCallOneTurnArgs,
+  boardCallShotSpec,
   type ConformanceObservations,
   judgeConformance,
   MCP_JSON_SERVER,
   mcpJsonControlSpec,
-  workerOneTurnArgs,
+  workerShotSpec,
 } from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
-import { execThrough, skillEnumerationSpec } from "../src/claude-worker.js";
+import { skillEnumerationSpec } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "../src/sandbox.js";
 import { composeTerminalScreen } from "../src/usage.js";
@@ -49,7 +48,7 @@ const MCP_JSON_LISTED = initWith([{ name: MCP_JSON_SERVER, status: "connected" }
 /** 9つの面がどれも今の盤面の読み取り関数で読める観測。 */
 function passingObservations(): ConformanceObservations {
   return {
-    mcpJson: async () => ({ control: MCP_JSON_LISTED, workerShaped: initWith([]), started: false }),
+    mcpJson: async () => ({ control: MCP_JSON_LISTED, workerShaped: initWith([]), workerShapedStarted: false, controlStarted: true }),
     initLine: async () => WORKER_STREAM,
     resultLine: async () => WORKER_STREAM,
     outputStyleLine: async () => WORKER_STREAM,
@@ -142,13 +141,17 @@ it.each([
   expect(ok).toBe(false);
 });
 
-// ADR 0341 決定6: 対照が server を載せないなら fixture が死んでいる —— worker の形の空を合格に読まない
+// ADR 0341 決定6: 対照で server が接続済みで起動していなければ fixture が死んでいる —— worker の形の空を合格に読まない
+const quiet = { workerShaped: initWith([]), workerShapedStarted: false };
+const live = { control: MCP_JSON_LISTED, controlStarted: true };
 it.each([
-  ["対照が server を載せない", { control: initWith([]), workerShaped: initWith([]), started: false }, "fixture"],
-  ["対照の init 行が無い", { control: "", workerShaped: initWith([]), started: false }, "fixture"],
-  ["worker の形が server を載せる", { control: MCP_JSON_LISTED, workerShaped: MCP_JSON_LISTED, started: true }, MCP_JSON_SERVER],
-  ["worker の形で server が起動した", { control: MCP_JSON_LISTED, workerShaped: initWith([]), started: true }, "started"],
-  ["worker の形の init 行が無い", { control: MCP_JSON_LISTED, workerShaped: "", started: false }, "worker-shaped"],
+  ["対照が server を載せない", { ...quiet, control: initWith([]), controlStarted: true }, "fixture"],
+  ["対照の init 行が無い", { ...quiet, control: "", controlStarted: true }, "fixture"],
+  ["対照が server を載せても起動の marker が無い", { ...quiet, control: MCP_JSON_LISTED, controlStarted: false }, "fixture"],
+  ["対照の server が接続済みでない", { ...quiet, control: initWith([{ name: MCP_JSON_SERVER, status: "failed" }]), controlStarted: true }, "fixture"],
+  ["worker の形が server を載せる", { ...live, workerShaped: MCP_JSON_LISTED, workerShapedStarted: true }, MCP_JSON_SERVER],
+  ["worker の形で server が起動した", { ...live, workerShaped: initWith([]), workerShapedStarted: true }, "started"],
+  ["worker の形の init 行が無い", { ...live, workerShaped: "", workerShapedStarted: false }, "worker-shaped"],
 ])("workspace .mcp.json の面は%sとき不合格になる", async (_, observed, detail) => {
   const { rows } = await judgeConformance({ ...passingObservations(), mcpJson: async () => observed }, PI_CAPTURED_AT);
 
@@ -158,7 +161,7 @@ it.each([
 });
 
 it("workspace .mcp.json の対照は skill 列挙の ping から --strict-mcp-config だけを外した形で、worker の形は ping そのもの", () => {
-  const ping = skillEnumerationSpec("/fixture", false);
+  const ping = skillEnumerationSpec("/fixture", { awaitReclaimed: false });
   const control = mcpJsonControlSpec("/fixture");
 
   expect(ping.args).toContain("--strict-mcp-config");
@@ -186,18 +189,21 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
 });
 
 it("Board call の形の1ターンは runner と同じフラグの定数から組む —— runner に足したフラグが試験の argv にも現れる(ADR 0303 決定4)", () => {
-  const args = boardCallOneTurnArgs();
+  const spec = boardCallShotSpec({ kind: "conformance result line", cwd: "/board", input: "OK?" });
+  const { args } = spec;
+  expect(spec).toMatchObject({ posture: "answer", cwd: "/board", input: "OK?" });
   expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
   expect(args).toContain("--verbose");
+  // 最終の argv: 答えの姿勢(ADR 0303 決定1)と runner の1ターンのフラグ
+  expect(args.slice(0, 3)).toEqual(["--safe-mode", "--setting-sources", ""]);
   expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
 });
 
-it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", async () => {
-  const specs: BoardCallSpec[] = [];
-  const capture = (async (spec: BoardCallSpec) => (specs.push(spec), null)) as BoardCall;
+it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
   // 設定の層は姿勢が運ぶ(ADR 0341 決定2)—— 口へ出る最終の argv で読む
-  await execThrough(capture, "conformance language (worker)", "/cwd", "worker-shaped")("claude", workerOneTurnArgs("/session/system.txt"), {}).catch(() => {});
-  const { args } = specs[0]!;
+  const spec = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/session/system.txt", input: "q" });
+  const { args } = spec;
+  expect(spec).toMatchObject({ posture: "worker-shaped", cwd: "/cwd", input: "q" });
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
   expect(args.filter((arg) => arg === "--setting-sources")).toHaveLength(1);
   expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
