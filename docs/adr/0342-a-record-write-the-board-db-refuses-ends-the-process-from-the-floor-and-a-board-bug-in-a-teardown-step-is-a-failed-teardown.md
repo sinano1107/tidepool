@@ -57,6 +57,6 @@ question の登録・quarantine・`closeSession`・`markTeardown`)が投げた�
 
 - Status 追記: ADR 0294 決定4・5、ADR 0112 決定1・3、ADR 0309 決定4、ADR 0266 決定3・4、ADR 0149 決定4、ADR 0336 決定3、ADR 0315 決定1、
   ADR 0331 決定1。
-- 実装は3 slice(床と境界の helper → 印の順序 → 後始末の runner)。#2822 と #2036 は runner の slice に畳む。
+- 実装の切り方は spec #2852 と、その ticket(#2853〜#2857)。#2822 と #2036 は runner の ticket に畳む。
 - 起動時の掃き出しの文面「the server restarted」は (A) の終了に少しずれる —— 「盤面の process が終わった」への一般化は text-only の
   派生 issue。
