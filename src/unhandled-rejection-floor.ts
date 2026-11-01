@@ -3,6 +3,9 @@ import Database from "better-sqlite3";
 
 export type SqliteError = InstanceType<typeof Database.SqliteError>;
 
+/** 拒まれた書き込みを投げた操作と task id(分かる範囲)。 */
+export type BoardDbRefusalSite = { operation?: string; taskId?: string };
+
 /** stderr への1行。`done` は書き込みの完了で撃つ —— macOS の pipe では `process.stderr` が非同期なので、
  *  直後に exit すると1行が落ちうる(#2853)。 */
 type WriteLine = (line: string, done: () => void) => void;
@@ -15,16 +18,17 @@ const exitProcess: Exit = (code) => process.exit(code);
  *  (codex-worker.ts)を避ける(sysexits の EX_IOERR)。 */
 export const BOARD_DB_REFUSAL_EXIT_CODE = 74;
 
-/** ADR 0342 決定1: 盤面 DB が書きを拒んだ(A)か。IOERR / READONLY は拡張 code(`SQLITE_IOERR_WRITE` など)も含む。
+/** ADR 0342 決定1: 盤面 DB が書きを拒んだ(A)か。6つの族はどれも拡張 code(`SQLITE_IOERR_WRITE` など)も含む ——
+ *  better-sqlite3 は拡張 code を返す。
  *  BUSY / LOCKED / CONSTRAINT_* / ERROR と、SqliteError でないものは盤面のバグ(B)で false。 */
 export function isBoardDbRefusal(error: unknown): error is SqliteError {
-  return error instanceof Database.SqliteError && /^SQLITE_(FULL|CANTOPEN|CORRUPT|NOTADB)$|^SQLITE_(IOERR|READONLY)(_|$)/.test(error.code);
+  return error instanceof Database.SqliteError && /^SQLITE_(FULL|IOERR|READONLY|CANTOPEN|CORRUPT|NOTADB)(_|$)/.test(error.code);
 }
 
 /** ADR 0342 決定2: (A) の行き先は process の終了。原因を固定の1行で stderr に出し、書き終えてから専用の code で終える。 */
 export function terminateOnBoardDbRefusal(
   error: SqliteError,
-  where: { operation?: string; taskId?: string } = {},
+  where: BoardDbRefusalSite = {},
   write: WriteLine = writeStderr,
   exit: Exit = exitProcess,
 ): void {

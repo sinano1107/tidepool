@@ -22,7 +22,7 @@ it("unhandledRejection の listener を1つ登録し、emit で理由を logger 
   expect(logged).toEqual([reason]);
 });
 
-/** 盤面 DB が書きを拒んだ署名(ADR 0342 決定1)。IOERR / READONLY は拡張 code も含む。 */
+/** 盤面 DB が書きを拒んだ署名(ADR 0342 決定1)。better-sqlite3 は拡張 code を返すので、6つの族はどれも拡張 code も含む。 */
 const REFUSALS = [
   "SQLITE_FULL",
   "SQLITE_IOERR",
@@ -30,7 +30,9 @@ const REFUSALS = [
   "SQLITE_READONLY",
   "SQLITE_READONLY_DBMOVED",
   "SQLITE_CANTOPEN",
+  "SQLITE_CANTOPEN_ISDIR",
   "SQLITE_CORRUPT",
+  "SQLITE_CORRUPT_INDEX",
   "SQLITE_NOTADB",
 ];
 
@@ -74,6 +76,7 @@ it.each(REFUSALS)("盤面 DB が書きを拒んだ reject(%s)は、1行を書き
 const NOT_REFUSALS: [string, Error][] = [
   ["SQLITE_CONSTRAINT_TRIGGER", new Database.SqliteError("aborted", "SQLITE_CONSTRAINT_TRIGGER")],
   ["SQLITE_BUSY", new Database.SqliteError("database is locked", "SQLITE_BUSY")],
+  ["族の境界の外の SQLITE_FULLX", new Database.SqliteError("lookalike", "SQLITE_FULLX")],
   ["SqliteError でない", Object.assign(new Error("not sqlite"), { code: "SQLITE_FULL" })],
 ];
 
