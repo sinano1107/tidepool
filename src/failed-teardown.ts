@@ -1,6 +1,9 @@
 import type { Db } from "./db.js";
 import { registerQuarantine } from "./quarantine.js";
 
+/** failedTeardown の reason の前置きと、投げた手の例外本文の境。書き手と読み手がこの1つを共有する。 */
+const THROWN_TEXT_FOLLOWS = ":\n\n";
+
 /** 落ちた後始末を Quarantine の failedTeardown 行で立てる(ADR 0112 決定2)。既存
  *  quarantine 族の**機構だけ**を借りた形である —— 鍵は後始末のタスク id で、1件に
  *  つき確認は最大1枚、解放は確認回答ただ1つ。資源ではない: 実行不能になったのは
@@ -24,8 +27,13 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
     db,
     "failedTeardown",
     taskId,
-    `that teardown has been unfinished since ${startedAt}:\n\n` +
+    `that teardown has been unfinished since ${startedAt}${THROWN_TEXT_FOLLOWS}` +
       (err instanceof Error ? err.message : String(err)),
     now,
   );
+}
+
+/** failedTeardown の `quarantine_refired` の reason から、投げた手の例外本文を取り出す。 */
+export function thrownTextOfFailedTeardownReason(reason: string): string {
+  return reason.slice(reason.indexOf(THROWN_TEXT_FOLLOWS) + THROWN_TEXT_FOLLOWS.length);
 }

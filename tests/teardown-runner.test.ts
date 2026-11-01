@@ -787,8 +787,7 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
   const expectRefusedAndHeld = async (b: Board, answering: Promise<unknown>, thrown: string) => {
     const refused = await answering.then(() => undefined, (err: unknown) => err);
     expect(refused).toBeInstanceOf(DomainError);
-    expect((refused as DomainError).message).toContain("threw again");
-    expect((refused as DomainError).message).toContain(thrown);
+    expect((refused as DomainError).message).toBe(`the teardown for task ${b.task.id} threw again: ${thrown}`);
     expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)).toBeDefined();
     expect(boardHalts(b.db)).toEqual([{ kind: "failedTeardown" }]);
     expect(b.slot.currentTaskId).toBe(b.task.id);
@@ -833,29 +832,13 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
   it("受理が返ってから回答の transaction までに入った2つ目の回答は受理の印で拒まれ、後始末は撃ち直されない", async () => {
     const { b, steps } = heldBehindExitStep();
     steps.broken = false;
-    let second!: Promise<unknown>;
 
-    await answer(b, acceptThen(b, () => {
-      second = answer(b);
-      // 1つ目が書く前に拒みが確定する —— 閉じた question への拒否と取り違えない
-      return expect(second).rejects.toThrow("already being re-run");
-    }));
+    // 1つ目が書く前に拒みが確定する —— 閉じた question への拒否と取り違えない
+    await answer(b, acceptThen(b, () => expect(answer(b)).rejects.toThrow("already being re-run")));
 
     // 2つ目が印を取れば、残りの無い枠で後始末そのものを撃ち直して、容器が空く前に枠を空ける
     expect(b.slot.currentTaskId).toBe(b.task.id);
     expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
-    expect(questions(b.db)).toEqual([]);
-  });
-
-  it("検査が投げたときは印が放れ、直してから答え直せる", async () => {
-    const { b, steps } = heldBehindExitStep();
-
-    await expect(answer(b)).rejects.toThrow("threw again");
-    expectHeld(b);
-    steps.broken = false;
-    await answer(b);
-
-    expect(steps.fired).toEqual(["exit", "temp", "project"]);
     expect(questions(b.db)).toEqual([]);
   });
 
@@ -871,7 +854,7 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
     expectHeld(b);
     expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!.id).not.toBe(answered.id);
     expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(true);
-    // 通った確認も印を放す —— 残すと新しい question にも答えられない
+    // ADR 0343 決定1: 通った確認も印を放す —— 残すと新しい question にも答えられない
     late.broken = false;
     await answer(b);
     expect(late.fired).toEqual(["exit", "temp", "project"]);
@@ -907,18 +890,21 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
     expect(b.slot.currentTaskId).toBeNull();
   });
 
-  it("残りの後ろに手が無ければ同じ鎖は回答の transaction の後に投げ、回答は通って新しい question が1枚立つ", async () => {
-    const b = board();
-    chainThatThrowsAfterTheAcceptance(b);
-    const answered = openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!;
+  it("確認から回答の書き込みまで await を挟まない —— 確認の直後に並んだ microtask が読むときには question は閉じている(ADR 0343 決定1)", async () => {
+    const { b, steps } = heldBehindExitStep();
+    steps.broken = false;
+    const question = openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!;
+    const seen: string[] = [];
 
-    await answer(b);
-    await settle();
+    await answer(b, async (id) => {
+      const confirm = await acceptTeardownQuarantine(b.deps, id);
+      return () => {
+        confirm();
+        queueMicrotask(() => seen.push(getTask(b.db, question.id)!.status));
+      };
+    });
 
-    expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!.id).not.toBe(answered.id);
-    expect(boardHalts(b.db)).toEqual([{ kind: "failedTeardown" }]);
-    expect(b.slot.currentTaskId).toBe(b.task.id);
-    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(true);
+    expect(seen).toEqual(["done"]);
   });
 });
 

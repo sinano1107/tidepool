@@ -2,7 +2,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
-import { quarantineFailedTeardown } from "./failed-teardown.js";
+import { quarantineFailedTeardown, thrownTextOfFailedTeardownReason } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineQuestion, openQuarantineValues } from "./quarantine.js";
 import type { Slot } from "./slot.js";
@@ -225,7 +225,7 @@ export type FailedTeardownCheck = (taskId: string) => Promise<() => void>;
 /** 落ちた後始末の解放の門(ADR 0112 決定3)。他の quarantine 族が受理の直前に資源を
  *  検証するのと同じ位置で走るが、検証すべき資源が無いので検査は後始末の再実行そのもの
  *  に一致する —— 残りが無くなるまで撃って通れば確認を返し、まだ投げるなら `DomainError` で回答を拒む。
- *  ADR 0343: 検査が返ってから回答を書くまでにも step は投げられるので、受理が証明するのは投げた step の再実行が
+ *  ADR 0343 決定1・2: 検査が返ってから回答を書くまでにも step は投げられるので、受理が証明するのは投げた step の再実行が
  *  回答を書く瞬間まで投げなかったことで、確認がそこで残りを読み直して拒む。重なりを拒む印も確認まで持つ。
  *
  *  再起動を跨いだ受理では枠が空いている(起動時復旧は落ちた後始末を撃ち直さず、枠も
@@ -233,6 +233,7 @@ export type FailedTeardownCheck = (taskId: string) => Promise<() => void>;
  *  再観測を満たすためである —— 満たさなければ早期 return で静かに受理され、tree rule が
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<() => void> {
+  const threwAgain = (thrown: string) => new DomainError(`the teardown for task ${taskId} threw again: ${thrown}`);
   // 重なった回答は拒む: 残りは先の受理が取り出した後なので、2つ目は空の残りを見て question を閉じる。印は同期に取り、question は開いたまま
   const releaseAcceptance = deps.slot.takeTeardownAcceptanceMark();
   if (!releaseAcceptance) {
@@ -258,10 +259,7 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
     // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
     if (isBoardDbRefusal(cause)) throw cause;
     deps.slot.appendFailedTeardownRest(taskId, rest);
-    throw new DomainError(
-      `the teardown for task ${taskId} threw again: ` +
-        (cause instanceof Error ? cause.message : String(cause)),
-    );
+    throw threwAgain(cause instanceof Error ? cause.message : String(cause));
   }
   // ADR 0343 決定1: 通っても拒んでも印を放す —— 残すと、立った残りを撃ち直す次の回答まで拒む
   return () => {
@@ -270,7 +268,7 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
     // 残りは `fail` が開いている question に積んでから立てるので、この question の最後の撃ち直しが投げた step である
     const question = openQuarantineQuestion(deps.db, "failedTeardown", taskId)!;
     const { reason } = latestEventOfTask(deps.db, question.id, "quarantine_refired")!.payload;
-    throw new DomainError(`the teardown for task ${taskId} threw again: ${reason}`);
+    throw threwAgain(thrownTextOfFailedTeardownReason(reason));
   };
 }
 
