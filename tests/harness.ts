@@ -595,6 +595,15 @@ export function failTeardownMark(db: Db): void {
   );
 }
 
+/** quarantine の question の登録(`registerTask` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
+export function failQuarantineQuestion(db: Db): () => void {
+  db.exec(
+    "CREATE TRIGGER fail_quarantine_question BEFORE INSERT ON tasks WHEN NEW.type = 'question' " +
+      "BEGIN SELECT RAISE(ABORT, 'quarantine write failed'); END",
+  );
+  return () => db.exec("DROP TRIGGER fail_quarantine_question");
+}
+
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —
  *  stderr captured, not inherited, same as src/git.ts's `git`. */
 export function git(dir: string, ...args: string[]): string {

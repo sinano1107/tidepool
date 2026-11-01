@@ -52,6 +52,7 @@ import {
   quarantineQuestion,
   routingJudgmentRepairTask,
   type Tidepool,
+  unhandledRejectionsDuring,
   WORKER_SPAWNED,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -816,6 +817,27 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
   });
 
+  it("skill の検査の失敗の spawn_failed の書き込みが投げたら、その throw を spawn_failed の原因として書き直さず未処理の reject へ上げる(ADR 0342 決定5)", async () => {
+    const calls: string[] = [];
+    const f = await fixture((taskId) => calls.push(taskId), undefined, undefined, undefined, { appServer: () => null });
+    const value = task(f.db);
+    // 落とすのは検査の失敗の文面の行だけ —— DB の失敗を原因にした2度目の書き込みは通り、行として見える
+    f.db.exec(
+      "CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events " +
+        "WHEN NEW.kind = 'spawn_failed' AND json_extract(NEW.payload, '$.message') LIKE 'Codex skills/list failed%' " +
+        "BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END",
+    );
+
+    const rejections = await unhandledRejectionsDuring(async () => {
+      void f.start(value);
+      await vi.waitFor(() => expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false));
+    });
+
+    expect(rejections).toEqual([expect.objectContaining({ message: "spawn_failed write failed" })]);
+    expect(listEvents(f.db, value.id).filter((event) => event.kind === "spawn_failed")).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、complete_task を complete_memory_review に替え、分解の verb を伏せ、普通の task は変わらない(ADR 0122 決定2 / ADR 0278 決定1 / ADR 0301 決定3)", async () => {
     const f = await fixture();
     await f.start(task(f.db));
@@ -1525,6 +1547,26 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(listEvents(f.db, value.id).some((e) => e.kind === "spawn_failed")).toBe(false);
     f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
     expect(calls).toEqual([[value.id, { error_code: "ENOENT", message: "spawn codex ENOENT" }]]);
+  });
+
+  it("spawn_failed の書き込みが rollback したら記録済みと読まず、同じ経路がもう1度来れば書き直す(ADR 0342 決定5)", async () => {
+    const calls: string[] = [];
+    const f = await fixture((taskId) => calls.push(taskId));
+    const value = task(f.db, "codex-spawn-failed-rollback");
+    await f.start(value);
+    f.db.exec(
+      "CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' " +
+        "BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END",
+    );
+    const enoent = () => Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" });
+
+    expect(() => f.process.emitError(enoent())).toThrow("spawn_failed write failed");
+    expect(calls).toEqual([]);
+    f.db.exec("DROP TRIGGER fail_spawn_failed");
+    f.process.emitError(enoent());
+
+    expect(listEvents(f.db, value.id).filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
+    expect(calls).toEqual([value.id]);
   });
 
   it("root の exit は worker_exited を書いて強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す(ADR 0145)", async () => {

@@ -49,6 +49,7 @@ import type { WorkerExit } from "../src/worker.js";
 import {
   excludeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
+  projectSettingsHiddenByBoard,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
@@ -65,7 +66,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -2010,6 +2011,45 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() =>
       expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("sparse-checkout"),
     );
+  });
+
+  it("回収後の復元の書き込みも quarantine の書き込みも rollback しても、次の session の回収で復元できる(ADR 0342 決定5)", async () => {
+    const ws = await makeWorkspace("tracked-settings-restore-rollback");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    const body = JSON.stringify({ hooks: { PostToolUse: [] } });
+    await writeFile(join(ws.path, ".claude", "settings.json"), body);
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    const { start, calls, db, emitExitAt } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+    const settings = () => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8");
+    const hidden = () => projectSettingsHiddenByBoard(db, { ...ws, name: "tidepool" });
+    start("task-restore-rollback-1");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    db.exec(
+      "CREATE TRIGGER fail_snapshot_drop BEFORE UPDATE OF sparse_snapshot ON workspace_state " +
+        "BEGIN SELECT RAISE(ABORT, 'snapshot drop failed'); END",
+    );
+    const dropQuarantineTrigger = failQuarantineQuestion(db);
+
+    const rejections = await unhandledRejectionsDuring(async () => {
+      emitExitAt(0, 0, null);
+      await vi.waitFor(() => expect(settings()).toBe(body));
+    });
+    expect(rejections).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
+    expect(hidden()).toBe(true);
+    db.exec("DROP TRIGGER fail_snapshot_drop");
+    dropQuarantineTrigger();
+
+    start("task-restore-rollback-2");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(settings).toThrow();
+    emitExitAt(1, 0, null);
+
+    await vi.waitFor(() => expect(settings()).toBe(body));
+    expect(hidden()).toBe(false);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
   it("人間の cone が .claude を外していれば、S bit が立っていても隠したものと読まず、tree を変えずに spawn する(ADR 0293 決定3)", async () => {

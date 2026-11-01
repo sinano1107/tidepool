@@ -114,8 +114,9 @@ export class TranscriptStore {
     const watch = (file: TranscriptFailure["file"], path: string, out: WriteStream) =>
       out.on("error", (err: NodeJS.ErrnoException) => {
         if (reported) return;
-        reported = true;
         this.onFailed({ taskId, workerSpawnedEventId, error_code: err.code ?? null, message: err.message, file, path: resolve(path) });
+        // ADR 0342 決定5: 印は一撃の書き込みが返った後 —— rollback した書き込みを報告済みと読まない
+        reported = true;
       });
     return {
       streamPath,
