@@ -82,6 +82,8 @@ function expectHeld(b: Board) {
   expect(b.watchdog.pendingReclaim()).toBeUndefined();
 }
 
+const transcriptFailure = (b: Board) => ({ taskId: b.task.id, workerSpawnedEventId: b.spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" }) as const;
+
 /** 梯子の底を越えるまで時計を進め、容器の空も観測させる —— 落ちた後始末は梯子に入らない(ADR 0112 決定4)。 */
 async function climbTheLadder(b: Board) {
   await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout * 3);
@@ -219,18 +221,90 @@ it("後始末(`runTeardown`)が投げると落ちた後始末が立ち、後始�
 
 it("transcript 失敗の一撃が投げると event も残らず落ちた後始末が立ち、受理の撃ち直しが event を1行だけ書く(ADR 0149 決定4 / ADR 0342 決定6)", async () => {
   const b = board();
-  const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
-  const failure = { taskId: b.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" } as const;
   const repair = failTeardownMark(b.db);
   const transcripts = () => listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed");
 
-  transcriptFailureHandler(b.deps, b.containers)(failure);
+  transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b));
   await climbTheLadder(b);
 
   expect(transcripts()).toEqual([]);
   expectHeld(b);
   repair();
   await answer(b);
+  await settle();
+  expect(transcripts()).toHaveLength(1);
+  expect(questions(b.db)).toEqual(["worker transcript could not be written: one", "the board's record container cannot be written — pickup is stopped"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it("transcript 失敗の記録の tx が投げても走っている worker へ強制回収を撃つ —— 受理の前の窓で1回(ADR 0149 決定3)", async () => {
+  const b = board({ hold: true });
+  failTeardownMark(b.db);
+
+  transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b));
+  await climbTheLadder(b);
+
+  expectHeld(b);
+  expect(b.runtime.forceReclaims).toEqual([b.task.id]);
+});
+
+it("transcript 失敗の記録の tx が投げた後に空の観測と exit が届いても決定せず、受理で event 1行・failure question 1枚が立って枠が空く(ADR 0149 決定3・4 / ADR 0112 決定4)", async () => {
+  const b = board({ hold: true });
+  const repair = failTeardownMark(b.db);
+  transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b));
+  // 直してから exit を届ける —— 決定を止めるのが書き込みの失敗でなく question の門であることを見る
+  repair();
+
+  b.runtime.fireEmpty(b.task.id);
+  await settle();
+  b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, signal: "SIGKILL" }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], capInterrupted: false });
+  await settle();
+
+  expectHeld(b);
+  expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
+  await answer(b);
+  await settle();
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed")).toHaveLength(1);
+  expect(questions(b.db)).toEqual(["worker transcript could not be written: one", "the board's record container cannot be written — pickup is stopped"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it.each([
+  [
+    "枠の主が替わった",
+    (b: Board): void => {
+      b.slot.release();
+      b.slot.occupy("the-next-task");
+    },
+  ],
+  ["後始末に入った", (b: Board): void => b.slot.enterTeardown()],
+  ["status が in_progress でない", (b: Board): void => void completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker")],
+] as const)("決着後(%s)に届いた transcript の失敗は event だけで強制回収を撃たない(ADR 0149 決定4)", (_, makeSettled) => {
+  const b = board({ hold: true });
+  makeSettled(b);
+
+  transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b));
+
+  expect(b.runtime.forceReclaims).toEqual([]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed")).toHaveLength(1);
+});
+
+it("transcript 失敗の強制回収の手が投げても一撃の外へ抜けず落ちた後始末が立ち、受理はその手から撃ち直して記録を1行書き枠を空ける(ADR 0342 決定6)", async () => {
+  const b = board({ hold: true });
+  const forceReclaim = b.containers.forceReclaim.bind(b.containers);
+  b.containers.forceReclaim = () => {
+    throw new Error("force reclaim blew up");
+  };
+  const transcripts = () => listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed");
+
+  expect(() => transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b))).not.toThrow();
+
+  expectHeld(b);
+  expect(transcripts()).toEqual([]);
+  b.containers.forceReclaim = forceReclaim;
+  await answer(b);
+  expect(b.runtime.forceReclaims).toContain(b.task.id);
+  b.runtime.fireEmpty(b.task.id);
   await settle();
   expect(transcripts()).toHaveLength(1);
   expect(questions(b.db)).toEqual(["worker transcript could not be written: one", "the board's record container cannot be written — pickup is stopped"]);
@@ -447,9 +521,8 @@ describe("盤面の決定の門より手前で書く —— 決定しない exit
 
 it("先に落ちた後始末の残りを持つ枠で書く step が投げても、先の残りを失わない —— 受理は投げた順に両方を撃ち直す(ADR 0342 決定6)", async () => {
   const b = board();
-  const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
   const repair = failTeardownMark(b.db);
-  transcriptFailureHandler(b.deps, b.containers)({ taskId: b.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" });
+  transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b));
   const steps = writeSteps();
 
   b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });

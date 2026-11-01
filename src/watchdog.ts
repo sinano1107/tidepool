@@ -260,39 +260,50 @@ export function spawnFailureHandler(
 }
 
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。
- *  event は常に書く。question と強制回収は、まだ後始末に入っていない session だけ ——
- *  決着後に届いた失敗には止めるものが無く、「盤面が止めた」が偽になる。後始末の印が
- *  先に置かれるので、続く exit で ADR 0145 の question は立たない。止めた session は、その failure question を
+ *  強制回収と question は、まだ決着していない session だけ —— 決着後に届いた失敗には止めるものが無く、「盤面が止めた」が偽に
+ *  なるので event だけを書く。強制回収は記録の tx より前に撃つ(ADR 0149 決定3)—— 記録が投げても worker を走らせ続けない。event は
+ *  question と同じ tx で、投げれば rollback し、受理の撃ち直しが書く(ADR 0342 決定6)。
+ *  exit は event loop を通って届くので tx に割り込まず、後始末の印が exit より先に置かれて ADR 0145 の question は立たない。tx が
+ *  投げたなら、exit は開いている落ちた後始末の question の門が持ち越す(ADR 0112 決定4)。止めた session は、その failure question を
  *  残したまま盤面全体の記録の器の停止も立てる(ADR 0266 決定4)—— `queueReturnHandler` の `todo` への復帰は通らない。 */
 export function transcriptFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (failure: TranscriptFailure) => void {
   return ({ taskId, workerSpawnedEventId, file, error_code, message, path }) =>
-    settleAndReclaim(
+    runTeardownSteps(
       deps,
-      containers,
       taskId,
-      registerFailure(
-        deps,
-        (task) => [
-          `worker transcript could not be written: ${task.title}`,
-          `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
-            `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
-        ],
-        `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
-          "That session was force-reclaimed and has its own failure question",
-      ),
-      // ADR 0342 決定6: event は失敗の記録と同じ tx —— rollback で何も残らず、受理の撃ち直しが2行目を書かない
+      // ADR 0149 決定3: 記録の手より前の手 —— 記録の手が投げても届いており、受理は記録の手から撃ち直す。後ろの手の2度目の送達は冪等
+      () => {
+        if (unsettledTask(deps, taskId)) containers.forceReclaim(taskId);
+      },
       () =>
-        appendEvent(deps.db, {
+        settleAndReclaim(
+          deps,
+          containers,
           taskId,
-          // worker_spawned は open より先に書かれている(ADR 0149 決定2)
-          actorId: getEvent(deps.db, workerSpawnedEventId)!.actor_id,
-          origin: "board",
-          payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
-          at: deps.clock.now(),
-        }),
+          registerFailure(
+            deps,
+            (task) => [
+              `worker transcript could not be written: ${task.title}`,
+              `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
+                `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
+            ],
+            `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
+              "That session was force-reclaimed and has its own failure question",
+          ),
+          // ADR 0342 決定6: event は失敗の記録と同じ tx —— rollback で何も残らず、受理の撃ち直しが2行目を書かない
+          () =>
+            appendEvent(deps.db, {
+              taskId,
+              // worker_spawned は open より先に書かれている(ADR 0149 決定2)
+              actorId: getEvent(deps.db, workerSpawnedEventId)!.actor_id,
+              origin: "board",
+              payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
+              at: deps.clock.now(),
+            }),
+        ),
     );
 }
 
@@ -308,6 +319,13 @@ function recordThen(deps: Pick<TeardownDeps, "db" | "clock" | "slot">, taskId: s
     },
     () => entered && follow(),
   );
+}
+
+/** session がまだ決着していなければその行を返す: 枠の主で、後始末中でなく、`in_progress`。 */
+function unsettledTask(deps: Pick<TeardownDeps, "db" | "slot">, taskId: string): Task | undefined {
+  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return undefined;
+  const task = getTask(deps.db, taskId);
+  return task?.status === "in_progress" ? task : undefined;
 }
 
 /** process を持たない session を盤面が観測した瞬間に決着させて後始末へ入れる(ADR 0118 / ADR 0274 の型)。決着を回収済み観測の
@@ -326,9 +344,8 @@ function settleAndReclaim(
     () =>
       deps.db.transaction(() => {
         record?.();
-        if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return false;
-        const task = getTask(deps.db, taskId);
-        if (task?.status !== "in_progress") return false;
+        const task = unsettledTask(deps, taskId);
+        if (!task) return false;
         const now = deps.clock.now();
         settle(task, now);
         markTeardown(deps.db, taskId, now);
@@ -449,11 +466,9 @@ export function startWatchdog(deps: {
         // 弾くのは `heldForContainment`
         if (sessionInTeardown(db)?.taskId === taskId) return false;
         // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
-        // 他人の session に failure question を立ててしまう
-        if (slot.currentTaskId !== taskId || slot.inTeardown) return false;
-        const task = getTask(db, taskId);
-        // 決着済みのタスクに failure question を立てない
-        if (task?.status !== "in_progress") return false;
+        // 他人の session に failure question を立ててしまう。決着済みのタスクにも立てない
+        const task = unsettledTask(teardown, taskId);
+        if (!task) return false;
         registerFailureAndMarkTeardown(
           db,
           task,
@@ -487,8 +502,7 @@ export function startWatchdog(deps: {
     }
     if (failedTeardownOpen()) return;
     recordThen(teardown, task.id, () => {
-      if (slot.currentTaskId !== task.id || slot.inTeardown || sessionInTeardown(db)?.taskId === task.id) return false;
-      if (getTask(db, task.id)?.status !== "in_progress") return false;
+      if (sessionInTeardown(db)?.taskId === task.id || !unsettledTask(teardown, task.id)) return false;
       raiseReclaimTimeout(task, rec, limit);
       return true;
     }, () => {
@@ -640,9 +654,9 @@ export function startWatchdog(deps: {
       failedOpen ||
       recordThen(teardown, taskId, () => {
         if (rec.humanStop || !ownsPickup()) return false;
-        if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return false;
-        const task = getTask(db, taskId);
-        if (task?.status !== "in_progress") return false;
+        if (sessionInTeardown(db)?.taskId === taskId) return false;
+        const task = unsettledTask(teardown, taskId);
+        if (!task) return false;
         return recordDecision(task, cap);
       }, () => {
         slot.enterTeardown();
