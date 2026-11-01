@@ -9,7 +9,7 @@ import { ProcessContainers } from "../src/process-container.js";
 import type { Harness } from "../src/registry.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingPty, recordingSpawn } from "./fakes.js";
-import { unhandledRejectionsDuring } from "./harness.js";
+import { failQuarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
 
 /** Board call の口(ADR 0136)のドメイン層。容器機構は fake、process は scripted、
  *  時間は FakeClock —— 口が持つのは「容器・上限・force・観測の順序」だけなので、
@@ -264,10 +264,7 @@ it("強制回収のあと回収 timeout まで空を観測できなければ、�
 it("回収 timeout の報告の書き込みが rollback したら帳簿に載せず、次の呼び出しの timeout で報告できる(ADR 0342 決定5)", async () => {
   const db = openDb(":memory:");
   const t = setup((reason, clock) => quarantineContainment(db, reason, clock.now()));
-  db.exec(
-    "CREATE TRIGGER fail_quarantine BEFORE INSERT ON tasks WHEN NEW.type = 'question' " +
-      "BEGIN SELECT RAISE(ABORT, 'quarantine write failed'); END",
-  );
+  const dropTrigger = failQuarantineQuestion(db);
   const unreclaimedCall = async (index: number) => {
     const call = t.calls.call(spec, readAll);
     await t.spawned(index + 1);
@@ -279,7 +276,7 @@ it("回収 timeout の報告の書き込みが rollback したら帳簿に載せ
 
   expect(await unreclaimedCall(0)).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
   expect(t.calls.pendingReclaim()).toBeUndefined();
-  db.exec("DROP TRIGGER fail_quarantine");
+  dropTrigger();
   expect(await unreclaimedCall(1)).toEqual([]);
 
   expect(t.calls.pendingReclaim()).toContain("skill enumeration");

@@ -49,6 +49,7 @@ import type { WorkerExit } from "../src/worker.js";
 import {
   excludeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
+  projectSettingsHiddenByBoard,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
@@ -65,7 +66,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -2023,27 +2024,23 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     const settings = () => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8");
-    const snapshot = () =>
-      (db.prepare("SELECT sparse_snapshot FROM workspace_state").get() as { sparse_snapshot: string | null }).sparse_snapshot;
+    const hidden = () => projectSettingsHiddenByBoard(db, { ...ws, name: "tidepool" });
     start("task-restore-rollback-1");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     db.exec(
       "CREATE TRIGGER fail_snapshot_drop BEFORE UPDATE OF sparse_snapshot ON workspace_state " +
         "BEGIN SELECT RAISE(ABORT, 'snapshot drop failed'); END",
     );
-    db.exec(
-      "CREATE TRIGGER fail_quarantine BEFORE INSERT ON tasks WHEN NEW.type = 'question' " +
-        "BEGIN SELECT RAISE(ABORT, 'quarantine write failed'); END",
-    );
+    const dropQuarantineTrigger = failQuarantineQuestion(db);
 
     const rejections = await unhandledRejectionsDuring(async () => {
       emitExitAt(0, 0, null);
       await vi.waitFor(() => expect(settings()).toBe(body));
     });
     expect(rejections).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
-    expect(snapshot()).not.toBeNull();
+    expect(hidden()).toBe(true);
     db.exec("DROP TRIGGER fail_snapshot_drop");
-    db.exec("DROP TRIGGER fail_quarantine");
+    dropQuarantineTrigger();
 
     start("task-restore-rollback-2");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
@@ -2051,7 +2048,7 @@ describe("ClaudeCodeWorker", () => {
     emitExitAt(1, 0, null);
 
     await vi.waitFor(() => expect(settings()).toBe(body));
-    expect(snapshot()).toBeNull();
+    expect(hidden()).toBe(false);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 

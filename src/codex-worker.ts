@@ -1433,17 +1433,24 @@ export class CodexWorker implements WorkerAdapter {
     };
     // ADR 0118: worker が1度も走らなかった pickup の観測点(skill の列挙・観測、spawn までの同期 throw、spawn の error)は同じ形で記録する
     let recorded = false;
+    /** spawn_failed の書き込み自身が投げた throw —— 外の catch はこれを spawn_failed の原因として書き直さない */
+    let writeFailure: unknown;
     const spawnFailed = (failure: { error_code: string | null; message: string }) => {
       // 配線の途中で投げたあとに spawn の error が来ても、記録は1度だけ
       if (recorded) return;
       removeTaskTemp();
-      appendEvent(this.options.db, {
-        taskId: task.id,
-        actorId: agent.name,
-        origin: "board",
-        payload: { kind: "spawn_failed", ...failure },
-        at: this.options.clock.now(),
-      });
+      try {
+        appendEvent(this.options.db, {
+          taskId: task.id,
+          actorId: agent.name,
+          origin: "board",
+          payload: { kind: "spawn_failed", ...failure },
+          at: this.options.clock.now(),
+        });
+      } catch (error) {
+        writeFailure = error;
+        throw error;
+      }
       // ADR 0342 決定5: 印は書き込みが返った後 —— rollback した書き込みを記録済みと読まない。一撃より前に置くのは、
       // 一撃が投げて経路が再び来たとき spawn_failed を2度書かないため
       recorded = true;
@@ -1638,6 +1645,8 @@ export class CodexWorker implements WorkerAdapter {
       // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない
       // 器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       this.running.delete(task.id);
+      // 書けなかった spawn_failed は今日の void の鎖の throw と同じく未処理の reject へ上げる(ADR 0342 決定5)
+      if (error === writeFailure) throw error;
       if (error instanceof RecordContainerError) {
         removeTaskTemp();
         this.options.onRecordContainerFailed?.(task.id, error);
