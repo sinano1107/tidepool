@@ -1,5 +1,7 @@
 # Provider が断った行は provider と model の組で Quarantine され、断られた session は queue の先頭へ戻る
 
+**Status 追記: 決定4 の「1ターンも走っておらず」は ADR 0338 で前提から門になった(2026-11-01、issue #2791)** —— `todo` へ戻るのはターンが走っていない session に限り、ターンが走った後の拒否は行の Quarantine の question と failure question の2枚になる。
+
 **Status 追記: 決定4 の「`todo` の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 断られた session の task は位置を変えずに `todo` へ戻る。「次の pickup は別の候補で走る」は位置を変えなくても成り立つ。
 
 **Status 追記: 決定2 の「advisor の導出からも外れ」は ADR 0200 決定6 で置き換え** —— advisor は表の行ではなく Provider の最上位の系列の alias になり、行の Quarantine を見ない。

@@ -1,5 +1,7 @@
 # 閉じた session の stream 由来の欄は1つの読み手から作り、出所は live の pipe か記録済みの transcript、session の窓を記録の上で閉じる位置は1つの規則で読む
 
+**Status 追記: 決定1 の「分類(ADR 0309)は呼び手が足す」は ADR 0338 で、読み手の出力のうち帰結に要る事実を呼び手が束にして渡す形になった(2026-11-01、issue #2791)** —— 決定3(帰結は live の呼び手だけが撃つ)は変わらない。
+
 2026-10-27 の triage → grilling(issue #2632、#2600 / ADR 0315 の族の根)で決定。session を閉じる関数は ADR 0315 決定1 で1本になったが、
 `worker_exited` の stream 由来の欄(消費・model の差し替え・拒否・advisor・最後の発話・CLI の報告した失敗)を作るのは adapter の
 メモリ上の観測だけで、起動時の復旧は同じ bytes が transcript にあるのに読まず、欄を null に固定していた。記録の上で session の窓を閉じる
