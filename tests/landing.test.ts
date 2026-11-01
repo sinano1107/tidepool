@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -51,7 +52,7 @@ import {
   writeBoardRefs,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, holdAfterMerge, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
-import { startGitHttpRemote } from "./git-http-remote.js";
+import { humanAskpass, startDenyingHttpRemote, startGitHttpRemote } from "./git-http-remote.js";
 import {
   commitWork,
   completedWork,
@@ -77,6 +78,7 @@ let db: Db | undefined;
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   db?.close();
   db = undefined;
 });
@@ -4901,6 +4903,18 @@ async function recordedWork(
   return work;
 }
 
+/** 着地が HEAD の位置を読む瞬間(突き合わせと書き込みの間の最後の git)に、別の書き手として `ref` を `sha` へ動かす git を PATH の先頭に置く。 */
+async function moveRefBeforeTheLandingWrite(repo: string, ref: string, sha: string): Promise<void> {
+  const shimDir = await tempDir("tidepool-git-shim-");
+  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(
+    join(shimDir, "git"),
+    `#!/bin/sh\ncase " $* " in *" --abbrev-ref HEAD "*) "${real}" -C "${repo}" update-ref ${ref} ${sha};; esac\nexec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${shimDir}:${process.env.PATH}`);
+}
+
 /** 着地 question に人間が WebUI から merge と答える。 */
 function answerMerge(board: Db, clock: FakeClock, workspace: WorkspaceConfig, question: Task) {
   return submitAnswer(
@@ -4945,6 +4959,48 @@ it("保護ブランチがタスクブランチの祖先へ巻き戻されてい�
 
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
+});
+
+// ADR 0243 決定4 / ADR 0339 Status 追記: 着地は転送を起こさないので checkout の config が転送を書き換えていても網に出ない。記録の基準は帯域外の文で読む
+it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf と fetch.recurseSubmodules があっても網に出ずに成功し、保護ブランチと記録の基準が landed に揃う", async () => {
+  const workspace = await makeWorkspace("landing-off-head-offline");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
+  const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
+  git(workspace.path, "checkout", `task/${work.id}`);
+  const remote = await startDenyingHttpRemote();
+  git(workspace.path, "config", `url.${remote.url}.insteadOf`, ".");
+  git(workspace.path, "config", "fetch.recurseSubmodules", "true");
+  const askpass = await humanAskpass();
+
+  const landed = mergeTaskToProtected(db, workspace, work.id);
+
+  expect({ landed, protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
+    landed: tip,
+    protected: tip,
+    askpass: false,
+    requests: [],
+  });
+  git(workspace.path, "update-ref", "refs/heads/main", before);
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`the board recorded it at ${tip} and it now sits at ${before}`);
+});
+
+// ADR 0243 決定4: `update-ref` の旧 sha が CAS。タスクブランチの途中へ動いた枝は `fetch .` なら ff で黙って飲まれる位置なので、そこへ動かす
+it("記録との突き合わせから書き込みまでに保護ブランチが動いていれば、ff の着地は書き込みで落ち、記録の基準は元の位置に畳まれる", async () => {
+  const workspace = await makeWorkspace("landing-off-head-cas");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  const moved = git(workspace.path, "rev-parse", "HEAD");
+  commitWork(workspace.path, "second.txt", "the second commit\n");
+  await moveRefBeforeTheLandingWrite(workspace.path, "refs/heads/main", moved);
+
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`but expected ${before}`);
+
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`the board recorded it at ${before} and it now sits at ${moved}`);
 });
 
 it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒む", async () => {

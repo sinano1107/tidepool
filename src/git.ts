@@ -39,11 +39,17 @@ export function gitWithInput(input: string, cwd: string, ...args: string[]): str
   return run(cwd, args, undefined, input).toString().trim();
 }
 
+/** 盤面の local の git の env の持ち主。ADR 0339 Status 追記: 転送は `file` だけ —— `insteadOf`・submodule・部分 clone の遅延 fetch が
+ *  人間の身元で網に出る経路を verb を数えずに閉じる。最後に spread するので呼び手の env にも process.env にも広げさせない。 */
+export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env, GIT_ALLOW_PROTOCOL: "file" };
+}
+
 function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): Buffer {
   try {
     return execFileSync("git", args, {
       cwd,
-      env: { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env },
+      env: localGitEnv(env),
       input,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });

@@ -7,7 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { git } from "./git.js";
+import { git, localGitEnv } from "./git.js";
 import {
   authedFetch,
   authedGitBounded,
@@ -793,7 +793,7 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
   const listing = execFileSync(
     "git",
     ["ls-tree", "-r", "-z", commit, "--", "agents", "authority", "workspaces.yaml"],
-    { cwd: dir, stdio: GIT_STDIO },
+    { cwd: dir, env: localGitEnv(), stdio: GIT_STDIO },
   ).toString();
   const blobs: { path: string; sha: string }[] = [];
   for (const entry of listing.split("\0")) {
@@ -806,6 +806,7 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
   const files = new Map<string, string>();
   const out = execFileSync("git", ["cat-file", "--batch"], {
     cwd: dir,
+    env: localGitEnv(),
     stdio: ["pipe", "pipe", "pipe"],
     input: `${blobs.map((b) => b.sha).join("\n")}\n`,
   });
@@ -1063,6 +1064,7 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   // ref を先に1つの commit へ解決し、以降はその commit だけを読む
   const commit = execFileSync("git", ["rev-parse", registryRef(mode)], {
     cwd: dir,
+    env: localGitEnv(),
     stdio: GIT_STDIO,
   })
     .toString()

@@ -1,5 +1,10 @@
 # 盤面の GitHub への子プロセスは組み立てた env で走り、注入した身元以外で網に出ない
 
+**Status 追記: 盤面の local の git の転送は `file` だけである(決定1 の env で走る子以外の全部で、決定5 の hop2 を含む)** —— 2026-11-01、issue #2861。
+local の verb でも `insteadOf`・`fetch.recurseSubmodules`・部分 clone の遅延 fetch で網に出て、人間の askpass の答えが載るので、verb を数えずに env の
+持ち主 1 つで閉じる。config がそう書き換えた checkout と blob の足りない部分 clone では、その git が `transport '<x>' not allowed` で落ちて既存の失敗経路に
+載り(着地なら回答の拒否、ADR 0103 決定4)、成功させる経路は足さない —— 「注入した身元以外で網に出ない」の fail-closed 側である。
+
 2026-11-01 の grilling(issue #2794 —— ADR 0334 の帰結、#2801 と同根)で決定。ADR 0024 決定1 の seam は「身元は host の ambient 認証ではなく
 盤面の設定から注入される」、決定3 は「credential が効く場所は 1 箇所」だが、実装は**継承した** env から既知の経路 1 本(設定済み credential
 helper)を消して自分の helper を足す形で、しかも認証つきの分岐だけだった。足す身元は決まっていたが、**注入した身元以外が網に出られない**とは
@@ -61,9 +66,9 @@ loopback の偽サーバに届くのは匿名の 1 要求だけになった。�
 - 組み立てた env に `LANG` が無いので git の stderr は C locale に固定され、ADR 0334 決定4 の `Operation too slow` の釘が host の言語に依らない。
 - `GIT_ALLOW_PROTOCOL=https` だけでは local path の remote(テスト fixture、loopback の `git http-backend`)が弾かれる —— `file:http:https` の根拠。
 - worker 側は変えない: sandbox は `~/.ssh` を読ませず、worker の網は allowed domains だけ(ADR 0033)。
-- 盤面の local の git(`git.ts` の `run`: WIP commit・registry commit・worktree、決定5 の hop2 と `update-ref` も)は本 ADR の外で、host の
-  global config と checkout の config を読んだまま —— `commit.gpgsign` が盤面の commit を人間の鍵で署名させるか失敗させ、`core.hooksPath` の
-  hook が走る(実測、#2819)。
+- 盤面の local の git(`git.ts` の `run`: WIP commit・registry commit・worktree、決定5 の hop2 と `update-ref` も)が config を**読む**半分は本 ADR の
+  外で、host の global config と checkout の config を読んだまま —— `commit.gpgsign` が盤面の commit を人間の鍵で署名させるか失敗させ、`core.hooksPath` の
+  hook が走る(実測、#2819 / #2842)。本 ADR が決めるのは転送だけである(Status 追記)。
 - token は検証済みの TLS にしか出ない —— 盤面 repo の config は空で `http.sslVerify` を倒せる file が無い。決定3 の「https の github.com にだけ」の
   TLS 側。
 - worker や人間が checkout の `.git/config` に何を書いても、盤面の名義と経路は変わらない。worker の `.git/config` 保護は harness ごとの行

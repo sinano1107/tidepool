@@ -16,7 +16,7 @@ import {
   originRepo,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { startDenyingHttpRemote, startRecordingHttpRemote } from "./git-http-remote.js";
+import { startDenyingHttpRemote, startRecordingHttpRemote, tripwire } from "./git-http-remote.js";
 import { git, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -330,14 +330,6 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
   async function checkoutOfDenyingRemote(): Promise<{ repo: string; url: string; requests: () => Record<string, string>[] }> {
     const remote = await startDenyingHttpRemote();
     return { repo: await checkoutWithOrigin(remote.url), ...remote };
-  }
-
-  /** 呼ばれたら印を残して失敗するだけの実行ファイル —— 呼ばれなかったことを見る。 */
-  function tripwire(dir: string, name: string): { path: string; tripped: () => boolean } {
-    const path = join(dir, name);
-    writeFileSync(path, `#!/bin/sh\ntouch "${path}.called"\nexit 1\n`);
-    chmodSync(path, 0o755);
-    return { path, tripped: () => existsSync(`${path}.called`) };
   }
 
   /** 盤面の子の HOME —— 盤面所有の repo はその下に作られ、呼び出しの終わりに消える。 */

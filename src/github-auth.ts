@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { git, gitWithEnv, rethrowNamingMissingCwd } from "./git.js";
+import { git, localGitEnv, rethrowNamingMissingCwd } from "./git.js";
 import { parseGitHubRepo } from "./repo-access.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -195,7 +195,7 @@ export function originValue(cwd: string): string | undefined {
 /** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
 function checkoutOrigin(cwd: string, verb: string): string {
   try {
-    return execFileSync("git", ["config", "remote.origin.url"], { cwd, stdio: ["ignore", "pipe", "pipe"] })
+    return execFileSync("git", ["config", "remote.origin.url"], { cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"] })
       .toString()
       .trim();
   } catch (err) {
@@ -302,8 +302,8 @@ export function authedFetch(auth: GitHubAuth | undefined, checkout: string, time
     // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
     const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
     runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
-    // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通さず、submodule も辿らない
-    gitWithEnv({ GIT_ALLOW_PROTOCOL: "file" }, checkout, "fetch", "--quiet", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
+    // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通らず(`git` の床)、submodule も辿らない
+    git(checkout, "fetch", "--quiet", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
   });
 }
 

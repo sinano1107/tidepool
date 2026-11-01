@@ -181,7 +181,7 @@ export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: 
     const head = resolvablePosedHead(db, room, examinee);
     git(path, "init", "--quiet", "--initial-branch=main");
     // FETCH_HEAD に面接室の在り処を残さない(ADR 0276 決定1)
-    git(path, "fetch", "--quiet", "--no-write-fetch-head", room.path, head);
+    git(path, "fetch", "--quiet", "--no-write-fetch-head", "--no-recurse-submodules", room.path, head);
     git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
   });
 }
@@ -1459,15 +1459,14 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   }
 
   const task = taskBranch(taskId);
-  const fastForward = isAncestor(workspace, ref, task);
-  const landed = fastForward
+  const landed = isAncestor(workspace, ref, task)
     ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
     : mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
   if (landed === undefined) throw landingConflict(workspace, branch, task);
   // 着地は人間面から入るので、同じ workspace で**別のタスクが走っている最中**に来る
   // (ADR 0064 決定4 が挙げる並行そのもの)。checkout はその worker の作業ツリーを
   // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
-  // —— HEAD が保護ブランチに無ければ ref だけを進める。`update-ref` に旧 sha を添えるのは
+  // —— HEAD が保護ブランチに無ければ ff でもそうでなくても ref だけを進める(ADR 0243 決定4)。`update-ref` に旧 sha を添えるのは
   // 安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
   // ここで落ちる(同じ workspace への2枚の着地回答が競えば、負けた側が回答の拒否で落ちる)。
   //
@@ -1477,11 +1476,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // 拒んで何も動かさず、その理由がそのまま人間へ返る(quarantine ではない —— ADR 0103 決定4)
   const write = boardRefWriter(db, workspace);
   if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
-    write(ref, landed, () =>
-      fastForward
-        ? git(workspace.path, "fetch", ".", `${task}:${branch}`)
-        : git(workspace.path, "update-ref", ref, landed, protectedSha),
-    );
+    write(ref, landed, () => git(workspace.path, "update-ref", ref, landed, protectedSha));
   } else write(ref, landed, () => git(workspace.path, "merge", "--ff-only", landed));
   return landed;
 }
