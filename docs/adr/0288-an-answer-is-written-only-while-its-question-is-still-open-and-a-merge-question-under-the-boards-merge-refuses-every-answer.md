@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2「印の前」の同期の区間で読み直すのは question の status だけでなく着地の門(`landingBlock`、ADR 0092 決定5)も —— gh が非同期になって窓が毎回開き(ADR 0330 決定1)、await 中に出た異議を越えて merge した(#2734)**
 
+**Status 追記: 決定2 の「印の前の読み直しが要るのは merge question だけ」は撤回 —— 執行が書き込みより先に commit する回答は書き込み直前の同期区間で条件を読み直し、印もそこまで持つ。落ちた後始末の受理が2例目([ADR 0343](0343-an-answer-whose-execution-commits-before-the-write-rereads-its-condition-in-the-synchronous-span-before-the-write-and-a-failed-teardown-acceptance-certifies-the-rerun-of-the-thrown-steps.md) 決定1、2026-11-01、issue #2891)。**
+
 2026-10-20 の grilling(issue #1821、#1759 の派生)で決定。人間の回答は、書き込みの前に await をはさむ種類が4つある ——
 PR 昇格の retry(収束)、merge question(PR の読み取りと merge)、quarantine(検査)、registry の提案の approve(registry への
 commit)。その間に別の経路が同じ question を観測で閉じうる。閉じる経路は7か所あり(遅い走査、回答受理直前のバックストップ、

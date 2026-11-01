@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の「落ちた後始末」は `runTeardown` の catch に限らず、GLOSSARY の定義どおり決着から回収済み観測までのどの step(exit の記録・分類後の決定・回収の梯子)が投げても立つ。決定3 の再実行の対象は「投げた後始末の step」に広がる —— process が生きていれば memory に残る同じ step、再起動を跨げば起動時の掃き出しが置き換えるので後始末の再実行のまま。盤面 DB そのものが書きを拒んだときはこの行も書けないので process が終わる([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定1・2・6、2026-11-01、issue #2837)。**
 
+**Status 追記: 決定3 の「完走」は、投げた step の再実行が回答を書く瞬間まで投げなかったことまで —— 回収済み観測を待って枠が空くまでは決定4 の梯子の観測のまま。受理は書き込み直前の同期区間で残りを読み直す([ADR 0343](0343-an-answer-whose-execution-commits-before-the-write-rereads-its-condition-in-the-synchronous-span-before-the-write-and-a-failed-teardown-acceptance-certifies-the-rerun-of-the-thrown-steps.md) 決定2、2026-11-01、issue #2891)。**
+
 2026-09-10 の grilling(issue #538)で決定。ADR 0109 決定1 が通常完了の解放を後始末へ移した際、`runTeardown` の呼び口は全部 fire-and-forget になり、unhandled rejection で盤面ごと落とさないために全例外が `console.error` へ流れるようになった。固着そのものは持ち込まれていない(変更前も `releaseWorkspace` の throw は slot 解放より手前で経路を切っていた)が、そこへ新しく足された人間向けの signal に2つの欠陥が残った —— 偽の文面の Containment question が1度だけ立ち、回答後は盤面が無言で固着する。現状調査と `file:line` は issue #538 のコメントに置く。
 
 ## 決定
