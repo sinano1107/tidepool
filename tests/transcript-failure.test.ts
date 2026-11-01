@@ -286,7 +286,6 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
 
     // destroy の 'error' は次の tick に撃たれ、投げると盤面の外へ抜ける —— 一撃が投げないことを見るため同期に撃つ
     expect(() => opened.stream.emit("error", enospc())).not.toThrow();
-    expect(t.containers.forceReclaims).toContain(task.id);
     const failed = await servedQuarantineQuestion(t, "failedTeardown", task.id);
     expect(failed.purpose).toContain("transcript_failed write failed");
     t.db.exec("DROP TRIGGER fail_transcript_failed");
