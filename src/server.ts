@@ -27,7 +27,6 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import type { DraftClient } from "./draft.js";
-import type { RowRefusal } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -58,7 +57,7 @@ import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } fr
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { closeUnclosedSessions } from "./session-close.js";
 import { Slot } from "./slot.js";
-import { getTask, type PickupStopped, type SessionStoppedByResource, type TaskType } from "./tasks.js";
+import { getTask, type PickupStopped, type TaskType } from "./tasks.js";
 import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -69,7 +68,6 @@ import {
   RECLAIM_TIMEOUT,
   recordContainerHaltHandler,
   registerFailureAndMarkTeardown,
-  rowRefusalHandler,
   spawnFailureHandler,
   startWatchdog,
   transcriptFailureHandler,
@@ -101,18 +99,15 @@ export type WorkerFactory = (deps: {
   /** ADR 0261 決定1: Codex adapter が `turn.failed` の exit の直後に使用量を読み直す口 —— pickup の観測と同じ probe。
    *  任意の口にしない: 渡し忘れは型で落ちる(合成側に probe が無い盤面だけが undefined を渡す)。 */
   openaiUsage: CodexAppServerProbe | undefined;
-  /** ADR 0184 決定4: 行の拒否を受ける盤面側の一撃(`rowRefusalHandler` 製)。 */
-  onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に止めた pickup を受ける盤面側の一撃(`queueReturnHandler` 製)。 */
   onPickupStopped: (taskId: string, payload: PickupStopped) => void;
-  /** ADR 0331 決定2・4: 資源の署名を持つ0ターンの session を受ける盤面側の一撃(同じ `queueReturnHandler` 製)。 */
-  onSessionStoppedByResource: (taskId: string, payload: SessionStoppedByResource) => void;
-  /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
-  onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
+  /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。行の拒否と0ターンの資源の停止も
+   *  この束に乗る(ADR 0338 決定1)。 */
+  onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
   transcripts: TranscriptStore;
 }) => WorkerAdapter;
@@ -477,8 +472,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     heldForContainment: (taskId) => watchdog?.heldForContainment(taskId) ?? false,
     pollNow,
   };
-  // ADR 0184 決定4: 行の拒否の一撃。中断と同じく worker より先に組む
-  const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
   // ADR 0274: process を持たないまま `todo` へ戻す pickup の一撃。資源の停止は scheduler と adapter の両方の観測点が呼ぶ
@@ -494,14 +487,11 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     containers,
     boardCall: boardCalls.call,
     openaiUsage: options.openaiUsage,
-    onRowRefused,
     onSpawnFailed,
     onRecordContainerFailed,
     onPickupStopped,
-    // ADR 0331 決定2: 0ターンの session の `todo` への復帰も同じ一撃を通る(ADR 0274 決定4)
-    onSessionStoppedByResource: onPickupStopped,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
-    onWorkerExited: (taskId, exit, cap) => watchdog?.onWorkerExited(taskId, exit, cap),
+    onWorkerExited: (taskId, exit, facts) => watchdog?.onWorkerExited(taskId, exit, facts),
     transcripts: options.transcripts,
   });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {

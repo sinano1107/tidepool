@@ -262,7 +262,7 @@ export class ScriptedWorker implements WorkerAdapter {
   /** 盤面が factory で渡す「worker が1度も走らなかった」の一撃(ADR 0118)。 */
   onSpawnFailed: ((taskId: string, failure: { error_code: string | null; message: string }) => void) | undefined;
   /** 盤面が factory で渡す root process の exit の一撃(ADR 0145)。 */
-  onWorkerExited: ((taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void) | undefined;
+  onWorkerExited: ((taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void) | undefined;
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -313,7 +313,7 @@ export class ScriptedWorker implements WorkerAdapter {
    *  `exit` は盤面へ渡さない —— 最終 verb の後の exit を演じる harness の既定の姿のまま残す。 */
   exitWith(taskId: string, exit: WorkerExit): void {
     this.exit(taskId);
-    this.onWorkerExited?.(taskId, exit, false);
+    this.onWorkerExited?.(taskId, exit, { turnRan: true, capInterrupted: false });
   }
 
   async checkUsage(): Promise<string | null> {

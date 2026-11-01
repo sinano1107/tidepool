@@ -1,8 +1,8 @@
-import type { EventPayload, ModelSwap } from "./events.js";
+import type { EventPayload, ModelSwap, RowRefusal } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import type { InjectionQuery } from "./memory.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import type { Task } from "./tasks.js";
+import type { SessionStoppedByResource, Task } from "./tasks.js";
 
 /** worker session に継承させない host の資格情報 env。どの Harness も自分の認証に使わないので、Harness を問わず spawn env から
  *  消す —— host が export しても worker に届かない。GitHub の2本は ADR 0024 決定3(worker は GitHub credential ゼロ)、
@@ -17,8 +17,15 @@ export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, 
   model_swaps?: ModelSwap[];
 };
 
-/** 上限到達による中断か。非同期の分類も必ず値で解決し、reject しない(ADR 0309)。 */
-export type WorkerExitClassification = boolean | Promise<boolean>;
+/** exit の帰結に要る事実の束(ADR 0338 決定1)。盤面はこれが揃ってから1度だけ決める(決定2)。 */
+export interface WorkerExitClassification {
+  /** 読み手がモデルのターンを観測したか。`worker_exited` には書かない(ADR 0338 決定5)。 */
+  turnRan: boolean;
+  /** 1 session に1つ: adapter が登録済みの資源の停止(ADR 0331 決定1)か、盤面が登録する未登録の行の拒否(ADR 0338 決定4)。 */
+  stop?: { registered: SessionStoppedByResource } | { refusal: RowRefusal };
+  /** 上限到達による中断か。非同期の分類も必ず値で解決し、reject しない(ADR 0309)。 */
+  capInterrupted: boolean | Promise<boolean>;
+}
 
 /** Boundary between the board and whatever executes tasks (design principle 7:
  *  the board speaks tasks; adapters speak vendors). The real adapter spawns a

@@ -308,7 +308,7 @@ async function makeWorker(
     logDir,
     transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
-    onWorkerExited: (taskId, exit, cap) => { if (cap) watchdog.onWorkerExited(taskId, exit, cap); },
+    onWorkerExited: (taskId, exit, facts) => { if (facts.capInterrupted) watchdog.onWorkerExited(taskId, exit, facts); },
     onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
     enumerateSkills: enumeration.enumerateSkills,
     enumerateHostSkills: bundled.enumerateHostSkills,
@@ -4887,7 +4887,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("429 の exit 通知は解決済みの中断分類を運ぶ(ADR 0309)", async () => {
     const order: unknown[] = [];
     const { start, processes, emitExit } = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, cap) => order.push(cap),
+      onWorkerExited: (_taskId, _exit, facts) => order.push(facts.capInterrupted),
     });
     start("task-capped-order");
     await vi.waitFor(() => expect(processes).toHaveLength(1));
@@ -4898,11 +4898,10 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(order).toEqual([true]);
   });
 
-  it("行の拒否(result 行の 404)の一撃は exit の一撃より先に、spawn 時の provider / model と worker_spawned の id を運んで呼ばれる(ADR 0184 決定4)", async () => {
+  it("行の拒否(result 行の 404)は exit の束に、spawn 時の provider / model と worker_spawned の id を運んで乗る(ADR 0184 決定4 / ADR 0338 決定1)", async () => {
     const order: unknown[] = [];
     const { start, processes, emitExit, db } = await makeWorker({}, {
-      onRowRefused: (_taskId, refusal) => order.push(refusal),
-      onWorkerExited: () => order.push("exited"),
+      onWorkerExited: (_taskId, _exit, facts) => order.push(facts.stop),
     });
     const task = start("task-row-refused-order");
     await vi.waitFor(() => expect(processes).toHaveLength(1));
@@ -4915,8 +4914,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     const spawned = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!;
     expect(order).toEqual([
-      { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id, cause: "api_404" },
-      "exited",
+      { refusal: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id, cause: "api_404" } },
     ]);
   });
 
@@ -5133,7 +5131,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("読み切りまでに届いた 429 も exit 通知の解決済みの中断分類に載る", async () => {
     const order: unknown[] = [];
     const f = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, cap) => order.push(cap),
+      onWorkerExited: (_taskId, _exit, facts) => order.push(facts.capInterrupted),
     });
     f.start("task-late-429");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));
@@ -5143,9 +5141,9 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     expect(order).toEqual([true]);
   });
 
-  it("exit のあと読み切りの前に届いた 404 の result 行で、行の拒否の一撃が撃たれる", async () => {
+  it("exit のあと読み切りの前に届いた 404 の result 行で、行の拒否が exit の束に乗る", async () => {
     const refused: unknown[] = [];
-    const f = await makeWorker({}, { onRowRefused: (_taskId, refusal) => refused.push(refusal.cause) });
+    const f = await makeWorker({}, { onWorkerExited: (_taskId, _exit, { stop }) => stop && "refusal" in stop && refused.push(stop.refusal.cause) });
     f.start("task-late-404");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 

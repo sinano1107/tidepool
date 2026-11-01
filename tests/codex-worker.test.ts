@@ -210,7 +210,6 @@ async function fixture(
     containers,
     auditorName,
     onPickupStopped,
-    onSessionStoppedByResource,
     boardState,
   }: {
     auditorName?: string;
@@ -220,7 +219,6 @@ async function fixture(
     usageProbe?: CodexAppServerProbe;
     containers?: ProcessContainers;
     onPickupStopped?: CodexWorkerOptions["onPickupStopped"];
-    onSessionStoppedByResource?: CodexWorkerOptions["onSessionStoppedByResource"];
     boardState?: (workspace: string) => CodexWorkerOptions["boardState"];
   } = {},
 ) {
@@ -272,7 +270,6 @@ You are the Codex worker.`,
     usageProbe,
     auditorName,
     onPickupStopped,
-    onSessionStoppedByResource,
     boardState: boardState?.(workspace),
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
@@ -297,10 +294,9 @@ describe("CodexWorker (ADR 0098)", () => {
     { type: "item.updated", item: { type: "agent_message", text: "working" } },
     { type: "item.completed", item: { type: "reasoning", text: "considering" } },
     { type: "turn.completed" },
-  ])("モデルの応答($type $item.type)を観測した exit は資源を止めても0ターンの復帰を通知しない(ADR 0331 決定2)", async (event) => {
-    const onSessionStoppedByResource = vi.fn();
+  ])("モデルの応答($type $item.type)を観測した exit は資源を止め、ターンが走った束で通知する(ADR 0331 決定2 / ADR 0338 決定1)", async (event) => {
     const onWorkerExited = vi.fn();
-    const f = await fixture(undefined, undefined, onWorkerExited, undefined, { onSessionStoppedByResource });
+    const f = await fixture(undefined, undefined, onWorkerExited);
     const value = task(f.db);
     await f.start(value);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(event)}\n`);
@@ -308,18 +304,17 @@ describe("CodexWorker (ADR 0098)", () => {
     f.process.emitExit(1, null);
 
     expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
-    expect(onSessionStoppedByResource).not.toHaveBeenCalled();
     expect(onWorkerExited).toHaveBeenCalledOnce();
+    expect(onWorkerExited.mock.calls[0]?.[2]).toMatchObject({ turnRan: true, stop: { registered: { quarantine: "workerMcpReachability" } } });
   });
 
   it.each([
     "handshaking with MCP server failed: error sending request for url (http://127.0.0.1:1/mcp), when send initialize request",
     "Mcp error: -32601: Method not found (code -32603)",
     "handshaking with MCP server failed: JSON-RPC error: -32000: unknown probe id (code -32603)",
-  ])("required tidepool MCP の実測した起動時 exit(%s)は資源を止め、exit の通知より先に0ターンの資源の停止を通知する(ADR 0331)", async (cause) => {
-    const onSessionStoppedByResource = vi.fn();
+  ])("required tidepool MCP の実測した起動時 exit(%s)は資源を止め、exit の束の停止に登録済みの到達性の停止を乗せる(ADR 0331 / ADR 0338 決定1)", async (cause) => {
     const onWorkerExited = vi.fn();
-    const f = await fixture(undefined, undefined, onWorkerExited, undefined, { onSessionStoppedByResource });
+    const f = await fixture(undefined, undefined, onWorkerExited);
     const value = task(f.db);
     await f.start(value);
     const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
@@ -329,12 +324,14 @@ describe("CodexWorker (ADR 0098)", () => {
     f.process.emitExit(1, null);
 
     expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
-    expect(onSessionStoppedByResource.mock.calls).toEqual([[value.id, {
-      kind: "session_stopped_by_resource", quarantine: "workerMcpReachability", value: "codex",
-      reason: expect.stringContaining(signature), worker_spawned_event_id: spawned.id,
+    expect(onWorkerExited.mock.calls).toEqual([[value.id, expect.objectContaining({ exit_code: 1, stderr_tail: signature }), {
+      turnRan: false,
+      stop: { registered: {
+        kind: "session_stopped_by_resource", quarantine: "workerMcpReachability", value: "codex",
+        reason: expect.stringContaining(signature), worker_spawned_event_id: spawned.id,
+      } },
+      capInterrupted: false,
     }]]);
-    expect(onSessionStoppedByResource.mock.invocationCallOrder[0]).toBeLessThan(onWorkerExited.mock.invocationCallOrder[0]!);
-    expect(onWorkerExited.mock.calls[0]?.[1]).toMatchObject({ exit_code: 1, stderr_tail: signature });
   });
 
   it.each([
@@ -344,22 +341,21 @@ describe("CodexWorker (ADR 0098)", () => {
     [1, "required MCP servers failed to initialize: tidepool: unavailable"],
     [0, "Failed to initialize session: required MCP servers failed to initialize: tidepool: unavailable"],
   ])("署名の条件を満たさない exit(%s, %s)は到達性を止めず通常の exit として通知する", async (code, stderr) => {
-    const onSessionStoppedByResource = vi.fn();
     const onWorkerExited = vi.fn();
-    const f = await fixture(undefined, undefined, onWorkerExited, undefined, { onSessionStoppedByResource });
+    const f = await fixture(undefined, undefined, onWorkerExited);
     const value = task(f.db);
     await f.start(value);
     f.process.processes[0]!.stderr.write(stderr);
     f.process.emitExit(code, null);
 
     expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual([]);
-    expect(onSessionStoppedByResource).not.toHaveBeenCalled();
+    expect(onWorkerExited.mock.calls[0]?.[2]).not.toHaveProperty("stop");
     expect(onWorkerExited.mock.calls[0]?.[1]).toMatchObject({ exit_code: code, stderr_tail: stderr });
   });
 
   it("thread / turn の開始や CLI のエラーだけではモデルのターンを観測したことにならない", async () => {
-    const onSessionStoppedByResource = vi.fn();
-    const f = await fixture(undefined, undefined, undefined, undefined, { onSessionStoppedByResource });
+    const onWorkerExited = vi.fn();
+    const f = await fixture(undefined, undefined, onWorkerExited);
     const value = task(f.db);
     await f.start(value);
     f.process.processes[0]!.stdout.write([
@@ -374,7 +370,8 @@ describe("CodexWorker (ADR 0098)", () => {
     f.process.processes[0]!.stderr.write("Failed to initialize session: required MCP servers failed to initialize: tidepool: failed");
     f.process.emitExit(1, null);
 
-    expect(onSessionStoppedByResource).toHaveBeenCalledOnce();
+    expect(onWorkerExited).toHaveBeenCalledOnce();
+    expect(onWorkerExited.mock.calls[0]?.[2]).toMatchObject({ turnRan: false, stop: { registered: { quarantine: "workerMcpReachability" } } });
   });
 
   it("spawns the pinned Codex route with isolated auth home and closed worker surfaces", async () => {
@@ -1615,7 +1612,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
   /** 最後の行を流して exit させ、盤面側の一撃の順と worker_exited の payload を返す。 */
   async function exitAfter(id: string, usageProbe: CodexAppServerProbe, last: object = turnFailed, code = 1) {
     const calls: Array<boolean | Promise<boolean>> = [];
-    const f = await fixture(undefined, undefined, (_taskId, _exit, classification) => calls.push(classification), undefined, { usageProbe });
+    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.capInterrupted), undefined, { usageProbe });
     const value = task(f.db, id);
     await f.start(value);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(last)}\n`);
@@ -1630,7 +1627,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     const calls: Array<boolean | Promise<boolean>> = [];
-    const f = await fixture(undefined, undefined, (_taskId, _exit, classification) => calls.push(classification), undefined, {
+    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.capInterrupted), undefined, {
       usageProbe: async (now) => { await pending; return observed(windowAt("primary", 100))(now); },
     });
     const value = task(f.db, "codex-pending-classification");
@@ -1655,7 +1652,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
 
   it("probe 未配線の turn.failed は即時に中断でない分類を渡す", async () => {
     const calls: unknown[] = [];
-    const f = await fixture(undefined, undefined, (_taskId, _exit, classification) => calls.push(classification));
+    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.capInterrupted));
     const value = task(f.db, "codex-no-probe");
     await f.start(value);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
