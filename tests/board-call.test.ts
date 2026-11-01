@@ -2,12 +2,14 @@ import { expect, it, vi } from "vitest";
 import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec, readOutput } from "../src/board-call.js";
 import { claudeBoardCallSpec } from "../src/claude-board-call-spec.js";
 import { execThrough } from "../src/claude-worker.js";
-import type { ContainmentCapability } from "../src/containment.js";
+import { type ContainmentCapability, quarantineContainment } from "../src/containment.js";
+import { openDb } from "../src/db.js";
 import type { ContainedProcess, PtyFn, PtyProcess } from "../src/process-container.js";
 import { ProcessContainers } from "../src/process-container.js";
 import type { Harness } from "../src/registry.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingPty, recordingSpawn } from "./fakes.js";
+import { unhandledRejectionsDuring } from "./harness.js";
 
 /** Board call の口(ADR 0136)のドメイン層。容器機構は fake、process は scripted、
  *  時間は FakeClock —— 口が持つのは「容器・上限・force・観測の順序」だけなので、
@@ -36,7 +38,7 @@ const readAll = (proc: ContainedProcess) => {
   return () => text || null;
 };
 
-function setup() {
+function setup(onReclaimTimeout?: (reason: string, clock: FakeClock) => void) {
   const { calls: spawns, ...recorder } = recordingSpawn();
   const clock = new FakeClock();
   const runtime = new FakeContainerRuntime(recorder.spawn);
@@ -52,7 +54,7 @@ function setup() {
     containers,
     clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
-    onReclaimTimeout: (reason) => quarantined.push(reason),
+    onReclaimTimeout: (reason) => (onReclaimTimeout ? onReclaimTimeout(reason, clock) : quarantined.push(reason)),
     checkCliVersion: async (harness) => versions[harness],
     onCliVersionMismatch: (harness, reason) => mismatches.push([harness, reason]),
   });
@@ -257,6 +259,30 @@ it("強制回収のあと回収 timeout まで空を観測できなければ、�
   t.runtime.fireEmpty(container);
   await new Promise((resolve) => setImmediate(resolve));
   expect(t.calls.pendingReclaim()).toBeUndefined();
+});
+
+it("回収 timeout の報告の書き込みが rollback したら帳簿に載せず、次の呼び出しの timeout で報告できる(ADR 0342 決定5)", async () => {
+  const db = openDb(":memory:");
+  const t = setup((reason, clock) => quarantineContainment(db, reason, clock.now()));
+  db.exec(
+    "CREATE TRIGGER fail_quarantine BEFORE INSERT ON tasks WHEN NEW.type = 'question' " +
+      "BEGIN SELECT RAISE(ABORT, 'quarantine write failed'); END",
+  );
+  const unreclaimedCall = async (index: number) => {
+    const call = t.calls.call(spec, readAll);
+    await t.spawned(index + 1);
+    t.runtime.hold(t.runtime.created[index]!);
+    t.emitExitAt(index, 0, null);
+    await call;
+    return unhandledRejectionsDuring(() => t.clock.advance(RECLAIM_TIMEOUT));
+  };
+
+  expect(await unreclaimedCall(0)).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
+  expect(t.calls.pendingReclaim()).toBeUndefined();
+  db.exec("DROP TRIGGER fail_quarantine");
+  expect(await unreclaimedCall(1)).toEqual([]);
+
+  expect(t.calls.pendingReclaim()).toContain("skill enumeration");
 });
 
 it("空になった呼び出しは回収 timeout を報告しない", async () => {

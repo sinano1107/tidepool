@@ -1436,7 +1436,6 @@ export class CodexWorker implements WorkerAdapter {
     const spawnFailed = (failure: { error_code: string | null; message: string }) => {
       // 配線の途中で投げたあとに spawn の error が来ても、記録は1度だけ
       if (recorded) return;
-      recorded = true;
       removeTaskTemp();
       appendEvent(this.options.db, {
         taskId: task.id,
@@ -1445,6 +1444,9 @@ export class CodexWorker implements WorkerAdapter {
         payload: { kind: "spawn_failed", ...failure },
         at: this.options.clock.now(),
       });
+      // ADR 0342 決定5: 印は書き込みが返った後 —— rollback した書き込みを記録済みと読まない。一撃より前に置くのは、
+      // 一撃が投げて経路が再び来たとき spawn_failed を2度書かないため
+      recorded = true;
       this.options.onSpawnFailed?.(task.id, failure);
     };
     const env = workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name);
