@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { rethrowNamingMissingCwd } from "./git.js";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { git, gitWithEnv, rethrowNamingMissingCwd } from "./git.js";
 import { parseGitHubRepo } from "./repo-access.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -119,7 +119,8 @@ function githubChildEnv(): NodeJS.ProcessEnv {
 let home: string | undefined;
 
 /** The children's HOME: a private (mkdtemp, mode 700) dir that starts empty and stays writable, since
- *  `gh` may write state there; the board never reads it. A tmp cleaner deleting it under a long-running
+ *  `gh` may write state there; the board reads nothing from it and only creates and removes its disposable
+ *  repos under it (ADR 0339 決定5), and `clone` runs from it. A tmp cleaner deleting it under a long-running
  *  board gets a fresh one at the next call. */
 function boardOwnedHome(): string {
   if (home === undefined || !existsSync(home)) home = mkdtempSync(join(tmpdir(), "tidepool-github-home-"));
@@ -178,45 +179,59 @@ export function repoKey(url: string | undefined): string | undefined {
  *  No origin, not a git checkout, or a non-GitHub remote all read the same:
  *  `undefined`, and the call runs anonymously (ADR 0339 決定2). */
 export function originRepo(cwd: string): string | undefined {
+  return repoKey(originValue(cwd));
+}
+
+/** The checkout's raw `remote.origin.url` — the value before any `insteadOf` (ADR 0339 決定4), the board's one
+ *  reading of "origin". `undefined` with no origin or outside a checkout. */
+export function originValue(cwd: string): string | undefined {
   try {
-    return repoKey(
-      execFileSync("git", ["config", "remote.origin.url"], {
-        cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-      })
-        .toString()
-        .trim(),
-    );
+    return checkoutOrigin(cwd, "config");
   } catch {
     return undefined;
   }
 }
 
-/** `-c` flags on every board git network call, with or without an identity (ADR 0339 決定1 / 2): what
- *  the built env cannot reach is the checkout's own `.git/config`. The empty helper clears every
- *  configured credential helper, the empty askPass clears the checkout's prompt program (which
- *  GIT_TERMINAL_PROMPT=0 does not stop), the empty extraHeader clears unqualified headers, and
- *  sslVerify keeps the token off unverified TLS (ADR 0339 帰結). ADR 0339 決定4: the board's identity
- *  exists only over https, so an ssh-spelled GitHub origin is rewritten per call; `remote.origin.url`
- *  keeps its spelling. */
-const GIT_FLOOR_ARGS = [
-  "-c",
-  "credential.helper=",
-  "-c",
-  "core.askPass=",
-  "-c",
-  "http.extraHeader=",
-  "-c",
-  "http.sslVerify=true",
-  "-c",
-  "url.https://github.com/.insteadOf=git@github.com:",
-  "-c",
-  "url.https://github.com/.insteadOf=ssh://git@github.com/",
-] as const;
+/** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
+function checkoutOrigin(cwd: string, verb: string): string {
+  try {
+    return execFileSync("git", ["config", "remote.origin.url"], { cwd, stdio: ["ignore", "pipe", "pipe"] })
+      .toString()
+      .trim();
+  } catch (err) {
+    if ((err as { status?: number }).status === 1) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
+    rethrowNamingMissingCwd(err, cwd, [verb]);
+  }
+}
 
-/** The inline helper serving the injected GH_TOKEN, after GIT_FLOOR_ARGS's reset. ADR 0339 決定3: it
- *  answers only `protocol=https host=github.com`, so a checkout's `insteadOf` to another host never gets
- *  the token. The token stays in the child env, never on the command line where `ps` could read it. */
+/** A non-GitHub value naming a local repository by a relative path. The board's network git runs outside the
+ *  checkout and `clone` from the board-owned HOME (ADR 0339 決定5), so such a path would resolve somewhere else.
+ *  URLs and scp spellings put a `:` before the first `/`. */
+export function isRelativeLocalPath(value: string): boolean {
+  return repoKey(value) === undefined && !isAbsolute(value) && !/^[^/]*:/.test(value);
+}
+
+/** ADR 0339 決定4: the URL the board goes out to, built from an origin value — GitHub in any spelling becomes the
+ *  https URL the board's identity exists on; a relative local path is resolved against `base`, where git itself would
+ *  have resolved it; anything else is used as written. */
+function networkUrl(origin: string, base: string): string {
+  const key = repoKey(origin);
+  if (key) return `https://github.com/${key}.git`;
+  return isRelativeLocalPath(origin) ? resolve(base, origin) : origin;
+}
+
+/** リモート側のブランチを指す remote-tracking ref(写し)の**綴り**。ADR 0052 のもとで「リモートの正本を読む」は registry の役
+ *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れ、書くのは push の後の `authedPush` と
+ *  `fetchBranchCopy` —— 綴りそのものは1つでなければならない(2つ持つと、片方だけを直したときに黙ってずれる)。どちらの ref を
+ *  読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
+export function remoteTrackingRef(branch: string): string {
+  return `refs/remotes/origin/${branch}`;
+}
+
+/** The inline helper serving the injected GH_TOKEN. ADR 0339 決定3: it answers only `protocol=https host=github.com`,
+ *  so the token goes out only to the https URL the board built for a GitHub origin (決定4) and never to a non-GitHub
+ *  URL, which a GitHub origin cannot become. The token stays in the child env, never on the command line where `ps`
+ *  could read it. */
 export const GIT_CREDENTIAL_ARGS = [
   "-c",
   'credential.helper=!f() { test "$1" = get || return 0; while read -r l; do case "$l" in protocol=https) p=1;; host=github.com) h=1;; esac; done; ' +
@@ -237,82 +252,120 @@ export const GIT_CREDENTIAL_ARGS = [
  *  である —— 資源ごとに数を分けると、片方だけを動かしたときに理由のほうが割れる。 */
 export const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
-/** Board-driven git network calls share credential injection and stall detection (ADR 0334).
- *  `repo` names a token already cached by `await auth.ensureToken(repo)`. Without
- *  an identity or GitHub repo the call is anonymous under the same floor (ADR 0339 決定2). */
+/** One network child's surroundings: its built env, the board repo it runs in (none for `clone`), the place a human
+ *  reads in the error, the stall bound, and the origin value the URL was built from. */
+type AuthedCall = { env: NodeJS.ProcessEnv; boardRepo: string | undefined; where: string; timeoutMs: number; origin: string };
+
+/** ADR 0339 決定5: a network call from a checkout never runs inside it. One disposable board-owned repo per call
+ *  (`--git-dir`, never env) borrows the checkout's objects read-only through `objects/info/alternates`, and is
+ *  removed at the end, success or failure. The URL is built from the checkout's origin value (決定4) and the token is
+ *  the one `await auth.ensureToken(originRepo(checkout))` cached; without an identity or a GitHub origin the call is
+ *  anonymous (決定2). */
+function inBoardRepo<T>(
+  auth: GitHubAuth | undefined,
+  checkout: string,
+  timeoutMs: number,
+  verb: string,
+  run: (call: AuthedCall & { boardRepo: string }, url: string) => T,
+): T {
+  const origin = checkoutOrigin(checkout, verb);
+  const env = auth ? auth.env(repoKey(origin)) : githubChildEnv();
+  const boardRepo = mkdtempSync(join(env.HOME!, "repo-"));
+  try {
+    execFileSync("git", ["init", "--quiet", "--bare", boardRepo], { env, stdio: ["ignore", "pipe", "pipe"] });
+    // ADR 0339 退けた形: GIT_OBJECT_DIRECTORY で借りると、ref を持たない盤面 repo の gc が checkout の objects を全部消す
+    const objects = git(checkout, "rev-parse", "--path-format=absolute", "--git-path", "objects");
+    writeFileSync(join(boardRepo, "objects", "info", "alternates"), `${objects}\n`);
+    return run({ env, boardRepo, where: checkout, timeoutMs, origin }, networkUrl(origin, checkout));
+  } finally {
+    rmSync(boardRepo, { recursive: true, force: true });
+  }
+}
+
+/** `ls-remote` or `push` from a checkout through a board repo (`inBoardRepo`). `args` are the verb's flags and
+ *  refspecs — a push names `<sha>:<ref>`, since the board repo has no refs; `authedPush` is the one caller that pushes. */
 export function authedGitBounded(
   auth: GitHubAuth | undefined,
-  cwd: string,
-  repo: string | undefined,
+  checkout: string,
   timeoutMs: number,
+  verb: "ls-remote" | "push",
   ...args: string[]
 ): string {
+  return inBoardRepo(auth, checkout, timeoutMs, verb, (call, url) => runAuthedGit(call, [verb, url, ...args]));
+}
+
+/** ADR 0339 決定5: brings the commit `want` into the checkout's object store without writing any of its refs, in two
+ *  hops — hop1 fetches it from the network into the board repo's `refs/board/fetched`, hop2 takes it from there into
+ *  the checkout. */
+export function authedFetch(auth: GitHubAuth | undefined, checkout: string, timeoutMs: number, want: string): void {
+  inBoardRepo(auth, checkout, timeoutMs, "fetch", (call, url) => {
+    // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
+    const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
+    runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
+    // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通さず、submodule も辿らない
+    gitWithEnv({ GIT_ALLOW_PROTOCOL: "file" }, checkout, "fetch", "--quiet", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
+  });
+}
+
+/** Pushes each `[branch, sha]` — atomically when there is more than one — and, once the push succeeded, writes each
+ *  copy `refs/remotes/origin/<branch>` to its sha. ADR 0052 Status 追記(#2827): a push from the board repo does not
+ *  move the checkout's copies, so the board writes them, inside the caller's ADR 0243 口. The sha is the caller's —
+ *  the value it announced — never re-read here. */
+export function authedPush(
+  auth: GitHubAuth | undefined,
+  checkout: string,
+  timeoutMs: number,
+  branches: ReadonlyArray<readonly [branch: string, sha: string]>,
+): void {
+  const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
+  authedGitBounded(auth, checkout, timeoutMs, "push", ...(branches.length > 1 ? ["--atomic"] : []), ...refspecs);
+  for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch), sha);
+}
+
+/** ADR 0339 決定5: `clone` runs from the board-owned HOME, so no checkout's config — not even a parent of
+ *  `dir` — is read; the new checkout's origin is the URL the board built. */
+export function authedClone(auth: GitHubAuth | undefined, source: string, dir: string, timeoutMs: number): void {
+  // cwd が置き場でなくなったので git clone は無い親を自分で作る —— 置き場が無ければ撃たずに名指す(issue #2722 の文)
+  if (!existsSync(dirname(dir))) throw new Error(`\`git clone\` cannot run: the directory ${dirname(dir)} does not exist`);
+  const env = auth ? auth.env(repoKey(source)) : githubChildEnv();
+  runAuthedGit({ env, boardRepo: undefined, where: dir, timeoutMs, origin: source }, ["clone", "--quiet", networkUrl(source, env.HOME!), dir]);
+}
+
+/** The one network child (ADR 0339 決定1): the board's own `-c` only — the injected helper, ADR 0334's stall
+ *  detection, and no auto maintenance or gc (the `--detach` child they spawn would outlive the stall bound). */
+function runAuthedGit(call: AuthedCall, args: string[]): string {
+  const { env, boardRepo, where, timeoutMs, origin } = call;
   try {
-    return runAuthedGit(auth, cwd, repo, args, timeoutMs);
+    return execFileSync(
+      "git",
+      [
+        ...(boardRepo ? [`--git-dir=${boardRepo}`] : []),
+        ...(env.GH_TOKEN ? GIT_CREDENTIAL_ARGS : []),
+        ...["-c", "http.lowSpeedLimit=1", "-c", `http.lowSpeedTime=${Math.ceil(timeoutMs / 1000)}`],
+        ...["-c", "maintenance.auto=false", "-c", "gc.auto=0"],
+        ...args,
+      ],
+      { cwd: boardRepo ?? env.HOME, env, stdio: ["ignore", "pipe", "pipe"] },
+    )
+      .toString()
+      .trim();
   } catch (err) {
     // ADR 0334 決定4: 接続前の無音では curl 28 が無く、Operation too slow だけが出る。
     const stderr = (err as { stderr?: Buffer }).stderr?.toString();
     if (stderr?.includes("Operation too slow")) {
-      throw new Error(`\`git ${args[0]}\` stalled: no bytes for ${Math.ceil(timeoutMs / 1000)} s (in ${cwd})`, { cause: err });
+      throw new Error(`\`git ${args[0]}\` stalled: no bytes for ${Math.ceil(timeoutMs / 1000)} s (in ${where})`, { cause: err });
     }
-    // ADR 0339 決定1 / 4: GitHub の ssh 綴りは書き換え済みなので、ここに来るのは checkout の insteadOf か非 GitHub の ssh remote
+    // ADR 0339 決定4: GitHub はどの綴りでも https に組むので、ssh が出る出所は非 GitHub の origin の値だけ
     if (stderr?.includes("transport 'ssh' not allowed")) {
       throw new Error(
-        `\`git ${args[0]}\` failed with \`transport 'ssh' not allowed\` (in ${cwd}): the board reaches GitHub only over https as itself — ` +
-          "check this checkout's `url.*.insteadOf` rules and the spelling of its origin",
+        `\`git ${args[0]}\` failed with \`transport 'ssh' not allowed\` (in ${where}): the board reaches a remote only over https or a local path — ` +
+          `the origin \`${origin}\` is an ssh remote outside GitHub`,
         { cause: err },
       );
     }
-    throw err;
+    // 理由は argv でなく stderr で言う —— argv は呼び出しごとに変わる盤面 repo の path と交渉の tip を持ち、同じ失敗を別の文にする
+    throw new Error(`\`git ${args[0]}\` failed (in ${where}): ${stderr?.trim() || String(err)}`, { cause: err });
   }
-}
-
-function runAuthedGit(
-  auth: GitHubAuth | undefined,
-  cwd: string,
-  repo: string | undefined,
-  args: string[],
-  timeoutMs: number,
-): string {
-  try {
-    const env = auth ? auth.env(repo) : githubChildEnv();
-    refuseFloorOverrides(cwd, env, args);
-    const stallArgs = ["-c", "http.lowSpeedLimit=1", "-c", `http.lowSpeedTime=${Math.ceil(timeoutMs / 1000)}`];
-    return execFileSync("git", [...GIT_FLOOR_ARGS, ...(env.GH_TOKEN ? GIT_CREDENTIAL_ARGS : []), ...stallArgs, ...args], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-      .toString()
-      .trim();
-  } catch (err) {
-    rethrowNamingMissingCwd(err, cwd, args);
-  }
-}
-
-/** ADR 0339 決定5: a URL-qualified `http.<url>.extraHeader` or `http.<url>.sslVerify` in the checkout's
- *  own config beats the `-c` reset in GIT_FLOOR_ARGS, so its presence refuses the call before anything
- *  goes out. Unscoped on purpose: under the built env it reads exactly the files the network call reads
- *  (local, worktree, includes). */
-function refuseFloorOverrides(cwd: string, env: NodeJS.ProcessEnv, args: string[]): void {
-  let keys: string;
-  try {
-    keys = execFileSync("git", ["config", "--name-only", "--get-regexp", "^http\\..*\\.(extraheader|sslverify)$"], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-      .toString()
-      .trim();
-  } catch (err) {
-    // 1 = no such key, also outside a checkout (clone runs from the base dir) —— nothing to refuse
-    if ((err as { status?: number }).status === 1) return;
-    throw err;
-  }
-  throw new Error(
-    `\`git ${args[0]}\` refused (in ${cwd}): this checkout's git config sets ${keys.split("\n").join(", ")}, ` +
-      "which would override the board's own settings on its network call — remove it to let the board use this checkout",
-  );
 }
 
 /** The fail-closed checks on the user token file (issue #50, unchanged by ADR

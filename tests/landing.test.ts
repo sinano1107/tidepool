@@ -130,9 +130,9 @@ function afterEachPush(github: FakeGitHubClient, effect: () => void): void {
   const prepare = github.preparePush.bind(github);
   github.preparePush = async (input) => {
     const push = await prepare(input);
-    return () => {
+    return (sha) => {
       try {
-        push();
+        push(sha);
       } finally {
         effect();
       }
@@ -890,7 +890,7 @@ it("origin が返らない push は何秒の無音で切れたかを書いて投
 
   await straddle(db, clock, workspace, async () => {
     const push = await client.preparePush({ path: workspace.path, branch: "task/pushed" });
-    expect(() => boardRefWriter(db, workspace)(ref, pushed, push)).toThrow(/^`git push` stalled: no bytes for 1 s/);
+    expect(() => boardRefWriter(db, workspace)(ref, pushed, () => push(pushed))).toThrow(/^`git push` stalled: no bytes for 1 s/);
     process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL");
     // 畳みの後に写しが3つ目の値へ動く —— 予告の行が2値のまま残っていれば `was: |<押した値>` が載る
     git(workspace.path, "update-ref", ref, elsewhere);

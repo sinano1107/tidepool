@@ -705,6 +705,62 @@ export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
   return initWorkspaceCheckout(path, name);
 }
 
+/** `shimGit` が記録した git の呼び出し1回ぶん。`alternates` は `--git-dir` の repo の `objects/info/alternates`。 */
+export interface GitCall {
+  args: string[];
+  env: { GH_TOKEN: string; GIT_TERMINAL_PROMPT: string; GIT_OBJECT_DIRECTORY: string };
+  alternates?: string;
+}
+
+/** PATH の本物の git の前に置く shim。呼び出しごとに argv と env を記録し、`route` の URL を書き換え(盤面の網に出る git は
+ *  checkout の insteadOf を読まない、ADR 0339 決定5 —— 盤面が組んだ URL の往復を local の bare へ回す)、`fake` の verb は本物へ
+ *  渡さず exit 0 で答える(`ls-remote` には `lsRemote` の行を返す)。それ以外は本物へ渡す。
+ *  テスト自身の git の呼び出しも通るので、URL を引数に渡すテストの git の**後に**入れる。テストの終わりに PATH を戻す。 */
+export async function shimGit(
+  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string } = {},
+): Promise<() => GitCall[]> {
+  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  const dir = await tempDir("tidepool-git-shim-");
+  const log = join(dir, "calls.log");
+  writeFileSync(log, "");
+  const [from, to] = options.route ?? [];
+  const fake = (options.fake ?? []).map((verb) => `*" ${verb} "*`).join("|");
+  writeFileSync(
+    join(dir, "git"),
+    "#!/bin/sh\n" +
+      (from ? `for a; do shift; [ "$a" = "${from}" ] && a="${to}"; set -- "$@" "$a"; done\n` : "") +
+      `alt=\nfor a in "$@"; do case "$a" in --git-dir=*) alt="\${a#--git-dir=}/objects/info/alternates";; esac; done\n` +
+      `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; ` +
+      `echo "env.GH_TOKEN=\${GH_TOKEN-}"; echo "env.GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}"; ` +
+      `echo "env.GIT_OBJECT_DIRECTORY=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
+      (fake ? `case " $* " in ${fake}) case " $* " in *" ls-remote "*) printf '%s' '${options.lsRemote ?? ""}';; esac; exit 0;; esac\n` : "") +
+      `exec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  onTestFinished(() => {
+    process.env.PATH = path;
+  });
+  return () =>
+    readFileSync(log, "utf8")
+      .split("---\n")
+      .filter(Boolean)
+      .map((block) => {
+        const lines = block.split("\n").filter(Boolean);
+        const value = (key: string) => lines.find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
+        return {
+          args: lines.filter((l) => l.startsWith("arg=")).map((l) => l.slice("arg=".length)),
+          env: {
+            GH_TOKEN: value("env.GH_TOKEN"),
+            GIT_TERMINAL_PROMPT: value("env.GIT_TERMINAL_PROMPT"),
+            GIT_OBJECT_DIRECTORY: value("env.GIT_OBJECT_DIRECTORY"),
+          },
+          ...(lines.some((l) => l.startsWith("alternates=")) ? { alternates: value("alternates") } : {}),
+        };
+      });
+}
+
 /** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
  *  持つ checkout と、そこへ**人間の merge を模して**書き込む publisher を組む。
  *  返す `WorkspaceConfig` の `repo` が「この workspace はリモートの正本を持つ」の

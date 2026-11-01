@@ -10,7 +10,7 @@ import {
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** protected な一般 workspace を1つ足した fixture。 */
@@ -256,15 +256,13 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
 
   it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
-    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    rejectRegistryPushes(registryDir);
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(
       updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).not.toBe(
       "the registry clone itself",
     );

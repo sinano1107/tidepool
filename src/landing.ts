@@ -6,12 +6,12 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
-import type { GitHubAuth } from "./github-auth.js";
+import { type GitHubAuth, remoteTrackingRef } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { isRemoteBacked } from "./pickup-predicates.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
-import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
+import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
 import {
   ancestorsSql,
   type ClosedRootOf,
@@ -1187,7 +1187,7 @@ export function createLanding(deps: LandingDeps): Landing {
           }
           return null;
         }, async () => {
-          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, pushBranch);
+          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, () => pushBranch(sha));
           return null;
         });
       };

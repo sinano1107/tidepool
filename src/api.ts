@@ -188,6 +188,7 @@ import {
   RegistrySelfDeleteError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
+  RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
@@ -894,7 +895,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof NoOwnGitDirError ||
         // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
         // register モードで拾えば通る、呼び出し側の状態の問題である
-        err instanceof OrphanCheckoutMismatchError
+        err instanceof OrphanCheckoutMismatchError ||
+        err instanceof RelativeClonePathError
       ) {
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof LiveCheckoutSignalsError) {

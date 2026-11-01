@@ -20,6 +20,9 @@ describe("parseGitHubRepo(ADR 0067 決定1: これは github.com か、の門)",
   it("ローカルパスは undefined —— quarantine テストが差し替える /nonexistent/... で probe が撃たれない", () => {
     expect(parseGitHubRepo("/nonexistent/upstream.git")).toBeUndefined();
     expect(parseGitHubRepo("/var/folders/t/tidepool-upstream-abc123")).toBeUndefined();
+    // GitHub の owner に `.` は入らない —— `..` / `.` から始まる相対 path を owner/name と読まない
+    expect(parseGitHubRepo("../up.git")).toBeUndefined();
+    expect(parseGitHubRepo("./up")).toBeUndefined();
   });
 });
 
