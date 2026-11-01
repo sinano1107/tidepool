@@ -4,6 +4,8 @@
 
 **Status 追記: 追記2 の「skill 列挙に `--setting-sources` を使えない —— user 層まで含めた集合が `@host` に要る」の理由は ADR 0335 決定4 で消えた** —— `@host` は同梱集合への正の解決になり、workspace cwd の列挙 ping を flag 無しのまま残す理由は「余分に deny しても害が無い」だけ(issue #2779)。
 
+**Status 追記: その「flag 無しのまま」も ADR 0341 決定4 で反転** —— skill 列挙は worker の形で撃つ(issue #2809)。
+
 
 issue #174 で決定。ADR 0042 / 0043 が worker session の advisor を扱ったのに続いて、
 **盤面自身の CLI 呼び出し(Board call)側の線**を引く。

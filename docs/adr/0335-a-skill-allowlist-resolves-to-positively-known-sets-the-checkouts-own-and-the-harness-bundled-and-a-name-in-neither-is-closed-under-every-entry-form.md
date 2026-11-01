@@ -1,5 +1,7 @@
 # skill の許可は正に知った集合(checkout が運ぶ・ハーネス同梱)への解決で、どちらにも無い名前はどの entry 形でも閉じる
 
+**Status 追記: 決定4(workspace cwd の列挙 ping は flag 無しのまま)は ADR 0341 決定4 で反転** —— ping は worker の形(`--setting-sources project` + `--strict-mcp-config`)で撃つ。flag 無しの ping が workspace の `.mcp.json` の MCP server をホスト上で起動していた(issue #2809)。
+
 2026-10-31 の grilling(issue #2779、#2774 の sweep の派生)で決定。checkout の `.claude/skills` に commit された、checkout の外を指す
 symlink は、固定版 CLI 2.1.286 が worker の形(sandbox profile + `--setting-sources project`)でも `init` に載せ、`Skill` は link の先の本文を
 注入する(CLI 自身の読みは sandbox の外。Linux の sandbox 下の Bash はその link を辿れない)。この skill の本文は workspace の git にも
