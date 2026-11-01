@@ -782,7 +782,7 @@ export async function refreshRegistry(
     fetchBranchCopy(dir, auth, REGISTRY_BRANCH, writeRef);
     return { available: true };
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 到達できない registry の data にせず底へ
     return {
       available: false,
       reason: `the registry remote main could not be refreshed (${String(err)})`,

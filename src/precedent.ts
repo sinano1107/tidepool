@@ -578,7 +578,7 @@ export function projectWhenTranscriptCloses(
     try {
       projectAndPersist(db, opts);
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 投影の失敗として log に流さない
       console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
     } finally {
       pendingProjections.get(db)?.delete(opts.workerSpawnedEventId);

@@ -307,6 +307,20 @@ describe("盤面 DB が書きを拒んだ poll", () => {
     scheduler.stop();
   });
 
+  it("pickup の契機の poll が拒まれれば、鎖の末尾で飲まず unhandled rejection として床へ届く", async () => {
+    const error = refusal();
+    const { clock, scheduler } = board({
+      taskExecutionCandidates: () => {
+        throw error;
+      },
+    });
+
+    const rejections = await unhandledRejectionsDuring(() => clock.advance(HOURLY));
+
+    expect(rejections).toEqual([error]);
+    scheduler.stop();
+  });
+
   it("後始末の一撃で拒まれれば poll は投げ、行は残らない", async () => {
     const error = refusal();
     const { scheduler, state, worker } = board({

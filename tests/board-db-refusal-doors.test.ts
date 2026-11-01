@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { AUTH_HEADERS, bootTidepool, HOUR, managementMcpClient, mcpClient, queueWork, registerWork, type Tidepool, unhandledRejectionsDuring } from "./harness.js";
+import { FakeDraftClient } from "./fakes.js";
+import { AUTH_HEADERS, bootTidepool, HOUR, managementMcpClient, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 /** ADR 0342 決定4: 再 throw が底に届かない口(express と MCP SDK が外側で受ける)は、盤面 DB の拒否(A)で `bootTidepool` の
  *  終了の関数を直接呼ぶ。lever は生きた接続の `query_only`(書き込みが SQLITE_READONLY になる)。 */
@@ -88,12 +89,19 @@ it("終了の関数が無い盤面では、拒まれた書き込みは今日ど�
   });
 });
 
-it("pickup の契機の poll が拒まれれば、鎖の末尾で飲まず unhandled rejection として床へ届く", async () => {
-  t = await bootTidepool();
-  queueWork(t, "waits for a writable board");
+// 応答を全部 4xx / 5xx に写す catch の族(api.ts の 502 / 503、管理 MCP の registryToolError)の代表
+it("下書きの Board call の記録が拒まれれば、503 を返さず終了の関数を1度呼ぶ", async () => {
+  const terminate = vi.fn();
+  t = await bootTidepool({ terminateOnBoardDbRefusal: terminate, draftClient: new FakeDraftClient() });
   t.db.pragma("query_only = 1");
 
-  const rejections = await unhandledRejectionsDuring(() => t!.clock.advance(HOUR));
+  const answer = fetch(`${t.baseUrl}/api/tasks/draft`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...AUTH_HEADERS },
+    body: JSON.stringify({ dump: "draft this" }),
+  });
 
-  expect(rejections).toEqual([refused]);
+  await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
+  expect(terminate).toHaveBeenCalledWith(refused, { operation: "POST /api/tasks/draft" });
+  expect(await stillPending(answer)).toBe("pending");
 });

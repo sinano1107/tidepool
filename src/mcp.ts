@@ -60,7 +60,7 @@ import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMateri
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
-import { createStatelessMcpRouter, endOnBoardDbRefusal, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
 import {
   assertPosable,
   assertTargetsRunnable,
@@ -528,12 +528,12 @@ function decomposeChildrenSchema(db: Db) {
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
-  const tidepool = rejectUnknownArguments(new McpServer({ name: "tidepool", version: "0.0.0" }));
-  const server = floorEveryResponse(endOnBoardDbRefusal(tidepool, deps.terminateOnBoardDbRefusal, attributedTaskId), {
+  const server = wrapEveryVerb(new McpServer({ name: "tidepool", version: "0.0.0" }), {
     db: deps.db,
     clock: deps.clock,
     surface: "worker",
     taskId: attributedTaskId,
+    terminate: deps.terminateOnBoardDbRefusal,
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)

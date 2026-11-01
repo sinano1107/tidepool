@@ -110,7 +110,7 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *  保証する)。梯子の底で保留されている session(`heldForContainment`)も同じ点で
  *  弾く —— そこでの解放の門は確認 question ただ1つである(ADR 0099 決定3)。
  *
- *  **投げない。** 呼び口は全部 fire-and-forget の `void` である(回収済み観測の
+ *  **投げない**(盤面 DB の拒否は別 —— 投げて床が process を終える、ADR 0342 決定4)。呼び口は全部 fire-and-forget の `void` である(回収済み観測の
  *  `.then`、adapter の中断ハンドラ、起動時の復旧)—— 解放が同期だった頃は例外が
  *  MCP 呼び出しの返り値になったが、今ここで投げれば unhandled rejection として盤面
  *  ごと落ち、しかも未了は行に残るので次の起動でも同じ所で落ちる。個々の失敗は

@@ -856,12 +856,12 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   app.get("/_ds_bundle.js", (_req, res) => res.sendFile("_ds_bundle.js", { root }));
   // ADR 0342 決定4: express の既定の 500 handler の前 —— 盤面 DB の拒否は 500 を返して続けず、終了の関数を呼んで何も答えない
   // (process は終わる途中)。終了の関数が無ければ既定の handler へ(再 throw)
-  const endOnRefusal: ErrorRequestHandler = (err, req, _res, next) => {
+  const endOnBoardDbRefusal: ErrorRequestHandler = (err, req, _res, next) => {
     if (!isBoardDbRefusal(err) || !options.terminateOnBoardDbRefusal) return next(err);
     options.terminateOnBoardDbRefusal(err, { operation: `${req.method} ${req.originalUrl.split("?")[0]}` });
   };
-  app.use(endOnRefusal);
-  mcpApp.use(endOnRefusal);
+  app.use(endOnBoardDbRefusal);
+  mcpApp.use(endOnBoardDbRefusal);
 
   const listener = await new Promise<import("node:http").Server>((resolve) => {
     const l = app.listen(options.port, "127.0.0.1", () => resolve(l));

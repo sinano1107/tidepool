@@ -235,7 +235,7 @@ async function readClaudeUsage(
         console.warn("[cli-auth] usage failure could not be classified", auth.reason);
       }
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 「分類できなかった」の log にせず底へ
       console.warn("[cli-auth] usage failure could not be classified", err);
     }
   }
@@ -412,7 +412,8 @@ export function startScheduler(deps: {
   /** 成功を挟まず続く失敗の計測(ADR 0294 決定2): 最初の失敗と回数。行と同じく memory だけ。 */
   let streak: { first: PollFailure; count: number } | undefined;
   /** slot を握る前の想定外の例外(と後始末の一撃の throw、ADR 0294 決定5): 盤面は落とさず、行に残して次の poll に任せる。
-   *  門の前・門の中の throw も数える —— 門の前で投げ続ける poll も pickup を同じく止めている */
+   *  門の前・門の中の throw も数える —— 門の前で投げ続ける poll も pickup を同じく止めている。
+   *  盤面 DB の拒否だけは行にせず投げる —— 床が process を終える(ADR 0342 決定4) */
   const pollFailed = (err: unknown) => {
     // ADR 0342 決定4: 盤面 DB の拒否は行にしない —— 投げて底(床)へ渡す
     if (isBoardDbRefusal(err)) throw err;
@@ -423,7 +424,8 @@ export function startScheduler(deps: {
     const { first, count } = streak;
     // 開いていれば立てない —— registerQuarantine は開いた鍵に quarantine_refired を積むので、poll ごとの event になる
     if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER) return;
-    // 失敗そのものが DB の故障なら question も書けない —— ここで投げれば poll が投げ、`idle` を待つ収束まで倒れる(ADR 0294 決定1)
+    // 失敗そのものが DB の故障なら question も書けない —— ここで投げれば poll が投げ、`idle` を待つ収束まで倒れる(ADR 0294 決定1)。
+    // 盤面 DB の拒否だけは投げる —— 床が process を終えるので倒れる収束は無い(ADR 0342 決定4)
     try {
       if (openQuarantineQuestion(db, "pollFailure", null)) return;
       registerQuarantine(
@@ -435,19 +437,19 @@ export function startScheduler(deps: {
         now,
       );
     } catch (questionErr) {
-      if (isBoardDbRefusal(questionErr)) throw questionErr; // ADR 0342 決定4
+      if (isBoardDbRefusal(questionErr)) throw questionErr; // ADR 0342 決定4: question も同じ器に書けない —— log に流さず床へ
       console.error("[scheduler] could not raise the poll failure question:", questionErr);
     }
   };
   /** 本体に入った poll が投げずに終わった: 行と計測を戻し、開いた question を観測で決着させる(ADR 0184 決定5 の形)。 */
   const pollSucceeded = () => {
     lastPollFailure = streak = undefined;
-    // finally の中で撃つので、投げれば poll が投げる(上と同じ)
+    // finally の中で撃つので、投げれば poll が投げる(上と同じ。盤面 DB の拒否だけは投げる、ADR 0342 決定4)
     try {
       const open = openQuarantineQuestion(db, "pollFailure", null);
       if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "pollFailure", value: null }, clock.now());
     } catch (settleErr) {
-      if (isBoardDbRefusal(settleErr)) throw settleErr; // ADR 0342 決定4
+      if (isBoardDbRefusal(settleErr)) throw settleErr; // ADR 0342 決定4: 決着も同じ器に書けない —— log に流さず床へ
       console.error("[scheduler] could not settle the poll failure question:", settleErr);
     }
   };
@@ -633,7 +635,7 @@ export function startScheduler(deps: {
             if (picked.type === "interview") openInterviewRoom(db, picked, base, clock.now());
             else openExamineeCheckout(db, picked, base, clock.now());
           } catch (err) {
-            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
             return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
           }
         }
@@ -647,7 +649,7 @@ export function startScheduler(deps: {
           }
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });
         } catch (err) {
-          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
           return stopped(await quarantineWithRepoAccessGuidance(err instanceof PickupGateError ? err.place : place, err, live));
         }
         if (!live()) return;
@@ -656,7 +658,7 @@ export function startScheduler(deps: {
       if (!live()) return;
       worker.start(started, setting, query);
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: spawn_failed も同じ器に書くので、書かずに底へ
       // await の後に届いた想定外の throw(修復の問い合わせの reject など)も、session が終わっていれば何も書かない(#1973)
       if (!live()) return;
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
@@ -686,7 +688,7 @@ export function startScheduler(deps: {
       const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", clock.now());
       return outcome.status === "translated" ? { view: outcome.text } : { reason: "throttled" };
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 訳せなかった理由にせず底へ
       return { reason: "failed", message: err instanceof Error ? err.message : String(err) };
     }
   }
@@ -1097,7 +1099,7 @@ export function startScheduler(deps: {
         try {
           recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now(), pickupEventId);
         } catch (err) {
-          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: shadow 行の失敗として log に流さない
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
       };
@@ -1120,7 +1122,7 @@ export function startScheduler(deps: {
   }
 
   let stopped = false;
-  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。poll は投げない(ADR 0294 決定1)
+  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。poll は盤面 DB の拒否のほかは投げない(ADR 0294 決定1 / ADR 0342 決定4)
   let polling: Promise<unknown> = Promise.resolve();
   function pollNow(): void {
     // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。

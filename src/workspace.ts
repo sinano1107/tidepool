@@ -248,6 +248,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       await firePickupPredicates(place, list, "before-open", { live });
       checks.push({ place, predicates: list });
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       if (err instanceof PickupGateError) throw err;
       throw new PickupGateError(place, err);
     }
@@ -657,7 +658,7 @@ export function restoreWorkspaceProjectSettingsAtBoot(
     try {
       materializeWorkspaceProjectSettings(db, workspace);
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
       quarantineWorkspace(db, workspace.name, err, now);
     }
   }
@@ -1311,7 +1312,7 @@ export function releaseWorkspace(
     if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
     parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, workspace.name, err, now);
   }
 }

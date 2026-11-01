@@ -469,7 +469,7 @@ export async function registerThroughHumanDoor(
           try {
             inspection = await recordedAnswer(deps.db, "issue_inspection", now(), deps.draftClient.inspectIssue(issue));
           } catch (err) {
-            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: inspection_unavailable の応答にせず底へ
             quarantineBoardCallRefusal(deps.db, err, "issue_inspection", undefined, now());
             const fullError = err instanceof Error ? err.message : String(err);
             console.warn("[issue inspection] LLM inspection failed", fullError);
