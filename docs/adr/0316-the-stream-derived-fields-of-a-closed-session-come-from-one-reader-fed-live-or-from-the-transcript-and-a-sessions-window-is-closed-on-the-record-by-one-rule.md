@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の「分類(ADR 0309)は呼び手が足す」は ADR 0338 で、読み手の出力のうち帰結に要る事実を呼び手が束にして渡す形になった(2026-11-01、issue #2791)** —— 決定3(帰結は live の呼び手だけが撃つ)は変わらない。
 
+**Status 追記: 決定4 の窓は、同じ task の次の spawn を越えない(2026-11-01、issue #2880)** —— 自分の spawn を指す exit が次の spawn より後に記録されても窓は次の spawn で閉じ、exit の観測自体は元の session に残す。遅れた観測で次の session の判断を前の窓へ入れないため。
+
 2026-10-27 の triage → grilling(issue #2632、#2600 / ADR 0315 の族の根)で決定。session を閉じる関数は ADR 0315 決定1 で1本になったが、
 `worker_exited` の stream 由来の欄(消費・model の差し替え・拒否・advisor・最後の発話・CLI の報告した失敗)を作るのは adapter の
 メモリ上の観測だけで、起動時の復旧は同じ bytes が transcript にあるのに読まず、欄を null に固定していた。記録の上で session の窓を閉じる
