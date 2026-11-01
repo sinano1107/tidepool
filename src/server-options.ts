@@ -267,7 +267,7 @@ export function buildWorkerOptions(
     reclaimTimeout: number;
     containers: ProcessContainers;
     boardCall: BoardCall;
-    onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+    onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record?: () => void) => void;
     onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
     onPickupStopped: (taskId: string, payload: PickupStopped) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;

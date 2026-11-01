@@ -53,8 +53,6 @@ function board({ hold = false } = {}): Board {
 
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question").map((q) => q.title);
 
-const repair = (db: Db) => db.exec("DROP TRIGGER fail_teardown_mark");
-
 /** 落ちた後始末の question への確認回答(受理の検査は `acceptTeardownQuarantine`)。 */
 function answer(b: Board) {
   const question = getTask(b.db, openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!.id)!;
@@ -104,13 +102,13 @@ it.each([
   ],
 ] as const)("%s が投げると落ちた後始末が1枚立って梯子は進まず、直してから受理すると同じ step が撃ち直されて枠が空く(ADR 0342 決定6)", async (_, fire, failure) => {
   const b = board();
-  failTeardownMark(b.db);
+  const repair = failTeardownMark(b.db);
 
   fire(b);
   await climbTheLadder(b);
 
   expectHeld(b);
-  repair(b.db);
+  repair();
   await answer(b);
   await settle();
   expect(questions(b.db)).toEqual([failure]);
@@ -121,14 +119,14 @@ it("回収済み観測の書き込みが投げると落ちた後始末が立ち�
   const b = board({ hold: true });
   await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
   expect(b.runtime.forceReclaims).toEqual([b.task.id]);
-  failTeardownMark(b.db);
+  const repair = failTeardownMark(b.db);
 
   b.runtime.fireEmpty(b.task.id);
   await settle();
   await climbTheLadder(b);
 
   expectHeld(b);
-  repair(b.db);
+  repair();
   await answer(b);
   await settle();
   expect(questions(b.db)).toEqual(["watchdog killed task: one"]);
@@ -137,14 +135,14 @@ it("回収済み観測の書き込みが投げると落ちた後始末が立ち�
 
 it("回収 timeout の書き込みが投げると落ちた後始末が立ち、待つ回収を報せない —— 受理が撃ち直すと Containment の門に移り、回収の待ちが行と一致する(ADR 0342 決定5・6)", async () => {
   const b = board({ hold: true });
-  failTeardownMark(b.db);
+  const repair = failTeardownMark(b.db);
 
   await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout);
   await b.clock.advance(CONFIG.reclaimTimeout * 3);
 
   expectHeld(b);
   expect(b.watchdog.heldForContainment(b.task.id)).toBe(false);
-  repair(b.db);
+  repair();
   await answer(b);
   expect(questions(b.db)).toEqual(["watchdog killed task: one", "worker containment is not established — pickup is stopped"]);
   expect(b.watchdog.pendingReclaim()).toBe(`the container for task ${b.task.id}`);
@@ -172,20 +170,46 @@ it("後始末の梯子の底の Containment の書き込みが投げると落ち
   expect(b.watchdog.pendingReclaim()).toBe(`the container for task ${b.task.id}`);
 });
 
+it("落ちた後始末が立った後に遅れて届いた空の観測は後始末を走らせず枠を空けない —— 受理が投げた手を撃ち直してから回収の門を通る(ADR 0112 決定4 / ADR 0342 決定6)", async () => {
+  const b = board({ hold: true });
+  b.containers.forceReclaim(b.task.id);
+  // 上限到達による中断: 決定が後始末へ入り、回収済み観測に後始末を繋ぐ
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: true });
+  b.db.exec(
+    "CREATE TRIGGER fail_containment BEFORE INSERT ON tasks WHEN NEW.question_quarantine_kind = 'containment' " +
+      "BEGIN SELECT RAISE(ABORT, 'containment write failed'); END",
+  );
+  await b.clock.advance(CONFIG.reclaimTimeout); // 後始末の梯子の底 → Containment の書き込みが投げる
+  expectHeld(b);
+
+  b.runtime.fireEmpty(b.task.id);
+  await settle();
+
+  expectHeld(b);
+  expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
+  b.db.exec("DROP TRIGGER fail_containment");
+  await answer(b);
+  expect(questions(b.db)).toEqual(["worker containment is not established — pickup is stopped"]);
+  b.watchdog.acceptReclaimed();
+  await settle();
+  expect(b.slot.currentTaskId).toBeNull();
+  expect(getTask(b.db, b.task.id)?.status).toBe("todo");
+});
+
 it("後始末(`runTeardown`)が投げると落ちた後始末が立ち、後始末の梯子は進まない —— 受理が後始末を撃ち直して枠が空く(ADR 0112)", async () => {
   const b = board({ hold: true });
   completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
   markTeardown(b.db, b.task.id, b.clock.now());
   b.slot.enterTeardown();
   // 印を消す書き込み(`clearTeardown`)が投げる
-  failTeardownMark(b.db);
+  const repair = failTeardownMark(b.db);
 
   await runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
   await climbTheLadder(b);
 
   expectHeld(b);
   expect(b.runtime.forceReclaims).toEqual([]);
-  repair(b.db);
+  repair();
   await answer(b);
   expect(b.slot.currentTaskId).toBeNull();
 });
@@ -194,7 +218,7 @@ it("transcript 失敗の一撃が投げると event も残らず落ちた後始�
   const b = board();
   const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
   const failure = { taskId: b.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" } as const;
-  failTeardownMark(b.db);
+  const repair = failTeardownMark(b.db);
   const transcripts = () => listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed");
 
   transcriptFailureHandler(b.deps, b.containers)(failure);
@@ -202,7 +226,7 @@ it("transcript 失敗の一撃が投げると event も残らず落ちた後始�
 
   expect(transcripts()).toEqual([]);
   expectHeld(b);
-  repair(b.db);
+  repair();
   await answer(b);
   await settle();
   expect(transcripts()).toHaveLength(1);
@@ -230,14 +254,14 @@ it("記録の tx の後の step が投げても落ちた後始末になり、受
 
 it("直さずに受理すると拒まれ(DomainError)、question は開いたまま枠も握ったまま —— 直してからの受理は通る(ADR 0112 決定3)", async () => {
   const b = board();
-  failTeardownMark(b.db);
+  const repair = failTeardownMark(b.db);
   spawnFailureHandler(b.deps, b.containers)(b.task.id, { error_code: "ENOENT", message: "spawn claude ENOENT" });
 
   await expect(answer(b)).rejects.toThrow(DomainError);
   await expect(answer(b)).rejects.toThrow("teardown mark failed");
 
   expectHeld(b);
-  repair(b.db);
+  repair();
   await answer(b);
   await settle();
   expect(b.slot.currentTaskId).toBeNull();

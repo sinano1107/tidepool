@@ -19,6 +19,7 @@ import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/qua
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { acceptTeardownQuarantine } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -250,7 +251,10 @@ async function fixture(
     auditorName,
     onPickupStopped,
     boardState,
+    board,
   }: {
+    /** 盤面の本物の一撃をそのまま繋ぐ(spawn_failed の書き込みを一撃に渡す形)。無ければ `onSpawnFailed` は書き込みの後に呼ぶ観測。 */
+    board?: CodexWorkerOptions["onSpawnFailed"];
     auditorName?: string;
     registryFiles?: Record<string, string>;
     linkWorkspace?: boolean;
@@ -304,7 +308,13 @@ You are the Codex worker.`,
     executable: "/opt/tidepool/bin/codex",
     containers: workerContainers,
     boardCall: appServerCall.call,
-    onSpawnFailed,
+    onSpawnFailed:
+      board ??
+      (onSpawnFailed &&
+        ((taskId, failure, record) => {
+          record();
+          onSpawnFailed(taskId, failure);
+        })),
     onWorkerExited,
     usageProbe,
     auditorName,
@@ -818,10 +828,35 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
   });
 
-  it("skill の検査の失敗の spawn_failed の書き込みが投げたら、その throw を spawn_failed の原因として書き直さず未処理の reject へ上げる(ADR 0342 決定5)", async () => {
+  /** skill の検査が落ちる pickup に、盤面の本物の一撃(`spawnFailureHandler`)を繋ぐ。`wrap` は一撃の前に盤面を壊す lever。
+   *  `calls` は一撃が呼ばれた task。 */
+  async function skillCheckFailsOnBoard(wrap: (db: ReturnType<typeof openDb>) => void = () => {}) {
+    const slot = new Slot();
     const calls: string[] = [];
-    const f = await fixture((taskId) => calls.push(taskId), undefined, undefined, undefined, { appServer: () => null });
-    const value = task(f.db);
+    let handler: NonNullable<CodexWorkerOptions["onSpawnFailed"]> = () => {};
+    const f = await fixture(undefined, undefined, undefined, undefined, {
+      appServer: () => null,
+      board: (taskId, failure, record) => {
+        calls.push(taskId);
+        wrap(f.db);
+        handler(taskId, failure, record);
+      },
+    });
+    handler = spawnFailureHandler({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, f.containers);
+    const value = pickupTask(f.db, task(f.db), "codex-agent", f.clock.now())!;
+    slot.occupy(value.id);
+    const accept = () => acceptTeardownQuarantine({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, value.id);
+    const startAndSettle = () =>
+      unhandledRejectionsDuring(async () => {
+        void f.start(value);
+        await vi.waitFor(() => expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false));
+      });
+    return { ...f, slot, value, calls, accept, startAndSettle };
+  }
+
+  it("skill の検査の失敗の spawn_failed の書き込みが投げたら、その throw を spawn_failed の原因として書き直さず落ちた後始末にする(ADR 0342 決定5・6)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const f = await skillCheckFailsOnBoard();
     // 落とすのは検査の失敗の文面の行だけ —— DB の失敗を原因にした2度目の書き込みは通り、行として見える
     f.db.exec(
       "CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events " +
@@ -829,37 +864,34 @@ describe("CodexWorker (ADR 0098)", () => {
         "BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END",
     );
 
-    const rejections = await unhandledRejectionsDuring(async () => {
-      void f.start(value);
-      await vi.waitFor(() => expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false));
-    });
+    const rejections = await f.startAndSettle();
 
-    expect(rejections).toEqual([expect.objectContaining({ message: "spawn_failed write failed" })]);
-    expect(listEvents(f.db, value.id).filter((event) => event.kind === "spawn_failed")).toEqual([]);
-    expect(calls).toEqual([]);
+    expect(rejections).toEqual([]);
+    expect(listBoard(f.db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+    expect(listEvents(f.db, f.value.id).filter((event) => event.kind === "spawn_failed")).toEqual([]);
+    expect(f.calls).toEqual([f.value.id]);
   });
 
-  /** skill の検査が落ちる pickup に、盤面の本物の一撃(`spawnFailureHandler`)を繋ぐ。`wrap` は一撃の前に盤面を壊す lever。 */
-  async function skillCheckFailsOnBoard(wrap: (db: ReturnType<typeof openDb>) => void = () => {}) {
-    const slot = new Slot();
-    let board: NonNullable<CodexWorkerOptions["onSpawnFailed"]> = () => {};
-    const f = await fixture((taskId, failure) => board(taskId, failure), undefined, undefined, undefined, { appServer: () => null });
-    const handler = spawnFailureHandler({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, f.containers);
-    board = (taskId, failure) => {
-      wrap(f.db);
-      handler(taskId, failure);
-    };
-    const value = pickupTask(f.db, task(f.db), "codex-agent", f.clock.now())!;
-    slot.occupy(value.id);
-    return { ...f, slot, value };
-  }
+  it("観測点の spawn_failed の書き込みが盤面のバグで投げても落ちた後始末になり、受理が1行だけ書く(ADR 0342 決定6 / #2036)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const f = await skillCheckFailsOnBoard();
+    f.db.exec("CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END");
+
+    expect(await f.startAndSettle()).toEqual([]);
+    expect(listBoard(f.db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+    f.db.exec("DROP TRIGGER fail_spawn_failed");
+    await f.accept();
+
+    expect(listEvents(f.db, f.value.id).filter((event) => event.kind === "spawn_failed")).toHaveLength(1);
+    expect(listBoard(f.db).filter((t) => t.type === "question").map((q) => q.title)).toContain(`worker never started for task: ${f.value.title}`);
+  });
 
   it("skill の検査の失敗で盤面側の一撃の記録が盤面のバグで投げると、落ちた後始末が立ち未処理の reject は出ない(ADR 0342 決定6 / #2036)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const f = await skillCheckFailsOnBoard();
     failTeardownMark(f.db);
 
-    const rejections = await unhandledRejectionsDuring(() => f.start(f.value)!);
+    const rejections = await f.startAndSettle();
 
     expect(rejections).toEqual([]);
     expect(listBoard(f.db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
@@ -869,10 +901,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("skill の検査の失敗で盤面側の一撃が盤面 DB の拒否で投げたら、外の catch は記録済みの印で飲まず未処理の reject へ上げる(ADR 0342 決定4)", async () => {
     const f = await skillCheckFailsOnBoard((db) => db.pragma("query_only = 1"));
 
-    const rejections = await unhandledRejectionsDuring(async () => {
-      void f.start(f.value);
-      await vi.waitFor(() => expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false));
-    });
+    const rejections = await f.startAndSettle();
     f.db.pragma("query_only = 0");
 
     expect(rejections).toEqual([expect.objectContaining({ code: "SQLITE_READONLY" })]);

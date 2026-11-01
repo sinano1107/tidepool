@@ -42,7 +42,7 @@ import {
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
-import { sessionInTeardown } from "../src/teardown.js";
+import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
@@ -1468,7 +1468,10 @@ describe("ClaudeCodeWorker", () => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
     const { start, calls, db } = await makeWorker({}, {
       ...pings,
-      onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+      onSpawnFailed: (taskId, failure, record) => {
+        record();
+        spawnFailures.push([taskId, failure]);
+      },
     });
     start("task-bundled-fail");
     await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
@@ -1567,7 +1570,10 @@ describe("ClaudeCodeWorker", () => {
       { "agents/deckhand.md": skilledMd("  - code-review\n") },
       {
         enumerateSkills: rec.enumerateSkills,
-        onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+        onSpawnFailed: (taskId, failure, record) => {
+        record();
+        spawnFailures.push([taskId, failure]);
+      },
       },
     );
     start("task-ping-fail");
@@ -1593,7 +1599,10 @@ describe("ClaudeCodeWorker", () => {
         enumerateSkills: async () => {
           throw new Error("reader blew up");
         },
-        onSpawnFailed: (taskId) => spawnFailures.push(taskId),
+        onSpawnFailed: (taskId, _failure, record) => {
+        record();
+        spawnFailures.push(taskId);
+      },
       },
     );
     start("task-ping-reject");
@@ -3473,7 +3482,10 @@ describe("ClaudeCodeWorker", () => {
   it("spawn 自体が ENOENT で失敗(syscall が \"spawn\" で始まる)すると spawn_failed を error_code/message 付きで記録し running から消す(issue #127)", async () => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
     const { calls, start, emitError, db, worker, killed } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+      onSpawnFailed: (taskId, failure, record) => {
+        record();
+        spawnFailures.push([taskId, failure]);
+      },
     });
     const task = start("task-spawn-enoent");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -3499,7 +3511,10 @@ describe("ClaudeCodeWorker", () => {
 
   it("spawn 族でない error(例: kill 失敗の syscall: \"kill\")は console.error のみで spawn_failed イベントは書かない(issue #127)", async () => {
     const spawnFailures: string[] = [];
-    const { calls, start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId) => spawnFailures.push(taskId) });
+    const { calls, start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId, _failure, record) => {
+        record();
+        spawnFailures.push(taskId);
+      } });
     const task = start("task-non-spawn-error");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -5109,9 +5124,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   });
 
   it("spawn が落ちた pickup の後始末は、読み口に process を1つも持たなかった session として報される(ADR 0274 決定3 / #651)", async () => {
-    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
+    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
     const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure) => onSpawnFailed(taskId, failure),
+      onSpawnFailed: (taskId, failure, record) => onSpawnFailed(taskId, failure, record),
     });
     onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
     const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
@@ -5131,9 +5146,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
   it("spawn の失敗で盤面側の一撃の記録が盤面のバグで投げても、listener の外へ抜けず落ちた後始末が立つ(ADR 0342 決定6 / #2036)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
+    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
     const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure) => onSpawnFailed(taskId, failure),
+      onSpawnFailed: (taskId, failure, record) => onSpawnFailed(taskId, failure, record),
     });
     onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
     const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
@@ -5147,6 +5162,29 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     expect(listBoard(db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
     expect(slot.currentTaskId).toBe(task.id);
+  });
+
+  it("spawn の失敗の観測点の spawn_failed の書き込みが盤面のバグで投げても、listener の外へ抜けず落ちた後始末になり、受理が1行だけ書く(ADR 0342 決定6 / #2036)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
+    const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
+      onSpawnFailed: (taskId, failure, record) => onSpawnFailed(taskId, failure, record),
+    });
+    onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
+    const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
+    slot.occupy(task.id);
+    worker.start(task, setting(task));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    db.exec("CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END");
+
+    expect(() => emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }))).not.toThrow();
+    expect(listBoard(db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+    expect(listEvents(db, task.id).filter((e) => e.kind === "spawn_failed")).toEqual([]);
+    db.exec("DROP TRIGGER fail_spawn_failed");
+    await acceptTeardownQuarantine({ db, clock, slot, resolve: undefined, pollNow: () => {} }, task.id);
+
+    expect(listEvents(db, task.id).filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
   });
 });
 

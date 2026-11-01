@@ -1,4 +1,5 @@
 import type { TaskContent } from "./tasks.js";
+import type { TeardownAction } from "./teardown.js";
 
 /** 子自身の pickup で凍結した親の文面(ADR 0321)。 */
 export type ParentBriefing = Partial<TaskContent> & {
@@ -17,7 +18,7 @@ export class Slot {
   private teardown = false;
   private taskContent: TaskContent | undefined;
   private parentContent: ParentBriefing | undefined;
-  private held: { taskId: string; steps: Array<() => unknown> } | undefined;
+  private failedTeardownRest: { taskId: string; actions: TeardownAction[] } | undefined;
 
   get currentTaskId(): string | null {
     return this.taskId;
@@ -54,21 +55,25 @@ export class Slot {
     this.teardown = true;
   }
 
-  /** 投げた後始末の step から先(ADR 0342 決定6)。落ちた後始末の受理が撃ち直す —— memory なので再起動を越えず、
+  /** 落ちた後始末の残り —— 投げた手から先(ADR 0342 決定6)。受理が撃ち直す。memory なので再起動を越えず、
    *  越えた受理は後始末そのものを撃ち直す。枠を握っている session の分だけ持つ。 */
-  holdTeardown(taskId: string, steps: Array<() => unknown>): void {
-    this.held = { taskId, steps };
+  keepFailedTeardownRest(taskId: string, actions: TeardownAction[]): void {
+    this.failedTeardownRest = { taskId, actions };
   }
 
-  takeHeldTeardown(taskId: string): Array<() => unknown> | undefined {
-    if (this.held?.taskId !== taskId) return undefined;
-    const { steps } = this.held;
-    this.held = undefined;
-    return steps;
+  hasFailedTeardownRest(taskId: string): boolean {
+    return this.failedTeardownRest?.taskId === taskId;
+  }
+
+  takeFailedTeardownRest(taskId: string): TeardownAction[] | undefined {
+    if (this.failedTeardownRest?.taskId !== taskId) return undefined;
+    const { actions } = this.failedTeardownRest;
+    this.failedTeardownRest = undefined;
+    return actions;
   }
 
   release(): void {
-    this.held = undefined;
+    this.failedTeardownRest = undefined;
     this.taskId = null;
     this.teardown = false;
     this.taskContent = undefined;

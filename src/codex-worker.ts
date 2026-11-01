@@ -377,8 +377,9 @@ export interface CodexWorkerOptions {
   /** ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る Board call の口。 */
   boardCall: BoardCall;
   boardState?: BoardStatePath[];
-  /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
-  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。`record` は観測点の spawn_failed の
+   *  書き込みで、一撃が失敗の記録と同じ tx で撃つ(ADR 0342 決定6)。不在 → 観測点が自分で書く。 */
+  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が `todo` へ戻す。 */
@@ -1434,13 +1435,12 @@ export class CodexWorker implements WorkerAdapter {
     };
     // ADR 0118: worker が1度も走らなかった pickup の観測点(skill の列挙・観測、spawn までの同期 throw、spawn の error)は同じ形で記録する
     let recorded = false;
-    /** spawn_failed の書き込み自身が投げた throw —— 外の catch はこれを spawn_failed の原因として書き直さない */
-    let writeFailure: unknown;
     const spawnFailed = (failure: { error_code: string | null; message: string }) => {
       // 配線の途中で投げたあとに spawn の error が来ても、記録は1度だけ
       if (recorded) return;
       removeTaskTemp();
-      try {
+      // ADR 0342 決定6: 書く行為は盤面の一撃に渡し、失敗の記録と同じ tx で書く —— 盤面のバグなら落ちた後始末が書き直す(中身は観測点のもの、ADR 0338 決定4)
+      const record = () =>
         appendEvent(this.options.db, {
           taskId: task.id,
           actorId: agent.name,
@@ -1448,14 +1448,10 @@ export class CodexWorker implements WorkerAdapter {
           payload: { kind: "spawn_failed", ...failure },
           at: this.options.clock.now(),
         });
-      } catch (error) {
-        writeFailure = error;
-        throw error;
-      }
-      // ADR 0342 決定5: 印は書き込みが返った後 —— rollback した書き込みを記録済みと読まない。一撃より前に置くのは、
-      // 一撃が投げて経路が再び来たとき spawn_failed を2度書かないため
+      if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, failure, record);
+      else record();
+      // ADR 0342 決定5: 印は一撃が返った後 —— 盤面 DB の拒否で投げた書き込みを記録済みと読まない
       recorded = true;
-      this.options.onSpawnFailed?.(task.id, failure);
     };
     const env = workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name);
     // ADR 0259 決定2・3・6: spawn の前に Codex 自身の列挙で skill を閉じ、閉じた設定の下で観測する。ここから先は
@@ -1646,9 +1642,8 @@ export class CodexWorker implements WorkerAdapter {
       // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない
       // 器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       this.running.delete(task.id);
-      // 書けなかった spawn_failed は今日の void の鎖の throw と同じく未処理の reject へ上げる(ADR 0342 決定5)。
-      // 盤面 DB の拒否も飲まない —— 一撃が投げた後は `recorded` が立っていて、下の spawnFailed では黙って消える(ADR 0342 決定4)
-      if (error === writeFailure || isBoardDbRefusal(error)) throw error;
+      // ADR 0342 決定4: 盤面 DB の拒否は spawn_failed の原因に書き直さず、未処理の reject として底へ上げる
+      if (isBoardDbRefusal(error)) throw error;
       if (error instanceof RecordContainerError) {
         removeTaskTemp();
         this.options.onRecordContainerFailed?.(task.id, error);

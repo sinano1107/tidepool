@@ -75,7 +75,7 @@ import {
   unrowedExaminees,
   unrowedTarget,
 } from "./tasks.js";
-import { liveSession, runTeardownSteps, type TeardownStepFn } from "./teardown.js";
+import { liveSession, runTeardownSteps, type TeardownAction } from "./teardown.js";
 import {
   blockedProviderUsageResources,
   evaluateAndReportProviderUsage,
@@ -409,7 +409,8 @@ export function startScheduler(deps: {
   let lastPollFailure: PollFailure | undefined;
   /** 成功を挟まず続く失敗の計測(ADR 0294 決定2): 最初の失敗と回数。行と同じく memory だけ。 */
   let streak: { first: PollFailure; count: number } | undefined;
-  /** slot を握る前の想定外の例外(と後始末の一撃の throw、ADR 0294 決定5): 盤面は落とさず、行に残して次の poll に任せる。
+  /** slot を握る前の想定外の例外: 盤面は落とさず、行に残して次の poll に任せる。後始末の一撃の盤面のバグは runner が落ちた後始末に
+   *  する(ADR 0342 決定6)ので、一撃からここへ届くのは盤面 DB の拒否だけ。
    *  門の前・門の中の throw も数える —— 門の前で投げ続ける poll も pickup を同じく止めている */
   const pollFailed = (err: unknown) => {
     console.error("[scheduler] poll failed; the next poll retries:", err);
@@ -576,8 +577,8 @@ export function startScheduler(deps: {
     // ここから `worker.start` までの await の間に session が終わったら(人間の停止)、継続は何も書かずに終わる ——
     // 記録は停止の要求と後始末が持つ(#1973 / ADR 0305)。各 await の後・次の副作用の前に読む
     const live = liveSession(db, picked.id);
-    // slot を握った後の一撃は後始末の step —— 投げれば落ちた後始末(ADR 0294 決定3・5 / ADR 0342 決定6)
-    const oneShot = (...steps: TeardownStepFn[]) => () => void runTeardownSteps({ db, clock, slot }, picked.id, ...steps);
+    // slot を握った後の一撃は後始末の手 —— 投げれば落ちた後始末(ADR 0294 決定3 / ADR 0342 決定6)
+    const oneShot = (...steps: TeardownAction[]) => () => void runTeardownSteps({ db, clock, slot }, picked.id, ...steps);
     try {
       // 呼び手には pickupTask が書いた task_picked_up の id を渡す —— shadow 行はこの event に乗る(ADR 0319 決定1)
       onPicked(latestEventOfTask(db, picked.id, "task_picked_up")!.id);

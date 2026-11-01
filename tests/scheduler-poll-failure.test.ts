@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
+import { boardHalts } from "../src/board-halt.js";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
 import { setPaused } from "../src/pause.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, POLL_FAILURE_QUESTION_TITLE } from "../src/quarantine.js";
@@ -9,8 +11,9 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, getTask, listBoard, registerTask } from "../src/tasks.js";
 import { acceptTeardownQuarantine } from "../src/teardown.js";
+import { spawnFailureHandler } from "../src/watchdog.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { HUMAN_WEBUI, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
+import { failTeardownMark, HUMAN_WEBUI, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
 
 /** ADR 0294 決定1: slot を握る前の poll の想定外の例外は盤面を落とさず、「最後の poll の失敗」の行に残して次の poll に任せる。 */
 function board(overrides: Partial<Parameters<typeof startScheduler>[0]> = {}) {
@@ -116,7 +119,7 @@ it("後始末の一撃そのものが投げても process は生きて落ちた�
 });
 
 /** slot を握った後の pickup の失敗(ADR 0294 決定3)の盤面を、受理の検査が同じ枠を読める形で組む。 */
-function heldBoard(onSpawnFailed: () => void) {
+function heldBoard(onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void) {
   const slot = new Slot();
   const b = board({ slot, onSpawnFailed });
   b.state.broken = false;
@@ -144,6 +147,30 @@ it("pickup の catch 自身の spawn_failed の書き込みが投げても落ち
   await b.accept();
   expect(b.spawnFailed()).toHaveLength(1);
   expect(shots).toBe(1);
+  b.scheduler.stop();
+});
+
+it("受理が撃ち直した盤面の一撃の中で盤面のバグが投げれば受理は拒まれ、question は開いたまま枠も握ったまま —— 入れ子の runner が飲まない(ADR 0342 決定6)", async () => {
+  let board: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
+  const b = heldBoard((taskId, failure) => board(taskId, failure));
+  board = spawnFailureHandler({ db: b.db, clock: b.clock, slot: b.slot, resolve: undefined, pollNow: () => {} }, fakeContainers());
+  b.db.exec("CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END");
+  await b.clock.advance(HOURLY);
+  expect(b.questionTitles()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  b.db.exec("DROP TRIGGER fail_spawn_failed");
+  const repair = failTeardownMark(b.db);
+
+  await expect(b.accept()).rejects.toThrow(DomainError);
+
+  expect(b.questionTitles()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  expect(boardHalts(b.db)).toEqual([{ kind: "failedTeardown" }]);
+  expect(b.slot.currentTaskId).toBe(b.head.id);
+  expect(getTask(b.db, b.head.id)?.status).toBe("in_progress");
+  repair();
+  await b.accept();
+  // 受理の検査を直に撃つので、落ちた後始末の question は回答の側が閉じる
+  expect(b.questionTitles()).toContain(`worker never started for task: ${b.head.title}`);
+  expect(b.spawnFailed()).toHaveLength(1);
   b.scheduler.stop();
 });
 

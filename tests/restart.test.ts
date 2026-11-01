@@ -153,10 +153,10 @@ it("後始末の step が盤面のバグで投げたまま再起動すると、�
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
   writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
   vi.spyOn(console, "error").mockImplementation(() => {});
-  failTeardownMark(t.db);
+  const repair = failTeardownMark(t.db);
   t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: 1 });
   expect((await questions(t)).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
-  t.db.exec("DROP TRIGGER fail_teardown_mark");
+  repair();
   await t.stopServer();
 
   t = await bootTidepool({ dir: t.dir, workspace: ws });

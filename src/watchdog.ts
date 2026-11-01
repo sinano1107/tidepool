@@ -209,48 +209,13 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
  *  形は行の拒否(ADR 0184 決定4)と同じ: `todo` への復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
  *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— drift で解決できない
  *  workspace の Quarantine を撃ち直さず、動いていない checkout に触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。
- *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。process が起きた session の `todo` への復帰は exit の決定
+ *  process の無い容器へ強制回収を撃つのは `spawnFailureHandler` と同じ。process が起きた session の `todo` への復帰は exit の決定
  *  (`onWorkerExited`)が持つ(ADR 0338 決定2)。 */
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (taskId: string, payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>) => void {
-  return (taskId, payload) => returnToQueueAndReclaim(deps, containers, taskId, payload);
-}
-
-/** `queueReturnHandler` の本体。`record` は同じ transaction の先頭に置く記録(記録の器の停止の登録)。 */
-function returnToQueueAndReclaim(
-  deps: TeardownDeps,
-  containers: ProcessContainers,
-  taskId: string,
-  payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>,
-  record?: () => void,
-): void {
-  let returned = false;
-  runTeardownSteps(
-    deps,
-    taskId,
-    () =>
-      deps.db.transaction(() => {
-        record?.();
-        if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
-        const task = getTask(deps.db, taskId);
-        if (task?.status !== "in_progress") return;
-        const now = deps.clock.now();
-        returnToQueue(deps.db, task, payload, now);
-        markTeardown(deps.db, taskId, now);
-        returned = true;
-      })(),
-    () => returned && reclaimIntoTeardown(deps, containers, taskId),
-  );
-}
-
-/** 記録の tx の後の step(ADR 0342 決定6): 後始末へ入り、process の無い容器へも強制回収を撃ち、回収済み観測に後始末を繋ぐ。
- *  門は持たない —— 受理の撃ち直しが門で空振りすると、枠は後始末中のまま回収の鎖が付かない(#2856)。 */
-function reclaimIntoTeardown(deps: TeardownDeps, containers: ProcessContainers, taskId: string): void {
-  deps.slot.enterTeardown();
-  containers.forceReclaim(taskId);
-  void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+  return (taskId, payload) => settleAndReclaim(deps, containers, taskId, (task, now) => returnToQueue(deps.db, task, payload, now));
 }
 
 /** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は transcript の open(ADR 0276 決定5)で、観測点は
@@ -261,14 +226,15 @@ export function recordContainerHaltHandler(
   containers: ProcessContainers,
 ): (taskId: string, err: RecordContainerError) => void {
   return (taskId, err) =>
-    returnToQueueAndReclaim(deps, containers, taskId, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, () =>
+    settleAndReclaim(deps, containers, taskId, (task, now) => returnToQueue(deps.db, task, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now), () =>
       registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue in its current place, not failed`, deps.clock.now()),
     );
 }
 
 /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃。観測点は3つ ——
  *  scheduler が捕まえる `start` の同期 throw、adapter が捕まえる `spawn()` の非同期
- *  失敗と skill 列挙の失敗(issue #770)—— で、`spawn_failed` event はそれぞれの観測点が書く。
+ *  失敗と skill 列挙の失敗(issue #770)—— で、`spawn_failed` event の中身はそれぞれの観測点が持つ。
+ *  adapter の観測点は書く行為を `record` で渡し、失敗の記録と同じ transaction で書く(ADR 0342 決定6 / ADR 0338 決定4)。
  *
  *  上限到達による中断と違い、記録(failure question)を回収済み観測の**前**に置く ——
  *  escalate verb と同じ順で、後始末中の status は `todo` になり、経路は `spawn_failed` の event から
@@ -277,14 +243,20 @@ export function recordContainerHaltHandler(
 export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, failure: { error_code: string | null; message: string }) => void {
-  return (taskId, failure) =>
-    failAndReclaim(deps, containers, taskId, (task) => [
-      `worker never started for task: ${task.title}`,
-      `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
-        `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
-        failure.message,
-    ]);
+): (taskId: string, failure: { error_code: string | null; message: string }, record?: () => void) => void {
+  return (taskId, failure, record) =>
+    settleAndReclaim(
+      deps,
+      containers,
+      taskId,
+      registerFailure(deps, (task) => [
+        `worker never started for task: ${task.title}`,
+        `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
+          `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
+          failure.message,
+      ]),
+      record,
+    );
 }
 
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。
@@ -297,18 +269,21 @@ export function transcriptFailureHandler(
   containers: ProcessContainers,
 ): (failure: TranscriptFailure) => void {
   return ({ taskId, workerSpawnedEventId, file, error_code, message, path }) =>
-    failAndReclaim(
+    settleAndReclaim(
       deps,
       containers,
       taskId,
-      (task) => [
-        `worker transcript could not be written: ${task.title}`,
-        `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
-          `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
-      ],
-      `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
-        "That session was force-reclaimed and has its own failure question",
-      // event は失敗の記録と同じ tx —— rollback で何も残らず、受理の撃ち直しが2行目を書かない(#2856)
+      registerFailure(
+        deps,
+        (task) => [
+          `worker transcript could not be written: ${task.title}`,
+          `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
+            `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
+        ],
+        `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
+          "That session was force-reclaimed and has its own failure question",
+      ),
+      // ADR 0342 決定6: event は失敗の記録と同じ tx —— rollback で何も残らず、受理の撃ち直しが2行目を書かない
       () =>
         appendEvent(deps.db, {
           taskId,
@@ -321,35 +296,62 @@ export function transcriptFailureHandler(
     );
 }
 
-/** 盤面が観測した瞬間に失敗を記録して後始末へ入れる(ADR 0118 の型)。記録を回収済み観測の
- *  **前**に置くので、後始末中の status は `todo` になり、経路はエスカレーションの step に
- *  読まれる(ADR 0113 決定3)。`haltReason` があれば記録の器の停止も同じ transaction で登録する(ADR 0266 決定4)。
- *  `record` は門より前に同じ transaction で書く記録(決着の後に届いた失敗にも残す event)。 */
-function failAndReclaim(
+/** 記録の手 → 後始末に入ったなら続きの手、の2手を runner に通す(ADR 0342 決定6)。`record` は tx で、後始末に入ったかを返す。
+ *  受理は投げた手から撃ち直す —— 続きの手は `record` の結果だけを読み、門を持たない。 */
+function recordThen(deps: Pick<TeardownDeps, "db" | "clock" | "slot">, taskId: string, record: () => boolean, follow: () => unknown) {
+  let entered = false;
+  return runTeardownSteps(
+    deps,
+    taskId,
+    () => {
+      entered = record();
+    },
+    () => entered && follow(),
+  );
+}
+
+/** process を持たない session を盤面が観測した瞬間に決着させて後始末へ入れる(ADR 0118 / ADR 0274 の型)。決着を回収済み観測の
+ *  **前**に置くので、後始末中の status が経路を決める(ADR 0113 決定3)。`record` は門より前に同じ transaction で書く
+ *  観測の記録 —— 決着の後に届いた失敗にも残す(ADR 0149 決定4)。 */
+function settleAndReclaim(
   deps: TeardownDeps,
   containers: ProcessContainers,
   taskId: string,
-  wording: (task: Task) => [title: string, reason: string],
-  haltReason?: string,
+  settle: (task: Task, now: Date) => void,
   record?: () => void,
-): void {
-  let failed = false;
-  runTeardownSteps(
+) {
+  return recordThen(
     deps,
     taskId,
     () =>
       deps.db.transaction(() => {
         record?.();
-        if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+        if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return false;
         const task = getTask(deps.db, taskId);
-        if (task?.status !== "in_progress") return;
+        if (task?.status !== "in_progress") return false;
         const now = deps.clock.now();
-        registerFailureAndMarkTeardown(deps.db, task, ...wording(task), now);
-        if (haltReason) registerQuarantine(deps.db, "recordContainer", null, haltReason, now);
-        failed = true;
+        settle(task, now);
+        markTeardown(deps.db, taskId, now);
+        return true;
       })(),
-    () => failed && reclaimIntoTeardown(deps, containers, taskId),
+    () => reclaimIntoTeardown(deps, containers, taskId),
   );
+}
+
+/** 失敗の記録(ADR 0118 の型)。`haltReason` があれば記録の器の停止も同じ transaction で登録する(ADR 0266 決定4)。 */
+function registerFailure(deps: TeardownDeps, wording: (task: Task) => [title: string, reason: string], haltReason?: string) {
+  return (task: Task, now: Date) => {
+    registerFailureQuestion(deps.db, task, ...wording(task), now);
+    if (haltReason) registerQuarantine(deps.db, "recordContainer", null, haltReason, now);
+  };
+}
+
+/** 記録の tx の後の手: 後始末へ入り、process の無い容器へも強制回収を撃ち、回収済み観測に後始末を繋ぐ。門は持たない ——
+ *  受理の撃ち直しが門で空振りすると、枠は後始末中のまま回収の鎖が付かない(ADR 0342 決定6)。 */
+function reclaimIntoTeardown(deps: TeardownDeps, containers: ProcessContainers, taskId: string): void {
+  deps.slot.enterTeardown();
+  containers.forceReclaim(taskId);
+  void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
@@ -428,8 +430,7 @@ export function startWatchdog(deps: {
       return;
     }
     if (failedTeardownOpen()) return;
-    let failed = false;
-    runTeardownSteps(
+    recordThen(
       teardown,
       taskId,
       () => {
@@ -437,13 +438,13 @@ export function startWatchdog(deps: {
         // 後始末へ入った session に遅れて届いた空の観測もここで外れる —— 外れなければ quarantine へ
         // 倒れた slot を黙って解放する(解放の門は確認 question ただ1つ)。後始末の側に届く観測を
         // 弾くのは `heldForContainment`
-        if (sessionInTeardown(db)?.taskId === taskId) return;
+        if (sessionInTeardown(db)?.taskId === taskId) return false;
         // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
         // 他人の session に failure question を立ててしまう
-        if (slot.currentTaskId !== taskId || slot.inTeardown) return;
+        if (slot.currentTaskId !== taskId || slot.inTeardown) return false;
         const task = getTask(db, taskId);
         // 決着済みのタスクに failure question を立てない
-        if (task?.status !== "in_progress") return;
+        if (task?.status !== "in_progress") return false;
         registerFailureAndMarkTeardown(
           db,
           task,
@@ -455,12 +456,12 @@ export function startWatchdog(deps: {
             exitSections(rec.exit),
           clock.now(),
         );
-        failed = true;
+        return true;
       },
+      // 撃った手の中の後始末の throw も同じ runner へ返す(受理の撃ち直しが黙って通らない)
       () => {
-        if (!failed) return;
         slot.enterTeardown();
-        void runTeardown(teardown, taskId, teardownStep(db, taskId));
+        return runTeardown(teardown, taskId, teardownStep(db, taskId));
       },
     );
   }
@@ -476,14 +477,12 @@ export function startWatchdog(deps: {
       return;
     }
     if (failedTeardownOpen()) return;
-    let raised = false;
-    runTeardownSteps(teardown, task.id, () => {
-      if (slot.currentTaskId !== task.id || slot.inTeardown || sessionInTeardown(db)?.taskId === task.id) return;
-      if (getTask(db, task.id)?.status !== "in_progress") return;
+    recordThen(teardown, task.id, () => {
+      if (slot.currentTaskId !== task.id || slot.inTeardown || sessionInTeardown(db)?.taskId === task.id) return false;
+      if (getTask(db, task.id)?.status !== "in_progress") return false;
       raiseReclaimTimeout(task, rec, limit);
-      raised = true;
+      return true;
     }, () => {
-      if (!raised) return;
       // ADR 0342 決定5: 印は書き込みが返った後 —— 先に置くと rollback の後に行の無い回収を報せる
       pending = task.id;
       rec.settled = true;
@@ -617,15 +616,13 @@ export function startWatchdog(deps: {
     const { turnRan, stop, capInterrupted } = facts;
     const decide = (cap: boolean) => {
       if (failedTeardownOpen()) return;
-      let settled = false;
-      runTeardownSteps(teardown, taskId, () => {
-        if (rec.humanStop) return;
-        if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return;
+      recordThen(teardown, taskId, () => {
+        if (rec.humanStop) return false;
+        if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return false;
         const task = getTask(db, taskId);
-        if (task?.status !== "in_progress") return;
-        settled = recordDecision(task, cap);
+        if (task?.status !== "in_progress") return false;
+        return recordDecision(task, cap);
       }, () => {
-        if (!settled) return;
         slot.enterTeardown();
         void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
       });
@@ -667,8 +664,8 @@ export function startWatchdog(deps: {
       const classified = capInterrupted.finally(() => {
         delete rec.classification;
       });
-      // 分類の Promise の reject(鎖の中の adapter の記録の書き込み)も runner が落ちた後始末にする —— 待つ梯子は reject を
-      // 受け取らず、行の門で止まる(#2822)
+      // ADR 0342 決定6: 分類の Promise の reject(鎖の中の adapter の記録の書き込み)も runner が落ちた後始末にする —— 待つ梯子は
+      // reject を受け取らず、行の門で止まる(ADR 0112 決定4)
       // shortcut: reject した Promise は撃ち直しても reject するので、受理は再起動まで拒まれる。adapter の書き込みが束の step になる #2857 で消える
       rec.classification = runTeardownSteps(teardown, taskId, () => classified.then(decide));
     }
@@ -683,7 +680,7 @@ export function startWatchdog(deps: {
     // 「その session のプロセスがこのホストに残っている」と断言するが実際には残って
     // いない。門は**行**に持つ: in-memory の門は再起動を越えないので、越えなければ
     // 起動のたびに偽の question を1枚ずつ刷る。
-    if (openQuarantineValues(db, "failedTeardown").length > 0) return;
+    if (failedTeardownOpen()) return;
     const task = getTask(db, taskId);
     if (!task) return;
     const rec = syncPickup(taskId);

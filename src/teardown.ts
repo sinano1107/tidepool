@@ -121,15 +121,31 @@ export async function runTeardown(
   taskId: string,
   step: TeardownStep = {},
 ): Promise<void> {
+  // ADR 0112 決定4 / ADR 0342 決定6: 落ちた後始末の残りを持つ session は、受理の撃ち直しのほかに後始末を走らせない ——
+  // 遅れた回収済み観測や MCP の verb が枠を空けると、残りの手も question も宙に浮く。受理は残りを取り出してから撃つ
+  if (deps.slot.hasFailedTeardownRest(taskId)) return;
   await runTeardownSteps(deps, taskId, () => teardown(deps, taskId, step));
 }
 
-/** 後始末の step: 同期か Promise を返す関数。 */
-export type TeardownStepFn = () => unknown;
+/** 後始末の1手: 同期か Promise を返す関数(経路ごとの差分の `TeardownStep` とは別物)。 */
+export type TeardownAction = () => unknown;
 
-/** 後始末の step の runner(ADR 0342 決定6 / ADR 0112)。step を順に撃ち、投げた step から先を枠に保持して落ちた
+/** 投げた手から先を外へ運ぶ throw。外の runner / 受理が自分の残りを後ろに継ぎ、1つの残りとして持つ(ADR 0342 決定6)。 */
+class TeardownThrew {
+  constructor(
+    readonly cause: unknown,
+    readonly rest: TeardownAction[],
+  ) {}
+}
+
+/** 同期に撃っている手の深さ。0 でなければ runner は入れ子 —— 投げた手は外の runner / 受理へ渡し、自分では question も残りも
+ *  持たない(持つと外は成功に見え、受理が黙って通る)。入れ子の runner が返す Promise は、撃った手が返して外へ繋ぐ ——
+ *  `void` すると reject が底へ落ちる。 */
+let driving = 0;
+
+/** 後始末の step の runner(ADR 0342 決定6 / ADR 0112)。手を順に撃ち、投げた手から先を枠に残して落ちた
  *  後始末の question を同期に立てる —— 行が立ってから返るので、watchdog の tick の門(ADR 0112 決定4)がすぐ効く。
- *  受理(`acceptTeardownQuarantine`)は保持した step から撃ち直す。盤面 DB の拒否は question も書けないので底へ投げる
+ *  受理(`acceptTeardownQuarantine`)は残した手から撃ち直す。盤面 DB の拒否は question も書けないので底へ投げる
  *  (ADR 0342 決定2・3)。
  *
  *  枠を握ったままの throw だけが落ちた後始末である。`slot.release()` より後 —— pickup の契機 ——
@@ -138,34 +154,49 @@ export type TeardownStepFn = () => unknown;
 export function runTeardownSteps(
   deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
   taskId: string,
-  ...steps: TeardownStepFn[]
+  ...actions: TeardownAction[]
 ): Promise<void> | undefined {
+  if (driving > 0) return drive(actions);
   const fail = (err: unknown) => {
-    if (isBoardDbRefusal(err)) throw err;
-    console.error(`[teardown] task ${taskId}:`, err);
+    const { cause, rest } = err as TeardownThrew;
+    if (isBoardDbRefusal(cause)) throw cause;
+    console.error(`[teardown] task ${taskId}:`, cause);
     if (deps.slot.currentTaskId !== taskId) return;
-    quarantineFailedTeardown(deps.db, taskId, err, deps.clock.now());
-    deps.slot.holdTeardown(taskId, steps);
+    quarantineFailedTeardown(deps.db, taskId, cause, deps.clock.now());
+    deps.slot.keepFailedTeardownRest(taskId, rest);
   };
   try {
-    return drive(steps)?.catch(fail);
+    return drive(actions)?.catch(fail);
   } catch (err) {
     fail(err);
     return undefined;
   }
 }
 
-/** step を順に撃ち、撃ち終えた step を列から外す —— 投げたとき列に残るのは投げた step から先。 */
-function drive(steps: TeardownStepFn[]): Promise<void> | undefined {
-  while (steps.length > 0) {
-    const result = steps[0]!();
-    if (result instanceof Promise) {
-      return result.then(() => {
-        steps.shift();
-        return drive(steps);
-      });
+/** 手を順に撃つ。投げれば `TeardownThrew` に投げた手から先を載せる —— 入れ子の runner の残りの後ろに、自分の残りを継ぐ。 */
+function drive(actions: readonly TeardownAction[], from = 0): Promise<void> | undefined {
+  const threw = (err: unknown, at: number) =>
+    err instanceof TeardownThrew
+      ? new TeardownThrew(err.cause, [...err.rest, ...actions.slice(at + 1)])
+      : new TeardownThrew(err, actions.slice(at));
+  for (let at = from; at < actions.length; at++) {
+    let result: unknown;
+    driving++;
+    try {
+      result = actions[at]!();
+    } catch (err) {
+      throw threw(err, at);
+    } finally {
+      driving--;
     }
-    steps.shift();
+    if (result instanceof Promise) {
+      return result.then(
+        () => drive(actions, at + 1),
+        (err) => {
+          throw threw(err, at);
+        },
+      );
+    }
   }
   return undefined;
 }
@@ -197,21 +228,22 @@ export type FailedTeardownCheck = (taskId: string) => Promise<void>;
  *  再観測を満たすためである —— 満たさなければ早期 return で静かに受理され、tree rule が
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<void> {
-  // ADR 0342 決定6: process が生きていれば投げた step から、再起動を跨げば後始末そのものを撃ち直す
-  const steps = deps.slot.takeHeldTeardown(taskId) ?? [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
+  // ADR 0342 決定6: process が生きていれば投げた手から、再起動を跨げば後始末そのものを撃ち直す
+  const actions = deps.slot.takeFailedTeardownRest(taskId) ?? [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
   if (deps.slot.currentTaskId === null) {
     deps.slot.occupy(taskId);
     deps.slot.enterTeardown();
   }
   try {
-    await drive(steps);
+    await drive(actions);
   } catch (err) {
+    const { cause, rest } = err as TeardownThrew;
     // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
-    if (isBoardDbRefusal(err)) throw err;
-    deps.slot.holdTeardown(taskId, steps);
+    if (isBoardDbRefusal(cause)) throw cause;
+    deps.slot.keepFailedTeardownRest(taskId, rest);
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
-        (err instanceof Error ? err.message : String(err)),
+        (cause instanceof Error ? cause.message : String(cause)),
     );
   }
 }
