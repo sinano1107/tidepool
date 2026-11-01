@@ -1283,8 +1283,8 @@ export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =
   );
 
 /** The checkout's own skills (issue #56 / ADR 0335 決定1): `carried` is the entry names under
- *  `<workspace>/.claude/skills/` that are a directory, or a symlink to a directory inside the checkout (issue
- *  #2774 — the CLI follows the link and names the skill by the entry); `entries` is every entry name there, which
+ *  `<workspace>/.claude/skills/` whose realpath is a directory inside the checkout, including links in any parent
+ *  (issues #2774 / #2784 — the CLI names the skill by the entry); `entries` is every entry name there, which
  *  the bundled set is subtracted by. This one-directory scan is the only discovery logic tidepool keeps in-house.
  *  A checkout or `.claude/skills` that cannot be read (missing, unresolvable, EACCES) is two empty sets, not an
  *  error (a workspace need not carry any skills). */
@@ -1293,23 +1293,21 @@ function scanWorkspaceSkills(workspacePath: string): CheckoutSkills {
   try {
     // real paths on both sides: the workspace path itself may pass through a symlink (macOS /var -> /private/var)
     const checkout = realpathSync(workspacePath);
-    const entries = readdirSync(skillsDir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    const entries = readdirSync(skillsDir).sort();
     return {
-      carried: entries
-        .filter((entry) => entry.isDirectory() || (entry.isSymbolicLink() && linksToDirInsideCheckout(join(skillsDir, entry.name), checkout)))
-        .map((entry) => entry.name),
-      entries: entries.map((entry) => entry.name),
+      carried: entries.filter((entry) => isDirInsideCheckout(join(skillsDir, entry), checkout)),
+      entries,
     };
   } catch {
     return { carried: [], entries: [] };
   }
 }
 
-/** A link whose target is outside the checkout is not carried by it (GLOSSARY.md `@workspace`); a broken
- *  link or one to a non-directory is no skill. Unreadable means not counted, so one entry never stops the scan. */
-function linksToDirInsideCheckout(link: string, checkout: string): boolean {
+/** ADR 0335 決定1: every entry's resolved directory must be inside the checkout, even through parent links.
+ *  Unreadable means not counted, so one entry never stops the scan. */
+function isDirInsideCheckout(entry: string, checkout: string): boolean {
   try {
-    const target = realpathSync(link);
+    const target = realpathSync(entry);
     return target.startsWith(checkout + sep) && statSync(target).isDirectory();
   } catch {
     return false;

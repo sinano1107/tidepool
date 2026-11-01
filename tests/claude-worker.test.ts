@@ -1300,6 +1300,53 @@ describe("ClaudeCodeWorker", () => {
     expect(deny).not.toContain("Skill(code-review)");
   });
 
+  describe.each([".claude/skills", ".claude"] as const)("外を指す %s の親 symlink(issue #2784)", (parent) => {
+    it.each([
+      ["@workspace", [], ["Workflow", "Skill(shared)", "Skill(debug)"]],
+      ["@host", ["debug"], ["Workflow", "Skill(shared)"]],
+      ["*", ["debug"], ["Workflow", "Skill(shared)"]],
+    ] as const)("%s は外の実 dir を deny し、workspace・host・permitted に数えない", async (scope, permitted, deny) => {
+      const wsDir = await tempDir("tidepool-ws-");
+      const outside = await tempDir("tidepool-outside-");
+      if (parent === ".claude/skills") {
+        await mkdir(join(outside, "shared-skills", "shared"), { recursive: true });
+        await mkdir(join(wsDir, ".claude"));
+        await symlink(join(outside, "shared-skills"), join(wsDir, parent));
+      } else {
+        await mkdir(join(outside, "dotclaude", "skills", "shared"), { recursive: true });
+        await symlink(join(outside, "dotclaude"), join(wsDir, parent));
+      }
+      const { start, calls, db } = await makeWorker(
+        { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd(`  - "${scope}"\n`) },
+        {
+          enumerateSkills: recordingEnumerator(["shared", "debug"]).enumerateSkills,
+          enumerateHostSkills: recordingBundledSet(["shared", "debug"]).enumerateHostSkills,
+        },
+      );
+      start("task-skill-parent-symlink");
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      expect(disallowedTools(calls[0]!.args)).toEqual(deny);
+      const spawned = listEvents(db, "task-skill-parent-symlink").find((e) => e.kind === "worker_spawned")!;
+      expect(spawned.payload).toMatchObject({ skills: { workspace: [], host: ["debug"], permitted } });
+    });
+  });
+
+  it("内側の .agents/skills を指す .claude/skills の下の実 dir は @workspace で許可し、workspace と permitted に数える(issue #2784)", async () => {
+    const wsDir = await tempDir("tidepool-ws-");
+    await mkdir(join(wsDir, ".agents", "skills", "inner"), { recursive: true });
+    await mkdir(join(wsDir, ".claude"));
+    await symlink("../.agents/skills", join(wsDir, ".claude", "skills"));
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd('  - "@workspace"\n') },
+      { enumerateSkills: recordingEnumerator(["inner", "debug"]).enumerateSkills },
+    );
+    start("task-skill-internal-parent-symlink");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow", "Skill(debug)"]);
+    const spawned = listEvents(db, "task-skill-internal-parent-symlink").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["inner"], host: [], permitted: ["inner"] } });
+  });
+
   // issue #2774: `.claude/skills/*` を `.agents/skills/*` への相対 symlink で置く checkout(tidepool 自身)
   const symlinkedSkillWorkspace = async () => {
     const wsDir = await tempDir("tidepool-ws-");
