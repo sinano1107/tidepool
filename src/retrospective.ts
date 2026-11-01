@@ -976,7 +976,8 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
   if (cause !== "preference") {
     try {
       derived = learningTarget(cause, worker, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
-    } catch {
+    } catch (err) {
+      if (!(err instanceof DomainError)) throw err; // ADR 0336 決定3: 決めた skip 以外は盤面のバグの印として sweep の console へ
       return;
     }
   }
@@ -988,7 +989,8 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
   let scope: string | null;
   try {
     scope = learnedScope(db, deps, task);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof DomainError)) throw err; // ADR 0336 決定3: 決めた skip 以外は sweep の console へ
     return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
   }
   await singleFlight(db, `draft:${attribution.id}`, async () => {

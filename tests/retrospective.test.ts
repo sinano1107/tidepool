@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import type { PromptPart } from "../src/board-prose.js";
@@ -52,7 +52,10 @@ import {
 import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
-afterEach(() => t?.stop());
+afterEach(() => {
+  vi.restoreAllMocks();
+  return t?.stop();
+});
 
 /** 定型の outcome で完了した RCA 子が findings に残す1行(RCA review は人間の直接 cancel の範囲外 —— ADR 0194)。 */
 const RCA_OUTCOME = `completion report: ${FULL_HANDOFF.outcome}`;
@@ -1597,6 +1600,34 @@ it("起草の答えが schema に合わなくても behavior_draft の行は残�
 
 const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
   listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));
+
+/** 第2回を task_ambiguity に確定させ、起草 client のある sweep を回す(`basedOn` は task の based_on_decision を書き換える setup)。 */
+async function draftAfterTaskAmbiguity(basedOn?: number) {
+  const b = awaitingSecondRound();
+  if (basedOn !== undefined) b.db.prepare("UPDATE tasks SET based_on_decision = ? WHERE id = ?").run(basedOn, b.task.id);
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
+  const drafter = new FakeBehaviorDraftClient();
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(attributed(b.db, b.task.id).map((p) => p.cause)).toEqual(["task_ambiguity"]);
+  expect(drafter.calls).toEqual([]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "memory_draft_failed")).toEqual([]);
+  return logged;
+}
+
+it("人間が登録した task の task_ambiguity は宛先が無いので起草せず、sweep の console にも何も出ない(ADR 0336 決定1 の決めた skip)", async () => {
+  const logged = await draftAfterTaskAmbiguity();
+
+  expect(logged).not.toHaveBeenCalled();
+});
+
+it("文面の書き手の導出が DomainError 以外で投げると、起草せず失敗 event も残さず、sweep の console に [retrospective] で届く(ADR 0336 決定3)", async () => {
+  const logged = await draftAfterTaskAmbiguity(999_999);
+
+  expect(logged).toHaveBeenCalledWith(expect.stringMatching(/^\[retrospective\] .*TypeError/));
+});
 
 it.each(["capability", "environment", "uncertain"] as const)("初回: %s に空の wrong_memory_entries が付いても cause と evidence がそのまま載り、RCA は cause に従う", async (cause) => {
   const b = objectedAfterReading();
