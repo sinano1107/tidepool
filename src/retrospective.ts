@@ -1019,8 +1019,6 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
   });
 }
 
-/** 行から学んだ記憶の置き場(起草と propose_from_material が共有): 行の主題を持つ task(meta-review とその系譜)の行は盤面全体(null)、
- *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事で、子はそれを継ぐ(ADR 0279 決定1 / ADR 0283 決定1)。 */
 /** 起草の skip の述語を走らせ、DomainError(決めた skip)なら undefined を返す。ADR 0336 決定3: それ以外の throw は
  *  分類されない盤面のバグの印なので、飲まずに sweep の fire-and-forget の console へ通す。 */
 function decidedSkip<T>(predicate: () => T): T | undefined {
@@ -1032,6 +1030,8 @@ function decidedSkip<T>(predicate: () => T): T | undefined {
   }
 }
 
+/** 行から学んだ記憶の置き場(起草と propose_from_material が共有): 行の主題を持つ task(meta-review とその系譜)の行は盤面全体(null)、
+ *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事で、子はそれを継ぐ(ADR 0279 決定1 / ADR 0283 決定1)。 */
 const learnedScope = (db: Db, board: { workspace?: { name: string } }, task: Task): string | null =>
   lineageSubjectOf(db, task.id) === null ? memoryScope(board, task) : null;
 
