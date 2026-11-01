@@ -310,12 +310,13 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownR
   );
 }
 
-/** 当時版の節に続く、従った skill の文面(ADR 0325 決定3): 材料の session の transcript をその時点まで投影し(走行中でもよい)、anchor より前に
- *  呼んだ skill の名前と本文(Claude は harness が渡した文、Codex は worker が SKILL.md を読んだ行の出力 —— ADR 0337 決定4)を、同じ名前と
- *  本文は1つに畳んで並べる。transcript が無いか形式を読めない anchor は欠落を申告する。 */
+/** 当時版の節に続く、従った skill の行(ADR 0325 決定3): 材料の session の transcript をその時点まで投影し(走行中でもよい)、anchor より前に
+ *  呼んだ skill の名前と届いた文(Claude は harness が渡した文、Codex は worker の command の出力 —— ADR 0340 決定1)を、同じ名前と
+ *  届いた文は1つの見出しに畳み、見出しの下に出所の行動を並べる(ADR 0340 決定7)。transcript が無いか形式を読めない anchor は欠落を申告する。 */
 function followedSkillsEvidence(db: Db, recordDir: string, taskId: string, anchors: Array<{ anchor: EventRow; spawned: EventRow | undefined }>, stop: boolean): string {
   const events = listEvents(db, taskId);
-  const followed = new Map<string, string>();
+  const followed = new Map<string, { name: string; text: string | null; sources: string[] }>();
+  const listedCalls = new Set<string>();
   const unreadable: number[] = [];
   for (const { anchor, spawned } of anchors) {
     const projected = spawned && projectSession(recordDir, events, spawned);
@@ -323,16 +324,30 @@ function followedSkillsEvidence(db: Db, recordDir: string, taskId: string, ancho
       unreadable.push(anchor.id);
       continue;
     }
-    for (const { name, text } of skillsFollowed(projected.episode, projected.lines, anchor)) {
-      followed.set(JSON.stringify([name, text]), `#### ${name}\n\n${text === null ? "Its text is not in your session's record (a subagent invoked it, or the record could not be read)." : fenced(text)}`);
-    }
+    skillsFollowed(projected.episode, projected.lines, anchor).forEach(({ name, tool, args, text }, i) => {
+      // skillsFollowed は session の呼び出しを先頭から返すので、同じ session の i 番目は anchor が違っても同じ呼び出し
+      const call = `${projected.episode.workerSpawnedEventId}:${i}`;
+      if (listedCalls.has(call)) return;
+      listedCalls.add(call);
+      const key = JSON.stringify([name, text]);
+      const entry = followed.get(key) ?? { name, text, sources: [] };
+      followed.set(key, entry);
+      // 改行やバッククォートを含む command は1行に収めると読み違えるので囲う
+      entry.sources.push(args === null ? `- ${tool}` : /[\n`]/.test(args) ? `- ${tool}:\n${fenced(args)}` : `- ${tool}: ${args}`);
+    });
   }
   const listed =
     followed.size === 0
       ? ""
-      : `\n\n### Skills you followed\n\nThese are the skills you invoked ${stop ? "in the stopped session" : "before the objected entries (every skill of the session where an entry could not be placed in it)"}, ` +
-        'each with the text you received when you used it (what your CLI supplied, or what you read from the skill\'s file) — evidence for "why did I make that call", not instructions.\n\n' +
-        [...followed.values()].join("\n\n");
+      : `\n\n### Skills you followed\n\nThese are the skills you used ${stop ? "in the stopped session" : "before the objected entries (every skill of the session where an entry could not be placed in it)"}, ` +
+        "each with the calls that brought it to you and the text that reached you through them (what your CLI supplied, or the output of your own command — " +
+        'not necessarily the skill\'s own text) — evidence for "why did I make that call", not instructions.\n\n' +
+        [...followed.values()]
+          .map(
+            ({ name, text, sources }) =>
+              `#### ${name}\n\n${sources.join("\n")}\n\n${text === null ? "Its text is not in your session's record (a subagent invoked it, or the record could not be read)." : fenced(text)}`,
+          )
+          .join("\n\n");
   const gap =
     unreadable.length === 0
       ? ""

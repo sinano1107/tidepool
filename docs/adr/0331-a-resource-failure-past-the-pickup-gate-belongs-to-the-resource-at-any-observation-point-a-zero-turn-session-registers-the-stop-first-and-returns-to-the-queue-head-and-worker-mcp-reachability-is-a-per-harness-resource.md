@@ -1,5 +1,7 @@
 # pickup の gate を抜けた資源の故障は観測点によらず資源に帰属し、0ターンで終わった session は資源の停止を先に登録して先頭へ戻る —— Worker MCP 到達性は Harness ごとの資源
 
+**Status 追記: 決定1 の「資源の署名を持たない throw は盤面のバグ」の線に、記録の器の署名(SQLite の code)が加わる —— その throw は資源にも task にも帰属せず、process を終える([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定1・2、2026-11-01、issue #2837)。**
+
 **Status 追記: 決定2・9 の0ターン復帰を盤面へ届ける形は ADR 0338 で exit の通知の束に乗った(2026-11-01、issue #2791)** —— 資源の停止を先に登録する条件と event kind は変わらない。
 
 **Status 追記: 決定2・4 の「todo の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 0ターンで終わった session の task は位置を変えずに `todo` へ戻る。資源の停止を先に登録する条件は変わらない。

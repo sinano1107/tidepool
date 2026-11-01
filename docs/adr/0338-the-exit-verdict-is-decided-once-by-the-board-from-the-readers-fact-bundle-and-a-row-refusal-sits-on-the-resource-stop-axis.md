@@ -1,5 +1,7 @@
 # exit の決着は読み手の事実の束から盤面が1箇所で1度決め、行の拒否は資源の停止と同じ軸に乗る
 
+**Status 追記: 決定4 の登録の持ち主は変えないまま、adapter の鎖の中の書き込み(`closeSession`・資源の停止の登録)は書く行為を束の step として盤面へ渡し、watchdog の後始末の runner が撃つ —— 書き込みの throw を盤面が受けて撃ち直せるようにするため([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定6、2026-11-01、issue #2837 / #2822)。**
+
 2026-11-01 の triage → grilling(issue #2791、#2776 の根)で決定。root の exit を受けた盤面の決着は、adapter が `onRowRefused` /
 `onSessionStoppedByResource` を `onWorkerExited` より**先に**撃ち、先に `todo` と後始末の印を置いた handler が勝って報告なき exit の
 決定(ADR 0145)が再観測で黙って退く、という呼び順の契約で成り立っていた。ADR 0309 決定1 が cap について廃止した形(「分類を exit より先に

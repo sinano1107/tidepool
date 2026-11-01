@@ -2,6 +2,8 @@
 
 **Status 追記: §7 追記(pickup の休止位置)の「読む場所は remote 正本を持つものだけ」は外れ、purely-local の読む場所も休止させる(ADR 0329 追記 決定11、2026-11-01、issue #2730)。**
 
+**Status 追記: 決定1 の「push 成功時にローカルの remote-tracking ref が更新されるので『push が通った』と『盤面に効いた』が同じ 1 つの事実」は、push が checkout の中で走ることに乗っていた。盤面の網に出る git は checkout の外の盤面所有 repo で走る([ADR 0339](0339-the-boards-github-children-run-in-a-built-env-and-only-the-injected-identity-reaches-the-network.md) 決定5、2026-11-01、issue #2827)ので、写しは push の成功を見て盤面が ADR 0243 の口の中で `update-ref` で書く —— 「効いた」の定義は変わらない(push の成功)が、写しを動かす手は git の副作用でなく盤面の書き込みになる。**
+
 issue #209 / #210 のグリリング(2026-08-08)で決定。実環境での初回動作確認の段取りを組む過程で、
 `src/` 全体に `git fetch` / `git pull` の呼び出しが**1つも存在しない**ことが判明した(`push` は
 `src/github.ts:136` と `src/registry-write.ts:43` の2箇所のみ。`scripts/deploy-pi.sh:69` の fetch は
