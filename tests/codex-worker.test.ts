@@ -9,7 +9,7 @@ import { boardDoctrine, fenced } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
-import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { appendEvent, type EventPayload, listEvents, listEventsOfKinds } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -189,6 +189,43 @@ function honestSkillsList(args: readonly string[], cwds: readonly string[]) {
   for (const skill of listed.data.flatMap((entry) => entry.skills)) skill.enabled = !closed.has(skill.path);
   return listed;
 }
+
+const HOME_SKILL = "/board/fixture/home/.agents/skills/home-skill/SKILL.md";
+const SKILL_CREATOR = "/board/fixture/codex-home/skills/.system/skill-creator/SKILL.md";
+
+/** 実体を checkout に置いた2つの skill・同梱1つ・user 1つを返す app-server(ADR 0337 決定2)。観測では閉じた path を無効と、
+ *  閉じなかった path を `enabled(path)` で答える(既定は有効)。 */
+function allowlistSkillsList(enabled: (path: string) => boolean = () => true) {
+  return (args: readonly string[], cwds: readonly string[]) => {
+    const [cwd] = cwds as [string];
+    const closed = args.includes("--strict-config") ? closedPaths(args) : null;
+    const skills = [
+      { name: "ws-skill", path: join(cwd, ".agents/skills/ws-skill/SKILL.md"), scope: "repo" },
+      { name: "other", path: join(cwd, ".agents/skills/other/SKILL.md"), scope: "repo" },
+      { name: "skill-creator", path: SKILL_CREATOR, scope: "system" },
+      { name: "home-skill", path: HOME_SKILL, scope: "user" },
+    ].map((skill) => ({ ...skill, enabled: closed === null || (!closed.has(skill.path) && enabled(skill.path)) }));
+    return { data: [{ cwd, skills, errors: [] }] };
+  };
+}
+
+/** `skills` の allowlist を持つ codex-agent と、checkout に SKILL.md の実体を置いた workspace。 */
+async function allowlistFixture(allowlist: string[], enabled?: (path: string) => boolean) {
+  const f = await fixture(undefined, undefined, undefined, undefined, {
+    appServer: allowlistSkillsList(enabled),
+    registryFiles: {
+      "agents/codex-agent.md": `---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\nprovider: openai\nskills: ${JSON.stringify(allowlist)}\n---\nYou are the Codex worker.`,
+    },
+  });
+  for (const name of ["ws-skill", "other"]) {
+    await mkdir(join(f.workspace, ".agents/skills", name), { recursive: true });
+    await writeFile(join(f.workspace, ".agents/skills", name, "SKILL.md"), `---\nname: ${name}\n---\n`);
+  }
+  return f;
+}
+
+const spawnedSkills = (f: { db: ReturnType<typeof openDb> }) =>
+  (listEventsOfKinds(f.db, ["worker_spawned"])[0]!.payload as { skills: unknown }).skills;
 
 /** The short empty override closes ambient developer instructions (ADR 0326). */
 const developerInstructions = (args: string[]) => configValue<string>(args, "developer_instructions=");
@@ -444,8 +481,7 @@ describe("CodexWorker (ADR 0098)", () => {
       advisor: null,
       harness: "codex",
       cli_version: CLI_VERSION,
-      // ADR 0325 決定6 / ADR 0335 決定3: Codex は skill を全部閉じるので、checkout の集合も同梱の集合も許可した集合も空
-      skills: { workspace: [], host: [], permitted: [] },
+      // skills の3列と paths は下の ADR 0337 決定2 のテストが固定する
     });
   });
 
@@ -640,6 +676,57 @@ describe("CodexWorker (ADR 0098)", () => {
       ...configPairs,
     ]);
     expect(observation!.requests).toEqual(enumeration!.requests);
+  });
+
+  it("allowlist を持つ agent の spawn は許した path を閉じず他を閉じ、観測は同じ設定で撃ち、worker_spawned.skills に3列と許した名前 → path の表を書く(ADR 0337 決定2・3)", async () => {
+    const f = await allowlistFixture(["ws-skill", "@host"]);
+    await f.start(task(f.db));
+
+    const spawned = f.process.calls[0]!.args;
+    expect([...closedPaths(spawned)]).toEqual([join(f.workspace, ".agents/skills/other/SKILL.md"), HOME_SKILL]);
+    const configPairs = spawned.flatMap((arg, i) => (spawned[i - 1] === "-c" ? ["-c", arg] : []));
+    expect(f.appServer[1]!.spec.args).toEqual(["app-server", "--strict-config", ...configPairs]);
+    expect(spawnedSkills(f)).toEqual({
+      workspace: ["ws-skill", "other"],
+      host: ["skill-creator"],
+      permitted: ["ws-skill", "skill-creator"],
+      paths: { "ws-skill": join(f.workspace, ".agents/skills/ws-skill/SKILL.md"), "skill-creator": SKILL_CREATOR },
+    });
+  });
+
+  it("`skills: []` の agent の spawn でも worker_spawned.skills の2列は列挙から埋まり、許可と表は空(ADR 0337 決定2)", async () => {
+    const f = await allowlistFixture([]);
+    await f.start(task(f.db));
+
+    expect(closedPaths(f.process.calls[0]!.args).size).toBe(4);
+    expect(spawnedSkills(f)).toEqual({ workspace: ["ws-skill", "other"], host: ["skill-creator"], permitted: [], paths: {} });
+  });
+
+  it("観測で無効と答えた許可候補は最終の spawn 設定でも閉じ、許可にも表にも載せない(ADR 0337 決定2)", async () => {
+    const f = await allowlistFixture(["@workspace"], (path) => !path.endsWith("/ws-skill/SKILL.md"));
+    await f.start(task(f.db));
+
+    expect(closedPaths(f.process.calls[0]!.args)).toContain(join(f.workspace, ".agents/skills/ws-skill/SKILL.md"));
+    expect(closedPaths(f.process.calls[0]!.args)).not.toContain(join(f.workspace, ".agents/skills/other/SKILL.md"));
+    expect(spawnedSkills(f)).toMatchObject({ permitted: ["other"], paths: { other: join(f.workspace, ".agents/skills/other/SKILL.md") } });
+  });
+
+  it.each([
+    ["work", "tidepool-work"],
+    ["review", "tidepool-review"],
+  ] as const)("同梱 skill を許した %s の spawn だけ、観測と spawn の filesystem 表に $CODEX_HOME/skills/.system の read 行が載り、CODEX_HOME の root は載らない(ADR 0337 決定5)", async (type, profile) => {
+    const value = (db: ReturnType<typeof openDb>) =>
+      registerTask(db, { type, assignee: "codex-agent", workspace: "work", title: type, purpose: "p", completion_criteria: "c" }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+    const withHost = await allowlistFixture(["@host"]);
+    await withHost.start(value(withHost.db));
+    const row = `${JSON.stringify(join(realpathSync(withHost.codexHome), "skills", ".system"))}="read"`;
+    expect(filesystem(withHost.process.calls[0]!.args, profile)).toContain(row);
+    expect(withHost.appServer[1]!.spec.args.join("\n")).toContain(row);
+    expect(filesystem(withHost.process.calls[0]!.args, profile)).not.toContain(`${JSON.stringify(realpathSync(withHost.codexHome))}=`);
+
+    const withoutHost = await allowlistFixture(["@workspace"]);
+    await withoutHost.start(value(withoutHost.db));
+    expect(filesystem(withoutHost.process.calls[0]!.args, profile)).not.toContain(".system");
   });
 
   it("worker_spawned は封じ込めの観測の後・本文の描画の前に書かれ、Roster はその id の時点の Executor —— 観測の最中に pickup された親の worker が載る(ADR 0295 決定4)", async () => {

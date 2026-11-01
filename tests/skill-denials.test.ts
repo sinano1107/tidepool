@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSkillAllowlist } from "../src/claude-worker.js";
+import { resolveSkillAllowlist } from "../src/skill-allowlist.js";
 
 /** ADR 0025 point 3 / ADR 0335 決定1: the only enforcement primitive is per-skill deny, so the adapter denies
  *  the CLI-enumerated set minus what the allowlist permits. Each entry resolves to one of two positively known

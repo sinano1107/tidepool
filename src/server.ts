@@ -42,17 +42,15 @@ import { createMcpRouter } from "./mcp.js";
 import { ensureMemoryIndex } from "./memory.js";
 import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
-import type { Provider } from "./provider.js";
+import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import { type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
-import type { Harness } from "./registry.js";
-import {
-  type AuthorityProfile,
+import { 
+  type AuthorityProfile,canonicalHarness, type Harness, 
   type RegistryCandidates,
   type RegistryReachabilityCheck,
   type RegistrySource,
-  type RosterAgent,
-} from "./registry.js";
+  type RosterAgent,} from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { closeUnclosedSessions } from "./session-close.js";
@@ -360,6 +358,12 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 同じ既定を共有する —— `options.watchdog` は任意なので定数のほうから取る。worker session の
   // 読み切りの上限も同じ値(ADR 0201 決定2)。
   const reclaimTimeout = given.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT;
+  // 封じ込めの検査をしない Harness: 通る agent が居ないか、通る Provider がどれも資格情報の不在を報告する(scheduler が
+  // その経路を選ばないのと同じ不在、ADR 0116 決定4)。組み込みは Codex にも乗る(ADR 0337 決定1)ので、codex を入れていない
+  // 盤面は agent の有無だけでは解けない question を起動時に立てる(#683)
+  const harnessUnused = (harness: Harness) =>
+    given.quarantineResolvers?.harnessContainment?.([harness]).length === 0 ||
+    PROVIDER_VALUES.filter((provider) => canonicalHarness(provider) === harness).every((provider) => given.credentialAbsence?.[provider]?.() !== undefined);
   const boardCalls = createBoardCalls({
     containers,
     clock: given.clock,
@@ -367,12 +371,12 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onReclaimTimeout: (reason) => quarantineContainment(db, reason, given.clock.now()),
     checkCliVersion: given.checkHarnessCliVersion,
     // ADR 0186 決定3: 版の不一致で断ったら、pickup の検査と同じ鍵の封じ込めの隔離へ(1資源につき1枚)。
-    // 封じ込めの検査を持たない盤面(registry 無し)と、その Harness を通る agent が居ない盤面では立てない ——
+    // 封じ込めの検査を持たない盤面(registry 無し)と、検査しない Harness(`harnessUnused`)では立てない ——
     // 起動時の検査(下)と同じ線。立てても回答の再検査が無く解けない question になり、codex を入れていない
     // 盤面では App Server の互換性検査が起動時に立ててしまう
     onCliVersionMismatch: (harness, reason) => {
       if (!given.harnessContainment) return;
-      if (given.quarantineResolvers?.harnessContainment?.([harness]).length === 0) return;
+      if (harnessUnused(harness)) return;
       registerQuarantine(db, "harnessContainment", harness, reason, given.clock.now());
     },
   });
@@ -862,13 +866,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   probeHumanSurface = () =>
     checkHumanSurfaceRefusesAnonymous(`http://127.0.0.1:${humanPort}${HUMAN_SURFACE_PROBE_PATH}`);
   // Harness resources some registry agent routes through (ADR 0110 決定1, via the
-  // same resolver the quarantine stops use) are inspected before boot returns.
+  // same resolver the quarantine stops use) and some Provider on it has credentials
+  // for (`harnessUnused`) are inspected before boot returns.
   // Without a resolver both are. Pickup and Confirmation answers run the same
   // four-question check again.
   if (harnessContainment) {
-    const agentsUsing = options.quarantineResolvers?.harnessContainment;
     for (const harness of ["claude-code", "codex"] as const) {
-      if (agentsUsing?.([harness]).length === 0) continue;
+      if (harnessUnused(harness)) continue;
       await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());
     }
   }

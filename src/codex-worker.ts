@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
@@ -48,6 +48,7 @@ import { registerQuarantine, registerResourceStop, workspaceContainmentValue } f
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
 import { closeSession, taskTempPrefix } from "./session-close.js";
+import { resolveSkillAllowlist } from "./skill-allowlist.js";
 
 
 import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
@@ -435,7 +436,8 @@ const skillsListResponse = z.object({
   data: z.array(
     z.object({
       cwd: z.string(),
-      skills: z.array(z.object({ name: z.string(), path: z.string(), enabled: z.boolean() })),
+      // ADR 0337 決定2: scope は翻訳が読む。知らない値は閉じるので文字列のまま、欠落だけを parse 失敗にする
+      skills: z.array(z.object({ name: z.string(), path: z.string(), scope: z.string(), enabled: z.boolean() })),
     }),
   ),
 });
@@ -456,9 +458,69 @@ export function listedSkillPaths(result: unknown, cwds: readonly string[]): stri
   return [...new Set(skillsAt(result, cwds).map((skill) => skill.path))];
 }
 
-/** 閉じた設定を当てた `skills/list` の `result` から、まだ有効と報告された skill を `name (path)` で拾う(ADR 0259 決定3)。 */
-export function enabledSkills(result: unknown, cwds: readonly string[]): string[] {
-  return skillsAt(result, cwds).filter((skill) => skill.enabled).map((skill) => `${skill.name} (${skill.path})`);
+/** 封じ込めの述語(ADR 0259 決定3 / ADR 0337 決定3): 閉じた設定を当てた `skills/list` の `result` から、盤面が許した path の外で
+ *  まだ有効と報告された skill を `name (path)` で拾う。許した path が有効なことは封じ込めの性質ではないので問わない。許さなかった path は
+ *  列挙に無かったもの(列挙と観測の間に現れた skill)も閉じたものとして問う —— 許可が空なら観測の全部が無効であること。 */
+export function enabledSkills(result: unknown, cwds: readonly string[], permitted: ReadonlySet<string>): string[] {
+  return skillsAt(result, cwds)
+    .filter((skill) => skill.enabled && !permitted.has(skill.path))
+    .map((skill) => `${skill.name} (${skill.path})`);
+}
+
+/** Codex の skill allowlist の翻訳(ADR 0337 決定2)。`deny` は閉じる path、`paths` は許した名前 → SKILL.md の path で、どちらも
+ *  Codex が列挙した綴り(worker が prompt で見て `cat` する綴り)。3列と `paths` は `worker_spawned.skills` に載る。 */
+export interface CodexSkillTranslation {
+  workspace: string[];
+  host: string[];
+  permitted: string[];
+  paths: Record<string, string>;
+  deny: string[];
+}
+
+/** `skills/list` 1回から allowlist を2集合へ翻訳する(ADR 0335 決定1・5 / ADR 0337 決定2)。`system` → 同梱集合、`repo` で盤面の realpath が
+ *  workspace の実体の下 → 運ぶ集合、それ以外(`user`・checkout の外の `repo`・解けない path・知らない scope)はどちらにも入れず閉じる。
+ *  realpath は内側かの判定にだけ使う。列挙の `enabled` は盤面所有の config.toml の写しで worker は読まない(#893)ので見ない。同じ scope の中で
+ *  name が重複した skill は名前 → path が1本に決まらないので両方閉じ、同名の同梱は checkout 側が勝つ(`resolveSkillAllowlist` の host の
+ *  引き算)。`observed` を渡すと許可は解決 ∩ 観測で有効と答えた集合になり、観測で無効だった許可候補は deny に戻る。 */
+function translateCodexSkills(input: {
+  allowlist: readonly string[];
+  listed: unknown;
+  /** 実体の path(realpath 済み)。 */
+  workspace: string;
+  observed?: unknown;
+}): CodexSkillTranslation {
+  const listed = skillsAt(input.listed, [input.workspace]);
+  const unique = (scope: string, name: string) => listed.filter((skill) => skill.scope === scope && skill.name === name).length === 1;
+  const inside = (path: string) => {
+    try {
+      return realpathSync(path).startsWith(input.workspace + sep);
+    } catch {
+      return false;
+    }
+  };
+  const carried = listed.filter((skill) => skill.scope === "repo" && unique("repo", skill.name) && inside(skill.path));
+  const bundled = listed.filter((skill) => skill.scope === "system" && unique("system", skill.name));
+  const resolved = resolveSkillAllowlist(
+    [...input.allowlist],
+    [...new Set(listed.map((skill) => skill.name))],
+    { carried: carried.map((skill) => skill.name), entries: listed.filter((skill) => skill.scope === "repo").map((skill) => skill.name) },
+    bundled.map((skill) => skill.name),
+  );
+  const chosen = new Map([...bundled, ...carried].map((skill) => [skill.name, skill.path]));
+  const enabled = input.observed === undefined
+    ? null
+    : new Set(skillsAt(input.observed, [input.workspace]).filter((skill) => skill.enabled).map((skill) => skill.path));
+  const paths = Object.fromEntries(
+    resolved.permitted.map((name) => [name, chosen.get(name)!] as const).filter(([, path]) => enabled === null || enabled.has(path)),
+  );
+  const open = new Set(Object.values(paths));
+  return {
+    workspace: carried.map((skill) => skill.name),
+    host: resolved.host,
+    permitted: Object.keys(paths),
+    paths,
+    deny: [...new Set(listed.map((skill) => skill.path))].filter((path) => !open.has(path)),
+  };
 }
 
 export interface CodexCapabilityObservation {
@@ -659,8 +721,8 @@ export const FORCED_LOGIN_METHOD = 'forced_login_method="chatgpt"';
 /** worker の `codex exec` の flag のうち hook に依らないもの。spawn と、版上げの適合試験の skill の閉鎖の行の exec が読む。 */
 export const WORKER_EXEC_FLAGS = ["--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config"] as const;
 
-/** 列挙した path をすべて閉じる `skills.config`(ADR 0259 決定2)。scope は問わない。 */
-function closedSkillsConfig(paths: readonly string[]): string {
+/** 渡した path をすべて閉じる `skills.config`(ADR 0259 決定2)。scope は問わない。 */
+export function closedSkillsConfig(paths: readonly string[]): string {
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;
 }
 
@@ -758,24 +820,27 @@ const SKILL_CHECK_FAILED =
   "Codex skills/list failed while the board enumerated or observed this workspace's skills, " +
   "so it could not decide or confirm which skills are closed";
 
-/** (codex, workspace) の組の検査(ADR 0259 決定1・3・5): 列挙した skill を閉じた spawn の設定を `--strict-config` で
- *  当てた `skills/list` が、すべて `enabled: false` と答えるか。worker の起動は本文だけ marker の spawn の設定(ADR 0259 追記)で、回答時の検査は
- *  placeholder の設定で、版上げの適合試験の skill の閉鎖の行(#1940)は観測の生の result ごと、同じこれを撃つ。
- *  列挙・観測そのものの失敗は投げる(決定6)。 */
+/** (codex, workspace) の組の検査(ADR 0259 決定1・3・5 / ADR 0337 決定2・3): 列挙 → allowlist の解決 → `列挙 − 解決` を閉じた spawn の
+ *  設定を `--strict-config` で当てた `skills/list` が、許した path の外をすべて `enabled: false` と答えるか。返す翻訳の許可は解決 ∩ 観測で
+ *  有効と答えた集合で、その `deny` は `列挙 − 許可`。worker の起動は agent の allowlist と本文だけ marker の spawn の設定(ADR 0259 追記)で、
+ *  回答時の検査と版上げの適合試験の skill の閉鎖の行(#1940)は `[]`(列挙の全部を閉じる placeholder)で、同じこれを撃つ。
+ *  `config` は翻訳から設定を組む(閉じる行は `closedSkillsConfig(translation.deny)`)。列挙・観測そのものの失敗は投げる(決定6)。 */
 export async function codexWorkspaceContainment(options: {
   call: BoardCall;
   executable: string;
   env: NodeJS.ProcessEnv;
   /** 実体の path(realpath 済み)。 */
   workspace: string;
-  config: (skills: string) => string[];
+  allowlist: readonly string[];
+  config: (translation: CodexSkillTranslation) => string[];
   /** spawn の前の検査だけが渡す継続の門(#1973): 列挙の間に session が終わっていれば観測の Board call を撃たずに投げる。 */
   live?: () => boolean;
-}): Promise<{ skills: string; capability: ContainmentCapability; observed: unknown }> {
+}): Promise<{ translation: CodexSkillTranslation; capability: ContainmentCapability; observed: unknown }> {
   const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
-  const skills = await enumerateSkills(through("Codex skill enumeration"), options.executable, options.env, options.workspace);
+  const [listed] = await callAppServer(through("Codex skill enumeration"), options.executable, options.env, [], [skillsListRequest(options.workspace)]);
+  const resolved = translateCodexSkills({ allowlist: options.allowlist, listed, workspace: options.workspace });
   if (options.live?.() === false) throw new Error("the session ended during Codex skill enumeration");
-  const config = options.config(skills);
+  const config = options.config(resolved);
   const [observed] = await callAppServer(
     through("Codex skill observation"),
     options.executable,
@@ -783,9 +848,10 @@ export async function codexWorkspaceContainment(options: {
     ["--strict-config", ...configArgs(config)],
     [skillsListRequest(options.workspace)],
   );
-  const enabled = enabledSkills(observed, [options.workspace]);
+  const enabled = enabledSkills(observed, [options.workspace], new Set(Object.values(resolved.paths)));
+  const translation = translateCodexSkills({ allowlist: options.allowlist, listed, workspace: options.workspace, observed });
   return {
-    skills,
+    translation,
     observed,
     capability: enabled.length === 0
       ? { available: true }
@@ -793,10 +859,17 @@ export async function codexWorkspaceContainment(options: {
           available: false,
           reason:
             `Under the board's closed skills.config, Codex still reports these skills enabled: ${enabled.join(", ")}. ` +
-            "The board disabled every skill path that skills/list returned for this workspace, so it cannot close " +
-            "these itself — find where Codex loads them from and remove or disable them there",
+            "The board permits none of these and disabled every one skills/list returned for this workspace, so it cannot " +
+            "close them itself — find where Codex loads them from and remove or disable them there",
         },
   };
+}
+
+/** ADR 0337 決定5: Codex はモデル自身が sandbox の中で SKILL.md を `cat` するので、同梱 skill を許した設定に限り `.system` の dir を読ませる。
+ *  `CODEX_HOME` の root は `auth.json` を持つので開けず、`user` scope の skill は `.system` の兄弟なので読めないまま。 */
+function bundledSkillReads(codexHome: string, translation: CodexSkillTranslation): string[] {
+  // 他の filesystem の行と同じく実体の綴りで書く(issue #864)
+  return translation.permitted.some((name) => translation.host.includes(name)) ? [join(realpathSync(codexHome), "skills", ".system")] : [];
 }
 
 /** Resolve once at composition time. Worker spawn uses the returned absolute path,
@@ -1193,13 +1266,15 @@ export function createCodexWorkspaceCheck(options: {
         executable: options.executable,
         env: workerEnv(options.executable, options.codexHome, taskTemp, "tidepool"),
         workspace,
-        config: (skills) =>
+        // ADR 0337 決定3: agent に依らない検査は列挙の全部を閉じる placeholder のまま
+        allowlist: [],
+        config: (translation) =>
           placeholderSpawnConfig("work", {
             workspace,
             allowedDomains: target.allowed_domains ?? [],
             taskTemp,
             executable: options.executable,
-            skills,
+            skills: closedSkillsConfig(translation.deny),
             hook: boardHookPath(options.codexHome),
           }),
       });
@@ -1303,10 +1378,7 @@ export class CodexWorker implements WorkerAdapter {
 
     // resolveExecutionAgent already enforces this at pickup; keep the adapter's
     // vendor boundary explicit so a future direct caller cannot silently mask it.
-    // 2つの拒否はどちらも ADR 0098(Codex v1 の正準経路、Harness の fallback なし)
-    if (agent.definition.skills.length > 0) {
-      throw new Error("CodexWorker v1 refuses a non-empty skill allowlist");
-    }
+    // ADR 0098(Codex の正準経路、Harness の fallback なし)
     if (setting.provider !== "openai") {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback`);
     }
@@ -1380,6 +1452,14 @@ export class CodexWorker implements WorkerAdapter {
     // scheduler の catch の外なので、失敗は自分で spawn_failed に落とす(Claude adapter の skill 列挙と同じ形)。
     // 列挙・観測の間に session が終わったら(停止・解放・再 pickup)、task temp だけ片付けて何も書かずに終わる(#1973)
     const live = liveSession(this.options.db, task.id);
+    // 観測と spawn は同じこの設定(ADR 0259 決定3)。同梱 skill を許した設定だけ `.system` を読める(ADR 0337 決定5)
+    const workerConfig = (translation: CodexSkillTranslation) =>
+      spawnConfig({
+        ...input,
+        readPaths: [...input.readPaths, ...bundledSkillReads(this.options.codexHome, translation)],
+        taskTemp,
+        skills: closedSkillsConfig(translation.deny),
+      });
     return (async () => {
       let checked: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
       try {
@@ -1388,7 +1468,8 @@ export class CodexWorker implements WorkerAdapter {
           executable: this.options.executable,
           env,
           workspace: workspacePath,
-          config: (skills) => spawnConfig({ ...input, taskTemp, skills }),
+          allowlist: agent.definition.skills,
+          config: workerConfig,
           live,
         });
       } catch (error) {
@@ -1427,8 +1508,13 @@ export class CodexWorker implements WorkerAdapter {
           source: setting.source,
           harness: "codex",
           cli_version: this.options.cliVersion,
-          // ADR 0325 決定6: Codex は skill を全部閉じる(allowlist の翻訳は #2689)
-          skills: { workspace: [], host: [], permitted: [] },
+          // ADR 0337 決定2: 3列は観測後の翻訳から。Codex だけ許した名前 → path の表を足す(Episode の投影が path で結ぶ)
+          skills: {
+            workspace: checked.translation.workspace,
+            host: checked.translation.host,
+            permitted: checked.translation.permitted,
+            paths: checked.translation.paths,
+          },
         },
         at: this.options.clock.now(),
       });
@@ -1461,7 +1547,7 @@ export class CodexWorker implements WorkerAdapter {
           "exec", "--json", ...WORKER_EXEC_FLAGS, "--dangerously-bypass-hook-trust",
           "-C", workspacePath,
           "-m", setting.model,
-          ...configArgs(spawnConfig({ ...input, taskTemp, skills: checked.skills })),
+          ...configArgs(workerConfig(checked.translation)),
         ],
         { cwd: workspacePath, env, stdin: "pipe" },
       );

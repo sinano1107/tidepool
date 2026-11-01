@@ -49,3 +49,44 @@ export function findSkillAllowlistError(skills: readonly string[]): { entry: str
 export function whyInvalidSkillAllowlist(skills: readonly string[]): string | undefined {
   return findSkillAllowlistError(skills)?.reason;
 }
+
+/** The checkout's side of the resolution (issue #56 / ADR 0335 決定1), shared by both Harnesses: `carried` is what
+ *  the checkout carries, `entries` is every name the checkout side claims, which the bundled set is subtracted by.
+ *  Claude: `carried` = dirs (or links to a dir inside the checkout — issue #2774) directly under `.claude/skills`,
+ *  `entries` = every name there whatever it points at. Codex (ADR 0337 決定2): `carried` = `repo`-scope skills whose
+ *  realpath is inside the checkout with a unique name, `entries` = every `repo`-scope name. */
+export type CheckoutSkills = { carried: string[]; entries: string[] };
+
+/** The skill allowlist resolved (ADR 0025 point 3 / ADR 0335 決定1): every entry resolves to one of the two
+ *  positively known sets — `@workspace` → what the checkout carries, `@host` → the bundled set minus every
+ *  checkout entry name (a same-named checkout skill wins in the CLI, and the CLI's loading rules are not copied
+ *  here, so over-subtracting is the fail-closed side), `*` → both, a name or `名前:*` → its match in the
+ *  enumeration. Permitted = the union ∩ (carried ∪ host), so a name in neither set — a link pointing outside the
+ *  checkout, a user-tier or plugin name, an unknown source — stays closed under every entry form; deny =
+ *  enumerated − permitted, the only enforcement primitive being per-skill deny. Entries are already
+ *  grammar-validated (registry.ts). Both lists follow the enumeration order; `host` is the effective `@host` set
+ *  the spawn records (ADR 0335 決定3). */
+export function resolveSkillAllowlist(
+  allowlist: string[],
+  enumerated: string[],
+  checkout: CheckoutSkills,
+  bundled: string[],
+): { deny: string[]; permitted: string[]; host: string[] } {
+  const entries = new Set(checkout.entries);
+  const host = bundled.filter((skill) => !entries.has(skill));
+  const carried = new Set(checkout.carried);
+  const hostSet = new Set(host);
+  const permits = (entry: string, skill: string) => {
+    if (entry === SKILL_WILDCARD) return true;
+    if (entry === "@workspace") return carried.has(skill);
+    if (entry === "@host") return hostSet.has(skill);
+    // "plug:*" → prefix "plug:"; isPluginGlob is the one shared definition of that shape
+    if (isPluginGlob(entry)) return skill.startsWith(entry.slice(0, -1));
+    return entry === skill;
+  };
+  const permitted = enumerated.filter(
+    (skill) => (carried.has(skill) || hostSet.has(skill)) && allowlist.some((entry) => permits(entry, skill)),
+  );
+  const allowed = new Set(permitted);
+  return { deny: enumerated.filter((skill) => !allowed.has(skill)), permitted, host };
+}

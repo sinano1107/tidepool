@@ -25,11 +25,11 @@ it("agents/fugu.md の無い registry を読むと、組み込みの fugu が印
     builtin: true,
     skills: ["@workspace"],
     icon: "🐡",
-    // 省略の展開(ADR 0116 決定1): 非空の skills を満たす正準経路だけ —— codex 経路
-    // (openai)は v1 で skills を提供しないので落ちる
+    // 省略の展開(ADR 0116 決定1 / ADR 0337 決定1): skills に依らず盤面が知る Provider 全部 —— Codex にも乗る
     provider: [
       { name: "anthropic", advisor: false },
       { name: "moonshot", advisor: false },
+      { name: "openai", advisor: false },
     ],
     // spawn 記録の definition_version が運ぶのは本文の内容 hash(ADR 0270 決定1)。空本文も空文字列の hash
     version: createHash("sha256").update("").digest("hex").slice(0, 16),

@@ -416,8 +416,8 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
 /** `quarantineResolvers` の2つの写像を実 registry から撃つ(#1013)。手書きの lambda で
  *  差し替えるテストしか無いと、導出が壊れても全部緑のまま起動時の検査が codex を
  *  黙って飛ばす。`agentMd()` は provider 行だけ違う agent の md を作る。
- *  組み込みの auditor は provider を省略した展開(anthropic / moonshot、@workspace
- *  skill が openai を外す)なので、claude-code / anthropic 側にだけ入る(実測: 名前は fugu)。 */
+ *  組み込みの auditor / interviewer は provider を省略した展開(盤面が知る Provider 全部、ADR 0337 決定1)
+ *  なので、どの Harness・Provider にも入る(名前は fugu / suzumedai)。 */
 const agentMd = (provider: string) =>
   `---\ndescription: d\nversion: "1"\nauthority: standard\nprovider: ${provider}\nskills: []\n---\nbody\n`;
 const BOTH_PROVIDERS = "\n  - name: anthropic\n  - name: openai";
@@ -434,15 +434,15 @@ it("harnessContainment は entry の Provider を正準 Harness に通し、ど�
     "agents/both.md": agentMd(BOTH_PROVIDERS),
   });
   // entry の名前を canonicalHarness に通さず比べる変異: "openai" !== "codex" で codex が空になり赤
-  expect(harnessContainment?.(["codex"])).toEqual(["both", "gpt"]);
+  expect(harnessContainment?.(["codex"])).toEqual(["both", "gpt", "fugu", "suzumedai"]);
   // some → every の変異: both がどちらの Harness にも入らなくなって赤
   expect(harnessContainment?.(["claude-code"])).toEqual(["both", "deckhand", "fugu", "suzumedai"]);
 });
 
-it("harnessContainment は anthropic だけの registry では codex を空で返す(#1013)", async () => {
+it("harnessContainment は anthropic だけの registry では codex に組み込みだけを返す(#1013 / ADR 0337 決定1)", async () => {
   const { harnessContainment } = await quarantineResolversFor({});
-  // 全 agent を返す / 絞り込みを落とす変異で赤(auditor も codex には入らない)
-  expect(harnessContainment?.(["codex"])).toEqual([]);
+  // 全 agent を返す / 絞り込みを落とす変異で赤(anthropic だけの deckhand は codex に入らない)
+  expect(harnessContainment?.(["codex"])).toEqual(["fugu", "suzumedai"]);
 });
 
 it("harnessContainment は不正な定義の agent を throw せず除く(#1013)", async () => {
@@ -460,14 +460,36 @@ it("providerAuth は entry の Provider 名を文字列のまま突き合わせ�
     "agents/both.md": agentMd(BOTH_PROVIDERS),
   });
   // some → every の変異: both が落ちて赤。全 agent を返す変異は下の anthropic 側で赤
-  expect(providerAuth?.(["openai"])).toEqual(["both", "gpt"]);
+  expect(providerAuth?.(["openai"])).toEqual(["both", "gpt", "fugu", "suzumedai"]);
   expect(providerAuth?.(["anthropic"])).toEqual(["both", "deckhand", "fugu", "suzumedai"]);
 });
 
-it("providerAuth は anthropic だけの registry では openai を空で返す(#1013)", async () => {
+it("providerAuth は anthropic だけの registry では openai に組み込みだけを返す(#1013 / ADR 0337 決定1)", async () => {
   const { providerAuth } = await quarantineResolversFor({});
   // 常に全 agent を返す変異で赤
-  expect(providerAuth?.(["openai"])).toEqual([]);
+  expect(providerAuth?.(["openai"])).toEqual(["fugu", "suzumedai"]);
+});
+
+// #683 の再発の釘: 組み込みは省略の展開で openai にも乗る(ADR 0337 決定1)ので、実 registry の resolver は codex に常に誰かを返す。
+// codex を入れていない盤面は Codex のログインも無いので、scheduler が openai を選ばないのと同じ資格情報の不在で起動時の検査も飛ばす
+it("codex のログインが無い盤面は、実 registry の resolver が組み込みを codex に返しても、起動時に codex の Harness 検査で question を立てない(#683 / ADR 0116 決定4)", async () => {
+  const options = await buildOptions({ ...composition(), registryDir: await makeRegistry(), workspaceName: "tidepool" });
+  const checked: string[] = [];
+  const t = await bootTidepool({
+    quarantineResolvers: options.quarantineResolvers,
+    codexHome: await tempDir("tidepool-codex-home-without-login-"),
+    harnessContainment: async (harness) => {
+      checked.push(harness);
+      return harness === "codex" ? { available: false, reason: "codex was not found on PATH" } : { available: true };
+    },
+  });
+  try {
+    expect(options.quarantineResolvers!.harnessContainment!(["codex"])).not.toEqual([]);
+    expect(checked).toEqual(["claude-code"]);
+    expect(await questions(t)).toEqual([]);
+  } finally {
+    await t.stop();
+  }
 });
 
 it("codex の Harness の封じ込め能力の検査は、Codex 自身の preflight に組まれる(ADR 0259 決定4)", async () => {

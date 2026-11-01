@@ -2224,10 +2224,14 @@ it.each(["agent_definition", "workspace_document"] as const)("第2回: 初回 un
 // 従った skill の文面と scope(ADR 0325 / #2691)—— ドメイン層。異議の判事は帰責のたびに transcript をその時点まで読んで投影する
 
 /** skill を呼ぶ session の盤面: `skills` の spawn 記録で spawn し、`entry` の行を書く。`transcript` は記録の器にその session の stream を書く。 */
-async function skillBoard({ skills = WORKER_SPAWNED.skills, entry }: { skills?: typeof WORKER_SPAWNED.skills; entry?: (b: ReturnType<typeof memoryBoard>) => number } = {}) {
+async function skillBoard({
+  skills = WORKER_SPAWNED.skills,
+  entry,
+  harness = WORKER_SPAWNED.harness,
+}: { skills?: typeof WORKER_SPAWNED.skills; entry?: (b: ReturnType<typeof memoryBoard>) => number; harness?: typeof WORKER_SPAWNED.harness } = {}) {
   const recordDir = await tempDir("tidepool-records-");
   const b = memoryBoard();
-  const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, skills } });
+  const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, skills, harness } });
   const decision = entry?.(b) ?? b.decide("ran make deploy");
   const transcript = (lines: string[]) => writeFileSync(join(recordDir, `${b.task.id}.${spawned}.stream.jsonl`), lines.join("\n"));
   const unreadable = () => mkdirSync(join(recordDir, `${b.task.id}.${spawned}.stream.jsonl`)); // 読むと EISDIR
@@ -2347,6 +2351,22 @@ it("異議の帰責からの起草の入力の transcript が ENOENT 以外で�
   );
   expect(listHaltedRefires(b.db)).toEqual([
     expect.objectContaining({ refire: "draft", target: judged!.id, last_failure: { reason: UNBUILT_EISDIR, at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
+  ]);
+});
+
+it("Codex の session への異議でも skills は非 null で spawn 記録の2列に分かれ、従った skill の本文は worker が SKILL.md を読んだ行の出力(ADR 0337 決定4)", async () => {
+  const deploy = "/w/.agents/skills/deploy/SKILL.md";
+  const b = await skillBoard({
+    harness: "codex",
+    skills: { workspace: ["deploy"], host: ["skill-creator"], permitted: ["deploy", "skill-creator"], paths: { deploy, "skill-creator": "/c/skills/.system/skill-creator/SKILL.md" } },
+    entry: (b) => appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "worker", at, payload: { kind: "task_completed", handoff_present: true, result: "shipped" } }),
+  });
+  b.transcript([
+    JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: `/bin/bash -lc 'cat ${deploy}'`, aggregated_output: "Run make deploy.", exit_code: 0, status: "completed" } }),
+  ]);
+
+  expect((await b.judged()).map((i) => [i.skills, i.skills_followed])).toEqual([
+    [{ workspace: ["deploy"], host: ["skill-creator"] }, [{ name: "deploy", position: 0, text: "Run make deploy." }]],
   ]);
 });
 

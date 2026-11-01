@@ -34,6 +34,7 @@ import {
   type SkillClosureObservation,
 } from "../src/codex-cli-conformance.js";
 import {
+  closedSkillsConfig,
   closedSurfaceConfig,
   codexWorkspaceContainment,
   configArgs,
@@ -152,7 +153,8 @@ async function skillClosure(): Promise<SkillClosureObservation> {
 
       const freshEnv = probeEnv(home);
       const loaded = [...closedSurfaceConfig(), 'developer_instructions=""', FORCED_LOGIN_METHOD];
-      const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, config: (skills) => [...loaded, skills] });
+      // ADR 0337 決定3: 適合試験は agent に依らない placeholder —— 列挙の全部を閉じる
+      const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, allowlist: [], config: (translation) => [...loaded, closedSkillsConfig(translation.deny)] });
       const provider = "tidepool_conformance";
       const { port } = endpoint.address() as AddressInfo;
       // worker と同じ exec の flag(hook を付けないので --dangerously-bypass-hook-trust は要らない)
@@ -186,7 +188,7 @@ async function skillClosure(): Promise<SkillClosureObservation> {
         skillsList: checked.observed,
         // 対照: skills.config だけを外した同じ exec
         openRequest: await capture(loaded),
-        closedRequest: await capture([...loaded, checked.skills]),
+        closedRequest: await capture([...loaded, closedSkillsConfig(checked.translation.deny)]),
         unreadablePaths: ["nodesc", "nofm"].map((name) => join(workspace, ".agents/skills", name, "SKILL.md")),
         authorizationSent,
       };

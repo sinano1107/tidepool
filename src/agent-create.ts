@@ -174,10 +174,7 @@ function normalizedDefinition(
 ): Omit<AgentDefinition, "version" | "retiredFields" | "unknownFields"> {
   return {
     ...input,
-    provider: normalizeProviderEntries(
-      input.advisor === true ? [{ name: input.provider, advisor: true }] : input.provider,
-      input.skills,
-    ),
+    provider: normalizeProviderEntries(input.advisor === true ? [{ name: input.provider, advisor: true }] : input.provider),
   };
 }
 

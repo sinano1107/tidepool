@@ -4,9 +4,11 @@ import {
   assertValidAgentDefinition,
   canonicalHarness,
   InvalidAgentDefinitionError,
+  loadRegistry,
   normalizeProviderEntries,
 } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 it("Provider は1つの正準 Harness に解決され、agent 定義に harness を持たない(ADR 0098)", () => {
   expect(PROVIDER_VALUES).toEqual(["anthropic", "moonshot", "openai"]);
@@ -27,34 +29,22 @@ it("OpenAI / Codex の正準経路に無い advisor は登録時と pickup 時�
   expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }] }, seedTierNames)).not.toThrow();
 });
 
-it("OpenAI / Codex v1 に無い skill capability も共有検査で拒否される(ADR 0098)", () => {
-  expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }], skills: ["tdd"] }, seedTierNames)).toThrow(
-    new InvalidAgentDefinitionError(
-      "deckhand",
-      'canonical route "openai -> codex" does not offer skills in v1 — a definition declaring a non-empty allowlist does not stand',
-    ),
-  );
-  expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }], skills: [] }, seedTierNames)).not.toThrow();
-});
-
-// ADR 0116 決定1: 省略は「盤面が知る Provider のうち、正準経路が skills を満たすもの」を
-// advisor なしで。門と展開は同じ能力表を読むので、展開した結果は必ず門を通る。
-it("provider の省略は正準経路が skills を満たす Provider だけに advisor なしで展開され、そのまま門を通る(ADR 0116 決定1)", () => {
-  const withSkills = normalizeProviderEntries(undefined, ["*"]);
-  const withoutSkills = normalizeProviderEntries(undefined, []);
-  expect({ withSkills, withoutSkills }).toEqual({
-    withSkills: [
-      { name: "anthropic", advisor: false },
-      { name: "moonshot", advisor: false },
-    ],
-    withoutSkills: PROVIDER_VALUES.map((name) => ({ name, advisor: false })),
+// ADR 0337 決定1: skill の提供は経路の能力ではない —— 非空の allowlist を持つ agent も openai で、省略なら Provider 全部に
+// advisor なしで展開され、どちらもそのまま門を通る(組み込み agent の展開は tests/built-in-agent.test.ts)。
+it.each([
+  ["openai", "provider: openai\n", [{ name: "openai", advisor: false }]],
+  ["省略", "", PROVIDER_VALUES.map((name) => ({ name, advisor: false }))],
+])("非空の skill allowlist を持つ agent は provider が %s でも登録でき、Provider の候補は skills で絞られない(ADR 0116 決定1 / ADR 0337 決定1)", async (_, provider, entries) => {
+  const dir = await makeRegistry({
+    "agents/deckhand.md": `---\nversion: 1\nauthority: standard\n${provider}skills:\n  - "@workspace"\n  - tdd\ndescription: d\n---\np\n`,
   });
-  expect(() => assertValidAgentDefinition("deckhand", { provider: withSkills, skills: ["*"] }, seedTierNames)).not.toThrow();
-  expect(() => assertValidAgentDefinition("deckhand", { provider: withoutSkills, skills: [] }, seedTierNames)).not.toThrow();
+  const registry = loadRegistry(dir, "purely-local");
+  expect(registry.agents.deckhand!.provider).toEqual(entries);
+  expect(() => assertValidAgentDefinition("deckhand", registry.agents.deckhand!, seedTierNames)).not.toThrow();
 });
 
 it("単一文字列の provider は advisor なしの長さ1 entry(ADR 0116 決定2)", () => {
-  expect(normalizeProviderEntries("anthropic", ["*"])).toEqual([{ name: "anthropic", advisor: false }]);
+  expect(normalizeProviderEntries("anthropic")).toEqual([{ name: "anthropic", advisor: false }]);
 });
 
 it("走れる経路が1つも無い provider の集合は宣言を満たす経路が無いとして拒否される(ADR 0116 決定1)", () => {
