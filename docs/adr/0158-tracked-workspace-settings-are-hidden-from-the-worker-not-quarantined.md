@@ -1,5 +1,7 @@
 # Git 共有された workspace の settings.json は中身を問わず worker から隠し、quarantine しない
 
+**Status 追記: 決定1 の「hooks・`sandbox` / `permissions`・壊れた JSON のどれを持っても」と決定2 の「床キー・hooks・壊れた JSON を持てば」という条件は [ADR 0346](0346-the-board-decides-workspace-settings-by-place-not-content-tracked-is-always-hidden-untracked-and-local-stop-on-presence.md) で廃止 —— tracked は中身を問わず隠し、untracked / local は存在で止める。中身を読む判定は disposition から消えた(2026-11-02、issue #2846)。**
+
 **Status 追記: 隠す書き方(pattern の置き換え・`sparse-checkout add` での戻し・skip-worktree の S bit での判定)は [ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) で、人間の sparse-checkout の写しに `!/.claude/settings.json` の1行を足して隠し、写しどおり戻す形に置き換わった(2026-10-21)。決定1〜4 はそのまま。**
 
 2026-09-26 の grilling(issue #1005)で決定。ADR 0037 追記(issue #382)は、tracked な `.claude/settings.json` が

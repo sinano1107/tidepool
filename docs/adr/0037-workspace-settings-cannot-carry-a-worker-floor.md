@@ -1,5 +1,7 @@
 # workspace 自身の settings は worker の床を運べない: hooks を殺し、settings ファイルへの書き込みを二層で塞ぐ
 
+**Status 追記: `FLOOR_DEFINING_KEYS` の spawn 時 guard(「深層防御として残す」)は [ADR 0346](0346-the-board-decides-workspace-settings-by-place-not-content-tracked-is-always-hidden-untracked-and-local-stop-on-presence.md) で退役 —— 盤面は settings の中身を読まず、tracked は隠し untracked / local は存在で止める(2026-11-02、issue #2846)。機構2(書き込みの二層)はそのまま。**
+
 **Status 追記: 追記(issue #382)の「worker session 中だけ Git の sparse-checkout で実体化から外し、回収を観測してから戻す」の書き方は [ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) で定め直した(2026-10-21)—— 人間の sparse-checkout の写しに1行足して隠し、写しどおり戻す。外す・戻すという線はそのまま。**
 
 issue #143 のグリリング(2026-08-02)で決定。#60 / ADR 0033 が per-task `--settings` でサンドボックス化する worker の Bash に対し、**workspace checkout 内の `.claude/settings.json` / `settings.local.json` はハーネス側(サンドボックスの外)に効く経路を2つ持つ** — hook の実行と、`sandbox` ブロックによる床の再定義。work セッションは自分の checkout に書けるので、両方とも worker 自身が仕込める。ADR 0033 の #60 追記が張った spawn 時ガード(`floorOverridingSettings`)は、この文書の実測で**紙の壁**だと判明した。
