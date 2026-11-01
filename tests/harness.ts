@@ -1579,6 +1579,16 @@ export const QUIET_EXIT: WorkerExit = {
   last_message: null,
 };
 
+/** setup のみ: 盤面の代わりに束の書く step を撃つ —— 分類の Promise は解決を待ってから(runner と同じ順、ADR 0342 決定6)。
+ *  本物の watchdog へ渡す fixture では呼ばない —— 2度撃つ。 */
+export function fireWrites({ capInterrupted, writes }: WorkerExitClassification): void {
+  const fire = () => {
+    for (const write of writes) write();
+  };
+  if (typeof capInterrupted === "boolean") fire();
+  else void capInterrupted.then(fire);
+}
+
 /** setup のみ: 時限の無い watchdog へ root の exit を束付きで渡す —— adapter と同じく、exit で強制回収を撃ってから渡す
  *  (ADR 0109 決定4 / ADR 0201 決定1)。 */
 export function exitToWatchdog(

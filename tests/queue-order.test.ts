@@ -24,12 +24,12 @@ const RETURNS: [string, BoardReturn][] = [
   ["record_container_unwritable", (deps, containers, task) => recordContainerHaltHandler(deps, containers)(task.id, new RecordContainerError(task.id, "/logs", "EACCES"))],
   ["session_stopped_by_resource", (deps, containers, task) => {
     const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });
-    exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { registered: { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: spawned } }, capInterrupted: false });
+    exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { registered: { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: spawned } }, writes: [], capInterrupted: false });
   }],
   ["row_refused", (deps, containers, task) => {
     const { provider, model } = loadExecutionSettingTable(deps.db)[0]!;
     const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });
-    exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: spawned } }, capInterrupted: false });
+    exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: spawned } }, writes: [], capInterrupted: false });
   }],
 ];
 

@@ -46,7 +46,7 @@ import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js"
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
-import type { WorkerExit } from "../src/worker.js";
+import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import {
   excludeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
@@ -67,7 +67,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, failTeardownMark, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -316,7 +316,7 @@ async function makeWorker(
     transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
     // Claude の分類は解決済みの値で渡る(ADR 0309)ので、Promise を真と読まないよう値で比べる
-    onWorkerExited: (taskId, exit, facts) => { if (facts.capInterrupted === true) watchdog.onWorkerExited(taskId, exit, facts); },
+    onWorkerExited: (taskId, exit, facts) => { if (facts.capInterrupted === true) watchdog.onWorkerExited(taskId, exit, facts); else fireWrites(facts); },
     onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
     enumerateSkills: enumeration.enumerateSkills,
     enumerateHostSkills: bundled.enumerateHostSkills,
@@ -3276,14 +3276,18 @@ describe("ClaudeCodeWorker", () => {
     ]);
   });
 
-  it("root の exit は worker_exited を書いて強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す(ADR 0145)", async () => {
+  it("root の exit は強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す —— worker_exited はその時点では書かれず、書く step を撃つと書かれる(ADR 0145 / ADR 0342 決定6)", async () => {
+    const exited = () => listEvents(f.db, "task-exit-without-report").filter((e) => e.kind === "worker_exited");
     const calls: Array<[string, WorkerExit, { exitedRecorded: boolean; forced: boolean }]> = [];
+    let fire = () => {};
     const f = await makeWorker({}, {
-      onWorkerExited: (taskId, exit) =>
+      onWorkerExited: (taskId, exit, facts) => {
         calls.push([taskId, exit, {
-          exitedRecorded: listEvents(f.db, taskId).some((e) => e.kind === "worker_exited"),
+          exitedRecorded: exited().length > 0,
           forced: f.killed.includes("SIGKILL"),
-        }]),
+        }]);
+        fire = () => fireWrites(facts);
+      },
     });
     f.start("task-exit-without-report");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));
@@ -3291,8 +3295,71 @@ describe("ClaudeCodeWorker", () => {
     f.emitExit(0, null);
 
     expect(calls).toEqual([
-      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom", reported_error: null, last_message: null }, { exitedRecorded: true, forced: true }],
+      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom", reported_error: null, last_message: null }, { exitedRecorded: false, forced: true }],
     ]);
+    expect(exited()).toEqual([]);
+    fire();
+    expect(exited()).toHaveLength(1);
+  });
+
+  describe("exit の記録は束の書く step で、close listener / timeout の中では書かない(ADR 0342 決定6 / ADR 0338 決定4)", () => {
+    const FAIL_EXITED = "CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END";
+
+    /** 束を受け取るだけで撃たない盤面。trigger を張った session を1つ走らせる。 */
+    async function session(id: string) {
+      const bundles: WorkerExitClassification[] = [];
+      const f = await makeWorker({}, { onWorkerExited: (_taskId, _exit, facts) => bundles.push(facts) });
+      f.start(id);
+      await vi.waitFor(() => expect(f.calls).toHaveLength(1));
+      f.db.exec(FAIL_EXITED);
+      return { f, bundles };
+    }
+    /** 残りの step を撃って一時領域を消す。 */
+    const finish = ({ f, bundles }: Awaited<ReturnType<typeof session>>) => {
+      f.db.exec("DROP TRIGGER fail_exited");
+      for (const write of bundles[0]!.writes) write();
+    };
+
+    it("worker_exited の INSERT が落ちても close listener は投げず、step は撃ったときだけ投げる", async () => {
+      const s = await session("task-exit-write-close");
+
+      expect(() => s.f.emitExit(1, null)).not.toThrow();
+
+      expect(s.bundles).toHaveLength(1);
+      expect(s.bundles[0]!.capInterrupted).toBe(false);
+      expect(() => s.bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
+      expect(listEvents(s.f.db, "task-exit-write-close").filter((e) => e.kind === "worker_exited")).toEqual([]);
+      finish(s);
+      expect(listEvents(s.f.db, "task-exit-write-close").filter((e) => e.kind === "worker_exited")).toHaveLength(1);
+    });
+
+    it("読み切りの timeout の中でも投げない", async () => {
+      const s = await session("task-exit-write-timeout");
+      s.f.emitExitOnlyAt(0, 1, null);
+
+      await expect(s.f.clock.advance(RECLAIM_TIMEOUT)).resolves.not.toThrow();
+
+      expect(s.bundles).toHaveLength(1);
+      expect(() => s.bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
+      finish(s);
+    });
+
+    it("認証の停止の値は書かずに束へ載り、登録は step の先頭 —— worker_exited より先で、撃つまで question は立たない", async () => {
+      const s = await session("task-exit-write-auth");
+      s.f.processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      s.f.emitExit(1, null);
+
+      const titles = () => listBoard(s.f.db).filter((t) => t.type === "question").map((t) => t.title);
+      expect(s.bundles[0]!.stop).toMatchObject({ registered: { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic" } });
+      expect(titles()).toEqual([]);
+      const [auth, exit] = s.bundles[0]!.writes;
+      auth!();
+      expect(titles()).toEqual(["anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped"]);
+      expect(() => exit!()).toThrow("worker_exited write failed");
+      finish(s);
+    });
   });
 
   it("worker_exited イベントに stderr の末尾20行を stderr_tail として載せる(issue #125)", async () => {
@@ -4510,7 +4577,7 @@ describe("advisor capability (issue #33)", () => {
 
     it("model_refusal_fallback の行は出た順に worker_exited.model_swaps へ逐語で載り、scope が local の行も載る(決定2・3)", async () => {
       const exits: WorkerExit[] = [];
-      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
+      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit, facts) => { exits.push(exit); fireWrites(facts); } });
       start("task-swaps");
       await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
@@ -4581,7 +4648,7 @@ describe("advisor capability (issue #33)", () => {
     // ADR 0317: 消費の報告が無くても failure question へ差し替えを渡す。
     it("result 行の無い session の差し替えは onWorkerExited へ渡り、usage は null のまま", async () => {
       const exits: WorkerExit[] = [];
-      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
+      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit, facts) => { exits.push(exit); fireWrites(facts); } });
       start("task-swap-killed");
       await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
@@ -5284,7 +5351,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
 
   it("読み切りが回収 timeout までに来なければ、それまでに読めた分で worker_exited を書き、盤面側の一撃を呼ぶ", async () => {
     const exits: WorkerExit[] = [];
-    const f = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
+    const f = await makeWorker({}, { onWorkerExited: (_taskId, exit, facts) => { exits.push(exit); fireWrites(facts); } });
     f.start("task-never-closed");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));
     f.processes[0]!.stdout.write(resultLine({}));

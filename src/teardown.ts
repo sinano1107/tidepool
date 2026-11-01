@@ -122,8 +122,12 @@ export async function runTeardown(
   step: TeardownStep = {},
 ): Promise<void> {
   // ADR 0112 決定4 / ADR 0342 決定6: 落ちた後始末の残りを持つ session は、受理の撃ち直しのほかに後始末を走らせない ——
-  // 遅れた回収済み観測や MCP の verb が枠を空けると、残りの手も question も宙に浮く。受理は残りを取り出してから撃つ
-  if (deps.slot.hasFailedTeardownRest(taskId)) return;
+  // 遅れた回収済み観測や MCP の verb が枠を空けると、残りの手も question も宙に浮く。届いた後始末は残りの後ろに継ぐ ——
+  // 捨てると受理の後に撃つ者が無く枠が空かない。受理は残りを取り出してから撃つ
+  if (deps.slot.hasFailedTeardownRest(taskId)) {
+    deps.slot.keepFailedTeardownRest(taskId, [() => teardown(deps, taskId, step)]);
+    return;
+  }
   await runTeardownSteps(deps, taskId, () => teardown(deps, taskId, step));
 }
 

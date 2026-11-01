@@ -313,7 +313,7 @@ export class ScriptedWorker implements WorkerAdapter {
    *  `exit` は盤面へ渡さない —— 最終 verb の後の exit を演じる harness の既定の姿のまま残す。 */
   exitWith(taskId: string, exit: WorkerExit): void {
     this.exit(taskId);
-    this.onWorkerExited?.(taskId, exit, { turnRan: true, capInterrupted: false });
+    this.onWorkerExited?.(taskId, exit, { turnRan: true, writes: [], capInterrupted: false });
   }
 
   async checkUsage(): Promise<string | null> {

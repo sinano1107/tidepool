@@ -429,8 +429,16 @@ export function startWatchdog(deps: {
       });
       return;
     }
-    if (failedTeardownOpen()) return;
-    recordThen(
+    if (failedTeardownOpen()) {
+      // 観測は1度きり: 捨てると受理の後の梯子が回収 timeout へ落ち、空の容器に偽の Containment question を立てる(ADR 0112 決定4)
+      if (slot.hasFailedTeardownRest(taskId)) slot.keepFailedTeardownRest(taskId, [() => recordReclaimed(taskId, rec, limit)]);
+      return;
+    }
+    recordReclaimed(taskId, rec, limit);
+  }
+
+  function recordReclaimed(taskId: string, rec: WatchRecord, limit: number) {
+    return recordThen(
       teardown,
       taskId,
       () => {
@@ -610,12 +618,23 @@ export function startWatchdog(deps: {
 
   /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
   function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
-    if (slot.currentTaskId !== taskId || slot.inTeardown) return;
+    const { turnRan, stop, capInterrupted, writes } = facts;
+    // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く
+    if (slot.currentTaskId !== taskId || slot.inTeardown) {
+      void runTeardownSteps(teardown, taskId, ...(typeof capInterrupted === "boolean" ? [] : [() => capInterrupted]), ...writes);
+      return;
+    }
     const rec = syncPickup(taskId);
     rec.exit = exit;
-    const { turnRan, stop, capInterrupted } = facts;
-    const decide = (cap: boolean) => {
-      if (failedTeardownOpen()) return;
+    let cap = false;
+    let failedOpen = false;
+    // ADR 0112 決定4 の門は撃ち直される手の外で読む —— 受理の撃ち直しは question が開いたまま走るので、手の中で読むと決定が黙って飛ぶ
+    const classified = (value: boolean) => {
+      cap = value;
+      failedOpen = failedTeardownOpen();
+    };
+    const decide = () =>
+      failedOpen ||
       recordThen(teardown, taskId, () => {
         if (rec.humanStop) return false;
         if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return false;
@@ -626,7 +645,6 @@ export function startWatchdog(deps: {
         slot.enterTeardown();
         void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
       });
-    };
     /** 決定の記録の tx。返り値は後始末へ入ったか。 */
     const recordDecision = (task: Task, cap: boolean): boolean => {
       const now = clock.now();
@@ -659,15 +677,15 @@ export function startWatchdog(deps: {
         return true;
       })();
     };
-    if (typeof capInterrupted === "boolean") decide(capInterrupted);
-    else {
-      const classified = capInterrupted.finally(() => {
+    // ADR 0309 決定3 / ADR 0342 決定6: 分類 → exit の記録 → 決定の順で、投げた手から撃ち直す。`stop` の登録も `writes` の中なので決定は登録の後に読む
+    if (typeof capInterrupted === "boolean") {
+      classified(capInterrupted);
+      runTeardownSteps(teardown, taskId, ...writes, decide);
+    } else {
+      // 門は書き込みまで覆う —— 待つ梯子が exit の記録を追い越さない。落ちた後始末は行の門で止まり、reject を受け取らない(ADR 0112 決定4)
+      rec.classification = runTeardownSteps(teardown, taskId, () => capInterrupted.then(classified), ...writes, decide)!.finally(() => {
         delete rec.classification;
       });
-      // ADR 0342 決定6: 分類の Promise の reject(鎖の中の adapter の記録の書き込み)も runner が落ちた後始末にする —— 待つ梯子は
-      // reject を受け取らず、行の門で止まる(ADR 0112 決定4)
-      // shortcut: reject した Promise は撃ち直しても reject するので、受理は再起動まで拒まれる。adapter の書き込みが束の step になる #2857 で消える
-      rec.classification = runTeardownSteps(teardown, taskId, () => classified.then(decide));
     }
   }
 
