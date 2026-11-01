@@ -1,5 +1,7 @@
 # 盤面の git のネットワーク呼び出しは総時間でなく「転送が止まった時間」で切り、無界の面は持たない
 
+**Status 追記: 帰結の「上限は非 http の remote には効かない」は閉じた —— ssh の転送は盤面の git から走らない([ADR 0339](0339-the-boards-github-children-run-in-a-built-env-and-only-the-injected-identity-reaches-the-network.md)、2026-11-01、issue #2794)。**
+
 2026-10-31〜11-01 の grilling(issue #2731 —— ADR 0330 の残余)で決定。盤面の git のネットワーク書き込みのうち clone・publish の push・registry の
 push は上限の無い `authedGit` で同期に走り、接続が black-hole すれば盤面の実行の糸が永久に止まって ADR 0036 の復旧経路(人間面)も応答しない。
 ADR 0330 が足した上限は Node の `timeout`(総時間 30 秒、超過で SIGTERM)で、clone と publish には合わない —— 所要時間が repo の大きさで決まる

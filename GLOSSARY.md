@@ -616,6 +616,8 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 盤面自身の **git コミット名義**(tree rule の WIP コミット・registry へのコミットの author、`tidepool` 名義 + App の bot noreply アドレス)は、worker の名義と同じく**呼び出しの env への明示注入で機械的に固定される** — 継承した環境に `GIT_*` が立っていても負けない(2026-08-13 のトリアージ、issue #312 / ADR 0071)。名義の3層(盤面 / GitHub App / エージェント名)は、どの層も ambient な設定ではなく自分の設定から決まる。
 
+盤面が GitHub へ出す子プロセス(git と `gh`)は、**注入した身元以外で網に出ない**(2026-11-01 の grilling、issue #2794 / ADR 0339)。host の git 設定・`~/.netrc`・askpass・ssh 鍵は、消すのではなく最初から子に見せない —— 子の env は継承ではなく盤面が組み立て、転送は file / http / https に限り、installation token は https の github.com にしか答えない。身元を持たない盤面と非 GitHub の remote には匿名でしか到達せず、private なら fail-closed に落ちる。人間の checkout の origin が ssh 綴りでも盤面は自分の https で出る —— 支持するのは人間の運用であって、盤面が ssh で出る形ではない(盤面の身元は https にしか存在しない)。
+
 ## Registry(レジストリ)
 
 エージェント定義(`agents/<name>.md`)・authority profile・workspaces.yaml を収める、盤面本体とは別の git リポジトリ(commit hash = agent の厳密な版 — ADR 0001)。v1 唯一の保護 workspace。盤面が読むのは常に**リモートの main にコミット済みの内容**であり、ワーキングツリーも、ホスト上の clone のローカル `main` も決して読まれない(ADR 0020 / ADR 0052)— clone は正本ではなくリモートの読み取りキャッシュである。正本をリモート側に置くことが「人間の merge を通っていない内容が spawn に効く経路は構造的に存在しない」を**事実にする**: merge はリモート上の出来事なので、ローカルを正本と読む限りこの文の逆(merge を通った内容が spawn に効かない)が成立してしまう。変更の正規経路は2本(agent 発 = registry-edit タスク → PR → 人間 merge、人間発 = WebUI → 盤面がリモートの main へ直接コミット)で、帯域外の手編集はリモートに載らない限り無効。routing meta-review の「agent の既定 `tier` を下げる」提案の承認は人間発の扉に属する —— 承認回答は WebUI 操作と同じ人間の明示行為で、push に失敗すれば回答ごと成立しない(ADR 0150)。人間発の変更では**リモートへ載ったこと自体が「効いた」の定義**であり、載せられなかった編集は成立していない(ADR 0052 — 旧・「盤面はローカルを読むのだから既に効いている」という issue #57 の線は撤回)。
