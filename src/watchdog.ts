@@ -260,15 +260,18 @@ export function spawnFailureHandler(
 }
 
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。
- *  event は常に書く。question と強制回収は、まだ後始末に入っていない session だけ ——
- *  決着後に届いた失敗には止めるものが無く、「盤面が止めた」が偽になる。後始末の印が
- *  先に置かれるので、続く exit で ADR 0145 の question は立たない。止めた session は、その failure question を
+ *  event は常に書く。強制回収と question は、まだ決着していない session だけ —— 決着後に届いた失敗には止めるものが
+ *  無く、「盤面が止めた」が偽になる。強制回収は記録の tx より前に撃つ(ADR 0149 決定3)—— 記録が投げても worker を走らせ続けない。
+ *  exit は event loop を通って届くので tx に割り込まず、後始末の印が exit より先に置かれて ADR 0145 の question は立たない。tx が
+ *  投げたなら、exit は開いている落ちた後始末の question の門が持ち越す(ADR 0112 決定4)。止めた session は、その failure question を
  *  残したまま盤面全体の記録の器の停止も立てる(ADR 0266 決定4)—— `queueReturnHandler` の `todo` への復帰は通らない。 */
 export function transcriptFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (failure: TranscriptFailure) => void {
-  return ({ taskId, workerSpawnedEventId, file, error_code, message, path }) =>
+  return ({ taskId, workerSpawnedEventId, file, error_code, message, path }) => {
+    // ADR 0149 決定3: runner の外で撃つ —— 記録の手が投げても届く。tx の後の手や受理の撃ち直しの2度目の送達は冪等
+    if (unsettledTask(deps, taskId)) containers.forceReclaim(taskId);
     settleAndReclaim(
       deps,
       containers,
@@ -294,6 +297,7 @@ export function transcriptFailureHandler(
           at: deps.clock.now(),
         }),
     );
+  };
 }
 
 /** 記録の手 → 後始末に入ったなら続きの手、の2手を runner に通す(ADR 0342 決定6)。`record` は tx で、後始末に入ったかを返す。
@@ -308,6 +312,13 @@ function recordThen(deps: Pick<TeardownDeps, "db" | "clock" | "slot">, taskId: s
     },
     () => entered && follow(),
   );
+}
+
+/** session がまだ決着していなければその行を返す: 枠の主で、後始末中でなく、`in_progress`。 */
+function unsettledTask(deps: Pick<TeardownDeps, "db" | "slot">, taskId: string): Task | undefined {
+  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return undefined;
+  const task = getTask(deps.db, taskId);
+  return task?.status === "in_progress" ? task : undefined;
 }
 
 /** process を持たない session を盤面が観測した瞬間に決着させて後始末へ入れる(ADR 0118 / ADR 0274 の型)。決着を回収済み観測の
@@ -326,9 +337,8 @@ function settleAndReclaim(
     () =>
       deps.db.transaction(() => {
         record?.();
-        if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return false;
-        const task = getTask(deps.db, taskId);
-        if (task?.status !== "in_progress") return false;
+        const task = unsettledTask(deps, taskId);
+        if (!task) return false;
         const now = deps.clock.now();
         settle(task, now);
         markTeardown(deps.db, taskId, now);

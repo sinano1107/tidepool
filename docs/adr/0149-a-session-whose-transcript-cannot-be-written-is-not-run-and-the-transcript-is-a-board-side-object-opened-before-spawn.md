@@ -1,5 +1,7 @@
 # transcript を取れない session は走らせず、transcript は盤面側の器として spawn より先に開く
 
+**Status 追記: 決定4 の「markTeardown → 強制回収」の順は変わった —— 強制回収は記録の tx より前で、記録が投げても worker を止める(決定3、2026-11-01、issue #2872)。** 門は決定4 の「決着後の失敗は event だけ」と同じで、枠の主で、後始末中でなく、`in_progress` の session にだけ撃つ。強制回収と tx は1つの tick で同期に走り、exit は event loop を通って届くので、その間に exit は観測されない —— 後始末の印が exit より先に置かれ、ADR 0145 の question が立たない点は変わらない。tx が投げたなら exit は落ちた後始末の question が開いている間に届き、既存の門(ADR 0112 決定4)が決定を受理の後へ持ち越す。
+
 **Status 追記: 決定4 の `transcript_failed` の event と question の書き込みが投げたら、盤面 DB の拒否なら process の終了、盤面のバグなら落ちた後始末([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定2・6、2026-11-01、issue #2837)。**
 
 **Status 追記: 決定1 の「stream と stderr の2本で1単位」は ADR 0313 決定1 で3本になった** —— spawn 時に harness へ渡した prompt 一式(`<task>.<worker_spawned の id>.prompt.json`)が3本目で、開く順序と器の失敗方針は同じ(2026-10-26 の grilling、issue #2554)。
