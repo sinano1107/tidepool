@@ -616,7 +616,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 盤面自身の **git コミット名義**(tree rule の WIP コミット・registry へのコミットの author、`tidepool` 名義 + App の bot noreply アドレス)は、worker の名義と同じく**呼び出しの env への明示注入で機械的に固定される** — 継承した環境に `GIT_*` が立っていても負けない(2026-08-13 のトリアージ、issue #312 / ADR 0071)。名義の3層(盤面 / GitHub App / エージェント名)は、どの層も ambient な設定ではなく自分の設定から決まる。
 
-盤面が GitHub へ出す子プロセス(git と `gh`)は、**注入した身元以外で網に出ない**(2026-11-01 の grilling、issue #2794 / ADR 0339)。host の git 設定・`~/.netrc`・askpass・ssh 鍵は、消すのではなく最初から子に見せない —— 子の env は継承ではなく盤面が組み立て、転送は file / http / https に限り、installation token は https の github.com にしか答えない。身元を持たない盤面と非 GitHub の remote には匿名でしか到達せず、private なら fail-closed に落ちる。人間の checkout の origin が ssh 綴りでも盤面は自分の https で出る —— 支持するのは人間の運用であって、盤面が ssh で出る形ではない(盤面の身元は https にしか存在しない)。
+盤面が GitHub へ出す子プロセス(git と `gh`)は、**注入した身元以外で網に出ない**(2026-11-01 の grilling、issue #2794 / ADR 0339)。host の git 設定・`~/.netrc`・askpass・ssh 鍵は、消すのではなく最初から子に見せない —— 子の env は継承ではなく盤面が組み立て、転送は file / http / https に限り、installation token は https の github.com にしか答えない。身元を持たない盤面と非 GitHub の remote には匿名でしか到達せず、private なら fail-closed に落ちる。人間の checkout の origin が ssh 綴りでも盤面は自分の https で出る —— 支持するのは人間の運用であって、盤面が ssh で出る形ではない(盤面の身元は https にしか存在しない)。網に出る git は人間の checkout の中では走らず、使い捨ての盤面所有の repo から checkout の objects を読むだけ借りて出る —— checkout の `.git/config` は網に出る呼び出しの入力にならず、どの key が身元や経路を運ぶかを盤面は数えない(2026-11-01 の grilling、issue #2827 / ADR 0339 決定5)。写しが動くのは盤面が口の中で書くときだけである(ADR 0243)。
 
 ## Registry(レジストリ)
 
