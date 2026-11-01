@@ -1,5 +1,7 @@
 # 振り返り Board call の「撃つ」は撃てると決めた時点から結果の記録までの区間で、区間の中の throw はどこで起きても撃って失敗したと数え、区間は1つの関数が所有する
 
+**Status 追記: 決定3 の sweep の catch は盤面 DB の拒否の署名を飲まず再 throw する([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定4、2026-11-01、issue #2837)。**
+
 2026-11-01 の grilling(issue #2698、#2691 の実装の派生)で決定。ADR 0164 決定3 は「撃てなかった」(client なし・行なし・throttle・容器)と
 「撃って失敗した」(exec・認証・検証・is_error)を列挙で分けたが、「撃つ」がどこから始まるかを書いていなかった。判事の入力の組み立て
 (transcript の読み・Episode の marker)はどちらにも入らず、初回の帰責(#2691)は失敗 event に書き、sweep の3経路(第2回・停止・起草)は

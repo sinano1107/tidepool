@@ -1,5 +1,7 @@
 # 前の盤面が閉じ切らなかった session は次の起動時の復旧が閉じ、観測していない exit は印を持つ exit の記録で表す
 
+**Status 追記: 決定1 の復旧の session ごとの catch は盤面 DB の拒否の署名を飲まず再 throw し、起動を拒む([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定4、2026-11-01、issue #2837)。**
+
 **Status 追記: 決定3 の対象から、process を1つも持たなかった session(ADR 0118 決定1、`spawn_failed` / `record_container_unwritable` で閉じた spawn)は除く(issue #2633)** —— 復旧が exit も Episode も書かない。判定の形は [ADR 0316](0316-the-stream-derived-fields-of-a-closed-session-come-from-one-reader-fed-live-or-from-the-transcript-and-a-sessions-window-is-closed-on-the-record-by-one-rule.md) 決定4(窓を閉じる位置の1つの規則、位置で対にする)。
 
 **Status 追記2: 決定2 の「盤面が持たない値(消費)は欠測、CLI の報告した失敗と最後の発話は埋めない」は [ADR 0316](0316-the-stream-derived-fields-of-a-closed-session-come-from-one-reader-fed-live-or-from-the-transcript-and-a-sessions-window-is-closed-on-the-record-by-one-rule.md) 決定2 で反転(issue #2632)** —— 復旧は記録済みの transcript を live と同じ読み手で読み、stream 由来の欄を全部埋める。欠測のまま残るのは exit code・signal・読み切り・`usage_recheck`・分類・所要時間。印(`exit_observed`)と「復旧の記録の時刻は起動の時刻」はそのまま。

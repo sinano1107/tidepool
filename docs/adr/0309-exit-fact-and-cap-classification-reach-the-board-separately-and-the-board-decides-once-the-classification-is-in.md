@@ -1,5 +1,7 @@
 # exit の事実と上限到達の分類は別々に盤面へ届き、盤面は分類が揃ってから報告なき exit を決める
 
+**Status 追記: 決定4「分類の Promise は reject しない」は値の読みの契約で、鎖の中の記録の書き込み(`closeSession` など)は対象外 —— 書き込みの throw は watchdog の後始末の runner が受け、盤面 DB の拒否なら床が process を終える([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定3・6、2026-11-01、issue #2837 / #2822)。**
+
 **Status 追記: 決定1 の「分類」は ADR 0338 で読み手の事実の束(ターンが走ったか・停止・上限到達)に広がり、決定2 の順は ADR 0338 決定2 の全順序に書き直した(2026-11-01、issue #2791)** —— exit を即時に渡し、揃ってから1度決める形は変わらない。
 
 2026-10-25 の triage(issue #2547、#2536 の spec レビューから派生)で決定。ADR 0261 決定3 は Codex の使用量の読み直しを adapter に置き、
