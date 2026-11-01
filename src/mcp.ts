@@ -60,7 +60,7 @@ import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMateri
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
-import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, endOnBoardDbRefusal, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   assertPosable,
   assertTargetsRunnable,
@@ -104,6 +104,7 @@ import {
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { readTiers } from "./tier.js";
+import type { TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   buildWorkspaceResolver,
   commitRoomCopy,
@@ -149,6 +150,8 @@ export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
+  /** ADR 0342 決定4: 盤面 DB が書きを拒んだ verb が呼ぶ終了。Absent → 再 throw(SDK の tool error)。 */
+  terminateOnBoardDbRefusal?: TerminateOnBoardDbRefusal;
   /** 盤面側 supervisor(ADR 0099 決定2)。最終 verb の着地後、後始末はこの
    *  **回収済み観測**の後ろでしか走らない(ADR 0109 決定1)。Absent → 容器を
    *  持たない盤面なので、観測は即座に解決したものとして扱う。 */
@@ -525,7 +528,8 @@ function decomposeChildrenSchema(db: Db) {
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
-  const server = floorEveryResponse(rejectUnknownArguments(new McpServer({ name: "tidepool", version: "0.0.0" })), {
+  const tidepool = rejectUnknownArguments(new McpServer({ name: "tidepool", version: "0.0.0" }));
+  const server = floorEveryResponse(endOnBoardDbRefusal(tidepool, deps.terminateOnBoardDbRefusal, attributedTaskId), {
     db: deps.db,
     clock: deps.clock,
     surface: "worker",

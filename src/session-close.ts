@@ -8,6 +8,7 @@ import { appendEvent, type EventPayload, listEventsOfKinds, SESSION_WINDOW_KINDS
 import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 import type { Harness } from "./registry.js";
 import { parseStreamLine } from "./stream-json.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** session の一時領域の名前の頭(ADR 0257 決定2)。adapter の mkdtemp と起動時の復旧の削除が共有する(ADR 0315 決定5)。 */
 export const taskTempPrefix = (harness: "claude" | "codex", taskId: string) => `tidepool-${harness}-${taskId}-`;
@@ -70,6 +71,8 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
         project,
       );
     } catch (err) {
+      // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
+      if (isBoardDbRefusal(err)) throw err;
       // transcript が読めない = 記録の dir が後から壊れた印(ADR 0314 決定2)。起動は落とさない
       console.error(`[recovery] could not close session ${spawned.id} of task ${taskId}:`, err);
     }

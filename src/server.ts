@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
@@ -60,7 +60,7 @@ import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps }
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
-import type { BoardDbRefusalSite, SqliteError } from "./unhandled-rejection-floor.js";
+import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   type PendingReclaim,
   queueReturnHandler,
@@ -325,7 +325,7 @@ export interface ServerOptions {
   transcripts: TranscriptStore;
   /** ADR 0342 決定4: 盤面 DB が書きを拒んだ(A)とき、再 throw が底に届かない境界が直接呼ぶ終了。
    *  Absent → 再 throw(テスト盤面の既定形)。本番は `terminateOnBoardDbRefusal`。 */
-  terminateOnBoardDbRefusal?: (error: SqliteError, where?: BoardDbRefusalSite) => void;
+  terminateOnBoardDbRefusal?: TerminateOnBoardDbRefusal;
 }
 
 /** `boardCallers` が組む口の一覧。 */
@@ -783,6 +783,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     createManagementMcpRouter({
       db,
       clock: options.clock,
+      terminateOnBoardDbRefusal: options.terminateOnBoardDbRefusal,
       pollNow,
       queueFailuresJson,
       workspace: options.workspace,
@@ -816,6 +817,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       db,
       slot,
       clock: options.clock,
+      terminateOnBoardDbRefusal: options.terminateOnBoardDbRefusal,
       // ADR 0109 決定1: 最終 verb の後の解放は、この supervisor の回収済み観測の
       // 後ろでしか走らない
       containers,
@@ -852,6 +854,14 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // express.static above already relies on.
   app.get("/styles.css", (_req, res) => res.sendFile("design-system/styles.css", { root }));
   app.get("/_ds_bundle.js", (_req, res) => res.sendFile("_ds_bundle.js", { root }));
+  // ADR 0342 決定4: express の既定の 500 handler の前 —— 盤面 DB の拒否は 500 を返して続けず、終了の関数を呼んで何も答えない
+  // (process は終わる途中)。終了の関数が無ければ既定の handler へ(再 throw)
+  const endOnRefusal: ErrorRequestHandler = (err, req, _res, next) => {
+    if (!isBoardDbRefusal(err) || !options.terminateOnBoardDbRefusal) return next(err);
+    options.terminateOnBoardDbRefusal(err, { operation: `${req.method} ${req.originalUrl.split("?")[0]}` });
+  };
+  app.use(endOnRefusal);
+  mcpApp.use(endOnRefusal);
 
   const listener = await new Promise<import("node:http").Server>((resolve) => {
     const l = app.listen(options.port, "127.0.0.1", () => resolve(l));
@@ -893,7 +903,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 検査が上で bind した人間面の実ポートを撃ち、上の Harness の起動時検査と並走しないため。
   //
   // ADR 0240 決定3 / ADR 0241 決定5: 起動完了の契機は後始末の復旧の後に撃つ —— その収束が復旧した後始末の根を着地させ、
-  // 最初の pickup はその回が終わってから判定する。`runTeardown` は投げない
+  // 最初の pickup はその回が終わってから判定する。`runTeardown` は盤面 DB の拒否のほかは投げない —— 拒否なら起動を拒む(ADR 0342 決定4)
   await teardownRecovery;
   startedScheduler = scheduler;
   pollNow();

@@ -341,6 +341,28 @@ it.each([
   expect(silenced).not.toHaveBeenCalled();
 });
 
+// ADR 0342 決定4: session ごとの catch は境界 —— 盤面 DB の拒否は飲まずに投げて起動を拒み、盤面のバグは記録して流す
+it("盤面 DB が書きを拒めば、起動時の復旧は投げて起動を拒む", async () => {
+  const b = await board();
+  b.db.pragma("query_only = 1");
+
+  expect(() => b.close()).toThrow("attempt to write a readonly database");
+});
+
+it("exit の記録が盤面のバグで投げた session は記録して流し、別の task の session を閉じる", async () => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
+  const b = await board();
+  const other = spawnOnAnotherTask(b.db);
+  b.db.exec(`CREATE TEMP TRIGGER exit_fails BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' AND NEW.task_id = '${b.task.id}' BEGIN SELECT RAISE(ABORT, 'board bug'); END`);
+
+  b.close();
+
+  expect(b.exits()).toEqual([]);
+  expect(listEvents(b.db, getEvent(b.db, other)!.task_id!).filter((e) => e.kind === "worker_exited")).toHaveLength(1);
+  expect(silenced).toHaveBeenCalledWith(expect.stringContaining(`${b.spawns[0]}`), expect.objectContaining({ message: "board bug" }));
+});
+
 /** その harness の spawn を1つ刻み、transcript を置く。 */
 function spawnWith(b: Awaited<ReturnType<typeof board>>, harness: Extract<EventPayload, { kind: "worker_spawned" }>["harness"], transcript: string): number {
   const id = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, harness } });

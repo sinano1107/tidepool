@@ -7,6 +7,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineValues } from "./quarantine.js";
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueue, type Task } from "./tasks.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
   onTaskBranch,
@@ -130,6 +131,7 @@ export async function runTeardown(
   try {
     await teardown(deps, taskId, step);
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 落ちた後始末にせず底へ
     console.error(`[teardown] task ${taskId}:`, err);
     if (deps.slot.currentTaskId === taskId) {
       quarantineFailedTeardown(deps.db, taskId, err, deps.clock.now());
@@ -171,6 +173,7 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
   try {
     await teardown(deps, taskId, teardownStep(deps.db, taskId));
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
         (err instanceof Error ? err.message : String(err)),

@@ -1,5 +1,7 @@
+import Database from "better-sqlite3";
 import { afterEach, expect, it, vi } from "vitest";
 import { listBoardCalls } from "../src/board-call-usage.js";
+import type { CliAuthCheck } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -70,14 +72,13 @@ it("checkUsage のnullを追加probeでも分類できなければ anthropic の
   );
 });
 
-/** 行には production の読み口がまだ無いので、server 境界の `t.db` でなく scheduler を直に組んで言う(ADR 0154 決定1・2)。 */
-it("使用量を読めない poll が撃った認証 probe は、usage を返せば cli_auth_probe の1行を残す(ADR 0299 決定1・6)", async () => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
+/** 行には production の読み口がまだ無いので、server 境界の `t.db` でなく scheduler を直に組んで言う(ADR 0154 決定1・2)。
+ *  使用量を読めない(checkUsage が null の)scheduler を、queue に task 1つで組む。 */
+function usageBlindScheduler(cliAuth: CliAuthCheck) {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   worker.scriptUsage(null);
-  const boardCall = { setting: { provider: "anthropic" as const, model: "haiku", effort: "low" }, usage: BOARD_CALL_USAGE };
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
     converge: async () => [],
@@ -90,9 +91,18 @@ it("使用量を読めない poll が撃った認証 probe は、usage を返せ
     onRecordContainerFailed: () => {},
     onPickupStopped: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
-    cliAuth: async () => ({ status: "unknown", reason: "probe hit its budget cap before returning an authentication verdict", boardCall }),
+    cliAuth,
   });
   registerTask(db, { type: "work", title: "waits while usage is ambiguous", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+  return { db, clock, scheduler };
+}
+
+const boardCall = { setting: { provider: "anthropic" as const, model: "haiku", effort: "low" }, usage: BOARD_CALL_USAGE };
+const capped = { status: "unknown" as const, reason: "probe hit its budget cap before returning an authentication verdict", boardCall };
+
+it("使用量を読めない poll が撃った認証 probe は、usage を返せば cli_auth_probe の1行を残す(ADR 0299 決定1・6)", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const { db, clock, scheduler } = usageBlindScheduler(async () => capped);
 
   await scheduler.rerunPoll();
   scheduler.stop();
@@ -100,4 +110,16 @@ it("使用量を読めない poll が撃った認証 probe は、usage を返せ
   expect(listBoardCalls(db)).toEqual([
     { use: "cli_auth_probe", ...boardCall.setting, fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: clock.now().toISOString() },
   ]);
+});
+
+// ADR 0342 決定4: probe の catch は境界 —— 盤面 DB の拒否は「分類できなかった」の log にせず投げる
+it("認証 probe の区間で盤面 DB が拒めば、poll は投げる", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const refusal = new Database.SqliteError("disk I/O error", "SQLITE_IOERR_WRITE");
+  const { scheduler } = usageBlindScheduler(async () => {
+    throw refusal;
+  });
+
+  await expect(scheduler.rerunPoll()).rejects.toBe(refusal);
+  scheduler.stop();
 });
