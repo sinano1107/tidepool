@@ -1,5 +1,7 @@
 # 盤面 DB が書きを拒んだ記録の書き込みは床から process を終え、後始末の step の中の盤面のバグは落ちた後始末である —— memory の印は書き込みの後
 
+**Status 追記: 決定1 の「後始末の step の中なら ADR 0112 の落ちた後始末」のうち、session の `writes` の束の手は後始末の外(枠の移動の後)にも届くので、その throw は別名の停止 `unclosedSession` になる。決定6 の残りは枠ではなく session ごとに持ち、枠の解放で消えない。再入の門は `failedTeardown` / `unclosedSession` の行で、読むのは枠の主の session の行([ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定1〜4、2026-11-01、issue #2876)。**
+
 **Status 追記: 決定6 の落ちた後始末の残りは、question が開いている間に届いた手(遅れた exit の書く step・後始末・回収済み観測)も運ぶ —— 投げた手の後ろに届いた順で並び、撃つのは投げた手が先(2026-11-01、issue #2857)。**
 
 2026-11-01 の grilling(issue #2837、#2822 / #2804 / #2805 の triage sweep で見えた族の根)で決定。記録を書く処理(`appendEvent`・

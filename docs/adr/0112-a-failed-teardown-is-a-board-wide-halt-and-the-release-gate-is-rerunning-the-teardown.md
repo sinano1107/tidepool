@@ -1,5 +1,7 @@
 # 落ちた後始末は盤面全体の停止であり、解放の門は後始末の再実行そのものである
 
+**Status 追記: 決定1 の対象は枠の後始末の step に戻り、session の `writes` の束(exit の記録・一時領域の削除・投影・資源の停止の登録)が投げたものは別名の停止 `unclosedSession`(値 = spawn event id)になる。決定4 の門と残りの継ぎ先は盤面全体の行ではなく枠の主の session の行を読む([ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定1・4、2026-11-01、issue #2876)。**
+
 **Status 追記: 決定1 の「落ちた後始末」は `runTeardown` の catch に限らず、GLOSSARY の定義どおり決着から回収済み観測までのどの step(exit の記録・分類後の決定・回収の梯子)が投げても立つ。決定3 の再実行の対象は「投げた後始末の step」に広がる —— process が生きていれば memory に残る同じ step、再起動を跨げば起動時の掃き出しが置き換えるので後始末の再実行のまま。盤面 DB そのものが書きを拒んだときはこの行も書けないので process が終わる([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定1・2・6、2026-11-01、issue #2837)。**
 
 **Status 追記: 決定3 の「完走」は、投げた step の再実行が回答を書く瞬間まで投げなかったことまで —— 回収済み観測を待って枠が空くまでは決定4 の梯子の観測のまま。受理は書き込み直前の同期区間で残りを読み直す([ADR 0343](0343-an-answer-whose-execution-commits-before-the-write-rereads-its-condition-in-the-synchronous-span-before-the-write-and-a-failed-teardown-acceptance-certifies-the-rerun-of-the-thrown-steps.md) 決定2、2026-11-01、issue #2891)。**
