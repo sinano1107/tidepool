@@ -2099,7 +2099,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // with usage: null rather than losing the exit fact entirely.
     // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
     const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
-      this.running.delete(task.id);
+      if (this.running.get(task.id) === child) this.running.delete(task.id);
       // the final stdout chunk may not end in "\n" (stream simply closes
       // mid-line), which would otherwise strand the last result line unread
       // and read as a false "missing usage" — same status as an actual kill,
@@ -2154,6 +2154,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。else は盤面の一撃を持たない構成のため
       if (this.options.onWorkerExited) {
         this.options.onWorkerExited(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
+          workerSpawnedEventId: spawnedEventId,
           turnRan: streamObserved.turnRan,
           ...(stop && { stop }),
           capInterrupted: streamObserved.capInterrupted,

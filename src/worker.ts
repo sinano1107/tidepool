@@ -20,6 +20,8 @@ export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, 
 
 /** exit の帰結に要る事実の束(ADR 0338 決定1)。盤面はこれが揃ってから1度だけ決める(決定2)。 */
 export interface WorkerExitClassification {
+  /** この exit を観測した session の worker_spawned event id。後の pickup については決めない。 */
+  workerSpawnedEventId: number;
   /** 読み手がモデルのターンを観測したか。`worker_exited` には書かない(ADR 0338 決定5)。 */
   turnRan: boolean;
   /** 1 session に1つ: adapter が登録する資源の停止(ADR 0331 決定1、登録は `writes` の中 —— 盤面は撃った後に読む)か、盤面が登録する未登録の行の拒否(ADR 0338 決定4)。 */

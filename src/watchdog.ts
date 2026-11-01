@@ -619,10 +619,12 @@ export function startWatchdog(deps: {
 
   /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
   function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
-    const { turnRan, stop, capInterrupted, writes } = facts;
+    const { workerSpawnedEventId, turnRan, stop, capInterrupted, writes } = facts;
+    const ownsPickup = () => (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0) < workerSpawnedEventId;
+    const sessionTeardown = { ...teardown, ownsSlot: ownsPickup };
     // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く
-    if (slot.currentTaskId !== taskId || slot.inTeardown) {
-      void runTeardownSteps(teardown, taskId, () => capInterrupted, ...writes);
+    if (!ownsPickup() || slot.currentTaskId !== taskId || slot.inTeardown) {
+      void runTeardownSteps(sessionTeardown, taskId, () => capInterrupted, ...writes);
       return;
     }
     const rec = syncPickup(taskId);
@@ -637,7 +639,7 @@ export function startWatchdog(deps: {
     const decide = () =>
       failedOpen ||
       recordThen(teardown, taskId, () => {
-        if (rec.humanStop) return false;
+        if (rec.humanStop || !ownsPickup()) return false;
         if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return false;
         const task = getTask(db, taskId);
         if (task?.status !== "in_progress") return false;
@@ -680,7 +682,7 @@ export function startWatchdog(deps: {
     };
     // ADR 0342 決定6: 分類 → exit の記録 → 決定の順で、投げた手から撃ち直す。`worker_exited` は盤面の決定が書く event より先(ADR 0309 決定3 の目的)。`stop` の登録も `writes` の中なので決定は登録の後に読む
     const running = runTeardownSteps(
-      teardown,
+      sessionTeardown,
       taskId,
       () => (typeof capInterrupted === "boolean" ? snapshotCapAndGate(capInterrupted) : capInterrupted.then(snapshotCapAndGate)),
       ...writes,

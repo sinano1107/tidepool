@@ -77,7 +77,7 @@ import { SEED_TIERS } from "../src/tier.js";
 import { TranscriptStore, workerPromptRecord } from "../src/transcript-store.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
-import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
+import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
 import { tempDir } from "./temp-dir.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
@@ -262,7 +262,7 @@ export class ScriptedWorker implements WorkerAdapter {
   /** 盤面が factory で渡す「worker が1度も走らなかった」の一撃(ADR 0118)。 */
   onSpawnFailed: ((taskId: string, failure: { error_code: string | null; message: string }) => void) | undefined;
   /** 盤面が factory で渡す root process の exit の一撃(ADR 0145)。 */
-  onWorkerExited: ((taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void) | undefined;
+  onWorkerExited: ((taskId: string, exit: WorkerExit) => void) | undefined;
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -313,7 +313,7 @@ export class ScriptedWorker implements WorkerAdapter {
    *  `exit` は盤面へ渡さない —— 最終 verb の後の exit を演じる harness の既定の姿のまま残す。 */
   exitWith(taskId: string, exit: WorkerExit): void {
     this.exit(taskId);
-    this.onWorkerExited?.(taskId, exit, { turnRan: true, writes: [], capInterrupted: false });
+    this.onWorkerExited?.(taskId, exit);
   }
 
   async checkUsage(): Promise<string | null> {
@@ -1206,6 +1206,7 @@ export function recordingSpawn() {
   const calls: SpawnCall[] = [];
   const processes: RecordedProcess[] = [];
   const killed: NodeJS.Signals[] = [];
+  const killedByProcess: NodeJS.Signals[][] = [];
   const exitListeners: ExitListener[][] = [];
   const closeListeners: ExitListener[][] = [];
   const errorListeners: Array<(err: Error) => void> = [];
@@ -1213,13 +1214,15 @@ export function recordingSpawn() {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env, ...(opts.stdin && { stdin: opts.stdin }) });
     const io: RecordedProcess = { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() };
     processes.push(io);
+    const signals: NodeJS.Signals[] = [];
+    killedByProcess.push(signals);
     const onExit: ExitListener[] = [];
     const onClose: ExitListener[] = [];
     exitListeners.push(onExit);
     closeListeners.push(onClose);
     return {
       ...io,
-      kill: (signal) => killed.push(signal),
+      kill: (signal) => { killed.push(signal); signals.push(signal); },
       on: (event: "exit" | "close" | "error", listener: ExitListener | ((err: Error) => void)) => {
         if (event === "exit") onExit.push(listener as ExitListener);
         if (event === "close") onClose.push(listener as ExitListener);
@@ -1252,7 +1255,7 @@ export function recordingSpawn() {
       }
     }
   };
-  return { calls, processes, killed, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError, removeClaudeTaskTemps };
+  return { calls, processes, killed, killedByProcess, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError, removeClaudeTaskTemps };
 }
 
 /** preflight の skills/list(段 1)の app-server の stdout。 */

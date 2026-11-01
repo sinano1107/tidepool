@@ -49,6 +49,7 @@ interface Fixture {
   containers: ProcessContainers;
   worker: ScriptedWorker;
   watchdog: Watchdog;
+  spawned: number;
   /** watchdog の後始末が撃った pickup の契機 —— 着地はこの契機が突く収束が撃つ(ADR 0241 決定5)。 */
   triggered: string[];
 }
@@ -73,6 +74,7 @@ async function sessionInTeardown(
     ...HUMAN_WEBUI,
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
+  const spawned = appendEvent(db, { taskId: picked.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
   slot.occupy(picked.id);
   await prepareWorkspaceAtPickup(db, ws, picked);
   // 盤面は pickup 時に session の容器を作る。このホストでは force だけでは空にならない
@@ -108,11 +110,11 @@ async function sessionInTeardown(
     config: CONFIG,
   });
   if (route === "cap") {
-    watchdog.onWorkerExited(task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: true });
+    watchdog.onWorkerExited(task.id, QUIET_EXIT, { workerSpawnedEventId: spawned, turnRan: true, writes: [], capInterrupted: true });
     containers.forceReclaim(task.id);
   }
-  if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, writes: [], capInterrupted: false });
-  return { db, clock, slot, task, ws, runtime, containers, worker, watchdog, triggered };
+  if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: spawned, turnRan: true, writes: [], capInterrupted: false });
+  return { db, clock, slot, task, ws, runtime, containers, worker, watchdog, triggered, spawned };
 }
 
 /** 後始末の backstop を超え、回収も観測できないまま梯子の底まで落とす。 */
@@ -136,7 +138,7 @@ it("exit の分類待ちは slot を握り、解決後に逐語付きの failure
   const f = await sessionInTeardown("watchdog");
   let classify!: (cap: boolean) => void;
   const classification = new Promise<boolean>((resolve) => { classify = resolve; });
-  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, last_message: "LAST", reported_error: "ERROR", stderr_tail: "STDERR" }, { turnRan: true, writes: [], capInterrupted: classification });
+  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, last_message: "LAST", reported_error: "ERROR", stderr_tail: "STDERR" }, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: classification });
   await settle();
   expect(questions(f.db)).toEqual([]);
   expect(f.slot.currentTaskId).toBe(f.task.id);
@@ -154,7 +156,7 @@ it("満杯の分類は in_progress のまま後始末へ入り、空の観測で
   const f = await sessionInTeardown("watchdog");
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
   let classify!: (cap: boolean) => void;
-  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
   classify(true);
   await settle();
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
@@ -170,7 +172,7 @@ it("満杯の分類は in_progress のまま後始末へ入り、空の観測で
 it.each([false, true])("人間の停止後の分類 %s は何も書かない(ADR 0309)", async (cap) => {
   const f = await sessionInTeardown("watchdog");
   let classify!: (cap: boolean) => void;
-  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
   f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
   const events = listEvents(f.db, f.task.id);
   const before = questions(f.db);
@@ -187,7 +189,7 @@ it.each(["before-timeout", "timeout", "empty-before-stop"] as const)("%s: 人間
   await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
   if (order !== "before-timeout") await f.clock.advance(CONFIG.reclaimTimeout - 1);
   let classify!: (cap: boolean) => void;
-  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
   if (order === "empty-before-stop") {
     f.runtime.fireEmpty(f.task.id);
     await settle();
@@ -223,7 +225,7 @@ it.each(["before-timeout", "timeout", "empty-before-stop"] as const)("%s: 人間
 it.each([false, true])("時間制限の停止後の分類 %s は満杯なら cap、そうでなければ梯子だけが受ける(ADR 0309)", async (cap) => {
   const f = await sessionInTeardown("watchdog");
   let classify!: (cap: boolean) => void;
-  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
   await f.clock.advance(CONFIG.timeLimits.work);
   expect(f.worker.gracefulStops).toEqual([f.task.id]);
   classify(cap);
@@ -246,7 +248,7 @@ it.each([false, true])("時間制限の停止後の分類 %s は満杯なら cap
 it.each(["slot", "status", "teardown"] as const)("分類解決時に %s を再観測し、既に決着した session を動かさない(ADR 0309)", async (gate) => {
   const f = await sessionInTeardown("watchdog");
   let classify!: (cap: boolean) => void;
-  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
   if (gate === "slot") {
     f.slot.release();
     f.slot.occupy("another-task");
@@ -275,7 +277,7 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), pollNow: () => {}, config: { timeLimits: { work: MIN }, grace: MIN, reclaimTimeout: 5 * MIN } });
   await clock.advance(2 * MIN);
   expect(runtime.forceReclaims).toEqual([task.id]);
-  watchdog.onWorkerExited(task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: true });
+  watchdog.onWorkerExited(task.id, QUIET_EXIT, { workerSpawnedEventId: appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() }), turnRan: true, writes: [], capInterrupted: true });
   runtime.fireEmpty(task.id);
   await settle();
   expect(questions(db)).toEqual([]);
@@ -310,7 +312,7 @@ it("ターンが走った後の 404 は行の Quarantine を立て、todo へ戻
   const f = await sessionInTeardown("watchdog");
   const { provider, model } = loadExecutionSettingTable(f.db)[0]!;
 
-  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, writes: [], capInterrupted: false });
+  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: f.spawned, turnRan: true, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, writes: [], capInterrupted: false });
   await settle();
 
   expect(openQuarantineValues(f.db, "tableRow")).toEqual([`${provider}/${model}`]);
@@ -327,7 +329,7 @@ it("時間制限の停止の梯子の途中でターンが走った session が 
   await f.clock.advance(CONFIG.timeLimits.work);
   expect(f.worker.gracefulStops).toEqual([f.task.id]);
 
-  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, writes: [], capInterrupted: false });
+  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: f.spawned, turnRan: true, stop: { refusal: { provider, model, cause: "api_404", worker_spawned_event_id: 1 } }, writes: [], capInterrupted: false });
   await settle();
 
   expect(openQuarantineValues(f.db, "tableRow")).toEqual([`${provider}/${model}`]);
@@ -391,7 +393,7 @@ it("資源の停止と上限到達の分類の Promise が同じ束で届くと�
   let classify!: (cap: boolean) => void;
   const stop = { kind: "session_stopped_by_resource", quarantine: "workerMcpReachability", value: "codex", reason: "exited with code 1", worker_spawned_event_id: spawned } as const;
 
-  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: false, stop: { registered: stop }, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
+  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: f.spawned, turnRan: false, stop: { registered: stop }, writes: [], capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }) });
   await settle();
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
 
@@ -816,7 +818,7 @@ it("回収済み観測が中断の一撃より先に届いていても(Codex の
     exit_code: 1,
     reported_error: "You've hit your usage limit.",
     usage_recheck: { result: "full", windows: [{ name: "primary", used_percent: 100, resets_at: "2026-10-15T12:00:00.000Z" }] },
-  }, { turnRan: true, writes: [], capInterrupted: true });
+  }, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: true });
   await settle();
 
   expect(questions(f.db)).toEqual([]);
@@ -833,7 +835,7 @@ it("使用量を読み直せなかった報告なき exit の failure question �
     ...QUIET_EXIT,
     exit_code: 1,
     usage_recheck: { result: "unreadable", reason: "App Server probe failed: timeout" },
-  }, { turnRan: true, writes: [], capInterrupted: false });
+  }, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: false });
 
   const [question, ...more] = questions(f.db);
   expect(more).toEqual([]);
@@ -1080,7 +1082,7 @@ it("報告なき exit で後始末の印の書き込みが落ちると、failure
   const f = await sessionInTeardown("watchdog");
   failTeardownMark(f.db);
 
-  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, writes: [], capInterrupted: false })).not.toThrow();
+  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: f.spawned, turnRan: true, writes: [], capInterrupted: false })).not.toThrow();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
   expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);

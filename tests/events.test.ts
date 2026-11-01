@@ -147,3 +147,12 @@ it("次の spawn の後の決着は前の session を never-ran にしない —
   expect(sessionWindow(events, events[0]!).neverRan).toBe(false);
   expect(sessionWindow(events, events[1]!).neverRan).toBe(true);
 });
+
+
+it("a delayed exit keeps its observation but closes the old session window at the next spawn", () => {
+  const events = taskEvents(WORKER_SPAWNED, { kind: "decision_logged", line: "old" }, WORKER_SPAWNED, { kind: "decision_logged", line: "new" }, exitOf(1));
+  const window = sessionWindow(events, events[0]!);
+
+  expect(events.map((event) => window.inSession(event))).toEqual([false, true, false, false, false]);
+  expect(window.exited?.id).toBe(5);
+});

@@ -1028,7 +1028,7 @@ export const SESSION_WINDOW_KINDS: readonly EventKind[] = ["worker_spawned", "wo
  *
  *  閉じる位置は、この spawn を指す `worker_exited`(issue #379 のポインタ)→ 無ければ spawn の後・同じ task の次の
  *  spawn の前にある never-ran の決着(`NEVER_RAN_KINDS`)→ 無ければ次の `worker_spawned`。exit と決着が両方あれば
- *  exit で閉じ、never-ran とは読まない。窓で切らないと同じタスクの前後の session の判断がこの Episode に湧く。
+ *  exit で閉じ、never-ran とは読まない。ただし次の spawn より後へは伸ばさない。窓で切らないと同じタスクの前後の session の判断がこの Episode に湧く。
  *  kind で絞って event を引く呼び手は `SESSION_WINDOW_KINDS` を含める —— 欠けると規則が黙って次の spawn に落ちる。 */
 export function sessionWindow(
   events: readonly EventRow[],
@@ -1050,7 +1050,7 @@ export function sessionWindow(
     (e) => NEVER_RAN_KINDS.includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < nextSpawnedId,
   );
   const end = exited ?? settled;
-  const endExclusive = end ? end.id + 1 : nextSpawnedId;
+  const endExclusive = Math.min(end ? end.id + 1 : Number.POSITIVE_INFINITY, nextSpawnedId);
   return {
     exited,
     neverRan: !exited && settled !== undefined,

@@ -5485,3 +5485,21 @@ describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
     expect(specs[0]!.args).toEqual(["--safe-mode", "--setting-sources", "", "-p"]);
   });
 });
+
+
+it("Claude's stale settle retains its spawn identity and leaves graceful stop connected to the replacement", async () => {
+  const exits = vi.fn();
+  const f = await makeWorker({}, { onWorkerExited: (...args) => { exits(...args); fireWrites(args[2]); } });
+  const value = f.start("same-task-delayed-exit");
+  await vi.waitFor(() => expect(f.processes).toHaveLength(1));
+  const original = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!.id;
+  f.emitExitOnlyAt(0, 1, null);
+  await f.containers.reclaimed(value.id);
+  f.worker.start(value, f.setting(value));
+  await vi.waitFor(() => expect(f.processes).toHaveLength(2));
+
+  f.emitCloseAt(0, 1, null);
+  expect(exits.mock.calls[0]?.[2]).toMatchObject({ workerSpawnedEventId: original });
+  f.worker.gracefulStop(value.id);
+  expect(f.killedByProcess[1]).toEqual(["SIGTERM"]);
+});
