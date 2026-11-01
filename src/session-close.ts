@@ -42,7 +42,7 @@ type RecordCloseOptions = { logDir: string; tmpDir: string; now: Date };
 export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions & { watermark: number }): void {
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
-    if (spawned.payload.kind !== "worker_spawned" || spawned.id > opts.watermark || spawned.task_id === null) continue;
+    if (spawned.id > opts.watermark) continue;
     try {
       closeSpawned(db, events, spawned, opts);
     } catch (err) {

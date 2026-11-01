@@ -16,7 +16,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     expect(boardHalts(openDb(":memory:"))).toEqual([]);
   });
 
-  it("6つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に、記録の器は末尾に並ぶ", () => {
+  it("同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に、記録の器は末尾に並ぶ", () => {
     const db = openDb(":memory:");
     startTriage(db, NOW);
     setPaused(db, true);

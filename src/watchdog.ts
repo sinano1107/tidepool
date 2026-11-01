@@ -19,6 +19,7 @@ import {
   sessionCloseSteps,
   sessionHaltOpen,
   sessionInTeardown,
+  spawnedAfterLatestPickup,
   type TeardownDeps,
   teardownStep,
 } from "./teardown.js";
@@ -635,9 +636,9 @@ export function startWatchdog(deps: {
   /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
   function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
     const { workerSpawnedEventId, turnRan, stop, capInterrupted, writes } = facts;
-    const ownsPickup = () => (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0) < workerSpawnedEventId;
-    // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く。分類を待つ手もこの session を閉じる手で、
-    // 枠の主の task id で落ちた後始末を立てると走っている次の session を止める(ADR 0344 決定4)
+    const ownsPickup = () => spawnedAfterLatestPickup(db, taskId, workerSpawnedEventId);
+    // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く。
+    // 分類を待つ手も束の手 —— reject は session の記録を閉じられないまま残す(ADR 0344 決定1 の Status 追記)
     if (!ownsPickup() || slot.currentTaskId !== taskId || slot.inTeardown) {
       void runTeardownSteps(teardown, taskId, ...sessionCloseSteps(workerSpawnedEventId, [() => capInterrupted, ...writes]));
       return;
@@ -699,8 +700,10 @@ export function startWatchdog(deps: {
     const running = runTeardownSteps(
       teardown,
       taskId,
-      () => (typeof capInterrupted === "boolean" ? snapshotCapAndGate(capInterrupted) : capInterrupted.then(snapshotCapAndGate)),
-      ...sessionCloseSteps(workerSpawnedEventId, writes),
+      ...sessionCloseSteps(workerSpawnedEventId, [
+        () => (typeof capInterrupted === "boolean" ? snapshotCapAndGate(capInterrupted) : capInterrupted.then(snapshotCapAndGate)),
+        ...writes,
+      ]),
       decide,
     );
     // 門は書き込みまで覆う —— 待つ梯子が exit の記録を追い越さない。落ちた後始末は行の門で止まり、reject を受け取らない(ADR 0112 決定4)

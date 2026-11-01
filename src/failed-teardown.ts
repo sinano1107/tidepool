@@ -1,7 +1,7 @@
 import type { Db } from "./db.js";
 import { registerQuarantine } from "./quarantine.js";
 
-/** failedTeardown の reason の前置きと、投げた手の例外本文の境。書き手と読み手がこの1つを共有する。 */
+/** failedTeardown / unclosedSession の reason の前置きと、投げた手の例外本文の境。書き手と読み手がこの1つを共有する。 */
 const THROWN_TEXT_FOLLOWS = ":\n\n";
 
 /** 落ちた後始末を Quarantine の failedTeardown 行で立てる(ADR 0112 決定2)。既存
@@ -33,8 +33,8 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
   );
 }
 
-/** failedTeardown の `quarantine_refired` の reason から、投げた手の例外本文を取り出す。 */
-export function thrownTextOfFailedTeardownReason(reason: string): string {
+/** failedTeardown / unclosedSession の `quarantine_refired` の reason から、投げた手の例外本文を取り出す。 */
+export function thrownTextOfHaltReason(reason: string): string {
   return reason.slice(reason.indexOf(THROWN_TEXT_FOLLOWS) + THROWN_TEXT_FOLLOWS.length);
 }
 

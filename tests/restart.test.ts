@@ -1,16 +1,18 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { enumerateHostSkills } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEventsOfKinds } from "../src/events.js";
+import { quarantineUnclosedSession } from "../src/failed-teardown.js";
 import { listEpisodes } from "../src/precedent.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
-import { getTask, listBoard } from "../src/tasks.js";
+import { completeTask, getTask, listBoard } from "../src/tasks.js";
+import { markTeardown } from "../src/teardown.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -285,3 +287,44 @@ it("待っている回収の無い Containment の確認回答の受理でも復
 
   expect(episodeOf(left.spawned)).toBeDefined();
 });
+
+// ADR 0315 決定1: 配線と門は server の合成にしか現れないので、この seam で書く(ADR 0107)
+it("前提検査が通らない間、閉じ切らなかった session の回答は拒まれ、記録から閉じず後始末も走らせない —— 通れば閉じ直して枠を空ける", async () => {
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = queueWork(t, "left open");
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
+  const spawned = appendEvent(t.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: t.clock.now() });
+  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  completeTask(t.db, getTask(t.db, task.id)!, FULL_HANDOFF, "deckhand", t.clock.now(), "worker");
+  markTeardown(t.db, task.id, t.clock.now());
+  quarantineUnclosedSession(t.db, spawned, task.id, new Error("exit write bug"), t.clock.now());
+  await t.stopServer();
+  const runtime = new FakeContainerRuntime();
+  runtime.scriptPreflight("the previous session may still be alive");
+  t = await bootTidepool({ dir: t.dir, workspace: ws, containerRuntime: runtime });
+  const temp = join(tmpdir(), `tidepool-claude-${task.id}-still-used`);
+  mkdirSync(temp);
+  onTestFinished(() => rmSync(temp, { recursive: true, force: true }));
+  const question = await servedQuarantineQuestion(t, "unclosedSession", String(spawned));
+  const answerIt = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+
+  const refused = await answerIt();
+
+  expect(refused.status).toBe(409);
+  expect(JSON.stringify(refused.json)).toContain("the previous session may still be alive");
+  expect(exitsOf(spawned)).toEqual([]);
+  expect(existsSync(temp)).toBe(true);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id });
+  expect((await servedQuarantineQuestion(t, "unclosedSession", String(spawned))).id).toBe(question.id);
+
+  runtime.scriptPreflight();
+  expect((await answerIt()).status).toBe(200);
+
+  expect(exitsOf(spawned).map((e) => e.payload)).toEqual([expect.objectContaining({ exit_observed: false })]);
+  expect(existsSync(temp)).toBe(false);
+  await vi.waitFor(() => expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main"));
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+}, GIT_FIXTURE_TEST_TIMEOUT);

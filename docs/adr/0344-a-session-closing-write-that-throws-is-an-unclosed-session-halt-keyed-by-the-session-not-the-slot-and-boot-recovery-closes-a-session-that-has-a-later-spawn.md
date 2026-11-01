@@ -1,5 +1,7 @@
 # session を閉じる書き込みが投げたら閉じ切らなかった session の停止であり、鍵は枠ではなく session である —— 起動時の復旧は後の spawn がある session も閉じる
 
+**Status 追記: 決定1 の束の手には分類を待つ手も数える —— その reject は session の記録を閉じられないまま残すので、枠の主かに依らず spawn event id の `unclosedSession` である(2026-11-02、issue #2903)。**
+
 2026-11-01 の grilling(issue #2876、#2857 の派生。#2872 / #2880 と同じ族の根)で決定。ADR 0342 決定6 は session の `writes` の束(exit の
 記録・一時領域の削除・投影・資源の停止の登録)を後始末の runner に乗せたが、runner の失敗の家(failedTeardown の行・memory の残り・受理の
 撃ち直し)は「投げた手の持ち主は枠の今の主で、その容器は空」を前提に組まれている。ADR 0201 決定2 により `writes` は枠が次の session に
