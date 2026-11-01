@@ -273,6 +273,28 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
     });
   }
 
+  it(`${harness} adapter: transcript_failed の書き込みが rollback したら報告済みと読まず、次の失敗の観測で書き直す(ADR 0342 決定5)`, async () => {
+    const { proc, transcripts } = await boot();
+    const task = queueWork(t, "loses its transcript twice");
+    await t.clock.advance(HOUR);
+    t.db.exec(
+      "CREATE TRIGGER fail_transcript_failed BEFORE INSERT ON events WHEN NEW.kind = 'transcript_failed' " +
+        "BEGIN SELECT RAISE(ABORT, 'transcript_failed write failed'); END",
+    );
+    const enospc = () => Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    const opened = transcripts.opened.get(task.id)!;
+
+    // destroy の 'error' は次の tick に撃たれ、投げると盤面の外へ抜ける —— 一撃の throw を見るため同期に撃つ
+    expect(() => opened.stream.emit("error", enospc())).toThrow("transcript_failed write failed");
+    expect(t.containers.forceReclaims).not.toContain(task.id);
+    t.db.exec("DROP TRIGGER fail_transcript_failed");
+    opened.stderr.emit("error", enospc());
+    proc.emitExit(null, "SIGKILL");
+    await settle();
+
+    expect((await events(task.id)).filter((e: any) => e.kind === "transcript_failed").map((e: any) => e.payload.file)).toEqual(["stderr"]);
+  });
+
   it(`${harness} adapter: 最終 verb が着地して後始末に入った session の transcript が落ちても、event だけが残り後始末は完走する`, async () => {
     const { proc, transcripts } = await boot();
     const task = queueWork(t, "already reported");

@@ -12,6 +12,13 @@ import { tempDir } from "./temp-dir.js";
  *  workspace を見つけなかったときと同じ)。 */
 export const writeUnannounced: RefWriter = (_ref, _newSha, write) => write();
 
+/** registry clone の原本に受け取りを拒ませる(push を落とす)。盤面の push は clone の pushurl を読まない(ADR 0339 決定5)ので、
+ *  落とすのは原本の側である。 */
+export function rejectRegistryPushes(registryDir: string): void {
+  const remote = execFileSync("git", ["config", "remote.origin.url"], { cwd: registryDir }).toString().trim();
+  writeFileSync(join(remote, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+}
+
 const AGENT_MD = `---
 description: General work agent for the tidepool board
 version: 0.3.1

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { updateProfile } from "../src/profile-create.js";
 import { loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -77,8 +77,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
 
   it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
-    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+    rejectRegistryPushes(registryDir);
 
     await expect(
       updateProfile(
@@ -93,7 +92,6 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
       ),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).not.toBe(
       "Rewritten guidance.",
     );

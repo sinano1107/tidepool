@@ -141,6 +141,7 @@ import {
   NotAGitRepositoryError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
+  RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
@@ -236,6 +237,7 @@ function registryToolError(err: unknown) {
     err instanceof BoardStateOverlapError ||
     err instanceof RepoAccessMissingError ||
     err instanceof NotAGitRepositoryError ||
+    err instanceof RelativeClonePathError ||
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||

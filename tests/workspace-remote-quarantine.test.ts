@@ -14,6 +14,7 @@ import {
   makeRemoteBackedWorkspace,
   registerWork,
   servedQuarantineQuestion,
+  shimGit,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -193,10 +194,9 @@ it("仲介が installation token を出せない workspace は、fetch 失敗と
 it("完了時の merge back で仲介が token を出せなくても、WIP は退避され workspace が quarantine に落ちる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   const localOrigin = workspace.repo!;
-  // origin の綴りは github.com(= token が要る形)、実際の往復は insteadOf でローカルの
-  // bare へ —— 実ネットワークへは出ない
+  // origin の綴りは github.com(= token が要る形)、実際の往復はローカルの bare へ —— 実ネットワークへは出ない
   git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/sandbox.git");
-  git(workspace.path, "config", `url.${localOrigin}.insteadOf`, "https://github.com/acme/sandbox.git");
+  await shimGit({ route: ["https://github.com/acme/sandbox.git", localOrigin] });
   // 1回目(pickup)は 4 分だけ有効な token を出す —— 5 分の余白を切っているので完了時の
   // ensure は取り直しに行き、2回目で仲介が断る
   let brokerDown = false;

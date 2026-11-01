@@ -5,7 +5,16 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
-import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, repoKey } from "./github-auth.js";
+import {
+  authedClone,
+  authedPush,
+  GIT_NETWORK_TIMEOUT_MS,
+  type GitHubAuth,
+  isRelativeLocalPath,
+  originValue,
+  remoteTrackingRef,
+  repoKey,
+} from "./github-auth.js";
 import { assertOwnGitDirectory, conventionCheckoutPath, originUrl } from "./pickup-predicates.js";
 import {
   assertValidAllowedDomains,
@@ -13,7 +22,6 @@ import {
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
-  remoteTrackingRef,
   type WorkspaceEntry,
   type WritableRegistry,
 } from "./registry.js";
@@ -463,7 +471,7 @@ export class CheckoutHasOriginError extends Error {
 }
 
 /** ADR 0066 決定2 の扉: purely-local な workspace に remote 正本を与える。
- *  `git remote add origin` → `git push --atomic origin <sha>:<ref>…`(全ブランチ)→ registry エントリへ `repo`。
+ *  `git remote add origin` → 盤面が組んだ URL へ `git push --atomic <sha>:<ref>…`(全ブランチ)→ 写しの `update-ref` → registry エントリへ `repo`。
  *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
 export async function publishWorkspace(input: PublishWorkspaceInput, deps: PublishWorkspaceDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
@@ -483,11 +491,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // なければならない —— 拒んだとき、巻き戻す痕跡がそもそも作られない側に立つ。
   await assertRepoAccess(input.repo, deps.github);
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
-  // `authedGitBounded` は温まったキャッシュから同期に注入するだけなので、下の「await は
+  // `authedPush` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
   const destination = repoKey(input.repo);
   await deps.githubAuth.ensureToken(destination);
-  // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGitBounded` も
+  // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedPush` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
   // 宣言が無い = ADR 0052 の quarantine 事由)を観測できない ──
@@ -503,19 +511,22 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // その写しになる N 本をまとめて口に予告する(ADR 0243 / ADR 0066 決定4): tip を読み直す push(`--all`)だと、走っている
   // session のタスクブランチが進んだぶん押した写しが予告と食い違い、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
   // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
-  const branches = [...refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/"))];
-  const writes = branches.map(([ref, sha]) => [remoteTrackingRef(ref.slice("refs/heads/".length)), sha] as const);
+  const branches = [...refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/"))].map(
+    ([ref, sha]) => [ref.slice("refs/heads/".length), sha] as const,
+  );
+  const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch), sha] as const);
   const { githubAuth } = deps;
   // 巻き戻しも口の内側に置く —— 畳みは `remote remove` が写しを消した後の ref を読み、予告の前の値へ戻す
   const publish = () => {
     try {
-      // `--atomic` は必須(ADR 0066 決定6): 宛先が「Add a README」つきの非空 repo
+      // 2本以上なら `--atomic` は必須(ADR 0066 決定6、`authedPush` が付ける): 宛先が「Add a README」つきの非空 repo
       // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
       // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
       // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
       // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
       // (ADR 0066 決定6)。
-      authedGitBounded(githubAuth, dir, destination, GIT_NETWORK_TIMEOUT_MS, "push", "--atomic", "origin", ...branches.map(([ref, sha]) => `${sha}:${ref}`));
+      // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しの `remote remove` がこれも消す
+      authedPush(githubAuth, dir, GIT_NETWORK_TIMEOUT_MS, branches);
       commitWorkspaceEntry(
         deps,
         input.name,
@@ -563,13 +574,24 @@ export class OrphanCheckoutMismatchError extends Error {
   }
 }
 
+/** 非 GitHub の clone 入力が相対 path(ADR 0339 決定5: clone は盤面所有の HOME から撃つので、相対 path は別の場所に解ける)。 */
+export class RelativeClonePathError extends Error {
+  constructor(repo: string) {
+    super(`clone source ${repo} is a relative path — give the local repository as an absolute path`);
+    this.name = "RelativeClonePathError";
+  }
+}
+
 /** 既存ディレクトリを流用してよいかの1箇所の判定(ADR 0087 決定5)。`wanted` は
  *  clone モードの要求 repo、create モードでは undefined(= origin を持たないこと
- *  が整合の条件)。URL は綴りそのままで比べる —— `git clone` は渡された綴りを
- *  そのまま `origin` に記録するので、同じ入力の再送はここを通る。 */
+ *  が整合の条件)。盤面の clone の `origin` は盤面が組んだ URL(ADR 0339 決定4)で、GitHub は入力の綴りに依らず
+ *  https になる —— 両方が GitHub に解けるときは repo key で、解けないときは綴りのまま比べる(ADR 0052 の「綴りで
+ *  repo を区別しない」)。同じ入力の再送はここを通る。読む origin は insteadOf を当てる前の値 —— 盤面の網に出る git が
+ *  読むのと同じ1つの読み方(ADR 0339 決定4)。 */
 function assertReusableOrphan(dir: string, wanted: string | undefined): void {
-  const origin = originUrl(dir);
-  if (origin === wanted) return;
+  const origin = originValue(dir);
+  const [have, want] = [repoKey(origin), repoKey(wanted)];
+  if (have !== undefined && want !== undefined ? have === want : origin === wanted) return;
   throw new OrphanCheckoutMismatchError(
     dir,
     `its 'origin' is ${origin ?? "absent"}, expected ${wanted ?? "none"}`,
@@ -733,6 +755,7 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
 /** The clone mode's external half: a checkout at the convention-derived
  *  location (ADR 0018 — the entry never records the path). */
 function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps): WorkspaceEntry {
+  if (isRelativeLocalPath(repo)) throw new RelativeClonePathError(repo);
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it
@@ -743,7 +766,7 @@ function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps)
   // `buildEntry` が先に温めてある)。
   // 流用してよいのは `origin` が要求 repo と一致するときだけ(ADR 0087 決定5)
   if (existsSync(dir)) assertReusableOrphan(dir, repo);
-  else authedGitBounded(deps.githubAuth, deps.workspacesBaseDir, repoKey(repo), GIT_NETWORK_TIMEOUT_MS, "clone", repo, dir);
+  else authedClone(deps.githubAuth, repo, resolve(dir), GIT_NETWORK_TIMEOUT_MS);
   // a fresh clone's HEAD is the upstream default branch — recorded when it
   // isn't "main" so branch discipline and the PR base start out right
   // (issue #27); "main" stays implicit (protectedBranch's default)

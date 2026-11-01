@@ -20,7 +20,7 @@ import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
@@ -413,8 +413,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
 it("GitHub workspace の解除は cached token を fresh に取り直して fetch し、通れば repo-access の修復を撃たない(ADR 0329 決定14)", async () => {
   const db = openDb(":memory:");
   const { workspace } = await makeRemoteBackedWorkspace("reef");
-  git(workspace.path, "config", `url.${workspace.repo}.insteadOf`, "https://github.com/acme/reef.git");
   git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/reef.git");
+  await shimGit({ route: ["https://github.com/acme/reef.git", workspace.repo!] });
   workspace.repo = "https://github.com/acme/reef.git";
   const file = join(await tempDir("release-token-"), "token");
   writeFileSync(file, "test-user-token\n", { mode: 0o600 });
