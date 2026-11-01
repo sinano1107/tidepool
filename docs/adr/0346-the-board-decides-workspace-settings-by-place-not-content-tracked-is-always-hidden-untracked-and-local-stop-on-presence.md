@@ -16,12 +16,16 @@
 2. **判定は置き場所だけで、中身は読まない。** Git 共有された `.claude/settings.json` は中身を問わず worker session 中だけ隠す
    (ADR 0158 の題のとおり —— 決定1 の条件を廃止)。`settings.local.json` と untracked な `settings.json` は存在するだけで
    (claude-code, workspace) の組を止める(ADR 0158 決定2 の条件を廃止)。読めないファイルは従来どおり止める。
-   `FLOOR_DEFINING_KEYS` と `hooks` の検査、JSON parse、隠された tracked の index 読みは disposition から消える。
-3. **settings の JSON を読むのは登録の門の `claude_settings_hooks` 信号(#383 / #1005)だけ。** 信号の線(hooks だけの tracked に
-   限る)は変えない。
+   `FLOOR_DEFINING_KEYS` と `hooks` の検査、JSON parse、隠された tracked の blob の読み(`git show :path`)は disposition から消える。
+   存在の判定(tree にある、または盤面が隠していて index にある)は保つ —— 人間が自分の sparse-checkout で外した settings.json は
+   無いものとして扱う線(ADR 0293 決定3)はそのまま。
+3. **settings の JSON を読むのは登録の門の `claude_settings_hooks` 信号(#383)だけで、信号は tracked な `settings.json` に hooks が
+   あれば立つ —— 床キーの有無は見ない。** #1005 の「hooks だけの tracked に限る(床キーと両持ちなら立てない)」は床キー持ちが
+   quarantine 側だった頃の契機の写しで、門は拒まず提示するだけなので、両持ちで立てて壊れる運用は無い。床キーの列挙は盤面から消える。
 4. **ADR 0303 決定2(`language` / `outputStyle` を持つ repo を拒まない)は tracked に残る** —— 隠されるので拒まれない。untracked の
    同じファイルは置き場所で止まる。釘(`tests/sandbox-settings.test.ts` の「拒否しない」、`tests/git.test.ts` の部分 clone の
-   index 読み)は書き換える。
+   index 読み、`tests/claude-worker.test.ts` の「床キーも hooks も持たない settings は隠さずに走る」、`tests/create-workspace.test.ts` の
+  「床キーと hooks の両持ちは信号にならない」)は書き換える。
 
 ## 退けた案
 
