@@ -15,7 +15,8 @@ import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "
 import { commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 
 /** 後始末の runner(ADR 0342 決定6 / ADR 0112): 後始末のどの step で盤面のバグが投げても落ちた後始末の question が1枚立ち、
- *  梯子は進まず、受理は投げた step を撃ち直す。workspace を持たない盤面(tree rule は no-op)で、step と枠だけを見る。 */
+ *  梯子は進まず、受理は投げた step を撃ち直す。既定は workspace を持たない盤面(tree rule は no-op)で step と枠だけを見て、
+ *  後始末の await の窓が要るテストだけ workspace を渡す。 */
 
 const MIN = 60 * 1000;
 const CONFIG = { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN };
@@ -465,7 +466,8 @@ it("先に落ちた後始末の残りを持つ枠で書く step が投げても�
   expect(b.slot.currentTaskId).toBeNull();
 });
 
-it("走っている後始末の await の間に書く step が投げても、後始末は枠を空けず残りの後ろに回る —— 受理は残りの手を撃ち、偽の workspace question を立てずに枠を空ける(ADR 0342 決定6)", async () => {
+/** 残りが [書く step, 後始末] で question が開いている完了の session。受理の撃ち直しも `ensureWorkspaceToken` の await まで同期に走る。 */
+async function teardownBehindWriteStep() {
   const ws = await makeWorkspace("sandbox");
   const b = board({ workspace: ws });
   await prepareWorkspaceAtPickup(b.db, ws, b.task);
@@ -480,6 +482,11 @@ it("走っている後始末の await の間に書く step が投げても、後
   b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
   await running;
   await settle();
+  return { b, steps };
+}
+
+it("走っている後始末の await の間に書く step が投げても、後始末は枠を空けず残りの後ろに回る —— 受理は残りの手を撃ち、偽の workspace question を立てずに枠を空ける(ADR 0342 決定6)", async () => {
+  const { b, steps } = await teardownBehindWriteStep();
 
   expectHeld(b);
   steps.broken = false;
@@ -576,22 +583,33 @@ it("時間制限の停止の後の exit で書く step が投げても、飲ま�
   expect(b.slot.currentTaskId).toBeNull();
 });
 
+it("上限到達の後始末が印を消す書き込みで投げても、受理の撃ち直しが枠を空ける —— 状態遷移が1回だけ残り、偽の Containment question は立たない(ADR 0112 決定3)", async () => {
+  const b = board({ hold: true });
+  b.containers.forceReclaim(b.task.id);
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: true, writes: [] });
+  await settle();
+  const repair = failTeardownMark(b.db);
+  b.runtime.fireEmpty(b.task.id);
+  await settle();
+  expectHeld(b);
+
+  repair();
+  await answer(b);
+  await settle();
+
+  expect(b.slot.currentTaskId).toBeNull();
+  expect(questions(b.db)).toEqual([]);
+  expect(getTask(b.db, b.task.id)?.status).toBe("todo");
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "cap_interrupted")).toHaveLength(1);
+  await climbTheLadder(b);
+  expect(questions(b.db)).toEqual([]);
+});
+
 describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決定3 / ADR 0342 決定6)", () => {
-  /** 残りが [書く step, 後始末] で question が開いている session。受理の撃ち直しは `ensureWorkspaceToken` の await まで同期に走る。 */
-  async function teardownBehindWriteStep() {
-    const ws = await makeWorkspace("sandbox");
-    const b = board({ workspace: ws });
-    await prepareWorkspaceAtPickup(b.db, ws, b.task);
-    commitWork(ws.path, "deliverable.txt", "work\n");
-    completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
-    markTeardown(b.db, b.task.id, b.clock.now());
-    b.slot.enterTeardown();
-    const first = writeSteps();
-    const running = runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
-    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: first.writes });
-    await running;
-    await settle();
-    first.broken = false;
+  /** 先に投げた書く step は直っていて、受理は残りを撃って後始末の await まで進む。 */
+  async function repairedBehindWriteStep() {
+    const { b, steps } = await teardownBehindWriteStep();
+    steps.broken = false;
     return b;
   }
 
@@ -605,7 +623,7 @@ describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決
   }
 
   it("受理の await の間に書く step が投げても、直っていれば投げた手から撃ち直して枠を空けて通る", async () => {
-    const b = await teardownBehindWriteStep();
+    const b = await repairedBehindWriteStep();
 
     const { accepting, late } = acceptWhileWriteStepThrows(b);
     late.broken = false;
@@ -617,10 +635,12 @@ describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決
     expect(boardHalts(b.db)).toEqual([]);
     expect(b.slot.currentTaskId).toBeNull();
     expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
+    await climbTheLadder(b);
+    expect(questions(b.db)).toEqual([]);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("同じ窓で直っていなければ回答は拒まれ、question は開いたまま枠と残りは保たれる —— 直してからの受理は通る", async () => {
-    const b = await teardownBehindWriteStep();
+    const b = await repairedBehindWriteStep();
 
     const { accepting, late } = acceptWhileWriteStepThrows(b);
 
@@ -635,7 +655,7 @@ describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("受理の await の間に遅い `runTeardown` が届いても解放は1回", async () => {
-    const b = await teardownBehindWriteStep();
+    const b = await repairedBehindWriteStep();
     const pollNow = vi.fn();
     b.deps.pollNow = pollNow;
 
@@ -649,17 +669,20 @@ describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決
     expect(b.slot.currentTaskId).toBeNull();
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
-  it("受理の後に梯子の底を越えても偽の Containment question は立たず、枠を握ったまま question だけが閉じた形にならない", async () => {
-    const b = await teardownBehindWriteStep();
+  it("受理の await の間に届いた2つ目の回答は拒まれ、1つ目の受理が通って枠を空ける —— 残りも question も残らない", async () => {
+    const b = await repairedBehindWriteStep();
 
-    const { accepting, late } = acceptWhileWriteStepThrows(b);
-    late.broken = false;
-    await accepting;
-    await climbTheLadder(b);
+    const first = answer(b);
+    const second = answer(b);
 
+    // 文面まで見る: 1つ目が閉じた question への回答も DomainError で拒まれるので、型だけでは印の拒否と見分けられない
+    await expect(second).rejects.toThrow(DomainError);
+    await expect(second).rejects.toThrow("already being re-run");
+    await first;
+    await settle();
     expect(questions(b.db)).toEqual([]);
-    expect(boardHalts(b.db)).toEqual([]);
     expect(b.slot.currentTaskId).toBeNull();
+    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 });
 

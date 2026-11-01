@@ -230,26 +230,36 @@ export type FailedTeardownCheck = (taskId: string) => Promise<void>;
  *  再観測を満たすためである —— 満たさなければ早期 return で静かに受理され、tree rule が
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<void> {
-  // ADR 0342 決定6: process が生きていれば投げた手から、再起動を跨げば後始末そのものを撃ち直す
-  let rest = deps.slot.takeFailedTeardownRest(taskId);
-  // 枠を取り直すのは再起動を跨いだ受理だけ —— 残りを持つ受理で枠が空いているのは先の受理の後始末が既に解放した後で、取り直すと解放する者が無い
-  if (!rest && deps.slot.currentTaskId === null) {
-    deps.slot.occupy(taskId);
-    deps.slot.enterTeardown();
+  // 重なった回答は拒む: 残りは先の受理が取り出した後なので、2つ目は空の残りを見て question を閉じる。印は同期に取り、question は開いたまま
+  const releaseAcceptance = deps.slot.takeTeardownAcceptanceMark();
+  if (!releaseAcceptance) {
+    throw new DomainError(
+      "a failed teardown is already being re-run by another answer — answer again if this question stays open",
+    );
   }
-  rest ??= [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
   try {
-    // ADR 0112 決定3: 撃っている間に継がれた手も撃つ —— 残したまま通すと、枠を握ったまま question だけが閉じる
-    for (; rest; rest = deps.slot.takeFailedTeardownRest(taskId)) await drive(rest);
+    // ADR 0342 決定6: process が生きていれば投げた手から撃ち直す
+    let actions = deps.slot.takeFailedTeardownRest(taskId);
+    // 枠を取り直すのは再起動を跨いだ受理だけ —— 残りを持つ受理で枠が空いているのは先の受理の後始末が既に解放した後で、取り直すと解放する者が無い
+    if (!actions && deps.slot.currentTaskId === null) {
+      deps.slot.occupy(taskId);
+      deps.slot.enterTeardown();
+    }
+    // 再起動を跨げば残りは無く、後始末そのものを撃ち直す
+    actions ??= [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
+    // ADR 0112 決定3 / ADR 0342 の Status 追記: 撃っている間に継がれた手も撃つ —— 残したまま通すと、枠を握ったまま question だけが閉じる
+    for (; actions; actions = deps.slot.takeFailedTeardownRest(taskId)) await drive(actions);
   } catch (err) {
-    const { cause, rest: thrownOnward } = err as TeardownThrew;
+    const { cause, rest } = err as TeardownThrew;
     // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
     if (isBoardDbRefusal(cause)) throw cause;
-    deps.slot.appendFailedTeardownRest(taskId, thrownOnward);
+    deps.slot.appendFailedTeardownRest(taskId, rest);
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
         (cause instanceof Error ? cause.message : String(cause)),
     );
+  } finally {
+    releaseAcceptance();
   }
 }
 
@@ -302,8 +312,11 @@ async function teardown(
       step.completion,
     );
   }
-  step.transition?.(task, now);
-  clearTeardown(db, taskId);
+  // ADR 0112 決定3: 印を消す書き込みで投げて状態遷移だけ残ると、撃ち直しの `ready` が外れて解放せずに受理が通る
+  db.transaction(() => {
+    step.transition?.(task, now);
+    clearTeardown(db, taskId);
+  })();
   slot.release();
   // 早期 return はすべてこの手前にある —— ここを越えた後始末だけが pickup の契機を撃つ。着地を直接は呼ばない ——
   // この契機が収束を突き、印を消した後に盤面が落ちても、起動の収束が同じ根を導く(ADR 0241 決定5 / ADR 0240)
