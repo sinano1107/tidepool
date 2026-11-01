@@ -101,7 +101,7 @@ import {
   type Task,
   taskIdForPr,
 } from "./tasks.js";
-import type { FailedTeardownCheck } from "./teardown.js";
+import type { FailedTeardownCheck, UnclosedSessionCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
@@ -565,6 +565,8 @@ export interface QuarantineCheckDeps {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0112 決定3: 後始末を**投げる版で**もう一度走らせる —— 検査が解放の門そのもの。 */
   teardownQuarantine?: FailedTeardownCheck;
+  /** ADR 0344 決定3: その session を閉じ直す —— 検査が解放の門そのもの。 */
+  closeUnclosedSession?: UnclosedSessionCheck;
   /** ADR 0294 決定2: 続く poll の失敗の受理の検査は poll の撃ち直しそのもの。Absent → その確認への回答は拒まれる。 */
   rerunPoll?: () => Promise<PollOutcome>;
   /** ADR 0328 決定3: 続く issue 展開の失敗の受理の検査は、最後に失敗した参照の読み直し。Absent → その確認への回答は拒まれる。 */
@@ -593,7 +595,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, rerunPoll, recheckIssueExpansion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
+  const { containment, registryReachability, teardownQuarantine, closeUnclosedSession, rerunPoll, recheckIssueExpansion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -722,6 +724,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 検査そのものが後始末の再実行なので、投げれば question は開いたまま残り、人間は
     // 直してもう一度答えられる。
     ...(teardownQuarantine && { failedTeardown: (value) => teardownQuarantine(value!) }),
+    ...(closeUnclosedSession && { unclosedSession: (value) => closeUnclosedSession(Number(value)) }),
     // 通った poll は開いた question を観測で決着させているので、回答の口は決着済みの形で返る(QuestionClosedError の枝)
     ...(rerunPoll && {
       pollFailure: async () => {

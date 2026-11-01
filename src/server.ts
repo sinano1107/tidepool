@@ -53,10 +53,10 @@ import {
   type RosterAgent,} from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
-import { closeUnclosedSessions } from "./session-close.js";
+import { closeSessionFromRecord, closeUnclosedSessions } from "./session-close.js";
 import { Slot } from "./slot.js";
 import { getTask, type PickupStopped, type TaskType } from "./tasks.js";
-import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
+import { acceptTeardownQuarantine, acceptUnclosedSession, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -597,6 +597,10 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
+  const closeUnclosedSession = (spawnId: number) =>
+    acceptUnclosedSession(teardownDeps, spawnId, () =>
+      closeSessionFromRecord(db, spawnId, { logDir: options.transcripts.dir, tmpDir: tmpdir(), now: options.clock.now() }),
+    );
   // 振り返り Board call の束: scheduler(poll の sweep)と WebUI(triage close)へ同じ1つを渡す
   const retrospectiveCalls: RetrospectiveCallDeps = {
     allocationClient: options.allocationClient,
@@ -686,6 +690,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     reclaim,
     registryReachability,
     teardownQuarantine,
+    closeUnclosedSession,
     rerunPoll: () => scheduler.rerunPoll(),
     recheckIssueExpansion: () => scheduler.recheckIssueExpansion(),
     providerCliAuth,

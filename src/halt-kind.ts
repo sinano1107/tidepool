@@ -1,6 +1,6 @@
 /** 盤面全体の停止の kind 語彙。並びは表示優先順位そのもので、出どころは1本ではない
  *  —— ADR 0068 決定1 が順序ごと固定し、`failedTeardown` は ADR 0112 決定1 が
- *  containment の直後に足し、`recordContainer` は ADR 0266 決定3 が末尾に足し、throttle は ADR 0140 決定1 が外した。順序つき列挙を
+ *  containment の直後に足し、`unclosedSession` は ADR 0344 決定1 がその直後に足し、`recordContainer` は ADR 0266 決定3 が末尾に足し、throttle は ADR 0140 決定1 が外した。順序つき列挙を
  *  返す唯一の場所は `board-halt.ts` のままで、ここが持つのは綴りだけである。
  *
  *  依存ゼロの leaf module にしてあるのは、この語彙をブラウザ側のプログラムが
@@ -13,6 +13,7 @@ export const HALT_KINDS = [
   "pause",
   "containment",
   "failedTeardown",
+  "unclosedSession",
   "registryReachability",
   "recordContainer",
 ] as const;

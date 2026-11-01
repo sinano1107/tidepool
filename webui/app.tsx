@@ -394,6 +394,10 @@ function mapData(
     failedTeardown: () => halt(
       { color: 'var(--coral-4)', line: 'board teardown failed · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', "the board's own teardown failed"),
+    // ADR 0344 決定1: 枠ではなく session の記録が閉じられない停止。枠が次の session に移っていても立つ
+    unclosedSession: () => halt(
+      { color: 'var(--coral-4)', line: 'board could not close a worker session · nothing starts', meta: 'see the repair question', taskId: null },
+      'warn', 'moved to front — pickup blocked', 'the board could not close a worker session'),
     registryReachability: () => halt(
       { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', 'registry remote is unreachable'),

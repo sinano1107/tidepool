@@ -15,11 +15,11 @@ import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type In
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, listEpisodes, projectionPending } from "../src/precedent.js";
 import { type ContainerSpawn, ProcessContainers } from "../src/process-container.js";
-import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
-import { acceptTeardownQuarantine } from "../src/teardown.js";
+import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -2064,7 +2064,7 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
     const exitedEvents = () => listEvents(f.db, value.id).filter((event) => event.kind === "worker_exited");
     const snapshot = () => ({ exited: exitedEvents().length, temp: existsSync(temp), episodes: listEpisodes(f.db, {}).length });
     const questions = () => listBoard(f.db).filter((t) => t.type === "question").map((t) => t.title);
-    const accept = () => acceptTeardownQuarantine({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, value.id);
+    const accept = () => acceptUnclosedSession({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, Number(openQuarantineValues(f.db, "unclosedSession")[0]), () => {});
     const failedExit = (stderr = "") => {
       process.processes[0]!.stdout.write(`${JSON.stringify({ type: "turn.failed" })}\n`);
       process.processes[0]!.stderr.write(stderr);
@@ -2074,13 +2074,13 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
     return { f, value, slot, after, questions, accept, failedExit, exitedEvents, snapshot };
   }
 
-  it("worker_exited の INSERT が投げると落ちた後始末で止まり、trigger を外して受理すると worker_exited → 一時領域の削除 → 投影の順に書いて枠が空く", async () => {
+  it("worker_exited の INSERT が投げると閉じ切らなかった session で止まり、trigger を外して受理すると worker_exited → 一時領域の削除 → 投影の順に書いて枠が空く", async () => {
     const j = await joined("codex-joined-exit");
     const repair = failWorkerExited(j.f.db);
     const observedAt = j.f.clock.now().toISOString();
 
     j.failedExit();
-    await vi.waitFor(() => expect(j.questions()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]));
+    await vi.waitFor(() => expect(j.questions()).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]));
     expect(j.slot.currentTaskId).toBe(j.value.id);
     expect(j.snapshot()).toMatchObject({ exited: 0, temp: true, episodes: 0 });
 
@@ -2096,7 +2096,7 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
     expect(j.exitedEvents()[0]!.payload).toMatchObject({ usage_recheck: { result: "not_full" } });
     // ADR 0315 決定2: 所要時間はこの時刻から導く(`src/learner.ts`)—— 受理の時刻を書かない
     expect(j.exitedEvents()[0]!.created_at).toBe(observedAt);
-    expect(j.questions()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE, `worker exited without reporting: ${j.value.title}`]);
+    expect(j.questions()).toEqual([UNCLOSED_SESSION_QUESTION_TITLE, `worker exited without reporting: ${j.value.title}`]);
     await vi.waitFor(() => expect(j.slot.currentTaskId).toBeNull());
   });
 
@@ -2108,7 +2108,7 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
     );
 
     j.failedExit("Failed to initialize session: required MCP servers failed to initialize: tidepool: failed");
-    await vi.waitFor(() => expect(j.questions()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]));
+    await vi.waitFor(() => expect(j.questions()).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]));
     expect(j.exitedEvents()).toHaveLength(1);
     expect(getTask(j.f.db, j.value.id)?.status).toBe("in_progress");
 

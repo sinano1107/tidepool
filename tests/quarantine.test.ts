@@ -38,6 +38,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   workspaceContainment: ["claude-code/sandbox", "codex/sandbox"],
   containment: [null],
   failedTeardown: ["task-1", "task-2"],
+  unclosedSession: ["7", "8"],
   registryReachability: [null],
   recordContainer: [null],
   pollFailure: [null],

@@ -37,3 +37,16 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
 export function thrownTextOfFailedTeardownReason(reason: string): string {
   return reason.slice(reason.indexOf(THROWN_TEXT_FOLLOWS) + THROWN_TEXT_FOLLOWS.length);
 }
+
+/** 閉じ切らなかった session を Quarantine の unclosedSession 行で立てる(ADR 0344 決定1・3)。鍵は spawn event id —— 同じ task の
+ *  2 session が衝突しない。「いつから」は最初の throw の時刻で、再発火は `registerQuarantine` の畳みに任せるので行の本文が持ち続ける。 */
+export function quarantineUnclosedSession(db: Db, spawnId: number, taskId: string, err: unknown, now: Date): void {
+  registerQuarantine(
+    db,
+    "unclosedSession",
+    String(spawnId),
+    `the session of task ${taskId} has been unclosed since ${now.toISOString()}${THROWN_TEXT_FOLLOWS}` +
+      (err instanceof Error ? err.message : String(err)),
+    now,
+  );
+}

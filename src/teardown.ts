@@ -2,9 +2,11 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
-import { quarantineFailedTeardown, thrownTextOfFailedTeardownReason } from "./failed-teardown.js";
+
+import { quarantineFailedTeardown, quarantineUnclosedSession, thrownTextOfFailedTeardownReason } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { openQuarantineQuestion, openQuarantineValues } from "./quarantine.js";
+import { openQuarantineQuestion } from "./quarantine.js";
+
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueue, type Task } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
@@ -121,15 +123,68 @@ export async function runTeardown(
   taskId: string,
   step: TeardownStep = {},
 ): Promise<void> {
-  // ADR 0112 決定4 / ADR 0342 決定6: 落ちた後始末の残りを持つ session は、受理の撃ち直しのほかに後始末を走らせない ——
+  // ADR 0112 決定4 / ADR 0342 決定6 / ADR 0344 決定4: 落ちた後始末・閉じ切らなかった session の残りを持つ session は、受理の撃ち直しのほかに後始末を走らせない ——
   // 遅れた回収済み観測や MCP の verb が枠を空けると、残りの手も question も宙に浮く。届いた後始末は残りの後ろに継ぐ ——
   // 捨てると受理の後に撃つ者が無く枠が空かない。受理は残りを取り出してから撃つ
-  if (deps.slot.deferToFailedTeardownRest(taskId, () => teardown(deps, taskId, step))) return;
+  if (deferToSessionRest(deps, taskId, () => teardown(deps, taskId, step))) return;
   await runTeardownSteps(deps, taskId, () => teardown(deps, taskId, step));
 }
 
-/** 後始末の1手: 同期か Promise を返す関数(経路ごとの差分の `TeardownStep` とは別物)。 */
-export type TeardownAction = () => unknown;
+/** 後始末の1手: 同期か Promise を返す関数(経路ごとの差分の `TeardownStep` とは別物)。`closesSession` は束の手の印で、値は spawn event id。 */
+export type TeardownAction = (() => unknown) & { closesSession?: number };
+
+/** session を閉じる手に印を付ける。runner は投げた手の印で停止の kind を選ぶ —— 枠の主かでは分けない(ADR 0344 決定1)。 */
+export function sessionCloseSteps(spawnId: number, actions: TeardownAction[]): TeardownAction[] {
+  return actions.map((action) => Object.assign(() => action(), { closesSession: spawnId }));
+}
+
+/** 閉じ切らなかった session の残り(ADR 0344 決定2): spawn event id → 投げた手から先。枠の解放で消えないので `Slot` の欄にしない。
+ *  鍵に `Slot` を使うのは盤面の process に1つで寿命が同じだから —— memory なので再起動を越えず、越えた受理は記録から閉じ直す。 */
+const unclosedRests = new WeakMap<Slot, Map<number, TeardownAction[]>>();
+
+function unclosedRestsOf(slot: Slot): Map<number, TeardownAction[]> {
+  let rests = unclosedRests.get(slot);
+  if (!rests) unclosedRests.set(slot, (rests = new Map()));
+  return rests;
+}
+
+function appendUnclosedRest(slot: Slot, spawnId: number, actions: TeardownAction[]): void {
+  const rests = unclosedRestsOf(slot);
+  rests.set(spawnId, [...(rests.get(spawnId) ?? []), ...actions]);
+}
+
+function takeUnclosedRest(slot: Slot, spawnId: number): TeardownAction[] | undefined {
+  const rests = unclosedRestsOf(slot);
+  const actions = rests.get(spawnId);
+  rests.delete(spawnId);
+  return actions;
+}
+
+/** task の今の pickup の session の spawn event id。前の pickup の spawn は死んだ session で、今の pickup に spawn が無ければ
+ *  process を持たなかった session —— 鍵は task id だけになる。 */
+function spawnOfCurrentPickup(db: Db, taskId: string): number | undefined {
+  const spawned = latestEventOfTask(db, taskId, "worker_spawned");
+  if (!spawned) return undefined;
+  return spawned.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0) ? spawned.id : undefined;
+}
+
+/** ADR 0112 決定4 の門(ADR 0344 決定4): 枠の主の session の行が開いているか —— `failedTeardown` は task id、`unclosedSession` は
+ *  spawn event id で引く。死んだ session の行は読まない —— 走っている session の梯子を止めない。`answered` は回答中の spawn で、行はまだ開いている。 */
+export function sessionHaltOpen(db: Db, taskId: string, answered?: number): boolean {
+  if (openQuarantineQuestion(db, "failedTeardown", taskId)) return true;
+  const spawnId = spawnOfCurrentPickup(db, taskId);
+  return spawnId !== undefined && spawnId !== answered && openQuarantineQuestion(db, "unclosedSession", String(spawnId)) !== undefined;
+}
+
+/** 枠の主の session の残りがあれば `action` をその後ろに継いで true —— 呼び手は自分では撃たず、受理に任せる(ADR 0112 決定4 / ADR 0344 決定4)。
+ *  死んだ session の残りには継がない —— 走っている session の観測が、その session と関係ない回答まで止まる。 */
+export function deferToSessionRest({ db, slot }: Pick<TeardownDeps, "db" | "slot">, taskId: string, action: TeardownAction): boolean {
+  if (slot.deferToFailedTeardownRest(taskId, action)) return true;
+  const spawnId = spawnOfCurrentPickup(db, taskId);
+  if (spawnId === undefined || !unclosedRestsOf(slot).has(spawnId)) return false;
+  appendUnclosedRest(slot, spawnId, [action]);
+  return true;
+}
 
 /** 投げた手から先を外へ運ぶ throw。外の runner / 受理が自分の残りを後ろに継ぎ、1つの残りとして持つ(ADR 0342 決定6)。 */
 class TeardownThrew {
@@ -144,17 +199,15 @@ class TeardownThrew {
  *  `void` すると reject が底へ落ちる。 */
 let driving = 0;
 
-/** 後始末の step の runner(ADR 0342 決定6 / ADR 0112)。手を順に撃ち、投げた手から先を枠に残して落ちた
- *  後始末の question を同期に立てる —— 行が立ってから返るので、watchdog の tick の門(ADR 0112 決定4)がすぐ効く。
- *  受理(`acceptTeardownQuarantine`)は残した手から撃ち直す。盤面 DB の拒否は question も書けないので底へ投げる
- *  (ADR 0342 決定2・3)。
+/** 後始末の step の runner(ADR 0342 決定6 / ADR 0112 / ADR 0344)。手を順に撃ち、投げた手から先を残して question を同期に立てる ——
+ *  行が立ってから返るので、watchdog の tick の門(ADR 0112 決定4)がすぐ効く。受理は残した手から撃ち直す。
+ *  盤面 DB の拒否は question も書けないので底へ投げる(ADR 0342 決定2・3)。
  *
- *  枠を握ったままの throw だけが落ちた後始末である。`slot.release()` より後 —— pickup の契機 ——
- *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: question は立てない。枠の主が替わった後に投げた
- *  adapter の書く step(`worker_exited` など)は再実行すべきものが残るが、次の session の枠を止めないので log に残し、
- *  次の起動の復旧(ADR 0315)に任せる。`ownsSlot` は、同じ task の後の pickup も別の枠の主と読む呼び手の門。 */
+ *  投げた手が session の束の手なら閉じ切らなかった session で、枠の主かに依らず spawn ごとに持つ(ADR 0344 決定1・2)。残りの先頭は
+ *  入れ子を越えても投げた手そのものである。それ以外の手は枠を握ったままの throw だけが落ちた後始末である: `slot.release()` より後 ——
+ *  pickup の契機 —— で投げた例外は枠も行も既に空いており、盤面は次へ進める。 */
 export function runTeardownSteps(
-  deps: Pick<TeardownDeps, "db" | "clock" | "slot"> & { ownsSlot?: () => boolean },
+  deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
   taskId: string,
   ...actions: TeardownAction[]
 ): Promise<void> | undefined {
@@ -163,7 +216,13 @@ export function runTeardownSteps(
     const { cause, rest } = err as TeardownThrew;
     if (isBoardDbRefusal(cause)) throw cause;
     console.error(`[teardown] task ${taskId}:`, cause);
-    if (deps.slot.currentTaskId !== taskId || deps.ownsSlot?.() === false) return;
+    const spawnId = rest[0]?.closesSession;
+    if (spawnId !== undefined) {
+      quarantineUnclosedSession(deps.db, spawnId, taskId, cause, deps.clock.now());
+      appendUnclosedRest(deps.slot, spawnId, rest);
+      return;
+    }
+    if (deps.slot.currentTaskId !== taskId) return;
     quarantineFailedTeardown(deps.db, taskId, cause, deps.clock.now());
     deps.slot.appendFailedTeardownRest(taskId, rest);
   };
@@ -204,13 +263,13 @@ function drive(actions: readonly TeardownAction[], from = 0): Promise<void> | un
 }
 
 /** 行に残った後始末の未了を、枠を握ってから走らせる —— 起動時の復旧と、再起動を越えた梯子の底の
- *  確認回答の受理(ADR 0254 決定2)が通る1つの門。未了が無い / 枠がもう握られている / 落ちた後始末の
- *  question が開いている(撃てば同じ所で落ちて無言に戻る。ADR 0112 決定4)なら撃たない。
+ *  確認回答の受理(ADR 0254 決定2)、閉じ切らなかった session の受理(`answered`)が通る1つの門。未了が無い / 枠がもう握られている /
+ *  後始末中の session の行が開いている(撃てば同じ所で落ちて無言に戻る。ADR 0112 決定4 / ADR 0344 決定4)なら撃たない。
  *  枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 走り切るまで pickup は進まない。 */
-export function resumeUnfinishedTeardown(deps: TeardownDeps): Promise<void> | undefined {
+export function resumeUnfinishedTeardown(deps: TeardownDeps, answered?: number): Promise<void> | undefined {
   const session = sessionInTeardown(deps.db);
   if (!session || deps.slot.currentTaskId !== null) return;
-  if (openQuarantineValues(deps.db, "failedTeardown").length > 0) return;
+  if (sessionHaltOpen(deps.db, session.taskId, answered)) return;
   deps.slot.occupy(session.taskId);
   deps.slot.enterTeardown();
   return runTeardown(deps, session.taskId, teardownStep(deps.db, session.taskId));
@@ -221,6 +280,11 @@ export function resumeUnfinishedTeardown(deps: TeardownDeps): Promise<void> | un
  *  なので、答えは「通った」か「投げた」しかない。通れば確認を返し、回答の書き込みと同じ
  *  同期区間で呼ばれる(ADR 0343 決定1)。 */
 export type FailedTeardownCheck = (taskId: string) => Promise<() => void>;
+
+/** 閉じ切らなかった session の受理の門(ADR 0344 決定3)。形は `FailedTeardownCheck` と同じで、鍵が spawn event id。 */
+export type UnclosedSessionCheck = (spawnId: number) => Promise<void>;
+
+const RERUN_IN_FLIGHT = "a failed teardown or session close is already being re-run by another answer — answer again if this question stays open";
 
 /** 落ちた後始末の解放の門(ADR 0112 決定3)。他の quarantine 族が受理の直前に資源を
  *  検証するのと同じ位置で走るが、検証すべき資源が無いので検査は後始末の再実行そのもの
@@ -237,9 +301,7 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
   // 重なった回答は拒む: 残りは先の受理が取り出した後なので、2つ目は空の残りを見て question を閉じる。印は同期に取り、question は開いたまま
   const releaseAcceptance = deps.slot.takeTeardownAcceptanceMark();
   if (!releaseAcceptance) {
-    throw new DomainError(
-      "a failed teardown is already being re-run by another answer — answer again if this question stays open",
-    );
+    throw new DomainError(RERUN_IN_FLIGHT);
   }
   try {
     // ADR 0342 決定6: process が生きていれば投げた手から撃ち直す
@@ -270,6 +332,29 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
     const { reason } = latestEventOfTask(deps.db, question.id, "quarantine_refired")!.payload;
     throw threwAgain(thrownTextOfFailedTeardownReason(reason));
   };
+}
+
+/** 閉じ切らなかった session の解放の門(ADR 0344 決定3): その session を閉じ直す。process が生きていれば memory の残りを投げた手から
+ *  撃ち切る。無ければ記録から閉じ直す —— 既に閉じていれば no-op で通り、行が起動時の再開を止めていた後始末はその後ろで走らせる。
+ *  投げれば `DomainError` で回答を拒む。印は落ちた後始末の受理と1つ —— 同じ session の残りに継がれた後始末を2つの受理が撃たない。 */
+export async function acceptUnclosedSession(deps: TeardownDeps, spawnId: number, closeFromRecord: () => void): Promise<void> {
+  const releaseAcceptance = deps.slot.takeTeardownAcceptanceMark();
+  if (!releaseAcceptance) throw new DomainError(RERUN_IN_FLIGHT);
+  try {
+    let actions: TeardownAction[] | undefined = takeUnclosedRest(deps.slot, spawnId) ?? [closeFromRecord, () => resumeUnfinishedTeardown(deps, spawnId)];
+    // ADR 0112 決定3: 撃っている間に継がれた手も撃つ
+    for (; actions; actions = takeUnclosedRest(deps.slot, spawnId)) await drive(actions);
+  } catch (err) {
+    const { cause, rest } = err as TeardownThrew;
+    // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
+    if (isBoardDbRefusal(cause)) throw cause;
+    appendUnclosedRest(deps.slot, spawnId, rest);
+    throw new DomainError(
+      `closing worker session ${spawnId} threw again: ` + (cause instanceof Error ? cause.message : String(cause)),
+    );
+  } finally {
+    releaseAcceptance();
+  }
 }
 
 /** 投げる後始末。捕まえる版が `runTeardown` で、受理の検査はこちらを走らせる
@@ -307,7 +392,7 @@ async function teardown(
   // その await を跨ぐ間に枠の主が変わる / 梯子の底へ落ちることがありうるので、門をもう一度読む
   if (!releasable()) return;
   // 同じ await の間に別の手が落ちた後始末を立てたなら解放しない —— 解放すると残りの手が消え、受理が2度目の後始末を撃つ(ADR 0342 決定6)
-  if (slot.deferToFailedTeardownRest(taskId, () => teardown(deps, taskId, step))) return;
+  if (deferToSessionRest(deps, taskId, () => teardown(deps, taskId, step))) return;
   const now = clock.now();
   if (workspace) {
     releaseWorkspace(
