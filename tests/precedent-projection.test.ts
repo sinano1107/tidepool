@@ -505,6 +505,26 @@ it("従った skill の本文は Base directory の見出しを除いた合成�
   ]);
 });
 
+it("Claude の従った skill の行は出所の行動として Skill と skill の名前を持ち、本文の行の無い subagent の呼び出しも、位置を置けない行への異議の position null の行も、出所の行動は持つ(ADR 0340 決定2)", () => {
+  const rows = (anchor: Pick<EventRow, "id" | "kind">) => skillsFollowed(projectSkills(), skillSession(), anchor).map((s) => [s.position, s.tool, s.args, s.text === null]);
+
+  expect(rows({ id: 0, kind: "task_completed" })).toEqual([
+    [0, "Skill", "wsbar", false],
+    [1, "Skill", "dataviz", false],
+    [3, "Skill", "wsbar", true],
+    [4, "Skill", "wsbar", false],
+    [5, "Skill", "dataviz", false],
+  ]);
+  // マーカーの無い判断の行: position は全部 null だが、出所の行動は呼び出しの位置から引ける
+  expect(rows({ id: 999, kind: "decision_logged" })).toEqual([
+    [null, "Skill", "wsbar", false],
+    [null, "Skill", "dataviz", false],
+    [null, "Skill", "wsbar", true],
+    [null, "Skill", "wsbar", false],
+    [null, "Skill", "dataviz", false],
+  ]);
+});
+
 it("Claude の worker が見た skill の集合は init 行の skills(ADR 0325 決定2)", () => {
   expect(projectSkills().skillsSeen).toEqual([
     "wsbar", "deep-research", "design", "design-sync", "dataviz", "update-config", "verify", "debug", "code-review", "simplify",
@@ -550,10 +570,10 @@ it("Codex の Episode の見た集合は spawn 記録の permitted で、従っ�
     { position: 0, name: "secret-word", transcriptRef: "item_1", subagent: false },
     { position: 1, name: "secret-word", transcriptRef: "item_3", subagent: false },
   ]);
-  // 本文は写さず行の参照を持ち、判事の skills_followed はその行の aggregated_output を逐語で読む
+  // 本文は写さず行の参照を持ち、判事の skills_followed の届いた文はその行の aggregated_output(ADR 0340 決定1)
   expect(skillsFollowed(episode, lines, { id: 0, kind: "task_completed" })).toEqual([
-    { name: "secret-word", position: 0, text: SECRET_WORD_BODY },
-    { name: "secret-word", position: 1, text: "---\nname:" },
+    { name: "secret-word", position: 0, tool: "command_execution", args: `/bin/bash -lc 'cat ${CODEX_WS_SKILL}'`, text: SECRET_WORD_BODY },
+    { name: "secret-word", position: 1, tool: "command_execution", args: `/bin/bash -lc "python3 -c 'print(open(\\"${CODEX_WS_SKILL}\\").read()[:9])'"`, text: "---\nname:" },
   ]);
 });
 

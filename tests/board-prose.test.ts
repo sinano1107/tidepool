@@ -420,18 +420,22 @@ it("異議された entry が別の actor の行だけなら、この worker の
   expect(parts.map((part) => part.part)).not.toContain("historical_definition");
 });
 
-/** self RCA の材料: deckhand の session で、transcript `lines(entry)` の判断の行に異議を打つ。session は閉じない(走行中)。 */
-async function skillRca(lines: (entryId: number) => string[]) {
+/** self RCA の材料: deckhand の session で、transcript `lines(entry, second)` の判断の行に異議を打つ(`second` は異議を打つ2つ目の判断の行で、
+ *  `objectSecond` のときだけ異議を打つ)。session は閉じない(走行中)。 */
+async function skillRca(lines: (entryId: number, second: number) => string[], objectSecond = false) {
   const db = openDb(":memory:");
   const at = new Date("2026-10-29T00:00:00.000Z");
   const dirs = await boardDirs();
   const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
   const spawned = recordedSpawn(db, dirs, objected, at);
   const entryId = logDecision(db, objected, "ran make deploy", "deckhand", at, "worker");
+  const second = logDecision(db, objected, "pushed the tag", "deckhand", at, "worker");
   const stream = join(dirs.recordDir, `${objected.id}.${spawned}.stream.jsonl`);
-  writeFileSync(stream, lines(entryId).join("\n"));
-  const objection = appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: [objection] }, at, ...HUMAN_WEBUI);
+  writeFileSync(stream, lines(entryId, second).join("\n"));
+  const objections = (objectSecond ? [entryId, second] : [entryId]).map((id) =>
+    appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: id, comment: "why?", session_id: 0 } }),
+  );
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: objections }, at, ...HUMAN_WEBUI);
   const history = () => historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
   return { entryId, stream, history };
 }
@@ -446,8 +450,39 @@ it("self RCA の当時版は、材料の session が走行中でも、異議さ�
 
   const history = b.history();
 
-  expect(history).toContain(`#### deploy\n\n${fenced("Run make deploy.")}`);
+  expect(history).toContain(`#### deploy\n\n- Skill: deploy\n\n${fenced("Run make deploy.")}`);
   expect(history).not.toContain("lint");
+});
+
+it("self RCA の従った skill の節は、同じ名前と届いた文の行を1つの見出しに畳んで出所の行動を並べ、届いた文が違う行は別の見出しにする(ADR 0340 決定1・7)", async () => {
+  const notice = "Skill /deploy is already loaded above; instructions unchanged.";
+  const b = await skillRca((entryId) => [
+    skillsInit(["deploy"]),
+    ...skillCall(1, "deploy", "Run make deploy."),
+    ...skillCall(2, "deploy", "Run make deploy."),
+    ...skillCall(3, "deploy", notice),
+    ...toolCall(4, "mcp__tidepool__log_decision", entryId),
+  ]);
+
+  const history = b.history();
+
+  expect(history).toContain(`#### deploy\n\n- Skill: deploy\n- Skill: deploy\n\n${fenced("Run make deploy.")}\n\n#### deploy\n\n- Skill: deploy\n\n${fenced(notice)}`);
+  expect(history.split(fenced("Run make deploy."))).toHaveLength(2);
+  expect(history).toContain("the output of your own command — not necessarily the skill's own text");
+});
+
+it("self RCA の従った skill の節は、同じ session の2つの異議された行より前の同じ呼び出しを、出所の行動として1度だけ並べる(ADR 0340 決定7)", async () => {
+  const b = await skillRca(
+    (entryId, second) => [
+      skillsInit(["deploy"]),
+      ...skillCall(1, "deploy", "Run make deploy."),
+      ...toolCall(2, "mcp__tidepool__log_decision", entryId),
+      ...toolCall(3, "mcp__tidepool__log_decision", second),
+    ],
+    true,
+  );
+
+  expect(b.history()).toContain(`#### deploy\n\n- Skill: deploy\n\n${fenced("Run make deploy.")}`);
 });
 
 it.each([

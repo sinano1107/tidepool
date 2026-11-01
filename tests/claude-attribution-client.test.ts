@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
+import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
 import {
   ATTRIBUTION_INPUT_FIELDS,
   type AttributionInput,
@@ -299,6 +300,51 @@ it("停止と異議の帰責の prompt は、skills_followed の skill に文面
   // 位置不明の読み方は異議の判事の prompt が持ち、欄の文は null の意味だけを言う(ADR 0324 決定2)
   expect(prompts[0]).toContain("When skills_followed positions are null, the objected entry could not be placed among the session's tool calls: read the skills' order against the decision log yourself.");
   expect(ATTRIBUTION_INPUT_FIELDS.skills_followed).not.toContain("yourself");
+});
+
+/** 停止と異議の判事・Behavior の起草(異議と停止)の4つの prompt。 */
+async function skillPrompts(): Promise<string[]> {
+  const prompts: string[] = [];
+  const exec = (result: unknown) => async (_command: string, _args: string[], _env: NodeJS.ProcessEnv, input?: string) => {
+    prompts.push(input!);
+    return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(result) });
+  };
+  const judge = new ClaudeAttributionClient({ exec: exec(judgment) });
+  const drafter = new ClaudeBehaviorDraftClient({ exec: exec({ path: "p", title: "t", text: "x", addressee: "all" }) });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+  await judge.judge(input, setting);
+  await judge.judgeStop(stopInput, setting);
+  await drafter.draft({ ...input, index: null }, setting);
+  await drafter.draftFromStop({ ...stopInput, index: null }, setting);
+  return prompts;
+}
+
+it("停止と異議の判事・Behavior の起草の prompt は、従った skill の行の出所の行動(tool / args)を説明し、届いた文が skill の文面とは限らないと言う(ADR 0340 決定1・2)", async () => {
+  const prompts = await skillPrompts();
+
+  expect(prompts).toHaveLength(4);
+  for (const prompt of prompts) {
+    expect(prompt).toContain(
+      "tool (the tool of the call it came from: Skill when the worker's CLI supplied the skill, command_execution when the worker ran a command naming the skill's file), " +
+        "args (that call's extracted argument: the skill's name for Skill, the command for command_execution)",
+    );
+    expect(prompt).toContain(
+      "text (the text that reached the worker in that call: what its CLI supplied (a short notice when the skill was already loaded), or the " +
+        "output of the worker's own command — the whole skill, a part, or a transformation of it — so not necessarily the skill's own text;",
+    );
+  }
+  expect(prompts[0]).toContain("a skill is text that reached the worker when it used the skill — the skills the worker invoked before the objected entry");
+});
+
+it("帰責の prompt の skill の節は、capability を文面の読み違えにだけ結び、加工した読みに結ぶ規則を持たない(ADR 0340 決定3)", async () => {
+  const [objection, stop] = await skillPrompts();
+
+  for (const prompt of [objection!, stop!]) {
+    const start = prompt.indexOf("a skill is ");
+    const clause = prompt.slice(start, prompt.indexOf("judge from the rest", start));
+    expect(clause.match(/capability/g)).toEqual(["capability"]);
+    expect(clause).toContain("while misreading the skill's text is capability");
+  }
 });
 
 it("skill の欄の文は盤面の語(harness・transcript)を定義なしに使わない(ADR 0324 決定3)", () => {

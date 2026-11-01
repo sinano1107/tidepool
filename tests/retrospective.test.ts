@@ -2317,7 +2317,7 @@ it("走行中の session の判断への異議でも、判断より前に従っ�
     '{"type":"assistant","uuid":"a4","message":{"content":[{"type":"tool_u',
   ]);
 
-  expect((await b.judged()).map((i) => i.skills_followed)).toEqual([[{ name: "deploy", position: 0, text: "Run make deploy." }]]);
+  expect((await b.judged()).map((i) => i.skills_followed)).toEqual([[{ name: "deploy", position: 0, tool: "Skill", args: "deploy", text: "Run make deploy." }]]);
 });
 
 it("判断の位置が置けない session では、session の skill の呼び出しが全部 position null(位置不明)で届く(ADR 0325 決定3)", async () => {
@@ -2326,8 +2326,8 @@ it("判断の位置が置けない session では、session の skill の呼び�
 
   expect((await b.judged()).map((i) => i.skills_followed)).toEqual([
     [
-      { name: "deploy", position: null, text: "Run make deploy." },
-      { name: "lint", position: null, text: "Run make lint." },
+      { name: "deploy", position: null, tool: "Skill", args: "deploy", text: "Run make deploy." },
+      { name: "lint", position: null, tool: "Skill", args: "lint", text: "Run make lint." },
     ],
   ]);
 });
@@ -2429,7 +2429,7 @@ it("Codex の session への異議でも skills は非 null で spawn 記録の2
   ]);
 
   expect((await b.judged()).map((i) => [i.skills, i.skills_followed])).toEqual([
-    [{ workspace: ["deploy"], host: ["skill-creator"] }, [{ name: "deploy", position: 0, text: "Run make deploy." }]],
+    [{ workspace: ["deploy"], host: ["skill-creator"] }, [{ name: "deploy", position: 0, tool: "command_execution", args: `/bin/bash -lc 'cat ${deploy}'`, text: "Run make deploy." }]],
   ]);
 });
 
@@ -2454,7 +2454,7 @@ it("第2回の帰責と Behavior candidate の起草の入力も、初回と同�
   refireRetrospectiveCalls(b.db, deps, at);
   await new Promise((resolve) => setImmediate(resolve));
 
-  const fields = { skills: { workspace: [], host: ["deploy"] }, skills_followed: [{ name: "deploy", position: 0, text: "Run make deploy." }] };
+  const fields = { skills: { workspace: [], host: ["deploy"] }, skills_followed: [{ name: "deploy", position: 0, tool: "Skill", args: "deploy", text: "Run make deploy." }] };
   expect([...client.calls, ...drafter.calls].map((c) => [c.input.rca_findings !== undefined, { skills: c.input.skills, skills_followed: c.input.skills_followed }])).toEqual([
     [false, fields],
     [true, fields],

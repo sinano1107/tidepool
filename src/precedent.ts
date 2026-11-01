@@ -693,12 +693,15 @@ function pullsBefore(
   return events.flatMap((e) => (e.payload.kind === "memory_pulled" && pulls.has(e.id) ? [e.payload] : []));
 }
 
-/** 判事と self RCA に渡す、従った skill 1つ(ADR 0325 決定3)。`position` が null = 異議された行を行動列に置けず、呼び出しを全部渡した印。
- *  `text` は Claude では harness が渡した本文(`Base directory` の見出しを除く —— path はベンダーの綴り)、Codex では worker が読んだ行の
- *  `aggregated_output`(ADR 0337 決定4)で、transcript に無ければ null。 */
+/** 判事と self RCA に渡す、従った skill の行1つ(ADR 0325 決定3)。`position` が null = 異議された行を行動列に置けず、呼び出しを全部渡した印。
+ *  `tool` / `args` は出所の行動で、行動列の欄と同じ(ADR 0340 決定2)。`text` はその呼び出しで worker に届いた文で、skill の文面との一致は
+ *  主張しない(ADR 0340 決定1)—— Claude では harness が渡した文(`Base directory` の見出しを除く —— path はベンダーの綴り)、Codex では
+ *  その行の `aggregated_output`(ADR 0337 決定4)で、transcript に無ければ null。 */
 export interface FollowedSkill {
   name: string;
   position: number | null;
+  tool: string;
+  args: string | null;
   text: string | null;
 }
 
@@ -713,7 +716,7 @@ export function projectSession(recordDir: string | undefined, events: EventRow[]
 
 /** `anchor` の行より前に従った skill(ADR 0325 決定3、`memory_read` と同じ線): 判断の行は decision、記憶の書き込みの行は memory_write の
  *  マーカーで切り、完了の行と停止は session の全部。マーカーの位置が置けない行は全部を position null で返す。本文は `lines` から読む。 */
-export function skillsFollowed(episode: Pick<Episode, "skillCalls" | "markers">, lines: string[] | null, anchor: Pick<EventRow, "id" | "kind">): FollowedSkill[] {
+export function skillsFollowed(episode: Pick<Episode, "actions" | "skillCalls" | "markers">, lines: string[] | null, anchor: Pick<EventRow, "id" | "kind">): FollowedSkill[] {
   const all = anchor.kind === "task_completed" || anchor.kind === "session_stopped_by_human";
   // 判断の行の decision / 記憶の書き込みの行の memory_write マーカーは、その行の event id で引ける(他の種別の行はマーカーを持たない)
   const cut = all ? Number.POSITIVE_INFINITY : episode.markers.find((m) => m.eventId === anchor.id)?.position ?? null;
@@ -728,7 +731,11 @@ export function skillsFollowed(episode: Pick<Episode, "skillCalls" | "markers">,
   }
   return episode.skillCalls
     .filter((c) => cut === null || c.position < cut)
-    .map((c) => ({ name: c.name, position: cut === null ? null : c.position, text: (c.transcriptRef && texts.get(c.transcriptRef)) ?? null }));
+    .map((c) => {
+      // ADR 0340 決定2: 出所は読み手向けの position が null でも、呼び出しの内部の位置で引ける
+      const { tool, args } = episode.actions[c.position]!;
+      return { name: c.name, position: cut === null ? null : c.position, tool, args, text: (c.transcriptRef && texts.get(c.transcriptRef)) ?? null };
+    });
 }
 
 const sortedIds = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b);
