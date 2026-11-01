@@ -45,4 +45,7 @@ loopback の偽サーバに届くのは匿名の 1 要求だけになった。�
 - 組み立てた env に `LANG` が無いので git の stderr は C locale に固定され、ADR 0334 決定4 の `Operation too slow` の釘が host の言語に依らない。
 - `GIT_ALLOW_PROTOCOL=https` だけでは local path の remote(テスト fixture、loopback の `git http-backend`)が弾かれる —— `file:http:https` の根拠。
 - worker 側は変えない: sandbox は `~/.ssh` を読ませず、worker の網は allowed domains だけ(ADR 0033)。
+- 盤面の local の git(`git.ts` の `run`: WIP commit・registry commit・worktree)は本 ADR の外で、host の global config を継承したまま ——
+  `commit.gpgsign` が盤面の commit を人間の鍵で署名させるか失敗させ、`core.hooksPath` の hook が走る(実測、#2819)。
+- token は検証済みの TLS にしか出ない(`-c http.sslVerify=true`)—— 決定3 の「https の github.com にだけ」の TLS 側。
 - #2801 は同じ根の別の姿で、同じ実装が閉じる。実装は 1 slice、#2794 のコメントが spec。
