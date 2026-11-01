@@ -91,8 +91,9 @@ export interface WorkspaceAdminDeps {
   boardState?: BoardStatePath[];
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210) and clone/repository calls, absent when no
-   *  secrets file is configured — clones then run unauthenticated, the same
-   *  fail-closed posture as the optional `github` client below. */
+   *  secrets file is configured — clones then run anonymously under the same
+   *  floor (ADR 0339 決定2), the same fail-closed posture as the optional
+   *  `github` client below. */
   githubAuth?: GitHubAuth;
 }
 
@@ -601,10 +602,10 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
 /** 盤面がこれから git でその repo へ出ていく直前に、その repo の installation token を
  *  仲介が出せることを1回だけ確かめる(ADR 0067 決定2 の登録の門 = `clone`、決定8 の
  *  `publish`。修復の中身は ADR 0093 決定8)。
- *  撃たないのは2つの場合で、どちらも今日の挙動のまま通す:
+ *  撃たないのは2つの場合で、どちらも通す:
  *
  *  - `github` 不在 —— 盤面が GitHub 身元(ADR 0024)を持たないので probe を撃つ相手
- *    そのものが無い。ここは通す側で、git 呼び出しは今日どおり素のまま落ちる
+ *    そのものが無い。ここは通す側で、git 呼び出しは匿名で撃ち、private なら落ちる(ADR 0339 決定2)
  *  - 非 GitHub の URL —— `clone` の入力欄も `publish` の宛先欄も「anything git が
  *    受ける綴り」であり、`parseGitHubRepo` の `undefined` がそのままこの門になる
  *    (決定1)

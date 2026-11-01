@@ -1,6 +1,7 @@
-import { execFileSync, spawn } from "node:child_process";
+import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import type { Readable } from "node:stream";
 import { onTestFinished } from "vitest";
 import { tempDir } from "./temp-dir.js";
 
@@ -84,10 +85,17 @@ export async function startGitHttpRemote(
       process.stdout.write('http://127.0.0.1:' + server.address().port + '/' + name + '\\n');
     });
   `, dirname(remote), basename(remote), mode], { stdio: ["ignore", "pipe", "pipe"] });
-  onTestFinished(async () => {
+  return listeningUrl(server, () => {
     if (existsSync(hookPid)) {
       try { process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL"); } catch { /* Hook already exited. */ }
     }
+  });
+}
+
+/** Stops the server process when the test finishes and resolves the URL it prints once listening. */
+function listeningUrl(server: ChildProcessByStdio<null, Readable, Readable>, beforeStop?: () => void): Promise<string> {
+  onTestFinished(async () => {
+    beforeStop?.();
     if (server.exitCode !== null || server.signalCode !== null) return;
     const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
     server.kill();
@@ -95,7 +103,7 @@ export async function startGitHttpRemote(
   });
   return new Promise<string>((resolve, reject) => {
     server.once("error", reject);
-    server.once("exit", (code) => reject(new Error(`git HTTP remote exited before listening: ${code}`)));
+    server.once("exit", (code) => reject(new Error(`HTTP remote exited before listening: ${code}`)));
     server.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().trim()));
   });
 }
@@ -117,17 +125,7 @@ export async function startDenyingHttpRemote(): Promise<{ url: string; requests:
       process.stdout.write('http://127.0.0.1:' + server.address().port + '/o/r.git\\n');
     });
   `, log], { stdio: ["ignore", "pipe", "pipe"] });
-  onTestFinished(async () => {
-    if (server.exitCode !== null || server.signalCode !== null) return;
-    const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
-    server.kill();
-    await exited;
-  });
-  const url = await new Promise<string>((resolve, reject) => {
-    server.once("error", reject);
-    server.once("exit", (code) => reject(new Error(`401 remote exited before listening: ${code}`)));
-    server.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().trim()));
-  });
+  const url = await listeningUrl(server);
   const requests = () =>
     readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, string>);
   return { url, requests };

@@ -141,6 +141,7 @@ it("盤面の registry fetch は仲介の installation token で撃たれ、ホ�
 it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さない(ADR 0024)", async () => {
   const floor = [
     "-c", "credential.helper=",
+    "-c", "core.askPass=",
     "-c", "http.extraHeader=",
     "-c", "http.sslVerify=true",
     "-c", "url.https://github.com/.insteadOf=git@github.com:",

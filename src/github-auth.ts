@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rethrowNamingMissingCwd } from "./git.js";
@@ -105,10 +105,10 @@ export class GitHubAuth {
  *  host git config, askpass, ssh settings and `~/.netrc` never reach the child. GIT_TERMINAL_PROMPT=0
  *  turns a bad token into a fast failure instead of a hung prompt. ADR 0339 帰結: `file:http` is in the
  *  transport allowlist for local-path remotes and loopback `git http-backend`. */
-export function githubChildEnv(): NodeJS.ProcessEnv {
+function githubChildEnv(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
-    HOME: emptyHome(),
+    HOME: boardOwnedHome(),
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
@@ -118,10 +118,11 @@ export function githubChildEnv(): NodeJS.ProcessEnv {
 
 let home: string | undefined;
 
-/** A private (mkdtemp, mode 700) dir fixed for the board's lifetime. Writable because `gh` may write
- *  state there; the board never reads it. */
-function emptyHome(): string {
-  home ??= mkdtempSync(join(tmpdir(), "tidepool-github-home-"));
+/** The children's HOME: a private (mkdtemp, mode 700) dir that starts empty and stays writable, since
+ *  `gh` may write state there; the board never reads it. A tmp cleaner deleting it under a long-running
+ *  board gets a fresh one at the next call. */
+function boardOwnedHome(): string {
+  if (home === undefined || !existsSync(home)) home = mkdtempSync(join(tmpdir(), "tidepool-github-home-"));
   return home;
 }
 
@@ -193,12 +194,16 @@ export function originRepo(cwd: string): string | undefined {
 
 /** `-c` flags on every board git network call, with or without an identity (ADR 0339 決定1 / 2): what
  *  the built env cannot reach is the checkout's own `.git/config`. The empty helper clears every
- *  configured credential helper, the empty extraHeader clears unqualified headers, and sslVerify keeps
- *  the token off unverified TLS (ADR 0339 帰結). ADR 0339 決定4: the board's identity exists only over
- *  https, so an ssh-spelled GitHub origin is rewritten per call; `remote.origin.url` keeps its spelling. */
+ *  configured credential helper, the empty askPass clears the checkout's prompt program (which
+ *  GIT_TERMINAL_PROMPT=0 does not stop), the empty extraHeader clears unqualified headers, and
+ *  sslVerify keeps the token off unverified TLS (ADR 0339 帰結). ADR 0339 決定4: the board's identity
+ *  exists only over https, so an ssh-spelled GitHub origin is rewritten per call; `remote.origin.url`
+ *  keeps its spelling. */
 const GIT_FLOOR_ARGS = [
   "-c",
   "credential.helper=",
+  "-c",
+  "core.askPass=",
   "-c",
   "http.extraHeader=",
   "-c",
@@ -269,12 +274,11 @@ function runAuthedGit(
   args: string[],
   timeoutMs: number,
 ): string {
-  const authenticated = auth !== undefined && repo !== undefined;
   try {
-    const env = auth?.env(repo) ?? githubChildEnv();
-    refuseQualifiedExtraHeader(cwd, env, args);
+    const env = auth ? auth.env(repo) : githubChildEnv();
+    refuseFloorOverrides(cwd, env, args);
     const stallArgs = ["-c", "http.lowSpeedLimit=1", "-c", `http.lowSpeedTime=${Math.ceil(timeoutMs / 1000)}`];
-    return execFileSync("git", [...GIT_FLOOR_ARGS, ...(authenticated ? GIT_CREDENTIAL_ARGS : []), ...stallArgs, ...args], {
+    return execFileSync("git", [...GIT_FLOOR_ARGS, ...(env.GH_TOKEN ? GIT_CREDENTIAL_ARGS : []), ...stallArgs, ...args], {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -286,26 +290,28 @@ function runAuthedGit(
   }
 }
 
-/** ADR 0339 決定5: a URL-qualified `http.<url>.extraHeader` in the checkout's own config beats the
- *  `-c http.extraHeader=` reset, so its presence refuses the call before anything goes out. */
-function refuseQualifiedExtraHeader(cwd: string, env: NodeJS.ProcessEnv, args: string[]): void {
+/** ADR 0339 決定5: a URL-qualified `http.<url>.extraHeader` or `http.<url>.sslVerify` in the checkout's
+ *  own config beats the `-c` reset in GIT_FLOOR_ARGS, so its presence refuses the call before anything
+ *  goes out. Unscoped on purpose: under the built env it reads exactly the files the network call reads
+ *  (local, worktree, includes). */
+function refuseFloorOverrides(cwd: string, env: NodeJS.ProcessEnv, args: string[]): void {
   let keys: string;
   try {
-    keys = execFileSync(
-      "git",
-      ["config", "--local", "--includes", "--name-only", "--get-regexp", "^http\\..*\\.extraheader$"],
-      { cwd, env, stdio: ["ignore", "pipe", "pipe"] },
-    )
+    keys = execFileSync("git", ["config", "--name-only", "--get-regexp", "^http\\..*\\.(extraheader|sslverify)$"], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
       .toString()
       .trim();
   } catch (err) {
-    // 1 = no such key; 128 = cwd is not a checkout (clone runs from the base dir) — nothing to refuse
-    if ([1, 128].includes((err as { status?: number }).status ?? -1)) return;
+    // 1 = no such key, also outside a checkout (clone runs from the base dir) —— nothing to refuse
+    if ((err as { status?: number }).status === 1) return;
     throw err;
   }
   throw new Error(
     `\`git ${args[0]}\` refused (in ${cwd}): this checkout's git config sets ${keys.split("\n").join(", ")}, ` +
-      "a header that would go out alongside the board's identity — remove it to let the board use this checkout",
+      "which would override the board's own settings on its network call — remove it to let the board use this checkout",
   );
 }
 
