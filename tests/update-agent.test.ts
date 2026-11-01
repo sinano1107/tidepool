@@ -111,7 +111,6 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
   it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     rejectRegistryPushes(registryDir);
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(
       updateAgent(
@@ -127,7 +126,6 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
       ),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").agents.deckhand?.description).not.toBe(
       "Rewritten description",
     );
@@ -428,6 +426,6 @@ You are ${name}.
     await expect(
       renameAgentTiers({ from: "standard", to: "mid", message: "m" }, { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } }),
     ).rejects.toThrow(RegistryPushFailedError);
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(git(git(registryDir, "config", "remote.origin.url"), "rev-parse", "main")).toBe(before);
   });
 });

@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./git.js";
-import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
-import { REGISTRY_BRANCH, refreshRegistry, registryRef, remoteTrackingRef, type WritableRegistry } from "./registry.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, remoteTrackingRef } from "./github-auth.js";
+import { REGISTRY_BRANCH, refreshRegistry, registryRef, type WritableRegistry } from "./registry.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
  *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から
@@ -160,11 +160,10 @@ function land(registry: WritableRegistry, worktreeDir: string, baseSha: string, 
       // 同期のまま撃てるのは、同じ verb の入口の `refreshRegistryForWrite` が
       // 既にこの repo の installation token を温めているからである(ADR 0066
       // 決定5 が要求する「publish の同期区間に await を入れない」の帰結)。
-      // worktree は元の clone の config を共有するので origin は同じ1つ。ADR 0052 Status 追記: 写しは push の成功を見て盤面が書く
-      registry.writeRef(remoteTrackingRef(REGISTRY_BRANCH), newSha, () => {
-        authedGitBounded(auth, worktreeDir, GIT_NETWORK_TIMEOUT_MS, "push", `${newSha}:refs/heads/${REGISTRY_BRANCH}`);
-        git(registry.dir, "update-ref", remoteTrackingRef(REGISTRY_BRANCH), newSha);
-      });
+      // worktree は元の clone の config と ref を共有するので、origin も写しも同じ1つ
+      registry.writeRef(remoteTrackingRef(REGISTRY_BRANCH), newSha, () =>
+        authedPush(auth, worktreeDir, GIT_NETWORK_TIMEOUT_MS, [[REGISTRY_BRANCH, newSha]]),
+      );
     } else {
       registry.writeRef(`refs/heads/${REGISTRY_BRANCH}`, newSha, () =>
         git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha),

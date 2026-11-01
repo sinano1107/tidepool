@@ -9,10 +9,12 @@ import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { git } from "./git.js";
 import {
+  authedFetch,
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   originRepo,
+  remoteTrackingRef,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
@@ -697,7 +699,7 @@ export type RefWriter = (ref: string, newSha: string, write: () => void) => void
 /** origin から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
  *  head を取る fetch(ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
 export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: string): void {
-  authedGitBounded(auth, dir, GIT_NETWORK_TIMEOUT_MS, "fetch", sha);
+  authedFetch(auth, dir, GIT_NETWORK_TIMEOUT_MS, sha);
 }
 
 /** ADR 0243 決定3: 写し `refs/remotes/origin/<branch>` を原本へ進める。`ls-remote` で原本の sha を知ってから口に予告し、
@@ -715,15 +717,6 @@ export function fetchBranchCopy(dir: string, auth: GitHubAuth | undefined, branc
     fetchCommit(dir, auth, sha);
     git(dir, "update-ref", copy, sha);
   });
-}
-
-/** リモート側のブランチを指す remote-tracking ref の**綴り**。ADR 0052 のもとで
- *  「リモートの正本を読む」は registry の役(`registryRef` の下)と workspace の役
- *  (`protectedBranchRef`)の2箇所に現れるが、綴りそのものは1つでなければならない
- *  —— 2つ持つと、片方だけを直したときに黙ってずれる(/code-review Standards 軸の
- *  指摘)。どちらの ref を読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
-export function remoteTrackingRef(branch: string): string {
-  return `refs/remotes/origin/${branch}`;
 }
 
 /** `mode` が指す、盤面が registry を読み書きする1つの ref — remote-tracking

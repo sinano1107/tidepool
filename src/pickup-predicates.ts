@@ -3,8 +3,9 @@ import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
+import { remoteTrackingRef } from "./github-auth.js";
 import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
-import { type RegistrySource, remoteTrackingRef } from "./registry.js";
+import type { RegistrySource } from "./registry.js";
 import { getTask, interviewRoomPath, latestPosedProbe, type Task, unsettledExaminees } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 

@@ -70,6 +70,7 @@ export function parseGitHubRepo(url: string | undefined): RepoSlug | undefined {
 
 // 受ける綴りは4つ: `https://github.com/o/r(.git)` / `ssh://git@github.com/o/r` /
 // `git@github.com:o/r.git` / `o/r`。接頭辞ごと省けるので bare な `o/r` も同じ式で
-// 落ちる —— ローカルパスは先頭の `/` と余分な区切りで弾かれる。
+// 落ちる —— ローカルパスは先頭の `/` と余分な区切りで弾かれ、`..` / `.` から始まる相対 path は owner に `.` を
+// 許さないことで弾かれる(GitHub の owner は英数字と `-` だけ)。
 const GITHUB_REPO_RE =
-  /^(?:(?:https:\/\/|ssh:\/\/git@)github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?$/;
+  /^(?:(?:https:\/\/|ssh:\/\/git@)github\.com\/|git@github\.com:)?([\w-]+)\/([\w.-]+?)(?:\.git)?$/;

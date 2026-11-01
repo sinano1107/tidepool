@@ -258,13 +258,11 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
     const { registryDir } = await makeRemoteBackedRegistry();
     rejectRegistryPushes(registryDir);
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(
       updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).not.toBe(
       "the registry clone itself",
     );

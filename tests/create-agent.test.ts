@@ -202,16 +202,15 @@ describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052
     expect(git(registryDir, "worktree", "list").trim().split("\n")).toHaveLength(1);
   });
 
-  it("push が失敗すると致命 — リモートにもローカルの追跡 ref にもコミットが残らず、worktree も残らない", async () => {
+  // 拒まれた push で写しが動かないことは create-workspace.test.ts の commitToRegistry の釘が持つ
+  it("push が失敗すると致命 — リモートにコミットが残らず、worktree も残らない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     rejectRegistryPushes(registryDir);
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(
       createAgent(input, { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced }, tiers: () => seedTierNames }),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").agents.tako).toBeUndefined();
     expect(git(registryDir, "worktree", "list").trim().split("\n")).toHaveLength(1);
   });

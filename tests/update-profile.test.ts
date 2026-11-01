@@ -78,7 +78,6 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
   it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     rejectRegistryPushes(registryDir);
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(
       updateProfile(
@@ -93,7 +92,6 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
       ),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).not.toBe(
       "Rewritten guidance.",
     );

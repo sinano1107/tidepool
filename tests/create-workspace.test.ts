@@ -59,7 +59,7 @@ it("registry の push が無音なら RegistryPushFailedError に中断理由を
   expect(failure).toHaveProperty("message", expect.stringContaining("`git push` stalled: no bytes for 1 s"));
 }, 15_000);
 
-// ADR 0052 Status 追記: 盤面所有の repo からの push は registry clone の写しを動かさない —— 写しは push の成功を見て盤面が書く
+// ADR 0052 Status 追記(#2827): 盤面所有の repo からの push は registry clone の写しを動かさない —— 写しは push の成功を見て盤面が書く
 it("registry の push が拒まれれば写し origin/main は動かず、通れば着地した commit を指す", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
   const registry = { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced };
@@ -626,6 +626,30 @@ describe("createWorkspace: clone モード(issue #57)", () => {
     await createWorkspace({ mode: "clone", name: "lagoon", repo: "git@github.com:sinano1107/tidepool.git" }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: "git@github.com:sinano1107/tidepool.git" });
+  });
+
+  // ADR 0339 決定4: 比べるのは insteadOf 適用前の origin の値 —— 盤面の網に出る git が読むのと同じ値
+  it("リトライの孤児の origin は insteadOf を当てる前の値で比べ、孤児の checkout の insteadOf に読み替えられない", async () => {
+    const registryDir = await makeMainRegistry();
+    const { github: _github, ...deps } = await makeDeps(registryDir);
+    const repo = "https://github.com/sinano1107/tidepool.git";
+    placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", await makeUpstream(), repo);
+    git(join(deps.workspacesBaseDir, "lagoon"), "config", "url.https://github.com/someone/else.git.insteadOf", repo);
+
+    await createWorkspace({ mode: "clone", name: "lagoon", repo }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo });
+  });
+
+  // 盤面所有の HOME から撃つ clone は、無い宛先の親を自分で作ってしまう —— 置き場が無ければ撃たずに名指して止まる
+  it("workspacesBaseDir が無ければ clone を撃たず、その在り処を名指して拒否する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = { ...(await makeDeps(registryDir)), workspacesBaseDir: join(await tempDir("tidepool-ws-parent-"), "missing") };
+
+    await expect(createWorkspace({ mode: "clone", name: "lagoon", repo: await makeUpstream() }, deps)).rejects.toThrow(
+      `\`git clone\` cannot run: the directory ${deps.workspacesBaseDir} does not exist`,
+    );
+    expect(existsSync(deps.workspacesBaseDir)).toBe(false);
   });
 
   // ADR 0339 決定5: clone は盤面所有の HOME から撃つので、相対 path は workspacesBaseDir ではない場所に解ける

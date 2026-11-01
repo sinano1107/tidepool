@@ -494,10 +494,10 @@ export class FakeGitHubClient implements GitHubClient {
   /** 返す push は記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
    *  なければ、盤面が自分の書き込みを基準に畳んだか(ADR 0243)を測れない。
    *  origin を持たない checkout(purely-local)には呼ばれない。 */
-  async preparePush(input: PushBranchInput): Promise<() => void> {
-    return () => {
+  async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {
+    return (sha) => {
       this.pushes.push(input);
-      execFileSync("git", ["push", "-u", "origin", input.branch], {
+      execFileSync("git", ["push", "origin", `${sha}:refs/heads/${input.branch}`], {
         cwd: input.path,
         stdio: ["ignore", "pipe", "pipe"],
       });

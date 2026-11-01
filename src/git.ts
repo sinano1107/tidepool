@@ -52,7 +52,9 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
   }
 }
 
-/** git の2つの runner(`run` と github-auth.ts の `runAuthedGit`)が共有する —— 直に `execFileSync` する呼び出しは通らない。Node は cwd が無いときも git が
+/** `run` と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git
+ *  そのもの(`runAuthedGit`)は盤面所有の repo か HOME を cwd にするので通らず、clone の置き場の不在は `authedClone` が
+ *  同じ文で先に名指す。Node は cwd が無いときも git が
  *  PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを投げ、それが quarantine の理由にそのまま載る
  *  (issue #2722)—— cwd が無いほうだけを在り処を名指す理由に書き換え、git が無いほうは元のまま投げる。 */
 export function rethrowNamingMissingCwd(err: unknown, cwd: string, args: string[]): never {

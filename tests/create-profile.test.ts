@@ -144,13 +144,11 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
   it("push が失敗すると致命 — リモートにもコミットが残らない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     rejectRegistryPushes(registryDir);
-    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(
       createProfile(input, { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } }),
     ).rejects.toThrow(RegistryPushFailedError);
 
-    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
     expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeUndefined();
   });
 

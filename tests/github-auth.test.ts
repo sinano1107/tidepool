@@ -1,22 +1,23 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authedClone,
+  authedFetch,
   authedGitBounded,
+  authedPush,
   GIT_CREDENTIAL_ARGS,
   GIT_NETWORK_TIMEOUT_MS,
   GitHubAuth,
   githubLoggedIn,
   loadGitHubAuth,
-  networkUrl,
   originRepo,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { startDenyingHttpRemote, startRecordingHttpRemote } from "./git-http-remote.js";
-import { git } from "./harness.js";
+import { git, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const brokers: FakeBroker[] = [];
@@ -279,7 +280,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
     await auth.ensureToken("acme/widget");
-    authedGitBounded(auth, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${git(repo, "rev-parse", "HEAD")}:refs/heads/main`);
+    authedPush(auth, repo, GIT_NETWORK_TIMEOUT_MS, [["main", git(repo, "rev-parse", "HEAD")]]);
 
     expect(git(remote, "rev-parse", "main")).toBe(git(repo, "rev-parse", "main"));
     expect(process.env.GH_TOKEN).toBeUndefined();
@@ -339,49 +340,56 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     return { path, tripped: () => existsSync(`${path}.called`) };
   }
 
-  /** 本物の git の前に置く記録係 —— 呼び出しごとの argv、`--git-dir` の repo の alternates、GIT_OBJECT_DIRECTORY を残して本物へ渡す。 */
-  async function recordGitCalls(): Promise<() => { args: string[]; alternates?: string; objectDirectory: string }[]> {
-    const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-    const dir = await tempDir("tidepool-git-record-");
-    const log = join(dir, "calls.log");
-    writeFileSync(log, "");
-    writeFileSync(
-      join(dir, "git"),
-      `#!/bin/sh\nalt=\nfor a in "$@"; do case "$a" in --git-dir=*) alt="\${a#--git-dir=}/objects/info/alternates";; esac; done\n` +
-        `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; echo "objectDirectory=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
-        `exec "${real}" "$@"\n`,
-    );
-    chmodSync(join(dir, "git"), 0o755);
-    vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
-    return () =>
-      readFileSync(log, "utf8")
-        .split("---\n")
-        .filter(Boolean)
-        .map((block) => {
-          const lines = block.split("\n").filter(Boolean);
-          const value = (key: string) => lines.find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1);
-          return {
-            args: lines.filter((l) => l.startsWith("arg=")).map((l) => l.slice("arg=".length)),
-            alternates: value("alternates"),
-            objectDirectory: value("objectDirectory") ?? "",
-          };
-        });
-  }
-
   /** 盤面の子の HOME —— 盤面所有の repo はその下に作られ、呼び出しの終わりに消える。 */
-  function boardHomeEntries(): string[] {
-    return readdirSync(new GitHubAuth("/unused").env(undefined).HOME!);
+  function boardHome(): string {
+    return new GitHubAuth("/unused").env(undefined).HOME!;
   }
 
-  // ADR 0339 決定4: 人間の checkout の ssh 綴りの origin は盤面の https に解決する(綴りの記録は変えない)
+  // ADR 0339 決定4: 人間の checkout の ssh 綴りの origin は盤面の https に解決し、綴りの記録は変えない —— git が受けた URL を見る
   it.each([
     ["git@github.com:o/r.git", "https://github.com/o/r.git"],
     ["ssh://git@github.com/o/r", "https://github.com/o/r.git"],
     ["https://github.com/o/r", "https://github.com/o/r.git"],
     ["http://127.0.0.1:8080/o/r.git", "http://127.0.0.1:8080/o/r.git"],
     ["/srv/mirrors/r.git", "/srv/mirrors/r.git"],
-  ])("origin の値 %s から盤面が組む URL は %s", (origin, url) => {
-    expect(networkUrl(origin)).toBe(url);
+  ])("origin の値 %s の checkout から、網に出る git は %s を受ける", async (origin, url) => {
+    const repo = await checkoutWithOrigin(origin);
+    const calls = await shimGit({ fake: ["ls-remote"] });
+
+    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
+
+    const { args } = calls().find((call) => call.args.includes("ls-remote"))!;
+    expect({ url: args[args.indexOf("ls-remote") + 1], recorded: git(repo, "config", "remote.origin.url") }).toEqual({ url, recorded: origin });
+  });
+
+  // 盤面所有の repo は checkout の外にあるので、相対 path の origin は checkout を起点に解いてから渡す
+  it("非 GitHub の相対 path の origin は checkout を起点に解かれ、fetch が届く", async () => {
+    const parent = await tempDir("tidepool-relative-");
+    const remote = join(parent, "up.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remote]);
+    const seed = await checkoutWithOrigin(remote);
+    git(seed, "commit", "--allow-empty", "-m", "seed");
+    git(seed, "push", "origin", "main");
+    const repo = join(parent, "checkout");
+    execFileSync("git", ["init", "-b", "main", repo]);
+    git(repo, "remote", "add", "origin", "../up.git");
+    const sha = git(remote, "rev-parse", "main");
+
+    authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, sha);
+
+    expect(git(repo, "cat-file", "-t", sha)).toBe("commit");
+  });
+
+  // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を http へ書き換えても、local の転送しか許さない
+  it("checkout の insteadOf が盤面所有の repo の path を http へ向けても、hop2 は網に出ない", async () => {
+    const { remote, repo } = await checkoutOfBareRemote();
+    const merged = await commitOnRemote(remote);
+    const decoy = await startDenyingHttpRemote();
+    git(repo, "config", `url.${decoy.url}/.insteadOf`, `${boardHome()}/`);
+    vi.stubEnv("GIT_TERMINAL_PROMPT", "0");
+
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, merged)).toThrow();
+    expect(decoy.requests()).toEqual([]);
   });
 
   // ADR 0339 決定4・5: 網に出る git は checkout の中で走らず、URL は盤面が組む —— checkout の config は身元も経路も運ばない
@@ -404,9 +412,9 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     git(repo, "commit", "--allow-empty", "-m", "topic");
     const topic = git(repo, "rev-parse", "HEAD");
 
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+    authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, merged);
     authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${topic}:refs/heads/topic`);
+    authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["topic", topic]]);
 
     const requests = reached.requests();
     expect({
@@ -423,7 +431,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const merged = await commitOnRemote(remote);
     const refs = git(repo, "for-each-ref");
 
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+    authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, merged);
 
     expect({ type: git(repo, "cat-file", "-t", merged), refs: git(repo, "for-each-ref") }).toEqual({ type: "commit", refs });
   });
@@ -446,9 +454,9 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const packBytes = (from: number) =>
       reached.requests().slice(from).filter((r) => r.path.endsWith("/git-upload-pack")).reduce((sum, r) => sum + r.bytes, 0);
 
-    authedGitBounded(undefined, empty, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+    authedFetch(undefined, empty, GIT_NETWORK_TIMEOUT_MS, merged);
     const seen = reached.requests().length;
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", merged);
+    authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, merged);
 
     const [whole, incremental] = [packBytes(0) - packBytes(seen), packBytes(seen)];
     expect({ whole: whole > 200 * 1024, ratio: incremental / whole < 0.1 }).toEqual({ whole: true, ratio: true });
@@ -459,29 +467,29 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     // 全 0 の oid は push では「消す」と読まれるので、どこにも無い別の oid を使う
     const missing = "1".repeat(40);
 
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", sha);
+    authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, sha);
     authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${sha}:refs/heads/copy`);
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", missing)).toThrow();
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "push", `${missing}:refs/heads/copy`)).toThrow();
+    authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["copy", sha]]);
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, missing)).toThrow();
+    expect(() => authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["copy", missing]])).toThrow();
     git(repo, "remote", "set-url", "origin", (await startDenyingHttpRemote()).url);
     expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main")).toThrow();
 
-    expect(boardHomeEntries()).toEqual([]);
+    expect(readdirSync(boardHome())).toEqual([]);
   });
 
   // ADR 0339 決定1・5: GIT_OBJECT_DIRECTORY で借りると盤面 repo の gc が checkout の objects を消す。fetch が起こす auto maintenance は上限の外に出る
   it("盤面所有の repo は alternates で checkout の objects を借り、GIT_OBJECT_DIRECTORY を使わず、hop1 の fetch は写しの sha を交渉の tip に渡し auto maintenance と gc を止める", async () => {
     const { repo, sha } = await checkoutOfBareRemote();
-    const calls = await recordGitCalls();
+    const calls = await shimGit();
 
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", sha);
+    authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, sha);
 
     const hop1 = calls().find(({ args }) => args.some((a) => a.startsWith("--git-dir=")) && args.includes("fetch"))!;
     const flags = hop1.args.join(" ");
     expect({
       alternates: realpathSync(hop1.alternates!),
-      objectDirectory: calls().map((c) => c.objectDirectory).filter(Boolean),
+      objectDirectory: calls().map((c) => c.env.GIT_OBJECT_DIRECTORY).filter(Boolean),
       tips: hop1.args.filter((a) => a.startsWith("--negotiation-tip=")),
       maintenance: flags.includes("-c maintenance.auto=false"),
       gc: flags.includes("-c gc.auto=0"),
@@ -510,7 +518,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
   it("非 GitHub の ssh origin で止まった文は、人間が直す origin の値を名指す", async () => {
     const repo = await checkoutWithOrigin("git@example.com:o/r");
 
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow(
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main")).toThrow(
       `\`git fetch\` failed with \`transport 'ssh' not allowed\` (in ${repo}): the board reaches a remote only over https or a local path — ` +
         "the origin `git@example.com:o/r` is an ssh remote outside GitHub",
     );
@@ -522,7 +530,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const askpass = tripwire(repo, "askpass");
     vi.stubEnv("GIT_ASKPASS", askpass.path);
 
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow();
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main")).toThrow();
     expect({ askpass: askpass.tripped(), offered: requests().map((r) => r.authorization) }).toEqual({
       askpass: false,
       offered: [undefined],
@@ -535,7 +543,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const askpass = tripwire(repo, "askpass");
     git(repo, "config", "core.askPass", askpass.path);
 
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow();
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main")).toThrow();
     expect({ askpass: askpass.tripped(), offered: requests().map((r) => r.authorization) }).toEqual({
       askpass: false,
       offered: [undefined],
@@ -548,7 +556,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     writeFileSync(join(hostHome, ".netrc"), "machine 127.0.0.1 login u password netrc-secret\n", { mode: 0o600 });
     vi.stubEnv("HOME", hostHome);
 
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow();
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main")).toThrow();
     expect(requests().map((r) => r.authorization)).toEqual([undefined]);
   });
 
@@ -575,6 +583,6 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const missing = join(await tempDir("tidepool-authed-"), "gone");
     const expected = `\`git fetch\` cannot run: the directory ${missing} does not exist`;
 
-    expect(() => authedGitBounded(undefined, missing, GIT_NETWORK_TIMEOUT_MS, "fetch", "main")).toThrow(expected);
+    expect(() => authedFetch(undefined, missing, GIT_NETWORK_TIMEOUT_MS, "main")).toThrow(expected);
   });
 });

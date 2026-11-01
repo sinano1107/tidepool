@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { git, rethrowNamingMissingCwd } from "./git.js";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { git, gitWithEnv, rethrowNamingMissingCwd } from "./git.js";
 import { parseGitHubRepo } from "./repo-access.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -179,14 +179,20 @@ export function repoKey(url: string | undefined): string | undefined {
  *  No origin, not a git checkout, or a non-GitHub remote all read the same:
  *  `undefined`, and the call runs anonymously (ADR 0339 決定2). */
 export function originRepo(cwd: string): string | undefined {
+  return repoKey(originValue(cwd));
+}
+
+/** The checkout's raw `remote.origin.url` — the value before any `insteadOf` (ADR 0339 決定4), the board's one
+ *  reading of "origin". `undefined` with no origin or outside a checkout. */
+export function originValue(cwd: string): string | undefined {
   try {
-    return repoKey(checkoutOrigin(cwd, "config"));
+    return checkoutOrigin(cwd, "config");
   } catch {
     return undefined;
   }
 }
 
-/** The checkout's raw `remote.origin.url` — the value before any `insteadOf` (ADR 0339 決定4). */
+/** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
 function checkoutOrigin(cwd: string, verb: string): string {
   try {
     return execFileSync("git", ["config", "remote.origin.url"], { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -198,16 +204,34 @@ function checkoutOrigin(cwd: string, verb: string): string {
   }
 }
 
-/** ADR 0339 決定4: the URL the board goes out to, built from an origin value — GitHub in any spelling
- *  becomes the https URL the board's identity exists on, anything else is used as written. */
-export function networkUrl(origin: string): string {
-  const key = repoKey(origin);
-  return key ? `https://github.com/${key}.git` : origin;
+/** A non-GitHub value naming a local repository by a relative path. The board's network git runs outside the
+ *  checkout and `clone` from the board-owned HOME (ADR 0339 決定5), so such a path would resolve somewhere else.
+ *  URLs and scp spellings put a `:` before the first `/`. */
+export function isRelativeLocalPath(value: string): boolean {
+  return repoKey(value) === undefined && !isAbsolute(value) && !/^[^/]*:/.test(value);
 }
 
-/** The inline helper serving the injected GH_TOKEN. ADR 0339 決定3: it
- *  answers only `protocol=https host=github.com`, so a checkout's `insteadOf` to another host never gets
- *  the token. The token stays in the child env, never on the command line where `ps` could read it. */
+/** ADR 0339 決定4: the URL the board goes out to, built from an origin value — GitHub in any spelling becomes the
+ *  https URL the board's identity exists on; a relative local path is resolved against `base`, where git itself would
+ *  have resolved it; anything else is used as written. */
+function networkUrl(origin: string, base: string): string {
+  const key = repoKey(origin);
+  if (key) return `https://github.com/${key}.git`;
+  return isRelativeLocalPath(origin) ? resolve(base, origin) : origin;
+}
+
+/** リモート側のブランチを指す remote-tracking ref(写し)の**綴り**。ADR 0052 のもとで「リモートの正本を読む」は registry の役
+ *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れ、書くのは push の後の `authedPush` と
+ *  `fetchBranchCopy` —— 綴りそのものは1つでなければならない(2つ持つと、片方だけを直したときに黙ってずれる)。どちらの ref を
+ *  読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
+export function remoteTrackingRef(branch: string): string {
+  return `refs/remotes/origin/${branch}`;
+}
+
+/** The inline helper serving the injected GH_TOKEN. ADR 0339 決定3: it answers only `protocol=https host=github.com`,
+ *  so the token goes out only to the https URL the board built for a GitHub origin (決定4) and never to a non-GitHub
+ *  URL, which a GitHub origin cannot become. The token stays in the child env, never on the command line where `ps`
+ *  could read it. */
 export const GIT_CREDENTIAL_ARGS = [
   "-c",
   'credential.helper=!f() { test "$1" = get || return 0; while read -r l; do case "$l" in protocol=https) p=1;; host=github.com) h=1;; esac; done; ' +
@@ -228,20 +252,22 @@ export const GIT_CREDENTIAL_ARGS = [
  *  である —— 資源ごとに数を分けると、片方だけを動かしたときに理由のほうが割れる。 */
 export const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
-/** Board-driven git network calls from a checkout (ADR 0339 決定4・5): they never run inside it. The URL is
- *  built from the checkout's origin value and the token is the one `await auth.ensureToken(originRepo(checkout))`
- *  cached; without an identity or a GitHub origin the call is anonymous (ADR 0339 決定2). Each call creates a
- *  disposable board-owned repo that borrows the checkout's objects read-only through `objects/info/alternates`
- *  and removes it at the end, success or failure. `args` are the verb's flags and refspecs — a push names
- *  `<sha>:<ref>`, since the board repo has no refs. `fetch` takes one want and brings it into the checkout's
- *  object store without writing any of its refs (hop2 is local, `git.ts`'s `run`). */
-export function authedGitBounded(
+/** One network child's surroundings: its built env, the board repo it runs in (none for `clone`), the place a human
+ *  reads in the error, the stall bound, and the origin value the URL was built from. */
+type AuthedCall = { env: NodeJS.ProcessEnv; boardRepo: string | undefined; where: string; timeoutMs: number; origin: string };
+
+/** ADR 0339 決定5: a network call from a checkout never runs inside it. One disposable board-owned repo per call
+ *  (`--git-dir`, never env) borrows the checkout's objects read-only through `objects/info/alternates`, and is
+ *  removed at the end, success or failure. The URL is built from the checkout's origin value (決定4) and the token is
+ *  the one `await auth.ensureToken(originRepo(checkout))` cached; without an identity or a GitHub origin the call is
+ *  anonymous (決定2). */
+function inBoardRepo<T>(
   auth: GitHubAuth | undefined,
   checkout: string,
   timeoutMs: number,
-  verb: "fetch" | "ls-remote" | "push",
-  ...args: string[]
-): string {
+  verb: string,
+  run: (call: AuthedCall & { boardRepo: string }, url: string) => T,
+): T {
   const origin = checkoutOrigin(checkout, verb);
   const env = auth ? auth.env(repoKey(origin)) : githubChildEnv();
   const boardRepo = mkdtempSync(join(env.HOME!, "repo-"));
@@ -250,30 +276,64 @@ export function authedGitBounded(
     // ADR 0339 退けた形: GIT_OBJECT_DIRECTORY で借りると、ref を持たない盤面 repo の gc が checkout の objects を全部消す
     const objects = git(checkout, "rev-parse", "--path-format=absolute", "--git-path", "objects");
     writeFileSync(join(boardRepo, "objects", "info", "alternates"), `${objects}\n`);
-    const network = { env, boardRepo, where: checkout, timeoutMs, origin };
-    if (verb !== "fetch") return networkGit(network, [verb, networkUrl(origin), ...args]);
-    // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
-    const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
-    networkGit(network, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), networkUrl(origin), `${args[0]}:refs/board/fetched`]);
-    return git(checkout, "fetch", "--quiet", boardRepo, "refs/board/fetched");
+    return run({ env, boardRepo, where: checkout, timeoutMs, origin }, networkUrl(origin, checkout));
   } finally {
     rmSync(boardRepo, { recursive: true, force: true });
   }
 }
 
+/** `ls-remote` or `push` from a checkout through a board repo (`inBoardRepo`). `args` are the verb's flags and
+ *  refspecs — a push names `<sha>:<ref>`, since the board repo has no refs; `authedPush` is the one caller that pushes. */
+export function authedGitBounded(
+  auth: GitHubAuth | undefined,
+  checkout: string,
+  timeoutMs: number,
+  verb: "ls-remote" | "push",
+  ...args: string[]
+): string {
+  return inBoardRepo(auth, checkout, timeoutMs, verb, (call, url) => runAuthedGit(call, [verb, url, ...args]));
+}
+
+/** ADR 0339 決定5: brings the commit `want` into the checkout's object store without writing any of its refs, in two
+ *  hops — hop1 fetches it from the network into the board repo's `refs/board/fetched`, hop2 takes it from there into
+ *  the checkout. */
+export function authedFetch(auth: GitHubAuth | undefined, checkout: string, timeoutMs: number, want: string): void {
+  inBoardRepo(auth, checkout, timeoutMs, "fetch", (call, url) => {
+    // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
+    const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
+    runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
+    // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通さず、submodule も辿らない
+    gitWithEnv({ GIT_ALLOW_PROTOCOL: "file" }, checkout, "fetch", "--quiet", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
+  });
+}
+
+/** Pushes each `[branch, sha]` — atomically when there is more than one — and, once the push succeeded, writes each
+ *  copy `refs/remotes/origin/<branch>` to its sha. ADR 0052 Status 追記(#2827): a push from the board repo does not
+ *  move the checkout's copies, so the board writes them, inside the caller's ADR 0243 口. The sha is the caller's —
+ *  the value it announced — never re-read here. */
+export function authedPush(
+  auth: GitHubAuth | undefined,
+  checkout: string,
+  timeoutMs: number,
+  branches: ReadonlyArray<readonly [branch: string, sha: string]>,
+): void {
+  const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
+  authedGitBounded(auth, checkout, timeoutMs, "push", ...(branches.length > 1 ? ["--atomic"] : []), ...refspecs);
+  for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch), sha);
+}
+
 /** ADR 0339 決定5: `clone` runs from the board-owned HOME, so no checkout's config — not even a parent of
  *  `dir` — is read; the new checkout's origin is the URL the board built. */
 export function authedClone(auth: GitHubAuth | undefined, source: string, dir: string, timeoutMs: number): void {
+  // cwd が置き場でなくなったので git clone は無い親を自分で作る —— 置き場が無ければ撃たずに名指す(issue #2722 の文)
+  if (!existsSync(dirname(dir))) throw new Error(`\`git clone\` cannot run: the directory ${dirname(dir)} does not exist`);
   const env = auth ? auth.env(repoKey(source)) : githubChildEnv();
-  networkGit({ env, boardRepo: undefined, where: dir, timeoutMs, origin: source }, ["clone", "--quiet", networkUrl(source), dir]);
+  runAuthedGit({ env, boardRepo: undefined, where: dir, timeoutMs, origin: source }, ["clone", "--quiet", networkUrl(source, env.HOME!), dir]);
 }
 
 /** The one network child (ADR 0339 決定1): the board's own `-c` only — the injected helper, ADR 0334's stall
  *  detection, and no auto maintenance or gc (the `--detach` child they spawn would outlive the stall bound). */
-function networkGit(
-  call: { env: NodeJS.ProcessEnv; boardRepo: string | undefined; where: string; timeoutMs: number; origin: string },
-  args: string[],
-): string {
+function runAuthedGit(call: AuthedCall, args: string[]): string {
   const { env, boardRepo, where, timeoutMs, origin } = call;
   try {
     return execFileSync(

@@ -182,7 +182,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     );
   });
 
-  // ADR 0052 Status 追記: 盤面所有の repo からの push は checkout の写しを動かさない —— 押した N 本の写しは push の成功を見て盤面が書く
+  // ADR 0052 Status 追記(#2827): 盤面所有の repo からの push は checkout の写しを動かさない —— 押した N 本の写しは push の成功を見て盤面が書く
   it.each([
     ["通れば、押した各ブランチの写しは押した sha を指す", false],
     ["拒まれれば、写しは1本も作られない", true],
