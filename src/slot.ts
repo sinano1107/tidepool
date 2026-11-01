@@ -82,7 +82,7 @@ export class Slot {
     return actions;
   }
 
-  /** 落ちた後始末の受理が走っている印。同期に取り、取れなければ undefined。後始末が枠を空けた後も受理の確認(ADR 0343 決定1)まで持つので `release` は触らない。 */
+  /** 落ちた後始末・閉じ切らなかった session の受理が走っている印。同期に取り、取れなければ undefined。後始末が枠を空けた後も受理の確認(ADR 0343 決定1)まで持つので `release` は触らない。 */
   takeTeardownAcceptanceMark(): (() => void) | undefined {
     if (this.acceptingTeardown) return undefined;
     this.acceptingTeardown = true;

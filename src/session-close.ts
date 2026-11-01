@@ -4,7 +4,7 @@ import { stderrTail } from "./child-stream.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "./codex-stream-reader.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, listEventsOfKinds, SESSION_WINDOW_KINDS, sessionWindow } from "./events.js";
+import { appendEvent, type EventPayload, type EventRow, listEventsOfKinds, SESSION_WINDOW_KINDS, sessionWindow } from "./events.js";
 import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 import type { Harness } from "./registry.js";
 import { parseStreamLine } from "./stream-json.js";
@@ -34,60 +34,76 @@ export function closeSessionActions(
   ];
 }
 
+type RecordCloseOptions = { logDir: string; tmpDir: string; now: Date };
+
 /** 前の盤面が閉じ切らなかった session を閉じる起動時の復旧(ADR 0315 決定1〜5)。対象は `watermark`(起動時点の最大 event id)
  *  以下の spawn だけ —— 受理の門から走るとき、走行中の別の盤面の session に偽の exit を書かない。1件の失敗は記録して流す
  *  —— 盤面 DB の拒否だけは投げて起動を拒む(ADR 0342 決定4)。 */
-export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: string; watermark: number; now: Date }): void {
+export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions & { watermark: number }): void {
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
-    if (spawned.payload.kind !== "worker_spawned" || spawned.id > opts.watermark || spawned.task_id === null) continue;
-    // shortcut: spawn ごとに盤面全体の event を舐める O(n²)、transcript も読み手と投影器で2度読む。起動が遅くなったら task ごとに分けて渡し、読みを1度にする
-    const window = sessionWindow(events, spawned);
-    // process を1つも持たなかった session は閉じない —— exit も Episode も一時領域の削除も無い(ADR 0316 決定4 / #2633)
-    if (window.neverRan) continue;
-    const taskId = spawned.task_id;
-    const { harness } = spawned.payload;
-    const base = join(opts.logDir, `${taskId}.${spawned.id}`);
-    const transcriptPath = `${base}.stream.jsonl`;
-    // transcript が無い session は投影できない —— 試みず記録もしない。exit があっても起動のたびに報告し続けない(ADR 0316 決定2)
-    const transcript = existsSync(transcriptPath);
-    const project = () => {
-      if (transcript && !hasEpisodeOfAnyVersion(db, spawned.id)) projectAndPersist(db, { workerSpawnedEventId: spawned.id, transcriptPath });
-    };
+    if (spawned.id > opts.watermark) continue;
     try {
-      // 後の spawn があれば窓は既に閉じている —— exit を書くと次の session に重なり、一時領域は後の session のもの
-      if (window.exited || window.hasNextSpawn) {
-        project();
-        continue;
-      }
-      const actions = closeSessionActions(
-        db,
-        () => ({
-          taskId,
-          actorId: spawned.actor_id,
-          at: opts.now,
-          payload: {
-            kind: "worker_exited",
-            exit_observed: false,
-            exit_code: null,
-            signal: null,
-            stderr_tail: readStderrTail(`${base}.stderr.log`),
-            ...streamExitFields(harness, transcriptPath),
-            worker_spawned_event_id: spawned.id,
-            output_closed: false,
-          },
-        }),
-        () => removeTaskTemps(opts.tmpDir, taskId),
-        project,
-      );
-      for (const action of actions) action();
+      closeSpawned(db, events, spawned, opts);
     } catch (err) {
       // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
       if (isBoardDbRefusal(err)) throw err;
       // transcript が読めない = 記録の dir が後から壊れた印(ADR 0314 決定2)。起動は落とさない
-      console.error(`[recovery] could not close session ${spawned.id} of task ${taskId}:`, err);
+      console.error(`[recovery] could not close session ${spawned.id} of task ${spawned.task_id}:`, err);
     }
   }
+}
+
+/** 1つの spawn を記録から閉じ直す(ADR 0344 決定3)。閉じ切らなかった session の受理の、再起動を跨いだ側の検査。投げたら呼び手へ返す。 */
+export function closeSessionFromRecord(db: Db, spawnId: number, opts: RecordCloseOptions): void {
+  const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
+  const spawned = events.find((e) => e.id === spawnId);
+  if (spawned) closeSpawned(db, events, spawned, opts);
+}
+
+/** 起動時の復旧と受理が共有する spawn ごとの閉じ方(ADR 0344 決定3: 写しを増やさない)。冪等: exit があれば書かず、Episode があれば投影しない。
+ *  資源の停止の登録は撃たない(ADR 0316 決定3)。 */
+function closeSpawned(db: Db, events: EventRow[], spawned: EventRow, opts: RecordCloseOptions): void {
+  if (spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) return;
+  // shortcut: spawn ごとに盤面全体の event を舐める O(n²)、transcript も読み手と投影器で2度読む。起動が遅くなったら task ごとに分けて渡し、読みを1度にする
+  const window = sessionWindow(events, spawned);
+  // process を1つも持たなかった session は閉じない —— exit も Episode も一時領域の削除も無い(ADR 0316 決定4 / #2633)
+  if (window.neverRan) return;
+  const taskId = spawned.task_id;
+  const { harness } = spawned.payload;
+  const base = join(opts.logDir, `${taskId}.${spawned.id}`);
+  const transcriptPath = `${base}.stream.jsonl`;
+  // transcript が無い session は投影できない —— 試みず記録もしない。exit があっても起動のたびに報告し続けない(ADR 0316 決定2)
+  const transcript = existsSync(transcriptPath);
+  const project = () => {
+    if (transcript && !hasEpisodeOfAnyVersion(db, spawned.id)) projectAndPersist(db, { workerSpawnedEventId: spawned.id, transcriptPath });
+  };
+  // 後の spawn があれば窓は既に閉じている —— exit を書くと次の session に重なり、一時領域は後の session のもの
+  if (window.exited || window.hasNextSpawn) {
+    project();
+    return;
+  }
+  const actions = closeSessionActions(
+    db,
+    () => ({
+      taskId,
+      actorId: spawned.actor_id,
+      at: opts.now,
+      payload: {
+        kind: "worker_exited",
+        exit_observed: false,
+        exit_code: null,
+        signal: null,
+        stderr_tail: readStderrTail(`${base}.stderr.log`),
+        ...streamExitFields(harness, transcriptPath),
+        worker_spawned_event_id: spawned.id,
+        output_closed: false,
+      },
+    }),
+    () => removeTaskTemps(opts.tmpDir, taskId),
+    project,
+  );
+  for (const action of actions) action();
 }
 
 /** live の adapter と同じ読み手に transcript の行を食わせる(ADR 0316 決定1)。読み手は投影器と同じく `worker_spawned.harness` で選ぶ。

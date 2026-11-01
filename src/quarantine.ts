@@ -17,6 +17,7 @@ import { canonicalHarness, type Harness } from "./registry.js";
 import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
+export const UNCLOSED_SESSION_QUESTION_TITLE = "the board could not close a worker session — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
 interface QuarantineProse {
   title: string;
@@ -156,7 +157,7 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
 /** Harness 単位の行(封じ込め能力・Worker MCP 到達性)が外す Provider: その Harness を正準経路に持つもの。 */
 const providersOnHarnesses = (harnesses: string[]) => PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider)));
 
-/** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
+/** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown → unclosedSession →
  *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
   {
@@ -190,6 +191,21 @@ export const QUARANTINES = [
         "if it throws again the answer is refused, " +
         "this question stays open, and the refusal carries that run's exception body.",
       completion_criteria: "the teardown for that task runs to completion",
+    }),
+  },
+  {
+    kind: "unclosedSession" satisfies HaltKind,
+    scope: "board",
+    /** 断言するのは3つだけ(ADR 0344 決定3): どの session(task と spawn id)が・いつから閉じられず・盤面のコードが投げた例外の本文。
+     *  task id から後は呼び出し側が reason に畳む。 */
+    prose: (spawnId: string | null, reason: string): QuarantineProse => ({
+      title: UNCLOSED_SESSION_QUESTION_TITLE,
+      purpose:
+        `the board's own code threw while writing the close of a worker session (spawn event ${spawnId}): ${reason}\n\n` +
+        "No task is picked up while this stands. Answering closes that session again: " +
+        "if it throws again the answer is refused, this question stays open, and the refusal carries that run's " +
+        "exception body. If the session is already closed, the answer passes as is.",
+      completion_criteria: "that session's record is closed",
     }),
   },
   {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { quarantineContainment } from "../src/containment.js";
 import { openDb } from "../src/db.js";
-import { quarantineFailedTeardown } from "../src/failed-teardown.js";
+import { quarantineFailedTeardown, quarantineUnclosedSession } from "../src/failed-teardown.js";
 import { setPaused } from "../src/pause.js";
 import { quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { getTask, listBoard, nextSlotTask, registerTask } from "../src/tasks.js";
@@ -16,7 +16,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     expect(boardHalts(openDb(":memory:"))).toEqual([]);
   });
 
-  it("6つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に、記録の器は末尾に並ぶ", () => {
+  it("同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に、記録の器は末尾に並ぶ", () => {
     const db = openDb(":memory:");
     startTriage(db, NOW);
     setPaused(db, true);
@@ -34,6 +34,15 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "registryReachability",
       "recordContainer",
     ]);
+  });
+
+  it("閉じ切らなかった session は落ちた後始末の直後に並ぶ —— 先に直すべきは枠が刺さっている側(ADR 0344 決定1)", () => {
+    const db = openDb(":memory:");
+    registerQuarantine(db, "registryReachability", null, "origin is unreachable", NOW);
+    quarantineUnclosedSession(db, 7, "task-1", new Error("exit write failed"), NOW);
+    quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
+
+    expect(boardHalts(db).map((h: { kind: string }) => h.kind)).toEqual(["failedTeardown", "unclosedSession", "registryReachability"]);
   });
 
   it("落ちた後始末が2件なら確認型 question は2枚立ち、片方に答えても残りが開いている間は停止のまま(ADR 0112 決定2)", () => {

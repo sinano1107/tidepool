@@ -7,15 +7,19 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
-import { openQuarantineValues, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
+import { questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
 import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, registerTask, returnToQueue, type Task, type TaskType, unrowedTarget } from "./tasks.js";
 import {
+  deferToSessionRest,
   markTeardown,
   resumeUnfinishedTeardown,
   runTeardown,
   runTeardownSteps,
+  sessionCloseSteps,
+  sessionHaltOpen,
   sessionInTeardown,
+  spawnedAfterLatestPickup,
   type TeardownDeps,
   teardownStep,
 } from "./teardown.js";
@@ -421,8 +425,6 @@ export function startWatchdog(deps: {
   };
   // 今 slot にいるタスクの記録1件(`syncPickup` が作り直す)
   let record: WatchRecord | null = null;
-  // ADR 0112 決定4: 落ちた後始末は梯子に入らない。門は行に持つ —— runner が同期に立てる行も同じ門で読む(ADR 0342 決定6)
-  const failedTeardownOpen = () => openQuarantineValues(db, "failedTeardown").length > 0;
 
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む ——
    *  通る型は通常完了・上限到達による中断と同じ後始末である(ADR 0109 決定1)。
@@ -446,10 +448,10 @@ export function startWatchdog(deps: {
       });
       return;
     }
-    if (failedTeardownOpen()) {
+    if (sessionHaltOpen(db, taskId)) {
       // 観測は1度きり: 捨てると受理の後の梯子が回収 timeout へ落ち、空の容器に偽の Containment question を立てる(ADR 0112 決定4)
       // 手は撃つ時に選ぶ: 待つ間に人間が止めれば `recordReclaimed` の門が外れ、後始末を撃つ者が無くなる
-      slot.deferToFailedTeardownRest(taskId, () => (rec.humanStop ? runTeardown(teardown, taskId, teardownStep(db, taskId)) : recordReclaimed(taskId, rec, limit)));
+      deferToSessionRest(teardown, taskId, () => (rec.humanStop ? runTeardown(teardown, taskId, teardownStep(db, taskId)) : recordReclaimed(taskId, rec, limit)));
       return;
     }
     recordReclaimed(taskId, rec, limit);
@@ -500,7 +502,7 @@ export function startWatchdog(deps: {
       void rec.classification.then(() => onReclaimTimeout(task, rec, limit));
       return;
     }
-    if (failedTeardownOpen()) return;
+    if (sessionHaltOpen(db, task.id)) return;
     recordThen(teardown, task.id, () => {
       if (sessionInTeardown(db)?.taskId === task.id || !unsettledTask(teardown, task.id)) return false;
       raiseReclaimTimeout(task, rec, limit);
@@ -634,11 +636,11 @@ export function startWatchdog(deps: {
   /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
   function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
     const { workerSpawnedEventId, turnRan, stop, capInterrupted, writes } = facts;
-    const ownsPickup = () => (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0) < workerSpawnedEventId;
-    const sessionTeardown = { ...teardown, ownsSlot: ownsPickup };
-    // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く
+    const ownsPickup = () => spawnedAfterLatestPickup(db, taskId, workerSpawnedEventId);
+    // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く。
+    // 分類を待つ手も束の手 —— reject は session の記録を閉じられないまま残す(ADR 0344 決定1 の Status 追記)
     if (!ownsPickup() || slot.currentTaskId !== taskId || slot.inTeardown) {
-      void runTeardownSteps(sessionTeardown, taskId, () => capInterrupted, ...writes);
+      void runTeardownSteps(teardown, taskId, ...sessionCloseSteps(workerSpawnedEventId, [() => capInterrupted, ...writes]));
       return;
     }
     const rec = syncPickup(taskId);
@@ -648,7 +650,7 @@ export function startWatchdog(deps: {
     // ADR 0112 決定4 の門は撃ち直される手の外で読む —— 受理の撃ち直しは question が開いたまま走るので、手の中で読むと決定が黙って飛ぶ
     const snapshotCapAndGate = (value: boolean) => {
       cap = value;
-      failedOpen = failedTeardownOpen();
+      failedOpen = sessionHaltOpen(db, taskId);
     };
     const decide = () =>
       failedOpen ||
@@ -696,10 +698,12 @@ export function startWatchdog(deps: {
     };
     // ADR 0342 決定6: 分類 → exit の記録 → 決定の順で、投げた手から撃ち直す。`worker_exited` は盤面の決定が書く event より先(ADR 0309 決定3 の目的)。`stop` の登録も `writes` の中なので決定は登録の後に読む
     const running = runTeardownSteps(
-      sessionTeardown,
+      teardown,
       taskId,
-      () => (typeof capInterrupted === "boolean" ? snapshotCapAndGate(capInterrupted) : capInterrupted.then(snapshotCapAndGate)),
-      ...writes,
+      ...sessionCloseSteps(workerSpawnedEventId, [
+        () => (typeof capInterrupted === "boolean" ? snapshotCapAndGate(capInterrupted) : capInterrupted.then(snapshotCapAndGate)),
+        ...writes,
+      ]),
       decide,
     );
     // 門は書き込みまで覆う —— 待つ梯子が exit の記録を追い越さない。落ちた後始末は行の門で止まり、reject を受け取らない(ADR 0112 決定4)
@@ -718,8 +722,8 @@ export function startWatchdog(deps: {
     // —— 容器はもう空なので強制回収は no-op で、続く Containment question は
     // 「その session のプロセスがこのホストに残っている」と断言するが実際には残って
     // いない。門は**行**に持つ: in-memory の門は再起動を越えないので、越えなければ
-    // 起動のたびに偽の question を1枚ずつ刷る。
-    if (failedTeardownOpen()) return;
+    // 起動のたびに偽の question を1枚ずつ刷る。読むのは枠の主の session の行(ADR 0344 決定4)。
+    if (sessionHaltOpen(db, taskId)) return;
     const task = getTask(db, taskId);
     if (!task) return;
     const rec = syncPickup(taskId);
