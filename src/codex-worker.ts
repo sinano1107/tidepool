@@ -1636,6 +1636,7 @@ export class CodexWorker implements WorkerAdapter {
         this.containers.forceReclaim(task.id);
       });
     })().catch((error) => {
+      if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: spawn_failed にせず床へ
       // shortcut: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
       // 稀な経路)。積み上がりが観測されたらここで destroy する。
       // ADR 0149 決定6: scheduler の catch の外なので、検査のあとの同期 throw(quarantine の登録、spawn まで、

@@ -113,7 +113,7 @@ import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
-import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
 import {
   type BoardTask,
   describeHandoffFields,
@@ -128,6 +128,7 @@ import {
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
+import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -140,6 +141,7 @@ import {
   NotAGitRepositoryError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
+  RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
@@ -148,6 +150,8 @@ import {
 export interface ManagementMcpDeps {
   db: Db;
   clock: Clock;
+  /** ADR 0342 決定4: 盤面 DB が書きを拒んだ verb が呼ぶ終了。Absent → 再 throw(SDK の tool error)。 */
+  terminateOnBoardDbRefusal?: TerminateOnBoardDbRefusal;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
@@ -226,12 +230,14 @@ const profileFieldsSchema = z.object({
 
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
 function registryToolError(err: unknown) {
+  if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: tool error にせず verb の包み(wrapEveryVerb の終了)へ
   if (err instanceof GitHubIdentityMissingError) return toolError(`registry configuration missing: ${err.message}`);
   if (
     err instanceof InvalidWorkspaceNameError ||
     err instanceof BoardStateOverlapError ||
     err instanceof RepoAccessMissingError ||
     err instanceof NotAGitRepositoryError ||
+    err instanceof RelativeClonePathError ||
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||
@@ -345,11 +351,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const closedRoot = closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
   /** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定5)。閉じた根の述語は cancel の門と同じ1本。 */
   const discardsOf = (taskId: string) => directCancelDiscards(deps.db, getTask(deps.db, taskId)!, closedRoot);
-  const server = floorEveryResponse(
-    rejectUnknownArguments(
-      new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
-    ),
-    { db: deps.db, clock: deps.clock, surface: "management" },
+  const server = wrapEveryVerb(
+    new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
+    { db: deps.db, clock: deps.clock, surface: "management", terminate: deps.terminateOnBoardDbRefusal },
   );
   // issue #1179: 各口は対応する HTTP の口(GET /api/tasks・GET /api/tasks/:id)と同じ注釈を持つ
   server.registerTool(
@@ -1264,6 +1268,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           ),
         );
       } catch (err) {
+        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: tool error にせず verb の包みの終了へ
         return toolError(err instanceof Error ? err.message : String(err));
       }
     },

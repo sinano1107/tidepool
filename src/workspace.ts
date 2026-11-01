@@ -6,8 +6,6 @@ import type { Db } from "./db.js";
 import { appendEvent, type ResourceStop } from "./events.js";
 import { git, gitWithEnv, gitWithInput } from "./git.js";
 import {
-  authedGitBounded,
-  GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   originRepo,
 } from "./github-auth.js";
@@ -51,6 +49,7 @@ import {
   readableInterviewRooms,
   type Task,
 } from "./tasks.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
  *  branch discipline and the slot-release tree rule (issue #8) act on it —
@@ -247,6 +246,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       await firePickupPredicates(place, list, "before-open", { live });
       checks.push({ place, predicates: list });
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       if (err instanceof PickupGateError) throw err;
       throw new PickupGateError(place, err);
     }
@@ -265,8 +265,7 @@ export async function firePickupPredicates(
     fetch: async (target) => {
       await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
       if (board.live?.() === false) return;
-      if (board.writeRef && isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), board.writeRef(target));
-      else refreshWorkspace(target, board.githubAuth);
+      if (isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), board.writeRef?.(target) ?? outsideTheGate);
     },
     park: (target) => parkOnProtectedBranch(target, board.writeRef?.(target) ?? outsideTheGate),
   };
@@ -277,6 +276,7 @@ export async function firePickupPredicates(
       if (predicate.phase === "before-open") predicate.check();
       else await predicate.check(fire);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       throw new PickupGateError(predicate.phase === "after-open" ? predicate.place : place, err, predicate.describe);
     }
   }
@@ -655,6 +655,7 @@ export function restoreWorkspaceProjectSettingsAtBoot(
     try {
       materializeWorkspaceProjectSettings(db, workspace);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
       quarantineWorkspace(db, workspace.name, err, now);
     }
   }
@@ -683,36 +684,6 @@ export async function ensureWorkspaceToken(
 ): Promise<void> {
   if (!isRemoteBacked(workspace)) return;
   await auth?.ensureToken(originRepo(workspace.path), options);
-}
-
-/** ADR 0052 決定2 の pickup 直前の refresh を workspace 側にも(issue #211 やること4)。
- *  remote 正本を宣言した workspace だけが fetch する —— 宣言の無い workspace には
- *  fetch する先が無い。
- *
- *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093): workspace の remote も private であり
- *  うるし、`authedGitBounded` は組み立てた env で撃つ ——「人間の `gh` ログインに寄りかから
- *  ない」がここでも同時に成立し、`auth` 不在なら匿名でしか撃たない(ADR 0339 決定1 / 2)。上限
- *  つきの面を使うのは、詰まった接続が同期呼び出しで event loop ごと止めてはならない
- *  からである(`GIT_NETWORK_TIMEOUT_MS`)。
- *
- *  token を要求する repo は**宣言(`repo`)ではなく checkout の `origin`** から
- *  決める。installation token は repo 単位なので、fetch が実際に触る remote と
- *  token の宛先は同じでなければならない —— `repo` は人間向けの provenance でも
- *  あって綴りの一致を要求しない(ADR 0052)ので、宣言から導くと別の repo 宛ての
- *  token を持って行きうる。
- *
- *  **同期のまま**なのは呼び出し元の都合である: `releaseWorkspace` は watchdog の
- *  tick(`setInterval` のコールバック)からも来る。したがって token の取得だけを
- *  `ensureWorkspaceToken` に分け、fetch する2つの経路がその手前で必ず撃つ ——
- *  温まっていなければここが fail-closed に落ちる(`GitHubAuth.env`)。
- *
- *  失敗は投げる —— 呼び出し元(pickup / completion release)がその workspace を
- *  quarantine する。仲介の不達もここに落ちる(ADR 0093 決定7)。registry の到達
- *  不能と違って盤面全体は止めない: これは特定 workspace の性質なので、資源単位の
- *  原則がそのまま適用できる(ADR 0052 決定5)。 */
-function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
-  if (!isRemoteBacked(workspace)) return;
-  authedGitBounded(auth, workspace.path, originRepo(workspace.path), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", protectedBranch(workspace));
 }
 
 /** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを進める —— 写しは pickup と
@@ -753,7 +724,7 @@ export async function prepareWorkspaceAtPickup(
   await firePickupPredicates(workspace, predicates, "after-open", board);
   if (board.live?.() === false) return;
   ensureTaskBranch(db, workspace, task);
-  // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `refreshWorkspace` が `refs/remotes` を、休止位置の ff が
+  // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `fetchBranchCopy` が `refs/remotes` を、休止位置の ff が
   // 保護ブランチを動かすので、前に撮ると盤面自身の書き込みが違反として立つ
   snapshotRefs(db, workspace);
 }
@@ -916,6 +887,7 @@ export function writeBoardRefs(
     try {
       fold();
     } catch (foldErr) {
+      if (isBoardDbRefusal(foldErr)) throw foldErr; // ADR 0342 決定4: 盤面 DB の拒否は書き込みの失敗の陰に隠さない
       console.warn(`[workspace] ${workspace.name}: folding the announced baseline failed after the write failed`, foldErr);
     }
     throw err;
@@ -1110,6 +1082,7 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter):
   try {
     writeRef(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
   } catch (cause) {
+    if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (git(workspace.path, "rev-parse", "HEAD") === remoteSha) return;
@@ -1300,12 +1273,14 @@ export function releaseWorkspace(
     // 同じ quarantine(ADR 0052)。呼び出し元で投げると slot が解放されない。
     if (mergeBack) {
       if (tokenFailure !== undefined) throw tokenFailure;
-      refreshWorkspace(workspace, githubAuth);
+      // 後始末の fetch はまだ口の外で写しを書く(#2459)
+      if (isRemoteBacked(workspace)) fetchBranchCopy(workspace.path, githubAuth, protectedBranch(workspace), outsideTheGate);
     }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
     parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, workspace.name, err, now);
   }
 }
@@ -1397,7 +1372,7 @@ export async function redoMergeBacks(
   try {
     parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (parkError) {
-    if (!failure) throw parkError;
+    if (!failure || isBoardDbRefusal(parkError)) throw parkError; // ADR 0342 決定4: 盤面 DB の拒否は先の理由の陰に隠さない
   }
   if (failure) throw failure.error;
 }

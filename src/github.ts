@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, originRepo } from "./github-auth.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, originRepo } from "./github-auth.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -139,8 +139,9 @@ export interface GitHubClient {
    *  (ADR 0053 / issue #400)。
    *
    *  token の取得(仲介への往復)だけをここで済ませ、push そのものは返した同期の関数が撃つ —— 盤面は push を
-   *  基準への予告と畳みの同期区間の中で撃つ(ADR 0243)。 */
-  preparePush(input: PushBranchInput): Promise<() => void>;
+   *  基準への予告と畳みの同期区間の中で撃つ(ADR 0243)。返した関数は予告した sha を受け、その sha を押して写しに書く ——
+   *  予告の後にブランチが進んでも、口が知らない値は書かない(ADR 0243 決定1)。 */
+  preparePush(input: PushBranchInput): Promise<(sha: string) => void>;
   readPullRequest(ref: PrRef): Promise<PrStatus>;
   /** Merges only while the PR's head is still `head` — the one whose CI was
    *  read (ADR 0231 決定1); GitHub refuses it once the head has moved. */
@@ -241,10 +242,12 @@ export class GhCliClient implements GitHubClient {
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
   private async gh(cwd: string, args: string[]): Promise<string> {
+    // ADR 0339 決定4: repo は盤面が origin の値から解き、cwd の remote(checkout の insteadOf 適用後)から gh に解かせない
     const repo = originRepo(cwd);
+    if (repo === undefined) throw new Error(`\`gh ${args[0]} ${args[1]}\` cannot run: the checkout ${cwd} has no origin on GitHub`);
     await this.auth.ensureToken(repo);
     try {
-      return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
+      return (await execFileAsync("gh", [...args, "-R", repo], { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
       // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
       if ((err as { killed?: boolean }).killed) {
@@ -254,10 +257,9 @@ export class GhCliClient implements GitHubClient {
     }
   }
 
-  async preparePush(input: PushBranchInput): Promise<() => void> {
-    const repo = originRepo(input.path);
-    await this.auth.ensureToken(repo);
-    return () => authedGitBounded(this.auth, input.path, repo, this.timeoutMs, "push", "-u", "origin", input.branch);
+  async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {
+    await this.auth.ensureToken(originRepo(input.path));
+    return (sha) => authedPush(this.auth, input.path, this.timeoutMs, [[input.branch, sha]]);
   }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {

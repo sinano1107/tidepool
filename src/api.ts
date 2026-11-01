@@ -171,6 +171,7 @@ import {
   TriageError,
   triagePreview,
 } from "./triage.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
@@ -188,6 +189,7 @@ import {
   RegistrySelfDeleteError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
+  RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
@@ -688,6 +690,7 @@ export interface ApiRouterDeps {
  *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」3つだけ:
  *  確認不足、確認では買えない拒否、そして外部の一手(fetch / push)の失敗。 */
 function respondToDeletionFailure(res: Response, err: unknown): void {
+  if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
   if (err instanceof DeletionConfirmationRequiredError) {
     // 危険な値の 409 と同じ `confirm_required` の往復に乗る(WebUI 側の
     // `useDangerousSave` がそのまま使える)が、`dangerous_values` は載せない ——
@@ -873,6 +876,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await workspaceAdmin.create(parsed.data);
       sendJson(res.status(201), {});
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       // the human's own synchronous request fails fast (ADR 0009): a bad name
       // is the caller's 400; anything else — including a fetch/push that
       // failed to land (ADR 0052 決定1: that means the edit never happened,
@@ -894,7 +898,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof NoOwnGitDirError ||
         // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
         // register モードで拾えば通る、呼び出し側の状態の問題である
-        err instanceof OrphanCheckoutMismatchError
+        err instanceof OrphanCheckoutMismatchError ||
+        err instanceof RelativeClonePathError
       ) {
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof LiveCheckoutSignalsError) {
@@ -938,6 +943,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await workspaceAdmin.update({ name: req.params.name, ...parsed.data });
       sendJson(res, {});
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       if (err instanceof UnknownWorkspaceError) {
         sendJson(res.status(404), { error: err.message });
       } else if (
@@ -981,6 +987,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
       sendJson(res, {});
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       if (err instanceof UnknownWorkspaceError) {
         sendJson(res.status(404), { error: err.message });
       } else if (
@@ -1020,6 +1027,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // 作成の扉が「組み込みを shadow した」ことを告げる。真のときだけ載せる
       sendJson(res.status(201), (isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {}) satisfies WireContract["POST /api/agents"]);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       // same posture as /workspaces' create: the human's own synchronous
       // request fails fast on a bad input (400), anything else — including a
       // fetch/push that failed to land — is 502 (ADR 0052 決定1)
@@ -1083,6 +1091,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await agentAdmin.update({ name: req.params.name, ...parsed.data });
       sendJson(res, {});
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       if (err instanceof UnknownAgentError) {
         sendJson(res.status(404), { error: err.message });
       } else if (err instanceof BuiltInAgentNotEditableError) {
@@ -1229,6 +1238,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await profileAdmin.create(parsed.data);
       sendJson(res.status(201), {});
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       if (err instanceof InvalidAuthorityProfileNameError) {
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
@@ -1264,6 +1274,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await profileAdmin.update({ name: req.params.name, ...parsed.data });
       sendJson(res, {});
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 502 で続けず、error middleware の終了へ
       if (err instanceof UnknownAuthorityProfileError) {
         sendJson(res.status(404), { error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
@@ -1312,6 +1323,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const draft = await draftTask(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), context }, clock.now());
       sendJson(res, draft satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 503 で続けず、error middleware の終了へ
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
       // rule: any failure surfacing through the DraftClient seam — timeout,
       // outage, or a bug in the (future) real adapter — is the same
@@ -1578,6 +1590,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const missing = HANDOFF_FIELDS.filter((f) => draft[f] === undefined || whyBlank(draft[f]));
       sendJson(res, { ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 503 で続けず、error middleware の終了へ
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
       sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
@@ -1623,6 +1636,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       sendJson(res, outcome satisfies WireContract["POST /api/translate"]);
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 503 で続けず、error middleware の終了へ
       if (err instanceof TranslationTargetError) {
         sendJson(res.status(404), { error: err.message });
         return;

@@ -9,15 +9,18 @@ import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { git } from "./git.js";
 import {
+  authedFetch,
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   originRepo,
+  remoteTrackingRef,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
 import { findSkillAllowlistError, whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 import type { Tier } from "./tier.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -694,10 +697,10 @@ export interface WritableRegistry extends RegistrySource {
  *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
 export type RefWriter = (ref: string, newSha: string, write: () => void) => void;
 
-/** origin から commit を sha で1つ取る。`refs/` には何も書かない(FETCH_HEAD だけ)—— merge の門が head を取る fetch
- *  (ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
+/** origin から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
+ *  head を取る fetch(ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
 export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: string): void {
-  authedGitBounded(auth, dir, originRepo(dir), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", sha);
+  authedFetch(auth, dir, GIT_NETWORK_TIMEOUT_MS, sha);
 }
 
 /** ADR 0243 決定3: 写し `refs/remotes/origin/<branch>` を原本へ進める。`ls-remote` で原本の sha を知ってから口に予告し、
@@ -705,7 +708,7 @@ export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: stri
  *  token は呼び手が温めておく。 */
 export function fetchBranchCopy(dir: string, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
   const head = `refs/heads/${branch}`;
-  const sha = authedGitBounded(auth, dir, originRepo(dir), GIT_NETWORK_TIMEOUT_MS, "ls-remote", "origin", head)
+  const sha = authedGitBounded(auth, dir, GIT_NETWORK_TIMEOUT_MS, "ls-remote", head)
     .split("\n")
     .map((line) => line.split("\t"))
     .find(([, name]) => name === head)?.[0];
@@ -715,15 +718,6 @@ export function fetchBranchCopy(dir: string, auth: GitHubAuth | undefined, branc
     fetchCommit(dir, auth, sha);
     git(dir, "update-ref", copy, sha);
   });
-}
-
-/** リモート側のブランチを指す remote-tracking ref の**綴り**。ADR 0052 のもとで
- *  「リモートの正本を読む」は registry の役(`registryRef` の下)と workspace の役
- *  (`protectedBranchRef`)の2箇所に現れるが、綴りそのものは1つでなければならない
- *  —— 2つ持つと、片方だけを直したときに黙ってずれる(/code-review Standards 軸の
- *  指摘)。どちらの ref を読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
-export function remoteTrackingRef(branch: string): string {
-  return `refs/remotes/origin/${branch}`;
 }
 
 /** `mode` が指す、盤面が registry を読み書きする1つの ref — remote-tracking
@@ -781,6 +775,7 @@ export async function refreshRegistry(
     fetchBranchCopy(dir, auth, REGISTRY_BRANCH, writeRef);
     return { available: true };
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 到達できない registry の data にせず底へ
     return {
       available: false,
       reason: `the registry remote main could not be refreshed (${String(err)})`,

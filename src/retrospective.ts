@@ -40,6 +40,7 @@ import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, i
 import { boardCallRow } from "./throttle.js";
 import { TranscriptStore } from "./transcript-store.js";
 import { entryObjections, type LogRow, listObjectedEntries, logRow, objectionsById, RCA_CAUSES, registerRcaReview, requireLogEntry } from "./triage.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
@@ -457,6 +458,7 @@ async function fireSpan<C, I, A, R>(
     stage = "Result could not be recorded: ";
     return steps.record(answer, input);
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 失敗 event も同じ器に書くので、書かずに底へ
     if (!quarantineBoardCallRefusal(db, err, use, taskId, now)) steps.failed(`${stage}${message(err)}`);
     return undefined;
   }
@@ -589,7 +591,12 @@ function secondRoundInput(db: Db, recordDir: string | undefined, objectedId: str
   };
 }
 
-const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
+const fireAndForget = (fired: Promise<void>, target: string) =>
+  void fired.catch((err) => {
+    // ADR 0342 決定4: 盤面 DB の拒否は鎖の末尾で飲まない —— 投げ直して床へ届ける
+    if (isBoardDbRefusal(err)) throw err;
+    console.error(`[retrospective] ${target}: ${String(err)}`);
+  });
 
 /** 配分評価を1 review ぶん撃つ(ADR 0172): 判断が返れば注釈を被レビュー task に載せ、撃てなかったら何も書かず、
  *  撃って失敗したら `allocation_review_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。入力の組み立ても撃つ区間の中で、組めなければ撃って失敗した(ADR 0336 決定1)。 */
