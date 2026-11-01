@@ -1570,13 +1570,13 @@ it("帰責の第2回の答えが schema に合わなくても attribution の行
 });
 
 /** 初回の帰責が preference で確定した異議に、起草の Board call を撃つ(`draft` は起草 client の答え)。 */
-async function draftAfterPreference(draft: Parameters<FakeBehaviorDraftClient["scriptDraft"]>[1]) {
+async function draftAfterPreference(draft: Parameters<FakeBehaviorDraftClient["scriptDraft"]>[1], board: Partial<RetrospectiveCallDeps> = {}) {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "preference", evidence: "taste" });
   const drafter = new FakeBehaviorDraftClient();
   drafter.scriptDraft(b.decision, draft);
-  const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+  const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" }, ...board };
   commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
   refireRetrospectiveCalls(b.db, deps, at);
   await new Promise((resolve) => setImmediate(resolve));
@@ -1620,6 +1620,16 @@ async function draftAfterTaskAmbiguity(basedOn?: number) {
 it("人間が登録した task の task_ambiguity は宛先が無いので起草せず、sweep の console にも何も出ない(ADR 0336 決定1 の決めた skip)", async () => {
   const logged = await draftAfterTaskAmbiguity();
 
+  expect(logged).not.toHaveBeenCalled();
+});
+
+it("workspace の無い task の preference は置き場が無いので起草せず、sweep の console にも何も出ない(ADR 0336 決定1 の決めた skip)", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const b = await draftAfterPreference({ path: "review", title: "Squash", text: "Squash before merge.", addressee: "worker" }, { workspace: undefined });
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "memory_draft_failed")).toEqual([]);
   expect(logged).not.toHaveBeenCalled();
 });
 
