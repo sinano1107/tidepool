@@ -837,8 +837,9 @@ export interface ClaudeWorkerOptions {
    *  over `boardCall`; injected for the same reason as `enumerateSkills`. */
   enumerateHostSkills?: () => Promise<string[] | null>;
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
-   *  `onWorkerExited` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
-  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+   *  `onWorkerExited` と同じ機能フィールド。`record` は観測点の spawn_failed の書き込みで、一撃が同じ tx で撃つ(ADR 0342 決定6)。
+   *  不在 → spawn 失敗を観測しても盤面は動かず、観測点が自分で書く。 */
+  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void;
   /** transcript の open が記録の器に書けなかった pickup(ADR 0266 決定4)の盤面側の一撃 —— `recordContainerHaltHandler` 製。
    *  観測するのは scheduler の catch の外(skill 列挙の continuation)だけで、同期の経路は scheduler が受ける。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
@@ -1719,21 +1720,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
 
   /** ADR 0118: this adapter's observation points of a pickup whose worker never
    *  ran (skill enumeration, a synchronous throw from `launch` inside the
-   *  enumeration continuation — ADR 0149 決定6 —, Node spawn()) record the fact the same way, then
-   *  hand the pickup to the board's one-shot. */
+   *  enumeration continuation — ADR 0149 決定6 —, Node spawn()) hand the pickup and the write of
+   *  the fact to the board's one-shot, which writes it in the failure's own transaction. */
   private recordSpawnFailed(
     task: Task,
     agent: ResolvedAgent,
     failure: { error_code: string | null; message: string },
   ): void {
-    appendEvent(this.options.db, {
-      taskId: task.id,
-      actorId: agent.name,
-      origin: "board",
-      payload: { kind: "spawn_failed", ...failure },
-      at: this.options.clock.now(),
-    });
-    this.options.onSpawnFailed?.(task.id, failure);
+    // ADR 0342 決定6: 書く行為は盤面の一撃に渡し、失敗の記録と同じ tx で書く(中身は観測点のもの、ADR 0338 決定4)
+    const record = () =>
+      appendEvent(this.options.db, {
+        taskId: task.id,
+        actorId: agent.name,
+        origin: "board",
+        payload: { kind: "spawn_failed", ...failure },
+        at: this.options.clock.now(),
+      });
+    if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, failure, record);
+    else record();
   }
 
   /** The vendor spawn recipe, run once the skill deny list is resolved (ADR

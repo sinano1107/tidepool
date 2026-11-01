@@ -1,16 +1,20 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
+import { boardHalts } from "../src/board-halt.js";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
 import { setPaused } from "../src/pause.js";
-import { POLL_FAILURE_QUESTION_TITLE } from "../src/quarantine.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, POLL_FAILURE_QUESTION_TITLE } from "../src/quarantine.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, getTask, listBoard, registerTask } from "../src/tasks.js";
+import { acceptTeardownQuarantine } from "../src/teardown.js";
+import { spawnFailureHandler } from "../src/watchdog.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { HUMAN_WEBUI, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
+import { failTeardownMark, HUMAN_WEBUI, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
 
 /** ADR 0294 決定1: slot を握る前の poll の想定外の例外は盤面を落とさず、「最後の poll の失敗」の行に残して次の poll に任せる。 */
 function board(overrides: Partial<Parameters<typeof startScheduler>[0]> = {}) {
@@ -89,9 +93,9 @@ it("投げた task が消えて queue が空になれば、本体に入った po
   scheduler.stop();
 });
 
-it("後始末の一撃そのものが投げても process は生きて行が残り、一撃は撃ち直されない(ADR 0294 決定5)", async () => {
+it("後始末の一撃そのものが投げても process は生きて落ちた後始末が1枚立ち、一撃は撃ち直されない(ADR 0294 決定5 / ADR 0342 決定6)", async () => {
   let shots = 0;
-  const { clock, worker, scheduler, state } = board({
+  const { db, clock, worker, scheduler, state } = board({
     onSpawnFailed: () => {
       shots++;
       throw new Error("teardown one-shot blew up");
@@ -108,9 +112,82 @@ it("後始末の一撃そのものが投げても process は生きて行が残�
 
   expect(rejections).toEqual([]);
   expect(shots).toBe(1);
-  expect(scheduler.lastPollFailure()?.message).toBe("teardown one-shot blew up");
-  expect(logged).toHaveBeenCalledWith(expect.stringContaining("[scheduler] poll failed"), expect.objectContaining({ message: "teardown one-shot blew up" }));
+  const raised = listBoard(db).filter((t) => t.type === "question");
+  expect(raised.map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  expect(raised[0]?.purpose).toContain("teardown one-shot blew up");
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining("[teardown] task"), expect.objectContaining({ message: "teardown one-shot blew up" }));
   scheduler.stop();
+});
+
+/** slot を握った後の pickup の失敗(ADR 0294 決定3)の盤面を、受理の検査が同じ枠を読める形で組む。 */
+function heldBoard(onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void) {
+  const slot = new Slot();
+  const b = board({ slot, onSpawnFailed });
+  b.state.broken = false;
+  b.worker.scriptStartFailure(new Error("spawn blew up"));
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const accept = () => acceptTeardownQuarantine({ db: b.db, clock: b.clock, slot, resolve: undefined, pollNow: () => {} }, b.head.id);
+  const spawnFailed = () => listEvents(b.db, b.head.id).filter((e) => e.kind === "spawn_failed");
+  const questionTitles = () => listBoard(b.db).filter((t) => t.type === "question").map((q) => q.title);
+  return { ...b, slot, accept, spawnFailed, questionTitles };
+}
+
+it("pickup の catch 自身の spawn_failed の書き込みが投げても落ちた後始末になり、受理が書き込みと一撃を撃ち直す(#2036 / ADR 0342 決定6)", async () => {
+  let shots = 0;
+  const b = heldBoard(() => shots++);
+  b.db.exec("CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END");
+
+  await b.clock.advance(HOURLY);
+
+  expect(b.questionTitles()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  expect(b.spawnFailed()).toEqual([]);
+  expect(shots).toBe(0);
+  expect(b.slot.currentTaskId).toBe(b.head.id);
+  expect(b.scheduler.lastPollFailure()).toBeUndefined();
+  b.db.exec("DROP TRIGGER fail_spawn_failed");
+  await b.accept();
+  expect(b.spawnFailed()).toHaveLength(1);
+  expect(shots).toBe(1);
+  b.scheduler.stop();
+});
+
+it("受理が撃ち直した盤面の一撃の中で盤面のバグが投げれば受理は拒まれ、question は開いたまま枠も握ったまま —— 入れ子の runner が飲まない(ADR 0342 決定6)", async () => {
+  let board: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
+  const b = heldBoard((taskId, failure) => board(taskId, failure));
+  board = spawnFailureHandler({ db: b.db, clock: b.clock, slot: b.slot, resolve: undefined, pollNow: () => {} }, fakeContainers());
+  b.db.exec("CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END");
+  await b.clock.advance(HOURLY);
+  expect(b.questionTitles()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  b.db.exec("DROP TRIGGER fail_spawn_failed");
+  const repair = failTeardownMark(b.db);
+
+  await expect(b.accept()).rejects.toThrow(DomainError);
+
+  expect(b.questionTitles()).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  expect(boardHalts(b.db)).toEqual([{ kind: "failedTeardown" }]);
+  expect(b.slot.currentTaskId).toBe(b.head.id);
+  expect(getTask(b.db, b.head.id)?.status).toBe("in_progress");
+  repair();
+  await b.accept();
+  // 受理の検査を直に撃つので、落ちた後始末の question は回答の側が閉じる
+  expect(b.questionTitles()).toContain(`worker never started for task: ${b.head.title}`);
+  expect(b.spawnFailed()).toHaveLength(1);
+  b.scheduler.stop();
+});
+
+it("一撃が投げた後の受理は一撃だけを撃ち直し、spawn_failed を2行目に書かない(ADR 0342 決定6)", async () => {
+  let shots = 0;
+  const b = heldBoard(() => {
+    shots++;
+    if (shots === 1) throw new Error("teardown one-shot blew up");
+  });
+
+  await b.clock.advance(HOURLY);
+  await b.accept();
+
+  expect(shots).toBe(2);
+  expect(b.spawnFailed()).toHaveLength(1);
+  b.scheduler.stop();
 });
 
 it("pickup の契機で収束が reject しても unhandledRejection は撃たれない", async () => {

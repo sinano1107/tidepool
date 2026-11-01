@@ -110,33 +110,95 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *  保証する)。梯子の底で保留されている session(`heldForContainment`)も同じ点で
  *  弾く —— そこでの解放の門は確認 question ただ1つである(ADR 0099 決定3)。
  *
- *  **投げない**(盤面 DB の拒否は別 —— 投げて床が process を終える、ADR 0342 決定4)。呼び口は全部 fire-and-forget の `void` である(回収済み観測の
- *  `.then`、adapter の中断ハンドラ、起動時の復旧)—— 解放が同期だった頃は例外が
- *  MCP 呼び出しの返り値になったが、今ここで投げれば unhandled rejection として盤面
- *  ごと落ち、しかも未了は行に残るので次の起動でも同じ所で落ちる。個々の失敗は
- *  すでにそれぞれの位置で quarantine に落ちている(`releaseWorkspace`)ので、ここへ
- *  届くのは想定外だけである。そこで止まった後始末は**盤面全体の停止**である
- *  (ADR 0112 決定1): 枠がまだ空いていないのではなく空かないので、確認 question を
- *  1枚立てて停止の列挙に載せ、解放の門を後始末の再実行そのものにする
- *  (`acceptTeardownQuarantine`)。
- *
- *  枠を握ったままの throw だけがその停止である。`slot.release()` より後 —— pickup の契機 ——
- *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: 再実行すべき後始末が
- *  無いので question は立てない。 */
+ *  呼び口は全部 fire-and-forget の `void` である(回収済み観測の `.then`、adapter の中断ハンドラ、
+ *  起動時の復旧)。個々の失敗はすでにそれぞれの位置で quarantine に落ちている(`releaseWorkspace`)ので、
+ *  ここへ届くのは想定外だけである。そこで止まった後始末は**盤面全体の停止**である(ADR 0112 決定1):
+ *  枠がまだ空いていないのではなく空かないので、後始末の runner(`runTeardownSteps`)が確認 question を
+ *  1枚立てて停止の列挙に載せ、解放の門を後始末の再実行そのものにする(`acceptTeardownQuarantine`)。
+ *  投げるのは盤面 DB の拒否だけで、底が process を終える(ADR 0342 決定2)。 */
 export async function runTeardown(
   deps: TeardownDeps,
   taskId: string,
   step: TeardownStep = {},
 ): Promise<void> {
+  // ADR 0112 決定4 / ADR 0342 決定6: 落ちた後始末の残りを持つ session は、受理の撃ち直しのほかに後始末を走らせない ——
+  // 遅れた回収済み観測や MCP の verb が枠を空けると、残りの手も question も宙に浮く。受理は残りを取り出してから撃つ
+  if (deps.slot.hasFailedTeardownRest(taskId)) return;
+  await runTeardownSteps(deps, taskId, () => teardown(deps, taskId, step));
+}
+
+/** 後始末の1手: 同期か Promise を返す関数(経路ごとの差分の `TeardownStep` とは別物)。 */
+export type TeardownAction = () => unknown;
+
+/** 投げた手から先を外へ運ぶ throw。外の runner / 受理が自分の残りを後ろに継ぎ、1つの残りとして持つ(ADR 0342 決定6)。 */
+class TeardownThrew {
+  constructor(
+    readonly cause: unknown,
+    readonly rest: TeardownAction[],
+  ) {}
+}
+
+/** 同期に撃っている手の深さ。0 でなければ runner は入れ子 —— 投げた手は外の runner / 受理へ渡し、自分では question も残りも
+ *  持たない(持つと外は成功に見え、受理が黙って通る)。入れ子の runner が返す Promise は、撃った手が返して外へ繋ぐ ——
+ *  `void` すると reject が底へ落ちる。 */
+let driving = 0;
+
+/** 後始末の step の runner(ADR 0342 決定6 / ADR 0112)。手を順に撃ち、投げた手から先を枠に残して落ちた
+ *  後始末の question を同期に立てる —— 行が立ってから返るので、watchdog の tick の門(ADR 0112 決定4)がすぐ効く。
+ *  受理(`acceptTeardownQuarantine`)は残した手から撃ち直す。盤面 DB の拒否は question も書けないので底へ投げる
+ *  (ADR 0342 決定2・3)。
+ *
+ *  枠を握ったままの throw だけが落ちた後始末である。`slot.release()` より後 —— pickup の契機 ——
+ *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: 再実行すべき後始末が
+ *  無いので question は立てない。 */
+export function runTeardownSteps(
+  deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
+  taskId: string,
+  ...actions: TeardownAction[]
+): Promise<void> | undefined {
+  if (driving > 0) return drive(actions);
+  const fail = (err: unknown) => {
+    const { cause, rest } = err as TeardownThrew;
+    if (isBoardDbRefusal(cause)) throw cause;
+    console.error(`[teardown] task ${taskId}:`, cause);
+    if (deps.slot.currentTaskId !== taskId) return;
+    quarantineFailedTeardown(deps.db, taskId, cause, deps.clock.now());
+    deps.slot.keepFailedTeardownRest(taskId, rest);
+  };
   try {
-    await teardown(deps, taskId, step);
+    return drive(actions)?.catch(fail);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 落ちた後始末にせず底へ
-    console.error(`[teardown] task ${taskId}:`, err);
-    if (deps.slot.currentTaskId === taskId) {
-      quarantineFailedTeardown(deps.db, taskId, err, deps.clock.now());
+    fail(err);
+    return undefined;
+  }
+}
+
+/** 手を順に撃つ。投げれば `TeardownThrew` に投げた手から先を載せる —— 入れ子の runner の残りの後ろに、自分の残りを継ぐ。 */
+function drive(actions: readonly TeardownAction[], from = 0): Promise<void> | undefined {
+  const threw = (err: unknown, at: number) =>
+    err instanceof TeardownThrew
+      ? new TeardownThrew(err.cause, [...err.rest, ...actions.slice(at + 1)])
+      : new TeardownThrew(err, actions.slice(at));
+  for (let at = from; at < actions.length; at++) {
+    let result: unknown;
+    driving++;
+    try {
+      result = actions[at]!();
+    } catch (err) {
+      throw threw(err, at);
+    } finally {
+      driving--;
+    }
+    if (result instanceof Promise) {
+      return result.then(
+        () => drive(actions, at + 1),
+        (err) => {
+          throw threw(err, at);
+        },
+      );
     }
   }
+  return undefined;
 }
 
 /** 行に残った後始末の未了を、枠を握ってから走らせる —— 起動時の復旧と、再起動を越えた梯子の底の
@@ -166,17 +228,22 @@ export type FailedTeardownCheck = (taskId: string) => Promise<void>;
  *  再観測を満たすためである —— 満たさなければ早期 return で静かに受理され、tree rule が
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<void> {
+  // ADR 0342 決定6: process が生きていれば投げた手から、再起動を跨げば後始末そのものを撃ち直す
+  const actions = deps.slot.takeFailedTeardownRest(taskId) ?? [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
   if (deps.slot.currentTaskId === null) {
     deps.slot.occupy(taskId);
     deps.slot.enterTeardown();
   }
   try {
-    await teardown(deps, taskId, teardownStep(deps.db, taskId));
+    await drive(actions);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
+    const { cause, rest } = err as TeardownThrew;
+    // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
+    if (isBoardDbRefusal(cause)) throw cause;
+    deps.slot.keepFailedTeardownRest(taskId, rest);
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
-        (err instanceof Error ? err.message : String(err)),
+        (cause instanceof Error ? cause.message : String(cause)),
     );
   }
 }

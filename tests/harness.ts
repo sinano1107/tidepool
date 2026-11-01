@@ -588,11 +588,12 @@ export function quarantineTestAgent(db: Db, name: string): void {
 
 /** 後始末の印の書き込みだけを落とす(setup、issue #1935 / #2025)—— 記録と印が同じ
  *  transaction なら記録も巻き戻る。 */
-export function failTeardownMark(db: Db): void {
+export function failTeardownMark(db: Db): () => void {
   db.exec(
     "CREATE TRIGGER fail_teardown_mark BEFORE UPDATE OF teardown_started_at ON tasks " +
       "BEGIN SELECT RAISE(ABORT, 'teardown mark failed'); END",
   );
+  return () => db.exec("DROP TRIGGER fail_teardown_mark");
 }
 
 /** quarantine の question の登録(`registerTask` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
