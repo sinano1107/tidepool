@@ -57,6 +57,7 @@ import {
   commitWork,
   completedWork,
   defaultingTo,
+  dropBoardBeforeFold,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -5116,13 +5117,9 @@ it("休止中の merge 回答が保護ブランチを書いた後、畳む前に
   const workspace = await makeWorkspace("landing-dormant-merge-dropped");
   const { db, clock } = await openBoard();
   const { works, questions } = await dormantSerialLanding(db, clock, workspace);
-  // 落ちた盤面の畳みはディスクに届かない: 予告(2値の行)は書けて、1値へ畳む書き込みだけが届かない形
-  db.exec(
-    "CREATE TEMP TRIGGER board_drops_before_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
-      "WHEN NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END",
-  );
+  const reopen = dropBoardBeforeFold(db);
   await expect(answerMerge(db, clock, workspace, questions[1]!)).rejects.toThrow("the board dropped");
-  db.exec("DROP TRIGGER board_drops_before_fold");
+  reopen();
   expect(git(workspace.path, "rev-list", "--count", `main..task/${works[1]!.id}`)).toBe("0");
 
   await answerMerge(db, clock, workspace, questions[2]!);
