@@ -13,7 +13,7 @@ import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task, unrowedTarget } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, DROP_TARGET_OPTION, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task, unrowedTarget } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { queueReturnHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
@@ -26,7 +26,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -353,6 +353,36 @@ it("ターンが走った後に行でない Interview の対象が 404 で断ら
   expect(questions(db)).toHaveLength(2);
   expect(listBoard(db).find((t) => t.id === examinee.id)?.status).toBe("blocked");
   expect(listEvents(db, examinee.id).find((e) => e.kind === "target_refused")?.payload).toMatchObject({ cause: "api_404" });
+});
+
+it("ターン後に断られた行でない対象を「この対象は測らない」で外すと、その受験者の failure question も倒れ、兄弟の root は残る(ADR 0338 決定3 / ADR 0199 決定4、issue #2824)", () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
+  const containers = new ProcessContainers(new FakeContainerRuntime());
+  // 対象を2つ持つ Interview —— 外した後も兄弟の受験者が root を残すので、root の cancel の連鎖に頼らず受験者の cancel だけを見る
+  const root = registerTask(
+    db,
+    { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" }] },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  const examinees = poseAccepted(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", POSED_HEAD);
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, "webui", clock.now());
+  const examinee = pickupTask(db, examinees.find((e) => unrowedTarget(db, e) !== undefined)!, "deckhand", clock.now())!;
+  const target = unrowedTarget(db, examinee)!;
+  slot.occupy(examinee.id);
+  containers.open(examinee.id);
+  exitToWatchdog({ db, clock, slot, containers }, examinee.id, { turnRan: true, stop: { refusal: { provider: target.provider, model: target.model, cause: "api_404", worker_spawned_event_id: 1 } }, capInterrupted: false });
+  const targetQuestion = questions(db).find((q) => q.question_quarantine_kind === "interviewTarget")!;
+  const failureQuestion = questions(db).find((q) => q.title === `worker exited without reporting: ${examinee.title}`)!;
+
+  answerQuestionViaWebui(db, getTask(db, targetQuestion.id)!, [DROP_TARGET_OPTION], clock.now());
+
+  expect(getTask(db, examinee.id)?.status).toBe("cancelled");
+  expect(getTask(db, failureQuestion.id)?.status).toBe("cancelled");
+  expect(questions(db).filter((q) => q.status === "todo")).toEqual([]);
+  expect(getTask(db, root.id)?.status).not.toBe("cancelled");
 });
 
 it("資源の停止と上限到達の分類の Promise が同じ束で届くと、Promise の解決後に1度だけ決め、0ターンの session は todo へ戻る(ADR 0338 決定2)", async () => {
