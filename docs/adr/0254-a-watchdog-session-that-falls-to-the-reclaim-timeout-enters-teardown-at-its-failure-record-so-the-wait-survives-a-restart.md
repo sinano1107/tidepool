@@ -1,5 +1,7 @@
 # 回収 timeout に落ちた watchdog の session は失敗の記録の瞬間に後始末へ入り、梯子の底の待ちは再起動を越える
 
+**Status 追記: 決定2 の復旧が後始末を完走させる前提 —— 後始末の step は再実行安全である —— の持ち主は [ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定1(2026-11-01、issue #2889)。tree rule は同 決定2・3 で再実行安全になる。**
+
 **Status 追記: 決定2 の受理の門から走る復旧に、前の盤面が閉じ切らなかった session の記録を閉じる段が1つ増える(ADR 0315 決定1・3)** —— 対象は起動時点の event id 以下の spawn に限り、走行中の別 Harness の session には書かない。
 
 2026-10-14 の triage / grilling(issue #648)で決定。watchdog の時間制限の梯子が回収 timeout に落ちると、failure question と

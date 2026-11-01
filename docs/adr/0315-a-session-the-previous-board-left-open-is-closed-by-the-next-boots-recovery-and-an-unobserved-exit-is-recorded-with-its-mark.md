@@ -1,5 +1,7 @@
 # 前の盤面が閉じ切らなかった session は次の起動時の復旧が閉じ、観測していない exit は印を持つ exit の記録で表す
 
+**Status 追記: 決定1 の後始末の復旧が乗る前提 —— 後始末の step は再実行安全である —— の持ち主は [ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定1(2026-11-01、issue #2889)。tree rule は同 決定2・3 で再実行安全になる。**
+
 **Status 追記: 決定1 の復旧の session ごとの catch は、盤面 DB の拒否以外の throw を log して流さず `unclosedSession` の行を立てて起動を続ける。決定3 の「同じ task に後の spawn があれば exit の記録は書かず投影だけ」は撤回 —— 窓が次の spawn を越えない規則(ADR 0316 決定4 Status 追記)で理由が消えたので、復旧は `exit_observed: false` の exit と投影を書く。一時領域の削除だけは、その task の spawn が watermark より後に無いときに限る([ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定2・5、2026-11-01、issue #2876)。**
 
 **Status 追記: 決定1 の復旧の session ごとの catch は盤面 DB の拒否の署名を飲まず再 throw し、起動を拒む([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定4、2026-11-01、issue #2837)。**

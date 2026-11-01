@@ -1,5 +1,7 @@
 # タスクブランチは worker の唯一の可変 ref である
 
+**Status 追記: 決定1 の「見張るのは `refs/*` 全部」に、HEAD の行(指し先)が加わる([ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定2、2026-11-01、issue #2889)—— 盤面が休止位置や merge back の帰り先へ checkout を動かすときは同じ口で予告し、畳む。worker が終わりに自分のブランチに居ない違反は今日どおり tree rule の HEAD 検査が先に捕まえる。**
+
 **Status 追記: 決定4 の「書いた後に撮り直す」と「成功したときにしか撮り直さない」は [ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) で「書く前に基準へ予告し、書いた後に2択で畳む」に置き換わった(2026-10-13)。決定1〜3・5〜7 はそのまま。**
 
 **Status 追記: 決定2 の「タスクブランチは決着後も削除されない」は、決着した pin の子のブランチについて [ADR 0263](0263-an-interview-examinee-reads-what-production-work-reads-except-what-reveals-the-measurement-or-unevens-the-targets.md) 決定5 が例外を置いた(2026-10-15)—— 盤面が後から走る pin の子の pickup の準備で、全 ref のスナップショットの前に外し、head を記録に残す。worker による削除が違反であることは変わらない。**

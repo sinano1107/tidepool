@@ -1,5 +1,7 @@
 # 落ちた後始末は盤面全体の停止であり、解放の門は後始末の再実行そのものである
 
+**Status 追記: 決定3 の「解放の門は後始末の再実行そのもの」が乗る前提 —— 後始末の step は再実行安全である —— の持ち主は [ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定1(2026-11-01、issue #2889)。tree rule は自分の事後条件(休止位置への checkout)が自分の事前条件(HEAD がタスクブランチ)を破っていて再実行安全ではなく、同 決定2・3 で基準を読んで2度目を飛ばす。**
+
 **Status 追記: 決定1 の対象は枠の後始末の step に戻り、session の `writes` の束(exit の記録・一時領域の削除・投影・資源の停止の登録)が投げたものは別名の停止 `unclosedSession`(値 = spawn event id)になる。決定4 の門と残りの継ぎ先は盤面全体の行ではなく枠の主の session の行を読む([ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定1・4、2026-11-01、issue #2876)。**
 
 **Status 追記: 決定1 の「落ちた後始末」は `runTeardown` の catch に限らず、GLOSSARY の定義どおり決着から回収済み観測までのどの step(exit の記録・分類後の決定・回収の梯子)が投げても立つ。決定3 の再実行の対象は「投げた後始末の step」に広がる —— process が生きていれば memory に残る同じ step、再起動を跨げば起動時の掃き出しが置き換えるので後始末の再実行のまま。盤面 DB そのものが書きを拒んだときはこの行も書けないので process が終わる([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定1・2・6、2026-11-01、issue #2837)。**

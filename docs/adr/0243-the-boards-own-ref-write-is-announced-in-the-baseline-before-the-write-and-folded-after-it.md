@@ -1,5 +1,7 @@
 # 盤面自身の ref の書き込みは、書く前に基準へ予告し、書いた後に畳む
 
+**Status 追記: 決定4 の口を通る書き込みに、盤面自身の checkout(HEAD の移動 —— 後始末と quarantine 受理の merge back の帰り先、休止位置)が加わる([ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定2、2026-11-01、issue #2889)。基準に HEAD の行を持ち、予告→checkout→畳む。**
+
 **Status 追記: Considered options の「落ちた後に書けたかは GitHub の PR では分からない」は狭まった —— merge した名義を読めば盤面自身の merge は見分けられる(ADR 0265 決定5)。予告の形は ref の書き込みに残る**
 
 2026-10-13 の grilling(issue #1848、発端は #1841 の実装で見つかった #1846)で決定。ADR 0064 決定4 は、盤面が
