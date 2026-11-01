@@ -22,12 +22,15 @@ question の登録・quarantine・`closeSession`・`markTeardown`)が投げた�
    ADR 0036 / 0294 決定4「人間面が開いたままなのが復旧経路」は人間の verb も全部書き込みなので面が開いていても操作できず、走っている
    worker の verb も失敗して token を燃やし、梯子も書けないので止められない。cgroup ごと殺せる終了だけがきれいに止まる。ADR 0112 が
    退けた「次の起動でも同じ所で落ちる」は (A) では望む振る舞い(同 決定3「直るまで動かないのが正しい」)。
-3. **底は床が担う。** `installUnhandledRejectionFloor` が (A) の署名を読み、当たれば決定2 の終了、外れれば今日どおり log。
-   `uncaughtException` は登録しない(Node の既定で落ちる)。これで (A) は経路に依らず終了になり、床に落ちる側の箇所は個別の catch
-   無しに揃う —— ADR 0294 決定4 と同じ「site の注意でなく機構」の理路。書き手側の扉(記録を書く1関数)は退ける(退けた形)。
-4. **fire-and-forget の境界の catch は (A) を飲まず再 throw する。** 境界は5つ(起動時の復旧の session ごとの catch、cliAuth の probe、
-   poll 失敗の行の guard、retrospective の sweep、raw な tick 群)で、1つの判定 helper を通す。起動時の復旧が (A) に当たれば起動を
-   拒む形にここで入る。
+3. **底は2つとも分類して終える。** `installUnhandledRejectionFloor` が (A) の署名を読み、当たれば決定2 の終了、外れれば今日どおり log。
+   `uncaughtException` にも受け手を置き、(A) なら同じ1行と exit code、それ以外は Node の既定と同じく error を出して code 1 で終える ——
+   続行はしない。ADR 0294 決定4 が同期の底を登録しなかった理由(状態が壊れうるので続行できない)は、必ず終える受け手には当たらない。
+   これで (A) は経路に依らず同じ終わり方になり、箇所は個別の catch 無しに揃う —— ADR 0294 決定4 と同じ「site の注意でなく機構」の
+   理路。書き手側の扉(記録を書く1関数)は退ける(退けた形)。
+4. **fire-and-forget の境界の catch は (A) を飲まず再 throw する。** 境界とは、投げた例外を底へ渡さずに自分で受けて続ける catch のこと
+   —— 起動時の復旧の session ごとの catch、cliAuth の probe、poll 失敗の行の guard、retrospective の sweep がその例で、`pollNow` の
+   `.catch(console.error)` のような鎖の末尾の catch も含む。どれも1つの判定 helper を通す。列挙は実装 issue が持つ(数はこの grilling
+   では測っていない)。起動時の復旧が (A) に当たれば起動を拒む形にここで入る。
 5. **記録に書けたことを前提にする process memory の印(settled / recorded / reported / pending / 帳簿)は、その書き込みの tx が返った後に
    置く。** 先に置くと rollback の後に再試行も鳴り直しも起きず、行の無い回収を報せる。決定6 の再実行の門が効く前提でもある。
 6. **(B) の後始末の step の持ち主は watchdog の runner 1本である。** 分類の `.then` の3箇所と `runTeardown` の呼び口は、throw を受けて
@@ -42,7 +45,7 @@ question の登録・quarantine・`closeSession`・`markTeardown`)が投げた�
 - **記録を書く扉を1つ作り、そこで受ける** —— 生の `.run(` が 69 箇所 20 file、transaction 72、better-sqlite3 に全体の error hook は無い。
   底は2つ(床と `uncaughtException`)しかないので、底で揃える。
 - **失敗 event を書いて続ける** —— (A) ではその event も書けない。
-- **境界の catch を lint で縛る** —— 境界は5つで、helper 1つで足りる。
+- **境界の catch を lint で縛る** —— 境界は数えられる数で、helper 1つを通す規則で足りる。数が増えて漏れが観測されたら lint の問い。
 
 ## 派生
 
