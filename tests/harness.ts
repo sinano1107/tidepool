@@ -596,6 +596,12 @@ export function failTeardownMark(db: Db): () => void {
   return () => db.exec("DROP TRIGGER fail_teardown_mark");
 }
 
+/** exit の記録(`worker_exited` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
+export function failWorkerExited(db: Db): () => void {
+  db.exec("CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END");
+  return () => db.exec("DROP TRIGGER fail_exited");
+}
+
 /** quarantine の question の登録(`registerTask` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
 export function failQuarantineQuestion(db: Db): () => void {
   db.exec(
@@ -1578,6 +1584,16 @@ export const QUIET_EXIT: WorkerExit = {
   reported_error: null,
   last_message: null,
 };
+
+/** setup のみ: 盤面の代わりに束の書く step を撃つ —— 分類の Promise は解決を待ってから(runner と同じ順、ADR 0342 決定6)。
+ *  本物の watchdog へ渡す fixture では呼ばない —— 2度撃つ。 */
+export function fireWrites({ capInterrupted, writes }: WorkerExitClassification): void {
+  const fire = () => {
+    for (const write of writes) write();
+  };
+  if (typeof capInterrupted === "boolean") fire();
+  else void capInterrupted.then(fire);
+}
 
 /** setup のみ: 時限の無い watchdog へ root の exit を束付きで渡す —— adapter と同じく、exit で強制回収を撃ってから渡す
  *  (ADR 0109 決定4 / ADR 0201 決定1)。 */

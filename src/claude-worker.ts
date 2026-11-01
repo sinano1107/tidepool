@@ -10,7 +10,7 @@ import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./chi
 import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
-import { quarantineCliAuthForProvider } from "./cli-auth.js";
+import { cliAuthStop } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -33,7 +33,7 @@ import {
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   workspaceSettingsDisposition,
 } from "./sandbox.js";
-import { closeSession, taskTempPrefix } from "./session-close.js";
+import { closeSessionActions, taskTempPrefix } from "./session-close.js";
 import { type CheckoutSkills, resolveSkillAllowlist } from "./skill-allowlist.js";
 import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServers } from "./stream-json.js";
 import {
@@ -43,7 +43,7 @@ import {
   type Task,
   taskVerbSwap,
 } from "./tasks.js";
-import { liveSession } from "./teardown.js";
+import { liveSession, type TeardownAction } from "./teardown.js";
 import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type Transcript, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
@@ -847,7 +847,8 @@ export interface ClaudeWorkerOptions {
    *  `onWorkerExited` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
-   *  帰結に要る事実の束も同じ通知で渡す(ADR 0309 / ADR 0338 決定1)。報告なき exit かどうかの判定は盤面側が持つ。 */
+   *  帰結に要る事実の束も同じ通知で渡す(ADR 0309 / ADR 0338 決定1)。報告なき exit かどうかの判定は盤面側が持つ。
+   *  不在なら束の `writes` は adapter が自分で撃つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。`containers` と同じく**省略できない**。 */
   transcripts: TranscriptStore;
@@ -2114,29 +2115,33 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // session was spawned to speak (a spawn-time fact), never inferred from
       // the envelope — every provider, the board's own included (ADR 0098 決定6),
       // quarantines only its own agents' pickup.
-      const authStop = streamObserved.cliAuthFailed
-        ? quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now())
-        : undefined;
+      const authStop = streamObserved.cliAuthFailed ? cliAuthStop(routing.provider) : undefined;
+      // ADR 0315 決定2: 所要時間はこの時刻から導く —— 受理の撃ち直しが受理の時刻を書かないよう、ここで1度だけ読む
+      const exitedAt = this.options.clock.now();
+      // ADR 0342 決定6: 中身と順序は adapter が持ち(ADR 0338 決定4)、盤面の runner が撃つ。
       // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
-      // 下の exit の一撃より先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
-      // (`sessionWindow`)ので、一撃が後から書く event は元から Episode に入らない
-      closeSession(
-        this.options.db,
-        {
-          taskId: task.id,
-          actorId: agent.name,
-          payload: {
-            kind: "worker_exited",
-            ...exit,
-            worker_spawned_event_id: spawnedEventId,
-            output_closed: outputClosed,
-            ...fields,
-          },
-          at: this.options.clock.now(),
-        },
-        removeTaskTemp,
-        () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id }),
-      );
+      // 盤面は決定より先に撃つ。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
+      // (`sessionWindow`)ので、決定が後から書く event は元から Episode に入らない
+      const writes: TeardownAction[] = [
+        ...(authStop ? [() => registerResourceStop(this.options.db, authStop.quarantine, authStop.value, authStop.reason, this.options.clock.now())] : []),
+        ...closeSessionActions(
+          this.options.db,
+          () => ({
+            taskId: task.id,
+            actorId: agent.name,
+            payload: {
+              kind: "worker_exited",
+              ...exit,
+              worker_spawned_event_id: spawnedEventId,
+              output_closed: outputClosed,
+              ...fields,
+            },
+            at: exitedAt,
+          }),
+          removeTaskTemp,
+          () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id }),
+        ),
+      ];
       // ADR 0338 決定1: 停止は1 session に1つ。ADR 0184 決定3: 行の拒否の帰属は spawn 時の行で、Provider では分岐しない(moonshot の 404 もこの1本を通る)。
       // shortcut: 404 と 401 / init の停止が同じ session に重なる形は未実測で、重なれば未登録の行の拒否を残す側を取る。観測されたら束に2つ載せる
       const resourceStop = authStop ?? initStop;
@@ -2146,11 +2151,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           ? { registered: { kind: "session_stopped_by_resource" as const, ...resourceStop, worker_spawned_event_id: spawnedEventId } }
           : undefined;
       // ADR 0309: Claude の分類は解決済み。束は読み手の出力の転送で、帰結は exit を受けた盤面が決める(ADR 0338 決定2)
-      this.options.onWorkerExited?.(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
-        turnRan: streamObserved.turnRan,
-        ...(stop && { stop }),
-        capInterrupted: streamObserved.capInterrupted,
-      });
+      // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。else は盤面の一撃を持たない構成のため
+      if (this.options.onWorkerExited) {
+        this.options.onWorkerExited(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
+          turnRan: streamObserved.turnRan,
+          ...(stop && { stop }),
+          capInterrupted: streamObserved.capInterrupted,
+          writes,
+        });
+      } else for (const write of writes) write();
     };
     // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
     // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても

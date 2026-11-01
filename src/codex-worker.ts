@@ -47,12 +47,12 @@ import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
-import { closeSession, taskTempPrefix } from "./session-close.js";
+import { closeSessionActions, taskTempPrefix } from "./session-close.js";
 import { resolveSkillAllowlist } from "./skill-allowlist.js";
 
 
 import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
-import { liveSession } from "./teardown.js";
+import { liveSession, type TeardownAction } from "./teardown.js";
 
 
 import { tierNames } from "./tier.js";
@@ -384,7 +384,8 @@ export interface CodexWorkerOptions {
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が `todo` へ戻す。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
-  /** ADR 0145: root process の exit を受ける盤面側の一撃。帰結に要る事実の束を添え(ADR 0338 決定1)、報告なき exit かどうかの判定は盤面側が持つ。 */
+  /** ADR 0145: root process の exit を受ける盤面側の一撃。帰結に要る事実の束を添え(ADR 0338 決定1)、報告なき exit かどうかの判定は盤面側が持つ。
+   *  不在なら束の `writes` は adapter が自分で撃つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
   /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
    *  分類にだけ使い、Throttle の状態には書かない。 */
@@ -1581,52 +1582,61 @@ export class CodexWorker implements WorkerAdapter {
         flushStdout();
         const fields = codexExitFields(streamObserved);
         const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), reported_error: fields.reported_error, last_message: fields.last_message };
-        // ADR 0331 決定3・7: #2701 の実測した署名だけを資源に帰属させ、観測値を理由に残す。登録は `record` が worker_exited の後に置く
+        // ADR 0331 決定3・7: #2701 の実測した署名だけを資源に帰属させ、観測値を理由に残す。登録は `writes` が worker_exited の後に置く
         const mcpStop: ResourceStop | undefined =
           exit.exit_code === 1 && exit.stderr_tail?.includes("Failed to initialize session: required MCP servers failed to initialize: tidepool:")
             ? { quarantine: "workerMcpReachability", value: "codex", reason: `this Codex worker session exited with code 1: ${exit.stderr_tail}` }
             : undefined;
+        // ADR 0083 追記10: Claude adapter と同じ閉じる1本で、worker_exited を書いたあとに Precedent を投影する(ADR 0315 決定1)。
+        // ADR 0315 決定2: 所要時間はこの時刻から導く —— 受理の撃ち直しが受理の時刻を書かないよう、撃つ時には読まない
+        let exitedAt = this.options.clock.now();
+        // ADR 0342 決定6: 中身と順序は adapter が持ち(ADR 0338 決定4)、盤面の runner が撃つ。exit は撃つ時に読む —— `usage_recheck` は分類の解決で入る
+        const writes: TeardownAction[] = [
+          ...closeSessionActions(
+            this.options.db,
+            () => ({
+              taskId: task.id,
+              actorId: agent.name,
+              payload: {
+                kind: "worker_exited",
+                ...exit,
+                worker_spawned_event_id: spawned,
+                output_closed: outputClosed,
+                ...fields,
+              },
+              at: exitedAt,
+            }),
+            removeTaskTemp,
+            () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id }),
+          ),
+          ...(mcpStop ? [() => registerResourceStop(this.options.db, mcpStop.quarantine, mcpStop.value, mcpStop.reason, this.options.clock.now())] : []),
+        ];
+        // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。これは盤面の一撃を持たない構成のため
+        const fire = () => {
+          for (const write of writes) write();
+        };
         // ADR 0338 決定1: 読み手(ターン)・process の事実(MCP の起動時 exit)・probe(cap)の3出所を同じ束にする。
-        // 分類が Promise の経路でも停止の登録はその解決より先に済み、盤面は解決を待って決める(決定2)
+        // 停止の登録は `writes` の中で、盤面は分類を待って撃ってから決める(決定2)
         const facts = (capInterrupted: WorkerExitClassification["capInterrupted"]): WorkerExitClassification => ({
           turnRan: streamObserved.turnRan,
           ...(mcpStop && { stop: { registered: { kind: "session_stopped_by_resource", ...mcpStop, worker_spawned_event_id: spawned } } }),
           capInterrupted,
+          writes,
         });
-        const probe = this.options.usageProbe;
+        const { onWorkerExited, usageProbe: probe } = this.options;
         if (!streamObserved.turnFailed || !probe) {
-          record(exit, outputClosed, fields, mcpStop);
-          this.options.onWorkerExited?.(task.id, exit, facts(false));
+          if (onWorkerExited) onWorkerExited(task.id, exit, facts(false));
+          else fire();
           return;
         }
-        // ADR 0309: exit の逐語は即時に渡し、分類は worker_exited を書いてから解決する。
+        // ADR 0309: exit の逐語は即時に渡す。分類は値だけを運び、書き込みは運ばない(決定4 / ADR 0342 決定6)
         const classification = recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => {
           exit.usage_recheck = usage_recheck;
-          record(exit, outputClosed, fields, mcpStop);
+          exitedAt = this.options.clock.now();
           return usage_recheck.result === "full";
         });
-        this.options.onWorkerExited?.(task.id, exit, facts(classification));
-      };
-      const record = (exit: WorkerExit, outputClosed: boolean, fields: ReturnType<typeof codexExitFields>, mcpStop: ResourceStop | undefined) => {
-        // ADR 0083 追記10: Claude adapter と同じ閉じる1本で、worker_exited を書いたあとに Precedent を投影する(ADR 0315 決定1)。
-        closeSession(
-          this.options.db,
-          {
-            taskId: task.id,
-            actorId: agent.name,
-            payload: {
-              kind: "worker_exited",
-              ...exit,
-              worker_spawned_event_id: spawned,
-              output_closed: outputClosed,
-              ...fields,
-            },
-            at: this.options.clock.now(),
-          },
-          removeTaskTemp,
-          () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id }),
-        );
-        if (mcpStop) registerResourceStop(this.options.db, mcpStop.quarantine, mcpStop.value, mcpStop.reason, this.options.clock.now());
+        if (onWorkerExited) onWorkerExited(task.id, exit, facts(classification));
+        else void classification.then(fire);
       };
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
       // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
@@ -1643,8 +1653,6 @@ export class CodexWorker implements WorkerAdapter {
       // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない
       // 器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       this.running.delete(task.id);
-      // ADR 0342 決定4: 盤面 DB の拒否は spawn_failed の原因に書き直さず、未処理の reject として底へ上げる
-      if (isBoardDbRefusal(error)) throw error;
       if (error instanceof RecordContainerError) {
         removeTaskTemp();
         this.options.onRecordContainerFailed?.(task.id, error);

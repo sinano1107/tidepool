@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
@@ -8,10 +8,11 @@ import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { acceptTeardownQuarantine, markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
-import { spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { acceptTeardownQuarantine, markTeardown, runTeardown, type TeardownAction, type TeardownDeps, teardownStep } from "../src/teardown.js";
+import { recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { FULL_HANDOFF, failTeardownMark, HUMAN_WEBUI, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 
 /** 後始末の runner(ADR 0342 決定6 / ADR 0112): 後始末のどの step で盤面のバグが投げても落ちた後始末の question が1枚立ち、
  *  梯子は進まず、受理は投げた step を撃ち直す。workspace を持たない盤面(tree rule は no-op)で、step と枠だけを見る。 */
@@ -36,7 +37,7 @@ interface Board {
 }
 
 /** 走っている session 1つ。`hold` した容器は強制回収では空にならない。 */
-function board({ hold = false } = {}): Board {
+function board({ hold = false, workspace }: { hold?: boolean; workspace?: WorkspaceConfig } = {}): Board {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -46,8 +47,8 @@ function board({ hold = false } = {}): Board {
   slot.occupy(task.id);
   containers.open(task.id);
   if (hold) runtime.hold(task.id);
-  const deps: TeardownDeps = { db, clock, slot, resolve: undefined, pollNow: () => {} };
-  const watchdog = startWatchdog({ db, clock, slot, worker: new ScriptedWorker(clock), containers, pollNow: () => {}, config: CONFIG });
+  const deps: TeardownDeps = { db, clock, slot, resolve: workspace && (() => workspace), pollNow: () => {} };
+  const watchdog = startWatchdog({ db, clock, slot, worker: new ScriptedWorker(clock), containers, workspace, pollNow: () => {}, config: CONFIG });
   return { db, clock, slot, runtime, containers, task, deps, watchdog };
 }
 
@@ -91,7 +92,7 @@ it.each([
     "分類が揃った後の決定の tx",
     (b: Board) => {
       b.containers.forceReclaim(b.task.id);
-      b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, capInterrupted: false });
+      b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, writes: [], capInterrupted: false });
     },
     `worker exited without reporting: one`,
   ],
@@ -174,7 +175,7 @@ it("落ちた後始末が立った後に遅れて届いた空の観測は後始�
   const b = board({ hold: true });
   b.containers.forceReclaim(b.task.id);
   // 上限到達による中断: 決定が後始末へ入り、回収済み観測に後始末を繋ぐ
-  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: true });
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, writes: [], capInterrupted: true });
   b.db.exec(
     "CREATE TRIGGER fail_containment BEFORE INSERT ON tasks WHEN NEW.question_quarantine_kind = 'containment' " +
       "BEGIN SELECT RAISE(ABORT, 'containment write failed'); END",
@@ -272,7 +273,7 @@ it("runner の中で盤面 DB が書きを拒めば(A)、question を立てず�
   b.containers.forceReclaim(b.task.id);
   b.db.pragma("query_only = 1");
 
-  expect(() => b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, capInterrupted: false })).toThrow(
+  expect(() => b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, writes: [], capInterrupted: false })).toThrow(
     expect.objectContaining({ code: "SQLITE_READONLY" }),
   );
 
@@ -281,11 +282,11 @@ it("runner の中で盤面 DB が書きを拒めば(A)、question を立てず�
   expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
 });
 
-it("分類の Promise が reject すると(adapter の記録の書き込みが投げた)、slot を黙って握り続けず落ちた後始末が立ち、梯子は進まず未処理の reject も出ない(#2822)", async () => {
+it("破られた契約への備え: 分類の Promise が reject しても(adapter の書き込みは束の step へ移ったのでそこからは来ない)、slot を黙って握り続けず落ちた後始末が立ち、梯子は進まず未処理の reject も出ない(#2822)", async () => {
   const b = board({ hold: true });
 
   const rejections = await unhandledRejectionsDuring(async () => {
-    b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, capInterrupted: Promise.reject(new Error("sweep: disk gone")) });
+    b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { turnRan: true, writes: [], capInterrupted: Promise.reject(new Error("sweep: disk gone")) });
     await settle();
     await climbTheLadder(b);
   });
@@ -293,4 +294,281 @@ it("分類の Promise が reject すると(adapter の記録の書き込みが�
   expect(rejections).toEqual([]);
   expectHeld(b);
   expect(getTask(b.db, openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!.id)?.purpose).toContain("sweep: disk gone");
+});
+
+/** 束の書く step(ADR 0342 決定6 / ADR 0338 決定4): 手ごとに撃った順を残し、`broken` の間だけ2つ目の手が投げる。 */
+function writeSteps() {
+  const steps: { broken: boolean; fired: string[]; writes: TeardownAction[] } = {
+    broken: true,
+    fired: [],
+    writes: [
+      () => steps.fired.push("exit"),
+      () => {
+        if (steps.broken) throw new Error("write step bug");
+        steps.fired.push("temp");
+      },
+      () => steps.fired.push("project"),
+    ],
+  };
+  return steps;
+}
+
+const FAILED_EXIT = { ...QUIET_EXIT, exit_code: 1 };
+
+it.each([
+  ["解決済みの分類", (): boolean | Promise<boolean> => false],
+  ["Promise の分類", (): boolean | Promise<boolean> => Promise.resolve(false)],
+] as const)("束の書く step が投げると(%s)落ちた後始末が1枚立って梯子は進まず、受理で step が再実行され枠が空く —— 済んだ step は撃ち直さない(ADR 0342 決定6)", async (_, cap) => {
+  const b = board();
+  const steps = writeSteps();
+  b.containers.forceReclaim(b.task.id);
+
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: cap(), writes: steps.writes });
+  await settle();
+  await climbTheLadder(b);
+
+  expectHeld(b);
+  expect(steps.fired).toEqual(["exit"]);
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual(["worker exited without reporting: one"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it("直さずに受理すると書く step の撃ち直しが拒まれ、直してからの受理で枠が空く(ADR 0112 決定3 / #2857)", async () => {
+  const b = board();
+  const steps = writeSteps();
+  b.containers.forceReclaim(b.task.id);
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: Promise.resolve(false), writes: steps.writes });
+  await settle();
+
+  await expect(answer(b)).rejects.toThrow("write step bug");
+  expectHeld(b);
+
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it("書く step は分類が揃ってから撃ち、決定はその後ろ —— Promise の分類の間は何も書かない(ADR 0342 決定6、ADR 0309 決定3 の Status 追記)", async () => {
+  const b = board();
+  const order: string[] = [];
+  let classify!: (cap: boolean) => void;
+  b.containers.forceReclaim(b.task.id);
+
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, {
+    turnRan: true,
+    capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }),
+    writes: [() => order.push(`questions at write: ${questions(b.db).length}`)],
+  });
+  await settle();
+  expect(order).toEqual([]);
+
+  classify(false);
+  await settle();
+  expect(order).toEqual(["questions at write: 0"]);
+  expect(questions(b.db)).toEqual(["worker exited without reporting: one"]);
+});
+
+describe("盤面の決定の門より手前で書く —— 決定しない exit も記録は失わない(ADR 0342 決定6)", () => {
+  /** 最終 verb が着地して後始末へ入った session。回収済み観測は `fireEmpty` が撃つ。 */
+  function completed() {
+    const b = board({ hold: true });
+    completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
+    markTeardown(b.db, b.task.id, b.clock.now());
+    b.slot.enterTeardown();
+    void b.containers.reclaimed(b.task.id).then(() => runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id)));
+    return b;
+  }
+
+  it("後始末中の exit も書く step を撃ち、決定はしない", () => {
+    const b = completed();
+    const steps = writeSteps();
+    steps.broken = false;
+
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+
+    expect(steps.fired).toEqual(["exit", "temp", "project"]);
+    expect(questions(b.db)).toEqual([]);
+  });
+
+  it("Promise の分類でも分類を待ってから撃つ", async () => {
+    const b = completed();
+    const steps = writeSteps();
+    steps.broken = false;
+    let classify!: (cap: boolean) => void;
+
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }), writes: steps.writes });
+    await settle();
+    expect(steps.fired).toEqual([]);
+
+    classify(false);
+    await settle();
+    expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  });
+
+  it("後始末中の exit の書く step が投げると落ちた後始末が立ち、遅れた回収済み観測は残りの後ろに継がれて、受理が撃ち直してから後始末が枠を空ける(ADR 0112 決定4)", async () => {
+    const b = completed();
+    const steps = writeSteps();
+
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.runtime.fireEmpty(b.task.id);
+    await settle();
+
+    expectHeld(b);
+    steps.broken = false;
+    await answer(b);
+    await settle();
+    expect(steps.fired).toEqual(["exit", "temp", "project"]);
+    expect(questions(b.db)).toEqual([]);
+    expect(b.slot.currentTaskId).toBeNull();
+  });
+
+  it("枠の主が替わった後に書く step が投げても次の session の枠を止めない —— log だけで question は立てない(ADR 0342 決定6)", () => {
+    const b = board();
+    const steps = writeSteps();
+    b.slot.release();
+    b.slot.occupy("next-task");
+
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+
+    expect(steps.fired).toEqual(["exit"]);
+    expect(questions(b.db)).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(`[teardown] task ${b.task.id}:`, expect.objectContaining({ message: "write step bug" }));
+  });
+});
+
+it("先に落ちた後始末の残りを持つ枠で書く step が投げても、先の残りを失わない —— 受理は投げた順に両方を撃ち直す(ADR 0342 決定6)", async () => {
+  const b = board();
+  const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
+  const repair = failTeardownMark(b.db);
+  transcriptFailureHandler(b.deps, b.containers)({ taskId: b.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" });
+  const steps = writeSteps();
+
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+
+  expectHeld(b);
+  repair();
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "transcript_failed")).toHaveLength(1);
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual(["worker transcript could not be written: one", "the board's record container cannot be written — pickup is stopped"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it("走っている後始末の await の間に書く step が投げても、後始末は枠を空けず残りの後ろに回る —— 受理は残りの手を撃ち、偽の workspace question を立てずに枠を空ける(ADR 0342 決定6)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  const b = board({ workspace: ws });
+  await prepareWorkspaceAtPickup(b.db, ws, b.task);
+  commitWork(ws.path, "deliverable.txt", "work\n");
+  completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
+  markTeardown(b.db, b.task.id, b.clock.now());
+  b.slot.enterTeardown();
+  const steps = writeSteps();
+
+  // 後始末は `ensureWorkspaceToken` の await まで同期に走り、exit の settle はその中に着く
+  const running = runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  await running;
+  await settle();
+
+  expectHeld(b);
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual([]);
+  expect(b.slot.currentTaskId).toBeNull();
+}, GIT_FIXTURE_TEST_TIMEOUT);
+
+it("残りが [後始末, 書く step] のとき、受理で後始末が枠を空けた後に step がまた投げても、次の受理は枠を取り直さず step だけ撃つ —— question なしで枠を握らない(ADR 0342 決定6 / ADR 0112 決定3)", async () => {
+  const b = board({ hold: true });
+  completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
+  markTeardown(b.db, b.task.id, b.clock.now());
+  b.slot.enterTeardown();
+  let broken = true;
+  await runTeardown(b.deps, b.task.id, {
+    transition: () => {
+      if (broken) throw new Error("teardown bug");
+    },
+  });
+  const steps = writeSteps();
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  broken = false;
+
+  await expect(answer(b)).rejects.toThrow("write step bug");
+  expect(b.slot.currentTaskId).toBeNull();
+
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual([]);
+  expect(b.slot.currentTaskId).toBeNull();
+  expect(b.slot.inTeardown).toBe(false);
+});
+
+it("飲まれた回収済み観測の後で人間が止めると、受理の後ろで人間の停止の後始末が枠を空ける —— 偽の Containment question を立てない(ADR 0112 決定4 / ADR 0305)", async () => {
+  const b = board({ hold: true });
+  const steps = writeSteps();
+  await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.runtime.fireEmpty(b.task.id);
+  await settle();
+
+  expect(b.watchdog.stopSession(b.task.id, () => recordHumanStop(b.db, b.task.id, "stop now", b.clock.now(), "webui"))).toBeUndefined();
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  await b.clock.advance(CONFIG.reclaimTimeout * 2);
+  await settle();
+
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual(["stopped by human: one"]);
+  expect(b.slot.currentTaskId).toBeNull();
+});
+
+it("書く step の中で盤面 DB が書きを拒めば(A)、question を立てずに底へ投げる —— 同期は throw、Promise の分類は reject(ADR 0342 決定2・6)", async () => {
+  const b = board();
+  const write = () => appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
+  const refused = expect.objectContaining({ code: "SQLITE_READONLY" });
+  b.db.pragma("query_only = 1");
+
+  expect(() => b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: false, writes: [write] })).toThrow(refused);
+  const rejections = await unhandledRejectionsDuring(async () => {
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: Promise.resolve(false), writes: [write] });
+    await settle();
+  });
+
+  b.db.pragma("query_only = 0");
+  expect(rejections).toContainEqual(refused);
+  expect(questions(b.db)).toEqual([]);
+  expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
+});
+
+it("時間制限の停止の後の exit で書く step が投げても、飲まれた回収済み観測は受理の後ろで受ける —— 偽の Containment question を立てずに枠が空く(ADR 0112 決定4)", async () => {
+  const b = board({ hold: true });
+  const steps = writeSteps();
+  await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  expect(b.runtime.forceReclaims).toEqual([b.task.id]);
+
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.runtime.fireEmpty(b.task.id);
+  await settle();
+  expectHeld(b);
+
+  steps.broken = false;
+  await answer(b);
+  await settle();
+  await b.clock.advance(CONFIG.reclaimTimeout * 2);
+
+  expect(steps.fired).toEqual(["exit", "temp", "project"]);
+  expect(questions(b.db)).toEqual(["watchdog killed task: one"]);
+  expect(b.slot.currentTaskId).toBeNull();
 });

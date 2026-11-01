@@ -498,8 +498,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onSpawnFailed,
     onRecordContainerFailed,
     onPickupStopped,
-    // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
-    onWorkerExited: (taskId, exit, facts) => watchdog?.onWorkerExited(taskId, exit, facts),
+    // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く。exit は pickup の後でしか来ず pickup は組み上がった後に始まる —— 無ければ束の書く step を黙って落とさず投げる
+    onWorkerExited: (taskId, exit, facts) => watchdog!.onWorkerExited(taskId, exit, facts),
     transcripts: options.transcripts,
   });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {

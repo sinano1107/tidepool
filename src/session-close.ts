@@ -8,22 +8,30 @@ import { appendEvent, type EventPayload, listEventsOfKinds, SESSION_WINDOW_KINDS
 import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 import type { Harness } from "./registry.js";
 import { parseStreamLine } from "./stream-json.js";
+import type { TeardownAction } from "./teardown.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** session の一時領域の名前の頭(ADR 0257 決定2)。adapter の mkdtemp と起動時の復旧の削除が共有する(ADR 0315 決定5)。 */
 export const taskTempPrefix = (harness: "claude" | "codex", taskId: string) => `tidepool-${harness}-${taskId}-`;
 
 /** session を閉じる1本(ADR 0315 決定1): exit の記録 → 一時領域の削除 → 投影、この順で。exit は投影より先 ——
- *  投影は `worker_exited_event_id` を写し、同じ版では作り直せない。adapter の終了処理と起動時の復旧が呼ぶ。 */
-export function closeSession(
+ *  投影は `worker_exited_event_id` を写し、同じ版では作り直せない。手に分けて返す: adapter は束に乗せて runner に撃たせ、投げた手から
+ *  撃ち直す(ADR 0342 決定6)—— 1手に畳むと受理が `worker_exited` を2行書く。起動時の復旧はその場で順に撃つ。
+ *  `exit` は撃つ時に読む —— Codex の読み直しの結果は分類の解決で入る。 */
+export function closeSessionActions(
   db: Db,
-  exit: { taskId: string; actorId: string; at: Date; payload: Extract<EventPayload, { kind: "worker_exited" }> },
+  exit: () => { taskId: string; actorId: string; at: Date; payload: Extract<EventPayload, { kind: "worker_exited" }> },
   removeTaskTemp: () => void,
   project: () => void,
-): void {
-  appendEvent(db, { taskId: exit.taskId, actorId: exit.actorId, origin: "board", payload: exit.payload, at: exit.at });
-  removeTaskTemp();
-  project();
+): TeardownAction[] {
+  return [
+    () => {
+      const { taskId, actorId, payload, at } = exit();
+      appendEvent(db, { taskId, actorId, origin: "board", payload, at });
+    },
+    removeTaskTemp,
+    project,
+  ];
 }
 
 /** 前の盤面が閉じ切らなかった session を閉じる起動時の復旧(ADR 0315 決定1〜5)。対象は `watermark`(起動時点の最大 event id)
@@ -38,6 +46,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
     // process を1つも持たなかった session は閉じない —— exit も Episode も一時領域の削除も無い(ADR 0316 決定4 / #2633)
     if (window.neverRan) continue;
     const taskId = spawned.task_id;
+    const { harness } = spawned.payload;
     const base = join(opts.logDir, `${taskId}.${spawned.id}`);
     const transcriptPath = `${base}.stream.jsonl`;
     // transcript が無い session は投影できない —— 試みず記録もしない。exit があっても起動のたびに報告し続けない(ADR 0316 決定2)
@@ -51,9 +60,9 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
         project();
         continue;
       }
-      closeSession(
+      const actions = closeSessionActions(
         db,
-        {
+        () => ({
           taskId,
           actorId: spawned.actor_id,
           at: opts.now,
@@ -63,14 +72,15 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
             exit_code: null,
             signal: null,
             stderr_tail: readStderrTail(`${base}.stderr.log`),
-            ...streamExitFields(spawned.payload.harness, transcriptPath),
+            ...streamExitFields(harness, transcriptPath),
             worker_spawned_event_id: spawned.id,
             output_closed: false,
           },
-        },
+        }),
         () => removeTaskTemps(opts.tmpDir, taskId),
         project,
       );
+      for (const action of actions) action();
     } catch (err) {
       // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
       if (isBoardDbRefusal(err)) throw err;

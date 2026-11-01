@@ -1,5 +1,7 @@
 # 盤面 DB が書きを拒んだ記録の書き込みは床から process を終え、後始末の step の中の盤面のバグは落ちた後始末である —— memory の印は書き込みの後
 
+**Status 追記: 決定6 の落ちた後始末の残りは、question が開いている間に届いた手(遅れた exit の書く step・後始末・回収済み観測)も運ぶ —— 投げた手の後ろに届いた順で並び、撃つのは投げた手が先(2026-11-01、issue #2857)。**
+
 2026-11-01 の grilling(issue #2837、#2822 / #2804 / #2805 の triage sweep で見えた族の根)で決定。記録を書く処理(`appendEvent`・
 question の登録・quarantine・`closeSession`・`markTeardown`)が投げたとき、行き先が箇所ごとに割れていた —— timer / stream listener の
 同期 throw は `uncaughtException` で落ち、`void` の鎖の throw は床(ADR 0294 決定4)に落ちて log だけで slot を握り続け、2箇所では

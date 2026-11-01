@@ -3,6 +3,7 @@ import type { ExecutionSetting } from "./execution-setting.js";
 import type { InjectionQuery } from "./memory.js";
 import { canonicalHarness, type Harness } from "./registry.js";
 import type { SessionStoppedByResource, Task } from "./tasks.js";
+import type { TeardownAction } from "./teardown.js";
 
 /** worker session に継承させない host の資格情報 env。どの Harness も自分の認証に使わないので、Harness を問わず spawn env から
  *  消す —— host が export しても worker に届かない。GitHub の2本は ADR 0024 決定3(worker は GitHub credential ゼロ)、
@@ -21,10 +22,13 @@ export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, 
 export interface WorkerExitClassification {
   /** 読み手がモデルのターンを観測したか。`worker_exited` には書かない(ADR 0338 決定5)。 */
   turnRan: boolean;
-  /** 1 session に1つ: adapter が登録済みの資源の停止(ADR 0331 決定1)か、盤面が登録する未登録の行の拒否(ADR 0338 決定4)。 */
+  /** 1 session に1つ: adapter が登録する資源の停止(ADR 0331 決定1、登録は `writes` の中 —— 盤面は撃った後に読む)か、盤面が登録する未登録の行の拒否(ADR 0338 決定4)。 */
   stop?: { registered: SessionStoppedByResource } | { refusal: RowRefusal };
-  /** 上限到達による中断か。非同期の分類も必ず値で解決し、reject しない(ADR 0309)。 */
+  /** 上限到達による中断か。非同期の分類も値だけを運び、reject しない(ADR 0309 決定4)—— 記録の書き込みは `writes`。 */
   capInterrupted: boolean | Promise<boolean>;
+  /** exit の記録を書く step。内容と順序は adapter が持ち(ADR 0338 決定4)、盤面の runner が分類の後に1度ずつ撃つ —— 投げたら受理がその step から撃ち直す(ADR 0342 決定6)。
+   *  必須の欄: 決定しない exit(後始末中・枠の主が替わった)でも撃つので、adapter の書き忘れは記録の欠落になる。 */
+  writes: TeardownAction[];
 }
 
 /** Boundary between the board and whatever executes tasks (design principle 7:

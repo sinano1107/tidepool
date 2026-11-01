@@ -161,13 +161,17 @@ export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): void 
 /** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
  * Provider fact, never by parsing prose from an error. Every Provider is a
  * resource-scoped quarantine; unrelated Provider workers continue. 返すのは止めた資源(ADR 0331 決定4)。 */
-export function quarantineCliAuthForProvider(
-  db: Db,
+export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date, reason?: string): ResourceStop {
+  const stop = cliAuthStop(provider, reason);
+  return registerResourceStop(db, stop.quarantine, stop.value, stop.reason, now);
+}
+
+/** 401 が止める資源の値だけ —— 登録は撃つ側の step に置き、値は束へ先に渡す(ADR 0342 決定6)。 */
+export function cliAuthStop(
   provider: Provider,
-  now: Date,
   reason = `A worker session or Board call returned an authentication failure while speaking the ${provider} provider`,
 ): ResourceStop {
-  return registerResourceStop(db, "providerAuth", provider, reason, now);
+  return { quarantine: "providerAuth", value: provider, reason };
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {
