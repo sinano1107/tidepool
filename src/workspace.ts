@@ -752,10 +752,15 @@ function currentRefs(workspace: WorkspaceConfig): string {
   return `${headValue(workspace)} HEAD${refs && `\n${refs}`}`;
 }
 
-/** 基準の HEAD 行の値: 指し先(ADR 0081 の symref の行)、detached なら sha。`symbolic-ref -q` の非零は 1 が detached で、他は道具の失敗。 */
+/** 基準の symref の行の値(ADR 0081: 解決値でなく指し先)。 */
+function symrefValue(target: string): string {
+  return `symref=${target}`;
+}
+
+/** 基準の HEAD 行の値: 指し先、detached なら sha。`symbolic-ref -q` の非零は 1 が detached で、他は道具の失敗。 */
 function headValue(workspace: WorkspaceConfig): string {
   try {
-    return `symref=${git(workspace.path, "symbolic-ref", "-q", "HEAD")}`;
+    return symrefValue(git(workspace.path, "symbolic-ref", "-q", "HEAD"));
   } catch (err) {
     if ((err as { status?: number } | null)?.status !== 1) throw err;
     return git(workspace.path, "rev-parse", "HEAD");
@@ -839,7 +844,7 @@ function assertOnlyTaskBranchMoved(db: Db, workspace: WorkspaceConfig, taskId: s
 }
 
 /** 基準を書き換える。基準を持たない workspace(一度も拾われていない)には何もしない —— 行を作らず、次の pickup が
- *  全体を撮る。保存値の綴りは常に「`for-each-ref` のソート済み出力」= **refname 順**である(ADR 0064 決定6)。 */
+ *  全体を撮る。保存値の綴りは常に「`currentRefs` の出力」= **refname 順**である(ADR 0064 決定6)。 */
 function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<string, string>) => void): boolean {
   const stored = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
@@ -867,7 +872,7 @@ function readRef(workspace: WorkspaceConfig, ref: string): string {
 }
 
 /** 畳みの読み返し: 基準の行と同じ綴りで読む。HEAD だけ別なのは指し先で数えるから(ADR 0081)—— `readRef` の sha は未生の HEAD を見分ける呼び手が使う。 */
-function readBaselineValue(workspace: WorkspaceConfig, ref: string): string {
+function readCheckoutValue(workspace: WorkspaceConfig, ref: string): string {
   if (ref !== "HEAD") return readRef(workspace, ref);
   try {
     return headValue(workspace);
@@ -886,14 +891,14 @@ function readBaselineValue(workspace: WorkspaceConfig, ref: string): string {
 export function writeBoardRefs(
   db: Db,
   workspace: WorkspaceConfig,
-  writes: ReadonlyArray<readonly [ref: string, newSha: string]>,
+  writes: ReadonlyArray<readonly [ref: string, newValue: string]>,
   write: () => void,
 ): void {
   const before = new Map<string, string>();
   const announced = updateBaseline(db, workspace, (values) => {
-    for (const [ref, newSha] of writes) {
+    for (const [ref, newValue] of writes) {
       before.set(ref, values.get(ref) ?? "");
-      values.set(ref, `${before.get(ref)}|${newSha}`);
+      values.set(ref, `${before.get(ref)}|${newValue}`);
     }
   });
   if (!announced) {
@@ -902,7 +907,7 @@ export function writeBoardRefs(
   }
   const fold = () =>
     updateBaseline(db, workspace, (values) => {
-      for (const [ref, newSha] of writes) values.set(ref, readBaselineValue(workspace, ref) === newSha ? newSha : before.get(ref)!);
+      for (const [ref, newValue] of writes) values.set(ref, readCheckoutValue(workspace, ref) === newValue ? newValue : before.get(ref)!);
     });
   try {
     write();
@@ -921,11 +926,11 @@ export function writeBoardRefs(
 
 /** 1つの workspace の基準に束ねた1本の口(`writeBoardRefs` の1本の形)。 */
 export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
-  return (ref, newSha, write) => writeBoardRefs(db, workspace, [[ref, newSha]], write);
+  return (ref, newValue, write) => writeBoardRefs(db, workspace, [[ref, newValue]], write);
 }
 
-/** 口を通さずに書く。pickup の鮮度の段の休止位置だけが使う —— 口に通すのは #2459。 */
-const outsideTheGate: RefWriter = (_ref, _newSha, write) => write();
+/** 口を通さずに書く。後始末の fetch と、口を渡されない鮮度の段(pickup)の fetch と休止位置が使う —— 口に通すのは #2459。 */
+const outsideTheGate: RefWriter = (_ref, _newValue, write) => write();
 
 /** ADR 0069 の3条件 —— **既知パス・untracked・0 バイト**をすべて満たすファイルだけが
  *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
@@ -1069,20 +1074,23 @@ function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: T
 }
 
 /** ADR 0345 決定3: HEAD がタスクブランチを離れ、基準が予告か畳みで持つ位置にある = 盤面が動かした。基準に HEAD の行が
- *  無ければ一致しない(fail-closed)—— worker の迷い込みは今日どおり `assertOnTaskBranch` が拒む。 */
+ *  無ければ一致しない(fail-closed)—— セッションが自分のブランチを離れていた形は今日どおり `assertOnTaskBranch` が拒む。 */
 function boardMovedHead(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
   const head = headValue(workspace);
-  return head !== `symref=refs/heads/${taskBranch(taskId)}` && baselineAllows(recordedRef(db, snapshotKey(workspace), "HEAD"), head);
+  return head !== symrefValue(`refs/heads/${taskBranch(taskId)}`) && baselineAllows(recordedRef(db, snapshotKey(workspace), "HEAD"), head);
 }
 
 /** ADR 0345 決定3: 盤面が checkout を動かした後の再実行の検査。退避も ref の比較も1度しか成り立たないので撃たず、
- *  ツリーの変更だけを読む —— 落ちた盤面の裏で残存 process が書いた形で、fail-closed に quarantine へ落とす。 */
+ *  ツリーの変更だけを読み、あれば fail-closed に quarantine へ落とす。ここへ来る形は2つあり、git からは見分けられない ——
+ *  盤面が動かした後に残存 process が書いた形と、タスクブランチの `.gitignore` だけが無視していたファイルが checkout の後に現れた形。 */
 function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, task: Task): void {
   removeShadowRemnants(workspace);
-  if (uncommittedChanges(workspace).length > 0) {
+  const changes = uncommittedChanges(workspace);
+  if (changes.length > 0) {
     throw new Error(
-      `workspace ${workspace.name} was written to after the board moved its checkout off ` +
-        `'${taskBranch(task.id)}' for task ${task.id} — these changes are not the session's deliverable`,
+      `workspace ${workspace.name} has uncommitted changes after the board moved its checkout off ` +
+        `'${taskBranch(task.id)}' for task ${task.id}: ${changes.join(", ")} — either a process wrote them after the board moved ` +
+        "the checkout, or they are ignored only on the task branch (its .gitignore does not apply on this branch)",
     );
   }
 }
@@ -1108,13 +1116,13 @@ function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, tas
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
  *  `releaseWorkspace` と pickup の後半が受ける)。
  *
- *  checkout と ff は呼び手が渡す `writeRef` で書く: 後始末と受理のやり直しは口(ADR 0243 決定4 / ADR 0345 決定2)、pickup の鮮度の段だけが
- *  `outsideTheGate` を明示して渡す(#2459)。 */
+ *  checkout と ff は呼び手が渡す `writeRef` で書く: 後始末と受理のやり直しは口(ADR 0243 決定4 / ADR 0345 決定2)、口を渡されない
+ *  pickup の鮮度の段だけが `firePickupPredicates` の既定の `outsideTheGate` で書く(#2459)。 */
 function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter): void {
   const branch = protectedBranch(workspace);
   try {
-    // ADR 0345 決定2: HEAD の移動も口を通る
-    writeRef("HEAD", `symref=refs/heads/${branch}`, () => git(workspace.path, "checkout", branch));
+    // ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、checkout も予告して畳む
+    writeRef("HEAD", symrefValue(`refs/heads/${branch}`), () => git(workspace.path, "checkout", branch));
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
@@ -1348,8 +1356,8 @@ function mergeBackInto(
 ): void {
   const source = taskBranch(taskId);
   const ref = `refs/heads/${target}`;
-  // ADR 0345 決定2: HEAD の移動も口を通る
-  boardRefWriter(db, workspace)("HEAD", `symref=${ref}`, () => git(workspace.path, "checkout", target));
+  // ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、checkout も予告して畳む
+  boardRefWriter(db, workspace)("HEAD", symrefValue(ref), () => git(workspace.path, "checkout", target));
   if (isAncestor(workspace, source, ref)) return;
   const sha = isAncestor(workspace, ref, source)
     ? git(workspace.path, "rev-parse", `refs/heads/${source}`)

@@ -601,6 +601,15 @@ export function failTeardownMark(db: Db): () => void {
   return () => db.exec("DROP TRIGGER fail_teardown_mark");
 }
 
+/** 落ちた盤面の畳みはディスクに届かない: 予告(2値の行)は書けて、1値へ畳む書き込みだけが届かない形。返り値で外す。 */
+export function dropBoardBeforeFold(db: Db): () => void {
+  db.exec(
+    "CREATE TEMP TRIGGER board_drops_before_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
+      "WHEN NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END",
+  );
+  return () => db.exec("DROP TRIGGER board_drops_before_fold");
+}
+
 /** exit の記録(`worker_exited` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
 export function failWorkerExited(db: Db): () => void {
   db.exec("CREATE TRIGGER fail_exited BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT RAISE(ABORT, 'worker_exited write failed'); END");

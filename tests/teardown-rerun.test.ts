@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -9,19 +9,34 @@ import { completeTask, getTask, listBoard, pickupTask, registerTask } from "../s
 import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { boardRefWriter, firePickupPredicates, prepareWorkspaceAtPickup, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, failGitCommits, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 
 // 後始末の再実行(ADR 0345): tree rule を通った checkout をもう1度読む経路の振る舞い。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
+/** 未決着の親の work を登録し、そのタスクブランチを main から立てる —— 子はそこへ merge back する。 */
+function registerParentWithBranch(db: Db, ws: WorkspaceConfig, now: Date): string {
+  const { id } = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
+  git(ws.path, "branch", `task/${id}`, "main");
+  return id;
+}
+
+/** 親のブランチに `work.txt` の別の内容を commit し、子は main から分ける —— 子の merge back は conflict する。 */
+function conflictOnParentBranch(ws: WorkspaceConfig, parentBranch: string, taskId: string): void {
+  git(ws.path, "checkout", parentBranch);
+  commitWork(ws.path, "work.txt", "conflicting\n");
+  git(ws.path, "branch", `task/${taskId}`, "main");
+}
+
 /** pickup の準備まで済み、worker が `work.txt` を1つ commit して決着した session。枠を握って後始末の印が立っている。 */
-async function settledSession(settle: "completed" | "interrupted", { workspace, parentId, beforePickup }: { workspace?: WorkspaceConfig; parentId?: (db: Db, ws: WorkspaceConfig) => string; beforePickup?: (ws: WorkspaceConfig, taskId: string) => void } = {}) {
+async function settledSession(settle: "completed" | "interrupted", { workspace, parent }: { workspace?: WorkspaceConfig; parent?: "delivers" | "conflicts" } = {}) {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = workspace ?? (await makeWorkspace("teardown-rerun"));
-  const registered = registerTask(db, { type: "work", title: "rerun", purpose: "why", completion_criteria: "done", parent_id: parentId?.(db, ws) }, clock.now(), ...HUMAN_WEBUI);
-  beforePickup?.(ws, registered.id);
+  const parentId = parent && registerParentWithBranch(db, ws, clock.now());
+  const registered = registerTask(db, { type: "work", title: "rerun", purpose: "why", completion_criteria: "done", parent_id: parentId }, clock.now(), ...HUMAN_WEBUI);
+  if (parent === "conflicts") conflictOnParentBranch(ws, `task/${parentId}`, registered.id);
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   await prepareWorkspaceAtPickup(db, ws, task);
   appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
@@ -32,7 +47,7 @@ async function settledSession(settle: "completed" | "interrupted", { workspace, 
   slot.occupy(task.id);
   slot.enterTeardown();
   const deps: TeardownDeps = { db, clock, slot, resolve: () => ws, pollNow: () => {} };
-  return { db, clock, ws, task, slot, deps, branch: `task/${task.id}` };
+  return { db, clock, ws, task, slot, deps, branch: `task/${task.id}`, parentBranch: `task/${parentId}` };
 }
 
 type Session = Awaited<ReturnType<typeof settledSession>>;
@@ -57,21 +72,18 @@ function expectCleanRerun(s: Session, deps: TeardownDeps, status: string): void 
   expect(head(s)).toBe("main");
 }
 
-/** 落ちた盤面の畳みはディスクに届かない: 予告(2値の行)は書けて、1値へ畳む書き込みだけが届かない形。 */
-function dropBoardAtFold(s: Session, write: () => void): void {
-  s.db.exec(
-    "CREATE TEMP TRIGGER board_drops_before_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
-      "WHEN NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END",
-  );
+/** HEAD を休止位置へ予告して `write` を撃ち、畳む前に盤面が落ちる: 基準に2値の HEAD 行が残る。 */
+function dropBoardAtHeadFold(s: Session, write: () => void): void {
+  const reopen = dropBoardBeforeFold(s.db);
   expect(() => boardRefWriter(s.db, s.ws)("HEAD", "symref=refs/heads/main", write)).toThrow("the board dropped");
-  s.db.exec("DROP TRIGGER board_drops_before_fold");
+  reopen();
 }
 
 it.each([
   ["完了、process が生きたままの受理", "completed", "done", false],
-  ["上限到達の中断、process が生きたままの受理", "interrupted", "todo", false],
+  ["上限到達による中断、process が生きたままの受理", "interrupted", "todo", false],
   ["完了、再起動を跨いだ受理", "completed", "done", true],
-  ["上限到達の中断、再起動を跨いだ受理", "interrupted", "todo", true],
+  ["上限到達による中断、再起動を跨いだ受理", "interrupted", "todo", true],
 ] as const)("tree rule を通った後の tx で落ちた後始末を受理すると、偽の workspace Quarantine を立てずに枠が空く —— %s(ADR 0345 決定3)", async (_, settle, status, restart) => {
   const s = await settledSession(settle);
   await teardownThrewAfterTreeRule(s);
@@ -130,7 +142,7 @@ it("基準の行が無い workspace の HEAD は盤面が動かしたと読ま�
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`is on 'main', not '${s.branch}' — refusing to commit`);
 });
 
-it("盤面が休止させた後に書かれたツリーは、退避せず「休止の後に書かれた」理由の workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
+it("盤面が休止させた後に書かれたツリーは、退避せず、変わったファイルと2つの原因を名指す workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
   const s = await settledSession("completed");
   await teardownThrewAfterTreeRule(s);
   writeFileSync(join(s.ws.path, "late.txt"), "written by a process that outlived the board\n");
@@ -139,9 +151,30 @@ it("盤面が休止させた後に書かれたツリーは、退避せず「休�
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
-  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("was written to after the board moved its checkout off");
+  const purpose = quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose;
+  expect(purpose).toContain(`has uncommitted changes after the board moved its checkout off '${s.branch}'`);
+  expect(purpose).toContain("?? late.txt");
+  expect(purpose).toContain("a process wrote them");
+  expect(purpose).toContain("ignored only on the task branch");
   expect(tips()).toEqual(before);
   expect(git(s.ws.path, "status", "--porcelain")).toBe("?? late.txt");
+  expect(head(s)).toBe("main");
+});
+
+it("タスクブランチの .gitignore だけが無視していたファイルは、休止の後の再実行で現れ、名指しの workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
+  const s = await settledSession("completed");
+  commitWork(s.ws.path, ".gitignore", "build/\n");
+  mkdirSync(join(s.ws.path, "build"));
+  writeFileSync(join(s.ws.path, "build", "out.txt"), "generated\n");
+  await teardownThrewAfterTreeRule(s);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
+  expect(git(s.ws.path, "status", "--porcelain", "--untracked-files=all")).toBe("?? build/out.txt");
+
+  await acceptTeardownQuarantine(s.deps, s.task.id);
+
+  const purpose = quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose;
+  expect(purpose).toContain("?? build/out.txt");
+  expect(purpose).toContain("ignored only on the task branch");
   expect(head(s)).toBe("main");
 });
 
@@ -176,23 +209,14 @@ it("退避の commit が落ちて Quarantine に返った tree rule の受理は
 });
 
 it("merge back の conflict で Quarantine に返った tree rule の受理は、帰り先に居るまま同じ conflict に着き、同じ question に quarantine_refired を1つ足す(ADR 0345 決定3・4)", async () => {
-  let parent = "";
-  const s = await settledSession("completed", {
-    parentId: (db, ws) => {
-      parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, new FakeClock().now(), ...HUMAN_WEBUI).id;
-      git(ws.path, "checkout", "-b", `task/${parent}`, "main");
-      commitWork(ws.path, "work.txt", "conflicting\n");
-      return parent;
-    },
-    beforePickup: (ws, taskId) => git(ws.path, "branch", `task/${taskId}`, "main"),
-  });
+  const s = await settledSession("completed", { parent: "conflicts" });
   await teardownThrewAfterTreeRule(s);
-  expect(head(s)).toBe(`task/${parent}`);
+  expect(head(s)).toBe(s.parentBranch);
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
   expectOneQuestionRefiredOnce(s, "does not merge cleanly");
-  expect(head(s)).toBe(`task/${parent}`);
+  expect(head(s)).toBe(s.parentBranch);
   expect(git(s.ws.path, "status", "--porcelain")).toBe("");
 });
 
@@ -200,14 +224,14 @@ it.each([
   [
     "HEAD が old(タスクブランチ)なら tree rule は通常どおり走って退避する",
     (s: Session) => {
-      dropBoardAtFold(s, () => {});
+      dropBoardAtHeadFold(s, () => {});
       writeFileSync(join(s.ws.path, "wip.txt"), "wip\n");
     },
     "WIP: task",
   ],
   [
     "HEAD が new(休止位置)なら退避と比較を飛ばす",
-    (s: Session) => dropBoardAtFold(s, () => git(s.ws.path, "checkout", "main")),
+    (s: Session) => dropBoardAtHeadFold(s, () => git(s.ws.path, "checkout", "main")),
     "add work.txt",
   ],
 ] as const)("予告と畳みの間で落ちた2値の HEAD 行: %s(ADR 0243 決定2 / ADR 0345 決定3)", async (_, droppedBoard, tipSubject) => {
@@ -222,30 +246,25 @@ it.each([
 });
 
 it("帰り先へ届いた merge back の後の再実行は、帰り先を動かさず休止位置へ戻る(ADR 0345 決定3)", async () => {
-  let parent = "";
-  const s = await settledSession("completed", {
-    parentId: (db, ws) => {
-      parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, new FakeClock().now(), ...HUMAN_WEBUI).id;
-      git(ws.path, "branch", `task/${parent}`, "main");
-      return parent;
-    },
-  });
+  const s = await settledSession("completed", { parent: "delivers" });
   await teardownThrewAfterTreeRule(s);
   const delivered = git(s.ws.path, "rev-parse", s.branch);
-  expect(git(s.ws.path, "rev-parse", `task/${parent}`)).toBe(delivered);
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
   expectCleanRerun(s, s.deps, "done");
-  expect(git(s.ws.path, "rev-parse", `task/${parent}`)).toBe(delivered);
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 });
 
 it("remote-backed の完了の merge back の後の再実行は、fetch が動かした写しを違反と読まず、park の ff-only で休止位置を remote に追従させる(ADR 0345 決定3)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-rerun-remote");
-  const s = await settledSession("completed", { workspace });
+  const s = await settledSession("completed", { workspace, parent: "delivers" });
   // 1度目の fetch は口の外で写しを動かす(#2459)—— 比較を再走させればこれを違反と読む
   publish("first.txt", "merged on GitHub\n", "merged before the teardown");
   await teardownThrewAfterTreeRule(s);
+  const delivered = git(s.ws.path, "rev-parse", s.branch);
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
   publish("merged.txt", "merged on GitHub\n", "merged outside");
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
@@ -253,6 +272,7 @@ it("remote-backed の完了の merge back の後の再実行は、fetch が動�
   expectCleanRerun(s, s.deps, "done");
   expect(git(s.ws.path, "rev-parse", "main")).toBe(git(s.ws.path, "rev-parse", "origin/main"));
   expect(git(s.ws.path, "show", "main:merged.txt")).toBe("merged on GitHub");
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 });
 
 it("休止位置の checkout の予告で盤面 DB が書きを拒むと、checkout の失敗に包まずに投げる(ADR 0342 決定4)", async () => {

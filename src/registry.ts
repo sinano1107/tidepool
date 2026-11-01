@@ -695,7 +695,7 @@ export interface WritableRegistry extends RegistrySource {
 
 /** 盤面の ref の書き込みを、書く先の workspace の基準への予告と畳みで包む口(ADR 0243 決定4)。新しい値を引数に
  *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
-export type RefWriter = (ref: string, newSha: string, write: () => void) => void;
+export type RefWriter = (ref: string, newValue: string, write: () => void) => void;
 
 /** origin から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
  *  head を取る fetch(ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */

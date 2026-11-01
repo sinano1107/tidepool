@@ -1,5 +1,11 @@
 # 後始末の step は冪等であるか記録から2度目を飛ばせなければならず、盤面自身の HEAD の移動も ref の口を通る
 
+**Status 追記: 決定2 の「比較には畳まない」は、`assertOnlyTaskBranchMoved` が HEAD の行を比較から外す形で実装した(2026-11-02、issue #2889)。**
+
+**Status 追記: 決定3 の「残存 process が書いた形だけがここに来る」は成り立たない —— タスクブランチの `.gitignore` だけが無視していたファイルも、休止位置への checkout の後に untracked として現れてここに来る(2026-11-02、issue #2889)。**
+
+**Status 追記: 決定4 の「HEAD はタスクブランチのまま」は merge back の conflict では成り立たない —— HEAD は帰り先に居り、再実行は盤面が動かしたと読んで同じ conflict に着き、`quarantine_refired` を足す(2026-11-02、issue #2889)。**
+
 2026-11-01 の grilling(issue #2889、#2879 の実装で見えた形)で決定。後始末 `teardown()` は [tree rule → 状態遷移と印を消す tx → 枠の解放]
 の1手で、tx が投げると受理の撃ち直し(ADR 0112 決定3)も再起動の復旧(ADR 0254 決定2 / ADR 0315 決定1)も tree rule から走り直す。
 tree rule の最初の読み(HEAD が `task/<id>` か —— #234 ケース1 の検出)を、同じ tree rule の最後の書き(休止位置への `git checkout`)が

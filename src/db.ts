@@ -239,7 +239,7 @@ export function openDb(path: string): Db {
     );
 
     -- ADR 0064 決定6: ref_snapshot は pickup の瞬間に撮った全 ref の写像
-    -- (for-each-ref のソート済み出力 = refname 順の "値 refname"。値は
+    -- (for-each-ref のソート済み出力に HEAD の行を足したもの —— ADR 0345 決定2 —— = refname 順の "値 refname"。値は
     -- objectname だが、symref の行だけは指し先 "symref=<refname>" である ——
     -- ADR 0081)。slot 解放時にこれと現在を比べ、
     -- タスクブランチ以外が1つでも動いていれば quarantine する。worker が書けない
