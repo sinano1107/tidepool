@@ -755,15 +755,13 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *
  *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093 / GLOSSARY.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
- *  registry は private なので認証が要り、しかも `authedGitBounded` の credential 引数は
- *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」
- *  だけでなく「人間の `gh` ログインに寄りかからない」ことを同時に成立させる。
- *  ホストに人間の helper が居ると認証なしでも fetch が通ってしまうため、実機で
- *  成功したことはこの条件の証拠にならない(issue #209 の実測)。
+ *  registry は private なので認証が要り、しかも `authedGitBounded` は組み立てた env で
+ *  撃つ —— つまりこの1行は「認証を足す」だけでなく「人間の `gh` ログインに寄りかから
+ *  ない」ことを同時に成立させる(ADR 0339 決定1)。
  *
- *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、書き込み側の
- *  push(`registry-write.ts` の `commitToRegistry`)と同じく bare な git に
- *  委ねる。private な remote ならそこで失敗し、レジストリ到達性の quarantine が
+ *  ADR 0339 決定2: `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、書き込み側の
+ *  push(`registry-write.ts` の `commitToRegistry`)と同じく匿名でしか撃たない —— host の
+ *  helper にも乗らない。private な remote ならそこで失敗し、レジストリ到達性の quarantine が
  *  人間を呼ぶ。
  *
  *  token の取得を try の**内側**に置くのがこの関数の要点である(ADR 0093 決定7):

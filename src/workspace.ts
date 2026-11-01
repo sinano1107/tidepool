@@ -690,8 +690,8 @@ export async function ensureWorkspaceToken(
  *  fetch する先が無い。
  *
  *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093): workspace の remote も private であり
- *  うるし、`authedGitBounded` の credential 引数はホストに設定済みの helper を先にクリア
- *  する ——「人間の `gh` ログインに寄りかからない」がここでも同時に成立する。上限
+ *  うるし、`authedGitBounded` は組み立てた env で撃つ ——「人間の `gh` ログインに寄りかから
+ *  ない」がここでも同時に成立し、`auth` 不在なら匿名でしか撃たない(ADR 0339 決定1 / 2)。上限
  *  つきの面を使うのは、詰まった接続が同期呼び出しで event loop ごと止めてはならない
  *  からである(`GIT_NETWORK_TIMEOUT_MS`)。
  *

@@ -1,7 +1,7 @@
 import { chmodSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import {
@@ -31,6 +31,7 @@ afterEach(async () => {
     delete process.env.GH_TOKEN;
   }
   if (originalPath !== undefined) process.env.PATH = originalPath;
+  vi.unstubAllEnvs();
   for (const broker of brokers.splice(0)) await broker.close();
   repoPath = remotePath = originalPath = undefined;
 });
@@ -130,6 +131,24 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
   // には現れない — issue #50 の「worker は credential ゼロ」
   expect(await readFile(logPath, "utf8")).toContain("token=installation-token");
   expect(process.env.GH_TOKEN).toBeUndefined();
+});
+
+// ADR 0339 決定1: gh も組み立てた env で走る —— host の GH_HOST が盤面の token を別の host へ向けない
+it("gh の子プロセス env は process.env の GH_HOST を運ばない", async () => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "host=\${GH_HOST-unset}" >> "${logPath}"\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+  vi.stubEnv("GH_HOST", "ghe.example.com");
+  repoPath = await tempDir("tidepool-repo-");
+  git(repoPath, "init", "-b", "main");
+  git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
+
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: repoPath, number: 7 }, "abc123");
+
+  expect(await readFile(logPath, "utf8")).toBe("host=unset\n");
 });
 
 /** Stands in for `gh pr view --json statusCheckRollup`: prints the given JSON
