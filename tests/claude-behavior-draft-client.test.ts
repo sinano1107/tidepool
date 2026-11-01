@@ -6,7 +6,7 @@ import {
   STOP_BEHAVIOR_DRAFT_INPUT_FIELDS,
   type StopBehaviorDraftInput,
 } from "../src/retrospective.js";
-import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { answerExec, boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
   entry_id: 7,
@@ -30,10 +30,10 @@ const draft = { path: "cli/flags", title: "Spell out flags", text: "Name dry-run
 it("draft は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON の起草を返す", async () => {
   const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args, env, input) => {
+    exec: answerExec(async (_command, args, env, input) => {
       calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
-    },
+    }),
   });
 
   await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", draft);

@@ -69,6 +69,9 @@ it("Claude の probe は一時 dir の sandbox の profile を --settings で、
   const probe = await startClaudeProbe();
   expect(probe.spawn.calls[0]!.command).toBe("claude");
   expect(probe.args).toContain("--strict-mcp-config");
+  // ADR 0341 決定4: worker の形 —— 姿勢のフラグが先頭に1度だけ
+  expect(probe.args.slice(0, 3)).toEqual(["--setting-sources", "project", "--strict-mcp-config"]);
+  expect(probe.args.filter((arg) => arg === "--setting-sources" || arg === "--strict-mcp-config")).toHaveLength(2);
   // profile は実 session と同じ生成器(buildSandboxSettings)で、一時 dir を workspace にしたもの
   expect(dirname(probe.settingsPath)).toBe(probe.cwd);
   expect(probe.settings.sandbox.enabled).toBe(true);

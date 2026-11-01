@@ -7,7 +7,7 @@ import {
   STOP_ATTRIBUTION_INPUT_FIELDS,
   type StopAttributionInput,
 } from "../src/retrospective.js";
-import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { answerExec, boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: AttributionInput = {
   entry_id: 7,
@@ -40,10 +40,10 @@ const stopInput: StopAttributionInput = {
 it("judge は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON 判定を返す", async () => {
   const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args, env, input) => {
+    exec: answerExec(async (_command, args, env, input) => {
       calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
-    },
+    }),
   });
 
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);

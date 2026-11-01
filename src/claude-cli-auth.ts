@@ -1,6 +1,7 @@
 import { type BoardCall, readOutput } from "./board-call.js";
 import type { BoardCallSetting } from "./board-call-usage.js";
 import { envelopeUsageSchema } from "./claude-board-call-runner.js";
+import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import {
   boardCallEnv,
   MoonshotApiKeyMissingError,
@@ -36,14 +37,15 @@ export type CliAuthCommand = (
 // CLI の起動込みで収まる幅に取る。
 const CLI_AUTH_PROBE_LIMIT_MS = 60_000;
 
-/** `CliAuthCommand` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。
+/** `CliAuthCommand` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。読み手はどれもホストの CLI 自身の
+ *  認証を観測する probe なので、姿勢は `ambient`(ADR 0341 決定1)。
  *  口が答えを返さなかったときは exit code も stdout も無い観測に写す —— 分類は
  *  「JSON envelope が無い」= 判定不能に倒れ、認証失敗とは読まれない。 */
 export const cliAuthCommandThrough =
   (call: BoardCall, kind: string): CliAuthCommand =>
   async (command, args, options) =>
     (await call(
-      { kind, harness: "claude-code", command, args, cwd: options.cwd, env: options.env, limitMs: CLI_AUTH_PROBE_LIMIT_MS },
+      claudeBoardCallSpec({ kind, posture: "ambient", command, args, cwd: options.cwd, env: options.env, limitMs: CLI_AUTH_PROBE_LIMIT_MS }),
       readOutput,
     )) ?? { exitCode: null, stdout: "" };
 
@@ -66,7 +68,6 @@ export function createClaudeCliAuthCheck(command: CliAuthCommand): CliAuthCheck 
         // 解除不能になる(issue #737)
         "--max-budget-usd",
         "0.025",
-        "--safe-mode",
       ],
       boardCallEnv(),
     );
@@ -98,7 +99,7 @@ export function createMoonshotCliAuthCheck(
     return runAuthProbe(
       command,
       { provider: "moonshot", model: MOONSHOT_DEFAULT_MODEL, effort: null },
-      ["--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"],
+      ["--max-turns", "1", "--max-budget-usd", "0.25"],
       env,
     );
   };
@@ -113,7 +114,7 @@ export function createClaudeModelProbe(command: CliAuthCommand): ModelProbe {
     return runModelProbe(
       command,
       setting,
-      [...pinnedModelFlags(setting.model, setting.effort), "--max-turns", "1", "--max-budget-usd", "0.025", "--safe-mode"],
+      [...pinnedModelFlags(setting.model, setting.effort), "--max-turns", "1", "--max-budget-usd", "0.025"],
       boardCallEnv(),
     );
   };
@@ -134,7 +135,7 @@ export function createMoonshotModelProbe(keyFile: string | undefined, command: C
     return runModelProbe(
       command,
       setting,
-      ["--model", setting.model, "--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"],
+      ["--model", setting.model, "--max-turns", "1", "--max-budget-usd", "0.25"],
       env,
     );
   };

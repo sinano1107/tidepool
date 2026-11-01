@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
@@ -6,6 +8,7 @@ import { openDb } from "../src/db.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const ANTHROPIC_AUTH_QUESTION_TITLE =
   "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
@@ -14,9 +17,12 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("Board call の口を通る exec は非ゼロ終了でも401 JSONのstdoutを分類側へ渡す(ADR 0070)", async () => {
+  // 姿勢のフラグが argv の先頭に乗るので、node の option に読まれない script を claude の代わりに起こす
+  const cli = join(await tempDir("tidepool-fake-claude-"), "claude");
+  writeFileSync(cli, `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ api_error_status: 401 })); process.exit(1);\n`, { mode: 0o755 });
   const failure = await execThrough(containerHarness(passthroughContainers()).boardCall, "task draft")(
-    process.execPath,
-    ["-e", 'process.stdout.write(JSON.stringify({ api_error_status: 401 })); process.exit(1)'],
+    cli,
+    ["-p"],
     process.env,
   ).catch((err: unknown) => err);
 

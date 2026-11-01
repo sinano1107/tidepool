@@ -1,46 +1,70 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
+import type { BoardCallSpec } from "./board-call.js";
 import { BOARD_CALL_ONE_TURN_FLAGS } from "./claude-board-call-runner.js";
+import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import { readResultEvent } from "./claude-stream-reader.js";
 import {
+  ANSWER_CALL_LIMIT_MS,
+  boardCallEnv,
   checkAutoMemoryClosed,
   pinnedModelFlags,
   probeToolSurfaceCapability,
   readInitReport,
   readToolSurface,
+  skillEnumerationSpec,
 } from "./claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "./cli-auth.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "./sandbox.js";
-import { readInitAutoMemoryPath, readInitField, readInitOutputStyle } from "./stream-json.js";
+import { readInitAutoMemoryPath, readInitField, readInitMcpServers, readInitOutputStyle } from "./stream-json.js";
 import { claudeUsageObservation, parseUsage } from "./usage.js";
 
-/** 適合試験のモデルの1ターン: worker が読む usage の形(stream-json)で、安い行を撃つ。 */
-const oneTurnArgs = () => [
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--verbose",
-  ...pinnedModelFlags("haiku", "low"),
-];
+/** 適合試験のモデルの1ターン(安い行)の注文。上限は答えを取りに行く呼び出しと同じ。 */
+type ShotOrder = { kind: string; cwd: string; input: string };
 
-/** Board call の形の1ターン —— runner と同じ姿勢のフラグの定数から組む(ADR 0303 決定4)。 */
-export const boardCallOneTurnArgs = () => [
-  "-p", ...pinnedModelFlags("haiku", "low"), ...BOARD_CALL_ONE_TURN_FLAGS,
-];
+/** Board call の形の1ターン —— 答えの姿勢(ADR 0341 決定2)と、runner と同じ1ターンのフラグの定数から組む(ADR 0303 決定4)。 */
+export const boardCallShotSpec = ({ kind, cwd, input }: ShotOrder): BoardCallSpec =>
+  claudeBoardCallSpec({
+    kind,
+    posture: "answer",
+    command: "claude",
+    args: ["-p", ...pinnedModelFlags("haiku", "low"), ...BOARD_CALL_ONE_TURN_FLAGS],
+    cwd,
+    env: boardCallEnv(),
+    limitMs: ANSWER_CALL_LIMIT_MS,
+    input,
+  });
 
-/** worker の形の1ターン —— worker と同じく project tier を読み、盤面が per-task settings で固定する
- *  言語・出力様式の2キーを flag tier に置く(ADR 0303 決定2)。 */
-export const workerOneTurnArgs = (systemPromptFile: string) => [
-  ...oneTurnArgs(),
-  "--append-system-prompt-file", systemPromptFile,
-  "--max-turns",
-  "1",
-  "--setting-sources",
-  "project",
-  "--settings",
-  JSON.stringify(LANGUAGE_AND_OUTPUT_STYLE_PINNED),
-];
+/** worker の形の1ターン —— worker の姿勢(project tier を読む、ADR 0341 決定2)で、worker が読む usage の形(stream-json)。
+ *  盤面が per-task settings で固定する言語・出力様式の2キーを flag tier に置く(ADR 0303 決定2)。 */
+export const workerShotSpec = ({ kind, cwd, input, systemPromptFile }: ShotOrder & { systemPromptFile: string }): BoardCallSpec =>
+  claudeBoardCallSpec({
+    kind,
+    posture: "worker-shaped",
+    command: "claude",
+    args: [
+      "-p", "--output-format", "stream-json", "--verbose", ...pinnedModelFlags("haiku", "low"),
+      "--append-system-prompt-file", systemPromptFile,
+      "--max-turns", "1",
+      "--settings", JSON.stringify(LANGUAGE_AND_OUTPUT_STYLE_PINNED),
+    ],
+    cwd,
+    env: boardCallEnv(),
+    limitMs: ANSWER_CALL_LIMIT_MS,
+    input,
+  });
+
+/** `.mcp.json` の面(ADR 0341 決定6)の fixture が置く stdio server の名前。 */
+export const MCP_JSON_SERVER = "conformance-mcp-json";
+
+/** `.mcp.json` の面(ADR 0341 決定6)の対照: skill 列挙の ping から strict だけを外した形 —— server が接続し起動することが
+ *  fixture の生きている証拠。 */
+export const mcpJsonControlSpec = (cwd: string): BoardCallSpec => {
+  const ping = skillEnumerationSpec(cwd, { awaitReclaimed: false });
+  // ADR 0341 決定6: 姿勢の欄は ping のもの(口は読まない)、argv は対照のもの —— strict だけが無い
+  return { ...ping, kind: "conformance .mcp.json control", args: ping.args.filter((arg) => arg !== "--strict-mcp-config") };
+};
 
 /** language の面の問い。init 行に `language` は出ないので、モデルに system prompt の指示を引かせる。 */
 export const LANGUAGE_QUESTION =
@@ -54,12 +78,15 @@ const LANGUAGE_SHOTS = 3;
 export interface ConformanceObservations {
   /** 封じ込めの probe と同じフラグで撃った `claude` の stdout(stream-json)。 */
   initLine: () => Promise<string>;
-  /** Board call と同じ cwd / フラグ(`boardCallOneTurnArgs`)でモデルの1ターンを走らせた stdout(init / result 行を含む)。 */
+  /** `.mcp.json`(`MCP_JSON_SERVER` の stdio server 1本、起動で marker を書く)を置いた neutral cwd で、skill 列挙の ping
+   *  (`workerShaped`)を撃ち、次に対照(`mcpJsonControlSpec`)を撃った stdout と、それぞれのあとに読んだ marker の有無。 */
+  mcpJson: () => Promise<{ control: string; workerShaped: string; workerShapedStarted: boolean; controlStarted: boolean }>;
+  /** Board call と同じ cwd / フラグ(`boardCallShotSpec`)でモデルの1ターンを走らせた stdout(init / result 行を含む)。 */
   resultLine: () => Promise<string>;
   /** 封じ込めの probe と同じ注文を、`.claude/settings.json` に既定でない `outputStyle` を置いた neutral cwd で撃った stdout。 */
   outputStyleLine: () => Promise<string>;
   /** `.claude/settings.json` に `{"language":"japanese"}` を置いた neutral cwd で、`LANGUAGE_QUESTION` を
-   *  worker の形(`workerOneTurnArgs`)か Board call の形(`boardCallOneTurnArgs`)で1回撃った stdout。 */
+   *  worker の形(`workerShotSpec`)か Board call の形(`boardCallShotSpec`)で1回撃った stdout。 */
   languageShot: (shape: "worker" | "board call") => Promise<string>;
   /** 存在しない model id での行の probe の判定。 */
   unknownModel: () => Promise<ModelProbeResult>;
@@ -95,6 +122,32 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
     },
   ],
   [
+    // ADR 0341 決定6: worker の形が依る vendor 挙動(strict が `.mcp.json` の server を立てない)を版上げの門で測る。
+    // 対照で server が接続済みで起動していなければ fixture の失敗で、worker の形の空を合格に読まない
+    "workspace .mcp.json",
+    async (obs) => {
+      const { control, workerShaped, workerShapedStarted, controlStarted } = await obs.mcpJson();
+      const status = (await replay(control, readInitMcpServers))?.find(({ name }) => name === MCP_JSON_SERVER)?.status;
+      if (status !== "connected" || !controlStarted) {
+        return {
+          pass: false,
+          detail:
+            `fixture failure: under the control (no \`--strict-mcp-config\`) \`${MCP_JSON_SERVER}\` is ${status ?? "not listed in init \`mcp_servers\`"} ` +
+            `and ${controlStarted ? "started" : "never started"}, so the worker-shaped row proves nothing`,
+        };
+      }
+      const servers = await replay(workerShaped, readInitMcpServers);
+      if (servers === null) return { pass: false, detail: "worker-shaped: the init line carries no readable `mcp_servers`" };
+      if (servers.length > 0 || workerShapedStarted) {
+        return {
+          pass: false,
+          detail: `worker-shaped: mcp_servers [${servers.map(({ name }) => name).join(", ")}], server ${workerShapedStarted ? "started" : "not started"}`,
+        };
+      }
+      return { pass: true, detail: `the control connects and starts \`${MCP_JSON_SERVER}\`; worker-shaped lists none and never starts it` };
+    },
+  ],
+  [
     "result line usage",
     async (obs) => {
       const stdout = await obs.resultLine();
@@ -103,7 +156,7 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
           ? checkAutoMemoryClosed(readInitAutoMemoryPath(parsed))
           : null,
       );
-      if (memory === null) return { pass: false, detail: "no `init` line to observe Board call auto-memory (`BOARD_CALL_ONE_TURN_FLAGS`)" };
+      if (memory === null) return { pass: false, detail: "no `init` line to observe Board call auto-memory (`boardCallShotSpec`)" };
       if (!memory.available) return { pass: false, detail: memory.reason };
       const result = await replay(stdout, readResultEvent);
       if (result === null) return { pass: false, detail: "no accepted `result` line (missing, is_error, or a usage shape the board cannot read)" };

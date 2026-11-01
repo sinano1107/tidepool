@@ -7,10 +7,22 @@ import type { ContainmentCapability } from "./containment.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import type { Harness } from "./registry.js";
 
+/** Claude の Board call の姿勢(ADR 0341 決定1): CLI が設定のどの層を読み、何を起動するか。値ごとのフラグは
+ *  Claude の adapter(`claudeBoardCallSpec`)だけが導く(ADR 0341 決定2)。 */
+export type ClaudeBoardCallPosture = "answer" | "worker-shaped" | "ambient";
+
+declare const claudeBoardCallBrand: unique symbol;
+/** `claudeBoardCallSpec` だけが付ける印: 姿勢を書いた literal では Claude の注文にならない —— 姿勢のフラグを導く
+ *  入口を迂回させない(ADR 0341 決定2)。型だけの印で、実行時の値は無い。 */
+export type ClaudeBoardCallBrand = { readonly [claudeBoardCallBrand]: true };
+
 /** 1回の Board call の注文(ADR 0136 決定4)。「何を・どの cwd で・どの env で
  *  起こすか」と「時間上限」「結果をいつ返すか」だけを言い、容器・force・観測の
- *  順序は口の中にある。 */
-export interface BoardCallSpec {
+ *  順序は口の中にある。Claude の注文は姿勢を必須で名指す —— 口はそれを読まない(ADR 0341 決定1・2)。 */
+export type BoardCallSpec = BoardCallOrder &
+  ((ClaudeBoardCallBrand & { harness: "claude-code"; posture: ClaudeBoardCallPosture }) | { harness: Exclude<Harness, "claude-code"> });
+
+interface BoardCallOrder {
   /** 呼び出しの種類。回収済み観測が不成立になったときの確認 question から
    *  「原因が worker なのか、どの probe なのか」が読める唯一の手掛かりなので、
    *  人間がその文面で読んで分かる綴りにする(例: "skill enumeration")。 */
@@ -34,7 +46,8 @@ export interface BoardCallSpec {
   /** 結果を回収済み観測のあとに返すか。既定は root の出力の読み切りで返す(ADR 0201)—— 答えの
    *  正しさは残存の有無で変わらない。true にするのは workspace を cwd にする
    *  呼び出しだけで、その workspace で次に起きる worker と残存を同居させない
-   *  ために門を1つ手前に置く(ADR 0136 決定5)。 */
+   *  ために門を1つ手前に置く(ADR 0136 決定5)。姿勢が workspace の MCP server を閉じても門は残す ——
+   *  閉じたのは宣言で、床は容器である(ADR 0341 決定5)。 */
   awaitReclaimed?: boolean;
   /** stdin を開けたまま渡すか。既定は閉じる。応答が揃うまで EOF を送れない
    *  呼び出し(App Server、#706)だけが opt-in する。 */
@@ -45,9 +58,9 @@ export interface BoardCallSpec {
 
 /** pty で起こす呼び出し(usage TUI、ADR 0136 決定8)。pty を起こすのは `launch` で、
  *  容器はその command に入り方を被せる。`read` は `PtyProcess` を受け取る。 */
-export interface PtyBoardCallSpec extends BoardCallSpec {
+export type PtyBoardCallSpec = BoardCallSpec & {
   pty: { launch: PtyFn; cols: number; rows: number };
-}
+};
 
 /** 呼び出し1回。`read` は spawn 直後に呼ばれ、「今までに観測した答え」を返す
  *  関数を渡す —— 口はそれを root の出力の読み切り(stream の close。pty は exit)のあとに
@@ -179,7 +192,7 @@ export function createBoardCalls(deps: {
   }
 
   const call = async <T>(
-    spec: BoardCallSpec & Partial<PtyBoardCallSpec>,
+    spec: BoardCallSpec & { pty?: PtyBoardCallSpec["pty"] },
     read: (proc: ContainedProcess & PtyProcess, done: () => void) => (exitCode: number | null) => T | null,
   ): Promise<T | null> => {
     // ADR 0136 決定7: 機構前提が不成立の platform では Board call を起こさない。

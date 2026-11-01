@@ -4,7 +4,7 @@ import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
-import { boardCallStream, CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
+import { answerExec, boardCallStream, CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
 
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
 const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
@@ -181,7 +181,7 @@ describe("Claude の Board call runner", () => {
       calls.push(args);
       return boardCallStream({ result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
     };
-    await runClaudeBoardCallJson(call(exec), schema);
+    await runClaudeBoardCallJson(call(answerExec(exec)), schema);
     expect(calls[0]![calls[0]!.indexOf("--output-format") + 1]).toBe("stream-json");
     expect(calls[0]).toContain("--verbose");
     expect(calls[0]).toContain("--safe-mode");

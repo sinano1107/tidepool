@@ -4,13 +4,16 @@ import { expect, it } from "vitest";
 import { BOARD_CALL_ONE_TURN_FLAGS } from "../src/claude-board-call-runner.js";
 import { createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import {
-  boardCallOneTurnArgs,
+  boardCallShotSpec,
   type ConformanceObservations,
   judgeConformance,
-  workerOneTurnArgs,
+  MCP_JSON_SERVER,
+  mcpJsonControlSpec,
+  workerShotSpec,
 } from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
+import { skillEnumerationSpec } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "../src/sandbox.js";
 import { composeTerminalScreen } from "../src/usage.js";
@@ -37,9 +40,15 @@ const PI_CAPTURED_AT = new Date("2026-08-14T00:00:00.000Z");
 const answered = (answer: string) =>
   `${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer, ...CLI_ENVELOPE_USAGE })}\n`;
 
-/** 8つの面がどれも今の盤面の読み取り関数で読める観測。 */
+/** init 行1本の stdout。 */
+const initWith = (mcpServers: Array<{ name: string; status: string }>) =>
+  `${JSON.stringify({ type: "system", subtype: "init", mcp_servers: mcpServers })}\n`;
+const MCP_JSON_LISTED = initWith([{ name: MCP_JSON_SERVER, status: "connected" }]);
+
+/** 9つの面がどれも今の盤面の読み取り関数で読める観測。 */
 function passingObservations(): ConformanceObservations {
   return {
+    mcpJson: async () => ({ control: MCP_JSON_LISTED, workerShaped: initWith([]), workerShapedStarted: false, controlStarted: true }),
     initLine: async () => WORKER_STREAM,
     resultLine: async () => WORKER_STREAM,
     outputStyleLine: async () => WORKER_STREAM,
@@ -67,11 +76,12 @@ function passingObservations(): ConformanceObservations {
   };
 }
 
-it("8つの面がどれも盤面の読み取り関数で読めれば、全行が合格で試験は通る", async () => {
+it("9つの面がどれも盤面の読み取り関数で読めれば、全行が合格で試験は通る", async () => {
   const { rows, ok } = await judgeConformance(passingObservations(), PI_CAPTURED_AT);
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
     ["init line", true],
+    ["workspace .mcp.json", true],
     ["result line usage", true],
     ["output style", true],
     ["language", true],
@@ -131,6 +141,35 @@ it.each([
   expect(ok).toBe(false);
 });
 
+// ADR 0341 決定6: 対照で server が接続済みで起動していなければ fixture が死んでいる —— worker の形の空を合格に読まない
+const quiet = { workerShaped: initWith([]), workerShapedStarted: false };
+const live = { control: MCP_JSON_LISTED, controlStarted: true };
+it.each([
+  ["対照が server を載せない", { ...quiet, control: initWith([]), controlStarted: true }, "fixture"],
+  ["対照の init 行が無い", { ...quiet, control: "", controlStarted: true }, "fixture"],
+  ["対照が server を載せても起動の marker が無い", { ...quiet, control: MCP_JSON_LISTED, controlStarted: false }, "fixture"],
+  ["対照の server が接続済みでない", { ...quiet, control: initWith([{ name: MCP_JSON_SERVER, status: "failed" }]), controlStarted: true }, "fixture"],
+  ["worker の形が server を載せる", { ...live, workerShaped: MCP_JSON_LISTED, workerShapedStarted: true }, MCP_JSON_SERVER],
+  ["worker の形で server が起動した", { ...live, workerShaped: initWith([]), workerShapedStarted: true }, "started"],
+  ["worker の形の init 行が無い", { ...live, workerShaped: "", workerShapedStarted: false }, "worker-shaped"],
+])("workspace .mcp.json の面は%sとき不合格になる", async (_, observed, detail) => {
+  const { rows } = await judgeConformance({ ...passingObservations(), mcpJson: async () => observed }, PI_CAPTURED_AT);
+
+  const failed = rows.filter((row) => !row.pass);
+  expect(failed.map((row) => row.surface)).toEqual(["workspace .mcp.json"]);
+  expect(failed[0]!.detail).toContain(detail);
+});
+
+it("workspace .mcp.json の対照は skill 列挙の ping から --strict-mcp-config だけを外した形で、worker の形は ping そのもの", () => {
+  const ping = skillEnumerationSpec("/fixture", { awaitReclaimed: false });
+  const control = mcpJsonControlSpec("/fixture");
+
+  expect(ping.args).toContain("--strict-mcp-config");
+  expect(control.args).toEqual(ping.args.filter((arg) => arg !== "--strict-mcp-config"));
+  expect(control.args[control.args.indexOf("--setting-sources") + 1]).toBe("project");
+  expect(control.cwd).toBe("/fixture");
+});
+
 it("観測が投げても(spawn の失敗)、その面を不合格にして残りの面の表を出す", async () => {
   const { rows, ok } = await judgeConformance(
     {
@@ -142,7 +181,7 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
     PI_CAPTURED_AT,
   );
 
-  expect(rows).toHaveLength(8);
+  expect(rows).toHaveLength(9);
   const failed = rows.filter((row) => !row.pass);
   expect(failed.map((row) => row.surface)).toEqual(["usage screen"]);
   expect(failed[0]!.detail).toContain("spawn claude ENOENT");
@@ -150,15 +189,23 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
 });
 
 it("Board call の形の1ターンは runner と同じフラグの定数から組む —— runner に足したフラグが試験の argv にも現れる(ADR 0303 決定4)", () => {
-  const args = boardCallOneTurnArgs();
+  const spec = boardCallShotSpec({ kind: "conformance result line", cwd: "/board", input: "OK?" });
+  const { args } = spec;
+  expect(spec).toMatchObject({ posture: "answer", cwd: "/board", input: "OK?" });
   expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
   expect(args).toContain("--verbose");
+  // 最終の argv: 答えの姿勢(ADR 0303 決定1)と runner の1ターンのフラグ
+  expect(args.slice(0, 3)).toEqual(["--safe-mode", "--setting-sources", ""]);
   expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
 });
 
 it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
-  const args = workerOneTurnArgs("/session/system.txt");
+  // 設定の層は姿勢が運ぶ(ADR 0341 決定2)—— 口へ出る最終の argv で読む
+  const spec = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/session/system.txt", input: "q" });
+  const { args } = spec;
+  expect(spec).toMatchObject({ posture: "worker-shaped", cwd: "/cwd", input: "q" });
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+  expect(args.filter((arg) => arg === "--setting-sources")).toHaveLength(1);
   expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
   expect(args).toContain("--append-system-prompt-file");
   expect(args).toContain("/session/system.txt");
