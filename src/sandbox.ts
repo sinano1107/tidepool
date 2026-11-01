@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 
+import { localGitEnv } from "./git.js";
 import { carriesReadOnly, type Task } from "./tasks.js";
 
 
@@ -580,6 +581,7 @@ const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
 function tracked(workspacePath: string, path: string): boolean {
   const indexed = spawnSync("git", ["ls-files", "--", path], {
     cwd: workspacePath,
+    env: localGitEnv(),
     encoding: "utf8",
   });
   return indexed.status === 0 && indexed.stdout !== "";
@@ -602,6 +604,7 @@ function settingsFile(
     }
     const indexed = spawnSync("git", ["show", `:${path}`], {
       cwd: workspacePath,
+      env: localGitEnv(),
       encoding: "utf8",
     });
     return indexed.status === 0 && indexed.stdout !== null

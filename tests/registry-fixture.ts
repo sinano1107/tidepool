@@ -220,7 +220,7 @@ export async function makeRemoteBackedRegistry(): Promise<{
   const remote = await tempDir("tidepool-registry-remote-");
   const publisher = await tempDir("tidepool-registry-publisher-");
   // stderr は piped: push / clone の進捗は成否に関係なく stderr へ出るので、
-  // 素通しするとテスト出力が git のノイズで埋まる(registry.ts の GIT_STDIO と同じ規律)
+  // 素通しするとテスト出力が git のノイズで埋まる(src/git.ts の `git` と同じ規律)
   const git = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
       cwd,

@@ -6,6 +6,7 @@ import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, examineeCheckoutPath, interviewRoomPath, interviewRootIdOf, registerTask, type Task } from "../src/tasks.js";
 import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
 import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -248,6 +249,25 @@ it("解放は受験者の checkout で tree rule を通して main に戻し、�
   expect(git(place.path, "show", "HEAD:wip.txt")).toBe("half an answer");
   expect(existsSync(join(place.path, "build", "out.txt"))).toBe(true);
   db.close();
+});
+
+it("global の insteadOf が面接室の path を http へ書き換えていれば、受験者の checkout の作成は網に出ず `transport 'http' not allowed` で落ちる(ADR 0339 Status 追記)", async () => {
+  const db = openDb(":memory:");
+  const { room, examinees, base } = await posedInRoom(db);
+  const remote = await startDenyingHttpRemote();
+  const globalConfig = join(await tempDir("tidepool-global-config-"), "gitconfig");
+  writeFileSync(globalConfig, `[url "${remote.url}"]\n\tinsteadOf = ${room.path}\n`);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+  vi.stubEnv("LC_ALL", "C");
+  const askpass = await humanAskpass();
+
+  try {
+    expect(() => openExamineeCheckout(db, examinees[0] as Task, base, NOW)).toThrow("transport 'http' not allowed");
+    expect({ askpass: askpass.tripped(), requests: remote.requests() }).toEqual({ askpass: false, requests: [] });
+  } finally {
+    vi.unstubAllEnvs();
+    db.close();
+  }
 });
 
 it("出題が記録した head を面接室で引けなければ、checkout を開くことはその理由で投げ、repo もブランチも作らない(ADR 0276 決定1)", async () => {

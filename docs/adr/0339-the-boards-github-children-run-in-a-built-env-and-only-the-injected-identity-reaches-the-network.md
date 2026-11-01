@@ -1,5 +1,11 @@
 # 盤面の GitHub への子プロセスは組み立てた env で走り、注入した身元以外で網に出ない
 
+**Status 追記: 盤面の local の git の転送は `file` だけである(決定1 の env で走る子以外の全部で、決定5 の hop2 を含む)。帰結の「本 ADR の外」は config を読む半分(#2819 / #2842)に狭まる** —— 2026-11-01、issue #2861。
+local の verb でも `insteadOf`・`fetch.recurseSubmodules`・部分 clone の遅延 fetch で網に出て、人間の askpass の答えが載るので、verb を数えずに env の
+持ち主 1 つで閉じる。config がそう書き換えた checkout と blob の足りない部分 clone では、その git が `transport '<x>' not allowed` で落ちて既存の失敗経路に
+載り(着地なら回答の拒否、ADR 0103 決定4)、成功させる経路は足さない —— 「注入した身元以外で網に出ない」の fail-closed 側である。盤面の commit が走らせる
+hook はこの env を継承するので、hook 自身の http の git も同じエラーで落ちる。
+
 2026-11-01 の grilling(issue #2794 —— ADR 0334 の帰結、#2801 と同根)で決定。ADR 0024 決定1 の seam は「身元は host の ambient 認証ではなく
 盤面の設定から注入される」、決定3 は「credential が効く場所は 1 箇所」だが、実装は**継承した** env から既知の経路 1 本(設定済み credential
 helper)を消して自分の helper を足す形で、しかも認証つきの分岐だけだった。足す身元は決まっていたが、**注入した身元以外が網に出られない**とは

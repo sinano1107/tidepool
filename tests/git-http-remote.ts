@@ -2,7 +2,7 @@ import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_proces
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Readable } from "node:stream";
-import { onTestFinished } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { tempDir } from "./temp-dir.js";
 
 /** A separate process keeps HTTP moving while the board runs synchronous git (ADR 0334). */
@@ -129,6 +129,23 @@ function listeningUrl(server: ChildProcessByStdio<null, Readable, Readable>, bef
     server.once("exit", (code) => reject(new Error(`HTTP remote exited before listening: ${code}`)));
     server.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().trim()));
   });
+}
+
+/** 呼ばれたら印を残して失敗するだけの実行ファイル —— 呼ばれなかったことを見る。 */
+export function tripwire(dir: string, name: string): { path: string; tripped: () => boolean } {
+  const path = join(dir, name);
+  writeFileSync(path, `#!/bin/sh\ntouch "${path}.called"\nexit 1\n`);
+  chmodSync(path, 0o755);
+  return { path, tripped: () => existsSync(`${path}.called`) };
+}
+
+/** 盤面の local の git が継承する人間の askpass を tripwire にする。呼び手が `vi.unstubAllEnvs()` する。 */
+export async function humanAskpass(): Promise<{ tripped: () => boolean }> {
+  const askpass = tripwire(await tempDir("tidepool-askpass-"), "askpass");
+  vi.stubEnv("GIT_ASKPASS", askpass.path);
+  // 0 でも askpass は呼ばれる —— askpass が失敗した後の端末への問いでテストが止まらないため
+  vi.stubEnv("GIT_TERMINAL_PROMPT", "0");
+  return askpass;
 }
 
 /** ADR 0339: a remote that answers every request 401 (Basic) and records each request's headers, so a

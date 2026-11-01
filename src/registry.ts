@@ -7,7 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { git } from "./git.js";
+import { git, localGitEnv } from "./git.js";
 import {
   authedFetch,
   authedGitBounded,
@@ -735,11 +735,6 @@ export interface RegistryReachability {
 }
 export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
-// stderr piped (not inherited), same as git.ts's `git()`: git narrates a
-// missing ref on stderr, and the board's console is not the place for it — the
-// message still rides the thrown error for callers that want it.
-const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
-
 /** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
  *  **非同期である**: 仲介から installation token を取る往復が中に入る(ADR 0093
  *  決定2)。fetch そのものは今も `execFileSync` の同期呼び出しで、非同期なのは
@@ -790,11 +785,7 @@ export async function refreshRegistry(
  *  `workspaces.yaml` are kept; a missing directory contributes nothing — the
  *  "absent is empty, not an error" shape `readdirSync` had. */
 function readRegistryFiles(dir: string, commit: string): Map<string, string> {
-  const listing = execFileSync(
-    "git",
-    ["ls-tree", "-r", "-z", commit, "--", "agents", "authority", "workspaces.yaml"],
-    { cwd: dir, stdio: GIT_STDIO },
-  ).toString();
+  const listing = git(dir, "ls-tree", "-r", "-z", commit, "--", "agents", "authority", "workspaces.yaml");
   const blobs: { path: string; sha: string }[] = [];
   for (const entry of listing.split("\0")) {
     // `<mode> <type> <sha>\t<path>`
@@ -806,6 +797,7 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
   const files = new Map<string, string>();
   const out = execFileSync("git", ["cat-file", "--batch"], {
     cwd: dir,
+    env: localGitEnv(),
     stdio: ["pipe", "pipe", "pipe"],
     input: `${blobs.map((b) => b.sha).join("\n")}\n`,
   });
@@ -1061,12 +1053,7 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
  *  (containment.ts の「省略 = 無制限という footgun は作らない」と同じ線)。 */
 export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   // ref を先に1つの commit へ解決し、以降はその commit だけを読む
-  const commit = execFileSync("git", ["rev-parse", registryRef(mode)], {
-    cwd: dir,
-    stdio: GIT_STDIO,
-  })
-    .toString()
-    .trim();
+  const commit = git(dir, "rev-parse", registryRef(mode));
   const files = readRegistryFiles(dir, commit);
   const agents: Record<string, AgentDefinition> = {};
   const authority: Record<string, AuthorityProfile> = {};
