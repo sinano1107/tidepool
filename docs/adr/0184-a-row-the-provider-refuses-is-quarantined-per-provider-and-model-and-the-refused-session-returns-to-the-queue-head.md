@@ -1,5 +1,7 @@
 # Provider が断った行は provider と model の組で Quarantine され、断られた session は queue の先頭へ戻る
 
+**Status 追記: 決定3 の「openai を観測するたびに表の行を照合する」の観測は pickup の gate の観測で、Codex の exit 時の使用量の読み直しは同じ probe でも行を照合しない —— exit の書き込みはその session の後始末の step で、無関係な行の登録の throw がこの task の落ちた後始末になる([ADR 0348](0348-the-openai-probe-results-resource-stop-has-one-owner-at-any-observation-point-and-the-exit-reread-only-withholds-throttle-writes.md) 決定2、2026-11-02、issue #2792 / #2776)。**
+
 **Status 追記: 決定4 の「1ターンも走っておらず」は ADR 0338 で前提から門になった(2026-11-01、issue #2791)** —— `todo` へ戻るのはターンが走っていない session に限り、ターンが走った後の拒否は行の Quarantine の question と failure question の2枚になる。
 
 **Status 追記: 決定4 の「`todo` の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 断られた session の task は位置を変えずに `todo` へ戻る。「次の pickup は別の候補で走る」は位置を変えなくても成り立つ。
