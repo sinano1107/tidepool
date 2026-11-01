@@ -1,5 +1,7 @@
 # Codex の上限到達による中断は exit の直後に読み直した使用量で認め、読み直しの結果は exit の記録に残す
 
+**Status 追記: 決定4「読み直しは分類にだけ使う」は「Throttle には書かない」に狭まり、決定6 後段「認証切れの Quarantine は次の pickup の観測が立てる」は ADR 0331 決定1 で置き換わっていた —— 読み直しの `unauthorized` は pickup と同じ Provider 認証の停止になる([ADR 0348](0348-the-openai-probe-results-resource-stop-has-one-owner-at-any-observation-point-and-the-exit-reread-only-withholds-throttle-writes.md) 決定1、2026-11-02、issue #2792 / #2776)。**
+
 **Status 追記: 決定3 の後段「満杯なら `onCapInterrupted` を先に撃ってから exit を渡す」は ADR 0309 で置き換え** —— adapter は exit を即時に渡し、読み直しの結果は同じ通知の別の引数(Promise)で届く。盤面が分類を読んでから決める(issue #2547)。
 
 2026-10-15 の triage / grilling(issue #1979)で決定。ADR 0104 決定5 と ADR 0145 決定5 の「Codex の上限到達の形は未観測

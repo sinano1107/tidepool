@@ -1,5 +1,7 @@
 # pickup の gate を抜けた資源の故障は観測点によらず資源に帰属し、0ターンで終わった session は資源の停止を先に登録して先頭へ戻る —— Worker MCP 到達性は Harness ごとの資源
 
+**Status 追記: 決定3 の署名に、exit 時の app-server probe の構造化 `unauthorized`(Codex の 401)が加わる —— 列挙は既に probe 由来の cap を持ち、「transcript の行か exit の事実」の括弧の根拠(復旧が同じ読み手で読む)は帰結「復旧は分類を撃ち直さない」で効いていない。probe の結果から資源の停止を導く持ち主は観測点に依らず1つ([ADR 0348](0348-the-openai-probe-results-resource-stop-has-one-owner-at-any-observation-point-and-the-exit-reread-only-withholds-throttle-writes.md) 決定1・3、2026-11-02、issue #2792 / #2776)。**
+
 **Status 追記: 決定1 の「資源の署名を持たない throw は盤面のバグ」の線に、記録の器の署名(SQLite の code)が加わる —— その throw は資源にも task にも帰属せず、process を終える([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定1・2、2026-11-01、issue #2837)。**
 
 **Status 追記: 決定2・9 の0ターン復帰を盤面へ届ける形は ADR 0338 で exit の通知の束に乗った(2026-11-01、issue #2791)** —— 資源の停止を先に登録する条件と event kind は変わらない。

@@ -1,5 +1,7 @@
 # exit の決着は読み手の事実の束から盤面が1箇所で1度決め、行の拒否は資源の停止と同じ軸に乗る
 
+**Status 追記: 決定1 の束の停止は、非同期の出所(Codex の exit 時の probe)からも届く —— 分類の Promise は真偽値ではなく probe から分かる事実(上限到達・停止)で解決し、盤面は解決した停止を読む([ADR 0348](0348-the-openai-probe-results-resource-stop-has-one-owner-at-any-observation-point-and-the-exit-reread-only-withholds-throttle-writes.md) 決定4、2026-11-02、issue #2792 / #2776)。**
+
 **Status 追記: 決定4 の登録の持ち主は変えないまま、adapter の鎖の中の書き込み(`closeSession`・資源の停止の登録)は書く行為を束の step として盤面へ渡し、watchdog の後始末の runner が撃つ —— 書き込みの throw を盤面が受けて撃ち直せるようにするため([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定6、2026-11-01、issue #2837 / #2822)。**
 
 2026-11-01 の triage → grilling(issue #2791、#2776 の根)で決定。root の exit を受けた盤面の決着は、adapter が `onRowRefused` /
