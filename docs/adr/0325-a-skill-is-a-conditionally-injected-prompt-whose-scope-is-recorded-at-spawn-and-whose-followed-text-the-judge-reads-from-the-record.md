@@ -1,5 +1,7 @@
 # skill は条件付きで注入される prompt であり、scope は spawn 時の記録と worker 自身の報告から引き、従った文面は transcript の投影から判事が読む
 
+**Status 追記: 決定3 の「従った文面」と決定4 の「当時の文面は記録から読める」は [ADR 0340](0340-a-followed-skill-row-carries-the-text-that-reached-the-worker-and-the-action-it-came-from-and-does-not-claim-to-be-the-skills-text.md) で読み替える** —— 従った skill の行の `text` は「その呼び出しで worker に届いた文」で、skill の文面であるとは記録は主張しない(Claude の2度目の呼び出しは CLI の短い通知、Codex は command の出力)。各行は出所の行動(`tool` / `args`)を添え、判事がそこから判じる。当時の文面が記録から読めるのは Codex では全文を読んだ行があるときだけ(2026-11-01、issue #2818)。
+
 **Status 追記: 決定6 の「Codex は集合も呼び出しも空」は ADR 0337 で置き換わる** —— Codex の「見た集合」は spawn 設定を当てた観測で `enabled: true` と答えた許可集合(決定2 が退けた盤面の列挙とは違い、worker に載らない名前は交差で落ちている)、従った skill は許した path を読んだ `command_execution` の行で本文は `aggregated_output`(2026-11-01、issue #2689)。
 
 **Status 追記: 決定2 の記録 `{ workspace, permitted }` と「workspace の集合で2分」は ADR 0335 決定3 で `{ workspace, host, permitted: string[] }` と記録の2列での正の分けに** —— `"all"` は廃止、`host` は同梱集合から checkout の entry 名を引いた実効集合(issue #2779)。

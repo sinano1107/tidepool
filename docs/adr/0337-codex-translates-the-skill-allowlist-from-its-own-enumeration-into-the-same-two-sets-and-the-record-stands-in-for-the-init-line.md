@@ -1,5 +1,7 @@
 # Codex は自身の列挙の scope から skill allowlist を同じ2集合へ翻訳し、観測で確かめた許可集合が init 行の代わりを務める
 
+**Status 追記: 決定4 の「本文はその行の `aggregated_output`(worker が実際に読んだ文面)」は [ADR 0340](0340-a-followed-skill-row-carries-the-text-that-reached-the-worker-and-the-action-it-came-from-and-does-not-claim-to-be-the-skills-text.md) で「その行で worker に届いた文」に読み替える** —— `cat` の全文も `python3` の加工後も `wc` の数値も同じ述語に当たり(#2817 の実測)、記録は出力が skill の文面であるとは主張せず、行の `command` を出所として添える。述語(全行を数える)は変えない(2026-11-01、issue #2818)。
+
 2026-11-01 の grilling(issue #2689、#2682 / ADR 0325 の派生)で決定。Codex worker は v1 の契約「skill 0件」(#195 / ADR 0098 決定7)のまま
 `skills/list` が返した path を全部閉じ(ADR 0259 決定2)、経路の能力表の `openai: { skills: false }`(ADR 0116)が allowlist を持つ agent を
 Codex に割り当てさせなかった。tako / fugu / 組み込み agent は全部 `@workspace` なので、Codex worker は門(#1879)の時点で1体も走れない。
