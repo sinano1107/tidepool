@@ -5016,7 +5016,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("429 の exit 通知は解決済みの中断分類を運ぶ(ADR 0309)", async () => {
     const order: unknown[] = [];
     const { start, processes, emitExit } = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, facts) => order.push(facts.capInterrupted),
+      onWorkerExited: (_taskId, _exit, facts) => { order.push(facts.capInterrupted); fireWrites(facts); },
     });
     start("task-capped-order");
     await vi.waitFor(() => expect(processes).toHaveLength(1));
@@ -5030,7 +5030,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("行の拒否(result 行の 404)は exit の束に、spawn 時の provider / model と worker_spawned の id を運んで乗る(ADR 0184 決定4 / ADR 0338 決定1)", async () => {
     const order: unknown[] = [];
     const { start, processes, emitExit, db } = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, facts) => order.push(facts.stop),
+      onWorkerExited: (_taskId, _exit, facts) => { order.push(facts.stop); fireWrites(facts); },
     });
     const task = start("task-row-refused-order");
     await vi.waitFor(() => expect(processes).toHaveLength(1));
@@ -5303,7 +5303,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("読み切りまでに届いた 429 も exit 通知の解決済みの中断分類に載る", async () => {
     const order: unknown[] = [];
     const f = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, facts) => order.push(facts.capInterrupted),
+      onWorkerExited: (_taskId, _exit, facts) => { order.push(facts.capInterrupted); fireWrites(facts); },
     });
     f.start("task-late-429");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));
@@ -5315,7 +5315,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
 
   it("exit のあと読み切りの前に届いた 404 の result 行で、行の拒否が exit の束に乗る", async () => {
     const refused: unknown[] = [];
-    const f = await makeWorker({}, { onWorkerExited: (_taskId, _exit, { stop }) => stop && "refusal" in stop && refused.push(stop.refusal.cause) });
+    const f = await makeWorker({}, { onWorkerExited: (_taskId, _exit, facts) => { const { stop } = facts; if (stop && "refusal" in stop) refused.push(stop.refusal.cause); fireWrites(facts); } });
     f.start("task-late-404");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
