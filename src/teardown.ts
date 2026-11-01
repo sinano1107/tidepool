@@ -223,7 +223,7 @@ export type FailedTeardownCheck = (taskId: string) => Promise<void>;
 
 /** 落ちた後始末の解放の門(ADR 0112 決定3)。他の quarantine 族が受理の直前に資源を
  *  検証するのと同じ位置で走るが、検証すべき資源が無いので検査は後始末の再実行そのもの
- *  に一致する —— 通れば受理へ進み、まだ投げるなら `DomainError` で回答を拒む。
+ *  に一致する —— 残りが無くなるまで撃って通れば受理へ進み、まだ投げるなら `DomainError` で回答を拒む。
  *
  *  再起動を跨いだ受理では枠が空いている(起動時復旧は落ちた後始末を撃ち直さず、枠も
  *  占めない)。その枠をここで取り直すのは、後始末の門である `slot.currentTaskId` の
@@ -231,19 +231,21 @@ export type FailedTeardownCheck = (taskId: string) => Promise<void>;
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<void> {
   // ADR 0342 決定6: process が生きていれば投げた手から、再起動を跨げば後始末そのものを撃ち直す
-  const rest = deps.slot.takeFailedTeardownRest(taskId);
+  let rest = deps.slot.takeFailedTeardownRest(taskId);
   // 枠を取り直すのは再起動を跨いだ受理だけ —— 残りを持つ受理で枠が空いているのは先の受理の後始末が既に解放した後で、取り直すと解放する者が無い
   if (!rest && deps.slot.currentTaskId === null) {
     deps.slot.occupy(taskId);
     deps.slot.enterTeardown();
   }
+  rest ??= [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];
   try {
-    await drive(rest ?? [() => teardown(deps, taskId, teardownStep(deps.db, taskId))]);
+    // ADR 0112 決定3: 撃っている間に継がれた手も撃つ —— 残したまま通すと、枠を握ったまま question だけが閉じる
+    for (; rest; rest = deps.slot.takeFailedTeardownRest(taskId)) await drive(rest);
   } catch (err) {
-    const { cause, rest } = err as TeardownThrew;
+    const { cause, rest: thrownOnward } = err as TeardownThrew;
     // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
     if (isBoardDbRefusal(cause)) throw cause;
-    deps.slot.appendFailedTeardownRest(taskId, rest);
+    deps.slot.appendFailedTeardownRest(taskId, thrownOnward);
     throw new DomainError(
       `the teardown for task ${taskId} threw again: ` +
         (cause instanceof Error ? cause.message : String(cause)),

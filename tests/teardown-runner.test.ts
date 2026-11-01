@@ -576,6 +576,92 @@ it("時間制限の停止の後の exit で書く step が投げても、飲ま�
   expect(b.slot.currentTaskId).toBeNull();
 });
 
+describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決定3 / ADR 0342 決定6)", () => {
+  /** 残りが [書く step, 後始末] で question が開いている session。受理の撃ち直しは `ensureWorkspaceToken` の await まで同期に走る。 */
+  async function teardownBehindWriteStep() {
+    const ws = await makeWorkspace("sandbox");
+    const b = board({ workspace: ws });
+    await prepareWorkspaceAtPickup(b.db, ws, b.task);
+    commitWork(ws.path, "deliverable.txt", "work\n");
+    completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
+    markTeardown(b.db, b.task.id, b.clock.now());
+    b.slot.enterTeardown();
+    const first = writeSteps();
+    const running = runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: first.writes });
+    await running;
+    await settle();
+    first.broken = false;
+    return b;
+  }
+
+  /** 受理の await の間に遅れた exit の書く step が投げる。返るのは受理と、その exit の手。 */
+  function acceptWhileWriteStepThrows(b: Board) {
+    const late = writeSteps();
+    const accepting = answer(b);
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: late.writes });
+    expect(late.fired).toEqual(["exit"]);
+    return { accepting, late };
+  }
+
+  it("受理の await の間に書く step が投げても、直っていれば投げた手から撃ち直して枠を空けて通る", async () => {
+    const b = await teardownBehindWriteStep();
+
+    const { accepting, late } = acceptWhileWriteStepThrows(b);
+    late.broken = false;
+    await accepting;
+    await settle();
+
+    expect(late.fired).toEqual(["exit", "temp", "project"]);
+    expect(questions(b.db)).toEqual([]);
+    expect(boardHalts(b.db)).toEqual([]);
+    expect(b.slot.currentTaskId).toBeNull();
+    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("同じ窓で直っていなければ回答は拒まれ、question は開いたまま枠と残りは保たれる —— 直してからの受理は通る", async () => {
+    const b = await teardownBehindWriteStep();
+
+    const { accepting, late } = acceptWhileWriteStepThrows(b);
+
+    await expect(accepting).rejects.toThrow(DomainError);
+    expectHeld(b);
+    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(true);
+    late.broken = false;
+    await answer(b);
+    await settle();
+    expect(late.fired).toEqual(["exit", "temp", "project"]);
+    expect(b.slot.currentTaskId).toBeNull();
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("受理の await の間に遅い `runTeardown` が届いても解放は1回", async () => {
+    const b = await teardownBehindWriteStep();
+    const pollNow = vi.fn();
+    b.deps.pollNow = pollNow;
+
+    const accepting = answer(b);
+    const lateTeardown = runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
+    await Promise.all([accepting, lateTeardown]);
+    await settle();
+
+    expect(pollNow).toHaveBeenCalledTimes(1);
+    expect(questions(b.db)).toEqual([]);
+    expect(b.slot.currentTaskId).toBeNull();
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("受理の後に梯子の底を越えても偽の Containment question は立たず、枠を握ったまま question だけが閉じた形にならない", async () => {
+    const b = await teardownBehindWriteStep();
+
+    const { accepting, late } = acceptWhileWriteStepThrows(b);
+    late.broken = false;
+    await accepting;
+    await climbTheLadder(b);
+
+    expect(questions(b.db)).toEqual([]);
+    expect(boardHalts(b.db)).toEqual([]);
+    expect(b.slot.currentTaskId).toBeNull();
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+});
 
 describe("exits belong to their original worker session", () => {
   function session() {
