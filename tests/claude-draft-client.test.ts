@@ -4,7 +4,7 @@ import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { reportProviderUsage } from "../src/throttle.js";
-import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { answerExec, boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const db = openDb(":memory:");
 const NOW = new Date("2026-10-02T00:00:00Z");
@@ -440,13 +440,13 @@ describe("ClaudeDraftClient", () => {
     const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeDraftClient({
       db,
-      exec: async (_command, args, _env, input) => {
+      exec: answerExec(async (_command, args, _env, input) => {
         calls.push({ args, input });
         return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
         });
-      },
+      }),
     });
 
     await client.draftTask("set up the greenhouse sensor", "English");

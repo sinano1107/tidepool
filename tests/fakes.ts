@@ -14,7 +14,7 @@ import { type BoardCall, type BoardCallSpec, createBoardCalls } from "../src/boa
 import type { BoardCallAnswer, BoardCallSetting, BoardCallUsage } from "../src/board-call-usage.js";
 import type { PromptPart } from "../src/board-prose.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
-import type { ClaudeWorkerOptions } from "../src/claude-worker.js";
+import { type ClaudeWorkerOptions, type ExecFn, execThrough } from "../src/claude-worker.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { createCodexCapabilityCheck } from "../src/codex-worker.js";
@@ -1321,6 +1321,13 @@ export const CLI_ENVELOPE_USAGE = {
   total_cost_usd: 0.000586,
   usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
 };
+
+/** `exec` を `execThrough` 越しに呼ぶ ExecFn —— `exec` が受け取る args は、答えの姿勢を足して口へ出る最終の argv(ADR 0341 決定2)。 */
+export const answerExec = (exec: ExecFn): ExecFn =>
+  execThrough(
+    (async (spec: BoardCallSpec) => ({ exitCode: 0, stdout: await exec(spec.command, spec.args, spec.env, spec.input), stderr: "" })) as BoardCall,
+    "answer",
+  );
 
 /** Answer-fetching Board call stdout: init and the whole final result, one JSON object per line. */
 export const boardCallStream = (result: object) =>

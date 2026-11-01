@@ -17,6 +17,8 @@ const LIMIT = 15_000;
 const spec: BoardCallSpec = {
   kind: "skill enumeration",
   harness: "claude-code",
+  // 口は姿勢を読まない(ADR 0341 決定2)
+  posture: "worker-shaped",
   command: "claude",
   args: ["-p", "/usage"],
   cwd: "/workspaces/sandbox",

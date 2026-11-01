@@ -15,8 +15,11 @@ import {
   type EnumerateSkillsFn,
   enumerateHostSkills,
   enumerateToolsThrough,
+  enumerateWorkspaceSkills,
+  execThrough,
   PROMPT_READY_MARKER,
   pinnedModelFlags,
+  toolSurfaceProbeSpec,
 } from "../src/claude-worker.js";
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
@@ -5229,7 +5232,7 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
   });
 
   // ADR 0335 決定2: 同梱集合は worker と同じ tier フラグで撃つ —— user 層の skill は同梱に数えない
-  it("ホストの skill 列挙(同梱集合)は --setting-sources project で撃つ", async () => {
+  it("ホストの skill 列挙(同梱集合)は --setting-sources project と --strict-mcp-config で撃つ(ADR 0341 決定4)", async () => {
     let args: string[] = [];
     await enumerateHostSkills((async (spec: BoardCallSpec) => {
       args = spec.args;
@@ -5237,6 +5240,7 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
     }) as BoardCall);
 
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+    expect(args).toContain("--strict-mcp-config");
   });
 
   it.each(probes)("%s の空の cwd は、口が throw したあとにも残らない", async (_, probe) => {
@@ -5245,5 +5249,51 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
     await expect(probe(call)).rejects.toThrow("口が落ちた");
 
     expect(existsSync(seen.cwd)).toBe(false);
+  });
+});
+
+describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
+  /** 口へ出た注文を写し取る偽の口。 */
+  function specRecordingCall() {
+    const specs: BoardCallSpec[] = [];
+    const call = (async (spec: BoardCallSpec) => (specs.push(spec), null)) as BoardCall;
+    return { call, specs };
+  }
+
+  it("workspace を cwd にする skill 列挙は worker の形で撃ち、sandbox の profile は運ばず、回収済み観測を待つ(決定3・4・5)", async () => {
+    const { call, specs } = specRecordingCall();
+
+    await enumerateWorkspaceSkills(call)("/workspaces/sandbox");
+
+    expect(specs[0]).toMatchObject({ posture: "worker-shaped", cwd: "/workspaces/sandbox", awaitReclaimed: true });
+    const { args } = specs[0]!;
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+    expect(args).toContain("--strict-mcp-config");
+    expect(args).not.toContain("--settings");
+  });
+
+  it("tool-surface probe の argv は姿勢を先に置いた同じ集合のままである(封じ込めの観測は変わらない)", () => {
+    const spec = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral");
+    const { args } = spec;
+    const settings = args[args.indexOf("--settings") + 1]!;
+    const tools = args[args.indexOf("--tools") + 1]!;
+
+    expect(spec).toMatchObject({ posture: "worker-shaped" });
+    expect(args.slice(0, 3)).toEqual(["--setting-sources", "project", "--strict-mcp-config"]);
+    expect([...args].sort()).toEqual(
+      [
+        "-p", "/usage", "--output-format", "stream-json", "--verbose", "--model", "haiku", "--max-turns", "1", "--max-budget-usd", "0.01",
+        "--permission-mode", "acceptEdits", "--setting-sources", "project", "--strict-mcp-config", "--settings", settings, "--tools", tools,
+      ].sort(),
+    );
+  });
+
+  it("答えを取りに行く呼び出しは --safe-mode と --setting-sources \"\" を姿勢で運ぶ(ADR 0303 決定1)", async () => {
+    const { call, specs } = specRecordingCall();
+
+    await expect(execThrough(call, "task draft")("claude", ["-p"], {}, "prompt")).rejects.toThrow("produced no answer");
+
+    expect(specs[0]).toMatchObject({ posture: "answer" });
+    expect(specs[0]!.args).toEqual(["--safe-mode", "--setting-sources", "", "-p"]);
   });
 });

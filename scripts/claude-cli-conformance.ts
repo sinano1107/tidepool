@@ -8,11 +8,11 @@
  *  注文(result 行・language の1ターン・404 の probe・使用量画面・下書き・翻訳)も撃つからである。
  *
  *  使い方: systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/claude-cli-conformance.ts */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
-import { createBoardCalls, readOutput } from "../src/board-call.js";
+import { type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
 import { containerRuntimeFor } from "../src/cgroup-container.js";
 import { cliAuthCommandThrough, createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import {
@@ -20,11 +20,13 @@ import {
   judgeConformance,
   judgeSeedRows,
   LANGUAGE_QUESTION,
+  MCP_JSON_SERVER,
+  mcpJsonControlSpec,
   workerOneTurnArgs,
 } from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
-import { boardCallEnv, checkUsageThrough, execThrough, toolSurfaceProbeSpec } from "../src/claude-worker.js";
+import { boardCallEnv, checkUsageThrough, execThrough, skillEnumerationSpec, toolSurfaceProbeSpec } from "../src/claude-worker.js";
 import { SystemClock } from "../src/clock.js";
 import { openDb } from "../src/db.js";
 import { ProcessContainers } from "../src/process-container.js";
@@ -57,13 +59,36 @@ const neutralCwd = (settings?: object) => {
 const scratch = neutralCwd();
 const outputStyleCwd = neutralCwd({ outputStyle: "Explanatory" });
 const languageCwd = neutralCwd({ language: "japanese" });
+// ADR 0341 決定6: `.mcp.json` に stdio server 1本 —— 起動すると marker を書き、initialize と tools/list にだけ答える
+const mcpJsonCwd = neutralCwd();
+const mcpJsonMarker = join(mcpJsonCwd, "server-started");
+writeFileSync(
+  join(mcpJsonCwd, "server.cjs"),
+  `require("node:fs").appendFileSync(process.argv[2], "started\\n");
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method, params } = JSON.parse(line);
+  if (id === undefined) return;
+  const result = method === "initialize"
+    ? { protocolVersion: params.protocolVersion, capabilities: {}, serverInfo: { name: "conformance", version: "0" } }
+    : { tools: [] };
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+});
+`,
+);
+writeFileSync(
+  join(mcpJsonCwd, ".mcp.json"),
+  JSON.stringify({
+    mcpServers: { [MCP_JSON_SERVER]: { type: "stdio", command: process.execPath, args: [join(mcpJsonCwd, "server.cjs"), mcpJsonMarker] } },
+  }),
+);
 
-// init 行は封じ込めの probe と同じ注文で撃つ(neutral cwd で撃つのも同じ)
-const probeStdout = (cwd: string) =>
-  call(toolSurfaceProbeSpec(cwd), readOutput).then((output) => {
+const stdoutOf = (spec: BoardCallSpec) =>
+  call(spec, readOutput).then((output) => {
     if (output === null) throw new Error("the Board call produced no answer (limit, spawn failure, or no container)");
     return output.stdout;
   });
+// init 行は封じ込めの probe と同じ注文で撃つ(neutral cwd で撃つのも同じ)
+const probeStdout = (cwd: string) => stdoutOf(toolSurfaceProbeSpec(cwd));
 
 // result 行は、モデルの1ターンを実際に走らせた stream-json から読む —— `/usage` ping は
 // ターンを起こさない(cost 0)ので、worker が読む usage の形を試せない
@@ -74,7 +99,7 @@ const languageShot = (shape: "worker" | "board call") => {
   const input = promptInput(workerPromptRecord("claude-code", [], LANGUAGE_QUESTION));
   const file = join(scratch, "language-system.txt");
   writeFileSync(file, input.system);
-  return execThrough(call, `conformance language (${shape})`, languageCwd)(
+  return execThrough(call, `conformance language (${shape})`, languageCwd, shape === "worker" ? "worker-shaped" : "answer")(
     "claude", shape === "worker" ? workerOneTurnArgs(file) : boardCallOneTurnArgs(), boardCallEnv(), input.user,
   );
 };
@@ -82,6 +107,12 @@ const languageShot = (shape: "worker" | "board call") => {
 const { rows } = await judgeConformance(
   {
     initLine: () => probeStdout(scratch),
+    // worker の形を先に撃ち、対照が server を起動する前に marker を読む
+    mcpJson: async () => {
+      const workerShaped = await stdoutOf(skillEnumerationSpec(mcpJsonCwd, false));
+      const started = existsSync(mcpJsonMarker);
+      return { workerShaped, started, control: await stdoutOf(mcpJsonControlSpec(mcpJsonCwd)) };
+    },
     resultLine: oneTurnStdout,
     outputStyleLine: () => probeStdout(outputStyleCwd),
     languageShot,

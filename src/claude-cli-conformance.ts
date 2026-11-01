@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
+import type { BoardCallSpec } from "./board-call.js";
 import { BOARD_CALL_ONE_TURN_FLAGS } from "./claude-board-call-runner.js";
 import { readResultEvent } from "./claude-stream-reader.js";
 import {
@@ -8,11 +9,12 @@ import {
   probeToolSurfaceCapability,
   readInitReport,
   readToolSurface,
+  skillEnumerationSpec,
 } from "./claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "./cli-auth.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "./sandbox.js";
-import { readInitAutoMemoryPath, readInitField, readInitOutputStyle } from "./stream-json.js";
+import { readInitAutoMemoryPath, readInitField, readInitMcpServers, readInitOutputStyle } from "./stream-json.js";
 import { claudeUsageObservation, parseUsage } from "./usage.js";
 
 /** 適合試験のモデルの1ターン: worker が読む usage の形(stream-json)で、安い行を撃つ。 */
@@ -29,18 +31,26 @@ export const boardCallOneTurnArgs = () => [
   "-p", ...pinnedModelFlags("haiku", "low"), ...BOARD_CALL_ONE_TURN_FLAGS,
 ];
 
-/** worker の形の1ターン —— worker と同じく project tier を読み、盤面が per-task settings で固定する
- *  言語・出力様式の2キーを flag tier に置く(ADR 0303 決定2)。 */
+/** worker の形の1ターン —— `worker-shaped` の姿勢で撃ち(worker と同じく project tier を読む、ADR 0341 決定2)、
+ *  盤面が per-task settings で固定する言語・出力様式の2キーを flag tier に置く(ADR 0303 決定2)。 */
 export const workerOneTurnArgs = (systemPromptFile: string) => [
   ...oneTurnArgs(),
   "--append-system-prompt-file", systemPromptFile,
   "--max-turns",
   "1",
-  "--setting-sources",
-  "project",
   "--settings",
   JSON.stringify(LANGUAGE_AND_OUTPUT_STYLE_PINNED),
 ];
+
+/** `.mcp.json` の面(ADR 0341 決定6)の fixture が置く stdio server の名前。 */
+export const MCP_JSON_SERVER = "conformance-mcp-json";
+
+/** `.mcp.json` の面の対照: skill 列挙の ping から strict だけを外した形 —— server が載ることが fixture の生きている証拠。
+ *  姿勢の欄は ping のまま残る(口は読まない)。 */
+export const mcpJsonControlSpec = (cwd: string): BoardCallSpec => {
+  const ping = skillEnumerationSpec(cwd, false);
+  return { ...ping, kind: "conformance .mcp.json control", args: ping.args.filter((arg) => arg !== "--strict-mcp-config") };
+};
 
 /** language の面の問い。init 行に `language` は出ないので、モデルに system prompt の指示を引かせる。 */
 export const LANGUAGE_QUESTION =
@@ -54,6 +64,9 @@ const LANGUAGE_SHOTS = 3;
 export interface ConformanceObservations {
   /** 封じ込めの probe と同じフラグで撃った `claude` の stdout(stream-json)。 */
   initLine: () => Promise<string>;
+  /** `.mcp.json`(`MCP_JSON_SERVER` の stdio server 1本、起動で marker を書く)を置いた neutral cwd で、skill 列挙の ping
+   *  (`workerShaped`)と対照(`mcpJsonControlSpec`)を撃った stdout。`started` は worker の形のあと、対照の前に読んだ marker の有無。 */
+  mcpJson: () => Promise<{ control: string; workerShaped: string; started: boolean }>;
   /** Board call と同じ cwd / フラグ(`boardCallOneTurnArgs`)でモデルの1ターンを走らせた stdout(init / result 行を含む)。 */
   resultLine: () => Promise<string>;
   /** 封じ込めの probe と同じ注文を、`.claude/settings.json` に既定でない `outputStyle` を置いた neutral cwd で撃った stdout。 */
@@ -92,6 +105,30 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
       if (!surface.available) return { pass: false, detail: surface.reason };
       if (skills === null) return { pass: false, detail: "the init line carries no readable `skills`" };
       return { pass: true, detail: `tools / mcp_servers / memory_paths as declared, ${skills.length} skills` };
+    },
+  ],
+  [
+    // ADR 0341 決定6: worker の形が依る vendor 挙動(strict が `.mcp.json` の server を立てない)を版上げの門で測る。
+    // 対照が載せなければ fixture の失敗で、worker の形の空を合格に読まない
+    "workspace .mcp.json",
+    async (obs) => {
+      const { control, workerShaped, started } = await obs.mcpJson();
+      const listed = await replay(control, readInitMcpServers);
+      if (!listed?.some(({ name }) => name === MCP_JSON_SERVER)) {
+        return {
+          pass: false,
+          detail: `fixture failure: the control (no \`--strict-mcp-config\`) lists no \`${MCP_JSON_SERVER}\` in init \`mcp_servers\`, so the worker-shaped row proves nothing`,
+        };
+      }
+      const servers = await replay(workerShaped, readInitMcpServers);
+      if (servers === null) return { pass: false, detail: "worker-shaped: the init line carries no readable `mcp_servers`" };
+      if (servers.length > 0 || started) {
+        return {
+          pass: false,
+          detail: `worker-shaped: mcp_servers [${servers.map(({ name }) => name).join(", ")}], server ${started ? "started" : "not started"}`,
+        };
+      }
+      return { pass: true, detail: `the control lists \`${MCP_JSON_SERVER}\`; worker-shaped lists none and the server never started` };
     },
   ],
   [

@@ -3,10 +3,11 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
+import { atNeutralCwd, type BoardCall, type BoardCallSpec, type ClaudeBoardCallPosture, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
+import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
 import { quarantineCliAuthForProvider } from "./cli-auth.js";
@@ -883,8 +884,8 @@ export type EnumerateSkillsFn = (cwd: string) => Promise<string[] | null>;
 // at its cwd under its tier flags, and `/usage` is local processing — cost
 // 0, num_turns 0, ~2s natural exit (verified, CLI 2.1.210). Guardrails mirror
 // checkUsage's old cost ceiling; --safe-mode is deliberately absent (it would
-// hide the very skills being enumerated — leakage is the observation target
-// here, not a threat).
+// hide the very skills being enumerated). Which tiers and MCP servers the ping
+// reads is the call's posture, not these args (ADR 0341 決定4).
 const SKILL_ENUM_ARGS = [
   "-p",
   "/usage",
@@ -931,30 +932,42 @@ export function readInitReport<T>(
  *  exit での強制回収・回収済み観測はすべて口の側にあり、ここが渡すのは注文だけ
  *  である(ADR 0136 決定4)。
  *
+ *  cwd を問わず worker の形で撃つ: 列挙は worker が見る集合に等しくなり、workspace が commit した `.mcp.json` の
+ *  server は立たない(ADR 0341 決定4)。
+ *
  *  `awaitReclaimed` は cwd で決まる: workspace を cwd にする呼び出しだけが回収済み
  *  観測のあとに返り、skill 列挙の結果を待ってから launch する既存の流れがそのまま
- *  門になる —— workspace が持ち込んだ MCP server の残存が、次にその workspace で
- *  走る worker と同居しない(ADR 0136 決定5)。neutral cwd の列挙(同梱集合 —— spawn の ping と skills picker の両方、
- *  ADR 0335 決定2)は待つ相手を持たないので root の exit で返る。`args` は SKILL_ENUM_ARGS に足す tier フラグ。 */
+ *  門になる(ADR 0136 決定5)。strict が server を閉じても門は残す —— 閉じたのは宣言で、床は容器である
+ *  (ADR 0341 決定5)。neutral cwd の列挙(同梱集合 —— spawn の ping と skills picker の両方、
+ *  ADR 0335 決定2)は待つ相手を持たないので root の exit で返る。 */
 function enumerateSkillsThrough(
   call: BoardCall,
   cwd: string,
-  { awaitReclaimed, args = [] }: { awaitReclaimed: boolean; args?: string[] },
+  { awaitReclaimed }: { awaitReclaimed: boolean },
 ): Promise<string[] | null> {
-  return call(
-    {
-      kind: "skill enumeration",
-      harness: "claude-code",
-      command: "claude",
-      args: [...SKILL_ENUM_ARGS, ...args],
-      cwd,
-      env: boardCallEnv(),
-      limitMs: SKILL_ENUM_TIMEOUT_MS,
-      awaitReclaimed,
-    },
-    (proc) => readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
+  return call(skillEnumerationSpec(cwd, awaitReclaimed), (proc) =>
+    readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
   );
 }
+
+/** skill 列挙の Board call の注文。適合試験(ADR 0186 決定7)の `.mcp.json` の面も同じこれで撃つ(ADR 0341 決定6)。 */
+export const skillEnumerationSpec = (cwd: string, awaitReclaimed: boolean): BoardCallSpec =>
+  claudeBoardCallSpec({
+    kind: "skill enumeration",
+    posture: "worker-shaped",
+    command: "claude",
+    args: SKILL_ENUM_ARGS,
+    cwd,
+    env: boardCallEnv(),
+    limitMs: SKILL_ENUM_TIMEOUT_MS,
+    awaitReclaimed,
+  });
+
+/** spawn の ping: workspace を cwd にする skill 列挙。 */
+export const enumerateWorkspaceSkills =
+  (call: BoardCall): EnumerateSkillsFn =>
+  (cwd) =>
+    enumerateSkillsThrough(call, cwd, { awaitReclaimed: true });
 
 /** The tool-surface probe's boundary (ADR 0039 決定3 / ADR 0108 決定1): what a
  *  session on this host actually gets when the board declares its allowlist —
@@ -978,7 +991,7 @@ export type EnumerateToolsFn = () => Promise<{
 // task type ごとに照合する深層防御側(`checkSessionInit`)が観測する。
 //
 // **この ping が運ぶのは本番フラグ一式のうち面を決める分だけである。** `--tools` は
-// 測る対象そのもの、`--permission-mode` と `--setting-sources project` は本番と同じ値。
+// 測る対象そのもの、`--permission-mode` は本番と同じ値、設定の層と MCP の宣言は姿勢(`worker-shaped`)が運ぶ。
 // 運ばないのは per-task の `--settings` ファイル(サンドボックスプロファイル)と
 // `--mcp-config` — どちらも**タスク単位の生成物**(workspace のパス・タスク帰属つき URL)で、
 // spawn の外には存在しない。したがって正本が答えるのは「このホストの CLI が盤面の宣言を
@@ -988,13 +1001,13 @@ export type EnumerateToolsFn = () => Promise<{
 // しており、正本の側はその MCP verb を除いた組み込みの面を見る(`mcp__` は比較対象外なので
 // どちらでも同じ答えになる)。
 //
-// `--setting-sources project` を足すのは**本番と同じ tier を読ませる**ため。足さないと
+// 姿勢の `--setting-sources project` は**本番と同じ tier を読ませる**。無いと
 // ホストの人間の `~/.claude/settings.json` の `permissions.deny` が面を削り
 // (ADR 0039 測定3)、本番の worker では起きない欠落を封じ込めの不成立に化けさせる。
-// 同梱集合の ping(`enumerateHostSkills`)も同じ理由でこれを足す。workspace cwd の列挙 ping は足さない ——
-// user 層の名前が載っても、worker に届かない名前を余分に deny するだけで害が無い(ADR 0335 決定4)。
+// skill 列挙の ping も、同梱集合・workspace cwd のどちらも同じ姿勢で撃つ —— workspace cwd の ping が
+// 姿勢を持たないと、workspace が commit した `.mcp.json` の server がホスト上で sandbox の外に立つ(ADR 0341 決定4)。
 //
-// `--strict-mcp-config` は**姿勢であってタスク単位の生成物ではない**ので、probe が
+// 姿勢の `--strict-mcp-config` は**タスク単位の生成物ではない**ので、probe が
 // `--mcp-config` を運ばないと決めた線に抵触しない(ADR 0108 決定3)。足さないと probe の
 // MCP 面は**ホストのもの**になり、人間が持つコネクタが面に出て、worker の封じ込めと
 // 無関係な理由で盤面全体が止まる(実測: neutral cwd の probe 形で claude.ai コネクタが4つ)。
@@ -1007,7 +1020,7 @@ export type EnumerateToolsFn = () => Promise<{
 //
 // inline の `--settings` は auto-memory を閉じる2キー(`AUTO_MEMORY_CLOSED`)と言語・出力様式を
 // 固定する2キー(`LANGUAGE_AND_OUTPUT_STYLE_PINNED`、ADR 0303 決定2)**だけ**を運ぶ。
-// これも `--strict-mcp-config` と同じく**姿勢であってタスク単位の生成物ではない**ので
+// これも `--strict-mcp-config` と同じく**タスク単位の生成物ではない**ので
 // (固定パスと固定値で workspace を含まない)、上の線に抵触しない(ADR 0108 決定3 と同じ理屈、
 // ADR 0156 決定3)。worker 設定と同じ定数から作るので閉じ方が食い違わず、CLI がキーを
 // 改名すれば init 報告に `memory_paths.auto` が現れて pickup の前に不成立になる。書きの
@@ -1019,9 +1032,6 @@ const TOOL_SURFACE_PROBE_ARGS = [
   ...SKILL_ENUM_ARGS,
   "--permission-mode",
   "acceptEdits",
-  "--setting-sources",
-  "project",
-  "--strict-mcp-config",
   "--settings",
   JSON.stringify({ ...AUTO_MEMORY_CLOSED, ...LANGUAGE_AND_OUTPUT_STYLE_PINNED }),
   "--tools",
@@ -1052,17 +1062,18 @@ export const enumerateToolsThrough =
     );
 
 /** tool-surface probe の Board call の注文。適合試験(ADR 0186 決定7)も同じこれで撃つ。 */
-export const toolSurfaceProbeSpec = (cwd: string): BoardCallSpec => ({
-  kind: "tool-surface probe",
-  harness: "claude-code",
-  // 版の門を外す唯一の注文: 版が戻ったことを確かめる手段がこの probe である(ADR 0186 決定3)
-  bypassVersionGate: true,
-  command: "claude",
-  args: TOOL_SURFACE_PROBE_ARGS,
-  cwd,
-  env: boardCallEnv(),
-  limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
-});
+export const toolSurfaceProbeSpec = (cwd: string): BoardCallSpec =>
+  claudeBoardCallSpec({
+    kind: "tool-surface probe",
+    posture: "worker-shaped",
+    // 版の門を外す唯一の注文: 版が戻ったことを確かめる手段がこの probe である(ADR 0186 決定3)
+    bypassVersionGate: true,
+    command: "claude",
+    args: TOOL_SURFACE_PROBE_ARGS,
+    cwd,
+    env: boardCallEnv(),
+    limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
+  });
 
 /** tool-surface probe の init 行の読み手。適合試験(ADR 0186 決定7)も同じこれで読む。
  *
@@ -1164,16 +1175,16 @@ export const claudeMcpReachabilityThrough =
         ),
       );
       const servers = await call(
-        {
+        claudeBoardCallSpec({
           kind: "Worker MCP reachability probe",
-          harness: "claude-code",
+          posture: "worker-shaped",
           command: "claude",
-          args: [...SKILL_ENUM_ARGS, "--setting-sources", "project", "--mcp-config", mcpConfig, "--strict-mcp-config", "--settings", settings],
+          args: [...SKILL_ENUM_ARGS, "--mcp-config", mcpConfig, "--settings", settings],
           cwd: dir,
           // sandbox.ts の taskTemp: CLI の TMPDIR もそこを指さないと proxy の socket が閉じた /tmp に残る
           env: { ...boardCallEnv(), TMPDIR: dir },
           limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
-        },
+        }),
         (proc) => readInitReport(proc.stdout, readInitMcpServers),
       );
       const reason =
@@ -1218,7 +1229,7 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
 
 /** The bundled set (ADR 0335 決定2): the harness-bundled skills, enumerated by the same `/usage` ping the
  *  spawn-time complement-deny uses — at a *neutral* cwd (a fresh empty directory, so no `.claude/skills/`) and
- *  under the worker's tier flag (`--setting-sources project`, so no user-tier skill). Its one owner is read by both
+ *  under the worker's posture (`worker-shaped`, so no user-tier skill — ADR 0341 決定4). Its one owner is read by both
  *  the spawn (the `@host` half of the resolution) and the WebUI's skills picker (issue #106), which returns it
  *  verbatim as its candidates (the scope words `*`/`@workspace`/`@host` are the picker's own additions).
  *
@@ -1233,7 +1244,7 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
  *  degrades that to an empty candidate set rather than a spawn failure. */
 export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =>
   atNeutralCwd("tidepool-skills-", (cwd) =>
-    enumerateSkillsThrough(call, cwd, { awaitReclaimed: false, args: ["--setting-sources", "project"] }),
+    enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }),
   );
 
 /** The checkout's own skills (issue #56 / ADR 0335 決定1): `carried` is the entry names under
@@ -1278,12 +1289,13 @@ const ANSWER_CALL_LIMIT_MS = 300_000;
  *  非ゼロ終了は `stdout` を付けて reject する —— `runClaudeBoardCallJson` がその
  *  stdout の 401 envelope を読んで provider quarantine を撃つ(ADR 0070)。口が答えを
  *  返さなかった(上限・spawn 失敗・容器の前提不成立)ときは stdout 無しで reject する。
- *  `cwd` は盤面自身の cwd が既定で、渡すのは適合試験が用意した neutral cwd で撃つときだけ(ADR 0303 決定4)。 */
+ *  `cwd` は盤面自身の cwd が既定で、渡すのは適合試験が用意した neutral cwd で撃つときだけ(ADR 0303 決定4)。
+ *  姿勢は答えの形(`answer`)が既定で、`worker-shaped` を渡すのは適合試験が worker の形の1ターンを撃つときだけ。 */
 export const execThrough =
-  (call: BoardCall, kind: string, cwd?: string): ExecFn =>
+  (call: BoardCall, kind: string, cwd?: string, posture: ClaudeBoardCallPosture = "answer"): ExecFn =>
   async (command, args, env, input) => {
     const output = await call(
-      { kind, harness: "claude-code", command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS, input },
+      claudeBoardCallSpec({ kind, posture, command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS, input }),
       readOutput,
     );
     if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);
@@ -1456,7 +1468,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.pty = options.pty ?? defaultPty;
     this.enumerateSkills =
       options.enumerateSkills ??
-      ((cwd) => enumerateSkillsThrough(options.boardCall, cwd, { awaitReclaimed: true }));
+      enumerateWorkspaceSkills(options.boardCall);
     this.enumerateHostSkills = options.enumerateHostSkills ?? (() => enumerateHostSkills(options.boardCall));
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
@@ -2249,9 +2261,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
  *  The panel renders only under a TTY, and only the interactive session
  *  keeps the OAuth subscription auth that draws the % figures (`--bare`
  *  drops to API billing and the panel disappears). Runs in the board's own
- *  cwd (unlike start(), which pins cwd to the task's workspace) with
- *  --safe-mode so the board repo's CLAUDE.md/skills/MCP never leak into the
- *  probe. Auth/tokens are never touched — refresh is left to the CLI's own
+ *  cwd (unlike start(), which pins cwd to the task's workspace) under the
+ *  `ambient` posture (--safe-mode) so the board repo's CLAUDE.md/skills/MCP never
+ *  leak into the probe. Auth/tokens are never touched — refresh is left to the CLI's own
  *  startup (ADR 0028's core constraint). Returns the composed terminal
  *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
  *  before the panel appears resolves null so the scheduler fails closed. A
@@ -2290,11 +2302,11 @@ export async function checkUsageThrough(
     }
   };
   const capture = await call(
-    {
+    claudeBoardCallSpec({
       kind: "usage TUI",
-      harness: "claude-code",
+      posture: "ambient",
       command: "claude",
-      args: ["--safe-mode", "--settings", settingsPath],
+      args: ["--settings", settingsPath],
       cwd: process.cwd(),
       // a Board call like any other (ADR 0044): this one raises no model turn
       // today — nothing is ever typed at the prompt — but that is a property
@@ -2302,7 +2314,7 @@ export async function checkUsageThrough(
       env: boardCallEnv(),
       limitMs: USAGE_LIMIT_MS,
       pty: { launch, cols: PTY_COLS, rows: PTY_ROWS },
-    },
+    }),
     (session, done) => scrapeUsage(session, done),
   );
   return capture === null ? null : composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).catch(() => null);

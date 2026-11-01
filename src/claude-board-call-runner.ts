@@ -26,8 +26,9 @@ const BOARD_CALL_SYSTEM_PROMPT = [
   "No tools, no follow-up turns, no prose around the JSON.",
 ].join(" ");
 
-/** 答えを取りに行く Board call の1ターンの姿勢。適合試験(ADR 0186 決定7)の Board call の形の1ターンも
- *  これから組む —— 手で写すと、ここに足したフラグを試験が測らない(ADR 0303 決定4)。 */
+/** 答えを取りに行く Board call の1ターンのフラグ。設定の層は `execThrough` の姿勢(`answer`)が運ぶ(ADR 0341 決定2)。
+ *  適合試験(ADR 0186 決定7)の Board call の形の1ターンもこれから組む —— 手で写すと、ここに足したフラグを試験が
+ *  測らない(ADR 0303 決定4)。 */
 export const BOARD_CALL_ONE_TURN_FLAGS = [
   "--output-format",
   "stream-json",
@@ -37,17 +38,6 @@ export const BOARD_CALL_ONE_TURN_FLAGS = [
   // this call is for, so a CLI that ever raises another turn fails loud
   "--max-turns",
   "1",
-  // this call runs with the board's own cwd, not a task workspace —
-  // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config,
-  // hooks and plugins from leaking into what must stay a bare answer.
-  // Auth/model/tools/permissions are unaffected (unlike --bare, which
-  // would force API-key-only auth). It does **not** keep an advisor out
-  // — measured, issue #174 — which is what the runner's env is for.
-  "--safe-mode",
-  // --safe-mode still reads `language` from the user and project tiers (measured
-  // on 2.1.286 / 2.1.308, #2454): no settings tier at all (ADR 0303 決定1)
-  "--setting-sources",
-  "",
 ] as const;
 
 /** One Board call that goes to **fetch an answer** (#662): the draft uses, the three retrospective uses and

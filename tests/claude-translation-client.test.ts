@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
-import { boardCallStream } from "./fakes.js";
+import { answerExec, boardCallStream } from "./fakes.js";
 
 const ENVELOPE = (result: string) =>
   boardCallStream({
@@ -129,10 +129,10 @@ describe("ClaudeTranslationClient", () => {
   it("--max-turns 1 と --safe-mode / --setting-sources \"\" を指定する(MCPツールを持たない単発呼び出し、ADR 0303 決定1)", async () => {
     const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
-      exec: async (_command, args, _env, input) => {
+      exec: answerExec(async (_command, args, _env, input) => {
         calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
-      },
+      }),
     });
 
     await client.translate(["s"], "Japanese");
