@@ -19,6 +19,7 @@ export class Slot {
   private taskContent: TaskContent | undefined;
   private parentContent: ParentBriefing | undefined;
   private failedTeardownRest: { taskId: string; actions: TeardownAction[] } | undefined;
+  private acceptingTeardown = false;
 
   get currentTaskId(): string | null {
     return this.taskId;
@@ -56,7 +57,8 @@ export class Slot {
   }
 
   /** 落ちた後始末の残り —— 投げた手から先(ADR 0342 決定6)。受理が撃ち直す。memory なので再起動を越えず、
-   *  越えた受理は後始末そのものを撃ち直す。枠を握っている session の分だけ持つ。先に残った手は捨てず、その後ろに継ぐ。 */
+   *  越えた受理は後始末そのものを撃ち直す。1つの task の分だけ持ち、受理の後始末が枠を空けた後に投げた手は枠が空いたまま持つ。
+   *  先に残った手は捨てず、その後ろに継ぐ。 */
   appendFailedTeardownRest(taskId: string, actions: TeardownAction[]): void {
     const earlier = this.failedTeardownRest?.taskId === taskId ? this.failedTeardownRest.actions : [];
     this.failedTeardownRest = { taskId, actions: [...earlier, ...actions] };
@@ -78,6 +80,15 @@ export class Slot {
     const { actions } = this.failedTeardownRest;
     this.failedTeardownRest = undefined;
     return actions;
+  }
+
+  /** 落ちた後始末の受理が走っている印。同期に取り、取れなければ undefined。後始末が枠を空けた後も受理の終わりまで持つので `release` は触らない。 */
+  takeTeardownAcceptanceMark(): (() => void) | undefined {
+    if (this.acceptingTeardown) return undefined;
+    this.acceptingTeardown = true;
+    return () => {
+      this.acceptingTeardown = false;
+    };
   }
 
   release(): void {

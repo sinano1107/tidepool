@@ -1521,7 +1521,7 @@ export type SessionStoppedByResource = Extract<QueueReturnPayload, { kind: "sess
  *  違う。失敗ではないので failure question(`registerFailureQuestion`)は立たず失敗統計も生まれない —— 中断の再開の門は次の pickup の
  *  Throttle である。行でない Interview の対象の拒否(ADR 0199 決定4)は、対象の question が開いているあいだ pickup されない。 */
 export function returnToQueue(db: Db, task: Task, payload: QueueReturnPayload, now: Date): void {
-  // 中断の後始末(`teardownStep` の transition)は transaction の外から呼ぶ
+  // 呼び手の transaction の中(入れ子は savepoint)でも単独でも、status と event を一緒に書く
   db.transaction(() => {
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
     appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
