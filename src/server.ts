@@ -60,6 +60,7 @@ import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps }
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
+import type { SqliteError } from "./unhandled-rejection-floor.js";
 import {
   type PendingReclaim,
   queueReturnHandler,
@@ -322,6 +323,9 @@ export interface ServerOptions {
   /** transcript の器(ADR 0149 決定5)。`containerRuntime` と同じく**省略できない** ——
    *  既定を持つと、失敗の一撃が配線されない器で黙って走る。 */
   transcripts: TranscriptStore;
+  /** ADR 0342 決定4: 盤面 DB が書きを拒んだ(A)とき、再 throw が底に届かない境界が直接呼ぶ終了。
+   *  Absent → 再 throw(テスト盤面の既定形)。本番は `terminateOnBoardDbRefusal`。 */
+  terminateOnBoardDbRefusal?: (error: SqliteError, where?: { operation?: string; taskId?: string }) => void;
 }
 
 /** `boardCallers` が組む口の一覧。 */

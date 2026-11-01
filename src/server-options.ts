@@ -94,6 +94,7 @@ import { type PickupStopped, resolveTaskAgent, type Task, type TaskType } from "
 import { tierNames } from "./tier.js";
 import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
+import { terminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
@@ -848,6 +849,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     agentRegistered: agentRegisteredChecker(board),
     agentDefinitionFailure: agentDefinitionFailureChecker(board, db),
     resolvesToBuiltIn: builtInResolutionChecker(board),
+    terminateOnBoardDbRefusal,
     isProtectedWorkspace: protectedWorkspaceChecker(board),
     listAgents: listAgentsResolver(board),
     // pass the provider itself, not a boot-time snapshot: the register screen's
