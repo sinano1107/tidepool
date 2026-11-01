@@ -385,6 +385,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
     expect(onWorkerExited.mock.calls).toEqual([[value.id, expect.objectContaining({ exit_code: 1, stderr_tail: signature }), {
+      workerSpawnedEventId: spawned.id,
       turnRan: false,
       stop: { registered: {
         kind: "session_stopped_by_resource", quarantine: "workerMcpReachability", value: "codex",
@@ -2132,4 +2133,22 @@ describe("resolveCodexExecutable", () => {
 
     expect(resolveCodexExecutable(linkDir).executable).toBe(await realpath(realExecutable));
   });
+});
+
+
+it("Codex's stale settle retains its spawn identity and leaves graceful stop connected to the replacement", async () => {
+  const exits = vi.fn();
+  const f = await fixture(undefined, undefined, exits);
+  const value = task(f.db, "same-task-delayed-exit");
+  await f.start(value);
+  const original = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!.id;
+  f.process.emitExitOnlyAt(0, 1, null);
+  await f.containers.reclaimed(value.id);
+  await f.start(value);
+  expect(f.process.processes).toHaveLength(2);
+
+  f.process.emitCloseAt(0, 1, null);
+  expect(exits.mock.calls[0]?.[2]).toMatchObject({ workerSpawnedEventId: original });
+  f.worker.gracefulStop(value.id);
+  expect(f.process.killedByProcess[1]).toEqual(["SIGINT"]);
 });

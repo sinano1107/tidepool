@@ -380,7 +380,12 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     worker: options.workerAdapter ?? ((deps) => {
       worker.useContainers(deps.containers);
       worker.onSpawnFailed = deps.onSpawnFailed;
-      worker.onWorkerExited = deps.onWorkerExited;
+      worker.onWorkerExited = (taskId, exit) => {
+        const spawned = latestEventOfTask(db, taskId, "worker_spawned");
+        const pickup = latestEventOfTask(db, taskId, "task_picked_up");
+        const workerSpawnedEventId = spawned && spawned.id > (pickup?.id ?? 0) ? spawned.id : appendEvent(db, { taskId, actorId: worker.id, origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
+        deps.onWorkerExited(taskId, exit, { workerSpawnedEventId, turnRan: true, writes: [], capInterrupted: false });
+      };
       return worker;
     }),
     containerRuntime: options.containerRuntime ?? containers,
@@ -1600,10 +1605,10 @@ export function fireWrites({ capInterrupted, writes }: WorkerExitClassification)
 export function exitToWatchdog(
   deps: { db: Db; clock: Clock; slot: Slot; containers: ProcessContainers; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig; pollNow?: () => void },
   taskId: string,
-  facts: WorkerExitClassification,
+  facts: Omit<WorkerExitClassification, "workerSpawnedEventId">,
 ): void {
   deps.containers.forceReclaim(taskId);
-  startWatchdog({ ...deps, worker: new ScriptedWorker(deps.clock), pollNow: deps.pollNow ?? (() => {}) }).onWorkerExited(taskId, QUIET_EXIT, facts);
+  startWatchdog({ ...deps, worker: new ScriptedWorker(deps.clock), pollNow: deps.pollNow ?? (() => {}) }).onWorkerExited(taskId, QUIET_EXIT, { ...facts, workerSpawnedEventId: appendEvent(deps.db, { taskId, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() }) });
 }
 
 /** agent 名と workspace 名の集合を registry として注入する boot の欄(集合を後から減らすと削除を模せる)。null の workspace は盤面の既定。 */

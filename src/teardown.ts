@@ -152,9 +152,9 @@ let driving = 0;
  *  枠を握ったままの throw だけが落ちた後始末である。`slot.release()` より後 —— pickup の契機 ——
  *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: question は立てない。枠の主が替わった後に投げた
  *  adapter の書く step(`worker_exited` など)は再実行すべきものが残るが、次の session の枠を止めないので log に残し、
- *  次の起動の復旧(ADR 0315)に任せる。 */
+ *  次の起動の復旧(ADR 0315)に任せる。`ownsSlot` は、同じ task の後の pickup も別の枠の主と読む呼び手の門。 */
 export function runTeardownSteps(
-  deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
+  deps: Pick<TeardownDeps, "db" | "clock" | "slot"> & { ownsSlot?: () => boolean },
   taskId: string,
   ...actions: TeardownAction[]
 ): Promise<void> | undefined {
@@ -163,7 +163,7 @@ export function runTeardownSteps(
     const { cause, rest } = err as TeardownThrew;
     if (isBoardDbRefusal(cause)) throw cause;
     console.error(`[teardown] task ${taskId}:`, cause);
-    if (deps.slot.currentTaskId !== taskId) return;
+    if (deps.slot.currentTaskId !== taskId || deps.ownsSlot?.() === false) return;
     quarantineFailedTeardown(deps.db, taskId, cause, deps.clock.now());
     deps.slot.appendFailedTeardownRest(taskId, rest);
   };

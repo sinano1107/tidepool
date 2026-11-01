@@ -1578,7 +1578,7 @@ export class CodexWorker implements WorkerAdapter {
       });
       // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
       const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
-        this.running.delete(task.id);
+        if (this.running.get(task.id) === child) this.running.delete(task.id);
         flushStdout();
         const fields = codexExitFields(streamObserved);
         const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), reported_error: fields.reported_error, last_message: fields.last_message };
@@ -1618,6 +1618,7 @@ export class CodexWorker implements WorkerAdapter {
         // ADR 0338 決定1: 読み手(ターン)・process の事実(MCP の起動時 exit)・probe(cap)の3出所を同じ束にする。
         // 停止の登録は `writes` の中で、盤面は分類を待って撃ってから決める(決定2)
         const facts = (capInterrupted: WorkerExitClassification["capInterrupted"]): WorkerExitClassification => ({
+          workerSpawnedEventId: spawned,
           turnRan: streamObserved.turnRan,
           ...(mcpStop && { stop: { registered: { kind: "session_stopped_by_resource", ...mcpStop, worker_spawned_event_id: spawned } } }),
           capInterrupted,
