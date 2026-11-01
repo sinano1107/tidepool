@@ -23,11 +23,12 @@ import type { VapidConfig } from "./push.js";
 import { startServer } from "./server.js";
 import { buildServerOptions, declaredRegistryMode } from "./server-options.js";
 import type { TranslationClient } from "./translate.js";
-import { installUnhandledRejectionFloor } from "./unhandled-rejection-floor.js";
+import { installUncaughtExceptionReceiver, installUnhandledRejectionFloor } from "./unhandled-rejection-floor.js";
 import { resolveWorkspacesBaseDir, workspacesBaseDirSource } from "./workspace.js";
 
-// ADR 0294 決定4: 起動の最初に床を置く(bootTidepool の外 —— テストは reject を失敗として見る)
+// ADR 0294 決定4 / ADR 0342 決定3: 起動の最初に2つの底を置く(bootTidepool の外 —— テストは reject と throw を失敗として見る)
 installUnhandledRejectionFloor();
+installUncaughtExceptionReceiver();
 
 const port = Number(process.env.PORT ?? 4589);
 // /mcp's own 127.0.0.1-only port (issue #37) — kept off `port` so
