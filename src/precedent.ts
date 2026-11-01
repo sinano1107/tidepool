@@ -83,7 +83,7 @@ export interface EpisodeAction {
   /** tool_result の `is_error === true` だけが失敗。欠落は成功(実測)。Codex は item の `status === "failed"`(ADR 0083 追記10)。 */
   failed: boolean;
   /** transcript 行への参照。派生は薄く、原文は transcript が正本(ADR 0083 追記)。 */
-  transcriptUuid: string;
+  transcriptRef: string;
   toolUseId: string;
   /** `parent_tool_use_id` 非 null = subagent が出した行動(#386 で実測)。 */
   subagent: boolean;
@@ -113,7 +113,7 @@ export interface SkillCall {
   /** `Skill` の行動行(Codex は `command_execution` の行動行)の位置(`EpisodeAction.index`)。 */
   position: number;
   name: string;
-  transcriptUuid: string | null;
+  transcriptRef: string | null;
   subagent: boolean;
 }
 
@@ -145,7 +145,7 @@ export interface EpisodeMarker {
   eventId: number | null;
   missingReason: MarkerMissingReason | null;
   /** 根拠になった transcript 行。decision では event id を写した tool_result の行。 */
-  transcriptUuid: string | null;
+  transcriptRef: string | null;
 }
 
 /** 行の解釈の3値(ADR 0083 追記 2 決定6)。rate limit や thinking token の通知の
@@ -222,9 +222,9 @@ interface LineReading {
   /** 構造マーカー(compaction / commit / advisor)。 */
   markers: EpisodeMarker[];
   /** tool 結果に写った event id → その `log_decision` / memory verb 行動の位置。 */
-  loggedAt: Map<number, { position: number; transcriptUuid: string }>;
-  pulledAt: Map<number, { position: number; transcriptUuid: string }>;
-  wroteAt: Map<number, { position: number; transcriptUuid: string }>;
+  loggedAt: Map<number, { position: number; transcriptRef: string }>;
+  pulledAt: Map<number, { position: number; transcriptRef: string }>;
+  wroteAt: Map<number, { position: number; transcriptRef: string }>;
   lines: EpisodeLineStats;
   cliVersion: string | null;
   skillsSeen: string[];
@@ -245,7 +245,7 @@ const emptyReading = (): LineReading => ({
 
 /** 行動の応答に写った盤面発行の event id を、その行動の位置に結ぶ。tool 名で絞るのは、他の verb の応答に
  *  `event_id` が生えたときに黙って decision / memory として結ばれないようにするため。 */
-function bindEventId(reading: LineReading, action: EpisodeAction, content: unknown, transcriptUuid: string): void {
+function bindEventId(reading: LineReading, action: EpisodeAction, content: unknown, transcriptRef: string): void {
   const boundAt = /__log_decision$/.test(action.tool)
     ? reading.loggedAt
     : PULL_TOOL.test(action.tool)
@@ -254,7 +254,7 @@ function bindEventId(reading: LineReading, action: EpisodeAction, content: unkno
         ? reading.wroteAt
         : null;
   const eventId = boundAt && readEventId(content);
-  if (boundAt && eventId !== null) boundAt.set(eventId, { position: action.index, transcriptUuid });
+  if (boundAt && eventId !== null) boundAt.set(eventId, { position: action.index, transcriptRef });
 }
 
 /** Claude Code の stream-json の行の読み手。 */
@@ -309,7 +309,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
         position: actions.length,
         eventId: null,
         missingReason: null,
-        transcriptUuid: uuid,
+        transcriptRef: uuid,
       });
       continue;
     }
@@ -340,7 +340,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
           position: actions.length,
           eventId: null,
           missingReason: null,
-          transcriptUuid: uuid,
+          transcriptRef: uuid,
         });
       }
       if (blockType === "tool_use" && typeof name === "string" && typeof id === "string") {
@@ -349,7 +349,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
           tool: name,
           args: readArgs(name, toolInput),
           failed: false,
-          transcriptUuid: uuid,
+          transcriptRef: uuid,
           toolUseId: id,
           subagent: parsed.parent_tool_use_id != null,
           subagentUsage: null,
@@ -367,7 +367,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
     }
   }
   reading.skillCalls = actions.flatMap(({ tool, args, failed, index, toolUseId, subagent }) =>
-    tool === "Skill" && !failed && args !== null ? [{ position: index, name: args, transcriptUuid: bodies.get(toolUseId) ?? null, subagent }] : [],
+    tool === "Skill" && !failed && args !== null ? [{ position: index, name: args, transcriptRef: bodies.get(toolUseId) ?? null, subagent }] : [],
   );
   return reading;
 }
@@ -412,7 +412,7 @@ function readCodexLines(transcriptLines: string[], spawned: Extract<EventPayload
       tool,
       args: readArgs(tool, item),
       failed: item.status === "failed",
-      transcriptUuid: id,
+      transcriptRef: id,
       toolUseId: id,
       subagent: false,
       subagentUsage: null,
@@ -425,7 +425,7 @@ function readCodexLines(transcriptLines: string[], spawned: Extract<EventPayload
     if (itemType === "command_execution" && item.status === "completed" && item.exit_code === 0 && typeof item.command === "string") {
       const command = item.command;
       for (const [name, path] of paths) {
-        if (command.includes(path)) reading.skillCalls.push({ position: action.index, name, transcriptUuid: id, subagent: false });
+        if (command.includes(path)) reading.skillCalls.push({ position: action.index, name, transcriptRef: id, subagent: false });
       }
     }
   }
@@ -486,7 +486,7 @@ function boundMarkers(
   kind: "decision" | "memory" | "memory_write",
   events: EventRow[],
   inSession: (e: EventRow) => boolean,
-  boundAt: Map<number, { position: number; transcriptUuid: string }>,
+  boundAt: Map<number, { position: number; transcriptRef: string }>,
 ): EpisodeMarker[] {
   const eventKind = ({ decision: "decision_logged", memory: "memory_pulled", memory_write: "memory_written" } as const)[kind];
   return events
@@ -498,7 +498,7 @@ function boundMarkers(
         position: hit?.position ?? null,
         eventId: e.id,
         missingReason: hit ? null : boundAt.size === 0 ? "no_event_id" : "unmatched",
-        transcriptUuid: hit?.transcriptUuid ?? null,
+        transcriptRef: hit?.transcriptRef ?? null,
       };
     });
 }
@@ -642,7 +642,7 @@ export function projectAndPersist(
     if (changes === 0) return null;
     const episodeId = Number(lastInsertRowid);
     const insertAction = db.prepare(
-      `INSERT INTO episode_actions (episode_id, idx, tool, args, failed, transcript_uuid, tool_use_id,
+      `INSERT INTO episode_actions (episode_id, idx, tool, args, failed, transcript_ref, tool_use_id,
          subagent, subagent_usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const a of episode.actions) {
@@ -652,24 +652,24 @@ export function projectAndPersist(
         a.tool,
         a.args,
         Number(a.failed),
-        a.transcriptUuid,
+        a.transcriptRef,
         a.toolUseId,
         Number(a.subagent),
         a.subagentUsage ? JSON.stringify(a.subagentUsage) : null,
       );
     }
     const insertMarker = db.prepare(
-      `INSERT INTO episode_markers (episode_id, seq, kind, position, event_id, missing_reason, transcript_uuid)
+      `INSERT INTO episode_markers (episode_id, seq, kind, position, event_id, missing_reason, transcript_ref)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     episode.markers.forEach((m, seq) => {
-      insertMarker.run(episodeId, seq, m.kind, m.position, m.eventId, m.missingReason, m.transcriptUuid);
+      insertMarker.run(episodeId, seq, m.kind, m.position, m.eventId, m.missingReason, m.transcriptRef);
     });
     const insertSkillCall = db.prepare(
-      "INSERT INTO episode_skill_calls (episode_id, seq, position, name, transcript_uuid, subagent) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO episode_skill_calls (episode_id, seq, position, name, transcript_ref, subagent) VALUES (?, ?, ?, ?, ?, ?)",
     );
     episode.skillCalls.forEach((c, seq) => {
-      insertSkillCall.run(episodeId, seq, c.position, c.name, c.transcriptUuid, Number(c.subagent));
+      insertSkillCall.run(episodeId, seq, c.position, c.name, c.transcriptRef, Number(c.subagent));
     });
     return episodeId;
   })();
@@ -728,7 +728,7 @@ export function skillsFollowed(episode: Pick<Episode, "skillCalls" | "markers">,
   }
   return episode.skillCalls
     .filter((c) => cut === null || c.position < cut)
-    .map((c) => ({ name: c.name, position: cut === null ? null : c.position, text: (c.transcriptUuid && texts.get(c.transcriptUuid)) ?? null }));
+    .map((c) => ({ name: c.name, position: cut === null ? null : c.position, text: (c.transcriptRef && texts.get(c.transcriptRef)) ?? null }));
 }
 
 const sortedIds = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b);
@@ -897,7 +897,7 @@ export function listEpisodes(
     skillsSeen: JSON.parse(row.skills_seen) as string[],
     skillCalls: skillCallRows
       .filter((c) => c.episode_id === row.id)
-      .map((c) => ({ position: c.position, name: c.name, transcriptUuid: c.transcript_uuid, subagent: c.subagent === 1 })),
+      .map((c) => ({ position: c.position, name: c.name, transcriptRef: c.transcript_ref, subagent: c.subagent === 1 })),
     prMerged: mergedPr(db, row.task_id),
     actions: actionRows
       .filter((a) => a.episode_id === row.id)
@@ -906,7 +906,7 @@ export function listEpisodes(
         tool: a.tool,
         args: a.args,
         failed: a.failed === 1,
-        transcriptUuid: a.transcript_uuid,
+        transcriptRef: a.transcript_ref,
         toolUseId: a.tool_use_id,
         subagent: a.subagent === 1,
         subagentUsage: a.subagent_usage ? (JSON.parse(a.subagent_usage) as SubagentUsage) : null,
@@ -918,7 +918,7 @@ export function listEpisodes(
         position: m.position,
         eventId: m.event_id,
         missingReason: m.missing_reason,
-        transcriptUuid: m.transcript_uuid,
+        transcriptRef: m.transcript_ref,
         ...(decisions.get(m.event_id ?? -1) ?? noOutcome()),
       })),
   }));
@@ -1029,7 +1029,7 @@ interface ActionRow {
   tool: string;
   args: string | null;
   failed: number;
-  transcript_uuid: string;
+  transcript_ref: string;
   tool_use_id: string;
   subagent: number;
   subagent_usage: string | null;
@@ -1039,7 +1039,7 @@ interface SkillCallRow {
   episode_id: number;
   position: number;
   name: string;
-  transcript_uuid: string | null;
+  transcript_ref: string | null;
   subagent: number;
 }
 
@@ -1050,7 +1050,7 @@ interface MarkerRow {
   position: number | null;
   event_id: number | null;
   missing_reason: MarkerMissingReason | null;
-  transcript_uuid: string | null;
+  transcript_ref: string | null;
 }
 
 /** `<taskId>.<worker_spawned event id>.stream.jsonl`(issue #379)。Episode の
