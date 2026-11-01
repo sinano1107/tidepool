@@ -1,5 +1,7 @@
 # 執行が書き込みより先に commit する回答は書き込み直前の同期区間で条件を読み直し、落ちた後始末の受理が証明するのは投げた step の再実行である
 
+**Status 追記: 決定1 の「執行が書き込みより先に commit する回答」の例に、閉じ切らなかった session の受理(その session の記録からの閉じ直し)が加わり3例になる。決定2 の「投げた step の再実行」の読みも同じ([ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定3、2026-11-01、issue #2876)。**
+
 2026-11-01 の grilling(issue #2891、#2879 の派生)で決定。落ちた後始末の受理(ADR 0112 決定3)は memory の残りが空になった瞬間に返り、
 回答の transaction はその後の同期区間で走る。`await` の再開までに並んだ microtask の中で後始末の step が投げると、開いている question に
 `quarantine_refired` が積まれ残りが立ち、直後の transaction がその question を閉じる —— 枠と残りを握ったまま停止の列挙から消え、梯子が
