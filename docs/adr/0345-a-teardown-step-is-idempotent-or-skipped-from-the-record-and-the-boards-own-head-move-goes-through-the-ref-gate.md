@@ -45,7 +45,7 @@ ADR も無かった。runner が撃つ全 step の再実行の分類は #2889 �
 ## 派生
 
 - Status 追記: ADR 0064 決定1(集合に HEAD の行)、ADR 0243 決定4(checkout も口)、ADR 0112 決定3・ADR 0254 決定2・ADR 0315 決定1・
-  ADR 0342 決定6(前提の持ち主は本 ADR 決定1)。
+  ADR 0342 決定6・ADR 0343 決定2(前提の持ち主は本 ADR 決定1。ADR 0344 決定3 の閉じ直しは記録から導く冪等な step で、決定1 を既に満たす)。
 - GLOSSARY.md の Slot-release tree rule と branch discipline の項。
 - 実装は1 slice、#2889 のコメントが spec。step の分類で見えた範囲外の2形(再起動を跨ぐ `quarantineContainment` の記録の門、
   `settleAndReclaim` の `record` が門より前に走る形)は別 issue。
