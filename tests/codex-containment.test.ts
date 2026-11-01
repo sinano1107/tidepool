@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
@@ -9,6 +9,8 @@ import {
   CODEX_PROMPT_MARKER,
   type CodexCapabilityObservation,
   checkCodexCapability,
+  closedSkillsConfig,
+  codexWorkspaceContainment,
   createCodexCapabilityCheck,
   enabledSkills,
   listedSkillPaths,
@@ -17,7 +19,6 @@ import {
   observedSkills,
   observedWorkerPrompts,
   resolveCodexExecutable,
-  translateCodexSkills,
 } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { ProcessContainers } from "../src/process-container.js";
@@ -29,6 +30,7 @@ import {
   emptySkillsList,
   FakeClock,
   FakeContainerRuntime,
+  fakeAppServerCall,
   recordingSpawn,
   requestedSkillsListCwd,
   skillsListAnswer,
@@ -472,90 +474,134 @@ it("盤面所有の config.toml が disable した user skill も、列挙は en
 });
 
 it("列挙の全部を閉じた設定を当てた skills/list の応答から、まだ有効と報告された skill を名前と path で拾う —— `[]` の agent・回答時の再検査・適合試験の形(ADR 0259 決定3 / ADR 0337 決定3)", () => {
-  const all = new Set(listedSkillPaths(codexSkillsList(), FIXTURE_CWDS));
-  expect(enabledSkills(codexSkillsList("closed"), FIXTURE_CWDS, all)).toEqual([]);
-  expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS, all)).toEqual([
+  expect(enabledSkills(codexSkillsList("closed"), FIXTURE_CWDS, new Set())).toEqual([]);
+  expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS, new Set())).toEqual([
     "flat (/board/fixture/ws/B/.agents/skills/flat/SKILL.md)",
   ]);
-  expect(() => enabledSkills({}, FIXTURE_CWDS, all)).toThrow();
+  expect(() => enabledSkills({}, FIXTURE_CWDS, new Set())).toThrow();
 });
 
-it("封じ込めの述語は盤面が閉じた path だけを問う —— 閉じた path が有効なら名指し、許した path が有効なのは不成立にしない(ADR 0337 決定3)", () => {
+it("封じ込めの述語は盤面が許した path の外だけを問う —— 許した path が有効なのは不成立にしない(ADR 0337 決定3)", () => {
   const flat = "/board/fixture/ws/B/.agents/skills/flat/SKILL.md";
-  const others = new Set(listedSkillPaths(codexSkillsList(), FIXTURE_CWDS).filter((path) => path !== flat));
-  expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS, others)).toEqual([]);
-  expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS, new Set([flat]))).toEqual([`flat (${flat})`]);
+  expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS, new Set([flat]))).toEqual([]);
+  expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS, new Set(["/board/fixture/ws/B/.agents/skills/pack/inner/SKILL.md"]))).toEqual([`flat (${flat})`]);
 });
 
-// 合成の `skills/list` の result(採ったものではない)。翻訳の規則が分ける形を1つずつ置く: 入れ子・checkout の中の link の実体・
-// 外を指す link・`.agents/skills` 自体が外への link(返る path は checkout の下、実体は外 —— #2816 の教訓)・解決できない path・
-// 親 repo の `repo`・`user`・同名の `repo` と `system`・`repo` の中の `name` 重複・知らない scope。flat は列挙で `enabled: false`
-// (盤面所有の config.toml の disable の形、#893)、skill-creator も同じ。
-const TRANSLATION_WS = "/board/fixture/ws/T";
-const translationList = () =>
-  JSON.parse(readFileSync(new URL("fixtures/codex-skills-list-translation.json", import.meta.url), "utf8")) as {
-    data: Array<{ cwd: string; skills: Array<{ name: string; path: string; scope?: string; enabled: boolean }> }>;
+// 合成の `skills/list` の result(採ったものではない)を実物の木に置いて翻訳する。規則が分ける形を1つずつ置く: 入れ子・checkout の中の
+// link の実体(Codex は実体の path で返す)・checkout の中を指す skill dir の link(alias、返る綴りのまま記録する)・外を指す link・外を指す
+// skill dir の link(返る path は checkout の下、実体は外 —— #2816 の教訓)・解決できない path・親 repo の `repo`・`user`・同名の `repo` と
+// `system`・`repo` の中の `name` 重複・知らない scope。flat は列挙で `enabled: false`(盤面所有の config.toml の disable の形、#893)。
+type SkillsListResult = { data: Array<{ cwd: string; skills: Array<{ name: string; path: string; scope?: string; enabled: boolean }> }> };
+async function translationTree() {
+  const root = realpathSync(await tempDir("tidepool-codex-translation-"));
+  const ws = join(root, "ws/T");
+  const skill = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "");
   };
-const skillPath = (name: string) => `${TRANSLATION_WS}/.agents/skills/${name}/SKILL.md`;
-const SYSTEM = "/board/fixture/codex-home/skills/.system";
-/** 盤面の realpath の代わり: `.agents/skills/via-dir-link` は外の実体へ解け、gone は解けない。他は返った綴りのまま。 */
-const translationRealpath = (path: string) => {
-  if (path === skillPath("via-dir-link")) return "/board/fixture/elsewhere/skills/via-dir-link/SKILL.md";
-  if (path === skillPath("gone")) throw new Error("ENOENT");
-  return path;
-};
-const translate = (allowlist: string[], observed?: unknown) =>
-  translateCodexSkills({ allowlist, listed: translationList(), workspace: TRANSLATION_WS, observed, realpath: translationRealpath });
-const ALL_TRANSLATION_PATHS = translationList().data[0]!.skills.map((skill) => skill.path);
-const except = (...open: string[]) => ALL_TRANSLATION_PATHS.filter((path) => !open.includes(path));
+  for (const dir of ["flat", "pack/inner", "shared", "dup-a", "dup-b"]) skill(join(ws, ".agents/skills", dir));
+  for (const dir of ["ws/T/vendor/linked", "ws/T/real-alias", "elsewhere/outside-link", "elsewhere/via-dir-link", "ws/.agents/skills/ancestor"]) skill(join(root, dir));
+  symlinkSync("../../real-alias", join(ws, ".agents/skills/alias"));
+  symlinkSync(join(root, "elsewhere/via-dir-link"), join(ws, ".agents/skills/via-dir-link"));
+  const listed = JSON.parse(
+    readFileSync(new URL("fixtures/codex-skills-list-translation.json", import.meta.url), "utf8").replaceAll("/board/fixture", root),
+  ) as SkillsListResult;
+  const path = (name: string) => listed.data[0]!.skills.find((s) => s.name === name)!.path;
+  return { ws, listed, path, all: listed.data[0]!.skills.map((s) => s.path) };
+}
 
-it("Codex の翻訳は scope と盤面の realpath で2集合を正に分け、checkout の外・user・知らない scope・name 重複はどちらにも入れない —— 列挙の enabled は見ない(ADR 0335 決定5 / ADR 0337 決定2)", () => {
-  expect(translate(["*"])).toEqual({
-    workspace: ["flat", "inner", "linked", "shared"],
+/** 閉じた設定を正直に当てる観測: 閉じた path を無効、それ以外を有効と答える。 */
+function honestObservation(listed: SkillsListResult, closed: ReadonlySet<string>): SkillsListResult {
+  const observed = structuredClone(listed);
+  for (const skill of observed.data[0]!.skills) skill.enabled = !closed.has(skill.path);
+  return observed;
+}
+
+/** 列挙には `listed`、観測には `observe(閉じた path)` を答える app-server で、Codex の (codex, workspace) の組の検査を撃つ。 */
+function contain(ws: string, listed: SkillsListResult, allowlist: string[], observe = (closed: ReadonlySet<string>) => honestObservation(listed, closed)) {
+  const call = fakeAppServerCall((args) => {
+    if (!args.includes("--strict-config")) return listed;
+    const line = args.find((arg) => arg.startsWith("skills.config="))!;
+    return observe(new Set([...line.matchAll(/path=("(?:[^"\\]|\\.)*")/g)].map((match) => JSON.parse(match[1]!) as string)));
+  }).call;
+  return codexWorkspaceContainment({ call, executable: "/opt/codex", env: {}, workspace: ws, allowlist, config: (translation) => [closedSkillsConfig(translation.deny)] });
+}
+
+it("Codex の翻訳は scope と盤面の realpath で2集合を正に分け、checkout の外・user・知らない scope・name 重複はどちらにも入れない —— 列挙の enabled は見ず、path は Codex が返した綴りで記録する(ADR 0335 決定5 / ADR 0337 決定2)", async () => {
+  const tree = await translationTree();
+  const { translation, capability } = await contain(tree.ws, tree.listed, ["*"]);
+  const skillCreator = tree.listed.data[0]!.skills.find((s) => s.scope === "system" && s.name === "skill-creator")!.path;
+  const shared = tree.listed.data[0]!.skills.find((s) => s.scope === "repo" && s.name === "shared")!.path;
+  const open = [tree.path("flat"), tree.path("inner"), tree.path("linked"), tree.path("alias"), shared, skillCreator];
+
+  expect(capability).toEqual({ available: true });
+  expect(translation).toEqual({
+    workspace: ["flat", "inner", "linked", "alias", "shared"],
     // 同名は checkout 側が勝ち、同梱の shared は host から外れる
     host: ["skill-creator"],
-    permitted: ["flat", "inner", "linked", "shared", "skill-creator"],
-    paths: {
-      flat: skillPath("flat"),
-      inner: `${TRANSLATION_WS}/.agents/skills/pack/inner/SKILL.md`,
-      linked: `${TRANSLATION_WS}/vendor/linked/SKILL.md`,
-      shared: skillPath("shared"),
-      "skill-creator": `${SYSTEM}/skill-creator/SKILL.md`,
-    },
-    deny: except(skillPath("flat"), `${TRANSLATION_WS}/.agents/skills/pack/inner/SKILL.md`, `${TRANSLATION_WS}/vendor/linked/SKILL.md`, skillPath("shared"), `${SYSTEM}/skill-creator/SKILL.md`),
+    permitted: ["flat", "inner", "linked", "alias", "shared", "skill-creator"],
+    // alias は実体(real-alias)でなく worker が見る綴り
+    paths: { flat: open[0], inner: open[1], linked: open[2], alias: join(tree.ws, ".agents/skills/alias/SKILL.md"), shared, "skill-creator": skillCreator },
+    deny: tree.all.filter((path) => !open.includes(path)),
   });
 });
 
+it(".agents/skills 自体が checkout の外への link なら、返る path が checkout の下でも運ぶ集合に入れない(ADR 0335 決定1 / #2816)", async () => {
+  const root = realpathSync(await tempDir("tidepool-codex-skills-dir-link-"));
+  const ws = join(root, "ws");
+  mkdirSync(join(root, "elsewhere/skills/x"), { recursive: true });
+  writeFileSync(join(root, "elsewhere/skills/x/SKILL.md"), "");
+  mkdirSync(join(ws, ".agents"), { recursive: true });
+  symlinkSync(join(root, "elsewhere/skills"), join(ws, ".agents/skills"));
+  const listed = { data: [{ cwd: ws, skills: [{ name: "x", path: join(ws, ".agents/skills/x/SKILL.md"), scope: "repo", enabled: true }] }] };
+
+  expect((await contain(ws, listed, ["*"])).translation).toMatchObject({ workspace: [], permitted: [], deny: [join(ws, ".agents/skills/x/SKILL.md")] });
+});
+
 it.each([
-  ["@workspace", ["@workspace"], ["flat", "inner", "linked", "shared"]],
+  ["@workspace", ["@workspace"], ["flat", "inner", "linked", "alias", "shared"]],
   ["@host", ["@host"], ["skill-creator"]],
   ["名前(どちらの集合にも無い名前は開かない)", ["flat", "home-skill", "ancestor", "outside-link", "via-dir-link", "gone", "dupname", "odd"], ["flat"]],
   ["同梱の同名", ["shared"], ["shared"]],
   ["名前:*", ["pack:*"], []],
   ["[]", [], []],
-])("allowlist の entry は Claude と同じ語彙で2集合の中だけを開く(%s)(ADR 0335 決定1 / ADR 0337 決定2)", (_, allowlist, permitted) => {
-  const translation = translate(allowlist);
+])("allowlist の entry は Claude と同じ語彙で2集合の中だけを開き、`[]` でも2集合は列挙から埋まる(%s)(ADR 0335 決定1 / ADR 0337 決定2)", async (_, allowlist, permitted) => {
+  const tree = await translationTree();
+  const { translation } = await contain(tree.ws, tree.listed, allowlist);
   expect(translation.permitted).toEqual(permitted);
   expect(Object.keys(translation.paths)).toEqual(permitted);
-  expect(translation.deny).toEqual(except(...Object.values(translation.paths)));
-  // `[]` でも2集合は列挙から埋まる
-  expect({ workspace: translation.workspace, host: translation.host }).toEqual({ workspace: ["flat", "inner", "linked", "shared"], host: ["skill-creator"] });
+  expect(translation.deny).toEqual(tree.all.filter((path) => !Object.values(translation.paths).includes(path)));
+  expect({ workspace: translation.workspace, host: translation.host }).toEqual({ workspace: ["flat", "inner", "linked", "alias", "shared"], host: ["skill-creator"] });
 });
 
-it("観測後の許可は解決 ∩ 観測で有効と答えた集合で、観測で無効だった許可候補は deny に戻る(ADR 0337 決定2)", () => {
-  const observed = translationList();
-  for (const skill of observed.data[0]!.skills) skill.enabled = skill.path !== skillPath("flat") && skill.name !== "dupname";
-  const translation = translate(["@workspace"], observed);
-  expect(translation.permitted).toEqual(["inner", "linked", "shared"]);
-  expect(translation.paths).not.toHaveProperty("flat");
-  expect(translation.deny).toContain(skillPath("flat"));
-  expect(translation.workspace).toEqual(["flat", "inner", "linked", "shared"]);
+it("観測後の許可は解決 ∩ 観測で有効と答えた集合で、観測で無効だった許可候補は deny に戻る(ADR 0337 決定2)", async () => {
+  const tree = await translationTree();
+  const { translation, capability } = await contain(tree.ws, tree.listed, ["@workspace"], (closed) => {
+    const observed = honestObservation(tree.listed, closed);
+    observed.data[0]!.skills.find((s) => s.name === "flat")!.enabled = false;
+    return observed;
+  });
+  expect(capability).toEqual({ available: true });
+  expect(translation.permitted).toEqual(["inner", "linked", "alias", "shared"]);
+  expect(translation.deny).toContain(tree.path("flat"));
+  expect(translation.workspace).toEqual(["flat", "inner", "linked", "alias", "shared"]);
 });
 
-it("scope の無い skills/list の応答は parse 失敗として投げる —— 版の変化で scope を読めない状態を通さない(ADR 0259 決定6)", () => {
-  const listed = translationList();
-  delete listed.data[0]!.skills[0]!.scope;
-  expect(() => translateCodexSkills({ allowlist: ["*"], listed, workspace: TRANSLATION_WS, realpath: translationRealpath })).toThrow();
+it("観測にだけ現れた許していない skill が有効なら、閉じたものとして不成立にする —— 列挙と観測の間に現れた path も fail closed(ADR 0337 決定3)", async () => {
+  const tree = await translationTree();
+  const late = join(tree.ws, ".agents/skills/late/SKILL.md");
+  const { capability } = await contain(tree.ws, tree.listed, ["@workspace"], (closed) => {
+    const observed = honestObservation(tree.listed, closed);
+    observed.data[0]!.skills.push({ name: "late", path: late, scope: "repo", enabled: true });
+    return observed;
+  });
+  expect(capability).toEqual({ available: false, reason: expect.stringContaining(`Codex still reports these skills enabled: late (${late}).`) });
+});
+
+it("scope の無い skills/list の応答は parse 失敗として投げる —— 版の変化で scope を読めない状態を通さない(ADR 0259 決定6)", async () => {
+  const tree = await translationTree();
+  delete tree.listed.data[0]!.skills[0]!.scope;
+  await expect(contain(tree.ws, tree.listed, ["*"])).rejects.toThrow();
 });
 
 it.each([

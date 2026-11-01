@@ -484,13 +484,7 @@ describe("CodexWorker (ADR 0098)", () => {
       advisor: null,
       harness: "codex",
       cli_version: CLI_VERSION,
-      // ADR 0337 決定2: `skills: []` の agent は何も許さないが、2列は列挙から埋まる(fixture B の repo の path は checkout の外なので運ぶ集合は空)
-      skills: {
-        workspace: [],
-        host: ["imagegen", "openai-docs", "plugin-creator", "review-agent", "skill-creator", "skill-installer"],
-        permitted: [],
-        paths: {},
-      },
+      // skills の3列と paths は下の ADR 0337 決定2 のテストが固定する
     });
   });
 
@@ -728,10 +722,10 @@ describe("CodexWorker (ADR 0098)", () => {
       registerTask(db, { type, assignee: "codex-agent", workspace: "work", title: type, purpose: "p", completion_criteria: "c" }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
     const withHost = await allowlistFixture(["@host"]);
     await withHost.start(value(withHost.db));
-    const row = `${JSON.stringify(join(withHost.codexHome, "skills", ".system"))}="read"`;
+    const row = `${JSON.stringify(join(realpathSync(withHost.codexHome), "skills", ".system"))}="read"`;
     expect(filesystem(withHost.process.calls[0]!.args, profile)).toContain(row);
     expect(withHost.appServer[1]!.spec.args.join("\n")).toContain(row);
-    expect(filesystem(withHost.process.calls[0]!.args, profile)).not.toContain(`${JSON.stringify(withHost.codexHome)}=`);
+    expect(filesystem(withHost.process.calls[0]!.args, profile)).not.toContain(`${JSON.stringify(realpathSync(withHost.codexHome))}=`);
 
     const withoutHost = await allowlistFixture(["@workspace"]);
     await withoutHost.start(value(withoutHost.db));

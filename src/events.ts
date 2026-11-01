@@ -403,7 +403,7 @@ export type EventPayload =
       /** ADR 0325 決定2 / ADR 0335 決定3: the skills the workspace checkout carries (dirs, and links to a dir inside the checkout), the
        *  effective harness-bundled set (`@host`: the bundled set minus every checkout entry name) and the names the board permitted —— the
        *  judge splits what the worker saw into workspace / host by the first two. ADR 0337 決定2: Codex fills the same three from its own
-       *  `skills/list` scopes and adds `paths` (permitted name → SKILL.md path) for the Episode projection; Claude records and Codex records
+       *  `skills/list` scopes and adds `paths` (permitted name → SKILL.md path as Codex listed it) for the Episode projection; Claude records and Codex records
        *  written before it have no `paths`, read as empty. */
       skills: { workspace: string[]; host: string[]; permitted: string[]; paths?: Record<string, string> };
     }

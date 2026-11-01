@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { PROVIDER_VALUES } from "../src/provider.js";
 import {
   assertValidAgentDefinition,
@@ -31,7 +30,7 @@ it("OpenAI / Codex の正準経路に無い advisor は登録時と pickup 時�
 });
 
 // ADR 0337 決定1: skill の提供は経路の能力ではない —— 非空の allowlist を持つ agent も openai で、省略なら Provider 全部に
-// advisor なしで展開され、どちらもそのまま門を通る。組み込み agent(`@workspace`)も Codex に乗る。
+// advisor なしで展開され、どちらもそのまま門を通る(組み込み agent の展開は tests/built-in-agent.test.ts)。
 it.each([
   ["openai", "provider: openai\n", [{ name: "openai", advisor: false }]],
   ["省略", "", PROVIDER_VALUES.map((name) => ({ name, advisor: false }))],
@@ -42,7 +41,6 @@ it.each([
   const registry = loadRegistry(dir, "purely-local");
   expect(registry.agents.deckhand!.provider).toEqual(entries);
   expect(() => assertValidAgentDefinition("deckhand", registry.agents.deckhand!, seedTierNames)).not.toThrow();
-  expect(registry.agents[DEFAULT_AUDITOR_NAME]!.provider).toEqual(PROVIDER_VALUES.map((name) => ({ name, advisor: false })));
 });
 
 it("単一文字列の provider は advisor なしの長さ1 entry(ADR 0116 決定2)", () => {

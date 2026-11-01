@@ -211,7 +211,9 @@ const followedSkill = (position: string) =>
     position,
     // 2.1.286 の実測: subagent の呼び出しの本文は親の session の stream に出ない
     text:
-      "the skill's text as the CLI the worker ran in gave it to the worker when it invoked the skill; null when the session's record could not " +
+      // ADR 0337 決定4: Codex では本文は注入でなく worker が読んだ文面なので、Harness に依らない言い方にする
+      "the skill's text as the worker received it when it used the skill (what its CLI supplied, or what it read from the skill's file); " +
+      "null when the session's record could not " +
       "be read, or when a subagent invoked the skill — that text never reaches the session's record",
   } satisfies Record<keyof FollowedSkill, string>)}`;
 

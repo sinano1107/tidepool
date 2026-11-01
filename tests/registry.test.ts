@@ -289,7 +289,6 @@ describe("loadRegistry", () => {
     ]);
   });
 
-  // ADR 0116 決定1: 省略の展開は agent の skills 宣言を読む —— parse が skills を渡す
   it("frontmatter の provider は entry の配列でもよく、advisor は entry ごとに書く(ADR 0116 決定2)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider:\n  - name: anthropic\n    advisor: true\n  - openai\n---\nYou are Deckhand.\n`,

@@ -6,6 +6,7 @@
         { "name": "flat", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/flat/SKILL.md", "scope": "repo", "enabled": false },
         { "name": "inner", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/pack/inner/SKILL.md", "scope": "repo", "enabled": true },
         { "name": "linked", "description": "d", "path": "/board/fixture/ws/T/vendor/linked/SKILL.md", "scope": "repo", "enabled": true },
+        { "name": "alias", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/alias/SKILL.md", "scope": "repo", "enabled": true },
         { "name": "outside-link", "description": "d", "path": "/board/fixture/elsewhere/outside-link/SKILL.md", "scope": "repo", "enabled": true },
         { "name": "via-dir-link", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/via-dir-link/SKILL.md", "scope": "repo", "enabled": true },
         { "name": "gone", "description": "d", "path": "/board/fixture/ws/T/.agents/skills/gone/SKILL.md", "scope": "repo", "enabled": true },

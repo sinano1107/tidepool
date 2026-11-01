@@ -488,13 +488,14 @@ export function openDb(path: string): Db {
       -- 欠測統計3値 + 未知の内訳(JSON)。内訳は可変キーの集計なので1列。
       lines                   TEXT NOT NULL,
       unrecognized_format     INTEGER NOT NULL DEFAULT 0 CHECK (unrecognized_format IN (0, 1)),
-      -- worker が見た skill の集合(JSON の名前の列。Claude は init 行、Codex は空 —— ADR 0325 決定2)
+      -- worker が見た skill の集合(JSON の名前の列。Claude は init 行 —— ADR 0325 決定2、Codex は spawn 記録の permitted —— ADR 0337 決定4)
       skills_seen             TEXT NOT NULL DEFAULT '[]',
       UNIQUE (worker_spawned_event_id, extractor_version)
     );
 
-    -- skill の呼び出し1回 = 1行(ADR 0325 決定3)。本文は写さず、本文を渡した合成 user 行を参照する。
-    -- transcript_uuid が null = その行が stream に無い呼び出し(subagent の呼び出しなど)。
+    -- skill の呼び出し1回 = 1行(ADR 0325 決定3)。本文は写さず、本文を持つ行を参照する —— Claude は本文を渡した合成 user 行の uuid、
+    -- Codex は許した SKILL.md を読んだ command_execution の完了行の item id(ADR 0337 決定4)。
+    -- transcript_uuid が null = その行が stream に無い呼び出し(Claude の subagent の呼び出しなど)。
     CREATE TABLE IF NOT EXISTS episode_skill_calls (
       episode_id      INTEGER NOT NULL REFERENCES episodes(id),
       seq             INTEGER NOT NULL,

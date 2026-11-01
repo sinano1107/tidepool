@@ -470,6 +470,28 @@ it("providerAuth は anthropic だけの registry では openai に組み込み�
   expect(providerAuth?.(["openai"])).toEqual(["fugu", "suzumedai"]);
 });
 
+// #683 の再発の釘: 組み込みは省略の展開で openai にも乗る(ADR 0337 決定1)ので、実 registry の resolver は codex に常に誰かを返す。
+// codex を入れていない盤面は Codex のログインも無いので、scheduler が openai を選ばないのと同じ資格情報の不在で起動時の検査も飛ばす
+it("codex のログインが無い盤面は、実 registry の resolver が組み込みを codex に返しても、起動時に codex の Harness 検査で question を立てない(#683 / ADR 0116 決定4)", async () => {
+  const options = await buildOptions({ ...composition(), registryDir: await makeRegistry(), workspaceName: "tidepool" });
+  const checked: string[] = [];
+  const t = await bootTidepool({
+    quarantineResolvers: options.quarantineResolvers,
+    codexHome: await tempDir("tidepool-codex-home-without-login-"),
+    harnessContainment: async (harness) => {
+      checked.push(harness);
+      return harness === "codex" ? { available: false, reason: "codex was not found on PATH" } : { available: true };
+    },
+  });
+  try {
+    expect(options.quarantineResolvers!.harnessContainment!(["codex"])).not.toEqual([]);
+    expect(checked).toEqual(["claude-code"]);
+    expect(await questions(t)).toEqual([]);
+  } finally {
+    await t.stop();
+  }
+});
+
 it("codex の Harness の封じ込め能力の検査は、Codex 自身の preflight に組まれる(ADR 0259 決定4)", async () => {
   const registryDir = await makeRegistry();
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool" });

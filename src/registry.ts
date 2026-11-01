@@ -354,13 +354,9 @@ export function assertValidAgentDefinition(
         `(and ${Object.keys(providerEntrySchema.shape).join(" / ")} inside a provider entry)`,
     );
   }
-  // ADR 0116 決定1
+  // ADR 0116 決定1(省略は Provider 全部に展開されるので、空になるのは書かれた空の列だけ —— ADR 0337 決定1)
   if (entries.length === 0) {
-    throw new InvalidAgentDefinitionError(
-      agentName,
-      "no provider entry is left — a written empty list, or an omitted provider whose declaration no canonical " +
-        "route satisfies, leaves no route this agent could ever run on",
-    );
+    throw new InvalidAgentDefinitionError(agentName, "no provider entry is left — a written empty list leaves no route this agent could ever run on");
   }
   // ADR 0110 決定1 / ADR 0200 決定2
   if (tier !== undefined && !tiers.includes(tier)) {

@@ -157,8 +157,6 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
           { name: "anthropic", advisor: true },
           { name: "openai", advisor: false },
         ],
-        // openai の正準経路は v1 で skill を提供しないので、その entry を持つ定義は
-        // 空の allowlist でなければ成立しない(ADR 0098 の検査も entry 単位)
         skills: [],
       },
     });

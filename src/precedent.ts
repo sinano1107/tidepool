@@ -419,7 +419,9 @@ function readCodexLines(transcriptLines: string[], spawned: Extract<EventPayload
     };
     actions.push(action);
     bindEventId(reading, action, (item.result as { content?: unknown } | null)?.content, id);
-    // ADR 0337 決定4: 従った skill は許した path を command に含む完了・exit 0 の command_execution —— 結ぶ鍵は記録の path だけ
+    // ADR 0337 決定4: 従った skill は許した path を command に含む完了・exit 0 の command_execution —— 結ぶ鍵は記録の path だけ。
+    // 記録は Codex が列挙した絶対 path の綴りで、worker は prompt のその綴りのまま読む(#2689 の実測)ので workspace 相対の綴りは照合しない
+    // (相対の綴りは checkout の実体の path を要るが、投影の入力の記録はそれを持たない)
     if (itemType === "command_execution" && item.status === "completed" && item.exit_code === 0 && typeof item.command === "string") {
       const command = item.command;
       for (const [name, path] of paths) {
