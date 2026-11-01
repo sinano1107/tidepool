@@ -8,7 +8,7 @@ import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
-import { acceptTeardownQuarantine, markTeardown, runTeardown, sessionInTeardown, type TeardownAction, type TeardownDeps, teardownStep } from "../src/teardown.js";
+import { acceptTeardownQuarantine, type FailedTeardownCheck, markTeardown, runTeardown, sessionInTeardown, type TeardownAction, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
@@ -58,14 +58,14 @@ function board({ hold = false, workspace }: { hold?: boolean; workspace?: Worksp
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question").map((q) => q.title);
 
 /** 落ちた後始末の question への確認回答(受理の検査は `acceptTeardownQuarantine`)。 */
-function answer(b: Board) {
+function answer(b: Board, teardownQuarantine: FailedTeardownCheck = (taskId) => acceptTeardownQuarantine(b.deps, taskId)) {
   const question = getTask(b.db, openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!.id)!;
   return submitAnswer(
     {
       db: b.db,
       pollNow() {},
       landing: unusedLanding,
-      quarantineChecks: quarantineChecks({ db: b.db, teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(b.deps, taskId) }),
+      quarantineChecks: quarantineChecks({ db: b.db, teardownQuarantine }),
     },
     question,
     ["repaired by hand"],
@@ -757,6 +757,155 @@ describe("受理は残りが無くなるまで撃ってから通す(ADR 0112 決
     expect(b.slot.currentTaskId).toBeNull();
     expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
   }, GIT_FIXTURE_TEST_TIMEOUT);
+});
+
+describe("受理が証明するのは、投げた step の再実行が回答を書く瞬間まで投げなかったこと(ADR 0343)", () => {
+  /** 上限到達の exit の書く step が投げて止まった session。容器は空かないので、受理の撃ち直しが通っても枠は握ったまま ——
+   *  受理の後に投げた手も落ちた後始末になる(枠が空いていれば `fail` の門で question も残りも立たない)。 */
+  function heldBehindExitStep() {
+    const b = board({ hold: true });
+    const steps = writeSteps();
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: true, writes: steps.writes });
+    expectHeld(b);
+    return { b, steps };
+  }
+
+  /** 同じ session に遅れて届く、Promise 分類の exit の書く step(直っていないので投げる)。 */
+  function lateExit(b: Board) {
+    const late = writeSteps();
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: Promise.resolve(false), writes: late.writes });
+    return late;
+  }
+
+  /** 受理の残りが空になって返った後、`submitAnswer` が再開する前に `between` を撃つ検査。 */
+  const acceptThen = (b: Board, between: () => unknown): FailedTeardownCheck => async (taskId) => {
+    const confirm = await acceptTeardownQuarantine(b.deps, taskId);
+    await between();
+    return confirm;
+  };
+
+  const expectRefusedAndHeld = async (b: Board, answering: Promise<unknown>, thrown: string) => {
+    const refused = await answering.then(() => undefined, (err: unknown) => err);
+    expect(refused).toBeInstanceOf(DomainError);
+    expect((refused as DomainError).message).toBe(`the teardown for task ${b.task.id} threw again: ${thrown}`);
+    expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)).toBeDefined();
+    expect(boardHalts(b.db)).toEqual([{ kind: "failedTeardown" }]);
+    expect(b.slot.currentTaskId).toBe(b.task.id);
+    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(true);
+  };
+
+  it("受理が返ってから回答の transaction までに Promise 分類の exit の書く step が投げると、回答は拒まれ question は開いたまま枠と残りは保たれる", async () => {
+    const { b, steps } = heldBehindExitStep();
+    steps.broken = false;
+
+    let late!: ReturnType<typeof writeSteps>;
+    const answering = answer(b, acceptThen(b, () => {
+      late = lateExit(b);
+      return settle();
+    }));
+
+    await expectRefusedAndHeld(b, answering, "write step bug");
+    expectHeld(b);
+    expect(late.fired).toEqual(["exit"]);
+  });
+
+  it("確認が残りを見て拒んだ後、次の回答は印を取れて、立った残りを撃ち直して通る", async () => {
+    const { b, steps } = heldBehindExitStep();
+    steps.broken = false;
+    let late!: ReturnType<typeof writeSteps>;
+    await expect(answer(b, acceptThen(b, () => {
+      late = lateExit(b);
+      return settle();
+    }))).rejects.toThrow("threw again");
+
+    late.broken = false;
+    await answer(b);
+
+    expect(late.fired).toEqual(["exit", "temp", "project"]);
+    expect(questions(b.db)).toEqual([]);
+    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
+    b.runtime.fireEmpty(b.task.id);
+    await settle();
+    expect(b.slot.currentTaskId).toBeNull();
+  });
+
+  it("受理が返ってから回答の transaction までに入った2つ目の回答は受理の印で拒まれ、後始末は撃ち直されない", async () => {
+    const { b, steps } = heldBehindExitStep();
+    steps.broken = false;
+
+    // 1つ目が書く前に拒みが確定する —— 閉じた question への拒否と取り違えない
+    await answer(b, acceptThen(b, () => expect(answer(b)).rejects.toThrow("already being re-run")));
+
+    // 2つ目が印を取れば、残りの無い枠で後始末そのものを撃ち直して、容器が空く前に枠を空ける
+    expect(b.slot.currentTaskId).toBe(b.task.id);
+    expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
+    expect(questions(b.db)).toEqual([]);
+  });
+
+  it("回答の transaction の後に Promise 分類の exit の書く step が投げると、新しい question が1枚立つ", async () => {
+    const { b, steps } = heldBehindExitStep();
+    steps.broken = false;
+    const answered = openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!;
+
+    await answer(b);
+    const late = lateExit(b);
+    await settle();
+
+    expectHeld(b);
+    expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!.id).not.toBe(answered.id);
+    expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(true);
+    // ADR 0343 決定1: 通った確認も印を放す —— 残すと新しい question にも答えられない
+    late.broken = false;
+    await answer(b);
+    expect(late.fired).toEqual(["exit", "temp", "project"]);
+    expect(questions(b.db)).toEqual([]);
+  });
+
+  /** 記録の tx が投げた spawn 失敗の session。残りは [記録, 続き] で、続きが受理の外へ `reclaimed().then(runTeardown)` を繋ぐ。
+   *  受理の撃ち直しでは印を置く書き込みは通り、繋いだ後始末の印を消す書き込みだけが投げる。 */
+  function chainThatThrowsAfterTheAcceptance(b: Board) {
+    const repairMark = failTeardownMark(b.db);
+    spawnFailureHandler(b.deps, b.containers)(b.task.id, { error_code: "ENOENT", message: "spawn claude ENOENT" });
+    expectHeld(b);
+    repairMark();
+    b.db.exec(
+      "CREATE TRIGGER fail_clear BEFORE UPDATE OF teardown_started_at ON tasks WHEN NEW.teardown_started_at IS NULL " +
+        "BEGIN SELECT RAISE(ABORT, 'clear teardown failed'); END",
+    );
+    return () => b.db.exec("DROP TRIGGER fail_clear");
+  }
+
+  it("受理の撃ち直しが繋いだ鎖の step が残りの後ろの早期 return の間に投げると、回答は拒まれ question は開いたまま枠と残りは保たれる", async () => {
+    const b = board();
+    const repair = chainThatThrowsAfterTheAcceptance(b);
+    // 残りの後ろの3本目: 撃っても早期 return するが、その await の分だけ受理の返りが鎖より遅れる
+    await runTeardown(b.deps, b.task.id, { ready: () => false });
+
+    await expectRefusedAndHeld(b, answer(b), "clear teardown failed");
+
+    repair();
+    await answer(b);
+    await settle();
+    expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)).toBeUndefined();
+    expect(b.slot.currentTaskId).toBeNull();
+  });
+
+  it("確認から回答の書き込みまで await を挟まない —— 確認の直後に並んだ microtask が読むときには question は閉じている(ADR 0343 決定1)", async () => {
+    const { b, steps } = heldBehindExitStep();
+    steps.broken = false;
+    const question = openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!;
+    const seen: string[] = [];
+
+    await answer(b, async (id) => {
+      const confirm = await acceptTeardownQuarantine(b.deps, id);
+      return () => {
+        confirm();
+        queueMicrotask(() => seen.push(getTask(b.db, question.id)!.status));
+      };
+    });
+
+    expect(seen).toEqual(["done"]);
+  });
 });
 
 describe("exits belong to their original worker session", () => {

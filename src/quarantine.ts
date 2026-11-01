@@ -470,8 +470,10 @@ export const QUARANTINES = [
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
 
 /** 解除の門(ADR 0137 決定5): kind → 受理の直前に撃ち直す検査。不成立なら理由つきで
- *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。 */
-export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null) => Promise<void>>>;
+ *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。
+ *  執行が書き込みより先に commit する検査は確認を返し、回答の書き込みと同じ同期区間で条件を読み直す。
+ *  資源を検証する検査は返さない —— 資源を確かめるだけで書き込みより先に commit する執行が無く、読み直す条件が立たない(ADR 0343 決定1)。 */
+export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null) => Promise<void | (() => void)>>>;
 
 /** kind → 値の集合を agent 名の集合へ写す resolver。合成 root が registry から組む。
  *  無い kind の値は誰も止めない。 */
