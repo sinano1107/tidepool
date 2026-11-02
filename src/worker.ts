@@ -18,16 +18,22 @@ export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, 
   model_swaps?: ModelSwap[];
 };
 
+/** 非同期の出所が1度に解決する exit の事実(ADR 0348 決定4)。 */
+export interface WorkerExitFacts {
+  capInterrupted: boolean;
+  stop?: WorkerExitClassification["stop"];
+}
+
 /** exit の帰結に要る事実の束(ADR 0338 決定1)。盤面はこれが揃ってから1度だけ決める(決定2)。 */
 export interface WorkerExitClassification {
   /** この exit を観測した session の worker_spawned event id。後の pickup については決めない。 */
   workerSpawnedEventId: number;
   /** 読み手がモデルのターンを観測したか。`worker_exited` には書かない(ADR 0338 決定5)。 */
   turnRan: boolean;
-  /** 1 session に1つ: adapter が登録する資源の停止(ADR 0331 決定1、登録は `writes` の中 —— 盤面は撃った後に読む)か、盤面が登録する未登録の行の拒否(ADR 0338 決定4)。 */
+  /** 1 session に1つ: adapter が登録する資源の停止(ADR 0331 決定1、登録は `writes` の中 —— 盤面は撃った後に読む)か、盤面が登録する未登録の行の拒否(ADR 0338 決定4)。非同期の出所からも classification に届く(ADR 0348 決定4)。 */
   stop?: { registered: SessionStoppedByResource } | { refusal: RowRefusal };
-  /** 上限到達による中断か。非同期の分類も値だけを運び、reject しない(ADR 0309 決定4)—— 記録の書き込みは `writes`。 */
-  capInterrupted: boolean | Promise<boolean>;
+  /** 上限到達と停止の事実は1度に解決する(ADR 0348 決定4)。値だけを運び reject しない(ADR 0309 決定4)—— 記録の書き込みは `writes`。 */
+  classification: WorkerExitFacts | Promise<WorkerExitFacts>;
   /** exit の記録を書く step。内容と順序は adapter が持ち(ADR 0338 決定4)、盤面の runner が分類の後に1度ずつ撃つ —— 投げたら受理がその step から撃ち直す(ADR 0342 決定6)。
    *  必須の欄: 決定しない exit(後始末中・枠の主が替わった)でも撃つので、adapter の書き忘れは記録の欠落になる。 */
   writes: TeardownAction[];

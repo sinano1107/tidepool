@@ -2,7 +2,7 @@ import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider, recordProbeBoardCall } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, type CodexAppServerProbeResult, whyRowUnlisted } from "./codex-app-server.js";
+import { type CodexAppServerProbe, type CodexAppServerProbeResult, codexProbeStop, whyRowUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCheck,
   containmentPickupBlocked,
@@ -41,6 +41,7 @@ import {
   questionRefusedTarget,
   refusedTargetQuestion,
   registerQuarantine,
+  registerResourceStop,
   tableRowEffortValue,
   tableRowValue,
 } from "./quarantine.js";
@@ -851,7 +852,8 @@ export function startScheduler(deps: {
           windows: [],
         };
         reportProviderUsage(db, observation);
-        if (result.status === "unauthorized") quarantineCliAuthForProvider(db, provider, now);
+        const stop = codexProbeStop(result);
+        if (stop) registerResourceStop(db, stop.quarantine, stop.value, stop.reason, now);
         return observation;
       }
       // ADR 0184 決定3: 観測のたびに表の openai の行すべてを一覧と照合する —— 選ばれていない行も外れる。

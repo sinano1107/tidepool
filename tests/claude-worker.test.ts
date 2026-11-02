@@ -316,7 +316,7 @@ async function makeWorker(
     transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
     // Claude の分類は解決済みの値で渡る(ADR 0309)ので、Promise を真と読まないよう値で比べる
-    onWorkerExited: (taskId, exit, facts) => { if (facts.capInterrupted === true) watchdog.onWorkerExited(taskId, exit, facts); else fireWrites(facts); },
+    onWorkerExited: (taskId, exit, facts) => { if (!(facts.classification instanceof Promise) && facts.classification.capInterrupted) watchdog.onWorkerExited(taskId, exit, facts); else fireWrites(facts); },
     onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
     enumerateSkills: enumeration.enumerateSkills,
     enumerateHostSkills: bundled.enumerateHostSkills,
@@ -3344,7 +3344,7 @@ describe("ClaudeCodeWorker", () => {
       expect(() => s.f.emitExit(1, null)).not.toThrow();
 
       expect(s.bundles).toHaveLength(1);
-      expect(s.bundles[0]!.capInterrupted).toBe(false);
+      expect(s.bundles[0]!.classification).toEqual({ capInterrupted: false });
       expect(() => s.bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
       expect(listEvents(s.f.db, "task-exit-write-close").filter((e) => e.kind === "worker_exited")).toEqual([]);
       finish(s);
@@ -5034,7 +5034,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("429 の exit 通知は解決済みの中断分類を運ぶ(ADR 0309)", async () => {
     const order: unknown[] = [];
     const { start, processes, emitExit } = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, facts) => { order.push(facts.capInterrupted); fireWrites(facts); },
+      onWorkerExited: (_taskId, _exit, facts) => { order.push((facts.classification as { capInterrupted: boolean }).capInterrupted); fireWrites(facts); },
     });
     start("task-capped-order");
     await vi.waitFor(() => expect(processes).toHaveLength(1));
@@ -5321,7 +5321,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("読み切りまでに届いた 429 も exit 通知の解決済みの中断分類に載る", async () => {
     const order: unknown[] = [];
     const f = await makeWorker({}, {
-      onWorkerExited: (_taskId, _exit, facts) => { order.push(facts.capInterrupted); fireWrites(facts); },
+      onWorkerExited: (_taskId, _exit, facts) => { order.push((facts.classification as { capInterrupted: boolean }).capInterrupted); fireWrites(facts); },
     });
     f.start("task-late-429");
     await vi.waitFor(() => expect(f.calls).toHaveLength(1));

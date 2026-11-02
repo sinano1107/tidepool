@@ -391,7 +391,7 @@ describe("CodexWorker (ADR 0098)", () => {
         kind: "session_stopped_by_resource", quarantine: "workerMcpReachability", value: "codex",
         reason: expect.stringContaining(signature), worker_spawned_event_id: spawned.id,
       } },
-      capInterrupted: false,
+      classification: { capInterrupted: false },
       writes: expect.any(Array),
     }]]);
   });
@@ -1823,17 +1823,84 @@ describe("上限到達による中断は exit の直後に読み直した使用�
 
   /** 最後の行を流して exit させ、盤面側の一撃の順と worker_exited の payload を返す。 */
   async function exitAfter(id: string, usageProbe: CodexAppServerProbe, last: object = turnFailed, code = 1) {
-    const calls: Array<boolean | Promise<boolean>> = [];
-    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.capInterrupted), undefined, { usageProbe });
+    const calls: Array<WorkerExitClassification["classification"]> = [];
+    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.classification), undefined, { usageProbe });
     const value = task(f.db, id);
     await f.start(value);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(last)}\n`);
     f.process.emitExit(code, null);
     expect(calls).toHaveLength(1);
-    const cap = await calls[0];
+    const cap = (await calls[0])!.capInterrupted;
     const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")!.payload as Record<string, unknown>;
-    return { f, calls, cap, exited };
+    return { f, calls: (await Promise.all(calls)).map((fact) => fact.capInterrupted), cap, exited };
   }
+
+  it("exit の unauthorized は解決した Provider 認証の停止を運び、writes を撃って初めて probe の理由で登録する(ADR 0348)", async () => {
+    const reason = "Codex rejected the rate-limit read with HTTP 401";
+    const bundles: WorkerExitClassification[] = [];
+    const probe = vi.fn(async () => ({ status: "unauthorized" as const, provider: "openai" as const, cliVersion: CLI_VERSION, reason }));
+    const f = await fixture(undefined, undefined, undefined, undefined, {
+      exitBoard: (_taskId, _exit, facts) => bundles.push(facts), usageProbe: probe,
+    });
+    const value = task(f.db, "codex-auth-stop");
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
+    f.process.emitExit(1, null);
+
+    const facts = bundles[0]!;
+    expect(facts.turnRan).toBe(false);
+    expect(await facts.classification).toEqual({ capInterrupted: false, stop: { registered: {
+      kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "openai", reason,
+      worker_spawned_event_id: facts.workerSpawnedEventId,
+    } } });
+    expect(openQuarantineValues(f.db, "providerAuth")).toEqual([]);
+    for (const write of facts.writes) write();
+    expect(openQuarantineValues(f.db, "providerAuth")).toEqual(["openai"]);
+    expect(listBoard(f.db).find((candidate) => candidate.question_quarantine_kind === "providerAuth")?.purpose).toContain(reason);
+    expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({ usage_recheck: { result: "unreadable", reason } });
+    expect(probe).toHaveBeenCalledOnce();
+    expect(getProviderUsage(f.db)).toEqual([]);
+  });
+
+  it.each([
+    ["unobservable", async () => ({ status: "unobservable", provider: "openai", cliVersion: CLI_VERSION, reason: "probe timed out" })],
+    ["throw", async () => { throw new Error("probe failed"); }],
+    ["not_full", observed(windowAt("primary", 99))],
+  ] satisfies Array<[string, CodexAppServerProbe]>)("exit の %s は資源の停止を載せず登録もしない", async (_, usageProbe) => {
+    const bundles: WorkerExitClassification[] = [];
+    const f = await fixture(undefined, undefined, undefined, undefined, {
+      exitBoard: (_taskId, _exit, facts) => bundles.push(facts), usageProbe,
+    });
+    const value = task(f.db);
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
+    f.process.emitExit(1, null);
+
+    expect(bundles[0]!.stop).toBeUndefined();
+    expect(await bundles[0]!.classification).toEqual({ capInterrupted: false });
+    for (const write of bundles[0]!.writes) write();
+    expect(openQuarantineValues(f.db, "providerAuth")).toEqual([]);
+    expect(openQuarantineValues(f.db, "tableRow")).toEqual([]);
+  });
+
+  it("required MCP の停止と unauthorized が重なると MCP の停止だけを残す(ADR 0348 決定4)", async () => {
+    const bundles: WorkerExitClassification[] = [];
+    const f = await fixture(undefined, undefined, undefined, undefined, {
+      exitBoard: (_taskId, _exit, facts) => bundles.push(facts),
+      usageProbe: async () => ({ status: "unauthorized", provider: "openai", cliVersion: CLI_VERSION, reason: "HTTP 401" }),
+    });
+    const value = task(f.db);
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
+    f.process.processes[0]!.stderr.write("Failed to initialize session: required MCP servers failed to initialize: tidepool: failed");
+    f.process.emitExit(1, null);
+
+    expect(bundles[0]!.stop).toMatchObject({ registered: { quarantine: "workerMcpReachability", value: "codex" } });
+    expect(await bundles[0]!.classification).toEqual({ capInterrupted: false });
+    for (const write of bundles[0]!.writes) write();
+    expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
+    expect(openQuarantineValues(f.db, "providerAuth")).toEqual([]);
+  });
 
   it("worker_exited の INSERT が落ちても分類の Promise は値で解決し、書く step は束に乗って撃ったときだけ投げる —— step が読む exit には読み直しの結果が入っている(#2822 / ADR 0342 決定6)", async () => {
     const bundles: WorkerExitClassification[] = [];
@@ -1846,7 +1913,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     expect(() => f.process.emitExit(1, null)).not.toThrow();
 
     expect(bundles).toHaveLength(1);
-    await expect(bundles[0]!.capInterrupted).resolves.toBe(false);
+    await expect(bundles[0]!.classification).resolves.toEqual({ capInterrupted: false });
     const exited = () => listEvents(f.db, value.id).filter((event) => event.kind === "worker_exited");
     expect(exited()).toEqual([]);
     expect(() => bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
@@ -1866,7 +1933,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
 
     expect(() => f.process.emitExit(1, null)).not.toThrow();
 
-    expect(bundles[0]!.capInterrupted).toBe(false);
+    expect(bundles[0]!.classification).toEqual({ capInterrupted: false });
     expect(() => bundles[0]!.writes[0]!()).toThrow("worker_exited write failed");
     repair();
     for (const write of bundles[0]!.writes) write();
@@ -1898,8 +1965,8 @@ describe("上限到達による中断は exit の直後に読み直した使用�
   it("probe 保留中に exit を即時通知し、分類は probe の解決で値に解決する(ADR 0309)", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
-    const calls: Array<boolean | Promise<boolean>> = [];
-    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.capInterrupted), undefined, {
+    const calls: Array<WorkerExitClassification["classification"]> = [];
+    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.classification), undefined, {
       usageProbe: async (now) => { await pending; return observed(windowAt("primary", 100))(now); },
     });
     const value = task(f.db, "codex-pending-classification");
@@ -1917,18 +1984,18 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     await new Promise((resolve) => setImmediate(resolve));
     expect(resolved).toBe(false);
     release();
-    expect(await classification).toBe(true);
+    expect(await classification).toEqual({ capInterrupted: true });
     expect(calls).toHaveLength(1);
   });
 
   it("probe 未配線の turn.failed は即時に中断でない分類を渡す", async () => {
     const calls: unknown[] = [];
-    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.capInterrupted));
+    const f = await fixture(undefined, undefined, (_taskId, _exit, facts) => calls.push(facts.classification));
     const value = task(f.db, "codex-no-probe");
     await f.start(value);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
     f.process.emitExit(1, null);
-    expect(calls).toEqual([false]);
+    expect(calls).toEqual([{ capInterrupted: false }]);
   });
 
   it("turn.failed で終わり、読み直した窓のどれかが 100% なら、exit と分類を同じ通知で渡し、worker_exited に満杯の窓だけを残す", async () => {
