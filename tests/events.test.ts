@@ -156,3 +156,11 @@ it("a delayed exit keeps its observation but closes the old session window at th
   expect(events.map((event) => window.inSession(event))).toEqual([false, true, false, false, false]);
   expect(window.exited?.id).toBe(5);
 });
+
+it("遅れて書かれた前の session の exit は次の session の窓に入らない —— 読み手は exit をポインタで引く(ADR 0344 決定5)", () => {
+  const events = taskEvents(WORKER_SPAWNED, { kind: "decision_logged", line: "old" }, WORKER_SPAWNED, { kind: "decision_logged", line: "new" }, exitOf(1));
+  const window = sessionWindow(events, events[2]!);
+
+  expect(events.map((event) => window.inSession(event))).toEqual([false, false, false, true, false]);
+  expect(window.exited).toBeUndefined();
+});

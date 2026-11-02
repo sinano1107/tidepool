@@ -5,6 +5,7 @@ import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "./codex-stream-reader.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, type EventRow, listEventsOfKinds, SESSION_WINDOW_KINDS, sessionWindow } from "./events.js";
+import { quarantineUnclosedSession } from "./failed-teardown.js";
 import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 import type { Harness } from "./registry.js";
 import { parseStreamLine } from "./stream-json.js";
@@ -34,27 +35,31 @@ export function closeSessionActions(
   ];
 }
 
-type RecordCloseOptions = { logDir: string; tmpDir: string; now: Date };
+type RecordCloseOptions = { logDir: string; tmpDir: string; watermark: number; now: Date };
 
 /** 前の盤面が閉じ切らなかった session を閉じる起動時の復旧(ADR 0315 決定1〜5)。対象は `watermark`(起動時点の最大 event id)
- *  以下の spawn だけ —— 受理の門から走るとき、走行中の別の盤面の session に偽の exit を書かない。1件の失敗は記録して流す
- *  —— 盤面 DB の拒否だけは投げて起動を拒む(ADR 0342 決定4)。 */
-export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions & { watermark: number }): void {
+ *  以下の spawn だけ —— 受理の門から走るとき、走行中の別の盤面の session に偽の exit を書かない。盤面 DB の拒否は投げて起動を拒み
+ *  (ADR 0342 決定4)、それ以外の throw は閉じ切らなかった session の行を立てて走査を打ち切り、起動は続く(ADR 0344 決定2)。 */
+export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions): void {
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
-    if (spawned.id > opts.watermark) continue;
+    if (spawned.id > opts.watermark || spawned.task_id === null) continue;
     try {
       closeSpawned(db, events, spawned, opts);
     } catch (err) {
       // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
       if (isBoardDbRefusal(err)) throw err;
-      // transcript が読めない = 記録の dir が後から壊れた印(ADR 0314 決定2)。起動は落とさない
+      // 行は例外の本文だけを持つので、stack は log に残す(後始末の runner の fail と同じ)
       console.error(`[recovery] could not close session ${spawned.id} of task ${spawned.task_id}:`, err);
+      // ADR 0344 決定2: 1原因に session の数だけ回答を求めない —— 残りは直して立て直した次の起動の復旧に任せる
+      quarantineUnclosedSession(db, spawned.id, spawned.task_id, err, opts.now);
+      return;
     }
   }
 }
 
-/** 1つの spawn を記録から閉じ直す(ADR 0344 決定3)。閉じ切らなかった session の受理の、再起動を跨いだ側の検査。投げたら呼び手へ返す。 */
+/** 1つの spawn を記録から閉じ直す(ADR 0344 決定3)。閉じ切らなかった session の受理の、再起動を跨いだ側の検査。投げたら呼び手へ返す。
+ *  ここでの `watermark` は一時領域の削除の門にだけ使う(ADR 0344 決定5)—— 対象は名指しの spawn で、線では選ばない。 */
 export function closeSessionFromRecord(db: Db, spawnId: number, opts: RecordCloseOptions): void {
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   const spawned = events.find((e) => e.id === spawnId);
@@ -78,8 +83,7 @@ function closeSpawned(db: Db, events: EventRow[], spawned: EventRow, opts: Recor
   const project = () => {
     if (transcript && !hasEpisodeOfAnyVersion(db, spawned.id)) projectAndPersist(db, { workerSpawnedEventId: spawned.id, transcriptPath });
   };
-  // 後の spawn があれば窓は既に閉じている —— exit を書くと次の session に重なり、一時領域は後の session のもの
-  if (window.exited || window.hasNextSpawn) {
+  if (window.exited) {
     project();
     return;
   }
@@ -100,7 +104,11 @@ function closeSpawned(db: Db, events: EventRow[], spawned: EventRow, opts: Recor
         output_closed: false,
       },
     }),
-    () => removeTaskTemps(opts.tmpDir, taskId),
+    // ADR 0344 決定5: path は session ごとに記録に無く、task 接頭辞の削除は watermark より後の走っている session の領域も消す。watermark 以下の後の spawn は死んでいるので止めない
+    // shortcut: 飛ばした一時領域は後から消えない —— 閉じ直しは window.exited で削除の前に返り、adapter は自分の path しか消さない。tmp に残骸を観測したら見直す
+    () => {
+      if (!events.some((e) => e.kind === "worker_spawned" && e.task_id === taskId && e.id > opts.watermark)) removeTaskTemps(opts.tmpDir, taskId);
+    },
     project,
   );
   for (const action of actions) action();
@@ -135,7 +143,15 @@ function readStderrTail(path: string): string | null {
 
 function removeTaskTemps(tmpDir: string, taskId: string): void {
   const prefixes = [taskTempPrefix("claude", taskId), taskTempPrefix("codex", taskId)];
-  for (const name of readdirSync(tmpDir)) {
+  // 削除の失敗は log だけで、閉じる手を投げない(adapter の削除の手と同じ、issue #705)—— 投げると行が立ち、閉じ直しは window.exited で削除を撃たないまま受理を通す
+  let names: string[];
+  try {
+    names = readdirSync(tmpDir);
+  } catch (error) {
+    console.error(`[recovery] could not read ${tmpDir}:`, error);
+    return;
+  }
+  for (const name of names) {
     if (!prefixes.some((p) => name.startsWith(p))) continue;
     try {
       rmSync(join(tmpDir, name), { recursive: true, force: true });

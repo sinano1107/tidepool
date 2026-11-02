@@ -1,5 +1,9 @@
 # 閉じた session の stream 由来の欄は1つの読み手から作り、出所は live の pipe か記録済みの transcript、session の窓を記録の上で閉じる位置は1つの規則で読む
 
+**Status 追記: 決定4 の窓は別の spawn を指す `worker_exited` を含まない —— 前の session の exit が次の spawn より後に書かれても次の session の窓に入らない(2026-11-02、issue #2904)。**
+
+**Status 追記: 決定2 の「読めない session は欠測のまま閉じる」は exit の欄の話で、投影が投げれば [ADR 0344](0344-a-session-closing-write-that-throws-is-an-unclosed-session-halt-keyed-by-the-session-not-the-slot-and-boot-recovery-closes-a-session-that-has-a-later-spawn.md) 決定2 の行が立つ(2026-11-02、issue #2904)。**
+
 **Status 追記: 決定1 の「分類(ADR 0309)は呼び手が足す」は ADR 0338 で、読み手の出力のうち帰結に要る事実を呼び手が束にして渡す形になった(2026-11-01、issue #2791)** —— 決定3(帰結は live の呼び手だけが撃つ)は変わらない。
 
 **Status 追記: 決定4 の窓は、同じ task の次の spawn を越えない(2026-11-01、issue #2880)** —— 自分の spawn を指す exit が次の spawn より後に記録されても窓は次の spawn で閉じ、exit の観測自体は元の session に残す。遅れた観測で次の session の判断を前の窓へ入れないため。
