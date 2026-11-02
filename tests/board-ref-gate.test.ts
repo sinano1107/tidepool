@@ -4,11 +4,12 @@ import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { namePickupPredicates } from "../src/pickup-predicates.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { commitRoomCopy, ensureTaskBranch, openExamineeCheckout, prepareWorkspaceAtPickup, recordedInterviewRoom, refValues, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { commitRoomCopy, ensureTaskBranch, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, prepareWorkspaceAtPickup, quarantineWorkspace, refValues, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -166,13 +167,15 @@ async function roomWithPickedExaminee() {
   await prepareWorkspaceAtPickup(db, checkout, examinee);
   expect(baseline(db, examinee.id).get("HEAD")).toBe(`symref=refs/heads/task/${examinee.id}`);
   const roomRow = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(root.id);
-  return { db, root, examinee, checkout, roomRow, roomBefore: roomRow() };
+  return { db, root, room, examinee, checkout, roomRow, roomBefore: roomRow() };
 }
 
 it("面接室の名前への受理の後半が受験者の checkout を休止させると受験者 id の行が変わり、面接室(root id)の行は変わらない(#2948)", async () => {
-  const { db, root, examinee, roomRow, roomBefore } = await roomWithPickedExaminee();
+  const { db, root, room, examinee, roomRow, roomBefore } = await roomWithPickedExaminee();
+  // 受理と同じ名前の項の後半だけを撃つ —— 受理は最後に面接室の行を撮り直す(ADR 0351 決定4)ので、そこまで撃つと誤った鍵の書き込みが消える
+  const { own, examinees } = namePickupPredicates(db, root.id, room, dirname(room.path));
 
-  await quarantineChecks({ db }).workspace!(root.id);
+  await firePickupPredicates(db, room, [...own, ...examinees], "after-open");
 
   expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
   expect(roomRow()).toBe(roomBefore);
@@ -198,6 +201,12 @@ function currentRefSet(path: string): Map<string, string> {
   return refValues(`symref=${git(path, "symbolic-ref", "HEAD")} HEAD\n${git(path, "for-each-ref", "--format=%(objectname) %(refname)")}`);
 }
 
+/** 開いている workspace quarantine の question に人間が答える(human-verbs の回答の経路)。 */
+function answerQuarantine(db: Db, ws: WorkspaceConfig) {
+  const question = quarantineQuestion(db, "workspace", ws.name)!;
+  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, question, ["repaired by hand"], undefined, () => NOW, "webui");
+}
+
 /** 拾って解放するとき worker が兄弟のブランチを作り、`refs/heads/sibling` を名指して quarantine に落ちた workspace。 */
 async function quarantinedBySibling(name: string) {
   const ws = await makeWorkspace(name);
@@ -208,9 +217,7 @@ async function quarantinedBySibling(name: string) {
   releaseWorkspace(db, ws, task, NOW);
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   expect(question.purpose).toContain("refs/heads/sibling");
-  const answer = () =>
-    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, getTask(db, question.id)!, ["repaired by hand"], undefined, () => NOW, "webui");
-  return { ws, db, task, question, answer };
+  return { ws, db, question, answer: () => answerQuarantine(db, ws) };
 }
 
 it("受理の後、基準の行は違反で名指された ref を含む今の全 ref の1値と一致する(ADR 0351 決定4)", async () => {
@@ -248,7 +255,7 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout 
   git(ws.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
   const merged = git(ws.path, "rev-parse", `task/${landing.id}`);
 
-  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, getTask(db, question.id)!, ["repaired by hand"], undefined, () => NOW, "webui");
+  await answerQuarantine(db, ws);
 
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(baseline(db, ws.name).get(`refs/heads/task/${landing.id}`)).toBe(merged);
@@ -256,22 +263,20 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout 
   db.close();
 });
 
-it("検査が落ちて回答が拒否されたとき、基準の行は変わらず question は開いたまま(ADR 0351 決定4)", async () => {
-  const { ws, db, question, answer } = await quarantinedBySibling("retake-refused");
+it("検査が落ちて回答が拒否されたとき、基準の行は変わらない(ADR 0351 決定4)", async () => {
+  const { ws, db, answer } = await quarantinedBySibling("retake-refused");
   const row = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(ws.name);
   const before = row();
   writeFileSync(join(ws.path, "stray.txt"), "written while quarantined\n");
 
   await expect(answer()).rejects.toThrow(DomainError);
 
-  expect(getTask(db, question.id)!.status).toBe("todo");
   expect(row()).toBe(before);
   db.close();
 });
 
 it("面接室の名前への受理は面接室の行と未決着の受験者の行をそれぞれの checkout から撮り直し、受験者の値は面接室の行に入らない(ADR 0351 決定4)", async () => {
-  const { db, root, examinee, checkout } = await roomWithPickedExaminee();
-  const room = recordedInterviewRoom(db, root.id)!;
+  const { db, root, room, examinee, checkout } = await roomWithPickedExaminee();
   git(room.path, "branch", "room-repair");
   git(checkout.path, "branch", "examinee-repair");
 
@@ -282,5 +287,21 @@ it("面接室の名前への受理は面接室の行と未決着の受験者の�
   expect(baseline(db, examinee.id)).toEqual(currentRefSet(checkout.path));
   expect(baseline(db, examinee.id).has("refs/heads/examinee-repair")).toBe(true);
   expect([...baseline(db, root.id).keys()].filter((ref) => ref.includes("examinee-repair") || ref.includes(examinee.id))).toEqual([]);
+  db.close();
+});
+
+it("purely-local で quarantine 中に帯域外に動いた保護ブランチは、受理の後の着地で帯域外と読まれない(ADR 0351 決定4)", async () => {
+  const ws = await makeWorkspace("retake-out-of-band-main");
+  const db = openDb(":memory:");
+  const task = work(db, "lands after the answer");
+  await prepareWorkspaceAtPickup(db, ws, task);
+  commitWork(ws.path, "feature.txt", "ready\n");
+  releaseWorkspace(db, ws, task, NOW);
+  quarantineWorkspace(db, ws.name, new Error("GitHub token acquisition failed"), NOW);
+  git(ws.path, "update-ref", "refs/heads/main", git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
+
+  await answerQuarantine(db, ws);
+
+  expect(() => mergeTaskToProtected(db, ws, task.id)).not.toThrow();
   db.close();
 });

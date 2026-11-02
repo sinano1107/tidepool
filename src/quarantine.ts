@@ -291,6 +291,9 @@ export const QUARANTINES = [
           "Answering confirms the repair — the board re-checks all of the following before " +
           "it accepts the answer, and refuses it if any fails:\n\n" +
           checks.map((check, i) => `${i + 1}. ${check}\n`).join("") +
+          // ADR 0351 決定4: 受理は基準を撮り直す —— 回答は動いた ref の受け入れでもある
+          "\nAccepting the answer also records every ref in the checkout(s) under this name, as they are then, as the board's baseline — " +
+          "refs moved since the board last recorded them are accepted as correct.\n" +
           "\nAny answer text is kept as a repair note.",
         completion_criteria: "the workspace is repaired by hand",
       };
