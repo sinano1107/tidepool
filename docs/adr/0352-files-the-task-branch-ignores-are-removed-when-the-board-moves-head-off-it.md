@@ -23,7 +23,8 @@ ADR 0351 決定5 の pickup の検査)と次の task の完了の門だけが、
    (ADR 0276 決定1): 非対称の理由は「その checkout に、別の branch で tree を読む次の session が居るか」の1点である。
 4. **退避の例外ではない。** ADR 0069 の「唯一の例外」が縛るのは WIP の外へ出られるもので、ignored ファイルは worker 自身の宣言で `add -A` の
    外に居り、消しても WIP に入るはずのものは1つも失わない。退避の後、HEAD を動かす手の中の別の step である。
-5. **再実行の枝(HEAD が既にタスクブランチを離れている)では撃たない。** 1回目の HEAD の移動が消している。ADR 0345 決定3 の dirty 検査は、
+5. **再実行の枝(HEAD が既にタスクブランチを離れている)に別の step は足さない。** 1回目の HEAD の移動が消している。再走する merge back と
+   休止位置の checkout が同じ helper を通って clean を再び撃つのは冪等で、害が無い。ADR 0345 決定3 の dirty 検査は、
    この決定の後は本来の意味(休止後の書き込み)だけを捕まえる。
 
 ## 退けた形
@@ -39,5 +40,6 @@ ADR 0351 決定5 の pickup の検査)と次の task の完了の門だけが、
   ADR 0052 決定7(「クリーンに戻す」に ignored ファイルが入る)。GLOSSARY.md の Slot-release tree rule の項。
 - 実装は1 slice、#2912 のコメントが spec。#2954(pickup の clean 検査)は本 issue が先。
 - `register` モードの workspace(人間の既存 checkout)では、登録前からあった ignored の中身が最初の pickup の手で消える —— ADR 0351 決定1 の線上で、#2842 の材料。
+- 削除は後始末・pickup と同じ同期の git で走り、大きな tree では盤面の event loop を数秒塞ぐ —— 今日の tree rule と同じ性質で、新しい失敗様式ではない。
 - 族の根は #2956(worker が走った checkout を次の session が使うか)。根が乗り物を替えれば本 ADR の機構は不要になるが、決定(宣言したものは
   成果でない)は残る。`.git/info/exclude` の形は #2957。
