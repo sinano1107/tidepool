@@ -22,7 +22,7 @@ watchdog の `WatchRecord` はどれも **task id** で持ち、session 起点�
    `spawnedAfterLatestPickup` は記録の読み手(`spawnOfCurrentPickup`、session の窓)のものとして残す。`Slot` は task id の読み手
    (tick・停止・verb の門)が多いので task id を残し、session id を並べて持つ。
 3. **一撃は自分の session id を運び、adapter は `start` の引数で受け取る。** transcript の失敗・spawn の失敗・pickup の停止の一撃は
-   pickup event id を引数に持つ。adapter は `task_picked_up` を読み直して再構成しない —— id の持ち主は pickup を書いた scheduler で、
+   pickup event id を引数に持ち、exit の事実の束(`WorkerExitClassification`)も同じく運ぶ —— 決定2 の述語は exit にもこの id で答える。adapter は `task_picked_up` を読み直して再構成しない —— id の持ち主は pickup を書いた scheduler で、
    scheduler を通さず adapter を直接走らせる呼び手は自分で与える。`TranscriptFailure` の spawn id は `transcript_failed` event の記録用に残る。
 4. **記録と停止の行の鍵は変えない。** exit・Episode・transcript・`unclosedSession`(ADR 0344 決定1)は spawn event id、`failedTeardown`
    は task id のまま。規則は「盤面の memory(帳簿・枠・`WatchRecord`)は pickup id、記録は spawn id、橋は `spawnOfCurrentPickup`」。
