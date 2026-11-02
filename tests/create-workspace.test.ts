@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -493,10 +493,11 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     ).rejects.toMatchObject({ name: "LiveCheckoutSignalsError", reasons: ["claude_settings_hooks"] });
   });
 
-  // #2935: hooks は通常ファイルのときだけ読む —— FIFO を指す link を開くと門が event loop ごと止まる
+  // #2935: hooks は通常ファイルのときだけ読む —— FIFO を指す link を開くと門が event loop ごと止まり、vitest の timeout は
+  // 発火しない。門は子 process で上限つきで走らせ、止まれば kill されて落ちる
   it("tracked な .claude/settings.json が FIFO を指す symlink なら、門は先を開かずに返り、信号にならない", async () => {
     const registryDir = await makeMainRegistry();
-    const deps = await makeDeps(registryDir);
+    const workspacesBaseDir = await tempDir("tidepool-ws-base-");
     const fifo = join(await tempDir("tidepool-fifo-"), "settings.fifo");
     execFileSync("mkfifo", [fifo]);
     const path = await makeLocalOnlyCheckout();
@@ -504,10 +505,22 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     symlinkSync(fifo, join(path, ".claude", "settings.json"));
     commitAll(path, "settings link");
 
-    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
+    const module = (rel: string) => JSON.stringify(new URL(rel, import.meta.url).href);
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import", "tsx", "--input-type=module", "-e",
+        `const { createWorkspace } = await import(${module("../src/workspace-create.ts")});
+         const { writeUnannounced } = await import(${module("./registry-fixture.ts")});
+         await createWorkspace({ mode: "register", name: "sandbox", path: ${JSON.stringify(path)} },
+           { registry: { dir: ${JSON.stringify(registryDir)}, mode: "purely-local", writeRef: writeUnannounced }, workspacesBaseDir: ${JSON.stringify(workspacesBaseDir)} });`,
+      ],
+      { timeout: 5000, encoding: "utf8" },
+    );
 
+    expect({ signal: child.signal, status: child.status }, child.stderr).toEqual({ signal: null, status: 0 });
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
-  }, 5000);
+  });
 
   it("confirm: true の再送は従来どおり登録する — エントリに confirm は残らない", async () => {
     const registryDir = await makeMainRegistry();

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { lstatSync } from "node:fs";
+import { accessSync, constants, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -580,14 +580,19 @@ function tracked(workspacePath: string, path: string): boolean {
 }
 
 /** 置き場所だけを見る —— `lstat` で link を辿らず、ファイルを開かない(ADR 0346 決定2)。パスに何かあれば種類を問わず在る:
- *  dangling の link も在り、FIFO や `/dev/zero` を指す link でも先を開かないので止まらない(#2935)。ENOENT 以外の失敗(`.claude` が
- *  通常ファイルの ENOTDIR、EACCES)とディレクトリは「読めない」。`hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある ——
+ *  link は先を問わず在り(dangling も)、FIFO や `/dev/zero` を指す link でも先を開かないので止まらない(#2935)。「読めない」は
+ *  ENOENT 以外の `lstat` の失敗(`.claude` が通常ファイルの ENOTDIR、EACCES)、ディレクトリ、読み権限の無い通常ファイル
+ *  (`access` で見る —— 開かない)。`hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある ——
  *  ADR 0293 決定3)。そのときだけ、作業ツリーに無い settings.json を index にあれば在ると読む。人間自身の sparse-checkout が外した
  *  ファイルは無いものとして扱う。 */
 function settingsFileState(workspacePath: string, name: string, hiddenByBoard: boolean): "present" | "unreadable" | undefined {
   const path = `.claude/${name}`;
+  const file = join(workspacePath, path);
   try {
-    return lstatSync(join(workspacePath, path)).isDirectory() ? "unreadable" : "present";
+    const stat = lstatSync(file);
+    if (stat.isDirectory()) return "unreadable";
+    if (stat.isFile()) accessSync(file, constants.R_OK);
+    return "present";
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
     return name === "settings.json" && hiddenByBoard && tracked(workspacePath, path) ? "present" : undefined;

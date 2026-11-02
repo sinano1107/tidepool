@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -423,9 +423,22 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
     });
   });
 
-  /** link の先は開かない —— FIFO は open で、/dev/zero は read で event loop を止める(#2935)。 */
+  /** link の先は開かない —— FIFO は open で、/dev/zero は read で event loop ごと止めるので、vitest の timeout は発火しない。
+   *  判定は子 process で上限つきで走らせ、止まれば kill されて落ちる(#2935)。 */
+  function dispositionInChild(workspace: string): unknown {
+    const module = JSON.stringify(new URL("../src/sandbox.ts", import.meta.url).href);
+    const child = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", `const { workspaceSettingsDisposition } = await import(${module}); console.log(JSON.stringify(workspaceSettingsDisposition(${JSON.stringify(workspace)})));`],
+      { timeout: 5000, encoding: "utf8" },
+    );
+    expect({ signal: child.signal, status: child.status }, child.stderr).toEqual({ signal: null, status: 0 });
+    return JSON.parse(child.stdout);
+  }
+
+  const danglingTarget = () => "../dang.json";
   const LINK_TARGETS: [string, (workspace: string) => string][] = [
-    ["在らない先(dangling)", () => "../dang.json"],
+    ["在らない先(dangling)", danglingTarget],
     ["FIFO", (workspace) => {
       execFileSync("mkfifo", [join(workspace, "f.fifo")]);
       return "../f.fifo";
@@ -433,20 +446,28 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
     ["/dev/zero", () => "/dev/zero"],
   ];
 
-  it.each(LINK_TARGETS)("tracked な settings.json が %s を指す symlink なら、先を開かず隠す", (_case, target) => {
-    withPlaced("settings.json", (file, workspace) => symlinkSync(target(workspace), file), true, (workspace) => {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+  it.each(LINK_TARGETS)("tracked な settings.json が %s を指す symlink なら、先を開かず隠す", (_case, makeTarget) => {
+    withPlaced("settings.json", (file, workspace) => symlinkSync(makeTarget(workspace), file), true, (workspace) => {
+      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
     });
-  }, 2000);
+  });
 
   it.each([
-    ...LINK_TARGETS.map(([target, link]) => [`untracked な settings.json の ${target}`, "settings.json", link] as const),
-    ["settings.local.json の 在らない先(dangling)", "settings.local.json", LINK_TARGETS[0]![1]] as const,
-  ])("%s を指す symlink は、先を開かず存在だけで止まる", (_case, name, target) => {
-    withPlaced(name, (file, workspace) => symlinkSync(target(workspace), file), false, (workspace) => {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
+    ...LINK_TARGETS.map(([label, makeTarget]) => [`untracked な settings.json の ${label}`, "settings.json", makeTarget] as const),
+    ["settings.local.json の 在らない先(dangling)", "settings.local.json", danglingTarget] as const,
+  ])("%s を指す symlink は、先を開かず存在だけで止まる", (_case, name, makeTarget) => {
+    withPlaced(name, (file, workspace) => symlinkSync(makeTarget(workspace), file), false, (workspace) => {
+      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
     });
-  }, 2000);
+  });
+
+  // ADR 0346 決定2「読めないファイルは従来どおり止める」—— 読み権限は access で見て、開かない(#2935)
+  it.skipIf(process.getuid?.() === 0)("tracked でも読み権限の無い通常ファイルの settings.json は隠さず止まる", () => {
+    withSettings("settings.json", {}, true, (workspace) => {
+      chmodSync(join(workspace, ".claude", "settings.json"), 0o000);
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
+    });
+  });
 
   it("組を止める理由は置き場所の語で書き、鍵を列挙しない(claudeWorkspaceContainment)", () => {
     withSettings("settings.local.json", {}, false, (workspace) => {

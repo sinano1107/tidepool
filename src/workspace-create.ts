@@ -686,8 +686,9 @@ function settingsDeclareHooks(path: string): boolean {
  *  `settings.local.json` の検査は `git status` の冗長ではない —— このファイルは
  *  gitignore されるので untracked としても現れない。未追跡の `settings.json` も同じ理由で
  *  独立に要る(issue #686 — ignore されていなければ `uncommitted_changes` と両方立つが、
- *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): 置き場所(tracked か未追跡か)は worker 向けの判定
- *  `workspaceSettingsDisposition` をそのまま使い、中身は門の信号の `settingsDeclareHooks` だけが読む。 */
+ *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): `settings.json` の置き場所(tracked か未追跡か)は worker 向けの判定
+ *  `workspaceSettingsDisposition` をそのまま使い、中身は門の信号の `settingsDeclareHooks` だけが読む。`settings.local.json` は
+ *  独立に、link を辿らない `lstat` で存在だけを見る。 */
 function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
   // --no-optional-locks: 門が人間の生きた作業ツリーの index.lock を取らない
@@ -704,7 +705,7 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
     // 故障)に化け、呼び出し側の入力の問題を盤面のせいにしてしまう
     reasons.push("worktree_unreadable");
   }
-  // link を辿らない —— dangling な link も在る(ADR 0346 決定2、#2935)。`.claude` が通常ファイルの ENOTDIR は従来どおり無い
+  // link を辿らない —— dangling な link も在る(#2935)。`.claude` が通常ファイルの ENOTDIR は従来どおり無い
   try {
     lstatSync(join(path, ".claude", "settings.local.json"));
     reasons.push("claude_settings_local");

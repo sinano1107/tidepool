@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2 の「`settings.local.json` は存在するだけで止める」は、ignored の形(tidepool 自身の `.gitignore` が無視する)には立たなくなる —— 盤面が HEAD を動かす手が pickup の checkout の前にそれを消し([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md))、検査は spawn 時でその後に走る。worker が育てた file は消えて正しく、人間の file は登録の門の信号の提示文で先に報せる(2026-11-02、issue #2912)。**
 
+**Status 追記: 決定2 の存在の判定は link を辿らない —— `.claude/settings*.json` に何か在れば(dangling や FIFO を指す link も)在ると読み、先は開かない。「読めない」は lstat の失敗・ディレクトリ・読み権限の無い通常ファイル(2026-11-03、issue #2935)。**
+
 2026-11-02 の grilling(issue #2846、#2809 のレビューの派生)で決定。#2846 / #2885 の実測(固定版 2.1.286、Lima VM)で、
 `apiKeyHelper` や `env.ANTHROPIC_BASE_URL` だけを持つ commit 済みの `.claude/settings.json` が列挙 ping と worker の CLI process に
 届き、helper がホスト上・sandbox の外で盤面の権限で走り、`env` が worker の資格情報を workspace の宛先へ運んだ。
