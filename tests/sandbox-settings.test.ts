@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
+import { claudeWorkspaceContainment } from "../src/harness-containment.js";
 import {
   buildSandboxSettings,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
@@ -238,7 +239,7 @@ describe("buildSandboxSettings の interview の root の床(ADR 0273 決定2)",
  *  この hook は ADR 0037 の `disableAllHooks: true` と排他だった(実測: 同じ
  *  flag tier の hook も巻き添えで死ぬ)。そこで blanket は外し、workspace 側
  *  hook は tracked project file なら worker checkout から物理排除し、それ以外は
- *  workspaceSettingsDisposition の quarantine へ移る(issue #382)。
+ *  workspaceSettingsDisposition の置き場所の判定で組ごと止まる(issue #382 / ADR 0346 決定2)。
  *  hot-load 経路(worker が settings を書いて次の呼び出しで hook を効かせる)は
  *  ADR 0037 の書き込み2層(sandbox denyWrite + Edit() deny)が既に独立に閉じて
  *  いる。 */
@@ -346,6 +347,20 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
   });
 });
 
+/** `.claude/<name>` を持つ git checkout。`tracked` なら index に載せる(`git add` で足りる —— 盤面の判定は index を見る)。 */
+function withSettings(name: string, body: unknown, tracked: boolean, check: (workspace: string) => void) {
+  const workspace = mkdtempSync(join(tmpdir(), "tidepool-settings-place-"));
+  mkdirSync(join(workspace, ".claude"));
+  writeFileSync(join(workspace, ".claude", name), JSON.stringify(body));
+  spawnSync("git", ["init", "--quiet"], { cwd: workspace });
+  if (tracked) spawnSync("git", ["add", `.claude/${name}`], { cwd: workspace });
+  try {
+    check(workspace);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
 /** ADR 0303 決定2: worker の記録の言語を repo / host の `language` / `outputStyle` に動かさせない。
  *  値1つのキーなので flag tier が丸ごと置き換え(#2454 の実測)、拒否ではなく上書きで閉じる。 */
 describe("Harness の language / outputStyle の固定(ADR 0303 決定2)", () => {
@@ -360,15 +375,54 @@ describe("Harness の language / outputStyle の固定(ADR 0303 決定2)", () =>
     expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
   });
 
-  it("workspace の .claude/settings.json が language / outputStyle を持っていても拒否しない", () => {
-    const workspace = mkdtempSync(join(tmpdir(), "tidepool-prose-keys-"));
-    mkdirSync(join(workspace, ".claude"));
-    writeFileSync(join(workspace, ".claude", "settings.json"), JSON.stringify({ language: "japanese", outputStyle: "Explanatory" }));
-    try {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: false });
-    } finally {
-      rmSync(workspace, { recursive: true, force: true });
-    }
+  it("tracked な .claude/settings.json が language / outputStyle を持っていても拒否せず、隠す", () => {
+    withSettings("settings.json", { language: "japanese", outputStyle: "Explanatory" }, true, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+    });
+  });
+});
+
+/** ADR 0346 決定2: 判定は置き場所だけで、中身は読まない。 */
+describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決定2)", () => {
+  it.each([
+    ["空の {}", {}],
+    ["apiKeyHelper だけ", { apiKeyHelper: "./helper.sh" }],
+    ["env だけ", { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:9" } }],
+  ])("tracked な settings.json は %s でも隠す", (_case, body) => {
+    withSettings("settings.json", body, true, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+    });
+  });
+
+  it("untracked な .claude/settings.json は language / outputStyle だけでも置き場所で止まる(ADR 0346 決定4)", () => {
+    withSettings("settings.json", { language: "japanese", outputStyle: "Explanatory" }, false, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
+    });
+  });
+
+  it("settings.local.json は {} だけでも止まる", () => {
+    withSettings("settings.local.json", {}, false, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.local.json"], excludeProjectSettings: false });
+    });
+  });
+
+  it("untracked な settings.json は {} だけでも止まる", () => {
+    withSettings("settings.json", {}, false, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
+    });
+  });
+
+  it("組を止める理由は置き場所の語で書き、鍵を列挙しない(claudeWorkspaceContainment)", () => {
+    withSettings("settings.local.json", {}, false, (workspace) => {
+      const contained = claudeWorkspaceContainment(workspace);
+      expect(contained.available).toBe(false);
+      const reason = contained.available ? "" : contained.reason;
+      expect(reason).toContain(".claude/settings.local.json");
+      expect(reason).toContain("local or untracked settings file");
+      expect(reason).toContain("unreadable");
+      expect(reason).toContain("the board can hide only a Git-tracked .claude/settings.json");
+      expect(reason).not.toMatch(/sandbox|permissions|hooks|invalid JSON/);
+    });
   });
 });
 

@@ -79,7 +79,7 @@ it("呼び手の env も ambient の env も転送の床を広げない", async 
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
 });
 
-it("部分 clone の sandbox の index 読み(`workspaceSettingsDisposition`)は網に出ず、読めない settings.json として返す", async () => {
+it("部分 clone で盤面が隠した tracked な settings.json は blob を読まず(`workspaceSettingsDisposition`)網に出ずに隠すと返す(ADR 0346 決定2)", async () => {
   const workspace = await makeWorkspace("partial-clone-settings");
   mkdirSync(join(workspace.path, ".claude"));
   writeFileSync(join(workspace.path, ".claude", "settings.json"), "{}\n");
@@ -87,7 +87,7 @@ it("部分 clone の sandbox の index 読み(`workspaceSettingsDisposition`)は
   fixtureGit(workspace.path, "commit", "-m", "settings");
   const { dir, offNetwork } = await partialCloneOf(workspace.path);
 
-  expect(workspaceSettingsDisposition(dir, true).overriding).toEqual(["settings.json"]);
+  expect(workspaceSettingsDisposition(dir, true)).toMatchObject({ excludeProjectSettings: true, overriding: [] });
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
 });
 

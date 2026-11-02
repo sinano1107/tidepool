@@ -1988,15 +1988,20 @@ describe("ClaudeCodeWorker", () => {
   it("隠れたままの tracked settings.json を戻せなければ workspace を quarantine して spawn せず、盤面の一撃で todo へ戻す(ADR 0158 / ADR 0274)", async () => {
     const ws = await makeWorkspace("tracked-settings-unrestorable");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
-    // 床キーも hooks も持たない settings は隠さずに走る —— 隠れたままなら戻すだけの枝に入る
     await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({}));
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
+    git(ws.path, "checkout", "-b", "no-settings");
+    git(ws.path, "rm", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "stop sharing project settings");
+    git(ws.path, "checkout", "main");
     const { start, calls, db, stops } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
-    // 前の session が隠したまま(写しが残る —— ADR 0293 決定3)。index を lock で塞ぐと戻せない
+    // 前の session が隠したまま(写しが残る —— ADR 0293 決定3)、index から settings.json が消えた branch なら戻すだけの枝に入る。
+    // index を lock で塞ぐと戻せない
     excludeWorkspaceProjectSettings(db, { ...ws, name: "tidepool" });
+    git(ws.path, "checkout", "no-settings");
     await writeFile(join(ws.path, ".git", "index.lock"), "");
     const task = start("task-sbx-unrestorable-settings");
     expect(calls).toEqual([]);
@@ -2146,7 +2151,37 @@ describe("ClaudeCodeWorker", () => {
     );
   });
 
-  it("sparse 後に branch の settings.json から hooks が消えれば通常 project settings を再実体化する", async () => {
+  it("sparse 後に index から settings.json が消えた branch では隠しを解いて再実体化する", async () => {
+    const ws = await makeWorkspace("tracked-settings-left-the-index");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await writeFile(
+      join(ws.path, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] } }),
+    );
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    git(ws.path, "checkout", "-b", "no-settings");
+    git(ws.path, "rm", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "stop sharing project settings");
+    git(ws.path, "checkout", "main");
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+    const hidden = () => projectSettingsHiddenByBoard(db, { ...ws, name: "tidepool" });
+
+    start("task-hooks-safe");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(hidden()).toBe(true);
+    git(ws.path, "checkout", "no-settings");
+    start("task-settings-gone");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    expect(hidden()).toBe(false);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+  });
+
+  it("sparse 後に branch の settings.json から hooks が消えても tracked なら隠したまま(ADR 0346 決定2)", async () => {
     const ws = await makeWorkspace("tracked-hooks-ordinary-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
@@ -2156,8 +2191,7 @@ describe("ClaudeCodeWorker", () => {
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
     git(ws.path, "checkout", "-b", "ordinary-settings");
-    const ordinary = JSON.stringify({ model: "sonnet" });
-    await writeFile(join(ws.path, ".claude", "settings.json"), ordinary);
+    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ model: "sonnet" }));
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "replace hooks with ordinary settings");
     git(ws.path, "checkout", "main");
@@ -2171,25 +2205,28 @@ describe("ClaudeCodeWorker", () => {
     start("task-hooks-ordinary");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
 
-    expect(calls).toHaveLength(2);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
-    expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(ordinary);
+    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
     expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
-  it("床キーを持たない通常の project settings(model 等)は spawn を止めない", async () => {
-    const wsDir = await tempDir("tidepool-ws-");
-    await mkdir(join(wsDir, ".claude"), { recursive: true });
+  it("床キーを持たない通常の project settings(model 等)は tracked なら spawn を止めず、隠して走る(ADR 0346 決定2)", async () => {
+    const ws = await makeWorkspace("tracked-settings-model-only");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
-      join(wsDir, ".claude", "settings.json"),
+      join(ws.path, ".claude", "settings.json"),
       JSON.stringify({ model: "sonnet" }),
     );
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project settings");
     const { start, calls, db } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     start("task-sbx-harmless-settings");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
   it("skills が空リストの agent は skill ディレクトリを一切開かない", async () => {

@@ -1059,7 +1059,7 @@ export const enumerateToolsThrough =
     // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
     // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
     // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
-    // `workspaceSettingsDisposition` がすでにその担当である。
+    // `workspaceSettingsDisposition` が置き場所で隠すか止める(ADR 0346 決定2)。
     atNeutralCwd("tidepool-tools-", (cwd) =>
       call(toolSurfaceProbeSpec(cwd), (proc) => readInitReport(proc.stdout, readToolSurface)),
     );
@@ -1554,15 +1554,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 走る場所(ADR 0273 決定1・8 / ADR 0276 決定1): interview の root は面接室、受験者は自分の checkout。下の検査・cwd・封じ込めの組はこちら、層と記憶は実環境
     const place = taskRunPlace(this.options.db, task, workspace);
     // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the *workspace's*
-    // own `.claude/settings.json` with the per-task `--settings` floor below,
-    // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
-    // entries win, and a `permissions.allow` entry lifts review's manual write
-    // floor (both measured — see workspaceSettingsDisposition). A checkout whose
-    // local or untracked settings redefine the floor stops the (claude-code,
-    // workspace) pair — sparse-checkout cannot safely hide them, and only the
-    // claude CLI reads them, so the workspace's Codex tasks keep running
-    // (ADR 0259 決定1). A tracked
-    // settings.json is hidden for the session instead, whatever it holds (ADR 0158).
+    // own `.claude/settings.json` with the per-task `--settings` floor below, and
+    // the board wants no key of it in the worker's process (measured — see
+    // workspaceSettingsDisposition, ADR 0346 決定1). A checkout with a local or
+    // untracked settings file stops the (claude-code, workspace) pair on its
+    // presence — sparse-checkout cannot safely hide them, and only the claude CLI
+    // reads them, so the workspace's Codex tasks keep running (ADR 0259 決定1). A
+    // tracked settings.json is hidden for the session instead, whatever it holds
+    // (ADR 0158 / ADR 0346 決定2).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の

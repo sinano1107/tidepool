@@ -31,10 +31,10 @@ export interface WorkerSessionSettings {
    *  mutually exclusive (measured — the blanket kills same-tier flag hooks
    *  too, and the managed tier, the one source that survives it, is a
    *  root-owned host-wide file with its override env var inert on 2.1.235).
-   *  What the blanket covered is re-covered without it: tracked project hooks
-   *  are kept out of the worker's physical checkout, untracked/local hooks
+   *  What the blanket covered is re-covered without it: tracked project settings
+   *  are kept out of the worker's physical checkout, untracked/local settings
    *  refuse the spawn and stop the (claude-code, workspace) pair
-   *  (`workspaceSettingsDisposition`, ADR 0259), and
+   *  (`workspaceSettingsDisposition`, ADR 0259 / ADR 0346), and
    *  the mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
@@ -177,7 +177,7 @@ export const SANDBOX_SHADOW_PATHS = [
 
 /** The workspace-side settings files the CLI merges into a session's settings.
  *  Both live inside the checkout, so a `work` session can write them — which is
- *  what ADR 0037 closes and what `workspaceSettingsDisposition` guards behind it. One
+ *  what ADR 0037 closes and what `workspaceSettingsDisposition` keeps away from the CLI behind it. One
  *  list, because the two are the same fact about the CLI's merge order. */
 const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
@@ -256,8 +256,7 @@ const CLAUDE_AUTO_MEMORY_DIR = join(homedir(), ".tidepool", "claude-auto-memory"
  *  false` does (read). The memory directory keeps a built-in write allowance even
  *  then — past review's `manual` floor — and a workspace's own
  *  `autoMemoryDirectory` could move it anywhere under home, so the directory is
- *  pinned here (the flag tier beats the project tier, measured on 2.1.283, which
- *  is why `workspaceSettingsDisposition` does not inspect these keys) and denied
+ *  pinned here (the flag tier beats the project tier, measured on 2.1.283) and denied
  *  by `AUTO_MEMORY_TOOL_DENY` (write). */
 export const AUTO_MEMORY_CLOSED = {
   autoMemoryEnabled: false,
@@ -267,8 +266,7 @@ export const AUTO_MEMORY_CLOSED = {
 /** ADR 0303 決定2: the keys that would otherwise let the repo's (or host's) settings move the
  *  language and style a worker writes its records in, shared by the worker settings and the
  *  containment probe like `AUTO_MEMORY_CLOSED`. Each is a single value the flag tier replaces
- *  outright (measured, #2454), so `workspaceSettingsDisposition` does not inspect these keys —
- *  a workspace that carries them is overridden, not refused. */
+ *  outright (measured, #2454). A tracked file that carries them is hidden, not refused (ADR 0346 決定4). */
 export const LANGUAGE_AND_OUTPUT_STYLE_PINNED = {
   language: "english",
   outputStyle: "default",
@@ -572,12 +570,6 @@ const defaultRunOk: RunOkFn = (command, args) => {
   }
 };
 
-/** Settings that claim authorship of the worker floor. In a local or untracked
- *  file they quarantine the workspace; a tracked `.claude/settings.json` is
- *  made absent from the worker checkout instead, whatever it holds (issue #382
- *  / ADR 0158), while staying in Git for the human side. */
-const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
-
 function tracked(workspacePath: string, path: string): boolean {
   const indexed = spawnSync("git", ["ls-files", "--", path], {
     cwd: workspacePath,
@@ -587,113 +579,59 @@ function tracked(workspacePath: string, path: string): boolean {
   return indexed.status === 0 && indexed.stdout !== "";
 }
 
-/** `hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある —— ADR 0293 決定3)。そのときだけ、作業ツリーに
- *  無い settings.json を index から読む。人間自身の sparse-checkout が外したファイルは無いものとして扱う。 */
-function settingsFile(
-  workspacePath: string,
-  name: string,
-  hiddenByBoard: boolean,
-): { raw: string } | "unreadable" | undefined {
+/** 中身は見ない —— 読むのは ENOENT と「読めない」を分けるためだけで、バイトは捨てる(ADR 0346 決定2)。読めるかは読まないと分からない
+ *  (ディレクトリは stat も open も通り、read で初めて落ちる)。`hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある ——
+ *  ADR 0293 決定3)。そのときだけ、作業ツリーに無い settings.json を index にあれば在ると読む。人間自身の sparse-checkout が外した
+ *  ファイルは無いものとして扱う。 */
+function settingsFile(workspacePath: string, name: string, hiddenByBoard: boolean): "present" | "unreadable" | undefined {
   const path = `.claude/${name}`;
   try {
-    return { raw: readFileSync(join(workspacePath, path), "utf8") };
+    readFileSync(join(workspacePath, path));
+    return "present";
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
-    if (name !== "settings.json" || !hiddenByBoard || !tracked(workspacePath, ".claude/settings.json")) {
-      return undefined;
-    }
-    const indexed = spawnSync("git", ["show", `:${path}`], {
-      cwd: workspacePath,
-      env: localGitEnv(),
-      encoding: "utf8",
-    });
-    return indexed.status === 0 && indexed.stdout !== null
-      ? { raw: indexed.stdout }
-      : "unreadable";
+    return name === "settings.json" && hiddenByBoard && tracked(workspacePath, path) ? "present" : undefined;
   }
 }
 
-/** The floor's one data-dependent guard, and deliberately a guard rather than
- *  part of the floor (ADR 0013:「床はデータの状態に依存しない」— the profile
- *  itself stays a code constant above).
+/** What the board does with the workspace's settings is decided by where they sit; what they hold is never read
+ *  (ADR 0346 決定2). A worker-shaped process gets no key of theirs (決定1): every key the board wants is on the flag
+ *  tier already, and the floor binds only the worker's Bash, so these files are the workspace's one way into the CLI
+ *  process itself. What a key does once it is in, measured:
  *
- *  Measured on 2.1.220: the CLI reads `sandbox` out of the *workspace's* own
- *  `.claude/settings.json` and merges it with the per-task `--settings` this
- *  module builds. `sandbox.enabled: false` loses to `--settings` (the flag tier
- *  wins), but `sandbox.filesystem.allowRead` **merges** — and since `allowRead`
- *  beats `denyRead`, a workspace can re-open anything it names. Neither
- *  `--setting-sources user` nor `--setting-sources ""` stops it.
+ *  - 2.1.286 (#2846 / #2885): a committed `apiKeyHelper` runs on the host, outside the sandbox, with the board's
+ *    authority; a committed `env.ANTHROPIC_BASE_URL` carries the worker's credentials to the workspace's destination.
+ *  - 2.1.220: `sandbox` merges with the per-task `--settings`. `sandbox.enabled: false` loses to the flag tier, but
+ *    `sandbox.filesystem.allowRead` merges — and since `allowRead` beats `denyRead`, a workspace can re-open anything it
+ *    names. Neither `--setting-sources user` nor `--setting-sources ""` stops it.
+ *  - 2.1.220: a `permissions.allow` entry in `settings.local.json` lifts review's `--permission-mode manual` write
+ *    floor (ADR 0035; `sh -c '… > f'` went through).
  *
- *  The worker itself cannot write either settings file (ADR 0037 mechanism 2);
- *  this guard is the second wall — a file already in the checkout, whoever put
- *  it there, is caught before the CLI merges it. The board's answer is to
- *  refuse the spawn — a workspace that redefines the sandbox is a broken
- *  resource, quarantined like any other (the caller does that; this returns
- *  the offending file names).
+ *  The worker itself cannot write either file (ADR 0037 mechanism 2); this is the second wall — a file already in the
+ *  checkout, whoever put it there, is caught before the CLI reads it.
  *
- *  `permissions` joins `sandbox` as a guarded key once review runs under
- *  `--permission-mode manual` (ADR 0035). Measured on 2.1.220: a
- *  `permissions.allow` entry in the checkout's `settings.local.json` lifts the
- *  manual write floor (`sh -c '… > f'` went through), while the same key in
- *  `settings.json` and `permissions.defaultMode` in either file do not. The
- *  guard covers both files and the whole `permissions` block regardless —
- *  which tier and which sub-key the CLI honours is vendor behaviour that can
- *  change under us, and this guard exists precisely so a change there is not a
- *  silent floor loss. Under `auto` this was harmless (the classifier
- *  self-approved anyway); under `manual` the permission layer *is* the floor,
- *  so the same guard applies.
+ *  A tracked `.claude/settings.json` comes back as `excludeProjectSettings`, for the caller to hide during the session
+ *  (ADR 0158). A local or untracked file, or one that cannot be read, comes back in `overriding`: the board can hide
+ *  only a tracked file, so the caller stops the (claude-code, workspace) pair.
  *
- *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
- *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".
+ *  `untrackedProjectSettings` feeds the register gate's live-checkout signal (issue #686) — `.claude/settings.json` on
+ *  disk and not in the index.
  *
- *  All of the above binds only files the CLI will read (ADR 0158): a tracked
- *  `.claude/settings.json` with floor keys, hooks, or invalid JSON is returned
- *  as `excludeProjectSettings` for the caller to hide during the session.
- *  Local, untracked, and unreadable files stay offending. `projectHooks` is the
- *  register gate's signal (issue #383), not a disposition.
- *
- *  `untrackedProjectSettings` is not part of the guard: it feeds the register
- *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
- *  and not in the index, whatever it holds.
- *
- *  `hiddenByBoard` is `projectSettingsHiddenByBoard` — the sparse snapshot, or failing that the
- *  board's leftover exclusion line (ADR 0293 決定3 / 決定7): only then is a tracked `settings.json`
- *  absent from the tree read from the index. Callers without that mark leave it false, so a file the human's own sparse-checkout leaves out reads as absent. */
+ *  `hiddenByBoard` is `projectSettingsHiddenByBoard` — the sparse snapshot, or failing that the board's leftover
+ *  exclusion line (ADR 0293 決定3 / 決定7): only then does a tracked `settings.json` absent from the tree count as
+ *  present. Callers without that mark leave it false, so a file the human's own sparse-checkout leaves out reads as
+ *  absent. */
 export function workspaceSettingsDisposition(workspacePath: string, hiddenByBoard = false) {
-  const offending: string[] = [];
+  const overriding: string[] = [];
   let excludeProjectSettings = false;
-  let projectHooks = false;
   let untrackedProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
     const file = settingsFile(workspacePath, name, hiddenByBoard);
     if (file === undefined) continue;
     const indexed = name === "settings.json" && tracked(workspacePath, ".claude/settings.json");
-    // 登録の門の信号(issue #686)。中身は読まない —— parse より前に、存在と未追跡だけで立てる
     if (name === "settings.json" && !indexed) untrackedProjectSettings = true;
-    if (file === "unreadable") {
-      offending.push(name);
-      continue;
-    }
-    try {
-      const parsed: unknown = JSON.parse(file.raw);
-      if (typeof parsed !== "object" || parsed === null) continue;
-      const floor = FLOOR_DEFINING_KEYS.some((key) => key in parsed);
-      if (!floor && !("hooks" in parsed)) continue;
-      if (!indexed) offending.push(name);
-      else {
-        excludeProjectSettings = true;
-        // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
-        if (!floor) projectHooks = true;
-      }
-    } catch {
-      if (!indexed) offending.push(name);
-      else excludeProjectSettings = true;
-    }
+    if (file === "unreadable" || !indexed) overriding.push(name);
+    else excludeProjectSettings = true;
   }
-  return {
-    overriding: offending,
-    excludeProjectSettings,
-    projectHooks,
-    untrackedProjectSettings,
-  };
+  return { overriding, excludeProjectSettings, untrackedProjectSettings };
 }
