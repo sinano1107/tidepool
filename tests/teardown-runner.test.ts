@@ -1,18 +1,21 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { listEpisodes, markProjectionPending, projectionPending, projectWhenTranscriptCloses } from "../src/precedent.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { closeSessionFromRecord } from "../src/session-close.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
-import { acceptTeardownQuarantine, acceptUnclosedSession, type FailedTeardownCheck, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownAction, type TeardownDeps, teardownStep, type UnclosedSessionCheck } from "../src/teardown.js";
+import { acceptTeardownQuarantine, acceptUnclosedSession, type FailedTeardownCheck, markTeardown, resumeUnfinishedTeardown, runTeardown, runTeardownSteps, sessionCloseSteps, sessionInTeardown, type TeardownAction, type TeardownDeps, teardownStep, type UnclosedSessionCheck } from "../src/teardown.js";
 import { recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import type { WorkerExitFacts } from "../src/worker.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
@@ -1360,5 +1363,91 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
       expect(sessionInTeardown(b.db)).toBeUndefined();
       expect(boardHalts(b.db)).toEqual([{ kind: "unclosedSession" }]);
     });
+  });
+});
+
+describe("live transcript projection", () => {
+  it("a late projection failure cannot halt the replacement session's ladder", async () => {
+    const b = board({ hold: true });
+    const stream = Object.assign(new EventEmitter(), { closed: false });
+    projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath: "/missing/old.stream.jsonl", taskId: b.task.id },
+      (step) => runTeardownSteps(b.deps, b.task.id, ...sessionCloseSteps(b.spawned, [step])));
+    b.containers.forceReclaim(b.task.id);
+    b.runtime.fireEmpty(b.task.id);
+    await b.containers.reclaimed(b.task.id);
+    returnToQueue(b.db, b.task, { kind: "cap_interrupted" }, b.clock.now());
+    b.slot.release();
+    pickupTask(b.db, getTask(b.db, b.task.id)!, "deckhand", b.clock.now());
+    appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
+    b.slot.occupy(b.task.id);
+    b.containers.open(b.task.id);
+    b.runtime.hold(b.task.id);
+
+    expect(() => stream.emit("close")).not.toThrow();
+    expect(openQuarantineValues(b.db, "unclosedSession")).toEqual([String(b.spawned)]);
+    await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+    expect(b.runtime.forceReclaims).toEqual([b.task.id, b.task.id]);
+    b.runtime.fireEmpty(b.task.id);
+    await settle();
+    await b.clock.advance(CONFIG.reclaimTimeout * 2);
+    expect(b.slot.currentTaskId).toBeNull();
+    expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE, "watchdog killed task: one"]);
+  });
+
+  it.each([false, true])("a projection DB refusal escapes to the floor without a halt and clears pending (already closed: %s)", (closed) => {
+    const b = board();
+    const dir = mkdtempSync(join(tmpdir(), "tidepool-refused-projection-"));
+    const path = join(dir, "stream.jsonl");
+    writeFileSync(path, "");
+    b.db.function("refuse_projection", () => { throw new Database.SqliteError("disk is full", "SQLITE_FULL"); });
+    b.db.exec("CREATE TEMP TRIGGER projection_refused BEFORE INSERT ON episodes BEGIN SELECT refuse_projection(); END");
+    const stream = Object.assign(new EventEmitter(), { closed });
+    markProjectionPending(b.db, b.spawned);
+    const schedule = () => projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath: path, taskId: b.task.id },
+      (step) => runTeardownSteps(b.deps, b.task.id, ...sessionCloseSteps(b.spawned, [step])));
+    if (!closed) schedule();
+
+    expect(closed ? schedule : () => stream.emit("close")).toThrow(expect.objectContaining({ code: "SQLITE_FULL" }));
+    expect(openQuarantineValues(b.db, "unclosedSession")).toEqual([]);
+    expect(projectionPending(b.db, b.spawned)).toBe(false);
+  });
+
+  it.each([false, true])("a projection bug halts its session with replayable work (already closed: %s)", async (closed) => {
+    const b = board({ hold: true });
+    const dir = mkdtempSync(join(tmpdir(), "tidepool-live-projection-"));
+    const path = join(dir, `${b.task.id}.${b.spawned}.stream.jsonl`);
+    writeFileSync(path, "");
+    b.db.exec("CREATE TEMP TRIGGER projection_fails BEFORE INSERT ON episodes BEGIN SELECT RAISE(ABORT, 'projection bug'); END");
+    const stream = Object.assign(new EventEmitter(), { closed });
+    markProjectionPending(b.db, b.spawned);
+    const project = () => projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath: path, taskId: b.task.id },
+      (step) => runTeardownSteps(b.deps, b.task.id, ...sessionCloseSteps(b.spawned, [step])));
+    const write = () => appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at: b.clock.now(), payload: {
+      kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: b.spawned, output_closed: true, usage: null, advisor: null, model_swaps: [], refusals: [],
+    } });
+    // The time-limit ladder has forced reclamation; output closes before the container becomes empty.
+    await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: [write, project] });
+    if (!closed) {
+      expect(projectionPending(b.db, b.spawned)).toBe(true);
+      expect(stream.emit("close")).toBe(true);
+    }
+    expectUnclosed(b);
+    expect(projectionPending(b.db, b.spawned)).toBe(false);
+    const question = openQuarantineQuestion(b.db, "unclosedSession", String(b.spawned))!;
+    b.runtime.fireEmpty(b.task.id);
+    await settle();
+    await b.clock.advance(CONFIG.reclaimTimeout * 2);
+    await expect(answerUnclosed(b)).rejects.toThrow("projection bug");
+    expect(openQuarantineQuestion(b.db, "unclosedSession", String(b.spawned))!.id).toBe(question.id);
+
+    b.db.exec("DROP TRIGGER projection_fails");
+    await answerUnclosed(b);
+    await settle();
+    await b.clock.advance(CONFIG.reclaimTimeout * 2);
+    expect(b.slot.currentTaskId).toBeNull();
+    expect(questions(b.db)).toEqual(["watchdog killed task: one"]);
+    expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "worker_exited")).toHaveLength(1);
+    expect(listEpisodes(b.db, {}).map((e) => e.workerSpawnedEventId)).toEqual([b.spawned]);
   });
 });
