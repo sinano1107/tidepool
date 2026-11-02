@@ -125,9 +125,10 @@ export function readOutput(proc: ContainedProcess): (exitCode: number | null) =>
 }
 
 /** 口そのもの。`pendingReclaim` は Containment quarantine の回答受理側
- *  (human-verbs)が読む門で、watchdog のものと並べて合成される —— 未回収の容器は
- *  worker session のものだけとは限らない。受理側の `acceptReclaimed` は持たない:
- *  解放するものを持つのは slot を握る worker session だけである。 */
+ *  (human-verbs)・pickup の門・読み口(ADR 0347 決定3)が読み、watchdog のものと
+ *  並べて合成される —— 未回収の容器は worker session のものだけとは限らない。
+ *  受理側の `acceptReclaimed` は持たない: 解放するものを持つのは slot を握る
+ *  worker session だけである。 */
 export interface BoardCalls {
   call: BoardCall;
   /** まだ空を観測できていない Board call の容器を名乗る一句、無ければ undefined。 */
@@ -144,6 +145,8 @@ export function createBoardCalls(deps: {
   clock: Clock;
   /** 強制回収から回収済み観測までの上限。watchdog と同じ既定を使う(ADR 0136)。 */
   reclaimTimeout: number;
+  /** 帳簿に載った容器が空になったときの pickup の契機(ADR 0347 決定3)。 */
+  pollNow: () => void;
   /** 回収済み観測の不成立を盤面へ返す口。配線先は Containment quarantine で、
    *  worker session の回収失敗と同じ経路である(新しい quarantine 族は立てない
    *  —— ADR 0136 決定6)。 */
@@ -183,13 +186,15 @@ export function createBoardCalls(deps: {
    *  依らず同じ —— watchdog の tick(`watchdog.ts` の `onReclaimTimeout`)と同じく
    *  盤面へ上がる。ここで握り潰すと Containment quarantine の失敗が黙って消える。 */
   function report(id: string, kind: string): void {
+    // ADR 0347 決定2: 帳簿は盤面の観測で、報告の書き込みより前 —— 投げた報告を撃ち直す runner が無く、ここが唯一の写しになる
+    unreclaimed.set(id, kind);
+    // ADR 0347 決定3: 帳簿は pickup を待たせるので、容器が空になる瞬間に解ける契機を対で張る
+    void deps.containers.reclaimed(id).then(() => deps.pollNow());
     // 回収を観測できない呼び出しが残りうることは ADR 0136
     deps.onReclaimTimeout(
       `${subject(kind)} was force-reclaimed but never observed empty, so processes from ` +
         "that call may still be running against this host and its workspaces",
     );
-    // ADR 0342 決定5: 帳簿は報告の書き込みが返った後 —— rollback した報告に行の無い回収を報せさせない
-    unreclaimed.set(id, kind);
   }
 
   const call = async <T>(

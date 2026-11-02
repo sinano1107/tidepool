@@ -203,6 +203,8 @@ export interface WireContract {
   "GET /api/queue": {
     halts: BoardHalt[];
     teardown?: Teardown;
+    /** まだ空を観測できていない容器を名乗る一句。pickup の門が読むものと同じ(ADR 0347 決定3)。 */
+    pendingReclaim?: string;
     lastPollFailure?: PollFailure;
     lastIssueExpansionFailure?: IssueExpansionFailure;
     providerUsage?: ProviderUsage[];

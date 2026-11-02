@@ -617,7 +617,7 @@ export interface ApiRouterDeps {
   resolvesToBuiltIn?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
    *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。 */
-  reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
+  reclaim?: Pick<PendingReclaim, "pendingReclaim" | "acceptReclaimed" | "resumeTeardown">;
   stopSession?: StopSession;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;
@@ -1985,6 +1985,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     return teardown ? { teardown } : {};
   }
 
+  // ADR 0347 決定3: 後始末の欄と同じく停止の列挙の外。question が開いていれば question とこの欄の両方が出る(把握して受け入れた重複)
+  function pendingReclaimJson(): Pick<WireContract["GET /api/queue"], "pendingReclaim"> {
+    const pendingReclaim = reclaim?.pendingReclaim();
+    return pendingReclaim === undefined ? {} : { pendingReclaim };
+  }
+
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。throttle は資源単位なので
   // 列挙に居ず、Provider ごとの使用量(providerUsage)が言う(ADR 0140 決定4)
   router.get("/pause", (_req, res) => {
@@ -2206,6 +2212,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     sendJson(res, {
       halts: boardHalts(db),
       ...teardownJson(),
+      ...pendingReclaimJson(),
       ...deps.queueFailuresJson(),
       ...providerUsageJson(),
       tasks: await presentLive(

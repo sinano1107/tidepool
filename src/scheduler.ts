@@ -353,6 +353,8 @@ export function startScheduler(deps: {
    *  1往復するので非同期。Absent → ゲートそのものを持たない盤面 — 実 CLI を
    *  持たないテストの既定形で、本番の配線(server.ts)は常に実検査を渡す。 */
   containment?: ContainmentCheck;
+  /** ADR 0347 決定3: まだ空を観測できていない容器を名乗る一句。停止の列挙の外で pickup を待たせる。 */
+  pendingReclaim?: () => string | undefined;
   /** ADR 0052: refreshes remote main only when a pickup candidate exists. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: disambiguates a failed usage observation with a live auth probe. */
@@ -398,6 +400,7 @@ export function startScheduler(deps: {
     taskExecutionCandidates,
     harnessContainment,
     containment,
+    pendingReclaim,
     registryReachability,
     cliAuth,
     githubAuth,
@@ -516,6 +519,9 @@ export function startScheduler(deps: {
     // whole board — containment belongs to the host and to the board's own
     // wiring, so no narrower resource can be halted.
     if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return "worker containment is not established";
+    // ADR 0347 決定3: 後始末と同じ「停止ではないが pickup を待たせているもの」—— question を立てない。同期で最後に読む(ADR 0119 決定5)
+    const unreclaimed = pendingReclaim?.();
+    if (unreclaimed !== undefined) return `${unreclaimed} has not been observed empty — pickup waits`;
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。

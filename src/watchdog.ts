@@ -48,7 +48,7 @@ export interface WatchdogConfig {
 
 /** 回収済み観測の不成立(GLOSSARY.md「容器」)で止まっている slot の門
  *  (ADR 0099 決定3)。Containment / Harness Containment quarantine の確認回答の
- *  受理側(human-verbs)だけがこれを読む。 */
+ *  受理側(human-verbs)と、pickup の門・読み口(`pendingReclaim` だけ、ADR 0347 決定3)がこれを読む。 */
 export interface PendingReclaim {
   /** 空をまだ観測できていない容器を名乗る一句(例: "the container for task 42")、
    *  無ければ undefined。id ではなく一句なのは、単位が worker session と Board call の
