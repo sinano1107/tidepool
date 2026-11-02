@@ -409,10 +409,11 @@ export function emptyToolSurfaceFlags(): string[] {
  *  that. Keeping it out is `boardCallEnv`'s job, one per Board call (ADR 0044).
  *
  *  Absent capability is not spelled by omitting the flag. Omission leaves the
- *  answer to the host: a workspace checkout's own `.claude/settings.json` can
- *  carry `advisorModel`, and the project tier is exactly the one the board
- *  admits with `--setting-sources project` (measured 2026-08-04 — an advisor
- *  attached through it). That path would make a session the registry declared
+ *  answer to the configuration sources: `advisorModel` in the project tier, the
+ *  one the board admits with `--setting-sources project`, attaches an advisor
+ *  (measured 2026-08-04). The workspace's settings files no longer reach a worker
+ *  (ADR 0346 決定1); the explicit no stays as a second wall, because this path
+ *  would make a session the registry declared
  *  advisor-less burn a stronger model while worker_spawned recorded `null`,
  *  which is precisely the attribution the whole capability is instrumented to
  *  protect. So absence is spelled as an explicit no, in the one env var that
@@ -1573,7 +1574,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
     // checkout を workspace 登録した」瞬間で、その checkout は自分の
     // `.claude/settings.local.json` を持っていることが多い。後ろに置くと真だが
-    // 的外れな診断(「settings が床を広げている」)が先に立ち、人間は
+    // 的外れな診断(「隠せない settings ファイルがある」)が先に立ち、人間は
     // settings を消して回ることになる。
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {

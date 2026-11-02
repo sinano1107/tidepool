@@ -1,5 +1,7 @@
 # Harness の言語・出力様式の設定は盤面が固定する —— Board call は設定の層を1つも読まず、記録に残る欄は prompt が言語を名指す
 
+**Status 追記: 決定2 の「`language` / `outputStyle` を持つ repo を拒まない」は [ADR 0346](0346-the-board-decides-workspace-settings-by-place-not-content-tracked-is-always-hidden-untracked-and-local-stop-on-presence.md) 決定4 のとおり tracked に残る —— 隠されるので拒まれない。untracked の同じファイルは置き場所で止まり、決定2 と退けた案が名指す `FLOOR_DEFINING_KEYS` は消えた(2026-11-02、issue #2846)。**
+
 2026-10-23 の triage(issue #2454)で決定。#2416 の確認で、英語の prompt・英語の入力に対する振り返り Board call の `evidence` が
 日本語で返った。原因は host の `~/.claude/settings.json` の `language: "japanese"` で、`--safe-mode` の下でも user tier と
 project tier の `language` が prompt に入ることを 2 版(pin 2.1.286 / 2.1.308)× control 付きで測った。worker の形

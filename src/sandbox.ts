@@ -34,7 +34,7 @@ export interface WorkerSessionSettings {
    *  What the blanket covered is re-covered without it: tracked project settings
    *  are kept out of the worker's physical checkout, untracked/local settings
    *  refuse the spawn and stop the (claude-code, workspace) pair
-   *  (`workspaceSettingsDisposition`, ADR 0259 / ADR 0346), and
+   *  (`workspaceSettingsDisposition`, ADR 0259 / ADR 0346 決定2), and
    *  the mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
@@ -583,7 +583,7 @@ function tracked(workspacePath: string, path: string): boolean {
  *  (ディレクトリは stat も open も通り、read で初めて落ちる)。`hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある ——
  *  ADR 0293 決定3)。そのときだけ、作業ツリーに無い settings.json を index にあれば在ると読む。人間自身の sparse-checkout が外した
  *  ファイルは無いものとして扱う。 */
-function settingsFile(workspacePath: string, name: string, hiddenByBoard: boolean): "present" | "unreadable" | undefined {
+function settingsFileState(workspacePath: string, name: string, hiddenByBoard: boolean): "present" | "unreadable" | undefined {
   const path = `.claude/${name}`;
   try {
     readFileSync(join(workspacePath, path));
@@ -626,11 +626,11 @@ export function workspaceSettingsDisposition(workspacePath: string, hiddenByBoar
   let excludeProjectSettings = false;
   let untrackedProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
-    const file = settingsFile(workspacePath, name, hiddenByBoard);
-    if (file === undefined) continue;
+    const state = settingsFileState(workspacePath, name, hiddenByBoard);
+    if (state === undefined) continue;
     const indexed = name === "settings.json" && tracked(workspacePath, ".claude/settings.json");
     if (name === "settings.json" && !indexed) untrackedProjectSettings = true;
-    if (file === "unreadable" || !indexed) overriding.push(name);
+    if (state === "unreadable" || !indexed) overriding.push(name);
     else excludeProjectSettings = true;
   }
   return { overriding, excludeProjectSettings, untrackedProjectSettings };

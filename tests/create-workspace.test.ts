@@ -447,8 +447,7 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     expect((err as LiveCheckoutSignalsError).cloneLanding).toBeNull();
   });
 
-  // tracked な床キーはリポジトリの性質で、clone 入口の提案先にも同じファイルが来る。
-  // 登録時の quarantine 予告は #383 が退けた意味なので、門は黙って通す(issue #686)。
+  // 信号は hooks の有無だけを見る(ADR 0346 決定3)。hooks の無い tracked な settings は隠されるだけなので門は黙って通す。
   it.each([
     ["床キーだけ", JSON.stringify({ permissions: { allow: ["Bash"] } })],
     ["壊れた JSON", "{ not json"],

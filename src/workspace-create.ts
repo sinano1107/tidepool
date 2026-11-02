@@ -668,7 +668,7 @@ type LiveCheckoutSignal =
   | "claude_settings_untracked";
 
 /** 登録の門の hooks 信号の読み手で、盤面で settings の JSON を読む唯一の場所(ADR 0346 決定3)。
- *  床キーは見ない。壊れた JSON と object でない値は信号にしない。 */
+ *  `sandbox` / `permissions` の有無は見ない。壊れた JSON と object でない値は信号にしない。 */
 function settingsDeclareHooks(path: string): boolean {
   try {
     const parsed: unknown = JSON.parse(readFileSync(join(path, ".claude", "settings.json"), "utf8"));
@@ -683,7 +683,7 @@ function settingsDeclareHooks(path: string): boolean {
  *  `settings.local.json` の検査は `git status` の冗長ではない —— このファイルは
  *  gitignore されるので untracked としても現れない。未追跡の `settings.json` も同じ理由で
  *  独立に要る(issue #686 — ignore されていなければ `uncommitted_changes` と両方立つが、
- *  抑制しない)。読み手は2つに分かれる(ADR 0346): 置き場所(tracked か未追跡か)は worker 向けの判定
+ *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): 置き場所(tracked か未追跡か)は worker 向けの判定
  *  `workspaceSettingsDisposition` をそのまま使い、中身は門の信号の `settingsDeclareHooks` だけが読む。 */
 function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
