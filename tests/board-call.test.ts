@@ -9,7 +9,7 @@ import { ProcessContainers } from "../src/process-container.js";
 import type { Harness } from "../src/registry.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingPty, recordingSpawn } from "./fakes.js";
-import { failQuarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
+import { failQuarantineQuestion, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
 
 /** Board call の口(ADR 0136)のドメイン層。容器機構は fake、process は scripted、
  *  時間は FakeClock —— 口が持つのは「容器・上限・force・観測の順序」だけなので、
@@ -37,6 +37,8 @@ const readAll = (proc: ContainedProcess) => {
   });
   return () => text || null;
 };
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 function setup(onReclaimTimeout?: (reason: string, clock: FakeClock) => void) {
   const { calls: spawns, ...recorder } = recordingSpawn();
@@ -66,7 +68,7 @@ function setup(onReclaimTimeout?: (reason: string, clock: FakeClock) => void) {
    *  1本目の process だけが動いている状態で使う。 */
   const say = async (text: string) => {
     recorder.processes[0]!.stdout.write(text);
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
   };
   return { ...recorder, spawns, clock, runtime, containers, calls, quarantined, versions, mismatches, pollNow, spawned, say };
 }
@@ -222,7 +224,7 @@ it("回収済み観測のあとに返す呼び出しは、容器が空になる�
   void call.then(() => {
     settled = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   expect(settled).toBe(false);
 
   t.runtime.fireEmpty(container);
@@ -260,7 +262,7 @@ it("強制回収のあと回収 timeout まで空を観測できなければ、�
 
   // 遅れて空になれば保留は解ける
   t.runtime.fireEmpty(container);
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   expect(t.calls.pendingReclaim()).toBeUndefined();
 });
 
@@ -275,8 +277,6 @@ async function unreclaimedCall(t: ReturnType<typeof setup>, order: BoardCallSpec
   return { container, rejections: await unhandledRejectionsDuring(() => t.clock.advance(RECLAIM_TIMEOUT)) };
 }
 
-const settle = () => new Promise((resolve) => setImmediate(resolve));
-
 it("回収 timeout の報告の書き込みが rollback しても帳簿は容器を名指し続け、次の呼び出しの timeout で報告でき、容器が空になるまで解けない(ADR 0347 決定2)", async () => {
   const db = openDb(":memory:");
   const t = setup((reason, clock) => quarantineContainment(db, reason, clock.now()));
@@ -289,6 +289,7 @@ it("回収 timeout の報告の書き込みが rollback しても帳簿は容器
 
   const second = await unreclaimedCall(t, { ...spec, kind: "usage read" }, 1);
   expect(second.rejections).toEqual([]);
+  expect(quarantineQuestion(db, "containment", null)?.purpose).toContain("usage read");
   t.runtime.fireEmpty(second.container);
   await settle();
   expect(t.calls.pendingReclaim()).toContain("skill enumeration");
@@ -460,10 +461,10 @@ it("root の exit のあと、出力の読み切りの前に届いた stdout / s
 
   t.emitExitOnlyAt(0, 0, null);
   // exit で決着させる実装が、遅れて届く出力を読む前に決着し終えるように間を挟む
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   t.processes[0]!.stdout.write("late answer");
   t.processes[0]!.stderr.write("late warning");
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   t.emitCloseAt(0, 0, null);
 
   expect(await call).toEqual({ exitCode: 0, stdout: "late answer", stderr: "late warning" });

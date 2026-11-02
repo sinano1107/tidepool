@@ -94,7 +94,7 @@ it("投げた task が消えて queue が空になれば、本体に入った po
 });
 
 // ADR 0347 決定3: 帳簿の待ちは停止の列挙に入らない —— 空を観測すれば question を挟まず解ける
-it("空を観測できていない容器がある間は pickup が待ち、理由にその一句が入り、停止の列挙は空のまま。容器が読めなくなれば今日どおり pickup する", async () => {
+it("空を観測できていない容器がある間は pickup が待ち、理由にその一句が入り、停止の列挙は空のまま。容器の空を観測すれば今日どおり pickup する", async () => {
   let pending: string | undefined = "the container for the skill enumeration Board call";
   const { db, worker, scheduler, state } = board({ pendingReclaim: () => pending });
   state.broken = false;

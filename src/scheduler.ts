@@ -519,7 +519,8 @@ export function startScheduler(deps: {
     // whole board — containment belongs to the host and to the board's own
     // wiring, so no narrower resource can be halted.
     if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return "worker containment is not established";
-    // ADR 0347 決定3: 後始末と同じ「停止ではないが pickup を待たせているもの」—— question を立てない。同期で最後に読む(ADR 0119 決定5)
+    // ADR 0347 決定3: 後始末と同じ「停止ではないが pickup を待たせているもの」で、question を立てない。
+    // 最後に読むのは、停止と封じ込めの理由を隠さず、上の await の後の容器の今を読むため
     const unreclaimed = pendingReclaim?.();
     if (unreclaimed !== undefined) return `${unreclaimed} has not been observed empty — pickup waits`;
   }

@@ -181,7 +181,8 @@ export function createBoardCalls(deps: {
     return observed;
   }
 
-  /** 空を観測できなかったことの報告。結果の promise とは別に撃つので、
+  /** 空を観測できなかったことの報告。帳簿を置き契機を張ってから撃つので、報告が投げても
+   *  その2つは残る(ADR 0347 決定2・3)。結果の promise とは別に撃つので、
    *  `onReclaimTimeout` が投げたときの上がり方は結果の待ち方(既定 / 回収済み観測)に
    *  依らず同じ —— watchdog の tick(`watchdog.ts` の `onReclaimTimeout`)と同じく
    *  盤面へ上がる。ここで握り潰すと Containment quarantine の失敗が黙って消える。 */

@@ -556,6 +556,17 @@ export async function managementMcpClient(baseUrl: string): Promise<Client> {
   return client;
 }
 
+/** 管理 MCP の `list_queue` の封筒を1回読む。 */
+export async function listQueueViaMcp(baseUrl: string): Promise<any> {
+  const client = await managementMcpClient(baseUrl);
+  try {
+    const result: any = await client.callTool({ name: "list_queue", arguments: {} });
+    return JSON.parse(result.content[0].text);
+  } finally {
+    await client.close();
+  }
+}
+
 /** 道具側の credential(issue #153): 盤面が受ける2つの形のうち bearer のほう。
  *  ブラウザ導線(cookie)は e2e が bootstrap URL を踏んで得る。 */
 export const AUTH_HEADERS = { authorization: `Bearer ${TEST_TOKEN}` } as const;

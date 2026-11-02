@@ -441,6 +441,14 @@ function mapData(
         line: teardown.humanStop ? 'stopped by human · session teardown' : 'session teardown · nothing new starts',
         meta: `${teardown.humanStop ? (teardown.humanStop.reason ?? 'no reason given') : TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
       }
+    : queueEnvelope.pendingReclaim
+    ? {
+        // ADR 0347 決定3: 枠は空いているが、空を観測できていない容器が pickup を待たせている。
+        // 後始末と同じく**停止ではない**ので HALT_COPY には居ない
+        color: 'var(--sun-4)', taskId: null,
+        line: 'waiting for a container to empty · nothing new starts',
+        meta: `${queueEnvelope.pendingReclaim} · kill its processes by hand`,
+      }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null, meta: 'concurrency=1' };
   // ADR 0294 決定1: 最後の poll の失敗は停止でも枠の状態でもない —— slot 行の枝にすると、一撃が投げて枠が塞がったまま
   // (決定5)の回に走っている行に隠れるので、欄があれば別の1行で、後始末の行と同じ「行 + いつ」の形で報せる

@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { enumerateHostSkills } from "../src/claude-worker.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, failQuarantineQuestion, HOUR, managementMcpClient, queueWork, type Tidepool, unhandledRejectionsDuring } from "./harness.js";
+import { api, bootTidepool, failQuarantineQuestion, HOUR, listQueueViaMcp, queueWork, type Tidepool, unhandledRejectionsDuring } from "./harness.js";
 
 /** Board call の回収失敗の写像(ADR 0136 決定6 / issue #767)。whole-probe の fake を
  *  外し、実物の skill 列挙(skills ピッカーの中立 cwd 版)を fake の容器機構の上で
@@ -67,16 +67,6 @@ it("Board call の容器が回収 timeout まで空にならなければ、盤�
   expect(runtime.forceReclaims).toHaveLength(1);
 });
 
-const listQueue = async (): Promise<any> => {
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    const result: any = await client.callTool({ name: "list_queue", arguments: {} });
-    return JSON.parse(result.content[0].text);
-  } finally {
-    await client.close();
-  }
-};
-
 // ADR 0347 決定3: 報告が書けなかった容器でも pickup は待ち、読み口がその理由を言い、空になれば他の契機なしに解ける
 it("報告の書き込みが投げた容器が残る間は2つの読み口が同じ一句を載せて pickup が待ち、空になれば欄が消えて pickup が起きる", async () => {
   const { runtime, container } = await unreclaimedSkillEnumeration();
@@ -89,7 +79,8 @@ it("報告の書き込みが投げた容器が残る間は2つの読み口が同
   const waiting = (await api(t.baseUrl, "GET", "/api/queue")).json;
   expect(waiting.halts).toEqual([]);
   expect(waiting.pendingReclaim).toBe(phrase);
-  expect((await listQueue()).pendingReclaim).toBe(phrase);
+  expect((await listQueueViaMcp(t.baseUrl)).pendingReclaim).toBe(phrase);
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.pendingReclaim).toBe(phrase);
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
@@ -98,7 +89,7 @@ it("報告の書き込みが投げた容器が残る間は2つの読み口が同
   runtime.fireEmpty(container);
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
   expect((await api(t.baseUrl, "GET", "/api/queue")).json).not.toHaveProperty("pendingReclaim");
-  expect(await listQueue()).not.toHaveProperty("pendingReclaim");
+  expect(await listQueueViaMcp(t.baseUrl)).not.toHaveProperty("pendingReclaim");
 });
 
 it("回答時の再検査は未回収の Board call 容器を読み、まだ空でなければ回答を拒む", async () => {

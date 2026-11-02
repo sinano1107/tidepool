@@ -616,8 +616,9 @@ export interface ApiRouterDeps {
   /** その名前がいま組み込み agent に解決されるか(ADR 0228)。Absent → registry の無い盤面。 */
   resolvesToBuiltIn?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
-   *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。 */
-  reclaim?: Pick<PendingReclaim, "pendingReclaim" | "acceptReclaimed" | "resumeTeardown">;
+   *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。
+   *  `pendingReclaim` は `GET /api/queue` と `GET /api/pause` の欄も読む(ADR 0347 決定3)。 */
+  reclaim?: PendingReclaim;
   stopSession?: StopSession;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;
@@ -1997,6 +1998,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     sendJson(res, {
       halts: boardHalts(db),
       ...teardownJson(),
+      ...pendingReclaimJson(),
       spendDown: spendDownJson(),
       ...providerUsageJson(),
     } satisfies WireContract["GET /api/pause"]);

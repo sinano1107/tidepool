@@ -616,8 +616,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     recordDir: options.transcripts.dir,
   };
   // ADR 0099 決定3 / ADR 0136: 回収済み観測を待って止まっている容器の門。単位は
-  // 2つ(worker session と Board call)なので、回答受理側が読む口もその2つの合成
-  // である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
+  // 2つ(worker session と Board call)なので、回答受理側・pickup の門・読み口(ADR 0347 決定3)が
+  // 読む口もその2つの合成である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
   const reclaim: PendingReclaim = {
     pendingReclaim: () => watchdog?.pendingReclaim() ?? boardCalls.pendingReclaim(),
     // 受理が動かすのは slot だけなので watchdog にしか用は無い —— Board call の
