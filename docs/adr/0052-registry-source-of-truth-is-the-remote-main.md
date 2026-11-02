@@ -1,5 +1,7 @@
 # 盤面が読む正本はリモートの保護ブランチであり、ホスト上の clone はキャッシュである
 
+**Status 追記: 決定7 の「クリーンに戻す」は、タスクブランチが無視していたファイルを休止位置へ動かす前に消すことまで含む —— 休止位置の tree は head と一致する([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md)、2026-11-02、issue #2912)。**
+
 **Status 追記: §7 追記(pickup の休止位置)の「読む場所は remote 正本を持つものだけ」は外れ、purely-local の読む場所も休止させる(ADR 0329 追記 決定11、2026-11-01、issue #2730)。**
 
 **Status 追記: 決定1 の「push 成功時にローカルの remote-tracking ref が更新されるので『push が通った』と『盤面に効いた』が同じ 1 つの事実」は、push が checkout の中で走ることに乗っていた。盤面の網に出る git は checkout の外の盤面所有 repo で走る([ADR 0339](0339-the-boards-github-children-run-in-a-built-env-and-only-the-injected-identity-reaches-the-network.md) 決定5、2026-11-01、issue #2827)ので、写しは push の成功を見て盤面が ADR 0243 の口の中で `update-ref` で書く —— 「効いた」の定義は変わらない(push の成功)が、写しを動かす手は git の副作用でなく盤面の書き込みになる。**

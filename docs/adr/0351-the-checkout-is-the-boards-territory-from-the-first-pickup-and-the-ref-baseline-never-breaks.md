@@ -1,5 +1,7 @@
 # checkout は最初の pickup 以降、休止中も盤面の専有領域であり、ref の基準は切れない
 
+**Status 追記: 決定5 の「dirty は休止後に書かれた」は、タスクブランチだけが無視するファイルを盤面が HEAD を動かす手で消すこと([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md))に乗って成り立つ —— 述語は HEAD の branch の ignore 規則に相対である(2026-11-02、issue #2912)。**
+
 2026-11-02 の grilling(issue #2911、#2889 の review で見えた形)で決定。基準(pickup で撮った全 ref のスナップショット、ADR 0064)は
 release の比較の後も残り、着地の帯域外判定(ADR 0103 決定1)が休止中に読むのに、次の pickup の全撮りが丸ごと上書きする。休止中に
 保護ブランチが動くと、着地の回答が次の pickup より前なら quarantine、後なら通る —— 同じ書き込みの行き先が時刻で変わる。休止位置で

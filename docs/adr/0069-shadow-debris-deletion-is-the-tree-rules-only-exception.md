@@ -1,5 +1,7 @@
 # サンドボックスの shadow 残骸の削除は slot-release tree rule の唯一の例外である
 
+**Status 追記: 「唯一の例外」が縛るのは WIP の外へ出られるものである。タスクブランチが無視するファイルを盤面が HEAD を動かす手で消す [ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md) は、worker 自身の宣言で `add -A` の外に居るものを消すので退避の例外には数えない(2026-11-02、issue #2912)。**
+
 issue #310 のグリリング(2026-08-13)で決定。実環境動作確認 第3段(ADR 0052)で、worker セッション中に
 workspace のルートへホーム相当の 0 バイトファイルが約20件現れることが観測された。Claude Code サンドボックスの
 既知のバグである(upstream: anthropic-experimental/sandbox-runtime#139、open) — `denyRead` された protected
