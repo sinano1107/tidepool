@@ -49,6 +49,8 @@ export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions): void {
     } catch (err) {
       // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
       if (isBoardDbRefusal(err)) throw err;
+      // 行は例外の本文だけを持つので、stack は log に残す(後始末の runner の fail と同じ)
+      console.error(`[recovery] could not close session ${spawned.id} of task ${spawned.task_id}:`, err);
       // ADR 0344 決定2: 1原因に session の数だけ回答を求めない —— 残りは直して立て直した次の起動の復旧に任せる
       quarantineUnclosedSession(db, spawned.id, spawned.task_id, err, opts.now);
       return;
@@ -56,7 +58,8 @@ export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions): void {
   }
 }
 
-/** 1つの spawn を記録から閉じ直す(ADR 0344 決定3)。閉じ切らなかった session の受理の、再起動を跨いだ側の検査。投げたら呼び手へ返す。 */
+/** 1つの spawn を記録から閉じ直す(ADR 0344 決定3)。閉じ切らなかった session の受理の、再起動を跨いだ側の検査。投げたら呼び手へ返す。
+ *  ここでの `watermark` は一時領域の削除の門にだけ使う(ADR 0344 決定5)—— 対象は名指しの spawn で、線では選ばない。 */
 export function closeSessionFromRecord(db: Db, spawnId: number, opts: RecordCloseOptions): void {
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   const spawned = events.find((e) => e.id === spawnId);
@@ -102,6 +105,7 @@ function closeSpawned(db: Db, events: EventRow[], spawned: EventRow, opts: Recor
       },
     }),
     // ADR 0344 決定5: path は session ごとに記録に無く、task 接頭辞の削除は watermark より後の走っている session の領域も消す。watermark 以下の後の spawn は死んでいるので止めない
+    // shortcut: 飛ばした一時領域は後から消えない —— 閉じ直しは window.exited で削除の前に返り、adapter は自分の path しか消さない。tmp に残骸を観測したら見直す
     () => {
       if (!events.some((e) => e.kind === "worker_spawned" && e.task_id === taskId && e.id > opts.watermark)) removeTaskTemps(opts.tmpDir, taskId);
     },
@@ -139,7 +143,15 @@ function readStderrTail(path: string): string | null {
 
 function removeTaskTemps(tmpDir: string, taskId: string): void {
   const prefixes = [taskTempPrefix("claude", taskId), taskTempPrefix("codex", taskId)];
-  for (const name of readdirSync(tmpDir)) {
+  // 削除の失敗は log だけで、閉じる手を投げない(adapter の削除の手と同じ、issue #705)—— 投げると行が立ち、閉じ直しは window.exited で削除を撃たないまま受理を通す
+  let names: string[];
+  try {
+    names = readdirSync(tmpDir);
+  } catch (error) {
+    console.error(`[recovery] could not read ${tmpDir}:`, error);
+    return;
+  }
+  for (const name of names) {
     if (!prefixes.some((p) => name.startsWith(p))) continue;
     try {
       rmSync(join(tmpDir, name), { recursive: true, force: true });

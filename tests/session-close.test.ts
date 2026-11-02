@@ -100,7 +100,7 @@ it("同じ task に後の spawn がある session も観測していない exit 
 it("後の spawn が watermark 以下なら死んでいる —— その session を閉じる手は一時領域を消す(ADR 0344 決定5)", async () => {
   const b = await board(1);
   const dead = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
-  // 後の spawn は process を持たないので閉じない —— 消せるのは前の session の手だけ
+  // ADR 0316 決定4 / #2633: 後の spawn は process を持たないので閉じない —— 消せるのは前の session の手だけ
   const watermark = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "spawn_failed", error_code: "ENOENT", message: "spawn claude ENOENT" } });
   const temp = join(b.tmpDir, `tidepool-claude-${b.task.id}-left`);
   mkdirSync(temp);
@@ -110,6 +110,19 @@ it("後の spawn が watermark 以下なら死んでいる —— その session
   expect(b.exits().map((e) => e.payload)).toEqual([expect.objectContaining({ worker_spawned_event_id: b.spawns[0] })]);
   expect(episodeOf(b.db, dead)).toBeUndefined();
   expect(existsSync(temp)).toBe(false);
+});
+
+it("一時領域の置き場が読めなくても削除は log だけで、exit と Episode を書いて question は立てない(issue #705)", async () => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
+  const b = await board();
+
+  closeUnclosedSessions(b.db, { logDir: b.logDir, tmpDir: join(b.tmpDir, "missing"), watermark: Number.MAX_SAFE_INTEGER, now: at });
+
+  const [exited] = b.exits();
+  expect(exited?.payload).toMatchObject({ exit_observed: false, worker_spawned_event_id: b.spawns[0] });
+  expect(episodeOf(b.db, b.spawns[0]!)).toMatchObject({ workerExitedEventId: exited!.id });
+  expect(questions(b.db)).toEqual([]);
 });
 
 it("古い投影器の版の Episode を持つ session は選ばない", async () => {
@@ -143,6 +156,8 @@ it("transcript の無い session は stream 由来の欄を欠測にして閉じ
 });
 
 it("transcript はあるが読めない session は欄を欠測の exit で閉じ、投げた投影は閉じ切らなかった session の question を1枚立てる(ADR 0344 決定2)", async () => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
   const b = await board(0);
   const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   mkdirSync(join(b.logDir, `${b.task.id}.${spawned}.stream.jsonl`));
@@ -379,6 +394,8 @@ it("exit の記録だけが盤面 DB に拒まれても投げて起動を拒み�
 });
 
 it("exit の記録が盤面のバグで投げた session は question を1枚立て、残りの session はその起動では閉じない —— 同じ spawn の再 throw で question は増えない(ADR 0344 決定2)", async () => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
   const b = await board();
   const other = spawnOnAnotherTask(b.db);
   const otherExits = () => listEvents(b.db, getEvent(b.db, other)!.task_id!).filter((e) => e.kind === "worker_exited");

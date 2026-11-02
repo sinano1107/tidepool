@@ -1029,7 +1029,7 @@ export const SESSION_WINDOW_KINDS: readonly EventKind[] = ["worker_spawned", "wo
  *  閉じる位置は、この spawn を指す `worker_exited`(issue #379 のポインタ)→ 無ければ spawn の後・同じ task の次の
  *  spawn の前にある never-ran の決着(`NEVER_RAN_KINDS`)→ 無ければ次の `worker_spawned`。exit と決着が両方あれば
  *  exit で閉じ、never-ran とは読まない。ただし次の spawn より後へは伸ばさない。窓で切らないと同じタスクの前後の session の判断がこの Episode に湧く。
- *  別の spawn を指す exit は窓に入れない —— 前の session の exit は次の spawn より後に書かれうる(ADR 0344 決定5)。
+ *  別の spawn を指す exit は窓に入れない —— 前の session の exit は次の spawn より後に書かれうる(ADR 0316 決定4 Status 追記)。
  *  kind で絞って event を引く呼び手は `SESSION_WINDOW_KINDS` を含める —— 欠けると規則が黙って次の spawn に落ちる。 */
 export function sessionWindow(
   events: readonly EventRow[],
@@ -1053,7 +1053,7 @@ export function sessionWindow(
   const end = exited ?? settled;
   const endExclusive = Math.min(end ? end.id + 1 : Number.POSITIVE_INFINITY, nextSpawnedId);
   const foreignExitIds = new Set(
-    events.filter((e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id !== spawned.id).map((e) => e.id),
+    events.filter((e) => e.task_id === spawned.task_id && e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id !== spawned.id).map((e) => e.id),
   );
   return {
     exited,
