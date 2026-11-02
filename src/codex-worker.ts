@@ -24,6 +24,7 @@ import {
   type CodexCliCommand,
   callAppServer,
   codexCommandThrough,
+  codexProbeStop,
 } from "./codex-app-server.js";
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "./codex-stream-reader.js";
 import type { ContainmentCapability } from "./containment.js";
@@ -387,8 +388,8 @@ export interface CodexWorkerOptions {
   /** ADR 0145: root process の exit を受ける盤面側の一撃。帰結に要る事実の束を添え(ADR 0338 決定1)、報告なき exit かどうかの判定は盤面側が持つ。
    *  不在なら束の `writes` は adapter が自分で撃つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
-  /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
-   *  分類にだけ使い、Throttle の状態には書かない。 */
+  /** ADR 0261 決定1 / ADR 0348 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
+   *  上限到達の分類と資源の停止を導き、Throttle の状態には書かない。 */
   usageProbe?: CodexAppServerProbe;
 }
 
@@ -1314,20 +1315,21 @@ function workerEnv(
   return env;
 }
 
-/** ADR 0261 決定2・6: どれかの窓が Throttle の 100% キャップに届いていれば満杯。読めなければ理由を持つ。 */
-async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<NonNullable<WorkerExit["usage_recheck"]>> {
+/** ADR 0261 決定2 / ADR 0348 決定1・4: 1度の読みから満杯の窓と資源の停止を導き、Throttle には書かない。 */
+async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<{ usage_recheck: NonNullable<WorkerExit["usage_recheck"]>; stop?: ResourceStop }> {
   try {
     const observed = await probe(now);
-    if (observed.status !== "observed") return { result: "unreadable", reason: observed.reason };
+    const stop = codexProbeStop(observed);
+    if (observed.status !== "observed") return { usage_recheck: { result: "unreadable", reason: observed.reason }, ...(stop && { stop }) };
     const full = observed.windows.filter((window) => window.usedPercent >= 100);
-    return full.length === 0
+    return { usage_recheck: full.length === 0
       ? { result: "not_full" }
       : {
           result: "full",
           windows: full.map((window) => ({ name: window.name, used_percent: window.usedPercent, resets_at: window.resetsAt })),
-        };
+        } };
   } catch (error) {
-    return { result: "unreadable", reason: String(error) };
+    return { usage_recheck: { result: "unreadable", reason: String(error) } };
   }
 }
 
@@ -1617,24 +1619,33 @@ export class CodexWorker implements WorkerAdapter {
         };
         // ADR 0338 決定1: 読み手(ターン)・process の事実(MCP の起動時 exit)・probe(cap)の3出所を同じ束にする。
         // 停止の登録は `writes` の中で、盤面は分類を待って撃ってから決める(決定2)
-        const facts = (capInterrupted: WorkerExitClassification["capInterrupted"]): WorkerExitClassification => ({
+        const facts = (classification: WorkerExitClassification["classification"]): WorkerExitClassification => ({
           workerSpawnedEventId: spawned,
           turnRan: streamObserved.turnRan,
           ...(mcpStop && { stop: { registered: { kind: "session_stopped_by_resource", ...mcpStop, worker_spawned_event_id: spawned } } }),
-          capInterrupted,
+          classification,
           writes,
         });
         const { onWorkerExited, usageProbe: probe } = this.options;
         if (!streamObserved.turnFailed || !probe) {
-          if (onWorkerExited) onWorkerExited(task.id, exit, facts(false));
+          if (onWorkerExited) onWorkerExited(task.id, exit, facts({ capInterrupted: false }));
           else fire();
           return;
         }
         // ADR 0309: exit の逐語は即時に渡す。分類は値だけを運び、書き込みは運ばない(決定4 / ADR 0342 決定6)
-        const classification = recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => {
+        let probeStop: ResourceStop | undefined;
+        if (!mcpStop) writes.push(() => {
+          if (probeStop) registerResourceStop(this.options.db, probeStop.quarantine, probeStop.value, probeStop.reason, this.options.clock.now());
+        });
+        const classification = recheckUsage(probe, this.options.clock.now()).then(({ usage_recheck, stop }) => {
           exit.usage_recheck = usage_recheck;
           exitedAt = this.options.clock.now();
-          return usage_recheck.result === "full";
+          // shortcut: MCP と probe の停止が同じ session に重なる形は未実測で、MCP を残す。観測されたら束に2つ載せる(ADR 0348 決定4)
+          probeStop = mcpStop ? undefined : stop;
+          return {
+            capInterrupted: usage_recheck.result === "full",
+            ...(probeStop && { stop: { registered: { kind: "session_stopped_by_resource" as const, ...probeStop, worker_spawned_event_id: spawned } } }),
+          };
         });
         if (onWorkerExited) onWorkerExited(task.id, exit, facts(classification));
         else void classification.then(fire);

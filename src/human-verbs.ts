@@ -609,7 +609,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // the turn ran whether or not the answer is accepted (ADR 0299 決定3・6)
     recordProbeBoardCall(deps.db, "model_probe", result, presentClock.now());
     if (result.status === "runs") return;
-    if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now());
+    if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now(), result.reason);
     throw new DomainError(`${row} still cannot run: ${result.reason}`);
   };
   return {

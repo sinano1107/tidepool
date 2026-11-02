@@ -24,7 +24,7 @@ import {
   teardownStep,
 } from "./teardown.js";
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
-import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
+import type { WorkerAdapter, WorkerExit, WorkerExitClassification, WorkerExitFacts } from "./worker.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -635,12 +635,13 @@ export function startWatchdog(deps: {
 
   /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
   function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
-    const { workerSpawnedEventId, turnRan, stop, capInterrupted, writes } = facts;
+    const { workerSpawnedEventId, turnRan, classification, writes } = facts;
+    let stop = facts.stop;
     const ownsPickup = () => spawnedAfterLatestPickup(db, taskId, workerSpawnedEventId);
     // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く。
     // 分類を待つ手も束の手 —— reject は session の記録を閉じられないまま残す(ADR 0344 決定1 の Status 追記)
     if (!ownsPickup() || slot.currentTaskId !== taskId || slot.inTeardown) {
-      void runTeardownSteps(teardown, taskId, ...sessionCloseSteps(workerSpawnedEventId, [() => capInterrupted, ...writes]));
+      void runTeardownSteps(teardown, taskId, ...sessionCloseSteps(workerSpawnedEventId, [() => classification, ...writes]));
       return;
     }
     const rec = syncPickup(taskId);
@@ -648,8 +649,9 @@ export function startWatchdog(deps: {
     let cap = false;
     let failedOpen = false;
     // ADR 0112 決定4 の門は撃ち直される手の外で読む —— 受理の撃ち直しは question が開いたまま走るので、手の中で読むと決定が黙って飛ぶ
-    const snapshotCapAndGate = (value: boolean) => {
-      cap = value;
+    const snapshotCapAndGate = (value: WorkerExitFacts) => {
+      cap = value.capInterrupted;
+      stop = facts.stop ?? value.stop;
       failedOpen = sessionHaltOpen(db, taskId);
     };
     const decide = () =>
@@ -701,7 +703,7 @@ export function startWatchdog(deps: {
       teardown,
       taskId,
       ...sessionCloseSteps(workerSpawnedEventId, [
-        () => (typeof capInterrupted === "boolean" ? snapshotCapAndGate(capInterrupted) : capInterrupted.then(snapshotCapAndGate)),
+        () => (classification instanceof Promise ? classification.then(snapshotCapAndGate) : snapshotCapAndGate(classification)),
         ...writes,
       ]),
       decide,

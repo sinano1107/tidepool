@@ -2157,7 +2157,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           workerSpawnedEventId: spawnedEventId,
           turnRan: streamObserved.turnRan,
           ...(stop && { stop }),
-          capInterrupted: streamObserved.capInterrupted,
+          classification: { capInterrupted: streamObserved.capInterrupted },
           writes,
         });
       } else for (const write of writes) write();

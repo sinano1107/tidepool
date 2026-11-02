@@ -14,6 +14,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession, type FailedTeardownCheck, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownAction, type TeardownDeps, teardownStep, type UnclosedSessionCheck } from "../src/teardown.js";
 import { recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import type { WorkerExitFacts } from "../src/worker.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, failTeardownMark, failWorkerExited, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
@@ -130,7 +131,7 @@ it.each([
     "分類が揃った後の決定の tx",
     (b: Board) => {
       b.containers.forceReclaim(b.task.id);
-      b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], capInterrupted: false });
+      b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], classification: { capInterrupted: false } });
     },
     `worker exited without reporting: one`,
   ],
@@ -213,7 +214,7 @@ it("落ちた後始末が立った後に遅れて届いた空の観測は後始�
   const b = board({ hold: true });
   b.containers.forceReclaim(b.task.id);
   // 上限到達による中断: 決定が後始末へ入り、回収済み観測に後始末を繋ぐ
-  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], capInterrupted: true });
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], classification: { capInterrupted: true } });
   b.db.exec(
     "CREATE TRIGGER fail_containment BEFORE INSERT ON tasks WHEN NEW.question_quarantine_kind = 'containment' " +
       "BEGIN SELECT RAISE(ABORT, 'containment write failed'); END",
@@ -291,7 +292,7 @@ it("transcript 失敗の記録の tx が投げた後に空の観測と exit が�
 
   b.runtime.fireEmpty(b.task.id);
   await settle();
-  b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, signal: "SIGKILL" }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], capInterrupted: false });
+  b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, signal: "SIGKILL" }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], classification: { capInterrupted: false } });
   await settle();
 
   expectHeld(b);
@@ -383,7 +384,7 @@ it("runner の中で盤面 DB が書きを拒めば(A)、question を立てず�
   b.containers.forceReclaim(b.task.id);
   b.db.pragma("query_only = 1");
 
-  expect(() => b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], capInterrupted: false })).toThrow(
+  expect(() => b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], classification: { capInterrupted: false } })).toThrow(
     expect.objectContaining({ code: "SQLITE_READONLY" }),
   );
 
@@ -396,7 +397,7 @@ it("破られた契約への備え: 分類の Promise が reject しても(adapt
   const b = board({ hold: true });
 
   const rejections = await unhandledRejectionsDuring(async () => {
-    b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], capInterrupted: Promise.reject(new Error("sweep: disk gone")) });
+    b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { workerSpawnedEventId: b.spawned, turnRan: true, writes: [], classification: Promise.reject(new Error("sweep: disk gone")) });
     await settle();
     await climbTheLadder(b);
   });
@@ -426,14 +427,14 @@ function writeSteps() {
 const FAILED_EXIT = { ...QUIET_EXIT, exit_code: 1 };
 
 it.each([
-  ["解決済みの分類", (): boolean | Promise<boolean> => false],
-  ["Promise の分類", (): boolean | Promise<boolean> => Promise.resolve(false)],
+  ["解決済みの分類", (): WorkerExitFacts | Promise<WorkerExitFacts> => ({ capInterrupted: false })],
+  ["Promise の分類", (): WorkerExitFacts | Promise<WorkerExitFacts> => Promise.resolve({ capInterrupted: false })],
 ] as const)("束の書く step が投げると(%s)閉じ切らなかった session が1枚立って梯子は進まず、受理で step が再実行され枠が空く —— 済んだ step は撃ち直さない(ADR 0344 決定1)", async (_, cap) => {
   const b = board();
   const steps = writeSteps();
   b.containers.forceReclaim(b.task.id);
 
-  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: cap(), writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: cap(), writes: steps.writes });
   await settle();
   await climbTheLadder(b);
 
@@ -451,7 +452,7 @@ it("直さずに受理すると書く step の撃ち直しが拒まれ、直し�
   const b = board();
   const steps = writeSteps();
   b.containers.forceReclaim(b.task.id);
-  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: Promise.resolve(false), writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: Promise.resolve({ capInterrupted: false }), writes: steps.writes });
   await settle();
 
   await expect(answerUnclosed(b)).rejects.toThrow(DomainError);
@@ -468,19 +469,19 @@ it("直さずに受理すると書く step の撃ち直しが拒まれ、直し�
 it("書く step は分類が揃ってから撃ち、決定はその後ろ —— Promise の分類の間は何も書かない(ADR 0342 決定6、ADR 0309 決定3 の Status 追記)", async () => {
   const b = board();
   const order: string[] = [];
-  let classify!: (cap: boolean) => void;
+  let classify!: (facts: WorkerExitFacts) => void;
   b.containers.forceReclaim(b.task.id);
 
   b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, {
     workerSpawnedEventId: b.spawned,
     turnRan: true,
-    capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }),
+    classification: new Promise<WorkerExitFacts>((resolve) => { classify = resolve; }),
     writes: [() => order.push(`questions at write: ${questions(b.db).length}`)],
   });
   await settle();
   expect(order).toEqual([]);
 
-  classify(false);
+  classify({ capInterrupted: false });
   await settle();
   expect(order).toEqual(["questions at write: 0"]);
   expect(questions(b.db)).toEqual(["worker exited without reporting: one"]);
@@ -502,7 +503,7 @@ describe("盤面の決定の門より手前で書く —— 決定しない exit
     const steps = writeSteps();
     steps.broken = false;
 
-    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
 
     expect(steps.fired).toEqual(["exit", "temp", "project"]);
     expect(questions(b.db)).toEqual([]);
@@ -512,13 +513,13 @@ describe("盤面の決定の門より手前で書く —— 決定しない exit
     const b = completed();
     const steps = writeSteps();
     steps.broken = false;
-    let classify!: (cap: boolean) => void;
+    let classify!: (facts: WorkerExitFacts) => void;
 
-    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }), writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: new Promise<WorkerExitFacts>((resolve) => { classify = resolve; }), writes: steps.writes });
     await settle();
     expect(steps.fired).toEqual([]);
 
-    classify(false);
+    classify({ capInterrupted: false });
     await settle();
     expect(steps.fired).toEqual(["exit", "temp", "project"]);
   });
@@ -527,7 +528,7 @@ describe("盤面の決定の門より手前で書く —— 決定しない exit
     const b = completed();
     const steps = writeSteps();
 
-    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
     b.runtime.fireEmpty(b.task.id);
     await settle();
 
@@ -546,7 +547,7 @@ describe("盤面の決定の門より手前で書く —— 決定しない exit
     b.slot.release();
     b.slot.occupy("next-task");
 
-    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
 
     expect(steps.fired).toEqual(["exit"]);
     expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
@@ -565,7 +566,7 @@ it("先に落ちた後始末の残りを持つ枠で書く step が投げても�
   transcriptFailureHandler(b.deps, b.containers)(transcriptFailure(b));
   const steps = writeSteps();
 
-  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
 
   expect(questions(b.db)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE, UNCLOSED_SESSION_QUESTION_TITLE]);
   expect(b.slot.currentTaskId).toBe(b.task.id);
@@ -593,7 +594,7 @@ async function teardownBehindWriteStep() {
 
   // 後始末は `ensureWorkspaceToken` の await まで同期に走り、exit の settle はその中に着く
   const running = runTeardown(b.deps, b.task.id, teardownStep(b.db, b.task.id));
-  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
   await running;
   await settle();
   return { b, steps };
@@ -623,7 +624,7 @@ it("落ちた後始末と書く step が別の question を持つとき、後始
     },
   });
   const steps = writeSteps();
-  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
   broken = false;
 
   await answer(b);
@@ -645,7 +646,7 @@ it("飲まれた回収済み観測の後で人間が止めると、受理の後�
   const b = board({ hold: true });
   const steps = writeSteps();
   await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
-  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
   b.runtime.fireEmpty(b.task.id);
   await settle();
 
@@ -667,9 +668,9 @@ it("書く step の中で盤面 DB が書きを拒めば(A)、question を立て
   const refused = expect.objectContaining({ code: "SQLITE_READONLY" });
   b.db.pragma("query_only = 1");
 
-  expect(() => b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: [write] })).toThrow(refused);
+  expect(() => b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: [write] })).toThrow(refused);
   const rejections = await unhandledRejectionsDuring(async () => {
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: Promise.resolve(false), writes: [write] });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: Promise.resolve({ capInterrupted: false }), writes: [write] });
     await settle();
   });
 
@@ -685,7 +686,7 @@ it("時間制限の停止の後の exit で書く step が投げても、飲ま�
   await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
   expect(b.runtime.forceReclaims).toEqual([b.task.id]);
 
-  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+  b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
   b.runtime.fireEmpty(b.task.id);
   await settle();
   expectUnclosed(b);
@@ -703,7 +704,7 @@ it("時間制限の停止の後の exit で書く step が投げても、飲ま�
 it("上限到達の後始末が印を消す書き込みで投げても、受理の撃ち直しが枠を空ける —— 状態遷移が1回だけ残り、偽の Containment question は立たない(ADR 0112 決定3)", async () => {
   const b = board({ hold: true });
   b.containers.forceReclaim(b.task.id);
-  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: true, writes: [] });
+  b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: true }, writes: [] });
   await settle();
   const repair = failTeardownMark(b.db);
   b.runtime.fireEmpty(b.task.id);
@@ -886,7 +887,7 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
     function heldBehindExitStep() {
       const b = board({ hold: true });
       const steps = writeSteps();
-      b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: true, writes: steps.writes });
+      b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: true }, writes: steps.writes });
       expectUnclosed(b);
       return { b, steps };
     }
@@ -894,7 +895,7 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
     /** 同じ session に遅れて届く、Promise 分類の exit の書く step(直っていないので投げる)。 */
     function lateExit(b: Board) {
       const late = writeSteps();
-      b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: Promise.resolve(false), writes: late.writes });
+      b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: Promise.resolve({ capInterrupted: false }), writes: late.writes });
       return late;
     }
 
@@ -1014,13 +1015,13 @@ describe("exits belong to their original worker session", () => {
 
   it.each(["after-pickup", "classification-pending"] as const)("a stale write failure cannot halt the replacement's time-limit ladder (%s)", async (when) => {
     const b = session();
-    let classify!: (value: boolean) => void;
-    const facts = { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: when === "classification-pending" ? new Promise<boolean>((resolve) => { classify = resolve; }) : false,
+    let classify!: (facts: WorkerExitFacts) => void;
+    const facts = { workerSpawnedEventId: b.spawned, turnRan: true, classification: when === "classification-pending" ? new Promise<WorkerExitFacts>((resolve) => { classify = resolve; }) : { capInterrupted: false },
       writes: [b.write, () => { throw new Error("old session write failed"); }] };
     if (when === "classification-pending") b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, facts);
     await pickAgain(b, false);
     if (when === "after-pickup") b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, facts);
-    else classify(false);
+    else classify({ capInterrupted: false });
     await settle();
 
     expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
@@ -1037,7 +1038,7 @@ describe("exits belong to their original worker session", () => {
     const b = session();
     const steps = writeSteps();
     await pickAgain(b, true);
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
     expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
 
     await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
@@ -1057,7 +1058,7 @@ describe("exits belong to their original worker session", () => {
   it("次の session の後始末は死んだ session の残りに継がれない(ADR 0344 決定4)", async () => {
     const b = session();
     await pickAgain(b, true);
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: writeSteps().writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: writeSteps().writes });
     completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
     markTeardown(b.db, b.task.id, b.clock.now());
     b.slot.enterTeardown();
@@ -1072,10 +1073,10 @@ describe("exits belong to their original worker session", () => {
     const b = session();
     const first = writeSteps();
     await pickAgain(b, true);
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: first.writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: first.writes });
     const nextSpawn = listEvents(b.db, b.task.id).filter((e) => e.kind === "worker_spawned").at(-1)!.id;
     const second = writeSteps();
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: nextSpawn, turnRan: true, capInterrupted: false, writes: second.writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: nextSpawn, turnRan: true, classification: { capInterrupted: false }, writes: second.writes });
 
     expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE, UNCLOSED_SESSION_QUESTION_TITLE]);
 
@@ -1091,7 +1092,7 @@ describe("exits belong to their original worker session", () => {
   it.each(["after-pickup", "classification-pending"] as const)("分類の Promise が reject しても(破られた契約)走っている session の梯子を止めず、死んだ session の行になる(%s、ADR 0344 決定1 の Status 追記)", async (when) => {
     const b = session();
     let reject!: (err: Error) => void;
-    const facts = { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: new Promise<boolean>((_, rejected) => { reject = rejected; }), writes: [b.write] };
+    const facts = { workerSpawnedEventId: b.spawned, turnRan: true, classification: new Promise<WorkerExitFacts>((_, rejected) => { reject = rejected; }), writes: [b.write] };
     if (when === "classification-pending") b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, facts);
     await pickAgain(b, false);
     if (when === "after-pickup") b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, facts);
@@ -1107,11 +1108,11 @@ describe("exits belong to their original worker session", () => {
 
   it.each([false, true])("a cap classification resolved after another pickup cannot decide the new session (cap: %s)", async (cap) => {
     const b = session();
-    let classify!: (value: boolean) => void;
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }), writes: [b.write] });
+    let classify!: (facts: WorkerExitFacts) => void;
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: new Promise<WorkerExitFacts>((resolve) => { classify = resolve; }), writes: [b.write] });
     await pickAgain(b, false);
 
-    classify(cap);
+    classify({ capInterrupted: cap });
     await settle();
 
     expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
@@ -1126,7 +1127,7 @@ describe("exits belong to their original worker session", () => {
     await pickAgain(b, spawn);
     expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
 
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: [b.write] });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: [b.write] });
 
     expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
     expect(questions(b.db)).toEqual([]);
@@ -1145,9 +1146,9 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
     const startedAt = b.clock.now().toISOString();
     const steps = writeSteps();
 
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
     await b.clock.advance(MIN);
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: writeSteps().writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: writeSteps().writes });
 
     expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
     const question = getTask(b.db, openQuarantineQuestion(b.db, "unclosedSession", String(b.spawned))!.id)!;
@@ -1170,7 +1171,7 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
     b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, {
       workerSpawnedEventId: b.spawned,
       turnRan: true,
-      capInterrupted: false,
+      classification: { capInterrupted: false },
       writes: [
         () => {
           if (broken) throw new Error("exit write bug");
@@ -1194,12 +1195,12 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
   it("分類待ちで止まった回収 timeout は、分類の後に書く手が投げたら進まない —— 偽の Containment question を立てない(ADR 0344 決定4)", async () => {
     const b = board({ hold: true });
     const steps = writeSteps();
-    let classify!: (cap: boolean) => void;
+    let classify!: (facts: WorkerExitFacts) => void;
     await b.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: new Promise<boolean>((resolve) => { classify = resolve; }), writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: new Promise<WorkerExitFacts>((resolve) => { classify = resolve; }), writes: steps.writes });
     await b.clock.advance(CONFIG.reclaimTimeout);
 
-    classify(false);
+    classify({ capInterrupted: false });
     await settle();
 
     expectUnclosed(b);
@@ -1212,7 +1213,7 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
     markTeardown(b.db, b.task.id, b.clock.now());
     b.slot.enterTeardown();
     const steps = writeSteps();
-    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
     const deps: TeardownDeps = {
       ...b.deps,
       resolve: () => {
@@ -1232,7 +1233,7 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
     b.containers.forceReclaim(b.task.id);
     failTeardownMark(b.db);
 
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: steps.writes });
+    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: steps.writes });
 
     expect(steps.fired).toEqual(["exit", "temp", "project"]);
     expectHeld(b);
@@ -1244,7 +1245,7 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
     b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, {
       workerSpawnedEventId: b.spawned,
       turnRan: true,
-      capInterrupted: false,
+      classification: { capInterrupted: false },
       writes: [
         () => {
           if (broken) throw new Error("exit write bug");
@@ -1267,7 +1268,7 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
       const repair = failWorkerExited(b.db);
       const write = () =>
         appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at: b.clock.now(), payload: { kind: "worker_exited", ...FAILED_EXIT, worker_spawned_event_id: b.spawned, output_closed: false, usage: null, advisor: null, model_swaps: [], refusals: [] } });
-      b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, capInterrupted: false, writes: [write] });
+      b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: [write] });
       expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
       const dir = mkdtempSync(join(tmpdir(), "tidepool-unclosed-"));
       const temp = join(dir, `tidepool-claude-${b.task.id}-abc`);

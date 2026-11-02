@@ -1,16 +1,22 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import { openDb } from "../src/db.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
+import { openQuarantineQuestion, registerQuarantine } from "../src/quarantine.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { Slot } from "../src/slot.js";
+import { getTask, registerTask } from "../src/tasks.js";
+import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import {
   api,
   bootTidepool,
   executionSetting,
   FULL_HANDOFF,
   HOUR,
+  HUMAN_WEBUI,
   mcpClient,
   queueWork,
   registerWork,
@@ -290,4 +296,37 @@ it("openai entry しか持たない行は quarantine 中は Pickable head では
   const runnable = queueWork(t, "anthropic entry を持つので別の行で走る", undefined, "runnable-agent");
   await api(t.baseUrl, "POST", `/api/tasks/${runnable.id}/move`, { after: null });
   expect(t.worker.started.map((task) => task.id)).toEqual([runnable.id]);
+});
+
+it("pickup の OpenAI 認証の停止は probe が観測した理由を登録する(ADR 0348 決定1)", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const reason = "Codex credential is no longer usable: account/read reports no account";
+  const scheduler = startScheduler({
+    db, clock, slot: new Slot(), worker: new ScriptedWorker(clock), containers: fakeContainers(),
+    retrospectiveCalls: noRetrospectiveCalls, converge: async () => [],
+    onSpawnFailed() {}, onRecordContainerFailed() {}, onPickupStopped() {},
+    taskExecutionCandidates: () => [executionSetting("openai", "gpt-5.6-sol")],
+    openaiUsage: async () => ({ status: "unauthorized", provider: "openai", cliVersion: "codex-cli 0.163.0", reason }),
+  });
+  onTestFinished(scheduler.stop);
+  registerTask(db, { type: "work", title: "waits for authentication", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
+
+  await clock.advance(HOURLY);
+
+  const question = openQuarantineQuestion(db, "providerAuth", "openai");
+  expect(getTask(db, question!.id)?.purpose).toContain(reason);
+});
+
+it("OpenAI の行の修理の HTTP 回答は App Server probe の拒否理由を409へ写す", async () => {
+  const reason = "Codex rate-limit read rejected with HTTP 401";
+  t = await bootTidepool({
+    openaiUsage: async () => ({ status: "unauthorized", provider: "openai", cliVersion: "codex-cli 0.163.0", reason }),
+  });
+  registerQuarantine(t.db, "tableRow", "openai/gpt-5.6-sol", "model was not listed", t.clock.now());
+  const question = openQuarantineQuestion(t.db, "tableRow", "openai/gpt-5.6-sol")!;
+
+  const response = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["the row can run again"] });
+
+  expect(response).toMatchObject({ status: 409, json: { error: `openai / gpt-5.6-sol still cannot run: ${reason}` } });
 });

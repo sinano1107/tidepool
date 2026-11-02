@@ -116,6 +116,34 @@ it("Provider 認証の再検査は cli_auth_probe、行と Interview の対象�
   ]);
 });
 
+it("OpenAI の Provider 認証の回答は unauthorized なら拒まれ、確認は開いたまま1枚残る", async () => {
+  const q = quarantined("providerAuth", "openai");
+  const reason = "Codex account/read reports no account";
+  const checks = quarantineChecks({
+    db: q.db, clock: new FakeClock(),
+    providerCliAuth: { openai: async () => ({ status: "unauthorized", reason }) },
+  });
+
+  await expect(q.answer(checks)).rejects.toThrow(`openai authentication is still unavailable: ${reason}`);
+
+  expect(openQuarantineQuestion(q.db, "providerAuth", "openai")?.id).toBe(q.question.id);
+});
+
+it("OpenAI の行の再検査が unauthorized なら、probe の理由で Provider 認証を登録して回答を拒む(ADR 0348)", async () => {
+  const q = quarantined("tableRow", "openai/gpt-5.6-sol");
+  const reason = "Codex rejected the rate-limit read with HTTP 401";
+  const checks = quarantineChecks({
+    db: q.db, clock: new FakeClock(),
+    modelProbes: { openai: async () => ({ status: "unauthorized", reason }) },
+  });
+
+  await expect(q.answer(checks)).rejects.toThrow(`openai / gpt-5.6-sol still cannot run: ${reason}`);
+
+  expect(openQuarantineQuestion(q.db, "tableRow", "openai/gpt-5.6-sol")).toBeDefined();
+  const auth = openQuarantineQuestion(q.db, "providerAuth", "openai");
+  expect(getTask(q.db, auth!.id)?.purpose).toContain(reason);
+});
+
 it("usage の無い再検査の結果は行を残さない", async () => {
   const db = openDb(":memory:");
   const checks = quarantineChecks({

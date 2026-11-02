@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { atNeutralCwd, type BoardCall, readOutput } from "./board-call.js";
+import { cliAuthStop } from "./cli-auth.js";
 import type { ContainmentCapability } from "./containment.js";
+import type { ResourceStop } from "./events.js";
 
 export const CODEX_APP_SERVER_VERSION = "codex-cli 0.163.0";
 
@@ -49,6 +51,11 @@ export type CodexAppServerProbeResult =
       cliVersion: string | null;
       reason: string;
     };
+
+/** ADR 0348 決定1: probe の資源の帰結は観測点を問わず1つ。登録は各観測点が持つ。 */
+export function codexProbeStop(result: CodexAppServerProbeResult): ResourceStop | undefined {
+  return result.status === "unauthorized" ? cliAuthStop("openai", result.reason) : undefined;
+}
 
 export type CodexAppServerProbe = (now: Date) => Promise<CodexAppServerProbeResult>;
 
