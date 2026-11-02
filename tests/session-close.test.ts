@@ -116,6 +116,19 @@ it("後の spawn が watermark 以下なら死んでいる —— その session
   expect(existsSync(temp)).toBe(false);
 });
 
+it("後の pickup が spawn の前に落ちても、前の session は観測していない exit で閉じ、Episode がその exit を指す(issue #2932、ADR 0316 決定4)", async () => {
+  const b = await board();
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "task_picked_up" } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "spawn_failed", error_code: null, message: "spawn blew up" } });
+
+  b.close();
+
+  const [exited, ...rest] = b.exits();
+  expect(rest).toEqual([]);
+  expect(exited?.payload).toMatchObject({ exit_observed: false, worker_spawned_event_id: b.spawns[0] });
+  expect(episodeOf(b.db, b.spawns[0]!)).toMatchObject({ workerExitedEventId: exited!.id });
+});
+
 it("一時領域の置き場が読めなくても削除は log だけで、exit と Episode を書いて question は立てない(issue #705)", async () => {
   const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
   onTestFinished(() => { silenced.mockRestore(); });
