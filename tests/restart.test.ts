@@ -9,11 +9,11 @@ import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { quarantineFailedTeardown, quarantineUnclosedSession } from "../src/failed-teardown.js";
 import { listEpisodes } from "../src/precedent.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
-import { completeTask, getTask, listBoard } from "../src/tasks.js";
+import { completeTask, getTask, listBoard, registerTask } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -371,3 +371,42 @@ it("前提検査が通らない間、閉じ切らなかった session の回答�
   await vi.waitFor(() => expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main"));
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
 }, GIT_FIXTURE_TEST_TIMEOUT);
+
+// issue #2932: 窓と never-ran の決着の線は server の起動・回答・pickup を跨いだ列にしか現れないので、この seam で書く(ADR 0107)
+it("復旧の打ち切りで閉じられなかった session は、retry の pickup が spawn の前に落ちても、次の起動の復旧で exit と Episode を書かれる(ADR 0316 決定4)", async () => {
+  t = await bootTidepool();
+  const retried = queueWork(t, "retried after the aborted recovery");
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([retried.id]));
+  await t.stopServer();
+  // setup: 同じ起動の走査で retried より先に投げる別 task の session と、retried の spawn(偽の worker は spawn を刻まない)
+  const db = openDb(join(t.dir, "board.sqlite"));
+  const at = new Date();
+  const thrower = registerTask(db, { type: "work", title: "its close throws", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(thrower.id);
+  const throwerSpawn = appendEvent(db, { taskId: thrower.id, actorId: "fake-worker", origin: "board", at, payload: WORKER_SPAWNED });
+  const previous = appendEvent(db, { taskId: retried.id, actorId: "fake-worker", origin: "board", at, payload: WORKER_SPAWNED });
+  db.close();
+  const unreadable = join(t.dir, `${thrower.id}.${throwerSpawn}.stream.jsonl`);
+  mkdirSync(unreadable);
+  writeFileSync(join(t.dir, `${retried.id}.${previous}.stream.jsonl`), toolCall(1, "Bash", null).join("\n"));
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  t = await bootTidepool({ dir: t.dir });
+  const unclosed = await servedQuarantineQuestion(t, "unclosedSession", String(throwerSpawn));
+  expect(exitsOf(previous)).toEqual([]);
+  rmSync(unreadable, { recursive: true });
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${unclosed.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  expect(await servedQuarantineQuestion(t, "unclosedSession", String(throwerSpawn))).toBeUndefined();
+  const interrupted = (await questions(t)).find((q) => q.title === `restart interrupted task: ${retried.title}`)!;
+  t.worker.scriptStartFailure(new Error("spawn blew up"));
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${interrupted.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+  await vi.waitFor(async () => expect((await questions(t)).map((q) => q.title)).toContain(`worker never started for task: ${retried.title}`));
+  await t.stopServer();
+
+  t = await bootTidepool({ dir: t.dir });
+
+  const [exited] = exitsOf(previous);
+  expect(exitsOf(previous).map((e) => e.payload)).toEqual([expect.objectContaining({ exit_observed: false })]);
+  expect(episodeOf(previous)?.workerExitedEventId).toBe(exited!.id);
+});

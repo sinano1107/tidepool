@@ -1020,15 +1020,16 @@ export function listEvents(db: Db, taskId: string): EventRow[] {
  *  spawn より前にしか書かれないので入らない。決着の kind の対応表はこれ1つ(ADR 0316 決定4)。 */
 export const NEVER_RAN_KINDS: readonly EventKind[] = ["spawn_failed", "record_container_unwritable"];
 
-/** `sessionWindow` が窓を閉じる位置を読むのに要る kind。kind で絞って event を引く呼び手はこれを含める。 */
-export const SESSION_WINDOW_KINDS: readonly EventKind[] = ["worker_spawned", "worker_exited", ...NEVER_RAN_KINDS];
+/** `sessionWindow` が窓を閉じる位置を読むのに要る kind(次の pickup を含む)。kind で絞って event を引く呼び手はこれを含める。 */
+export const SESSION_WINDOW_KINDS: readonly EventKind[] = ["task_picked_up", "worker_spawned", "worker_exited", ...NEVER_RAN_KINDS];
 
 /** 1つの worker session に属するイベントの窓。窓を記録の上で閉じる位置の規則はここ1つ(ADR 0316 決定4)で、
  *  Precedent の投影・学習器・決定ログの anchor・後始末の決着・起動時の復旧が読む。
  *
  *  閉じる位置は、この spawn を指す `worker_exited`(issue #379 のポインタ)→ 無ければ spawn の後・同じ task の次の
- *  spawn の前にある never-ran の決着(`NEVER_RAN_KINDS`)→ 無ければ次の `worker_spawned`。exit と決着が両方あれば
- *  exit で閉じ、never-ran とは読まない。ただし次の spawn より後へは伸ばさない。窓で切らないと同じタスクの前後の session の判断がこの Episode に湧く。
+ *  pickup(無ければ次の spawn)の前にある never-ran の決着(`NEVER_RAN_KINDS`)→ 無ければ次の `task_picked_up` か
+ *  `worker_spawned`。exit と決着が両方あれば exit で閉じ、never-ran とは読まない。ただし次の pickup・次の spawn より後へは
+ *  伸ばさない(ADR 0316 決定4 Status 追記、issue #2880 / #2932)。窓で切らないと同じタスクの前後の session の判断がこの Episode に湧く。
  *  別の spawn を指す exit は窓に入れない —— 前の session の exit は次の spawn より後に書かれうる(ADR 0316 決定4 Status 追記)。
  *  kind で絞って event を引く呼び手は `SESSION_WINDOW_KINDS` を含める —— 欠けると規則が黙って次の spawn に落ちる。 */
 export function sessionWindow(
@@ -1044,14 +1045,15 @@ export function sessionWindow(
   const exited = events.find(
     (e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id === spawned.id,
   );
-  const nextSpawnedId = events
-    .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
-    .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
-  const settled = events.find(
-    (e) => NEVER_RAN_KINDS.includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < nextSpawnedId,
-  );
+  const nextOf = (kind: EventKind) =>
+    events.filter((e) => e.kind === kind && e.task_id === spawned.task_id && e.id > spawned.id).reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
+  const nextSpawnedId = nextOf("worker_spawned");
+  // ADR 0316 決定4(issue #2932): 窓と never-ran の決着は同じ task の次の pickup を越えない —— 後の pickup の決着を前の session に読ませない。
+  // 次の spawn は pickup の無い列の backstop
+  const upper = Math.min(nextOf("task_picked_up"), nextSpawnedId);
+  const settled = events.find((e) => NEVER_RAN_KINDS.includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < upper);
   const end = exited ?? settled;
-  const endExclusive = Math.min(end ? end.id + 1 : Number.POSITIVE_INFINITY, nextSpawnedId);
+  const endExclusive = Math.min(end ? end.id + 1 : Number.POSITIVE_INFINITY, upper);
   const foreignExitIds = new Set(
     events.filter((e) => e.task_id === spawned.task_id && e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id !== spawned.id).map((e) => e.id),
   );
@@ -1065,7 +1067,7 @@ export function sessionWindow(
 
 /** `anchor` を含む session を開いた `worker_spawned`: anchor 自身が spawn ならそれ、そうでなければ anchor より前で最後に
  *  開いた同じ task の session で、その窓に anchor が入るもの —— 窓の外(session 無しに書かれた entry)なら undefined。
- *  `events` は同じ task の、payload を解いた event(spawn・exit・never-ran の決着があれば足りる)。`sessionOf` と決定ログの一覧が共有する。 */
+ *  `events` は同じ task の、payload を解いた event(pickup・spawn・exit・never-ran の決着があれば足りる —— `SESSION_WINDOW_KINDS`)。`sessionOf` と決定ログの一覧が共有する。 */
 export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRowOf<"worker_spawned"> | undefined {
   const isSpawn = (e: EventRow): e is EventRowOf<"worker_spawned"> => e.payload.kind === "worker_spawned";
   if (isSpawn(anchor)) return anchor;

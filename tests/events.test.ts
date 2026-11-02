@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent, currentAttributions, type EventPayload, type EventRow, latestEventOfTask, listEventsOfKinds, sessionWindow } from "../src/events.js";
+import { appendEvent, currentAttributions, type EventPayload, type EventRow, latestEventOfTask, listEventsOfKinds, SESSION_WINDOW_KINDS, sessionWindow } from "../src/events.js";
 import { api, bootTidepool, bundledObjection, FIXTURE_OTHER_TASK, FIXTURE_TASK, HOUR, mcpClient, QUIET_EXIT, seedFixtureBoard, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 let t: Tidepool;
@@ -139,6 +139,20 @@ it("exit と never-ran の決着が両方あれば exit で閉じ、never-ran �
 
   expect(events.map((e) => window.inSession(e))).toEqual([false, true, true, false]);
   expect({ exited: window.exited?.id, neverRan: window.neverRan }).toEqual({ exited: 3, neverRan: false });
+});
+
+it("後の pickup の never-ran の決着は前の session の決着ではなく、後の pickup の event は前の窓に入らない(issue #2932)", () => {
+  const events = taskEvents(WORKER_SPAWNED, { kind: "decision_logged", line: "old" }, { kind: "task_picked_up" }, SPAWN_FAILED, { kind: "task_escalated", question_id: "q" });
+  const window = sessionWindow(events, events[0]!);
+
+  expect(events.map((e) => window.inSession(e))).toEqual([false, true, false, false, false]);
+  expect({ exited: window.exited, neverRan: window.neverRan, hasNextSpawn: window.hasNextSpawn }).toEqual({ exited: undefined, neverRan: false, hasNextSpawn: false });
+});
+
+it("SESSION_WINDOW_KINDS で絞って引く呼び手も、後の pickup の決着を前の session の決着と読まない(issue #2932)", () => {
+  const events = taskEvents(WORKER_SPAWNED, { kind: "task_picked_up" }, SPAWN_FAILED).filter((e) => SESSION_WINDOW_KINDS.includes(e.kind));
+
+  expect(sessionWindow(events, events[0]!).neverRan).toBe(false);
 });
 
 it("次の spawn の後の決着は前の session を never-ran にしない —— 窓は次の spawn で閉じる", () => {
