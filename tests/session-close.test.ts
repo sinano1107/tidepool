@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "../src/claude-stream-reader.js";
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "../src/codex-stream-reader.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents } from "../src/events.js";
 import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
-import { quarantineExcludedProviders } from "../src/quarantine.js";
+import { quarantineExcludedProviders, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { closeUnclosedSessions } from "../src/session-close.js";
 import { parseStreamLine } from "../src/stream-json.js";
 import { listBoard, pickupTask, registerTask } from "../src/tasks.js";
@@ -35,6 +36,7 @@ async function board(sessions = 1) {
 }
 
 const episodeOf = (db: Db, spawned: number) => listEpisodes(db, {}).find((e) => e.workerSpawnedEventId === spawned);
+const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question").map((q) => q.title);
 
 it("exit の記録が無い session は、観測していない印の exit で閉じ、Episode がその exit を指す", async () => {
   const b = await board();
@@ -81,16 +83,33 @@ it("exit はあるが Episode の無い session は投影だけ補い、2つ目�
   expect(episodeOf(b.db, b.spawns[0]!)).toMatchObject({ workerExitedEventId: exited });
 });
 
-it("同じ task に後の spawn がある session は exit を書かず投影だけ —— 窓を次の session に重ねない", async () => {
+it("同じ task に後の spawn がある session も観測していない exit で閉じ、Episode がその exit を指し、watermark より後の spawn の一時領域は残す(ADR 0344 決定5)", async () => {
   const b = await board(2);
   const live = join(b.tmpDir, `tidepool-claude-${b.task.id}-live`);
   mkdirSync(live);
 
   b.close(b.spawns[1]! - 1);
 
-  expect(b.exits()).toEqual([]);
-  expect(episodeOf(b.db, b.spawns[0]!)).toMatchObject({ workerExitedEventId: null });
+  const [exited, ...rest] = b.exits();
+  expect(rest).toEqual([]);
+  expect(exited?.payload).toMatchObject({ exit_observed: false, worker_spawned_event_id: b.spawns[0] });
+  expect(episodeOf(b.db, b.spawns[0]!)).toMatchObject({ workerExitedEventId: exited!.id });
   expect(existsSync(live)).toBe(true);
+});
+
+it("後の spawn が watermark 以下なら死んでいる —— その session を閉じる手は一時領域を消す(ADR 0344 決定5)", async () => {
+  const b = await board(1);
+  const dead = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  // 後の spawn は process を持たないので閉じない —— 消せるのは前の session の手だけ
+  const watermark = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "spawn_failed", error_code: "ENOENT", message: "spawn claude ENOENT" } });
+  const temp = join(b.tmpDir, `tidepool-claude-${b.task.id}-left`);
+  mkdirSync(temp);
+
+  b.close(watermark);
+
+  expect(b.exits().map((e) => e.payload)).toEqual([expect.objectContaining({ worker_spawned_event_id: b.spawns[0] })]);
+  expect(episodeOf(b.db, dead)).toBeUndefined();
+  expect(existsSync(temp)).toBe(false);
 });
 
 it("古い投影器の版の Episode を持つ session は選ばない", async () => {
@@ -123,9 +142,7 @@ it("transcript の無い session は stream 由来の欄を欠測にして閉じ
   expect(episodeOf(b.db, lost)).toBeUndefined();
 });
 
-it("transcript はあるが読めない session は欄を欠測にして閉じ、投影の失敗は記録して流す", async () => {
-  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => { silenced.mockRestore(); });
+it("transcript はあるが読めない session は欄を欠測の exit で閉じ、投げた投影は閉じ切らなかった session の question を1枚立てる(ADR 0344 決定2)", async () => {
   const b = await board(0);
   const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   mkdirSync(join(b.logDir, `${b.task.id}.${spawned}.stream.jsonl`));
@@ -133,7 +150,7 @@ it("transcript はあるが読めない session は欄を欠測にして閉じ�
   b.close();
 
   expect(b.exits().map((e) => e.payload)).toEqual([expect.objectContaining({ exit_observed: false, usage: null, reported_error: null, last_message: null })]);
-  expect(silenced).toHaveBeenCalledWith(expect.stringContaining(`${spawned}`), expect.anything());
+  expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
 });
 
 /** Claude の stream-json: init・差し替え・advisor の相談・拒否・最後の発話・CLI の報告した失敗・result 行。 */
@@ -341,7 +358,7 @@ it.each([
   expect(silenced).not.toHaveBeenCalled();
 });
 
-// ADR 0342 決定4: session ごとの catch は境界 —— 盤面 DB の拒否は飲まずに投げて起動を拒み、盤面のバグは記録して流す
+// ADR 0342 決定4 / ADR 0344 決定2: session ごとの catch は境界 —— 盤面 DB の拒否は飲まずに投げて起動を拒み、盤面のバグは閉じ切らなかった session の行を立てて起動を続ける
 it("盤面 DB が書きを拒めば、起動時の復旧は投げて起動を拒む", async () => {
   const b = await board();
   b.db.pragma("query_only = 1");
@@ -349,18 +366,31 @@ it("盤面 DB が書きを拒めば、起動時の復旧は投げて起動を拒
   expect(() => b.close()).toThrow("attempt to write a readonly database");
 });
 
-it("exit の記録が盤面のバグで投げた session は記録して流し、別の task の session を閉じる", async () => {
-  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => { silenced.mockRestore(); });
+it("exit の記録だけが盤面 DB に拒まれても投げて起動を拒み、question を立てない", async () => {
+  const b = await board();
+  // query_only は question の書き込みも拒むので、再 throw と行の登録を見分けられない —— exit の INSERT にだけ (A) を投げる
+  b.db.function("refuse_write", () => {
+    throw new Database.SqliteError("database or disk is full", "SQLITE_FULL");
+  });
+  b.db.exec("CREATE TEMP TRIGGER exit_refused BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT refuse_write(); END");
+
+  expect(() => b.close()).toThrow("database or disk is full");
+  expect(questions(b.db)).toEqual([]);
+});
+
+it("exit の記録が盤面のバグで投げた session は question を1枚立て、残りの session はその起動では閉じない —— 同じ spawn の再 throw で question は増えない(ADR 0344 決定2)", async () => {
   const b = await board();
   const other = spawnOnAnotherTask(b.db);
+  const otherExits = () => listEvents(b.db, getEvent(b.db, other)!.task_id!).filter((e) => e.kind === "worker_exited");
   b.db.exec(`CREATE TEMP TRIGGER exit_fails BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' AND NEW.task_id = '${b.task.id}' BEGIN SELECT RAISE(ABORT, 'board bug'); END`);
 
   b.close();
+  b.close();
 
   expect(b.exits()).toEqual([]);
-  expect(listEvents(b.db, getEvent(b.db, other)!.task_id!).filter((e) => e.kind === "worker_exited")).toHaveLength(1);
-  expect(silenced).toHaveBeenCalledWith(expect.stringContaining(`${b.spawns[0]}`), expect.objectContaining({ message: "board bug" }));
+  expect(otherExits()).toEqual([]);
+  expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
+  expect(listBoard(b.db).find((t) => t.type === "question")?.purpose).toContain(`spawn event ${b.spawns[0]}`);
 });
 
 /** その harness の spawn を1つ刻み、transcript を置く。 */

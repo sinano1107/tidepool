@@ -1276,7 +1276,7 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
       writeFileSync(join(dir, `${b.task.id}.${b.spawned}.stream.jsonl`), `${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
       // 起動時の復旧は枠を占めず、memory の残りは越えない
       const deps: TeardownDeps = { ...b.deps, slot: new Slot() };
-      const closeFromRecord = () => closeSessionFromRecord(b.db, b.spawned, { logDir: dir, tmpDir: dir, now: b.clock.now() });
+      const closeFromRecord = () => closeSessionFromRecord(b.db, b.spawned, { logDir: dir, tmpDir: dir, watermark: Number.MAX_SAFE_INTEGER, now: b.clock.now() });
       const exits = () => listEvents(b.db, b.task.id).filter((e) => e.kind === "worker_exited");
       return { b, repair, deps, closeFromRecord, temp, exits };
     }
@@ -1292,6 +1292,17 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
       expect(questions(b.db)).toEqual([]);
       expect(boardHalts(b.db)).toEqual([]);
       expect(openQuarantineValues(b.db, "providerAuth")).toEqual([]);
+    });
+
+    it("同じ task に後の spawn がある session も exit を書いて question が閉じる(ADR 0344 決定5)", async () => {
+      const { b, repair, deps, closeFromRecord, exits } = restartFixture();
+      appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at: b.clock.now(), payload: WORKER_SPAWNED });
+      repair();
+
+      await answerUnclosed(b, { deps, closeFromRecord });
+
+      expect(exits().map((e) => e.payload)).toEqual([expect.objectContaining({ exit_observed: false, worker_spawned_event_id: b.spawned })]);
+      expect(questions(b.db)).toEqual([]);
     });
 
     it("既に閉じていれば no-op で通る —— 2行目を書かない", async () => {
