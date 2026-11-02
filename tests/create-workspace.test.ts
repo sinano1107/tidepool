@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -353,6 +353,16 @@ async function checkoutWithLocalSettings(): Promise<string> {
   return dir;
 }
 
+/** 信号2だけを立てる: 先の無い `.claude/settings.local.json` の symlink —— 存在は link を辿らずに読む(#2935)。 */
+async function checkoutWithDanglingLocalSettings(): Promise<string> {
+  const dir = await makeLocalOnlyCheckout();
+  await mkdir(join(dir, ".claude"), { recursive: true });
+  symlinkSync("../dang.json", join(dir, ".claude", "settings.local.json"));
+  await writeFile(join(dir, ".gitignore"), ".claude/settings.local.json\n");
+  commitAll(dir, "ignore local settings");
+  return dir;
+}
+
 /** 信号3だけを立てる: hooks を持つ **tracked** な `.claude/settings.json`。
  *  `claude_settings_hooks` は tracked のときだけ立つ(未追跡は `claude_settings_untracked`)ので
  *  commit まで進める(add どまりだと staged = 信号1 も一緒に立ってしまう)。 */
@@ -385,6 +395,7 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
   const cases: [string, () => Promise<string>, string][] = [
     ["uncommitted changes / untracked files", dirtyCheckout, "uncommitted_changes"],
     [".claude/settings.local.json の存在", checkoutWithLocalSettings, "claude_settings_local"],
+    [".claude/settings.local.json の dangling な symlink", checkoutWithDanglingLocalSettings, "claude_settings_local"],
     [".claude/settings.json の hooks", checkoutWithProjectHooks, "claude_settings_hooks"],
     [
       "gitignore された .claude/settings.json(床キーと hooks)",
@@ -481,6 +492,22 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
       createWorkspace({ mode: "register", name: "sandbox", path }, deps),
     ).rejects.toMatchObject({ name: "LiveCheckoutSignalsError", reasons: ["claude_settings_hooks"] });
   });
+
+  // #2935: hooks は通常ファイルのときだけ読む —— FIFO を指す link を開くと門が event loop ごと止まる
+  it("tracked な .claude/settings.json が FIFO を指す symlink なら、門は先を開かずに返り、信号にならない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const fifo = join(await tempDir("tidepool-fifo-"), "settings.fifo");
+    execFileSync("mkfifo", [fifo]);
+    const path = await makeLocalOnlyCheckout();
+    await mkdir(join(path, ".claude"), { recursive: true });
+    symlinkSync(fifo, join(path, ".claude", "settings.json"));
+    commitAll(path, "settings link");
+
+    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
+  }, 5000);
 
   it("confirm: true の再送は従来どおり登録する — エントリに confirm は残らない", async () => {
     const registryDir = await makeMainRegistry();

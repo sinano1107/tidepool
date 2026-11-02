@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -668,10 +668,13 @@ type LiveCheckoutSignal =
   | "claude_settings_untracked";
 
 /** 登録の門の hooks 信号の読み手で、盤面で settings の JSON を読む唯一の場所(ADR 0346 決定3)。
- *  `sandbox` / `permissions` の有無は見ない。壊れた JSON と object でない値は信号にしない。 */
+ *  `sandbox` / `permissions` の有無は見ない。壊れた JSON と object でない値は信号にしない。読むのは通常ファイルだけ ——
+ *  link は辿らないので、FIFO を指す link で門が止まらない(#2935)。 */
 function settingsDeclareHooks(path: string): boolean {
+  const file = join(path, ".claude", "settings.json");
   try {
-    const parsed: unknown = JSON.parse(readFileSync(join(path, ".claude", "settings.json"), "utf8"));
+    if (!lstatSync(file).isFile()) return false;
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
     return typeof parsed === "object" && parsed !== null && "hooks" in parsed;
   } catch {
     return false;
@@ -701,7 +704,11 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
     // 故障)に化け、呼び出し側の入力の問題を盤面のせいにしてしまう
     reasons.push("worktree_unreadable");
   }
-  if (existsSync(join(path, ".claude", "settings.local.json"))) reasons.push("claude_settings_local");
+  // link を辿らない —— dangling な link も在る(ADR 0346 決定2、#2935)。`.claude` が通常ファイルの ENOTDIR は従来どおり無い
+  try {
+    lstatSync(join(path, ".claude", "settings.local.json"));
+    reasons.push("claude_settings_local");
+  } catch {}
   const settings = workspaceSettingsDisposition(path);
   if (settings.excludeProjectSettings && settingsDeclareHooks(path)) reasons.push("claude_settings_hooks");
   if (settings.untrackedProjectSettings) reasons.push("claude_settings_untracked");

@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -350,9 +350,14 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
 
 /** `.claude/<name>` を持つ git checkout。`tracked` なら commit まで進める。 */
 function withSettings(name: string, body: unknown, tracked: boolean, check: (workspace: string) => void) {
+  withPlaced(name, (file) => writeFileSync(file, JSON.stringify(body)), tracked, check);
+}
+
+/** `.claude/<name>` を `place` が置いた git checkout。`tracked` なら commit まで進める。 */
+function withPlaced(name: string, place: (file: string, workspace: string) => void, tracked: boolean, check: (workspace: string) => void) {
   const workspace = mkdtempSync(join(tmpdir(), "tidepool-settings-place-"));
   mkdirSync(join(workspace, ".claude"));
-  writeFileSync(join(workspace, ".claude", name), JSON.stringify(body));
+  place(join(workspace, ".claude", name), workspace);
   git(workspace, "init", "--quiet");
   if (tracked) {
     git(workspace, "add", `.claude/${name}`);
@@ -417,6 +422,31 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
       expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
     });
   });
+
+  /** link の先は開かない —— FIFO は open で、/dev/zero は read で event loop を止める(#2935)。 */
+  const LINK_TARGETS: [string, (workspace: string) => string][] = [
+    ["在らない先(dangling)", () => "../dang.json"],
+    ["FIFO", (workspace) => {
+      execFileSync("mkfifo", [join(workspace, "f.fifo")]);
+      return "../f.fifo";
+    }],
+    ["/dev/zero", () => "/dev/zero"],
+  ];
+
+  it.each(LINK_TARGETS)("tracked な settings.json が %s を指す symlink なら、先を開かず隠す", (_case, target) => {
+    withPlaced("settings.json", (file, workspace) => symlinkSync(target(workspace), file), true, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+    });
+  }, 2000);
+
+  it.each([
+    ...LINK_TARGETS.map(([target, link]) => [`untracked な settings.json の ${target}`, "settings.json", link] as const),
+    ["settings.local.json の 在らない先(dangling)", "settings.local.json", LINK_TARGETS[0]![1]] as const,
+  ])("%s を指す symlink は、先を開かず存在だけで止まる", (_case, name, target) => {
+    withPlaced(name, (file, workspace) => symlinkSync(target(workspace), file), false, (workspace) => {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
+    });
+  }, 2000);
 
   it("組を止める理由は置き場所の語で書き、鍵を列挙しない(claudeWorkspaceContainment)", () => {
     withSettings("settings.local.json", {}, false, (workspace) => {
