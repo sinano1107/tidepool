@@ -498,6 +498,12 @@ export function lineageTaskBranch(
   return resolveTaskBranchLineage(db, workspace, task).branch;
 }
 
+/** ADR 0352 決定1・2: 離れる branch が無視するものは、行き先でも無視されるものと入れ子 repo も消す。 */
+function checkoutBranch(workspace: WorkspaceConfig, branch: string): void {
+  git(workspace.path, "clean", "-q", "-ffdX");
+  git(workspace.path, "checkout", branch);
+}
+
 /** Branch discipline at pickup: work never happens on the protected branch.
  *  A fresh task forks from its live lineage — an examinee, with no lineage, from its own checkout's `main`, which is the
  *  head its probe recorded (ADR 0276 決定1); a resumed task only checks its existing branch out again, WIP intact. */
@@ -506,7 +512,8 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
   if (!taskBranchExists(workspace, task.id)) {
     git(workspace.path, "branch", branch, lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace));
   }
-  git(workspace.path, "checkout", branch);
+  if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, branch);
+  else git(workspace.path, "checkout", branch);
 }
 
 /** sparse snapshot: 盤面が settings.json を隠す前の人間の sparse-checkout(ADR 0293 決定1)。pattern ファイルの無い
@@ -1086,16 +1093,15 @@ function boardMovedHead(db: Db, workspace: WorkspaceConfig, taskId: string): boo
 }
 
 /** ADR 0345 決定3: 盤面が checkout を動かした後の再実行の検査。退避も ref の比較も1度しか成り立たないので撃たず、
- *  ツリーの変更だけを読み、あれば fail-closed に quarantine へ落とす。ここへ来る形は2つあり、git からは見分けられない ——
- *  盤面が動かした後に残存 process が書いた形と、タスクブランチの `.gitignore` だけが無視していたファイルが checkout の後に現れた形。 */
+ *  ツリーの変更だけを読み、あれば fail-closed に quarantine へ落とす。ignored は HEAD を動かす前に消すので(ADR 0352 決定1)、
+ *  ここへ来るのは盤面が動かした後に書かれた形である。 */
 function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, task: Task): void {
   removeShadowRemnants(workspace);
   const changes = uncommittedChanges(workspace);
   if (changes.length > 0) {
     throw new Error(
       `workspace ${workspace.name} has uncommitted changes after the board moved its checkout off ` +
-        `'${taskBranch(task.id)}' for task ${task.id}: ${changes.join(", ")} — either a process wrote them after the board moved ` +
-        "the checkout, or they are ignored only on the task branch (its .gitignore does not apply on this branch)",
+        `'${taskBranch(task.id)}' for task ${task.id}: ${changes.join(", ")} — a process wrote them after the board moved the checkout`,
     );
   }
 }
@@ -1127,7 +1133,11 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter):
   const branch = protectedBranch(workspace);
   try {
     // ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、checkout も予告して畳む
-    writeRef("HEAD", symrefValue(`refs/heads/${branch}`), () => git(workspace.path, "checkout", branch));
+    writeRef("HEAD", symrefValue(`refs/heads/${branch}`), () => {
+      // ADR 0276 決定1: 受験者の checkout は再開にも自分の ignored の生成物を残す
+      if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, branch);
+      else git(workspace.path, "checkout", branch);
+    });
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
@@ -1362,7 +1372,10 @@ function mergeBackInto(
   const source = taskBranch(taskId);
   const ref = `refs/heads/${target}`;
   // ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、checkout も予告して畳む
-  boardRefWriter(db, workspace)("HEAD", symrefValue(ref), () => git(workspace.path, "checkout", target));
+  boardRefWriter(db, workspace)("HEAD", symrefValue(ref), () => {
+    if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, target);
+    else git(workspace.path, "checkout", target);
+  });
   if (isAncestor(workspace, source, ref)) return;
   const sha = isAncestor(workspace, ref, source)
     ? git(workspace.path, "rev-parse", `refs/heads/${source}`)

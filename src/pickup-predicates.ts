@@ -159,7 +159,12 @@ function recordedPlacePredicates(
   text: { recorded: (path: string) => string; create: string; scope: string },
 ): PickupPredicate[] {
   const recorded = recordedPlace(db, taskId, kind);
-  const place = { name, path: recorded?.path ?? conventionCheckoutPath(taskId, workspacesBaseDir) };
+  const place = {
+    name,
+    path: recorded?.path ?? conventionCheckoutPath(taskId, workspacesBaseDir),
+    // ADR 0276 決定1・3: 後半の休止も受験者の checkout として扱い、ignored の生成物を残す
+    ...(kind === "examinee_checkout_opened" ? { snapshot_key: taskId } : {}),
+  };
   if (recorded) {
     return [
       {

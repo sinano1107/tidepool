@@ -725,7 +725,8 @@ export class LiveCheckoutSignalsError extends Error {
       `${path} looks like a checkout a human is working in (${reasons.join(", ")})` +
         (cloneLanding === null
           ? "; register it anyway with confirm: true"
-          : `; the clone entrance would give the board its own checkout at ${cloneLanding} instead — register this path anyway with confirm: true`),
+          : `; the clone entrance would give the board its own checkout at ${cloneLanding} instead — register this path anyway with confirm: true`) +
+        ". From the first pickup onward, the board deletes ignored files in this checkout (such as .claude/settings.local.json, .env, and node_modules); clone mode avoids deleting them here.",
     );
     this.name = "LiveCheckoutSignalsError";
   }

@@ -240,6 +240,7 @@ it("解放は受験者の checkout で tree rule を通して main に戻し、�
 
   expect(workspaceNeedsHuman(db, root.id)).toBe(false);
   expect(git(place.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(readFileSync(join(place.path, "build", "out.txt"), "utf8")).toBe("generated\n");
   const wip = git(place.path, "rev-parse", `task/${examinee.id}`);
 
   expect(await pickUp(db, examinee, workspace, base)).toEqual(place);
