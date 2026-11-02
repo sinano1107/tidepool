@@ -1,5 +1,7 @@
 # 盤面は GitHub 上に repo を作らない — workspace はローカルに生まれ、`publish` が remote 正本を与える
 
+**Status 追記: 「ADR 0064 のスナップショットは pickup→release の窓の中だけの一時的な基準である」は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定2 で外れた(2026-11-02、issue #2911)—— 基準は切れず、休止中も比較の相手である。**
+
 issue #212 のグリリング(2026-08-12)で決定。#209 の machine user 対応から派生した議論で、`createWorkspace` の `create` モードが `gh repo create <name> --private --add-readme` を **tidepool-bot のトークンで**撃っていることが判明した(`src/github.ts:264-266`)。`src/github.ts:246` のコメントが明記するとおり owner を省いた bare name は**認証ユーザ**に解決されるので、この扉から生まれる repo の owner は tidepool-bot であってユーザーではない。
 
 CONTEXT.md の GitHub identity は「**GitHub 上の名義は執行者を表し、判断の帰属は盤面の記録が正典**」と書くが、執行者と所有者は別である。実務上も bot の資格情報は Pi 上のトークンファイル1つであり、それを失ったとき失われるのは**ユーザー自身の成果物**になる。

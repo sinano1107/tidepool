@@ -1,5 +1,7 @@
 # 記録された場所の開いた event は repo ができた後に書く —— 面接室と受験者の checkout は1つの開く手順で開き、面接室の名前の quarantine は、その名前を立てうる門の述語をすべて撃ち直して解く
 
+**Status 追記: 追記 決定14 の「後半の ff の書き手は呼び手が渡す —— pickup は口の外のまま(#2459 は動かさない)」は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定3 で外れた(2026-11-02、issue #2911)—— pickup も読む場所も口を通る。pickup は後半より前に基準と比べ、名前の場所の休止位置の clean も検査する(同 決定2・5)。**
+
 2026-10-30 の triage → grilling(issue #2724 —— #2705 の code-review の残り)で決定。面接室の名前(root id)の quarantine は3つの門から
 立つ —— root 自身が面接室を開く手順、読む task の pickup の門(ADR 0277 追記 決定1)、受験者が自分の checkout を開く手順(ADR 0276 決定3)。
 解除の門(ADR 0137 決定5)は開く手順を撃ち直せない(event を書き repo を作る副作用そのもの)ので、開いた event・ディレクトリ・repo の有無から
