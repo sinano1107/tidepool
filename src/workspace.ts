@@ -793,13 +793,26 @@ function snapshotKey(workspace: WorkspaceConfig): string {
 }
 
 /** ADR 0064 決定5: worker に checkout を手渡した瞬間の全 ref を基準として焼く。
- *  撮るのは pickup の1回だけで、ここから先は盤面自身が書いた ref の行だけが
+ *  全撮りは pickup と quarantine の受理(`retakeRefBaselines`、ADR 0351 決定4)だけが撮り、それ以外は盤面自身が書いた ref の行だけが
  *  書く前の予告と書いた後の畳みで更新される(`writeBoardRefs`)。 */
 function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
+  writeSnapshot(db, snapshotKey(workspace), currentRefs(workspace));
+}
+
+function writeSnapshot(db: Db, key: string, refs: string): void {
   db.prepare(
     `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
      ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot`,
-  ).run(snapshotKey(workspace), currentRefs(workspace));
+  ).run(key, refs);
+}
+
+/** ADR 0351 決定4: quarantine の受理は検査がすべて成立した後に、名前に掛かる場所それぞれの基準を自分の checkout から撮り直す ——
+ *  受験者の checkout は受験者 id の行(ADR 0276 決定3)。repo の無い場所は撮らない。全部読んでから書くので、読みが落ちれば行は変わらない。 */
+export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
+  const rows = new Map(places.filter((place) => placeHasRepository(place.path)).map((place) => [snapshotKey(place), currentRefs(place)]));
+  db.transaction(() => {
+    for (const [key, refs] of rows) writeSnapshot(db, key, refs);
+  })();
 }
 
 function storedRefs(db: Db, workspaceName: string): string {
