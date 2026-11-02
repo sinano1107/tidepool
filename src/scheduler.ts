@@ -91,6 +91,7 @@ import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.
 import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
+  boardRefWriter,
   buildWorkspaceResolver,
   firePickupPredicates,
   openExamineeCheckout,
@@ -655,7 +656,7 @@ export function startScheduler(deps: {
         try {
           for (const { place: read, predicates } of checks) {
             if (read.path === place.path) continue;
-            await firePickupPredicates(read, predicates, "after-open", { githubAuth, live });
+            await firePickupPredicates(read, predicates, "after-open", { githubAuth, live, writeRef: (target) => boardRefWriter(db, target) });
             if (!live()) return;
           }
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });

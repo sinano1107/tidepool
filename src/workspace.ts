@@ -243,7 +243,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
     if (live?.() === false) return checks;
     try {
       const list = predicates();
-      await firePickupPredicates(place, list, "before-open", { live });
+      await firePickupPredicates(place, list, "before-open", { live, writeRef: (target) => boardRefWriter(db, target) });
       checks.push({ place, predicates: list });
     } catch (err) {
       if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
@@ -254,20 +254,21 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
   return checks;
 }
 
-/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、後半の書き手と token の鮮度だけは呼び手が決める。 */
+/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き手は口(ADR 0351 決定3)で、
+ *  鍵は項の場所の checkout の鍵 —— 受験者の checkout は受験者 id の行を編集する(#2948)。 */
 export async function firePickupPredicates(
   place: WorkspaceConfig,
   predicates: PickupPredicate[],
   phase: PickupPredicate["phase"],
-  board: PickupPrep & { writeRef?: (place: WorkspaceConfig) => RefWriter; fresh?: boolean } = {},
+  board: PickupPrep & { writeRef: (place: WorkspaceConfig) => RefWriter; fresh?: boolean },
 ): Promise<void> {
   const fire: PlaceFire = {
     fetch: async (target) => {
       await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
       if (board.live?.() === false) return;
-      if (isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), board.writeRef?.(target) ?? outsideTheGate);
+      if (isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), board.writeRef(target));
     },
-    park: (target) => parkOnProtectedBranch(target, board.writeRef?.(target) ?? outsideTheGate),
+    park: (target) => parkOnProtectedBranch(target, board.writeRef(target)),
   };
   for (const predicate of predicates) {
     if (board.live?.() === false) return;
@@ -509,11 +510,17 @@ function checkoutBranch(workspace: WorkspaceConfig, branch: string): void {
  *  head its probe recorded (ADR 0276 決定1); a resumed task only checks its existing branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const branch = taskBranch(task.id);
+  const ref = `refs/heads/${branch}`;
+  // ADR 0351 決定3: 作成と checkout も口を通す —— 作成は無い行に fork 元の sha を、checkout は HEAD の行を予告する(ADR 0345 決定2)
+  const write = boardRefWriter(db, workspace);
   if (!taskBranchExists(workspace, task.id)) {
-    git(workspace.path, "branch", branch, lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace));
+    const source = lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace);
+    write(ref, git(workspace.path, "rev-parse", source), () => git(workspace.path, "branch", branch, source));
   }
-  if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, branch);
-  else git(workspace.path, "checkout", branch);
+  write("HEAD", symrefValue(ref), () => {
+    if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, branch);
+    else git(workspace.path, "checkout", branch);
+  });
 }
 
 /** sparse snapshot: 盤面が settings.json を隠す前の人間の sparse-checkout(ADR 0293 決定1)。pattern ファイルの無い
@@ -733,7 +740,7 @@ export async function prepareWorkspaceAtPickup(
   const rootId = interviewRootIdOf(db, task);
   const predicates = rootId === undefined ? checkoutPickupPredicates(workspace)
     : task.type === "interview" ? roomPickupPredicates(db, rootId, "") : examineePickupPredicates(db, task, rootId, "");
-  await firePickupPredicates(workspace, predicates, "after-open", board);
+  await firePickupPredicates(workspace, predicates, "after-open", { ...board, writeRef: (place) => boardRefWriter(db, place) });
   if (board.live?.() === false) return;
   ensureTaskBranch(db, workspace, task);
   // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `fetchBranchCopy` が `refs/remotes` を、休止位置の ff が
@@ -941,9 +948,6 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
   return (ref, newValue, write) => writeBoardRefs(db, workspace, [[ref, newValue]], write);
 }
 
-/** 口を通さずに書く。後始末の fetch と、口を渡されない鮮度の段(pickup)の fetch と休止位置が使う —— 口に通すのは #2459。 */
-const outsideTheGate: RefWriter = (_ref, _newValue, write) => write();
-
 /** ADR 0069 の3条件 —— **既知パス・untracked・0 バイト**をすべて満たすファイルだけが
  *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
  *  完了の門(ADR 0084)の dirty 判定は同じ集合を見なければならない —— 2箇所に綴りが
@@ -1127,8 +1131,7 @@ function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, tas
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
  *  `releaseWorkspace` と pickup の後半が受ける)。
  *
- *  checkout と ff は呼び手が渡す `writeRef` で書く: 後始末と受理のやり直しは口(ADR 0243 決定4 / ADR 0345 決定2)、口を渡されない
- *  pickup の鮮度の段だけが `firePickupPredicates` の既定の `outsideTheGate` で書く(#2459)。 */
+ *  checkout と ff は呼び手が渡す口で書く(ADR 0243 決定4 / ADR 0345 決定2 / ADR 0351 決定3)。 */
 function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter): void {
   const branch = protectedBranch(workspace);
   try {
@@ -1345,8 +1348,8 @@ export function releaseWorkspace(
     // 同じ quarantine(ADR 0052)。呼び出し元で投げると slot が解放されない。
     if (mergeBack) {
       if (tokenFailure !== undefined) throw tokenFailure;
-      // 後始末の fetch はまだ口の外で写しを書く(#2459)
-      if (isRemoteBacked(workspace)) fetchBranchCopy(workspace.path, githubAuth, protectedBranch(workspace), outsideTheGate);
+      // ADR 0351 決定3: 基準は切れないので、後始末の fetch も口を通す
+      if (isRemoteBacked(workspace)) fetchBranchCopy(workspace.path, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
     }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
@@ -1414,7 +1417,7 @@ function undeliveredMergeBacks(
 
 /** ADR 0240 決定4: workspace の quarantine の受理の検査がやり直す merge back。届いていない done の work が無ければ何もしない
  *  (ネットワークにも出ない)。あれば、走っている session(後始末が未了のものを含む)が無いことを読んでから(ADR 0064)、
- *  保護ブランチの fetch(後始末の fetch と違い口を通る形 —— `refreshProtectedBranch`)→ 帰り先へ merge back → 休止位置へ
+ *  保護ブランチの fetch(`refreshProtectedBranch`)→ 帰り先へ merge back → 休止位置へ
  *  戻す、を踏む。どの書き込みも口を通り、基準の行は書いた値に
  *  畳まれる(ADR 0243 決定4)。conflict は中断状態を残さないので、休止位置へ戻して出口の文のまま投げる。 */
 export async function redoMergeBacks(

@@ -1,0 +1,169 @@
+import { dirname } from "node:path";
+import { expect, it, vi } from "vitest";
+import { type Db, openDb } from "../src/db.js";
+import { quarantineChecks } from "../src/human-verbs.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import { Slot } from "../src/slot.js";
+import { cancelTaskDirectly, registerTask, type Task } from "../src/tasks.js";
+import { commitRoomCopy, ensureTaskBranch, openExamineeCheckout, prepareWorkspaceAtPickup, refValues, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
+
+// 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+const NOW = new Date("2026-11-03T00:00:00.000Z");
+
+/** 基準の行(鍵は checkout の鍵)を refname → 値 で。 */
+function baseline(db: Db, key: string): Map<string, string> {
+  return refValues(db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(key) as string);
+}
+
+function work(db: Db, title: string) {
+  return registerTask(db, { type: "work", title, purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+}
+
+/** 行の値が今の ref の値の1値であること。 */
+function expectRowsCurrent(db: Db, key: string, ws: WorkspaceConfig, refs: string[]): void {
+  const row = baseline(db, key);
+  for (const ref of refs) expect([ref, row.get(ref)]).toEqual([ref, git(ws.path, "rev-parse", ref)]);
+}
+
+it("remote-backed の完了の後始末の merge back の fetch の後、基準の refs/remotes/origin/<protected> の行は fetch 先の1値で、休止位置の ff も違反と読まれない(#2459 項目1)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("gate-release");
+  const db = openDb(":memory:");
+  const task = work(db, "release with merge back");
+  // pickup の fetch・休止位置の ff も盤面自身の書き込み —— 直後の解放の比較が違反と読まない
+  publish("before.txt", "landed before the pickup\n", "merge before the pickup");
+  await prepareWorkspaceAtPickup(db, workspace, task);
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  commitWork(workspace.path, "work.txt", "work\n");
+
+  releaseWorkspace(db, workspace, task, NOW, true, undefined, undefined, true);
+
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expectRowsCurrent(db, workspace.name, workspace, ["refs/remotes/origin/main", "refs/heads/main"]);
+  db.close();
+});
+
+it("ensureTaskBranch の後、基準にタスクブランチの行(fork 元の sha)と HEAD の行(symref)が予告どおりの1値で入り、再開は HEAD の行を戻す(ADR 0351 決定3 / ADR 0345 決定2)", async () => {
+  const ws = await makeWorkspace("gate-task-branch");
+  const db = openDb(":memory:");
+  const first = work(db, "leaves a baseline");
+  await prepareWorkspaceAtPickup(db, ws, first);
+  releaseWorkspace(db, ws, first, NOW);
+  const next = work(db, "forks from main");
+  const branch = `refs/heads/task/${next.id}`;
+
+  ensureTaskBranch(db, ws, next);
+
+  expect(baseline(db, ws.name).get(branch)).toBe(git(ws.path, "rev-parse", "main"));
+  expect(baseline(db, ws.name).get("HEAD")).toBe(`symref=${branch}`);
+
+  // 再開: ブランチは在り、HEAD だけが休止位置から戻る
+  commitWork(ws.path, "wip.txt", "wip\n");
+  releaseWorkspace(db, ws, next, NOW);
+  expect(baseline(db, ws.name).get("HEAD")).toBe("symref=refs/heads/main");
+  ensureTaskBranch(db, ws, next);
+
+  expect(baseline(db, ws.name).get("HEAD")).toBe(`symref=${branch}`);
+  db.close();
+});
+
+it("Interview の root の pickup が読む実環境の fetch・休止位置の ff の後、その実環境の基準の行は1値で現在値と一致する(ADR 0351 決定3)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("gate-read-place");
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const earlier = work(db, "leaves a baseline on the real workspace");
+  await prepareWorkspaceAtPickup(db, workspace, earlier);
+  releaseWorkspace(db, workspace, earlier, clock.now());
+  cancelTaskDirectly(db, earlier, null, clock.now(), {}, "webui");
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] as never }, clock.now(), ...HUMAN_WEBUI);
+  const worker = new ScriptedWorker(clock);
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    workspace,
+    resolveWorkspace: () => workspace,
+    workspacesDir: await tempDir("gate-read-place-rooms-"),
+  });
+
+  await clock.advance(HOURLY);
+  await vi.waitFor(() => expect(worker.started.map((t) => t.id)).toEqual([root.id]));
+  scheduler.stop();
+
+  expect(git(workspace.path, "rev-parse", "main")).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
+  expectRowsCurrent(db, workspace.name, workspace, ["refs/remotes/origin/main", "refs/heads/main"]);
+  db.close();
+});
+
+it("pickup の fetch の後に休止位置が落ちても、基準の refs/remotes/origin/<protected> の行は fetch 先の1値で現在値と一致する(#2459 項目2・3)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("gate-pickup");
+  const db = openDb(":memory:");
+  const earlier = work(db, "leaves a baseline");
+  await prepareWorkspaceAtPickup(db, workspace, earlier);
+  releaseWorkspace(db, workspace, earlier, NOW);
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  // 帯域外のローカルの commit で保護ブランチが分岐し、休止位置の ff が落ちる
+  commitWork(workspace.path, "by-hand.txt", "committed on the host\n");
+
+  await expect(prepareWorkspaceAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
+
+  expectRowsCurrent(db, workspace.name, workspace, ["refs/remotes/origin/main"]);
+  db.close();
+});
+
+/** 面接室(行あり、休止位置)と、出題された未決着の受験者の checkout(行あり、自分のタスクブランチの上)。受験者は pickup の状態にしない
+ *  —— 走行中の session があると受理が拒む。 */
+async function roomWithPickedExaminee() {
+  const db = openDb(":memory:");
+  const workspace = await makeWorkspace("gate-examinee-real");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] as never }, NOW, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  const room = taskRunPlace(db, root, workspace);
+  await prepareWorkspaceAtPickup(db, room, root);
+  const head = commitRoomCopy(db, room);
+  const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", head) as [Task];
+  releaseWorkspace(db, room, root, NOW);
+  openExamineeCheckout(db, examinee, dirname(room.path), NOW);
+  const checkout = taskRunPlace(db, examinee, workspace);
+  await prepareWorkspaceAtPickup(db, checkout, examinee);
+  expect(baseline(db, examinee.id).get("HEAD")).toBe(`symref=refs/heads/task/${examinee.id}`);
+  const roomRow = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(root.id);
+  return { db, root, examinee, checkout, roomRow, roomBefore: roomRow() };
+}
+
+it("面接室の名前への受理の後半が受験者の checkout を休止させると受験者 id の行が変わり、面接室(root id)の行は変わらない(#2948)", async () => {
+  const { db, root, examinee, roomRow, roomBefore } = await roomWithPickedExaminee();
+
+  await quarantineChecks({ db }).workspace!(root.id);
+
+  expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
+  expect(roomRow()).toBe(roomBefore);
+  db.close();
+});
+
+it("受験者の再開の pickup の after-open が checkout を休止させると受験者 id の行が変わり、面接室(root id)の行は変わらない(#2948)", async () => {
+  const { db, examinee, checkout, roomRow, roomBefore } = await roomWithPickedExaminee();
+  // pickup の継続の門が休止の直後に閉じる(#1973)—— 全撮りの前の基準を読む
+  const live = () => git(checkout.path, "rev-parse", "--abbrev-ref", "HEAD") !== "main";
+
+  await prepareWorkspaceAtPickup(db, checkout, examinee, { live });
+
+  expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
+  expect(roomRow()).toBe(roomBefore);
+  db.close();
+});
