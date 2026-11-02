@@ -512,6 +512,9 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     expect((err as LiveCheckoutSignalsError).message).toContain(
       join(deps.workspacesBaseDir, "sandbox"),
     );
+    expect((err as LiveCheckoutSignalsError).message).toContain(
+      "From the first pickup onward, the board deletes ignored files in this checkout (such as .claude/settings.local.json, .env, and node_modules); clone mode avoids deleting them here.",
+    );
   });
 
   // purely-local には代替の入口が無い(コピーは ADR 0052/0053 でこの issue が
