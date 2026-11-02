@@ -1078,6 +1078,7 @@ export function containerHarness(
       containers,
       clock,
       reclaimTimeout: RECLAIM_TIMEOUT,
+      pollNow: () => {},
       onReclaimTimeout: () => {},
       checkCliVersion: pinnedCliVersions,
       onCliVersionMismatch: () => {},

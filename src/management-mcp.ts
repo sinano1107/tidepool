@@ -168,8 +168,9 @@ export interface ManagementMcpDeps {
   resolvesToBuiltIn?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
-   *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。 */
-  reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
+   *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。
+   *  `pendingReclaim` は `list_queue` の欄も読む(ADR 0347 決定3)。 */
+  reclaim?: PendingReclaim;
   stopSession?: StopSession;
   /** ADR 0137 決定5: 解除の門の map(WebUI 側と同じ配線)。 */
   quarantineChecks?: QuarantineChecks;
@@ -384,10 +385,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "list_queue",
     {
       description:
-        "List the execution queue and pickup state: `halts` (plus `teardown` while a session is being torn down, and " +
+        "List the execution queue and pickup state: `halts` (plus `teardown` while a session is being torn down, " +
+        "`pendingReclaim` while a force-reclaimed container has not been observed empty, and " +
         "`lastPollFailure` while the last poll that got past the gates threw, and `lastIssueExpansionFailure` while reading " +
         "GitHub issues at pickup keeps failing — tasks that read GitHub then show as skipped) say why pickup is waiting, `tasks` " +
-        `lists the queue in board order. ${nextDescription("list_queue", "tasks", "`halts`, `teardown`, `lastPollFailure` and `lastIssueExpansionFailure` come")}`,
+        `lists the queue in board order. ${nextDescription("list_queue", "tasks", "`halts`, `teardown`, `pendingReclaim`, `lastPollFailure` and `lastIssueExpansionFailure` come")}`,
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
@@ -397,6 +399,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
         // 承知の上である
         const teardown = sessionInTeardown(deps.db);
+        // ADR 0347 決定3: 後始末と同じく列挙の外で pickup を待たせているもの。門が読む一句と同じ
+        const pendingReclaim = deps.reclaim?.pendingReclaim();
         const failures = deps.queueFailuresJson();
         const tasks = listQueue(
           deps.db,
@@ -412,6 +416,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         return packItems(read, "tasks", tasks, {
           halts: boardHalts(deps.db),
           ...(teardown ? { teardown } : {}),
+          ...(pendingReclaim === undefined ? {} : { pendingReclaim }),
           ...failures,
         });
       }),

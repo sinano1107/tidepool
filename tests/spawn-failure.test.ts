@@ -11,8 +11,8 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  listQueueViaMcp,
   makeWorkspace,
-  managementMcpClient,
   questions,
   queueWork,
   type Tidepool,
@@ -98,14 +98,7 @@ it("空を観測できない容器では、読み口が後始末中を報せ、�
   expect(t.containers.forceReclaims).toContain(task.id);
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.teardown.taskId).toBe(task.id);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    const result: any = await client.callTool({ name: "list_queue", arguments: {} });
-    const queue = JSON.parse(result.content[0].text);
-    expect(queue.teardown.taskId).toBe(task.id);
-  } finally {
-    await client.close();
-  }
+  expect((await listQueueViaMcp(t.baseUrl)).teardown.taskId).toBe(task.id);
   expect(await status(task.id)).toBe("blocked");
 
   await t.clock.advance(10 * MIN);

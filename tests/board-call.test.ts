@@ -9,7 +9,7 @@ import { ProcessContainers } from "../src/process-container.js";
 import type { Harness } from "../src/registry.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingPty, recordingSpawn } from "./fakes.js";
-import { failQuarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
+import { failQuarantineQuestion, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
 
 /** Board call の口(ADR 0136)のドメイン層。容器機構は fake、process は scripted、
  *  時間は FakeClock —— 口が持つのは「容器・上限・force・観測の順序」だけなので、
@@ -38,6 +38,8 @@ const readAll = (proc: ContainedProcess) => {
   return () => text || null;
 };
 
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 function setup(onReclaimTimeout?: (reason: string, clock: FakeClock) => void) {
   const { calls: spawns, ...recorder } = recordingSpawn();
   const clock = new FakeClock();
@@ -50,10 +52,12 @@ function setup(onReclaimTimeout?: (reason: string, clock: FakeClock) => void) {
     codex: { available: true },
   };
   const mismatches: Array<[Harness, string]> = [];
+  const pollNow = vi.fn();
   const calls = createBoardCalls({
     containers,
     clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
+    pollNow,
     onReclaimTimeout: (reason) => (onReclaimTimeout ? onReclaimTimeout(reason, clock) : quarantined.push(reason)),
     checkCliVersion: async (harness) => versions[harness],
     onCliVersionMismatch: (harness, reason) => mismatches.push([harness, reason]),
@@ -64,9 +68,9 @@ function setup(onReclaimTimeout?: (reason: string, clock: FakeClock) => void) {
    *  1本目の process だけが動いている状態で使う。 */
   const say = async (text: string) => {
     recorder.processes[0]!.stdout.write(text);
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
   };
-  return { ...recorder, spawns, clock, runtime, containers, calls, quarantined, versions, mismatches, spawned, say };
+  return { ...recorder, spawns, clock, runtime, containers, calls, quarantined, versions, mismatches, pollNow, spawned, say };
 }
 
 const DRIFTED = { available: false, reason: "the board pins Claude CLI 2.1.280, but this host's is 2.1.290" } as const;
@@ -98,6 +102,7 @@ it("版の検査が投げたら、不一致として断る", async () => {
     containers: t.containers,
     clock: t.clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
+    pollNow: () => {},
     onReclaimTimeout: () => {},
     checkCliVersion: async () => {
       throw new Error("spawn claude ENOENT");
@@ -219,7 +224,7 @@ it("回収済み観測のあとに返す呼び出しは、容器が空になる�
   void call.then(() => {
     settled = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   expect(settled).toBe(false);
 
   t.runtime.fireEmpty(container);
@@ -257,29 +262,62 @@ it("強制回収のあと回収 timeout まで空を観測できなければ、�
 
   // 遅れて空になれば保留は解ける
   t.runtime.fireEmpty(container);
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   expect(t.calls.pendingReclaim()).toBeUndefined();
 });
 
-it("回収 timeout の報告の書き込みが rollback したら帳簿に載せず、次の呼び出しの timeout で報告できる(ADR 0342 決定5)", async () => {
+/** 回収 timeout まで空にならない呼び出しを1つ流す。戻り値は容器 id と、timeout の間に上がった unhandled rejection。 */
+async function unreclaimedCall(t: ReturnType<typeof setup>, order: BoardCallSpec, index: number) {
+  const call = t.calls.call(order, readAll);
+  await t.spawned(index + 1);
+  const container = t.runtime.created[index]!;
+  t.runtime.hold(container);
+  t.emitExitAt(index, 0, null);
+  await call;
+  return { container, rejections: await unhandledRejectionsDuring(() => t.clock.advance(RECLAIM_TIMEOUT)) };
+}
+
+it("回収 timeout の報告の書き込みが rollback しても帳簿は容器を名指し続け、次の呼び出しの timeout で報告でき、容器が空になるまで解けない(ADR 0347 決定2)", async () => {
   const db = openDb(":memory:");
   const t = setup((reason, clock) => quarantineContainment(db, reason, clock.now()));
   const dropTrigger = failQuarantineQuestion(db);
-  const unreclaimedCall = async (index: number) => {
-    const call = t.calls.call(spec, readAll);
-    await t.spawned(index + 1);
-    t.runtime.hold(t.runtime.created[index]!);
-    t.emitExitAt(index, 0, null);
-    await call;
-    return unhandledRejectionsDuring(() => t.clock.advance(RECLAIM_TIMEOUT));
-  };
 
-  expect(await unreclaimedCall(0)).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
-  expect(t.calls.pendingReclaim()).toBeUndefined();
-  dropTrigger();
-  expect(await unreclaimedCall(1)).toEqual([]);
-
+  const first = await unreclaimedCall(t, spec, 0);
+  expect(first.rejections).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
   expect(t.calls.pendingReclaim()).toContain("skill enumeration");
+  dropTrigger();
+
+  const second = await unreclaimedCall(t, { ...spec, kind: "usage read" }, 1);
+  expect(second.rejections).toEqual([]);
+  expect(quarantineQuestion(db, "containment", null)?.purpose).toContain("usage read");
+  t.runtime.fireEmpty(second.container);
+  await settle();
+  expect(t.calls.pendingReclaim()).toContain("skill enumeration");
+
+  t.runtime.fireEmpty(first.container);
+  await settle();
+  expect(t.calls.pendingReclaim()).toBeUndefined();
+});
+
+// ADR 0347 決定3: 契機は帳簿の有無で撃つ —— 報告の書き込みの成否に依らない
+it.each([
+  ["報告が書けた", false],
+  ["報告が投げた", true],
+])("帳簿に載った容器が遅れて空になると pollNow が1度撃たれ、空にならない間は撃たれない(%s)", async (_label, reportThrows) => {
+  const db = openDb(":memory:");
+  const t = setup((reason, clock) => quarantineContainment(db, reason, clock.now()));
+  if (reportThrows) failQuarantineQuestion(db);
+
+  const { container, rejections } = await unreclaimedCall(t, spec, 0);
+  expect(rejections).toHaveLength(reportThrows ? 1 : 0);
+  await t.clock.advance(RECLAIM_TIMEOUT);
+  await settle();
+  expect(t.pollNow).not.toHaveBeenCalled();
+
+  t.runtime.fireEmpty(container);
+  await settle();
+  expect(t.pollNow).toHaveBeenCalledTimes(1);
+  expect(t.calls.pendingReclaim()).toBeUndefined();
 });
 
 it("空になった呼び出しは回収 timeout を報告しない", async () => {
@@ -404,6 +442,7 @@ it("断ったことの報告が投げても、口は null を返す —— 失�
     containers: t.containers,
     clock: t.clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
+    pollNow: () => {},
     onReclaimTimeout: () => {},
     checkCliVersion: async () => DRIFTED,
     onCliVersionMismatch: () => {
@@ -422,10 +461,10 @@ it("root の exit のあと、出力の読み切りの前に届いた stdout / s
 
   t.emitExitOnlyAt(0, 0, null);
   // exit で決着させる実装が、遅れて届く出力を読む前に決着し終えるように間を挟む
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   t.processes[0]!.stdout.write("late answer");
   t.processes[0]!.stderr.write("late warning");
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   t.emitCloseAt(0, 0, null);
 
   expect(await call).toEqual({ exitCode: 0, stdout: "late answer", stderr: "late warning" });

@@ -4290,6 +4290,13 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     taskId: teardown.taskId,
     line: teardown.humanStop ? "stopped by human \xB7 session teardown" : "session teardown \xB7 nothing new starts",
     meta: `${teardown.humanStop ? teardown.humanStop.reason ?? "no reason given" : TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
+  } : queueEnvelope.pendingReclaim ? {
+    // ADR 0347 決定3: 枠は空いているが、空を観測できていない容器が pickup を待たせている。
+    // 後始末と同じく**停止ではない**ので HALT_COPY には居ない
+    color: "var(--sun-4)",
+    taskId: null,
+    line: "waiting for a container to empty \xB7 nothing new starts",
+    meta: `${queueEnvelope.pendingReclaim} \xB7 kill its processes by hand`
   } : { color: "var(--rock-3)", line: "slot free \u2014 nothing running", taskId: null, meta: "concurrency=1" };
   const failure = queueEnvelope.lastPollFailure;
   const pollFailureMeta = failure && `${failure.message} \xB7 at ${fmtTime(failure.at)}`;

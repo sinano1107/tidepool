@@ -369,10 +369,18 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const harnessUnused = (harness: Harness) =>
     given.quarantineResolvers?.harnessContainment?.([harness]).length === 0 ||
     PROVIDER_VALUES.filter((provider) => canonicalHarness(provider) === harness).every((provider) => given.credentialAbsence?.[provider]?.() !== undefined);
+  // ADR 0119 決定3・4: pickup の契機は scheduler より先に組まれる deps(中断の一撃・起動時の
+  // 復旧)にも要るので、scheduler を後から解決する。解決するのは起動完了の時点(この関数の
+  // 末尾)である —— listen の前に poll が走れば、封じ込め検査がまだ bind していない人間面を
+  // 撃って fail-closed の quarantine に落ちる。それより前に届いた契機(復旧の後始末の完走を
+  // 含む)は捨ててよい: 起動完了の poll が同じ盤面を読む。
+  let startedScheduler: Scheduler | undefined;
+  const pollNow = () => startedScheduler?.pollNow();
   const boardCalls = createBoardCalls({
     containers,
     clock: given.clock,
     reclaimTimeout,
+    pollNow,
     onReclaimTimeout: (reason) => quarantineContainment(db, reason, given.clock.now()),
     checkCliVersion: given.checkHarnessCliVersion,
     // ADR 0186 決定3: 版の不一致で断ったら、pickup の検査と同じ鍵の封じ込めの隔離へ(1資源につき1枚)。
@@ -466,13 +474,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   app.use(auth.requireJsonContentType);
   // exit の観測・分類は時限の設定によらず watchdog が受ける(ADR 0309)。
   let watchdog: Watchdog | undefined;
-  // ADR 0119 決定3・4: pickup の契機は scheduler より先に組まれる deps(中断の一撃・起動時の
-  // 復旧)にも要るので、scheduler を後から解決する。解決するのは起動完了の時点(この関数の
-  // 末尾)である —— listen の前に poll が走れば、封じ込め検査がまだ bind していない人間面を
-  // 撃って fail-closed の quarantine に落ちる。それより前に届いた契機(復旧の後始末の完走を
-  // 含む)は捨ててよい: 起動完了の poll が同じ盤面を読む。
-  let startedScheduler: Scheduler | undefined;
-  const pollNow = () => startedScheduler?.pollNow();
   const sessionTeardown: TeardownDeps = {
     db,
     clock: options.clock,
@@ -614,6 +615,16 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     agentRegistered: options.agentRegistered,
     recordDir: options.transcripts.dir,
   };
+  // ADR 0099 決定3 / ADR 0136: 回収済み観測を待って止まっている容器の門。単位は
+  // 2つ(worker session と Board call)なので、回答受理側・pickup の門・読み口(ADR 0347 決定3)が
+  // 読む口もその2つの合成である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
+  const reclaim: PendingReclaim = {
+    pendingReclaim: () => watchdog?.pendingReclaim() ?? boardCalls.pendingReclaim(),
+    // 受理が動かすのは slot だけなので watchdog にしか用は無い —— Board call の
+    // 未回収は `pendingReclaim` が容器を読み直した時点で解ける。
+    acceptReclaimed: () => watchdog?.acceptReclaimed(),
+    resumeTeardown: () => watchdog?.resumeTeardown(),
+  };
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -633,6 +644,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     credentialAbsence: options.credentialAbsence,
     taskExecutionCandidates: options.taskExecutionCandidates,
     harnessContainment,
+    pendingReclaim: reclaim.pendingReclaim,
     registryReachability,
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
@@ -665,16 +677,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   });
   // Human stop needs the timed ladder; the exit receiver also serves boards without it.
   const stopSession = options.watchdog ? watchdog.stopSession : undefined;
-  // ADR 0099 決定3 / ADR 0136: 回収済み観測を待って止まっている容器の門。単位は
-  // 2つ(worker session と Board call)なので、回答受理側が読む口もその2つの合成
-  // である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
-  const reclaim: PendingReclaim = {
-    pendingReclaim: () => watchdog?.pendingReclaim() ?? boardCalls.pendingReclaim(),
-    // 受理が動かすのは slot だけなので watchdog にしか用は無い —— Board call の
-    // 未回収は `pendingReclaim` が容器を読み直した時点で解ける。
-    acceptReclaimed: () => watchdog?.acceptReclaimed(),
-    resumeTeardown: () => watchdog?.resumeTeardown(),
-  };
   // ADR 0137 決定5: 解除の門の map は WebUI と管理 MCP が共有する1つだけ
   const checks = quarantineChecks({
     db,

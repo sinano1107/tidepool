@@ -44,6 +44,7 @@ const { call } = createBoardCalls({
   containers,
   clock: new SystemClock(),
   reclaimTimeout: RECLAIM_TIMEOUT,
+  pollNow: () => {},
   onReclaimTimeout: (reason) => console.warn(reason),
   checkCliVersion: async () => ({ available: true }),
   onCliVersionMismatch: () => {},

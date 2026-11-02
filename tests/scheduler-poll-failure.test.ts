@@ -93,6 +93,25 @@ it("投げた task が消えて queue が空になれば、本体に入った po
   scheduler.stop();
 });
 
+// ADR 0347 決定3: 帳簿の待ちは停止の列挙に入らない —— 空を観測すれば question を挟まず解ける
+it("空を観測できていない容器がある間は pickup が待ち、理由にその一句が入り、停止の列挙は空のまま。容器の空を観測すれば今日どおり pickup する", async () => {
+  let pending: string | undefined = "the container for the skill enumeration Board call";
+  const { db, worker, scheduler, state } = board({ pendingReclaim: () => pending });
+  state.broken = false;
+
+  expect(await scheduler.rerunPoll()).toEqual({
+    outcome: "blocked",
+    reason: "the container for the skill enumeration Board call has not been observed empty — pickup waits",
+  });
+  expect(worker.started).toEqual([]);
+  expect(boardHalts(db)).toEqual([]);
+
+  pending = undefined;
+  await scheduler.rerunPoll();
+  expect(worker.started.map((t) => t.title)).toEqual(["head"]);
+  scheduler.stop();
+});
+
 it("後始末の一撃そのものが投げても process は生きて落ちた後始末が1枚立ち、一撃は撃ち直されない(ADR 0294 決定5 / ADR 0342 決定6)", async () => {
   let shots = 0;
   const { db, clock, worker, scheduler, state } = board({
