@@ -667,13 +667,24 @@ type LiveCheckoutSignal =
   | "claude_settings_hooks"
   | "claude_settings_untracked";
 
+/** 登録の門の hooks 信号の読み手で、盤面で settings の JSON を読む唯一の場所(ADR 0346 決定3)。
+ *  `sandbox` / `permissions` の有無は見ない。壊れた JSON と object でない値は信号にしない。 */
+function settingsDeclareHooks(path: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(path, ".claude", "settings.json"), "utf8"));
+    return typeof parsed === "object" && parsed !== null && "hooks" in parsed;
+  } catch {
+    return false;
+  }
+}
+
 /** 登録対象の checkout に「生きた dev checkout らしさ」の信号があるか(issue #383)。
  *
  *  `settings.local.json` の検査は `git status` の冗長ではない —— このファイルは
  *  gitignore されるので untracked としても現れない。未追跡の `settings.json` も同じ理由で
  *  独立に要る(issue #686 — ignore されていなければ `uncommitted_changes` と両方立つが、
- *  抑制しない)。hooks と未追跡の読み口は `src/sandbox.ts` の
- *  `workspaceSettingsDisposition` をそのまま使う(設定の読み手は1つ)。 */
+ *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): 置き場所(tracked か未追跡か)は worker 向けの判定
+ *  `workspaceSettingsDisposition` をそのまま使い、中身は門の信号の `settingsDeclareHooks` だけが読む。 */
 function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
   // --no-optional-locks: 門が人間の生きた作業ツリーの index.lock を取らない
@@ -685,14 +696,14 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   } catch {
     // 作業ツリーを持たないパス(bare repo は `rev-parse --git-dir` を通ってここへ
     // 来る)。「読めなかった」を「きれい」と読ませない —— sandbox.ts の
-    // workspaceSettingsDisposition と同じ fail-closed だが、この門は拒まないので
+    // workspaceSettingsDisposition が読めない settings を止めるのと同じ fail-closed だが、この門は拒まないので
     // 人間が見て納得すれば従来どおり登録される。素の例外を投げれば 502(盤面の
     // 故障)に化け、呼び出し側の入力の問題を盤面のせいにしてしまう
     reasons.push("worktree_unreadable");
   }
   if (existsSync(join(path, ".claude", "settings.local.json"))) reasons.push("claude_settings_local");
   const settings = workspaceSettingsDisposition(path);
-  if (settings.projectHooks) reasons.push("claude_settings_hooks");
+  if (settings.excludeProjectSettings && settingsDeclareHooks(path)) reasons.push("claude_settings_hooks");
   if (settings.untrackedProjectSettings) reasons.push("claude_settings_untracked");
   return reasons;
 }

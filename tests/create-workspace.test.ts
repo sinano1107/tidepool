@@ -354,7 +354,7 @@ async function checkoutWithLocalSettings(): Promise<string> {
 }
 
 /** 信号3だけを立てる: hooks を持つ **tracked** な `.claude/settings.json`。
- *  `workspaceSettingsDisposition` の `projectHooks` は tracked のときだけ立つので
+ *  `claude_settings_hooks` は tracked のときだけ立つ(未追跡は `claude_settings_untracked`)ので
  *  commit まで進める(add どまりだと staged = 信号1 も一緒に立ってしまう)。 */
 async function checkoutWithProjectHooks(): Promise<string> {
   const dir = await makeLocalOnlyCheckout();
@@ -447,23 +447,39 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     expect((err as LiveCheckoutSignalsError).cloneLanding).toBeNull();
   });
 
-  // tracked な床キーはリポジトリの性質で、clone 入口の提案先にも同じファイルが来る。
-  // 登録時の quarantine 予告は #383 が退けた意味なので、門は黙って通す(issue #686)。
-  // hooks と両持ちでも claude_settings_hooks は立てない(issue #1005 — 信号は hooks だけの tracked に限る)
+  // 信号は hooks の有無だけを見る(ADR 0346 決定3)。hooks の無い tracked な settings は隠されるだけなので門は黙って通す。
   it.each([
-    ["床キーだけ", { permissions: { allow: ["Bash"] } }],
-    ["床キーと hooks", { permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }],
+    ["床キーだけ", JSON.stringify({ permissions: { allow: ["Bash"] } })],
+    ["壊れた JSON", "{ not json"],
+    ["object でない値", "null"],
   ])("tracked な .claude/settings.json の%sは信号にならず、confirm 無しで登録される", async (_, content) => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
     const path = await makeLocalOnlyCheckout();
     await mkdir(join(path, ".claude"), { recursive: true });
-    await writeFile(join(path, ".claude", "settings.json"), JSON.stringify(content));
-    commitAll(path, "floor key");
+    await writeFile(join(path, ".claude", "settings.json"), content);
+    commitAll(path, "settings without hooks");
 
     await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
+  });
+
+  // ADR 0346 決定3: 信号は hooks の有無だけを見る —— 門は拒まず提示するので、床キーと両持ちでも立てる
+  it("tracked な .claude/settings.json の床キーと hooks は claude_settings_hooks を立てる", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await makeLocalOnlyCheckout();
+    await mkdir(join(path, ".claude"), { recursive: true });
+    await writeFile(
+      join(path, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }),
+    );
+    commitAll(path, "floor key and hooks");
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path }, deps),
+    ).rejects.toMatchObject({ name: "LiveCheckoutSignalsError", reasons: ["claude_settings_hooks"] });
   });
 
   it("confirm: true の再送は従来どおり登録する — エントリに confirm は残らない", async () => {

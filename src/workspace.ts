@@ -582,10 +582,15 @@ export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConf
   const base = snapshot.mode === "disabled" ? "/*\n" : snapshot.pattern;
   gitWithInput(`${base.trimEnd()}\n${BOARD_SETTINGS_LINE}\n`, workspace.path, "sparse-checkout", "set", "--no-cone", "--stdin");
   if (lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
-    throw new Error(`workspace ${workspace.name}: could not exclude .claude/settings.json`);
+    throw new Error(
+      `workspace ${workspace.name}: could not exclude .claude/settings.json: it has uncommitted changes, which sparse-checkout keeps in the tree — commit or revert them`,
+    );
   }
-  if (git(workspace.path, "status", "--porcelain") !== "") {
-    throw new Error(`workspace ${workspace.name}: sparse settings exclusion left a dirty tree`);
+  // このファイルだけを見る: tracked な settings.json を持つ repo はすべてここを通るので(ADR 0346 決定2)、無関係な untracked で止めない
+  if (git(workspace.path, "status", "--porcelain", "--", ".claude/settings.json") !== "") {
+    throw new Error(
+      `workspace ${workspace.name}: .claude/settings.json has staged changes, which hiding it would leave in the index — commit or unstage them`,
+    );
   }
 }
 
