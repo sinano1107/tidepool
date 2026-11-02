@@ -385,11 +385,10 @@ it("復旧の打ち切りで閉じられなかった session は、retry の pic
   const thrower = registerTask(db, { type: "work", title: "its close throws", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(thrower.id);
   const throwerSpawn = appendEvent(db, { taskId: thrower.id, actorId: "fake-worker", origin: "board", at, payload: WORKER_SPAWNED });
-  const previous = appendEvent(db, { taskId: retried.id, actorId: "fake-worker", origin: "board", at, payload: WORKER_SPAWNED });
   db.close();
   const unreadable = join(t.dir, `${thrower.id}.${throwerSpawn}.stream.jsonl`);
   mkdirSync(unreadable);
-  writeFileSync(join(t.dir, `${retried.id}.${previous}.stream.jsonl`), toolCall(1, "Bash", null).join("\n"));
+  const previous = leaveOpenSession(t.dir, retried.id).spawned;
   vi.spyOn(console, "error").mockImplementation(() => {});
 
   t = await bootTidepool({ dir: t.dir });

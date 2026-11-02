@@ -1049,11 +1049,11 @@ export function sessionWindow(
     events.filter((e) => e.kind === kind && e.task_id === spawned.task_id && e.id > spawned.id).reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
   const nextSpawnedId = nextOf("worker_spawned");
   // ADR 0316 決定4(issue #2932): 窓と never-ran の決着は同じ task の次の pickup を越えない —— 後の pickup の決着を前の session に読ませない。
-  // 次の spawn は pickup の無い列の backstop
-  const upper = Math.min(nextOf("task_picked_up"), nextSpawnedId);
-  const settled = events.find((e) => NEVER_RAN_KINDS.includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < upper);
+  // 本物の pickup は必ず spawn より先なので、次の spawn が効くのは pickup の無い列(spawn だけの fixture、kind の絞りに task_picked_up が欠けた呼び手)だけ
+  const nextSessionStartId = Math.min(nextOf("task_picked_up"), nextSpawnedId);
+  const settled = events.find((e) => NEVER_RAN_KINDS.includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < nextSessionStartId);
   const end = exited ?? settled;
-  const endExclusive = Math.min(end ? end.id + 1 : Number.POSITIVE_INFINITY, upper);
+  const endExclusive = Math.min(end ? end.id + 1 : Number.POSITIVE_INFINITY, nextSessionStartId);
   const foreignExitIds = new Set(
     events.filter((e) => e.task_id === spawned.task_id && e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id !== spawned.id).map((e) => e.id),
   );
