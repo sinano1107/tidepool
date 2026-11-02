@@ -1,14 +1,16 @@
-import { dirname } from "node:path";
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { quarantineChecks } from "../src/human-verbs.js";
+import { DomainError } from "../src/domain-error.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, registerTask, type Task } from "../src/tasks.js";
-import { commitRoomCopy, ensureTaskBranch, openExamineeCheckout, prepareWorkspaceAtPickup, refValues, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
+import { commitRoomCopy, ensureTaskBranch, openExamineeCheckout, prepareWorkspaceAtPickup, recordedInterviewRoom, refValues, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
@@ -186,5 +188,99 @@ it("受験者の再開の pickup の after-open が checkout を休止させる�
 
   expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
   expect(roomRow()).toBe(roomBefore);
+  db.close();
+});
+
+// ADR 0351 決定4: workspace quarantine の受理は、検査がすべて成立した後に基準を撮り直す(#2951)。
+
+/** checkout の今の全 ref を基準の行と同じ形で(HEAD は指し先)。 */
+function currentRefSet(path: string): Map<string, string> {
+  return refValues(`symref=${git(path, "symbolic-ref", "HEAD")} HEAD\n${git(path, "for-each-ref", "--format=%(objectname) %(refname)")}`);
+}
+
+/** 拾って解放するとき worker が兄弟のブランチを作り、`refs/heads/sibling` を名指して quarantine に落ちた workspace。 */
+async function quarantinedBySibling(name: string) {
+  const ws = await makeWorkspace(name);
+  const db = openDb(":memory:");
+  const task = work(db, "wanders onto a sibling branch");
+  await prepareWorkspaceAtPickup(db, ws, task);
+  git(ws.path, "branch", "sibling");
+  releaseWorkspace(db, ws, task, NOW);
+  const question = quarantineQuestion(db, "workspace", ws.name)!;
+  expect(question.purpose).toContain("refs/heads/sibling");
+  const answer = () =>
+    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, getTask(db, question.id)!, ["repaired by hand"], undefined, () => NOW, "webui");
+  return { ws, db, task, question, answer };
+}
+
+it("受理の後、基準の行は違反で名指された ref を含む今の全 ref の1値と一致する(ADR 0351 決定4)", async () => {
+  const { ws, db, question, answer } = await quarantinedBySibling("retake-on-accept");
+
+  await answer();
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(baseline(db, ws.name)).toEqual(currentRefSet(ws.path));
+  expect(baseline(db, ws.name).get("refs/heads/sibling")).toBe(git(ws.path, "rev-parse", "sibling"));
+  db.close();
+});
+
+it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout で行ってから受理すると、基準にその merge 後の位置が入る(ADR 0351 決定4)", async () => {
+  const ws = await makeWorkspace("retake-merge-ours");
+  const db = openDb(":memory:");
+  const landing = work(db, "lands");
+  await prepareWorkspaceAtPickup(db, ws, landing);
+  commitWork(ws.path, "repair.txt", "base\n");
+  releaseWorkspace(db, ws, landing, NOW);
+  const repair = registerTask(db, { type: "work", title: "repair", purpose: "why", completion_criteria: "done", parent_id: landing.id }, NOW, ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(db, ws, repair);
+  commitWork(ws.path, "repair.txt", "fixed\n");
+  releaseWorkspace(db, ws, repair, NOW);
+  // 修理が分かれた後に帰り先が同じファイルを書く —— 修理の merge back が conflict する
+  await prepareWorkspaceAtPickup(db, ws, landing);
+  commitWork(ws.path, "repair.txt", "conflicting\n");
+  releaseWorkspace(db, ws, landing, NOW);
+  await prepareWorkspaceAtPickup(db, ws, repair);
+  completeTask(db, repair, FULL_HANDOFF, "worker", NOW, "worker");
+  releaseWorkspace(db, ws, getTask(db, repair.id)!, NOW, true);
+  const question = quarantineQuestion(db, "workspace", ws.name)!;
+  expect(question.purpose).toContain(`task/${repair.id} does not merge cleanly`);
+  git(ws.path, "checkout", `task/${landing.id}`);
+  git(ws.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
+  const merged = git(ws.path, "rev-parse", `task/${landing.id}`);
+
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, getTask(db, question.id)!, ["repaired by hand"], undefined, () => NOW, "webui");
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(baseline(db, ws.name).get(`refs/heads/task/${landing.id}`)).toBe(merged);
+  expect(baseline(db, ws.name)).toEqual(currentRefSet(ws.path));
+  db.close();
+});
+
+it("検査が落ちて回答が拒否されたとき、基準の行は変わらず question は開いたまま(ADR 0351 決定4)", async () => {
+  const { ws, db, question, answer } = await quarantinedBySibling("retake-refused");
+  const row = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(ws.name);
+  const before = row();
+  writeFileSync(join(ws.path, "stray.txt"), "written while quarantined\n");
+
+  await expect(answer()).rejects.toThrow(DomainError);
+
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  expect(row()).toBe(before);
+  db.close();
+});
+
+it("面接室の名前への受理は面接室の行と未決着の受験者の行をそれぞれの checkout から撮り直し、受験者の値は面接室の行に入らない(ADR 0351 決定4)", async () => {
+  const { db, root, examinee, checkout } = await roomWithPickedExaminee();
+  const room = recordedInterviewRoom(db, root.id)!;
+  git(room.path, "branch", "room-repair");
+  git(checkout.path, "branch", "examinee-repair");
+
+  await quarantineChecks({ db }).workspace!(root.id);
+
+  expect(baseline(db, root.id)).toEqual(currentRefSet(room.path));
+  expect(baseline(db, root.id).has("refs/heads/room-repair")).toBe(true);
+  expect(baseline(db, examinee.id)).toEqual(currentRefSet(checkout.path));
+  expect(baseline(db, examinee.id).has("refs/heads/examinee-repair")).toBe(true);
+  expect([...baseline(db, root.id).keys()].filter((ref) => ref.includes("examinee-repair") || ref.includes(examinee.id))).toEqual([]);
   db.close();
 });

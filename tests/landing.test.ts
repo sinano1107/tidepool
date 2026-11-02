@@ -3972,9 +3972,9 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   commitWork(workspace.path, "feature.txt", "ready\n");
   settleRepairNotMergedBack(db, clock, workspace, work.id);
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
-  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
 
-  await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantineQuestion(db, "workspace", workspace.name)!);
+  // やり直しそのものを撃つ —— 受理は検査の後に基準を撮り直し、動いた ref を回答で受け入れる(ADR 0351 決定4)
+  await redoMergeBacks(db, workspace, workspace.name, undefined);
 
   expect(head(workspace)).toBe("main");
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);

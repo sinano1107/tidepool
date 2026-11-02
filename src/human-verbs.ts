@@ -118,6 +118,7 @@ import {
   quarantineWorkspace,
   redoMergeBacks,
   resolveWorkspacesBaseDir,
+  retakeRefBaselines,
   taskBranch,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
@@ -625,7 +626,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
-      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back。
+      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back → 基準の撮り直し(ADR 0351 決定4)。
       const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
       const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
         try {
@@ -659,6 +660,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       }
       await fire([...own, ...examinees], "after-open");
       if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
+      // 場所は後半の項が撃った場所そのもの —— 受験者の checkout は受験者 id の鍵を持つ
+      const places = [...own, ...examinees].flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : []));
+      await refuseOnError(() => retakeRefBaselines(deps.db, places));
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
