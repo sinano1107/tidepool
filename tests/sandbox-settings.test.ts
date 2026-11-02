@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -350,9 +350,14 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
 
 /** `.claude/<name>` を持つ git checkout。`tracked` なら commit まで進める。 */
 function withSettings(name: string, body: unknown, tracked: boolean, check: (workspace: string) => void) {
+  withPlaced(name, (file) => writeFileSync(file, JSON.stringify(body)), tracked, check);
+}
+
+/** `.claude/<name>` を `place` が置いた git checkout。`tracked` なら commit まで進める。 */
+function withPlaced(name: string, place: (file: string, workspace: string) => void, tracked: boolean, check: (workspace: string) => void) {
   const workspace = mkdtempSync(join(tmpdir(), "tidepool-settings-place-"));
   mkdirSync(join(workspace, ".claude"));
-  writeFileSync(join(workspace, ".claude", name), JSON.stringify(body));
+  place(join(workspace, ".claude", name), workspace);
   git(workspace, "init", "--quiet");
   if (tracked) {
     git(workspace, "add", `.claude/${name}`);
@@ -414,6 +419,52 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
       const file = join(workspace, ".claude", "settings.json");
       rmSync(file);
       mkdirSync(file);
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
+    });
+  });
+
+  /** link の先は開かない —— FIFO は open で、/dev/zero は read で event loop ごと止めるので、vitest の timeout は発火しない。
+   *  判定は子 process で上限つきで走らせ、止まれば kill されて落ちる(#2935)。 */
+  function dispositionInChild(workspace: string): unknown {
+    const module = JSON.stringify(new URL("../src/sandbox.ts", import.meta.url).href);
+    const child = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", `const { workspaceSettingsDisposition } = await import(${module}); console.log(JSON.stringify(workspaceSettingsDisposition(${JSON.stringify(workspace)})));`],
+      { timeout: 5000, encoding: "utf8" },
+    );
+    expect({ signal: child.signal, status: child.status }, child.stderr).toEqual({ signal: null, status: 0 });
+    return JSON.parse(child.stdout);
+  }
+
+  const danglingTarget = () => "../dang.json";
+  const LINK_TARGETS: [string, (workspace: string) => string][] = [
+    ["在らない先(dangling)", danglingTarget],
+    ["FIFO", (workspace) => {
+      execFileSync("mkfifo", [join(workspace, "f.fifo")]);
+      return "../f.fifo";
+    }],
+    ["/dev/zero", () => "/dev/zero"],
+  ];
+
+  it.each(LINK_TARGETS)("tracked な settings.json が %s を指す symlink なら、先を開かず隠す", (_case, makeTarget) => {
+    withPlaced("settings.json", (file, workspace) => symlinkSync(makeTarget(workspace), file), true, (workspace) => {
+      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+    });
+  });
+
+  it.each([
+    ...LINK_TARGETS.map(([label, makeTarget]) => [`untracked な settings.json の ${label}`, "settings.json", makeTarget] as const),
+    ["settings.local.json の 在らない先(dangling)", "settings.local.json", danglingTarget] as const,
+  ])("%s を指す symlink は、先を開かず存在だけで止まる", (_case, name, makeTarget) => {
+    withPlaced(name, (file, workspace) => symlinkSync(makeTarget(workspace), file), false, (workspace) => {
+      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
+    });
+  });
+
+  // ADR 0346 決定2「読めないファイルは従来どおり止める」—— 読み権限は access で見て、開かない(#2935)
+  it.skipIf(process.getuid?.() === 0)("tracked でも読み権限の無い通常ファイルの settings.json は隠さず止まる", () => {
+    withSettings("settings.json", {}, true, (workspace) => {
+      chmodSync(join(workspace, ".claude", "settings.json"), 0o000);
       expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
     });
   });
