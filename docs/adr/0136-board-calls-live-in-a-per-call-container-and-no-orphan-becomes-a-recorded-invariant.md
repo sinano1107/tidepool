@@ -1,5 +1,7 @@
 # Board call は呼び出しごとの容器の中で起き、「孤児を残さない」は記録された不変条件になる
 
+**Status 追記: 決定3・10 の同じ id 空間に並ぶ worker session の容器の id は、task id から pickup event id に改める([ADR 0353](0353-the-container-ledger-the-slot-and-the-watch-record-are-keyed-by-the-sessions-pickup-event-id-and-a-session-originated-hand-names-its-own-session.md) 決定1、2026-11-02、issue #2919)。**
+
 2026-09-21 の grilling(issue #460)で決定。ADR 0099 決定8 が範囲外に分けた Board call の子 process の回収を決める。「孤児を残さない」は issue #81 の受け入れ基準とコードコメントにしか根拠が無いまま、issue #741 では teardown の SIGKILL を外す案を退ける盾として既に決定のように働いていた。加えて実測(issue #460 のコメントに置く)で、skill 列挙の probe は model turn を立てないのに task workspace の設定が持ち込んだ MCP server を workspace の中に立て、stdin の EOF を無視する子は root の SIGKILL 後にも**自然終了後にも**残ることが分かった — 「短命な probe だから弱い床で足りる」の前提はこの呼び出しには成り立たない。
 
 ## 決定
