@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
+import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -54,6 +55,30 @@ it("未コミットの変更を残したまま work タスクを完了しよう�
   });
   expect(retry.isError ?? false).toBe(false);
   await client.close();
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+it("workspace が Quarantine 中でも dirty な work の完了は拒み、commit 後の呼び直しは通る(ADR 0350 決定1)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "finish while the workspace is quarantined");
+  await t.clock.advance(HOUR);
+  quarantineWorkspace(t.db, ws.name, new Error("unrelated workspace failure"), t.clock.now());
+  writeFileSync(join(ws.path, "notes.txt"), "the deliverable\n");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+
+  const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("uncommitted changes");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+
+  git(ws.path, "add", "-A");
+  git(ws.path, "commit", "-m", "notes: record the deliverable");
+  const retry: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  expect(retry.isError ?? false).toBe(false);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
 });
 

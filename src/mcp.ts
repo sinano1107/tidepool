@@ -327,11 +327,11 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | unde
   return workspace && taskRunPlace(deps.db, task, workspace);
 }
 
-/** 完了の門(ADR 0084 決定1・2 / issue #240)。ここに立つのは `completeTask` を人間経路
+/** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
-function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
-  if (!completionTreeGateApplies(deps.db, task, workspace)) return;
+function assertWorkTreeCommitted(_deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
+  if (!completionTreeGateApplies(task)) return;
   if (!treeIsDirty(workspace)) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +

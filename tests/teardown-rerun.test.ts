@@ -195,6 +195,47 @@ function expectOneQuestionRefiredOnce(s: Session, reason: string): void {
   expect(s.deps.slot.currentTaskId).toBeNull();
 }
 
+function expectLateWriteQuarantinePreserved(s: Session, deps: TeardownDeps, questionId: string, reason: string): void {
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.id).toBe(questionId);
+  expect(listEvents(s.db, questionId).flatMap((e) => e.payload.kind === "quarantine_refired" ? [e.payload.reason] : [])).toEqual([expect.stringContaining(reason)]);
+  expect(git(s.ws.path, "ls-tree", "--name-only", s.parentBranch)).not.toContain("late.txt");
+  expect(git(s.ws.path, "log", "--format=%s", "--all")).not.toContain("WIP: task");
+  expect(head(s)).toBe(s.branch);
+  expect(deps.slot.currentTaskId).toBeNull();
+  expect(getTask(s.db, s.task.id)?.status).toBe("done");
+  expect(sessionInTeardown(s.db)).toBeUndefined();
+}
+
+it.each([false, true])("完了報告後の書き込みで Quarantine に返った後始末の受理は、再起動=%s でも検査を切らず同じ question を再発火する(ADR 0350 決定1・3)", async (restart) => {
+  const s = await settledSession("completed", { parent: "delivers" });
+  writeFileSync(join(s.ws.path, "late.txt"), "written after completion\n");
+  await teardownThrewAfterTreeRule(s);
+  const question = quarantineQuestion(s.db, "workspace", s.ws.name)!;
+  const reason = `written to after task ${s.task.id} reported done`;
+  expect(question.purpose).toContain(reason);
+  expect(head(s)).toBe(s.branch);
+  const deps = restart ? restarted(s) : s.deps;
+
+  await acceptTeardownQuarantine(deps, s.task.id);
+
+  expectLateWriteQuarantinePreserved(s, deps, question.id, reason);
+});
+
+it("完了報告後の書き込みで Quarantine に返った直後に盤面が落ちても、起動時の復旧は同じ question を再発火する(ADR 0350 決定1・3)", async () => {
+  const s = await settledSession("completed", { parent: "delivers" });
+  writeFileSync(join(s.ws.path, "late.txt"), "written after completion\n");
+  // tree rule が返ってから印を消す前に process が死ぬ —— failedTeardown の question は立たない。
+  releaseWorkspace(s.db, s.ws, getTask(s.db, s.task.id)!, s.clock.now(), true, undefined, undefined, true);
+  const question = quarantineQuestion(s.db, "workspace", s.ws.name)!;
+  const reason = `written to after task ${s.task.id} reported done`;
+  expect(question.purpose).toContain(reason);
+  const deps = restarted(s);
+
+  await resumeUnfinishedTeardown(deps);
+
+  expectLateWriteQuarantinePreserved(s, deps, question.id, reason);
+});
+
 it("退避の commit が落ちて Quarantine に返った tree rule の受理は、同じ question に quarantine_refired を1つ足す(ADR 0345 決定4)", async () => {
   const s = await settledSession("interrupted");
   writeFileSync(join(s.ws.path, "wip.txt"), "wip\n");
