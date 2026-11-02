@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { enumerateHostSkills } from "../src/claude-worker.js";
+import { quarantineContainment } from "../src/containment.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEventsOfKinds } from "../src/events.js";
-import { quarantineUnclosedSession } from "../src/failed-teardown.js";
+import { quarantineFailedTeardown, quarantineUnclosedSession } from "../src/failed-teardown.js";
 import { listEpisodes } from "../src/precedent.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { completeTask, getTask, listBoard } from "../src/tasks.js";
@@ -172,6 +173,48 @@ it("後始末の step が盤面のバグで投げたまま再起動すると、�
   expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("unfinished work");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
   expect((await questions(t)).map((q) => q.title)).toEqual([`restart interrupted task: ${task.title}`]);
+});
+
+it("前提検査が通らない間、Containment と落ちた後始末の回答は workspace を書かず、修理後に同じ後始末の question への回答で枠を空ける", async () => {
+  const ws = await makeWorkspace("sandbox");
+  const harnessContainment = async () => ({ available: true }) as const;
+  t = await bootTidepool({ workspace: ws, harnessContainment });
+  const task = queueWork(t, "failed teardown across restart");
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
+  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  completeTask(t.db, getTask(t.db, task.id)!, FULL_HANDOFF, "deckhand", t.clock.now(), "worker");
+  markTeardown(t.db, task.id, t.clock.now());
+  quarantineFailedTeardown(t.db, task.id, new Error("tree rule bug"), t.clock.now());
+  quarantineContainment(t.db, "previous session may still be alive", t.clock.now());
+  await t.stopServer();
+  const runtime = new FakeContainerRuntime();
+  runtime.scriptPreflight("previous session may still be alive");
+  t = await bootTidepool({ dir: t.dir, workspace: ws, containerRuntime: runtime, harnessContainment });
+  const failed = await servedQuarantineQuestion(t, "failedTeardown", task.id);
+  const containment = await servedQuarantineQuestion(t, "containment", null);
+  const before = (await api(t.baseUrl, "GET", "/api/queue")).json.teardown;
+  expect(before).toMatchObject({ taskId: task.id, settlement: "completed" });
+  const answer = (id: string) => api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, { answers: ["repaired by hand"] });
+
+  for (const question of [containment, failed]) {
+    const refused = await answer(question.id);
+
+    expect(refused.status).toBe(409);
+    expect(JSON.stringify(refused.json)).toContain("previous session may still be alive");
+    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toEqual(before);
+    expect((await servedQuarantineQuestion(t, "failedTeardown", task.id)).id).toBe(failed.id);
+    expect((await servedQuarantineQuestion(t, "containment", null)).id).toBe(containment.id);
+  }
+
+  runtime.scriptPreflight();
+  expect((await answer(failed.id)).status).toBe(200);
+
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failed.id}`)).json.status).toBe("done");
 });
 
 // ── 前の盤面が閉じ切らなかった session(issue #2600 / ADR 0315)──────────────────

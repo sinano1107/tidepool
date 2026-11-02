@@ -599,7 +599,12 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const workerMcpReachability = reachabilityProbe && ((harness: Harness) => probeWorkerMcpReachability(probeIds, workerMcpUrl, harness, reachabilityProbe));
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
   // (`containment` / `registryReachability` と同じ配線)。
-  const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
+  const teardownQuarantine = (taskId: string) => {
+    // ADR 0112 決定3 Status 追記: 残りの撃ち直しも再起動を跨いだ後始末も、前の盤面の process が残っていないという前提の後に走る
+    const preflight = containers.preflight();
+    if (!preflight.available) throw new DomainError(preflight.reason);
+    return acceptTeardownQuarantine(teardownDeps, taskId);
+  };
   const closeUnclosedSession = async (spawnId: number) => {
     // ADR 0315 決定1: 起動時の復旧と同じ門 —— 前の盤面の process が残っていないと証明できない間は、記録から閉じず後始末も再開しない
     const preflight = containers.preflight();
