@@ -15,8 +15,8 @@ ADR 0103 決定1・ADR 0052 §7・ADR 0345 決定3 は違反と前提してい�
 1. **checkout は最初の pickup 以降、休止中も盤面の専有領域である。** 人間の変更は verb か question の回答を通ってだけ基準に入る。
    ADR 0064 決定3 の「違反」は session の窓から休止へ広がる。同決定が誤検知コストの根拠にした窓の短さは、「人間は盤面の checkout に
    書かない」(人間用の checkout を分ける運用、#2842 の前提)に置き換わる —— コストは触れば1枚の1択 question、触らなければゼロ。
-2. **基準は切れない。** 全撮りは、行が無いか NULL の pickup(盤面がこの checkout をまだ持ったことがない)と quarantine の受理(決定4)
-   だけが撮る。以後の pickup は fetch・park より前に基準と比べ、違反は動いた ref を名指して workspace quarantine に落とす。release の
+2. **基準は切れない。** 全撮りは、盤面がこの checkout をまだ持ったことがない開き(行が無いか NULL の pickup と、読む場所の最初の開き —— 決定6)と
+   quarantine の受理(決定4)だけが撮る。以後の pickup は fetch・park より前に基準と比べ、違反は動いた ref を名指して workspace quarantine に落とす。release の
    比較は今日どおりで、比較の直後にタスクブランチの行を基準へ畳む —— この畳みは冪等(タスクブランチは session の後に動かない)なので、
    ADR 0345 決定3 の再実行の経路でも無条件に走る(同 決定1)。比較器は1つで、除外集合が release(タスクブランチ)と pickup(無し)で
    違うだけ。release での行無しは今日どおり違反(ADR 0064 決定6)。remote-backed の休止位置の先行検査(ADR 0052 §7)は remote 側の
@@ -46,7 +46,7 @@ ADR 0103 決定1・ADR 0052 §7・ADR 0345 決定3 は違反と前提してい�
 
 ## 派生
 
-- Status 追記: ADR 0064 決定3・6・7、ADR 0066、ADR 0081、ADR 0239 帰結、ADR 0243 決定5、ADR 0276 決定3、ADR 0329 追記 決定14、ADR 0345 決定3。
+- Status 追記: ADR 0064 決定3・5・6・7、ADR 0066、ADR 0081、ADR 0239 帰結、ADR 0243 決定5、ADR 0276 決定3、ADR 0329 追記 決定14、ADR 0345 決定3。
 - GLOSSARY.md の Branch discipline・Workspace・Slot-release tree rule・Quarantine の項。
 - 実装は複数 slice(基準の連続と口、受理の撮り直し、pickup の clean 検査 —— #2912 に blocked-by、読む場所、行の寿命)。#2459 はこの spec
   に畳む。#2842 はこの決定を前提に問いが狭まる。
