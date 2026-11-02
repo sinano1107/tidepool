@@ -10,7 +10,7 @@ ADR 0351 決定5 の pickup の検査)と次の task の完了の門だけが、
 
 ## 決定
 
-1. **盤面が名前の場所で HEAD をタスクブランチの外へ動かす手は、動かす前の branch が無視しているファイルを消してから動かす。**
+1. **盤面が名前の場所で HEAD を別の branch へ動かす手は、動かす前の branch が無視しているファイルを消してから動かす。**
    merge back の帰り先への checkout、休止位置への checkout、次の pickup のタスクブランチへの checkout、quarantine 受理のやり直しの同じ手が
    その全部で、1つの helper(ignored だけの `git clean`、入れ子 repo も)を通る。保証を述語側(branch 非依存に書き直す・記録して除外する)
    ではなく HEAD を動かす手に置くのは、読み手を増やさないためである。worker がタスクブランチの `.gitignore` に書いたものは worker 自身の
@@ -38,5 +38,6 @@ ADR 0351 決定5 の pickup の検査)と次の task の完了の門だけが、
 - Status 追記: ADR 0069(「唯一」の射程)、ADR 0345 決定3(`.gitignore` の形はここに来なくなる)、ADR 0351 決定5(前提が成立)、
   ADR 0052 決定7(「クリーンに戻す」に ignored ファイルが入る)。GLOSSARY.md の Slot-release tree rule の項。
 - 実装は1 slice、#2912 のコメントが spec。#2954(pickup の clean 検査)は本 issue が先。
+- `register` モードの workspace(人間の既存 checkout)では、登録前からあった ignored の中身が最初の pickup の手で消える —— ADR 0351 決定1 の線上で、#2842 の材料。
 - 族の根は #2956(worker が走った checkout を次の session が使うか)。根が乗り物を替えれば本 ADR の機構は不要になるが、決定(宣言したものは
   成果でない)は残る。`.git/info/exclude` の形は #2957。
