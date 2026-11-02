@@ -39,7 +39,10 @@ ADR 0351 決定5 の pickup の検査)と次の task の完了の門だけが、
 - Status 追記: ADR 0069(「唯一」の射程)、ADR 0345 決定3(`.gitignore` の形はここに来なくなる)、ADR 0351 決定5(前提が成立)、
   ADR 0052 決定7(「クリーンに戻す」に ignored ファイルが入る)。GLOSSARY.md の Slot-release tree rule の項。
 - 実装は1 slice、#2912 のコメントが spec。#2954(pickup の clean 検査)は本 issue が先。
-- `register` モードの workspace(人間の既存 checkout)では、登録前からあった ignored の中身が最初の pickup の手で消える —— ADR 0351 決定1 の線上で、#2842 の材料。
+- `register` モードの workspace(人間の既存 checkout)では、登録前からあった ignored の中身(`.claude/settings.local.json`・`.env`・`node_modules`)が最初の
+  pickup の手で消える。人間が消える前に知る扉は登録の門の信号の提示(issue #383)で、その文に「ignored ファイルは消える」を足す —— denylist の除外も、
+  settings の検査との順序の結合も足さない。ADR 0351 決定1 の線上で、#2842 の材料。
+- ADR 0346 決定2 の「`settings.local.json` は存在するだけで止める」は、ignored の形では立たなくなる —— 検査は spawn 時で、pickup の手が先に消す。
 - 削除は後始末・pickup と同じ同期の git で走り、大きな tree では盤面の event loop を数秒塞ぐ —— 今日の tree rule と同じ性質で、新しい失敗様式ではない。
 - 族の根は #2956(worker が走った checkout を次の session が使うか)。根が乗り物を替えれば本 ADR の機構は不要になるが、決定(宣言したものは
   成果でない)は残る。`.git/info/exclude` の形は #2957。
