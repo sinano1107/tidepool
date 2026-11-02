@@ -6,6 +6,7 @@ import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
+import { UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask, registerTask } from "../src/tasks.js";
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
@@ -463,13 +464,14 @@ async function bootCodex() {
   });
   const codexHome = await tempDir("exit-without-report-codex-home-");
   return bootWithAdapter(
-    ({ db, clock, containers, onSpawnFailed, onWorkerExited, transcripts }) =>
+    ({ db, clock, containers, onSpawnFailed, onWorkerExited, onSessionCloseStep, transcripts }) =>
       new CodexWorker({
         db,
         clock,
         containers,
         onSpawnFailed,
         onWorkerExited,
+        onSessionCloseStep,
         registry: { dir: registryDir, mode: "purely-local" },
         agent: "codex-agent",
         workspace: "work",
@@ -486,6 +488,26 @@ async function bootCodex() {
 }
 
 for (const [harness, boot] of [["Claude", bootClaude], ["Codex", bootCodex]] as const) {
+  it(`${harness} adapter: live projection failures map repair answers to 409 until repaired, then 200`, async () => {
+    const proc = await boot();
+    queueWork(t, "projection fails");
+    await t.clock.advance(HOUR);
+    t.db.exec("CREATE TEMP TRIGGER projection_fails BEFORE INSERT ON episodes BEGIN SELECT RAISE(ABORT, 'projection bug'); END");
+    proc.emitExit(1, null);
+    proc.processes[0]!.stdout.end();
+    proc.processes[0]!.stderr.end();
+    let question: any;
+    await vi.waitFor(async () => {
+      question = (await questions(t)).find((q: any) => q.title === UNCLOSED_SESSION_QUESTION_TITLE);
+      expect(question).toBeDefined();
+    });
+    const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+
+    expect((await answer()).status).toBe(409);
+    t.db.exec("DROP TRIGGER projection_fails");
+    expect((await answer()).status).toBe(200);
+  });
+
   it.each([0, 1])(`${harness} adapter: 資源の署名なしに exit %s した session は failure question を1枚立てて枠を空ける`, async (code) => {
     const proc = await boot();
     const task = queueWork(t, "exits quietly");

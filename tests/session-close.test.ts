@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -6,11 +7,14 @@ import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "..
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "../src/codex-stream-reader.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents } from "../src/events.js";
-import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
+import { EXTRACTOR_VERSION, listEpisodes, projectWhenTranscriptCloses } from "../src/precedent.js";
 import { quarantineExcludedProviders, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { closeUnclosedSessions } from "../src/session-close.js";
+import { Slot } from "../src/slot.js";
 import { parseStreamLine } from "../src/stream-json.js";
 import { listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import { runTeardownSteps, sessionCloseSteps } from "../src/teardown.js";
+import { FakeClock } from "./fakes.js";
 import { HUMAN_WEBUI, QUIET_EXIT, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -422,3 +426,21 @@ function spawnOnAnotherTask(db: Db): number {
   const task = pickupTask(db, registerTask(db, { type: "work", title: "other", purpose: "other", completion_criteria: "works" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
   return appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
 }
+
+it("boot recovery folds a live projection failure into the same open session question", async () => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
+  const b = await board();
+  const spawn = b.spawns[0]!;
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawn, output_closed: true, usage: null } });
+  b.db.exec("CREATE TEMP TRIGGER projection_fails BEFORE INSERT ON episodes BEGIN SELECT RAISE(ABORT, 'projection bug'); END");
+  projectWhenTranscriptCloses(b.db, Object.assign(new EventEmitter(), { closed: true }), { workerSpawnedEventId: spawn, transcriptPath: join(b.logDir, `${b.task.id}.${spawn}.stream.jsonl`), taskId: b.task.id },
+    (step) => runTeardownSteps({ db: b.db, clock: new FakeClock(), slot: new Slot() }, b.task.id, ...sessionCloseSteps(spawn, [step])));
+  const question = listBoard(b.db).find((t) => t.type === "question")!;
+  expect(question).toBeDefined();
+
+  b.close();
+  b.close();
+
+  expect(listBoard(b.db).filter((t) => t.type === "question").map((t) => t.id)).toEqual([question.id]);
+});

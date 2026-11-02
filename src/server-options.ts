@@ -271,6 +271,8 @@ export function buildWorkerOptions(
     onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
     onPickupStopped: (taskId: string, payload: PickupStopped) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
+    /** ADR 0344 決定1: transcript の close から投影の同期の手を session の runner で撃つ。 */
+    onSessionCloseStep: (taskId: string, spawnId: number, step: () => void) => unknown;
     transcripts: TranscriptStore;
   },
 ): ClaudeWorkerOptions {
@@ -311,6 +313,7 @@ export function buildWorkerOptions(
     // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する。行の拒否と0ターンの
     // 資源の停止もこの束に乗る(ADR 0338 決定1)
     onWorkerExited: session.onWorkerExited,
+    onSessionCloseStep: session.onSessionCloseStep,
     // ADR 0149: transcript は盤面側の器が開く
     transcripts: session.transcripts,
   };
@@ -344,6 +347,7 @@ export function buildCodexWorkerOptions(
     onRecordContainerFailed: session.onRecordContainerFailed,
     onPickupStopped: session.onPickupStopped,
     onWorkerExited: session.onWorkerExited,
+    onSessionCloseStep: session.onSessionCloseStep,
     // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
     // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない
     usageProbe: session.openaiUsage,

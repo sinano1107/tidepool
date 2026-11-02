@@ -1,5 +1,7 @@
 # session を閉じる書き込みが投げたら閉じ切らなかった session の停止であり、鍵は枠ではなく session である —— 起動時の復旧は後の spawn がある session も閉じる
 
+**Status 追記: 決定1 の束の手には、非同期に届く transcript の close の後の投影も数える(2026-11-02、issue #2918)。** close の時に新しい runner で同期の投影の手を撃ち、既に閉じていれば同期に入れ子の runner で撃つ。投影待ちを Promise にして `writes` や決定に transcript の close を待たせず、投げた手は session の残りに載せる。
+
 **Status 追記: 決定1 の束の手には分類を待つ手も数える —— その reject は session の記録を閉じられないまま残すので、枠の主かに依らず spawn event id の `unclosedSession` である(2026-11-02、issue #2903)。**
 
 2026-11-01 の grilling(issue #2876、#2857 の派生。#2872 / #2880 と同じ族の根)で決定。ADR 0342 決定6 は session の `writes` の束(exit の
