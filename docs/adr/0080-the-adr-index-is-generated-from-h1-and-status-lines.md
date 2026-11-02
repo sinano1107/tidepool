@@ -1,5 +1,7 @@
 # ADR 索引は生成物 — 正典は各 ADR の H1 と Status 行
 
+**Status 追記: 決定1 の手動実行・pre-commit hook 不採用は [ADR 0349](0349-the-adr-index-is-generated-at-commit-from-staged-adrs.md)で置き換え。生成規則と CI の検査は維持。**
+
 手動維持の規律(domain.md「Keep the index current」)は守られなかった — 索引には 10 件の行落ちと 12 件の本文乖離が同時に存在した(実測は issue #343)。一方で索引の価値は実在する: 行は日本語の決定文(H1)であり、英語 kebab のファイル名を並べる `ls` では代替できない。よって索引は捨てず、規律を人手から機械に移す。
 
 **決定1: `docs/adr/README.md` はヘッダ段落を含めて丸ごと生成物にする。** `scripts/build-adr-index.mjs` が全文を生成し、既存の生成済みアセット(WebUI / DS バンドル)と同じく `--check` モードをテーブル駆動テストに1行足して stale を固定する。実行は手動 — ADR を作成・supersede したら走らせ、忘れはテストが落とす。生成物の守り方をこのリポジトリで一つに保つため、pre-commit hook は導入しない。部分差し替えの境界マーカー方式も、規約を一つ増やすだけなので採らない。
