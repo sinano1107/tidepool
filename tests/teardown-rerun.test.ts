@@ -314,7 +314,7 @@ it("帰り先へ届いた merge back の後の再実行は、帰り先を動か�
 it("remote-backed の完了の merge back の後の再実行は、fetch が動かした写しを違反と読まず、park の ff-only で休止位置を remote に追従させる(ADR 0345 決定3)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-rerun-remote");
   const s = await settledSession("completed", { workspace, parent: "delivers" });
-  // 1度目の fetch は口の外で写しを動かす(#2459)—— 比較を再走させればこれを違反と読む
+  // 後始末の前に remote が進み、1度目の fetch が写しを動かす
   publish("first.txt", "merged on GitHub\n", "merged before the teardown");
   await teardownThrewAfterTreeRule(s);
   const delivered = git(s.ws.path, "rev-parse", s.branch);
@@ -333,5 +333,5 @@ it("休止位置の checkout の予告で盤面 DB が書きを拒むと、check
   const s = await settledSession("completed");
   s.db.pragma("query_only = true");
 
-  await expect(firePickupPredicates(s.ws, checkoutPickupPredicates(s.ws), "after-open", { writeRef: (place) => boardRefWriter(s.db, place) })).rejects.toMatchObject({ code: "SQLITE_READONLY" });
+  await expect(firePickupPredicates(s.db, s.ws, checkoutPickupPredicates(s.ws), "after-open")).rejects.toMatchObject({ code: "SQLITE_READONLY" });
 });

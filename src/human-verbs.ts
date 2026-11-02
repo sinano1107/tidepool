@@ -110,7 +110,6 @@ import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchd
 import type { SettledMark } from "./wire-contract.js";
 import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
-  boardRefWriter,
   buildWorkspaceResolver,
   firePickupPredicates,
   mergeTaskToProtected,
@@ -630,9 +629,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
       const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
         try {
-          await firePickupPredicates(target, predicates, phase, {
-            githubAuth: deps.githubAuth, fresh: true, writeRef: (place) => boardRefWriter(deps.db, place),
-          });
+          await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
           let message = err instanceof Error ? err.message : String(err);

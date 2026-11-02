@@ -243,7 +243,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
     if (live?.() === false) return checks;
     try {
       const list = predicates();
-      await firePickupPredicates(place, list, "before-open", { live, writeRef: (target) => boardRefWriter(db, target) });
+      await firePickupPredicates(db, place, list, "before-open", { live });
       checks.push({ place, predicates: list });
     } catch (err) {
       if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
@@ -254,21 +254,22 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
   return checks;
 }
 
-/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き手は口(ADR 0351 決定3)で、
- *  鍵は項の場所の checkout の鍵 —— 受験者の checkout は受験者 id の行を編集する(#2948)。 */
+/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き込みは口(ADR 0351 決定3)で、
+ *  鍵は項の場所の checkout の鍵 —— 受験者の checkout は受験者 id の行を編集する(ADR 0276 決定3)。 */
 export async function firePickupPredicates(
+  db: Db,
   place: WorkspaceConfig,
   predicates: PickupPredicate[],
   phase: PickupPredicate["phase"],
-  board: PickupPrep & { writeRef: (place: WorkspaceConfig) => RefWriter; fresh?: boolean },
+  board: PickupPrep & { fresh?: boolean } = {},
 ): Promise<void> {
   const fire: PlaceFire = {
     fetch: async (target) => {
       await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
       if (board.live?.() === false) return;
-      if (isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), board.writeRef(target));
+      if (isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), boardRefWriter(db, target));
     },
-    park: (target) => parkOnProtectedBranch(target, board.writeRef(target)),
+    park: (target) => parkOnProtectedBranch(db, target),
   };
   for (const predicate of predicates) {
     if (board.live?.() === false) return;
@@ -499,10 +500,14 @@ export function lineageTaskBranch(
   return resolveTaskBranchLineage(db, workspace, task).branch;
 }
 
-/** ADR 0352 決定1・2: 離れる branch が無視するものは、行き先でも無視されるものと入れ子 repo も消す。 */
-function checkoutBranch(workspace: WorkspaceConfig, branch: string): void {
-  git(workspace.path, "clean", "-q", "-ffdX");
-  git(workspace.path, "checkout", branch);
+/** 盤面が checkout を動かす1手。ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、HEAD の行に予告して畳む。
+ *  ADR 0352 決定1・2: 名前の場所では、離れる branch が無視するものは行き先でも無視されるものと入れ子 repo も消す ——
+ *  受験者の checkout は再開にも自分の ignored の生成物を残す(ADR 0276 決定1)。 */
+function checkoutThroughGate(db: Db, workspace: WorkspaceConfig, branch: string): void {
+  boardRefWriter(db, workspace)("HEAD", symrefValue(`refs/heads/${branch}`), () => {
+    if (snapshotKey(workspace) === workspace.name) git(workspace.path, "clean", "-q", "-ffdX");
+    git(workspace.path, "checkout", branch);
+  });
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
@@ -510,17 +515,12 @@ function checkoutBranch(workspace: WorkspaceConfig, branch: string): void {
  *  head its probe recorded (ADR 0276 決定1); a resumed task only checks its existing branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const branch = taskBranch(task.id);
-  const ref = `refs/heads/${branch}`;
-  // ADR 0351 決定3: 作成と checkout も口を通す —— 作成は無い行に fork 元の sha を、checkout は HEAD の行を予告する(ADR 0345 決定2)
-  const write = boardRefWriter(db, workspace);
+  // ADR 0351 決定3: 作成と checkout も口を通す —— 作成は無い行に fork 元の sha を予告する
   if (!taskBranchExists(workspace, task.id)) {
     const source = lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace);
-    write(ref, git(workspace.path, "rev-parse", source), () => git(workspace.path, "branch", branch, source));
+    boardRefWriter(db, workspace)(`refs/heads/${branch}`, git(workspace.path, "rev-parse", source), () => git(workspace.path, "branch", branch, source));
   }
-  write("HEAD", symrefValue(ref), () => {
-    if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, branch);
-    else git(workspace.path, "checkout", branch);
-  });
+  checkoutThroughGate(db, workspace, branch);
 }
 
 /** sparse snapshot: 盤面が settings.json を隠す前の人間の sparse-checkout(ADR 0293 決定1)。pattern ファイルの無い
@@ -740,11 +740,10 @@ export async function prepareWorkspaceAtPickup(
   const rootId = interviewRootIdOf(db, task);
   const predicates = rootId === undefined ? checkoutPickupPredicates(workspace)
     : task.type === "interview" ? roomPickupPredicates(db, rootId, "") : examineePickupPredicates(db, task, rootId, "");
-  await firePickupPredicates(workspace, predicates, "after-open", { ...board, writeRef: (place) => boardRefWriter(db, place) });
+  await firePickupPredicates(db, workspace, predicates, "after-open", board);
   if (board.live?.() === false) return;
   ensureTaskBranch(db, workspace, task);
-  // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `fetchBranchCopy` が `refs/remotes` を、休止位置の ff が
-  // 保護ブランチを動かすので、前に撮ると盤面自身の書き込みが違反として立つ
+  // ADR 0064 決定5: worker に checkout を手渡す瞬間の全 ref —— fetch・休止位置・タスクブランチの後に撮る
   snapshotRefs(db, workspace);
 }
 
@@ -1131,16 +1130,11 @@ function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, tas
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
  *  `releaseWorkspace` と pickup の後半が受ける)。
  *
- *  checkout と ff は呼び手が渡す口で書く(ADR 0243 決定4 / ADR 0345 決定2 / ADR 0351 決定3)。 */
-function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter): void {
+ *  checkout と ff は口で書く(ADR 0243 決定4 / ADR 0345 決定2 / ADR 0351 決定3)。 */
+function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   try {
-    // ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、checkout も予告して畳む
-    writeRef("HEAD", symrefValue(`refs/heads/${branch}`), () => {
-      // ADR 0276 決定1: 受験者の checkout は再開にも自分の ignored の生成物を残す
-      if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, branch);
-      else git(workspace.path, "checkout", branch);
-    });
+    checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
@@ -1151,7 +1145,7 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter):
   // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
   // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
   try {
-    writeRef(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
+    boardRefWriter(db, workspace)(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
@@ -1353,7 +1347,7 @@ export function releaseWorkspace(
     }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
-    parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
+    parkOnProtectedBranch(db, workspace);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, workspace.name, err, now);
@@ -1374,11 +1368,7 @@ function mergeBackInto(
 ): void {
   const source = taskBranch(taskId);
   const ref = `refs/heads/${target}`;
-  // ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、checkout も予告して畳む
-  boardRefWriter(db, workspace)("HEAD", symrefValue(ref), () => {
-    if (snapshotKey(workspace) === workspace.name) checkoutBranch(workspace, target);
-    else git(workspace.path, "checkout", target);
-  });
+  checkoutThroughGate(db, workspace, target);
   if (isAncestor(workspace, source, ref)) return;
   const sha = isAncestor(workspace, ref, source)
     ? git(workspace.path, "rev-parse", `refs/heads/${source}`)
@@ -1449,7 +1439,7 @@ export async function redoMergeBacks(
     failure = { error };
   }
   try {
-    parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
+    parkOnProtectedBranch(db, workspace);
   } catch (parkError) {
     if (!failure || isBoardDbRefusal(parkError)) throw parkError; // ADR 0342 決定4: 盤面 DB の拒否は先の理由の陰に隠さない
   }

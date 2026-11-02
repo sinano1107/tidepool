@@ -26,6 +26,11 @@ function work(db: Db, title: string) {
   return registerTask(db, { type: "work", title, purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
 }
 
+function interviewRoot(db: Db, workspace: WorkspaceConfig, now: Date) {
+  const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+  return registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [target] }, now, ...HUMAN_WEBUI);
+}
+
 /** 行の値が今の ref の値の1値であること。 */
 function expectRowsCurrent(db: Db, key: string, ws: WorkspaceConfig, refs: string[]): void {
   const row = baseline(db, key);
@@ -36,8 +41,6 @@ it("remote-backed の完了の後始末の merge back の fetch の後、基準�
   const { workspace, publish } = await makeRemoteBackedWorkspace("gate-release");
   const db = openDb(":memory:");
   const task = work(db, "release with merge back");
-  // pickup の fetch・休止位置の ff も盤面自身の書き込み —— 直後の解放の比較が違反と読まない
-  publish("before.txt", "landed before the pickup\n", "merge before the pickup");
   await prepareWorkspaceAtPickup(db, workspace, task);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   commitWork(workspace.path, "work.txt", "work\n");
@@ -82,7 +85,7 @@ it("Interview の root の pickup が読む実環境の fetch・休止位置の 
   releaseWorkspace(db, workspace, earlier, clock.now());
   cancelTaskDirectly(db, earlier, null, clock.now(), {}, "webui");
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] as never }, clock.now(), ...HUMAN_WEBUI);
+  const root = interviewRoot(db, workspace, clock.now());
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
@@ -110,6 +113,24 @@ it("Interview の root の pickup が読む実環境の fetch・休止位置の 
   db.close();
 });
 
+it("pickup の休止位置の ff の後、基準の保護ブランチの行は ff 先の1値で現在値と一致する(#2459 項目3)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("gate-pickup-park");
+  const db = openDb(":memory:");
+  const earlier = work(db, "leaves a baseline");
+  await prepareWorkspaceAtPickup(db, workspace, earlier);
+  releaseWorkspace(db, workspace, earlier, NOW);
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  const published = git(workspace.path, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
+  // pickup の継続の門が休止位置の ff の直後に閉じる(#1973)—— 全撮りの前の基準を読む
+  const live = () => git(workspace.path, "rev-parse", "main") !== published;
+
+  await prepareWorkspaceAtPickup(db, workspace, work(db, "parks first"), { live });
+
+  expect(git(workspace.path, "rev-parse", "main")).toBe(published);
+  expectRowsCurrent(db, workspace.name, workspace, ["refs/heads/main", "refs/remotes/origin/main"]);
+  db.close();
+});
+
 it("pickup の fetch の後に休止位置が落ちても、基準の refs/remotes/origin/<protected> の行は fetch 先の1値で現在値と一致する(#2459 項目2・3)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("gate-pickup");
   const db = openDb(":memory:");
@@ -131,7 +152,7 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
 async function roomWithPickedExaminee() {
   const db = openDb(":memory:");
   const workspace = await makeWorkspace("gate-examinee-real");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] as never }, NOW, ...HUMAN_WEBUI);
+  const root = interviewRoot(db, workspace, NOW);
   openTestInterviewRoom(db, root);
   const room = taskRunPlace(db, root, workspace);
   await prepareWorkspaceAtPickup(db, room, root);
