@@ -388,8 +388,8 @@ export interface CodexWorkerOptions {
   /** ADR 0145: root process の exit を受ける盤面側の一撃。帰結に要る事実の束を添え(ADR 0338 決定1)、報告なき exit かどうかの判定は盤面側が持つ。
    *  不在なら束の `writes` は adapter が自分で撃つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
-  /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
-   *  分類にだけ使い、Throttle の状態には書かない。 */
+  /** ADR 0261 決定1 / ADR 0348 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
+   *  上限到達の分類と資源の停止を導き、Throttle の状態には書かない。 */
   usageProbe?: CodexAppServerProbe;
 }
 
