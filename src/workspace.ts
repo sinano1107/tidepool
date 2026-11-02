@@ -1047,11 +1047,11 @@ export function onTaskBranch(workspace: WorkspaceConfig, taskId: string): boolea
   }
 }
 
-/** ADR 0084 の完了の門が掛かる述語(work タスクかつ workspace が needs-human でない)。
+/** ADR 0350 決定1: 完了の門は work タスクに掛かり、workspace の Quarantine では変わらない。
  *  ADR 0109 決定3 が「退避しない」範囲も**同じ述語**である —— 門が verb の手前で clean を
  *  要求している範囲でだけ、後始末時の汚れは成果ではなく残存プロセスの露見だと言える。 */
-export function completionTreeGateApplies(db: Db, task: Task, workspace: WorkspaceConfig): boolean {
-  return task.type === "work" && !workspaceNeedsHuman(db, workspace.name);
+export function completionTreeGateApplies(task: Task): boolean {
+  return task.type === "work";
 }
 
 /** 完了経路の後始末が tree rule の代わりに走らせる**検査**(ADR 0109 決定3)。
@@ -1320,7 +1320,7 @@ export function releaseWorkspace(
     if (boardMovedHead(db, workspace, task.id)) {
       assertNothingWrittenAfterBoardMovedHead(workspace, task);
     } else {
-      if (completed && completionTreeGateApplies(db, task, workspace)) {
+      if (completed && completionTreeGateApplies(task)) {
         assertNothingWrittenAfterCompletion(workspace, task);
       } else {
         releaseTree(workspace, task);

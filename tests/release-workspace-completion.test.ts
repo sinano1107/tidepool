@@ -2,10 +2,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { listEvents } from "../src/events.js";
+import { completeTask, getTask, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
   prepareWorkspaceAtPickup,
+  quarantineWorkspace,
   releaseWorkspace,
   treeIsDirty,
   type WorkspaceConfig,
@@ -13,6 +15,7 @@ import {
 } from "../src/workspace.js";
 import {
   commitWork,
+  FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
@@ -58,7 +61,7 @@ it("完了の報告の後に書かれたものは成果ではない —— WIP �
   // 決着を報告した後に、まだ生きていた process が書く
   writeFileSync(join(ws.path, "after-the-report.txt"), "written by a process that outlived\n");
 
-  expect(completionTreeGateApplies(db, task, ws)).toBe(true);
+  expect(completionTreeGateApplies(task)).toBe(true);
   releaseAfterCompletion(db, ws, task);
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
@@ -68,6 +71,26 @@ it("完了の報告の後に書かれたものは成果ではない —— WIP �
   expect(git(ws.path, "status", "--porcelain")).not.toBe("");
   // merge-back も走っていない —— 報告後の書き込みが祖先ブランチへ運ばれることはない
   expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
+});
+
+it("完了と解放の間に別の理由で workspace が Quarantine になっても、報告後の書き込みを退避しない(ADR 0350 決定1)", async () => {
+  const { db, task, ws } = await pickedUpSession();
+  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+  writeFileSync(join(ws.path, "late.txt"), "written after completion\n");
+  quarantineWorkspace(db, ws.name, new Error("unrelated workspace failure"), NOW);
+  const question = quarantineQuestion(db, "workspace", ws.name)!;
+  const mainBefore = git(ws.path, "rev-parse", "main");
+
+  releaseAfterCompletion(db, ws, getTask(db, task.id)!);
+
+  expect(quarantineQuestion(db, "workspace", ws.name)?.id).toBe(question.id);
+  expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("unrelated workspace failure");
+  expect(listEvents(db, question.id).flatMap((e) => e.payload.kind === "quarantine_refired" ? [e.payload.reason] : [])).toEqual([expect.stringContaining(`written to after task ${task.id} reported done`)]);
+  expect(git(ws.path, "log", "--format=%s", "--all")).not.toContain("WIP: task");
+  expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(ws.path, "status", "--porcelain")).toBe("?? late.txt");
 });
 
 it("汚れが shadow 残骸の3条件だけを満たすなら、削除された上で通常どおり完了する", async () => {
@@ -121,7 +144,7 @@ it("review の完了でも退避する —— 完了の門を持たない解放�
 
   // 門が verb の手前で clean を要求していない範囲では、後始末時の汚れを
   // 「報告後に書かれたもの」とは言えない
-  expect(completionTreeGateApplies(db, task, ws)).toBe(false);
+  expect(completionTreeGateApplies(task)).toBe(false);
   releaseAfterCompletion(db, ws, task);
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
