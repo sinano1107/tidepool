@@ -67,7 +67,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, sessionId, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -317,7 +317,7 @@ async function makeWorker(
     ...containerHarness(containers, clock),
     // Claude の分類は解決済みの値で渡る(ADR 0309)ので、Promise を真と読まないよう値で比べる
     onWorkerExited: (taskId, exit, facts) => { if (!(facts.classification instanceof Promise) && facts.classification.capInterrupted) watchdog.onWorkerExited(taskId, exit, facts); else fireWrites(facts); },
-    onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
+    onPickupStopped: (taskId, _sessionId, payload) => stops.push([taskId, payload]),
     enumerateSkills: enumeration.enumerateSkills,
     enumerateHostSkills: bundled.enumerateHostSkills,
     ...extraOptions,
@@ -335,8 +335,8 @@ async function makeWorker(
     // scheduler と同じ順序: slot を取ってから spawn する。この unit 盤面では
     // 1つずつ順に走らせるので、前の session の slot は次の pickup で明け渡す。
     slot.release();
-    slot.occupy(task.id);
-    worker.start(task, setting(task), query);
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task), query);
     return task;
   };
   const setting = (task: Task) =>
@@ -719,7 +719,7 @@ describe("ClaudeCodeWorker", () => {
       parent_id: reviewed.id,
     };
     insertTask(db, review);
-    worker.start(review, setting(review));
+    worker.start(review, sessionId(db, review.id), setting(review));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -754,7 +754,7 @@ describe("ClaudeCodeWorker", () => {
       parent_id: reviewed.id,
     };
     insertTask(db, review);
-    worker.start(review, setting(review));
+    worker.start(review, sessionId(db, review.id), setting(review));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -817,9 +817,9 @@ describe("ClaudeCodeWorker", () => {
       const task = subject ? getTask(db, listBoard(db).find((t) => t.meta_review_subject === subject)!.id)! : makeTask(`task-${calls.length}`);
       if (!subject) insertTask(db, task);
       slot.release();
-      slot.occupy(task.id);
+      slot.occupy(task.id, sessionId(db, task.id));
       const before = calls.length;
-      worker.start(task, setting(task));
+      worker.start(task, sessionId(db, task.id), setting(task));
       await vi.waitFor(() => expect(calls).toHaveLength(before + 1));
       const args = calls.at(-1)!.args;
       return { task, systemPrompt: systemText(args) };
@@ -851,8 +851,8 @@ describe("ClaudeCodeWorker", () => {
     db.prepare("UPDATE tasks SET assignee = 'deckhand' WHERE meta_review_subject = 'memory'").run();
     const task = getTask(db, listBoard(db).find((t) => t.meta_review_subject === "memory")!.id)!;
     slot.release();
-    slot.occupy(task.id);
-    worker.start(task, setting(task));
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls.at(-1)!.args;
@@ -932,8 +932,8 @@ describe("ClaudeCodeWorker", () => {
     openTestInterviewRoom(db, root);
     const [child] = poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     openTestExamineeCheckout(db, child!);
-    slot.occupy(child!.id);
-    worker.start(child!, setting(child!));
+    slot.occupy(child!.id, sessionId(db, child!.id));
+    worker.start(child!, sessionId(db, child!.id), setting(child!));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -945,8 +945,8 @@ describe("ClaudeCodeWorker", () => {
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(db, root);
-    slot.occupy(root.id);
-    worker.start(root, setting(root));
+    slot.occupy(root.id, sessionId(db, root.id));
+    worker.start(root, sessionId(db, root.id), setting(root));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
@@ -959,8 +959,8 @@ describe("ClaudeCodeWorker", () => {
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(db, root);
     poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
-    slot.occupy(root.id);
-    worker.start(root, setting(root));
+    slot.occupy(root.id, sessionId(db, root.id));
+    worker.start(root, sessionId(db, root.id), setting(root));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     expect(systemText(args)).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
@@ -1476,7 +1476,7 @@ describe("ClaudeCodeWorker", () => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
     const { start, calls, db } = await makeWorker({}, {
       ...pings,
-      onSpawnFailed: (taskId, failure, record) => {
+      onSpawnFailed: (taskId, _sessionId, failure, record) => {
         record();
         spawnFailures.push([taskId, failure]);
       },
@@ -1578,7 +1578,7 @@ describe("ClaudeCodeWorker", () => {
       { "agents/deckhand.md": skilledMd("  - code-review\n") },
       {
         enumerateSkills: rec.enumerateSkills,
-        onSpawnFailed: (taskId, failure, record) => {
+        onSpawnFailed: (taskId, _sessionId, failure, record) => {
         record();
         spawnFailures.push([taskId, failure]);
       },
@@ -1607,7 +1607,7 @@ describe("ClaudeCodeWorker", () => {
         enumerateSkills: async () => {
           throw new Error("reader blew up");
         },
-        onSpawnFailed: (taskId, _failure, record) => {
+        onSpawnFailed: (taskId, _sessionId, _failure, record) => {
         record();
         spawnFailures.push(taskId);
       },
@@ -1706,14 +1706,14 @@ describe("ClaudeCodeWorker", () => {
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(db, root);
-    slot.occupy(root.id);
-    worker.start(root, setting(root));
+    slot.occupy(root.id, sessionId(db, root.id));
+    worker.start(root, sessionId(db, root.id), setting(root));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const [child] = poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "deckhand", new Date(0), "worker", POSED_HEAD);
     const checkout = openTestExamineeCheckout(db, child!);
     slot.release();
-    slot.occupy(child!.id);
-    worker.start(child!, setting(child!));
+    slot.occupy(child!.id, sessionId(db, child!.id));
+    worker.start(child!, sessionId(db, child!.id), setting(child!));
     await vi.waitFor(() => expect(calls).toHaveLength(2));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
@@ -1748,8 +1748,8 @@ describe("ClaudeCodeWorker", () => {
             BOARD_ACTOR_ID,
             "board",
           );
-    slot.occupy(task.id);
-    worker.start(task, setting(task));
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
@@ -1816,7 +1816,7 @@ describe("ClaudeCodeWorker", () => {
     expect(listEvents(db, value.id).find((e) => e.kind === "worker_exited")!.payload).toMatchObject({ exit_code: 0, reported_error: null });
     expect(listBoard(db).find((task) => task.type === "question")?.title).toBe(`worker exited without reporting: ${value.title}`);
     expect(getTask(db, value.id)?.status).not.toBe("done");
-    await containers.reclaimed(value.id);
+    await containers.reclaimed(String(sessionId(db, value.id)));
     expect(existsSync(file)).toBe(false);
   });
 
@@ -2344,11 +2344,11 @@ describe("ClaudeCodeWorker", () => {
     const recorder = recordingSpawn();
     onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
     const runtime = new FakeContainerRuntime(recorder.spawn);
-    const { start } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
+    const { start, db } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
     const task = start("task-init-container-kill", null, "deckhand", "work");
     await vi.waitFor(() => expect(recorder.processes).toHaveLength(1));
     recorder.processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
-    await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([task.id]));
+    await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([String(sessionId(db, task.id))]));
     expect(recorder.killed).toEqual([]);
   });
 
@@ -2511,7 +2511,7 @@ describe("ClaudeCodeWorker", () => {
     const value = makeTask("task-prompt");
     value.purpose = large;
     insertTask(db, value);
-    worker.start(value, setting(value));
+    worker.start(value, sessionId(db, value.id), setting(value));
     const spawned = listEvents(db, value.id).find((e) => e.kind === "worker_spawned")!;
     const recorded = new TranscriptStore(logDir).readPrompt(value.id, spawned.id)!;
     const args = calls[0]!.args;
@@ -2551,7 +2551,7 @@ describe("ClaudeCodeWorker", () => {
     const task = start("task-retry");
     // retry / decompose 復帰 / quarantine 復帰はいずれも同じ task を worker が
     // 再度 start する形なので、直接 worker.start を2回呼んで再現する
-    worker.start(task, setting(task));
+    worker.start(task, 0, setting(task));
     await vi.waitFor(async () => {
       const files = (await readdir(logDir)).filter((name) => name.startsWith("task-retry."));
       expect(files.filter((name) => name.endsWith(".stream.jsonl"))).toHaveLength(2);
@@ -2643,7 +2643,7 @@ describe("ClaudeCodeWorker", () => {
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
       insertTask(db, task);
-      worker.start(task, pickedSetting(db, { dir: registryDir, mode: "purely-local" }, task));
+      worker.start(task, sessionId(db, task.id), pickedSetting(db, { dir: registryDir, mode: "purely-local" }, task));
       await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
       const args = recorder.calls[0]!.args;
       const configPath = args[args.indexOf("--mcp-config") + 1]!;
@@ -2684,7 +2684,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, db, calls } = await makeWorker();
     const task = makeTask("task-no-effort", null, "deckhand", "work");
     insertTask(db, task);
-    worker.start(task, { provider: "anthropic", model: "claude-haiku-4-5-20251001", effort: null, advisor: undefined, tier_id: 1, source: { tier: "board", provider: "only" } });
+    worker.start(task, sessionId(db, task.id), { provider: "anthropic", model: "claude-haiku-4-5-20251001", effort: null, advisor: undefined, tier_id: 1, source: { tier: "board", provider: "only" } });
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model claude-haiku-4-5-20251001");
     expect(calls[0]!.args).not.toContain("--effort");
@@ -2729,7 +2729,7 @@ describe("ClaudeCodeWorker", () => {
     insertTask(db, task);
     // 盤面の表の economy 行は claude-sonnet-5-5。渡された設定はそれと違う値で、しかも
     // 「順位で選ばれた」出所を持つ —— どちらも再解決からは出てこない
-    worker.start(task, {
+    worker.start(task, sessionId(db, task.id), {
       provider: "anthropic",
       model: "opus",
       effort: "max",
@@ -2748,7 +2748,7 @@ describe("ClaudeCodeWorker", () => {
     const { calls, worker, db } = await makeWorker();
     const task = makeTask(`task-tier-${type}`, null, "deckhand", type);
     insertTask(db, task);
-    worker.start(task, { provider: "anthropic", model: "opus", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
+    worker.start(task, sessionId(db, task.id), { provider: "anthropic", model: "opus", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!.payload).toMatchObject({ tier_id: 3 });
   });
@@ -3618,7 +3618,7 @@ describe("ClaudeCodeWorker", () => {
   it("spawn 自体が ENOENT で失敗(syscall が \"spawn\" で始まる)すると spawn_failed を error_code/message 付きで記録し running から消す(issue #127)", async () => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
     const { calls, start, emitError, db, worker, killed } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure, record) => {
+      onSpawnFailed: (taskId, _sessionId, failure, record) => {
         record();
         spawnFailures.push([taskId, failure]);
       },
@@ -3647,7 +3647,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("spawn 族でない error(例: kill 失敗の syscall: \"kill\")は console.error のみで spawn_failed イベントは書かない(issue #127)", async () => {
     const spawnFailures: string[] = [];
-    const { calls, start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId, _failure, record) => {
+    const { calls, start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId, _sessionId, _failure, record) => {
         record();
         spawnFailures.push(taskId);
       } });
@@ -3718,7 +3718,7 @@ describe("ClaudeCodeWorker", () => {
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);
-    worker.start(task, pickedSetting(db, { dir: registryDir, mode: "remote-backed" }, task));
+    worker.start(task, sessionId(db, task.id), pickedSetting(db, { dir: registryDir, mode: "remote-backed" }, task));
     await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
 
     const spawned = listEvents(db, "task-remote").find((e) => e.kind === "worker_spawned");
@@ -3762,7 +3762,7 @@ describe("ClaudeCodeWorker", () => {
     // self RCA: concrete assignee = the historical worker, parent = objected
     const rca: Task = { ...makeTask("rca-1", null, "deckhand", "review"), parent_id: "objected-1" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -3786,7 +3786,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-3", null, "deckhand", "review"), parent_id: "objected-3" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -3808,7 +3808,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-4", null, "deckhand", "review"), parent_id: "objected-4" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -3837,7 +3837,7 @@ describe("ClaudeCodeWorker", () => {
     // independent review: unset assignee → resolves to the Auditor pointer
     const audit: Task = { ...makeTask("audit-1", null, null, "review"), parent_id: "objected-2" };
     insertTask(db, audit);
-    worker.start(audit, setting(audit));
+    worker.start(audit, sessionId(db, audit.id), setting(audit));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const prompt = systemText(args);
@@ -3858,7 +3858,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-6", null, "deckhand", "review"), parent_id: "objected-6" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -3885,7 +3885,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-10", null, "deckhand", "review"), parent_id: "objected-10" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -3913,7 +3913,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-11" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     // the built-in's finite skill list launches after the async skill enumeration
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
@@ -3938,7 +3938,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "objected-12" };
     insertSelfRca(db, rca);
-    worker.start(rca, setting(rca));
+    worker.start(rca, sessionId(db, rca.id), setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
@@ -5227,7 +5227,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     // ADR 0109 決定4: root の exit を観測した adapter はその場で強制回収を撃つ。ここで
     // 測りたいのは「送達も exit も観測ではない」なので、force では空にならないホスト —
     // 行儀よく exit しない子孫が残っている session — を明示的にスクリプトする。
-    runtime.hold(task.id);
+    runtime.hold(String(sessionId(db, task.id)));
     // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
     // 実物で通す —— tree rule はその基準に対して退避する
     await prepareWorkspaceAtPickup(db, ws, task);
@@ -5248,7 +5248,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(slot.currentTaskId).toBe(task.id);
     expect(getTask(db, task.id)!.status).toBe("in_progress");
 
-    runtime.fireEmpty(task.id);
+    runtime.fireEmpty(String(sessionId(db, task.id)));
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
     expect(getTask(db, task.id)!.status).toBe("todo");
@@ -5260,15 +5260,15 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   });
 
   it("spawn が落ちた pickup の後始末は、読み口に process を1つも持たなかった session として報される(ADR 0274 決定3 / #651)", async () => {
-    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
+    let onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
     const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure, record) => onSpawnFailed(taskId, failure, record),
+      onSpawnFailed: (taskId, _sessionId, failure, record) => onSpawnFailed(taskId, _sessionId, failure, record),
     });
     onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
     const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
     const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
-    slot.occupy(task.id);
-    worker.start(task, setting(task));
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
@@ -5282,15 +5282,15 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
   it("spawn の失敗で盤面側の一撃の記録が盤面のバグで投げても、listener の外へ抜けず落ちた後始末が立つ(ADR 0342 決定6 / #2036)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
+    let onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
     const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure, record) => onSpawnFailed(taskId, failure, record),
+      onSpawnFailed: (taskId, _sessionId, failure, record) => onSpawnFailed(taskId, _sessionId, failure, record),
     });
     onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
     const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
     const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
-    slot.occupy(task.id);
-    worker.start(task, setting(task));
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     failTeardownMark(db);
 
@@ -5302,15 +5302,15 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
   it("spawn の失敗の観測点の spawn_failed の書き込みが盤面のバグで投げても、listener の外へ抜けず落ちた後始末になり、受理が1行だけ書く(ADR 0342 決定6 / #2036)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
+    let onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record: () => void) => void = () => {};
     const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
-      onSpawnFailed: (taskId, failure, record) => onSpawnFailed(taskId, failure, record),
+      onSpawnFailed: (taskId, _sessionId, failure, record) => onSpawnFailed(taskId, _sessionId, failure, record),
     });
     onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
     const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
     const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
-    slot.occupy(task.id);
-    worker.start(task, setting(task));
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     db.exec("CREATE TRIGGER fail_spawn_failed BEFORE INSERT ON events WHEN NEW.kind = 'spawn_failed' BEGIN SELECT RAISE(ABORT, 'spawn_failed write failed'); END");
 
@@ -5545,8 +5545,8 @@ it("Claude's stale settle retains its spawn identity and leaves graceful stop co
   await vi.waitFor(() => expect(f.processes).toHaveLength(1));
   const original = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!.id;
   f.emitExitOnlyAt(0, 1, null);
-  await f.containers.reclaimed(value.id);
-  f.worker.start(value, f.setting(value));
+  await f.containers.reclaimed(String(sessionId(f.db, value.id)));
+  f.worker.start(value, sessionId(f.db, value.id), f.setting(value));
   await vi.waitFor(() => expect(f.processes).toHaveLength(2));
 
   f.emitCloseAt(0, 1, null);

@@ -9,6 +9,7 @@ import {
   HOUR,
   mcpClient,
   registerWork,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 
@@ -127,7 +128,7 @@ it("a child sees every sibling in registration-event order under its decision, i
     (task: any) => task.title === "measure current",
   );
   await api(t.baseUrl, "POST", `/api/tasks/${current.id}/move`, { after: null });
-  t.containers.fireEmpty(parent.id);
+  t.containers.fireEmpty(String(sessionId(t.db, parent.id)));
   await new Promise((resolve) => setImmediate(resolve));
   const clientTask = t.worker.started.at(-1)!;
   expect(clientTask.title).toBe("measure current");

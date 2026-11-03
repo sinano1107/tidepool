@@ -20,6 +20,7 @@ import {
   HUMAN_WEBUI,
   makeWorkspace,
   quarantineQuestion,
+  sessionId,
 } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -46,7 +47,7 @@ async function pickedUpSession(): Promise<{
     ...HUMAN_WEBUI,
   );
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
-  slot.occupy(task.id);
+  slot.occupy(task.id, sessionId(db, task.id));
   await prepareWorkspaceAtPickup(db, ws, task);
   return { deps: { db, clock, slot, resolve: () => ws, pollNow: () => {} }, slot, task, ws };
 }
@@ -76,7 +77,7 @@ it("枠の主が入れ替わっていたら何もしない —— 他人の slot
   writeFileSync(join(ws.path, "half-done.txt"), "work in flight\n");
   // 回収済み観測を待つ間に、次の session が枠に入っていた
   slot.release();
-  slot.occupy("someone-else");
+  slot.occupy("someone-else", sessionId(deps.db, "someone-else"));
   const transitions: string[] = [];
 
   await runTeardown(deps, task.id, { transition: (t: Task) => transitions.push(t.id) });
@@ -103,7 +104,7 @@ it("門が既に解決した workspace は後始末で解決し直さない —�
     ...HUMAN_WEBUI,
   );
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
-  slot.occupy(task.id);
+  slot.occupy(task.id, sessionId(db, task.id));
   let resolveCalls = 0;
   const resolve = () => {
     resolveCalls++;
@@ -142,7 +143,7 @@ function completedSession() {
     ...HUMAN_WEBUI,
   );
   const task = completeTask(db, pickupTask(db, registered, "deckhand", clock.now())!, FULL_HANDOFF, "deckhand", clock.now(), "worker");
-  slot.occupy(task.id);
+  slot.occupy(task.id, sessionId(db, task.id));
   const calls: string[] = [];
   const deps: TeardownDeps = {
     db,
@@ -167,7 +168,7 @@ it("後始末は着地を直接撃たず、枠を空けた後に pickup の契�
 it("枠の主が変わっていた・梯子の底で保留された後始末は、pickup の契機を撃たない", async () => {
   const changed = completedSession();
   changed.slot.release();
-  changed.slot.occupy("someone-else");
+  changed.slot.occupy("someone-else", sessionId(changed.deps.db, "someone-else"));
   await runTeardown(changed.deps, changed.task.id, { completion: true });
 
   const held = completedSession();

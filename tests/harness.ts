@@ -367,6 +367,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
   const db = openDb(dbPath);
+  containers.taskIdForSession = (id) => /^\d+$/.test(id) ? getEvent(db, Number(id))?.task_id ?? undefined : undefined;
   const server = await startServer({
     db,
     port: 0,
@@ -384,7 +385,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
         const spawned = latestEventOfTask(db, taskId, "worker_spawned");
         const pickup = latestEventOfTask(db, taskId, "task_picked_up");
         const workerSpawnedEventId = spawned && spawned.id > (pickup?.id ?? 0) ? spawned.id : appendEvent(db, { taskId, actorId: worker.id, origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
-        deps.onWorkerExited(taskId, exit, { workerSpawnedEventId, turnRan: true, writes: [], classification: { capInterrupted: false } });
+        deps.onWorkerExited(taskId, exit, { sessionId: pickup!.id, workerSpawnedEventId, turnRan: true, writes: [], classification: { capInterrupted: false } });
       };
       return worker;
     }),
@@ -1625,10 +1626,10 @@ export function fireWrites({ classification, writes }: WorkerExitClassification)
 export function exitToWatchdog(
   deps: { db: Db; clock: Clock; slot: Slot; containers: ProcessContainers; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig; pollNow?: () => void },
   taskId: string,
-  facts: Omit<WorkerExitClassification, "workerSpawnedEventId">,
+  facts: Omit<WorkerExitClassification, "workerSpawnedEventId" | "sessionId">,
 ): void {
-  deps.containers.forceReclaim(taskId);
-  startWatchdog({ ...deps, worker: new ScriptedWorker(deps.clock), pollNow: deps.pollNow ?? (() => {}) }).onWorkerExited(taskId, QUIET_EXIT, { ...facts, workerSpawnedEventId: appendEvent(deps.db, { taskId, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() }) });
+  deps.containers.forceReclaim(String(sessionId(deps.db, taskId)));
+  startWatchdog({ ...deps, worker: new ScriptedWorker(deps.clock), pollNow: deps.pollNow ?? (() => {}) }).onWorkerExited(taskId, QUIET_EXIT, { ...facts, sessionId: sessionId(deps.db, taskId), workerSpawnedEventId: appendEvent(deps.db, { taskId, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() }) });
 }
 
 /** agent 名と workspace 名の集合を registry として注入する boot の欄(集合を後から減らすと削除を模せる)。null の workspace は盤面の既定。 */
@@ -1768,3 +1769,14 @@ export const haltedRefires = async (t: Tidepool) => (await api(t.baseUrl, "GET",
 
 /** 起草 client の成功の応答。 */
 export const KEEP_FIXTURES = { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" } as const;
+
+const syntheticSessions = new WeakMap<Db, Map<string, number>>();
+/** Pickup identity for fixture setup and fake-container observations; direct-adapter fixtures supply distinct synthetic ids. */
+export function sessionId(db: Db, taskId: string): number {
+  const pickup = latestEventOfTask(db, taskId, "task_picked_up");
+  if (pickup) return pickup.id;
+  let sessions = syntheticSessions.get(db);
+  if (!sessions) syntheticSessions.set(db, sessions = new Map());
+  if (!sessions.has(taskId)) sessions.set(taskId, -sessions.size - 1);
+  return sessions.get(taskId)!;
+}

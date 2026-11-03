@@ -23,7 +23,7 @@ import {
 } from "../src/teardown.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, sessionId } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -71,7 +71,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
     ...HUMAN_WEBUI,
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
-  slot.occupy(picked.id);
+  slot.occupy(picked.id, sessionId(db, picked.id));
   await prepareWorkspaceAtPickup(db, ws, picked);
   commitWork(ws.path, "deliverable.txt", "the real work\n");
   const task =
@@ -200,7 +200,7 @@ it("watchdog の強制回収で落ちた後始末の受理は、殺したタス�
 it("早期 return では立たない —— 枠の主が変わった / 梯子の底で保留は失敗ではない", async () => {
   const changed = await session();
   changed.slot.release();
-  changed.slot.occupy("someone-else");
+  changed.slot.occupy("someone-else", sessionId(changed.db, "someone-else"));
   await runTeardown(changed.deps, changed.task.id, { completion: true });
 
   const held = await session();

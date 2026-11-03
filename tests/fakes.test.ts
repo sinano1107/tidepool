@@ -31,7 +31,7 @@ it("withHealthyUsage: id は中の adapter のもので、start は query を含
   const task = { id: "t1" } as Task;
   const setting = { provider: "claude-code" } as unknown as ExecutionSetting;
 
-  worker.start(task, setting, { view: "tide chart drift" });
+  worker.start(task, 1, setting, { view: "tide chart drift" });
   worker.gracefulStop("t1");
 
   expect(worker.id).toBe("inner-agent");

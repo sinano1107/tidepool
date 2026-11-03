@@ -31,6 +31,7 @@ import {
   makeWorkspace,
   quarantineQuestion,
   servedQuarantineQuestion,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -54,7 +55,7 @@ it.each([
     const started: Array<[string, Provider]> = [];
     const worker: WorkerAdapter = {
       id: "claude-agent",
-      start: (task, setting) => started.push([task.id, setting.provider]),
+      start: (task, _sessionId, setting) => started.push([task.id, setting.provider]),
       gracefulStop() {},
       checkUsage: async () => healthyUsageText(clock.now()),
     };
@@ -106,12 +107,12 @@ it.each([
     const onPickupStopped = queueReturnHandler({ db, clock, slot, resolve: undefined, pollNow: () => scheduler.pollNow() }, containers);
     const worker: WorkerAdapter = {
       id: "claude-agent",
-      start: (task, setting) => {
+      start: (task, _sessionId, setting) => {
         started.push([task.id, setting.provider]);
         if (started.length > 1) return;
         const stop = { quarantine: "workspaceContainment", value: "claude-code/B", reason: "unsafe settings" } as const;
         registerQuarantine(db, stop.quarantine, stop.value, stop.reason, clock.now());
-        onPickupStopped(task.id, { kind: "pickup_stopped", ...stop });
+        onPickupStopped(task.id, sessionId(db, task.id), { kind: "pickup_stopped", ...stop });
       },
       gracefulStop() {},
       checkUsage: async () => healthyUsageText(clock.now()),

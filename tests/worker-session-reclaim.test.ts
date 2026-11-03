@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { boardContainerRuntimeFor } from "../src/cgroup-container.js";
 import { markTeardown } from "../src/teardown.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, servedQuarantineQuestion, sessionId, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -25,7 +25,7 @@ const watchdog = { timeLimits: { work: WORK_LIMIT }, grace: GRACE, reclaimTimeou
 async function forceReclaimed(task: { id: string }): Promise<void> {
   await t.clock.advance(90 * MIN); // 畳み込み停止
   await t.clock.advance(GRACE); // 強制回収
-  expect(t.containers.forceReclaims).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, task.id))]);
 }
 
 /** `harnessContainment` を渡す盤面の pickup は人間面の自己検査(実 HTTP の往復、
@@ -51,7 +51,7 @@ it("強制回収の送達では slot は解放されない — 解放するの�
   });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR); // pickup
-  containers.hold(task.id); // このホストでは force だけでは容器が空にならない
+  containers.hold(String(sessionId(t.db, task.id))); // このホストでは force だけでは容器が空にならない
 
   await forceReclaimed(task);
 
@@ -63,7 +63,7 @@ it("強制回収の送達では slot は解放されない — 解放するの�
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 
   // 空になった signal が届いて初めて failure question と slot 解放へ進む
-  containers.fireEmpty(task.id);
+  containers.fireEmpty(String(sessionId(t.db, task.id)));
   await t.clock.advance(1 * MIN);
   expect((await questions())[0].question_items[0].options).toContain("retry");
   await t.clock.advance(HOUR);
@@ -76,7 +76,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
-  containers.hold(task.id);
+  containers.hold(String(sessionId(t.db, task.id)));
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
 
   await forceReclaimed(task);
@@ -101,7 +101,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 
   // 遅れて届いた空の観測は slot を黙って解放しない — 門は確認 question だけ
-  containers.fireEmpty(task.id);
+  containers.fireEmpty(String(sessionId(t.db, task.id)));
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
   // pickup は開いている quarantine だけで止まるので、上の assert は slot の解放を
@@ -118,7 +118,7 @@ it("「今なぜ pickup が起きないか」の読み口が回収失敗を盤�
   t = await bootTidepool({ containerRuntime: containers, watchdog });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
-  containers.hold(task.id);
+  containers.hold(String(sessionId(t.db, task.id)));
 
   await forceReclaimed(task);
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([]);
@@ -133,7 +133,7 @@ it("quarantine の回答時に容器の空を再観測する — populated な�
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   await pickedUp(task);
-  containers.hold(task.id);
+  containers.hold(String(sessionId(t.db, task.id)));
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);
 
@@ -158,13 +158,13 @@ it("空を観測してから回答すると受理され、slot-release tree rule
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   await pickedUp(task);
-  containers.hold(task.id);
+  containers.hold(String(sessionId(t.db, task.id)));
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);
 
   // 人間が手で残存 process を片付けた = 容器の空が観測できるようになった
-  containers.fireEmpty(task.id);
+  containers.fireEmpty(String(sessionId(t.db, task.id)));
   const quarantine = await containmentQuestion();
   const accepted = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, {
     answers: ["repaired by hand"],
@@ -249,7 +249,7 @@ it("回収 timeout のあと再起動して前提検査が通ると、回答よ�
   t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
-  containers.hold(task.id);
+  containers.hold(String(sessionId(t.db, task.id)));
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);

@@ -100,11 +100,11 @@ export type WorkerFactory = (deps: {
    *  任意の口にしない: 渡し忘れは型で落ちる(合成側に probe が無い盤面だけが undefined を渡す)。 */
   openaiUsage: CodexAppServerProbe | undefined;
   /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
-  onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record?: () => void) => void;
+  onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record?: () => void) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
-  onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
+  onRecordContainerFailed: (taskId: string, sessionId: number, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に止めた pickup を受ける盤面側の一撃(`queueReturnHandler` 製)。 */
-  onPickupStopped: (taskId: string, payload: PickupStopped) => void;
+  onPickupStopped: (taskId: string, sessionId: number, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。行の拒否と0ターンの資源の停止も
    *  この束に乗る(ADR 0338 決定1)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;

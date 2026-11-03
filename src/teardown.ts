@@ -274,7 +274,7 @@ export function resumeUnfinishedTeardown(deps: TeardownDeps, answeredSpawn?: num
   const session = sessionInTeardown(deps.db);
   if (!session || deps.slot.currentTaskId !== null) return;
   if (sessionHaltOpen(deps.db, session.taskId, answeredSpawn)) return;
-  deps.slot.occupy(session.taskId);
+  deps.slot.occupy(session.taskId, latestEventOfTask(deps.db, session.taskId, "task_picked_up")!.id);
   deps.slot.enterTeardown();
   return runTeardown(deps, session.taskId, teardownStep(deps.db, session.taskId));
 }
@@ -349,7 +349,7 @@ export function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Pr
     // 先の受理の後始末が既に解放した後で、取り直すと解放する者が無い
     fallback: () => {
       if (deps.slot.currentTaskId === null) {
-        deps.slot.occupy(taskId);
+        deps.slot.occupy(taskId, latestEventOfTask(deps.db, taskId, "task_picked_up")!.id);
         deps.slot.enterTeardown();
       }
       return [() => teardown(deps, taskId, teardownStep(deps.db, taskId))];

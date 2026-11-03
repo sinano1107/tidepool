@@ -15,6 +15,7 @@ export type ParentBriefing = Partial<TaskContent> & {
  *  枠は空かない。`inTeardown` がその局面を表す。 */
 export class Slot {
   private taskId: string | null = null;
+  private sessionId: number | null = null;
   private teardown = false;
   private taskContent: TaskContent | undefined;
   private parentContent: ParentBriefing | undefined;
@@ -23,6 +24,11 @@ export class Slot {
 
   get currentTaskId(): string | null {
     return this.taskId;
+  }
+
+  /** ADR 0353 決定1・2: 枠の主は task の今の run でなく、pickup が名指した session。 */
+  get currentSessionId(): number | null {
+    return this.sessionId;
   }
 
   /** 後始末(GLOSSARY.md「後始末」)に入っているか。最終 verb が着地してから
@@ -42,9 +48,10 @@ export class Slot {
     return this.parentContent;
   }
 
-  occupy(taskId: string, content?: TaskContent, parentBriefing?: ParentBriefing): void {
+  occupy(taskId: string, sessionId: number, content?: TaskContent, parentBriefing?: ParentBriefing): void {
     if (this.taskId !== null) throw new Error("slot already occupied");
     this.taskId = taskId;
+    this.sessionId = sessionId;
     this.teardown = false;
     this.taskContent = content;
     this.parentContent = parentBriefing;
@@ -94,6 +101,7 @@ export class Slot {
   release(): void {
     this.failedTeardownRest = undefined;
     this.taskId = null;
+    this.sessionId = null;
     this.teardown = false;
     this.taskContent = undefined;
     this.parentContent = undefined;

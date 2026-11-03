@@ -1,7 +1,6 @@
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
-import { getTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, withHealthyUsage } from "./fakes.js";
 import {
@@ -15,6 +14,7 @@ import {
   makeWorkspace,
   questions,
   queueWork,
+  sessionId,
   type Tidepool,
   unhandledRejectionsDuring,
 } from "./harness.js";
@@ -95,7 +95,7 @@ it("空を観測できない容器では、読み口が後始末中を報せ、�
   await t.clock.advance(HOUR);
 
   expect(await neverStarted()).toHaveLength(1);
-  expect(t.containers.forceReclaims).toContain(task.id);
+  expect(t.containers.forceReclaims).toContain(String(sessionId(t.db, task.id)));
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.teardown.taskId).toBe(task.id);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
   expect((await listQueueViaMcp(t.baseUrl)).teardown.taskId).toBe(task.id);
@@ -181,11 +181,11 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
   });
   const logDir = await tempDir("skill-enum-fail-logs-");
   // 列挙の probe は init 行を出さず exit もしない。task 以外の容器(= Board call)は
-  // force では空にならない —— 容器 id の綴りには結び付けず「task の行が無い id」で見分ける
+  // force では空にならない —— worker session と Board call は接頭辞で区別する
   const runtime = new (class extends FakeContainerRuntime {
     override create(id: string) {
       const container = super.create(id);
-      if (!getTask(t.db, id)) this.hold(id);
+      if (id.startsWith("board-call-")) this.hold(id);
       return container;
     }
   })(() => ({ stdout: new PassThrough(), stderr: new PassThrough(), kill() {}, on() {} }));

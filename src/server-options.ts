@@ -267,9 +267,9 @@ export function buildWorkerOptions(
     reclaimTimeout: number;
     containers: ProcessContainers;
     boardCall: BoardCall;
-    onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }, record?: () => void) => void;
-    onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
-    onPickupStopped: (taskId: string, payload: PickupStopped) => void;
+    onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record?: () => void) => void;
+    onRecordContainerFailed: (taskId: string, sessionId: number, err: RecordContainerError) => void;
+    onPickupStopped: (taskId: string, sessionId: number, payload: PickupStopped) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
     /** ADR 0344 決定1: transcript の close から投影の同期の手を session の runner で撃つ。 */
     onSessionCloseStep: (taskId: string, spawnId: number, step: () => void) => unknown;

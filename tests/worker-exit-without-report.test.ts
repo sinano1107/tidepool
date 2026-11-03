@@ -22,6 +22,7 @@ import {
   QUIET_EXIT,
   questions,
   queueWork,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -186,12 +187,12 @@ it("容器が空になった観測の前は枠を握ったままで、観測の�
 
   expect(await exitedWithoutReport()).toHaveLength(1);
   // 強制回収は adapter が撃った1本だけ(重ねない)
-  expect(t.containers.forceReclaims).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, task.id))]);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
   await t.clock.advance(MIN);
   expect(started()).toEqual([task.id]);
 
-  t.containers.fireEmpty(task.id);
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
   await settle();
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
   expect(started()).toEqual([task.id, next.id]);
@@ -231,7 +232,7 @@ it("watchdog が畳み込み停止を送達したあとの exit では、この 
 
   // 猶予が過ぎて watchdog の強制回収 → 回収済み観測
   await t.clock.advance(30 * MIN);
-  t.containers.fireEmpty(task.id);
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
   await settle();
   expect((await questions(t)).map((q: any) => q.title)).toEqual(["watchdog killed task: runs too long"]);
 });
@@ -293,7 +294,7 @@ it("畳み込み停止のあとの exit が持つ最後の発話・CLI の失敗
   t.worker.exitWith(task.id, TALKATIVE_EXIT);
   await settle();
   await t.clock.advance(30 * MIN); // 強制回収
-  t.containers.fireEmpty(task.id);
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
   await settle();
 
   const [question] = await watchdogKilled();
@@ -375,7 +376,7 @@ it("決着したタスクの遅れた exit は、枠を継いだタスクの梯�
   expect(started()).toEqual([first.id, second.id]);
 
   await t.clock.advance(30 * MIN); // second の強制回収
-  t.containers.fireEmpty(second.id);
+  t.containers.fireEmpty(String(sessionId(t.db, second.id)));
   await settle();
   expect(t.worker.gracefulStops).toEqual([first.id, second.id]);
   const [question] = (await watchdogKilled()).filter((q: any) => q.title === "watchdog killed task: second");
@@ -626,7 +627,7 @@ it.each([
   stdout.write(`${JSON.stringify({ type: "assistant", message: { model: "claude-opus-5-5", content: [{ type: "tool_use", id: "bash-1", name: "Bash", input: { command: "echo ready" } }] } })}\n`);
   stdout.write(`${JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "bash-1", is_error: true, content: failure }] } })}\n`);
 
-  await vi.waitFor(() => expect(proc.forceReclaims).toEqual([task.id]));
+  await vi.waitFor(() => expect(proc.forceReclaims).toEqual([String(sessionId(t.db, task.id))]));
   const [quarantine] = await questions(t);
   expect(quarantine).toMatchObject({ registrant: "tidepool", question_quarantine_kind: "harnessContainment", question_quarantine_value: "claude-code" });
   expect(quarantine.purpose).toContain(failure);
@@ -667,7 +668,7 @@ it.each([
   await t.clock.advance(HOUR);
 
   proc.processes[0]!.stdout.write(initWithMcpServers(servers));
-  await vi.waitFor(() => expect(proc.forceReclaims).toEqual([task.id]));
+  await vi.waitFor(() => expect(proc.forceReclaims).toEqual([String(sessionId(t.db, task.id))]));
   proc.emitExit(null, "SIGKILL");
   await settle();
 

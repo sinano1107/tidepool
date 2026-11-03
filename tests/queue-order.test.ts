@@ -10,7 +10,7 @@ import { type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { RecordContainerError } from "../src/transcript-store.js";
 import { queueReturnHandler, recordContainerHaltHandler } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime } from "./fakes.js";
-import { exitToWatchdog, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { exitToWatchdog, HUMAN_WEBUI, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 /** キュー順(GLOSSARY.md / ADR 0333 決定1・2): 盤面が自分の都合で todo へ戻す task は位置を変えない —— 順を動かすのは登録と人間の行為だけ。 */
 
@@ -20,8 +20,8 @@ type BoardReturn = (deps: TeardownDeps, containers: ProcessContainers, task: Tas
 
 const RETURNS: [string, BoardReturn][] = [
   ["cap_interrupted", (deps, _, task) => teardownStep(deps.db, task.id).transition!(task, deps.clock.now())],
-  ["pickup_stopped", (deps, containers, task) => queueReturnHandler(deps, containers)(task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" })],
-  ["record_container_unwritable", (deps, containers, task) => recordContainerHaltHandler(deps, containers)(task.id, new RecordContainerError(task.id, "/logs", "EACCES"))],
+  ["pickup_stopped", (deps, containers, task) => queueReturnHandler(deps, containers)(task.id, sessionId(deps.db, task.id), { kind: "pickup_stopped", quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" })],
+  ["record_container_unwritable", (deps, containers, task) => recordContainerHaltHandler(deps, containers)(task.id, sessionId(deps.db, task.id), new RecordContainerError(task.id, "/logs", "EACCES"))],
   ["session_stopped_by_resource", (deps, containers, task) => {
     const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });
     exitToWatchdog({ ...deps, containers }, task.id, { turnRan: false, stop: { registered: { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: spawned } }, writes: [], classification: { capInterrupted: false } });
@@ -41,8 +41,8 @@ it.each(RETURNS)("盤面が %s で todo へ戻した task は拾われる前の�
   const register = (title: string) => registerTask(db, { type: "work", title, purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
   const [a, b, c] = [register("A"), register("B"), register("C")];
   const picked = pickupTask(db, b, "deckhand", clock.now())!;
-  slot.occupy(picked.id);
-  containers.open(picked.id);
+  slot.occupy(picked.id, sessionId(db, picked.id));
+  containers.open(String(sessionId(db, picked.id)));
   // 走行中に人間が C を先頭へ動かす
   moveTask(db, c, null, clock.now(), ...HUMAN_WEBUI);
 

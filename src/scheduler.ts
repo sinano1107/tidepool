@@ -307,13 +307,13 @@ export function startScheduler(deps: {
   /** 盤面側 supervisor(ADR 0099 決定2): pickup が worker session の容器を作る。 */
   containers: ProcessContainers;
   /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
-  onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0266 決定3・4: 記録の器が書けない pickup(`start` の中の transcript の open、ADR 0276 決定5)の一撃
    *  (`recordContainerHaltHandler` 製)。 */
-  onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
+  onRecordContainerFailed: (taskId: string, sessionId: number, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が worker の起動前に pickup を止めた —— `todo` へ戻して後始末を通す一撃(`queueReturnHandler` 製)。
    *  adapter の中の停止は adapter が同じ一撃を呼ぶ。 */
-  onPickupStopped: (taskId: string, payload: PickupStopped) => void;
+  onPickupStopped: (taskId: string, sessionId: number, payload: PickupStopped) => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the
@@ -593,22 +593,23 @@ export function startScheduler(deps: {
     // ここから `worker.start` までの await の間に session が終わったら(人間の停止)、継続は何も書かずに終わる ——
     // 記録は停止の要求と後始末が持つ(#1973 / ADR 0305)。各 await の後・次の副作用の前に読む
     const live = liveSession(db, picked.id);
+    const sessionId = latestEventOfTask(db, picked.id, "task_picked_up")!.id;
     // slot を握った後の一撃は後始末の手 —— 投げれば落ちた後始末(ADR 0294 決定3 / ADR 0342 決定6)
     const oneShot = (...steps: TeardownAction[]) => () => void runTeardownSteps({ db, clock, slot }, picked.id, ...steps);
     try {
       // 呼び手には pickupTask が書いた task_picked_up の id を渡す —— shadow 行はこの event に乗る(ADR 0319 決定1)
-      onPicked(latestEventOfTask(db, picked.id, "task_picked_up")!.id);
+      onPicked(sessionId);
       const started = { ...picked, ...content };
-      slot.occupy(picked.id, { title: started.title, purpose: started.purpose, completion_criteria: started.completion_criteria }, parentBriefing);
+      slot.occupy(picked.id, sessionId, { title: started.title, purpose: started.purpose, completion_criteria: started.completion_criteria }, parentBriefing);
       // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
       // かった pickup でも、force / reclaimed の相手はもう存在している。
-      containers.open(picked.id);
+      containers.open(String(sessionId));
       // branch discipline is the board's own, not the worker's: by the time
       // the worker starts, the workspace already sits on the task branch
       const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
       // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、`todo` へ戻して後始末を通す
       // 停止が無い(準備の失敗が session の終わった後に届いた、#1973)なら一撃も無い
-      const stopped = (stop: ResourceStop | undefined) => stop && oneShot(() => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop }));
+      const stopped = (stop: ResourceStop | undefined) => stop && oneShot(() => onPickupStopped(picked.id, sessionId, { kind: "pickup_stopped", ...stop }));
       if (resolve) {
         let drift: (() => void) | undefined;
         const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now(), (stop) => (drift = stopped(stop)));
@@ -667,13 +668,13 @@ export function startScheduler(deps: {
       }
       const query = await injectionQuery(started);
       if (!live()) return;
-      worker.start(started, setting, query);
+      worker.start(started, sessionId, setting, query);
     } catch (err) {
       if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: spawn_failed も同じ器に書くので、書かずに底へ
       // await の後に届いた想定外の throw(修復の問い合わせの reject など)も、session が終わっていれば何も書かない(#1973)
       if (!live()) return;
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
-      if (err instanceof RecordContainerError) return oneShot(() => onRecordContainerFailed(picked.id, err));
+      if (err instanceof RecordContainerError) return oneShot(() => onRecordContainerFailed(picked.id, sessionId, err));
       // ADR 0118 / ADR 0294 決定3: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす。event の書き込みも一撃の step(#2036)
       const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };
@@ -687,7 +688,7 @@ export function startScheduler(deps: {
             payload: { kind: "spawn_failed", ...failure },
             at: clock.now(),
           }),
-        () => onSpawnFailed(picked.id, failure),
+        () => onSpawnFailed(picked.id, sessionId, failure),
       );
     }
   }

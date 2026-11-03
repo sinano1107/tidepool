@@ -11,6 +11,7 @@ import {
   makeWorkspace,
   mcpClient,
   queueWork,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 
@@ -53,10 +54,10 @@ it("畳み込み停止後、猶予を過ぎると容器の強制回収が一度�
   expect(t.containers.forceReclaims).toEqual([]);
 
   await t.clock.advance(1 * MIN); // t = 180min: grace elapsed, 強制回収 fires
-  expect(t.containers.forceReclaims).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, task.id))]);
 
   await t.clock.advance(10 * MIN); // no repeat force reclaim
-  expect(t.containers.forceReclaims).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, task.id))]);
   // 合図は adapter が選ぶので、seam に raw signal 名は一度も現れない
   expect(t.worker.gracefulStops).toEqual([task.id]);
 });
@@ -143,10 +144,11 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
 
   // first run: hits the limit, gets killed
   await t.clock.advance(HOUR); // picked up at t = 60min
+  const firstSession = sessionId(t.db, task.id);
   await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
   await t.clock.advance(grace); // t = 180min: 強制回収
   expect(t.worker.gracefulStops).toEqual([task.id]);
-  expect(t.containers.forceReclaims).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, task.id))]);
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
@@ -159,7 +161,7 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
   await t.clock.advance(90 * MIN);
   await t.clock.advance(grace);
   expect(t.worker.gracefulStops).toEqual([task.id, task.id]);
-  expect(t.containers.forceReclaims).toEqual([task.id, task.id]);
+  expect(t.containers.forceReclaims).toEqual([String(firstSession), String(sessionId(t.db, task.id))]);
 });
 
 it("failure question が開いている間、失敗タスクと同判断の兄弟も held になり slot に入らない", async () => {

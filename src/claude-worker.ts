@@ -840,13 +840,13 @@ export interface ClaudeWorkerOptions {
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
    *  `onWorkerExited` と同じ機能フィールド。`record` は観測点の spawn_failed の書き込みで、一撃が同じ tx で撃つ(ADR 0342 決定6)。
    *  不在 → spawn 失敗を観測しても盤面は動かず、観測点が自分で書く。 */
-  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void;
+  onSpawnFailed?: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record: () => void) => void;
   /** transcript の open が記録の器に書けなかった pickup(ADR 0266 決定4)の盤面側の一撃 —— `recordContainerHaltHandler` 製。
    *  観測するのは scheduler の catch の外(skill 列挙の continuation)だけで、同期の経路は scheduler が受ける。 */
-  onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
+  onRecordContainerFailed?: (taskId: string, sessionId: number, err: RecordContainerError) => void;
   /** 資源の Quarantine が spawn の前に pickup を止めた(ADR 0274)盤面側の一撃 —— `queueReturnHandler` 製。
    *  `onWorkerExited` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
-  onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
+  onPickupStopped?: (taskId: string, sessionId: number, payload: PickupStopped) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  帰結に要る事実の束も同じ通知で渡す(ADR 0309 / ADR 0338 決定1)。報告なき exit かどうかの判定は盤面側が持つ。
    *  不在なら束の `writes` は adapter が自分で撃つ。 */
@@ -1516,7 +1516,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db), "work");
   }
 
-  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
+  start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): void {
     // loaded per pickup so a registry update takes effect on the next task —
     // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
     // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
@@ -1544,7 +1544,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // alongside the scheduler's own pre-pickup gate, which is what
     // ordinarily catches this before start() is ever called.
     // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が `todo` へ戻す
-    const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, { kind: "pickup_stopped", ...stop });
+    const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, sessionId, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
       this.options.db,
       (taskWorkspace) =>
@@ -1595,7 +1595,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const settings = workspaceSettingsDisposition(place.path, hidden);
     if (settings.excludeProjectSettings) {
       try {
-        const reclaimed = this.containers.open(task.id).reclaimed;
+        const reclaimed = this.containers.open(String(sessionId)).reclaimed;
         excludeWorkspaceProjectSettings(this.options.db, place);
         this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
@@ -1665,7 +1665,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const skills = agent.definition.skills;
     const checkout = scanWorkspaceSkills(place.path);
     if (skills.length === 0) {
-      this.launch(task, workspace, place, agent, registry, {
+      this.launch(task, sessionId, workspace, place, agent, registry, {
         deny: [],
         disableSlashCommands: true,
         // no ping ran, so the bundled set is unknown — nothing is permitted for it to split
@@ -1692,7 +1692,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // --disable-slash-commands spawn: that would silently drop the
         // equipment the agent was promised and make the failure unobservable.
         // ADR 0335 決定2: a failed bundled ping is this spawn's failure only, not the harness's containment.
-        this.recordSpawnFailed(task, agent, {
+        this.recordSpawnFailed(task, sessionId, agent, {
           error_code: null,
           message:
             `${[enumerated === null && "skill enumeration", bundled === null && "bundled skill enumeration"].filter(Boolean).join(" and ")} ` +
@@ -1705,15 +1705,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw をこの continuation が
       // `spawn_failed` に落とす。transcript が開けない器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       try {
-        this.launch(task, workspace, place, agent, registry, {
+        this.launch(task, sessionId, workspace, place, agent, registry, {
           deny,
           disableSlashCommands: false,
           skills: { workspace: checkout.carried, host, permitted },
         }, routing, query);
       } catch (err) {
         if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: spawn_failed も同じ器に書くので、書かずに底へ
-        if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, err);
-        this.recordSpawnFailed(task, agent, {
+        if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, sessionId, err);
+        this.recordSpawnFailed(task, sessionId, agent, {
           error_code: (err as NodeJS.ErrnoException).code ?? null,
           message: err instanceof Error ? err.message : String(err),
         });
@@ -1727,6 +1727,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  the fact to the board's one-shot, which writes it in the failure's own transaction. */
   private recordSpawnFailed(
     task: Task,
+    sessionId: number,
     agent: ResolvedAgent,
     failure: { error_code: string | null; message: string },
   ): void {
@@ -1739,7 +1740,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         payload: { kind: "spawn_failed", ...failure },
         at: this.options.clock.now(),
       });
-    if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, failure, record);
+    if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, sessionId, failure, record);
     else record();
   }
 
@@ -1755,6 +1756,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  is spelled exactly once per pickup. */
   private launch(
     task: Task,
+    sessionId: number,
     workspace: WorkspaceConfig,
     /** 走る場所(`taskRunPlace`): cwd と sandbox の書きと読み。`workspace` は層・許可ドメイン・記憶の実環境 */
     place: RunPlace,
@@ -1885,7 +1887,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ `RecordContainerError` が呼び手へ返り、
       // process は1つも起きない(ADR 0266 決定4)
       const record = workerPromptRecord("claude-code", system, prompt);
-      transcript = this.options.transcripts.open(task.id, spawnedEventId, record);
+      transcript = this.options.transcripts.open(task.id, sessionId, spawnedEventId, record);
       const submitted = promptInput(record);
       input = submitted.user;
       const systemPromptFile = join(taskTemp, "system-prompt.txt");
@@ -1929,7 +1931,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // reclaimed の相手が居ない session は生まれない。
       // shortcut: open の後の設定の書き込みか spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の
       // question が1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
-      child = this.containers.open(task.id).spawn(
+      child = this.containers.open(String(sessionId)).spawn(
         "claude",
         [
           "-p",
@@ -2066,14 +2068,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const parsed = parseStreamLine(line);
       observeClaudeLine(streamObserved, parsed);
       if (initStop === undefined) {
-        initStop = this.checkSessionInit(task, enforcement.disableSlashCommands, parsed);
+        initStop = this.checkSessionInit(task, sessionId, enforcement.disableSlashCommands, parsed);
       }
       if (streamObserved.sandboxFailure && !sandboxStopped && !initStop) {
         sandboxStopped = true;
         // ADR 0331 帰結(#2703): Bash のターンは走ったので、回収後も ADR 0145 の failure question を残す。
         const reason = `this Claude worker session reported a sandbox failure: ${streamObserved.sandboxFailure}`;
         registerQuarantine(this.options.db, "harnessContainment", "claude-code", reason, this.options.clock.now());
-        this.containers.forceReclaim(task.id);
+        this.containers.forceReclaim(String(sessionId));
       }
     });
     this.running.set(task.id, child);
@@ -2094,7 +2096,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       this.running.delete(task.id);
       removeTaskTemp();
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
-      this.recordSpawnFailed(task, agent, { error_code: errno.code ?? null, message: err.message });
+      this.recordSpawnFailed(task, sessionId, agent, { error_code: errno.code ?? null, message: err.message });
     });
     // usage is settled at the root's output close — after task_completed via MCP,
     // not before (issue #32) — so kill/crash sessions still get a worker_exited
@@ -2157,6 +2159,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。else は盤面の一撃を持たない構成のため
       if (this.options.onWorkerExited) {
         this.options.onWorkerExited(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
+          sessionId,
           workerSpawnedEventId: spawnedEventId,
           turnRan: streamObserved.turnRan,
           ...(stop && { stop }),
@@ -2170,10 +2173,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // root が書き終えた出力は失われず、孤児が出力の口を握っていても読み切りが来る
     // (ADR 0201 決定1)。これは**送達であって回収の完了ではなく**、ADR 0099 決定1 の
     // 語彙は不変である: 門は回収済み観測ただ1つで、後始末はその後ろでしか走らない。
-    settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
+    settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(String(sessionId)), settle);
     sendInput(child, input, (error) => {
       console.error(`[worker] could not send prompt for task ${task.id}:`, error);
-      this.containers.forceReclaim(task.id);
+      this.containers.forceReclaim(String(sessionId));
     });
   }
 
@@ -2228,6 +2231,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  報告できない。封じ込めと両方崩れた行は封じ込めの1枚だけ(安全の側、1 session に資源の停止は1つ)。 */
   private checkSessionInit(
     task: Task,
+    sessionId: number,
     slashCommandsDisabled: boolean,
     parsed: Record<string, unknown> | null,
   ): ResourceStop | null | undefined {
@@ -2254,7 +2258,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       : toolSurface;
     if (!surface.available) {
       console.error(`[worker] containment drift on task ${task.id}: ${surface.reason}`);
-      this.containers.forceReclaim(task.id);
+      this.containers.forceReclaim(String(sessionId));
       return quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
     }
     // 封じ込めが成立した init 行でだけ到達性を読む —— 両方が崩れた行は安全の側の1枚だけ(1 session に資源の停止は1つ)
@@ -2262,7 +2266,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const unreachable = workerMcpUnreachable("this Claude worker session", mcpServers!);
     if (unreachable === null) return null;
     console.error(`[worker] Worker MCP unreachable on task ${task.id}: ${unreachable}`);
-    this.containers.forceReclaim(task.id);
+    this.containers.forceReclaim(String(sessionId));
     return registerResourceStop(this.options.db, "workerMcpReachability", "claude-code", unreachable, this.options.clock.now());
   }
 
