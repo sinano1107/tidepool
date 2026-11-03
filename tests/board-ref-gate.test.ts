@@ -124,7 +124,7 @@ it("pickup の休止位置の ff の後、基準の保護ブランチの行は f
   releaseWorkspace(db, workspace, earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   const published = git(workspace.path, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
-  // pickup の継続の門が休止位置の ff の直後に閉じる(#1973)—— 全撮りの前の基準を読む
+  // pickup の継続の門が休止位置の ff の直後に閉じる(#1973)—— タスクブランチを作る前の基準を読む
   const live = () => git(workspace.path, "rev-parse", "main") !== published;
 
   await prepareWorkspaceAtPickup(db, workspace, work(db, "parks first"), { live });
@@ -184,7 +184,7 @@ it("面接室の名前への受理の後半が受験者の checkout を休止さ
 
 it("受験者の再開の pickup の after-open が checkout を休止させると受験者 id の行が変わり、面接室(root id)の行は変わらない(#2948)", async () => {
   const { db, examinee, checkout, roomRow, roomBefore } = await roomWithPickedExaminee();
-  // pickup の継続の門が休止の直後に閉じる(#1973)—— 全撮りの前の基準を読む
+  // pickup の継続の門が休止の直後に閉じる(#1973)—— タスクブランチを作る前の基準を読む
   const live = () => git(checkout.path, "rev-parse", "--abbrev-ref", "HEAD") !== "main";
 
   await prepareWorkspaceAtPickup(db, checkout, examinee, { live });

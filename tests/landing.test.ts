@@ -110,9 +110,8 @@ function promotionFailures(board: Db, taskId: string) {
 }
 
 /** 別タスクのセッションを盤面の書き込み `boardWrite` をまたいで走らせ、解放する。
- *  盤面の書き込みの予告と畳み(ADR 0243)が効くのはこの形だけである —— 書き込みの後に拾う
- *  セッションは pickup で基準を全撮りする。`workerForges` は、そのセッションの worker が
- *  書き込みの前に偽造する ref。 */
+ *  盤面の書き込みの予告と畳み(ADR 0243)を解放の比較で見る形 —— 休止中の書き込みは次の pickup の比較が
+ *  見る(ADR 0351 決定2)。`workerForges` は、そのセッションの worker が書き込みの前に偽造する ref。 */
 async function straddle(
   board: Db,
   clock: FakeClock,

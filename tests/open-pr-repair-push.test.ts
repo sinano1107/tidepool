@@ -84,8 +84,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
   expect(t.github.pushes).toEqual([{ path: workspace.path, branch: `task/${work.id}` }]);
 });
 
-// 予告と畳み(ADR 0243)はここでは言えない: push の後に拾う次のタスクは pickup で
-// 基準を全撮りする。予告と畳みの釘は landing.test.ts の、盤面の書き込みを
+// 予告と畳み(ADR 0243)はここでは述べない: 釘は landing.test.ts の、盤面の書き込みを
 // またいで走るセッションの解放にある。
 it("push のあとに拾った次のタスクは quarantine されずに着地し、2本目の PR が開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("push-then-release");
