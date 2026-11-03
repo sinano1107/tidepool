@@ -329,6 +329,33 @@ it("remote-backed の完了の merge back の後の再実行は、fetch が動�
   expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 });
 
+// ADR 0351 決定2: 基準は切れない —— 再実行の後始末の後も次の pickup は比べ、release はタスクブランチの行を無条件に畳む(#2953)。
+it("再実行の後始末の後に休止中の main へ載った不明な commit は、次の pickup が refs/heads/main を名指して止める(#2911 の形)", async () => {
+  const s = await settledSession("completed");
+  await teardownThrewAfterTreeRule(s);
+  await acceptTeardownQuarantine(s.deps, s.task.id);
+  expectCleanRerun(s, s.deps, "done");
+  commitWork(s.ws.path, "by-hand.txt", "committed on main while the checkout rested\n");
+  const moved = git(s.ws.path, "rev-parse", "main");
+  const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.clock.now(), ...HUMAN_WEBUI);
+
+  await expect(prepareWorkspaceAtPickup(s.db, s.ws, next)).rejects.toThrow(`now: ${moved} refs/heads/main`);
+  expect(head(s)).toBe("main");
+});
+
+it("盤面が HEAD を休止位置へ動かして畳む前に落ちた後始末の再実行は、比較を飛ばしてもタスクブランチの行を今の tip に畳み、次の pickup は止まらない(ADR 0351 決定2 / ADR 0345 決定1)", async () => {
+  const s = await settledSession("interrupted");
+  dropBoardAtHeadFold(s, () => git(s.ws.path, "checkout", "main"));
+
+  releaseWorkspace(s.db, s.ws, getTask(s.db, s.task.id)!, s.clock.now());
+
+  const row = s.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(s.ws.name) as string;
+  expect(row).toContain(`${git(s.ws.path, "rev-parse", s.branch)} refs/heads/${s.branch}`);
+  const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.clock.now(), ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(s.db, s.ws, next);
+  expect(head(s)).toBe(`task/${next.id}`);
+});
+
 it("休止位置の checkout の予告で盤面 DB が書きを拒むと、checkout の失敗に包まずに投げる(ADR 0342 決定4)", async () => {
   const s = await settledSession("completed");
   s.db.pragma("query_only = true");

@@ -141,8 +141,8 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
   await prepareWorkspaceAtPickup(db, workspace, earlier);
   releaseWorkspace(db, workspace, earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
-  // 帯域外のローカルの commit で保護ブランチが分岐し、休止位置の ff が落ちる
-  commitWork(workspace.path, "by-hand.txt", "committed on the host\n");
+  // remote が運ぶファイルと同じ名前の untracked が休止位置の ff を拒ませる —— 休止中の ref の書き込みは次の pickup の比較が先に止める(ADR 0351 決定2)
+  writeFileSync(join(workspace.path, "merged.txt"), "left untracked on the host\n");
 
   await expect(prepareWorkspaceAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
 
@@ -228,6 +228,17 @@ it("受理の後、基準の行は違反で名指された ref を含む今の�
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(baseline(db, ws.name)).toEqual(currentRefSet(ws.path));
   expect(baseline(db, ws.name).get("refs/heads/sibling")).toBe(git(ws.path, "rev-parse", "sibling"));
+  db.close();
+});
+
+it("受理の後の pickup は、違反で名指された ref を比較で名指さずに通る(ADR 0351 決定2・4)", async () => {
+  const { ws, db, answer } = await quarantinedBySibling("retake-then-pickup");
+  await answer();
+  const next = work(db, "after the answer");
+
+  await prepareWorkspaceAtPickup(db, ws, next);
+
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
   db.close();
 });
 

@@ -99,6 +99,7 @@ import {
   pickupGate,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
+  RefsMovedError,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -661,6 +662,8 @@ export function startScheduler(deps: {
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+          // 基準の違反は repo アクセスの失敗ではない —— 案内を付けずに走る場所の名前で止める(受験者は root id、ADR 0276 決定3)
+          if (err instanceof RefsMovedError) return stopped(quarantineWorkspace(db, place.name, err, clock.now()));
           return stopped(await quarantineWithRepoAccessGuidance(err instanceof PickupGateError ? err.place : place, err, live));
         }
         if (!live()) return;

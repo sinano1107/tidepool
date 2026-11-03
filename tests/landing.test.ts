@@ -4426,8 +4426,8 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
 );
 
 // ADR 0289 決定2: ローカル着地の merge 回答も同じ述語で拒み、比べる相手はローカルのタスクブランチ
-/** purely-local の workspace で W を pickup して commit し、完了して収束が local merge question を立てた盤面。
- *  checkout は W のタスクブランチに残る。 */
+/** purely-local の workspace で W を pickup して commit し、完了の後始末で休止位置へ戻し、収束が local merge question を立てた盤面。
+ *  後始末を通すのは実経路の順(release → 次の pickup)—— 基準は切れないので、通さずに次を拾うと W のブランチを違反と読む(ADR 0351 決定2)。 */
 async function landLocally(name: string) {
   const workspace = await makeWorkspace(name);
   const { db, clock } = await openBoard();
@@ -4435,7 +4435,8 @@ async function landLocally(name: string) {
   const work = landingWork(db, clock, workspace.name);
   await prepareWorkspaceAtPickup(db, workspace, work);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  finish(db, clock, work);
+  const done = finish(db, clock, work);
+  releaseWorkspace(db, workspace, done, clock.now(), true, undefined, undefined, true);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "local_merge_question" });
   const question = openLocalMergeQuestions(db, work.id)[0]!;
   return { workspace, db, clock, landing, work, question };
@@ -4487,11 +4488,16 @@ it("修理が done で後始末が merge back する前のローカル着地の 
 it("修理の merge back が conflict して quarantine に落ちた間のローカル着地の merge 回答は、その quarantine question を名指して拒まれ、conflict を解いた受理の後の回答で修理ごと載る", async () => {
   const local = await landLocally("local-left-behind-conflict");
   const { workspace, db, clock, work, question } = local;
+  // 実経路の順: 修理が W から分かれて commit し中断した後、兄弟の修理が同じファイルを W へ merge back し、修理が再開して完了する
   const repair = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  await prepareWorkspaceAtPickup(db, workspace, repair);
   commitWork(workspace.path, "repair.txt", "fixed\n");
-  git(workspace.path, "checkout", `task/${work.id}`);
+  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now());
+  const sibling = attachUnsettledChild(db, clock, work.id);
+  await prepareWorkspaceAtPickup(db, workspace, sibling);
   commitWork(workspace.path, "repair.txt", "conflicting\n");
+  finish(db, clock, sibling);
+  releaseWorkspace(db, workspace, getTask(db, sibling.id)!, clock.now(), true);
   await prepareWorkspaceAtPickup(db, workspace, repair);
   finish(db, clock, repair);
   releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
@@ -5066,6 +5072,26 @@ it.each([
 
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
   expect(getTask(db, question.id)?.status).toBe("todo");
+});
+
+// ADR 0351 決定2: 基準は切れないので、休止中に載った不明な commit の行き先は着地の回答の時刻に依らない(#2953)
+it.each([
+  ["次の pickup の前", false],
+  ["次の pickup の後", true],
+])("休止中に保護ブランチへ載った不明な commit は、着地の merge 回答が%sでも回答を拒んで quarantine し、保護ブランチを動かさない", async (_shape, pickedUp) => {
+  const workspace = await makeWorkspace("landing-rest-unknown-commit");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  commitWork(workspace.path, "out-of-band.txt", "moved by hand while the checkout rested\n");
+  const moved = git(workspace.path, "rev-parse", "refs/heads/main");
+  if (pickedUp) await expect(prepareWorkspaceAtPickup(db, workspace, landingWork(db, clock))).rejects.toThrow(`now: ${moved} refs/heads/main`);
+
+  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow("moved out of band");
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
 });
 
 // ADR 0103 決定4 の否定側: 記録と一致していれば、着地のコンフリクトは回答の拒否であって隔離ではない。
