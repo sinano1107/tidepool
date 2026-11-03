@@ -60,19 +60,22 @@ function git(args, input) {
 
 function staged() {
   const changed = git(['diff', '--cached', '--name-only', '--no-renames', '-z', '--', 'docs/adr']).split('\0');
-  if (!changed.some((path) => /^docs\/adr\/\d{4}-.*\.md$/.test(path))) return;
-  const files = git(['ls-files', '-z', '--', 'docs/adr']).split('\0')
-    .filter((path) => /^docs\/adr\/\d{4}-.*\.md$/.test(path)).sort();
+  if (!changed.some((path) => /^docs\/adr\/\d{4}-[^/]*\.md$/.test(path))) return;
+  const tree = git(['write-tree']).trim();
+  const files = git(['ls-tree', '-r', '--name-only', '-z', tree, '--', 'docs/adr']).split('\0')
+    .filter((path) => /^docs\/adr\/\d{4}-[^/]*\.md$/.test(path)).sort();
   const out = render(files.map((path) => path.slice('docs/adr/'.length)),
-    (file) => git(['show', `:docs/adr/${file}`]));
+    (file) => git(['show', `${tree}:docs/adr/${file}`]));
   const readme = 'docs/adr/README.md';
   const outputPath = join(ROOT, readme);
   const tracked = git(['ls-files', '-z', '--', readme]) !== '';
   const current = tracked ? git(['show', `:${readme}`]) : undefined;
   const stat = lstatSync(outputPath, { throwIfNoEntry: false });
   const present = stat !== undefined;
+  // ADR 0349 決定1: allow Git-normalized bytes without trusting flags that can hide unstaged edits.
   if ((present && !stat.isFile()) ||
-      (tracked ? !present || readFileSync(outputPath, 'utf8') !== current : present)) {
+      (tracked ? !present || (readFileSync(outputPath, 'utf8') !== current &&
+        git(['hash-object', `--path=${readme}`, outputPath]).trim() !== git(['rev-parse', `:${readme}`]).trim()) : present)) {
     throw new Error(`${readme} has unstaged or untracked changes; stage or save them before committing`);
   }
   if (current === out) return;

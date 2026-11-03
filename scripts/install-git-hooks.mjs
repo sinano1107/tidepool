@@ -6,8 +6,17 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const env = { ...process.env };
+// ADR 0349 決定2: target this package's checkout while retaining caller config restrictions.
+for (const name of [
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE', 'GIT_PREFIX',
+  'GIT_SHALLOW_FILE', 'GIT_GRAFT_FILE', 'GIT_CONFIG',
+]) delete env[name];
+const gitArgs = ['--git-dir', join(ROOT, '.git'), '--work-tree', ROOT];
+const gitOptions = { cwd: ROOT, encoding: 'utf8', env };
 function git(...args) {
-  const result = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  const result = spawnSync('git', [...gitArgs, ...args], gitOptions);
   if (result.error || result.status !== 0) {
     throw new Error(result.error?.message || result.stderr.trim() || `git ${args.join(' ')} failed`);
   }
@@ -18,7 +27,7 @@ try {
   if (!existsSync(join(ROOT, '.git')) || realpathSync(git('rev-parse', '--show-toplevel')) !== realpathSync(ROOT)) {
     throw new Error('package is not the root of its own Git checkout');
   }
-  const current = spawnSync('git', ['config', '--get', 'core.hooksPath'], { cwd: ROOT, encoding: 'utf8' });
+  const current = spawnSync('git', [...gitArgs, 'config', '--get', 'core.hooksPath'], gitOptions);
   if (current.stdout?.trim() === '.githooks') {
     console.log('Git hooks already configured as .githooks');
   } else if (current.status === 0) {

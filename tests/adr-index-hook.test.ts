@@ -42,6 +42,36 @@ async function fixture() {
 }
 
 describe("ADR index pre-commit", () => {
+  it("excludes intent-to-add ADRs from the committed index", async () => {
+    const repo = await fixture();
+    put(repo, ADR, "# Committed title\n");
+    git(repo, "add", ADR);
+    const pending = "docs/adr/0002-pending.md";
+    put(repo, pending, "# Not committed\n");
+    git(repo, "add", "-N", pending);
+    git(repo, "commit", "-qm", "staged ADR with pending addition");
+    expect(git(repo, "show", `HEAD:${README}`)).toBe(`${HEADER}- [0001](0001-first.md) — Committed title\n`);
+    expect(git(repo, "ls-tree", "--name-only", "HEAD", "--", pending)).toBe("");
+    expect(readFileSync(join(repo, pending), "utf8")).toBe("# Not committed\n");
+    expect(git(repo, "diff", "--name-only")).toBe(`${pending}\n`);
+  }, 30_000);
+
+  it("ignores nested Markdown files both as changes and as ADR index entries", async () => {
+    const repo = await fixture();
+    put(repo, "docs/adr/0002-folder/inside.md", "# Nested document\n");
+    git(repo, "add", "docs/adr/0002-folder/inside.md");
+    put(repo, README, "Unstaged README\n");
+    git(repo, "commit", "-qm", "nested document only");
+    expect(git(repo, "show", `HEAD:${README}`)).toBe(INITIAL);
+    expect(readFileSync(join(repo, README), "utf8")).toBe("Unstaged README\n");
+    put(repo, README, INITIAL);
+    put(repo, ADR, "# Direct child\n");
+    git(repo, "add", ADR);
+    git(repo, "commit", "-qm", "direct ADR change");
+    expect(git(repo, "show", `HEAD:${README}`)).toBe(`${HEADER}- [0001](0001-first.md) — Direct child\n`);
+    expect(run(repo, process.execPath, ["scripts/build-adr-index.mjs", "--check"]).status).toBe(0);
+  }, 30_000);
+
   it("commits the index generated from staged ADRs and preserves unstaged content", async () => {
     const repo = await fixture();
     put(repo, ADR, "# Staged title\n\n**Status: superseded**\n\n**Status 追記: follow-up**\n\nBody\n");
@@ -179,6 +209,40 @@ describe("ADR index pre-commit", () => {
     expect(readFileSync(join(repo, README), "utf8")).toBe(expected);
   }, 30_000);
 
+  it("commits with a clean CRLF README under core.autocrlf", async () => {
+    const repo = await fixture();
+    git(repo, "config", "core.autocrlf", "true");
+    rmSync(join(repo, README));
+    git(repo, "checkout-index", "--force", "--", README);
+    expect(readFileSync(join(repo, README), "utf8")).toBe(INITIAL.replaceAll("\n", "\r\n"));
+    expect(git(repo, "diff", "--name-only")).toBe("");
+    put(repo, ADR, "# CRLF checkout\n");
+    git(repo, "add", ADR);
+    git(repo, "commit", "-qm", "ADR with CRLF checkout");
+    expect(git(repo, "show", `HEAD:${README}`)).toBe(`${HEADER}- [0001](0001-first.md) — CRLF checkout\n`);
+    expect(git(repo, "status", "--porcelain")).toBe("");
+  }, 30_000);
+
+  it.each(["ordinary", "assume-unchanged", "skip-worktree"])("protects an edited CRLF README with %s index flags", async (flag) => {
+    const repo = await fixture();
+    git(repo, "config", "core.autocrlf", "true");
+    put(repo, ADR, "# Must not overwrite README\n");
+    git(repo, "add", ADR);
+    const edited = `${INITIAL.replaceAll("\n", "\r\n")}Local edit\r\n`;
+    put(repo, README, edited);
+    if (flag !== "ordinary") {
+      git(repo, "update-index", `--${flag}`, README);
+      expect(git(repo, "diff", "--name-only", "--", README)).toBe("");
+    }
+    const staged = git(repo, "ls-files", "--stage");
+    const result = run(repo, "git", ["commit", "-qm", "must preserve CRLF edit"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`${README} has unstaged`);
+    expect(readFileSync(join(repo, README), "utf8")).toBe(edited);
+    expect(git(repo, "ls-files", "--stage")).toBe(staged);
+    expect(git(repo, "log", "--format=%s", "-1")).toBe("initial\n");
+  }, 30_000);
+
   it("leaves README alone when the commit has no ADR changes", async () => {
     const repo = await fixture();
     put(repo, README, "unstaged README\n");
@@ -260,6 +324,25 @@ describe("ADR hook installer", () => {
     expect(readFileSync(join(repo, ".git/config"))).toEqual(config);
   }, 30_000);
 
+  it("configures only its own checkout when an unrelated GIT_DIR is inherited", async () => {
+    const repo = await fixture();
+    const other = await fixture();
+    git(repo, "config", "--unset", "core.hooksPath");
+    git(other, "config", "--unset", "core.hooksPath");
+    put(repo, "other.txt", "source staged change\n");
+    git(repo, "add", "other.txt");
+    const sourceIndex = readFileSync(join(repo, ".git/index"));
+    const otherIndex = readFileSync(join(other, ".git/index"));
+    const otherConfig = readFileSync(join(other, ".git/config"));
+    const result = install(repo, { GIT_DIR: join(other, ".git") });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("configured");
+    expect(git(repo, "config", "--local", "--get", "core.hooksPath")).toBe(".githooks\n");
+    expect(readFileSync(join(other, ".git/config"))).toEqual(otherConfig);
+    expect(readFileSync(join(repo, ".git/index"))).toEqual(sourceIndex);
+    expect(readFileSync(join(other, ".git/index"))).toEqual(otherIndex);
+  }, 30_000);
+
   it("does not configure a non-checkout package inside an unrelated parent repo", async () => {
     const repo = await fixture();
     const nested = join(repo, "nested-package");
@@ -290,7 +373,7 @@ describe("ADR hook installer", () => {
     git(repo, "config", "--unset", "core.hooksPath");
     const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     put(repo, "package.json", JSON.stringify({ name: "adr-hook-test", version: "1.0.0", scripts: { prepare: packageJson.scripts.prepare } }));
-    const npmEnv = { npm_config_cache: join(repo, ".npm-cache"), NPM_CONFIG_USERCONFIG: join(repo, ".npmrc-user"), NPM_CONFIG_GLOBALCONFIG: join(repo, ".npmrc-global") };
+    const npmEnv = { npm_config_cache: join(repo, ".npm-cache"), npm_config_update_notifier: "false", NPM_CONFIG_USERCONFIG: join(repo, ".npmrc-user"), NPM_CONFIG_GLOBALCONFIG: join(repo, ".npmrc-global") };
     const installed = run(repo, "npm", ["install", "--offline", "--no-audit", "--no-fund"], npmEnv);
     expect(installed.stderr).toBe("");
     expect(installed.status).toBe(0);
