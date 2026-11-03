@@ -1,5 +1,7 @@
 # タスクブランチは worker の唯一の可変 ref である
 
+**Status 追記: 決定3 の「セッション中」の範囲と窓の短さを根拠にした誤検知コスト、決定5 の全撮りの位置(pickup の最後)、決定6 の「未設定に分岐は書かない」(pickup でだけ、行が無い / NULL を「まだ持ったことがない」と読んで最初の撮りをする —— release では今日どおり違反)、決定7 の「次の pickup が常に新しい基準を取る」は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) で変わった(2026-11-02、issue #2911)—— checkout は最初の pickup 以降、休止中も盤面の専有領域で、基準は切れない。全撮りは盤面がその checkout をまだ持ったことがない開き(行の無い pickup・読む場所の最初の開き)と quarantine の受理だけが撮り、以後の pickup は比較する。**
+
 **Status 追記: 決定1 の「見張るのは `refs/*` 全部」に、HEAD の行(指し先)が加わる([ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定2、2026-11-01、issue #2889)—— 盤面が休止位置や merge back の帰り先へ checkout を動かすときは同じ口で予告し、畳む。worker が終わりに自分のブランチに居ない違反は今日どおり tree rule の HEAD 検査が先に捕まえる。**
 
 **Status 追記: 決定4 の「書いた後に撮り直す」と「成功したときにしか撮り直さない」は [ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) で「書く前に基準へ予告し、書いた後に2択で畳む」に置き換わった(2026-10-13)。決定1〜3・5〜7 はそのまま。**

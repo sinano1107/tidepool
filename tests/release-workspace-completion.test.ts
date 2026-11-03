@@ -1,11 +1,14 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { listEvents } from "../src/events.js";
+import { completeTask, getTask, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
+  ensureTaskBranch,
   prepareWorkspaceAtPickup,
+  quarantineWorkspace,
   releaseWorkspace,
   treeIsDirty,
   type WorkspaceConfig,
@@ -13,6 +16,7 @@ import {
 } from "../src/workspace.js";
 import {
   commitWork,
+  FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
@@ -51,6 +55,56 @@ function releaseAfterCompletion(db: Db, ws: WorkspaceConfig, task: Task): void {
   releaseWorkspace(db, ws, task, NOW, task.type === "work", undefined, undefined, true);
 }
 
+it("完了の merge back は ignored の生成物と入れ子 repo を消してから帰り、次のタスクは clean に始まる(ADR 0352 決定1・2)", async () => {
+  const db = openDb(":memory:");
+  const ws = await makeWorkspace("ignored-completion");
+  commitWork(ws.path, ".gitignore", "node_modules/\n");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+  git(ws.path, "branch", `task/${parent.id}`, "main");
+  const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+  const task = pickupTask(db, registered, "deckhand", NOW)!;
+  await prepareWorkspaceAtPickup(db, ws, task);
+  commitWork(ws.path, ".gitignore", "node_modules/\nbuild/\n");
+  mkdirSync(join(ws.path, "build", "nested"), { recursive: true });
+  git(join(ws.path, "build", "nested"), "init", "-q");
+  writeFileSync(join(ws.path, "build", "nested", "out.txt"), "generated\n");
+  mkdirSync(join(ws.path, "node_modules"));
+  writeFileSync(join(ws.path, "node_modules", "cache"), "shared ignore rule\n");
+  expect(treeIsDirty(ws)).toBe(false);
+  completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+
+  releaseAfterCompletion(db, ws, getTask(db, task.id)!);
+
+  expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
+  expect(existsSync(join(ws.path, "build"))).toBe(false);
+  expect(existsSync(join(ws.path, "node_modules"))).toBe(false);
+  expect(git(ws.path, "show", `task/${parent.id}:.gitignore`)).toContain("build/");
+
+  const next = registerTask(db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(db, ws, pickupTask(db, next, "deckhand", NOW)!);
+
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${next.id}`);
+  expect(treeIsDirty(ws)).toBe(false);
+});
+
+it("pickup のタスクブランチへの checkout は、離れる main だけが無視する生成物も消す(ADR 0352 決定1)", async () => {
+  const db = openDb(":memory:");
+  const ws = await makeWorkspace("ignored-pickup");
+  const task = registerTask(db, { type: "work", title: "resume", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+  git(ws.path, "branch", `task/${task.id}`, "main");
+  commitWork(ws.path, ".gitignore", "build/\n");
+  mkdirSync(join(ws.path, "build"));
+  writeFileSync(join(ws.path, "build", "out.txt"), "generated at rest\n");
+
+  ensureTaskBranch(db, ws, task);
+
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(existsSync(join(ws.path, "build"))).toBe(false);
+  expect(treeIsDirty(ws)).toBe(false);
+});
+
 it("完了の報告の後に書かれたものは成果ではない —— WIP も merge-back も無く workspace が quarantine に落ちる", async () => {
   const { db, task, ws } = await pickedUpSession();
   commitWork(ws.path, "deliverable.txt", "the real work\n");
@@ -58,7 +112,7 @@ it("完了の報告の後に書かれたものは成果ではない —— WIP �
   // 決着を報告した後に、まだ生きていた process が書く
   writeFileSync(join(ws.path, "after-the-report.txt"), "written by a process that outlived\n");
 
-  expect(completionTreeGateApplies(db, task, ws)).toBe(true);
+  expect(completionTreeGateApplies(task)).toBe(true);
   releaseAfterCompletion(db, ws, task);
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
@@ -68,6 +122,26 @@ it("完了の報告の後に書かれたものは成果ではない —— WIP �
   expect(git(ws.path, "status", "--porcelain")).not.toBe("");
   // merge-back も走っていない —— 報告後の書き込みが祖先ブランチへ運ばれることはない
   expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
+});
+
+it("完了と解放の間に別の理由で workspace が Quarantine になっても、報告後の書き込みを退避しない(ADR 0350 決定1)", async () => {
+  const { db, task, ws } = await pickedUpSession();
+  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+  writeFileSync(join(ws.path, "late.txt"), "written after completion\n");
+  quarantineWorkspace(db, ws.name, new Error("unrelated workspace failure"), NOW);
+  const question = quarantineQuestion(db, "workspace", ws.name)!;
+  const mainBefore = git(ws.path, "rev-parse", "main");
+
+  releaseAfterCompletion(db, ws, getTask(db, task.id)!);
+
+  expect(quarantineQuestion(db, "workspace", ws.name)?.id).toBe(question.id);
+  expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("unrelated workspace failure");
+  expect(listEvents(db, question.id).flatMap((e) => e.payload.kind === "quarantine_refired" ? [e.payload.reason] : [])).toEqual([expect.stringContaining(`written to after task ${task.id} reported done`)]);
+  expect(git(ws.path, "log", "--format=%s", "--all")).not.toContain("WIP: task");
+  expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(ws.path, "status", "--porcelain")).toBe("?? late.txt");
 });
 
 it("汚れが shadow 残骸の3条件だけを満たすなら、削除された上で通常どおり完了する", async () => {
@@ -105,6 +179,11 @@ it("観測そのものが失敗したら完了経路は clean に倒さず quara
 
 it("完了以外の解放では、着地後の書き込みが従来どおり WIP としてタスクブランチに退避される", async () => {
   const { db, task, ws } = await pickedUpSession();
+  commitWork(ws.path, ".gitignore", "build/\nnode_modules/\n");
+  for (const dir of ["build", "node_modules"]) {
+    mkdirSync(join(ws.path, dir));
+    writeFileSync(join(ws.path, dir, "cache"), "generated\n");
+  }
   writeFileSync(join(ws.path, "half-done.txt"), "work in flight\n");
 
   // escalate / decompose は完了経路ではない —— 退避が生まれる従来の解放
@@ -113,6 +192,35 @@ it("完了以外の解放では、着地後の書き込みが従来どおり WIP
   expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
   expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).toContain("WIP");
   expect(git(ws.path, "show", `task/${task.id}:half-done.txt`)).toBe("work in flight");
+  expect(git(ws.path, "ls-tree", "--name-only", `task/${task.id}`).split("\n")).toEqual([".gitignore", "README.md", "half-done.txt"]);
+  expect(existsSync(join(ws.path, "build"))).toBe(false);
+  expect(existsSync(join(ws.path, "node_modules"))).toBe(false);
+  const wip = git(ws.path, "rev-parse", `task/${task.id}`);
+
+  await prepareWorkspaceAtPickup(db, ws, task);
+
+  expect(git(ws.path, "rev-parse", "HEAD")).toBe(wip);
+  expect(treeIsDirty(ws)).toBe(false);
+  expect(existsSync(join(ws.path, "build"))).toBe(false);
+  expect(existsSync(join(ws.path, "node_modules"))).toBe(false);
+});
+
+it("ignored の生成物を削除できなければ、checkout を動かさず workspace Quarantine に落ちる(ADR 0352 / ADR 0069 決定4)", async () => {
+  const { db, task, ws } = await pickedUpSession();
+  commitWork(ws.path, ".gitignore", "build/\n");
+  const build = join(ws.path, "build");
+  mkdirSync(build);
+  writeFileSync(join(build, "out.txt"), "generated\n");
+  chmodSync(build, 0o555);
+  try {
+    releaseAfterCompletion(db, ws, task);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("failed to remove build/out.txt");
+    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+    expect(existsSync(join(build, "out.txt"))).toBe(true);
+  } finally {
+    chmodSync(build, 0o755);
+  }
 });
 
 it("review の完了でも退避する —— 完了の門を持たない解放の WIP はタスクブランチに留まる", async () => {
@@ -121,7 +229,7 @@ it("review の完了でも退避する —— 完了の門を持たない解放�
 
   // 門が verb の手前で clean を要求していない範囲では、後始末時の汚れを
   // 「報告後に書かれたもの」とは言えない
-  expect(completionTreeGateApplies(db, task, ws)).toBe(false);
+  expect(completionTreeGateApplies(task)).toBe(false);
   releaseAfterCompletion(db, ws, task);
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(false);

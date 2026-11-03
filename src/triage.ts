@@ -755,7 +755,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     objectionsByEntry.set(o.entry_id, list);
   }
   const attributions = currentAttributions(db);
-  // session の窓を切るのに要るのは spawn・exit・never-ran の決着だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
+  // session の窓を切るのに要るのは `SESSION_WINDOW_KINDS` だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // shortcut: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
   const sessionEvents = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   // Interview ごとに1回だけ引く —— 同じ root の行は同じグループ

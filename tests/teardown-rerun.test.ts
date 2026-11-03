@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -142,7 +142,7 @@ it("基準の行が無い workspace の HEAD は盤面が動かしたと読ま�
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`is on 'main', not '${s.branch}' — refusing to commit`);
 });
 
-it("盤面が休止させた後に書かれたツリーは、退避せず、変わったファイルと2つの原因を名指す workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
+it("盤面が休止させた後に書かれたツリーは、退避せず、変わったファイルと休止後の書き込みを名指す workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
   const s = await settledSession("completed");
   await teardownThrewAfterTreeRule(s);
   writeFileSync(join(s.ws.path, "late.txt"), "written by a process that outlived the board\n");
@@ -155,27 +155,25 @@ it("盤面が休止させた後に書かれたツリーは、退避せず、変�
   expect(purpose).toContain(`has uncommitted changes after the board moved its checkout off '${s.branch}'`);
   expect(purpose).toContain("?? late.txt");
   expect(purpose).toContain("a process wrote them");
-  expect(purpose).toContain("ignored only on the task branch");
+  expect(purpose).not.toContain("ignored only on the task branch");
   expect(tips()).toEqual(before);
   expect(git(s.ws.path, "status", "--porcelain")).toBe("?? late.txt");
   expect(head(s)).toBe("main");
 });
 
-it("タスクブランチの .gitignore だけが無視していたファイルは、休止の後の再実行で現れ、名指しの workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
+it("タスクブランチだけが無視する生成物は休止前に消え、再実行も workspace Quarantine 無しで完了する(ADR 0352 決定1・5)", async () => {
   const s = await settledSession("completed");
   commitWork(s.ws.path, ".gitignore", "build/\n");
   mkdirSync(join(s.ws.path, "build"));
   writeFileSync(join(s.ws.path, "build", "out.txt"), "generated\n");
   await teardownThrewAfterTreeRule(s);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
-  expect(git(s.ws.path, "status", "--porcelain", "--untracked-files=all")).toBe("?? build/out.txt");
+  expect(git(s.ws.path, "status", "--porcelain")).toBe("");
+  expect(existsSync(join(s.ws.path, "build"))).toBe(false);
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
-  const purpose = quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose;
-  expect(purpose).toContain("?? build/out.txt");
-  expect(purpose).toContain("ignored only on the task branch");
-  expect(head(s)).toBe("main");
+  expectCleanRerun(s, s.deps, "done");
 });
 
 it("盤面が休止させた後の shadow 残骸は書かれたものに数えない(ADR 0069 / ADR 0345 決定3)", async () => {
@@ -194,6 +192,47 @@ function expectOneQuestionRefiredOnce(s: Session, reason: string): void {
   expect(listEvents(s.db, question.id).flatMap((e) => (e.payload.kind === "quarantine_refired" ? [e.payload.reason] : []))).toEqual([expect.stringContaining(reason)]);
   expect(s.deps.slot.currentTaskId).toBeNull();
 }
+
+function expectLateWriteQuarantinePreserved(s: Session, deps: TeardownDeps, questionId: string, reason: string): void {
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.id).toBe(questionId);
+  expect(listEvents(s.db, questionId).flatMap((e) => e.payload.kind === "quarantine_refired" ? [e.payload.reason] : [])).toEqual([expect.stringContaining(reason)]);
+  expect(git(s.ws.path, "ls-tree", "--name-only", s.parentBranch)).not.toContain("late.txt");
+  expect(git(s.ws.path, "log", "--format=%s", "--all")).not.toContain("WIP: task");
+  expect(head(s)).toBe(s.branch);
+  expect(deps.slot.currentTaskId).toBeNull();
+  expect(getTask(s.db, s.task.id)?.status).toBe("done");
+  expect(sessionInTeardown(s.db)).toBeUndefined();
+}
+
+it.each([false, true])("完了報告後の書き込みで Quarantine に返った後始末の受理は、再起動=%s でも検査を切らず同じ question を再発火する(ADR 0350 決定1・3)", async (restart) => {
+  const s = await settledSession("completed", { parent: "delivers" });
+  writeFileSync(join(s.ws.path, "late.txt"), "written after completion\n");
+  await teardownThrewAfterTreeRule(s);
+  const question = quarantineQuestion(s.db, "workspace", s.ws.name)!;
+  const reason = `written to after task ${s.task.id} reported done`;
+  expect(question.purpose).toContain(reason);
+  expect(head(s)).toBe(s.branch);
+  const deps = restart ? restarted(s) : s.deps;
+
+  await acceptTeardownQuarantine(deps, s.task.id);
+
+  expectLateWriteQuarantinePreserved(s, deps, question.id, reason);
+});
+
+it("完了報告後の書き込みで Quarantine に返った直後に盤面が落ちても、起動時の復旧は同じ question を再発火する(ADR 0350 決定1・3)", async () => {
+  const s = await settledSession("completed", { parent: "delivers" });
+  writeFileSync(join(s.ws.path, "late.txt"), "written after completion\n");
+  // tree rule が返ってから印を消す前に process が死ぬ —— failedTeardown の question は立たない。
+  releaseWorkspace(s.db, s.ws, getTask(s.db, s.task.id)!, s.clock.now(), true, undefined, undefined, true);
+  const question = quarantineQuestion(s.db, "workspace", s.ws.name)!;
+  const reason = `written to after task ${s.task.id} reported done`;
+  expect(question.purpose).toContain(reason);
+  const deps = restarted(s);
+
+  await resumeUnfinishedTeardown(deps);
+
+  expectLateWriteQuarantinePreserved(s, deps, question.id, reason);
+});
 
 it("退避の commit が落ちて Quarantine に返った tree rule の受理は、同じ question に quarantine_refired を1つ足す(ADR 0345 決定4)", async () => {
   const s = await settledSession("interrupted");
@@ -245,6 +284,21 @@ it.each([
   expect(git(s.ws.path, "log", "-1", "--format=%s", s.branch)).toContain(tipSubject);
 });
 
+it("merge back が conflict しても、帰り先への checkout の前に ignored の入れ子 repo は消えている(ADR 0352 決定1)", async () => {
+  const s = await settledSession("completed", { parent: "conflicts" });
+  commitWork(s.ws.path, ".gitignore", "build/\n");
+  const nested = join(s.ws.path, "build", "nested");
+  mkdirSync(nested, { recursive: true });
+  git(nested, "init", "-q");
+  writeFileSync(join(nested, "out.txt"), "generated\n");
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("does not merge cleanly");
+  expect(head(s)).toBe(s.parentBranch);
+  expect(existsSync(join(s.ws.path, "build"))).toBe(false);
+});
+
 it("帰り先へ届いた merge back の後の再実行は、帰り先を動かさず休止位置へ戻る(ADR 0345 決定3)", async () => {
   const s = await settledSession("completed", { parent: "delivers" });
   await teardownThrewAfterTreeRule(s);
@@ -260,7 +314,7 @@ it("帰り先へ届いた merge back の後の再実行は、帰り先を動か�
 it("remote-backed の完了の merge back の後の再実行は、fetch が動かした写しを違反と読まず、park の ff-only で休止位置を remote に追従させる(ADR 0345 決定3)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-rerun-remote");
   const s = await settledSession("completed", { workspace, parent: "delivers" });
-  // 1度目の fetch は口の外で写しを動かす(#2459)—— 比較を再走させればこれを違反と読む
+  // 後始末の前に remote が進み、1度目の fetch が写しを動かす
   publish("first.txt", "merged on GitHub\n", "merged before the teardown");
   await teardownThrewAfterTreeRule(s);
   const delivered = git(s.ws.path, "rev-parse", s.branch);
@@ -279,5 +333,5 @@ it("休止位置の checkout の予告で盤面 DB が書きを拒むと、check
   const s = await settledSession("completed");
   s.db.pragma("query_only = true");
 
-  await expect(firePickupPredicates(s.ws, checkoutPickupPredicates(s.ws), "after-open", { writeRef: (place) => boardRefWriter(s.db, place) })).rejects.toMatchObject({ code: "SQLITE_READONLY" });
+  await expect(firePickupPredicates(s.db, s.ws, checkoutPickupPredicates(s.ws), "after-open")).rejects.toMatchObject({ code: "SQLITE_READONLY" });
 });

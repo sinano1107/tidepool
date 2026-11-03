@@ -110,7 +110,6 @@ import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchd
 import type { SettledMark } from "./wire-contract.js";
 import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
-  boardRefWriter,
   buildWorkspaceResolver,
   firePickupPredicates,
   mergeTaskToProtected,
@@ -119,6 +118,7 @@ import {
   quarantineWorkspace,
   redoMergeBacks,
   resolveWorkspacesBaseDir,
+  retakeRefBaselines,
   taskBranch,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
@@ -626,13 +626,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
-      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back。
+      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back → 基準の撮り直し(ADR 0351 決定4)。
       const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+      const all = [...own, ...examinees];
       const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
         try {
-          await firePickupPredicates(target, predicates, phase, {
-            githubAuth: deps.githubAuth, fresh: true, writeRef: (place) => boardRefWriter(deps.db, place),
-          });
+          await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
           let message = err instanceof Error ? err.message : String(err);
@@ -644,7 +643,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(message);
         }
       };
-      await fire([...own, ...examinees], "before-open");
+      await fire(all, "before-open");
       const room = getTask(deps.db, value!)?.type === "interview";
       if (room) target.path = interviewRoomPath(deps.db, value!) ?? target.path;
       // clean tree は受験者の checkout には当てない(WIP を残す、ADR 0329 決定12)。
@@ -660,8 +659,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name).includes(value!))) {
         throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
       }
-      await fire([...own, ...examinees], "after-open");
+      await fire(all, "after-open");
       if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
+      // 場所は後半の項が撃った場所そのもの —— 受験者の checkout は受験者 id の鍵を持つ(ADR 0276 決定3)
+      const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];
+      await refuseOnError(() => retakeRefBaselines(deps.db, places));
     },
     agent: async (value) => {
       const quarantineAgentName = value!;

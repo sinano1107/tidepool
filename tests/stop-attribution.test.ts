@@ -11,10 +11,12 @@ import { approveMemoryProposal, humanEntryInput, listMemoryEntries, readMemory, 
 import { META_REVIEW_SUBJECTS, materialEvents } from "../src/meta-review.js";
 import { markProjectionPending, projectAndPersist, projectWhenTranscriptCloses } from "../src/precedent.js";
 import { completeRca, listHaltedRefires, markHaltedRefire, proposeFromMaterial, type RetrospectiveCallDeps, refireRetrospectiveCalls } from "../src/retrospective.js";
+import { Slot } from "../src/slot.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
+import { runTeardownSteps, sessionCloseSteps } from "../src/teardown.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import { definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls, recordPrompt } from "./fakes.js";
+import { definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, FakeClock, noRetrospectiveCalls, recordPrompt } from "./fakes.js";
 import { api, bootTidepool, followedRows, HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, registerWork, skillCall, skillsInit, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -215,7 +217,8 @@ function stoppedPendingProjection(b: ReturnType<typeof fixture>, transcriptPath:
   markProjectionPending(b.db, b.spawned);
   b.exit();
   const stream = Object.assign(new EventEmitter(), { closed: false });
-  projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath, taskId: b.task.id });
+  projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath, taskId: b.task.id },
+    (step) => runTeardownSteps({ db: b.db, clock: new FakeClock(), slot: new Slot() }, b.task.id, ...sessionCloseSteps(b.spawned, [step])));
   return () => {
     stream.closed = true;
     stream.emit("close");

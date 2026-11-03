@@ -57,7 +57,7 @@ import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./
 import { closeSessionFromRecord, closeUnclosedSessions } from "./session-close.js";
 import { Slot } from "./slot.js";
 import { getTask, type PickupStopped, type TaskType } from "./tasks.js";
-import { acceptTeardownQuarantine, acceptUnclosedSession, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
+import { acceptTeardownQuarantine, acceptUnclosedSession, resumeUnfinishedTeardown, runTeardownSteps, sessionCloseSteps, type TeardownDeps } from "./teardown.js";
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -108,6 +108,8 @@ export type WorkerFactory = (deps: {
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。行の拒否と0ターンの資源の停止も
    *  この束に乗る(ADR 0338 決定1)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
+  /** ADR 0344 決定1: transcript の close から投影の同期の手を session の runner で撃つ。 */
+  onSessionCloseStep: (taskId: string, spawnId: number, step: () => void) => unknown;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
   transcripts: TranscriptStore;
 }) => WorkerAdapter;
@@ -503,6 +505,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onPickupStopped,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く。exit は pickup の後でしか来ず pickup は組み上がった後に始まる —— 無ければ束の書く step を黙って落とさず投げる
     onWorkerExited: (taskId, exit, facts) => watchdog!.onWorkerExited(taskId, exit, facts),
+    onSessionCloseStep: (taskId, spawnId, step) => runTeardownSteps(sessionTeardown, taskId, ...sessionCloseSteps(spawnId, [step])),
     transcripts: options.transcripts,
   });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {

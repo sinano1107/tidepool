@@ -1,5 +1,7 @@
 # symref は指し先で数える — ref スナップショットに解決値を保存しない
 
+**Status 追記: 「保存済みスナップショットは次の pickup が丸ごと撮り直す」は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定2 で外れた(2026-11-02、issue #2911)—— 以後の形式変更は行の畳み直しを要する。この ADR の形式変更の行は既に残っていない。**
+
 **Status 追記: 「盤面が symref を名指しで書く経路は存在せず」はもう成り立たない —— 盤面自身の checkout は HEAD の行を `symref=<指し先>` の値で ref の口に通す([ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定2、2026-11-02、issue #2889)。**
 
 issue #304 のグリリング(2026-08-15)で決定。ADR 0052 の実環境動作確認 第2段で、registry workspace の

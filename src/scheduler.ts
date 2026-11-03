@@ -655,7 +655,7 @@ export function startScheduler(deps: {
         try {
           for (const { place: read, predicates } of checks) {
             if (read.path === place.path) continue;
-            await firePickupPredicates(read, predicates, "after-open", { githubAuth, live });
+            await firePickupPredicates(db, read, predicates, "after-open", { githubAuth, live });
             if (!live()) return;
           }
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });

@@ -8,7 +8,6 @@ import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } fr
 import { parseStreamLine, readAdvisorOutcome, readInitField, readInitVersion } from "./stream-json.js";
 import { TranscriptStore } from "./transcript-store.js";
 import { entryObjections } from "./triage.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
  *  Episode を決定論的に組む(ADR 0083 決定8 / 追記 / 追記 2、issue #356)。
@@ -567,25 +566,23 @@ export function projectionPending(db: Db, workerSpawnedEventId: number): boolean
 
 /** worker adapter の終了処理から呼ぶ(issue #356 / ADR 0083 追記10)。呼ぶのは **worker_exited を書いたあと**
  *  —— でなければ exit / usage 参照が投影に入らない。投影は transcript の**書き込みストリームが閉じたあと** ——
- *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。派生表なので
- *  失敗しても走らせて危険な状態にはならず(ADR 0083 追記 2)、盤面を落とすほうが害が大きいので失敗は記録して流す。 */
+ *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。
+ *  ADR 0344 決定1: close の後も投影を session の束の手として runner に渡し、失敗した手と残りを持つ。 */
 export function projectWhenTranscriptCloses(
   db: Db,
   stream: { readonly closed: boolean; once(event: "close", listener: () => void): unknown },
   opts: { workerSpawnedEventId: number; transcriptPath: string; taskId: string },
-): void {
+  execute: (project: () => void) => unknown,
+): unknown {
   const project = () => {
     try {
       projectAndPersist(db, opts);
-    } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 投影の失敗として log に流さない
-      console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
     } finally {
       pendingProjections.get(db)?.delete(opts.workerSpawnedEventId);
     }
   };
-  if (stream.closed) project();
-  else stream.once("close", project);
+  if (stream.closed) return execute(project);
+  stream.once("close", () => { execute(project); });
 }
 
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で

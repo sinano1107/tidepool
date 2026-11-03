@@ -388,6 +388,8 @@ export interface CodexWorkerOptions {
   /** ADR 0145: root process の exit を受ける盤面側の一撃。帰結に要る事実の束を添え(ADR 0338 決定1)、報告なき exit かどうかの判定は盤面側が持つ。
    *  不在なら束の `writes` は adapter が自分で撃つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
+  /** ADR 0344 決定1: transcript の close から投影の同期の手を session の runner で撃つ。 */
+  onSessionCloseStep?: (taskId: string, spawnId: number, step: () => void) => unknown;
   /** ADR 0261 決定1 / ADR 0348 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
    *  上限到達の分類と資源の停止を導き、Throttle の状態には書かない。 */
   usageProbe?: CodexAppServerProbe;
@@ -1609,7 +1611,8 @@ export class CodexWorker implements WorkerAdapter {
               at: exitedAt,
             }),
             removeTaskTemp,
-            () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id }),
+            () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id },
+              (step) => this.options.onSessionCloseStep ? this.options.onSessionCloseStep(task.id, spawned, step) : step()),
           ),
           ...(mcpStop ? [() => registerResourceStop(this.options.db, mcpStop.quarantine, mcpStop.value, mcpStop.reason, this.options.clock.now())] : []),
         ];

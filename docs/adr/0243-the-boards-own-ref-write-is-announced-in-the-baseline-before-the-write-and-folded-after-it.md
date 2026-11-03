@@ -1,5 +1,7 @@
 # 盤面自身の ref の書き込みは、書く前に基準へ予告し、書いた後に畳む
 
+**Status 追記: 決定5 の「落ちて残った2値行は次の pickup の全撮りで消えるに任せる」は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定4 で「次の比較で ref が持つ側に畳む」に置き換わった(2026-11-02、issue #2911)—— 基準は切れないので全撮りは来ない。決定4 の口を通る書き込みに pickup の fetch・park・タスクブランチの作成・checkout、release の merge back の fetch、読む場所の fetch・park が加わる(同 決定3)。**
+
 **Status 追記: 決定4 の口を通る書き込みに、盤面自身の checkout(HEAD の移動 —— 後始末と quarantine 受理の merge back の帰り先、休止位置)が加わる([ADR 0345](0345-a-teardown-step-is-idempotent-or-skipped-from-the-record-and-the-boards-own-head-move-goes-through-the-ref-gate.md) 決定2、2026-11-01、issue #2889)。基準に HEAD の行を持ち、予告→checkout→畳む。**
 
 **Status 追記: Considered options の「落ちた後に書けたかは GitHub の PR では分からない」は狭まった —— merge した名義を読めば盤面自身の merge は見分けられる(ADR 0265 決定5)。予告の形は ref の書き込みに残る**

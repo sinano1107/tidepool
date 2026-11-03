@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -6,11 +7,14 @@ import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "..
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "../src/codex-stream-reader.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents } from "../src/events.js";
-import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
+import { EXTRACTOR_VERSION, listEpisodes, projectWhenTranscriptCloses } from "../src/precedent.js";
 import { quarantineExcludedProviders, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { closeUnclosedSessions } from "../src/session-close.js";
+import { Slot } from "../src/slot.js";
 import { parseStreamLine } from "../src/stream-json.js";
 import { listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import { runTeardownSteps, sessionCloseSteps } from "../src/teardown.js";
+import { FakeClock } from "./fakes.js";
 import { HUMAN_WEBUI, QUIET_EXIT, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -110,6 +114,19 @@ it("後の spawn が watermark 以下なら死んでいる —— その session
   expect(b.exits().map((e) => e.payload)).toEqual([expect.objectContaining({ worker_spawned_event_id: b.spawns[0] })]);
   expect(episodeOf(b.db, dead)).toBeUndefined();
   expect(existsSync(temp)).toBe(false);
+});
+
+it("後の pickup が spawn の前に落ちても、前の session は観測していない exit で閉じ、Episode がその exit を指す(issue #2932、ADR 0316 決定4)", async () => {
+  const b = await board();
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "task_picked_up" } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "spawn_failed", error_code: null, message: "spawn blew up" } });
+
+  b.close();
+
+  const [exited, ...rest] = b.exits();
+  expect(rest).toEqual([]);
+  expect(exited?.payload).toMatchObject({ exit_observed: false, worker_spawned_event_id: b.spawns[0] });
+  expect(episodeOf(b.db, b.spawns[0]!)).toMatchObject({ workerExitedEventId: exited!.id });
 });
 
 it("一時領域の置き場が読めなくても削除は log だけで、exit と Episode を書いて question は立てない(issue #705)", async () => {
@@ -422,3 +439,21 @@ function spawnOnAnotherTask(db: Db): number {
   const task = pickupTask(db, registerTask(db, { type: "work", title: "other", purpose: "other", completion_criteria: "works" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
   return appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
 }
+
+it("boot recovery folds a live projection failure into the same open session question", async () => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
+  const b = await board();
+  const spawn = b.spawns[0]!;
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawn, output_closed: true, usage: null } });
+  b.db.exec("CREATE TEMP TRIGGER projection_fails BEFORE INSERT ON episodes BEGIN SELECT RAISE(ABORT, 'projection bug'); END");
+  projectWhenTranscriptCloses(b.db, Object.assign(new EventEmitter(), { closed: true }), { workerSpawnedEventId: spawn, transcriptPath: join(b.logDir, `${b.task.id}.${spawn}.stream.jsonl`), taskId: b.task.id },
+    (step) => runTeardownSteps({ db: b.db, clock: new FakeClock(), slot: new Slot() }, b.task.id, ...sessionCloseSteps(spawn, [step])));
+  const question = listBoard(b.db).find((t) => t.type === "question")!;
+  expect(question).toBeDefined();
+
+  b.close();
+  b.close();
+
+  expect(listBoard(b.db).filter((t) => t.type === "question").map((t) => t.id)).toEqual([question.id]);
+});
