@@ -35,6 +35,7 @@ import {
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import { workspaceSettingsDisposition } from "./sandbox.js";
 import {
+  dropWorkspaceState,
   entryCheckoutPath,
   refValues,
   resolvesToRegistryClone,
@@ -421,8 +422,7 @@ export async function deleteWorkspace(
     },
     `delete workspace ${input.name} via WebUI`,
   );
-  // ADR 0351 決定7: 行の寿命は workspace の寿命 —— 残すと同名を別 path で登録し直したとき旧 checkout の基準と比べる
-  deps.db.prepare("DELETE FROM workspace_state WHERE name = ?").run(input.name);
+  dropWorkspaceState(deps.db, input.name);
   return checkout;
 }
 

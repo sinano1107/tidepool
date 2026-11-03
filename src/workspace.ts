@@ -815,6 +815,12 @@ export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
   })();
 }
 
+/** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の写しの行ごと消す。残すと同名を別 path で登録し直したとき
+ *  旧 checkout の基準と比べる。面接室と受験者の行は消されない checkout のものなので、ここを通らない(ADR 0276 決定4)。 */
+export function dropWorkspaceState(db: Db, name: string): void {
+  db.prepare("DELETE FROM workspace_state WHERE name = ?").run(name);
+}
+
 function storedRefs(db: Db, workspaceName: string): string {
   const row = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
