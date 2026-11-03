@@ -388,7 +388,7 @@ export class RegistrySelfDeleteError extends Error {
 
 export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
-  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences,
+  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences & { db: Db },
 ): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
@@ -421,6 +421,8 @@ export async function deleteWorkspace(
     },
     `delete workspace ${input.name} via WebUI`,
   );
+  // ADR 0351 決定7: 行の寿命は workspace の寿命 —— 残すと同名を別 path で登録し直したとき旧 checkout の基準と比べる
+  deps.db.prepare("DELETE FROM workspace_state WHERE name = ?").run(input.name);
   return checkout;
 }
 

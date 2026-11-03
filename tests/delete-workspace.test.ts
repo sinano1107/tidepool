@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { type Db, openDb } from "../src/db.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
@@ -20,7 +21,78 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskIds: [] };
+const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskIds: [], db: openDb(":memory:") };
+
+/** 基準と sparse の写しを持つ行を置いた盤面 db。 */
+function dbWithState(): Db {
+  const db = openDb(":memory:");
+  db.prepare("INSERT INTO workspace_state (name, ref_snapshot, sparse_snapshot) VALUES (?, ?, ?)").run(
+    "tidepool",
+    "refs/heads/main abc",
+    '{"mode":"disabled","pattern":null}',
+  );
+  return db;
+}
+
+const stateRow = (db: Db) => db.prepare("SELECT * FROM workspace_state WHERE name = ?").get("tidepool");
+
+describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
+  it("削除が成立すると、その name の行(基準と sparse の写し)が無くなる —— 同名を別 path で登録し直しても行は無い", async () => {
+    const registryDir = await makeMainRegistry();
+    const db = dbWithState();
+
+    await deleteWorkspace(
+      { name: "tidepool", confirm: true },
+      {
+        registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+        workspacesBaseDir: "/workspaces",
+        ...NO_REFERENCES,
+        db,
+      },
+    );
+
+    expect(stateRow(db)).toBeUndefined();
+  });
+
+  it("confirm なしで拒まれたとき、行はそのまま", async () => {
+    const registryDir = await makeMainRegistry();
+    const db = dbWithState();
+
+    await expect(
+      deleteWorkspace(
+        { name: "tidepool" },
+        {
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          workspacesBaseDir: "/workspaces",
+          ...NO_REFERENCES,
+          db,
+        },
+      ),
+    ).rejects.toThrow(DeletionConfirmationRequiredError);
+
+    expect(stateRow(db)).toBeDefined();
+  });
+
+  it("確認で買えない拒否(未決着タスク)のとき、行はそのまま", async () => {
+    const registryDir = await makeMainRegistry();
+    const db = dbWithState();
+
+    await expect(
+      deleteWorkspace(
+        { name: "tidepool", confirm: true },
+        {
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          workspacesBaseDir: "/workspaces",
+          ...NO_REFERENCES,
+          unsettledTaskCount: 1,
+          db,
+        },
+      ),
+    ).rejects.toMatchObject({ name: "DeletionBlockedError" });
+
+    expect(stateRow(db)).toBeDefined();
+  });
+});
 
 describe("deleteWorkspace: 正常系(issue #205 / ADR 0087 決定1・決定4)", () => {
   it("workspaces.yaml からエントリを除去するコミットが着地し、残る checkout の場所を返す", async () => {
