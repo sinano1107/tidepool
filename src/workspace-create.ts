@@ -35,6 +35,7 @@ import {
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import { workspaceSettingsDisposition } from "./sandbox.js";
 import {
+  dropWorkspaceState,
   entryCheckoutPath,
   refValues,
   resolvesToRegistryClone,
@@ -388,7 +389,7 @@ export class RegistrySelfDeleteError extends Error {
 
 export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
-  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences,
+  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences & { db: Db },
 ): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
@@ -421,6 +422,7 @@ export async function deleteWorkspace(
     },
     `delete workspace ${input.name} via WebUI`,
   );
+  dropWorkspaceState(deps.db, input.name);
   return checkout;
 }
 
