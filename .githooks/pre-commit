@@ -1,0 +1,6 @@
+#!/bin/sh
+if ! command -v node >/dev/null 2>&1; then
+  echo 'ADR index: Node is required to run the pre-commit hook.' >&2
+  exit 1
+fi
+exec node scripts/build-adr-index.mjs --staged
