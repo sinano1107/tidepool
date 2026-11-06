@@ -708,6 +708,11 @@ export function workerSpawnEnv(
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
   };
+  // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear a human's or the board's sparse S bit.
+  const gitConfigCount = Number(env.GIT_CONFIG_COUNT ?? "0");
+  env[`GIT_CONFIG_KEY_${gitConfigCount}`] = "sparse.expectFilesOutsideOfPatterns";
+  env[`GIT_CONFIG_VALUE_${gitConfigCount}`] = "true";
+  env.GIT_CONFIG_COUNT = String(gitConfigCount + 1);
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
   for (const name of SWAP_DISABLE_ENVS) delete env[name];
@@ -760,8 +765,8 @@ export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessE
  *  config (issue #53). Mechanical, not entrusted to the agent's good will — the
  *  four GIT_* vars pin both author and committer. The email's `.invalid` TLD
  *  (RFC 2606) can never resolve to a real deliverable address, so an agent
- *  name never masquerades as a person's inbox. ADR 0024 invariant: only
- *  identity vars ride the worker env — never a GitHub token (the board injects
+ *  name never masquerades as a person's inbox. ADR 0024 invariant: the worker
+ *  env never carries a GitHub token (the board injects
  *  those per-call in github-auth.ts, never into the inherited env). */
 export function agentGitIdentityEnv(agentName: string): Record<string, string> {
   const email = `${agentName}@tidepool.invalid`;

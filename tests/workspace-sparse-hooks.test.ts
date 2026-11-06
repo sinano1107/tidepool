@@ -19,7 +19,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, type Tidepool } from "./harness.js";
+import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, quarantineQuestion, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -159,6 +159,58 @@ async function monorepo(name: string): Promise<WorkspaceConfig> {
 }
 
 const exists = (workspace: WorkspaceConfig, path: string) => existsSync(join(workspace.path, path));
+
+it.each([false, true])("S bit を落とした settings が戻らなければ投げ、写しを残す(assume-unchanged=%s、#2943)", async (assumeUnchanged) => {
+  const workspace = await monorepo(`sparse-missing-${assumeUnchanged}`);
+  db = openDb(":memory:");
+  excludeWorkspaceProjectSettings(db, workspace);
+  // The worker's Git lost S before its assume-unchanged workaround hid the deletion.
+  git(workspace.path, "update-index", "--no-skip-worktree", "--", ".claude/settings.json");
+  if (assumeUnchanged) git(workspace.path, "update-index", "--assume-unchanged", "--", ".claude/settings.json");
+
+  expect(() => materializeWorkspaceProjectSettings(db!, workspace)).toThrow(".claude/settings.json was not restored");
+  if (assumeUnchanged) expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(exists(workspace, ".claude/settings.json")).toBe(false);
+  // The board line is gone, so this export now proves the stored snapshot was retained.
+  expect(exists(workspace, ".git/info/sparse-checkout")).toBe(false);
+  expect(projectSettingsHiddenByBoard(db, workspace)).toBe(true);
+
+  git(workspace.path, "update-index", "--no-assume-unchanged", "--no-skip-worktree", "--", ".claude/settings.json");
+  git(workspace.path, "checkout", "--", ".claude/settings.json");
+  materializeWorkspaceProjectSettings(db, workspace);
+  expect(exists(workspace, ".claude/settings.json")).toBe(true);
+  expect(projectSettingsHiddenByBoard(db, workspace)).toBe(false);
+});
+
+it("起動時の戻しで settings が欠けていれば workspace を quarantine し、実測した復旧手順を伝える(#2943)", async () => {
+  const workspace = await monorepo("sparse-missing-quarantine");
+  db = openDb(":memory:");
+  excludeWorkspaceProjectSettings(db, workspace);
+  git(workspace.path, "update-index", "--no-skip-worktree", "--", ".claude/settings.json");
+  git(workspace.path, "update-index", "--assume-unchanged", "--", ".claude/settings.json");
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [workspace], new Date("2026-11-06T00:00:00.000Z"));
+
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(true);
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  expect(question.purpose).toContain(".claude/settings.json was not restored");
+  expect(question.purpose).toContain("git update-index --no-assume-unchanged --no-skip-worktree -- .claude/settings.json");
+  expect(question.purpose).toContain("git checkout -- .claude/settings.json");
+});
+
+it("人間の sparse が settings を外していれば、写しの戻しはファイルの不在を受け入れる(#2943)", async () => {
+  const workspace = await monorepo("sparse-human-exclusion");
+  git(workspace.path, "sparse-checkout", "set", "pkg-a");
+  db = openDb(":memory:");
+  excludeWorkspaceProjectSettings(db, workspace);
+
+  expect(() => materializeWorkspaceProjectSettings(db!, workspace)).not.toThrow();
+
+  expect(exists(workspace, ".claude/settings.json")).toBe(false);
+  expect(git(workspace.path, "sparse-checkout", "list")).toBe("pkg-a");
+  expect(projectSettingsHiddenByBoard(db, workspace)).toBe(false);
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+});
 
 it("人間の cone は session 中も広がらず settings.json だけ消え、戻すと pattern と cone モードが元どおり(ADR 0293)", async () => {
   const workspace = await monorepo("sparse-cone");

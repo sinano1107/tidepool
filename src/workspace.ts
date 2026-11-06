@@ -586,8 +586,8 @@ export function projectSettingsHiddenByBoard(db: Db, workspace: WorkspaceConfig)
 
 /** Keep shared project settings (ADR 0158) in Git but out of the worker's physical checkout:
  *  the human's own sparse patterns plus one non-cone exclusion line (ADR 0293 決定2), so the
- *  worker never sees more than the human's checkout does. Non-cone sparse-checkout leaves the
- *  index and status clean, so branch changes and the slot-release tree rule need no special case. */
+ *  worker never sees more than the human's checkout does. The worker's Git env preserves the
+ *  sparse S bit despite the sandbox's settings stub (ADR 0037 機構2); sparse-checkout alone cannot. */
 export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConfig): void {
   // 写しは DB に無いときだけ撮る —— 回収前の2本目が盤面の形を人間の状態として写さない(ADR 0293 決定1)。
   // 残った盤面の行から読んだ写しも DB に写す —— この session の回収が worker の書いた pattern を読み直さない(決定7)
@@ -624,7 +624,7 @@ export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConf
 
 /** Put the human's sparse-checkout back from the snapshot when no worker owns the checkout, and
  *  let git itself write the mode (cone lives in config.worktree — ADR 0293 決定4). The snapshot
- *  is dropped only after git succeeded; a failure throws for the caller to quarantine. */
+ *  is dropped only after git succeeded and no tracked settings are missing; a failure throws for the caller to quarantine. */
 export function materializeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConfig): void {
   const snapshot = storedSparseSnapshot(db, workspace) ?? snapshotFromBoardLine(workspace, true);
   if (!snapshot) return;
@@ -640,6 +640,14 @@ export function materializeWorkspaceProjectSettings(db: Db, workspace: Workspace
     gitWithInput(snapshot.pattern, workspace.path, "sparse-checkout", "set", "--no-cone", "--stdin");
     writeFileSync(patternPath, snapshot.pattern);
     git(workspace.path, "sparse-checkout", "reapply", snapshot.mode === "cone" ? "--cone" : "--no-cone");
+  }
+  // ADR 0293 決定6: Git can report success while assume-unchanged leaves the human's settings absent.
+  if (git(workspace.path, "ls-files", "-d", "--", ".claude/settings.json") !== "") {
+    throw new Error(
+      `workspace ${workspace.name}: .claude/settings.json was not restored. In the workspace, run ` +
+        "`git update-index --no-assume-unchanged --no-skip-worktree -- .claude/settings.json` and " +
+        "`git checkout -- .claude/settings.json` to clear the index flags and restore it, then retry workspace recovery",
+    );
   }
   dropSparseSnapshot(db, snapshotKey(workspace));
 }
