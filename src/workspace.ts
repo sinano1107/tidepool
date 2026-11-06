@@ -766,7 +766,7 @@ export async function prepareWorkspaceAtPickup(
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
   if (rootId === undefined || task.type === "interview") {
-    const changes = git(workspace.path, "status", "--porcelain");
+    const changes = git(workspace.path, "status", "--porcelain", "--untracked-files=all");
     if (changes !== "") {
       throw new PickupGateError(workspace, new Error(
         `workspace ${workspace.name} has uncommitted changes while resting: ${changes} — a process wrote them after the board moved the checkout`,

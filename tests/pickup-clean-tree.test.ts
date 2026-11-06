@@ -44,6 +44,24 @@ it.each([
   expect(readFileSync(join(workspace.path, path), "utf8")).toBe(content);
 });
 
+it("status.showUntrackedFiles=no でも休止後の untracked を pickup で拒む(ADR 0351 決定5)", async () => {
+  const workspace = await makeWorkspace("pickup-hidden-untracked");
+  db = openDb(":memory:");
+  const earlier = work("earlier");
+  await prepareWorkspaceAtPickup(db, workspace, earlier);
+  releaseWorkspace(db, workspace, earlier, NOW);
+  git(workspace.path, "config", "status.showUntrackedFiles", "no");
+  writeFileSync(join(workspace.path, "late.txt"), "written while resting\n");
+
+  await expect(prepareWorkspaceAtPickup(db, workspace, work("next"))).rejects.toMatchObject({
+    place: workspace,
+    message: expect.stringContaining("?? late.txt"),
+  });
+
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(readFileSync(join(workspace.path, "late.txt"), "utf8")).toBe("written while resting\n");
+});
+
 async function restingRoom() {
   const workspace = await makeWorkspace("pickup-room-real");
   db = openDb(":memory:");
