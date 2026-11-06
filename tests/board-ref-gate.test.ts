@@ -141,8 +141,8 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
   await prepareWorkspaceAtPickup(db, workspace, earlier);
   releaseWorkspace(db, workspace, earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
-  // remote が運ぶファイルと同じ名前の untracked が休止位置の ff を拒ませる —— 休止中の ref の書き込みは次の pickup の比較が先に止める(ADR 0351 決定2)
-  writeFileSync(join(workspace.path, "merged.txt"), "left untracked on the host\n");
+  // clean 検査と fetch の後、休止位置への checkout が呼ぶ hook で ff を塞ぐ(ADR 0351 決定5)。
+  writeFileSync(join(workspace.path, ".git/hooks/post-checkout"), '#!/bin/sh\nprintf "left untracked on the host\\n" > merged.txt\n', { mode: 0o755 });
 
   await expect(prepareWorkspaceAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
 
