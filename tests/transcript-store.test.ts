@@ -8,7 +8,7 @@ const PROMPT: PromptRecord = { harness: "claude-code", board: [{ part: "authorit
 
 it("readPrompt は open が書いた prompt をそのまま返し、無い・parse できない記録は null(ADR 0314 決定2)", async () => {
   const store = new TranscriptStore(await tempDir("tidepool-transcripts-"));
-  const { stream, stderr } = store.open("t-1", 7, PROMPT);
+  const { stream, stderr } = store.open("t-1", 0, 7, PROMPT);
   stream.destroy();
   stderr.destroy();
   writeFileSync(join(store.dir, "t-1.8.prompt.json"), '{"harness":"claude-code","system":[{"part":"defin');

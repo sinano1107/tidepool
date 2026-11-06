@@ -26,6 +26,8 @@ export interface WorkerExitFacts {
 
 /** exit の帰結に要る事実の束(ADR 0338 決定1)。盤面はこれが揃ってから1度だけ決める(決定2)。 */
 export interface WorkerExitClassification {
+  /** ADR 0353 決定3: この exit を観測した session の pickup event id。 */
+  sessionId: number;
   /** この exit を観測した session の worker_spawned event id。後の pickup については決めない。 */
   workerSpawnedEventId: number;
   /** 読み手がモデルのターンを観測したか。`worker_exited` には書かない(ADR 0338 決定5)。 */
@@ -56,6 +58,8 @@ export interface WorkerAdapter {
   readonly id: string;
   /** Fire-and-forget: the worker acts back on the board via MCP.
    *
+   *  `sessionId` は scheduler が pickup で書いた event id(ADR 0353 決定3)。adapter は記録から組み直さない。
+   *
    *  `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter はこれをそのまま使い、spawn 時に解決し直さない —— 除外の文脈を
    *  持たない再解決は scheduler と違う entry を選びうる(温存中の Provider で
@@ -66,7 +70,7 @@ export interface WorkerAdapter {
    *
    *  spawn までに await を挟む実装は、session が終わった(停止・解放・再 pickup)あとの継続で spawn しない ——
    *  各 await の後に `liveSession` を読み、閉じていれば何も書かずに終わる(#1973)。 */
-  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void;
+  start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): void;
   /** 畳み込み停止(graceful stop): `taskId` の session に、自己終了と作業の
    *  畳み込みを促す合図を送る。**送達のみで、従われる保証はない** — 合図の
    *  選択(Claude なら SIGTERM)は Harness の性質なので adapter の実装詳細に
@@ -96,10 +100,10 @@ export class CanonicalWorkerRouter implements WorkerAdapter {
     this.adapters = options.adapters;
   }
 
-  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
+  start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): void {
     // 選ばれた実行設定の Provider の正準経路へ出す —— 「どの Harness で
     // 走るか」を Provider と別に解決すると、選択と dispatch がずれる(ADR 0098)。
-    this.adapters[canonicalHarness(setting.provider)].start(task, setting, query);
+    this.adapters[canonicalHarness(setting.provider)].start(task, sessionId, setting, query);
   }
 
   gracefulStop(taskId: string): void {

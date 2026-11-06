@@ -10,7 +10,7 @@ import { Slot } from "../src/slot.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, defaultingTo, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { commitWork, defaultingTo, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, sessionId } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -29,7 +29,7 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
       ...HUMAN_WEBUI,
     );
     const picked = pickupTask(db, task, "deckhand", clock.now())!;
-    slot.occupy(task.id);
+    slot.occupy(task.id, sessionId(db, task.id));
     // as the scheduler's pickup() would have done: the task branch is
     // already checked out on prod, not sandbox, by the time the worker runs
     ensureTaskBranch(db, prod, picked);

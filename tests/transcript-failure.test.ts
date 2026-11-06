@@ -15,10 +15,12 @@ import {
   FULL_HANDOFF,
   git,
   HOUR,
+  initWithMcpServers,
   mcpClient,
   questions,
   queueWork,
   servedQuarantineQuestion,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -45,8 +47,8 @@ const teardown = async () => (await api(t.baseUrl, "GET", "/api/queue")).json.te
 /** 盤面に渡す transcript の器。テストは開かれた session の stream をここから取って落とす。 */
 class RecordingTranscripts extends TranscriptStore {
   readonly opened = new Map<string, Transcript>();
-  override open(taskId: string, workerSpawnedEventId: number, prompt: PromptRecord) {
-    const opened = super.open(taskId, workerSpawnedEventId, prompt);
+  override open(taskId: string, sessionId: number, workerSpawnedEventId: number, prompt: PromptRecord) {
+    const opened = super.open(taskId, sessionId, workerSpawnedEventId, prompt);
     this.opened.set(taskId, opened);
     return opened;
   }
@@ -194,7 +196,7 @@ for (const [harness, boot] of HARNESSES) {
 it("prompt の記録を書けない器では open が prompt のファイルの絶対 path を名指す RecordContainerError で落ちる —— stream と同じ記録の器の停止の入口(ADR 0313 決定1 / ADR 0266 決定3)", async () => {
   const dir = await tempDir("transcript-store-");
   await mkdir(join(dir, "task-p.7.prompt.json"));
-  const open = () => new TranscriptStore(dir).open("task-p", 7, { harness: "claude-code", board: [], task: "u", placement: { board: "system" } });
+  const open = () => new TranscriptStore(dir).open("task-p", 1, 7, { harness: "claude-code", board: [], task: "u", placement: { board: "system" } });
 
   expect(open).toThrow(RecordContainerError);
   expect(open).toThrow(expect.objectContaining({ path: join(dir, "task-p.7.prompt.json") }));
@@ -242,7 +244,7 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
         .get(task.id)!
         [file].destroy(Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" }));
       // fd の stream は close の後に 'error' を撃つので、観測は数 tick 先にある
-      await vi.waitFor(() => expect(t.containers.forceReclaims).toContain(task.id));
+      await vi.waitFor(() => expect(t.containers.forceReclaims).toContain(String(sessionId(t.db, task.id))));
       // 強制回収で root が exit する —— ADR 0145 の question は重ならない
       proc.emitExit(null, "SIGKILL");
       await settle();
@@ -326,4 +328,102 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
     expect(await teardown()).toBeUndefined();
     expect(await status(task.id)).not.toBe("in_progress");
   });
+}
+
+async function retryAfterExit(boot: () => ReturnType<typeof bootWithAdapter>, title: string) {
+  const { proc, transcripts } = await boot();
+  const task = queueWork(t, title);
+  await t.clock.advance(HOUR);
+  const oldTranscript = transcripts.opened.get(task.id)!;
+  const oldSpawn = (await events(task.id)).find((e: any) => e.kind === "worker_spawned");
+  proc.emitExitAt(0, 1, null);
+  await settle();
+  const failure = (await questions(t)).find((q: any) => q.title.startsWith("worker exited"));
+  const retry = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] });
+  await vi.waitFor(() => expect(proc.calls).toHaveLength(2));
+  return { task, oldTranscript, oldSpawn, forcesBefore: [...t.containers.forceReclaims], retryStatus: retry.status };
+}
+
+for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
+  it(`${harness}: an old session's transcript error after retry only records that session's failure`, async () => {
+    const { task, oldTranscript, oldSpawn, forcesBefore, retryStatus } = await retryAfterExit(boot, "retry transcript");
+    expect(retryStatus).toBe(200);
+
+    oldTranscript.stream.emit("error", Object.assign(new Error("old transcript failed"), { code: "EIO" }));
+    await settle();
+
+    expect(await status(task.id)).toBe("in_progress");
+    expect(t.containers.forceReclaims).toEqual(forcesBefore);
+    expect((await events(task.id)).filter((e: any) => e.kind === "transcript_failed").map((e: any) => e.payload.worker_spawned_event_id)).toEqual([oldSpawn.id]);
+    expect((await questions(t)).filter((q: any) => q.status !== "done")).toEqual([]);
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([]);
+  });
+}
+
+for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
+  it(`${harness}: an old transcript write throw halts only the old spawn and acceptance records it`, async () => {
+    const { task, oldTranscript, oldSpawn, forcesBefore } = await retryAfterExit(boot, "retry transcript write");
+    t.db.exec("CREATE TRIGGER fail_old_transcript BEFORE INSERT ON events WHEN NEW.kind = 'transcript_failed' BEGIN SELECT RAISE(ABORT, 'old transcript write failed'); END");
+
+    expect(() => oldTranscript.stream.emit("error", new Error("old transcript failed"))).not.toThrow();
+    expect(await status(task.id)).toBe("in_progress");
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([{ kind: "unclosedSession" }]);
+    const halt = await servedQuarantineQuestion(t, "unclosedSession", String(oldSpawn.id));
+    expect(halt.purpose).toContain("old transcript write failed");
+    expect((await events(task.id)).filter((e: any) => e.kind === "transcript_failed")).toEqual([]);
+    t.db.exec("DROP TRIGGER fail_old_transcript");
+    oldTranscript.stderr.emit("error", new Error("second error"));
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${halt.id}/answer`, { answers: ["fixed"] })).status).toBe(200);
+    await settle();
+
+    expect((await events(task.id)).filter((e: any) => e.kind === "transcript_failed").map((e: any) => e.payload.worker_spawned_event_id)).toEqual([oldSpawn.id]);
+    expect(t.containers.forceReclaims).toEqual(forcesBefore);
+    expect(await status(task.id)).toBe("in_progress");
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([]);
+  });
+}
+
+for (const [harness, boot, sources] of [
+  ["Claude", HARNESSES[0][1], ["sandbox", "init drift", "MCP unreachable", "prompt", "output close"]],
+  ["Codex", bootCodex, ["prompt", "output close"]],
+] as const) {
+  for (const source of sources) {
+    it(`${harness}: delayed ${source} from a reclaimed session cannot reclaim the retry`, async () => {
+      const { proc } = await boot();
+      const task = queueWork(t, "late adapter callback");
+      await t.clock.advance(HOUR);
+      const oldSession = String(sessionId(t.db, task.id));
+      expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "retry" })).status).toBe(200);
+      await t.clock.advance(WATCHDOG.grace);
+      const failure = (await questions(t)).find((q: any) => q.title.startsWith("stopped by human"));
+      expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+      await vi.waitFor(() => expect(proc.calls).toHaveLength(2));
+      const forcesBefore = [...t.containers.forceReclaims];
+      const currentSession = String(sessionId(t.db, task.id));
+      const old = proc.processes[0]!;
+      if (source === "prompt") old.stdin.emit("error", new Error("old broken pipe"));
+      else if (source === "output close") {
+        proc.emitExitOnlyAt(0, 1, null);
+        proc.emitCloseAt(0, 1, null);
+      } else if (source === "sandbox") {
+        old.stdout.write(`${JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "old-bash", name: "Bash", input: {} }] } })}\n`);
+        old.stdout.write(`${JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "old-bash", is_error: true, content: "Sandbox is required but failed to initialize: Failed to create bridge sockets after 5 attempts. Restart to retry." }] } })}\n`);
+      } else {
+        const init = JSON.parse(initWithMcpServers([{ name: "tidepool", status: source === "MCP unreachable" ? "failed" : "connected" }]));
+        init.tools = init.tools.filter((tool: string) => tool !== "Skill");
+        if (source === "init drift") init.tools.push("CronCreate");
+        old.stdout.write(`${JSON.stringify(init)}\n`);
+      }
+      await settle();
+
+      expect(currentSession).not.toBe(oldSession);
+      expect(t.containers.forceReclaims).toEqual(forcesBefore);
+      expect(t.containers.forceReclaims).not.toContain(currentSession);
+      expect(await status(task.id)).toBe("in_progress");
+      if (source === "output close") {
+        expect((await events(task.id)).filter((e: any) => e.kind === "worker_exited")).toHaveLength(1);
+        expect((await questions(t)).filter((q: any) => q.status !== "done")).toEqual([]);
+      }
+    });
+  }
 }

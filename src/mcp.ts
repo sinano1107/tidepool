@@ -397,7 +397,7 @@ function runReleasingVerb(
       heldForContainment: deps.heldForContainment,
       pollNow: deps.pollNow,
     };
-    const reclaimed = deps.containers?.reclaimed(task.id) ?? Promise.resolve();
+    const reclaimed = deps.containers?.reclaimed(String(deps.slot.currentSessionId)) ?? Promise.resolve();
     void reclaimed.then(() => runTeardown(teardown, task.id, { ...teardownStep(deps.db, task.id), workspace }));
     return { ...result, session_over: SESSION_OVER_NOTICE };
   });

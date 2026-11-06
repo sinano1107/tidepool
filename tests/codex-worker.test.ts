@@ -55,6 +55,7 @@ import {
   poseAccepted,
   quarantineQuestion,
   routingJudgmentRepairTask,
+  sessionId,
   type Tidepool,
   unhandledRejectionsDuring,
   WORKER_SPAWNED,
@@ -240,7 +241,7 @@ const boardText = (args: string[]) => boardByArgs.get(args)!;
 /** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
 const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_servers.tidepool.enabled_tools=");
 async function fixture(
-  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
+  onSpawnFailed?: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
   onWorkerExited?: CodexWorkerOptions["onWorkerExited"],
   spawn?: ContainerSpawn,
@@ -316,9 +317,9 @@ You are the Codex worker.`,
     onSpawnFailed:
       board ??
       (onSpawnFailed &&
-        ((taskId, failure, record) => {
+        ((taskId, _sessionId, failure, record) => {
           record();
-          onSpawnFailed(taskId, failure);
+          onSpawnFailed(taskId, _sessionId, failure);
         })),
     onWorkerExited:
       exitBoard ??
@@ -335,7 +336,7 @@ You are the Codex worker.`,
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task, query?: InjectionQuery) => {
-    const started = worker.start(value, executionSettingsFor(db, agent, value)[0]!, query);
+    const started = worker.start(value, sessionId(db, value.id), executionSettingsFor(db, agent, value)[0]!, query);
     return started?.then(() => {
       const spawned = listEvents(db, value.id).filter((e) => e.kind === "worker_spawned").at(-1);
       const call = process.calls.at(-1);
@@ -385,6 +386,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
     expect(onWorkerExited.mock.calls).toEqual([[value.id, expect.objectContaining({ exit_code: 1, stderr_tail: signature }), {
+      sessionId: sessionId(f.db, value.id),
       workerSpawnedEventId: spawned.id,
       turnRan: false,
       stop: { registered: {
@@ -794,7 +796,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(onSpawnFailed).not.toHaveBeenCalled();
     // 組の停止として盤面の一撃に1回渡す —— 一撃が todo へ戻して枠を空ける(ADR 0274)
     expect(onPickupStopped.mock.calls).toEqual([
-      [value.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "codex/work", reason: expect.stringContaining("Codex still reports these skills enabled: flat") }],
+      [value.id, sessionId(f.db, value.id), { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "codex/work", reason: expect.stringContaining("Codex still reports these skills enabled: flat") }],
     ]);
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
   });
@@ -816,7 +818,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(f.process.calls).toEqual([]);
     expect(f.appServer).toEqual([]);
     expect(onSpawnFailed).not.toHaveBeenCalled();
-    expect(onPickupStopped.mock.calls).toEqual([[value.id, { kind: "pickup_stopped", ...stop }]]);
+    expect(onPickupStopped.mock.calls).toEqual([[value.id, sessionId(f.db, value.id), { kind: "pickup_stopped", ...stop }]]);
   });
 
   it.each([
@@ -827,7 +829,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["観測の応答に workspace の entry が無い", (args: readonly string[], cwds: readonly string[]) => (args.includes("--strict-config") ? { data: [] } : codexSkillsListAt(cwds))],
   ])("skill の列挙・観測の失敗(%s)は spawn_failed を書いて盤面側の一撃を呼び、組の quarantine は立てず spawn しない(ADR 0259 決定6 / ADR 0118)", async (_, appServer) => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
-    const f = await fixture((taskId, failure) => calls.push([taskId, failure]), undefined, undefined, undefined, { appServer });
+    const f = await fixture((taskId, _sessionId, failure) => calls.push([taskId, failure]), undefined, undefined, undefined, { appServer });
     const value = task(f.db);
     await f.start(value);
 
@@ -849,15 +851,15 @@ describe("CodexWorker (ADR 0098)", () => {
     let handler: NonNullable<CodexWorkerOptions["onSpawnFailed"]> = () => {};
     const f = await fixture(undefined, undefined, undefined, undefined, {
       appServer: () => null,
-      board: (taskId, failure, record) => {
+      board: (taskId, _sessionId, failure, record) => {
         calls.push(taskId);
         wrap(f.db);
-        handler(taskId, failure, record);
+        handler(taskId, sessionId(f.db, taskId), failure, record);
       },
     });
     handler = spawnFailureHandler({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, f.containers);
     const value = pickupTask(f.db, task(f.db), "codex-agent", f.clock.now())!;
-    slot.occupy(value.id);
+    slot.occupy(value.id, sessionId(f.db, value.id));
     const accept = () => acceptTeardownQuarantine({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, value.id);
     const startAndSettle = () =>
       unhandledRejectionsDuring(async () => {
@@ -1334,7 +1336,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {
     const f = await fixture();
     for (const value of [task(f.db, "codex-tier-work"), metaReviewTask(f.db)]) {
-      await f.worker.start(value, { provider: "openai", model: "gpt-6-astra", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
+      await f.worker.start(value, sessionId(f.db, value.id), { provider: "openai", model: "gpt-6-astra", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
       expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({ tier_id: 3 });
     }
   });
@@ -1342,7 +1344,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("盤面が順位で選んだ openai の設定を渡されれば、anthropic を先頭に持つ agent でも codex で走る(#544 の demo —— spawn 側の再解決は順位1位の anthropic を返して拒否になる)", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-carried-setting");
-    await f.worker.start(value, {
+    await f.worker.start(value, sessionId(f.db, value.id), {
       provider: "openai",
       model: "gpt-6-astra",
       effort: "high",
@@ -1621,7 +1623,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("spawn 自体の失敗(syscall が \"spawn\" で始まる)は盤面側の一撃を呼び、spawn 族でない error は呼ばず spawn_failed も書かない(ADR 0118)", async () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
-    const f = await fixture((taskId, failure) => calls.push([taskId, failure]));
+    const f = await fixture((taskId, _sessionId, failure) => calls.push([taskId, failure]));
     const value = task(f.db, "codex-spawn-enoent");
     await f.start(value);
 
@@ -1696,7 +1698,7 @@ describe("CodexWorker (ADR 0098)", () => {
     const f = await fixture(undefined, undefined, undefined, undefined, { exitBoard: onExit });
     const value = pickupTask(f.db, task(f.db), "codex-agent", f.clock.now())!;
     const slot = new Slot();
-    slot.occupy(value.id);
+    slot.occupy(value.id, sessionId(f.db, value.id));
     const watchdog = startWatchdog({ db: f.db, clock: f.clock, slot, worker: f.worker, containers: f.containers, pollNow: () => {}, config: { timeLimits: {}, grace: 0 } });
     onTestFinished(watchdog.stop);
     onExit.mockImplementation(watchdog.onWorkerExited);
@@ -1732,7 +1734,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("skill を閉じたあと spawn が同期で投げたら、spawn_failed を書いて盤面側の一撃を呼び、task の一時ディレクトリは残らない(ADR 0149 決定6 / issue #705)", async () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
-    const f = await fixture((taskId, failure) => calls.push([taskId, failure]), undefined, undefined, () => {
+    const f = await fixture((taskId, _sessionId, failure) => calls.push([taskId, failure]), undefined, undefined, () => {
       throw new Error("spawn blew up");
     });
     const value = task(f.db);
@@ -1745,7 +1747,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("spawn のあとの配線で投げても未処理の reject にせず、spawn_failed を1度だけ書いて盤面側の一撃を呼ぶ(ADR 0118)", async () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
-    const f = await fixture((taskId, failure) => calls.push([taskId, failure]), undefined, undefined, () => ({ on() {}, kill() {} }) as never);
+    const f = await fixture((taskId, _sessionId, failure) => calls.push([taskId, failure]), undefined, undefined, () => ({ on() {}, kill() {} }) as never);
     const value = task(f.db);
 
     await f.start(value);
@@ -2070,9 +2072,9 @@ describe("Codex の分類待ちを停止の梯子が追い越さない(ADR 0309)
     const value = task(f.db, `codex-ladder-${bottom}`);
     pickupTask(f.db, value, "codex-agent", f.clock.now());
     const slot = new Slot();
-    slot.occupy(value.id);
-    containers.open(value.id);
-    runtime.hold(value.id);
+    slot.occupy(value.id, sessionId(f.db, value.id));
+    containers.open(String(sessionId(f.db, value.id)));
+    runtime.hold(String(sessionId(f.db, value.id)));
     const watchdog = startWatchdog({ db: f.db, clock: f.clock, slot, worker: f.worker, containers, pollNow: () => {}, config: { timeLimits: { work: 60_000 }, grace: 60_000, reclaimTimeout: 60_000 } });
     onTestFinished(watchdog.stop);
     notify = watchdog.onWorkerExited;
@@ -2082,7 +2084,7 @@ describe("Codex の分類待ちを停止の梯子が追い越さない(ADR 0309)
     process.processes[0]!.stderr.write("STDERR\n");
     process.emitExit(1, null);
     await f.clock.advance(60_000); // 梯子が回収の観測を待つ
-    if (bottom === "reclaimed") runtime.fireEmpty(value.id);
+    if (bottom === "reclaimed") runtime.fireEmpty(String(sessionId(f.db, value.id)));
     else await f.clock.advance(120_000); // timeout 後も分類が揃うまで決めない
     await new Promise((resolve) => setImmediate(resolve));
     expect(listBoard(f.db).filter((task) => task.type === "question")).toEqual([]);
@@ -2121,8 +2123,8 @@ describe("Codex の書く step を本物の watchdog の runner が撃つ(ADR 03
     const value = task(f.db, id);
     pickupTask(f.db, value, "codex-agent", f.clock.now());
     const slot = new Slot();
-    slot.occupy(value.id);
-    containers.open(value.id);
+    slot.occupy(value.id, sessionId(f.db, value.id));
+    containers.open(String(sessionId(f.db, value.id)));
     const watchdog = startWatchdog({ db: f.db, clock: f.clock, slot, worker: f.worker, containers, pollNow: () => {}, config: { timeLimits: {}, grace: 0 } });
     onTestFinished(watchdog.stop);
     notify = watchdog.onWorkerExited;
@@ -2210,7 +2212,7 @@ it("Codex's stale settle retains its spawn identity and leaves graceful stop con
   await f.start(value);
   const original = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!.id;
   f.process.emitExitOnlyAt(0, 1, null);
-  await f.containers.reclaimed(value.id);
+  await f.containers.reclaimed(String(sessionId(f.db, value.id)));
   await f.start(value);
   expect(f.process.processes).toHaveLength(2);
 

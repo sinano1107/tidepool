@@ -27,7 +27,20 @@ import {
   recordingSpawn,
   withHealthyUsage,
 } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, questions, queueWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  git,
+  HOUR,
+  HUMAN_WEBUI,
+  makeRemoteBackedWorkspace,
+  makeWorkspace,
+  questions,
+  queueWork,
+  sessionId,
+  type Tidepool,
+  WORKER_SPAWNED,
+} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -261,7 +274,8 @@ for (const [window, boot, boardCallsAtStop] of WINDOWS) {
     const kinds = (await events(task.id)).map((e) => e.kind);
     expect(kinds).not.toContain("worker_spawned");
     expect(kinds).not.toContain("spawn_failed");
-    expect(t.containers.created.filter((id) => id === task.id)).toHaveLength(1);
+    const firstSession = String(sessionId(t.db, task.id));
+    expect(t.containers.created.filter((id) => id === firstSession)).toHaveLength(1);
     expect(await status(task.id)).toBe("blocked");
     const [failure, ...more] = await questions(t);
     expect(more).toEqual([]);
@@ -275,9 +289,9 @@ for (const [window, boot, boardCallsAtStop] of WINDOWS) {
     await settle();
 
     expect(proc.calls).toHaveLength(1);
-    expect(t.containers.created.filter((id) => id === task.id)).toHaveLength(2);
     const after = await events(task.id);
     const retried = after.filter((e) => e.kind === "task_picked_up").at(-1)!;
+    expect(t.containers.created.filter((id) => id === firstSession || id === String(retried.id))).toHaveLength(2);
     expect(after.filter((e) => e.kind === "worker_spawned").map((e) => e.id > retried.id)).toEqual([true]);
   });
 }

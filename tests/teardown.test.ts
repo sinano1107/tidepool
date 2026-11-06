@@ -18,6 +18,7 @@ import {
   mcpClient,
   questions,
   registerWork,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 
@@ -98,11 +99,11 @@ it("容器が生きている間は次の task が pickup されない —— 進
   expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).toBe("done");
   // root の exit は観測され、強制回収が送達されている —— それでも門は開かない
   expect(t.worker.exits).toEqual([first.id]);
-  expect(t.containers.forceReclaims).toEqual([first.id]);
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, first.id))]);
   await t.clock.advance(HOUR);
   expect(started()).toEqual([first.id]);
 
-  t.containers.fireEmpty(first.id);
+  t.containers.fireEmpty(String(sessionId(t.db, first.id)));
   await t.clock.advance(HOUR);
   expect(started()).toEqual([first.id, second.id]);
 });
@@ -135,7 +136,7 @@ it("decompose と escalate も同じ —— 枠を握っているのは task で
 
     await t.clock.advance(HOUR);
     expect(started()).toEqual([first.id]);
-    t.containers.fireEmpty(first.id);
+    t.containers.fireEmpty(String(sessionId(t.db, first.id)));
     await t.clock.advance(HOUR);
     expect(started()).toEqual([first.id, second.id]);
     await t.stop();
@@ -217,7 +218,7 @@ it("「今なぜ pickup が起きないか」の読み口が後始末を報せ�
   expect(teardown.taskId).toBe(task.id);
   expect(teardown.settlement).toBe("completed");
 
-  t.containers.fireEmpty(task.id);
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
   await settle();
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.teardown).toBeUndefined();
 });

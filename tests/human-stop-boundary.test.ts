@@ -5,7 +5,7 @@ import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, bundledObjection, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, nextPoll, questions, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, bundledObjection, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, nextPoll, questions, registerWork, sessionId, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
@@ -50,7 +50,7 @@ it("HTTP stop exposes the failure immediately, rejects late worker completion, a
   expect(queue.tasks.map((x: { id: string }) => x.id)).toEqual([task.id, next.id]);
   await t.clock.advance(MIN);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-  t.containers.fireEmpty(task.id);
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
   await new Promise((resolve) => setImmediate(resolve));
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, task.id]);
 });

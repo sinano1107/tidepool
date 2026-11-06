@@ -102,7 +102,7 @@ export const unusedLanding: Landing = {
 
 /** 過去の spawn が記録した prompt(ADR 0313 決定1)を記録の器 `dir` に書く —— 当時版の読み手(ADR 0314 決定1)の setup。 */
 export function recordPrompt(dir: string, taskId: string, spawnedEventId: number, system: PromptPart[], user = "", harness: Harness = "claude-code"): void {
-  const { stream, stderr } = new TranscriptStore(dir).open(taskId, spawnedEventId, workerPromptRecord(harness, system, user));
+  const { stream, stderr } = new TranscriptStore(dir).open(taskId, 0, spawnedEventId, workerPromptRecord(harness, system, user));
   stream.destroy();
   stderr.destroy();
 }
@@ -184,7 +184,7 @@ export function healthyUsageText(now: Date): string {
 export function withHealthyUsage(adapter: WorkerAdapter, clock: { now(): Date }): WorkerAdapter {
   return {
     id: adapter.id,
-    start: (task, setting, query) => adapter.start(task, setting, query),
+    start: (task, sessionId, setting, query) => adapter.start(task, sessionId, setting, query),
     gracefulStop: (taskId) => adapter.gracefulStop(taskId),
     checkUsage: async () => healthyUsageText(clock.now()),
   };
@@ -258,9 +258,10 @@ export class ScriptedWorker implements WorkerAdapter {
   readonly gracefulStops: string[] = [];
   readonly exits: string[] = [];
   private containers: ProcessContainers | undefined;
+  private readonly sessions = new Map<string, number>();
   private startFailure: Error | undefined;
   /** 盤面が factory で渡す「worker が1度も走らなかった」の一撃(ADR 0118)。 */
-  onSpawnFailed: ((taskId: string, failure: { error_code: string | null; message: string }) => void) | undefined;
+  onSpawnFailed: ((taskId: string, sessionId: number, failure: { error_code: string | null; message: string }) => void) | undefined;
   /** 盤面が factory で渡す root process の exit の一撃(ADR 0145)。 */
   onWorkerExited: ((taskId: string, exit: WorkerExit) => void) | undefined;
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
@@ -272,7 +273,8 @@ export class ScriptedWorker implements WorkerAdapter {
     readonly id = "fake-worker",
   ) {}
 
-  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
+  start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): void {
+    this.sessions.set(task.id, sessionId);
     this.started.push(task);
     this.startedSettings.push(setting);
     this.startedQueries.push(query);
@@ -288,7 +290,7 @@ export class ScriptedWorker implements WorkerAdapter {
 
   /** Node の `spawn()` が非同期に失敗した、の観測(ADR 0118 の adapter 側の観測点)。 */
   failSpawn(taskId: string, error_code: string, message: string): void {
-    this.onSpawnFailed?.(taskId, { error_code, message });
+    this.onSpawnFailed?.(taskId, this.sessions.get(taskId)!, { error_code, message });
   }
 
   gracefulStop(taskId: string): void {
@@ -306,7 +308,7 @@ export class ScriptedWorker implements WorkerAdapter {
    *  (`FakeContainerRuntime`)が決め、`hold` された容器はこれでは空にならない。 */
   exit(taskId: string): void {
     this.exits.push(taskId);
-    this.containers?.forceReclaim(taskId);
+    this.containers?.forceReclaim(String(this.sessions.get(taskId)));
   }
 
   /** 実 adapter の exit handler と同じ順で、強制回収のあとに盤面へ exit を渡す(ADR 0145)。
@@ -388,6 +390,9 @@ export class FakeContainerRuntime implements ContainerRuntime {
    *  Board call の容器を前回の run の残骸と読み違えないため、単位を問わずここに載る。 */
   readonly preflightLive: Array<ReadonlySet<string>> = [];
   private readonly held = new Set<string>();
+  /** Harness resolves pickup ids so hold(taskId) can be scripted before pickup. */
+  taskIdForSession?: (id: string) => string | undefined;
+  private readonly sessionsByTask = new Map<string, string>();
   private readonly markEmpty = new Map<string, () => void>();
   private capability: ContainerRuntimeCapability = { available: true };
 
@@ -404,7 +409,7 @@ export class FakeContainerRuntime implements ContainerRuntime {
   /** この id の容器は強制回収では空にならない — 空の観測は `fireEmpty`
    *  だけが起こす。 */
   hold(id: string): void {
-    this.held.add(id);
+    this.held.add(this.sessionsByTask.get(id) ?? id);
   }
 
   /** 「容器が空になった」signal を撃つ。 */
@@ -419,9 +424,17 @@ export class FakeContainerRuntime implements ContainerRuntime {
 
   create(id: string): ProcessContainer {
     this.created.push(id);
+    const taskId = this.taskIdForSession?.(id);
+    if (taskId) {
+      this.sessionsByTask.set(taskId, id);
+      if (this.held.delete(taskId)) this.held.add(id);
+    }
     let markEmpty!: () => void;
     const reclaimed = new Promise<void>((resolve) => {
-      markEmpty = resolve;
+      markEmpty = () => {
+        if (taskId && this.sessionsByTask.get(taskId) === id) this.sessionsByTask.delete(taskId);
+        resolve();
+      };
     });
     this.markEmpty.set(id, markEmpty);
     return {

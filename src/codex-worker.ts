@@ -380,11 +380,11 @@ export interface CodexWorkerOptions {
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。`record` は観測点の spawn_failed の
    *  書き込みで、一撃が失敗の記録と同じ tx で撃つ(ADR 0342 決定6)。不在 → 観測点が自分で書く。 */
-  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }, record: () => void) => void;
+  onSpawnFailed?: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record: () => void) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
-  onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
+  onRecordContainerFailed?: (taskId: string, sessionId: number, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が `todo` へ戻す。 */
-  onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
+  onPickupStopped?: (taskId: string, sessionId: number, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。帰結に要る事実の束を添え(ADR 0338 決定1)、報告なき exit かどうかの判定は盤面側が持つ。
    *  不在なら束の `writes` は adapter が自分で撃つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
@@ -1349,10 +1349,10 @@ export class CodexWorker implements WorkerAdapter {
     mkdirSync(options.codexHome, { recursive: true });
   }
 
-  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): Promise<void> | undefined {
+  start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): Promise<void> | undefined {
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
     // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が `todo` へ戻す
-    const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, { kind: "pickup_stopped", ...stop });
+    const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, sessionId, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
       this.options.db,
       (name) => resolveExecutionWorkspace(registry, this.options.workspace, name, this.workspacesDir),
@@ -1453,7 +1453,7 @@ export class CodexWorker implements WorkerAdapter {
           payload: { kind: "spawn_failed", ...failure },
           at: this.options.clock.now(),
         });
-      if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, failure, record);
+      if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, sessionId, failure, record);
       else record();
       // ADR 0342 決定5: 印は一撃が返った後 —— 盤面 DB の拒否で投げた書き込みを記録済みと読まない
       recorded = true;
@@ -1547,11 +1547,11 @@ export class CodexWorker implements WorkerAdapter {
         material,
       });
       const prompt = workerPromptRecord("codex", parts, taskPrompt(task));
-      const transcript = this.options.transcripts.open(task.id, spawned, prompt);
+      const transcript = this.options.transcripts.open(task.id, sessionId, spawned, prompt);
       const submitted = promptInput(prompt);
       // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
       markProjectionPending(this.options.db, spawned);
-      const child = this.containers.open(task.id).spawn(
+      const child = this.containers.open(String(sessionId)).spawn(
         this.options.executable,
         [
           "--ask-for-approval", "never",
@@ -1623,6 +1623,7 @@ export class CodexWorker implements WorkerAdapter {
         // ADR 0338 決定1: 読み手(ターン)・process の事実(MCP の起動時 exit)・probe(cap)の3出所を同じ束にする。
         // 停止の登録は `writes` の中で、盤面は分類を待って撃ってから決める(決定2)
         const facts = (classification: WorkerExitClassification["classification"]): WorkerExitClassification => ({
+          sessionId,
           workerSpawnedEventId: spawned,
           turnRan: streamObserved.turnRan,
           ...(mcpStop && { stop: { registered: { kind: "session_stopped_by_resource", ...mcpStop, worker_spawned_event_id: spawned } } }),
@@ -1655,10 +1656,10 @@ export class CodexWorker implements WorkerAdapter {
       };
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
       // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
-      settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
+      settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(String(sessionId)), settle);
       sendInput(child, submitted.user, (error) => {
         console.error(`[codex-worker] could not send prompt for task ${task.id}:`, error);
-        this.containers.forceReclaim(task.id);
+        this.containers.forceReclaim(String(sessionId));
       });
     })().catch((error) => {
       if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: spawn_failed にせず床へ
@@ -1670,7 +1671,7 @@ export class CodexWorker implements WorkerAdapter {
       this.running.delete(task.id);
       if (error instanceof RecordContainerError) {
         removeTaskTemp();
-        this.options.onRecordContainerFailed?.(task.id, error);
+        this.options.onRecordContainerFailed?.(task.id, sessionId, error);
         return;
       }
       spawnFailed({

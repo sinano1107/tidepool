@@ -19,7 +19,7 @@ function fakeWorker(id: string, usage: string): WorkerAdapter & {
     started,
     settings,
     stopped,
-    start(task, setting) {
+    start(task, _sessionId, setting) {
       started.push(task.id);
       settings.push(setting);
       running.add(task.id);
@@ -48,7 +48,7 @@ function router() {
 it("盤面が選んだ実行設定の Provider の正準 Harness へ出し、設定をそのまま adapter へ渡す(ADR 0098 / ADR 0110 決定3)", () => {
   const { worker, claude, codex } = router();
 
-  worker.start(task("multi-entry-task"), openai);
+  worker.start(task("multi-entry-task"), 1, openai);
 
   expect({ claude: claude.started, codex: codex.started, carried: codex.settings }).toEqual({
     claude: [],
@@ -60,7 +60,7 @@ it("盤面が選んだ実行設定の Provider の正準 Harness へ出し、設
 it("watchdog の畳み込み停止は実際に spawn した Harness の root process へ届く", () => {
   const { worker, claude, codex } = router();
 
-  worker.start(task("openai-task"), openai);
+  worker.start(task("openai-task"), 1, openai);
   worker.gracefulStop("openai-task");
 
   expect(codex.stopped).toEqual(["openai-task"]);

@@ -13,7 +13,7 @@ import { completeTask, getTask, listBoard } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, sessionId, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -285,13 +285,13 @@ it("回収 timeout の確認回答の受理でも復旧が走り、この起動�
   t = await bootTidepool({ ...options, dir: t.dir });
   expect(episodeOf(left.spawned)).toBeUndefined();
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([previous.id]));
-  containers.hold(previous.id);
+  containers.hold(String(sessionId(t.db, previous.id)));
   // この起動が spawn した走行中の session(偽の worker は spawn を刻まないので setup が置く)
   const running = appendEvent(t.db, { taskId: previous.id, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
   await t.clock.advance(watchdog.timeLimits.work);
   await t.clock.advance(watchdog.grace);
   await t.clock.advance(watchdog.reclaimTimeout);
-  containers.fireEmpty(previous.id);
+  containers.fireEmpty(String(sessionId(t.db, previous.id)));
   left.writeTranscript(); // 記録の dir が戻った
 
   const containment = (await questions(t)).find((q) => q.question_quarantine_kind === "containment")!;
@@ -314,7 +314,7 @@ it("待っている回収の無い Containment の確認回答の受理でも復
   // Board call の容器が回収 timeout まで空にならない —— 盤面全体の Containment quarantine(watchdog の待つ回収は無い)
   const pending = api(t.baseUrl, "GET", "/api/skills");
   await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
-  const container = runtime.created.find((id) => id !== previous.id)!;
+  const container = runtime.created.find((id) => id !== String(sessionId(t.db, previous.id)))!;
   runtime.hold(container);
   recorder.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", skills: [] })}\n`);
   await new Promise((resolve) => setImmediate(resolve));

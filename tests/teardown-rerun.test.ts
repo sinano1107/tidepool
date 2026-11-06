@@ -9,7 +9,7 @@ import { completeTask, getTask, listBoard, pickupTask, registerTask } from "../s
 import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { boardRefWriter, firePickupPredicates, prepareWorkspaceAtPickup, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, failGitCommits, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, failGitCommits, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 // 後始末の再実行(ADR 0345): tree rule を通った checkout をもう1度読む経路の振る舞い。
 
@@ -44,7 +44,7 @@ async function settledSession(settle: "completed" | "interrupted", { workspace, 
   if (settle === "completed") completeTask(db, task, FULL_HANDOFF, "worker", clock.now(), "worker");
   markTeardown(db, task.id, clock.now());
   const slot = new Slot();
-  slot.occupy(task.id);
+  slot.occupy(task.id, sessionId(db, task.id));
   slot.enterTeardown();
   const deps: TeardownDeps = { db, clock, slot, resolve: () => ws, pollNow: () => {} };
   return { db, clock, ws, task, slot, deps, branch: `task/${task.id}`, parentBranch: `task/${parentId}` };

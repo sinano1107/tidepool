@@ -4,7 +4,7 @@ import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
+import { appendEvent, type EventOrigin, getEvent, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { questionRefusedTarget, registerQuarantine } from "./quarantine.js";
@@ -19,7 +19,6 @@ import {
   sessionCloseSteps,
   sessionHaltOpen,
   sessionInTeardown,
-  spawnedAfterLatestPickup,
   type TeardownDeps,
   teardownStep,
 } from "./teardown.js";
@@ -79,13 +78,12 @@ export interface Watchdog extends PendingReclaim {
   onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
 }
 
-/** watchdog が持つ、今 slot にいるタスクの今の pickup の記録。taskId か pickup が替われば
+/** watchdog が持つ、今 slot にいるタスクの今の pickup の記録。session id が替われば
  *  丸ごと作り直す —— retry された run は前の run の踏み終えた梯子を引き継がず、決着した
  *  タスクの分は残らない。slot にいないタスクの記録で先へ進む入口は無い(どの入口も、
  *  question や slot の解放の前に slot の主を確かめる)。 */
 interface WatchRecord {
-  taskId: string;
-  pickup: number;
+  sessionId: number;
   stopSentAt?: number;
   forceSentAt?: number;
   humanStop?: boolean;
@@ -98,14 +96,6 @@ interface WatchRecord {
   exit?: WorkerExit;
   /** worker_exited の記録より前に梯子の底が決着しないための門(ADR 0309 決定3)。 */
   classification?: Promise<void>;
-}
-
-/** The task's most recent pickup, not its first: a retried task is picked up
- *  again after its earlier kill, and the watchdog must time the new run, not
- *  the original one. */
-function pickedUpAt(db: Db, taskId: string): number {
-  const row = latestEventOfTask(db, taskId, "task_picked_up");
-  return row ? new Date(row.created_at).getTime() : 0;
 }
 
 /** exit が持っていた逐語 —— worker の最後の発話、CLI が報告した失敗の文、stderr 末尾 ——
@@ -218,8 +208,8 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>) => void {
-  return (taskId, payload) => settleAndReclaim(deps, containers, taskId, (task, now) => returnToQueue(deps.db, task, payload, now));
+): (taskId: string, sessionId: number, payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>) => void {
+  return (taskId, sessionId, payload) => settleAndReclaim(deps, containers, taskId, sessionId, (task, now) => returnToQueue(deps.db, task, payload, now));
 }
 
 /** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は transcript の open(ADR 0276 決定5)で、観測点は
@@ -228,9 +218,9 @@ export function queueReturnHandler(
 export function recordContainerHaltHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, err: RecordContainerError) => void {
-  return (taskId, err) =>
-    settleAndReclaim(deps, containers, taskId, (task, now) => returnToQueue(deps.db, task, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now), () =>
+): (taskId: string, sessionId: number, err: RecordContainerError) => void {
+  return (taskId, sessionId, err) =>
+    settleAndReclaim(deps, containers, taskId, sessionId, (task, now) => returnToQueue(deps.db, task, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now), () =>
       registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue in its current place, not failed`, deps.clock.now()),
     );
 }
@@ -247,12 +237,13 @@ export function recordContainerHaltHandler(
 export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, failure: { error_code: string | null; message: string }, record?: () => void) => void {
-  return (taskId, failure, record) =>
+): (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record?: () => void) => void {
+  return (taskId, sessionId, failure, record) =>
     settleAndReclaim(
       deps,
       containers,
       taskId,
+      sessionId,
       registerFailure(deps, (task) => [
         `worker never started for task: ${task.title}`,
         `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
@@ -274,19 +265,26 @@ export function transcriptFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (failure: TranscriptFailure) => void {
-  return ({ taskId, workerSpawnedEventId, file, error_code, message, path }) =>
-    runTeardownSteps(
+  return ({ taskId, sessionId, workerSpawnedEventId, file, error_code, message, path }) => {
+    const record = () => appendEvent(deps.db, {
+      taskId, actorId: getEvent(deps.db, workerSpawnedEventId)!.actor_id, origin: "board",
+      payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId }, at: deps.clock.now(),
+    });
+    // ADR 0353 決定5: 枠の主でない session の記録の失敗は、その spawn の閉じ切らなかった行に残す。
+    if (!unsettledSession(deps, sessionId)) return runTeardownSteps(deps, taskId, ...sessionCloseSteps(workerSpawnedEventId, [record]));
+    return runTeardownSteps(
       deps,
       taskId,
       // ADR 0149 決定3: 記録の手より前の手 —— 記録の手が投げても届いており、受理は記録の手から撃ち直す。後ろの手の2度目の送達は冪等
       () => {
-        if (unsettledTask(deps, taskId)) containers.forceReclaim(taskId);
+        if (unsettledSession(deps, sessionId)) containers.forceReclaim(String(sessionId));
       },
       () =>
         settleAndReclaim(
           deps,
           containers,
           taskId,
+          sessionId,
           registerFailure(
             deps,
             (task) => [
@@ -297,18 +295,10 @@ export function transcriptFailureHandler(
             `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
               "That session was force-reclaimed and has its own failure question",
           ),
-          // ADR 0342 決定6: event は失敗の記録と同じ tx —— rollback で何も残らず、受理の撃ち直しが2行目を書かない
-          () =>
-            appendEvent(deps.db, {
-              taskId,
-              // worker_spawned は open より先に書かれている(ADR 0149 決定2)
-              actorId: getEvent(deps.db, workerSpawnedEventId)!.actor_id,
-              origin: "board",
-              payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
-              at: deps.clock.now(),
-            }),
+          record,
         ),
     );
+  };
 }
 
 /** 記録の手 → 後始末に入ったなら続きの手、の2手を runner に通す(ADR 0342 決定6)。`record` は tx で、後始末に入ったかを返す。
@@ -325,9 +315,10 @@ function recordThen(deps: Pick<TeardownDeps, "db" | "clock" | "slot">, taskId: s
   );
 }
 
-/** session がまだ決着していなければその行を返す: 枠の主で、後始末中でなく、`in_progress`。 */
-function unsettledTask(deps: Pick<TeardownDeps, "db" | "slot">, taskId: string): Task | undefined {
-  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return undefined;
+/** ADR 0353 決定2: 枠の session と一致し、後始末中でなく、`in_progress` ならその task を返す。 */
+function unsettledSession(deps: Pick<TeardownDeps, "db" | "slot">, sessionId: number): Task | undefined {
+  const taskId = deps.slot.currentTaskId;
+  if (taskId === null || deps.slot.currentSessionId !== sessionId || deps.slot.inTeardown) return undefined;
   const task = getTask(deps.db, taskId);
   return task?.status === "in_progress" ? task : undefined;
 }
@@ -339,6 +330,7 @@ function settleAndReclaim(
   deps: TeardownDeps,
   containers: ProcessContainers,
   taskId: string,
+  sessionId: number,
   settle: (task: Task, now: Date) => void,
   record?: () => void,
 ) {
@@ -348,14 +340,14 @@ function settleAndReclaim(
     () =>
       deps.db.transaction(() => {
         record?.();
-        const task = unsettledTask(deps, taskId);
+        const task = unsettledSession(deps, sessionId);
         if (!task) return false;
         const now = deps.clock.now();
         settle(task, now);
         markTeardown(deps.db, taskId, now);
         return true;
       })(),
-    () => reclaimIntoTeardown(deps, containers, taskId),
+    () => reclaimIntoTeardown(deps, containers, taskId, sessionId),
   );
 }
 
@@ -369,10 +361,10 @@ function registerFailure(deps: TeardownDeps, wording: (task: Task) => [title: st
 
 /** 記録の tx の後の手: 後始末へ入り、process の無い容器へも強制回収を撃ち、回収済み観測に後始末を繋ぐ。門は持たない ——
  *  受理の撃ち直しが門で空振りすると、枠は後始末中のまま回収の鎖が付かない(ADR 0342 決定6)。 */
-function reclaimIntoTeardown(deps: TeardownDeps, containers: ProcessContainers, taskId: string): void {
+function reclaimIntoTeardown(deps: TeardownDeps, containers: ProcessContainers, taskId: string, sessionId: number): void {
   deps.slot.enterTeardown();
-  containers.forceReclaim(taskId);
-  void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+  containers.forceReclaim(String(sessionId));
+  void containers.reclaimed(String(sessionId)).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
@@ -411,8 +403,8 @@ export function startWatchdog(deps: {
   const config: WatchdogConfig = deps.config ?? { timeLimits: {}, grace: 0 };
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
-  let pending: string | null = null;
-  const heldForContainment = (taskId: string) => pending === taskId;
+  let pending: { taskId: string; sessionId: number } | null = null;
+  const heldForContainment = (taskId: string) => pending?.taskId === taskId;
   const teardown: TeardownDeps = {
     db,
     clock,
@@ -469,7 +461,7 @@ export function startWatchdog(deps: {
         if (sessionInTeardown(db)?.taskId === taskId) return false;
         // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
         // 他人の session に failure question を立ててしまう。決着済みのタスクにも立てない
-        const task = unsettledTask(teardown, taskId);
+        const task = unsettledSession(teardown, rec.sessionId);
         if (!task) return false;
         registerFailureAndMarkTeardown(
           db,
@@ -504,12 +496,12 @@ export function startWatchdog(deps: {
     }
     if (sessionHaltOpen(db, task.id)) return;
     recordThen(teardown, task.id, () => {
-      if (sessionInTeardown(db)?.taskId === task.id || !unsettledTask(teardown, task.id)) return false;
+      if (sessionInTeardown(db)?.taskId === task.id || !unsettledSession(teardown, rec.sessionId)) return false;
       raiseReclaimTimeout(task, rec, limit);
       return true;
     }, () => {
       // ADR 0342 決定5: 印は書き込みが返った後 —— 先に置くと rollback の後に行の無い回収を報せる
-      pending = task.id;
+      pending = { taskId: task.id, sessionId: rec.sessionId };
       rec.settled = true;
       slot.enterTeardown();
     });
@@ -559,7 +551,7 @@ export function startWatchdog(deps: {
     }
     if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) {
       rec.forceSentAt = now;
-      containers.forceReclaim(taskId);
+      containers.forceReclaim(String(rec.sessionId));
     }
   }
 
@@ -582,15 +574,15 @@ export function startWatchdog(deps: {
       );
       // ADR 0342 決定5: 印は書き込みが返った後
       rec.settled = true;
-      pending = taskId;
+      pending = { taskId, sessionId: rec.sessionId };
     });
   }
 
   /** 記録を今の pickup に合わせる。retry された task が次の tick より先に exit すると、
    *  前の run の記録を読んでしまうので、tick と exit の観測の両方がここを通る。 */
-  function syncPickup(taskId: string): WatchRecord {
-    const pickup = pickedUpAt(db, taskId);
-    if (record?.taskId !== taskId || record.pickup !== pickup) record = { taskId, pickup, settled: false };
+  function syncPickup(): WatchRecord {
+    const sessionId = slot.currentSessionId!;
+    if (record?.sessionId !== sessionId) record = { sessionId, settled: false };
     return record;
   }
 
@@ -613,38 +605,37 @@ export function startWatchdog(deps: {
     }
     if (now - rec.stopSentAt! >= config.grace) {
       rec.forceSentAt = now;
-      containers.forceReclaim(task.id);
-      void containers.reclaimed(task.id).then(() => onReclaimed(task.id, rec, limit));
+      containers.forceReclaim(String(rec.sessionId));
+      void containers.reclaimed(String(rec.sessionId)).then(() => onReclaimed(task.id, rec, limit));
     }
   }
 
   const stopSession: StopSession = (taskId, recordStop) => {
     if (slot.currentTaskId !== taskId) return "nothing running";
     if (slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return "already ending";
-    const rec = syncPickup(taskId);
+    const rec = syncPickup();
     recordStop();
     slot.enterTeardown();
     rec.humanStop = true;
     beginStop(taskId, rec);
     // 分類待ちに留めた空の観測も、人間の停止は分類を待たずに受け取る(ADR 0309)。
     if (rec.forceSentAt !== undefined && rec.classification) {
-      void containers.reclaimed(taskId).then(() => onReclaimed(taskId, rec, 0));
+      void containers.reclaimed(String(rec.sessionId)).then(() => onReclaimed(taskId, rec, 0));
     }
     return undefined;
   };
 
   /** exit の事実と束を分けて受け、束が揃った時点で slot・後始末・status を読み直して1度だけ決める(ADR 0309 / ADR 0338 決定2)。 */
   function onWorkerExited(taskId: string, exit: WorkerExit, facts: WorkerExitClassification): void {
-    const { workerSpawnedEventId, turnRan, classification, writes } = facts;
+    const { sessionId, workerSpawnedEventId, turnRan, classification, writes } = facts;
     let stop = facts.stop;
-    const ownsPickup = () => spawnedAfterLatestPickup(db, taskId, workerSpawnedEventId);
     // ADR 0342 決定6: 決定しない exit(通常完了の後始末中・枠の主が替わった)も exit の記録は書く。
     // 分類を待つ手も束の手 —— reject は session の記録を閉じられないまま残す(ADR 0344 決定1 の Status 追記)
-    if (!ownsPickup() || slot.currentTaskId !== taskId || slot.inTeardown) {
+    if (!unsettledSession(teardown, sessionId)) {
       void runTeardownSteps(teardown, taskId, ...sessionCloseSteps(workerSpawnedEventId, [() => classification, ...writes]));
       return;
     }
-    const rec = syncPickup(taskId);
+    const rec = syncPickup();
     rec.exit = exit;
     let cap = false;
     let failedOpen = false;
@@ -657,14 +648,14 @@ export function startWatchdog(deps: {
     const decide = () =>
       failedOpen ||
       recordThen(teardown, taskId, () => {
-        if (rec.humanStop || !ownsPickup()) return false;
+        if (rec.humanStop) return false;
         if (sessionInTeardown(db)?.taskId === taskId) return false;
-        const task = unsettledTask(teardown, taskId);
+        const task = unsettledSession(teardown, rec.sessionId);
         if (!task) return false;
         return recordDecision(task, cap);
       }, () => {
         slot.enterTeardown();
-        void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
+        void containers.reclaimed(String(rec.sessionId)).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
       });
     /** 決定の記録の tx。返り値は後始末へ入ったか。 */
     const recordDecision = (task: Task, cap: boolean): boolean => {
@@ -728,7 +719,7 @@ export function startWatchdog(deps: {
     if (sessionHaltOpen(db, taskId)) return;
     const task = getTask(db, taskId);
     if (!task) return;
-    const rec = syncPickup(taskId);
+    const rec = syncPickup();
     if (rec.humanStop) {
       advanceStop(task, rec, 0);
       return;
@@ -744,7 +735,7 @@ export function startWatchdog(deps: {
 
     const now = clock.now().getTime();
     if (rec.stopSentAt === undefined) {
-      if (now - rec.pickup >= limit) beginStop(taskId, rec);
+      if (now - new Date(getEvent(db, rec.sessionId)!.created_at).getTime() >= limit) beginStop(taskId, rec);
       return;
     }
     advanceStop(task, rec, limit);
@@ -764,8 +755,8 @@ export function startWatchdog(deps: {
     heldForContainment,
     onWorkerExited,
     pendingReclaim: () =>
-      pending !== null && containers.pendingReclaim(pending)
-        ? `the container for task ${pending}`
+      pending !== null && containers.pendingReclaim(String(pending.sessionId))
+        ? `the container for task ${pending.taskId}`
         : undefined,
     resumeTeardown,
     acceptReclaimed: () => {
@@ -775,9 +766,9 @@ export function startWatchdog(deps: {
       }
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の
       // 直前でもう一度読む(1資源1枚の quarantine と同じ posture)
-      if (containers.pendingReclaim(pending)) return;
+      if (containers.pendingReclaim(String(pending.sessionId))) return;
       deps.closeLeftOpenSessions?.();
-      const taskId = pending;
+      const { taskId } = pending;
       pending = null;
       // slot が解放される瞬間に tree rule が走る、の対を閉じる(GLOSSARY.md
       // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない。

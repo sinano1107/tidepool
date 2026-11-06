@@ -36,6 +36,7 @@ export function probeRecordContainer(dir: string): void {
 
 /** 走ってから書けなくなった transcript の観測(ADR 0149 決定4)。 */
 export interface TranscriptFailure {
+  sessionId: number;
   taskId: string;
   workerSpawnedEventId: number;
   error_code: string | null;
@@ -92,6 +93,7 @@ export class TranscriptStore {
    *  (issue #379 / ADR 0083 追記2)。prompt は spawn の前にここで書き切って閉じるので、走ってから書けなくなる経路を持たない。 */
   open(
     taskId: string,
+    sessionId: number,
     workerSpawnedEventId: number,
     prompt: PromptRecord,
   ): Transcript {
@@ -114,7 +116,7 @@ export class TranscriptStore {
     const watch = (file: TranscriptFailure["file"], path: string, out: WriteStream) =>
       out.on("error", (err: NodeJS.ErrnoException) => {
         if (reported) return;
-        this.onFailed({ taskId, workerSpawnedEventId, error_code: err.code ?? null, message: err.message, file, path: resolve(path) });
+        this.onFailed({ taskId, sessionId, workerSpawnedEventId, error_code: err.code ?? null, message: err.message, file, path: resolve(path) });
         // ADR 0342 決定5・6: 印は一撃が返った後。盤面のバグで rollback した書き込みは落ちた後始末の question が持つ(受理が書き直す)ので、
         // 次の fd の error は2行目を書かない。印が立たないのは盤面 DB の拒否で一撃が投げたときだけ
         reported = true;

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { pickupTask, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, managementMcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, managementMcpClient, registerWork, sessionId, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -29,7 +29,7 @@ it("an HTTP-approved cancel closes the worker door immediately and picks up the 
   expect(JSON.stringify(late)).toMatch(/session.*over/i);
   await t.clock.advance(MIN);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-  t.containers.fireEmpty(task.id);
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
   await new Promise((resolve) => setImmediate(resolve));
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, next.id]);
 });
