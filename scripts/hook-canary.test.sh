@@ -101,6 +101,24 @@ check "a hook firing in the sparse live workspace is the breach" FAIL project_ho
 check "a silent control proves nothing" VACUOUS project_hook_verdict yes yes no no
 check "a session that never ran proves nothing" VACUOUS project_hook_verdict no yes no yes
 
+echo "agent-frontmatter/live — named denial and neither marker"
+check "the named Agent refusal with neither marker is the pass" PASS agent_frontmatter_live_verdict no no yes
+check "an agent hook marker outranks a claimed denial" FAIL agent_frontmatter_live_verdict yes no yes
+check "a running checkout agent defeats the live deny" FAIL agent_frontmatter_live_verdict no yes yes
+check "silence without the named Agent refusal proves nothing" VACUOUS agent_frontmatter_live_verdict no no no
+
+echo "agent-frontmatter/control-a — trusted config and no Agent deny"
+check "both markers prove the agent hook and delegation work" PASS agent_frontmatter_trusted_verdict yes yes
+check "a dry trusted hook proves nothing about the live row" VACUOUS agent_frontmatter_trusted_verdict no yes
+check "a hook marker without sub-ran does not prove delegation finished" VACUOUS agent_frontmatter_trusted_verdict yes no
+check "no delegation and no hook is unmeasured" VACUOUS agent_frontmatter_trusted_verdict no no
+
+echo "agent-frontmatter/control-b — fresh config and no Agent deny"
+check "sub-ran without a hook marker proves the fresh config guard" PASS agent_frontmatter_fresh_verdict no yes
+check "a hook under fresh config is the breach" FAIL agent_frontmatter_fresh_verdict yes yes
+check "a hook marker outranks a missing sub-ran" FAIL agent_frontmatter_fresh_verdict yes no
+check "fresh config silence without delegation proves nothing" VACUOUS agent_frontmatter_fresh_verdict no no
+
 echo
 if [[ "$failures" -eq 0 ]]; then
   echo "hook-canary verdicts: all cases pass"
