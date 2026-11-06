@@ -228,7 +228,8 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   // 変化として quarantine に落とす
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await complete(reviewed.id);
-  git(workspace.path, "push", "origin", `task/${reviewed.id}:main`);
+  // URL へ押す —— `origin` の名で押すと checkout の写しまで休止中に動き、次の pickup の比較が止める(ADR 0351 決定2)
+  git(workspace.path, "push", workspace.repo!, `task/${reviewed.id}:main`);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === reviewed.id,
@@ -483,16 +484,27 @@ it("merge back が conflict すると完了は維持したまま workspace を q
   const parent = await registerWork(t, "conflicting integration");
   await t.clock.advance(HOUR);
   writeFileSync(join(workspace.path, "shared.txt"), "base\n");
-  await decompose(parent.id, "conflicting child");
+  const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
+  await parentClient.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "the sibling may integrate before the conflicting child resumes",
+      children: [
+        { title: "conflicting child", purpose: "first", completion_criteria: "first done" },
+        { title: "advancing sibling", purpose: "second", completion_criteria: "second done" },
+      ],
+    },
+  });
+  await parentClient.close();
 
-  const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) => task.parent_id === parent.id,
+  const [child, sibling] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+    (task: any) => task.parent_id === parent.id && task.type === "work",
   );
   await t.clock.advance(HOUR); // 子は親の当時の先端から分岐する
 
   // 親ブランチが進むのは**セッションの外**である(ADR 0064: 走っているセッションの
   // 傍らで祖先が動くこと自体が違反)。子は escalate で slot を手放し、その間に
-  // 兄弟の統合が親を進め、回答で再開する —— 再開は既存ブランチの checkout だけなので
+  // 兄弟の統合が親を進め(実経路の順、ADR 0351 決定2)、回答で再開する —— 再開は既存ブランチの checkout だけなので
   // 分岐点は古いまま残り、merge back が衝突する。
   const escalated = await mcpClient(t.mcpBaseUrl, child.id);
   await escalated.callTool({
@@ -513,12 +525,9 @@ it("merge back が conflict すると完了は維持したまま workspace を q
     (task: any) => task.type === "question" && task.parent_id === child.id,
   );
 
-  const parentCheckout = await tempDir("tidepool-parent-worktree-");
-  git(workspace.path, "worktree", "add", parentCheckout, `task/${parent.id}`);
-  writeFileSync(join(parentCheckout, "shared.txt"), "parent version\n");
-  git(parentCheckout, "add", "shared.txt");
-  git(parentCheckout, "commit", "-m", "advance parent independently");
-  git(workspace.path, "worktree", "remove", parentCheckout);
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "shared.txt", "parent version\n");
+  await complete(sibling.id);
 
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["mine"] });
   commitWork(workspace.path, "shared.txt", "child version\n");
