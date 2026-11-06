@@ -33,6 +33,8 @@ Watch for a **family** as you cluster: issues one design mechanism would explain
 
 Print the clusters to the user — issue numbers and a one-line reason each, plus any family candidate — then go on without waiting.
 
+**Codex login.** The one wait: when any picked issue needs a real `codex` run — a Codex worker, the Codex harness, or Codex CLI behaviour — the base's ChatGPT login is likely dead. Clones share one refresh token, and the first clone that refreshed it in an earlier sweep left the base holding a spent one. Before dispatching, ask the user to log in again in the base and wait for them: `limactl start tidepool-sweep-base`, then they run `! limactl shell tidepool-sweep-base bash -lc 'codex login --device-auth'`, then `limactl stop tidepool-sweep-base`. `codex login status` reads only the file and reports a dead login as logged in, so it is no check.
+
 ## 4. Dispatch
 
 One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), all dispatched at once. The count is not what needs bounding: VM clones, the one resource the Mac can run out of, are bounded by the slots [take-vm-slot.sh](scripts/take-vm-slot.sh) hands out, and the CPU contention left over only slows runs down, since PROCEDURE.md has a timeout confirmed by rerunning the file alone. The main tier is enough: every outcome is read by the maintainer before anything moves. Each prompt carries:

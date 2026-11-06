@@ -46,7 +46,9 @@ its tools is [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't rep
 `/triage-sweep` gives each sub-agent that needs Linux its own clone of `tidepool-sweep-base`, a
 stopped copy of the `tidepool` VM. Lima cannot clone a running instance, hence the stopped base;
 clones are copy-on-write on APFS, so they take no disk until they write, start in about 20 s, and
-inherit the base's `claude` / `gh` logins.
+inherit the base's `claude` / `gh` / `codex` logins. The `codex` login is a ChatGPT login whose
+refresh token the clones share, so it dies after the first sweep that runs `codex`;
+`/triage-sweep` asks for `codex login --device-auth` in the base before a sweep that needs it.
 
 Create it — and recreate it the same way when the base's CLIs or logins have gone stale — while
 nothing is running in `tidepool`:
