@@ -1,4 +1,4 @@
-import { type Dirent, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, type Stats, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -900,11 +900,11 @@ export interface ClaudeWorkerOptions {
  *  than meaning "unrestricted". */
 export type ExecFn = (command: string, args: string[], env: NodeJS.ProcessEnv, input?: string) => Promise<string>;
 
-/** What one enumeration ping's init line reports: the full skill set (ADR 0025 point 4) and the subagents
+/** What one enumeration ping's init line reports: the full skill set (ADR 0025 決定4) and the subagents
  *  (ADR 0354 決定2) the CLI would give a session at its cwd. */
 export type InitEnumeration = { skills: string[]; agents: string[] };
 
-/** The skill-enumeration boundary (issue #56 / ADR 0025 point 4): resolve what
+/** The skill-enumeration boundary (issue #56 / ADR 0025 決定4): resolve what
  *  the CLI would give the session at `cwd`, or null if the probe
  *  failed. Injected so the deny-list computation runs without a real CLI in
  *  tests (same fake-injection posture as ContainerSpawn/PtyFn, ADR 0027). */
@@ -1279,11 +1279,20 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
   };
 }
 
-/** The bundled set (ADR 0335 決定2): the harness-bundled skills, enumerated by the same `/usage` ping the
- *  spawn-time complement-deny uses — at a *neutral* cwd (a fresh empty directory, so no `.claude/skills/`) and
- *  under the worker's posture (`worker-shaped`, so no user-tier skill — ADR 0341 決定4). Its one owner is read by both
- *  the spawn (the `@host` half of the resolution) and the WebUI's skills picker (issue #106), which returns it
- *  verbatim as its candidates (the scope words `*`/`@workspace`/`@host` are the picker's own additions).
+/** The bundled set (ADR 0335 決定2): the harness-bundled skills and subagents, enumerated by the same `/usage` ping
+ *  the spawn-time complement-deny uses — at a *neutral* cwd (a fresh empty directory, so no `.claude/skills/` or
+ *  `.claude/agents/`) and under the worker's posture (`worker-shaped`, so no user tier — ADR 0341 決定4). This is its
+ *  one owner; `project` is what each reader takes off the init line. */
+const enumerateBundled = <T>(call: BoardCall, project: (parsed: Record<string, unknown> | null) => T | null): Promise<T | null> =>
+  atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }, project));
+
+/** The spawn's read of the bundled set: the `@host` half of the skill resolution and the bundled subagents the
+ *  checkout's are told apart from (ADR 0354 決定2). */
+const enumerateBundledSet = (call: BoardCall): Promise<InitEnumeration | null> => enumerateBundled(call, readInitEnumeration);
+
+/** The WebUI's skills picker's read of the bundled set (issue #106): its skills, which the picker returns
+ *  verbatim as its candidates (the scope words `*`/`@workspace`/`@host` are the picker's own additions). Only
+ *  `skills` is read: the picker has no use for the subagents, so an init line without them still answers it.
  *
  *  Why the picker deliberately does NOT enumerate a workspace's own skills: the
  *  settings screen has no workspace context to enumerate against — an agent
@@ -1293,18 +1302,9 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
  *  here. A workspace-specific individual name is added by free entry instead
  *  (an allowlist is a reference, not a claim of stock — ADR 0023). Null on a
  *  failed probe, same fail-closed shape as the spawn-time enumeration; the route
- *  degrades that to an empty candidate set rather than a spawn failure.
- *
- *  The picker reads only `skills` off the init line; the spawn sends the same ping through `enumerateBundledSet` and
- *  also reads the bundled subagents (ADR 0354 決定2). */
+ *  degrades that to an empty candidate set rather than a spawn failure. */
 export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =>
-  atNeutralCwd("tidepool-skills-", (cwd) =>
-    enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }, (parsed) => readInitField(parsed, "skills")),
-  );
-
-/** The spawn's bundled-set ping: `enumerateHostSkills`'s ping, read for the bundled subagents too (ADR 0354 決定2). */
-const enumerateBundledSet = (call: BoardCall): Promise<InitEnumeration | null> =>
-  atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }, readInitEnumeration));
+  enumerateBundled(call, (parsed) => readInitField(parsed, "skills"));
 
 /** The checkout's own skills (issue #56 / ADR 0335 決定1): `carried` is the entry names under
  *  `<workspace>/.claude/skills/` whose realpath is a directory inside the checkout, including links in any parent
@@ -1327,43 +1327,73 @@ function scanWorkspaceSkills(workspacePath: string): CheckoutSkills {
   }
 }
 
-/** ADR 0354 決定2: the `name:` of every regular `.md` under `<workspace>/.claude/agents/`, subdirectories included —
- *  the CLI names a subagent by `name`, not by filename. Dirents are lstat'd, so links are never followed. A missing or
- *  unreadable dir (or the 0-byte file a shadow path leaves, ADR 0069) is no names; a file that cannot be read or carries
- *  no string `name` is skipped, so one file never stops the scan. */
-function scanCheckoutAgentNames(workspacePath: string): string[] {
+/** What the checkout's `.claude/agents/` defines (ADR 0354 決定2): the frontmatter names, and whether some definition
+ *  carried a frontmatter this side could not parse (its name, which could be any bundled one, is unknown). */
+type CheckoutSubagents = { names: string[]; unparsed: boolean };
+
+/** ADR 0354 決定2: the `name:` of every `.md` file under `<workspace>/.claude/agents/`, subdirectories included —
+ *  the CLI names a subagent by `name`, not by filename. Links are followed, as the CLI follows them (binary reading of
+ *  2.1.286); a directory is walked once by its realpath, so a link loop ends. Only regular files are read, so a FIFO
+ *  never blocks the spawn (#2935). A BOM, CRLF line ends and a closing fence at end of file are normalised before the
+ *  registry's frontmatter split. A missing or unreadable dir (or the 0-byte file a shadow path leaves, ADR 0069) is no
+ *  names; a file that cannot be read, has no fence or carries no string `name` is skipped. */
+function scanCheckoutSubagentNames(workspacePath: string): CheckoutSubagents {
   const names: string[] = [];
-  // not `readdirSync`'s `recursive`: it descends into a linked directory (measured on Node 22)
+  let unparsed = false;
+  const walked = new Set<string>();
   const walk = (dir: string) => {
-    let entries: Dirent[];
+    let entries: string[];
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      const real = realpathSync(dir);
+      if (walked.has(real)) return;
+      walked.add(real);
+      entries = readdirSync(dir);
     } catch {
       return;
     }
     for (const entry of entries) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) walk(path);
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const path = join(dir, entry);
+      let stat: Stats;
       try {
-        const split = splitFrontmatter(readFileSync(path, "utf8"));
-        const name = split && (parseYaml(split.frontmatter) as { name?: unknown } | null)?.name;
-        if (typeof name === "string" && name !== "") names.push(name);
+        stat = statSync(path);
       } catch {
-        // unreadable or not YAML: skipped like a file without `name`
+        continue; // a broken link
       }
+      if (stat.isDirectory()) walk(path);
+      if (!stat.isFile() || !entry.endsWith(".md")) continue;
+      let text: string;
+      try {
+        text = readFileSync(path, "utf8").replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+      } catch {
+        continue;
+      }
+      const split = splitFrontmatter(text.endsWith("\n---") ? `${text}\n` : text);
+      if (!split) continue;
+      let meta: unknown;
+      try {
+        meta = parseYaml(split.frontmatter);
+      } catch {
+        // the CLI loads frontmatter `yaml` rejects (e.g. `description: Use when: …`)
+        unparsed = true;
+        continue;
+      }
+      const name = (meta as { name?: unknown } | null)?.name;
+      if (typeof name === "string" && name !== "") names.push(name);
     }
   };
   walk(join(workspacePath, ".claude", "agents"));
-  return names.sort();
+  return { names: names.sort(), unparsed };
 }
 
 /** ADR 0354 決定2: the checkout's subagents the worker must not reach — the names only the workspace cwd's ping reports,
- *  plus every frontmatter name the checkout defines, since a same-named definition silently replaces the built-in and
- *  the subtraction cannot see it (that built-in is closed too). */
-function checkoutAgentDeny(workspace: string[], bundled: string[], defined: string[]): string[] {
+ *  plus every frontmatter name the checkout defines, since a same-named definition silently replaces the harness-bundled
+ *  subagent and the subtraction cannot see it (that bundled subagent is closed too). A definition whose name could not
+ *  be read could shadow any bundled subagent, so then every bundled one is closed. */
+function checkoutSubagentDeny(workspace: string[], bundled: string[], checkout: CheckoutSubagents): string[] {
   const neutral = new Set(bundled);
-  return [...new Set([...workspace.filter((name) => !neutral.has(name)), ...defined])];
+  return [
+    ...new Set([...workspace.filter((name) => !neutral.has(name)), ...checkout.names, ...(checkout.unparsed ? bundled : [])]),
+  ];
 }
 
 /** ADR 0335 決定1: every entry's resolved directory must be inside the checkout, even through parent links.
@@ -1753,7 +1783,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // checkout's subagent definitions are closed by name off the same two pings, so every allowlist (`[]` included)
     // runs both ~2s zero-token /usage pings first — the enumeration at the workspace cwd and the bundled set at a
     // neutral cwd. Either failing fails the spawn closed — never run without the deny lists (no fail-open, ADR 0025
-    // point 6). `[]` keeps its one-flag skill shape: `--disable-slash-commands` closes every skill.
+    // 決定6). `[]` keeps its one-flag skill shape: `--disable-slash-commands` closes every skill.
     const skills = agent.definition.skills;
     const checkout = scanWorkspaceSkills(place.path);
     // ping の間に session が終わったら(停止・解放・再 pickup)、継続は何も書かずに終わる —— 記録は停止の側が持つ(#1973)
@@ -1765,7 +1795,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     ]).then(([enumerated, bundled]) => {
       if (!live()) return;
       if (enumerated === null || bundled === null) {
-        // spawn failure with no fail-open (ADR 0025 point 6): the deny lists
+        // spawn failure with no fail-open (ADR 0025 決定6): the deny lists
         // could not be resolved, so no process starts and the allowlist is
         // never bypassed. This is the third observation point of ADR 0118's
         // family (a pickup whose worker never ran): record spawn_failed now
@@ -1784,19 +1814,30 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         });
         return;
       }
-      // `[]` resolves no skill deny (the flag closes them all), so it permits nothing and records no bundled set
-      const { deny, permitted, host } =
-        skills.length === 0
-          ? { deny: [], permitted: [], host: [] }
-          : resolveSkillAllowlist(skills, enumerated.skills, checkout, bundled.skills);
-      const agentDeny = checkoutAgentDeny(enumerated.agents, bundled.agents, scanCheckoutAgentNames(place.path));
+      const { deny, permitted, host } = resolveSkillAllowlist(skills, enumerated.skills, checkout, bundled.skills);
+      const disableSlashCommands = skills.length === 0;
+      // `[]` carries no per-skill deny: the flag closes every skill
+      const skillDeny = disableSlashCommands ? [] : deny;
+      const subagentDeny = checkoutSubagentDeny(enumerated.agents, bundled.agents, scanCheckoutSubagentNames(place.path));
+      // the CLI splits `--disallowedTools` on commas and whitespace outside parens and a `)` ends the paren, so such a
+      // name would deny something else and leave itself open — fail closed instead (ADR 0025 決定6)
+      const unspellable = [...skillDeny, ...subagentDeny].find((name) => /[(),\\\s]/.test(name));
+      if (unspellable !== undefined) {
+        this.recordSpawnFailed(task, sessionId, agent, {
+          error_code: null,
+          message:
+            `the deny name ${JSON.stringify(unspellable)} cannot be spelled as a --disallowedTools token, so the skill ` +
+            "and agent deny lists could not be resolved and the worker was not spawned (no fail-open)",
+        });
+        return;
+      }
       // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw をこの continuation が
       // `spawn_failed` に落とす。transcript が開けない器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       try {
         this.launch(task, sessionId, workspace, place, agent, registry, {
-          deny,
-          agentDeny,
-          disableSlashCommands: skills.length === 0,
+          skillDeny,
+          subagentDeny,
+          disableSlashCommands,
           skills: { workspace: checkout.carried, host, permitted },
         }, routing, query);
       } catch (err) {
@@ -1852,8 +1893,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     agent: ResolvedAgent,
     registry: Registry,
     enforcement: {
-      deny: string[];
-      agentDeny: string[];
+      skillDeny: string[];
+      subagentDeny: string[];
       disableSlashCommands: boolean;
       skills: { workspace: string[]; host: string[]; permitted: string[] };
     },
@@ -1902,9 +1943,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // トークンを space 区切りで畳むと1トークンが誤分割される。
       const disallowedTools = [
         "Workflow",
-        ...enforcement.deny.map((s) => `Skill(${s})`),
+        ...enforcement.skillDeny.map((s) => `Skill(${s})`),
         // ADR 0354 決定2: the checkout's subagents, spelled `Agent(名前)` as measured (not `Task(名前)`)
-        ...enforcement.agentDeny.map((name) => `Agent(${name})`),
+        ...enforcement.subagentDeny.map((name) => `Agent(${name})`),
         ...reviewToolDenials(task.type),
       ].join(",");
       // ADR 0035 / 0038: what has to be lifted back out of the mode's floor. Same

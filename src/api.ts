@@ -660,8 +660,8 @@ export interface ApiRouterDeps {
    *  tests fake them singly) → not configured, the route reports 503. */
   profileAdmin?: Partial<ProfileAdmin>;
   /** The skills picker's candidate source (issue #106 / ADR 0025 点4), bound by
-   *  main.ts to the adapter's neutral-cwd `/usage` ping (claude-worker.ts's
-   *  `enumerateHostSkills`, the same bundled set the spawn reads — the spawn then
+   *  server-options.ts to claude-worker.ts's `enumerateHostSkills` — the skills of the
+   *  neutral-cwd `/usage` ping the spawn also reads for its bundled set (the spawn then
    *  resolves `@host` to it minus the checkout's `.claude/skills` entry names, ADR
    *  0335 決定1・2). Returns the harness-bundled skills, or null on a failed probe.
    *  Absent → no CLI to enumerate against; GET /api/skills degrades to an empty

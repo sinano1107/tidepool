@@ -324,11 +324,11 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
     });
   });
 
-  it("settings file のエントリは workspace 相対 — deny は literal path で判定されるので、workspace が変わっても同じ綴りになる", () => {
+  it("エントリは workspace 相対 — deny は literal path で判定されるので、workspace が変わっても `.claude/agents/**` の他は同じ配列になる", () => {
     // ADR 0354 決定2 の `.claude/agents/**` だけは絶対 path の綴り(下の describe)なので workspace ごとに違う
     const at = (workspacePath: string) =>
       buildSandboxSettings({ taskType: "review", workspacePath, ...HOST })
-        .permissions.deny.filter((entry) => entry.includes("settings"));
+        .permissions.deny.filter((entry) => entry !== `Edit(/${workspacePath}/.claude/agents/**)`);
     expect(at("/home/pi/work/tidepool")).toEqual(at("/some/other/checkout"));
   });
 });

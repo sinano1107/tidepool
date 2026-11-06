@@ -1327,15 +1327,24 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args).not.toContain("--disable-slash-commands");
   });
 
-  it("skills が空リストの agent も subagent を閉じるために両方の ping を撃ち、skill は --disable-slash-commands 一発で全禁止し、--tools に Skill を載せない(ADR 0354 決定2 / ADR 0025 point 5 / ADR 0185)", async () => {
-    const { start, calls, enumeration, bundled } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") });
-    start();
+  it("skills が空リストの agent も subagent を閉じるために両方の ping を撃ち、skill は --disable-slash-commands 一発で全禁止し、--tools に Skill を載せず、worker_spawned には同梱の集合を記録する(ADR 0354 決定2 / ADR 0025 決定5 / ADR 0185 / ADR 0335 決定3)", async () => {
+    const enumeration = recordingEnumerator(["dataviz", "debug"]);
+    const bundled = recordingBundledSet(["dataviz", "debug"]);
+    const { start, calls, db } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  []\n") },
+      { enumerateSkills: enumeration.enumerateSkills, enumerateHostSkills: bundled.enumerateHostSkills },
+    );
+    start("task-empty-allowlist");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(enumeration.calls).toEqual([FIXTURE_WORKSPACE]);
     expect(bundled.pings).toBe(1);
     expect(calls[0]!.args).toContain("--disable-slash-commands");
+    // 全禁止はフラグが持つので、Skill(名前) の deny は載らない
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow"]);
     // disable フラグが CLI の面から外す `Skill` を、宣言からも外す
     expect(spawnedTools(calls[0]!.args)).not.toContain("Skill");
+    const spawned = listEvents(db, "task-empty-allowlist").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: [], host: ["dataviz", "debug"], permitted: [] } });
   });
 
   it("有限の許可リストは列挙 ping の全集合から許可の補集合を Skill(名前) で deny する(ADR 0025 point 3)", async () => {
@@ -1375,32 +1384,84 @@ describe("ClaudeCodeWorker", () => {
     expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow", "Agent(prober)"]);
   });
 
-  it("checkout の .claude/agents の下の regular な .md の frontmatter name を Agent(名前) で deny する —— built-in と同名も、下位 dir も。link と name の無い file は読まない(ADR 0354 決定2)", async () => {
+  // ADR 0354 決定2: checkout の `.claude/agents` を置いた workspace で spawn し、その `--disallowedTools` を返す。両方の ping は
+  // 同梱の subagent だけを返す —— checkout の定義が同梱と同名なら、ping の引き算には何も現れない
+  const spawnWithCheckoutAgents = async (taskId: string, place: (agentsDir: string, outside: string) => Promise<void>) => {
     const wsDir = await tempDir("tidepool-ws-");
     const outside = await tempDir("tidepool-outside-");
     const agentsDir = join(wsDir, ".claude", "agents");
-    await mkdir(join(agentsDir, "nested"), { recursive: true });
-    // agent 名は filename ではなく name
-    await writeFile(join(agentsDir, "reviewer.md"), "---\nname: sneaky-reviewer\npermissionMode: acceptEdits\n---\nbody\n");
-    await writeFile(join(agentsDir, "nested", "deep.md"), "---\nname: deep-one\n---\nbody\n");
-    // 同名の built-in を黙って置き換えるので、ping の引き算では見えない
-    await writeFile(join(agentsDir, "explore.md"), "---\nname: Explore\npermissionMode: auto\n---\nbody\n");
-    await writeFile(join(agentsDir, "noname.md"), "---\ndescription: no name here\n---\nbody\n");
-    await writeFile(join(outside, "linked.md"), "---\nname: linked-one\n---\nbody\n");
-    await symlink(join(outside, "linked.md"), join(agentsDir, "linked.md"));
-    await mkdir(join(outside, "dir"));
-    await writeFile(join(outside, "dir", "inner.md"), "---\nname: via-dir-link\n---\nbody\n");
-    await symlink(join(outside, "dir"), join(agentsDir, "dir-link"));
+    await mkdir(agentsDir, { recursive: true });
+    await place(agentsDir, outside);
     const { start, calls } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
       {
-        enumerateSkills: recordingEnumerator([], ["claude", "Explore"]).enumerateSkills,
-        enumerateHostSkills: recordingBundledSet([], ["claude", "Explore"]).enumerateHostSkills,
+        enumerateSkills: recordingEnumerator([], ["claude", "Explore", "Plan"]).enumerateSkills,
+        enumerateHostSkills: recordingBundledSet([], ["claude", "Explore", "Plan"]).enumerateHostSkills,
       },
     );
-    start("task-agent-frontmatter");
+    start(taskId);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow", "Agent(Explore)", "Agent(deep-one)", "Agent(sneaky-reviewer)"]);
+    return disallowedTools(calls[0]!.args);
+  };
+
+  it("checkout の .claude/agents の下の .md の frontmatter name を Agent(名前) で deny する —— 同梱の subagent と同名も、下位 dir も。name の無い file は飛ばす(ADR 0354 決定2)", async () => {
+    const deny = await spawnWithCheckoutAgents("task-agent-frontmatter", async (agentsDir) => {
+      await mkdir(join(agentsDir, "nested"));
+      // agent 名は filename ではなく name
+      await writeFile(join(agentsDir, "reviewer.md"), "---\nname: sneaky-reviewer\npermissionMode: acceptEdits\n---\nbody\n");
+      await writeFile(join(agentsDir, "nested", "deep.md"), "---\nname: deep-one\n---\nbody\n");
+      // 同名の同梱 subagent を黙って置き換える
+      await writeFile(join(agentsDir, "explore.md"), "---\nname: Explore\npermissionMode: auto\n---\nbody\n");
+      await writeFile(join(agentsDir, "noname.md"), "---\ndescription: no name here\n---\nbody\n");
+    });
+    expect(deny).toEqual(["Workflow", "Agent(Explore)", "Agent(deep-one)", "Agent(sneaky-reviewer)"]);
+  });
+
+  it("BOM・CRLF・末尾で閉じる fence の .md も name を読んで deny する(ADR 0354 決定2)", async () => {
+    const deny = await spawnWithCheckoutAgents("task-agent-fences", async (agentsDir) => {
+      await writeFile(join(agentsDir, "bom.md"), "\uFEFF---\nname: Explore\n---\nbody\n");
+      await writeFile(join(agentsDir, "crlf.md"), "---\r\nname: Plan\r\n---\r\nbody\r\n");
+      await writeFile(join(agentsDir, "eof.md"), "---\nname: claude\n---");
+    });
+    expect(deny).toEqual(["Workflow", "Agent(Explore)", "Agent(Plan)", "Agent(claude)"]);
+  });
+
+  it("link の先の .md と link の dir の下の .md も CLI と同じく辿って deny し、link の輪と FIFO では止まらない(ADR 0354 決定2 / #2935)", async () => {
+    const deny = await spawnWithCheckoutAgents("task-agent-links", async (agentsDir, outside) => {
+      await writeFile(join(outside, "linked.md"), "---\nname: Explore\n---\nbody\n");
+      await symlink(join(outside, "linked.md"), join(agentsDir, "linked.md"));
+      await mkdir(join(outside, "dir"));
+      await writeFile(join(outside, "dir", "inner.md"), "---\nname: Plan\n---\nbody\n");
+      await symlink(join(outside, "dir"), join(agentsDir, "dir-link"));
+      await symlink(agentsDir, join(outside, "dir", "loop"));
+      execFileSync("mkfifo", [join(agentsDir, "pipe.md")]);
+    });
+    expect(deny).toEqual(["Workflow", "Agent(Explore)", "Agent(Plan)"]);
+  });
+
+  it("frontmatter の YAML が読めない .md があれば、その name が同梱のどれを置き換えるか分からないので同梱の subagent を全部 deny する(ADR 0354 決定2)", async () => {
+    const deny = await spawnWithCheckoutAgents("task-agent-unparsed", async (agentsDir) => {
+      // CLI は読むが `yaml` は拒む形
+      await writeFile(join(agentsDir, "loose.md"), "---\nname: Explore\ndescription: Use when: you need it\n---\nbody\n");
+    });
+    expect(deny).toEqual(["Workflow", "Agent(claude)", "Agent(Explore)", "Agent(Plan)"]);
+  });
+
+  it("deny の名前が --disallowedTools の区切り(括弧・バックスラッシュ・comma・空白)を含めば spawn_failed で、worker を起こさない(ADR 0354 決定2 / ADR 0025 決定6)", async () => {
+    const spawnFailures: Array<{ error_code: string | null; message: string }> = [];
+    const { start, calls } = await makeWorker({}, {
+      enumerateSkills: recordingEnumerator([], ["claude", "evil),Bash(x"]).enumerateSkills,
+      enumerateHostSkills: recordingBundledSet([], ["claude"]).enumerateHostSkills,
+      onSpawnFailed: (_taskId, _sessionId, failure, record) => {
+        record();
+        spawnFailures.push(failure);
+      },
+    });
+    start("task-unspellable-deny");
+    await vi.waitFor(() =>
+      expect(spawnFailures).toEqual([{ error_code: null, message: expect.stringContaining('the deny name "evil),Bash(x" cannot be spelled') }]),
+    );
+    expect(calls).toEqual([]);
   });
 
   it("@workspace は checkout が運ぶ skill だけを許可し、列挙に載った user 層・plugin の名前を deny する(ADR 0025 / ADR 0335 決定1)", async () => {
@@ -1573,17 +1634,21 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned.payload).toMatchObject({ skills: { workspace: ["dataviz", "inner", "tdd"], host: ["debug"], permitted } });
   });
 
-  it.each<[string, Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]>, RegExp]>([
-    ["同梱 ping の null", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so /],
+  // `[]` の agent も両方の ping を撃つ(ADR 0354 決定2)ので、同じ失敗の形になる
+  const emptyAllowlist = { "agents/deckhand.md": skilledMd("  []\n") };
+  it.each<[string, Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]>, RegExp, Record<string, string>]>([
+    ["同梱 ping の null", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so /, {}],
     ["同梱 ping の reject", {
       enumerateHostSkills: async () => {
         throw new Error("bundled ping blew up");
       },
-    }, /^bundled skill enumeration failed, so /],
-    ["両方の ping の null", { enumerateSkills: async () => null, enumerateHostSkills: async () => null }, /^skill enumeration and bundled skill enumeration failed, so /],
-  ])("%s は spawn_failed を書いて onSpawnFailed を呼び、どの ping が落ちたかを名指し、worker を起こさない(ADR 0335 決定2)", async (_shape, pings, message) => {
+    }, /^bundled skill enumeration failed, so /, {}],
+    ["両方の ping の null", { enumerateSkills: async () => null, enumerateHostSkills: async () => null }, /^skill enumeration and bundled skill enumeration failed, so /, {}],
+    ["skills が空リストの agent の workspace cwd の ping の null", { enumerateSkills: async () => null }, /^skill enumeration failed, so the skill and agent deny lists /, emptyAllowlist],
+    ["skills が空リストの agent の同梱 ping の null", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so the skill and agent deny lists /, emptyAllowlist],
+  ])("%s は spawn_failed を書いて onSpawnFailed を呼び、どの ping が落ちたかを名指し、worker を起こさない(ADR 0335 決定2 / ADR 0354 決定2)", async (_shape, pings, message, files) => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
-    const { start, calls, db } = await makeWorker({}, {
+    const { start, calls, db } = await makeWorker(files, {
       ...pings,
       onSpawnFailed: (taskId, _sessionId, failure, record) => {
         record();
@@ -1594,24 +1659,6 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
     expect(spawnFailures).toEqual([["task-bundled-fail", { error_code: null, message: expect.stringMatching(message) }]]);
     expect(listEvents(db, "task-bundled-fail").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
-    expect(calls).toEqual([]);
-  });
-
-  it.each<[string, Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]>, RegExp]>([
-    ["workspace cwd の ping", { enumerateSkills: async () => null }, /^skill enumeration failed, so the skill and agent deny lists /],
-    ["同梱 ping", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so the skill and agent deny lists /],
-  ])("skills が空リストの agent でも %s の null は spawn_failed で、worker を起こさない(ADR 0354 決定2 / ADR 0025 point 6)", async (_ping, pings, message) => {
-    const spawnFailures: Array<{ error_code: string | null; message: string }> = [];
-    const { start, calls, db } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") }, {
-      ...pings,
-      onSpawnFailed: (_taskId, _sessionId, failure, record) => {
-        record();
-        spawnFailures.push(failure);
-      },
-    });
-    start("task-empty-allowlist-ping-fail");
-    await vi.waitFor(() => expect(spawnFailures).toEqual([{ error_code: null, message: expect.stringMatching(message) }]));
-    expect(listEvents(db, "task-empty-allowlist-ping-fail").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
     expect(calls).toEqual([]);
   });
 
@@ -1642,20 +1689,20 @@ describe("ClaudeCodeWorker", () => {
   // ではなく「容器が空になるまで launch の spawn が1本も起きない」で現れる。
   // issue #767 の AC はこれをサーバー境界と書いているが、adapter の export で
   // 全部見えるので ADR 0107 の最下位 seam であるここに置く。
-  const skillEnumOnFakeContainers = async () => {
+  const skillEnumOnFakeContainers = async (extra: Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]> = {}) => {
     const recorder = recordingSpawn();
     onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
     const runtime = new FakeContainerRuntime(recorder.spawn);
     const worker = await makeWorker(
       { "agents/deckhand.md": skilledMd("  - code-review\n") },
-      // 列挙だけ実物に戻す(`undefined` で constructor の既定へ落ちる)。同梱 ping は偽物のままなので、口を通る spawn は列挙の1本
-      { containers: new ProcessContainers(runtime), enumerateSkills: undefined },
+      // 列挙だけ実物に戻す(`undefined` で constructor の既定へ落ちる)。同梱 ping は偽物のまま(subagent は空)なので、口を通る spawn は列挙の1本
+      { containers: new ProcessContainers(runtime), enumerateSkills: undefined, ...extra },
     );
     return { ...worker, recorder, runtime };
   };
   // 実物の init 行は `agents` も持つ(ADR 0354 決定2 の列挙が読む)
-  const skillsInit = (skills: string[]) =>
-    `${JSON.stringify({ type: "system", subtype: "init", skills, agents: ["claude", "Explore"] })}\n`;
+  const skillsInit = (skills: string[], agents: string[] | null = ["claude", "Explore"]) =>
+    `${JSON.stringify({ type: "system", subtype: "init", skills, ...(agents && { agents }) })}\n`;
   const settle = () => new Promise((resolve) => setImmediate(resolve));
 
   it("skill 列挙の容器が空になるまで worker は launch されない(ADR 0136 決定5)", async () => {
@@ -1696,6 +1743,30 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(recorder.calls).toHaveLength(2));
     // 列挙の答えはそのまま deny になる(口を通しても probe の意味は変わらない)
     expect(disallowedTools(recorder.calls[1]!.args)).toContain("Skill(tdd)");
+    // init 行の `agents` のうち同梱 ping に無い名前も(ADR 0354 決定2)
+    expect(disallowedTools(recorder.calls[1]!.args)).toEqual(expect.arrayContaining(["Agent(claude)", "Agent(Explore)"]));
+  });
+
+  it("init 行に `agents` が無ければ列挙は読めなかったとして spawn_failed に落ち、launch しない(ADR 0354 決定2 / ADR 0025 決定6)", async () => {
+    const spawnFailures: Array<{ error_code: string | null; message: string }> = [];
+    const { start, recorder, runtime } = await skillEnumOnFakeContainers({
+      onSpawnFailed: (_taskId, _sessionId, failure, record) => {
+        record();
+        spawnFailures.push(failure);
+      },
+    });
+    start("task-init-without-agents", null, "deckhand", "work");
+    await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
+    recorder.processes[0]!.stdout.write(skillsInit(["code-review", "tdd"], null));
+    await settle();
+    recorder.emitExitAt(0, 0, null);
+    await settle();
+    runtime.fireEmpty(runtime.created[0]!);
+
+    await vi.waitFor(() =>
+      expect(spawnFailures).toEqual([{ error_code: null, message: expect.stringMatching(/^skill enumeration failed, so /) }]),
+    );
+    expect(recorder.calls).toHaveLength(1);
   });
 
   // issue #770: ADR 0118 の族の3つ目の観測点。時計は進めない —— 失敗の瞬間に記録する
