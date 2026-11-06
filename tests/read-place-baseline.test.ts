@@ -1,7 +1,15 @@
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { poseProbe, registerTask } from "../src/tasks.js";
-import { commitRoomCopy, openInterviewRoom, PickupGateError, pickupGate, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { listEvents } from "../src/events.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import { Slot } from "../src/slot.js";
+import { cancelTaskDirectly, completeAudit, getTask, listExaminees, poseProbe, registerTask } from "../src/tasks.js";
+import { queueReturnHandler } from "../src/watchdog.js";
+import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, PickupGateError, pickupGate, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -111,4 +119,75 @@ it("root 配下の監査 review が読む面接室の変更も、面接室の名
   });
 
   expect(git(workspace.path, "branch", "--list", `task/${audit.id}`)).toBe("");
+});
+
+it("読む実環境の ref 違反は repo アクセスを問い合わせず実環境を quarantine し、root を todo へ戻す(ADR 0067 決定2 / ADR 0274)", async () => {
+  const workspace = await makeWorkspace("read-ref-drift-guidance");
+  db = openDb(":memory:");
+  const earlier = work("leaves a baseline");
+  await prepareWorkspaceAtPickup(db, workspace, earlier);
+  releaseWorkspace(db, workspace, earlier, NOW);
+  cancelTaskDirectly(db, earlier, null, NOW, {}, "webui");
+  git(workspace.path, "remote", "add", "origin", "https://github.com/acme/widget.git");
+  const declared = { ...workspace, repo: "https://github.com/acme/widget" };
+  commitWork(workspace.path, "by-hand.txt", "unknown commit while resting\n");
+  const moved = git(workspace.path, "rev-parse", "main");
+  const { root, room, base } = await reader(declared);
+  const github = new FakeGitHubClient();
+  const refusal = "the GitHub token broker refused a token for acme/widget (HTTP 404: repo_unreachable)";
+  github.scriptUnreachable("acme/widget", refusal);
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const slot = new Slot();
+  const containers = fakeContainers();
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db, clock, slot, worker, containers, github,
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => declared, pollNow: () => scheduler.pollNow() }, containers),
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    workspace: declared,
+    resolveWorkspace: () => declared,
+    workspacesDir: base,
+  });
+  try {
+    await clock.advance(HOURLY);
+    await vi.waitFor(() => expect(getTask(db, root.id)!.status === "todo" && quarantineQuestion(db, "workspace", workspace.name)).toBeTruthy());
+  } finally {
+    scheduler.stop();
+  }
+
+  expect(github.repoAccessCalls).toBe(0);
+  const purpose = quarantineQuestion(db, "workspace", workspace.name)!.purpose;
+  expect(purpose).toContain(`now: ${moved} refs/heads/main`);
+  expect(purpose).not.toContain(refusal);
+  expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
+  expect(getTask(db, root.id)).toMatchObject({ status: "todo", sort_key: root.sort_key });
+  expect(listEvents(db, root.id).filter((event) => event.kind === "pickup_stopped")).toHaveLength(1);
+  expect(worker.started).toEqual([]);
+  expect(git(room.path, "branch", "--list", `task/${root.id}`)).toBe("");
+});
+
+it("symlink の基点で初めて開く受験者の checkout は読む面接室の基準と比べず、自分のタスクブランチへ進む(ADR 0276 決定3 / ADR 0351 決定6)", async () => {
+  const workspace = await makeWorkspace("read-examinee-alias");
+  db = openDb(":memory:");
+  const { root, room, reads, base } = await reader(workspace);
+  await prepareWorkspaceAtPickup(db, room, root, { reads });
+  const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, room));
+  releaseWorkspace(db, room, root, NOW);
+  completeAudit(db, audit, { verdict: "accepted", findings: "the probe measures the target" }, "auditor", NOW, "worker");
+  const [examinee] = listExaminees(db, root.id);
+  const alias = join(await tempDir("read-examinee-alias-"), "rooms");
+  symlinkSync(base, alias);
+  const checks = await pickupGate(db, workspace, examinee!, alias);
+  openExamineeCheckout(db, examinee!, alias, NOW);
+  const checkout = taskRunPlace(db, examinee!, workspace);
+
+  await prepareWorkspaceAtPickup(db, checkout, examinee!, { reads: checks });
+
+  expect(git(checkout.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${examinee!.id}`);
+  releaseWorkspace(db, checkout, examinee!, NOW);
+  expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
 });

@@ -761,8 +761,7 @@ export async function prepareWorkspaceAtPickup(
   task: Task,
   board: PickupPrep & { reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }> } = {},
 ): Promise<void> {
-  if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
-  else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  prepareRefBaseline(db, workspace);
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
   if (rootId === undefined || task.type === "interview") {
@@ -774,11 +773,10 @@ export async function prepareWorkspaceAtPickup(
     }
   }
   for (const read of board.reads ?? []) {
-    if (read.place.path === workspace.path) continue;
+    if (safeRealpath(read.place.path) === safeRealpath(workspace.path)) continue;
     // ADR 0351 決定6: 読む場所も後半が書く前に比べ、違反は読む場所の名前で止める。
     try {
-      if (storedRefs(db, snapshotKey(read.place)) === "") snapshotRefs(db, read.place);
-      else compareAndFoldBaseline(db, read.place, [], "while the checkout rested since the last session");
+      prepareRefBaseline(db, read.place);
     } catch (err) {
       if (isBoardDbRefusal(err)) throw err;
       throw new PickupGateError(read.place, err);
@@ -843,6 +841,11 @@ function snapshotKey(workspace: WorkspaceConfig): string {
  *  (`writeBoardRefs`)、比較が2値行を畳む(`compareAndFoldBaseline`)。 */
 function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   writeSnapshot(db, snapshotKey(workspace), currentRefs(workspace));
+}
+
+function prepareRefBaseline(db: Db, workspace: WorkspaceConfig): void {
+  if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
+  else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
 }
 
 function writeSnapshot(db: Db, key: string, refs: string): void {

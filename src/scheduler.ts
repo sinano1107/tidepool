@@ -657,9 +657,12 @@ export function startScheduler(deps: {
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-          // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、走る場所の名前で止める(受験者は root id、ADR 0276 決定3)
-          if (err instanceof RefsMovedError) return stopped(quarantineWorkspace(db, place.name, err, clock.now()));
-          return stopped(await quarantineWithRepoAccessGuidance(err instanceof PickupGateError ? err.place : place, err, live));
+          const failedPlace = err instanceof PickupGateError ? err.place : place;
+          // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、落ちた場所の名前で止める(受験者は root id、ADR 0276 決定3)
+          if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {
+            return stopped(quarantineWorkspace(db, failedPlace.name, err, clock.now()));
+          }
+          return stopped(await quarantineWithRepoAccessGuidance(failedPlace, err, live));
         }
         if (!live()) return;
       }
