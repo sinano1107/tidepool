@@ -15,7 +15,7 @@ export async function startGitHttpRemote(
   const hookPid = join(remote, "hook.pid");
   if (mode === "stall-push") {
     const hook = join(remote, "hooks", "pre-receive");
-    writeFileSync(hook, `#!/bin/sh\necho $$ > "${hookPid}"\nexec sleep 10\n`);
+    writeFileSync(hook, `#!/bin/sh\necho $$ > "${hookPid}"\nexec sleep 60\n`);
     chmodSync(hook, 0o755);
   }
   const server = spawn(process.execPath, ["--input-type=module", "-e", `
@@ -30,8 +30,8 @@ export async function startGitHttpRemote(
       const write = res.write.bind(res);
       res.write = (chunk, ...rest) => { bytes += chunk.length; return write(chunk, ...rest); };
       if (log) res.on('finish', () => appendFileSync(log, JSON.stringify({ path: url.pathname, headers: req.headers, bytes }) + '\\n'));
-      // Also bounds a broken implementation during the red test.
-      const watchdog = mode === 'slow-clone' ? undefined : setTimeout(() => res.destroy(), 8000);
+      // Slow CI pack/hook startup must not let this bound beat the push's 1 s idle timeout (#2986).
+      const watchdog = mode === 'slow-clone' ? undefined : setTimeout(() => res.destroy(), mode === 'stall-push' ? 30_000 : 8000);
       res.on('close', () => clearTimeout(watchdog));
       if (mode === 'stall-info' && url.pathname.endsWith('/info/refs')) return;
       const child = spawn('git', ['http-backend'], {
