@@ -61,8 +61,9 @@ file を読む承認、binary の読み)もあり、同じ根の2例目である
 
 - Status 追記: ADR 0346(「唯一の口」)、ADR 0287 決定3(射程は model の軸)。
 - GLOSSARY: Subagent(checkout の定義は届かない)、床(worker の CLI process が読む host の per-checkout 状態)。
-- Status 追記: ADR 0341(posture に env の半分)、ADR 0025 決定5(`[]` でも ping は撃つ)。posture の env の半分は、呼び出しの寿命を
-  知る runner が付けて消す(注文を組む側は純粋のまま)。配線は `LiveCheckoutSignal` の union と WebUI の文言表。
+- Status 追記: ADR 0341(posture に env の半分)、ADR 0025 決定5(`[]` でも ping は撃つ)。posture の env の半分は、Board call の口が harness を知らない(ADR 0341 決定2)
+  ので runner には置けず、`atNeutralCwd` と同じ形の wrapper が dir を作って消し、注文を組む側は worker-shaped のとき dir を型で必須に取って
+  env に写すだけ(純粋のまま)。配線は `LiveCheckoutSignal` の union と WebUI の文言表。
 - 観測は spawn env の宣言テスト(ADR 0287 決定5 の形)と、ADR 0037 の hook canary に agent frontmatter の行を足す形 —— 対照の行は
   使い捨ての `CLAUDE_CONFIG_DIR` に trust を seed して hook が走ることを示す(R1 の形)。skip の文は
   debug log にしか出ないので stream では観測しない。fresh な config dir で CLI の既定 model が変わる(opus → sonnet、実測)が、盤面は
