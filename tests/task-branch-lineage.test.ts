@@ -228,8 +228,12 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   // 変化として quarantine に落とす
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await complete(reviewed.id);
-  // URL へ押す —— `origin` の名で押すと checkout の写しまで休止中に動き、次の pickup の比較が止める(ADR 0351 決定2)
-  git(workspace.path, "push", workspace.repo!, `task/${reviewed.id}:main`);
+  // 別の clone から押す —— 盤面の checkout から押すと写し(`refs/remotes/origin/main`)まで休止中に動き、次の pickup の
+  // 比較が止める(ADR 0351 決定2)
+  const merger = await tempDir("tidepool-lineage-outside-merge-");
+  git(merger, "clone", workspace.repo!, ".");
+  git(merger, "fetch", workspace.path, `task/${reviewed.id}:landed`);
+  git(merger, "push", "origin", "landed:main");
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === reviewed.id,
