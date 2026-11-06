@@ -84,8 +84,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
   expect(t.github.pushes).toEqual([{ path: workspace.path, branch: `task/${work.id}` }]);
 });
 
-// 予告と畳み(ADR 0243)はここでは言えない: push の後に拾う次のタスクは pickup で
-// 基準を全撮りする。予告と畳みの釘は landing.test.ts の、盤面の書き込みを
+// 予告と畳み(ADR 0243)はここでは述べない: 釘は landing.test.ts の、盤面の書き込みを
 // またいで走るセッションの解放にある。
 it("push のあとに拾った次のタスクは quarantine されずに着地し、2本目の PR が開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("push-then-release");
@@ -232,6 +231,13 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
 
   const occupant = await registerWork(t, "keep another checkout occupied");
   await t.clock.advance(HOUR);
+  // ADR 0351 決定2・4: 休止中の手の修理は次の pickup の比較がそのブランチを名指して止め、workspace quarantine の受理が基準に入れる
+  const quarantine = await servedQuarantineQuestion(t, "workspace", "squash-catch-up-conflict");
+  expect(quarantine?.purpose).toContain(`refs/heads/task/${repair.id}`);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired"] })).status).toBe(200);
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${occupant.id}`));
   commitWork(workspace.path, "occupant.txt", "unrelated running work\n");
   const occupiedHead = git(workspace.path, "rev-parse", "HEAD");
 

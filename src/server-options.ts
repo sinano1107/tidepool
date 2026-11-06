@@ -501,7 +501,8 @@ function registryReachabilityCheck(
 
 /** ADR 0243 決定4: registry clone の ref を書く口。registry clone が workspace として登録されていればその基準に束ねる ——
  *  起動時・人間面の書き込み・到達性の検査(pickup のゲートと quarantine の受理)がすべてこの1つの束ねを通る。登録が
- *  読めなければ予告せずに書く(説明の欠けは次の解放が誤検知の quarantine として大きな音で出す)。 */
+ *  読めなければ予告せずに書く(説明の欠けは次の比較 —— 休止中の書き込みなら次の pickup、session 中なら解放 —— が誤検知の
+ *  quarantine として大きな音で出す、ADR 0351 決定2)。 */
 function registryRefWriter(board: BoardComposition, db: Db): RefWriter {
   return (ref, newSha, write) => {
     let workspace: WorkspaceConfig | undefined;

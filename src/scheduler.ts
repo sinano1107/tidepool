@@ -92,13 +92,13 @@ import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
-  firePickupPredicates,
   openExamineeCheckout,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
+  RefsMovedError,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -653,14 +653,11 @@ export function startScheduler(deps: {
         // ADR 0329 決定10・11: 読む場所も remote の有無で絞らず、同じ一覧の後半で休止させる。
         const place = taskRunPlace(db, picked, resolved);
         try {
-          for (const { place: read, predicates } of checks) {
-            if (read.path === place.path) continue;
-            await firePickupPredicates(db, read, predicates, "after-open", { githubAuth, live });
-            if (!live()) return;
-          }
-          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+          // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、走る場所の名前で止める(受験者は root id、ADR 0276 決定3)
+          if (err instanceof RefsMovedError) return stopped(quarantineWorkspace(db, place.name, err, clock.now()));
           return stopped(await quarantineWithRepoAccessGuidance(err instanceof PickupGateError ? err.place : place, err, live));
         }
         if (!live()) return;

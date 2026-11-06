@@ -160,7 +160,7 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
     git(path, "init", "--quiet", "--initial-branch=main");
     initialRoomCommit(path, root.id);
   });
-  initialRoomCommit(path, root.id);
+  reopenUnbornRoom(db, { name: root.id, path });
 }
 
 function initialRoomCommit(path: string, rootId: string): void {
@@ -169,6 +169,20 @@ function initialRoomCommit(path: string, rootId: string): void {
   git(path, "symbolic-ref", "HEAD", "refs/heads/main");
   // 受験者の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+}
+
+/** 手の `git init` で作り直された記録済みの面接室の未生の HEAD を補う。ADR 0351 決定3: 開き直しは基準の行を持つので口を通す ——
+ *  書く前に値を知るため commit を先に作る(ADR 0243 決定1)。`main` は作るだけ —— HEAD が orphan の branch にあって `main` が既に
+ *  在れば書き込みが落ち、面接室の quarantine に返る(在る `main` を上書きしない)。 */
+function reopenUnbornRoom(db: Db, room: WorkspaceConfig): void {
+  if (readRef(room, "HEAD") !== "") return;
+  // 受験者の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
+  const commit = git(room.path, "commit-tree", git(room.path, "write-tree"), "-m", "Initial commit");
+  writeBoardRefs(db, room, [["HEAD", symrefValue("refs/heads/main")], ["refs/heads/main", commit]], () => {
+    git(room.path, "update-ref", "refs/heads/main", commit, "");
+    // ADR 0329 決定13: 未生の HEAD だけ main へ向け直す —— 人間の init.defaultBranch に依らない。
+    git(room.path, "symbolic-ref", "HEAD", "refs/heads/main");
+  });
 }
 
 /** 受験者は出題の head だけを fetch した自分の checkout で解く。記録済みなら何も作り直さず WIP を残す(ADR 0276 / ADR 0329)。 */
@@ -729,22 +743,29 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
  *  git に進まずに戻る —— 呼び手は戻った後に同じ門を読む。 */
 type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
 
-/** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。読む場所には当てない —— タスクブランチも基準も
- *  走る場所だけのもの(実環境に root のブランチを立てない、ADR 0273 決定2)。 */
+/** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。タスクブランチも基準も走る場所だけのもの
+ *  (実環境に root のブランチを立てない、ADR 0273 決定2)。
+ *  ADR 0351 決定2: 基準は切れない —— 行が無いか NULL なら最初の撮り、あれば盤面が書く前に除外無しで比べる。以後の書き込みは口が畳む。
+ *  比較は読む場所の後半(`reads`、ADR 0329 決定10・11)より前 —— 走る場所の違反は読む場所を書く前に止まる。 */
 export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: PickupPrep = {},
+  board: PickupPrep & { reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }> } = {},
 ): Promise<void> {
+  if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
+  else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  for (const read of board.reads ?? []) {
+    if (read.place.path === workspace.path) continue;
+    await firePickupPredicates(db, read.place, read.predicates, "after-open", board);
+    if (board.live?.() === false) return;
+  }
   const rootId = interviewRootIdOf(db, task);
   const predicates = rootId === undefined ? checkoutPickupPredicates(workspace)
     : task.type === "interview" ? roomPickupPredicates(db, rootId, "") : examineePickupPredicates(db, task, rootId, "");
   await firePickupPredicates(db, workspace, predicates, "after-open", board);
   if (board.live?.() === false) return;
   ensureTaskBranch(db, workspace, task);
-  // ADR 0064 決定5: worker に checkout を手渡す瞬間の全 ref —— fetch・休止位置・タスクブランチの後に撮る
-  snapshotRefs(db, workspace);
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も
@@ -792,9 +813,9 @@ function snapshotKey(workspace: WorkspaceConfig): string {
   return (workspace as RunPlace).snapshot_key ?? workspace.name;
 }
 
-/** ADR 0064 決定5: worker に checkout を手渡した瞬間の全 ref を基準として焼く。
- *  全撮りは pickup と quarantine の受理(`retakeRefBaselines`、ADR 0351 決定4)だけが撮り、それ以外は盤面自身が書いた ref の行だけが
- *  書く前の予告と書いた後の畳みで更新される(`writeBoardRefs`)。 */
+/** ADR 0351 決定2: 全撮りは盤面がまだ持ったことのない checkout の pickup(行が無いか NULL)と quarantine の受理
+ *  (`retakeRefBaselines`、決定4)だけが撮り、それ以外は盤面自身が書いた ref の行だけが書く前の予告と書いた後の畳みで更新される
+ *  (`writeBoardRefs`)、比較が2値行を畳む(`compareAndFoldBaseline`)。 */
 function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   writeSnapshot(db, snapshotKey(workspace), currentRefs(workspace));
 }
@@ -807,9 +828,12 @@ function writeSnapshot(db: Db, key: string, refs: string): void {
 }
 
 /** ADR 0351 決定4: quarantine の受理は検査がすべて成立した後に、名前に掛かる場所それぞれの基準を自分の checkout から撮り直す ——
- *  受験者の checkout は受験者 id の行(ADR 0276 決定3)。repo の無い場所は撮らない。全部読んでから書くので、読みが落ちれば行は変わらない。 */
+ *  受験者の checkout は受験者 id の行(ADR 0276 決定3)。撮り直すのは盤面が既に基準を持つ場所だけ —— まだ持ったことのない場所
+ *  (開いていない面接室・受験者の checkout の在り処に repo がある)は最初の開きの build が口を通らずに書くので、その後の最初の
+ *  pickup が最初の撮りをする(決定2)。repo の無い場所も撮らない。全部読んでから書くので、読みが落ちれば行は変わらない。 */
 export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
-  const rows = new Map(places.filter((place) => placeHasRepository(place.path)).map((place) => [snapshotKey(place), currentRefs(place)]));
+  const held = places.filter((place) => placeHasRepository(place.path) && storedRefs(db, snapshotKey(place)) !== "");
+  const rows = new Map(held.map((place) => [snapshotKey(place), currentRefs(place)]));
   db.transaction(() => {
     for (const [key, refs] of rows) writeSnapshot(db, key, refs);
   })();
@@ -825,8 +849,8 @@ function storedRefs(db: Db, workspaceName: string): string {
   const row = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
     .get(workspaceName) as { ref_snapshot: string | null } | undefined;
-  // 未設定に分岐は書かない(ADR 0064 決定6): 空文字は現在の ref 集合と一致しないので
-  // 自然に違反へ落ちる —— pickup を経ない解放経路が将来足されても検査は黙って消えない
+  // 行無しと NULL は空文字: 解放と着地は分岐を書かずに違反へ落ち(ADR 0064 決定6 —— pickup を経ない解放経路が足されても
+  // 検査は黙って消えない)、pickup と受理だけがこれを「まだ持ったことがない」と読む(ADR 0351 決定2)
   return row?.ref_snapshot ?? "";
 }
 
@@ -841,11 +865,16 @@ export function refValues(snapshot: string): Map<string, string> {
   );
 }
 
-/** 基準の行の値が、今の ref の値を「動いていない」と読むか。基準を読む2つの側(解放時の比較 —— ADR 0064 決定2、
- *  着地の帯域外判定 —— ADR 0103 決定1)はどちらもこれで解く: 予告中の行は2値のどちらとも一致で通す(ADR 0243 決定2)。
+/** 基準の行の値が持つ値の集まり: 1値、予告中なら `<old>|<new>` の2値(ADR 0243 決定1)。 */
+function baselineValues(recorded: string | undefined): string[] {
+  return (recorded ?? "").split("|");
+}
+
+/** 基準の行の値が、今の ref の値を「動いていない」と読むか。基準を読む側(pickup と解放の比較 —— ADR 0351 決定2 /
+ *  ADR 0064 決定2、着地の帯域外判定 —— ADR 0103 決定1)はどれもこれで解く: 予告中の行は2値のどちらとも一致で通す(ADR 0243 決定2)。
  *  行が無いことと ref が無いことは、どちらも空文字として突き合わせる。 */
 function baselineAllows(recorded: string | undefined, actual: string | undefined): boolean {
-  return (recorded ?? "").split("|").includes(actual ?? "");
+  return baselineValues(recorded).includes(actual ?? "");
 }
 
 /** 盤面自身の記録が持つ `ref` の値、記録に行が無ければ undefined。行の**有無**を
@@ -855,33 +884,37 @@ function recordedRef(db: Db, workspaceName: string, ref: string): string | undef
   return refValues(storedRefs(db, workspaceName)).get(ref);
 }
 
-/** ADR 0064 の不変条件そのもの: **タスクブランチは worker の唯一の可変 ref である**。
- *  自分のタスクブランチを両側から落として、残りの ref がすべて基準の値のままであることを要求する ——
- *  移動・削除・新規作成のいずれも違反で、削除が最も静かな破壊であるからこそ「動いた
- *  ものだけを見る」綴りは選ばない(決定2)。
+/** 基準の比較で動いた ref が見つかった —— 呼び手はどれも workspace quarantine に落とし、pickup は repo アクセスの案内を付けない
+ *  (fetch の失敗ではない —— 案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)。 */
+export class RefsMovedError extends Error {}
+
+/** ADR 0064 の不変条件の1つの比較器で、通れば2値行を畳む(ADR 0351 決定2・4): `except` 以外の ref がすべて基準の値のままであることを要求する ——
+ *  移動・削除・新規作成のいずれも違反で、削除が最も静かな破壊であるからこそ「動いたものだけを見る」綴りは選ばない(ADR 0064 決定2)。
+ *  release は自分のタスクブランチと HEAD を、pickup は何も除かない。通れば、落ちて残った2値行を ref が持つ側に畳む(ADR 0351 決定4)。
  *
  *  メッセージは**動いた ref を名指しする**。quarantine の確認 question の本文に載り、
  *  人間の修理手順がそのまま読める形になる。予告中の行は2値のまま載る。 */
-function assertOnlyTaskBranchMoved(db: Db, workspace: WorkspaceConfig, taskId: string): void {
-  const except = `refs/heads/${taskBranch(taskId)}`;
+function compareAndFoldBaseline(db: Db, workspace: WorkspaceConfig, except: readonly string[], when: string): void {
   const before = refValues(storedRefs(db, snapshotKey(workspace)));
   const after = refValues(currentRefs(workspace));
-  // ADR 0345 決定2: HEAD の行は比較に畳まない —— 終わりに自分のブランチに居ることは手前の HEAD 検査が持つ
   const moved = [...new Set([...before.keys(), ...after.keys()])].filter(
-    (ref) => ref !== except && ref !== "HEAD" && !baselineAllows(before.get(ref), after.get(ref)),
+    (ref) => !except.includes(ref) && !baselineAllows(before.get(ref), after.get(ref)),
   );
-  if (moved.length === 0) return;
-  throw new Error(
-    `workspace ${workspace.name}: refs other than ${except} changed during the session — ` +
-      [
-        ...moved.filter((ref) => before.has(ref)).map((ref) => `was: ${before.get(ref)} ${ref}`),
-        ...moved.filter((ref) => after.has(ref)).map((ref) => `now: ${after.get(ref)} ${ref}`),
-      ].join(", "),
-  );
+  if (moved.length > 0) {
+    throw new RefsMovedError(
+      `workspace ${workspace.name}: refs${except.length > 0 ? ` other than ${except.join(" and ")}` : ""} changed ${when} — ` +
+        [
+          ...moved.filter((ref) => before.has(ref)).map((ref) => `was: ${before.get(ref)} ${ref}`),
+          ...moved.filter((ref) => after.has(ref)).map((ref) => `now: ${after.get(ref)} ${ref}`),
+        ].join(", "),
+    );
+  }
+  const announced = [...before].filter(([ref, value]) => baselineValues(value).length > 1 && !except.includes(ref));
+  if (announced.length > 0) updateBaseline(db, workspace, (values) => announced.forEach(([ref]) => values.set(ref, after.get(ref) ?? "")));
 }
 
-/** 基準を書き換える。基準を持たない workspace(一度も拾われていない)には何もしない —— 行を作らず、次の pickup が
- *  全体を撮る。保存値の綴りは常に「`currentRefs` の出力」= **refname 順**である(ADR 0064 決定6)。 */
+/** 基準を書き換える。基準を持たない checkout(盤面がまだ持ったことがない)には何もしない —— 行を作らず、最初の pickup が
+ *  全体を撮る(ADR 0351 決定2)。保存値の綴りは常に「`currentRefs` の出力」= **refname 順**である(ADR 0064 決定6)。 */
 function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<string, string>) => void): boolean {
   const stored = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
@@ -921,7 +954,7 @@ function readCheckoutValue(workspace: WorkspaceConfig, ref: string): string {
 /** ADR 0243 の口: 盤面が ref を書くときはここを通る(休止中の着地の `merge --ff-only` のように checkout ごと動かす書き込みも)。書く前に基準のその行を
  *  `<old>|<new>` に予告し、`write()` を撃ち、ref を読み返して `new` なら `{new}`、違えば `{old}` に畳む —— 読み返した
  *  値そのものを基準に入れることは無い(決定2)。`write()` が投げても畳んでから投げ直す。予告と畳みの間で盤面が
- *  落ちれば2値の行が残り、次の pickup の全撮りが消すまでどちらの値も違反と読まれない(決定5)。
+ *  落ちれば2値の行が残り、どちらの値も違反と読まれない(決定5)—— 次の比較が ref の持つ側に畳む(ADR 0351 決定4)。
  *
  *  `write()` は同期に限る —— 予告→書く→畳むが1つの同期区間になり、盤面の他の書き込みと交差しない。token の取得
  *  (仲介への往復)は呼び手が予告の前に済ませる。 */
@@ -1342,6 +1375,7 @@ export function releaseWorkspace(
    *  退避する: そこでの WIP はタスクブランチに留まり、merge-back に載らない。 */
   completed = false,
 ): void {
+  const taskRef = `refs/heads/${taskBranch(task.id)}`;
   try {
     if (boardMovedHead(db, workspace, task.id)) {
       assertNothingWrittenAfterBoardMovedHead(workspace, task);
@@ -1352,9 +1386,12 @@ export function releaseWorkspace(
         releaseTree(workspace, task);
       }
       // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
-      // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
-      assertOnlyTaskBranchMoved(db, workspace, task.id);
+      // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する。
+      // ADR 0345 決定2: HEAD の行は比較に畳まない —— 終わりに自分のブランチに居ることは手前の HEAD 検査が持つ
+      compareAndFoldBaseline(db, workspace, [taskRef, "HEAD"], "during the session");
     }
+    // ADR 0351 決定2: タスクブランチの行を現在値へ畳む —— session の後に動かないので冪等で、再実行の経路でも撃つ
+    updateBaseline(db, workspace, (values) => values.set(taskRef, readRef(workspace, taskRef)));
     // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
     // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
     // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
