@@ -199,7 +199,7 @@ it("生きた dev checkout の信号は 409 に信号コードと clone 着地�
         if (input.mode === "register" && input.confirm !== true) {
           throw new LiveCheckoutSignalsError(
             input.path,
-            ["uncommitted_changes", "claude_settings_local"],
+            ["uncommitted_changes", "claude_settings_local", "claude_subagents"],
             "/mnt/workspaces/tidepool",
           );
         }
@@ -214,7 +214,7 @@ it("生きた dev checkout の信号は 409 に信号コードと clone 着地�
   expect(refused.status).toBe(409);
   expect(refused.json).toMatchObject({
     confirm_required: true,
-    live_checkout_signals: ["uncommitted_changes", "claude_settings_local"],
+    live_checkout_signals: ["uncommitted_changes", "claude_settings_local", "claude_subagents"],
     clone_landing: "/mnt/workspaces/tidepool",
   });
   // 危険な値(ADR 0061 / GLOSSARY.md)とは別の族なので、同じ欄には載せない ——

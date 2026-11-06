@@ -377,6 +377,18 @@ async function checkoutWithProjectHooks(): Promise<string> {
   return dir;
 }
 
+/** `.claude/agents/` に tracked な `<name>.md` を1つ置く(commit まで進めて信号1 を立てない)。
+ *  `setup` は commit 前の細工(symlink 等)で、信号の主題だけを変える。 */
+function checkoutWithAgentsDir(setup: (dir: string) => void | Promise<void>): () => Promise<string> {
+  return async () => {
+    const dir = await makeLocalOnlyCheckout();
+    await setup(dir);
+    // 空 dir は git status に出ず、commit する物が無い
+    if (git(dir, "status", "--porcelain") !== "") commitAll(dir, "agents");
+    return dir;
+  };
+}
+
 /** 信号4だけを立てる: gitignore される `.claude/settings.json`(issue #686)。
  *  中身は読まないので、床キーと hooks の両持ちでも壊れた JSON でも同じ信号になる。
  *  .gitignore は commit して信号1 を立てない。 */
@@ -397,6 +409,14 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     [".claude/settings.local.json の存在", checkoutWithLocalSettings, "claude_settings_local"],
     [".claude/settings.local.json の dangling な symlink", checkoutWithDanglingLocalSettings, "claude_settings_local"],
     [".claude/settings.json の hooks", checkoutWithProjectHooks, "claude_settings_hooks"],
+    [
+      "tracked な .claude/agents/<x>.md",
+      checkoutWithAgentsDir(async (dir) => {
+        await mkdir(join(dir, ".claude", "agents"), { recursive: true });
+        await writeFile(join(dir, ".claude", "agents", "reviewer.md"), "# reviewer\n");
+      }),
+      "claude_subagents",
+    ],
     [
       "gitignore された .claude/settings.json(床キーと hooks)",
       checkoutWithUntrackedSettings(
@@ -470,6 +490,46 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     await mkdir(join(path, ".claude"), { recursive: true });
     await writeFile(join(path, ".claude", "settings.json"), content);
     commitAll(path, "settings without hooks");
+
+    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
+  });
+
+  // ADR 0354 決定3: claude_subagents は `.claude/agents` が実ディレクトリで、直下に通常ファイルの *.md があるときだけ。
+  // 0-byte の shadow file(ADR 0069)・link・空 dir・*.md でない物・*.md の link は立たない
+  it.each<[string, (dir: string) => void | Promise<void>]>([
+    ["0-byte の .claude/agents ファイル", async (dir) => {
+      await mkdir(join(dir, ".claude"), { recursive: true });
+      await writeFile(join(dir, ".claude", "agents"), "");
+    }],
+    [".claude/agents が .md を含むディレクトリへの symlink", async (dir) => {
+      const target = join(dir, "elsewhere");
+      await mkdir(target, { recursive: true });
+      await writeFile(join(target, "reviewer.md"), "# reviewer\n");
+      await mkdir(join(dir, ".claude"), { recursive: true });
+      symlinkSync(target, join(dir, ".claude", "agents"));
+    }],
+    [".claude/agents が空のディレクトリ", async (dir) => {
+      await mkdir(join(dir, ".claude", "agents"), { recursive: true });
+    }],
+    ["*.md でないファイルだけ", async (dir) => {
+      await mkdir(join(dir, ".claude", "agents"), { recursive: true });
+      await writeFile(join(dir, ".claude", "agents", "notes.txt"), "x");
+    }],
+    ["*.md が symlink", async (dir) => {
+      await mkdir(join(dir, ".claude", "agents"), { recursive: true });
+      await writeFile(join(dir, "real.md"), "# real\n");
+      symlinkSync("../../real.md", join(dir, ".claude", "agents", "reviewer.md"));
+    }],
+    ["*.md が下位ディレクトリにだけある", async (dir) => {
+      await mkdir(join(dir, ".claude", "agents", "nested"), { recursive: true });
+      await writeFile(join(dir, ".claude", "agents", "nested", "reviewer.md"), "# reviewer\n");
+    }],
+  ])("%s は claude_subagents にならず、confirm 無しで登録される", async (_, setup) => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await checkoutWithAgentsDir(setup)();
 
     await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
 
