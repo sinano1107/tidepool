@@ -330,19 +330,24 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
   });
 }
 
+async function retryAfterExit(boot: () => ReturnType<typeof bootWithAdapter>, title: string) {
+  const { proc, transcripts } = await boot();
+  const task = queueWork(t, title);
+  await t.clock.advance(HOUR);
+  const oldTranscript = transcripts.opened.get(task.id)!;
+  const oldSpawn = (await events(task.id)).find((e: any) => e.kind === "worker_spawned");
+  proc.emitExitAt(0, 1, null);
+  await settle();
+  const failure = (await questions(t)).find((q: any) => q.title.startsWith("worker exited"));
+  const retry = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] });
+  await vi.waitFor(() => expect(proc.calls).toHaveLength(2));
+  return { task, oldTranscript, oldSpawn, forcesBefore: [...t.containers.forceReclaims], retryStatus: retry.status };
+}
+
 for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
   it(`${harness}: an old session's transcript error after retry only records that session's failure`, async () => {
-    const { proc, transcripts } = await boot();
-    const task = queueWork(t, "retry transcript");
-    await t.clock.advance(HOUR);
-    const oldTranscript = transcripts.opened.get(task.id)!;
-    const oldSpawn = (await events(task.id)).find((e: any) => e.kind === "worker_spawned");
-    proc.emitExitAt(0, 1, null);
-    await settle();
-    const failure = (await questions(t)).find((q: any) => q.title.startsWith("worker exited"));
-    expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] })).status).toBe(200);
-    await vi.waitFor(() => expect(proc.calls).toHaveLength(2));
-    const forcesBefore = [...t.containers.forceReclaims];
+    const { task, oldTranscript, oldSpawn, forcesBefore, retryStatus } = await retryAfterExit(boot, "retry transcript");
+    expect(retryStatus).toBe(200);
 
     oldTranscript.stream.emit("error", Object.assign(new Error("old transcript failed"), { code: "EIO" }));
     await settle();
@@ -357,17 +362,7 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
 
 for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
   it(`${harness}: an old transcript write throw halts only the old spawn and acceptance records it`, async () => {
-    const { proc, transcripts } = await boot();
-    const task = queueWork(t, "retry transcript write");
-    await t.clock.advance(HOUR);
-    const oldTranscript = transcripts.opened.get(task.id)!;
-    const oldSpawn = (await events(task.id)).find((e: any) => e.kind === "worker_spawned");
-    proc.emitExitAt(0, 1, null);
-    await settle();
-    const failure = (await questions(t)).find((q: any) => q.title.startsWith("worker exited"));
-    await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] });
-    await vi.waitFor(() => expect(proc.calls).toHaveLength(2));
-    const forcesBefore = [...t.containers.forceReclaims];
+    const { task, oldTranscript, oldSpawn, forcesBefore } = await retryAfterExit(boot, "retry transcript write");
     t.db.exec("CREATE TRIGGER fail_old_transcript BEFORE INSERT ON events WHEN NEW.kind = 'transcript_failed' BEGIN SELECT RAISE(ABORT, 'old transcript write failed'); END");
 
     expect(() => oldTranscript.stream.emit("error", new Error("old transcript failed"))).not.toThrow();
