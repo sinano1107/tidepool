@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -21,6 +21,7 @@ import {
   PROMPT_READY_MARKER,
   pinnedModelFlags,
   toolSurfaceProbeSpec,
+  workerSpawnEnv,
 } from "../src/claude-worker.js";
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
@@ -529,6 +530,68 @@ describe("ClaudeCodeWorker", () => {
       .toString()
       .trim();
     expect(author).toBe("tako <tako@tidepool.invalid>");
+  });
+
+  it("worker の git は sparse な settings の stub があっても commit 後に S bit を保つ(#2943)", async () => {
+    vi.stubEnv("GIT_CONFIG_COUNT", undefined);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const workerEnv = workerSpawnEnv(undefined, {
+      provider: "anthropic", model: "opus", effort: null, advisor: undefined,
+      tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: undefined,
+    }, tmpdir());
+
+    for (const [label, env, tag] of [
+      ["control", process.env, "H"],
+      ["worker", workerEnv, "S"],
+    ] as const) {
+      const workspace = await makeWorkspace(`sparse-stub-${label}`);
+      await mkdir(join(workspace.path, ".claude"));
+      await writeFile(join(workspace.path, ".claude/settings.json"), '{"env":{"PROJECT":"human"}}');
+      git(workspace.path, "add", ".claude/settings.json");
+      git(workspace.path, "commit", "-m", "share settings");
+      git(workspace.path, "sparse-checkout", "set", "--no-cone", "/*", "!/.claude/settings.json");
+      expect(git(workspace.path, "ls-files", "-v", "--", ".claude/settings.json")).toBe("S .claude/settings.json");
+      await mkdir(join(workspace.path, ".claude"), { recursive: true });
+      await writeFile(join(workspace.path, ".claude/settings.json"), "");
+      await writeFile(join(workspace.path, "work.txt"), "worker work\n");
+      const run = (...args: string[]) => execFileSync("git", ["-c", "user.name=worker", "-c", "user.email=worker@example.com", ...args], { cwd: workspace.path, env }).toString().trim();
+      run("add", "work.txt");
+      run("commit", "-m", "commit worker work");
+      expect(run("ls-files", "-v", "--", ".claude/settings.json")).toBe(`${tag} .claude/settings.json`);
+      if (label === "worker") {
+        expect(run("status", "--porcelain")).toBe("");
+        // The sandbox unmount removes its stub before the host observes the checkout.
+        await rm(join(workspace.path, ".claude/settings.json"));
+        expect(git(workspace.path, "status", "--porcelain")).toBe("");
+        git(workspace.path, "sparse-checkout", "disable");
+        expect(readFileSync(join(workspace.path, ".claude/settings.json"), "utf8")).toBe('{"env":{"PROJECT":"human"}}');
+      }
+    }
+  });
+
+  it("worker の sparse 設定は既存の GIT_CONFIG_* を残して後ろに足し、既存の false より優先する(#2943)", () => {
+    vi.stubEnv("GIT_CONFIG_COUNT", "2");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "core.quotePath");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
+    vi.stubEnv("GIT_CONFIG_KEY_1", "sparse.expectFilesOutsideOfPatterns");
+    vi.stubEnv("GIT_CONFIG_VALUE_1", "false");
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+
+    const env = workerSpawnEnv(undefined, {
+      provider: "moonshot", model: "kimi-k3[1m]", effort: null, advisor: undefined,
+      tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: "test-key",
+    }, tmpdir());
+
+    expect(env).toMatchObject({
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_0: "core.quotePath", GIT_CONFIG_VALUE_0: "false",
+      GIT_CONFIG_KEY_1: "sparse.expectFilesOutsideOfPatterns", GIT_CONFIG_VALUE_1: "false",
+      GIT_CONFIG_KEY_2: "sparse.expectFilesOutsideOfPatterns", GIT_CONFIG_VALUE_2: "true",
+    });
+    expect(execFileSync("git", ["config", "--get", "core.quotePath"], { env }).toString().trim()).toBe("false");
+    expect(execFileSync("git", ["config", "--get", "sparse.expectFilesOutsideOfPatterns"], { env }).toString().trim()).toBe("true");
+    expect(process.env.GIT_CONFIG_COUNT).toBe("2");
+    expect(process.env.GIT_CONFIG_KEY_2).toBeUndefined();
   });
 
   it("ADR 0024 の不変条件: 盤面が注入する identity env は GIT_* 4変数のみで、トークンを含まない", () => {
@@ -4846,7 +4909,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     return path;
   }
 
-  it("anthropic の spawn の挙動は導入前のまま — env マップの差分は scrub の対称化のみ(Moonshot 注入一式 = 向き先・トークン・モデルをすべて除去)", async () => {
+  it("anthropic の spawn env は Moonshot の注入一式を除去し、worker の固定値を載せる", async () => {
     // これは挙動の回帰ではなく env マップの意図的な変更である: これまでの除去は
     // 向き先・トークンの2つだったが、moonshot に注入する一式すべて(+
     // ANTHROPIC_MODEL)を相手から除去する形に対称化した(注入一覧と除去一覧は
@@ -4854,11 +4917,14 @@ You are Kipper, the tidepool board's Kimi work agent.
     // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
     // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
     // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。後から足したのは
-    // 自動更新の停止(ADR 0186 決定4)と、task temp を指す2つの temp 変数(ADR 0257 決定2)だけである。
+    // 自動更新の停止(ADR 0186 決定4)、task temp(ADR 0257 決定2)、sparse の S bit 保護(ADR 0293)である。
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
     vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "maintenance.auto");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
     try {
       const { start, calls } = await makeWorker();
       start();
@@ -4875,6 +4941,9 @@ You are Kipper, the tidepool board's Kimi work agent.
         GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
         GIT_COMMITTER_NAME: "deckhand",
         GIT_COMMITTER_EMAIL: "deckhand@tidepool.invalid",
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_1: "sparse.expectFilesOutsideOfPatterns",
+        GIT_CONFIG_VALUE_1: "true",
       };
       delete expected.ANTHROPIC_BASE_URL;
       delete expected.ANTHROPIC_AUTH_TOKEN;
