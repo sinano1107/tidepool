@@ -588,6 +588,8 @@ const LIVE_CHECKOUT_SIGNAL_LABEL: Record<string, string> = {
     'The checkout\'s .claude/settings.json carries hooks — the shape of a development checkout, not a disposable one.',
   claude_settings_untracked:
     'The checkout has an untracked .claude/settings.json — host-local settings that live only in this tree, not in the repository.',
+  claude_subagents:
+    'The checkout has subagent definitions in .claude/agents — workers do not use this checkout\'s subagent definitions.',
 };
 
 // The merge dial (registry.ts): required and three-valued since ADR 0079, so

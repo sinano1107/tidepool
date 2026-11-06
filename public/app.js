@@ -1805,7 +1805,8 @@ const LIVE_CHECKOUT_SIGNAL_LABEL = {
   worktree_unreadable: "The checkout has no readable working tree \u2014 the board could not tell whether work is in progress there.",
   claude_settings_local: "The checkout has .claude/settings.local.json \u2014 host-local state a human put there for their own sessions.",
   claude_settings_hooks: "The checkout's .claude/settings.json carries hooks \u2014 the shape of a development checkout, not a disposable one.",
-  claude_settings_untracked: "The checkout has an untracked .claude/settings.json \u2014 host-local settings that live only in this tree, not in the repository."
+  claude_settings_untracked: "The checkout has an untracked .claude/settings.json \u2014 host-local settings that live only in this tree, not in the repository.",
+  claude_subagents: "The checkout has subagent definitions in .claude/agents \u2014 workers do not use this checkout's subagent definitions."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "choose one \u2014 the dial is required" },

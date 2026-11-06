@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -667,7 +667,8 @@ type LiveCheckoutSignal =
   | "worktree_unreadable"
   | "claude_settings_local"
   | "claude_settings_hooks"
-  | "claude_settings_untracked";
+  | "claude_settings_untracked"
+  | "claude_subagents";
 
 /** 登録の門の hooks 信号の読み手で、盤面で settings の JSON を読む唯一の場所(ADR 0346 決定3)。
  *  `sandbox` / `permissions` の有無は見ない。壊れた JSON と object でない値は信号にしない。読むのは通常ファイルだけ ——
@@ -678,6 +679,19 @@ function settingsDeclareHooks(path: string): boolean {
     if (!lstatSync(file).isFile()) return false;
     const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
     return typeof parsed === "object" && parsed !== null && "hooks" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+/** ADR 0354 決定3: checkout の `.claude/agents` が実ディレクトリで、直下に通常ファイルの `*.md` が1つ以上あるか。
+ *  中身も tracked かも見ない。link は辿らない(#2935)ので、ADR 0069 の 0-byte shadow file(通常ファイル)や
+ *  ディレクトリへの link では立たない。再帰もしない —— 読まれる定義は直下だけ。 */
+function hasSubagentDefinitions(path: string): boolean {
+  const dir = join(path, ".claude", "agents");
+  try {
+    if (!lstatSync(dir).isDirectory()) return false;
+    return readdirSync(dir, { withFileTypes: true }).some((e) => e.isFile() && e.name.endsWith(".md"));
   } catch {
     return false;
   }
@@ -715,6 +729,7 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const settings = workspaceSettingsDisposition(path);
   if (settings.excludeProjectSettings && settingsDeclareHooks(path)) reasons.push("claude_settings_hooks");
   if (settings.untrackedProjectSettings) reasons.push("claude_settings_untracked");
+  if (hasSubagentDefinitions(path)) reasons.push("claude_subagents");
   return reasons;
 }
 
