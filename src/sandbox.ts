@@ -420,8 +420,9 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
     // ADR 0273 決定2: `acceptEdits` closes the in-process tools outside cwd, so the read-only paths also get a `Read` allow
     // (`//` = absolute). Never `additionalDirectories`: under `acceptEdits` it would let Edit / Write in as well
     permissions: {
-      // ADR 0354 決定1: the session's config dir, spelled like AUTO_MEMORY_TOOL_DENY (`//` = absolute, ADR 0156)
-      deny: [...SETTINGS_TOOL_DENY, AUTO_MEMORY_TOOL_DENY, `Edit(/${configDir}/**)`],
+      // ADR 0354 決定2: no subagent definitions added mid-session (the CLI's rescan is unmeasured), beside the settings
+      // file deny. ADR 0354 決定1: the session's config dir. Both spelled like AUTO_MEMORY_TOOL_DENY (`//` = absolute, ADR 0156)
+      deny: [...SETTINGS_TOOL_DENY, `Edit(/${workspacePath}/.claude/agents/**)`, AUTO_MEMORY_TOOL_DENY, `Edit(/${configDir}/**)`],
       ...(readPaths.length > 0 && { allow: readPaths.map((path) => `Read(/${path}/**)`) }),
     },
     ...AUTO_MEMORY_CLOSED,

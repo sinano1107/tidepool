@@ -1184,11 +1184,11 @@ export function fakeAppServerCall(answer: (args: readonly string[], cwds: readon
   return { call, calls };
 }
 
-/** Claude worker の skill の ping 2本(workspace cwd の列挙・同梱集合)を空集合で答える偽物。`*` の agent も spawn の前に両方を撃つ
- *  (ADR 0335 決定1)が、盤面のテストの fake の容器はそれに答えないので、spawn の手前で済ませる。 */
+/** Claude worker の列挙の ping 2本(workspace cwd の列挙・同梱集合)を skill も subagent も空集合で答える偽物。どの agent も spawn
+ *  の前に両方を撃つ(ADR 0335 決定1 / ADR 0354 決定2)が、盤面のテストの fake の容器はそれに答えないので、spawn の手前で済ませる。 */
 export const noSkillPings: Pick<ClaudeWorkerOptions, "enumerateSkills" | "enumerateHostSkills"> = {
-  enumerateSkills: async () => [],
-  enumerateHostSkills: async () => [],
+  enumerateSkills: async () => ({ skills: [], agents: [] }),
+  enumerateHostSkills: async () => ({ skills: [], agents: [] }),
 };
 
 /** 列挙には実物の応答を、観測には全部閉じた実物の応答を返す app-server の口 —— skill の閉鎖を駆動しない Codex adapter の

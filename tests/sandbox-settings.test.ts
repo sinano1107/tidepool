@@ -317,16 +317,18 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
       deny: [
         "Edit(.claude/settings.json)",
         "Edit(.claude/settings.local.json)",
+        "Edit(//home/pi/work/tidepool/.claude/agents/**)",
         `Edit(/${homedir()}/.tidepool/claude-auto-memory/**)`,
         "Edit(//tmp/tidepool-claude-task-1-config-Ef34Gh/**)",
       ],
     });
   });
 
-  it("エントリは workspace 相対 — deny は literal path で判定されるので、workspace が変わっても同じ配列になる", () => {
+  it("settings file のエントリは workspace 相対 — deny は literal path で判定されるので、workspace が変わっても同じ綴りになる", () => {
+    // ADR 0354 決定2 の `.claude/agents/**` だけは絶対 path の綴り(下の describe)なので workspace ごとに違う
     const at = (workspacePath: string) =>
       buildSandboxSettings({ taskType: "review", workspacePath, ...HOST })
-        .permissions.deny;
+        .permissions.deny.filter((entry) => entry.includes("settings"));
     expect(at("/home/pi/work/tidepool")).toEqual(at("/some/other/checkout"));
   });
 });
@@ -347,6 +349,19 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
       expect(settings.autoMemoryEnabled).toBe(false);
       expect(settings.autoMemoryDirectory).toBe(fixed);
       expect(settings.permissions.deny).toContain(`Edit(/${fixed}/**)`);
+    }
+  });
+});
+
+/** ADR 0354 決定2: checkout の subagent 定義は名前で閉じるが、CLI が session 中に `.claude/agents` を再走査するかは測っていないので、
+ *  worker の Write tool からの定義の追加も settings の deny と並べて閉じる。綴りは ADR 0156 の auto-memory と同じ絶対 path(`//` 始まり)——
+ *  相対 path に `**` を付けた形は測っていない。 */
+describe("buildSandboxSettings の .claude/agents(ADR 0354 決定2)", () => {
+  it("work / review とも workspace の .claude/agents の下への Edit を絶対パスの綴り(// 始まり)で deny する", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(buildSandboxSettings({ taskType, workspacePath: "/home/pi/work/tidepool", ...HOST }).permissions.deny).toContain(
+        "Edit(//home/pi/work/tidepool/.claude/agents/**)",
+      );
     }
   });
 });

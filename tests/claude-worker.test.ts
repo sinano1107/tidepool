@@ -360,24 +360,25 @@ function makeNoSettingsBranch(path: string) {
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
- *  records the cwd it was probed at and returns a scripted full skill set (or
- *  null to simulate a probe failure). */
-function recordingEnumerator(result: string[] | null) {
+ *  records the cwd it was probed at and returns a scripted full skill set and the
+ *  init line's subagents (ADR 0354 決定2), or null to simulate a probe failure. */
+function recordingEnumerator(result: string[] | null, agents: string[] = []) {
   const calls: string[] = [];
   const enumerateSkills: EnumerateSkillsFn = async (cwd) => {
     calls.push(cwd);
-    return result;
+    return result && { skills: result, agents };
   };
   return { calls, enumerateSkills };
 }
 
-/** Scripted stand-in for the bundled-set ping (ADR 0335 決定2): counts the pings and returns a scripted set (or null). */
-function recordingBundledSet(result: string[] | null) {
+/** Scripted stand-in for the bundled-set ping (ADR 0335 決定2): counts the pings and returns a scripted set and its
+ *  subagents (or null). */
+function recordingBundledSet(result: string[] | null, agents: string[] = []) {
   const rec = {
     pings: 0,
     enumerateHostSkills: async () => {
       rec.pings += 1;
-      return result;
+      return result && { skills: result, agents };
     },
   };
   return rec;
@@ -1326,12 +1327,12 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args).not.toContain("--disable-slash-commands");
   });
 
-  it("skills が空リストの agent は列挙 ping を呼ばず --disable-slash-commands 一発で全禁止し、--tools に Skill を載せない(ADR 0025 point 5 / ADR 0185)", async () => {
+  it("skills が空リストの agent も subagent を閉じるために両方の ping を撃ち、skill は --disable-slash-commands 一発で全禁止し、--tools に Skill を載せない(ADR 0354 決定2 / ADR 0025 point 5 / ADR 0185)", async () => {
     const { start, calls, enumeration, bundled } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") });
     start();
-    expect(calls).toHaveLength(1);
-    expect(enumeration.calls).toEqual([]);
-    expect(bundled.pings).toBe(0);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(enumeration.calls).toEqual([FIXTURE_WORKSPACE]);
+    expect(bundled.pings).toBe(1);
     expect(calls[0]!.args).toContain("--disable-slash-commands");
     // disable フラグが CLI の面から外す `Skill` を、宣言からも外す
     expect(spawnedTools(calls[0]!.args)).not.toContain("Skill");
@@ -1355,6 +1356,51 @@ describe("ClaudeCodeWorker", () => {
     expect(deny).not.toContain("Skill(code-review)");
     // 全件 deny されても面に残る(#1268 の実測)ので、`Skill` が外れるのは空リストだけ(ADR 0185)
     expect(spawnedTools(calls[0]!.args)).toContain("Skill");
+  });
+
+  it.each([
+    ["*", '  - "*"\n'],
+    ["[]", "  []\n"],
+  ] as const)("allowlist が %s でも、workspace cwd の ping にだけ載る subagent を Agent(名前) で deny する(ADR 0354 決定2)", async (_shape, skillsYaml) => {
+    const { start, calls } = await makeWorker(
+      { "agents/deckhand.md": skilledMd(skillsYaml) },
+      {
+        enumerateSkills: recordingEnumerator([], ["claude", "Explore", "prober"]).enumerateSkills,
+        enumerateHostSkills: recordingBundledSet([], ["claude", "Explore"]).enumerateHostSkills,
+      },
+    );
+    start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    // `Task(名前)` ではない —— 実測で効いた綴り
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow", "Agent(prober)"]);
+  });
+
+  it("checkout の .claude/agents の下の regular な .md の frontmatter name を Agent(名前) で deny する —— built-in と同名も、下位 dir も。link と name の無い file は読まない(ADR 0354 決定2)", async () => {
+    const wsDir = await tempDir("tidepool-ws-");
+    const outside = await tempDir("tidepool-outside-");
+    const agentsDir = join(wsDir, ".claude", "agents");
+    await mkdir(join(agentsDir, "nested"), { recursive: true });
+    // agent 名は filename ではなく name
+    await writeFile(join(agentsDir, "reviewer.md"), "---\nname: sneaky-reviewer\npermissionMode: acceptEdits\n---\nbody\n");
+    await writeFile(join(agentsDir, "nested", "deep.md"), "---\nname: deep-one\n---\nbody\n");
+    // 同名の built-in を黙って置き換えるので、ping の引き算では見えない
+    await writeFile(join(agentsDir, "explore.md"), "---\nname: Explore\npermissionMode: auto\n---\nbody\n");
+    await writeFile(join(agentsDir, "noname.md"), "---\ndescription: no name here\n---\nbody\n");
+    await writeFile(join(outside, "linked.md"), "---\nname: linked-one\n---\nbody\n");
+    await symlink(join(outside, "linked.md"), join(agentsDir, "linked.md"));
+    await mkdir(join(outside, "dir"));
+    await writeFile(join(outside, "dir", "inner.md"), "---\nname: via-dir-link\n---\nbody\n");
+    await symlink(join(outside, "dir"), join(agentsDir, "dir-link"));
+    const { start, calls } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
+      {
+        enumerateSkills: recordingEnumerator([], ["claude", "Explore"]).enumerateSkills,
+        enumerateHostSkills: recordingBundledSet([], ["claude", "Explore"]).enumerateHostSkills,
+      },
+    );
+    start("task-agent-frontmatter");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow", "Agent(Explore)", "Agent(deep-one)", "Agent(sneaky-reviewer)"]);
   });
 
   it("@workspace は checkout が運ぶ skill だけを許可し、列挙に載った user 層・plugin の名前を deny する(ADR 0025 / ADR 0335 決定1)", async () => {
@@ -1551,6 +1597,24 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toEqual([]);
   });
 
+  it.each<[string, Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]>, RegExp]>([
+    ["workspace cwd の ping", { enumerateSkills: async () => null }, /^skill enumeration failed, so the skill and agent deny lists /],
+    ["同梱 ping", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so the skill and agent deny lists /],
+  ])("skills が空リストの agent でも %s の null は spawn_failed で、worker を起こさない(ADR 0354 決定2 / ADR 0025 point 6)", async (_ping, pings, message) => {
+    const spawnFailures: Array<{ error_code: string | null; message: string }> = [];
+    const { start, calls, db } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") }, {
+      ...pings,
+      onSpawnFailed: (_taskId, _sessionId, failure, record) => {
+        record();
+        spawnFailures.push(failure);
+      },
+    });
+    start("task-empty-allowlist-ping-fail");
+    await vi.waitFor(() => expect(spawnFailures).toEqual([{ error_code: null, message: expect.stringMatching(message) }]));
+    expect(listEvents(db, "task-empty-allowlist-ping-fail").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
   // ADR 0325 決定2: 帰責の判事が scope を引けるよう、spawn の記録は allowlist の形に関わらず checkout の skill と許可した集合を持つ
   it.each([
     ["*", '  - "*"\n', ["tdd", "code-review"]],
@@ -1589,8 +1653,9 @@ describe("ClaudeCodeWorker", () => {
     );
     return { ...worker, recorder, runtime };
   };
+  // 実物の init 行は `agents` も持つ(ADR 0354 決定2 の列挙が読む)
   const skillsInit = (skills: string[]) =>
-    `${JSON.stringify({ type: "system", subtype: "init", skills })}\n`;
+    `${JSON.stringify({ type: "system", subtype: "init", skills, agents: ["claude", "Explore"] })}\n`;
   const settle = () => new Promise((resolve) => setImmediate(resolve));
 
   it("skill 列挙の容器が空になるまで worker は launch されない(ADR 0136 決定5)", async () => {
@@ -1908,18 +1973,25 @@ describe("ClaudeCodeWorker", () => {
     expect(existsSync(file)).toBe(false);
   });
 
-  it("spawn までの間に例外が出たら start はそれを投げ直し、task temp は残らない(ADR 0257 / issue #705 と同じ)", async () => {
+  it("spawn までの間に例外が出たら spawn_failed に落ち、task temp は残らない(ADR 0149 決定6 / ADR 0257 / issue #705 と同じ)", async () => {
     let file = "";
-    // 同期に launch するのは ping の無い `[]` の形だけ(ADR 0335 決定1)。ping の後の throw は spawn_failed に落ちる(ADR 0149 決定6)
-    const { start } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") }, {
+    const spawnFailures: Array<{ error_code: string | null; message: string }> = [];
+    // launch はどの allowlist でも ping の後の continuation で起きる(ADR 0354 決定2)ので、その throw は spawn_failed に落ちる
+    const { start, db } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") }, {
       containers: passthroughContainers((_command, args) => {
         file = args[args.indexOf("--append-system-prompt-file") + 1]!;
         expect(existsSync(file)).toBe(true);
         throw new Error("spawn blew up");
       }),
+      onSpawnFailed: (_taskId, _sessionId, failure, record) => {
+        record();
+        spawnFailures.push(failure);
+      },
     });
 
-    expect(() => start("task-temp-sync-throw")).toThrow("spawn blew up");
+    start("task-temp-sync-throw");
+    await vi.waitFor(() => expect(spawnFailures).toEqual([{ error_code: null, message: "spawn blew up" }]));
+    expect(listEvents(db, "task-temp-sync-throw").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
     expect(existsSync(file)).toBe(false);
     expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-sync-throw-"))).toEqual([]);
   });
@@ -2107,7 +2179,7 @@ describe("ClaudeCodeWorker", () => {
       {
         enumerateSkills: async (cwd) => {
           seenAtPing.push(existsSync(join(cwd, ".claude", "settings.json")));
-          return [];
+          return { skills: [], agents: [] };
         },
       },
     );
@@ -2311,6 +2383,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/deckhand.md": skilledMd("  []\n"),
     });
     start("task-sbx-noskills");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
     expect(allowRead.some((p: string) => p.includes(".claude/skills"))).toBe(false);
   });
@@ -2345,6 +2418,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/deckhand.md": skilledMd("  []\n"),
     });
     start("task-init-noskills-ok", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       initLine([...WORK_SURFACE_WITHOUT_SKILL, "mcp__tidepool__get_current_task"]),
     );
@@ -2358,6 +2432,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/deckhand.md": skilledMd("  []\n"),
     });
     start("task-init-noskills-drift", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine(WORK_SURFACE));
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);
@@ -2575,6 +2650,7 @@ describe("ClaudeCodeWorker", () => {
     value.purpose = large;
     insertTask(db, value);
     worker.start(value, sessionId(db, value.id), setting(value));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawned = listEvents(db, value.id).find((e) => e.kind === "worker_spawned")!;
     const recorded = new TranscriptStore(logDir).readPrompt(value.id, spawned.id)!;
     const args = calls[0]!.args;

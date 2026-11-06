@@ -189,9 +189,9 @@ async function bootClaudeHeldInEnumeration(workspace?: WorkspaceConfig) {
           logDir: deps.transcripts.dir,
           enumerateSkills: async () => {
             await hold.wait();
-            return ["code-review"];
+            return { skills: ["code-review"], agents: [] };
           },
-          enumerateHostSkills: async () => ["code-review"],
+          enumerateHostSkills: async () => ({ skills: ["code-review"], agents: [] }),
         }),
       "anthropic",
       { workspace, dir },

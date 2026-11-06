@@ -815,7 +815,7 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
 
 /** Split a `---\nfrontmatter\n---\nbody` document into its two halves, or null
  *  when the frontmatter fence is absent. */
-function splitFrontmatter(raw: string): { frontmatter: string; body: string } | null {
+export function splitFrontmatter(raw: string): { frontmatter: string; body: string } | null {
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   return match ? { frontmatter: match[1]!, body: match[2]! } : null;
 }
