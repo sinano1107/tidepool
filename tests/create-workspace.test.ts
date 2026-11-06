@@ -383,7 +383,8 @@ function checkoutWithAgentsDir(setup: (dir: string) => void | Promise<void>): ()
   return async () => {
     const dir = await makeLocalOnlyCheckout();
     await setup(dir);
-    commitAll(dir, "agents");
+    // 空 dir は git status に出ず、commit する物が無い
+    if (git(dir, "status", "--porcelain") !== "") commitAll(dir, "agents");
     return dir;
   };
 }
