@@ -38,10 +38,17 @@ export const boardCallShotSpec = ({ kind, cwd, input }: ShotOrder): BoardCallSpe
 
 /** worker の形の1ターン —— worker の姿勢(project tier を読む、ADR 0341 決定2)で、worker が読む usage の形(stream-json)。
  *  盤面が per-task settings で固定する言語・出力様式の2キーを flag tier に置く(ADR 0303 決定2)。 */
-export const workerShotSpec = ({ kind, cwd, input, systemPromptFile }: ShotOrder & { systemPromptFile: string }): BoardCallSpec =>
+export const workerShotSpec = ({
+  kind,
+  cwd,
+  input,
+  systemPromptFile,
+  configDir,
+}: ShotOrder & { systemPromptFile: string; configDir: string }): BoardCallSpec =>
   claudeBoardCallSpec({
     kind,
     posture: "worker-shaped",
+    configDir,
     command: "claude",
     args: [
       "-p", "--output-format", "stream-json", "--verbose", ...pinnedModelFlags("haiku", "low"),
@@ -60,8 +67,8 @@ export const MCP_JSON_SERVER = "conformance-mcp-json";
 
 /** `.mcp.json` の面(ADR 0341 決定6)の対照: skill 列挙の ping から strict だけを外した形 —— server が接続し起動することが
  *  fixture の生きている証拠。 */
-export const mcpJsonControlSpec = (cwd: string): BoardCallSpec => {
-  const ping = skillEnumerationSpec(cwd, { awaitReclaimed: false });
+export const mcpJsonControlSpec = (cwd: string, configDir: string): BoardCallSpec => {
+  const ping = skillEnumerationSpec(cwd, { awaitReclaimed: false, configDir });
   // ADR 0341 決定6: 姿勢の欄は ping のもの(口は読まない)、argv は対照のもの —— strict だけが無い
   return { ...ping, kind: "conformance .mcp.json control", args: ping.args.filter((arg) => arg !== "--strict-mcp-config") };
 };

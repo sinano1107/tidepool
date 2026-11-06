@@ -1260,12 +1260,12 @@ export function recordingSpawn() {
   const emitError = (err: Error) => {
     for (const listener of errorListeners) listener(err);
   };
-  /** Claude worker の task temp(ADR 0257)を、子を exit させずに消す。盤面を止めた後の
+  /** Claude worker の task temp(ADR 0257)と config dir(ADR 0354 決定1)を、子を exit させずに消す。盤面を止めた後の
    *  `onTestFinished` から呼べる —— exit を撃つと閉じた DB に後始末が書きにいく。 */
   const removeClaudeTaskTemps = () => {
     for (const { env } of calls) {
-      if (env.TMPDIR && basename(env.TMPDIR).startsWith("tidepool-claude-")) {
-        rmSync(env.TMPDIR, { recursive: true, force: true });
+      for (const dir of [env.TMPDIR, env.CLAUDE_CONFIG_DIR]) {
+        if (dir && basename(dir).startsWith("tidepool-claude-")) rmSync(dir, { recursive: true, force: true });
       }
     }
   };

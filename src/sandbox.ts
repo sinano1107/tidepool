@@ -338,6 +338,9 @@ export interface WorkerSessionSettingsInput {
    *  both profiles. The CLI process's `TMPDIR` must point here too, or its proxy
    *  socket stays under the closed `/tmp` and allowed domains go unreachable. */
   taskTemp: string;
+  /** ADR 0354 決定1: this session's board-owned `CLAUDE_CONFIG_DIR`, realpath'd like `taskTemp`. Required — a
+   *  settings file without its deny would leave the worker able to write trust for its cwd mid-session. */
+  configDir: string;
   /** Whether `/lib64` exists on this host — checked by the caller so this stays pure. */
   lib64: boolean;
   /** ADR 0273 決定2: checkouts outside the cwd opened for reading only — an
@@ -405,7 +408,7 @@ export interface WorkerSessionSettingsInput {
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
-  const { taskType, workspacePath, allowedDomains, taskTemp, lib64, readPaths = [] } = input;
+  const { taskType, workspacePath, allowedDomains, taskTemp, configDir, lib64, readPaths = [] } = input;
   const readOnly = carriesReadOnly(taskType);
   return {
     // issue #378: not keyed on the profile — a subagent can smuggle a board
@@ -417,7 +420,8 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
     // ADR 0273 決定2: `acceptEdits` closes the in-process tools outside cwd, so the read-only paths also get a `Read` allow
     // (`//` = absolute). Never `additionalDirectories`: under `acceptEdits` it would let Edit / Write in as well
     permissions: {
-      deny: [...SETTINGS_TOOL_DENY, AUTO_MEMORY_TOOL_DENY],
+      // ADR 0354 決定1: the session's config dir, spelled like AUTO_MEMORY_TOOL_DENY (`//` = absolute, ADR 0156)
+      deny: [...SETTINGS_TOOL_DENY, AUTO_MEMORY_TOOL_DENY, `Edit(/${configDir}/**)`],
       ...(readPaths.length > 0 && { allow: readPaths.map((path) => `Read(/${path}/**)`) }),
     },
     ...AUTO_MEMORY_CLOSED,

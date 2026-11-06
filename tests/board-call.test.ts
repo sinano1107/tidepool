@@ -25,6 +25,7 @@ const spec: BoardCallSpec = claudeBoardCallSpec({
   args: ["-p", "/usage"],
   cwd: "/workspaces/sandbox",
   env: { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1" },
+  configDir: "/tmp/tidepool-claude-config-fixture",
   limitMs: LIMIT,
 });
 

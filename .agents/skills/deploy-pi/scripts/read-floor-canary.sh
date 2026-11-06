@@ -187,6 +187,9 @@ mkdir -p "$WS"
 git init -q "$WS"
 # The board's own shape and length (see the header); a uuid stands in for the task id.
 TASK_TEMP=$(mktemp -d "/tmp/tidepool-claude-$(cat /proc/sys/kernel/random/uuid)-XXXXXX")
+# The board's per-session CLAUDE_CONFIG_DIR (ADR 0354), which the profile denies to Edit. Under $WORK, removed with it.
+CONFIG_DIR="$WORK/config-dir"
+mkdir -m 700 "$CONFIG_DIR"
 TMP_TARGET=$(mktemp /tmp/read-floor-canary-XXXXXX)
 echo "$TMP_TOKEN" > "$TMP_TARGET"
 echo "$HOME_TOKEN" > "$HOME_TARGET"
@@ -220,7 +223,7 @@ grep -qF "$SESSION_TOKEN" "$SESSION_TARGET" && base_session=yes || base_session=
 # The profile comes from the DEPLOYED code, never hand-written.
 log "emitting the work profile from the deployed code…"
 if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$WS" \
-        --task-temp "$TASK_TEMP" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
+        --task-temp "$TASK_TEMP" --config-dir "$CONFIG_DIR" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
   fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
   exit 1
 fi

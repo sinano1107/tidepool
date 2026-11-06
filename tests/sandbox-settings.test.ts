@@ -8,6 +8,7 @@ import { claudeWorkspaceContainment } from "../src/harness-containment.js";
 import {
   buildSandboxSettings,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
+  type WorkerSessionSettingsInput,
   workspaceSettingsDisposition,
 } from "../src/sandbox.js";
 import { git } from "./harness.js";
@@ -15,7 +16,8 @@ import { git } from "./harness.js";
 /** 呼び出し側が渡すホストの事実(ADR 0257): task temp のパスと `/lib64` の有無。関数は純粋なまま、
  *  在るかの判定は呼び出し側が持つ。 */
 const TASK_TEMP = "/tmp/tidepool-claude-task-1-Ab12Cd";
-const HOST = { taskTemp: TASK_TEMP, lib64: false };
+const CONFIG_DIR = "/tmp/tidepool-claude-task-1-config-Ef34Gh";
+const HOST = { taskTemp: TASK_TEMP, configDir: CONFIG_DIR, lib64: false };
 
 /** ADR 0033: worker セッションの Bash はハーネス内蔵サンドボックス(macOS
  *  Seatbelt / Linux bubblewrap)で workspace に封じる。この純関数はその
@@ -123,7 +125,7 @@ describe("buildSandboxSettings の読みの範囲(ADR 0257)", () => {
     buildSandboxSettings({
       taskType,
       workspacePath: "/home/pi/work/tidepool",
-      taskTemp: TASK_TEMP,
+      ...HOST,
       lib64,
     }).sandbox.filesystem;
 
@@ -316,6 +318,7 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
         "Edit(.claude/settings.json)",
         "Edit(.claude/settings.local.json)",
         `Edit(/${homedir()}/.tidepool/claude-auto-memory/**)`,
+        "Edit(//tmp/tidepool-claude-task-1-config-Ef34Gh/**)",
       ],
     });
   });
@@ -345,6 +348,24 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
       expect(settings.autoMemoryDirectory).toBe(fixed);
       expect(settings.permissions.deny).toContain(`Edit(/${fixed}/**)`);
     }
+  });
+});
+
+/** ADR 0354 決定1: worker の CLI 状態は spawn ごとの盤面所有の config dir にあり、worker の Write tool からは閉じる ——
+ *  開いていれば session の最中に cwd の trust をその dir の `.claude.json` へ書ける。綴りは ADR 0156 の auto-memory と同じ形。 */
+describe("buildSandboxSettings の config dir(ADR 0354 決定1)", () => {
+  it("work / review とも config dir への Edit を絶対パスの綴り(// 始まり)で deny する", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(buildSandboxSettings({ taskType, workspacePath: "/home/pi/work/tidepool", ...HOST }).permissions.deny).toContain(
+        "Edit(//tmp/tidepool-claude-task-1-config-Ef34Gh/**)",
+      );
+    }
+  });
+
+  it("config dir は省けない(fail-closed)", () => {
+    // @ts-expect-error —— config dir の無い入力は型が通らない
+    const input: WorkerSessionSettingsInput = { taskType: "work", workspacePath: "/w", taskTemp: TASK_TEMP, lib64: false };
+    expect(input.taskType).toBe("work");
   });
 });
 
@@ -381,7 +402,7 @@ describe("Harness の language / outputStyle の固定(ADR 0303 決定2)", () =>
         buildSandboxSettings({ taskType, workspacePath: "/home/pi/work/tidepool", ...HOST }),
       ).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
     }
-    const { args } = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral");
+    const { args } = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral", "/tmp/tidepool-claude-config-neutral");
     expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
   });
 

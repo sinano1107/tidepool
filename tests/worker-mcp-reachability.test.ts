@@ -86,6 +86,19 @@ it("Claude の probe は一時 dir の sandbox の profile を --settings で、
   expect(existsSync(probe.cwd)).toBe(false);
 });
 
+// ADR 0354 決定1: probe は worker と同じ CLI 状態の下で走り、同じ dir が settings の deny と env の両方に届く
+it("Claude の probe の process は呼び出しごとの config dir を env に載せ、settings がその dir への Edit を閉じ、終われば dir は消える", async () => {
+  const probe = await startClaudeProbe();
+  const { env } = probe.spawn.calls[0]!;
+  const configDir = env.CLAUDE_CONFIG_DIR!;
+  expect(existsSync(configDir)).toBe(true);
+  expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe("");
+  expect(probe.settings.permissions.deny).toContain(`Edit(/${configDir}/**)`);
+  probe.spawn.emitExit(0, null);
+  await probe.result;
+  expect(existsSync(configDir)).toBe(false);
+});
+
 /** 台本の init 行(`mcp_servers` だけを差し替える)を書いて exit させ、Claude の probe の答えを返す。 */
 async function claudeProbeAnswers(stdout: string) {
   const probe = await startClaudeProbe();

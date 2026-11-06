@@ -157,7 +157,7 @@ record() {
 
 # A fresh room and task temp (the board's shape, `/tmp/tidepool-<cli>-<task id>-XXXXXX`:
 # the CLI's proxy socket lives in it and a Unix socket path is length-limited),
-# with the probe and its targets in the room. Sets ROOM and TASK_TEMP.
+# with the probe and its targets in the room. Sets ROOM, TASK_TEMP and CONFIG_DIR.
 prepare() {
   local cli="$1"
   ROOM=$WORK/$cli/room
@@ -165,6 +165,9 @@ prepare() {
   git init -q "$ROOM"
   TASK_TEMP=$(mktemp -d "/tmp/tidepool-$cli-$(cat /proc/sys/kernel/random/uuid)-XXXXXX")
   TASK_TEMPS+=("$TASK_TEMP")
+  # The board's per-session CLAUDE_CONFIG_DIR (ADR 0354), denied to Edit by the Claude profile. Under $WORK, removed with it.
+  CONFIG_DIR=$WORK/$cli/config-dir
+  mkdir -m 700 "$CONFIG_DIR"
   cp "$REPO/$PROBE" "$ROOM/" || { fail "$REPO/$PROBE is missing — is that checkout up to date?"; exit 2; }
   # Paths only — the tokens never leave the target files.
   cat > "$ROOM/interview-room-targets" <<EOF
@@ -255,7 +258,7 @@ fi
 log "claude: $(claude --version 2>&1)"
 prepare claude
 if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts interview "$ROOM" \
-        --task-temp "$TASK_TEMP" --read "$REAL" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
+        --task-temp "$TASK_TEMP" --config-dir "$CONFIG_DIR" --read "$REAL" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
   fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules and the interview type (#2192)?"
   exit 2
 fi

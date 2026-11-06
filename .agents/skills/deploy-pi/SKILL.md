@@ -97,7 +97,7 @@ PI=masaki@100.78.52.97
 #    TMPDIR and CLAUDE_CODE_TMPDIR, or the CLI's proxy socket lands in the
 #    closed /tmp and 3a(5) cannot reach its allowed domain.
 ssh $PI 'mkdir -p ~/sandbox-smoke/ws ~/.claude/skills/tp-smoke-denied
-mkdir -m 700 ~/sandbox-smoke/task-temp
+mkdir -m 700 ~/sandbox-smoke/task-temp ~/sandbox-smoke/config-dir
 echo CANARY > ~/sandbox-smoke/canary.txt
 echo inside > ~/sandbox-smoke/ws/inside.txt
 echo DENIED-AUX  > ~/.claude/skills/tp-smoke-denied/aux.txt
@@ -111,8 +111,8 @@ JS
 git init -q ~/sandbox-smoke/ws'
 # 2. emit BOTH profiles from the DEPLOYED code — never hand-write them. The
 #    allowed domain is present in both because the network block is shared.
-ssh $PI 'cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work /home/masaki/sandbox-smoke/ws --task-temp /home/masaki/sandbox-smoke/task-temp --allowed-domain registry.npmjs.org > ~/sandbox-smoke/work.json
-cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts review /home/masaki/sandbox-smoke/ws --task-temp /home/masaki/sandbox-smoke/task-temp --allowed-domain registry.npmjs.org > ~/sandbox-smoke/review.json'
+ssh $PI 'cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work /home/masaki/sandbox-smoke/ws --task-temp /home/masaki/sandbox-smoke/task-temp --config-dir /home/masaki/sandbox-smoke/config-dir --allowed-domain registry.npmjs.org > ~/sandbox-smoke/work.json
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts review /home/masaki/sandbox-smoke/ws --task-temp /home/masaki/sandbox-smoke/task-temp --config-dir /home/masaki/sandbox-smoke/config-dir --allowed-domain registry.npmjs.org > ~/sandbox-smoke/review.json'
 # 3a. work profile: filesystem controls, loopback bind and allowed-domain reach
 #     all share one emitted profile/session.
 #     Production spawn shape (ADR 0038): acceptEdits + --setting-sources project
