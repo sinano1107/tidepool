@@ -763,12 +763,21 @@ export async function prepareWorkspaceAtPickup(
 ): Promise<void> {
   if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
   else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  const rootId = interviewRootIdOf(db, task);
+  // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
+  if (rootId === undefined || task.type === "interview") {
+    const changes = git(workspace.path, "status", "--porcelain");
+    if (changes !== "") {
+      throw new PickupGateError(workspace, new Error(
+        `workspace ${workspace.name} has uncommitted changes while resting: ${changes} — a process wrote them after the board moved the checkout`,
+      ));
+    }
+  }
   for (const read of board.reads ?? []) {
     if (read.place.path === workspace.path) continue;
     await firePickupPredicates(db, read.place, read.predicates, "after-open", board);
     if (board.live?.() === false) return;
   }
-  const rootId = interviewRootIdOf(db, task);
   const predicates = rootId === undefined ? checkoutPickupPredicates(workspace)
     : task.type === "interview" ? roomPickupPredicates(db, rootId, "") : examineePickupPredicates(db, task, rootId, "");
   await firePickupPredicates(db, workspace, predicates, "after-open", board);

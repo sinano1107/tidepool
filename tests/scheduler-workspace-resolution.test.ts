@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -53,6 +55,28 @@ function expectReturnedToQueue(db: Db, task: Task, stop: Record<string, unknown>
 }
 
 describe("scheduler の pickup が task.workspace を解決する", () => {
+  it("休止位置が dirty な workspace は quarantine し、task は同じ位置の todo へ戻り、別の workspace が走る(ADR 0351 決定5 / ADR 0274)", async () => {
+    const sandbox = await makeWorkspace("sandbox");
+    const prod = await makeWorkspace("prod");
+    writeFileSync(join(sandbox.path, "late.txt"), "written while resting\n");
+    const { db, clock, worker, slot, scheduler } = stoppingBoard(sandbox, defaultingTo(sandbox, prod));
+    const task = registerTask(db, { type: "work", title: "dirty resting tree", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+    const next = registerTask(db, { type: "work", title: "next", purpose: "p", completion_criteria: "c", workspace: "prod" }, clock.now(), ...HUMAN_WEBUI);
+
+    await clock.advance(HOURLY);
+    await vi.waitFor(() => expect(worker.started.map((t) => t.id)).toEqual([next.id]));
+
+    expectReturnedToQueue(db, task, { quarantine: "workspace", value: "sandbox", reason: expect.stringContaining("a process wrote them after the board moved the checkout") });
+    const question = openQuarantineQuestion(db, "workspace", "sandbox")!;
+    expect(getTask(db, question.id)!.purpose).toContain("?? late.txt");
+    expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
+    expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(git(sandbox.path, "branch", "--list", `task/${task.id}`)).toBe("");
+    expect(sessionInTeardown(db)).toBeUndefined();
+    expect(slot.currentTaskId).toBe(next.id);
+    scheduler.stop();
+  });
+
   it("既定の workspace の準備が落ちて todo へ戻った task は、修復まで workspace の quarantine に外され、同じ停止に拾い直されずに次の task が拾われる(ADR 0274 決定1)", async () => {
     // pickup が空の欄に既定の名前を書くので、止めた quarantine の名前と候補の除外の鍵が一致する
     const unpreparable = { name: "known-workspace", path: "/nonexistent/known" };
