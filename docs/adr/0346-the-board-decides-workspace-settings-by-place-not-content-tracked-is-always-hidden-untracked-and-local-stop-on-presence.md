@@ -1,5 +1,7 @@
 # 盤面は workspace の settings の中身を読まず置き場所で決める —— Git 共有された settings.json は常に隠し、共有されていない settings は存在で止める
 
+**Status 追記: 本文の「settings.json は workspace がその process に書き込める唯一の口」は誤り —— checkout の `.claude/agents/*.md` の frontmatter `hooks:` が、host の人間の `~/.claude.json` がその checkout を trust していれば host で走った(2.1.286 実測)。worker の CLI 状態を盤面所有にして閉じ、subagent 定義は名前で閉じる([ADR 0354](0354-a-claude-workers-cli-state-is-board-owned-and-fresh-per-spawn-and-a-checkouts-subagent-definitions-are-denied-by-name.md)、2026-11-06、issue #2936)。決定1〜4 はそのまま。**
+
 **Status 追記: 決定2 の「`settings.local.json` は存在するだけで止める」は、ignored の形(tidepool 自身の `.gitignore` が無視する)には立たなくなる —— 盤面が HEAD を動かす手が pickup の checkout の前にそれを消し([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md))、検査は spawn 時でその後に走る。worker が育てた file は消えて正しく、人間の file は登録の門の信号の提示文で先に報せる(2026-11-02、issue #2912)。**
 
 **Status 追記: 決定2 の存在の判定は link を辿らない —— `.claude/settings*.json` に何か在れば(dangling や FIFO を指す link も)在ると読み、先は開かない。「読めない」は lstat の失敗・ディレクトリ・読み権限の無い通常ファイル(2026-11-03、issue #2935)。**

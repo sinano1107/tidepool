@@ -1,5 +1,7 @@
 # subagent の model / effort は親の采配で行の仕事に数え、盤面は host の subagent env だけを消す
 
+**Status 追記: 決定3 が `.claude/agents/*.md` を「親の采配」に置いたのは model の軸に限る** —— frontmatter の `hooks:` は trust 済み checkout で host で走り、`permissionMode` は親の床を広げるので、checkout の subagent 定義は worker に届けない([ADR 0354](0354-a-claude-workers-cli-state-is-board-owned-and-fresh-per-spawn-and-a-checkouts-subagent-definitions-are-denied-by-name.md)、2026-11-06、issue #2936)。host の env を消す決定3 の列に `CLAUDE_CODE_SANDBOXED` が加わる。
+
 2026-10-20 の grilling(issue #1887 —— ADR 0245 の帰結が残した経路)で決定。worker が Agent tool(Claude)/ `spawn_agent`(Codex)で
 分けた仕事が、pin した行と別の model で走りうることが問われた。固定版の CLI(Claude Code 2.1.286 / Codex 0.147.0)を Lima VM で走らせて
 測ると、別の model で走る経路は3種類に分かれた: **親(worker 自身)が選ぶもの**(Agent tool の `model` 引数、checkout の `.claude/agents/*.md`
