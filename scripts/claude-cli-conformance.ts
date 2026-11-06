@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
-import { type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
+import { atBoardOwnedConfigDir, type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
 import { containerRuntimeFor } from "../src/cgroup-container.js";
 import { cliAuthCommandThrough, createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import {
@@ -97,7 +97,8 @@ const shotStdout = (spec: BoardCallSpec) =>
     return output.stdout;
   });
 // init 行は封じ込めの probe と同じ注文で撃つ(neutral cwd で撃つのも同じ)
-const probeStdout = (cwd: string) => stdoutOf(toolSurfaceProbeSpec(cwd));
+// worker の形の注文は、どれも呼び出しごとの盤面所有の config dir で撃つ(ADR 0354 決定1)
+const probeStdout = (cwd: string) => atBoardOwnedConfigDir((configDir) => stdoutOf(toolSurfaceProbeSpec(cwd, configDir)));
 
 // result 行は、モデルの1ターンを実際に走らせた stream-json から読む —— `/usage` ping は
 // ターンを起こさない(cost 0)ので、worker が読む usage の形を試せない
@@ -109,7 +110,9 @@ const languageShot = (shape: "worker" | "board call") => {
   const file = join(scratch, "language-system.txt");
   writeFileSync(file, input.system);
   const order = { kind: `conformance language (${shape})`, cwd: languageCwd, input: input.user };
-  return shotStdout(shape === "worker" ? workerShotSpec({ ...order, systemPromptFile: file }) : boardCallShotSpec(order));
+  return shape === "worker"
+    ? atBoardOwnedConfigDir((configDir) => shotStdout(workerShotSpec({ ...order, systemPromptFile: file, configDir })))
+    : shotStdout(boardCallShotSpec(order));
 };
 
 const { rows } = await judgeConformance(
@@ -117,9 +120,11 @@ const { rows } = await judgeConformance(
     initLine: () => probeStdout(scratch),
     // worker の形を先に撃ち、対照が server を起動する前に marker を読む
     mcpJson: async () => {
-      const workerShaped = await stdoutOf(skillEnumerationSpec(mcpJsonCwd, { awaitReclaimed: false }));
+      const workerShaped = await atBoardOwnedConfigDir((configDir) =>
+        stdoutOf(skillEnumerationSpec(mcpJsonCwd, { awaitReclaimed: false, configDir })),
+      );
       const workerShapedStarted = existsSync(mcpJsonMarker);
-      const control = await stdoutOf(mcpJsonControlSpec(mcpJsonCwd));
+      const control = await atBoardOwnedConfigDir((configDir) => stdoutOf(mcpJsonControlSpec(mcpJsonCwd, configDir)));
       return { workerShaped, workerShapedStarted, control, controlStarted: existsSync(mcpJsonMarker) };
     },
     resultLine: oneTurnStdout,

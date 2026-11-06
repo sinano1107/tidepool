@@ -328,6 +328,10 @@ mkdir -p "$WORK"
 # run, shared by every role. Under $WORK so it lives and dies with it.
 TASK_TEMP="$WORK/task-temp"
 mkdir -m 700 "$TASK_TEMP"
+# Only a path for --config-dir: the emitted profile denies Edit on it (ADR 0354 決定1). This canary's
+# `claude -p` does not set CLAUDE_CONFIG_DIR yet (#2993 / #2994). Under $WORK, removed with it.
+CONFIG_DIR="$WORK/config-dir"
+mkdir -m 700 "$CONFIG_DIR"
 
 holes=0
 unmeasured=0
@@ -357,7 +361,7 @@ record() {
 log "emitting the work profile from the deployed code…"
 for r in live control memory memory-control; do
   if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$(ws_of "$r")" \
-          --task-temp "$TASK_TEMP" > "$(profile_of "$r")"); then
+          --task-temp "$TASK_TEMP" --config-dir "$CONFIG_DIR" > "$(profile_of "$r")"); then
     fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
     exit 1
   fi

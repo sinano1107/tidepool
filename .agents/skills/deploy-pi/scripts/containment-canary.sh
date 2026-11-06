@@ -150,6 +150,10 @@ mkdir -p "$WORK"
 # so it is kept and removed with it — the rerun advice below needs it too.
 TASK_TEMP="$WORK/task-temp"
 mkdir -m 700 "$TASK_TEMP"
+# Only a path for --config-dir: the emitted profile denies Edit on it (ADR 0354 決定1). This canary's
+# `claude -p` does not set CLAUDE_CONFIG_DIR yet (#2993 / #2994). Under $WORK, removed with it.
+CONFIG_DIR="$WORK/config-dir"
+mkdir -m 700 "$CONFIG_DIR"
 
 # Counted separately, because they mean different things to whoever reads the
 # exit code: `holes` is "a worker got through", `unmeasured` is "this run could
@@ -250,7 +254,7 @@ done
 
 log "  emitting the work profile from the deployed code (never hand-written)…"
 if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$SESSION_REPO" \
-        --task-temp "$TASK_TEMP" > "$WORK/work.json"); then
+        --task-temp "$TASK_TEMP" --config-dir "$CONFIG_DIR" > "$WORK/work.json"); then
   fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
   exit 1
 fi

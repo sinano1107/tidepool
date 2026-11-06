@@ -7,7 +7,7 @@
  *  中途半端に残る。デプロイに載る恒久的なスクリプトにしておく方が安い。
  *
  *  使い方: tsx scripts/emit-sandbox-settings.ts <work|review|interview> <workspacePath>
- *          --task-temp dir [--allowed-domain domain] [--read path]
+ *          --task-temp dir --config-dir dir [--allowed-domain domain] [--read path]
  *
  *  skill の名前は取らない: settings に skill 由来の read path は無い(ADR 0335 決定3)。
  *
@@ -17,6 +17,9 @@
  *  `--task-temp` は必須(ADR 0257 決定2)。吐いた settings で走らせる `claude -p` には、同じ dir を
  *  `TMPDIR` と `CLAUDE_CODE_TMPDIR` に載せて渡す —— 載せないと許可ドメインに届かない。
  *
+ *  `--config-dir` も必須(ADR 0354 決定1): worker の `CLAUDE_CONFIG_DIR` で、settings はそこへの `Edit` を deny する。
+ *  `--codex` の出力には載らないので、そちらでは取らない。
+ *
  *  `--codex` を付けると、Codex の worker が spawn で渡す permission の `-c` 値(`permissionConfig()`)と proxy の1行
  *  (`NETWORK_PROXY_CONFIG`)を1行1つで吐く(issue #2197 の面接室 canary)。executable は盤面と同じく PATH 上の `codex` の実体。skill は取らない。 */
 import { existsSync } from "node:fs";
@@ -24,7 +27,7 @@ import { NETWORK_PROXY_CONFIG, permissionConfig, resolveCodexExecutable } from "
 import { buildSandboxSettings, type WorkerSessionSettingsInput } from "../src/sandbox.js";
 
 const USAGE =
-  "usage: emit-sandbox-settings.ts <work|review|interview> <workspacePath> --task-temp dir [--allowed-domain domain] [--read path] [--codex]";
+  "usage: emit-sandbox-settings.ts <work|review|interview> <workspacePath> --task-temp dir (--config-dir dir | --codex) [--allowed-domain domain] [--read path]";
 const [taskType, workspacePath, ...rest] = process.argv.slice(2);
 
 if ((taskType !== "work" && taskType !== "review" && taskType !== "interview") || !workspacePath) {
@@ -35,11 +38,15 @@ if ((taskType !== "work" && taskType !== "review" && taskType !== "interview") |
 const allowedDomains: string[] = [];
 const readPaths: string[] = [];
 let taskTemp: string | undefined;
+let configDir: string | undefined;
 let codex = false;
 for (let i = 0; i < rest.length; i += 1) {
   if (rest[i] === "--task-temp") {
     // a missing value falls through to the required check below
     taskTemp = rest[++i];
+  } else if (rest[i] === "--config-dir") {
+    // same as --task-temp
+    configDir = rest[++i];
   } else if (rest[i] === "--allowed-domain") {
     const domain = rest[++i];
     if (!domain) {
@@ -74,11 +81,17 @@ if (codex) {
   process.exit(0);
 }
 
+if (!configDir) {
+  console.error(USAGE);
+  process.exit(2);
+}
+
 const input: WorkerSessionSettingsInput = {
   taskType,
   workspacePath,
   ...(allowedDomains.length > 0 && { allowedDomains }),
   taskTemp,
+  configDir,
   lib64: existsSync("/lib64"),
   readPaths,
 };

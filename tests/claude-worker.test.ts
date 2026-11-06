@@ -538,7 +538,7 @@ describe("ClaudeCodeWorker", () => {
     const workerEnv = workerSpawnEnv(undefined, {
       provider: "anthropic", model: "opus", effort: null, advisor: undefined,
       tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: undefined,
-    }, tmpdir());
+    }, tmpdir(), tmpdir());
 
     for (const [label, env, tag] of [
       ["control", process.env, "H"],
@@ -580,7 +580,7 @@ describe("ClaudeCodeWorker", () => {
     const env = workerSpawnEnv(undefined, {
       provider: "moonshot", model: "kimi-k3[1m]", effort: null, advisor: undefined,
       tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: "test-key",
-    }, tmpdir());
+    }, tmpdir(), tmpdir());
 
     expect(env).toMatchObject({
       GIT_CONFIG_COUNT: "3",
@@ -4656,6 +4656,57 @@ describe("advisor capability (issue #33)", () => {
     });
   });
 
+  // ── worker の CLI 状態(ADR 0354 決定1)────────────────────────────
+  describe("worker の CLI 状態は盤面所有で spawn ごとに新規(ADR 0354 決定1)", () => {
+    // 人間の `~/.claude.json` の trust と外部 include の承認が worker に届かない —— credentials だけは host の既定の置き場に残す
+    it("CLAUDE_CONFIG_DIR は spawn ごとに新しく、workspace と task temp の外に在り、settings の deny が同じ path を閉じ、settle の後には無い", async () => {
+      const { start, calls, emitExitAt } = await makeWorker();
+      start("config-dir-a");
+      start("config-dir-b");
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+      const dirs = calls.map((call) => call.env.CLAUDE_CONFIG_DIR!);
+      expect(new Set(dirs).size).toBe(2);
+      for (const [i, call] of calls.entries()) {
+        const dir = dirs[i]!;
+        expect(existsSync(dir)).toBe(true);
+        expect(realpathSync(dir)).toBe(dir);
+        for (const outer of [call.cwd!, call.env.TMPDIR!]) expect(dir.startsWith(`${outer}/`)).toBe(false);
+        expect(call.env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe("");
+        const settings = JSON.parse(readFileSync(call.args[call.args.indexOf("--settings") + 1]!, "utf8"));
+        expect(settings.permissions.deny).toContain(`Edit(/${dir}/**)`);
+      }
+
+      emitExitAt(0, 0, null);
+      emitExitAt(1, null, "SIGKILL");
+      expect(dirs.filter((dir) => existsSync(dir))).toEqual([]);
+    });
+
+    it("spawn の失敗の後にも config dir は残らない", async () => {
+      const { start, calls, emitError } = await makeWorker();
+      start("config-dir-spawn-error");
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      const dir = calls[0]!.env.CLAUDE_CONFIG_DIR!;
+      expect(existsSync(dir)).toBe(true);
+
+      emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
+      expect(existsSync(dir)).toBe(false);
+    });
+
+    // workspace trust の述語を host の env が反転させる(ADR 0005 の線)
+    it("ホストが立てた CLAUDE_CODE_SANDBOXED を spawn env から消す", async () => {
+      vi.stubEnv("CLAUDE_CODE_SANDBOXED", "1");
+      try {
+        const { start, calls } = await makeWorker();
+        start();
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        expect(calls[0]!.env.CLAUDE_CODE_SANDBOXED).toBeUndefined();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   // ── main の pin を上書きする host env(issue #2351)──────────────
   describe("main の pin を上書きする host env(issue #2351)", () => {
     const PIN_OVERRIDE_ENVS = ["CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"];
@@ -4917,7 +4968,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
     // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
     // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。後から足したのは
-    // 自動更新の停止(ADR 0186 決定4)、task temp(ADR 0257 決定2)、sparse の S bit 保護(ADR 0293)である。
+    // 自動更新の停止(ADR 0186 決定4)、task temp(ADR 0257 決定2)、sparse の S bit 保護(ADR 0293)、盤面所有の config dir(ADR 0354 決定1)である。
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
     vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
@@ -4937,6 +4988,8 @@ You are Kipper, the tidepool board's Kimi work agent.
         CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
         TMPDIR: calls[0]!.env.TMPDIR,
         CLAUDE_CODE_TMPDIR: calls[0]!.env.TMPDIR,
+        CLAUDE_CONFIG_DIR: calls[0]!.env.CLAUDE_CONFIG_DIR,
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
         GIT_AUTHOR_NAME: "deckhand",
         GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
         GIT_COMMITTER_NAME: "deckhand",
@@ -4950,6 +5003,8 @@ You are Kipper, the tidepool board's Kimi work agent.
       delete expected.ANTHROPIC_MODEL;
       // host の GitHub / OpenAI の資格情報も載らない(issue #2469)—— 開発者の shell に GH_TOKEN があっても落ちない
       for (const name of HOST_CREDENTIAL_ENVS) delete expected[name];
+      // sandbox 下の CLI から npm test を走らせても落ちない(ADR 0354 決定1)
+      delete expected.CLAUDE_CODE_SANDBOXED;
       expect(calls[0]!.env).toEqual(expected);
       // 従来通りの認証継承: Claude のサブスク資格情報は残る
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
@@ -5581,7 +5636,7 @@ describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
   });
 
   it("tool-surface probe の argv は姿勢を先に置いた同じ集合のままである(封じ込めの観測は変わらない)", () => {
-    const spec = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral");
+    const spec = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral", "/tmp/tidepool-claude-config-neutral");
     const { args } = spec;
     const settings = args[args.indexOf("--settings") + 1]!;
     const tools = args[args.indexOf("--tools") + 1]!;

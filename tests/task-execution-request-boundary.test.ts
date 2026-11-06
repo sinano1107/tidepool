@@ -213,7 +213,7 @@ You are Tako.
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));
   const proc = recordingSpawn();
-  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
+  onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs); // task temp と config dir の後始末(ADR 0257 / ADR 0354 決定1)
   server = await startServer({
     db: boardDb,
     taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),

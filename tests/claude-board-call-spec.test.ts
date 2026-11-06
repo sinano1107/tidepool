@@ -5,11 +5,11 @@ import { claudeBoardCallSpec } from "../src/claude-board-call-spec.js";
 const order = { kind: "k", command: "claude", args: ["-p", "/usage"], cwd: "/w", env: {}, limitMs: 1 };
 
 it.each([
-  ["answer", ["--safe-mode", "--setting-sources", ""]],
-  ["worker-shaped", ["--setting-sources", "project", "--strict-mcp-config"]],
-  ["ambient", ["--safe-mode"]],
-] as const)("姿勢 %s は呼び出し側の args の前に決まったフラグ列を置く(ADR 0341 決定1・2)", (posture, flags) => {
-  const spec = claudeBoardCallSpec({ ...order, posture });
+  [{ posture: "answer" }, ["--safe-mode", "--setting-sources", ""]],
+  [{ posture: "worker-shaped", configDir: "/c" }, ["--setting-sources", "project", "--strict-mcp-config"]],
+  [{ posture: "ambient" }, ["--safe-mode"]],
+] as const)("姿勢 %o は呼び出し側の args の前に決まったフラグ列を置く(ADR 0341 決定1・2)", (posture, flags) => {
+  const spec = claudeBoardCallSpec({ ...order, ...posture });
   expect(spec.harness).toBe("claude-code");
   expect(spec.args).toEqual([...flags, "-p", "/usage"]);
 });
@@ -25,4 +25,21 @@ it("Claude の spec は入口を通らずには組めない —— 姿勢を書�
   // @ts-expect-error —— 姿勢のフラグを導くのは claudeBoardCallSpec だけ
   const literal: BoardCallSpec = { ...order, harness: "claude-code", posture: "answer" };
   expect(literal.args).toEqual(["-p", "/usage"]);
+});
+
+// ADR 0354 決定1 / ADR 0341 の Status 追記: worker-shaped の姿勢は env の半分を持つ —— 新しい呼び出し場所も dir を忘れられない
+it("worker-shaped の注文は config dir を型で必須に取り、env の2鍵に写す。answer / ambient は取らず載せない", () => {
+  // @ts-expect-error —— worker-shaped は config dir 無しでは組めない
+  claudeBoardCallSpec({ ...order, posture: "worker-shaped" });
+  // @ts-expect-error —— answer は人間の login 状態のまま走る
+  claudeBoardCallSpec({ ...order, posture: "answer", configDir: "/c" });
+
+  const worker = claudeBoardCallSpec({ ...order, env: { PATH: "/bin" }, posture: "worker-shaped", configDir: "/c" });
+  expect(worker.env).toEqual({ PATH: "/bin", CLAUDE_CONFIG_DIR: "/c", CLAUDE_SECURESTORAGE_CONFIG_DIR: "" });
+  expect(worker).not.toHaveProperty("configDir");
+  for (const posture of ["answer", "ambient"] as const) {
+    const env = claudeBoardCallSpec({ ...order, posture }).env;
+    expect(env).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+    expect(env).not.toHaveProperty("CLAUDE_SECURESTORAGE_CONFIG_DIR");
+  }
 });

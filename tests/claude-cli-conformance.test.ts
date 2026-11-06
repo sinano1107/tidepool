@@ -161,8 +161,8 @@ it.each([
 });
 
 it("workspace .mcp.json の対照は skill 列挙の ping から --strict-mcp-config だけを外した形で、worker の形は ping そのもの", () => {
-  const ping = skillEnumerationSpec("/fixture", { awaitReclaimed: false });
-  const control = mcpJsonControlSpec("/fixture");
+  const ping = skillEnumerationSpec("/fixture", { awaitReclaimed: false, configDir: "/config" });
+  const control = mcpJsonControlSpec("/fixture", "/config");
 
   expect(ping.args).toContain("--strict-mcp-config");
   expect(control.args).toEqual(ping.args.filter((arg) => arg !== "--strict-mcp-config"));
@@ -201,7 +201,7 @@ it("Board call の形の1ターンは runner と同じフラグの定数から�
 
 it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
   // 設定の層は姿勢が運ぶ(ADR 0341 決定2)—— 口へ出る最終の argv で読む
-  const spec = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/session/system.txt", input: "q" });
+  const spec = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/session/system.txt", configDir: "/config", input: "q" });
   const { args } = spec;
   expect(spec).toMatchObject({ posture: "worker-shaped", cwd: "/cwd", input: "q" });
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
@@ -209,6 +209,14 @@ it("worker の形の1ターンは project tier を読み、盤面の定数で la
   expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
   expect(args).toContain("--append-system-prompt-file");
   expect(args).toContain("/session/system.txt");
+});
+
+// ADR 0354 決定1: 適合試験の worker の形の撃ち方も worker と同じ CLI 状態の下で走る —— 測る挙動が worker の見るものになる
+it("worker の形の1ターンと .mcp.json の対照の env は config dir を載せ、credentials は空の set で host に残す", () => {
+  const shot = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/s.txt", configDir: "/config", input: "q" });
+  for (const { env } of [shot, mcpJsonControlSpec("/fixture", "/config")]) {
+    expect(env).toMatchObject({ CLAUDE_CONFIG_DIR: "/config", CLAUDE_SECURESTORAGE_CONFIG_DIR: "" });
+  }
 });
 
 it("output style の面は init 行の output_style が既定でなければ、または読めなければ不合格になる", async () => {

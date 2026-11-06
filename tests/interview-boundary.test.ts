@@ -401,7 +401,7 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
   const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${JSON.stringify(workspace.path)}\n` });
   const logDir = await tempDir("repaired-room-reader-logs-");
   const proc = recordingSpawn();
-  onTestFinished(proc.removeClaudeTaskTemps);
+  onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs);
   await t.stopServer();
   t = await bootTidepool({
     dir,

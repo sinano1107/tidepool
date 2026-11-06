@@ -3,11 +3,11 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
+import { atBoardOwnedConfigDir, atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
-import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
+import { claudeBoardCallSpec, configDirEnv } from "./claude-board-call-spec.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
 import { cliAuthStop } from "./cli-auth.js";
@@ -461,6 +461,10 @@ const SUBAGENT_MODEL_ENVS = [
   "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP",
 ] as const;
 
+/** host が workspace trust の述語を反転させる env(ADR 0354 決定1、ADR 0005 の線)。subagent の model とは別の軸なので別名で、
+ *  同じ形(常に delete)で worker の spawn env から消す。 */
+const TRUST_PREDICATE_ENVS = ["CLAUDE_CODE_SANDBOXED"] as const;
+
 /** host が main の pin を上書きする env(issue #2351、ADR 0005 の線)。`CLAUDE_CODE_EFFORT_LEVEL` は
  *  `--effort` に勝つ(2.1.286 の VM 実測: env=low + `--effort high` → low、env=high + `--effort low` → high、
  *  effort null の行にも env の値が載る)ので、`worker_spawned.effort` が pin を書く記録と実走が食い違う。
@@ -633,7 +637,7 @@ export interface ProviderRouting extends ExecutionSetting {
 }
 
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
- *  identity vars. Seven **independent** concerns, deliberately not named for the
+ *  identity vars. Ten **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
@@ -671,7 +675,8 @@ export interface ProviderRouting extends ExecutionSetting {
  *     unreachable (#1950).
  *  6. `SUBAGENT_MODEL_ENVS` — always deleted (ADR 0287 決定3): a subagent's
  *     model is the parent's call plus the pinned CLI's defaults, never the
- *     host's blanket override.
+ *     host's blanket override. `TRUST_PREDICATE_ENVS` rides the same shape (ADR
+ *     0354 決定1): a host env must not flip the CLI's workspace-trust predicate.
  *  7. `PIN_OVERRIDE_ENVS` — always deleted (#2351): the host's effort env beats
  *     `--effort` and its alias remaps beat `--advisor <alias>`, so leaving them
  *     would put a pin in `worker_spawned` that the session did not run under.
@@ -679,6 +684,13 @@ export interface ProviderRouting extends ExecutionSetting {
  *     CLI passes every env but its own credentials through to Bash (ADR 0070's
  *     measurement), so a host-exported GitHub / OpenAI token would reach the
  *     worker.
+ *  9. `CLAUDE_CONFIG_DIR` at the session's board-owned config dir and
+ *     `CLAUDE_SECURESTORAGE_CONFIG_DIR` set empty (`configDirEnv`, ADR 0354
+ *     決定1): the host human's `~/.claude.json` trust and include approvals never
+ *     reach a worker, while credentials stay at the host's default store.
+ *  10. `sparse.expectFilesOutsideOfPatterns=true` appended to `GIT_CONFIG_*`
+ *     (ADR 0293 / ADR 0037 機構2): the sandbox's settings stub must not clear a
+ *     sparse S bit.
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
  *  both directions: an anthropic spawn never inherits the Moonshot injection
@@ -699,11 +711,13 @@ export function workerSpawnEnv(
   advisor: string | undefined,
   routing: ProviderRouting,
   taskTemp: string,
+  configDir: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     TMPDIR: taskTemp,
     CLAUDE_CODE_TMPDIR: taskTemp,
+    ...configDirEnv(configDir),
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
@@ -717,6 +731,7 @@ export function workerSpawnEnv(
   else delete env[ADVISOR_DISABLE_ENV];
   for (const name of SWAP_DISABLE_ENVS) delete env[name];
   for (const name of SUBAGENT_MODEL_ENVS) delete env[name];
+  for (const name of TRUST_PREDICATE_ENVS) delete env[name];
   for (const name of PIN_OVERRIDE_ENVS) delete env[name];
   for (const name of HOST_CREDENTIAL_ENVS) delete env[name];
   if (routing.provider === "moonshot") {
@@ -956,16 +971,22 @@ function enumerateSkillsThrough(
   cwd: string,
   { awaitReclaimed }: { awaitReclaimed: boolean },
 ): Promise<string[] | null> {
-  return call(skillEnumerationSpec(cwd, { awaitReclaimed }), (proc) =>
-    readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
+  return atBoardOwnedConfigDir((configDir) =>
+    call(skillEnumerationSpec(cwd, { awaitReclaimed, configDir }), (proc) =>
+      readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
+    ),
   );
 }
 
 /** skill 列挙の Board call の注文。適合試験(ADR 0186 決定7)の `.mcp.json` の面も同じこれで撃つ(ADR 0341 決定6)。 */
-export const skillEnumerationSpec = (cwd: string, { awaitReclaimed }: { awaitReclaimed: boolean }): BoardCallSpec =>
+export const skillEnumerationSpec = (
+  cwd: string,
+  { awaitReclaimed, configDir }: { awaitReclaimed: boolean; configDir: string },
+): BoardCallSpec =>
   claudeBoardCallSpec({
     kind: "skill enumeration",
     posture: "worker-shaped",
+    configDir,
     command: "claude",
     args: SKILL_ENUM_ARGS,
     cwd,
@@ -1069,14 +1090,17 @@ export const enumerateToolsThrough =
     // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
     // `workspaceSettingsDisposition` が置き場所で隠すか止める(ADR 0346 決定2)。
     atNeutralCwd("tidepool-tools-", (cwd) =>
-      call(toolSurfaceProbeSpec(cwd), (proc) => readInitReport(proc.stdout, readToolSurface)),
+      atBoardOwnedConfigDir((configDir) =>
+        call(toolSurfaceProbeSpec(cwd, configDir), (proc) => readInitReport(proc.stdout, readToolSurface)),
+      ),
     );
 
 /** tool-surface probe の Board call の注文。適合試験(ADR 0186 決定7)も同じこれで撃つ。 */
-export const toolSurfaceProbeSpec = (cwd: string): BoardCallSpec =>
+export const toolSurfaceProbeSpec = (cwd: string, configDir: string): BoardCallSpec =>
   claudeBoardCallSpec({
     kind: "tool-surface probe",
     posture: "worker-shaped",
+    configDir,
     // 版の門を外す唯一の注文: 版が戻ったことを確かめる手段がこの probe である(ADR 0186 決定3)
     bypassVersionGate: true,
     command: "claude",
@@ -1167,7 +1191,7 @@ function workerMcpUnreachable(subject: string, servers: Array<{ name: string; st
 export const claudeMcpReachabilityThrough =
   (call: BoardCall) =>
   (url: string): Promise<ContainmentCapability> =>
-    atNeutralCwd("tidepool-mcp-probe-", async (neutral) => {
+    atNeutralCwd("tidepool-mcp-probe-", (neutral) => atBoardOwnedConfigDir(async (configDir) => {
       // 実 session と同じく profile と cwd を実体の綴りで書く(issue #1954)
       const dir = realpathSync(neutral);
       const mcpConfig = join(dir, "probe.mcp.json");
@@ -1181,6 +1205,8 @@ export const claudeMcpReachabilityThrough =
             workspacePath: dir,
             allowedDomains: [],
             taskTemp: dir,
+            // ADR 0354 決定1: settings の deny と env が同じ dir を名指す
+            configDir,
             lib64: existsSync("/lib64"),
           }),
         ),
@@ -1189,6 +1215,7 @@ export const claudeMcpReachabilityThrough =
         claudeBoardCallSpec({
           kind: "Worker MCP reachability probe",
           posture: "worker-shaped",
+          configDir,
           command: "claude",
           args: [...SKILL_ENUM_ARGS, "--mcp-config", mcpConfig, "--settings", settings],
           cwd: dir,
@@ -1204,7 +1231,7 @@ export const claudeMcpReachabilityThrough =
             "failed to start, a stalled auth prompt, or a timeout) — whether a Claude worker reaches the board is unknown"
           : workerMcpUnreachable("a Claude worker started under the board's sandbox profile", servers);
       return reason === null ? { available: true } : { available: false, reason };
-    });
+    }));
 
 /** Claude Harness の封じ込めの問いのうち、版の一致とツール面(ADR 0186 決定2)。版が
  *  違えばツール面の probe を撃たない。版の門を `probeToolSurfaceCapability` の外に置くのは、
@@ -1783,11 +1810,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // failure, and on any throw between here and the spawn; a failed removal only
     // logs, never stopping the rest of the cleanup (issue #705).
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), taskTempPrefix("claude", task.id))));
-    const removeTaskTemp = () => {
-      try {
-        rmSync(taskTemp, { recursive: true, force: true });
-      } catch (error) {
-        console.error(`[worker] could not remove ${taskTemp}:`, error);
+    // ADR 0354 決定1: the session's CLI state dir, created first thing inside the try below and from then on removed
+    // with the task temp. A sibling of it, not inside it (the task temp is in the sandbox's allowWrite); the task's
+    // prefix lets the startup recovery's task-temp sweep reach it too
+    const sessionDirs = [taskTemp];
+    const removeTaskTempAndConfigDir = () => {
+      for (const dir of sessionDirs) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch (error) {
+          console.error(`[worker] could not remove ${dir}:`, error);
+        }
       }
     };
     let spawnedEventId: number;
@@ -1795,6 +1828,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let child: ContainedProcess;
     let input = "";
     try {
+      // the parent is resolved first, so the one throwing call leaves nothing behind
+      const configDir = mkdtempSync(join(realpathSync(tmpdir()), `${taskTempPrefix("claude", task.id)}config-`));
+      sessionDirs.push(configDir);
       const prompt = taskPrompt(task);
       // dynamic orchestration is a category ban for workers (ADR 0010 addendum /
       // issue #31): "Workflow" is always denied. Per-skill denies (ADR 0025 point
@@ -1926,6 +1962,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             workspacePath,
             allowedDomains: workspace.allowed_domains,
             taskTemp,
+            configDir,
             lib64: existsSync("/lib64"),
             readPaths: place.reads.map((read) => read.path),
           }),
@@ -2042,13 +2079,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // overlay — a spread on top of it could not have removed a key. The git
           // identity carries no key it touches, so layering it after is safe.
           env: {
-            ...workerSpawnEnv(routing.advisor, routing, taskTemp),
+            ...workerSpawnEnv(routing.advisor, routing, taskTemp, configDir),
             ...agentGitIdentityEnv(agent.name),
           },
         },
       );
     } catch (error) {
-      removeTaskTemp();
+      removeTaskTempAndConfigDir();
       throw error;
     }
     const transcriptPath = transcript.streamPath;
@@ -2099,7 +2136,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         return;
       }
       this.running.delete(task.id);
-      removeTaskTemp();
+      removeTaskTempAndConfigDir();
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
       this.recordSpawnFailed(task, sessionId, agent, { error_code: errno.code ?? null, message: err.message });
     });
@@ -2147,7 +2184,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             },
             at: exitedAt,
           }),
-          removeTaskTemp,
+          removeTaskTempAndConfigDir,
           () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id },
             (step) => this.options.onSessionCloseStep ? this.options.onSessionCloseStep(task.id, spawnedEventId, step) : step()),
         ),
