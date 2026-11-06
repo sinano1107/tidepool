@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sendInput } from "./child-stream.js";
@@ -96,6 +96,21 @@ export function atNeutralCwd<T>(prefix: string, probe: (cwd: string) => Promise<
       rmSync(dir, { recursive: true, force: true });
     } catch {
       // best-effort: a leftover empty temp dir is harmless
+    }
+  });
+}
+
+/** A fresh CLI state dir for one call (ADR 0354 決定1: a worker-shaped call without a spawn makes and removes its own),
+ *  with `atNeutralCwd`'s lifetime: removed only after the call settles. Real-path spelled (the parent is resolved
+ *  first, so there is nothing to leak between creating it and resolving it), so a settings deny and the env name the
+ *  same path. Unlike a neutral cwd it may hold the CLI's state afterwards, so a failed removal is logged. */
+export function atBoardOwnedConfigDir<T>(call: (configDir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "tidepool-config-"));
+  return call(dir).finally(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (error) {
+      console.error(`[board-call] could not remove config dir ${dir}:`, error);
     }
   });
 }

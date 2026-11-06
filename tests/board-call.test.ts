@@ -1,5 +1,6 @@
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec, readOutput } from "../src/board-call.js";
+import { atBoardOwnedConfigDir, type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec, readOutput } from "../src/board-call.js";
 import { claudeBoardCallSpec } from "../src/claude-board-call-spec.js";
 import { execThrough } from "../src/claude-worker.js";
 import { type ContainmentCapability, quarantineContainment } from "../src/containment.js";
@@ -526,4 +527,18 @@ it("本文送信中のEPIPEは成功した出力があっても失敗となり�
   t.processes[0]!.stdin.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
   expect(await result).toBeNull();
   expect(t.runtime.forceReclaims).toHaveLength(1);
+});
+
+it.each([["解決"], ["reject"]])("盤面所有の config dir は呼び出しの間だけ空で在り、%s の後には無い(ADR 0354 決定1)", async (settle) => {
+  let seen = "";
+  const run = atBoardOwnedConfigDir(async (dir) => {
+    seen = dir;
+    expect(readdirSync(dir)).toEqual([]);
+    // settings の deny と env が同じ綴りになるよう実体の path で渡す(task temp と同じ)
+    expect(realpathSync(dir)).toBe(dir);
+    if (settle === "reject") throw new Error("口が落ちた");
+    return "ok";
+  });
+  await (settle === "reject" ? expect(run).rejects.toThrow("口が落ちた") : expect(run).resolves.toBe("ok"));
+  expect(existsSync(seen)).toBe(false);
 });

@@ -423,7 +423,7 @@ async function bootWithAdapter(
   provider: Provider = "anthropic",
 ) {
   const proc = recordingSpawn();
-  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
+  onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs); // task temp と config dir の後始末(ADR 0257 / ADR 0354 決定1)
   const runtime = new FakeContainerRuntime(proc.spawn);
   t = await bootTidepool({
     watchdog: WATCHDOG,

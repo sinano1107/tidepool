@@ -1,7 +1,6 @@
-import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { BoardCallSpec } from "../src/board-call.js";
-import { atBoardOwnedConfigDir, claudeBoardCallSpec } from "../src/claude-board-call-spec.js";
+import { claudeBoardCallSpec } from "../src/claude-board-call-spec.js";
 
 const order = { kind: "k", command: "claude", args: ["-p", "/usage"], cwd: "/w", env: {}, limitMs: 1 };
 
@@ -43,18 +42,4 @@ it("worker-shaped の注文は config dir を型で必須に取り、env の2鍵
     expect(env).not.toHaveProperty("CLAUDE_CONFIG_DIR");
     expect(env).not.toHaveProperty("CLAUDE_SECURESTORAGE_CONFIG_DIR");
   }
-});
-
-it.each([["解決"], ["reject"]])("盤面所有の config dir は呼び出しの間だけ空で在り、%s の後には無い(ADR 0354 決定1)", async (settle) => {
-  let seen = "";
-  const run = atBoardOwnedConfigDir(async (dir) => {
-    seen = dir;
-    expect(readdirSync(dir)).toEqual([]);
-    // settings の deny と env が同じ綴りになるよう実体の path で渡す(task temp と同じ)
-    expect(realpathSync(dir)).toBe(dir);
-    if (settle === "reject") throw new Error("口が落ちた");
-    return "ok";
-  });
-  await (settle === "reject" ? expect(run).rejects.toThrow("口が落ちた") : expect(run).resolves.toBe("ok"));
-  expect(existsSync(seen)).toBe(false);
 });

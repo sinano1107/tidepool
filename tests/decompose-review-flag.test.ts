@@ -401,7 +401,7 @@ it.each([
     });
     const logDir = await tempDir("review-tier-logs-");
     const proc = recordingSpawn();
-    onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
+    onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs); // task temp と config dir の後始末(ADR 0257 / ADR 0354 決定1)
     t = await bootTidepool({
       // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>

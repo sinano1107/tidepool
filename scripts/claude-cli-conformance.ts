@@ -13,9 +13,8 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
-import { type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
+import { atBoardOwnedConfigDir, type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
 import { containerRuntimeFor } from "../src/cgroup-container.js";
-import { atBoardOwnedConfigDir } from "../src/claude-board-call-spec.js";
 import { cliAuthCommandThrough, createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import {
   boardCallShotSpec,

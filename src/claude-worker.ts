@@ -3,11 +3,11 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
+import { atBoardOwnedConfigDir, atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
-import { atBoardOwnedConfigDir, claudeBoardCallSpec, configDirEnv } from "./claude-board-call-spec.js";
+import { claudeBoardCallSpec, configDirEnv } from "./claude-board-call-spec.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
 import { cliAuthStop } from "./cli-auth.js";
@@ -637,7 +637,7 @@ export interface ProviderRouting extends ExecutionSetting {
 }
 
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
- *  identity vars. Seven **independent** concerns, deliberately not named for the
+ *  identity vars. Ten **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
@@ -684,6 +684,13 @@ export interface ProviderRouting extends ExecutionSetting {
  *     CLI passes every env but its own credentials through to Bash (ADR 0070's
  *     measurement), so a host-exported GitHub / OpenAI token would reach the
  *     worker.
+ *  9. `CLAUDE_CONFIG_DIR` at the session's board-owned config dir and
+ *     `CLAUDE_SECURESTORAGE_CONFIG_DIR` set empty (`configDirEnv`, ADR 0354
+ *     決定1): the host human's `~/.claude.json` trust and include approvals never
+ *     reach a worker, while credentials stay at the host's default store.
+ *  10. `sparse.expectFilesOutsideOfPatterns=true` appended to `GIT_CONFIG_*`
+ *     (ADR 0293 / ADR 0037 機構2): the sandbox's settings stub must not clear a
+ *     sparse S bit.
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
  *  both directions: an anthropic spawn never inherits the Moonshot injection
@@ -704,11 +711,13 @@ export function workerSpawnEnv(
   advisor: string | undefined,
   routing: ProviderRouting,
   taskTemp: string,
+  configDir: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     TMPDIR: taskTemp,
     CLAUDE_CODE_TMPDIR: taskTemp,
+    ...configDirEnv(configDir),
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
@@ -1801,12 +1810,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // failure, and on any throw between here and the spawn; a failed removal only
     // logs, never stopping the rest of the cleanup (issue #705).
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), taskTempPrefix("claude", task.id))));
-    // ADR 0354 決定1: the CLI state dir, a sibling of the task temp (that one is in the sandbox's allowWrite), with
-    // its lifetime. The task's prefix lets the startup recovery's task-temp sweep reach it too
-    // shortcut: if this mkdtemp throws, the task temp above is left behind; move both into the try if that is ever observed
-    const configDir = realpathSync(mkdtempSync(join(tmpdir(), `${taskTempPrefix("claude", task.id)}config-`)));
-    const removeTaskTemp = () => {
-      for (const dir of [taskTemp, configDir]) {
+    // ADR 0354 決定1: the session's CLI state dir, created first thing inside the try below and from then on removed
+    // with the task temp. A sibling of it, not inside it (the task temp is in the sandbox's allowWrite); the task's
+    // prefix lets the startup recovery's task-temp sweep reach it too
+    const sessionDirs = [taskTemp];
+    const removeTaskTempAndConfigDir = () => {
+      for (const dir of sessionDirs) {
         try {
           rmSync(dir, { recursive: true, force: true });
         } catch (error) {
@@ -1819,6 +1828,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let child: ContainedProcess;
     let input = "";
     try {
+      // the parent is resolved first, so the one throwing call leaves nothing behind
+      const configDir = mkdtempSync(join(realpathSync(tmpdir()), `${taskTempPrefix("claude", task.id)}config-`));
+      sessionDirs.push(configDir);
       const prompt = taskPrompt(task);
       // dynamic orchestration is a category ban for workers (ADR 0010 addendum /
       // issue #31): "Workflow" is always denied. Per-skill denies (ADR 0025 point
@@ -2067,14 +2079,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // overlay — a spread on top of it could not have removed a key. The git
           // identity carries no key it touches, so layering it after is safe.
           env: {
-            ...workerSpawnEnv(routing.advisor, routing, taskTemp),
-            ...configDirEnv(configDir),
+            ...workerSpawnEnv(routing.advisor, routing, taskTemp, configDir),
             ...agentGitIdentityEnv(agent.name),
           },
         },
       );
     } catch (error) {
-      removeTaskTemp();
+      removeTaskTempAndConfigDir();
       throw error;
     }
     const transcriptPath = transcript.streamPath;
@@ -2125,7 +2136,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         return;
       }
       this.running.delete(task.id);
-      removeTaskTemp();
+      removeTaskTempAndConfigDir();
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
       this.recordSpawnFailed(task, sessionId, agent, { error_code: errno.code ?? null, message: err.message });
     });
@@ -2173,7 +2184,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             },
             at: exitedAt,
           }),
-          removeTaskTemp,
+          removeTaskTempAndConfigDir,
           () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id },
             (step) => this.options.onSessionCloseStep ? this.options.onSessionCloseStep(task.id, spawnedEventId, step) : step()),
         ),

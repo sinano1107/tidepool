@@ -196,7 +196,8 @@ mkdir -p "$OUTSIDE"
 # run, shared by every role. Under $WORK so it lives and dies with it.
 TASK_TEMP="$WORK/task-temp"
 mkdir -m 700 "$TASK_TEMP"
-# The board's per-session CLAUDE_CONFIG_DIR (ADR 0354), which the profile denies to Edit; same lifetime.
+# Only a path for --config-dir: the emitted profile denies Edit on it (ADR 0354 決定1). This canary's
+# `claude -p` does not set CLAUDE_CONFIG_DIR yet (#2993 / #2994). Under $WORK, removed with it.
 CONFIG_DIR="$WORK/config-dir"
 mkdir -m 700 "$CONFIG_DIR"
 

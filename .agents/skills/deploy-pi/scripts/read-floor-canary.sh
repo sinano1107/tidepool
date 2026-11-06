@@ -187,7 +187,8 @@ mkdir -p "$WS"
 git init -q "$WS"
 # The board's own shape and length (see the header); a uuid stands in for the task id.
 TASK_TEMP=$(mktemp -d "/tmp/tidepool-claude-$(cat /proc/sys/kernel/random/uuid)-XXXXXX")
-# The board's per-session CLAUDE_CONFIG_DIR (ADR 0354), which the profile denies to Edit. Under $WORK, removed with it.
+# Only a path for --config-dir: the emitted profile denies Edit on it (ADR 0354 決定1). This canary's
+# `claude -p` does not set CLAUDE_CONFIG_DIR yet (#2993 / #2994). Under $WORK, removed with it.
 CONFIG_DIR="$WORK/config-dir"
 mkdir -m 700 "$CONFIG_DIR"
 TMP_TARGET=$(mktemp /tmp/read-floor-canary-XXXXXX)

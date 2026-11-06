@@ -165,7 +165,8 @@ prepare() {
   git init -q "$ROOM"
   TASK_TEMP=$(mktemp -d "/tmp/tidepool-$cli-$(cat /proc/sys/kernel/random/uuid)-XXXXXX")
   TASK_TEMPS+=("$TASK_TEMP")
-  # The board's per-session CLAUDE_CONFIG_DIR (ADR 0354), denied to Edit by the Claude profile. Under $WORK, removed with it.
+  # Only a path for the Claude profile's --config-dir: it denies Edit on it (ADR 0354 決定1). The Claude
+  # `claude -p` below does not set CLAUDE_CONFIG_DIR yet (#2993 / #2994). Under $WORK, removed with it.
   CONFIG_DIR=$WORK/$cli/config-dir
   mkdir -m 700 "$CONFIG_DIR"
   cp "$REPO/$PROBE" "$ROOM/" || { fail "$REPO/$PROBE is missing — is that checkout up to date?"; exit 2; }

@@ -1,5 +1,4 @@
-import { realpathSync } from "node:fs";
-import { atNeutralCwd, type BoardCallSpec, type ClaudeBoardCallBrand, type ClaudeBoardCallPosture } from "./board-call.js";
+import type { BoardCallSpec, ClaudeBoardCallBrand, ClaudeBoardCallPosture } from "./board-call.js";
 
 /** 姿勢 → フラグの唯一の写像(ADR 0341 決定2)。runner の module に置かないのは、runner が claude-worker.ts から原語を
  *  import していて、claude-worker.ts がここを引くと import の循環になるから(原語の移設は #2472)。 */
@@ -20,11 +19,6 @@ export const POSTURE_FLAGS: Record<ClaudeBoardCallPosture, readonly string[]> = 
  *  置き場(Mac の keychain、Linux の `~/.claude/.credentials.json`)に残す。worker の spawn env と注文が同じこれで綴る。 */
 export const configDirEnv = (configDir: string) => ({ CLAUDE_CONFIG_DIR: configDir, CLAUDE_SECURESTORAGE_CONFIG_DIR: "" });
 
-/** spawn の無い worker の形の呼び出しの config dir(ADR 0354 決定1): 呼び出しごとに作って消す —— `atNeutralCwd` と同じ寿命。
- *  実体の path で渡すのは、MCP 到達性 probe の settings の deny と env が同じ綴りになるため。 */
-export const atBoardOwnedConfigDir = <T>(call: (configDir: string) => Promise<T>): Promise<T> =>
-  atNeutralCwd("tidepool-claude-config-", async (dir) => call(realpathSync(dir)));
-
 type ClaudeBoardCallSpec = Extract<BoardCallSpec, { harness: "claude-code" }>;
 
 /** 注文の入力: worker-shaped だけが config dir を型で必須に取る(ADR 0354 決定1)—— 新しい呼び出し場所が忘れられない。 */
@@ -44,5 +38,5 @@ export const claudeBoardCallSpec = <S extends ClaudeBoardCallInput>(
     harness: "claude-code",
     args: [...POSTURE_FLAGS[spec.posture], ...spec.args],
     env: configDir === undefined ? spec.env : { ...spec.env, ...configDirEnv(configDir) },
-  } as unknown as Omit<S, "configDir"> & { harness: "claude-code" } & ClaudeBoardCallBrand;
+  } as Omit<S, "configDir"> & { harness: "claude-code" } & ClaudeBoardCallBrand;
 };

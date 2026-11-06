@@ -1,9 +1,13 @@
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
+import type { BoardCall } from "../src/board-call.js";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import {
   checkClaudeCliVersion,
+  enumerateHostSkills,
   enumerateToolsThrough,
+  enumerateWorkspaceSkills,
   probeClaudeHarnessCapability,
   probeToolSurfaceCapability,
 } from "../src/claude-worker.js";
@@ -126,6 +130,26 @@ it("ping は Board call の口を通り、口が答えを返さなければ(上�
   await clock.advance(60_000);
 
   expect((await result).available).toBe(false);
+});
+
+// ADR 0354 決定1: worker の形の ping / probe の process は worker と同じ CLI 状態の下で走る —— spawn の無い呼び出しは
+// 呼び出しごとに dir を作り、終われば消す
+it.each([
+  ["workspace を cwd にする skill 列挙", (call: BoardCall) => enumerateWorkspaceSkills(call)("/workspaces/sandbox")],
+  ["neutral cwd の skill 列挙", (call: BoardCall) => enumerateHostSkills(call)],
+  ["tool-surface probe", (call: BoardCall) => enumerateToolsThrough(call)()],
+] as const)("%s の process の env は呼び出しの間だけ在る空の config dir を名指し、credentials は空の set で host に残す", async (_, probe) => {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)), new FakeClock());
+  const result = probe(boardCall);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
+  const { env } = spawn.calls[0]!;
+  expect(readdirSync(env.CLAUDE_CONFIG_DIR!)).toEqual([]);
+  expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe("");
+
+  spawn.emitExit(0, null);
+  await result;
+  expect(existsSync(env.CLAUDE_CONFIG_DIR!)).toBe(false);
 });
 
 it("ping が allowlist 外のツールを観測したら不成立 — 具体名が残る", async () => {

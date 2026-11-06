@@ -57,7 +57,7 @@ const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${
 async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, ModelProbe>>; watchdog?: WatchdogConfig } = {}) {
   const provider = options.provider ?? "anthropic";
   const proc = recordingSpawn();
-  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
+  onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs); // task temp と config dir の後始末(ADR 0257 / ADR 0354 決定1)
   const registryDir = await makeRegistry();
   const logDir = await tempDir("row-refusal-logs-");
   const moonshotApiKeyFile = join(logDir, "moonshot-api-key");

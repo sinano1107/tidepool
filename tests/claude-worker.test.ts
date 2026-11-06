@@ -538,7 +538,7 @@ describe("ClaudeCodeWorker", () => {
     const workerEnv = workerSpawnEnv(undefined, {
       provider: "anthropic", model: "opus", effort: null, advisor: undefined,
       tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: undefined,
-    }, tmpdir());
+    }, tmpdir(), tmpdir());
 
     for (const [label, env, tag] of [
       ["control", process.env, "H"],
@@ -580,7 +580,7 @@ describe("ClaudeCodeWorker", () => {
     const env = workerSpawnEnv(undefined, {
       provider: "moonshot", model: "kimi-k3[1m]", effort: null, advisor: undefined,
       tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: "test-key",
-    }, tmpdir());
+    }, tmpdir(), tmpdir());
 
     expect(env).toMatchObject({
       GIT_CONFIG_COUNT: "3",
@@ -5633,27 +5633,6 @@ describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
     expect(args).toContain("--strict-mcp-config");
     expect(args).not.toContain("--settings");
-  });
-
-  // ADR 0354 決定1: worker の形の ping / probe は worker と同じ CLI 状態の下で走る —— spawn の無い呼び出しは呼び出しごとに作って消す
-  it.each([
-    ["ホストの skill 列挙", (call: BoardCall) => enumerateHostSkills(call)],
-    ["workspace を cwd にする skill 列挙", (call: BoardCall) => enumerateWorkspaceSkills(call)("/workspaces/sandbox")],
-    ["tool-surface probe", (call: BoardCall) => enumerateToolsThrough(call)()],
-  ] as const)("%s は呼び出しの間だけ在る空の config dir を env に載せ、credentials は空の set で host に残す", async (_, probe) => {
-    const seen: Array<{ env: NodeJS.ProcessEnv; entries: string[] }> = [];
-    const call = (async (spec: BoardCallSpec) => {
-      seen.push({ env: spec.env, entries: readdirSync(spec.env.CLAUDE_CONFIG_DIR!) });
-      return null;
-    }) as BoardCall;
-
-    await probe(call);
-
-    expect(seen).toHaveLength(1);
-    const [{ env, entries }] = seen as [(typeof seen)[0]];
-    expect(entries).toEqual([]);
-    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe("");
-    expect(existsSync(env.CLAUDE_CONFIG_DIR!)).toBe(false);
   });
 
   it("tool-surface probe の argv は姿勢を先に置いた同じ集合のままである(封じ込めの観測は変わらない)", () => {

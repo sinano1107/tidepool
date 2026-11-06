@@ -1262,14 +1262,14 @@ export function recordingSpawn() {
   };
   /** Claude worker の task temp(ADR 0257)と config dir(ADR 0354 決定1)を、子を exit させずに消す。盤面を止めた後の
    *  `onTestFinished` から呼べる —— exit を撃つと閉じた DB に後始末が書きにいく。 */
-  const removeClaudeTaskTemps = () => {
+  const removeClaudeTaskTempsAndConfigDirs = () => {
     for (const { env } of calls) {
       for (const dir of [env.TMPDIR, env.CLAUDE_CONFIG_DIR]) {
         if (dir && basename(dir).startsWith("tidepool-claude-")) rmSync(dir, { recursive: true, force: true });
       }
     }
   };
-  return { calls, processes, killed, killedByProcess, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError, removeClaudeTaskTemps };
+  return { calls, processes, killed, killedByProcess, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError, removeClaudeTaskTempsAndConfigDirs };
 }
 
 /** preflight の skills/list(段 1)の app-server の stdout。 */
