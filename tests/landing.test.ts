@@ -22,6 +22,9 @@ import {
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
 import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError } from "../src/registry.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import { Slot } from "../src/slot.js";
 import {
   answerQuestion,
   cancelTaskDirectly,
@@ -51,7 +54,7 @@ import {
   type WorkspaceConfig,
   writeBoardRefs,
 } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, holdAfterMerge, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, fakeHead, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote, startGitHttpRemote } from "./git-http-remote.js";
 import {
   commitWork,
@@ -5073,25 +5076,52 @@ it.each([
   expect(getTask(db, question.id)?.status).toBe("todo");
 });
 
-// ADR 0351 決定2: 基準は切れないので、休止中に載った不明な commit の行き先は着地の回答の時刻に依らない(#2953)
+// ADR 0351 決定2: 基準は切れないので、休止中に載った帯域外の commit の行き先は着地の回答の時刻に依らない(#2953)
 it.each([
-  ["次の pickup の前", false],
-  ["次の pickup の後", true],
-])("休止中に保護ブランチへ載った不明な commit は、着地の merge 回答が%sでも回答を拒んで quarantine し、保護ブランチを動かさない", async (_shape, pickedUp) => {
-  const workspace = await makeWorkspace("landing-rest-unknown-commit");
+  ["次の pickup の前(着地の帯域外判定が止める)", false],
+  ["次の pickup の後(pickup の比較が止める)", true],
+])("休止中に保護ブランチへ載った帯域外の commit は、着地の merge 回答が%sでも workspace を quarantine し、回答を拒んで保護ブランチを動かさない", async (_shape, pickedUp) => {
+  const workspace = await makeWorkspace("landing-rest-out-of-band");
   const { db, clock } = await openBoard();
   const work = await recordedWork(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
   commitWork(workspace.path, "out-of-band.txt", "moved by hand while the checkout rested\n");
   const moved = git(workspace.path, "rev-parse", "refs/heads/main");
-  if (pickedUp) await expect(prepareWorkspaceAtPickup(db, workspace, landingWork(db, clock))).rejects.toThrow(`now: ${moved} refs/heads/main`);
+  if (pickedUp) {
+    await pickUpOnce(db, clock, workspace);
+    expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`now: ${moved} refs/heads/main`);
+  }
 
-  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow("moved out of band");
+  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow(DomainError);
 
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
   expect(getTask(db, question.id)?.status).toBe("todo");
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
 });
+
+/** scheduler の pickup を1回撃ち、その workspace の quarantine が立つまで待つ(pickup の比較の停止、ADR 0274)。 */
+async function pickUpOnce(db: Db, clock: FakeClock, workspace: WorkspaceConfig): Promise<void> {
+  const worker = new ScriptedWorker(clock);
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    workspace,
+    resolveWorkspace: () => workspace,
+  });
+  await clock.advance(HOURLY);
+  await vi.waitFor(() => expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined());
+  scheduler.stop();
+  expect(worker.started).toEqual([]);
+}
 
 // ADR 0103 決定4 の否定側: 記録と一致していれば、着地のコンフリクトは回答の拒否であって隔離ではない。
 // 拒否の後も着地 question が開いたまま残る(ADR 0137 決定3)ので、人間は直してもう一度答えられる。

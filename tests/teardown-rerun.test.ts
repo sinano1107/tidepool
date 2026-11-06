@@ -330,7 +330,7 @@ it("remote-backed の完了の merge back の後の再実行は、fetch が動�
 });
 
 // ADR 0351 決定2: 基準は切れない —— 再実行の後始末の後も次の pickup は比べ、release はタスクブランチの行を無条件に畳む(#2953)。
-it("再実行の後始末の後に休止中の main へ載った不明な commit は、次の pickup が refs/heads/main を名指して止める(#2911 の形)", async () => {
+it("再実行の後始末の後に休止中の main へ載った帯域外の commit は、次の pickup が refs/heads/main を名指して止める(#2911 の形)", async () => {
   const s = await settledSession("completed");
   await teardownThrewAfterTreeRule(s);
   await acceptTeardownQuarantine(s.deps, s.task.id);
@@ -349,8 +349,7 @@ it("盤面が HEAD を休止位置へ動かして畳む前に落ちた後始末�
 
   releaseWorkspace(s.db, s.ws, getTask(s.db, s.task.id)!, s.clock.now());
 
-  const row = s.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(s.ws.name) as string;
-  expect(row).toContain(`${git(s.ws.path, "rev-parse", s.branch)} refs/heads/${s.branch}`);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
   const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.clock.now(), ...HUMAN_WEBUI);
   await prepareWorkspaceAtPickup(s.db, s.ws, next);
   expect(head(s)).toBe(`task/${next.id}`);
