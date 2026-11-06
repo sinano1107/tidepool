@@ -511,7 +511,6 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     }],
     [".claude/agents が空のディレクトリ", async (dir) => {
       await mkdir(join(dir, ".claude", "agents"), { recursive: true });
-      await writeFile(join(dir, ".claude", "agents", ".gitkeep"), "");
     }],
     ["*.md でないファイルだけ", async (dir) => {
       await mkdir(join(dir, ".claude", "agents"), { recursive: true });

@@ -704,7 +704,8 @@ function hasSubagentDefinitions(path: string): boolean {
  *  独立に要る(issue #686 — ignore されていなければ `uncommitted_changes` と両方立つが、
  *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): `settings.json` の置き場所(tracked か未追跡か)は worker 向けの判定
  *  `workspaceSettingsDisposition` をそのまま使い、中身は門の信号の `settingsDeclareHooks` だけが読む。`settings.local.json` は
- *  独立に、link を辿らない `lstat` で存在だけを見る。 */
+ *  独立に、link を辿らない `lstat` で存在だけを見る。
+ *  `.claude/agents` の subagent 定義は `hasSubagentDefinitions` が在否だけを見る(ADR 0354 決定3)。 */
 function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
   // --no-optional-locks: 門が人間の生きた作業ツリーの index.lock を取らない
