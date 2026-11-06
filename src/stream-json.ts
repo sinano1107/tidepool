@@ -38,12 +38,12 @@ const isInitLine = (parsed: Record<string, unknown> | null): boolean =>
   parsed !== null && parsed.type === "system" && parsed.subtype === "init";
 
 /** The init line's string-array fields. `skills` is ADR 0025's enumeration;
- *  `tools` is the surface ADR 0039 compares against the board's Tool allowlist.
- *  Fail-closed: a non-init line, or a field that isn't an array of strings,
+ *  `agents` the subagents ADR 0354 決定2 closes by name; `tools` is the surface ADR 0039 compares against the board's
+ *  Tool allowlist. Fail-closed: a non-init line, or a field that isn't an array of strings,
  *  reads as "not the init report" rather than as an empty answer. */
 export function readInitField(
   parsed: Record<string, unknown> | null,
-  field: "skills" | "tools",
+  field: "skills" | "agents" | "tools",
 ): string[] | null {
   if (!isInitLine(parsed)) return null;
   const value = (parsed as Record<string, unknown>)[field];

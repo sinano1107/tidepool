@@ -134,14 +134,17 @@ const SKILLED_DECKHAND = {
     "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
     "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
 };
-/** skill 許可リストが空の agent —— ping の無い形で、spawn は start() の中で同期に起きる(ADR 0335 決定1)。 */
+/** skill 許可リストが空の agent —— これも列挙の ping を撃ち、spawn はその `.then` の中から起きる(ADR 0354 決定2)。 */
 const SKILLLESS_DECKHAND = {
   "agents/deckhand.md":
     "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
     "description: General work agent\nskills: []\n---\nYou are Deckhand.\n",
 };
 const bootClaudeAfterSkillEnumeration = () =>
-  bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => ["code-review"], enumerateHostSkills: async () => ["code-review"] });
+  bootClaude(SKILLED_DECKHAND, {
+    enumerateSkills: async () => ({ skills: ["code-review"], agents: [] }),
+    enumerateHostSkills: async () => ({ skills: ["code-review"], agents: [] }),
+  });
 
 const HARNESSES = [
   ["Claude", () => bootClaude(SKILLLESS_DECKHAND)],
@@ -209,8 +212,8 @@ const NON_OPEN_FAILURES = [
     "Claude(spawn の入力の dir が無い)",
     async () =>
       bootClaude(SKILLED_DECKHAND, {
-        enumerateSkills: async () => ["code-review"],
-        enumerateHostSkills: async () => ["code-review"],
+        enumerateSkills: async () => ({ skills: ["code-review"], agents: [] }),
+        enumerateHostSkills: async () => ({ skills: ["code-review"], agents: [] }),
         logDir: join(await tempDir("transcript-failure-logs-"), "gone"),
       }),
   ],
