@@ -751,7 +751,7 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
  *  git に進まずに戻る —— 呼び手は戻った後に同じ門を読む。 */
 type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
 
-/** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。タスクブランチも基準も走る場所だけのもの
+/** pickup の準備: 開く場所すべての ref の基準と鮮度を確かめ、走る場所だけにタスクブランチを立てる
  *  (実環境に root のブランチを立てない、ADR 0273 決定2)。
  *  ADR 0351 決定2: 基準は切れない —— 行が無いか NULL なら最初の撮り、あれば盤面が書く前に除外無しで比べる。以後の書き込みは口が畳む。
  *  比較は読む場所の後半(`reads`、ADR 0329 決定10・11)より前 —— 走る場所の違反は読む場所を書く前に止まる。 */
@@ -761,8 +761,7 @@ export async function prepareWorkspaceAtPickup(
   task: Task,
   board: PickupPrep & { reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }> } = {},
 ): Promise<void> {
-  if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
-  else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  prepareRefBaseline(db, workspace);
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
   if (rootId === undefined || task.type === "interview") {
@@ -774,7 +773,14 @@ export async function prepareWorkspaceAtPickup(
     }
   }
   for (const read of board.reads ?? []) {
-    if (read.place.path === workspace.path) continue;
+    if (safeRealpath(read.place.path) === safeRealpath(workspace.path)) continue;
+    // ADR 0351 決定6: 読む場所も後半が書く前に比べ、違反は読む場所の名前で止める。
+    try {
+      prepareRefBaseline(db, read.place);
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err;
+      throw new PickupGateError(read.place, err);
+    }
     await firePickupPredicates(db, read.place, read.predicates, "after-open", board);
     if (board.live?.() === false) return;
   }
@@ -835,6 +841,11 @@ function snapshotKey(workspace: WorkspaceConfig): string {
  *  (`writeBoardRefs`)、比較が2値行を畳む(`compareAndFoldBaseline`)。 */
 function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   writeSnapshot(db, snapshotKey(workspace), currentRefs(workspace));
+}
+
+function prepareRefBaseline(db: Db, workspace: WorkspaceConfig): void {
+  if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
+  else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
 }
 
 function writeSnapshot(db: Db, key: string, refs: string): void {
