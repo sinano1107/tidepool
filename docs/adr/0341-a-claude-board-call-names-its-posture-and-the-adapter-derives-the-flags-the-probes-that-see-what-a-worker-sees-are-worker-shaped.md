@@ -1,5 +1,7 @@
 # Claude の Board call は姿勢を名指し、フラグは adapter が導く —— worker が見るものを観測する probe は worker の形で撃つ
 
+**Status 追記: worker-shaped posture は flags に加えて env の半分(盤面所有の `CLAUDE_CONFIG_DIR`、`CLAUDE_SECURESTORAGE_CONFIG_DIR=""`)を持つ** —— worker が見るものを見る probe と ping は、worker と同じ CLI 状態の下で走る([ADR 0354](0354-a-claude-workers-cli-state-is-board-owned-and-fresh-per-spawn-and-a-checkouts-subagent-definitions-are-denied-by-name.md) 決定1、2026-11-06、issue #2936)。
+
 **Status 追記: 決定2 の入口は runner の module でなく、import を持たない adapter 側の独立 module `src/claude-board-call-spec.ts` に置く**
 —— runner(`src/claude-board-call-runner.ts`)は `claude-worker.ts` から値を import しており、`claude-worker.ts` が runner の入口を
 import すると循環になり Biome の `noImportCycles`(error)が落とす(#2809 の実装で実測)。写像が adapter 側に1つで、口がフラグを組まない
