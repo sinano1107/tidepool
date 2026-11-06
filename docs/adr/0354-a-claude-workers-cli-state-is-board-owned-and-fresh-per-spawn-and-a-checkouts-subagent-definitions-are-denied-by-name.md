@@ -33,7 +33,8 @@ file を読む承認、binary の読み)もあり、同じ根の2例目である
    読み)。後者が要るのは、projectSettings の agent が同名の built-in / user agent を黙って置き換える(binary の読み)ので、名前の集合の
    引き算では同名の衝突が見えないから —— ADR 0335 決定1 が `.claude/skills` の entry 名を読むのと同じ写し。同名は閉じる側(worker が
    その built-in を失う)。綴りは実測どおり `--disallowedTools Agent(<name>)`(`Task(<name>)` ではない)。列挙の失敗は spawn の失敗
-   (ADR 0025 決定6)。session 中の定義の追加は Write が permission で拒まれ Bash は sandbox の stub(triage の実測)だが、CLI の
+   (ADR 0025 決定6)。2本の ping は skill の allowlist に依らず常に撃つ —— `[]` の agent も subagent は持つので、ADR 0025 決定5 の
+   「`[]` は ping 不要」は skill の deny についてだけ残る(`--disable-slash-commands` はそのまま)。session 中の定義の追加は Write が permission で拒まれ Bash は sandbox の stub(triage の実測)だが、CLI の
    再走査は測っていないので `Edit(<ws>/.claude/agents/**)` の deny を settings の deny と並べて置く(ADR 0037 機構2 の重ね方)。理由は hooks ではなく `permissionMode` —— 定義が床の軸に触る以上、CLAUDE.md や `@workspace`
    skill と同じ「model に届く文」ではない。ADR 0287 決定3 の「親の采配」は model の軸の決定で、矛盾しない。
 3. **登録の門は checkout に `.claude/agents/*.md` があることを live-checkout 信号(#383)の1コードとして提示する。** tracked か否かも
@@ -60,7 +61,8 @@ file を読む承認、binary の読み)もあり、同じ根の2例目である
 
 - Status 追記: ADR 0346(「唯一の口」)、ADR 0287 決定3(射程は model の軸)。
 - GLOSSARY: Subagent(checkout の定義は届かない)、床(worker の CLI process が読む host の per-checkout 状態)。
-- Status 追記: ADR 0341(posture に env の半分)。配線は `LiveCheckoutSignal` の union と WebUI の文言表。
+- Status 追記: ADR 0341(posture に env の半分)、ADR 0025 決定5(`[]` でも ping は撃つ)。posture の env の半分は、呼び出しの寿命を
+  知る runner が付けて消す(注文を組む側は純粋のまま)。配線は `LiveCheckoutSignal` の union と WebUI の文言表。
 - 観測は spawn env の宣言テスト(ADR 0287 決定5 の形)と、ADR 0037 の hook canary に agent frontmatter の行を足す形 —— 対照の行は
   使い捨ての `CLAUDE_CONFIG_DIR` に trust を seed して hook が走ることを示す(R1 の形)。skip の文は
   debug log にしか出ないので stream では観測しない。fresh な config dir で CLI の既定 model が変わる(opus → sonnet、実測)が、盤面は
