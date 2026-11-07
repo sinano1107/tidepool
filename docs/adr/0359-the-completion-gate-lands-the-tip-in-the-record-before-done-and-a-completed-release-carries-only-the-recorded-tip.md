@@ -40,4 +40,5 @@ commit が足されていれば ref が進んで祖先へ運ばれる、未 comm
 - Status 追記: ADR 0084 決定2、ADR 0109 決定3、ADR 0350 決定1、ADR 0356 決定2、ADR 0357 決定2。GLOSSARY.md: 「報告後の書き込み」を立て、
   Slot-release tree rule と task の checkout の行を直す。
 - 名前の場所で走る完了経路の検査(task の checkout でない分岐)は site を持たない —— work は全部 task の checkout で走る。spec で消す。
+- `cancelled` の解放(ADR 0304)は決定3 でも決定5 でもなく今日の形のまま —— 読めなければ event を書いて checkout を残し、question は立てない(唯一の写しを消さない)。
 - 実装は1 slice、#3053 のコメントが spec。#3031(受験者の解放)と #3033(view の上限)はこの決定に乗る。
