@@ -69,7 +69,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, sessionId, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, sessionId, stubHostEnvDecoys, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -571,7 +571,8 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
-  it("worker の sparse 設定は既存の GIT_CONFIG_* を残して後ろに足し、既存の false より優先する(#2943)", () => {
+  // ADR 0358 決定1: host の GIT_CONFIG_* は列挙に無いので継がず、sparse の設定は index 0 に載る
+  it("worker の sparse 設定は host の GIT_CONFIG_* を継がず、index 0 に載る(#2943)", () => {
     vi.stubEnv("GIT_CONFIG_COUNT", "2");
     vi.stubEnv("GIT_CONFIG_KEY_0", "core.quotePath");
     vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
@@ -585,15 +586,12 @@ describe("ClaudeCodeWorker", () => {
     }, tmpdir(), tmpdir());
 
     expect(env).toMatchObject({
-      GIT_CONFIG_COUNT: "3",
-      GIT_CONFIG_KEY_0: "core.quotePath", GIT_CONFIG_VALUE_0: "false",
-      GIT_CONFIG_KEY_1: "sparse.expectFilesOutsideOfPatterns", GIT_CONFIG_VALUE_1: "false",
-      GIT_CONFIG_KEY_2: "sparse.expectFilesOutsideOfPatterns", GIT_CONFIG_VALUE_2: "true",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns", GIT_CONFIG_VALUE_0: "true",
     });
-    expect(execFileSync("git", ["config", "--get", "core.quotePath"], { env }).toString().trim()).toBe("false");
+    expect(env.GIT_CONFIG_KEY_1).toBeUndefined();
     expect(execFileSync("git", ["config", "--get", "sparse.expectFilesOutsideOfPatterns"], { env }).toString().trim()).toBe("true");
     expect(process.env.GIT_CONFIG_COUNT).toBe("2");
-    expect(process.env.GIT_CONFIG_KEY_2).toBeUndefined();
   });
 
   it("ADR 0024 の不変条件: 盤面が注入する identity env は GIT_* 4変数のみで、トークンを含まない", () => {
@@ -5111,61 +5109,103 @@ You are Kipper, the tidepool board's Kimi work agent.
     return path;
   }
 
-  it("anthropic の spawn env は Moonshot の注入一式を除去し、worker の固定値を載せる", async () => {
-    // これは挙動の回帰ではなく env マップの意図的な変更である: これまでの除去は
-    // 向き先・トークンの2つだったが、moonshot に注入する一式すべて(+
-    // ANTHROPIC_MODEL)を相手から除去する形に対称化した(注入一覧と除去一覧は
-    // 同じ定数から導かれる)。`--model claude-sonnet-5-5` のピン留めがある限り、env の
-    // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
-    // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
-    // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。後から足したのは
-    // 自動更新の停止(ADR 0186 決定4)、task temp(ADR 0257 決定2)、sparse の S bit 保護(ADR 0293)、盤面所有の config dir(ADR 0354 決定1)である。
-    vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
+  // ADR 0358 決定1・2・5: spawn env は盤面が列挙したものだけ —— host の囮(秘密の形の名前、旧除去一覧の名前、Moonshot の
+  // routing 一式、host の GIT_CONFIG_*)はどれも届かず、expected は literal(#2478 の偽陽性と失敗出力の値の露出を消す)。
+  // ANTHROPIC_MODEL が無くても実効挙動は不変: モデルはフラグでピン留めされる。
+  it("anthropic の spawn env は列挙と完全一致し、host の囮は届かない", async () => {
+    stubHostEnvDecoys();
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
     vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
     vi.stubEnv("GIT_CONFIG_COUNT", "1");
     vi.stubEnv("GIT_CONFIG_KEY_0", "maintenance.auto");
     vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
-    try {
-      const { start, calls } = await makeWorker();
-      start();
-      await vi.waitFor(() => expect(calls).toHaveLength(1));
-      const expected: NodeJS.ProcessEnv = {
-        ...process.env,
-        CLAUDE_STREAM_IDLE_TIMEOUT_MS: "600000",
-        API_TIMEOUT_MS: "600000",
-        DISABLE_AUTOUPDATER: "1",
-        CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
-        TMPDIR: calls[0]!.env.TMPDIR,
-        CLAUDE_CODE_TMPDIR: calls[0]!.env.TMPDIR,
-        CLAUDE_CONFIG_DIR: calls[0]!.env.CLAUDE_CONFIG_DIR,
-        CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
-        GIT_AUTHOR_NAME: "deckhand",
-        GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
-        GIT_COMMITTER_NAME: "deckhand",
-        GIT_COMMITTER_EMAIL: "deckhand@tidepool.invalid",
-        GIT_CONFIG_COUNT: "2",
-        GIT_CONFIG_KEY_1: "sparse.expectFilesOutsideOfPatterns",
-        GIT_CONFIG_VALUE_1: "true",
-      };
-      delete expected.ANTHROPIC_BASE_URL;
-      delete expected.ANTHROPIC_AUTH_TOKEN;
-      delete expected.ANTHROPIC_MODEL;
-      // host の GitHub / OpenAI の資格情報も載らない(issue #2469)—— 開発者の shell に GH_TOKEN があっても落ちない
-      for (const name of HOST_CREDENTIAL_ENVS) delete expected[name];
-      // sandbox 下の CLI から npm test を走らせても落ちない(ADR 0354 決定1)
-      delete expected.CLAUDE_CODE_SANDBOXED;
-      expect(calls[0]!.env).toEqual(expected);
-      // 従来通りの認証継承: Claude のサブスク資格情報は残る
-      expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
-      // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
-      // (値の出所は盤面の表 —— ADR 0110 決定3)
-      expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
-      expect(calls[0]!.args.join(" ")).toContain("--effort high");
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const { start, calls } = await makeWorker();
+    start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const { env } = calls[0]!;
+    expect(env).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      TMPDIR: env.TMPDIR,
+      CLAUDE_CODE_TMPDIR: env.TMPDIR,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+      CLAUDE_STREAM_IDLE_TIMEOUT_MS: "600000",
+      API_TIMEOUT_MS: "600000",
+      DISABLE_AUTOUPDATER: "1",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns",
+      GIT_CONFIG_VALUE_0: "true",
+      GIT_AUTHOR_NAME: "deckhand",
+      GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
+      GIT_COMMITTER_NAME: "deckhand",
+      GIT_COMMITTER_EMAIL: "deckhand@tidepool.invalid",
+      CLAUDE_CODE_OAUTH_TOKEN: "claude-subscription-token",
+    });
+    expect([env.TMPDIR, env.CLAUDE_CONFIG_DIR]).toEqual([expect.any(String), expect.any(String)]);
+    // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
+    // (値の出所は盤面の表 —— ADR 0110 決定3)
+    expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
+    expect(calls[0]!.args.join(" ")).toContain("--effort high");
+  });
+
+  // 同じ土台の上に Moonshot の routing 一式(key file から)だけが載り、Claude の subscription は列挙に無い(ADR 0096 / 0097 決定2)
+  it("moonshot の spawn env は列挙と完全一致し、host の囮も Claude の token も届かない", async () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
+    const keyFile = await makeMoonshotKeyFile();
+    const { start, calls } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    start("task-kimi", null, "kipper");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const { env } = calls[0]!;
+    expect(env).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      TMPDIR: env.TMPDIR,
+      CLAUDE_CODE_TMPDIR: env.TMPDIR,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+      CLAUDE_STREAM_IDLE_TIMEOUT_MS: "600000",
+      API_TIMEOUT_MS: "600000",
+      DISABLE_AUTOUPDATER: "1",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns",
+      GIT_CONFIG_VALUE_0: "true",
+      GIT_AUTHOR_NAME: "kipper",
+      GIT_AUTHOR_EMAIL: "kipper@tidepool.invalid",
+      GIT_COMMITTER_NAME: "kipper",
+      GIT_COMMITTER_EMAIL: "kipper@tidepool.invalid",
+      ANTHROPIC_BASE_URL: "https://api.moonshot.ai/anthropic",
+      ANTHROPIC_AUTH_TOKEN: "sk-moonshot-test-key",
+      ANTHROPIC_MODEL: "kimi-k3[1m]",
+    });
+    expect([env.TMPDIR, env.CLAUDE_CONFIG_DIR]).toEqual([expect.any(String), expect.any(String)]);
+  });
+
+  // ADR 0070 決定1: Pi の盤面は env の token だけで認証する —— anthropic には名指しの pass-through、Moonshot には載せない
+  it("盤面 env の CLAUDE_CODE_OAUTH_TOKEN は anthropic の spawn env に載り、moonshot の spawn env には載らない", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const keyFile = await makeMoonshotKeyFile();
+    const { start, calls } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    start("task-claude");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    start("task-kimi", null, "kipper");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls.map((call) => call.env.CLAUDE_CODE_OAUTH_TOKEN)).toEqual(["claude-subscription-token", undefined]);
   });
 
   it("moonshot の spawn env は Moonshot 互換エンドポイント向きの一式(向き先・Bearer トークン・モデル)を注入する(issue #445)", async () => {

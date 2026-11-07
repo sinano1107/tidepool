@@ -127,7 +127,7 @@ function vapidConfig(): VapidConfig | undefined {
 
 // ADR 0036 / issue #153: 人間面の credential。盤面が持つのはハッシュだけで、
 // 平文は生成した瞬間に一度表示されるだけ — process.env には**載せない**
-// (claude-worker.ts の spawn は `{ ...process.env }` を worker に渡す)。
+// (codex-worker.ts の spawn は `{ ...process.env }` を worker に渡す)。
 // cookie はオリジン単位なので、盤面は自分が公開されている URL を知っている必要が
 // ある(自力では導出できない)。Pi なら tailnet の公開 URL をここに設定する。
 const { credential, messages } = openHumanCredential({

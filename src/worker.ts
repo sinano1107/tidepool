@@ -11,6 +11,19 @@ import type { TeardownAction } from "./teardown.js";
  *  adapter の定数(ADR 0005)でなくここに置く。 */
 export const HOST_CREDENTIAL_ENVS = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"] as const;
 
+/** ADR 0358 決定2: worker の形の env の土台 —— Harness の adapter はこの上に自分の注入一式だけを載せる。盤面の env は名指しで
+ *  読み、spread しない(列挙の外は届かない、決定1)。`HOME` は Claude の credentials の置き場のため(ADR 0354 決定1)、git config の
+ *  2つは `HOME` が運ぶ host の git config を閉じる。`TMPDIR` は temp を渡す呼び出しだけが持つ。 */
+export function workerBaseEnv(temp?: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    ...(temp === undefined ? {} : { TMPDIR: temp }),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
+
 /** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。
  *  `model_swaps` は `worker_exited.model_swaps` の写し(ADR 0215 決定5)で、差し替えが無ければ欠ける —— event 側と違い
  *  常には置かない(読み手は文面の節だけ)。 */

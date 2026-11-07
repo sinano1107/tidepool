@@ -1,5 +1,17 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { boardCallEnv, boardCallEnvWithoutThinking } from "../src/claude-worker.js";
+import {
+  answerBoardCallEnv,
+  boardCallEnv,
+  boardCallEnvWithoutThinking,
+  claudeMcpReachabilityThrough,
+  moonshotCliAuthEnv,
+  usageScrapeEnv,
+} from "../src/claude-worker.js";
+import { specRecordingCall } from "./fakes.js";
+import { HOST_ENV_DECOYS, stubHostEnvDecoys } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** Board call(盤面呼び出し / ADR 0044): 盤面が自分の機能のために回す CLI 呼び出しは
  *  worker session ではなく、したがって advisor を持たない。ここが見張るのは
@@ -19,19 +31,76 @@ describe("Board call の env", () => {
     expect(boardCallEnv().DISABLE_AUTOUPDATER).toBe("1");
   });
 
-  // 差分ではなく完全な env を返す契約(ADR 0044 決定3)。呼び出し側が
-  // `{ ...process.env, ...boardCallEnv() }` と綴る形にすると、`...process.env` を
-  // 書き忘れたサイトが PATH も認証も失って壊れる —— 書き忘れられる余地を残さない。
-  it("ホストの env を丸ごと引き継ぐ(差分ではなく完全形)", () => {
-    const previous = process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE;
-    process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE = "carried";
-    try {
-      expect(boardCallEnv().TIDEPOOL_BOARD_CALL_ENV_PROBE).toBe("carried");
-      expect(boardCallEnv().PATH).toBe(process.env.PATH);
-    } finally {
-      if (previous === undefined) delete process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE;
-      else process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE = previous;
-    }
+  // 差分ではなく完全な env を返す契約(ADR 0044 決定3)は保ったまま、中身は盤面が列挙したものだけ(ADR 0358 決定1・2)。
+  // 答えの Board call も anthropic を喋る(ADR 0096)ので盤面 env の token を受け取り、API key は列挙に無い(ADR 0070 決定1)。
+  // TMPDIR は持たない(OS 既定)。
+  it("答えの Board call の env は列挙と完全一致し、host の囮は届かない", () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "board-oauth-token");
+
+    expect(answerBoardCallEnv()).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "board-oauth-token",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      DISABLE_AUTOUPDATER: "1",
+      DISABLE_PROMPT_CACHING: "1",
+    });
+  });
+
+  // worker の形の Board call(ADR 0341)は盤面所有の config dir(ADR 0354 決定1)を運び、MCP 到達性 probe だけは
+  // 使い捨て dir を TMPDIR に渡す(sandbox の proxy socket を閉じた /tmp に置かない)
+  it("worker の形の Board call の env は列挙と完全一致し、host の囮は届かない", async () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "board-oauth-token");
+    const { call, specs } = specRecordingCall();
+
+    await claudeMcpReachabilityThrough(call)("http://localhost:4589/mcp");
+
+    const { env, cwd } = specs[0]!;
+    expect(env).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      TMPDIR: cwd,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "board-oauth-token",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      DISABLE_AUTOUPDATER: "1",
+      CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toEqual(expect.any(String));
+  });
+
+  // Moonshot の認証 probe は Moonshot の worker spawn と同じ組み立て: Claude の subscription は列挙に無く、
+  // routing 一式は key file から(ADR 0097 決定2)
+  it("Moonshot の認証 probe の env は列挙と完全一致し、host の囮も Claude の token も届かない", async () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "board-oauth-token");
+    const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
+    await writeFile(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+
+    expect(moonshotCliAuthEnv(keyFile)).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      DISABLE_AUTOUPDATER: "1",
+      ANTHROPIC_BASE_URL: "https://api.moonshot.ai/anthropic",
+      ANTHROPIC_AUTH_TOKEN: "sk-moonshot-test-key",
+      ANTHROPIC_MODEL: "kimi-k3[1m]",
+    });
+  });
+
+  // ADR 0358 決定1 の外(pty の TUI が TERM 等に依るかが未測): 盤面の env を継ぐのが意図である釘
+  it("/usage scrape の env は host の env をそのまま継ぐ(列挙の外)", () => {
+    stubHostEnvDecoys();
+
+    expect(usageScrapeEnv()).toMatchObject({ ...HOST_ENV_DECOYS, PATH: "/usr/bin:/bin", CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1", DISABLE_AUTOUPDATER: "1" });
   });
 
   // 盤面プロセスの env に立てる案を採らなかったことの裏返し —— それを採ると
