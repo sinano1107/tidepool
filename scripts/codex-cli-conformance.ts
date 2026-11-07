@@ -228,6 +228,15 @@ const { rows } = await judgeConformance({
       return result.stdout;
     }),
   skillClosure,
+  // ADR 0358 決定4: 盤面の preflight と同じく空のディレクトリを cwd に。`-c` を1つ当てて sessionFlags の層を立たせる
+  configLayers: () =>
+    inDisposable(async ({ temp }) => {
+      const [configRead, requirementsRead] = await callAppServer(command, executable, env, ["-c", 'model="x"'], [
+        { method: "config/read", params: { includeLayers: true, cwd: temp } },
+        { method: "configRequirements/read", params: null },
+      ]);
+      return { configRead, requirementsRead };
+    }),
 });
 
 // 種の openai 行は、1ターンの `exec --json` を worker の出力の読み取りで読む(ADR 0187 決定4)。

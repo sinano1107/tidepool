@@ -2,7 +2,7 @@ import { z } from "zod";
 import { type Row, rowOf, type Verdict } from "./claude-cli-conformance.js";
 import { type CodexAppServerProbeResult, type compatibilityCheck, modelListResponse, whyRowUnlisted } from "./codex-app-server.js";
 import { codexTokenUsage, parseJsonl, readCodexUsage, readTurnFailure } from "./codex-stream-reader.js";
-import { observedAgentsMdLayer } from "./codex-worker.js";
+import { observedAgentsMdLayer, observedConfigLayers } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
@@ -27,6 +27,9 @@ export interface ConformanceObservations {
   promptInput: () => Promise<string>;
   /** skill の閉鎖の行の観測。script が `SKILL_CLOSURE_MARKERS` の skill を置いた workspace と使い捨ての `CODEX_HOME` で撃つ。 */
   skillClosure: () => Promise<SkillClosureObservation>;
+  /** 盤面の CODEX_HOME と `-c` を1つ当てた app-server の `config/read`(includeLayers: true、cwd は空のディレクトリ)と
+   *  `configRequirements/read` の result。 */
+  configLayers: () => Promise<{ configRead: unknown; requirementsRead: unknown }>;
 }
 
 export interface SkillClosureObservation {
@@ -211,6 +214,19 @@ const SURFACES: Array<[string, (obs: ConformanceObservations) => Promise<Verdict
         pass: true,
         detail: `${Object.keys(readable).length} skills reach the request only without skills.config; ${errored.length} unreadable skills only in errors[]`,
       };
+    },
+  ],
+  [
+    "config layers (config/read / configRequirements/read)",
+    async (obs) => {
+      // ADR 0358 決定4: 口と層の名前は 0.163.0 の source の読み —— 盤面の読み取りが実物の応答の形を読めるかをここで照らす
+      const { configRead, requirementsRead } = await obs.configLayers();
+      const { configLayers, requirements } = observedConfigLayers(configRead, requirementsRead);
+      const types = configLayers.map((layer) => layer.type);
+      const missing = ["sessionFlags", "user"].filter((type) => !types.includes(type));
+      return missing.length > 0
+        ? fail(`config/read layers lack ${missing.join(", ")}; observed ${types.join(", ")}`)
+        : { pass: true, detail: `layers ${types.join(", ")}; requirements ${JSON.stringify(requirements)}` };
     },
   ],
 ];

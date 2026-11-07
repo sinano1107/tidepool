@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
@@ -540,6 +540,77 @@ export interface CodexCapabilityObservation {
   agentsMdLayer: readonly string[];
   /** `hooks/list` の vendor 診断。照合には使わず、hook 不一致の理由文に写すだけ(#734)。 */
   hookDiagnostics: readonly string[];
+  /** `config/read(includeLayers)` の層(ADR 0358 決定4)。path は `file` か `dotCodexFolder`。 */
+  configLayers: readonly CodexConfigLayer[];
+  /** `configRequirements/read` の `requirements` をそのまま。無しは null。 */
+  requirements: unknown;
+}
+
+export interface CodexConfigLayer {
+  type: string;
+  path: string | null;
+  empty: boolean;
+  disabledReason: string | null;
+}
+
+// 欄が無い応答(`includeLayers` を無視する版)は「層が無い」と読まずに投げ、preflight の failed に倒す
+const configReadResponse = z.object({
+  layers: z.array(
+    z.object({
+      name: z.object({ type: z.string(), file: z.string().optional(), dotCodexFolder: z.string().optional() }),
+      config: z.record(z.string(), z.unknown()),
+      disabledReason: z.string().nullish(),
+    }),
+  ),
+});
+
+/** `config/read` と `configRequirements/read` の `result` を観測へ写す(ADR 0358 決定4)。`requirements` の欄が無ければ投げる。 */
+export function observedConfigLayers(
+  configRead: unknown,
+  requirementsRead: unknown,
+): Pick<CodexCapabilityObservation, "configLayers" | "requirements"> {
+  if (!requirementsRead || typeof requirementsRead !== "object" || !("requirements" in requirementsRead)) {
+    throw new Error("configRequirements/read returned no requirements field");
+  }
+  return {
+    configLayers: configReadResponse.parse(configRead).layers.map(({ name, config, disabledReason }) => ({
+      type: name.type,
+      path: name.file ?? name.dotCodexFolder ?? null,
+      empty: Object.keys(config).length === 0,
+      disabledReason: disabledReason ?? null,
+    })),
+    requirements: requirementsRead.requirements,
+  };
+}
+
+/** symlink の綴り違い(macOS の /var → /private/var)を畳む。報告された file は無くてよいので、無ければ親ディレクトリで解く。 */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    try {
+      return join(realpathSync(dirname(path)), basename(path));
+    } catch {
+      return path;
+    }
+  }
+}
+
+/** ADR 0358 決定4: 列挙した2層 —— `sessionFlags`(盤面の `-c`)と file が盤面所有の `CODEX_HOME/config.toml` の `user`
+ *  (Codex 自身が trust を書くので内容は問わない)—— の外で内容を持つ層を `type (path)` で拾う。悪い type を数える denylist ではないので、
+ *  未知の type も無効化された層も内容があれば拾う。 */
+function layersOutsideEnumeration(layers: readonly CodexConfigLayer[], codexHome: string): string[] {
+  const boardUserConfig = canonicalPath(join(codexHome, "config.toml"));
+  return layers
+    .filter((layer) =>
+      !layer.empty &&
+      layer.type !== "sessionFlags" &&
+      !(layer.type === "user" && layer.path !== null && canonicalPath(layer.path) === boardUserConfig)
+    )
+    .map((layer) => {
+      const notes = [layer.path, layer.disabledReason && `disabled: ${layer.disabledReason}`].filter(Boolean);
+      return notes.length === 0 ? layer.type : `${layer.type} (${notes.join(", ")})`;
+    });
 }
 
 /** 期待と観測の差だけを言う(全量は並べない —— 面の全行を並べた表は Quarantine 画面では読めない)。 */
@@ -558,7 +629,7 @@ export type CodexCapabilityProbe = () => Promise<CodexCapabilityObservation>;
  *  `pinnedVersion` は version 行の差し替え口で、渡すのは版上げの適合試験だけ(#1385)。 */
 export async function checkCodexCapability(
   probe: CodexCapabilityProbe,
-  hookPath: string,
+  codexHome: string,
   pinnedVersion = CODEX_CLI_VERSION,
 ): Promise<ContainmentCapability> {
   let observed: CodexCapabilityObservation;
@@ -574,11 +645,14 @@ export async function checkCodexCapability(
       // 盤面が Codex に登録されていることを要求する hook —— spawn が渡す宣言と同じ1つの形
       [
         "hook",
-        [{ event: "preToolUse", matcher: BOARD_HOOK_MATCHER, enabled: true, source: "sessionFlags", command: hookPath }],
+        [{ event: "preToolUse", matcher: BOARD_HOOK_MATCHER, enabled: true, source: "sessionFlags", command: boardHookPath(codexHome) }],
         observed.hooks,
       ],
       ["worker user prompt", [CODEX_PROMPT_MARKER], observed.workerPrompts],
       ["agents.md", [], observed.agentsMdLayer],
+      ["config layer", [], layersOutsideEnumeration(observed.configLayers, codexHome)],
+      // ADR 0358 決定4: vendor の「制限にしか使えない」という主張で例外にしない
+      ["requirements", null, observed.requirements],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
   if (mismatch) {
@@ -954,20 +1028,31 @@ export function observedAgentsMdLayer(promptInput: string): string[] {
  *  読んで #730 の受け入れ観測を省いてはならない。
  *
  *  同じ起動で spawn の設定を `--strict-config` で読ませ、review 種別は initialize だけの
- *  起動をもう1本足す —— 綴りの誤りはここで throw になる(ADR 0142 決定4)。 */
+ *  起動をもう1本足す —— 綴りの誤りはここで throw になる(ADR 0142 決定4)。work 種別の起動は config 層と
+ *  requirements も読む(ADR 0358 決定4)。 */
 async function probeHookRegistration(
   call: BoardCall,
   executable: string,
   env: NodeJS.ProcessEnv,
+  emptyCwd: string,
   config: (taskType: Task["type"]) => string[],
-): Promise<ReturnType<typeof observedHooks>> {
+): Promise<ReturnType<typeof observedHooks> & ReturnType<typeof observedConfigLayers>> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
   // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`failed` に倒れる
-  const [listed] = await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("work"))], [
-    { method: "hooks/list", params: { cwds: [] } },
-  ]);
+  const [listed, configRead, requirementsRead] = await callAppServer(
+    command,
+    executable,
+    env,
+    ["--strict-config", ...configArgs(config("work"))],
+    [
+      { method: "hooks/list", params: { cwds: [] } },
+      // ADR 0358 決定4: worker の process に入る config 層を同じ session で Codex 自身に報告させる。cwd は空の cwd(ADR 0259 決定4)
+      { method: "config/read", params: { includeLayers: true, cwd: emptyCwd } },
+      { method: "configRequirements/read", params: null },
+    ],
+  );
   await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("review"))], []);
-  return observedHooks(listed);
+  return { ...observedHooks(listed), ...observedConfigLayers(configRead, requirementsRead) };
 }
 
 const PERMISSION_CANARY = `
@@ -1221,7 +1306,7 @@ async function actualCodexCapability(options: {
       skills: observedSkills(promptInput),
       workerPrompts: observedWorkerPrompts(promptInput),
       agentsMdLayer: observedAgentsMdLayer(promptInput),
-      ...await probeHookRegistration(call, options.executable, env, (taskType) =>
+      ...await probeHookRegistration(call, options.executable, env, emptyCwd, (taskType) =>
         placeholderSpawnConfig(taskType, {
           workspace,
           allowedDomains: [],
@@ -1249,11 +1334,7 @@ export function createCodexCapabilityCheck(options: {
   if (options.onPath === false) {
     return async () => ({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH when the board started" });
   }
-  return () => checkCodexCapability(
-    () => actualCodexCapability(options),
-    boardHookPath(options.codexHome),
-    options.pinnedVersion,
-  );
+  return () => checkCodexCapability(() => actualCodexCapability(options), options.codexHome, options.pinnedVersion);
 }
 
 /** 回答時の (codex, workspace) の検査(ADR 0259 決定5)。worker の起動と同じ検査を placeholder の spawn 設定で撃ち、

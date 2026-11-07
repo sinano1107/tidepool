@@ -56,6 +56,16 @@ const OBSERVED: CodexAppServerProbeResult = {
 //   workspace で、`project_doc_max_bytes=0` を付けずに撃ったもの。workspace のパスだけ無害な固定値へ置換してある
 // skills-list-closed-unreadable は採ったものではない: 実物の codex-skills-list-closed.json の workspace B の entry に、
 // `errors[]` を2つ足して作った。`errors[]` の形は `SkillErrorInfo` の生成 schema、message は #1972 の実測の stderr の文面
+// 2026-11-07 に Lima VM で codex-cli 0.163.0 の実物へ撃った `config/read`(includeLayers: true、cwd は空のディレクトリ、`-c model="x"`)と
+// `configRequirements/read` の result。version の hash と config / origins の中身だけ省いてある
+const configRead = (layers: unknown[]) => ({ config: {}, origins: {}, layers });
+const MEASURED_LAYERS = [
+  { name: { type: "sessionFlags" }, version: "sha256:0", config: { model: "x" } },
+  { name: { type: "user", file: "/tmp/ch3041-eEYy/config.toml", profile: null }, version: "sha256:0", config: {} },
+  { name: { type: "system", file: "/etc/codex/config.toml" }, version: "sha256:0", config: {} },
+];
+const MEASURED_REQUIREMENTS = { supportsIndependentSpeedModes: true, requirements: null };
+
 const passing = (): ConformanceObservations => ({
   compatibility: async () => ({ ok: true, cliVersion: "codex-cli 0.147.0" }),
   appServer: async () => OBSERVED,
@@ -73,9 +83,10 @@ const passing = (): ConformanceObservations => ({
     unreadablePaths: [NO_DESCRIPTION, NO_FRONTMATTER],
     authorizationSent: false,
   }),
+  configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: MEASURED_REQUIREMENTS }),
 });
 
-it("各面の観測が盤面の読み取りを通れば、10面すべてが合格で ok", async () => {
+it("各面の観測が盤面の読み取りを通れば、11面すべてが合格で ok", async () => {
   const { rows, ok } = await judgeConformance(passing());
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
@@ -89,8 +100,15 @@ it("各面の観測が盤面の読み取りを通れば、10面すべてが合�
     ["unlisted domain → 403 blocked-by-allowlist", true],
     ["AGENTS.md layer", true],
     ["skill closure", true],
+    ["config layers (config/read / configRequirements/read)", true],
   ]);
   expect(ok).toBe(true);
+});
+
+it("config 層の面は実物の層の type と requirements の「無し」の綴りを detail に出す(ADR 0358 決定4)", async () => {
+  const { rows } = await judgeConformance(passing());
+  expect(rows.find((row) => row.surface === "config layers (config/read / configRequirements/read)")!.detail)
+    .toBe("layers sessionFlags, user, system; requirements null");
 });
 
 /** 合格の観測の skill の閉鎖を一部だけ差し替える。 */
@@ -273,6 +291,24 @@ it.each<[string, string, Partial<ConformanceObservations>, string]>([
     "skill closure",
     withSkillClosure({ closedRequest: "" }),
     prompt,
+  ],
+  [
+    "config/read の層に sessionFlags が無い",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS.slice(1)), requirementsRead: MEASURED_REQUIREMENTS }) },
+    "lack sessionFlags",
+  ],
+  [
+    "config/read が includeLayers を無視して layers を返さない",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: { config: {}, origins: {}, layers: null }, requirementsRead: MEASURED_REQUIREMENTS }) },
+    "threw:",
+  ],
+  [
+    "configRequirements/read に requirements の欄が無い",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: { supportsIndependentSpeedModes: true } }) },
+    "no requirements field",
   ],
 ])("%s: その面だけが不合格で、ok は false", async (_case, surface, changed, detail) => {
   const { rows, ok } = await judgeConformance({ ...passing(), ...changed });

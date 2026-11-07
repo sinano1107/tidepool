@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync, rmSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
 import { z } from "zod";
@@ -17,7 +17,7 @@ import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import { type ClaudeWorkerOptions, type ExecFn, execThrough } from "../src/claude-worker.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
-import { createCodexCapabilityCheck } from "../src/codex-worker.js";
+import { CODEX_CLI_VERSION, CODEX_FEATURE_SNAPSHOT, CODEX_PROMPT_MARKER, createCodexCapabilityCheck } from "../src/codex-worker.js";
 import type {
   ChildDraftContext,
   DraftClient,
@@ -1277,60 +1277,99 @@ export const skillsListAnswer = (result: unknown) => `{"id":1,"result":{}}\n${JS
 /** skill を持たない cwd の skills/list の `result`。 */
 export const emptySkillsList = (cwd: string) => ({ data: [{ cwd, skills: [], errors: [] }] });
 
-/** app-server の stdin に流れた skills/list の要求の `cwds[0]` —— preflight は検査ごとに作る空の cwd を名指すので、
- *  fake はそれを読んで同じ cwd の entry で答える。 */
-export async function requestedSkillsListCwd(proc: RecordedProcess): Promise<string> {
+/** app-server の stdin に流れた要求の列(`initialize` / `initialized` の前置きを含む)。 */
+async function writtenRequests(proc: RecordedProcess): Promise<Array<{ method: string; params?: unknown }>> {
   const written = await vi.waitFor(() => {
     const chunk = proc.stdin.read();
     expect(chunk).not.toBeNull();
     return String(chunk);
   });
-  const requests = written.trim().split("\n").map((line) => JSON.parse(line));
-  return requests.find((request) => request.method === "skills/list").params.cwds[0];
+  return written.trim().split("\n").map((line) => JSON.parse(line));
 }
+
+/** app-server の stdin に流れた skills/list の要求の `cwds[0]` —— preflight は検査ごとに作る空の cwd を名指すので、
+ *  fake はそれを読んで同じ cwd の entry で答える。 */
+export async function requestedSkillsListCwd(proc: RecordedProcess): Promise<string> {
+  const requests = await writtenRequests(proc);
+  return (requests.find((request) => request.method === "skills/list")!.params as { cwds: string[] }).cwds[0]!;
+}
+
+/** 盤面の列挙の内側の層だけを返す `config/read` の `layers` —— codex-cli 0.163.0 の実測の形(ADR 0358 決定4)。
+ *  system は file が無いので config が空で報告される。 */
+export const conformingConfigLayers = (codexHome: string): unknown[] => [
+  { name: { type: "sessionFlags" }, version: "sha256:0", config: { model: "x" } },
+  { name: { type: "user", file: join(codexHome, "config.toml"), profile: null }, version: "sha256:0", config: {} },
+  { name: { type: "system", file: "/etc/codex/config.toml" }, version: "sha256:0", config: {} },
+];
 
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`
  *  で駆動し、preflight を指定した停止点まで進める(issue #874)。段の並びは --version(0)・
  *  skills/list(1)・prompt-input(2)・features list(3)・sandbox probe ×2(4, 5)・work app-server(6)・
- *  review app-server(7)。停止点までの段は exit 0 で通す — skills/list は `skillsList(cwd)`(既定は skill 無し)を
- *  返し、prompt-input は JSON を読まれるので空配列を返し、review まで進めるときだけ work app-server
- *  (hooks/list)に登録一致の応答を書いて通す。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
+ *  review app-server(7)。停止点までの段は exit 0 で、照合を通る応答で通す —— 固定版の --version、skills/list は
+ *  `skillsList(cwd)`(既定は skill 無し)、prompt-input は user item の marker だけ、features list は snapshot どおり、
+ *  work app-server は盤面の hook の登録・`configLayers(codexHome)`(既定は列挙の内側だけ)・`requirements`(既定は null)。
+ *  `complete` は review app-server まで通して検査を終わらせる。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
  *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
  *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
- *  work 側の index は `index - 1`。`listedCwd` は skills/list の要求が名指した cwd(検査ごとの空の cwd)。 */
+ *  work 側の index は `index - 1`。`listedCwd` は skills/list の要求が名指した cwd(検査ごとの空の cwd)、
+ *  `workAppServerRequests` は review 停止と `complete` で work app-server の stdin に流れた要求の列。 */
 export async function driveCodexPreflight(
-  stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
-  overrides: { codexHome?: string; skillsList?: (cwd: string) => unknown } = {},
+  stop: "sandboxProbe" | "workAppServer" | "reviewAppServer" | "complete",
+  overrides: {
+    codexHome?: string;
+    skillsList?: (cwd: string) => unknown;
+    configLayers?: (codexHome: string) => unknown[];
+    requirements?: unknown;
+  } = {},
 ) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const capability = createCodexCapabilityCheck({
-    executable: "/opt/tidepool/bin/codex",
-    codexHome: overrides.codexHome ?? await tempDir("tidepool-codex-home-"),
-    call: boardCall,
-  })();
+  const codexHome = overrides.codexHome ?? await tempDir("tidepool-codex-home-");
+  const capability = createCodexCapabilityCheck({ executable: "/opt/tidepool/bin/codex", codexHome, call: boardCall })();
 
   let listedCwd = "";
   const before = stop === "sandboxProbe" ? [0, 1, 2, 3] : [0, 1, 2, 3, 4, 5];
   for (const i of before) {
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
+    if (i === 0) spawn.processes[0]!.stdout.write(`${CODEX_CLI_VERSION}\n`);
     if (i === 1) {
       listedCwd = await requestedSkillsListCwd(spawn.processes[1]!);
       spawn.processes[1]!.stdout.write(skillsListAnswer((overrides.skillsList ?? emptySkillsList)(listedCwd)));
     }
-    if (i === 2) spawn.processes[2]!.stdout.write("[]");
+    if (i === 2) spawn.processes[2]!.stdout.write(JSON.stringify([{ role: "user", content: [{ text: CODEX_PROMPT_MARKER }] }]));
+    if (i === 3) {
+      spawn.processes[3]!.stdout.write(Object.entries(CODEX_FEATURE_SNAPSHOT).map(([name, state]) => `${name} stable ${state}\n`).join(""));
+    }
     spawn.emitExitAt(i, 0, null);
   }
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(before.length + 1));
 
-  if (stop === "reviewAppServer") {
+  let workAppServerRequests: Array<{ method: string; params?: unknown }> = [];
+  if (stop === "reviewAppServer" || stop === "complete") {
     const workIndex = before.length; // 6: work app-server
-    spawn.processes[workIndex]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+    workAppServerRequests = await writtenRequests(spawn.processes[workIndex]!);
+    const hook = {
+      eventName: "preToolUse",
+      matcher: "mcp__tidepool__.*",
+      enabled: true,
+      source: "sessionFlags",
+      command: join(codexHome, "tidepool-hooks", "main-thread-mcp.mjs"),
+    };
+    spawn.processes[workIndex]!.stdout.write([
+      { id: 1, result: {} },
+      { id: 2, result: { data: [{ hooks: [hook] }] } },
+      { id: 3, result: { config: {}, origins: {}, layers: (overrides.configLayers ?? conformingConfigLayers)(codexHome) } },
+      { id: 4, result: { supportsIndependentSpeedModes: true, requirements: overrides.requirements ?? null } },
+    ].map((line) => `${JSON.stringify(line)}\n`).join(""));
     spawn.emitExitAt(workIndex, 0, null);
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(workIndex + 2));
   }
+  if (stop === "complete") {
+    spawn.processes[before.length + 1]!.stdout.write('{"id":1,"result":{}}\n');
+    spawn.emitExitAt(before.length + 1, 0, null);
+  }
 
-  return { spawn, capability, index: spawn.calls.length - 1, listedCwd };
+  return { spawn, capability, index: spawn.calls.length - 1, listedCwd, workAppServerRequests };
 }
 
 /** `claude -p --output-format json` の封筒が報告する usage —— 答えを取りに行く Board call は、これが無いと失敗する(ADR 0299 決定4)。 */
