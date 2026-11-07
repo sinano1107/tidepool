@@ -10,10 +10,10 @@ import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../sr
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, logDecision, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget, whyNoReturnDestination } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, logDecision, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerFailureQuestion, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget, whyNoReturnDestination } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
-import { registerFailureQuestion } from "../src/watchdog.js";
+
 import { whyAssigneeCannotTake, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, markPickedUp, POSED_HEAD, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 

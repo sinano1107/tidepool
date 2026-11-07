@@ -1608,6 +1608,36 @@ export function escalateTask(
   return question!;
 }
 
+/** The failure escalation: a question child in tidepool's own name (the agent
+ *  could not self-report), with a standing "retry" option — answering it runs
+ *  through the ordinary unblock-to-head path, same as any other escalation.
+ *  記録だけを撃つ —— tree rule はどの呼び手でも後始末(`runTeardown`)が走らせる。 */
+export function registerFailureQuestion(
+  db: Db,
+  task: Task,
+  title: string,
+  reason: string,
+  now: Date,
+  /** What "retry" does, when the failure changes it (a kept task checkout, ADR 0356 決定2). */
+  retry = `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. `,
+): void {
+  escalateTask(
+    db,
+    task,
+    {
+      // abandon's consequence is spelled out via abandonConsequence; it's
+      // declared via the system-internal failure kind below, never exposed
+      // to agents.
+      context: `${reason}\n\n${retry}${abandonConsequence(db, task)}`,
+      questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
+      question_kind: { kind: "failure", cancel_option: "abandon" },
+    },
+    BOARD_ACTOR_ID,
+    now,
+    "board",
+  );
+}
+
 /** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /
  *  issue #130): collect the target and every one of its unfinished descendants
  *  and mark each cancelled, appending `payload` (built by the caller to name

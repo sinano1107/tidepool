@@ -17,7 +17,6 @@ import {
   makeWorkspace,
   mcpClient,
   prepareAtPickup,
-  quarantineQuestion,
   registerWork,
   servedQuarantineQuestion,
   type Tidepool,
@@ -99,11 +98,12 @@ it("remote-backed の解放が休止位置の ff でローカルの保護ブラ�
   const parked = git(workspace.path, "rev-parse", "main");
   expect(parked).not.toBe(pickedUp);
 
-  // 同じ基準で解放をやり直す: 行が ff 先の1値なら、pickup の位置へ戻したローカルの保護ブランチは ff 先の値から動いたと名指しされる
+  // 同じ基準で次の pickup が比べる: 行が ff 先の1値なら、pickup の位置へ戻したローカルの保護ブランチは ff 先の値から動いたと名指しされる
+  // (旧: 解放をやり直して比べた —— ADR 0356 決定2 の後、解放を刻んだ再実行は削除だけを撃つ)
   git(workspace.path, "update-ref", "refs/heads/main", pickedUp);
-  releaseWorkspace(db, place, task, now);
+  const next = registerTask(db, { type: "work", title: "next", purpose: "pick up after the rollback", completion_criteria: "never runs" }, now, ...HUMAN_WEBUI);
 
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${parked} refs/heads/main`);
+  await expect(prepareAtPickup(db, workspace, next)).rejects.toThrow(`was: ${parked} refs/heads/main`);
   db.close();
 });
 

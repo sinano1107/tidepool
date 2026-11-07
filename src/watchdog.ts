@@ -9,7 +9,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, registerTask, returnToQueue, type Task, type TaskType, unrowedTarget } from "./tasks.js";
+import { getTask, type QueueReturnPayload, registerFailureQuestion, registerTask, returnToQueue, type Task, type TaskType, unrowedTarget } from "./tasks.js";
 import {
   deferToSessionRest,
   markTeardown,
@@ -112,37 +112,6 @@ function exitSections(exit: WorkerExit | undefined): string {
     (exit?.model_swaps?.length
       ? `\n\nmodels swapped in by the CLI:\n${exit.model_swaps.map((s) => `${s.from} → ${s.to}`).join("\n")}`
       : "")
-  );
-}
-
-/** The failure escalation: a question child in tidepool's own name (the agent
- *  could not self-report), with a standing "retry" option — answering it runs
- *  through the ordinary unblock-to-head path, same as any other escalation.
- *  記録だけを撃つ —— tree rule はどの呼び手でも後始末(`runTeardown`)が走らせる。 */
-export function registerFailureQuestion(
-  db: Db,
-  task: Task,
-  title: string,
-  reason: string,
-  now: Date,
-): void {
-  escalateTask(
-    db,
-    task,
-    {
-      // abandon's consequence is spelled out via abandonConsequence; it's
-      // declared via the system-internal failure kind below, never exposed
-      // to agents.
-      context:
-        `${reason}\n\n` +
-        `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
-        abandonConsequence(db, task),
-      questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
-      question_kind: { kind: "failure", cancel_option: "abandon" },
-    },
-    BOARD_ACTOR_ID,
-    now,
-    "board",
   );
 }
 

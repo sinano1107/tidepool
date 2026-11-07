@@ -7,9 +7,8 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
-import { taskCheckoutPath } from "../src/tasks.js";
 import { type PromptRecord, RecordContainerError, type Transcript, TranscriptStore } from "../src/transcript-store.js";
-import type { WorkerAdapter } from "../src/worker.js";
+
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -19,9 +18,9 @@ import {
   HOUR,
   initWithMcpServers,
   mcpClient,
+  opensCheckoutAtWorkspace,
   questions,
   queueWork,
-  recordCheckoutAtWorkspace,
   servedQuarantineQuestion,
   sessionId,
   type Tidepool,
@@ -59,17 +58,6 @@ class RecordingTranscripts extends TranscriptStore {
 
 type CheckoutAt = { dir: string; workspace: string; workspacesDir?: string };
 
-/** scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この盤面は workspace を追跡しないので、
- *  開いた event だけを registry の workspace の在り処で先に置く。 */
-function opensCheckout(adapter: WorkerAdapter, db: Parameters<WorkerFactory>[0]["db"], at: CheckoutAt): WorkerAdapter {
-  const start = adapter.start.bind(adapter);
-  adapter.start = (task, ...rest) => {
-    if (taskCheckoutPath(db, task.id) === undefined) recordCheckoutAtWorkspace(db, task, { dir: at.dir, mode: "purely-local" }, at.workspace, at.workspacesDir);
-    start(task, ...rest);
-  };
-  return adapter;
-}
-
 /** 実 adapter を盤面に載せる。transcript の器の dir は adapter が `deps.transcripts.dir` で引ける。 */
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
@@ -86,7 +74,7 @@ async function bootWithAdapter(
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts,
-    workerAdapter: (deps) => withHealthyUsage(opensCheckout(build(deps), deps.db, at), deps.clock),
+    workerAdapter: (deps) => withHealthyUsage(opensCheckoutAtWorkspace(build(deps), deps.db, at), deps.clock),
   });
   return { proc, transcripts, transcriptDir };
 }

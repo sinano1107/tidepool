@@ -1,21 +1,16 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { permissionConfig } from "../src/codex-worker.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { buildSandboxSettings } from "../src/sandbox.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listChildren, registerTask, type Task } from "../src/tasks.js";
-import {
-  completionTreePaths,
-  fetchTaskCheckoutTip,
-  RefsMovedError,
-  releaseWorkspace,
-  runPlaceReadPaths,
-  TaskCheckoutHostError,
-  taskRunPlace,
-  type WorkspaceConfig,
-} from "../src/workspace.js";
+import { completionTreePaths, fetchTaskCheckoutTip, RefsMovedError, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig } from "../src/workspace.js";
+import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -41,9 +36,16 @@ async function pickedUp(name: string, type: "work" | "review" = "work") {
 const objectsOf = (named: WorkspaceConfig) => realpathSync(join(named.path, ".git", "objects"));
 const subjects = (named: WorkspaceConfig, ref: string) => git(named.path, "log", "--format=%s", ref).split("\n");
 
-it("pickup は規約の番地に task の checkout を開き、名前の場所の HEAD と tree は動かない(ADR 0356 決定1・2)", async () => {
-  const { named, task, place, branch } = await pickedUp("task-checkout-open");
+it("pickup は規約の番地(基点 / task id / pickup の event id)に task の checkout を開き、名前の場所の HEAD と tree は動かない(ADR 0356 決定1・2)", async () => {
+  const named = await makeWorkspace("task-checkout-open");
+  db = openDb(":memory:");
+  const task = register();
+  const base = await tempDir("tidepool-task-checkouts-");
+  const place = await prepareAtPickup(db, named, task, { workspacesBaseDir: base });
+  const branch = `task/${task.id}`;
+  const pickup = listEvents(db, task.id).filter((e) => e.kind === "task_picked_up").at(-1)!;
 
+  expect(place.path).toBe(realpathSync(join(base, task.id, String(pickup.id))));
   expect(realpathSync(place.path)).not.toBe(realpathSync(named.path));
   expect(readFileSync(join(place.path, ".git", "objects", "info", "alternates"), "utf8").trim()).toBe(objectsOf(named));
   expect(git(place.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/${branch}`);
@@ -100,6 +102,7 @@ it("解放の後、task の checkout は無く、名前の場所のタスクブ�
   releaseWorkspace(db, place, task, NOW);
 
   expect(existsSync(place.path)).toBe(false);
+  expect(existsSync(dirname(place.path))).toBe(false);
   expect(git(named.path, "rev-parse", `${branch}^`)).toBe(workerTip);
   expect(subjects(named, branch)[0]).toBe(`WIP: task ${task.id} — work`);
   expect(git(named.path, "status", "--porcelain", "--ignored", "--untracked-files=all")).toBe("");
@@ -129,6 +132,55 @@ it("worker がタスクブランチを消した checkout の解放は task の�
   expect(listChildren(db, task.id)).toHaveLength(1);
 });
 
+it("worker が自分の .git を消した checkout の解放は task の失敗で、残りを消さず名前の場所を quarantine しない(ADR 0356 決定2)", async () => {
+  const { named, task, place, branch } = await pickedUp("task-checkout-git-gone");
+  const before = git(named.path, "rev-parse", branch);
+  writeFileSync(join(place.path, "unfinished.txt"), "work the board can no longer read\n");
+  rmSync(join(place.path, ".git"), { recursive: true });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(readFileSync(join(place.path, "unfinished.txt"), "utf8")).toBe("work the board can no longer read\n");
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+  expect(git(named.path, "rev-parse", branch)).toBe(before);
+  expect(listEvents(db, task.id).find((e) => e.kind === "task_checkout_release_failed")?.payload).toMatchObject({ path: place.path });
+  expect(listChildren(db, task.id)).toEqual([expect.objectContaining({ type: "question", question_cancel_option: "abandon" })]);
+});
+
+it("名前の場所の側で完了の門の書き込みが落ちても門は拒まず、完了の解放が tip を引いて merge back する —— その時まだ落ちれば quarantine(ADR 0084 決定2 / ADR 0356 決定3)", async () => {
+  const named = await makeWorkspace("task-checkout-gate-observation");
+  db = openDb(":memory:");
+  const parent = register();
+  git(named.path, "branch", `task/${parent.id}`, "main");
+  const child = register("work", parent.id);
+  const place = await prepareAtPickup(db, named, child);
+  commitWork(place.path, "child.txt", "child\n");
+  const lock = join(named.path, ".git", "refs", "heads", "task", `${child.id}.lock`);
+  writeFileSync(lock, "");
+
+  expect(() => fetchTaskCheckoutTip(db, place, child.id)).not.toThrow();
+  expect(git(named.path, "ls-tree", "--name-only", `task/${child.id}`)).not.toContain("child.txt");
+  completeTask(db, child, FULL_HANDOFF, "worker", NOW, "worker");
+  releaseWorkspace(db, place, getTask(db, child.id)!, NOW, true, undefined, undefined, true);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeDefined();
+  expect(existsSync(join(place.path, ".git"))).toBe(true);
+
+  rmSync(lock);
+  releaseWorkspace(db, place, getTask(db, child.id)!, NOW, true, undefined, undefined, true);
+  expect(git(named.path, "show", `task/${parent.id}:child.txt`)).toBe("child");
+  expect(existsSync(place.path)).toBe(false);
+});
+
+it("session の間に名前の場所の HEAD を人間が動かせば、解放は保護ブランチへ黙って戻さず quarantine に落ちる(ADR 0351 / ADR 0356 決定1)", async () => {
+  const { named, task, place } = await pickedUp("task-checkout-human-switch");
+  git(named.path, "switch", "--quiet", "-c", "human-branch");
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(quarantineQuestion(db, "workspace", named.name)?.purpose).toContain("symref=refs/heads/human-branch HEAD");
+  expect(git(named.path, "symbolic-ref", "HEAD")).toBe("refs/heads/human-branch");
+});
+
 it("再開は残した checkout を再利用せず、新しい番地に作り直す(ADR 0356 決定2)", async () => {
   const { named, task, place } = await pickedUp("task-checkout-resume");
   git(place.path, "checkout", "--quiet", "-b", "elsewhere");
@@ -142,20 +194,52 @@ it("再開は残した checkout を再利用せず、新しい番地に作り直
   expect(git(resumed.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${task.id}`);
 });
 
-it("pickup の fetch が名前の場所の objects の破損で落ちれば名前の場所の失敗で、番地に repo を作れないのは host 側の失敗(ADR 0356 決定2)", async () => {
+/** scheduler の pickup を1回撃つ。worker は start されず、spawn の失敗(host 側の停止)の一撃だけを数える。 */
+async function scheduledPickup(named: WorkspaceConfig, workspacesDir: string) {
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const spawnFailures: string[] = [];
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    workspacesDir,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: (taskId) => spawnFailures.push(taskId),
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    workspace: named,
+    resolveWorkspace: () => named,
+  });
+  await clock.advance(HOURLY);
+  await vi.waitFor(() => expect(quarantineQuestion(db, "workspace", named.name) !== undefined || spawnFailures.length > 0).toBe(true));
+  scheduler.stop();
+  expect(worker.started).toEqual([]);
+  return spawnFailures;
+}
+
+it("pickup の fetch が名前の場所の objects の破損で落ちれば名前の場所を quarantine し、番地に repo を作れないのは quarantine しない host 側の停止(ADR 0356 決定2)", async () => {
   const named = await makeWorkspace("task-checkout-broken-source");
   db = openDb(":memory:");
+  register();
   const blob = git(named.path, "rev-parse", "main:README.md");
   rmSync(join(named.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
-  const fetchFailure = await prepareAtPickup(db, named, register()).catch((err: unknown) => err);
-  expect(fetchFailure).toBeInstanceOf(Error);
-  expect(fetchFailure).not.toBeInstanceOf(TaskCheckoutHostError);
+  expect(await scheduledPickup(named, await tempDir("tidepool-task-checkouts-"))).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeDefined();
+  db.close();
 
   const healthy = await makeWorkspace("task-checkout-unwritable");
+  db = openDb(":memory:");
   const task = register();
   const base = await tempDir("tidepool-task-checkouts-");
   writeFileSync(join(base, task.id), "a file where the task's directory goes\n");
-  await expect(prepareAtPickup(db, healthy, task, { workspacesBaseDir: base })).rejects.toBeInstanceOf(TaskCheckoutHostError);
+  expect(await scheduledPickup(healthy, base)).toEqual([task.id]);
+  expect(quarantineQuestion(db, "workspace", healthy.name)).toBeUndefined();
+  expect(listEvents(db, task.id).find((e) => e.kind === "spawn_failed")?.payload).toMatchObject({ message: expect.stringContaining("cannot be created") });
   expect(git(healthy.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
@@ -211,7 +295,7 @@ it("子は名前の場所の親のブランチから fork し、子の done の�
   expect(git(resumed.path, "rev-parse", "HEAD")).toBe(advanced);
 });
 
-it("削除の前で落ちた解放の再実行は冪等 —— 2つ目の WIP を積まず checkout を消し、済んだ後の再実行は何もしない(ADR 0356 決定2 / ADR 0345)", async () => {
+it("削除の途中で落ちた解放の再実行は記録から削除だけを撃つ —— 半分消えた tree から2つ目の WIP を積まず、済んだ後の再実行は何もしない(ADR 0356 決定2 / ADR 0345)", async () => {
   const { named, task, place, branch } = await pickedUp("task-checkout-rerun");
   writeFileSync(join(place.path, "wip.txt"), "in progress\n");
   const parent = join(place.path, "..");
@@ -222,11 +306,16 @@ it("削除の前で落ちた解放の再実行は冪等 —— 2つ目の WIP �
     chmodSync(parent, 0o755);
   }
   const afterCrash = git(named.path, "rev-parse", branch);
+  expect(git(named.path, "show", `${branch}:wip.txt`)).toBe("in progress");
+  // 削除が tree の一部だけを消して .git を残した形
+  rmSync(join(place.path, "wip.txt"));
+  rmSync(join(place.path, "README.md"));
   expect(existsSync(join(place.path, ".git"))).toBe(true);
 
   releaseWorkspace(db, place, task, NOW);
   expect(git(named.path, "rev-parse", branch)).toBe(afterCrash);
   expect(existsSync(place.path)).toBe(false);
+  expect(existsSync(parent)).toBe(false);
 
   releaseWorkspace(db, place, task, NOW);
   expect(git(named.path, "rev-parse", branch)).toBe(afterCrash);
@@ -267,11 +356,4 @@ it.each(["work", "review"] as const)("%s の sandbox と permission の宣言: c
   expect(filesystem).toContain(`${JSON.stringify(objects)}="read"`);
   expect(filesystem).toContain(`${JSON.stringify(place.path)}=${JSON.stringify(type === "work" ? "write" : "read")}`);
   if (type === "work") expect(filesystem).toContain(`${JSON.stringify(join(place.path, ".git"))}="write"`);
-});
-
-it("pickup の準備は名前の場所の基準を撮るだけで、task の checkout に基準の行を作らない(ADR 0356 決定4)", async () => {
-  const { named, task } = await pickedUp("task-checkout-baseline");
-  const keys = db.prepare("SELECT name FROM workspace_state WHERE ref_snapshot IS NOT NULL").pluck().all();
-  expect(keys).toEqual([named.name]);
-  expect(taskRunPlace(db, task, named).name).toBe(named.name);
 });

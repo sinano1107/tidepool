@@ -1,6 +1,4 @@
-import { mkdtempSync } from "node:fs";
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
@@ -35,6 +33,7 @@ import {
   servedQuarantineQuestion,
   sessionId,
   type Tidepool,
+  tempDirSync,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -69,7 +68,7 @@ it.each([
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
       // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
-      workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
+      workspacesDir: tempDirSync("tidepool-task-checkouts-"),
       converge: async () => [],
       db,
       clock,
@@ -128,7 +127,7 @@ it.each([
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
       // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
-      workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
+      workspacesDir: tempDirSync("tidepool-task-checkouts-"),
       // server.ts と同じ配線: 収束は走っている poll の終わりを待つ(ADR 0241 決定5)。start の中で撃たれた後始末の契機は
       // この poll の inFlight の間に届くので、契機を守っているのはこの待ちである(#2252)。即解決の converge だと
       // microtask の順序で偶然通る

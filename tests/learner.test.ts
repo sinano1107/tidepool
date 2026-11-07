@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, it, onTestFinished } from "vitest";
 import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -17,7 +14,7 @@ import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard
 import { type Tier, tierIdOf } from "../src/tier.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, settleReview, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, settleReview, tempDirSync, WORKER_SPAWNED } from "./harness.js";
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
@@ -292,7 +289,7 @@ function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspa
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
     // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
-    workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
+    workspacesDir: tempDirSync("tidepool-task-checkouts-"),
     converge: async () => [],
     db,
     clock,

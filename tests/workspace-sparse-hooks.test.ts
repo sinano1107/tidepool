@@ -143,8 +143,8 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
   );
   expect(git(workspace.path, "show", `task/${child.id}:.claude/settings.json`)).toBe(settings);
   expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
-  // 写しは撮らない —— task の checkout は解放で消え、戻すものが無い
-  expect(db.prepare("SELECT COUNT(*) FROM workspace_state WHERE sparse_snapshot IS NOT NULL").pluck().get()).toBe(0);
+  // 写しは撮らない —— task の checkout は解放で消え、戻すものが無い。名前の場所は隠している最中と読まれない
+  expect(projectSettingsHiddenByBoard(db, workspace)).toBe(false);
 });
 
 /** 前の盤面 process が隠したまま落ちた形 —— 写しは次の盤面が開く DB に残る(ADR 0293 決定5)。 */

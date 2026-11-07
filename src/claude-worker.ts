@@ -55,6 +55,7 @@ import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerE
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
+  isTaskCheckout,
   materializeWorkspaceProjectSettings,
   projectSettingsHiddenByBoard,
   quarantineWorkspace,
@@ -1729,7 +1730,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         const reclaimed = this.containers.open(String(sessionId)).reclaimed;
         excludeWorkspaceProjectSettings(this.options.db, place);
         // ADR 0356 決定2: task の checkout は解放で消えるので戻さない
-        if (!place.named) this.restoreProjectSettingsAfterReclaim(reclaimed, place);
+        if (!isTaskCheckout(place)) this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
         if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));

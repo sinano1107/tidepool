@@ -85,7 +85,7 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { startWatchdog, type WatchdogConfig } from "../src/watchdog.js";
-import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
+import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import {
   openInterviewRoom,
@@ -788,6 +788,28 @@ export function recordCheckoutAtWorkspace(
     return;
   }
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+}
+
+/** adapter の `start` を包み、まだ task の checkout が開いていない task には先に `recordCheckoutAtWorkspace` を撃つ —— workspace を
+ *  追跡しない盤面・pickup を通さない unit 盤面の代わりの準備。実物の準備が開いた checkout はそのまま使われる。 */
+export function opensCheckoutAtWorkspace<A extends WorkerAdapter>(
+  adapter: A,
+  db: Db,
+  at: { dir: string; mode?: RegistryMode; workspace: string; workspacesDir?: string },
+): A {
+  const start = adapter.start.bind(adapter);
+  adapter.start = (task, ...rest) => {
+    if (taskCheckoutPath(db, task.id) === undefined) recordCheckoutAtWorkspace(db, task, { dir: at.dir, mode: at.mode ?? "purely-local" }, at.workspace, at.workspacesDir);
+    return start(task, ...rest);
+  };
+  return adapter;
+}
+
+/** 使い捨ての dir の同期版 —— 同期の fixture(scheduler の組み立てなど)が task の checkout の基点に渡す。test の終わりに消える。 */
+export function tempDirSync(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
 }
 
 /** A fresh temp git checkout named `name`, one commit deep. The dir is a

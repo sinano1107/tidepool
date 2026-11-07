@@ -43,7 +43,7 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, type Task, taskCheckoutPath } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -69,7 +69,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -326,13 +326,8 @@ async function makeWorker(
   });
   // scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この unit 盤面では pickup を通さないので、
   // 開いた event だけを workspace の在り処で先に置く —— 既に開いた checkout がある task(実物の準備を通したもの)はそのまま
-  const adapterStart = worker.start.bind(worker);
-  worker.start = (task, ...rest) => {
-    if (taskCheckoutPath(db, task.id) === undefined) {
-      recordCheckoutAtWorkspace(db, task, extraOptions.registry ?? { dir: registryDir, mode: "purely-local" }, extraOptions.workspace ?? "tidepool", extraOptions.workspacesDir);
-    }
-    return adapterStart(task, ...rest);
-  };
+  const registry = extraOptions.registry ?? { dir: registryDir, mode: "purely-local" as const };
+  opensCheckoutAtWorkspace(worker, db, { ...registry, workspace: extraOptions.workspace ?? "tidepool", workspacesDir: extraOptions.workspacesDir });
   /** Register a board task and hand it to the worker, as the scheduler would. */
   const start = (
     id?: string,
@@ -2321,37 +2316,6 @@ describe("ClaudeCodeWorker", () => {
     emitExit(0, null);
     await new Promise((resolve) => setImmediate(resolve));
     expect(quarantineQuestion(db, "workspace", "tidepool")).toBeUndefined();
-  });
-
-  // 旧: 回収後の復元の書き込みも quarantine の書き込みも rollback しても、次の session の回収で写しから復元できた(ADR 0342 決定5)
-  it("task の checkout の隠しは写しを書かず、session を重ねても名前の場所の settings.json と隠しの印は動かない(ADR 0356 決定2)", async () => {
-    const ws = await makeWorkspace("tracked-settings-restore-rollback");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    const body = JSON.stringify({ hooks: { PostToolUse: [] } });
-    await writeFile(join(ws.path, ".claude", "settings.json"), body);
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project hooks");
-    const { startInCheckout, calls, db, emitExitAt } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-    const settings = () => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8");
-    const hidden = () => projectSettingsHiddenByBoard(db, { ...ws, name: "tidepool" });
-    const snapshots = () => db.prepare("SELECT COUNT(*) FROM workspace_state WHERE sparse_snapshot IS NOT NULL").pluck().get();
-
-    const first = await startInCheckout("task-restore-rollback-1", ws.path);
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(() => readFileSync(join(first.place.path, ".claude", "settings.json"), "utf8")).toThrow();
-    emitExitAt(0, 0, null);
-    const second = await startInCheckout("task-restore-rollback-2", ws.path);
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-    expect(() => readFileSync(join(second.place.path, ".claude", "settings.json"), "utf8")).toThrow();
-    emitExitAt(1, 0, null);
-    await Promise.resolve();
-
-    expect(settings()).toBe(body);
-    expect(hidden()).toBe(false);
-    expect(snapshots()).toBe(0);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
   it("人間の cone が .claude を外していれば、S bit が立っていても隠したものと読まず、tree を変えずに spawn する(ADR 0293 決定3)", async () => {

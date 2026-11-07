@@ -216,6 +216,9 @@ export type EventPayload =
   | { kind: "examinee_checkout_opened"; path: string }
   // ADR 0356 決定2: 盤面が work / review の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
   | { kind: "task_checkout_opened"; path: string }
+  // ADR 0356 決定2: 解放が worker の tip と WIP を名前の場所の ref にし名前の場所の側を済ませた —— path の checkout は消してよい
+  // (再実行はこれを見て削除だけを撃つ)
+  | { kind: "task_checkout_released"; path: string }
   // ADR 0356 決定2: 解放で worker の repo を読めず、task の checkout を path に残した —— reason は git の失敗の本文
   | { kind: "task_checkout_release_failed"; path: string; reason: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが

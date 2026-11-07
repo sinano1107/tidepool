@@ -12,6 +12,7 @@ import { getTask, interviewRootIdOf, returnToQueue, type Task } from "./tasks.js
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
+  isTaskCheckout,
   onTaskBranch,
   PlaceNotOpenError,
   type RunPlace,
@@ -465,7 +466,7 @@ function runPlaceToRelease(
     throw err;
   }
   // ADR 0356 決定2: task の checkout は開いた event が在り処を持ち、repo が消えていれば解放がそれを読み飛ばす
-  return !step.neverRan || place.named || onTaskBranch(place, task.id) ? place : undefined;
+  return !step.neverRan || isTaskCheckout(place) || onTaskBranch(place, task.id) ? place : undefined;
 }
 
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は

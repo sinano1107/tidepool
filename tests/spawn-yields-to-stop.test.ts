@@ -12,10 +12,10 @@ import type { GitHubAuth } from "../src/github-auth.js";
 import type { Provider } from "../src/provider.js";
 import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import type { WorkerFactory } from "../src/server.js";
-import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, pickupTask, registerTask, returnToQueue, taskCheckoutPath } from "../src/tasks.js";
+import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { liveSession, markTeardown, sessionInTeardown } from "../src/teardown.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import type { WorkerAdapter } from "../src/worker.js";
+
 import type { WorkspaceConfig } from "../src/workspace.js";
 import {
   answerSkillsList,
@@ -38,9 +38,9 @@ import {
   HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
+  opensCheckoutAtWorkspace,
   questions,
   queueWork,
-  recordCheckoutAtWorkspace,
   sessionId,
   type Tidepool,
   WORKER_SPAWNED,
@@ -155,17 +155,6 @@ function holdNth(nth = 1) {
 
 type CheckoutAt = { dir: string; workspace: string; workspacesDir?: string };
 
-/** scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。workspace を追跡しない盤面では、開いた event だけを
- *  registry の workspace の在り処で先に置く —— 追跡する盤面では準備が開いた checkout がそのまま使われる。 */
-function opensCheckout(adapter: WorkerAdapter, db: Parameters<WorkerFactory>[0]["db"], at: CheckoutAt): WorkerAdapter {
-  const start = adapter.start.bind(adapter);
-  adapter.start = (task, ...rest) => {
-    if (taskCheckoutPath(db, task.id) === undefined) recordCheckoutAtWorkspace(db, task, { dir: at.dir, mode: "purely-local" }, at.workspace, at.workspacesDir);
-    start(task, ...rest);
-  };
-  return adapter;
-}
-
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
   provider: Provider,
@@ -180,7 +169,7 @@ async function bootWithAdapter(
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
-    workerAdapter: (deps) => withHealthyUsage(opensCheckout(build(deps), deps.db, at), deps.clock),
+    workerAdapter: (deps) => withHealthyUsage(opensCheckoutAtWorkspace(build(deps), deps.db, at), deps.clock),
   });
   return proc;
 }

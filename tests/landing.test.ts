@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -74,6 +73,7 @@ import {
   settleReview,
   settleReviews,
   squashTaskIntoOrigin,
+  tempDirSync,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -3902,13 +3902,12 @@ it.each([
   const merged = git(workspace.path, "rev-parse", `task/${work.id}`);
   expect(git(workspace.path, "rev-parse", `${merged}^1`)).toBe(targetBefore);
   expect(git(workspace.path, "rev-parse", `${merged}^2`)).toBe(git(workspace.path, "rev-parse", `task/${repair.id}`));
-  // earlier の pickup の基準で解放をやり直す: 帰り先の行が merge commit の1値なら、その位置は通り、戻した位置は名指しされる
-  // (ADR 0356 決定1: 旧形はやり直しの前に名前の場所の HEAD を earlier のブランチへ戻していた —— 解放は HEAD を読まない)
+  // 同じ基準で次の pickup が比べる: 帰り先の行が merge commit の1値なら、その位置は通り、戻した位置は名指しされる
+  // (旧: earlier の解放をやり直して比べた —— ADR 0356 決定2 の後、解放を刻んだ再実行は削除だけを撃つ)
   if (rolledBack) git(workspace.path, "update-ref", `refs/heads/task/${work.id}`, targetBefore);
-  releaseWorkspace(db, earlierPlace, earlier, clock.now());
-  const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose ?? "";
-  if (rolledBack) expect(purpose).toContain(`was: ${merged} refs/heads/task/${work.id}`);
-  else expect(purpose).not.toMatch(new RegExp(`refs/heads/(task/${work.id}|main)\\b`));
+  const failure = await prepareAtPickup(db, workspace, landingWork(db, clock)).then(() => undefined, (err: unknown) => err as Error);
+  if (rolledBack) expect(failure?.message).toContain(`was: ${merged} refs/heads/task/${work.id}`);
+  else expect(failure?.message ?? "").not.toMatch(new RegExp(`refs/heads/(task/${work.id}|main)\\b`));
 });
 
 it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
@@ -5126,7 +5125,7 @@ async function pickUpOnce(db: Db, clock: FakeClock, workspace: WorkspaceConfig):
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
     // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
-    workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
+    workspacesDir: tempDirSync("tidepool-task-checkouts-"),
     converge: async () => [],
     db,
     clock,

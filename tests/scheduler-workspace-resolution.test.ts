@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -13,13 +12,13 @@ import { sessionInTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
 import { type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutOf, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { checkoutOf, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, tempDirSync } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** task の checkout の番地の基点(ADR 0356 決定2)—— 既定の `~/tidepool-workspaces` に書かない。 */
 function checkoutBase(): string {
-  const dir = mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-"));
+  const dir = tempDirSync("tidepool-task-checkouts-");
   onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

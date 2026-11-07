@@ -100,11 +100,25 @@ export function boardWriteTree(cwd: string, head: string, objectsFrom: string, s
 
 /** The repo's own status: only the board's env overrides apply (ADR 0356 決定5). For the named place, whose config is the human's or the board's. */
 export function ownWorktreeStatus(cwd: string): WorktreeChange[] {
-  return run(cwd, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"]).toString()
-    .split("\0").filter(Boolean).map((line) => ({ path: line.slice(3), status: line.slice(0, 2) }));
+  return porcelainChanges(run(cwd, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"]).toString());
 }
 
-export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?: string, objectsFrom = cwd): WorktreeChange[] {
+function porcelainChanges(output: string): WorktreeChange[] {
+  return output.split("\0").filter(Boolean).map((line) => ({ path: line.slice(3), status: line.slice(0, 2) }));
+}
+
+/** ADR 0356 決定3: a task checkout read only through the board's view — a fresh index from `head`'s tree and `objectsFrom`'s
+ *  objects. Nothing runs in the worker's repo, so its real index and nested repos are not read; a submodule counts by its gitlink. */
+export function boardViewStatus(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy): WorktreeChange[] {
+  return withBoardGit(cwd, (view, dir) => {
+    const config = seedViewIndex(view, dir, head, sparse);
+    return porcelainChanges(view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]));
+  }, objectsFrom);
+}
+
+/** The view over a checkout the board does not own but a worker still runs in (the Interview room, until #3031): it also reads
+ *  the real index for staged content (ADR 0084 決定1) and recurses into populated submodules. */
+export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?: string): WorktreeChange[] {
   const index = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index");
   let head: string | undefined;
   try {
@@ -132,7 +146,7 @@ export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?
       if (boardWorktreeStatus(submodule).length > 0) paths.set(path, " M");
     }
     return [...paths].map(([path, status]) => ({ path, status }));
-  }, objectsFrom);
+  });
 }
 
 /** `git` に env を足したもの(一時 index の `GIT_INDEX_FILE` 用)。 */

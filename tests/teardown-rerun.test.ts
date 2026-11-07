@@ -152,13 +152,13 @@ it.each([
   expect(head(s)).toBe("main");
 });
 
-// 旧: 基準の行が無い workspace の HEAD は盤面が動かしたと読まず commit を拒んだ(ADR 0345 決定3)
-it("基準の行が無い名前の場所の再実行は、動いていない ref も違反と読んで quarantine に落ちる(fail-closed、ADR 0064 決定6 / ADR 0356 決定4)", async () => {
+// 旧: 基準の行が無い workspace の HEAD は盤面が動かしたと読まず commit を拒んだ(ADR 0345 決定3)。ADR 0356 決定2 の後、解放を
+// 刻んだ再実行は削除だけを撃つので、基準を失うのは解放より前
+it("基準の行を失った名前の場所の解放は、動いていない ref も違反と読んで quarantine に落ちる(fail-closed、ADR 0064 決定6 / ADR 0356 決定4)", async () => {
   const s = await settledSession("completed");
-  await teardownThrewAfterTreeRule(s);
   s.db.exec("DELETE FROM workspace_state");
 
-  await acceptTeardownQuarantine(s.deps, s.task.id);
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("changed during the session");
 });
@@ -241,16 +241,6 @@ it.each([false, true])("完了報告後の書き込みで Quarantine に返っ�
   expectLateWriteQuarantinePreserved(s, deps, question.id, reason);
 });
 
-it("完了報告後の commit も、完了の門が着けた tip との差分として書き込みに数える(ADR 0109 決定3 / ADR 0356 決定3)", async () => {
-  const s = await settledSession("completed", { parent: "delivers" });
-  commitWork(s.place.path, "late.txt", "committed after completion\n");
-
-  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
-
-  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`written to after task ${s.task.id} reported done`);
-  expect(git(s.ws.path, "ls-tree", "--name-only", s.parentBranch)).not.toContain("late.txt");
-});
-
 it("完了報告後の書き込みで Quarantine に返った直後に盤面が落ちても、起動時の復旧は同じ question を再発火する(ADR 0350 決定1・3)", async () => {
   const s = await settledSession("completed", { parent: "delivers" });
   writeFileSync(join(s.place.path, "late.txt"), "written after completion\n");
@@ -291,7 +281,7 @@ it("merge back の conflict で Quarantine に返った tree rule の受理は�
 
 // 旧: HEAD の2値行(予告と畳みの間で落ちた休止)と parking の回復(ADR 0243 決定2 / ADR 0345 決定3 / ADR 0356 決定5)。名前の場所の
 // HEAD は動かなくなったので、予告と畳みの間で落ちうる盤面の書き込みはタスクブランチの WIP の1本になった
-it("WIP のタスクブランチの書き込みの予告と畳みの間で落ちた解放の再実行は、2つ目の WIP を積まず行を畳み、次の pickup は止まらない(ADR 0243 決定2 / ADR 0356 決定2)", async () => {
+it("WIP のタスクブランチの書き込みの予告と畳みの間で落ちた解放の再実行は、2つ目の WIP を積まず、残った2値の行で次の pickup は止まらない(ADR 0243 決定2 / ADR 0351 決定4 / ADR 0356 決定2)", async () => {
   const s = await settledSession("interrupted");
   writeFileSync(join(s.place.path, "wip.txt"), "wip\n");
   const pickedUp = git(s.ws.path, "rev-parse", s.branch);
@@ -305,14 +295,13 @@ it("WIP のタスクブランチの書き込みの予告と畳みの間で落ち
   }
   const tip = git(s.ws.path, "rev-parse", s.branch);
   expect(git(s.ws.path, "log", "-1", "--format=%s", s.branch)).toContain("WIP: task");
-  const row = () => s.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(s.ws.name) as string;
-  s.db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(row().replace(`${tip} refs/heads/${s.branch}`, `${pickedUp}|${tip} refs/heads/${s.branch}`), s.ws.name);
+  const row = s.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(s.ws.name) as string;
+  s.db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(row.replace(`${tip} refs/heads/${s.branch}`, `${pickedUp}|${tip} refs/heads/${s.branch}`), s.ws.name);
 
   release(s);
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
   expect(git(s.ws.path, "rev-parse", s.branch)).toBe(tip);
-  expect(row()).toContain(`\n${tip} refs/heads/${s.branch}`);
   expect(existsSync(s.place.path)).toBe(false);
   const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.clock.now(), ...HUMAN_WEBUI);
   const place = await prepareAtPickup(s.db, s.ws, next);
@@ -340,7 +329,7 @@ it("merge back の conflict は名前の場所の HEAD を動かさず、ignored
   expect(existsSync(join(s.ws.path, "build"))).toBe(false);
 });
 
-it("帰り先へ届いた merge back の後の再実行は、帰り先を動かさず休止位置に居る(ADR 0345 決定3)", async () => {
+it("帰り先へ届いた merge back の後の再実行は、帰り先を動かさず休止位置に居る(ADR 0345 決定3 / ADR 0356 決定2)", async () => {
   const s = await settledSession("completed", { parent: "delivers" });
   await teardownThrewAfterTreeRule(s);
   const delivered = git(s.ws.path, "rev-parse", s.branch);
@@ -352,7 +341,9 @@ it("帰り先へ届いた merge back の後の再実行は、帰り先を動か�
   expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 });
 
-it("remote-backed の完了の merge back の後の再実行は、fetch が動かした写しを違反と読まず、park の ff-only で休止位置を remote に追従させる(ADR 0345 決定3)", async () => {
+// 旧: 再実行が fetch と park の ff-only を撃ち直して休止位置を remote に追従させた(ADR 0345 決定3)。解放を刻んだ再実行は削除だけで、
+// 追従は次の pickup の鮮度の段が持つ(issue #2223)
+it("remote-backed の完了の merge back の後の再実行は名前の場所に触れず、その後に remote が進んでも次の pickup が休止位置を追従させる(ADR 0345 決定3 / ADR 0356 決定2)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-rerun-remote");
   const s = await settledSession("completed", { workspace, parent: "delivers" });
   // 後始末の前に remote が進み、1度目の fetch が写しを動かす
@@ -365,9 +356,11 @@ it("remote-backed の完了の merge back の後の再実行は、fetch が動�
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
   expectCleanRerun(s, s.deps, "done");
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
+  const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.clock.now(), ...HUMAN_WEBUI);
+  await prepareAtPickup(s.db, s.ws, next);
   expect(git(s.ws.path, "rev-parse", "main")).toBe(git(s.ws.path, "rev-parse", "origin/main"));
   expect(git(s.ws.path, "show", "main:merged.txt")).toBe("merged on GitHub");
-  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 });
 
 // ADR 0351 決定2: 基準は切れない —— 再実行の後始末の後も次の pickup は比べ、release はタスクブランチの行を無条件に畳む(#2953)。

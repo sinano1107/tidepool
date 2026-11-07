@@ -112,7 +112,9 @@ it("worker が設定した fsmonitor は完了の門・退避・次の pickup �
   }
 });
 
-it("完了の門は作業ツリーを HEAD に戻した後も staged な変更を読む(ADR 0084 決定1)", async () => {
+// 旧: 完了の門は作業ツリーを HEAD に戻した後も worker の index の staged な変更を読んだ(ADR 0084 決定1)。盤面は worker の index を
+// 読まず、退避と同じ作業ツリーだけを読む —— staged だけの内容は WIP にも門にも現れない
+it("完了の門は worker の index を読まず、作業ツリーを tip に戻した staged だけの変更を名指さない —— 退避が積むものと同じを読む(ADR 0356 決定3)", async () => {
   const { db, task, place } = await pickedUpSession();
   try {
     const path = join(place.path, "README.md");
@@ -121,13 +123,14 @@ it("完了の門は作業ツリーを HEAD に戻した後も staged な変更�
     git(place.path, "add", "README.md");
     writeFileSync(path, `${original}\n`);
 
-    expect(completionTreePaths(place, task.id, db)).toEqual(["README.md"]);
+    expect(completionTreePaths(place, task.id, db)).toEqual([]);
   } finally {
     db.close();
   }
 });
 
-it("the gate sees dirty submodules without executing their Git filters (ADR 0356 決定3)", async () => {
+// 旧: 門は populated な submodule の中の未 commit の内容も読んだ。盤面は worker の入れ子の repo で git を撃たず(ADR 0356 決定3)、submodule は gitlink だけで読む
+it("the gate reads a submodule by its gitlink only, without running Git in the worker's nested repo or its filters (ADR 0356 決定3)", async () => {
   const { db, task, place } = await pickedUpSession();
   try {
     const source = await makeWorkspace("nested-module-source");
@@ -149,7 +152,7 @@ it("the gate sees dirty submodules without executing their Git filters (ADR 0356
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
 
-    expect(completionTreePaths(place, task.id, db)).toEqual(["module with space"]);
+    expect(completionTreePaths(place, task.id, db)).toEqual([]);
     expect(existsSync(marker)).toBe(false);
     git(submodule, "config", "--unset", "filter.probe.clean");
     git(submodule, "add", "README.md");
@@ -255,7 +258,7 @@ it("完了と解放の間に別の理由で workspace が Quarantine になっ�
   expect(git(place.path, "status", "--porcelain")).toBe("?? late.txt");
 });
 
-it("汚れが shadow 残骸の3条件だけを満たすなら、通常どおり完了する", async () => {
+it("汚れが shadow 残骸の3条件だけを満たすなら、task の checkout ごと通常どおり完了する(ADR 0069 / ADR 0356 決定3)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   commitWork(place.path, "deliverable.txt", "the real work\n");
   gateFetch(db, place, task);
@@ -291,7 +294,7 @@ it("観測そのものが失敗したら完了経路は clean に倒さず quara
   expect(existsSync(join(place.path, ".git"))).toBe(true);
 });
 
-it("完了以外の解放では、着地後の書き込みが従来どおり WIP としてタスクブランチに退避され、再開の checkout はその WIP に立つ", async () => {
+it("完了以外の解放では、着地後の書き込みが従来どおり WIP としてタスクブランチに退避され、再開の checkout はその WIP に立つ(ADR 0356 決定2)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   commitWork(place.path, ".gitignore", "build/\nnode_modules/\n");
   for (const dir of ["build", "node_modules"]) {
