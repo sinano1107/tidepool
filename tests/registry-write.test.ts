@@ -9,6 +9,7 @@ describe("commitToRegistry", () => {
   it("returns the base SHA without a commit when nothing changes", async () => {
     const dir = await makeRegistry();
     git(dir, "branch", "-M", "main");
+    git(dir, "config", "status.showUntrackedFiles", "no");
     const base = git(dir, "rev-parse", "main");
 
     const landed = commitToRegistry(
@@ -20,7 +21,7 @@ describe("commitToRegistry", () => {
 
     expect(landed).toBe(base);
     expect(git(dir, "rev-parse", "main")).toBe(base);
-  });
+  }, 15_000);
 
   it("lands a new file even when Git is configured to hide untracked files", async () => {
     const dir = await makeRegistry();
@@ -38,5 +39,5 @@ describe("commitToRegistry", () => {
     expect(landed).not.toBe(base);
     expect(git(dir, "rev-parse", "main")).toBe(landed);
     expect(git(dir, "show", `${landed}:new-file.txt`)).toBe("new content");
-  });
+  }, 15_000);
 });

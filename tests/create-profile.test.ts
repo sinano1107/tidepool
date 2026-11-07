@@ -21,21 +21,6 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 describe("createProfile: 正常系(issue #76)", () => {
-  it("Git が untracked files を隠す設定でも新しい profile を読み取れる", async () => {
-    const registryDir = await makeMainRegistry();
-    git(registryDir, "config", "status.showUntrackedFiles", "no");
-
-    await createProfile(
-      { name: "new-profile", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "escalate", confirmDangerous: true },
-      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
-    );
-
-    expect(loadRegistry(registryDir, "purely-local").authority["new-profile"]).toMatchObject({
-      name: "new-profile",
-      guidance: "g",
-    });
-  });
-
   it("authority/<name>.yaml が Tidepool 名義でコミットされ、loadRegistry が全フィールドを返す(ラウンドトリップ、merge 含む)", async () => {
     const registryDir = await makeMainRegistry();
 
