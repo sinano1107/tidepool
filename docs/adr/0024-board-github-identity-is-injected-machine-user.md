@@ -4,6 +4,8 @@
 
 **Status 追記: 身元の形は [ADR 0093](0093-the-boards-github-identity-is-one-app-and-a-token-broker-mints-per-repo-tokens.md) で machine user の PAT から単一 GitHub App の installation token に変わった(2026-08-21)。** 決定1 の seam(身元は盤面の設定から注入される)・決定2 の「名義 = 執行者」・決定3 の worker ゼロ credential はそのまま。決定4 の「アカウント」は App を指す。
 
+**Status 追記: 決定3 の理由句「worker は env を継承するため、置くと剥がし忘れ1箇所で漏れる」は [ADR 0358](0358-a-worker-shaped-process-receives-only-what-the-board-enumerates-env-is-built-and-codex-config-layers-outside-the-enumeration-fail-the-capability.md) で経路が変わった** —— worker の形で走る process の env は盤面が組み立て、host の名前は列挙に無ければ届かない。「worker は GitHub credential ゼロ」「credential が効く場所は1箇所」の決定は不変(2026-11-07、issue #2998)。
+
 2026-07-15 の grilling(issue #50)で決定。v1 の GitHub 書き込み(PR 作成・CI 確認・merge)は host の `gh auth`、つまり人間本人の ambient 認証にただ乗りしており、worker も盤面プロセスの env をまるごと継承するため同じ認証が worker セッションにも漏れていた。「PR 昇格は worker に託さず盤面だけが行う」(issue #19 の seam)が credential 層では成立していなかった。
 
 決定は4点:

@@ -4,6 +4,8 @@
 
 **Status 追記(2026-10-15、ADR-0262): 実測の1行目「有効な setup-token でも対話 TUI の使用率%パネルは出る」は今の CLI では成り立たない** —— 長期 token は `user:inference` しか持たず、`/usage` は refresh の後で窓の行を消す。長期 token の盤面では Claude の使用量は観測不能のままとし、門の盤面は VM 内 `/login` を保つ(ADR-0262)。
 
+**Status 追記: 決定1 の「全呼び出しが env 継承で受け取る」は [ADR 0358](0358-a-worker-shaped-process-receives-only-what-the-board-enumerates-env-is-built-and-codex-config-layers-outside-the-enumeration-fail-the-capability.md) で「盤面が組み立てる env に anthropic の adapter が pass-through する」に変わった** —— token の置き場(systemd `EnvironmentFile`)は不変で、worker に届く経路だけが継承から列挙になった(2026-11-07、issue #2998)。
+
 issue #318 のグリリング(2026-08-13)で決定。盤面は無人で回る前提だが、動力である claude CLI の資格情報は
 対話ログイン前提で、refresh token がサービス側に reject されたり複数セッションの refresh が競合したりすると
 **黙って**期限切れになる(#306 で観測)。切れると worker spawn・AI 下書き・表示時翻訳・使用量の読み取りの

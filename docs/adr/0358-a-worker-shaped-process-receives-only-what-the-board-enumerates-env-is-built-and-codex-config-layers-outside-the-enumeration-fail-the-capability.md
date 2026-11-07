@@ -17,12 +17,14 @@ Codex の user 層(ADR 0098 / 0147)はその線の上にあった。残ってい
 ## 決定
 
 1. **worker の形で走る process(worker 本体、worker の形の ping / probe —— ADR 0341 の posture)は、host の状態を既定で隔て、渡すものを
-   盤面が列挙する。** 列挙の外のものが届く形は、名前を消す点修正ではなく、この決定への違反として直す。外に残すのは、答えを取りに行く
-   Board call と `/usage` の scrape(ADR 0354 が人間の login に残した)、盤面の local git(ADR 0339 帰結、#2819 / #2842)の2つ。
-2. **env は Harness を跨いで1箇所で組み立てる。** 土台は `PATH`・`HOME`(Claude の credentials の置き場、ADR 0354 決定1)・task temp の
-   `TMPDIR` だけで、その上に Harness の adapter が自分の注入一式(Claude: `CLAUDE_CODE_OAUTH_TOKEN` の pass-through、config dir、
+   盤面が列挙する。** 列挙の外のものが届く形は、名前を消す点修正ではなく、この決定への違反として直す。外に残すのは `/usage` の scrape(pty の TUI で
+   `TERM` 等に依る —— 未測)と盤面の local git(ADR 0339 帰結、#2819 / #2842)の2つ。答えを取りに行く Board call は、CLI 状態は人間の
+   login のまま(ADR 0354)だが env はこの決定に入る —— 空のツール面(ADR 0044)でも env の持ち主を2つに割らない。
+2. **env は Harness を跨いで1箇所で組み立てる。** 土台は `PATH`・`HOME`(Claude の credentials の置き場のためだけ、ADR 0354 決定1)・task temp の
+   `TMPDIR`・`GIT_CONFIG_GLOBAL=/dev/null`・`GIT_CONFIG_NOSYSTEM=1`(`HOME` が運ぶ host の git config を Harness 共通で閉じる —— #2819 が
+   盤面の local git で観測した `commit.gpgsign` / `core.hooksPath` は worker の git にも効く。Codex 側は #453 の実装の写しで ADR が無かった)で、その上に Harness の adapter が自分の注入一式(Claude: `CLAUDE_CODE_OAUTH_TOKEN` の pass-through、config dir、
    timeout、`GIT_*` の名義。Moonshot: key file からの注入 —— spawn も認証の probe も。Codex: `CODEX_HOME`、git config、npm の固定値)を載せる。
-   Claude worker・Moonshot の認証 probe・Codex worker・Codex の probe・worker の形の Claude Board call が同じ場所から受け取る。`LANG` / `TZ` / `USER` / `SHELL` /
+   Claude worker・Moonshot の認証 probe・Codex worker・Codex の probe・Claude Board call(worker の形も答えも)が同じ場所から受け取る。`LANG` / `TZ` / `USER` / `SHELL` /
    proxy / CA / `SSH_AUTH_SOCK` / `TIDEPOOL_*` は渡さない。ADR 0097 決定4 の「注入一覧と除去一覧を同じ定数から導く」は注入の向きだけが
    残り、除去一覧は無くなる。
 3. **列挙はコード定数で、設定の口を持たない。** 渡す名前は Harness adapter の vendor 知識(ADR 0005)で、registry・盤面設定・盤面 env の
@@ -56,6 +58,7 @@ Codex の user 層(ADR 0098 / 0147)はその線の上にあった。残ってい
 
 ## 派生
 
-- Status 追記: ADR 0097 決定4(退役)、ADR 0287 決定3 と ADR 0354 決定1(「常に delete」は「列挙に無い」で読む)。
+- Status 追記: ADR 0097 決定4(退役)、ADR 0287 決定3 と ADR 0354 決定1(「常に delete」は「列挙に無い」で読む)、ADR 0024 決定3 と
+  ADR 0070 決定1(「env 継承で受け取る」の経路は列挙した pass-through に)。
 - GLOSSARY: 床(host 側の状態に env と Codex の config 層を含める)。
 - 実装は `/to-spec` → `/to-tickets`(env の組み立て・Codex の層の検査・テスト)。#3002 / #2478 は同じ変更で閉じる。
