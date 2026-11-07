@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardDoctrine, fenced } from "../src/board-prose.js";
@@ -56,6 +56,7 @@ import {
   quarantineQuestion,
   routingJudgmentRepairTask,
   sessionId,
+  stubHostEnvDecoys,
   type Tidepool,
   unhandledRejectionsDuring,
   WORKER_SPAWNED,
@@ -441,19 +442,12 @@ describe("CodexWorker (ADR 0098)", () => {
   it("spawns the pinned Codex route with isolated auth home and closed worker surfaces", async () => {
     const f = await fixture();
     const value = task(f.db);
-    process.env.OPENAI_API_KEY = "must-not-leak";
-    process.env.GITHUB_TOKEN = "must-not-leak";
-
     await f.start(value);
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.GITHUB_TOKEN;
 
     const call = f.process.calls[0]!;
     expect(call.command).toBe("/opt/tidepool/bin/codex");
     expect(call.cwd).toBe(f.workspace);
     expect(call.env.CODEX_HOME).toBe(f.codexHome);
-    expect(call.env.OPENAI_API_KEY).toBeUndefined();
-    expect(call.env.GITHUB_TOKEN).toBeUndefined();
     expect(call.args).toEqual(expect.arrayContaining([
       "--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--ignore-user-config",
       "--ignore-rules", "--strict-config", "--dangerously-bypass-hook-trust",
@@ -512,17 +506,35 @@ describe("CodexWorker (ADR 0098)", () => {
     });
   });
 
-  // Claude の worker spawn env と同じ4本(issue #2469)。期待値は独立した literal(実装の定数を import しない)
-  it("host の GitHub / OpenAI の資格情報 env 4つを worker env から消す", async () => {
-    const credentialEnvs = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"];
+  // ADR 0358 決定1・2・5: spawn env は盤面が列挙したものだけ —— host の囮(秘密の形の名前、OpenAI / Anthropic / GitHub の
+  // 資格情報、host の PATH)はどれも届かず、expected は literal。TMPDIR は spawn ごとの mkdtemp なので観測から取る
+  it("Codex の spawn env は列挙と完全一致し、host の囮は届かない", async () => {
     const f = await fixture();
-    for (const name of credentialEnvs) vi.stubEnv(name, "must-not-leak");
-    try {
-      await f.start(task(f.db));
-      for (const name of credentialEnvs) expect(f.process.calls[0]!.env[name]).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    stubHostEnvDecoys();
+    vi.stubEnv("CODEX_API_KEY", "decoy-codex-api-key");
+    vi.stubEnv("GITHUB_TOKEN", "decoy-github-token");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "decoy-claude-oauth-token");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "decoy-anthropic-auth-token");
+    await f.start(task(f.db));
+    const { env } = f.process.calls[0]!;
+    expect(env.TMPDIR).toEqual(expect.any(String));
+    expect(env).toStrictEqual({
+      PATH: ["/opt/tidepool/bin", dirname(process.execPath), "/Library/Developer/CommandLineTools/usr/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(delimiter),
+      HOME: "/home/board",
+      TMPDIR: env.TMPDIR,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CODEX_HOME: f.codexHome,
+      XDG_CONFIG_HOME: join(env.TMPDIR!, "xdg"),
+      npm_config_cache: join(env.TMPDIR!, "npm-cache"),
+      npm_config_userconfig: "/dev/null",
+      npm_config_offline: "true",
+      npm_config_update_notifier: "false",
+      GIT_AUTHOR_NAME: "codex-agent",
+      GIT_AUTHOR_EMAIL: "codex-agent@tidepool.invalid",
+      GIT_COMMITTER_NAME: "codex-agent",
+      GIT_COMMITTER_EMAIL: "codex-agent@tidepool.invalid",
+    });
   });
 
   it("allowed_domains を持たない workspace では network の許可は 127.0.0.1 だけのまま(issue #763)", async () => {

@@ -6,6 +6,7 @@ import { atNeutralCwd, type BoardCall, readOutput } from "./board-call.js";
 import { cliAuthStop } from "./cli-auth.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { ResourceStop } from "./events.js";
+import { workerBaseEnv } from "./worker.js";
 
 export const CODEX_APP_SERVER_VERSION = "codex-cli 0.163.0";
 
@@ -191,12 +192,10 @@ export function codexLoginAbsence(codexHome: string): string | undefined {
   return existsSync(path) ? undefined : `no Codex login: ${path} is absent`;
 }
 
-/** Codex の Board call の env: 盤面の CODEX_HOME を指し、API key に落ちる道を残さない(ADR 0098)。 */
+/** Codex の Board call の env(ADR 0358 決定2): worker と同じ土台に盤面の CODEX_HOME だけを載せる —— API key は列挙に無いので
+ *  届かない(ADR 0098)。task を持たないので temp は渡さない(OS 既定の TMPDIR)。 */
 export function probeEnv(codexHome: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
-  delete env.OPENAI_API_KEY;
-  delete env.CODEX_API_KEY;
-  return env;
+  return { ...workerBaseEnv(), CODEX_HOME: codexHome };
 }
 
 function commandFailure(result: CodexCliCommandResult): string | null {

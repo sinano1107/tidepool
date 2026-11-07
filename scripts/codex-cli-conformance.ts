@@ -106,7 +106,7 @@ const egress = (host: string) =>
       kind: "conformance egress",
       args: ["sandbox", "-P", "tidepool-work", "-C", workspace, ...config.flatMap((entry) => ["-c", entry]), ...egressCurl(host)],
       cwd: workspace,
-      env: { ...env, TMPDIR: temp, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      env: { ...env, TMPDIR: temp },
       limitMs: 60_000,
     });
     return result.stdout + result.stderr;
