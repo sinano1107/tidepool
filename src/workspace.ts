@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ResourceStop } from "./events.js";
-import { git, gitWithEnv, gitWithInput } from "./git.js";
+import { git, gitStatus, gitWithEnv, gitWithInput } from "./git.js";
 import {
   type GitHubAuth,
   originRepo,
@@ -765,7 +765,7 @@ export async function prepareWorkspaceAtPickup(
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
   if (rootId === undefined || task.type === "interview") {
-    const changes = git(workspace.path, "status", "--porcelain", "--untracked-files=all");
+    const changes = gitStatus(workspace.path);
     if (changes !== "") {
       throw new PickupGateError(workspace, new Error(
         `workspace ${workspace.name} has uncommitted changes while resting: ${changes} — a process wrote them after the board moved the checkout`,
@@ -1044,14 +1044,14 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
  *  ここを読む —— 判定を2箇所に複製すると、片方だけが残骸を数えて無実の拒否か取りこぼしが
  *  生まれる。
  *
- *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
+ *  `gitStatus` の `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
  *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
  *  `.claude/agents` だけの残骸が dirty に数えられる。
  *
  *  **観測できなければ投げる。** 飲むかどうかは呼び手の判断であり、経路ごとに違う。 */
 function uncommittedChanges(workspace: WorkspaceConfig): string[] {
   const remnants = new Set<string>(shadowRemnants(workspace));
-  return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
+  return gitStatus(workspace.path)
     .split("\n")
     .filter((line) => line !== "" && !remnants.has(line.slice(3)));
 }
@@ -1246,7 +1246,7 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
   assertOwnGitDirectory(workspace.path);
   let status: string;
   try {
-    status = git(workspace.path, "status", "--porcelain");
+    status = gitStatus(workspace.path);
   } catch (err) {
     throw new Error(
       `workspace ${workspace.name} is not a usable git repository: ` +
