@@ -442,18 +442,12 @@ describe("CodexWorker (ADR 0098)", () => {
   it("spawns the pinned Codex route with isolated auth home and closed worker surfaces", async () => {
     const f = await fixture();
     const value = task(f.db);
-    vi.stubEnv("OPENAI_API_KEY", "must-not-leak");
-    vi.stubEnv("GITHUB_TOKEN", "must-not-leak");
-    onTestFinished(() => { vi.unstubAllEnvs(); });
-
     await f.start(value);
 
     const call = f.process.calls[0]!;
     expect(call.command).toBe("/opt/tidepool/bin/codex");
     expect(call.cwd).toBe(f.workspace);
     expect(call.env.CODEX_HOME).toBe(f.codexHome);
-    expect(call.env.OPENAI_API_KEY).toBeUndefined();
-    expect(call.env.GITHUB_TOKEN).toBeUndefined();
     expect(call.args).toEqual(expect.arrayContaining([
       "--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--ignore-user-config",
       "--ignore-rules", "--strict-config", "--dangerously-bypass-hook-trust",
@@ -510,19 +504,6 @@ describe("CodexWorker (ADR 0098)", () => {
       cli_version: CLI_VERSION,
       // skills の3列と paths は下の ADR 0337 決定2 のテストが固定する
     });
-  });
-
-  // Claude の worker spawn env と同じ4本(issue #2469)。期待値は独立した literal(実装の定数を import しない)
-  it("host の GitHub / OpenAI の資格情報 env 4つを worker env から消す", async () => {
-    const credentialEnvs = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"];
-    const f = await fixture();
-    for (const name of credentialEnvs) vi.stubEnv(name, "must-not-leak");
-    try {
-      await f.start(task(f.db));
-      for (const name of credentialEnvs) expect(f.process.calls[0]!.env[name]).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   // ADR 0358 決定1・2・5: spawn env は盤面が列挙したものだけ —— host の囮(秘密の形の名前、OpenAI / Anthropic / GitHub の
