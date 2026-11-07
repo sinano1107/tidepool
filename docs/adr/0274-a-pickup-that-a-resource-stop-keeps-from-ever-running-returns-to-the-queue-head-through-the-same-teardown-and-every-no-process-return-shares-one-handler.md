@@ -1,5 +1,7 @@
 # 資源の停止で worker が1度も走らなかった pickup は、同じ後始末を通って todo の先頭へ戻り、process を持たない復帰は一撃を1本で共有する
 
+**Status 追記: 決定3 の「pickup が名前の場所を休止位置から動かしたか」の導出は、task の checkout では「開いた event があるか」に替わる([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 **Status 追記: 決定1・4 の「todo の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 位置を変えずに `todo` へ戻る。1 transaction に後始末の印を置く形(決定3)と一撃を1本で共有する形(決定4)は変わらない。
 
 **Status 追記: 決定2 の kind の並びに `target_refused` を加える(issue #2580)** —— 表の行でない Interview の対象の拒否は `row_refused` から分ける。戻した後の扱いが行の Quarantine でなく対象の question だからで、表の行の拒否は `row_refused` のままである。

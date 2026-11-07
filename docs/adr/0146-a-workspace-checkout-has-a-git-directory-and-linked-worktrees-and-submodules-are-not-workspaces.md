@@ -1,5 +1,7 @@
 # workspace の checkout は `.git` をディレクトリに持つ: linked worktree・submodule は workspace にならない
 
+**Status 追記: 決定1・3 の「`.git` が directory」の理由のうち sandbox の cwd の側は消える(worker は task の checkout で走る)。盤面が branch を書く側の理由は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 issue #866 の grilling(2026-09-22)で決定。#849(PR #865)が Codex work worker の filesystem 表に `<workspace>/.git` = write、`.git/hooks` / `.git/config` = read を足したところ、`.git` が**ファイル**の checkout(linked worktree・submodule の形)では Linux の sandbox が mount 先を作れず起動しない(Lima VM で実測、exit 101)。ただし退行の範囲は issue の見立てより狭い —— linked worktree の gitdir は workspace の外にあり sandbox が隠すので、#849 以前から Codex route の Linux では git 操作ができなかった(同じ VM で `git add` が `not a git repository`)。#849 が変えたのは「git だけ壊れている」→「sandbox 自体が立たない」である。測定は #866 のコメントに置く。
 
 ## 決定

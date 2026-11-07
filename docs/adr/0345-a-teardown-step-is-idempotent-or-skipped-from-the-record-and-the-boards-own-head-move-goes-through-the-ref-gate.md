@@ -1,5 +1,7 @@
 # 後始末の step は冪等であるか記録から2度目を飛ばせなければならず、盤面自身の HEAD の移動も ref の口を通る
 
+**Status 追記: 決定2・3 の「盤面が HEAD を動かした」の読みは、名前の場所の HEAD が動かなくなり task の checkout が session ごとに消えるので要らなくなる。決定1 は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 **Status 追記: 決定3 の dirty 検査に「タスクブランチの `.gitignore` だけが無視していたファイル」は来なくなる —— 盤面が HEAD をタスクブランチの外へ動かす手がそれを先に消す([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md)、2026-11-02、issue #2912)。**
 
 **Status 追記: 決定3 の「HEAD が予告の位置なら退避と ref の比較を飛ばす」は、タスクブランチの行を基準へ畳む冪等な step を再実行でも走らせる形になり、「盤面が休止させた後に書かれた」の dirty 検査は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定5 の不変(休止中の変更は ref も tree も盤面のものでない)の観測点の1つになる(2026-11-02、issue #2911)。**

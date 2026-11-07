@@ -1,5 +1,7 @@
 # 盤面が読む正本はリモートの保護ブランチであり、ホスト上の clone はキャッシュである
 
+**Status 追記: 決定7 の休止位置へ「戻す」手は無くなる —— 名前の場所の HEAD は保護ブランチを離れず、残るのはリモートへの追従と worktree の追従([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 **Status 追記: 決定7 の「クリーンに戻す」は、タスクブランチが無視していたファイルを休止位置へ動かす前に消すことまで含む —— 休止位置の tree は head と一致する([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md)、2026-11-02、issue #2912)。**
 
 **Status 追記: §7 追記(pickup の休止位置)の「読む場所は remote 正本を持つものだけ」は外れ、purely-local の読む場所も休止させる(ADR 0329 追記 決定11、2026-11-01、issue #2730)。**

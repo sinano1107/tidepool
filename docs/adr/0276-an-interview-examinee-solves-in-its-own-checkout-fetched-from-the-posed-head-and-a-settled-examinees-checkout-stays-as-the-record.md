@@ -1,5 +1,7 @@
 # 受験者は出題の head から fetch した自分の checkout で解く —— 面接室は root が組む場所、決着した受験者の checkout は記録として残る
 
+**Status 追記: 決定1 の「再開は同じ checkout」は撤回(task の checkout は session ごとに作り直す)、決定3 の受験者ごとの snapshot の鍵は要らなくなる。決定4 は保つ([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 **Status 追記: 決定3 の鍵を受験者 id にした理由「name を共有すると中断中の受験者の行を次の受験者が上書きし」は、[ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定2 で上書き(全撮り)が無くなっても成り立つ —— checkout ごとに ref が別なので鍵はそのまま(2026-11-02、issue #2911)。**
 
 2026-10-19 の grilling(issue #2239 —— #2193 の code-review の疑い)で決定。面接室は机が1つの部屋で、受験者が順に座る形だった

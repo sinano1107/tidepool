@@ -1,5 +1,7 @@
 # purely-local の着地の帯域外判定は盤面自身の記録で行い、正当な非 ff は Tidepool 名義の merge で追いつかせる
 
+**Status 追記: 決定3 の「走行中は checkout を動かさない」の分岐は消え、保護ブランチの ref の書き込みは常に worktree の追従と対の plumbing([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 **Status 追記: 決定1 が読む基準は次の pickup の全撮りで作り直されなくなった([ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定2、2026-11-02、issue #2911)—— 旧・休止中に保護ブランチが動いたとき、着地の回答が次の pickup より前なら quarantine、後なら通っていた。決定1 の文はそのまま。**
 
 **Status 追記: 決定3 の「綴りは今日どおり2つ」と Considered options の「plumbing への一本化」は [ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) 決定4 で「merge の計算は走行中も休止中も plumbing の1つ、ref の動かし方だけが `update-ref` / `merge --ff-only` の2つ」に置き換わった(2026-10-13、#1871)。決定1・2・4・5 はそのまま。**

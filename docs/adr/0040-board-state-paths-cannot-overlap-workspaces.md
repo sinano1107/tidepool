@@ -1,5 +1,7 @@
 # 盤面の状態パスは workspace と交差できない: 重なりガードは pickup 時の workspace quarantine
 
+**Status 追記: 決定の「workspace の中」は worker の読み書きの半径で、worker は task の checkout で走るので重なりの検査はその番地に当たる([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 issue #149 のグリリング(2026-08-04)で決定。盤面自身の状態ファイルの既定パスが cwd 相対で、盤面を checkout の中から走らせる運用と組み合わさると、その checkout を workspace 登録した瞬間に worker の書き込み半径(`allowWrite: [workspace.path]` — ADR 0033)の中に盤面の状態が入る。人間面に到達せずに盤面の状態を変えられる裏口であり(ADR 0034/0036 の不変条件の迂回)、worker-logs には stream-json の監査記録が入るため**監査対象が自分の監査記録を書き換えられる**形でもある。
 
 ## 保護対象は盤面プロセスに固定の5点

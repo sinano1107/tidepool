@@ -1,5 +1,7 @@
 # タスクブランチが無視するファイルは、盤面が HEAD をそのブランチの外へ動かすときに消える
 
+**Status 追記: 族の根 #2956 が乗り物を替えた —— task の checkout は session ごとに消えるので HEAD の移動で ignored を消す機構は要らず、決定(宣言したものは成果でない)だけが残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
+
 2026-11-02 の grilling(issue #2912、#2889 の finding)で決定。「clean」の述語(`git status --porcelain`、ADR 0084 決定3 の1つの綴り)は
 HEAD の branch の ignore 規則に相対であり、4つの読み手のうち盤面自身が HEAD を動かした後に読む2つ(ADR 0345 決定3 の再実行の検査、
 ADR 0351 決定5 の pickup の検査)と次の task の完了の門だけが、タスクブランチの `.gitignore` だけが無視していたファイルを「休止後に書かれた」
