@@ -51,7 +51,7 @@ import { promptInput, RecordContainerError, type Transcript, type TranscriptStor
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import { type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
+import { boardEnvByName, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
@@ -429,9 +429,9 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
 /** The one env var that closes the advisor whatever the configuration sources
  *  say (measured: it beats both the project settings tier and an explicit
  *  `--advisor` flag). Named once because "this session has no advisor" must
- *  have exactly one spelling — `boardCallEnv`, `moonshotCliAuthEnv` and
- *  `workerSpawnEnv` set it, and a typo in any of them would fail open and
- *  silently. */
+ *  have exactly one spelling — `workerSpawnEnv` sets it, and `boardCallEnv`,
+ *  `usageScrapeEnv` and `moonshotCliAuthEnv` through `BOARD_CLI_CLOSED`; a
+ *  typo in any of them would fail open and silently. */
 const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
 
 /** The env var that closes the model's own reasoning (ADR 0062 決定2), named
@@ -448,10 +448,14 @@ const DISABLE_PROMPT_CACHING = "DISABLE_PROMPT_CACHING";
  *  同じ理由で1か所に名付ける —— env 関数のどこかで綴りを誤れば、黙って開く。 */
 const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
 
-/** anthropic を喋る process(worker spawn と Board call、ADR 0096)が盤面 env から名指しで受け取る認証 token(ADR 0070 決定1 /
+/** Board call と Moonshot の認証 probe は worker session ではないので advisor を持たず(ADR 0044)、CLI は自分で更新しない
+ *  (ADR 0186 決定4)。 */
+const BOARD_CLI_CLOSED = { [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" } as const;
+
+/** anthropic を喋る process(worker spawn と Board call、ADR 0096)が盤面 env にあれば名指しで受け取る認証 token(ADR 0070 決定1 /
  *  ADR 0358 決定2)。`ANTHROPIC_API_KEY` は列挙に無い —— ADR 0070 が API key 課金を退けた。Moonshot 向きには載せない:
- *  subscription に Kimi の仕事を課金させない(ADR 0097 決定2)。 */
-const anthropicAuthEnv = (): NodeJS.ProcessEnv => ({ CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN });
+ *  資格情報は provider ごとに分ける(ADR 0097 決定4)—— subscription に Kimi の仕事を課金させない。 */
+const anthropicAuthEnv = (): NodeJS.ProcessEnv => boardEnvByName("CLAUDE_CODE_OAUTH_TOKEN");
 
 /** The Moonshot routing set (ADR 0096 / issue #445): the endpoint, the Bearer
  *  token and the model a `provider: moonshot` process is injected with — the
@@ -472,8 +476,9 @@ const moonshotRoutingEnv = (apiKey: string, model: string): NodeJS.ProcessEnv =>
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
 
 /** Where the Moonshot Platform key lives: the board's state-file home, never
- *  the board's env (ADR 0097 決定4 — human-surface-credential の「平文は
- *  process.env に乗せない — worker spawn が継承するから」と同じ doctrine)。
+ *  the board's env (ADR 0097 決定4)—— 鍵は Moonshot 向きの注入にだけ要る盤面の
+ *  秘密で、env に置く理由が無い。worker に届かないことは ADR 0358 決定2 の列挙が
+ *  どちらにしても持つ。
  *  Mirrors auth.ts's `resolveTokenFile`: one resolver so a differing HOME
  *  (sudo 越し等) can't split the board from its tooling. */
 export function resolveMoonshotApiKeyFile(configured: string | undefined): string {
@@ -554,7 +559,7 @@ function readMoonshotApiKey(keyFile: string): string {
  *  refusal-swap stoppers (ADR 0323). `temp` is passed only by the call that
  *  needs `TMPDIR` off the closed `/tmp` (the Worker MCP reachability probe). */
 export function boardCallEnv(temp?: string): NodeJS.ProcessEnv {
-  return { ...workerBaseEnv(temp), ...anthropicAuthEnv(), [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
+  return { ...workerBaseEnv(temp), ...anthropicAuthEnv(), ...BOARD_CLI_CLOSED };
 }
 
 /** The `/usage` scrape's env — **outside ADR 0358 決定1**: a pty TUI whose
@@ -562,7 +567,7 @@ export function boardCallEnv(temp?: string): NodeJS.ProcessEnv {
  *  `process.env`, and with it any host var such as `ANTHROPIC_BASE_URL`. Like
  *  every Board call it closes the advisor and the autoupdater. */
 export function usageScrapeEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
+  return { ...process.env, ...BOARD_CLI_CLOSED };
 }
 
 /** ADR 0355 決定1: answer calls disable caching without changing worker-shaped observations. */
@@ -655,7 +660,9 @@ export interface ProviderRouting extends ExecutionSetting {
  *  set — a board env pointed at Moonshot must not silently switch every Claude
  *  worker to metered Kimi billing. A moonshot spawn gets the routing set
  *  (base URL, Bearer token read from the key file, model in the provider's
- *  notation) and no Claude subscription credential (ADR 0097 決定2).
+ *  notation) and no Claude subscription credential — credentials are separated
+ *  per provider (ADR 0097 決定4) and the token is simply not enumerated here
+ *  (ADR 0358 決定2).
  *  Beyond these, effort mapping and context-window knobs are #447's
  *  measurements, not guesses to bake in here. */
 export function workerSpawnEnv(
@@ -700,8 +707,7 @@ export function workerSpawnEnv(
 export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessEnv {
   return {
     ...workerBaseEnv(),
-    [ADVISOR_DISABLE_ENV]: "1",
-    [AUTOUPDATER_DISABLE_ENV]: "1",
+    ...BOARD_CLI_CLOSED,
     ...moonshotRoutingEnv(readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile)), MOONSHOT_DEFAULT_MODEL),
   };
 }
@@ -2402,9 +2408,9 @@ export async function checkUsageThrough(
       command: "claude",
       args: ["--settings", settingsPath],
       cwd: process.cwd(),
-      // a Board call like any other (ADR 0044): this one raises no model turn
-      // today — nothing is ever typed at the prompt — but that is a property
-      // of the vendor's TUI, not one this board placed here.
+      // advisor closed as on every Board call (ADR 0044): this one raises no model
+      // turn today, but that is a property of the vendor's TUI, not one this board
+      // placed here. Unlike the others its env inherits process.env (ADR 0358 決定1 の外).
       env: usageScrapeEnv(),
       limitMs: USAGE_LIMIT_MS,
       pty: { launch, cols: PTY_COLS, rows: PTY_ROWS },

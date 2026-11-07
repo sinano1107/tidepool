@@ -648,6 +648,7 @@ export const HOST_ENV_DECOYS = {
   CLAUDE_CODE_SANDBOXED: "1",
   CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: "1",
   GH_TOKEN: "decoy-gh-token",
+  OPENAI_API_KEY: "decoy-openai-api-key",
   ANTHROPIC_BASE_URL: "https://decoy.example/anthropic",
   ANTHROPIC_API_KEY: "decoy-anthropic-api-key",
 } as const;

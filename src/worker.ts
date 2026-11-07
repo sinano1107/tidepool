@@ -11,13 +11,17 @@ import type { TeardownAction } from "./teardown.js";
  *  adapter の定数(ADR 0005)でなくここに置く。 */
 export const HOST_CREDENTIAL_ENVS = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"] as const;
 
+/** 盤面の env から名指しで写す(ADR 0358 決定2)—— 盤面に無い名前は鍵ごと載せない。 */
+export function boardEnvByName(...names: string[]): NodeJS.ProcessEnv {
+  return Object.fromEntries(names.flatMap((name) => (process.env[name] === undefined ? [] : [[name, process.env[name]]])));
+}
+
 /** ADR 0358 決定2: worker の形の env の土台 —— Harness の adapter はこの上に自分の注入一式だけを載せる。盤面の env は名指しで
  *  読み、spread しない(列挙の外は届かない、決定1)。`HOME` は Claude の credentials の置き場のため(ADR 0354 決定1)、git config の
  *  2つは `HOME` が運ぶ host の git config を閉じる。`TMPDIR` は temp を渡す呼び出しだけが持つ。 */
 export function workerBaseEnv(temp?: string): NodeJS.ProcessEnv {
   return {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    ...boardEnvByName("PATH", "HOME"),
     ...(temp === undefined ? {} : { TMPDIR: temp }),
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",

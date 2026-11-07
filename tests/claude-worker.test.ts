@@ -571,29 +571,6 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
-  // ADR 0358 決定1: host の GIT_CONFIG_* は列挙に無いので継がず、sparse の設定は index 0 に載る
-  it("worker の sparse 設定は host の GIT_CONFIG_* を継がず、index 0 に載る(#2943)", () => {
-    vi.stubEnv("GIT_CONFIG_COUNT", "2");
-    vi.stubEnv("GIT_CONFIG_KEY_0", "core.quotePath");
-    vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
-    vi.stubEnv("GIT_CONFIG_KEY_1", "sparse.expectFilesOutsideOfPatterns");
-    vi.stubEnv("GIT_CONFIG_VALUE_1", "false");
-    onTestFinished(() => { vi.unstubAllEnvs(); });
-
-    const env = workerSpawnEnv(undefined, {
-      provider: "moonshot", model: "kimi-k3[1m]", effort: null, advisor: undefined,
-      tier_id: 1, source: { tier: "board", provider: "only" }, moonshotApiKey: "test-key",
-    }, tmpdir(), tmpdir());
-
-    expect(env).toMatchObject({
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns", GIT_CONFIG_VALUE_0: "true",
-    });
-    expect(env.GIT_CONFIG_KEY_1).toBeUndefined();
-    expect(execFileSync("git", ["config", "--get", "sparse.expectFilesOutsideOfPatterns"], { env }).toString().trim()).toBe("true");
-    expect(process.env.GIT_CONFIG_COUNT).toBe("2");
-  });
-
   it("ADR 0024 の不変条件: 盤面が注入する identity env は GIT_* 4変数のみで、トークンを含まない", () => {
     // 盤面が worker env に「足す」ものだけがこの issue の関心。その注入物は identity 変数
     // だけに閉じ、GitHub トークンは決して混ざらない(トークンは github-auth.ts
@@ -5123,7 +5100,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const { env } = calls[0]!;
-    expect(env).toEqual({
+    expect(env).toStrictEqual({
       PATH: "/usr/bin:/bin",
       HOME: "/home/board",
       TMPDIR: env.TMPDIR,
@@ -5152,7 +5129,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     expect(calls[0]!.args.join(" ")).toContain("--effort high");
   });
 
-  // 同じ土台の上に Moonshot の routing 一式(key file から)だけが載り、Claude の subscription は列挙に無い(ADR 0096 / 0097 決定2)
+  // 同じ土台の上に Moonshot の routing 一式(key file から)だけが載り、Claude の subscription は列挙に無い(ADR 0096 / ADR 0097 決定4 / ADR 0358 決定2)
   it("moonshot の spawn env は列挙と完全一致し、host の囮も Claude の token も届かない", async () => {
     stubHostEnvDecoys();
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
@@ -5164,7 +5141,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     start("task-kimi", null, "kipper");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const { env } = calls[0]!;
-    expect(env).toEqual({
+    expect(env).toStrictEqual({
       PATH: "/usr/bin:/bin",
       HOME: "/home/board",
       TMPDIR: env.TMPDIR,
@@ -5224,7 +5201,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     expect(env.ANTHROPIC_MODEL).toBe("kimi-k3[1m]");
   });
 
-  it("moonshot の spawn から Claude のサブスク資格情報(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY)は除去される(双方向 scrub)", async () => {
+  it("Claude のサブスク資格情報(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY)は列挙に無く、moonshot の spawn env に届かない", async () => {
     // Moonshot 公式も ANTHROPIC_API_KEY 残留との衝突を警告している(ADR 0097 決定4)
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-api-key");
