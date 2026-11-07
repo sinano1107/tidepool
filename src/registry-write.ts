@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git } from "./git.js";
+import { git, gitStatus } from "./git.js";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, remoteTrackingRef } from "./github-auth.js";
 import { REGISTRY_BRANCH, refreshRegistry, registryRef, type WritableRegistry } from "./registry.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
@@ -138,7 +138,7 @@ export function commitToRegistry(
   try {
     git(registry.dir, "worktree", "add", "--detach", worktreeDir, base);
     write(worktreeDir);
-    if (git(worktreeDir, "status", "--porcelain") === "") return baseSha;
+    if (gitStatus(worktreeDir) === "") return baseSha;
     git(worktreeDir, "add", "-A");
     git(worktreeDir, "commit", "-m", message);
     land(registry, worktreeDir, baseSha, auth);
