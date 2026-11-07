@@ -9,12 +9,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
-import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { type BoardStatePath, boardStateOverlap, resolveForComparison } from "./board-state.js";
 import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
@@ -540,15 +540,19 @@ export interface CodexCapabilityObservation {
   agentsMdLayer: readonly string[];
   /** `hooks/list` の vendor 診断。照合には使わず、hook 不一致の理由文に写すだけ(#734)。 */
   hookDiagnostics: readonly string[];
-  /** `config/read(includeLayers)` の層(ADR 0358 決定4)。path は `file` か `dotCodexFolder`。 */
+  /** `config/read(includeLayers)` の層(ADR 0358 決定4)。 */
   configLayers: readonly CodexConfigLayer[];
   /** `configRequirements/read` の `requirements` をそのまま。無しは null。 */
   requirements: unknown;
 }
 
-export interface CodexConfigLayer {
+interface CodexConfigLayer {
   type: string;
+  /** `file` か `dotCodexFolder`。 */
   path: string | null;
+  /** path の無い層の名乗り —— name の他の文字列欄(mdm の domain・key、enterpriseManaged の id・name)。人間が消す先を知るためだけ。 */
+  identity: string | null;
+  /** `config` が `{}`。file の無い層もこう報告される(0.163.0 の system)。 */
   empty: boolean;
   disabledReason: string | null;
 }
@@ -557,7 +561,7 @@ export interface CodexConfigLayer {
 const configReadResponse = z.object({
   layers: z.array(
     z.object({
-      name: z.object({ type: z.string(), file: z.string().optional(), dotCodexFolder: z.string().optional() }),
+      name: z.object({ type: z.string(), file: z.string().optional(), dotCodexFolder: z.string().optional() }).catchall(z.unknown()),
       config: z.record(z.string(), z.unknown()),
       disabledReason: z.string().nullish(),
     }),
@@ -573,44 +577,61 @@ export function observedConfigLayers(
     throw new Error("configRequirements/read returned no requirements field");
   }
   return {
-    configLayers: configReadResponse.parse(configRead).layers.map(({ name, config, disabledReason }) => ({
-      type: name.type,
-      path: name.file ?? name.dotCodexFolder ?? null,
-      empty: Object.keys(config).length === 0,
-      disabledReason: disabledReason ?? null,
-    })),
+    configLayers: configReadResponse.parse(configRead).layers.map(({ name: { type, file, dotCodexFolder, ...rest }, config, disabledReason }) => {
+      const path = file ?? dotCodexFolder ?? null;
+      const identity = Object.entries(rest).filter(([, value]) => typeof value === "string").map(([key, value]) => `${key} ${value}`).join(", ");
+      return {
+        type,
+        path,
+        identity: path === null && identity !== "" ? identity : null,
+        empty: Object.keys(config).length === 0,
+        disabledReason: disabledReason ?? null,
+      };
+    }),
     requirements: requirementsRead.requirements,
   };
 }
 
-/** symlink の綴り違い(macOS の /var → /private/var)を畳む。報告された file は無くてよいので、無ければ親ディレクトリで解く。 */
-function canonicalPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    try {
-      return join(realpathSync(dirname(path)), basename(path));
-    } catch {
-      return path;
-    }
-  }
+/** symlink の綴り違い(macOS の /var → /private/var)を畳む。解けない path は誰とも一致させない(fail-closed)。 */
+function comparablePath(path: string): string | null {
+  const result = resolveForComparison(path);
+  return "resolved" in result ? result.resolved : null;
 }
 
-/** ADR 0358 決定4: 列挙した2層 —— `sessionFlags`(盤面の `-c`)と file が盤面所有の `CODEX_HOME/config.toml` の `user`
- *  (Codex 自身が trust を書くので内容は問わない)—— の外で内容を持つ層を `type (path)` で拾う。悪い type を数える denylist ではないので、
- *  未知の type も無効化された層も内容があれば拾う。 */
+/** ADR 0358 決定4: 盤面が渡す config 層の列挙 —— 内容を持ってよい層の type と、その層が盤面のものである条件。`sessionFlags` は盤面の
+ *  `-c`、`user` は file が盤面所有の `CODEX_HOME/config.toml` のときだけ(Codex 自身が trust を書くので内容は問わない)。
+ *  適合試験の config 層の行も、実物がこの type を報告することをここから照らす。 */
+export const ENUMERATED_CONFIG_LAYERS: ReadonlyMap<string, (path: string | null, codexHome: string) => boolean> = new Map([
+  ["sessionFlags", () => true],
+  [
+    "user",
+    (path: string | null, codexHome: string) => {
+      const reported = path === null ? null : comparablePath(path);
+      return reported !== null && reported === comparablePath(join(codexHome, "config.toml"));
+    },
+  ],
+]);
+
+/** 列挙の外で内容を持つ層を `type (path)` で拾う。悪い type を数える denylist ではないので、未知の type も無効化された層も内容があれば拾う。 */
 function layersOutsideEnumeration(layers: readonly CodexConfigLayer[], codexHome: string): string[] {
-  const boardUserConfig = canonicalPath(join(codexHome, "config.toml"));
   return layers
-    .filter((layer) =>
-      !layer.empty &&
-      layer.type !== "sessionFlags" &&
-      !(layer.type === "user" && layer.path !== null && canonicalPath(layer.path) === boardUserConfig)
-    )
+    .filter((layer) => !layer.empty && !ENUMERATED_CONFIG_LAYERS.get(layer.type)?.(layer.path, codexHome))
     .map((layer) => {
-      const notes = [layer.path, layer.disabledReason && `disabled: ${layer.disabledReason}`].filter(Boolean);
+      const notes = [layer.path ?? layer.identity, layer.disabledReason && `disabled: ${layer.disabledReason}`].filter(Boolean);
       return notes.length === 0 ? layer.type : `${layer.type} (${notes.join(", ")})`;
     });
+}
+
+/** requirements のうち null でも盤面自身の `-c` の形でもない key を `key: value` で名指す。null と `{}` は空。vendor の「制限にしか
+ *  使えない」という主張で例外にしない(ADR 0358 決定4)ので、未知の key も値があれば拾う。 */
+export function requirementsOutsideBoard(requirements: unknown): string[] {
+  if (requirements === null) return [];
+  if (typeof requirements !== "object" || Array.isArray(requirements)) return [JSON.stringify(requirements)];
+  return Object.entries(requirements)
+    .filter(([key, value]) =>
+      value !== null && !(Object.hasOwn(BOARD_REQUIREMENTS, key) && JSON.stringify(value) === JSON.stringify(BOARD_REQUIREMENTS[key]))
+    )
+    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
 }
 
 /** 期待と観測の差だけを言う(全量は並べない —— 面の全行を並べた表は Quarantine 画面では読めない)。 */
@@ -641,6 +662,9 @@ export async function checkCodexCapability(
   const mismatch = (
     [
       ["version", [pinnedVersion], [observed.cliVersion]],
+      // ADR 0358 決定4: host の層は hook・skill も乱しうるので、層の名前で先に言う
+      ["config layer", [], layersOutsideEnumeration(observed.configLayers, codexHome)],
+      ["requirements", [], requirementsOutsideBoard(observed.requirements)],
       ["skill", [], observed.skills],
       // 盤面が Codex に登録されていることを要求する hook —— spawn が渡す宣言と同じ1つの形
       [
@@ -650,9 +674,6 @@ export async function checkCodexCapability(
       ],
       ["worker user prompt", [CODEX_PROMPT_MARKER], observed.workerPrompts],
       ["agents.md", [], observed.agentsMdLayer],
-      ["config layer", [], layersOutsideEnumeration(observed.configLayers, codexHome)],
-      // ADR 0358 決定4: vendor の「制限にしか使えない」という主張で例外にしない
-      ["requirements", null, observed.requirements],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
   if (mismatch) {
@@ -795,8 +816,14 @@ function hookConfig(hook: string): string[] {
   ];
 }
 
-/** ChatGPT 認証だけを使う(ADR 0098 決定3)。spawn と、版上げの適合試験の skill の閉鎖の行の exec が読む。 */
-export const FORCED_LOGIN_METHOD = 'forced_login_method="chatgpt"';
+const FORCED_LOGIN = "chatgpt";
+/** ChatGPT 認証だけを使う(ADR 0098 決定3)。spawn と、版上げの適合試験の skill の閉鎖の行の exec と config 層の行が読む。
+ *  preflight は同じ値を requirements の盤面自身の形として読む。 */
+export const FORCED_LOGIN_METHOD = `forced_login_method=${toml(FORCED_LOGIN)}`;
+
+/** ADR 0358 決定4: 盤面自身の `-c` が requirements に現れる形。`forced_login_method`(ADR 0098 決定3)は `allowedLoginMethods` として
+ *  報告される(0.163.0 で実測)。 */
+const BOARD_REQUIREMENTS: Readonly<Record<string, unknown>> = { allowedLoginMethods: [FORCED_LOGIN] };
 
 /** worker の `codex exec` の flag のうち hook に依らないもの。spawn と、版上げの適合試験の skill の閉鎖の行の exec が読む。 */
 export const WORKER_EXEC_FLAGS = ["--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config"] as const;
@@ -1030,7 +1057,7 @@ export function observedAgentsMdLayer(promptInput: string): string[] {
  *  同じ起動で spawn の設定を `--strict-config` で読ませ、review 種別は initialize だけの
  *  起動をもう1本足す —— 綴りの誤りはここで throw になる(ADR 0142 決定4)。work 種別の起動は config 層と
  *  requirements も読む(ADR 0358 決定4)。 */
-async function probeHookRegistration(
+async function probeWorkAppServer(
   call: BoardCall,
   executable: string,
   env: NodeJS.ProcessEnv,
@@ -1306,7 +1333,7 @@ async function actualCodexCapability(options: {
       skills: observedSkills(promptInput),
       workerPrompts: observedWorkerPrompts(promptInput),
       agentsMdLayer: observedAgentsMdLayer(promptInput),
-      ...await probeHookRegistration(call, options.executable, env, emptyCwd, (taskType) =>
+      ...await probeWorkAppServer(call, options.executable, env, emptyCwd, (taskType) =>
         placeholderSpawnConfig(taskType, {
           workspace,
           allowedDomains: [],

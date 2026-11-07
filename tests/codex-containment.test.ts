@@ -67,8 +67,8 @@ const VALID: CodexCapabilityObservation = {
   hookDiagnostics: [],
   // ADR 0358 決定4: 列挙した2層(盤面の `-c` と盤面所有の user 層)だけが内容を持つ
   configLayers: [
-    { type: "sessionFlags", path: null, empty: false, disabledReason: null },
-    { type: "user", path: "/board/codex-home/config.toml", empty: false, disabledReason: null },
+    { type: "sessionFlags", path: null, identity: null, empty: false, disabledReason: null },
+    { type: "user", path: "/board/codex-home/config.toml", identity: null, empty: false, disabledReason: null },
   ],
   requirements: null,
 };
@@ -270,19 +270,18 @@ it("preflight は hooks/list と同じ app-server session で config/read(includ
 
 it.each([
   [
-    "system の層に内容がある",
-    { configLayers: (codexHome: string) => [...conformingConfigLayers(codexHome), { name: { type: "system", file: "/etc/codex/config.toml" }, version: "sha256:1", config: { projects: {} } }] },
-    "config layer mismatch: expected [], observed [\"system (/etc/codex/config.toml)\"]",
+    "project の層は dotCodexFolder を path に、disabledReason をそのまま写す",
+    { name: { type: "project", dotCodexFolder: "/ws/.codex" }, version: "sha256:1", config: { model: "y" }, disabledReason: "untrusted" },
+    "project (/ws/.codex, disabled: untrusted)",
   ],
   [
-    "project の層に内容がある",
-    { configLayers: (codexHome: string) => [...conformingConfigLayers(codexHome), { name: { type: "project", dotCodexFolder: "/ws/.codex" }, version: "sha256:1", config: { model: "y" } }] },
-    "project (/ws/.codex)",
+    "path の無い mdm の層は domain と key で名乗る",
+    { name: { type: "mdm", domain: "com.openai.codex", key: "config_toml_base64" }, version: "sha256:1", config: { model: "y" } },
+    "mdm (domain com.openai.codex, key config_toml_base64)",
   ],
-  ["requirements が null でない", { requirements: { allowedSandboxModes: ["read-only"] } }, "requirements mismatch"],
-] as const)("実 probe は config/read の層の type・path・内容の有無と requirements を観測に写す —— %s(ADR 0358 決定4)", async (_, answers, expected) => {
-  const { capability } = await driveCodexPreflight("complete", answers);
-  expect(await capability).toMatchObject({ available: false, reason: expect.stringContaining(expected) });
+] as const)("実 probe は config/read の層の type・path・内容の有無を観測に写す —— %s(ADR 0358 決定4)", async (_, extra, expected) => {
+  const { capability } = await driveCodexPreflight("complete", { configLayers: (codexHome) => [...conformingConfigLayers(codexHome), extra] });
+  expect(await capability).toMatchObject({ available: false, reason: expect.stringContaining(`config layer mismatch: expected [], observed ["${expected}"]`) });
 });
 
 it("宣言どおりの観測は封じ込めを成立させる", async () => {
@@ -314,7 +313,7 @@ it.each([
 
 /** 内容を持つ config 層1つ(`config/read` の `name.type` と path)。 */
 const layer = (type: string, path: string | null, changed: Partial<CodexCapabilityObservation["configLayers"][number]> = {}) =>
-  ({ type, path, empty: false, disabledReason: null, ...changed });
+  ({ type, path, identity: null, empty: false, disabledReason: null, ...changed });
 
 it.each([
   ["system に内容", [layer("system", "/etc/codex/config.toml")], "system (/etc/codex/config.toml)"],
@@ -323,16 +322,31 @@ it.each([
   ["project に内容", [layer("project", "/ws/.codex")], "project (/ws/.codex)"],
   ["無効化された層でも内容があれば", [layer("system", "/etc/codex/config.toml", { disabledReason: "untrusted" })], "system (/etc/codex/config.toml, disabled: untrusted)"],
   ["列挙に無い未知の type に内容", [layer("vendorNewLayer", null)], "vendorNewLayer"],
+  ["path の無い層は名乗りで", [layer("enterpriseManaged", null, { identity: "id acme, name codex" })], "enterpriseManaged (id acme, name codex)"],
 ])("列挙の外の config 層(%s)は封じ込めを不成立にし、理由文に層の type と path を挙げる(ADR 0358 決定4)", async (_, extra, named) => {
   const capability = await checkCodexCapability(async () => ({ ...VALID, configLayers: [...VALID.configLayers, ...extra] }), BOARD_CODEX_HOME);
   expect(capability).toMatchObject({ available: false, reason: expect.stringContaining("config layer mismatch") });
   if (!capability.available) expect(capability.reason).toContain(named);
 });
 
-it("requirements が null でなければ封じ込めを不成立にする(ADR 0358 決定4)", async () => {
-  const capability = await checkCodexCapability(async () => ({ ...VALID, requirements: { allowedApprovalPolicies: ["never"] } }), BOARD_CODEX_HOME);
+it.each([
+  ["null", null],
+  ["空の object", {}],
+  ["盤面自身の forced_login_method が生む allowedLoginMethods だけ", { allowedLoginMethods: ["chatgpt"], allowedApprovalPolicies: null }],
+])("requirements が %s なら封じ込めは成立したまま(ADR 0358 決定4)", async (_, requirements) => {
+  expect(await checkCodexCapability(async () => ({ ...VALID, requirements }), BOARD_CODEX_HOME)).toEqual({ available: true });
+});
+
+it.each([
+  ["盤面の値でない allowedLoginMethods", { allowedLoginMethods: ["apikey"] }, 'allowedLoginMethods: [\\"apikey\\"]'],
+  ["ほかの key に値", { allowedLoginMethods: ["chatgpt"], allowedSandboxModes: ["read-only"] }, "allowedSandboxModes"],
+])("requirements に%sがあれば封じ込めを不成立にし、その key を名指す(ADR 0358 決定4)", async (_, requirements, named) => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, requirements }), BOARD_CODEX_HOME);
   expect(capability).toMatchObject({ available: false, reason: expect.stringContaining("requirements mismatch") });
-  if (!capability.available) expect(capability.reason).toContain("allowedApprovalPolicies");
+  if (!capability.available) {
+    expect(capability.reason).toContain(named);
+    expect(capability.reason).not.toContain("allowedLoginMethods: [\\\"chatgpt\\\"]");
+  }
 });
 
 it("config が空の層は type を問わず封じ込めを成立させたまま(ADR 0358 決定4)", async () => {

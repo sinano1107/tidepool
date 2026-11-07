@@ -1294,20 +1294,24 @@ export async function requestedSkillsListCwd(proc: RecordedProcess): Promise<str
   return (requests.find((request) => request.method === "skills/list")!.params as { cwds: string[] }).cwds[0]!;
 }
 
-/** 盤面の列挙の内側の層だけを返す `config/read` の `layers` —— codex-cli 0.163.0 の実測の形(ADR 0358 決定4)。
- *  system は file が無いので config が空で報告される。 */
+// 2026-11-07 に Lima VM で codex-cli 0.163.0 の実物へ撃った `config/read`(includeLayers: true、cwd は空のディレクトリ、`-c model="x"`)
+// と `configRequirements/read`(盤面の `forced_login_method` の `-c` を当てた session)の result。version の hash を省き、
+// requirements の他の key(すべて null)を省いてある
+/** 盤面の列挙の内側の層だけを返す `config/read` の `layers`(ADR 0358 決定4)。system は file が無いので config が空で報告される。 */
 export const conformingConfigLayers = (codexHome: string): unknown[] => [
   { name: { type: "sessionFlags" }, version: "sha256:0", config: { model: "x" } },
   { name: { type: "user", file: join(codexHome, "config.toml"), profile: null }, version: "sha256:0", config: {} },
   { name: { type: "system", file: "/etc/codex/config.toml" }, version: "sha256:0", config: {} },
 ];
+/** 盤面自身の `-c` だけを当てた `configRequirements/read` の `result`。 */
+export const boardConfigRequirements = { supportsIndependentSpeedModes: true, requirements: { allowedLoginMethods: ["chatgpt"] } };
 
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`
  *  で駆動し、preflight を指定した停止点まで進める(issue #874)。段の並びは --version(0)・
  *  skills/list(1)・prompt-input(2)・features list(3)・sandbox probe ×2(4, 5)・work app-server(6)・
  *  review app-server(7)。停止点までの段は exit 0 で、照合を通る応答で通す —— 固定版の --version、skills/list は
  *  `skillsList(cwd)`(既定は skill 無し)、prompt-input は user item の marker だけ、features list は snapshot どおり、
- *  work app-server は盤面の hook の登録・`configLayers(codexHome)`(既定は列挙の内側だけ)・`requirements`(既定は null)。
+ *  work app-server は盤面の hook の登録・`configLayers(codexHome)`(既定は列挙の内側だけ)・盤面自身の requirements。
  *  `complete` は review app-server まで通して検査を終わらせる。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
  *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
  *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
@@ -1319,7 +1323,6 @@ export async function driveCodexPreflight(
     codexHome?: string;
     skillsList?: (cwd: string) => unknown;
     configLayers?: (codexHome: string) => unknown[];
-    requirements?: unknown;
   } = {},
 ) {
   const spawn = recordingSpawn();
@@ -1359,7 +1362,7 @@ export async function driveCodexPreflight(
       { id: 1, result: {} },
       { id: 2, result: { data: [{ hooks: [hook] }] } },
       { id: 3, result: { config: {}, origins: {}, layers: (overrides.configLayers ?? conformingConfigLayers)(codexHome) } },
-      { id: 4, result: { supportsIndependentSpeedModes: true, requirements: overrides.requirements ?? null } },
+      { id: 4, result: boardConfigRequirements },
     ].map((line) => `${JSON.stringify(line)}\n`).join(""));
     spawn.emitExitAt(workIndex, 0, null);
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(workIndex + 2));

@@ -132,7 +132,7 @@ function forComparison(path: string, platform: NodeJS.Platform): string {
  *  **ENOENT 以外の失敗は解決不能**として undefined を返す(ELOOP・EACCES など)。
  *  「判定できなかった」を「問題なし」と読まないのが ADR 0033 の settings ガードと
  *  同じ線であり、その fail-closed は呼び出し側が担う。 */
-function resolveForComparison(path: string): { resolved: string } | { cause: string } {
+export function resolveForComparison(path: string): { resolved: string } | { cause: string } {
   let current = resolve(path);
   const trailing: string[] = [];
   for (;;) {

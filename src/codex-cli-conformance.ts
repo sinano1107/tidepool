@@ -2,7 +2,7 @@ import { z } from "zod";
 import { type Row, rowOf, type Verdict } from "./claude-cli-conformance.js";
 import { type CodexAppServerProbeResult, type compatibilityCheck, modelListResponse, whyRowUnlisted } from "./codex-app-server.js";
 import { codexTokenUsage, parseJsonl, readCodexUsage, readTurnFailure } from "./codex-stream-reader.js";
-import { observedAgentsMdLayer, observedConfigLayers } from "./codex-worker.js";
+import { ENUMERATED_CONFIG_LAYERS, observedAgentsMdLayer, observedConfigLayers, requirementsOutsideBoard } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
@@ -27,7 +27,7 @@ export interface ConformanceObservations {
   promptInput: () => Promise<string>;
   /** skill の閉鎖の行の観測。script が `SKILL_CLOSURE_MARKERS` の skill を置いた workspace と使い捨ての `CODEX_HOME` で撃つ。 */
   skillClosure: () => Promise<SkillClosureObservation>;
-  /** 盤面の CODEX_HOME と `-c` を1つ当てた app-server の `config/read`(includeLayers: true、cwd は空のディレクトリ)と
+  /** 盤面の CODEX_HOME と、盤面の `forced_login_method` ほか `-c` を当てた app-server の `config/read`(includeLayers: true、cwd は空のディレクトリ)と
    *  `configRequirements/read` の result。 */
   configLayers: () => Promise<{ configRead: unknown; requirementsRead: unknown }>;
 }
@@ -223,9 +223,14 @@ const SURFACES: Array<[string, (obs: ConformanceObservations) => Promise<Verdict
       const { configRead, requirementsRead } = await obs.configLayers();
       const { configLayers, requirements } = observedConfigLayers(configRead, requirementsRead);
       const types = configLayers.map((layer) => layer.type);
-      const missing = ["sessionFlags", "user"].filter((type) => !types.includes(type));
-      return missing.length > 0
-        ? fail(`config/read layers lack ${missing.join(", ")}; observed ${types.join(", ")}`)
+      const missing = [...ENUMERATED_CONFIG_LAYERS.keys()].filter((type) => !types.includes(type));
+      if (missing.length > 0) return fail(`config/read layers lack ${missing.join(", ")}; observed ${types.join(", ")}`);
+      // 盤面所有の user 層は file の照合で認める —— file を報告しなければ preflight は常に倒れる
+      if (configLayers.some((layer) => layer.type === "user" && layer.path === null)) return fail("the user layer reports no file");
+      // 盤面自身の `-c` だけの session で preflight と同じ述語が空 —— requirements の「無し」の綴りを釘にする(#3041 追記)
+      const outside = requirementsOutsideBoard(requirements);
+      return outside.length > 0
+        ? fail(`requirements beyond the board's own flags: ${outside.join("; ")}`)
         : { pass: true, detail: `layers ${types.join(", ")}; requirements ${JSON.stringify(requirements)}` };
     },
   ],
