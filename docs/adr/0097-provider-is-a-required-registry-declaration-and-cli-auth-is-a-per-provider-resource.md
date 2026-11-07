@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の「provider は必須」は ADR-0110 決定1 で撤回** —— 省略の意味が「特定の1つ」ではなく「盤面が資格情報を持つ全 Provider を床の構成で」になり、隠れた既定が無いので**書き忘れと意図の区別がつかない**という論拠が消えた(entry 配列としての実装は #544)。決定2〜4(認証の資源は provider 単位、advisor は経路が提供する能力、資格情報の双方向 scrub)は不変で、advisor の可否検査もそのまま —— ただし宣言の綴りは真偽値になった(ADR 0110 決定1)。
 
+**Status 追記: 決定4 の「allowlist ではなく双方向 scrub(denylist)」は [ADR 0358](0358-a-worker-shaped-process-receives-only-what-the-board-enumerates-env-is-built-and-codex-config-layers-outside-the-enumeration-fail-the-capability.md) で退役** —— 前提の「秘密を盤面 env に置かない doctrine が床にある」は ADR 0070 決定1 が盤面 env に token と VAPID 鍵を置いた時点で崩れていた。worker の形で走る process の env は盤面が組み立て、注入一式(provider ごとの定数)の向きだけが残り、除去一覧は無くなる(2026-11-07、issue #2998)。
+
 2026-08-23 の grilling(Kimi 対応、ADR 0096)で決定。CONTEXT.md は従来「ハーネス(Claude Code 等)」の語しか持たず、動力の認証(ADR 0070)は「あらゆる AI 発話が同じ1つの資格情報で行われる」を根拠に盤面全体停止の3つ目の資源だった。第2の推論提供元が入るとこの前提が壊れるため、概念を分離し、資源の粒度を引き直す。
 
 ## 決定

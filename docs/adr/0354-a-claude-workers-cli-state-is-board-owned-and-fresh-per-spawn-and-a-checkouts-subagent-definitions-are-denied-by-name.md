@@ -1,5 +1,7 @@
 # Claude worker の CLI 状態は盤面所有で spawn ごとに新規、checkout の subagent 定義は名前で閉じる —— 口は settings.json だけではなかった
 
+**Status 追記: 決定1 の「`CLAUDE_CODE_SANDBOXED` を spawn env から常に delete」は [ADR 0358](0358-a-worker-shaped-process-receives-only-what-the-board-enumerates-env-is-built-and-codex-config-layers-outside-the-enumeration-fail-the-capability.md) で「盤面が組み立てる env の列挙に無い」と読み、worker の形の Board call(#3002)も同じ env を受け取る** —— 「その process が読む host 側の状態は盤面が持つ」の線を env と Codex の config 層へ広げた(2026-11-07、issue #2998 / #3017)。
+
 2026-11-02〜06 の grilling(issue #2936、#2846 のレビューの派生)で決定。triage の実測(Lima VM、固定版 2.1.286)で、checkout の
 `.claude/agents/*.md` の frontmatter `hooks:` が **その checkout が trust 済みのとき** host 上・sandbox の外で、worker session の env を
 継承して走った。trust は checkout の性質ではなく host の人間の `~/.claude.json` の `projects[<cwd>]` の状態で、Claude worker の spawn env
