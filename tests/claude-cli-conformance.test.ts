@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_CALL_ONE_TURN_FLAGS } from "../src/claude-board-call-runner.js";
 import { createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import {
@@ -201,6 +201,8 @@ it("Board call の形の1ターンは runner と同じフラグの定数から�
 });
 
 it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
+  vi.stubEnv("DISABLE_PROMPT_CACHING", undefined);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
   // 設定の層は姿勢が運ぶ(ADR 0341 決定2)—— 口へ出る最終の argv で読む
   const spec = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/session/system.txt", configDir: "/config", input: "q" });
   const { args } = spec;

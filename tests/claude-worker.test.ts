@@ -3287,6 +3287,8 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("checkUsage は board 自身の cwd で claude --safe-mode を、折り返しを避ける広い桁幅で起動する(ADR 0028)", async () => {
+    vi.stubEnv("DISABLE_PROMPT_CACHING", undefined);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
     const rec = recordingPty();
     const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
@@ -5765,6 +5767,8 @@ it.each([
   ["tool surface", (call: BoardCall) => enumerateToolsThrough(call)()],
   ["Worker MCP reachability", (call: BoardCall) => claudeMcpReachabilityThrough(call)("http://localhost:4589/mcp")],
 ] as const)("%s probe preserves worker prompt caching", async (_name, probe) => {
+  vi.stubEnv("DISABLE_PROMPT_CACHING", undefined);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
   const { call, specs } = specRecordingCall();
   await probe(call);
   expect(specs).toHaveLength(1);
@@ -5774,6 +5778,8 @@ it.each([
 describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
   // worker-shaped の probe が見るものは worker が見るもの —— 姿勢の一覧と worker 本体の spawn をずらさない(決定4)
   it("worker 本体の spawn の argv は worker-shaped の姿勢のフラグをどれも運ぶ", async () => {
+    vi.stubEnv("DISABLE_PROMPT_CACHING", undefined);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
     const { start, calls } = await makeWorker();
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
