@@ -1,5 +1,11 @@
 # worker の形で走る process は盤面が列挙したものだけを host から受け取る —— env は組み立て、Codex の列挙外の config 層は封じ込め能力の不成立
 
+**Status 追記: 決定4 の「requirements が空でなければ不成立」は「盤面の `sessionFlags` が作る値の外に requirements があれば不成立」と読む** ——
+固定版 0.163.0 の実物は、盤面自身が渡す `-c forced_login_method="chatgpt"`(ADR 0098)を `configRequirements/read` の
+`allowedLoginMethods: ["chatgpt"]` として報告し、`/etc/codex` の無い host でも requirements は空にならなかった。成立は、各欄が null か、
+`allowedLoginMethods` が盤面の flag の値と一致するときだけ。列挙した `sessionFlags` が作る値を列挙に入れる形で、vendor の主張による例外ではない
+(2026-11-07、issue #3041 の実測コメント)。
+
 2026-11-07 の grilling(issue #2998 と #3017 を1つで、#3002 / #2478 は同じ族)で決定。GLOSSARY「床」の最後の段落(ADR 0354)は
 「worker の CLI process が読む host 側の状態は盤面が持つ」と言い、git / gh の子(ADR 0339 決定1)・Claude の CLI 状態(ADR 0354 決定1)・
 Codex の user 層(ADR 0098 / 0147)はその線の上にあった。残っていたのは2つ —— **env** は ADR 0097 決定4 が反対側(`process.env` を継ぎ、
