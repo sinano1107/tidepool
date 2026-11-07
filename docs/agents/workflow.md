@@ -29,7 +29,7 @@ Ask `/ask-matt` when the question is "which skill fits". This file answers "how 
 
 ## Writing the work up
 
-The branch is about what the record already says, not about size in the abstract and not about who implements. Implementation starts in a fresh session with `/implement`, working from the issue.
+The branch is about what the record already says, not about size in the abstract and not about who implements. `/to-spec` and `/to-tickets` run in the grilling session itself — the facts and measurement tables are still loaded there, and the user types the command (both skills are `disable-model-invocation`). Only `/implement` starts a fresh session, working from the issue.
 
 - **One slice, and the comment step 5 left on the originating issue already says what a spec would** — completion criteria, the files to touch, the invariants and the tests that pin them → skip the write-up and hand `/implement <originating issue>` to a fresh implementation session.
 - **One slice, but the comment does not carry that** → `/to-spec`, then hand the spec issue to `/implement`.
