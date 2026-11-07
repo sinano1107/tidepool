@@ -3,7 +3,7 @@ import type { BoardCallSetting } from "./board-call-usage.js";
 import { envelopeUsageSchema } from "./claude-board-call-runner.js";
 import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import {
-  boardCallEnv,
+  answerBoardCallEnv,
   MoonshotApiKeyMissingError,
   moonshotCliAuthEnv,
   pinnedModelFlags,
@@ -69,7 +69,7 @@ export function createClaudeCliAuthCheck(command: CliAuthCommand): CliAuthCheck 
         "--max-budget-usd",
         "0.025",
       ],
-      boardCallEnv(),
+      answerBoardCallEnv(),
     );
 }
 
@@ -115,7 +115,7 @@ export function createClaudeModelProbe(command: CliAuthCommand): ModelProbe {
       command,
       setting,
       [...pinnedModelFlags(setting.model, setting.effort), "--max-turns", "1", "--max-budget-usd", "0.025"],
-      boardCallEnv(),
+      answerBoardCallEnv(),
     );
   };
 }
