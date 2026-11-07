@@ -8,7 +8,7 @@ import { buildSandboxSettings } from "../src/sandbox.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, getTask, listChildren, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { completionTreePaths, fetchTaskCheckoutTip, RefsMovedError, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
@@ -147,28 +147,61 @@ it("worker が自分の .git を消した checkout の解放は task の失敗�
   expect(listChildren(db, task.id)).toEqual([expect.objectContaining({ type: "question", question_cancel_option: "abandon" })]);
 });
 
-it("名前の場所の側で完了の門の書き込みが落ちても門は拒まず、完了の解放が tip を引いて merge back する —— その時まだ落ちれば quarantine(ADR 0084 決定2 / ADR 0356 決定3)", async () => {
+it("cancelled の解放で読めない checkout は、唯一の写しを残して question を立てない(ADR 0359 派生)", async () => {
+  const { named, task, place } = await pickedUp("task-checkout-cancelled");
+  const survivingFile = join(place.path, "unfinished.txt");
+  writeFileSync(survivingFile, "only surviving copy\n");
+  rmSync(join(place.path, ".git"), { recursive: true });
+  cancelTaskDirectly(db, task, null, NOW, {}, "webui");
+
+  releaseWorkspace(db, place, getTask(db, task.id)!, NOW);
+
+  expect(getTask(db, task.id)?.status).toBe("cancelled");
+  expect(readFileSync(survivingFile, "utf8")).toBe("only surviving copy\n");
+  expect(listEvents(db, task.id).filter(({ kind }) => kind.startsWith("task_checkout_")).map(({ kind }) => kind)).toEqual([
+    "task_checkout_opened",
+    "task_checkout_release_failed",
+  ]);
+  expect(listChildren(db, task.id)).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+});
+
+it("名前の場所の ref を書けなければ完了の門は拒み、lock を外して完了すると merge back する(ADR 0359 決定1)", async () => {
   const named = await makeWorkspace("task-checkout-gate-observation");
   db = openDb(":memory:");
   const parent = register();
   git(named.path, "branch", `task/${parent.id}`, "main");
-  const child = register("work", parent.id);
+  const child = pickupTask(db, register("work", parent.id), "deckhand", NOW)!;
   const place = await prepareAtPickup(db, named, child);
   commitWork(place.path, "child.txt", "child\n");
   const lock = join(named.path, ".git", "refs", "heads", "task", `${child.id}.lock`);
   writeFileSync(lock, "");
 
-  expect(() => fetchTaskCheckoutTip(db, place, child.id)).not.toThrow();
+  expect(() => fetchTaskCheckoutTip(db, place, child.id)).toThrow(/cannot lock ref/);
   expect(git(named.path, "ls-tree", "--name-only", `task/${child.id}`)).not.toContain("child.txt");
-  completeTask(db, child, FULL_HANDOFF, "worker", NOW, "worker");
-  releaseWorkspace(db, place, getTask(db, child.id)!, NOW, true, undefined, undefined, true);
-  expect(quarantineQuestion(db, "workspace", named.name)).toBeDefined();
+  expect(getTask(db, child.id)?.status).toBe("in_progress");
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
   expect(existsSync(join(place.path, ".git"))).toBe(true);
 
   rmSync(lock);
+  fetchTaskCheckoutTip(db, place, child.id);
+  completeTask(db, child, FULL_HANDOFF, "worker", NOW, "worker");
   releaseWorkspace(db, place, getTask(db, child.id)!, NOW, true, undefined, undefined, true);
   expect(git(named.path, "show", `task/${parent.id}:child.txt`)).toBe("child");
   expect(existsSync(place.path)).toBe(false);
+});
+
+it("完了の門をやり直すと、先に引いた commit ではなく現在の worker tip を記録する(ADR 0359 決定1)", async () => {
+  const { named, task, place, branch } = await pickedUp("task-checkout-gate-rewind");
+  const base = git(place.path, "rev-parse", "HEAD");
+  commitWork(place.path, "first-attempt.txt", "superseded\n");
+  fetchTaskCheckoutTip(db, place, task.id);
+  expect(git(named.path, "rev-parse", branch)).toBe(git(place.path, "rev-parse", "HEAD"));
+
+  git(place.path, "reset", "--hard", base);
+  fetchTaskCheckoutTip(db, place, task.id);
+
+  expect(git(named.path, "rev-parse", branch)).toBe(base);
 });
 
 it("session の間に名前の場所の HEAD を人間が動かせば、解放は保護ブランチへ黙って戻さず quarantine に落ちる(ADR 0351 / ADR 0356 決定1)", async () => {

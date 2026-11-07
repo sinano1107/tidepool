@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { completeTask, getTask, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { completeTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
   completionTreePaths,
@@ -27,10 +27,7 @@ import {
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-/** 完了経路の後始末が tree rule の代わりに走らせる**検査**(ADR 0109 決定3)。
- *  退避するかしないかを決めるのは `completionTreeGateApplies` の述語ひとつで、
- *  掛かる範囲(work タスク)では汚れは成果ではなく残存プロセスの露見である。
- *  ADR 0356 の後、worker は task の checkout で走り、完了の門は先に worker の tip を名前の場所へ引く。 */
+// ADR 0359: 門が記録した tip を完了の解放で運び、worker の checkout では報告後の書き込みを観測する。
 
 const NOW = new Date("2026-09-10T00:00:00.000Z");
 async function pickedUpSession(type: TaskType = "work"): Promise<{
@@ -62,6 +59,111 @@ function releaseAfterCompletion(db: Db, place: RunPlace, task: Task): void {
 }
 
 const treeIsDirty = (place: RunPlace, task: Task) => completionTreePaths(place, task.id).length > 0;
+
+async function completedChild() {
+  const db = openDb(":memory:");
+  const ws = await makeWorkspace("completed-child");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+  const parentBranch = `task/${parent.id}`;
+  git(ws.path, "branch", parentBranch, "main");
+  const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+  const task = pickupTask(db, registered, "deckhand", NOW)!;
+  const place = await prepareAtPickup(db, ws, task);
+  commitWork(place.path, "child.txt", "child work\n");
+  const tip = git(place.path, "rev-parse", "HEAD");
+  gateFetch(db, place, task);
+  completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+  return { db, ws, task: getTask(db, task.id)!, place, tip, parentBranch };
+}
+
+const writeObservations = (db: Db, task: Task) =>
+  listEvents(db, task.id).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion");
+
+it("完了報告後の commit は観測し、merge back は完了の門が記録した tip を運ぶ(ADR 0359 決定2・3)", async () => {
+  const { db, task, ws, place, tip, parentBranch } = await completedChild();
+  try {
+    commitWork(place.path, "after-done.txt", "late commit\n");
+    const workerTip = git(place.path, "rev-parse", "HEAD");
+
+    releaseAfterCompletion(db, place, task);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(git(ws.path, "show", `${parentBranch}:child.txt`)).toBe("child work");
+    expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "after-done.txt")).toBe("");
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "committed", worker_tip: workerTip },
+    ]);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了報告後に worker の .git が無くなっても記録の tip を運び、checkout を削除する(ADR 0359 決定2・3)", async () => {
+  const { db, task, ws, place, parentBranch } = await completedChild();
+  try {
+    rmSync(join(place.path, ".git"), { recursive: true });
+
+    releaseAfterCompletion(db, place, task);
+
+    expect(git(ws.path, "show", `${parentBranch}:child.txt`)).toBe("child work");
+    const observation = { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") };
+    expect(writeObservations(db, task)).toEqual([observation]);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(existsSync(place.path)).toBe(false);
+
+    const events = listEvents(db, task.id);
+    releaseAfterCompletion(db, place, task);
+    expect(listEvents(db, task.id)).toEqual(events);
+  } finally {
+    db.close();
+  }
+});
+
+it("観測の後に merge back が失敗しても、解放の再実行で同じ観測を重ねない(ADR 0345 決定1)", async () => {
+  const { db, task, ws, place, parentBranch } = await completedChild();
+  try {
+    writeFileSync(join(place.path, "late.txt"), "written after completion\n");
+    const lock = join(ws.path, ".git", "refs", "heads", `${parentBranch}.lock`);
+    writeFileSync(lock, "");
+
+    releaseAfterCompletion(db, place, task);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("cannot lock ref");
+    expect(writeObservations(db, task)).toHaveLength(1);
+    expect(existsSync(place.path)).toBe(true);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+
+    rmSync(lock);
+    releaseAfterCompletion(db, place, task);
+
+    expect(writeObservations(db, task)).toHaveLength(1);
+    expect(git(ws.path, "show", `${parentBranch}:child.txt`)).toBe("child work");
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了後に名前の場所のタスクブランチが動けば、worker の書き込みとはせず quarantine する(ADR 0359 決定4)", async () => {
+  const { db, task, ws, place, parentBranch } = await completedChild();
+  try {
+    const ref = `refs/heads/task/${task.id}`;
+    git(ws.path, "update-ref", ref, "main");
+
+    releaseAfterCompletion(db, place, task);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(`now: ${git(ws.path, "rev-parse", "main")} ${ref}`);
+    expect(writeObservations(db, task)).toEqual([]);
+    expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "child.txt")).toBe("");
+    expect(existsSync(place.path)).toBe(true);
+  } finally {
+    db.close();
+  }
+});
 
 it("完了の門は worker の index や info/exclude で隠した変更を読み、.gitignore は尊重する(ADR 0356 決定3)", async () => {
   const { db, task, place } = await pickedUpSession();
@@ -217,45 +319,49 @@ it("pickup は名前の場所の ignored の生成物を消さず、task の che
   expect(treeIsDirty(place, task)).toBe(false);
 });
 
-it("完了の報告の後に書かれたものは成果ではない —— WIP も merge-back も無く workspace が quarantine に落ちる", async () => {
-  const { db, task, ws, place } = await pickedUpSession();
-  commitWork(place.path, "deliverable.txt", "the real work\n");
-  gateFetch(db, place, task);
-  const mainBefore = git(ws.path, "rev-parse", "main");
-  // 決着を報告した後に、まだ生きていた process が書く
-  writeFileSync(join(place.path, "after-the-report.txt"), "written by a process that outlived\n");
+it("完了報告後の未コミットの書き込みは退避せず、記録の tip を merge back する(ADR 0359 決定3)", async () => {
+  const { db, task, ws, place, tip, parentBranch } = await completedChild();
+  try {
+    writeFileSync(join(place.path, "after-the-report.txt"), "written after completion\n");
 
-  expect(completionTreeGateApplies(task)).toBe(true);
-  releaseAfterCompletion(db, place, task);
+    releaseAfterCompletion(db, place, task);
 
-  expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
-  expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(`written to after task ${task.id} reported done`);
-  // 退避されていない: WIP コミットは無く、汚れは task の checkout に人間の修理材料として残る(ADR 0356 決定2)
-  expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).not.toContain("WIP");
-  expect(git(place.path, "status", "--porcelain")).not.toBe("");
-  // merge-back も走っていない —— 報告後の書き込みが祖先ブランチへ運ばれることはない
-  expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["after-the-report.txt"] },
+    ]);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(git(ws.path, "show", `${parentBranch}:child.txt`)).toBe("child work");
+    expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "after-the-report.txt")).toBe("");
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
 });
 
-it("完了と解放の間に別の理由で workspace が Quarantine になっても、報告後の書き込みを退避しない(ADR 0350 決定1)", async () => {
-  const { db, task, ws, place } = await pickedUpSession();
-  commitWork(place.path, "deliverable.txt", "the real work\n");
-  gateFetch(db, place, task);
-  completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
-  writeFileSync(join(place.path, "late.txt"), "written after completion\n");
-  quarantineWorkspace(db, ws.name, new Error("unrelated workspace failure"), NOW);
-  const question = quarantineQuestion(db, "workspace", ws.name)!;
-  const mainBefore = git(ws.path, "rev-parse", "main");
+it("完了と解放の間に別の理由で workspace が Quarantine になっても、観測を記録して merge back する(ADR 0350 決定1 / ADR 0359 決定3)", async () => {
+  const { db, task, ws, place, tip, parentBranch } = await completedChild();
+  try {
+    writeFileSync(join(place.path, "late.txt"), "written after completion\n");
+    quarantineWorkspace(db, ws.name, new Error("unrelated workspace failure"), NOW);
+    const question = quarantineQuestion(db, "workspace", ws.name)!;
 
-  releaseAfterCompletion(db, place, getTask(db, task.id)!);
+    releaseAfterCompletion(db, place, task);
 
-  expect(quarantineQuestion(db, "workspace", ws.name)?.id).toBe(question.id);
-  expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("unrelated workspace failure");
-  expect(listEvents(db, question.id).flatMap((e) => e.payload.kind === "quarantine_refired" ? [e.payload.reason] : [])).toEqual([expect.stringContaining(`written to after task ${task.id} reported done`)]);
-  expect(git(ws.path, "log", "--format=%s", "--all")).not.toContain("WIP: task");
-  expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  expect(git(place.path, "status", "--porcelain")).toBe("?? late.txt");
+    expect(quarantineQuestion(db, "workspace", ws.name)).toMatchObject({ id: question.id, purpose: question.purpose });
+    expect(listEvents(db, question.id).some(({ kind }) => kind === "quarantine_refired")).toBe(false);
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["late.txt"] },
+    ]);
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(git(ws.path, "show", `${parentBranch}:child.txt`)).toBe("child work");
+    expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "late.txt")).toBe("");
+    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
 });
 
 it("汚れが shadow 残骸の3条件だけを満たすなら、task の checkout ごと通常どおり完了する(ADR 0069 / ADR 0356 決定3)", async () => {
@@ -275,23 +381,27 @@ it("汚れが shadow 残骸の3条件だけを満たすなら、task の checkou
   expect(existsSync(place.path)).toBe(false);
 });
 
-it("観測そのものが失敗したら完了経路は clean に倒さず quarantine に落ちる —— 門の握り潰しはここには無い", async () => {
+it.each([false, true])("名前の場所の記録の tree が壊れたら、門では拒み、解放では quarantine する (done=%s)", async (completed) => {
   const { db, task, ws, place } = await pickedUpSession();
-  commitWork(place.path, "deliverable.txt", "the real work\n");
-  gateFetch(db, place, task);
-  // ADR 0356 決定3: the board reads the tip's tree from the named place. Leave the tip resolvable but break that tree.
-  const tree = git(ws.path, "rev-parse", `task/${task.id}^{tree}`);
-  rmSync(join(ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+  try {
+    commitWork(place.path, "deliverable.txt", "the real work\n");
+    gateFetch(db, place, task);
+    if (completed) completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const tree = git(ws.path, "rev-parse", `task/${task.id}^{tree}`);
+    rmSync(join(ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
 
-  // 門(ADR 0084 決定2)は観測の失敗を clean に倒す —— 直後の解放で tree rule が
-  // 同じ git に躓いて quarantine が人間に届くからである
-  expect(treeIsDirty(place, task)).toBe(false);
-  // 完了経路にはその網が無い(tree rule が検査に置き換わっている)ので、飲まない
-  releaseAfterCompletion(db, place, task);
-
-  expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
-  // 検査で止まっている: task の checkout は消えていない
-  expect(existsSync(join(place.path, ".git"))).toBe(true);
+    if (completed) {
+      releaseAfterCompletion(db, place, getTask(db, task.id)!);
+      expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
+      expect(existsSync(join(place.path, ".git"))).toBe(true);
+      expect(writeObservations(db, task)).toEqual([]);
+    } else {
+      expect(() => completionTreePaths(place, task.id, db)).toThrow();
+      expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    }
+  } finally {
+    db.close();
+  }
 });
 
 it("完了以外の解放では、着地後の書き込みが従来どおり WIP としてタスクブランチに退避され、再開の checkout はその WIP に立つ(ADR 0356 決定2)", async () => {
@@ -356,4 +466,32 @@ it("review の完了でも退避する —— 完了の門を持たない解放�
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
   expect(git(ws.path, "show", `task/${task.id}:reviewer-leavings.txt`)).toBe("notes");
+});
+
+it.each(["repository", "task branch"])("review の完了後に %s が無ければ観測を記録して checkout を削除する(ADR 0359 決定5)", async (missing) => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const branch = `task/${task.id}`;
+    const tip = git(ws.path, "rev-parse", branch);
+    writeFileSync(join(place.path, "reviewer-leavings.txt"), "notes\n");
+    if (missing === "repository") {
+      rmSync(join(place.path, ".git"), { recursive: true });
+    } else {
+      git(place.path, "switch", "-c", "elsewhere");
+      git(place.path, "branch", "-D", branch);
+    }
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(`has no ${missing === "repository" ? "git repository" : "branch"}`) },
+    ]);
+    expect(git(ws.path, "rev-parse", branch)).toBe(tip);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
 });

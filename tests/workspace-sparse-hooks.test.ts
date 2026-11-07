@@ -4,9 +4,9 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
-import { getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
+import { completeTask, getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
 import {
   completionTreePaths,
   excludeWorkspaceProjectSettings,
@@ -20,7 +20,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, prepareAtPickup, quarantineQuestion, type Tidepool } from "./harness.js";
+import { bootTidepool, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, prepareAtPickup, quarantineQuestion, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -75,6 +75,7 @@ it("a worker cannot hide a tracked deletion by changing sparse rules after picku
   const place = await prepareAtPickup(db, workspace, task);
   expect(existsSync(join(workspace.path, "human-omitted.txt"))).toBe(false);
   expect(completionTreePaths(place, task.id, db)).toEqual([]);
+  completeTask(db, task, FULL_HANDOFF, "worker", now, "worker");
 
   // ADR 0356 決定3: worker が task の checkout に書いた sparse(盤面の行を真似ても)は view に効かない
   git(place.path, "sparse-checkout", "set", "--no-cone", "/*", "!/.claude/settings.json", "!/README.md");
@@ -83,8 +84,12 @@ it("a worker cannot hide a tracked deletion by changing sparse rules after picku
 
   db.close();
   db = openDb(dbPath);
-  releaseWorkspace(db, place, task, now, false, undefined, undefined, true);
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("written to after task");
+  releaseWorkspace(db, place, getTask(db, task.id)!, now, false, undefined, undefined, true);
+  expect(listEvents(db, task.id).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion")).toEqual([
+    { kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["README.md"] },
+  ]);
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expect(existsSync(place.path)).toBe(false);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 });
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -85,6 +85,33 @@ it("complete による解放ではツリーがクリーンに戻り、WIP コミ
   expect(git(ws.path, "show", `task/${task.id}:notes.txt`)).toBe("half-finished work");
   // main には何も書かれていない
   expect(() => git(ws.path, "show", "main:notes.txt")).toThrow();
+});
+
+it("complete_task explains a board-side ref write failure and can be retried in the same session", async () => {
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "write things");
+  await t.clock.advance(HOUR);
+
+  commitWork(checkoutOf(t.db, task.id), "notes.txt", "finished work\n");
+  const lock = join(ws.path, ".git", "refs", "heads", "task", `${task.id}.lock`);
+  writeFileSync(lock, "");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  const complete = () => client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  try {
+    expect(await complete()).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: expect.stringMatching(/the board could not record the task branch tip.*retry complete_task or escalate/is) }],
+    });
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+    expect(await servedQuarantineQuestion(t, "workspace", ws.name)).toBeUndefined();
+
+    rmSync(lock);
+    expect((await complete()).isError ?? false).toBe(false);
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+  } finally {
+    await client.close();
+  }
 });
 
 it("release は既知パス・untracked・0バイトをすべて満たす sandbox shadow だけを WIP から除く", async () => {
