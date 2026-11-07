@@ -41,4 +41,4 @@ repo も worker の tree も読む。ref の書き込みが同期なのは ADR 0
   読みは残らない。
 - FIFO は commit できない(`add -A` が拒む、symlink の `.gitignore` は git が辿らない)ので、作り直した checkout での retry は安全。
   ただし #3028 の再開が残した checkout を再利用しないことが前提(#3028 にコメント)。
-- 実装は ADR 0356 の view が生まれてから(#2966 は blocked-by #3028)。#3018 はここで決まり、同じ spec で閉じる。
+- 実装は ADR 0356 の view が生まれてから(spec #3033 は blocked-by #3029 / #3030)。#3018 はここで決まり、同じ spec で閉じる。
