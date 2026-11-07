@@ -220,8 +220,8 @@ export type EventPayload =
   // ADR 0276 決定1・4: 盤面が受験者の最初の pickup で自分の checkout を面接室の外に作った —— path はその在り処(面接室と同じ形)
   | { kind: "examinee_checkout_opened"; path: string }
   // ADR 0356 決定2: 盤面が work / review の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
-  | { kind: "task_checkout_opened"; path: string }
-  // ADR 0356 決定2: 解放が名前の場所の側を済ませた —— path の checkout は消してよい
+  | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip" }
+  // ADR 0356 決定2 / ADR 0359 決定2: 解放が名前の場所の側を済ませた —— path の checkout は消してよい
   // (再実行はこれを見て削除だけを撃つ)
   | { kind: "task_checkout_released"; path: string }
   | ({ kind: "task_checkout_written_after_completion"; path: string } & TaskCheckoutWriteObservation)

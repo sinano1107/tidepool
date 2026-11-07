@@ -13,10 +13,10 @@ import { queueReturnHandler } from "../src/watchdog.js";
 import {
   boardRefWriter,
   commitRoomCopy,
-  fetchTaskCheckoutTip,
   openExamineeCheckout,
   openInterviewRoom,
   quarantineWorkspace,
+  recordTaskCheckoutTip,
   releaseWorkspace,
   taskBranchExists,
   taskRunPlace,
@@ -52,7 +52,7 @@ async function restedAfterCompletion(name: string) {
   const done = work(db, "completes");
   const place = await prepareAtPickup(db, ws, done);
   commitWork(place.path, "done.txt", "done\n");
-  fetchTaskCheckoutTip(db, place, done.id);
+  recordTaskCheckoutTip(db, place, done.id);
   completeTask(db, done, FULL_HANDOFF, "worker", NOW, "worker");
   releaseWorkspace(db, place, done, NOW, false, undefined, undefined, true);
   expect(quarantineQuestion(db, "workspace", ws.name)).toBeUndefined();

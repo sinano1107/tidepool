@@ -111,8 +111,8 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   completionTreePaths,
-  fetchTaskCheckoutTip,
   type RunPlace,
+  recordTaskCheckoutTip,
   resolveOrQuarantine,
   TaskCheckoutUnreadableError,
   taskRunPlace,
@@ -338,7 +338,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
   if (!completionTreeGateApplies(task)) return;
   // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
   try {
-    fetchTaskCheckoutTip(deps.db, workspace, task.id);
+    recordTaskCheckoutTip(deps.db, workspace, task.id);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof TaskCheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);

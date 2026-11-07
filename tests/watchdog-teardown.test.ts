@@ -18,10 +18,10 @@ import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeard
 import { queueReturnHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import type { WorkerExitFacts } from "../src/worker.js";
 import {
-  fetchTaskCheckoutTip,
   openInterviewRoom,
   quarantineWorkspace,
   type RunPlace,
+  recordTaskCheckoutTip,
   resolveOrQuarantine,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -85,7 +85,7 @@ async function sessionInTeardown(
   runtime.hold(String(sessionId(db, picked.id)));
   commitWork(place.path, "deliverable.txt", "the real work\n");
   // 完了の門は worker の tip を名前の場所へ引いてから done にする(ADR 0356 決定3)
-  if (route === "complete") fetchTaskCheckoutTip(db, place, picked.id);
+  if (route === "complete") recordTaskCheckoutTip(db, place, picked.id);
 
   const task =
     route === "complete"

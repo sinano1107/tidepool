@@ -43,10 +43,10 @@ import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
 import {
   boardRefWriter,
-  fetchTaskCheckoutTip,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
+  recordTaskCheckoutTip,
   redoMergeBacks,
   refreshProtectedBranch,
   releaseWorkspace,
@@ -682,7 +682,7 @@ it("open PR 更新は盤面が動かした remote ref だけを予告して畳�
   git(place.path, "tag", "worker-created-tag");
   git(workspace.path, "tag", "out-of-band-tag");
   // 修理の tip は盤面が口を通して名前の場所へ引く(完了の門の前半と同じ手、ADR 0356 決定3)
-  fetchTaskCheckoutTip(db, place, task.id);
+  recordTaskCheckoutTip(db, place, task.id);
 
   await expect(convergeOn(landing, task.id)).resolves.toMatchObject({
     kind: "landed",
@@ -4452,7 +4452,7 @@ async function landLocally(name: string) {
   const work = landingWork(db, clock, workspace.name);
   const place = await prepareAtPickup(db, workspace, work);
   commitWork(place.path, "feature.txt", "ready\n");
-  fetchTaskCheckoutTip(db, place, work.id);
+  recordTaskCheckoutTip(db, place, work.id);
   const done = finish(db, clock, work);
   releaseWorkspace(db, place, done, clock.now(), true, undefined, undefined, true);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "local_merge_question" });
@@ -4490,7 +4490,7 @@ it("修理が done で後始末が merge back する前のローカル着地の 
   const place = await prepareAtPickup(db, workspace, repair);
   commitWork(place.path, "repair.txt", "fixed\n");
   // 完了の門が修理の tip を名前の場所へ引く(ADR 0356 決定3)
-  fetchTaskCheckoutTip(db, place, repair.id);
+  recordTaskCheckoutTip(db, place, repair.id);
   finish(db, clock, repair);
   markTeardown(db, repair.id, clock.now());
   const protectedHead = git(workspace.path, "rev-parse", "main");

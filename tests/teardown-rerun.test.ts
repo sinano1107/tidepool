@@ -7,7 +7,7 @@ import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
 import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
-import { fetchTaskCheckoutTip, firePickupPredicates, type RunPlace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { firePickupPredicates, type RunPlace, recordTaskCheckoutTip, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import {
   commitWork,
@@ -64,7 +64,7 @@ async function settledSession(
   commitWork(place.path, "work.txt", "work\n");
   work?.(place.path);
   if (settle === "completed") {
-    fetchTaskCheckoutTip(db, place, task.id);
+    recordTaskCheckoutTip(db, place, task.id);
     completeTask(db, task, FULL_HANDOFF, "worker", clock.now(), "worker");
   }
   markTeardown(db, task.id, clock.now());

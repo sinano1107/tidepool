@@ -359,6 +359,27 @@ it("決着した受験者の checkout とタスクブランチは、次の受験
   db.close();
 });
 
+it("受験者の解放は報告後の書き込みを答案に退避せず、面接室を quarantine する(ADR 0109 決定3)", async () => {
+  const db = openDb(":memory:");
+  try {
+    const { workspace, root, examinees, base } = await posedInRoom(db);
+    const examinee = examinees[0]!;
+    const place = await pickUp(db, examinee, workspace, base);
+    commitWork(place.path, "answer.txt", "an answer\n");
+    const answer = git(place.path, "rev-parse", "HEAD");
+    const done = completeTask(db, examinee, FULL_HANDOFF, "tako", NOW, "worker");
+    writeFileSync(join(place.path, "late.txt"), "outside the answer\n");
+
+    releaseWorkspace(db, place, done, NOW, true, undefined, undefined, true);
+
+    expect(workspaceNeedsHuman(db, root.id)).toBe(true);
+    expect(git(place.path, "rev-parse", `task/${done.id}`)).toBe(answer);
+    expect(readFileSync(join(place.path, "late.txt"), "utf8")).toBe("outside the answer\n");
+  } finally {
+    db.close();
+  }
+});
+
 
 it("決着した受験者の下に repair の work を登録すると拒まれる(ADR 0268 決定5)", async () => {
   const db = openDb(":memory:");

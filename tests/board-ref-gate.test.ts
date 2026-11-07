@@ -10,7 +10,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { catchUpTaskBranch, commitRoomCopy, fetchTaskCheckoutTip, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, quarantineWorkspace, refValues, releaseWorkspace, retakeRefBaselines, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -108,7 +108,7 @@ it("merge back and parking ignore repo-local hooks, signing and merge drivers (A
     git(ws.path, "checkout", "main");
     const place = await prepareAtPickup(db, ws, child);
     commitWork(place.path, "shared.txt", shared("base", "child"));
-    fetchTaskCheckoutTip(db, place, child.id);
+    recordTaskCheckoutTip(db, place, child.id);
 
     const hooks = installHookAndSigningProbes(ws);
     writeFileSync(join(hooks, "merge-driver"), '#!/bin/sh\ntouch "$0.ran"\nexit 1\n', { mode: 0o755 });
@@ -135,12 +135,12 @@ it("local landing follows HEAD without executing a repo-local smudge command (AD
     const place = await prepareAtPickup(db, ws, task);
     commitWork(place.path, ".gitattributes", "landed.txt filter=probe\n");
     commitWork(place.path, "landed.txt", "landed content\n");
-    fetchTaskCheckoutTip(db, place, task.id);
+    recordTaskCheckoutTip(db, place, task.id);
     releaseWorkspace(db, place, task, NOW, false, undefined, undefined, true);
     const other = work(db, "land a divergent change first");
     const otherPlace = await prepareAtPickup(db, ws, other);
     commitWork(otherPlace.path, "other.txt", "other content\n");
-    fetchTaskCheckoutTip(db, otherPlace, other.id);
+    recordTaskCheckoutTip(db, otherPlace, other.id);
     releaseWorkspace(db, otherPlace, other, NOW, false, undefined, undefined, true);
     mergeTaskToProtected(db, ws, other.id);
 
@@ -172,7 +172,7 @@ it("local landing restores the old worktree when Git cannot lock the protected r
     const before = git(ws.path, "rev-parse", "HEAD");
     const place = await prepareAtPickup(db, ws, task);
     commitWork(place.path, "landed.txt", "landed content\n");
-    fetchTaskCheckoutTip(db, place, task.id);
+    recordTaskCheckoutTip(db, place, task.id);
     releaseWorkspace(db, place, task, NOW, false, undefined, undefined, true);
     const lock = join(ws.path, ".git", "refs", "heads", "main.lock");
     writeFileSync(lock, "");
@@ -196,7 +196,7 @@ it("remote-backed の完了の後始末の merge back の fetch の後、基準�
   const place = await prepareAtPickup(db, workspace, task);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   commitWork(place.path, "work.txt", "work\n");
-  fetchTaskCheckoutTip(db, place, task.id);
+  recordTaskCheckoutTip(db, place, task.id);
   const hooks = installHookAndSigningProbes(workspace);
 
   releaseWorkspace(db, place, task, NOW, true, undefined, undefined, true);

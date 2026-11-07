@@ -1,15 +1,17 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
-import { listEvents } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { completeTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
   completionTreePaths,
-  fetchTaskCheckoutTip,
   quarantineWorkspace,
   type RunPlace,
+  recordTaskCheckoutTip,
   releaseWorkspace,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -24,10 +26,11 @@ import {
   prepareAtPickup,
   quarantineQuestion,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-// ADR 0359: 門が記録した tip を完了の解放で運び、worker の checkout では報告後の書き込みを観測する。
+// ADR 0359 決定2・3: 門が記録した tip を完了の解放で運び、worker の checkout では報告後の書き込みを観測する。
 
 const NOW = new Date("2026-09-10T00:00:00.000Z");
 async function pickedUpSession(type: TaskType = "work"): Promise<{
@@ -50,7 +53,7 @@ async function pickedUpSession(type: TaskType = "work"): Promise<{
 }
 
 /** 完了の門の前半(`assertWorkTreeCommitted`): worker の tip を名前の場所のタスクブランチにする。 */
-const gateFetch = (db: Db, place: RunPlace, task: Task) => fetchTaskCheckoutTip(db, place, task.id);
+const gateFetch = (db: Db, place: RunPlace, task: Task) => recordTaskCheckoutTip(db, place, task.id);
 
 /** 完了経路の後始末そのもの(`runTeardown` が組み立てる引数と同じ形)—— work タスクの
  *  完了だけが merge-back まで進む。 */
@@ -60,7 +63,7 @@ function releaseAfterCompletion(db: Db, place: RunPlace, task: Task): void {
 
 const treeIsDirty = (place: RunPlace, task: Task) => completionTreePaths(place, task.id).length > 0;
 
-async function completedChild() {
+async function completedChild(legacy?: "stale" | "recorded") {
   const db = openDb(":memory:");
   const ws = await makeWorkspace("completed-child");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
@@ -69,9 +72,12 @@ async function completedChild() {
   const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", NOW)!;
   const place = await prepareAtPickup(db, ws, task);
+  if (legacy) {
+    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path: place.path }, at: NOW });
+  }
   commitWork(place.path, "child.txt", "child work\n");
   const tip = git(place.path, "rev-parse", "HEAD");
-  gateFetch(db, place, task);
+  if (legacy !== "stale") gateFetch(db, place, task);
   completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
   return { db, ws, task: getTask(db, task.id)!, place, tip, parentBranch };
 }
@@ -123,6 +129,31 @@ it("完了報告後に worker の .git が無くなっても記録の tip を運
   }
 });
 
+it.each(["stale", "unreadable", "matching"])("旧版で完了した task は worker tip と照合してから解放する (worker=%s)", async (worker) => {
+  const { db, task, ws, place, tip, parentBranch } = await completedChild(worker === "matching" ? "recorded" : "stale");
+  try {
+    if (worker === "unreadable") rmSync(join(place.path, ".git"), { recursive: true });
+    const branch = `task/${task.id}`;
+    const before = git(ws.path, "rev-parse", branch);
+
+    releaseAfterCompletion(db, place, task);
+
+    expect(git(ws.path, "rev-parse", branch)).toBe(before);
+    expect(writeObservations(db, task)).toEqual([]);
+    if (worker === "matching") {
+      expect(git(ws.path, "rev-parse", parentBranch)).toBe(tip);
+      expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+      expect(existsSync(place.path)).toBe(false);
+    } else {
+      expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("earlier board version");
+      expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "child.txt")).toBe("");
+      expect(readFileSync(join(place.path, "child.txt"), "utf8")).toBe("child work\n");
+    }
+  } finally {
+    db.close();
+  }
+});
+
 it("観測の後に merge back が失敗しても、解放の再実行で同じ観測を重ねない(ADR 0345 決定1)", async () => {
   const { db, task, ws, place, parentBranch } = await completedChild();
   try {
@@ -148,19 +179,58 @@ it("観測の後に merge back が失敗しても、解放の再実行で同じ�
   }
 });
 
-it("完了後に名前の場所のタスクブランチが動けば、worker の書き込みとはせず quarantine する(ADR 0359 決定4)", async () => {
+it.each([false, true])("完了後の名前の場所の ref の移動と worker の checkout の消失を独立に扱う (.git removed=%s, ADR 0359 決定3・4)", async (removeGit) => {
   const { db, task, ws, place, parentBranch } = await completedChild();
   try {
     const ref = `refs/heads/task/${task.id}`;
     git(ws.path, "update-ref", ref, "main");
+    if (removeGit) rmSync(join(place.path, ".git"), { recursive: true });
 
     releaseAfterCompletion(db, place, task);
 
     expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(`now: ${git(ws.path, "rev-parse", "main")} ${ref}`);
-    expect(writeObservations(db, task)).toEqual([]);
+    expect(writeObservations(db, task)).toEqual(removeGit ? [
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") },
+    ] : []);
     expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "child.txt")).toBe("");
     expect(existsSync(place.path)).toBe(true);
   } finally {
+    db.close();
+  }
+});
+
+it("基準比較の直後に人間がタスクブランチを動かしても、確認済みの tip だけを merge back する(ADR 0359 決定2・4)", async () => {
+  const { db, task, ws, place, tip, parentBranch } = await completedChild();
+  try {
+    git(ws.path, "switch", "--detach", tip);
+    commitWork(ws.path, "human.txt", "human work\n");
+    const humanTip = git(ws.path, "rev-parse", "HEAD");
+    git(ws.path, "switch", "main");
+
+    // 完了の解放が基準比較を済ませた後、記録の tree を読む Git の呼び出しに人間の書き込みを挟む。
+    const bin = await tempDir("tidepool-completion-ref-move-");
+    const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(join(bin, "move-ref"), `${realGit}\nrefs/heads/task/${task.id}\n${humanTip}\n`);
+    writeFileSync(join(bin, "git"), [
+      "#!/bin/sh",
+      '{ IFS= read -r git; IFS= read -r ref; IFS= read -r tip; } < "${0%/*}/move-ref"',
+      'if [ "$1" = cat-file ] && [ "$2" = -e ]; then',
+      '  "$git" update-ref "$ref" "$tip" || exit',
+      "fi",
+      'exec "$git" "$@"',
+      "",
+    ].join("\n"), { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+
+    releaseAfterCompletion(db, place, task);
+    vi.unstubAllEnvs();
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(humanTip);
+    expect(git(ws.path, "rev-parse", parentBranch)).toBe(tip);
+    const next = registerTask(db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+    await expect(prepareAtPickup(db, ws, next)).rejects.toThrow(/refs changed while the checkout rested/);
+  } finally {
+    vi.unstubAllEnvs();
     db.close();
   }
 });
@@ -381,20 +451,30 @@ it("汚れが shadow 残骸の3条件だけを満たすなら、task の checkou
   expect(existsSync(place.path)).toBe(false);
 });
 
-it.each([false, true])("名前の場所の記録の tree が壊れたら、門では拒み、解放では quarantine する (done=%s)", async (completed) => {
+it.each([
+  { completed: false, treePath: "root", removeGit: false },
+  { completed: true, treePath: "root", removeGit: false },
+  { completed: true, treePath: "nested", removeGit: false },
+  { completed: true, treePath: "nested", removeGit: true },
+])("名前の場所の記録の tree が壊れたら、門では拒み、解放では quarantine する (done=$completed, tree=$treePath, .git removed=$removeGit)", async ({ completed, treePath, removeGit }) => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
-    commitWork(place.path, "deliverable.txt", "the real work\n");
+    mkdirSync(join(place.path, "nested"));
+    commitWork(place.path, "nested/deliverable.txt", "the real work\n");
     gateFetch(db, place, task);
     if (completed) completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
-    const tree = git(ws.path, "rev-parse", `task/${task.id}^{tree}`);
+    const revision = `task/${task.id}`;
+    const tree = git(ws.path, "rev-parse", treePath === "root" ? `${revision}^{tree}` : `${revision}:nested`);
     rmSync(join(ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+    if (removeGit) rmSync(join(place.path, ".git"), { recursive: true });
 
     if (completed) {
       releaseAfterCompletion(db, place, getTask(db, task.id)!);
       expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
-      expect(existsSync(join(place.path, ".git"))).toBe(true);
-      expect(writeObservations(db, task)).toEqual([]);
+      expect(readFileSync(join(place.path, "nested/deliverable.txt"), "utf8")).toBe("the real work\n");
+      expect(writeObservations(db, task)).toEqual(removeGit ? [
+        { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") },
+      ] : []);
     } else {
       expect(() => completionTreePaths(place, task.id, db)).toThrow();
       expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
@@ -492,6 +572,33 @@ it.each(["repository", "task branch"])("review の完了後に %s が無けれ�
     expect(listChildren(db, task.id)).toEqual([]);
     expect(existsSync(place.path)).toBe(false);
   } finally {
+    db.close();
+  }
+});
+
+it.each(["transfer", "staging"])("review の完了で %s が落ちれば、名前の場所を quarantine して checkout を残す", async (stage) => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    if (stage === "transfer") {
+      commitWork(place.path, "reviewer-leavings.txt", "only worker copy\n");
+      git(ws.path, "config", "fetch.unpackLimit", "1");
+      const packDir = join(ws.path, ".git", "objects", "pack");
+      rmSync(packDir, { recursive: true });
+      writeFileSync(packDir, "");
+    } else {
+      writeFileSync(join(place.path, "reviewer-leavings.txt"), "only worker copy\n");
+      vi.stubEnv("TMPDIR", join(ws.path, "missing-temp-directory"));
+    }
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
+    expect(writeObservations(db, task)).toEqual([]);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+    expect(readFileSync(join(place.path, "reviewer-leavings.txt"), "utf8")).toBe("only worker copy\n");
+  } finally {
+    vi.unstubAllEnvs();
     db.close();
   }
 });
