@@ -713,7 +713,7 @@ export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessE
  *  (RFC 2606) can never resolve to a real deliverable address, so an agent
  *  name never masquerades as a person's inbox. ADR 0024 invariant: the worker
  *  env never carries a GitHub token (the board injects
- *  those per-call in github-auth.ts, never into the inherited env). */
+ *  those per-call in github-auth.ts, never into the worker env). */
 export function agentGitIdentityEnv(agentName: string): Record<string, string> {
   const email = `${agentName}@tidepool.invalid`;
   return {
@@ -2096,8 +2096,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           systemPromptFile,
         ],
         // the agent's own commits are stamped with the agent's identity (issue
-        // #53), merged over the inherited env — never a token (ADR 0024). The
-        // the spawn-tier env knobs (issue #33) ride the same merge: the explicit
+        // #53), merged over the built env — never a token (ADR 0024). The
+        // spawn-tier env knobs (issue #33) ride the same merge: the explicit
         // "no advisor" and the #69238 stream timeouts, both pinned here rather
         // than left to the host's environment file (ADR 0005).
         {

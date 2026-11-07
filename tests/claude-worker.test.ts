@@ -595,8 +595,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("ADR 0024 の不変条件: 盤面が注入する identity env は GIT_* 4変数のみで、トークンを含まない", () => {
-    // worker は process.env をまるごと継承する(既存挙動)ので、盤面が worker
-    // env に「足す」ものだけがこの issue の関心。その注入物は identity 変数
+    // 盤面が worker env に「足す」ものだけがこの issue の関心。その注入物は identity 変数
     // だけに閉じ、GitHub トークンは決して混ざらない(トークンは github-auth.ts
     // が execFileSync の env に都度注入するのみ — ADR 0024 の「効く場所は1箇所」)。
     expect(Object.keys(agentGitIdentityEnv("deckhand")).sort()).toEqual([
@@ -5240,7 +5239,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       const env = calls[0]!.env;
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-      // それ以外の盤面 env は従来通り継承される(PATH 等で子プロセスが死なない)
+      // PATH は土台が名指しで渡す(子プロセスが死なない)
       expect(env.PATH).toBe(process.env.PATH);
     } finally {
       vi.unstubAllEnvs();
