@@ -4,6 +4,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeByKindViaMcp,
   completeIntegrationReviews,
@@ -40,7 +41,7 @@ it("purely-local: 未決着の付帯子がある間は着地 question を立て�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   expect((await completeViaMcp(t, task.id)).isError ?? false).toBe(false);
 
@@ -77,7 +78,7 @@ it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決�
   });
   const task = await registerWork(t, "ship remotely");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   await completeViaMcp(t, task.id);
 
@@ -103,7 +104,7 @@ it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら a
   });
   const task = await registerWork(t, "ship unattended");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   await completeViaMcp(t, task.id);
 
@@ -131,7 +132,7 @@ it("remote-backed(external): 付帯子の決着後に PR が開く", async () =>
   });
   const task = await registerWork(t, "ship to an outside merge surface");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   await completeViaMcp(t, task.id);
   expect(t.github.requests).toEqual([]);
@@ -152,7 +153,7 @@ it("purely-local: 人間が付帯子を cancel しても着地する — cancel 
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship despite the cancelled review");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   // human 宛て: slot に入らない付帯子。agent 宛てだと完了の後始末の poll が統合点レビューより先に拾う(ADR 0119 決定3)
   const attached = attachChild(t, task.id, "review the feature", "human");
 
@@ -173,7 +174,7 @@ it("purely-local: 人間が付帯子を complete しても着地する", async (
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship after the human check");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   const attached = attachChild(t, task.id, "check the feature by hand", "human");
 
   await completeViaMcp(t, task.id);
@@ -193,7 +194,7 @@ it("待機中に付いた2つ目の付帯子が着地をもう一度待たせ、
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship after two attached children");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
 
   // 待っている間に異議修理が付く — 門は着地の瞬間に読み直される(ADR 0092 決定3)
@@ -239,7 +240,7 @@ it("決着済み分解子に付いた異議修理が未決着なら、親の着�
     (candidate: any) => candidate.parent_id === parent.id && candidate.type === "work",
   );
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "child.txt", "child work\n");
+  commitWork(checkoutOf(t.db, child.id), "child.txt", "child work\n");
   await completeViaMcp(t, child.id);
 
   // 決着済みの分解子へ付いた修理 — 系譜経由で親のタスクブランチへ流れ込むので、
@@ -286,7 +287,7 @@ it("付帯子が abandon で決着した場合も着地する", async () => {
   });
   const task = await registerWork(t, "ship despite the abandoned repair");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   // 完了の後始末が空けた slot には、tick を待たずに統合点レビューが入る(ADR 0119 決定3)。付帯子はその後に
   // 付ける —— 先に付けると、その poll がレビューより先に付帯子を拾う
@@ -315,7 +316,7 @@ it("付帯子の付帯子(修理に付いたレビュー)も、根の着地を�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   const repair = attachChild(t, task.id, "repair the feature", "human");
   const repairReview = attachChild(t, repair.id, "review the repair", "human");
 
@@ -338,7 +339,7 @@ it("着地済みの根の下で自分が着地の根になった付帯子も、�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const [landing] = await questions(t);
@@ -348,7 +349,7 @@ it("着地済みの根の下で自分が着地の根になった付帯子も、�
   const repair = attachChild(t, task.id, "repair the landed feature");
   const repairReview = attachChild(t, repair.id, "review the repair", "human");
   await pickUp(t, repair.id);
-  commitWork(workspace.path, "repair.txt", "repaired\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "repaired\n");
   await completeViaMcp(t, repair.id);
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
 
@@ -406,7 +407,7 @@ async function completeObjectedExternalWorkAndExpectNoPr(): Promise<any> {
     entry_id: entry.id,
     comment: "the implementation still needs the agreed repair",
   });
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   expect((await completeViaMcp(t, task.id)).isError ?? false).toBe(false);
   expect(t.github.requests).toEqual([]);
@@ -445,7 +446,7 @@ async function landingQuestionThenAttachedChild(): Promise<{ task: any; landing:
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const [landing] = await questions(t);
@@ -492,7 +493,7 @@ it("open な triage session の未束ねの異議は、着地 question への me
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the objected feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const [landing] = await questions(t);
@@ -540,7 +541,7 @@ it("分解子の判断への異議も親の着地 question を 409 にし、comm
     (candidate: any) => candidate.parent_id === parent.id && candidate.type === "work",
   );
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "child.txt", "child work\n");
+  commitWork(checkoutOf(t.db, child.id), "child.txt", "child work\n");
   await completeViaMcp(t, child.id);
   await t.clock.advance(HOUR);
   await completeViaMcp(t, parent.id);
@@ -587,7 +588,7 @@ it("PR の merge question も同じ検証を通る — 未決着の付帯子が�
   });
   const task = await registerWork(t, "ship remotely");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const [merge] = await questions(t);

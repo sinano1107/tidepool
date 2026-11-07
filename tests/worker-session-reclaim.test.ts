@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { boardContainerRuntimeFor } from "../src/cgroup-container.js";
 import { markTeardown } from "../src/teardown.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, servedQuarantineQuestion, sessionId, type Tidepool } from "./harness.js";
+import { api, bootTidepool, checkoutOf, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, servedQuarantineQuestion, sessionId, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -77,7 +77,8 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(String(sessionId(t.db, task.id)));
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  const checkout = checkoutOf(t.db, task.id);
+  writeFileSync(join(checkout, "draft.txt"), "stuck work\n");
 
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);
@@ -95,7 +96,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
 
   // slot は解放されない。tree rule も走っていない — まだ生きているかもしれない
   // process が書いている作業ツリーを退避すること自体が競合である
-  expect(git(ws.path, "status", "--porcelain")).not.toBe("");
+  expect(git(checkout, "status", "--porcelain")).not.toBe("");
   queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
@@ -106,7 +107,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
   // pickup は開いている quarantine だけで止まるので、上の assert は slot の解放を
   // 見分けない。解放の直前に走る tree rule が作業ツリーを動かしていないことで見る
-  expect(git(ws.path, "status", "--porcelain")).not.toBe("");
+  expect(git(checkout, "status", "--porcelain")).not.toBe("");
   // 遅れた観測は question も刷り直さない
   const after = await questions();
   expect(after.filter((q: any) => q.title.includes("watchdog killed"))).toHaveLength(1);
@@ -159,7 +160,7 @@ it("空を観測してから回答すると受理され、slot-release tree rule
   await t.clock.advance(HOUR);
   await pickedUp(task);
   containers.hold(String(sessionId(t.db, task.id)));
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "draft.txt"), "stuck work\n");
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);
 
@@ -250,13 +251,14 @@ it("回収 timeout のあと再起動して前提検査が通ると、回答よ�
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(String(sessionId(t.db, task.id)));
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "draft.txt"), "stuck work\n");
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);
   await t.stopServer();
 
   t = await bootTidepool({ dir: t.dir, workspace: ws, watchdog, harnessContainment: async () => ({ available: true }) });
-  await vi.waitFor(() => expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main"));
+  // ADR 0356 決定2: 名前の場所の HEAD は動かない —— 後始末の完走は WIP がタスクブランチに着くことで見る(旧: HEAD が main に戻るのを待った)
+  await vi.waitFor(() => expect(git(ws.path, "ls-tree", "--name-only", `task/${task.id}`)).toContain("draft.txt"));
 
   // 起動時の復旧が後始末を完走させた: tree rule は回答を待たずに走っている
   expect(git(ws.path, "status", "--porcelain")).toBe("");
@@ -283,7 +285,7 @@ it("Harness 封じ込めの盤面で前提検査が落ちた再起動のあと�
   queueWork(t, "next");
   await t.clock.advance(HOUR);
   await pickedUp(task);
-  writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "wip.txt"), "unfinished work\n");
   // 上限到達による中断を adapter が観測した瞬間の行(tests/teardown.test.ts と同じ setup)。
   // 梯子には落ちていないので盤面全体の Containment question は無く、残るのは後始末の印だけ
   markTeardown(t.db, task.id, t.clock.now());

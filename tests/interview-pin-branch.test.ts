@@ -5,9 +5,9 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, examineeCheckoutPath, interviewRoomPath, interviewRootIdOf, registerTask, type Task } from "../src/tasks.js";
-import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, poseAccepted, prepareAtPickup } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、受験者の checkout(ADR 0276)。
@@ -178,7 +178,7 @@ async function posedInRoom(db: Db, targets: object[] = [opusHigh], compose: (roo
 async function pickUp(db: Db, examinee: Task, workspace: WorkspaceConfig, base: string) {
   openExamineeCheckout(db, examinee, base, NOW);
   const place = taskRunPlace(db, examinee, workspace);
-  await prepareWorkspaceAtPickup(db, place, examinee);
+  await prepareAtPickup(db, place, examinee);
   return place;
 }
 

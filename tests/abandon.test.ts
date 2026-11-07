@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -57,7 +58,7 @@ it("abandon の回答で判断ごと破棄される: 失敗タスクと同判断
   const sibling = board0.find((x: any) => x.title === "sibling");
 
   await t.clock.advance(HOUR); // "will fail" picked up
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, failing.id), "draft.txt"), "stuck work\n");
   await t.clock.advance(90 * MIN); // SIGTERM
   await t.clock.advance(grace); // SIGKILL — failure question registered
 
@@ -131,7 +132,7 @@ it("abandon のカスケードは done の兄弟には触れない(記録は劣�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${finished.id}`)).json.status).toBe("done");
 
   await t.clock.advance(HOUR); // "will fail 2" picked up next
-  writeFileSync(join(ws.path, "draft2.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, failing.id), "draft2.txt"), "stuck work\n");
   await t.clock.advance(90 * MIN); // SIGTERM
   await t.clock.advance(grace); // SIGKILL — failure question registered
 

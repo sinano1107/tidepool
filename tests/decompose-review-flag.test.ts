@@ -403,6 +403,8 @@ it.each([
     const proc = recordingSpawn();
     onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs); // task temp と config dir の後始末(ADR 0257 / ADR 0354 決定1)
     t = await bootTidepool({
+      // ADR 0356 決定2: adapter は盤面が pickup で開いた task の checkout で走る —— 盤面がその名前の場所を準備する
+      workspace: { name: "tidepool", path: workspace.path },
       // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>
         executionSettingsFor(t.db, loadRegistry(registryDir, "purely-local").agents.tako!, task),

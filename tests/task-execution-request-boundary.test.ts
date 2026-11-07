@@ -221,6 +221,9 @@ You are Tako.
     mcpPort: 0,
     credential: TEST_CREDENTIAL,
     clock,
+    // ADR 0356 決定2: adapter は盤面が pickup で開いた task の checkout で走る —— 盤面がその名前の場所を準備する
+    workspace: { name: "tidepool", path: workspace.path },
+    workspacesDir: join(boardDir, "workspaces"),
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts: new TranscriptStore(logDir),
     checkHarnessCliVersion: pinnedCliVersions,

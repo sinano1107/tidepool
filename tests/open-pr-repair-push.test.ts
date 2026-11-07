@@ -6,6 +6,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   completeIntegrationReviewViaMcp,
@@ -18,6 +19,7 @@ import {
   questions,
   registerWork,
   servedQuarantineQuestion,
+  sessionId,
   squashTaskIntoOrigin,
   type Tidepool,
 } from "./harness.js";
@@ -38,7 +40,7 @@ async function landedWork(workspace: WorkspaceConfig): Promise<any> {
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship reviewable work");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "v1\n");
+  commitWork(checkoutOf(t.db, work.id), "feature.txt", "v1\n");
   await completeViaMcp(t, work.id);
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === work.id,
@@ -49,11 +51,11 @@ async function landedWork(workspace: WorkspaceConfig): Promise<any> {
 }
 
 /** 着地済みの `work` に付いた修理を1本、拾って commit して完了させる。 */
-async function completeRepair(work: any, workspace: WorkspaceConfig): Promise<void> {
+async function completeRepair(work: any): Promise<void> {
   const repair = attachChild(t, work.id, "repair the reviewed work");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "fixed\n");
   const res: any = await completeViaMcp(t, repair.id);
   expect(res.isError ?? false).toBe(false);
 }
@@ -76,7 +78,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
   const work = await landedWork(workspace);
   expect(t.github.requests).toHaveLength(1);
 
-  await completeRepair(work, workspace);
+  await completeRepair(work);
 
   // 修理はタスクブランチに載り、PR は増えず、盤面が origin へ押し直す
   expect(git(workspace.path, "show", `task/${work.id}:repair.txt`)).toBe("fixed");
@@ -89,11 +91,11 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
 it("push のあとに拾った次のタスクは quarantine されずに着地し、2本目の PR が開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("push-then-release");
   const work = await landedWork(workspace);
-  await completeRepair(work, workspace);
+  await completeRepair(work);
 
   const next = await registerWork(t, "the next slice");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "next.txt", "more\n");
+  commitWork(checkoutOf(t.db, next.id), "next.txt", "more\n");
   await completeViaMcp(t, next.id);
   await completeIntegrationReviews(t, next.id);
 
@@ -107,7 +109,7 @@ it("purely-local の同じ構図では push は起きない", async () => {
   const work = await landedWork(workspace);
   expect(work.pr_number).toBeNull();
 
-  await completeRepair(work, workspace);
+  await completeRepair(work);
 
   expect(git(workspace.path, "show", `task/${work.id}:repair.txt`)).toBe("fixed");
   expect(t.github.pushes).toEqual([]);
@@ -118,7 +120,7 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
   const work = await landedWork(workspace);
   t.github.scriptMergedOutside(work.pr_number);
 
-  await completeRepair(work, workspace);
+  await completeRepair(work);
 
   expect(t.github.pushes).toEqual([]);
   expect(t.github.stateChecks).toContainEqual({ path: workspace.path, number: work.pr_number });
@@ -129,7 +131,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship work reviewed after PR open");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "v1\n");
+  commitWork(checkoutOf(t.db, work.id), "feature.txt", "v1\n");
   await completeViaMcp(t, work.id);
   await completeIntegrationReviews(t, work.id);
   const landed = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
@@ -162,8 +164,9 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
 
   await squashTaskIntoOrigin(workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
-  commitWork(workspace.path, "repair.txt", "fixed after squash\n");
-  const taskHeadBeforeCatchUp = git(workspace.path, "rev-parse", `task/${repair.id}`);
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "fixed after squash\n");
+  // 完了の門が worker の tip を名前の場所へ引く(ADR 0356 決定3)—— 追いつき merge の第1親はその tip
+  const taskHeadBeforeCatchUp = git(checkoutOf(t.db, repair.id), "rev-parse", "HEAD");
   const completed: any = await completeViaMcp(t, repair.id);
   expect(completed.isError ?? false).toBe(false);
 
@@ -206,7 +209,7 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
   await squashTaskIntoOrigin(workspace, work.id);
   await changeProtectedFile(workspace, "repair.txt", "protected version\n");
   t.github.scriptMergedOutside(work.pr_number);
-  commitWork(workspace.path, "repair.txt", "task version\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "task version\n");
   const completed: any = await completeViaMcp(t, repair.id);
   expect(completed.isError ?? false).toBe(false);
 
@@ -237,9 +240,11 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired"] })).status).toBe(200);
   await t.clock.advance(HOUR);
-  await vi.waitFor(() => expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${occupant.id}`));
-  commitWork(workspace.path, "occupant.txt", "unrelated running work\n");
-  const occupiedHead = git(workspace.path, "rev-parse", "HEAD");
+  // 旧: 走行中の別タスクは名前の場所の HEAD を自分のブランチに置いていた。今は task の checkout で走り、名前の場所の HEAD は main(ADR 0356 決定1)
+  await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(occupant.id));
+  const occupantCheckout = checkoutOf(t.db, occupant.id);
+  commitWork(occupantCheckout, "occupant.txt", "unrelated running work\n");
+  const occupiedHead = git(occupantCheckout, "rev-parse", "HEAD");
 
   const retried = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
     answers: ["retry"],
@@ -257,11 +262,10 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
       `refs/remotes/origin/main...task/${repair.id}`,
     ),
   ).toBe("repair-only.txt");
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
-    `task/${occupant.id}`,
-  );
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(occupiedHead);
-  expect(git(workspace.path, "show", "HEAD:occupant.txt")).toBe("unrelated running work");
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(git(occupantCheckout, "rev-parse", "HEAD")).toBe(occupiedHead);
+  expect(git(occupantCheckout, "show", "HEAD:occupant.txt")).toBe("unrelated running work");
+  expect(git(occupantCheckout, "status", "--porcelain")).toBe("");
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json.status).toBe("done");
 
@@ -278,13 +282,20 @@ it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇
 
   await squashTaskIntoOrigin(workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
-  commitWork(workspace.path, "repair.txt", "repair survives tool failure\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "repair survives tool failure\n");
+  // 完了の門はタスクブランチの ref を名前の場所に書く(ADR 0356 決定3)ので、lock は門の後・後始末の前に置く
+  t.containers.hold(repair.id);
+  const completed: any = await completeViaMcp(t, repair.id);
+  expect(completed.isError ?? false).toBe(false);
   writeFileSync(
     join(workspace.path, ".git", "refs", "heads", "task", `${repair.id}.lock`),
     "locked\n",
   );
-  const completed: any = await completeViaMcp(t, repair.id);
-  expect(completed.isError ?? false).toBe(false);
+  t.containers.fireEmpty(String(sessionId(t.db, repair.id)));
+  // 後始末と収束は回収の観測の後ろで非同期に走る
+  for (let i = 0; i < 200 && !(await questions(t)).some((q: any) => q.question_pending_pr_promotion_task_id === repair.id); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 
   const failure = (await questions(t)).find(
     (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === repair.id,
@@ -305,7 +316,7 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
   await squashTaskIntoOrigin(workspace, work.id);
   await changeProtectedFile(workspace, "feature.txt", "protected follow-up\n");
   t.github.scriptMergedOutside(work.pr_number);
-  commitWork(workspace.path, "feature.txt", "repair result\n");
+  commitWork(checkoutOf(t.db, repair.id), "feature.txt", "repair result\n");
   const completed: any = await completeViaMcp(t, repair.id);
   expect(completed.isError ?? false).toBe(false);
 
@@ -326,7 +337,7 @@ it("push の失敗は PR 昇格失敗 question として人間に見える", asy
   const work = await landedWork(workspace);
   t.github.scriptPushFailure(new Error("remote hung up after upload"));
 
-  await completeRepair(work, workspace);
+  await completeRepair(work);
 
   expect(t.github.pushes).toHaveLength(1);
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([

@@ -1,10 +1,10 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
@@ -47,16 +47,20 @@ afterEach(async () => {
   await t?.stop();
 });
 
-it("pickup 時にタスクブランチが作成・checkout され、作業はそのブランチ上で行われる", async () => {
+// 旧: pickup が名前の場所でタスクブランチを checkout した
+it("pickup 時に名前の場所にタスクブランチの ref が作られ、worker の task の checkout はそのブランチの上にいる(ADR 0356 決定1)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
 
   // ブランチ規律は tidepool 本体が敷く: フェイクワーカーは何もしていないのに
-  // workspace はタスクブランチの上にいる(main 直書きは構造的に起きない)
+  // task の checkout はタスクブランチの上にいる(main 直書きは構造的に起きない)
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(ws.path, "rev-parse", "--verify", `task/${task.id}`)).not.toBe("");
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 });
 
 // ADR 0084 以降、完了は例外である: worker のコミットが門で要求されるので、完了の
@@ -67,7 +71,7 @@ it("complete による解放ではツリーがクリーンに戻り、WIP コミ
   const task = await registerWork(t, "write things");
   await t.clock.advance(HOUR);
 
-  commitWork(ws.path, "notes.txt", "half-finished work\n");
+  commitWork(checkoutOf(t.db, task.id), "notes.txt", "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
@@ -92,14 +96,16 @@ it("release は既知パス・untracked・0バイトをすべて満たす sandbo
   const task = await registerWork(t, "write while sandbox shadows exist");
   await t.clock.advance(HOUR);
 
+  // ADR 0356 決定1: worker は task の checkout で書く
+  const checkout = checkoutOf(t.db, task.id);
   for (const path of KNOWN_SANDBOX_SHADOW_PATHS) {
     if (path === ".profile" || path === ".zshrc") continue;
-    mkdirSync(dirname(join(ws.path, path)), { recursive: true });
-    writeFileSync(join(ws.path, path), "");
+    mkdirSync(dirname(join(checkout, path)), { recursive: true });
+    writeFileSync(join(checkout, path), "");
   }
-  commitWork(ws.path, ".zshrc", "real workspace content\n");
-  commitWork(ws.path, ".future-shadow", "");
-  commitWork(ws.path, "notes.txt", "work product\n");
+  commitWork(checkout, ".zshrc", "real workspace content\n");
+  commitWork(checkout, ".future-shadow", "");
+  commitWork(checkout, "notes.txt", "work product\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -125,7 +131,7 @@ it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面�
   await t.clock.advance(HOUR);
 
   // 退避が生まれるのは完了**以外**の解放(ADR 0084)—— エスカレーションで測る
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "notes.txt"), "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({
     name: "escalate",
@@ -145,14 +151,16 @@ it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面�
   );
 });
 
-it("エスカレーション解放でも WIP が退避され、再開は自ブランチの checkout だけで済む", async () => {
+// 旧: 再開は名前の場所で自ブランチを checkout し直した
+it("エスカレーション解放でも WIP が退避され、再開は自ブランチから作り直した task の checkout で WIP を持って始まる(ADR 0356 決定2)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "risky work");
   await t.clock.advance(HOUR);
 
   // 作業途中でエスカレーション — コミットしないまま slot を手放す
-  writeFileSync(join(ws.path, "draft.txt"), "work in flight\n");
+  const first = checkoutOf(t.db, task.id);
+  writeFileSync(join(first, "draft.txt"), "work in flight\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "escalate",
@@ -164,14 +172,16 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
   expect(res.isError ?? false).toBe(false);
   await client.close();
 
-  // 完了と同じ tree rule が走る: WIP 退避 + クリーンツリー
+  // 完了と同じ tree rule が走る: WIP 退避 + task の checkout は消える
   expect(git(ws.path, "status", "--porcelain")).toBe("");
   expect(git(ws.path, "show", `task/${task.id}:draft.txt`)).toBe("work in flight");
+  expect(existsSync(first)).toBe(false);
 
   // 待つ間に別タスクが同じ workspace を自分のブランチで通過する
   const other = await registerWork(t, "other work");
   await t.clock.advance(HOUR);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${other.id}`);
+  const otherCheckout = checkoutOf(t.db, other.id);
+  expect(git(otherCheckout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${other.id}`);
   const c2 = await mcpClient(t.mcpBaseUrl, other.id);
   await c2.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await c2.close();
@@ -185,8 +195,11 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
   const question = list.find((x: any) => x.type === "question");
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["a"] });
   expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([task.id, other.id, task.id]);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
-  expect(readFileSync(join(ws.path, "draft.txt"), "utf8")).toBe("work in flight\n");
+  const resumed = checkoutOf(t.db, task.id);
+  expect(resumed).not.toBe(first);
+  expect(git(resumed, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(readFileSync(join(resumed, "draft.txt"), "utf8")).toBe("work in flight\n");
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 });
 
 it("tree rule の失敗で workspace が needs-human になり、pickup が止まり、question が生まれる", async () => {
@@ -195,9 +208,9 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   const task = await registerWork(t, "doomed work");
   await t.clock.advance(HOUR);
 
-  // リポジトリ自体を壊して WIP コミットを失敗させる(コンフリクト等の代役)
-  commitWork(ws.path, "junk.txt", "uncommittable\n");
-  await rm(join(ws.path, ".git"), { recursive: true, force: true });
+  // 名前の場所の main へ帯域外に commit して解放を失敗させる(盤面が書いていない ref の移動、ADR 0351 —— コンフリクト等の代役)。
+  // 旧: .git を消した —— 完了の門が名前の場所へ tip を引けず、完了そのものが成立しなくなった(ADR 0356 決定3)
+  commitWork(ws.path, "junk.txt", "out of band\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
@@ -226,42 +239,37 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   expect(events.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
 });
 
-it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pickup を止める", async () => {
+// 旧: sandbox shadow を削除してから退避し、削除の失敗は workspace を quarantine した
+it("task の checkout の sandbox shadow は消さずに完了の検査から除き、workspace を quarantine せず後続 pickup を止めない(ADR 0356 決定3)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "finish while a sandbox mount survives");
   await t.clock.advance(HOUR);
 
-  const shadowDir = join(ws.path, ".claude");
+  const shadowDir = join(checkoutOf(t.db, task.id), ".claude");
   mkdirSync(shadowDir);
   writeFileSync(join(shadowDir, "agents"), "");
-  chmodSync(shadowDir, 0o555);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
-  try {
-    await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
-  } finally {
-    chmodSync(shadowDir, 0o755);
-    await client.close();
-  }
+  const res: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+  expect(res.isError ?? false).toBe(false);
 
-  const question = await servedQuarantineQuestion(t, "workspace", "sandbox");
-  expect(question?.purpose).toContain("unlink");
-
-  await registerWork(t, "must wait for workspace repair");
-  await t.clock.advance(HOUR);
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  expect((await api(t.baseUrl, "GET", "/api/tasks")).json.some((x: any) => x.type === "question" && x.title.includes("sandbox"))).toBe(false);
+  expect(git(ws.path, "ls-tree", "-r", "--name-only", `task/${task.id}`)).not.toContain(".claude/agents");
 });
 
-it("ワーカーが main に逃げていても WIP は main にコミットされず、workspace が隔離される", async () => {
+// 旧: ワーカーが名前の場所で main に逃げていたら WIP の commit を拒んで workspace を隔離した(#234 ケース1)
+it("ワーカーが task の checkout で別のブランチに逃げても、盤面はタスクブランチ1本を読み、main には何も載らず隔離もしない(ADR 0356 決定4)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "rogue work");
   await t.clock.advance(HOUR);
 
-  // 規律を破るワーカー: セッション中に main へ checkout し、散らかしたままエスカレート
+  // 規律を破るワーカー: セッション中に別のブランチへ checkout し、散らかしたままエスカレート
   // する(完了は ADR 0084 の門がコミット済みを要求するので、退避が生まれる解放で測る)
-  git(ws.path, "checkout", "main");
-  writeFileSync(join(ws.path, "rogue.txt"), "must not land on main\n");
+  const checkout = checkoutOf(t.db, task.id);
+  git(checkout, "checkout", "-b", "main");
+  writeFileSync(join(checkout, "rogue.txt"), "must not land on main\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "escalate",
@@ -273,16 +281,12 @@ it("ワーカーが main に逃げていても WIP は main にコミットさ�
   expect(res.isError ?? false).toBe(false);
   await client.close();
 
-  // main には何もコミットされていない(初期コミットのみ)— tree rule は
-  // タスクブランチ以外への WIP コミットを拒否する
+  // 名前の場所の main には何もコミットされていない(初期コミットのみ)—— WIP はタスクブランチにだけ着く
   expect(git(ws.path, "log", "--format=%s", "main")).toBe("initial");
-  // 拒否は隔離として扱われる: workspace の question が生まれ、pickup が止まる
-  // (エスカレーション自身の question とは別に立つ)
+  expect(git(ws.path, "show", `task/${task.id}:rogue.txt`)).toBe("must not land on main");
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(
-    list.find((x: any) => x.type === "question" && x.title.includes("sandbox")),
-  ).toBeDefined();
-  await registerWork(t, "stalled work");
+  expect(list.find((x: any) => x.type === "question" && x.title.includes("sandbox"))).toBeUndefined();
+  const next = await registerWork(t, "next work");
   await t.clock.advance(HOUR);
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id, next.id]);
 });

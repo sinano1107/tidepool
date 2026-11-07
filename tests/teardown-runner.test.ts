@@ -18,9 +18,9 @@ import { completeTask, getTask, listBoard, pickupTask, registerTask, returnToQue
 import { acceptTeardownQuarantine, acceptUnclosedSession, type FailedTeardownCheck, markTeardown, resumeUnfinishedTeardown, runTeardown, runTeardownSteps, sessionCloseSteps, sessionInTeardown, type TeardownAction, type TeardownDeps, teardownStep, type UnclosedSessionCheck } from "../src/teardown.js";
 import { recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import type { WorkerExitFacts } from "../src/worker.js";
-import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
+import { fetchTaskCheckoutTip, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, failTeardownMark, failWorkerExited, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, sessionId, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failTeardownMark, failWorkerExited, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, QUIET_EXIT, sessionId, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 
 /** 後始末の runner(ADR 0342 決定6 / ADR 0112): 後始末のどの step で盤面のバグが投げても落ちた後始末の question が1枚立ち、
  *  梯子は進まず、受理は投げた step を撃ち直す。既定は workspace を持たない盤面(tree rule は no-op)で step と枠だけを見て、
@@ -589,8 +589,9 @@ it("先に落ちた後始末の残りを持つ枠で書く step が投げても�
 async function teardownBehindWriteStep() {
   const ws = await makeWorkspace("sandbox");
   const b = board({ workspace: ws });
-  await prepareWorkspaceAtPickup(b.db, ws, b.task);
-  commitWork(ws.path, "deliverable.txt", "work\n");
+  const place = await prepareAtPickup(b.db, ws, b.task);
+  commitWork(place.path, "deliverable.txt", "work\n");
+  fetchTaskCheckoutTip(b.db, place, b.task.id);
   completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
   markTeardown(b.db, b.task.id, b.clock.now());
   b.slot.enterTeardown();
@@ -784,8 +785,9 @@ describe("落ちた後始末の受理は撃ち切ってから通し、重なっ�
   async function teardownBehindTranscriptRecord() {
     const ws = await makeWorkspace("sandbox");
     const b = board({ workspace: ws });
-    await prepareWorkspaceAtPickup(b.db, ws, b.task);
-    commitWork(ws.path, "deliverable.txt", "work\n");
+    const place = await prepareAtPickup(b.db, ws, b.task);
+    commitWork(place.path, "deliverable.txt", "work\n");
+    fetchTaskCheckoutTip(b.db, place, b.task.id);
     completeTask(b.db, getTask(b.db, b.task.id)!, FULL_HANDOFF, "deckhand", b.clock.now(), "worker");
     markTeardown(b.db, b.task.id, b.clock.now());
     b.slot.enterTeardown();

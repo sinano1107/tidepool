@@ -10,9 +10,9 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { catchUpTaskBranch, commitRoomCopy, ensureTaskBranch, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, prepareWorkspaceAtPickup, quarantineWorkspace, refValues, releaseWorkspace, retakeRefBaselines, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { catchUpTaskBranch, commitRoomCopy, fetchTaskCheckoutTip, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, quarantineWorkspace, refValues, releaseWorkspace, retakeRefBaselines, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, quarantineQuestion } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
@@ -59,7 +59,8 @@ function expectHooksAndSigningInactive(hooks: string): void {
   for (const name of BLOCKED_COMMANDS) expect(existsSync(join(hooks, `${name}.ran`)), name).toBe(false);
 }
 
-it.each([false, true])("catch-up follows the updated tip when the task branch is checked out (shallow: %s, ADR 0356 決定5)", async (shallow) => {
+// 旧: タスクブランチが名前の場所で checkout されていて、catch-up は worktree をその tip に追従させた
+it.each([false, true])("catch-up advances the task branch ref in the named place without moving its HEAD or worktree (shallow: %s, ADR 0356 決定1・5)", async (shallow) => {
   const source = await makeWorkspace("gate-catch-up");
   const ws = { ...source };
   if (shallow) {
@@ -73,14 +74,20 @@ it.each([false, true])("catch-up follows the updated tip when the task branch is
     const task = work(db, "catch up");
     git(ws.path, "branch", `task/${task.id}`);
     commitWork(ws.path, "upstream.txt", "from main\n");
-    await prepareWorkspaceAtPickup(db, ws, task);
-    commitWork(ws.path, "task.txt", "from the task\n");
+    const place = await prepareAtPickup(db, ws, task);
+    commitWork(place.path, "task.txt", "from the task\n");
+    releaseWorkspace(db, place, task, NOW);
+    const head = git(ws.path, "rev-parse", "HEAD");
 
     catchUpTaskBranch(db, ws, task.id);
 
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    expect(git(ws.path, "rev-parse", "HEAD")).toBe(head);
     expect(git(ws.path, "status", "--porcelain")).toBe("");
-    expect(readFileSync(join(ws.path, "upstream.txt"), "utf8")).toBe("from main\n");
-    expect(readFileSync(join(ws.path, "task.txt"), "utf8")).toBe("from the task\n");
+    expect(existsSync(join(ws.path, "task.txt"))).toBe(false);
+    expect(git(ws.path, "show", `task/${task.id}:upstream.txt`)).toBe("from main");
+    expect(git(ws.path, "show", `task/${task.id}:task.txt`)).toBe("from the task");
   } finally {
     db.close();
   }
@@ -98,14 +105,16 @@ it("merge back and parking ignore repo-local hooks, signing and merge drivers (A
     git(ws.path, "branch", `task/${child.id}`);
     git(ws.path, "checkout", "-b", `task/${parent.id}`);
     commitWork(ws.path, "shared.txt", shared("parent", "base"));
-    await prepareWorkspaceAtPickup(db, ws, child);
-    commitWork(ws.path, "shared.txt", shared("base", "child"));
+    git(ws.path, "checkout", "main");
+    const place = await prepareAtPickup(db, ws, child);
+    commitWork(place.path, "shared.txt", shared("base", "child"));
+    fetchTaskCheckoutTip(db, place, child.id);
 
     const hooks = installHookAndSigningProbes(ws);
     writeFileSync(join(hooks, "merge-driver"), '#!/bin/sh\ntouch "$0.ran"\nexit 1\n', { mode: 0o755 });
     git(ws.path, "config", "merge.probe.driver", `"${join(hooks, "merge-driver")}"`);
 
-    releaseWorkspace(db, ws, child, NOW, true, undefined, undefined, true);
+    releaseWorkspace(db, place, child, NOW, true, undefined, undefined, true);
 
     expect(existsSync(join(hooks, "merge-driver.ran"))).toBe(false);
     expectHooksAndSigningInactive(hooks);
@@ -123,14 +132,16 @@ it("local landing follows HEAD without executing a repo-local smudge command (AD
   const db = openDb(":memory:");
   try {
     const task = work(db, "land a filtered path");
-    await prepareWorkspaceAtPickup(db, ws, task);
-    commitWork(ws.path, ".gitattributes", "landed.txt filter=probe\n");
-    commitWork(ws.path, "landed.txt", "landed content\n");
-    releaseWorkspace(db, ws, task, NOW, false, undefined, undefined, true);
+    const place = await prepareAtPickup(db, ws, task);
+    commitWork(place.path, ".gitattributes", "landed.txt filter=probe\n");
+    commitWork(place.path, "landed.txt", "landed content\n");
+    fetchTaskCheckoutTip(db, place, task.id);
+    releaseWorkspace(db, place, task, NOW, false, undefined, undefined, true);
     const other = work(db, "land a divergent change first");
-    await prepareWorkspaceAtPickup(db, ws, other);
-    commitWork(ws.path, "other.txt", "other content\n");
-    releaseWorkspace(db, ws, other, NOW, false, undefined, undefined, true);
+    const otherPlace = await prepareAtPickup(db, ws, other);
+    commitWork(otherPlace.path, "other.txt", "other content\n");
+    fetchTaskCheckoutTip(db, otherPlace, other.id);
+    releaseWorkspace(db, otherPlace, other, NOW, false, undefined, undefined, true);
     mergeTaskToProtected(db, ws, other.id);
 
     const hooks = installHookAndSigningProbes(ws);
@@ -159,9 +170,10 @@ it("local landing restores the old worktree when Git cannot lock the protected r
   try {
     const task = work(db, "land with a blocked ref");
     const before = git(ws.path, "rev-parse", "HEAD");
-    await prepareWorkspaceAtPickup(db, ws, task);
-    commitWork(ws.path, "landed.txt", "landed content\n");
-    releaseWorkspace(db, ws, task, NOW, false, undefined, undefined, true);
+    const place = await prepareAtPickup(db, ws, task);
+    commitWork(place.path, "landed.txt", "landed content\n");
+    fetchTaskCheckoutTip(db, place, task.id);
+    releaseWorkspace(db, place, task, NOW, false, undefined, undefined, true);
     const lock = join(ws.path, ".git", "refs", "heads", "main.lock");
     writeFileSync(lock, "");
 
@@ -181,12 +193,13 @@ it("remote-backed の完了の後始末の merge back の fetch の後、基準�
   const { workspace, publish } = await makeRemoteBackedWorkspace("gate-release");
   const db = openDb(":memory:");
   const task = work(db, "release with merge back");
-  await prepareWorkspaceAtPickup(db, workspace, task);
+  const place = await prepareAtPickup(db, workspace, task);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
-  commitWork(workspace.path, "work.txt", "work\n");
+  commitWork(place.path, "work.txt", "work\n");
+  fetchTaskCheckoutTip(db, place, task.id);
   const hooks = installHookAndSigningProbes(workspace);
 
-  releaseWorkspace(db, workspace, task, NOW, true, undefined, undefined, true);
+  releaseWorkspace(db, place, task, NOW, true, undefined, undefined, true);
 
   expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
   expectHooksAndSigningInactive(hooks);
@@ -205,8 +218,7 @@ it("parking can recreate a missing local protected branch from origin (ADR 0356 
     publish("remote.txt", "new remote content\n", "new remote commit");
     const task = work(db, "uses the remote fork source");
 
-    await prepareWorkspaceAtPickup(db, ws, task);
-    releaseWorkspace(db, ws, task, NOW);
+    releaseWorkspace(db, await prepareAtPickup(db, ws, task), task, NOW);
 
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
@@ -246,7 +258,7 @@ it("fetch leaves loose objects unpacked and never runs pre-auto-gc (ADR 0356 決
     writeFileSync(join(ws.path, ".git", "hooks", "pre-auto-gc"), '#!/bin/sh\ntouch .git/board-gc-ran\nexit 1\n', { mode: 0o755 });
     publish("remote.txt", "new remote content\n", "new remote commit");
 
-    await prepareWorkspaceAtPickup(db, ws, work(db, "fetch without auto-gc"));
+    await prepareAtPickup(db, ws, work(db, "fetch without auto-gc"));
 
     expect(loose.every((path) => existsSync(path))).toBe(true);
     expect(existsSync(boardMarker)).toBe(false);
@@ -256,27 +268,28 @@ it("fetch leaves loose objects unpacked and never runs pre-auto-gc (ADR 0356 決
   }
 });
 
-it("ensureTaskBranch の後、基準にタスクブランチの行(fork 元の sha)と HEAD の行(symref)が予告どおりの1値で入り、再開は HEAD の行を戻す(ADR 0351 決定3 / ADR 0345 決定2)", async () => {
+// 旧: ensureTaskBranch が名前の場所の HEAD をタスクブランチへ動かし、基準の HEAD 行は pickup と休止の間で往復した(ADR 0345 決定2)
+it("pickup の後、基準にタスクブランチの行(fork 元の sha)が予告どおりの1値で入り、HEAD の行は再開を跨いでも保護ブランチを指す(ADR 0351 決定3 / ADR 0356 決定1)", async () => {
   const ws = await makeWorkspace("gate-task-branch");
   const db = openDb(":memory:");
   const first = work(db, "leaves a baseline");
-  await prepareWorkspaceAtPickup(db, ws, first);
-  releaseWorkspace(db, ws, first, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, ws, first), first, NOW);
   const next = work(db, "forks from main");
   const branch = `refs/heads/task/${next.id}`;
 
-  ensureTaskBranch(db, ws, next);
+  const place = await prepareAtPickup(db, ws, next);
 
   expect(baseline(db, ws.name).get(branch)).toBe(git(ws.path, "rev-parse", "main"));
-  expect(baseline(db, ws.name).get("HEAD")).toBe(`symref=${branch}`);
-
-  // 再開: ブランチは在り、HEAD だけが休止位置から戻る
-  commitWork(ws.path, "wip.txt", "wip\n");
-  releaseWorkspace(db, ws, next, NOW);
   expect(baseline(db, ws.name).get("HEAD")).toBe("symref=refs/heads/main");
-  ensureTaskBranch(db, ws, next);
 
-  expect(baseline(db, ws.name).get("HEAD")).toBe(`symref=${branch}`);
+  // 再開: ブランチは在り、解放が着けた WIP の tip の1値に畳まれている。HEAD の行は動かない
+  writeFileSync(join(place.path, "wip.txt"), "wip\n");
+  releaseWorkspace(db, place, next, NOW);
+  expect(baseline(db, ws.name).get(branch)).toBe(git(ws.path, "rev-parse", branch));
+  await prepareAtPickup(db, ws, next);
+
+  expect(baseline(db, ws.name).get(branch)).toBe(git(ws.path, "rev-parse", branch));
+  expect(baseline(db, ws.name).get("HEAD")).toBe("symref=refs/heads/main");
   db.close();
 });
 
@@ -285,8 +298,7 @@ it("Interview の root の pickup が読む実環境の fetch・休止位置の 
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const earlier = work(db, "leaves a baseline on the real workspace");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, clock.now());
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, clock.now());
   cancelTaskDirectly(db, earlier, null, clock.now(), {}, "webui");
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   const root = interviewRoot(db, workspace, clock.now());
@@ -321,14 +333,13 @@ it("pickup の休止位置の ff の後、基準の保護ブランチの行は f
   const { workspace, publish } = await makeRemoteBackedWorkspace("gate-pickup-park");
   const db = openDb(":memory:");
   const earlier = work(db, "leaves a baseline");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   const published = git(workspace.path, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
   // pickup の継続の門が休止位置の ff の直後に閉じる(#1973)—— タスクブランチを作る前の基準を読む
   const live = () => git(workspace.path, "rev-parse", "main") !== published;
 
-  await prepareWorkspaceAtPickup(db, workspace, work(db, "parks first"), { live });
+  await prepareAtPickup(db, workspace, work(db, "parks first"), { live });
 
   expect(git(workspace.path, "rev-parse", "main")).toBe(published);
   expectRowsCurrent(db, workspace.name, workspace, ["refs/heads/main", "refs/remotes/origin/main"]);
@@ -339,14 +350,13 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
   const { workspace, publish } = await makeRemoteBackedWorkspace("gate-pickup");
   const db = openDb(":memory:");
   const earlier = work(db, "leaves a baseline");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   // ADR 0356 決定5: checkout hook は走らないので、履歴の分岐で ff を塞ぐ。
   commitWork(workspace.path, "local.txt", "local commit\n");
   retakeRefBaselines(db, [workspace]);
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
+  await expect(prepareAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
 
   expectRowsCurrent(db, workspace.name, workspace, ["refs/remotes/origin/main"]);
   db.close();
@@ -360,13 +370,13 @@ async function roomWithPickedExaminee() {
   const root = interviewRoot(db, workspace, NOW);
   openTestInterviewRoom(db, root);
   const room = taskRunPlace(db, root, workspace);
-  await prepareWorkspaceAtPickup(db, room, root);
+  await prepareAtPickup(db, room, root);
   const head = commitRoomCopy(db, room);
   const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", head) as [Task];
   releaseWorkspace(db, room, root, NOW);
   openExamineeCheckout(db, examinee, dirname(room.path), NOW);
   const checkout = taskRunPlace(db, examinee, workspace);
-  await prepareWorkspaceAtPickup(db, checkout, examinee);
+  await prepareAtPickup(db, checkout, examinee);
   expect(baseline(db, examinee.id).get("HEAD")).toBe(`symref=refs/heads/task/${examinee.id}`);
   const roomRow = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(root.id);
   return { db, root, room, examinee, checkout, roomRow, roomBefore: roomRow() };
@@ -389,7 +399,7 @@ it("受験者の再開の pickup の after-open が checkout を休止させる�
   // pickup の継続の門が休止の直後に閉じる(#1973)—— タスクブランチを作る前の基準を読む
   const live = () => git(checkout.path, "rev-parse", "--abbrev-ref", "HEAD") !== "main";
 
-  await prepareWorkspaceAtPickup(db, checkout, examinee, { live });
+  await prepareAtPickup(db, checkout, examinee, { live });
 
   expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
   expect(roomRow()).toBe(roomBefore);
@@ -409,14 +419,16 @@ function answerQuarantine(db: Db, ws: WorkspaceConfig) {
   return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, question, ["repaired by hand"], undefined, () => NOW, "webui");
 }
 
-/** 拾って解放するとき worker が兄弟のブランチを作り、`refs/heads/sibling` を名指して quarantine に落ちた workspace。 */
+/** session の間に名前の場所に兄弟のブランチが作られ、解放が `refs/heads/sibling` を名指して quarantine に落ちた workspace。
+ *  旧: worker が名前の場所で兄弟のブランチを作った —— ADR 0356 決定4 の後、worker の ref の移動は task の checkout の中で
+ *  基準に届かないので、名前の場所の ref を動かすのは worker 以外の手。 */
 async function quarantinedBySibling(name: string) {
   const ws = await makeWorkspace(name);
   const db = openDb(":memory:");
-  const task = work(db, "wanders onto a sibling branch");
-  await prepareWorkspaceAtPickup(db, ws, task);
+  const task = work(db, "a sibling branch appears in the named place");
+  const place = await prepareAtPickup(db, ws, task);
   git(ws.path, "branch", "sibling");
-  releaseWorkspace(db, ws, task, NOW);
+  releaseWorkspace(db, place, task, NOW);
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   expect(question.purpose).toContain("refs/heads/sibling");
   return { ws, db, question, answer: () => answerQuarantine(db, ws) };
@@ -438,9 +450,10 @@ it("受理の後の pickup は、違反で名指された ref を比較で名指
   await answer();
   const next = work(db, "after the answer");
 
-  await prepareWorkspaceAtPickup(db, ws, next);
+  const place = await prepareAtPickup(db, ws, next);
 
-  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
+  expect(git(place.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   db.close();
 });
 
@@ -448,22 +461,23 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout 
   const ws = await makeWorkspace("retake-merge-ours");
   const db = openDb(":memory:");
   const landing = work(db, "lands");
-  await prepareWorkspaceAtPickup(db, ws, landing);
-  commitWork(ws.path, "repair.txt", "base\n");
-  releaseWorkspace(db, ws, landing, NOW);
+  const landingPlace = await prepareAtPickup(db, ws, landing);
+  commitWork(landingPlace.path, "repair.txt", "base\n");
+  releaseWorkspace(db, landingPlace, landing, NOW);
   const repair = registerTask(db, { type: "work", title: "repair", purpose: "why", completion_criteria: "done", parent_id: landing.id }, NOW, ...HUMAN_WEBUI);
-  await prepareWorkspaceAtPickup(db, ws, repair);
-  commitWork(ws.path, "repair.txt", "fixed\n");
-  releaseWorkspace(db, ws, repair, NOW);
+  const repairPlace = await prepareAtPickup(db, ws, repair);
+  commitWork(repairPlace.path, "repair.txt", "fixed\n");
+  releaseWorkspace(db, repairPlace, repair, NOW);
   // 修理が分かれた後に帰り先が同じファイルを書く —— 修理の merge back が conflict する
-  await prepareWorkspaceAtPickup(db, ws, landing);
-  commitWork(ws.path, "repair.txt", "conflicting\n");
-  releaseWorkspace(db, ws, landing, NOW);
-  await prepareWorkspaceAtPickup(db, ws, repair);
+  const resumedLanding = await prepareAtPickup(db, ws, landing);
+  commitWork(resumedLanding.path, "repair.txt", "conflicting\n");
+  releaseWorkspace(db, resumedLanding, landing, NOW);
+  const resumedRepair = await prepareAtPickup(db, ws, repair);
   completeTask(db, repair, FULL_HANDOFF, "worker", NOW, "worker");
-  releaseWorkspace(db, ws, getTask(db, repair.id)!, NOW, true);
+  releaseWorkspace(db, resumedRepair, getTask(db, repair.id)!, NOW, true);
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   expect(question.purpose).toContain(`task/${repair.id} does not merge cleanly`);
+  // 人間の手は名前の場所で(ADR 0239 帰結の文が名指す場所)
   git(ws.path, "checkout", `task/${landing.id}`);
   git(ws.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
   const merged = git(ws.path, "rev-parse", `task/${landing.id}`);
@@ -507,9 +521,9 @@ it("purely-local で quarantine 中に帯域外に動いた保護ブランチは
   const ws = await makeWorkspace("retake-out-of-band-main");
   const db = openDb(":memory:");
   const task = work(db, "lands after the answer");
-  await prepareWorkspaceAtPickup(db, ws, task);
-  commitWork(ws.path, "feature.txt", "ready\n");
-  releaseWorkspace(db, ws, task, NOW);
+  const place = await prepareAtPickup(db, ws, task);
+  commitWork(place.path, "feature.txt", "ready\n");
+  releaseWorkspace(db, place, task, NOW);
   quarantineWorkspace(db, ws.name, new Error("GitHub token acquisition failed"), NOW);
   git(ws.path, "update-ref", "refs/heads/main", git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 

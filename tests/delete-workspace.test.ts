@@ -6,9 +6,9 @@ import { openDb } from "../src/db.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
-import { completionTreePaths, prepareWorkspaceAtPickup, projectSettingsHiddenByBoard, releaseWorkspace } from "../src/workspace.js";
+import { completionTreePaths, projectSettingsHiddenByBoard, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, quarantineQuestion } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -33,10 +33,10 @@ async function sessionWithState(name: string) {
   const now = new Date();
   const registered = registerTask(db, { type: "work", title: "t", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", now)!;
-  await prepareWorkspaceAtPickup(db, ws, task);
+  const place = await prepareAtPickup(db, ws, task);
   db.prepare("UPDATE workspace_state SET sparse_snapshot = ? WHERE name = ?").run('{"mode":"disabled","pattern":null}', name);
-  commitWork(ws.path, "work.txt", "work\n");
-  return { db, ws, task, now };
+  commitWork(place.path, "work.txt", "work\n");
+  return { db, ws, place, task, now };
 }
 
 type Session = Awaited<ReturnType<typeof sessionWithState>>;
@@ -44,7 +44,7 @@ type Session = Awaited<ReturnType<typeof sessionWithState>>;
 /** 行の有無を production の読み手で: sparse の写しは「盤面が隠している最中」の印、基準は解放の比較が読む(無ければ違反、ADR 0064 決定6)。 */
 function expectState(s: Session, kept: boolean): void {
   expect(projectSettingsHiddenByBoard(s.db, s.ws)).toBe(kept);
-  releaseWorkspace(s.db, s.ws, s.task, s.now);
+  releaseWorkspace(s.db, s.place, s.task, s.now);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name) === undefined).toBe(kept);
 }
 
@@ -73,9 +73,9 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
       git(replacement.path, "sparse-checkout", "set", "--no-cone", "/*", "!/omitted.txt");
       const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.now, ...HUMAN_WEBUI);
 
-      await prepareWorkspaceAtPickup(s.db, replacement, next);
+      const place = await prepareAtPickup(s.db, replacement, next);
 
-      expect(completionTreePaths(replacement, s.db)).toEqual([]);
+      expect(completionTreePaths(place, next.id, s.db)).toEqual([]);
     } finally {
       s.db.close();
     }

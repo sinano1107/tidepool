@@ -51,7 +51,7 @@ import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watc
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import {
   excludeWorkspaceProjectSettings,
-  prepareWorkspaceAtPickup,
+
   projectSettingsHiddenByBoard,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -69,7 +69,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, sessionId, stubHostEnvDecoys, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -324,6 +324,10 @@ async function makeWorker(
     enumerateHostSkills: bundled.enumerateHostSkills,
     ...extraOptions,
   });
+  // scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この unit 盤面では pickup を通さないので、
+  // 開いた event だけを workspace の在り処で先に置く —— 既に開いた checkout がある task(実物の準備を通したもの)はそのまま
+  const registry = extraOptions.registry ?? { dir: registryDir, mode: "purely-local" as const };
+  opensCheckoutAtWorkspace(worker, db, { ...registry, workspace: extraOptions.workspace ?? "tidepool", workspacesDir: extraOptions.workspacesDir });
   /** Register a board task and hand it to the worker, as the scheduler would. */
   const start = (
     id?: string,
@@ -341,6 +345,16 @@ async function makeWorker(
     worker.start(task, sessionId(db, task.id), setting(task), query);
     return task;
   };
+  /** 実物の名前の場所(registry の `tidepool`)で pickup の準備を通し、task の checkout を開いてから hand する —— scheduler と同じ順。 */
+  const startInCheckout = async (id: string, path: string) => {
+    const task = makeTask(id);
+    insertTask(db, task);
+    const place = await prepareAtPickup(db, { name: "tidepool", path }, task);
+    slot.release();
+    slot.occupy(task.id, sessionId(db, task.id));
+    worker.start(task, sessionId(db, task.id), setting(task));
+    return { task, place };
+  };
   const setting = (task: Task) =>
     pickedSetting(
       db,
@@ -349,7 +363,7 @@ async function makeWorker(
       extraOptions.agent,
       extraOptions.auditorName,
     );
-  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, stops, watchdog, enumeration, bundled, ...recorder };
+  return { worker, start, startInCheckout, setting, logDir, db, slot, clock, registryDir, containers, stops, watchdog, enumeration, bundled, ...recorder };
 }
 
 /** `.claude/settings.json` が index から消えた branch `no-settings` を切り、main へ戻る。 */
@@ -2127,6 +2141,7 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.purpose).not.toContain("settings.local.json");
   });
 
+  // 旧: 名前の場所で外し、回収後に写しから戻した(ADR 0293)
   it.each([
     ["hooks(issue #382)", JSON.stringify({ hooks: { PostToolUse: [] }, model: "sonnet" })],
     ["permissions(ADR 0158)", JSON.stringify({ permissions: { allow: ["Bash(*)"] } })],
@@ -2136,25 +2151,28 @@ describe("ClaudeCodeWorker", () => {
     ],
     ["壊れた JSON(ADR 0158)", "{ not json"],
     ["model だけ(ADR 0346 決定2)", JSON.stringify({ model: "sonnet" })],
-  ])("tracked settings.json の %s は spawn 前に実体化から外し、workspace を quarantine しない", async (_case, body) => {
+  ])("tracked settings.json の %s は task の checkout で spawn 前に実体化から外し、workspace を quarantine せず、名前の場所には触れない(ADR 0356 決定2)", async (_case, body) => {
     const ws = await makeWorkspace("tracked-settings");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(join(ws.path, ".claude", "settings.json"), body);
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project settings");
-    const { start, calls, db, emitExit } = await makeWorker({
+    const { startInCheckout, calls, db, emitExit } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
-    start("task-sbx-plain-settings");
+    const { place } = await startInCheckout("task-sbx-plain-settings", ws.path);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]!.cwd).toBe(place.path);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
-    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
-    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(() => readFileSync(join(place.path, ".claude", "settings.json"), "utf8")).toThrow();
+    expect(git(place.path, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(body);
 
+    // 戻すものは無い —— task の checkout は解放で消え、名前の場所は隠されていない
     emitExit(0, null);
-    await vi.waitFor(() =>
-      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(body),
-    );
+    await Promise.resolve();
+    expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(body);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
   it("tracked settings.json を隠せなければ (claude-code, workspace) の組ではなく workspace を quarantine し、spawn しない(ADR 0259 決定1)", async () => {
@@ -2255,62 +2273,23 @@ describe("ClaudeCodeWorker", () => {
     expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("sparse-checkout") }]]);
   });
 
-  it("回収後に隠した settings.json を戻せなければ workspace を quarantine する(#1969)", async () => {
+  // 旧: 回収後に隠した settings.json を戻せなければ workspace を quarantine した(#1969)
+  it("task の checkout で隠した settings.json は回収後に戻さないので、戻しの失敗で workspace を quarantine しない(ADR 0356 決定2)", async () => {
     const ws = await makeWorkspace("tracked-settings-unrestorable-after-reclaim");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
-    const { start, calls, db, emitExit } = await makeWorker({
+    const { startInCheckout, calls, db, emitExit } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
-    start("task-sbx-unrestorable-after-reclaim");
+    const { place } = await startInCheckout("task-sbx-unrestorable-after-reclaim", ws.path);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    await writeFile(join(ws.path, ".git", "index.lock"), "");
+    await writeFile(join(place.path, ".git", "index.lock"), "");
 
     emitExit(0, null);
-    await vi.waitFor(() =>
-      expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("sparse-checkout"),
-    );
-  });
-
-  it("回収後の復元の書き込みも quarantine の書き込みも rollback しても、次の session の回収で復元できる(ADR 0342 決定5)", async () => {
-    const ws = await makeWorkspace("tracked-settings-restore-rollback");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    const body = JSON.stringify({ hooks: { PostToolUse: [] } });
-    await writeFile(join(ws.path, ".claude", "settings.json"), body);
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project hooks");
-    const { start, calls, db, emitExitAt } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-    const settings = () => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8");
-    const hidden = () => projectSettingsHiddenByBoard(db, { ...ws, name: "tidepool" });
-    start("task-restore-rollback-1");
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    db.exec(
-      "CREATE TRIGGER fail_snapshot_drop BEFORE UPDATE OF sparse_snapshot ON workspace_state " +
-        "BEGIN SELECT RAISE(ABORT, 'snapshot drop failed'); END",
-    );
-    const dropQuarantineTrigger = failQuarantineQuestion(db);
-
-    const rejections = await unhandledRejectionsDuring(async () => {
-      emitExitAt(0, 0, null);
-      await vi.waitFor(() => expect(settings()).toBe(body));
-    });
-    expect(rejections).toEqual([expect.objectContaining({ message: "quarantine write failed" })]);
-    expect(hidden()).toBe(true);
-    db.exec("DROP TRIGGER fail_snapshot_drop");
-    dropQuarantineTrigger();
-
-    start("task-restore-rollback-2");
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-    expect(settings).toThrow();
-    emitExitAt(1, 0, null);
-
-    await vi.waitFor(() => expect(settings()).toBe(body));
-    expect(hidden()).toBe(false);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(quarantineQuestion(db, "workspace", "tidepool")).toBeUndefined();
   });
 
   it("人間の cone が .claude を外していれば、S bit が立っていても隠したものと読まず、tree を変えずに spawn する(ADR 0293 決定3)", async () => {
@@ -2371,30 +2350,31 @@ describe("ClaudeCodeWorker", () => {
     expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
-  it("同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さない", async () => {
+  // 旧: 同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さなかった(戻しの数え上げ)
+  it("同じ名前の場所の2つの session はそれぞれの task の checkout で hooks を隠し、どちらの回収も相手の checkout と名前の場所に触れない(ADR 0356 決定2)", async () => {
     const ws = await makeWorkspace("tracked-hooks-overlap");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
     await writeFile(join(ws.path, ".claude", "settings.json"), settings);
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
-    const { start, calls, emitExitAt } = await makeWorker({
+    const { startInCheckout, calls, emitExitAt } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
 
-    start("task-hooks-first");
+    const first = await startInCheckout("task-hooks-first", ws.path);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    start("task-hooks-second");
+    const second = await startInCheckout("task-hooks-second", ws.path);
     await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(second.place.path).not.toBe(first.place.path);
 
     emitExitAt(0, 0, null);
     await Promise.resolve();
-    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+    expect(() => readFileSync(join(second.place.path, ".claude", "settings.json"), "utf8")).toThrow();
 
     emitExitAt(1, 0, null);
-    await vi.waitFor(() =>
-      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(settings),
-    );
+    await Promise.resolve();
+    expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(settings);
   });
 
   it("sparse 後に index から settings.json が消えた branch では隠しを解いて再実体化する", async () => {
@@ -2828,6 +2808,7 @@ describe("ClaudeCodeWorker", () => {
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
       insertTask(db, task);
+      recordCheckoutAtWorkspace(db, task, { dir: registryDir, mode: "purely-local" }, "tidepool");
       worker.start(task, sessionId(db, task.id), pickedSetting(db, { dir: registryDir, mode: "purely-local" }, task));
       await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
       const args = recorder.calls[0]!.args;
@@ -3908,6 +3889,7 @@ describe("ClaudeCodeWorker", () => {
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);
+    recordCheckoutAtWorkspace(db, task, { dir: registryDir, mode: "remote-backed" }, "tidepool");
     worker.start(task, sessionId(db, task.id), pickedSetting(db, { dir: registryDir, mode: "remote-backed" }, task));
     await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
 
@@ -5292,7 +5274,8 @@ You are Kipper, the tidepool board's Kimi work agent.
     // 分かりやすい失敗: どこに何を置けば直るかがメッセージから読める
     expect((thrown as Error).message).toContain(missing);
     expect(calls).toEqual([]);
-    expect(listEvents(db, "task-kimi-no-key")).toEqual([]);
+    // 盤面の準備が開いた task の checkout(fixture)のほかは何も記録されない
+    expect(listEvents(db, "task-kimi-no-key").map((e) => e.kind)).toEqual(["task_checkout_opened"]);
   });
 
   it("空のキーファイルも未配置と同じ失敗になる(中身のない credential で spawn しない)", async () => {
@@ -5511,21 +5494,23 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     const { spawn, processes, emitExit } = recordingSpawn();
     const runtime = new FakeContainerRuntime(spawn);
     const ws = await makeWorkspace("cap-ws");
-    const { start, db, slot } = await makeWorker(
-      {},
+    const named = { name: "tidepool", path: ws.path };
+    const { startInCheckout, db, slot } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n` },
       { containers: new ProcessContainers(runtime) },
-      () => ws,
+      () => named,
     );
-    const task = start("task-capped-ordering");
+    // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット + task の checkout)を
+    // 実物で通してから spawn する —— tree rule はその基準に対して退避する
+    const { task, place } = await startInCheckout("task-capped-ordering", ws.path);
     // ADR 0109 決定4: root の exit を観測した adapter はその場で強制回収を撃つ。ここで
     // 測りたいのは「送達も exit も観測ではない」なので、force では空にならないホスト —
     // 行儀よく exit しない子孫が残っている session — を明示的にスクリプトする。
-    runtime.hold(String(sessionId(db, task.id)));
-    // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
-    // 実物で通す —— tree rule はその基準に対して退避する
-    await prepareWorkspaceAtPickup(db, ws, task);
-    // 途中ターンの WIP: session はタスクブランチの上で作業していた
-    writeFileSync(join(ws.path, "wip.txt"), "half-done work\n");
+    const session = String(sessionId(db, task.id));
+    runtime.hold(session);
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
+    // 途中ターンの WIP: session は task の checkout のタスクブランチの上で作業していた(ADR 0356 決定1)
+    writeFileSync(join(place.path, "wip.txt"), "half-done work\n");
     processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
@@ -5541,14 +5526,15 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(slot.currentTaskId).toBe(task.id);
     expect(getTask(db, task.id)!.status).toBe("in_progress");
 
-    runtime.fireEmpty(String(sessionId(db, task.id)));
+    runtime.fireEmpty(session);
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
     expect(getTask(db, task.id)!.status).toBe("todo");
-    // tree rule が走った: WIP はタスクブランチへ退避され、checkout は保護ブランチへ戻る
+    // tree rule が走った: WIP はタスクブランチへ退避され、task の checkout は消え、名前の場所は保護ブランチのまま(ADR 0356 決定1・2)
     expect(git(ws.path, "status", "--porcelain")).toBe("");
     expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("half-done work");
+    expect(existsSync(place.path)).toBe(false);
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
   });
 

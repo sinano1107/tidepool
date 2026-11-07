@@ -6,6 +6,7 @@ import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -30,7 +31,7 @@ it("未コミットの変更を残したまま work タスクを完了しよう�
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "notes.txt"), "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
@@ -44,11 +45,12 @@ it("未コミットの変更を残したまま work タスクを完了しよう�
   // 拒否ではタスクもツリーも動かない
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
   expect(after.status).toBe("in_progress");
-  expect(git(ws.path, "status", "--porcelain")).toContain("notes.txt");
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "status", "--porcelain")).toContain("notes.txt");
 
   // slot もセッションも生きている: commit して呼び直せばそのまま完了する
-  git(ws.path, "add", "-A");
-  git(ws.path, "commit", "-m", "notes: capture the half-finished work");
+  git(checkoutOf(t.db, task.id), "add", "-A");
+  git(checkoutOf(t.db, task.id), "commit", "-m", "notes: capture the half-finished work");
   const retry: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },
@@ -64,7 +66,7 @@ it("workspace が Quarantine 中でも dirty な work の完了は拒み、commi
   const task = await registerWork(t, "finish while the workspace is quarantined");
   await t.clock.advance(HOUR);
   quarantineWorkspace(t.db, ws.name, new Error("unrelated workspace failure"), t.clock.now());
-  writeFileSync(join(ws.path, "notes.txt"), "the deliverable\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "notes.txt"), "the deliverable\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
 
   const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -73,8 +75,8 @@ it("workspace が Quarantine 中でも dirty な work の完了は拒み、commi
   expect(result.content[0].text).toContain("uncommitted changes");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 
-  git(ws.path, "add", "-A");
-  git(ws.path, "commit", "-m", "notes: record the deliverable");
+  git(checkoutOf(t.db, task.id), "add", "-A");
+  git(checkoutOf(t.db, task.id), "commit", "-m", "notes: record the deliverable");
   const retry: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
 
@@ -91,9 +93,9 @@ it("sandbox の shadow 残骸だけが残っていても完了の門は通る", 
   const task = await registerWork(t, "verify without changing anything");
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, ".zshrc"), "");
-  mkdirSync(join(ws.path, ".claude"), { recursive: true });
-  writeFileSync(join(ws.path, ".claude/agents"), "");
+  writeFileSync(join(checkoutOf(t.db, task.id), ".zshrc"), "");
+  mkdirSync(join(checkoutOf(t.db, task.id), ".claude"), { recursive: true });
+  writeFileSync(join(checkoutOf(t.db, task.id), ".claude/agents"), "");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -121,7 +123,7 @@ it("review タスクの完了は dirty でも拒否されない", async () => {
   ).json;
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, "scratch.txt"), "reviewer leavings\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "scratch.txt"), "reviewer leavings\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({ name: "complete_task", arguments: { handoff: { outcome: "no findings" } } });
   await client.close();
@@ -138,7 +140,7 @@ it("escalate は dirty でも拒否されず、WIP コミットの subject に�
   const task = await registerWork(t, "wire up the sensor");
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "notes.txt"), "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "escalate",
@@ -175,7 +177,7 @@ it("issue参照タスクの WIP コミット subject はプレースホルダを
   t.github.scriptIssue(240, { title: "workerは必ずcommitメッセージを考えてほしい", body: "", comments: [] });
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "notes.txt"), "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({
     name: "escalate",
@@ -197,7 +199,7 @@ it("decompose は dirty でも拒否されず、WIP がタスクブランチへ�
   const task = await registerWork(t, "split the work");
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "notes.txt"), "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "decompose",

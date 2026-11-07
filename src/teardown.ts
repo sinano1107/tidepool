@@ -8,12 +8,14 @@ import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineQuestion } from "./quarantine.js";
 
 import type { Slot } from "./slot.js";
-import { getTask, returnToQueue, type Task } from "./tasks.js";
+import { getTask, interviewRootIdOf, returnToQueue, type Task } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
+  isTaskCheckout,
   onTaskBranch,
   PlaceNotOpenError,
+  type RunPlace,
   releaseWorkspace,
   resolveOrQuarantine,
   taskRunPlace,
@@ -446,21 +448,25 @@ function runPlaceToRelease(
   task: Task,
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
-  if (!step.completion && !step.neverRan) {
-    const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
-    return resolved && taskRunPlace(db, task, resolved);
-  }
-  let place: WorkspaceConfig;
+  let place: RunPlace;
   try {
-    place = taskRunPlace(db, task, resolve(task.workspace));
+    if (!step.completion && !step.neverRan) {
+      const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
+      if (!resolved) return undefined;
+      place = taskRunPlace(db, task, resolved);
+    } else {
+      place = taskRunPlace(db, task, resolve(task.workspace));
+    }
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) return undefined;
     // 開いた event は repo 完成後に書く(ADR 0329)。event 前に途中まで作られた場所にも process・準備・task ブランチは無く、
-    // 触る checkout が無い。記録はあって repo が消えた場所は下の `onTaskBranch` が外す
-    if (step.neverRan && err instanceof PlaceNotOpenError) return undefined;
+    // 触る checkout が無い。この session の task の checkout が開いていなければ worker も走っていない(ADR 0356 決定2)。
+    // 記録はあって repo が消えた面接室・受験者の checkout は下の `onTaskBranch` が外す
+    if (err instanceof PlaceNotOpenError && (step.neverRan || interviewRootIdOf(db, task) === undefined)) return undefined;
     throw err;
   }
-  return !step.neverRan || onTaskBranch(place, task.id) ? place : undefined;
+  // ADR 0356 決定2: task の checkout は開いた event が在り処を持ち、repo が消えていれば解放がそれを読み飛ばす
+  return !step.neverRan || isTaskCheckout(place) || onTaskBranch(place, task.id) ? place : undefined;
 }
 
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は

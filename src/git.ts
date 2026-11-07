@@ -36,10 +36,11 @@ export function gitStatus(cwd: string): string {
   return git(cwd, "status", "--porcelain", "--untracked-files=all");
 }
 
-/** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view. */
-export function withBoardGit<T>(cwd: string, use: (view: (args: string[], overrides?: NodeJS.ProcessEnv) => string, gitDir: string) => T): T {
-  const format = git(cwd, "rev-parse", "--show-object-format");
-  const objects = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "objects");
+/** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view.
+ *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's. */
+export function withBoardGit<T>(cwd: string, use: (view: (args: string[], overrides?: NodeJS.ProcessEnv) => string, gitDir: string) => T, objectsFrom = cwd): T {
+  const format = git(objectsFrom, "rev-parse", "--show-object-format");
+  const objects = git(objectsFrom, "rev-parse", "--path-format=absolute", "--git-path", "objects");
   const dir = mkdtempSync(join(tmpdir(), "tidepool-git-view-"));
   try {
     git(dir, "init", "--bare", "--quiet", "--template=", `--object-format=${format}`);
@@ -72,6 +73,51 @@ export type WorktreeChange = { path: string; status: string };
 
 export const displayWorktreePath = (path: string): string => /[\r\n\t]/.test(path) ? JSON.stringify(path) : path;
 
+/** The view's fresh index holds `head`'s tree, with the board's sparse policy applied on a blank tree; returns the policy's config. */
+function seedViewIndex(view: (args: string[], overrides?: NodeJS.ProcessEnv) => string, dir: string, head: string | undefined, sparse: SparsePolicy | undefined): string[] {
+  if (head !== undefined) {
+    view(["update-ref", "--no-deref", "HEAD", head]);
+    view(["read-tree", head]);
+  }
+  const config = sparseOptions(dir, sparse);
+  if (sparse && head !== undefined) {
+    // ADR 0293 決定3 / ADR 0356 決定3: apply sparse policy on a blank tree instead of trusting the real index's marks.
+    const empty = join(dir, "empty");
+    mkdirSync(empty);
+    view(["-C", empty, "-c", "core.bare=false", ...config, "sparse-checkout", "reapply"], { GIT_WORK_TREE: empty });
+  }
+  return config;
+}
+
+/** ADR 0356 決定3: the worktree's content as a tree in `objectsFrom`'s objects, staged by `add -A` into a fresh index seeded from `head`. */
+export function boardWriteTree(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy, exclude: string[] = []): string {
+  return withBoardGit(cwd, (view, dir) => {
+    const config = seedViewIndex(view, dir, head, sparse);
+    view([...config, "add", "-A", "--", ".", ...exclude.map((path) => `:(exclude,literal)${path}`)]);
+    return view(["write-tree"]).trim();
+  }, objectsFrom);
+}
+
+/** The repo's own status: only the board's env overrides apply (ADR 0356 決定5). For the named place, whose config is the human's or the board's. */
+export function ownWorktreeStatus(cwd: string): WorktreeChange[] {
+  return porcelainChanges(run(cwd, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"]).toString());
+}
+
+function porcelainChanges(output: string): WorktreeChange[] {
+  return output.split("\0").filter(Boolean).map((line) => ({ path: line.slice(3), status: line.slice(0, 2) }));
+}
+
+/** ADR 0356 決定3: a task checkout read only through the board's view — a fresh index from `head`'s tree and `objectsFrom`'s
+ *  objects. Nothing runs in the worker's repo, so its real index and nested repos are not read; a submodule counts by its gitlink. */
+export function boardViewStatus(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy): WorktreeChange[] {
+  return withBoardGit(cwd, (view, dir) => {
+    const config = seedViewIndex(view, dir, head, sparse);
+    return porcelainChanges(view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]));
+  }, objectsFrom);
+}
+
+/** The view over a checkout the board does not own but a worker still runs in (the Interview room, until #3031): it also reads
+ *  the real index for staged content (ADR 0084 決定1) and recurses into populated submodules. */
 export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?: string): WorktreeChange[] {
   const index = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index");
   let head: string | undefined;
@@ -81,17 +127,7 @@ export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?
     if ((err as { status?: number }).status !== 1) throw err;
   }
   return withBoardGit(cwd, (view, dir) => {
-    if (head !== undefined) {
-      view(["update-ref", "--no-deref", "HEAD", head]);
-      view(["read-tree", head]);
-    }
-    const config = sparseOptions(dir, sparse);
-    if (sparse && head !== undefined) {
-      // ADR 0293 決定3 / ADR 0356 決定3: apply sparse policy on a blank tree instead of trusting the real index's marks.
-      const empty = join(dir, "empty");
-      mkdirSync(empty);
-      view(["-C", empty, "-c", "core.bare=false", ...config, "sparse-checkout", "reapply"], { GIT_WORK_TREE: empty });
-    }
+    const config = seedViewIndex(view, dir, head, sparse);
     const worktree = view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]);
     const paths = new Map(worktree.split("\0").filter(Boolean).map((line) => [line.slice(3), line.slice(0, 2)]));
     // ADR 0084 決定1: the real index can hold staged content that is absent from the worktree.

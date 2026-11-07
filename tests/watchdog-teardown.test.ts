@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,16 +18,17 @@ import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeard
 import { queueReturnHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import type { WorkerExitFacts } from "../src/worker.js";
 import {
+  fetchTaskCheckoutTip,
   openInterviewRoom,
-  prepareWorkspaceAtPickup,
   quarantineWorkspace,
+  type RunPlace,
   resolveOrQuarantine,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, sessionId, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, exitToWatchdog, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, POSED_HEAD, poseAccepted, prepareAtPickup, QUIET_EXIT, sessionId, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -46,6 +47,7 @@ interface Fixture {
   slot: Slot;
   task: Task;
   ws: WorkspaceConfig;
+  place: RunPlace;
   runtime: FakeContainerRuntime;
   containers: ProcessContainers;
   worker: ScriptedWorker;
@@ -77,11 +79,13 @@ async function sessionInTeardown(
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   const spawned = appendEvent(db, { taskId: picked.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
   slot.occupy(picked.id, sessionId(db, picked.id));
-  await prepareWorkspaceAtPickup(db, ws, picked);
+  const place = await prepareAtPickup(db, ws, picked);
   // 盤面は pickup 時に session の容器を作る。このホストでは force だけでは空にならない
   containers.open(String(sessionId(db, picked.id)));
   runtime.hold(String(sessionId(db, picked.id)));
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  commitWork(place.path, "deliverable.txt", "the real work\n");
+  // 完了の門は worker の tip を名前の場所へ引いてから done にする(ADR 0356 決定3)
+  if (route === "complete") fetchTaskCheckoutTip(db, place, picked.id);
 
   const task =
     route === "complete"
@@ -115,7 +119,7 @@ async function sessionInTeardown(
     containers.forceReclaim(String(sessionId(db, task.id)));
   }
   if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 }, { sessionId: sessionId(db, task.id), workerSpawnedEventId: spawned, turnRan: true, writes: [], classification: { capInterrupted: false } });
-  return { db, clock, slot, task, ws, runtime, containers, worker, watchdog, triggered, spawned };
+  return { db, clock, slot, task, ws, place, runtime, containers, worker, watchdog, triggered, spawned };
 }
 
 /** 後始末の backstop を超え、回収も観測できないまま梯子の底まで落とす。 */
@@ -460,7 +464,7 @@ async function stoppedBeforeSpawn(taskWorkspace?: string) {
   const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand", workspace: ws.name })!;
   slot.occupy(task.id, sessionId(db, task.id));
   containers.open(String(sessionId(db, task.id)));
-  if (!taskWorkspace) await prepareWorkspaceAtPickup(db, ws, task);
+  const place = taskWorkspace ? undefined : await prepareAtPickup(db, ws, task);
   moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), null, clock.now(), ...HUMAN_WEBUI);
   const triggered: string[] = [];
   const resolve = (name: string | null) => {
@@ -468,12 +472,13 @@ async function stoppedBeforeSpawn(taskWorkspace?: string) {
     return ws;
   };
   const handler = queueReturnHandler({ db, clock, slot, resolve, pollNow: () => triggered.push("pollNow") }, containers);
-  return { db, clock, ws, slot, runtime, containers, task, triggered, resolve, handler };
+  return { db, clock, ws, place, slot, runtime, containers, task, triggered, resolve, handler };
 }
 
 it("worker を起動する前に資源の Quarantine が止めた pickup は、failure question も spawn_failed も無く位置を変えずに todo へ戻り、後始末が休止位置へ戻して枠と容器を空ける(ADR 0274 / ADR 0333 決定1)", async () => {
   const f = await stoppedBeforeSpawn();
-  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
+  // ADR 0356 決定1・2: 準備は名前の場所の HEAD を動かさず task の checkout を開く(旧: 名前の場所の HEAD がタスクブランチに乗った)
+  expect(existsSync(join(f.place!.path, ".git"))).toBe(true);
   const stop = { quarantine: "workspaceContainment", value: "codex/sandbox", reason: "Codex still reports these skills enabled" } as const;
   registerQuarantine(f.db, stop.quarantine, stop.value, stop.reason, f.clock.now());
 
@@ -491,6 +496,8 @@ it("worker を起動する前に資源の Quarantine が止めた pickup は、f
   expect(listEvents(f.db, f.task.id).filter((e) => e.kind === "pickup_stopped").map((e) => e.payload)).toEqual([{ kind: "pickup_stopped", ...stop }]);
   expect(questions(f.db).map((q) => q.id)).toEqual([openQuarantineQuestion(f.db, "workspaceContainment", "codex/sandbox")!.id]);
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(f.place!.path)).toBe(false);
+  expect(existsSync(f.place!.path)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
   expect(markedSession(f.db)).toBeUndefined();
   expect(f.runtime.forceReclaims).toEqual([String(sessionId(f.db, f.task.id))]);
@@ -513,7 +520,7 @@ async function stoppedBeforeCheckout(prior: boolean) {
   if (prior) {
     const earlier = pickupTask(db, registerTask(db, { type: "work", title: "earlier", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now())!;
     slot.occupy(earlier.id, sessionId(db, earlier.id));
-    await prepareWorkspaceAtPickup(db, ws, earlier);
+    await prepareAtPickup(db, ws, earlier);
     escalateTask(db, earlier, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", clock.now(), "worker");
     markTeardown(db, earlier.id, clock.now());
     slot.enterTeardown();
@@ -524,7 +531,7 @@ async function stoppedBeforeCheckout(prior: boolean) {
   const task = pickupTask(db, registerTask(db, { type: "work", title: "stopped", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now(), { assignee: "deckhand", workspace: ws.name })!;
   slot.occupy(task.id, sessionId(db, task.id));
   containers.open(String(sessionId(db, task.id)));
-  const failure = await prepareWorkspaceAtPickup(db, { ...ws, repo: "https://github.com/acme/elsewhere.git" }, task).then(() => undefined, (err: unknown) => err);
+  const failure = await prepareAtPickup(db, { ...ws, repo: "https://github.com/acme/elsewhere.git" }, task).then(() => undefined, (err: unknown) => err);
   expect(failure).toBeInstanceOf(Error);
   const stop = quarantineWorkspace(db, ws.name, failure, clock.now());
   const handler = queueReturnHandler(deps, containers);
@@ -739,9 +746,10 @@ it.each([
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
-it("準備が task ブランチへ checkout した後で spawn が落ちた pickup の後始末は、今日どおり退避して休止位置へ戻す(ADR 0274 決定3 / ADR 0052 決定7)", async () => {
+it("準備が task の checkout を開いた後で spawn が落ちた pickup の後始末は、今日どおり退避して task の checkout を消し、名前の場所は休止位置に居る(ADR 0274 決定3 / ADR 0052 決定7 / ADR 0356 決定2)", async () => {
   const f = await stoppedBeforeSpawn();
-  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
+  // ADR 0356 決定1・2: 準備は task の checkout を開く(旧: 名前の場所の HEAD がタスクブランチに乗った)
+  expect(existsSync(join(f.place!.path, ".git"))).toBe(true);
   const failure = { error_code: "ENOENT", message: "spawn claude ENOENT" };
   // 観測点が event を書いてから盤面の一撃を呼ぶ(scheduler / adapter と同じ順)
   appendEvent(f.db, { taskId: f.task.id, actorId: "deckhand", origin: "board", payload: { kind: "spawn_failed", ...failure }, at: f.clock.now() });
@@ -750,12 +758,15 @@ it("準備が task ブランチへ checkout した後で spawn が落ちた pick
   await settle();
 
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(f.place!.path)).toBe(false);
   expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
-it("1度目の pickup で止まり、2度目の pickup で走ってエスカレーションした session は、走った session として退避を通る —— 自分のブランチを離れていれば拒否して Quarantine に落ちる(ADR 0274 決定3 の「最後の pickup」)", async () => {
+// 旧: 自分のブランチを離れて名前の場所の main に成果を残した worker は commit を拒まれ Quarantine に落ちた(#234 ケース1)。worker は
+// task の checkout で走り、盤面が読むのはタスクブランチ1本なので、離れた位置で残したものもその上の WIP に載る
+it("1度目の pickup で止まり、2度目の pickup で走ってエスカレーションした session は、走った session として退避を通る —— task の checkout で自分のブランチを離れていても、盤面はタスクブランチ1本を読んで WIP に載せる(ADR 0274 決定3 の「最後の pickup」/ ADR 0356 決定4)", async () => {
   const f = await stoppedBeforeSpawn("sandbox");
   registerQuarantine(f.db, "agent", "deckhand", "unknown agent", f.clock.now());
   f.handler(f.task.id, sessionId(f.db, f.task.id), { kind: "pickup_stopped", quarantine: "agent", value: "deckhand", reason: "unknown agent" });
@@ -765,10 +776,10 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
   const picked = pickupTask(f.db, getTask(f.db, f.task.id)!, "deckhand", f.clock.now())!;
   f.slot.occupy(picked.id, sessionId(f.db, picked.id));
   f.containers.open(String(sessionId(f.db, picked.id)));
-  await prepareWorkspaceAtPickup(f.db, f.ws, picked);
-  // 走った worker が自分のブランチを離れ、成果を main の上に残した
-  git(f.ws.path, "checkout", "main");
-  await writeFile(`${f.ws.path}/wip.txt`, "work left on main\n");
+  const place = await prepareAtPickup(f.db, f.ws, picked);
+  // 走った worker が task の checkout で自分のブランチを離れ、成果を別の位置に残した
+  git(place.path, "checkout", "--quiet", "-b", "elsewhere");
+  await writeFile(`${place.path}/wip.txt`, "work left elsewhere\n");
   escalateTask(f.db, picked, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", f.clock.now(), "worker");
   markTeardown(f.db, picked.id, f.clock.now());
   f.slot.enterTeardown();
@@ -776,8 +787,10 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
 
   await runTeardown({ db: f.db, clock: f.clock, slot: f.slot, resolve: f.resolve, pollNow: () => {} }, picked.id, teardownStep(f.db, picked.id));
 
-  expect(getTask(f.db, openQuarantineQuestion(f.db, "workspace", f.ws.name)!.id)?.purpose).toContain(`is on 'main', not 'task/${picked.id}' — refusing to commit`);
-  expect(git(f.ws.path, "status", "--porcelain")).toContain("wip.txt");
+  expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
+  expect(git(f.ws.path, "show", `task/${picked.id}:wip.txt`)).toBe("work left elsewhere");
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(place.path)).toBe(false);
 });
 
 it.each([
@@ -805,7 +818,7 @@ it.each([
   const f = await stoppedBeforeSpawn();
   const spawnedId = appendEvent(f.db, { taskId: f.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: f.clock.now() });
   appendEvent(f.db, { taskId: f.task.id, actorId: "deckhand", origin: "board", payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null }, at: f.clock.now() });
-  await writeFile(`${f.ws.path}/wip.txt`, "left by the session\n");
+  await writeFile(`${f.place!.path}/wip.txt`, "left by the session\n");
   const stop = { quarantine: "providerAuth", value: "anthropic", reason: "401" } as const;
   registerQuarantine(f.db, stop.quarantine, stop.value, stop.reason, f.clock.now());
   const question = openQuarantineQuestion(f.db, "providerAuth", "anthropic")!;
@@ -889,7 +902,7 @@ it("cap teardown reaches containment in one reclaim timeout without running the 
 it("cap reclaim arriving after containment waits for acceptance before stashing WIP and returning the task to todo (ADR 0333 決定1)", async () => {
   const f = await sessionInTeardown("cap");
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
-  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await writeFile(`${f.place.path}/wip.txt`, "unfinished work\n");
   await f.clock.advance(5 * MIN);
   expect(f.watchdog.pendingReclaim()).toBe(`the container for task ${f.task.id}`);
   f.watchdog.acceptReclaimed();
@@ -898,7 +911,7 @@ it("cap reclaim arriving after containment waits for acceptance before stashing 
   await settle();
   expect(f.slot.currentTaskId).toBe(f.task.id);
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(git(f.ws.path, "status", "--porcelain")).toContain("wip.txt");
+  expect(git(f.place.path, "status", "--porcelain")).toContain("wip.txt");
 
   f.watchdog.acceptReclaimed();
   await settle();
@@ -912,7 +925,7 @@ it("cap reclaim arriving after containment waits for acceptance before stashing 
 
 it("acceptance of an escalated session stashes WIP without completion inspection or merge-back", async () => {
   const f = await sessionInTeardown("escalate");
-  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await writeFile(`${f.place.path}/wip.txt`, "unfinished work\n");
   await fallToTheBottom(f);
   f.runtime.fireEmpty(String(sessionId(f.db, f.task.id)));
   await settle();
@@ -996,7 +1009,7 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   await runTeardown(teardownDeps, f.task.id, { completion: true, workspace: f.ws });
 
   // 確認 question は開いたまま。workspace も slot も動かない
-  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
+  expect(existsSync(join(f.place.path, ".git"))).toBe(true);
   expect(f.slot.currentTaskId).toBe(f.task.id);
   expect(f.triggered).toEqual([]);
   expect(boardHalts(f.db)).toEqual([{ kind: "containment" }]);
@@ -1005,6 +1018,7 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   f.watchdog.acceptReclaimed();
   await settle();
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(f.place.path)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
   expect(f.triggered).toEqual(["pollNow"]);
 });
@@ -1019,7 +1033,7 @@ it("Harness Containment の受理の経路は、この run で待っている回
   await settle();
 
   expect(f.watchdog.heldForContainment(f.task.id)).toBe(true);
-  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
+  expect(existsSync(join(f.place.path, ".git"))).toBe(true);
   expect(f.slot.currentTaskId).toBe(f.task.id);
   expect(f.triggered).toEqual([]);
 
@@ -1027,19 +1041,20 @@ it("Harness Containment の受理の経路は、この run で待っている回
   f.watchdog.acceptReclaimed();
   await settle();
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(f.place.path)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
 });
 
 it("報告なき exit が梯子の底に落ちた後で届いた回収済み観測は解放しない —— 確認回答で tree rule が走る(issue #1380)", async () => {
   const f = await sessionInTeardown("exit");
-  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await writeFile(`${f.place.path}/wip.txt`, "unfinished work\n");
   await fallToTheBottom(f);
 
   // 遅れて容器の空が観測される。報告なき exit の `void reclaimed.then(...)` が後始末を撃つ
   f.runtime.fireEmpty(String(sessionId(f.db, f.task.id)));
   await settle();
   expect(f.slot.currentTaskId).toBe(f.task.id);
-  expect(git(f.ws.path, "status", "--porcelain")).toContain("wip.txt");
+  expect(git(f.place.path, "status", "--porcelain")).toContain("wip.txt");
   expect(boardHalts(f.db)).toEqual([{ kind: "containment" }]);
 
   f.watchdog.acceptReclaimed();
@@ -1149,7 +1164,7 @@ function restart(f: Fixture): { slot: Slot; watchdog: Watchdog; triggered: strin
 
 it("再起動後の確認回答が、回収 timeout に落ちた watchdog の session の後始末を走らせる —— WIP はタスクブランチへ退避され、枠が空く(issue #648)", async () => {
   const f = await sessionInTeardown("watchdog");
-  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await writeFile(`${f.place.path}/wip.txt`, "unfinished work\n");
   await reclaimTimesOut(f);
   const restarted = restart(f);
 

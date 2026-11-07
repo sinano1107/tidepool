@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
@@ -7,6 +9,7 @@ import { FakeContainerRuntime } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
@@ -49,7 +52,8 @@ it.each([false, true])("restart recovers cap teardown without a failure question
   const task = await registerWork(t, "interrupted by cap");
   await registerWork(t, "next");
   await t.clock.advance(HOUR);
-  await writeFile(`${ws.path}/wip.txt`, "unfinished work\n");
+  const checkout = checkoutOf(t.db, task.id);
+  await writeFile(join(checkout, "wip.txt"), "unfinished work\n");
   // Setup the durable state at the instant the adapter observed a 429 exit.
   markTeardown(t.db, task.id, t.clock.now());
   // 上限到達による中断の経路: 行は `in_progress` のまま残る(ADR 0113 決定2)
@@ -62,7 +66,7 @@ it.each([false, true])("restart recovers cap teardown without a failure question
     expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
     expect((await questions(t)).some((q: any) => q.title.includes("interrupted task"))).toBe(false);
     expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
-    expect(git(ws.path, "status", "--porcelain")).toContain("wip.txt");
+    expect(git(checkout, "status", "--porcelain")).toContain("wip.txt");
     await t.stopServer();
   }
 
@@ -171,7 +175,9 @@ it("最終 verb の着地後、同じ session の呼び出しは読取も含め�
   // slot も workspace も動かない
   await t.clock.advance(HOUR);
   expect(started()).toEqual([task.id]);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // ADR 0356 決定2: 後始末が走っていない = task の checkout が残る(旧: 名前の場所の HEAD がタスクブランチに居た)
+  const held = checkoutOf(t.db, task.id);
+  expect(existsSync(join(held, ".git"))).toBe(true);
 });
 
 it("解放系 verb 3つの返り値に終了の指示が入る", async () => {
@@ -228,10 +234,12 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  commitWork(checkoutOf(t.db, task.id), "deliverable.txt", "the real work\n");
   t.containers.hold(task.id);
   await completeViaMcp(t, task.id);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // ADR 0356 決定2: 後始末が走っていない = task の checkout が残る(旧: 名前の場所の HEAD がタスクブランチに居た)
+  const checkout = checkoutOf(t.db, task.id);
+  expect(existsSync(join(checkout, ".git"))).toBe(true);
 
   // in-memory の callback は盤面の crash を越えない。起動完了の poll(ADR 0119 決定4)が
   // 空いた checkout を動かす前の休止位置を見るため、pickup を止めておく(Pause は再起動を跨ぐ)
@@ -240,7 +248,8 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
   t = await bootTidepool({ dir: t.dir, workspace: ws });
   await settle();
 
-  // tree rule / merge-back / 休止位置 / slot 解放が完走している
+  // tree rule / merge-back / 休止位置 / slot 解放が完走し、task の checkout は消えている
+  expect(existsSync(checkout)).toBe(false);
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(ws.path, "show", `task/${task.id}:deliverable.txt`)).toBe("the real work");
   // Pause の解除で、空いた枠に統合点レビューが入る
@@ -261,7 +270,7 @@ it("前提検査が通らなければ後始末は走らず、pickup は止まっ
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  commitWork(checkoutOf(t.db, task.id), "deliverable.txt", "the real work\n");
   t.containers.hold(task.id);
   await completeViaMcp(t, task.id);
   await t.stopServer();
@@ -272,7 +281,9 @@ it("前提検査が通らなければ後始末は走らず、pickup は止まっ
   await settle();
 
   // 証明の前に進めば、生き残った process の居る workspace を盤面が書く
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // ADR 0356 決定2: 後始末が走っていない = task の checkout が残る(旧: 名前の場所の HEAD がタスクブランチに居た)
+  const held = checkoutOf(t.db, task.id);
+  expect(existsSync(join(held, ".git"))).toBe(true);
   await registerWork(t, "two");
   await t.clock.advance(HOUR);
   expect(started()).toEqual([]);
@@ -283,7 +294,7 @@ it("落ちた後始末の question を残したまま再起動しても、起動
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  commitWork(checkoutOf(t.db, task.id), "deliverable.txt", "the real work\n");
   t.containers.hold(task.id);
   await completeViaMcp(t, task.id);
   // 盤面自身のコードが投げた瞬間の durable な状態(ADR 0112)。門は行に持つので再起動を越える
@@ -295,7 +306,9 @@ it("落ちた後始末の question を残したまま再起動しても、起動
   await t.clock.advance(HOUR);
 
   // 撃ち直していない —— 撃てば同じ所で落ちて無言に戻る
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // ADR 0356 決定2: 後始末が走っていない = task の checkout が残る(旧: 名前の場所の HEAD がタスクブランチに居た)
+  const held = checkoutOf(t.db, task.id);
+  expect(existsSync(join(held, ".git"))).toBe(true);
   const raised = (await questions(t)).map((q: any) => q.title);
   expect(raised).toContain(FAILED_TEARDOWN_QUESTION_TITLE);
   expect(raised.some((title: string) => title.includes("containment"))).toBe(false);

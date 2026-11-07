@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import type { BoardCall } from "../src/board-call.js";
@@ -14,6 +15,7 @@ import type { WorkerFactory } from "../src/server.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { liveSession, markTeardown, sessionInTeardown } from "../src/teardown.js";
 import { recordHumanStop } from "../src/watchdog.js";
+
 import type { WorkspaceConfig } from "../src/workspace.js";
 import {
   answerSkillsList,
@@ -30,11 +32,13 @@ import {
 import {
   api,
   bootTidepool,
+  checkoutOf,
   git,
   HOUR,
   HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
+  opensCheckoutAtWorkspace,
   questions,
   queueWork,
   sessionId,
@@ -149,9 +153,12 @@ function holdNth(nth = 1) {
   return { release, fail, calls: () => calls, wait: () => (++calls === nth ? held : Promise.resolve()) };
 }
 
+type CheckoutAt = { dir: string; workspace: string; workspacesDir?: string };
+
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
   provider: Provider,
+  at: CheckoutAt,
   board: { workspace?: WorkspaceConfig; dir?: string } = {},
 ) {
   const proc = recordingSpawn();
@@ -162,7 +169,7 @@ async function bootWithAdapter(
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
-    workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
+    workerAdapter: (deps) => withHealthyUsage(opensCheckoutAtWorkspace(build(deps), deps.db, at), deps.clock),
   });
   return proc;
 }
@@ -194,6 +201,7 @@ async function bootClaudeHeldInEnumeration(workspace?: WorkspaceConfig) {
           enumerateHostSkills: async () => ({ skills: ["code-review"], agents: [] }),
         }),
       "anthropic",
+      { dir: registryDir, workspace: "tidepool" },
       { workspace, dir },
     );
   const proc = await boot();
@@ -241,6 +249,7 @@ async function bootCodexHeldAt(holdAt: 1 | 2) {
         boardCall,
       }),
     "openai",
+    { dir: registryDir, workspace: "work", workspacesDir: tmpdir() },
   );
   return { proc, release: hold.release, boardCalls: hold.calls };
 }
@@ -313,14 +322,17 @@ class HeldTranslationClient extends FakeTranslationClient {
   }
 }
 
-it("scheduler の pickup の窓(注入 query の翻訳)に届いた停止の後、worker は start されず、窓の継続は何も書かない —— task ブランチに乗った checkout は今日どおり退避して休止位置へ戻る", async () => {
+// 旧: 名前の場所の HEAD がタスクブランチに乗った checkout を退避して休止位置へ戻した
+it("scheduler の pickup の窓(注入 query の翻訳)に届いた停止の後、worker は start されず、窓の継続は何も書かない —— 開いた task の checkout は今日どおり退避して消え、名前の場所は休止位置に居る(ADR 0356 決定1・2)", async () => {
   const workspace = await makeWorkspace("sandbox");
   const translationClient = new HeldTranslationClient();
   t = await bootTidepool({ workspace, resolveWorkspace: () => workspace, translationClient, watchdog: WATCHDOG });
   const title = "潮汐グラフのずれを直す";
   const task = queueWork(t, title);
   await t.clock.advance(HOUR);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 
   expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "wrong direction" })).status).toBe(200);
   await t.clock.advance(WATCHDOG.grace);
@@ -331,6 +343,7 @@ it("scheduler の pickup の窓(注入 query の翻訳)に届いた停止の後�
   expect(t.worker.started).toEqual([]);
   await expectNothingWrittenByTheWindow(task.id, title);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(checkout)).toBe(false);
   expect(await teardown()).toBeUndefined();
 });
 
@@ -412,7 +425,10 @@ it("Claude の列挙の窓で止めた session の後始末が再起動で途切
   const task = queueWork(t, "stopped then restarted");
   await t.clock.advance(HOUR);
   await settle();
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // 旧: 名前の場所の HEAD がタスクブランチに乗っていた —— ADR 0356 決定1 の後は task の checkout が乗る
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "wrong direction" })).status).toBe(200);
   release();
   await settle();
@@ -426,6 +442,7 @@ it("Claude の列挙の窓で止めた session の後始末が再起動で途切
   expect((await events(task.id)).map((e) => e.kind)).not.toContain("worker_exited");
   await expectNothingWrittenByTheWindow(task.id, task.title);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(checkout)).toBe(false);
   expect(await status(task.id)).toBe("blocked");
   expect(await teardown()).toBeUndefined();
 });

@@ -40,12 +40,14 @@ import type { ContainerRuntime, ProcessContainers } from "../src/process-contain
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
-import type {
-  AuthorityProfile,
-  RegistryCandidates,
-  RegistryReachabilityCheck,
-  RegistrySource,
-  RosterAgent,
+import {
+  type AuthorityProfile,
+  loadRegistry,
+  type RegistryCandidates,
+  type RegistryMode,
+  type RegistryReachabilityCheck,
+  type RegistrySource,
+  type RosterAgent,
 } from "../src/registry.js";
 import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
 import { completeRoutingReview, judgmentKey, type RegistryAgent, type RoutingObject } from "../src/routing-review.js";
@@ -61,6 +63,7 @@ import {
   decomposeTask,
   getTask,
   humanDecomposeTask,
+  interviewRootIdOf,
   isRca,
   listBoard,
   listChildren,
@@ -74,6 +77,7 @@ import {
   registerTask,
   type Task,
   type TaskType,
+  taskCheckoutPath,
   taskVerbSwap,
 } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
@@ -81,9 +85,18 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { startWatchdog, type WatchdogConfig } from "../src/watchdog.js";
-import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
+import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
-import { openInterviewRoom, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import {
+  openInterviewRoom,
+  prepareWorkspaceAtPickup,
+  type RunPlace,
+  resolveExecutionWorkspace,
+  resolveWorkspacesBaseDir,
+  taskRunPlace,
+  UnknownWorkspaceError,
+  type WorkspaceConfig,
+} from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
   FakeAttributionClient,
@@ -755,6 +768,74 @@ export async function initWorkspaceCheckout(path: string, name: string): Promise
   return { name, path };
 }
 
+/** pickup の準備(ADR 0356 決定2): 名前の場所を準備し、work / review なら task の checkout を開いて走る場所を返す —— worker の
+ *  書き込みは返った `path` に、解放は返った場所に当てる。この session の pickup の event が無ければ(未 pickup、または前の
+ *  session の checkout が既に開いている再開)1つ刻む —— 番地の鍵は pickup の event id。基点は呼び手ごとの使い捨て dir。 */
+export async function prepareAtPickup(
+  db: Db,
+  workspace: WorkspaceConfig,
+  task: Task,
+  board: Partial<Parameters<typeof prepareWorkspaceAtPickup>[3]> = {},
+): Promise<RunPlace> {
+  const checkout = interviewRootIdOf(db, task) === undefined;
+  const now = board.now ?? new Date("2026-11-07T00:00:00.000Z");
+  if (checkout && (!latestEventOfTask(db, task.id, "task_picked_up") || taskCheckoutPath(db, task.id) !== undefined)) {
+    appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: { kind: "task_picked_up" }, at: now });
+  }
+  const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
+  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now });
+  return checkout && taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, workspace) : { ...workspace, reads: [] };
+}
+
+/** その task のこの session の task の checkout(ADR 0356 決定1)—— 盤面の pickup の後に worker が書く在り処。 */
+export function checkoutOf(db: Db, taskId: string): string {
+  const path = taskCheckoutPath(db, taskId);
+  if (path === undefined) throw new Error(`task ${taskId} has no open task checkout`);
+  return path;
+}
+
+/** adapter の unit 盤面: scheduler の準備が開く task の checkout(ADR 0356 決定2)の代わりに、task の workspace の在り処を
+ *  そのまま開いた event に記録する —— adapter は cwd をこの event から引く。解決できない名前・読めない registry・Interview の
+ *  場所には何もしない(adapter 自身の扱いを測るテストのため)。 */
+export function recordCheckoutAtWorkspace(
+  db: Db,
+  task: Task,
+  registry: { dir: string; mode: RegistryMode },
+  defaultWorkspace: string,
+  workspacesDir?: string,
+): void {
+  if (interviewRootIdOf(db, task) !== undefined) return;
+  let path: string;
+  try {
+    path = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), defaultWorkspace, task.workspace, resolveWorkspacesBaseDir(workspacesDir)).path;
+  } catch {
+    return;
+  }
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+}
+
+/** adapter の `start` を包み、まだ task の checkout が開いていない task には先に `recordCheckoutAtWorkspace` を撃つ —— workspace を
+ *  追跡しない盤面・pickup を通さない unit 盤面の代わりの準備。実物の準備が開いた checkout はそのまま使われる。 */
+export function opensCheckoutAtWorkspace<A extends WorkerAdapter>(
+  adapter: A,
+  db: Db,
+  at: { dir: string; mode?: RegistryMode; workspace: string; workspacesDir?: string },
+): A {
+  const start = adapter.start.bind(adapter);
+  adapter.start = (task, ...rest) => {
+    if (taskCheckoutPath(db, task.id) === undefined) recordCheckoutAtWorkspace(db, task, { dir: at.dir, mode: at.mode ?? "purely-local" }, at.workspace, at.workspacesDir);
+    return start(task, ...rest);
+  };
+  return adapter;
+}
+
+/** 使い捨ての dir の同期版 —— 同期の fixture(scheduler の組み立てなど)が task の checkout の基点に渡す。test の終わりに消える。 */
+export function tempDirSync(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 /** A fresh temp git checkout named `name`, one commit deep. The dir is a
  *  `tempDir`, so it is removed when the calling test finishes. */
 export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
@@ -1030,11 +1111,11 @@ export function openTestExamineeCheckout(db: Db, examinee: Task): string {
   return path;
 }
 
-/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。 */
-export function failGitCommits(): void {
+/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。task の checkout の WIP は `commit-tree` で積む(決定3)。 */
+export function failGitCommits(verb: "commit" | "commit-tree" = "commit"): void {
   const dir = mkdtempSync(join(tmpdir(), "tidepool-git-commit-failure-"));
   const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = commit ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = ${verb} ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
   vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
   onTestFinished(() => {
     vi.unstubAllEnvs();

@@ -3,6 +3,7 @@ import { registerTask } from "../src/tasks.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -49,7 +50,7 @@ async function completeIssueBackedTask(handoff: Record<string, string> = fullHan
   });
 
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "issue-fix.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "issue-fix.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const { tools } = await client.listTools();
@@ -117,7 +118,7 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
   );
 
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "notes.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "notes.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({

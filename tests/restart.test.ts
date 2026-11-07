@@ -12,13 +12,24 @@ import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { completeTask, getTask, listBoard } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
+import { fetchTaskCheckoutTip, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, sessionId, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, checkoutOf, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, sessionId, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+/** worker が task の checkout に成果を commit し、完了の門(tip を名前の場所へ引く、ADR 0356 決定3)を経て done にした形。checkout を返す。 */
+function gateCompleted(ws: WorkspaceConfig, taskId: string): string {
+  const task = getTask(t.db, taskId)!;
+  const place = taskRunPlace(t.db, task, ws);
+  commitWork(place.path, "deliverable.txt", "the real work\n");
+  fetchTaskCheckoutTip(t.db, place, taskId);
+  completeTask(t.db, task, FULL_HANDOFF, "deckhand", t.clock.now(), "worker");
+  return place.path;
+}
 
 it("a restart drops the interrupted task into the same failure-escalation path as a watchdog kill, freeing the slot", async () => {
   t = await bootTidepool();
@@ -76,20 +87,21 @@ async function interruptedThenBootWithFailedPreflight(harnessContainment?: () =>
   const task = queueWork(t, "interrupted by restart");
   await t.clock.advance(HOUR);
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
-  writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
+  const checkout = checkoutOf(t.db, task.id);
+  writeFileSync(join(checkout, "wip.txt"), "unfinished work\n");
   await t.stopServer();
   beforeReboot?.(task.id);
 
   const runtime = new FakeContainerRuntime();
   runtime.scriptPreflight("previous session may still be alive");
   t = await bootTidepool({ dir: t.dir, workspace: ws, containerRuntime: runtime, watchdog, harnessContainment });
-  return { ws, task, runtime };
+  return { ws, task, runtime, checkout };
 }
 
 it("前提検査が落ちた起動では、再起動中断の workspace を書かずに failure question を立てて後始末へ入れる(issue #1936)", async () => {
-  const { ws, task } = await interruptedThenBootWithFailedPreflight();
+  const { ws, task, checkout } = await interruptedThenBootWithFailedPreflight();
 
-  expect(git(ws.path, "status", "--porcelain")).toContain("wip.txt");
+  expect(git(checkout, "status", "--porcelain")).toContain("wip.txt");
   expect(git(ws.path, "log", "--format=%s", `task/${task.id}`)).not.toContain("WIP");
   expect((await questions(t)).map((q) => q.title)).toContain(`restart interrupted task: ${task.title}`);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id, settlement: "released" });
@@ -154,7 +166,7 @@ it("後始末の step が盤面のバグで投げたまま再起動すると、�
   const task = queueWork(t, "throws while deciding");
   await t.clock.advance(HOUR);
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
-  writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "wip.txt"), "unfinished work\n");
   vi.spyOn(console, "error").mockImplementation(() => {});
   const repair = failTeardownMark(t.db);
   t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: 1 });
@@ -182,8 +194,7 @@ it("前提検査が通らない間、Containment と落ちた後始末の回答�
   const task = queueWork(t, "failed teardown across restart");
   await t.clock.advance(HOUR);
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
-  completeTask(t.db, getTask(t.db, task.id)!, FULL_HANDOFF, "deckhand", t.clock.now(), "worker");
+  const checkout = gateCompleted(ws, task.id);
   markTeardown(t.db, task.id, t.clock.now());
   quarantineFailedTeardown(t.db, task.id, new Error("tree rule bug"), t.clock.now());
   quarantineContainment(t.db, "previous session may still be alive", t.clock.now());
@@ -202,7 +213,8 @@ it("前提検査が通らない間、Containment と落ちた後始末の回答�
 
     expect(refused.status).toBe(409);
     expect(JSON.stringify(refused.json)).toContain("previous session may still be alive");
-    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+    // ADR 0356 決定2: 後始末が走っていない = task の checkout が残っている(旧: 名前の場所の HEAD がタスクブランチに居た)
+    expect(existsSync(join(checkout, ".git"))).toBe(true);
     expect(git(ws.path, "status", "--porcelain")).toBe("");
     expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toEqual(before);
     expect((await servedQuarantineQuestion(t, "failedTeardown", task.id)).id).toBe(failed.id);
@@ -212,6 +224,7 @@ it("前提検査が通らない間、Containment と落ちた後始末の回答�
   runtime.scriptPreflight();
   expect((await answer(failed.id)).status).toBe(200);
 
+  expect(existsSync(checkout)).toBe(false);
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
   expect((await api(t.baseUrl, "GET", `/api/tasks/${failed.id}`)).json.status).toBe("done");
@@ -339,8 +352,7 @@ it("前提検査が通らない間、閉じ切らなかった session の回答�
   await t.clock.advance(HOUR);
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
   const spawned = appendEvent(t.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: t.clock.now() });
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
-  completeTask(t.db, getTask(t.db, task.id)!, FULL_HANDOFF, "deckhand", t.clock.now(), "worker");
+  const checkout = gateCompleted(ws, task.id);
   markTeardown(t.db, task.id, t.clock.now());
   quarantineUnclosedSession(t.db, spawned, task.id, new Error("exit write bug"), t.clock.now());
   await t.stopServer();
@@ -359,7 +371,8 @@ it("前提検査が通らない間、閉じ切らなかった session の回答�
   expect(JSON.stringify(refused.json)).toContain("the previous session may still be alive");
   expect(exitsOf(spawned)).toEqual([]);
   expect(existsSync(temp)).toBe(true);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // ADR 0356 決定2: 後始末が走っていない = task の checkout が残っている(旧: 名前の場所の HEAD がタスクブランチに居た)
+  expect(existsSync(join(checkout, ".git"))).toBe(true);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id });
   expect((await servedQuarantineQuestion(t, "unclosedSession", String(spawned))).id).toBe(question.id);
 
@@ -368,6 +381,7 @@ it("前提検査が通らない間、閉じ切らなかった session の回答�
 
   expect(exitsOf(spawned).map((e) => e.payload)).toEqual([expect.objectContaining({ exit_observed: false })]);
   expect(existsSync(temp)).toBe(false);
-  await vi.waitFor(() => expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main"));
+  await vi.waitFor(() => expect(existsSync(checkout)).toBe(false));
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
 }, GIT_FIXTURE_TEST_TIMEOUT);

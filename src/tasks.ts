@@ -581,6 +581,14 @@ export function examineeCheckoutPath(db: Db, examineeId: string): string | undef
   return latestEventOfTask(db, examineeId, "examinee_checkout_opened")?.payload.path;
 }
 
+/** この session の task の checkout の在り処(ADR 0356 決定2): 後の pickup に越されていない開いた event から引く —— 前の session が
+ *  残した checkout は再利用しない。まだ開いていなければ undefined。 */
+export function taskCheckoutPath(db: Db, taskId: string): string | undefined {
+  const pickup = latestEventOfTask(db, taskId, "task_picked_up");
+  const opened = latestEventOfTask(db, taskId, "task_checkout_opened");
+  return opened && (!pickup || opened.id > pickup.id) ? opened.payload.path : undefined;
+}
+
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。
  *  名前はその面接室の root の id —— 面接室の quarantine が立つ名前(ADR 0273 決定8)。開く前に一覧を撃つ門は workspace.ts の `pickupGate`。 */
 export function readableInterviewRooms(db: Db, rootId: string): { name: string; path: string }[] {
@@ -1598,6 +1606,36 @@ export function escalateTask(
     });
   })();
   return question!;
+}
+
+/** The failure escalation: a question child in tidepool's own name (the agent
+ *  could not self-report), with a standing "retry" option — answering it runs
+ *  through the ordinary unblock-to-head path, same as any other escalation.
+ *  記録だけを撃つ —— tree rule はどの呼び手でも後始末(`runTeardown`)が走らせる。 */
+export function registerFailureQuestion(
+  db: Db,
+  task: Task,
+  title: string,
+  reason: string,
+  now: Date,
+  /** What "retry" does, when the failure changes it (a kept task checkout, ADR 0356 決定2). */
+  retry = `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. `,
+): void {
+  escalateTask(
+    db,
+    task,
+    {
+      // abandon's consequence is spelled out via abandonConsequence; it's
+      // declared via the system-internal failure kind below, never exposed
+      // to agents.
+      context: `${reason}\n\n${retry}${abandonConsequence(db, task)}`,
+      questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
+      question_kind: { kind: "failure", cancel_option: "abandon" },
+    },
+    BOARD_ACTOR_ID,
+    now,
+    "board",
+  );
 }
 
 /** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /

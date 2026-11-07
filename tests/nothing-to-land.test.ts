@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   FULL_HANDOFF,
@@ -85,8 +86,9 @@ it("同じ内容が squash で保護ブランチへ着地済みなら、履歴�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "finish work already landed by content");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "same result\n");
-  await squashTaskIntoOrigin(workspace, task.id);
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "same result\n");
+  // ADR 0356 決定1: 完了前の worker の commit は task の checkout にだけある
+  await squashTaskIntoOrigin({ ...workspace, path: checkoutOf(t.db, task.id) }, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({

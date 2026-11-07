@@ -58,12 +58,15 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
   const provider = options.provider ?? "anthropic";
   const proc = recordingSpawn();
   onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs); // task temp と config dir の後始末(ADR 0257 / ADR 0354 決定1)
-  const registryDir = await makeRegistry();
+  // ADR 0356 決定2: adapter は盤面が名前の場所から開いた task の checkout で走り、その objects を読む —— registry の workspace と
+  // 盤面が準備する名前の場所を同じ checkout にする
+  const workspace = await makeWorkspace("tidepool");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n` });
   const logDir = await tempDir("row-refusal-logs-");
   const moonshotApiKeyFile = join(logDir, "moonshot-api-key");
   writeFileSync(moonshotApiKeyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
   t = await bootTidepool({
-    workspace: await makeWorkspace("tidepool"),
+    workspace,
     taskExecutionCandidates: (task) =>
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,

@@ -7,7 +7,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { runTeardown, type TeardownDeps } from "../src/teardown.js";
 import {
-  prepareWorkspaceAtPickup,
+
   resolveOrQuarantine,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -19,6 +19,7 @@ import {
   git,
   HUMAN_WEBUI,
   makeWorkspace,
+  prepareAtPickup,
   quarantineQuestion,
   sessionId,
 } from "./harness.js";
@@ -35,6 +36,7 @@ async function pickedUpSession(): Promise<{
   slot: Slot;
   task: Task;
   ws: WorkspaceConfig;
+  checkout: string;
 }> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
@@ -48,13 +50,13 @@ async function pickedUpSession(): Promise<{
   );
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(task.id, sessionId(db, task.id));
-  await prepareWorkspaceAtPickup(db, ws, task);
-  return { deps: { db, clock, slot, resolve: () => ws, pollNow: () => {} }, slot, task, ws };
+  const { path: checkout } = await prepareAtPickup(db, ws, task);
+  return { deps: { db, clock, slot, resolve: () => ws, pollNow: () => {} }, slot, task, ws, checkout };
 }
 
 it("後始末は1つの session につきちょうど1回走る —— 2度目は枠の再観測で落ちる", async () => {
-  const { deps, slot, task, ws } = await pickedUpSession();
-  writeFileSync(join(ws.path, "half-done.txt"), "work in flight\n");
+  const { deps, slot, task, ws, checkout } = await pickedUpSession();
+  writeFileSync(join(checkout, "half-done.txt"), "work in flight\n");
   const transitions: string[] = [];
   const step = { transition: (t: Task) => transitions.push(t.id) };
 
@@ -73,8 +75,8 @@ it("後始末は1つの session につきちょうど1回走る —— 2度目�
 });
 
 it("枠の主が入れ替わっていたら何もしない —— 他人の slot を解放しない", async () => {
-  const { deps, slot, task, ws } = await pickedUpSession();
-  writeFileSync(join(ws.path, "half-done.txt"), "work in flight\n");
+  const { deps, slot, task, checkout } = await pickedUpSession();
+  writeFileSync(join(checkout, "half-done.txt"), "work in flight\n");
   // 回収済み観測を待つ間に、次の session が枠に入っていた
   slot.release();
   slot.occupy("someone-else", sessionId(deps.db, "someone-else"));
@@ -84,7 +86,7 @@ it("枠の主が入れ替わっていたら何もしない —— 他人の slot
 
   expect(transitions).toEqual([]);
   expect(slot.currentTaskId).toBe("someone-else");
-  expect(git(ws.path, "status", "--porcelain")).not.toBe("");
+  expect(git(checkout, "status", "--porcelain")).not.toBe("");
 });
 
 it("門が既に解決した workspace は後始末で解決し直さない —— 同じ観測で2度撃たない", async () => {

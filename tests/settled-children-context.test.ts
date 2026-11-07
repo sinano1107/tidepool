@@ -6,6 +6,7 @@ import { cancelTaskDirectly, joinHistory, registerTask, taskHistoryRows } from "
 import {
   api,
   bootTidepool,
+  checkoutOf,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -148,7 +149,7 @@ it("get_current_task の history に、cancelled 子タスクの発端 question 
   await decomposeClient.close();
 
   await t.clock.advance(HOUR); // "will fail" picked up
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, t.worker.started.at(-1)!.id), "draft.txt"), "stuck work\n");
   await t.clock.advance(90 * MIN); // SIGTERM
   await t.clock.advance(grace); // SIGKILL — failure question registered
 

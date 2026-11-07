@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
@@ -6,17 +6,18 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { ensureTaskBranch } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   HUMAN_WEBUI,
   makeWorkspace,
+  prepareAtPickup,
   questions,
   queueWork,
   TEST_CREDENTIAL,
@@ -42,7 +43,7 @@ it("既定 workspace a・既定 agent a で pickup したタスクは、再起�
   t = await bootTidepool({ workspace: a, resolveWorkspace: defaultingTo(a, b), workerId: "a" });
   const task = queueWork(t, "unspecified work");
   await t.clock.advance(HOUR);
-  writeFileSync(join(a.path, "stuck.txt"), "interrupted mid-write\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "stuck.txt"), "interrupted mid-write\n");
   await t.stopServer();
 
   // 再起動の中断(起動時の掃き出し)は、差し替えた既定 b の盤面で走る
@@ -54,8 +55,11 @@ it("既定 workspace a・既定 agent a で pickup したタスクは、再起�
   expect(t.worker.started.map(({ id, workspace, assignee }) => ({ id, workspace, assignee }))).toEqual([
     { id: task.id, workspace: a.name, assignee: "a" },
   ]);
-  expect(git(a.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
-  expect(git(a.path, "log", "--format=%s", "HEAD")).toContain(`WIP: task ${task.id}`);
+  // ADR 0356 決定2: 再開は a のタスクブランチから task の checkout を作り直す(旧: a の HEAD でタスクブランチを checkout した)
+  const resumed = checkoutOf(t.db, task.id);
+  expect(git(resumed, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(resumed, "log", "--format=%s", "HEAD")).toContain(`WIP: task ${task.id}`);
+  expect(git(a.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(b.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(b.path, "branch", "--list", `task/${task.id}`)).toBe("");
   expect((await questions(t)).filter((q) => q.question_quarantine_kind === "workspace" && q.question_quarantine_value === b.name)).toEqual([]);
@@ -68,8 +72,8 @@ describe("再起動中断の後始末が task.workspace を解決する", () => 
     const boardDir = await tempDir("tidepool-board-");
     const dbPath = join(boardDir, "board.sqlite");
 
-    // simulate a restart-interrupted task: in_progress, its task branch
-    // already checked out on prod, uncommitted work left mid-flight
+    // simulate a restart-interrupted task: in_progress, its task checkout
+    // already opened from prod (ADR 0356 決定2), uncommitted work left mid-flight
     const seedDb = openDb(dbPath);
     const clock0 = new FakeClock();
     const task = registerTask(
@@ -79,10 +83,8 @@ describe("再起動中断の後始末が task.workspace を解決する", () => 
       ...HUMAN_WEBUI,
     );
     const picked = pickupTask(seedDb, task, "deckhand", clock0.now())!;
-    ensureTaskBranch(seedDb, prod, picked);
-    await import("node:fs").then((fs) =>
-      fs.writeFileSync(join(prod.path, "stuck.txt"), "interrupted mid-write\n"),
-    );
+    const place = await prepareAtPickup(seedDb, prod, picked);
+    writeFileSync(join(place.path, "stuck.txt"), "interrupted mid-write\n");
     seedDb.close();
 
     const bootClock = new FakeClock();
@@ -109,5 +111,6 @@ describe("再起動中断の後始末が task.workspace を解決する", () => 
       `WIP: task ${task.id}`,
     );
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(existsSync(place.path)).toBe(false);
   });
 });

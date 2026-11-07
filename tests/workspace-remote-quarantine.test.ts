@@ -6,6 +6,7 @@ import { type FakeBroker, startFakeBroker } from "./fake-broker.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeViaMcp,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -223,7 +224,7 @@ it("完了時の merge back で仲介が token を出せなくても、WIP は�
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   expect(t.worker.started).toHaveLength(1);
-  commitWork(workspace.path, "work.txt", "done\n");
+  commitWork(checkoutOf(t.db, task.id), "work.txt", "done\n");
   brokerDown = true;
 
   const result = await completeViaMcp(t, task.id);

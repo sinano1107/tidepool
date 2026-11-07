@@ -6,7 +6,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { editTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, tempDirSync } from "./harness.js";
 
 // ADR 0233: 既定への参照は pickup で終わる —— 解決した名前を空の列にだけ書き(指定済みは ADR 0012 のまま)、書いた列と名前を pickup の event に残す
 describe("pickupTask は呼び手が解決した名前を空の列にだけ書く(ADR 0233 / ADR 0012)", () => {
@@ -90,6 +90,8 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     const clock = new FakeClock();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
+      workspacesDir: tempDirSync("tidepool-task-checkouts-"),
       converge: async () => [],
       db,
       clock,
@@ -127,6 +129,8 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     const clock = new FakeClock();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
+      workspacesDir: tempDirSync("tidepool-task-checkouts-"),
       converge: async () => [],
       db,
       clock,

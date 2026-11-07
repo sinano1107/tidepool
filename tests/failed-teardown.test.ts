@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardHalts } from "../src/board-halt.js";
@@ -21,9 +23,9 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "../src/teardown.js";
-import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
+import { fetchTaskCheckoutTip, type RunPlace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, sessionId } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, sessionId } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -49,6 +51,7 @@ interface Fixture {
   slot: Slot;
   task: Task;
   ws: WorkspaceConfig;
+  place: RunPlace;
   deps: TeardownDeps;
   /** 後始末が撃った pickup の契機 —— 着地はこの契機が突く収束が撃つ(ADR 0241 決定5)。 */
   triggered: string[];
@@ -72,8 +75,10 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id, sessionId(db, picked.id));
-  await prepareWorkspaceAtPickup(db, ws, picked);
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  const place = await prepareAtPickup(db, ws, picked);
+  commitWork(place.path, "deliverable.txt", "the real work\n");
+  // 完了の門は worker の tip を名前の場所へ引いてから done にする(ADR 0356 決定3)
+  if (route === "complete") fetchTaskCheckoutTip(db, place, picked.id);
   const task =
     route === "complete"
       ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now(), "worker")
@@ -109,7 +114,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
     },
     pollNow: () => triggered.push("pollNow"),
   };
-  return { db, clock, slot, task, ws, deps, triggered, repair: () => (broken = false) };
+  return { db, clock, slot, task, ws, place, deps, triggered, repair: () => (broken = false) };
 }
 
 /** 立っている落ちた後始末の question。 */
@@ -149,9 +154,9 @@ it("後始末が投げたら、落ちた後始末の question が1枚立つ —�
   expect(purpose).toContain("Answering re-runs the same teardown");
   // 諦めて枠を解放する2つ目の選択肢は無い
   expect(raised[0]?.question_items?.[0]?.options).toEqual(["repaired by hand"]);
-  // 枠は握られたまま。workspace も動いていない
+  // 枠は握られたまま。task の checkout も残っている(ADR 0356 決定2)
   expect(f.slot.currentTaskId).toBe(f.task.id);
-  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
+  expect(existsSync(join(f.place.path, ".git"))).toBe(true);
 });
 
 it("同じ session に対して2枚目は立たない", async () => {

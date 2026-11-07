@@ -43,9 +43,9 @@ import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
 import {
   boardRefWriter,
+  fetchTaskCheckoutTip,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
-  prepareWorkspaceAtPickup,
   quarantineWorkspace,
   redoMergeBacks,
   refreshProtectedBranch,
@@ -67,11 +67,13 @@ import {
   HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
+  prepareAtPickup,
   quarantineQuestion,
   queuedForAutoMerge,
   settleReview,
   settleReviews,
   squashTaskIntoOrigin,
+  tempDirSync,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -114,7 +116,8 @@ function promotionFailures(board: Db, taskId: string) {
 
 /** 別タスクのセッションを盤面の書き込み `boardWrite` をまたいで走らせ、解放する。
  *  盤面の書き込みの予告と畳み(ADR 0243)を解放の比較で見る形 —— 休止中の書き込みは次の pickup の比較が
- *  見る(ADR 0351 決定2)。`workerForges` は、そのセッションの worker が書き込みの前に偽造する ref。 */
+ *  見る(ADR 0351 決定2)。`workerForges` は、そのセッションの間に盤面の外の書き手が名前の場所に偽造する ref
+ *  (ADR 0356 決定1 の後、worker は task の checkout で走り名前の場所の ref に届かない)。 */
 async function straddle(
   board: Db,
   clock: FakeClock,
@@ -123,11 +126,11 @@ async function straddle(
   workerForges?: string,
 ): Promise<void> {
   const straddler = landingWork(board, clock);
-  await prepareWorkspaceAtPickup(board, workspace, straddler);
+  const place = await prepareAtPickup(board, workspace, straddler);
   if (workerForges) git(workspace.path, "update-ref", workerForges, "HEAD");
   await boardWrite();
-  commitWork(workspace.path, "straddler.txt", "work\n");
-  releaseWorkspace(board, workspace, straddler, clock.now());
+  commitWork(place.path, "straddler.txt", "work\n");
+  releaseWorkspace(board, place, straddler, clock.now());
 }
 
 /** fake の push のたびに、転送の後で `effect` を撃つ —— push が失敗と報告されても撃つ。 */
@@ -646,7 +649,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
   expect(github.pushes).toEqual([{ path: workspace.path, branch: `task/${task.id}` }]);
 });
 
-it("open PR 更新は盤面が動かした remote ref だけを予告して畳む", async () => {
+it("open PR 更新は盤面が動かした remote ref だけを予告して畳み、worker の task の checkout の ref は読まない(ADR 0356 決定4)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-announce-fold");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -672,18 +675,24 @@ it("open PR 更新は盤面が動かした remote ref だけを予告して畳�
   await straddle(db, clock, workspace, () => landing.converge());
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 
-  await prepareWorkspaceAtPickup(db, workspace, task);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  git(workspace.path, "tag", "worker-created-tag");
+  // 旧: worker が共有の checkout に作った tag を解放の比較が名指した。ADR 0356 決定4 の後、worker の tag は task の checkout に
+  // 留まって読まれず、名前の場所で ref を動かせるのは盤面の外の書き手だけ
+  const place = await prepareAtPickup(db, workspace, task);
+  commitWork(place.path, "repair.txt", "fixed\n");
+  git(place.path, "tag", "worker-created-tag");
+  git(workspace.path, "tag", "out-of-band-tag");
+  // 修理の tip は盤面が口を通して名前の場所へ引く(完了の門の前半と同じ手、ADR 0356 決定3)
+  fetchTaskCheckoutTip(db, place, task.id);
 
   await expect(convergeOn(landing, task.id)).resolves.toMatchObject({
     kind: "landed",
     form: "open_pull_request_updated",
   });
-  releaseWorkspace(db, workspace, task, clock.now());
+  releaseWorkspace(db, place, task, clock.now());
 
   const quarantine = quarantineQuestion(db, "workspace", workspace.name);
-  expect(quarantine?.purpose).toContain("refs/tags/worker-created-tag");
+  expect(quarantine?.purpose).toContain("refs/tags/out-of-band-tag");
+  expect(quarantine?.purpose).not.toContain("refs/tags/worker-created-tag");
   expect(quarantine?.purpose).not.toContain(`refs/remotes/origin/task/${task.id}`);
 });
 
@@ -919,13 +928,13 @@ it.each<[string, boolean, (path: string, ref: string, announced: string, elsewhe
   const announced = git(workspace.path, "rev-parse", "HEAD");
   const elsewhere = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "elsewhere");
   const running = landingWork(db, clock);
-  await prepareWorkspaceAtPickup(db, workspace, running);
+  const place = await prepareAtPickup(db, workspace, running);
 
   // 落ちた盤面: 予告は書かれ、書き込みは返らず、畳みは来ない
   announceThenCrash(db, workspace, ref, announced);
   move(workspace.path, ref, announced, elsewhere);
-  commitWork(workspace.path, "running.txt", "work\n");
-  releaseWorkspace(db, workspace, running, clock.now());
+  commitWork(place.path, "running.txt", "work\n");
+  releaseWorkspace(db, place, running, clock.now());
 
   const question = quarantineQuestion(db, "workspace", workspace.name);
   expect(question !== undefined).toBe(quarantined);
@@ -937,7 +946,7 @@ it.each<[string, boolean, (path: string, ref: string, announced: string, elsewhe
 it("書き込みが投げた後に畳みも落ちれば、口は書き込みの失敗のほうを投げる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-fold-fails");
   const { db, clock } = await openBoard();
-  await prepareWorkspaceAtPickup(db, workspace, landingWork(db, clock));
+  await prepareAtPickup(db, workspace, landingWork(db, clock));
   const write = () => {
     db.exec("CREATE TEMP TRIGGER fold_fails BEFORE UPDATE ON workspace_state BEGIN SELECT RAISE(ABORT, 'fold failed'); END");
     throw new Error("push rejected");
@@ -953,7 +962,7 @@ it("収束前の保護ブランチの fetch は写しを原本の sha へ進め�
   const { workspace, publish } = await makeRemoteBackedWorkspace("landing-split-fetch");
   const { db, clock } = await openBoard();
   const running = landingWork(db, clock);
-  await prepareWorkspaceAtPickup(db, workspace, running);
+  const place = await prepareAtPickup(db, workspace, running);
   publish("merged.txt", "merged on GitHub\n", "merged outside");
   const copy = "refs/remotes/origin/main";
   const pickedUp = git(workspace.path, "rev-parse", copy);
@@ -967,8 +976,8 @@ it("収束前の保護ブランチの fetch は写しを原本の sha へ進め�
   expect(refsBesidesCopy()).toEqual(before);
   // 原本の1値に畳まれている —— 2値の行のまま残れば、pickup の値へ戻った写しを解放が通してしまう
   git(workspace.path, "update-ref", copy, pickedUp);
-  commitWork(workspace.path, "running.txt", "work\n");
-  releaseWorkspace(db, workspace, running, clock.now());
+  commitWork(place.path, "running.txt", "work\n");
+  releaseWorkspace(db, place, running, clock.now());
   expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${original} ${copy}`);
 });
 
@@ -1976,10 +1985,10 @@ it("nothing_to_land を刻んだ根の子の修理は根のブランチへ帰ら
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ kind: "nothing_to_land" });
   // 修理を後始末と同じ形で拾い、commit し、完了して merge back する
   const repair = attachUnsettledChild(db, clock, root.id);
-  await prepareWorkspaceAtPickup(db, workspace, repair);
-  commitWork(workspace.path, "repair.txt", "repaired after nothing to land\n");
+  const place = await prepareAtPickup(db, workspace, repair);
+  commitWork(place.path, "repair.txt", "repaired after nothing to land\n");
   const done = finish(db, clock, repair);
-  releaseWorkspace(db, workspace, done, clock.now(), true);
+  releaseWorkspace(db, place, done, clock.now(), true);
 
   await expect(landing.converge()).resolves.toEqual([
     { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 1 } },
@@ -3771,8 +3780,8 @@ function settleRepairNotMergedBack(
   return getTask(db, repair.id)!;
 }
 
-/** #1777 の形: 修理の merge back が後始末で conflict し、workspace が quarantine に落ちる。checkout は着地するタスクの
- *  ブランチの tip に、中断状態なしで残る。 */
+/** #1777 の形: 修理の merge back が後始末で conflict し、workspace が quarantine に落ちる。名前の場所は保護ブランチに、
+ *  中断状態なしで残る(ADR 0356 決定5 —— 旧: 着地するタスクのブランチの tip に残った)。 */
 async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
   const pr = await openPushedPr(name, merge);
   const { workspace, db, clock, work } = pr;
@@ -3782,9 +3791,10 @@ async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
   git(workspace.path, "checkout", `task/${work.id}`);
   commitWork(workspace.path, "repair.txt", "conflicting\n");
   git(workspace.path, "push", "origin", `task/${work.id}`);
-  await prepareWorkspaceAtPickup(db, workspace, repair);
+  git(workspace.path, "checkout", "main");
+  const place = await prepareAtPickup(db, workspace, repair);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
-  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  releaseWorkspace(db, place, getTask(db, repair.id)!, clock.now(), true);
   const question = quarantineQuestion(db, "workspace", workspace.name)!;
   return { ...pr, repair: getTask(db, repair.id)!, question };
 }
@@ -3875,9 +3885,9 @@ it.each([
   const pr = await openPushedPr("redo-merge-back-baseline", "escalate");
   const { workspace, db, clock, work } = pr;
   const earlier = landingWork(db, clock);
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  commitWork(workspace.path, "earlier.txt", "work\n");
-  releaseWorkspace(db, workspace, earlier, clock.now());
+  const earlierPlace = await prepareAtPickup(db, workspace, earlier);
+  commitWork(earlierPlace.path, "earlier.txt", "work\n");
+  releaseWorkspace(db, earlierPlace, earlier, clock.now());
   git(workspace.path, "checkout", `task/${work.id}`);
   const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
   // 修理が分かれた後に帰り先が進む —— merge back は ff にならず merge commit を作る
@@ -3892,13 +3902,12 @@ it.each([
   const merged = git(workspace.path, "rev-parse", `task/${work.id}`);
   expect(git(workspace.path, "rev-parse", `${merged}^1`)).toBe(targetBefore);
   expect(git(workspace.path, "rev-parse", `${merged}^2`)).toBe(git(workspace.path, "rev-parse", `task/${repair.id}`));
-  // earlier の pickup の基準で解放をやり直す: 帰り先の行が merge commit の1値なら、その位置は通り、戻した位置は名指しされる
-  git(workspace.path, "checkout", `task/${earlier.id}`);
+  // 同じ基準で次の pickup が比べる: 帰り先の行が merge commit の1値なら、その位置は通り、戻した位置は名指しされる
+  // (旧: earlier の解放をやり直して比べた —— ADR 0356 決定2 の後、解放を刻んだ再実行は削除だけを撃つ)
   if (rolledBack) git(workspace.path, "update-ref", `refs/heads/task/${work.id}`, targetBefore);
-  releaseWorkspace(db, workspace, earlier, clock.now());
-  const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose ?? "";
-  if (rolledBack) expect(purpose).toContain(`was: ${merged} refs/heads/task/${work.id}`);
-  else expect(purpose).not.toMatch(new RegExp(`refs/heads/(task/${work.id}|main)\\b`));
+  const failure = await prepareAtPickup(db, workspace, landingWork(db, clock)).then(() => undefined, (err: unknown) => err as Error);
+  if (rolledBack) expect(failure?.message).toContain(`was: ${merged} refs/heads/task/${work.id}`);
+  else expect(failure?.message ?? "").not.toMatch(new RegExp(`refs/heads/(task/${work.id}|main)\\b`));
 });
 
 it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
@@ -3932,21 +3941,26 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
   expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([]);
 });
 
-it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む", async () => {
+it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む(ADR 0356 決定1)", async () => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-running", "escalate");
   const { workspace, db, clock, repair, question } = pr;
+  const branches = () => [git(workspace.path, "rev-parse", "HEAD"), git(workspace.path, "rev-parse", `task/${repair.id}`)];
+  const before = branches();
   pickupTask(db, landingWork(db, clock), "worker", clock.now());
 
   await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
     new DomainError(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`),
   );
 
-  // ADR 0356 決定5: the checkout is still on the repair branch.
-  expect(head(workspace)).toBe(`task/${repair.id}`);
+  // 旧: checkout は修理のブランチに居たまま。ADR 0356 決定1 の後、名前の場所は保護ブランチに居て、受理はそこから何も動かさない
+  expect(head(workspace)).toBe("main");
+  expect(branches()).toEqual(before);
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
-it("受理は index で隠した変更を拒み、checkout を動かさない(ADR 0356 決定3)", async () => {
+// 旧: 受理は worker が index で隠した変更を拒んだ。ADR 0356 決定3 の後、名前の場所は自分の git で読み(人間の index の印は
+// 人間の宣言)、worker はそこに書かない —— 受理が拒むのは名前の場所の自分の git に見える変更
+it("受理は名前の場所を自分の git で読み、見える変更を拒み、checkout を動かさない(ADR 0356 決定3)", async () => {
   const pr = await openPushedPr("redo-merge-back-refused-to-start", "escalate");
   const { workspace, db, clock, work } = pr;
   const repair = attachUnsettledChild(db, clock, work.id);
@@ -3954,8 +3968,7 @@ it("受理は index で隠した変更を拒み、checkout を動かさない(AD
   commitWork(workspace.path, "README.md", "repaired\n");
   git(workspace.path, "checkout", `task/${work.id}`);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
-  // The board now sees the change before attempting merge-back or parking.
-  git(workspace.path, "update-index", "--skip-worktree", "README.md");
+  // The board sees the change before attempting merge-back or parking.
   writeFileSync(join(workspace.path, "README.md"), "local\n");
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
 
@@ -3971,8 +3984,9 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   const workspace = await makeWorkspace("redo-merge-back-local");
   const { db, clock } = await openBoard();
   const work = landingWork(db, clock);
-  await prepareWorkspaceAtPickup(db, workspace, work);
-  commitWork(workspace.path, "feature.txt", "ready\n");
+  const place = await prepareAtPickup(db, workspace, work);
+  commitWork(place.path, "feature.txt", "ready\n");
+  releaseWorkspace(db, place, work, clock.now());
   settleRepairNotMergedBack(db, clock, workspace, work.id);
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
@@ -4436,10 +4450,11 @@ async function landLocally(name: string) {
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const work = landingWork(db, clock, workspace.name);
-  await prepareWorkspaceAtPickup(db, workspace, work);
-  commitWork(workspace.path, "feature.txt", "ready\n");
+  const place = await prepareAtPickup(db, workspace, work);
+  commitWork(place.path, "feature.txt", "ready\n");
+  fetchTaskCheckoutTip(db, place, work.id);
   const done = finish(db, clock, work);
-  releaseWorkspace(db, workspace, done, clock.now(), true, undefined, undefined, true);
+  releaseWorkspace(db, place, done, clock.now(), true, undefined, undefined, true);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "local_merge_question" });
   const question = openLocalMergeQuestions(db, work.id)[0]!;
   return { workspace, db, clock, landing, work, question };
@@ -4472,8 +4487,10 @@ it("修理が done で後始末が merge back する前のローカル着地の 
   const local = await landLocally("local-left-behind-teardown");
   const { workspace, db, clock, work, question } = local;
   const repair = attachUnsettledChild(db, clock, work.id);
-  await prepareWorkspaceAtPickup(db, workspace, repair);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  const place = await prepareAtPickup(db, workspace, repair);
+  commitWork(place.path, "repair.txt", "fixed\n");
+  // 完了の門が修理の tip を名前の場所へ引く(ADR 0356 決定3)
+  fetchTaskCheckoutTip(db, place, repair.id);
   finish(db, clock, repair);
   markTeardown(db, repair.id, clock.now());
   const protectedHead = git(workspace.path, "rev-parse", "main");
@@ -4482,7 +4499,7 @@ it("修理が done で後始末が merge back する前のローカル着地の 
   expect(git(workspace.path, "rev-parse", "main")).toBe(protectedHead);
   expect(getTask(db, question.id)!.status).toBe("todo");
 
-  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  releaseWorkspace(db, place, getTask(db, repair.id)!, clock.now(), true);
   await answerLocalMerge(local);
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed");
@@ -4493,17 +4510,17 @@ it("修理の merge back が conflict して quarantine に落ちた間のロー
   const { workspace, db, clock, work, question } = local;
   // 実経路の順: 修理が W から分かれて commit し中断した後、兄弟の修理が同じファイルを W へ merge back し、修理が再開して完了する
   const repair = attachUnsettledChild(db, clock, work.id);
-  await prepareWorkspaceAtPickup(db, workspace, repair);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now());
+  const repairPlace = await prepareAtPickup(db, workspace, repair);
+  commitWork(repairPlace.path, "repair.txt", "fixed\n");
+  releaseWorkspace(db, repairPlace, getTask(db, repair.id)!, clock.now());
   const sibling = attachUnsettledChild(db, clock, work.id);
-  await prepareWorkspaceAtPickup(db, workspace, sibling);
-  commitWork(workspace.path, "repair.txt", "conflicting\n");
+  const siblingPlace = await prepareAtPickup(db, workspace, sibling);
+  commitWork(siblingPlace.path, "repair.txt", "conflicting\n");
   finish(db, clock, sibling);
-  releaseWorkspace(db, workspace, getTask(db, sibling.id)!, clock.now(), true);
-  await prepareWorkspaceAtPickup(db, workspace, repair);
+  releaseWorkspace(db, siblingPlace, getTask(db, sibling.id)!, clock.now(), true);
+  const resumed = await prepareAtPickup(db, workspace, repair);
   finish(db, clock, repair);
-  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  releaseWorkspace(db, resumed, getTask(db, repair.id)!, clock.now(), true);
   const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
   const protectedHead = git(workspace.path, "rev-parse", "main");
 
@@ -4560,10 +4577,10 @@ it("ローカル着地の hold 回答が受理されると、その時点のタ�
 /** 根 W の付帯子として修理 F を pickup(lineage で W から fork)して commit し、完了して後始末の merge back で W へ届ける。 */
 async function mergeBackRepair({ db, clock, workspace, work }: Awaited<ReturnType<typeof landLocally>>) {
   const repair = attachUnsettledChild(db, clock, work.id);
-  await prepareWorkspaceAtPickup(db, workspace, repair);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  const place = await prepareAtPickup(db, workspace, repair);
+  commitWork(place.path, "repair.txt", "fixed\n");
   finish(db, clock, repair);
-  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  releaseWorkspace(db, place, getTask(db, repair.id)!, clock.now(), true);
   return repair;
 }
 
@@ -4899,8 +4916,8 @@ it("shadow が消えて組み込みに落ちた work のキューの PR は、�
 
 // ADR 0103 決定1・4: 帯域外の判定は盤面自身の記録(ref snapshot)との突き合わせで、
 // 着地の回答だけがこの型を隔離に結ぶ。以下のテストがこの判定を述べる唯一の場所(ADR 0107)。
-/** 記録がある形: work を拾い、タスクブランチに commit し、解放する。保護ブランチの行が
- *  記録に入り、HEAD は保護ブランチへ戻っている。 */
+/** 記録がある形: work を拾い、task の checkout でタスクブランチに commit し、解放する。保護ブランチの行が
+ *  記録に入り、名前の場所の HEAD は保護ブランチのまま(ADR 0356 決定1)。 */
 async function recordedWork(
   board: Db,
   clock: FakeClock,
@@ -4909,9 +4926,9 @@ async function recordedWork(
   file = "feature.txt",
 ) {
   const work = landingWork(board, clock);
-  await prepareWorkspaceAtPickup(board, workspace, work);
-  commitWork(workspace.path, file, content);
-  releaseWorkspace(board, workspace, work, clock.now());
+  const place = await prepareAtPickup(board, workspace, work);
+  commitWork(place.path, file, content);
+  releaseWorkspace(board, place, work, clock.now());
   return work;
 }
 
@@ -5043,14 +5060,14 @@ it.each([
   const work = await recordedWork(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
   const running = landingWork(db, clock);
-  await prepareWorkspaceAtPickup(db, workspace, running);
+  const place = await prepareAtPickup(db, workspace, running);
   const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
   announceThenCrash(db, workspace, "refs/heads/main", tip);
   if (written) git(workspace.path, "update-ref", "refs/heads/main", tip);
 
   await answerMerge(db, clock, workspace, question);
-  commitWork(workspace.path, "running.txt", "work\n");
-  releaseWorkspace(db, workspace, running, clock.now());
+  commitWork(place.path, "running.txt", "work\n");
+  releaseWorkspace(db, place, running, clock.now());
 
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(tip);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
@@ -5107,6 +5124,8 @@ async function pickUpOnce(db: Db, clock: FakeClock, workspace: WorkspaceConfig):
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
+    workspacesDir: tempDirSync("tidepool-task-checkouts-"),
     converge: async () => [],
     db,
     clock,
@@ -5140,12 +5159,13 @@ it.each([
   const secondQuestion = mergeQuestion(db, clock, { pending_local_merge_task_id: second.id });
   await answerMerge(db, clock, workspace, firstQuestion);
   const third = occupied ? landingWork(db, clock) : undefined;
-  if (third) await prepareWorkspaceAtPickup(db, workspace, third);
+  if (third) await prepareAtPickup(db, workspace, third);
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
   const head = git(workspace.path, "rev-parse", "HEAD");
   const branch = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
-  expect(branch).toBe(third ? `task/${third.id}` : "main");
+  // ADR 0356 決定1: 走行中も名前の場所は保護ブランチに居る(旧: 走行中のタスクブランチに居た)
+  expect(branch).toBe("main");
 
   const rejected = answerMerge(db, clock, workspace, secondQuestion);
 
@@ -5242,39 +5262,42 @@ it("休止中の着地がコンフリクトしても、中断した merge を残
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
 
-// #1872: 走っている session の worker が保護ブランチを checkout していれば、merge 回答は HEAD が保護ブランチにある枝
-// (checkout ごと ff)に入る —— 枝は DB の走っている行ではなく HEAD の位置で選ぶ
-/** 着地を待つ work と、DB 上で走っている(拾われた)session が保護ブランチを checkout して untracked の WIP を書いた形。 */
-async function landingUnderWorkerOnProtected(board: Db, clock: FakeClock, workspace: WorkspaceConfig, wipFile: string) {
+// 旧(#1872): 走っている session の worker が名前の場所で保護ブランチを checkout していれば、merge 回答は checkout ごと ff した。
+// ADR 0356 決定1・5 の後、worker は task の checkout で走り、名前の場所の HEAD は常に保護ブランチなので、merge 回答はいつも
+// 名前の場所の作業ツリーを追従させる
+/** 着地を待つ work と、DB 上で走っている(拾われた)session が task の checkout に untracked の WIP を書いた形。 */
+async function landingUnderRunningSession(board: Db, clock: FakeClock, workspace: WorkspaceConfig, wipFile: string) {
   const work = await recordedWork(board, clock, workspace);
   const question = mergeQuestion(board, clock, { pending_local_merge_task_id: work.id });
   const running = pickupTask(board, landingWork(board, clock), "worker", clock.now())!;
-  await prepareWorkspaceAtPickup(board, workspace, running);
-  git(workspace.path, "checkout", "main");
-  writeFileSync(join(workspace.path, wipFile), "the running session's work in progress\n");
-  return { work, question };
+  const place = await prepareAtPickup(board, workspace, running);
+  writeFileSync(join(place.path, wipFile), "the running session's work in progress\n");
+  return { work, question, place };
 }
 
-it("走っている session が保護ブランチを checkout していれば、merge 回答は checkout ごと ff し、WIP を残し quarantine しない", async () => {
+it("走っている session の間も merge 回答は名前の場所を checkout ごと ff し、task の checkout の WIP に触れず quarantine しない(ADR 0356 決定1・5)", async () => {
   const workspace = await makeWorkspace("landing-worker-on-protected");
   const { db, clock } = await openBoard();
-  const { work, question } = await landingUnderWorkerOnProtected(db, clock, workspace, "wip.txt");
+  const { work, question, place } = await landingUnderRunningSession(db, clock, workspace, "wip.txt");
 
   await answerMerge(db, clock, workspace, question);
 
   const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(tip);
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(tip);
-  expect(git(workspace.path, "status", "--porcelain")).toBe("?? wip.txt");
-  expect(readFileSync(join(workspace.path, "wip.txt"), "utf8")).toBe("the running session's work in progress\n");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("the running session's work in progress\n");
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
-it("保護ブランチを checkout した worker の WIP が着地の運ぶファイルと被れば、ff の拒否が回答の拒否として返り、何も動かさない", async () => {
+// 旧: 保護ブランチを checkout した worker の WIP が着地の運ぶファイルと被った形(#1872)。名前の場所の作業ツリーに被るものを
+// 置けるのはもう盤面の外の書き手だけ
+it("名前の場所の作業ツリーの untracked が着地の運ぶファイルと被れば、ff の拒否が回答の拒否として返り、何も動かさない(ADR 0356 決定5)", async () => {
   const workspace = await makeWorkspace("landing-worker-on-protected-overlap");
   const { db, clock } = await openBoard();
   const before = git(workspace.path, "rev-parse", "refs/heads/main");
-  const { question } = await landingUnderWorkerOnProtected(db, clock, workspace, "feature.txt");
+  const { question } = await landingUnderRunningSession(db, clock, workspace, "unrelated.txt");
+  writeFileSync(join(workspace.path, "feature.txt"), "the running session's work in progress\n");
 
   await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow("would be overwritten");
 

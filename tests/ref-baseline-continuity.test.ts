@@ -13,9 +13,9 @@ import { queueReturnHandler } from "../src/watchdog.js";
 import {
   boardRefWriter,
   commitRoomCopy,
+  fetchTaskCheckoutTip,
   openExamineeCheckout,
   openInterviewRoom,
-  prepareWorkspaceAtPickup,
   quarantineWorkspace,
   releaseWorkspace,
   taskBranchExists,
@@ -23,7 +23,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, poseAccepted, quarantineQuestion } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 基準は切れない(ADR 0351 決定2): 行のある pickup は全撮りの代わりに比べ、release はタスクブランチの行を畳み、2値行は ref が持つ側に畳む(#2953)。
@@ -39,9 +39,9 @@ function work(db: Db, title: string, parentId?: string) {
 /** session 中に `move` で ref を動かしてから解放した結果の quarantine の本文 —— 基準の行がその ref をどの値で持つかを解放の比較で読む。 */
 async function releaseAfter(db: Db, ws: WorkspaceConfig, move: () => void): Promise<string | undefined> {
   const task = work(db, "reads the baseline back");
-  await prepareWorkspaceAtPickup(db, ws, task);
+  const place = await prepareAtPickup(db, ws, task);
   move();
-  releaseWorkspace(db, ws, task, NOW);
+  releaseWorkspace(db, place, task, NOW);
   return quarantineQuestion(db, "workspace", ws.name)?.purpose;
 }
 
@@ -50,10 +50,11 @@ async function restedAfterCompletion(name: string) {
   const ws = await makeWorkspace(name);
   const db = openDb(":memory:");
   const done = work(db, "completes");
-  await prepareWorkspaceAtPickup(db, ws, done);
-  commitWork(ws.path, "done.txt", "done\n");
+  const place = await prepareAtPickup(db, ws, done);
+  commitWork(place.path, "done.txt", "done\n");
+  fetchTaskCheckoutTip(db, place, done.id);
   completeTask(db, done, FULL_HANDOFF, "worker", NOW, "worker");
-  releaseWorkspace(db, ws, done, NOW, false, undefined, undefined, true);
+  releaseWorkspace(db, place, done, NOW, false, undefined, undefined, true);
   expect(quarantineQuestion(db, "workspace", ws.name)).toBeUndefined();
   return { ws, db, done };
 }
@@ -134,27 +135,29 @@ it.each([
   const ws = await makeWorkspace("rest-moved-ref");
   const db = openDb(":memory:");
   const parent = work(db, "ancestor");
-  await prepareWorkspaceAtPickup(db, ws, parent);
-  commitWork(ws.path, "parent.txt", "parent\n");
-  releaseWorkspace(db, ws, parent, NOW);
+  const parentPlace = await prepareAtPickup(db, ws, parent);
+  commitWork(parentPlace.path, "parent.txt", "parent\n");
+  releaseWorkspace(db, parentPlace, parent, NOW);
   const ref = move(ws, parent);
   const head = git(ws.path, "symbolic-ref", "HEAD");
   const child = work(db, "forks from the ancestor", parent.id);
 
-  await expect(prepareWorkspaceAtPickup(db, ws, child)).rejects.toThrow(new RegExp(`(was|now): \\S+ ${ref}`));
+  await expect(prepareAtPickup(db, ws, child)).rejects.toThrow(new RegExp(`(was|now): \\S+ ${ref}`));
 
   expect(git(ws.path, "symbolic-ref", "HEAD")).toBe(head);
   expect(taskBranchExists(ws, child.id)).toBe(false);
   db.close();
 });
 
-it("休止中に何も動かなければ、次の pickup は通ってタスクブランチへ乗る(ADR 0351 決定2)", async () => {
+// 旧: 次の pickup は名前の場所の HEAD をタスクブランチへ乗せた
+it("休止中に何も動かなければ、次の pickup は通り、task の checkout がタスクブランチに乗って名前の場所は保護ブランチに居る(ADR 0351 決定2 / ADR 0356 決定1)", async () => {
   const { ws, db } = await restedAfterCompletion("rest-nothing-moved");
   const next = work(db, "next");
 
-  await prepareWorkspaceAtPickup(db, ws, next);
+  const place = await prepareAtPickup(db, ws, next);
 
-  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
+  expect(git(place.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   db.close();
 });
 
@@ -162,8 +165,7 @@ it("remote-backed で休止中に remote の main だけが進めば、次の pi
   const { workspace, publish } = await makeRemoteBackedWorkspace("rest-remote-advanced");
   const db = openDb(":memory:");
   const earlier = work(db, "leaves a baseline");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   const before = git(workspace.path, "rev-parse", "main");
 
@@ -199,19 +201,19 @@ it("session 中に予告と畳みの間で落ちて2値行が残っても、rele
   const ws = await makeWorkspace("release-announced-row");
   const db = openDb(":memory:");
   const task = work(db, "runs");
-  await prepareWorkspaceAtPickup(db, ws, task);
+  const place = await prepareAtPickup(db, ws, task);
   const ref = "refs/heads/keep";
   const sha = git(ws.path, "rev-parse", "main");
   const reopen = dropBoardBeforeFold(db);
   expect(() => boardRefWriter(db, ws)(ref, sha, () => git(ws.path, "update-ref", ref, sha))).toThrow("the board dropped");
   reopen();
 
-  releaseWorkspace(db, ws, task, NOW);
+  releaseWorkspace(db, place, task, NOW);
   expect(quarantineQuestion(db, "workspace", ws.name)).toBeUndefined();
   // 行が ref の持つ側(sha)の1値なら、予告のもう一方(無い)へ戻すと次の pickup が名指す
   git(ws.path, "update-ref", "-d", ref);
 
-  await expect(prepareWorkspaceAtPickup(db, ws, work(db, "next"))).rejects.toThrow(`was: ${sha} ${ref}`);
+  await expect(prepareAtPickup(db, ws, work(db, "next"))).rejects.toThrow(`was: ${sha} ${ref}`);
   db.close();
 });
 
@@ -225,21 +227,22 @@ it.each([
   seed(db, ws);
 
   const purpose = await releaseAfter(db, ws, () => {
-    commitWork(ws.path, "work.txt", "work\n");
-    git(ws.path, "tag", "-f", "before-the-board", "HEAD");
+    git(ws.path, "tag", "-f", "before-the-board", git(ws.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "by hand"));
   });
 
   expect(purpose).toContain(`now: ${git(ws.path, "rev-parse", "before-the-board")} refs/tags/before-the-board`);
   db.close();
 });
 
-it("基準の行が無い workspace の release は、今日どおり違反で workspace quarantine に落ちる(ADR 0064 決定6)", async () => {
+// 旧: pickup を経ずに名前の場所でタスクブランチへ checkout した workspace を解放した
+it("基準の行が無い名前の場所の release は、今日どおり違反で workspace quarantine に落ちる(ADR 0064 決定6 / ADR 0356 決定4)", async () => {
   const ws = await makeWorkspace("release-without-row");
   const db = openDb(":memory:");
-  const task = work(db, "never prepared");
-  git(ws.path, "checkout", "-q", "-b", `task/${task.id}`);
+  const task = work(db, "baseline lost");
+  const place = await prepareAtPickup(db, ws, task);
+  db.exec("DELETE FROM workspace_state");
 
-  releaseWorkspace(db, ws, task, NOW);
+  releaseWorkspace(db, place, task, NOW);
 
   expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("now: ");
   db.close();
@@ -254,7 +257,7 @@ async function restedRoom(name: string, pose: boolean) {
   const base = await tempDir(`${name}-rooms-`);
   openInterviewRoom(db, root, base, NOW);
   const room = taskRunPlace(db, root, ws);
-  await prepareWorkspaceAtPickup(db, room, root);
+  await prepareAtPickup(db, room, root);
   const [examinee] = pose ? (poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, room)) as [Task]) : [];
   releaseWorkspace(db, room, root, NOW);
   expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
@@ -269,7 +272,7 @@ it("在り処が消えて手で `git init` し直した面接室を、受理の�
   await quarantineChecks({ db }).workspace!(root.id);
 
   openInterviewRoom(db, root, base, NOW);
-  await prepareWorkspaceAtPickup(db, taskRunPlace(db, root, ws), root);
+  await prepareAtPickup(db, taskRunPlace(db, root, ws), root);
 
   expect(git(room.path, "log", "-1", "--format=%s", "main")).toBe("Initial commit");
   releaseWorkspace(db, taskRunPlace(db, root, ws), root, NOW);
@@ -297,7 +300,7 @@ it("盤面が一度も開いていない受験者の checkout の在り処に re
 
   openExamineeCheckout(db, examinee!, base, NOW);
   const checkout = taskRunPlace(db, examinee!, ws);
-  await prepareWorkspaceAtPickup(db, checkout, examinee!);
+  await prepareAtPickup(db, checkout, examinee!);
 
   expect(git(checkout.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${examinee!.id}`);
 });

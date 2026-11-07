@@ -1,9 +1,8 @@
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -38,7 +37,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "result.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "result.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -64,7 +63,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "report.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "report.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -93,7 +92,7 @@ it("PR 作成が失敗しても complete_task 自体は成立し、ツリーは�
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
 
-  commitWork(ws.path, "notes.txt", "shipped\n");
+  commitWork(checkoutOf(t.db, task.id), "notes.txt", "shipped\n");
   t.github.scriptFailure(new Error("GitHub API is down"));
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -130,15 +129,16 @@ it("review タスクの complete_task では PR が作られない", async () =>
   expect(t.github.requests).toHaveLength(0);
 });
 
-it("tree rule が失敗して workspace が quarantine された場合は PR が作られない", async () => {
+// 旧: 名前の場所の .git を壊して WIP コミットを失敗させた —— 完了の門が名前の場所へ tip を引くので、今は門で拒まれる
+it("解放が名前の場所の側で失敗して workspace が quarantine された場合は PR が作られない(ADR 0356 決定2・4)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "doomed work");
   await t.clock.advance(HOUR);
 
-  // tree-rule.test.ts と同じ代役: リポジトリ自体を壊して WIP コミットを失敗させる
-  commitWork(ws.path, "junk.txt", "uncommittable\n");
-  await rm(join(ws.path, ".git"), { recursive: true, force: true });
+  commitWork(checkoutOf(t.db, task.id), "junk.txt", "finished\n");
+  // session の間に名前の場所の ref が盤面の口の外で動く —— 解放の比較が quarantine に落とす
+  git(ws.path, "tag", "out-of-band");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",

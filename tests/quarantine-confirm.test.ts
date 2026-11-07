@@ -1,5 +1,4 @@
-import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
@@ -7,6 +6,7 @@ import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviewViaMcp,
   completeViaMcp,
@@ -29,13 +29,14 @@ afterEach(async () => {
   await t?.stop();
 });
 
-/** Breaks the tree rule the same way tree-rule.test.ts does: destroy .git so
- *  the WIP commit fails and quarantine kicks in. */
+/** Breaks the release: an out-of-band commit on the named place's main moves a ref the board did not write (ADR 0351),
+ *  and an untracked file stays behind for the repair check to refuse.
+ *  旧: .git を消して WIP commit を落とした —— 完了の門が名前の場所へ tip を引けず完了を拒むようになった(ADR 0356 決定3) */
 async function triggerQuarantine(t: Tidepool, ws: WorkspaceConfig, title: string) {
   const task = await registerWork(t, title);
   await t.clock.advance(HOUR);
+  commitWork(ws.path, "out-of-band.txt", "committed on main by hand\n");
   writeFileSync(join(ws.path, `${title.replace(/\s/g, "-")}.txt`), "uncommittable\n");
-  await rm(join(ws.path, ".git"), { recursive: true, force: true });
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
@@ -99,7 +100,7 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
 
   const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
-  // 何も直さず「直した」と答える — .git はまだ壊れたまま
+  // 何も直さず「直した」と答える — untracked はまだ残ったまま
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["repaired by hand"],
   });
@@ -142,8 +143,7 @@ it("ツリーがクリーンだと確認されれば question が done になり
 
   const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
-  // 実際に手で直す: git を作り直し、ツリーをクリーンにする
-  git(ws.path, "init", "-b", "main");
+  // 実際に手で直す: 残ったものを commit してツリーをクリーンにする
   git(ws.path, "add", "-A");
   git(ws.path, "commit", "-m", "manual repair");
 
@@ -240,7 +240,10 @@ it("走行中の session が開く workspace の修復回答は休止操作の�
   const refused = await answer();
   expect(refused.status).toBe(409);
   expect(refused.json.error).toContain("session or its teardown is still running");
-  expect(git(workspace.path, "branch", "--show-current")).toBe(`task/${task.id}`);
+  // ADR 0356 決定1: session は task の checkout で走り、名前の場所の HEAD は保護ブランチのまま(旧: HEAD がタスクブランチに居た)
+  expect(git(workspace.path, "branch", "--show-current")).toBe("main");
+  const checkout = checkoutOf(t.db, task.id);
+  expect(existsSync(join(checkout, ".git"))).toBe(true);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 
   await completeViaMcp(t, task.id);
@@ -253,7 +256,7 @@ it("workspace の quarantine が抱えていた根は、その quarantine に答
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship reviewable work");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "v1\n");
+  commitWork(checkoutOf(t.db, work.id), "feature.txt", "v1\n");
   await completeViaMcp(t, work.id);
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === work.id,

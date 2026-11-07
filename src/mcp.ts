@@ -111,7 +111,10 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   completionTreePaths,
+  fetchTaskCheckoutTip,
+  type RunPlace,
   resolveOrQuarantine,
+  TaskCheckoutUnreadableError,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -320,7 +323,7 @@ export async function runVerb<R>(
 /** タスク自身の実行 workspace(issue #26 / ADR 0009 —— 盤面の既定ではない)。解決できない
  *  名前は `resolveOrQuarantine` が quarantine する**副作用を持つ**ので、1つの verb 呼び出しで
  *  2度撃たない(2度目は同じ観測を cause として重ねて記録するだけである)。 */
-function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | undefined {
+function resolveTaskWorkspace(deps: McpDeps, task: Task): RunPlace | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
@@ -331,9 +334,19 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | unde
 /** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
-function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
+function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace): void {
   if (!completionTreeGateApplies(task)) return;
-  const paths = completionTreePaths(workspace, deps.db);
+  // ADR 0356 決定3: worker の tip を先に名前の場所へ引く —— worker の repo から引けなければ完了を拒む。名前の場所の側で落ちた観測は
+  // 飲んで門を開ける(ADR 0084 決定2)—— 完了の解放がもう一度引き、落ちればそこで quarantine になる
+  let landed: boolean;
+  try {
+    landed = fetchTaskCheckoutTip(deps.db, workspace, task.id);
+  } catch (err) {
+    if (err instanceof TaskCheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
+    throw err;
+  }
+  if (!landed) return;
+  const paths = completionTreePaths(workspace, task.id, deps.db);
   if (paths.length === 0) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
@@ -369,7 +382,7 @@ function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task) => (actorId: string, now: Date) => object,
-  gate?: (task: Task, workspace: WorkspaceConfig) => void,
+  gate?: (task: Task, workspace: RunPlace) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
     const workspace = gate ? (resolveTaskWorkspace(deps, task) ?? null) : undefined;

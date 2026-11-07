@@ -8,6 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { type PromptRecord, RecordContainerError, type Transcript, TranscriptStore } from "../src/transcript-store.js";
+
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -17,6 +18,7 @@ import {
   HOUR,
   initWithMcpServers,
   mcpClient,
+  opensCheckoutAtWorkspace,
   questions,
   queueWork,
   servedQuarantineQuestion,
@@ -54,10 +56,13 @@ class RecordingTranscripts extends TranscriptStore {
   }
 }
 
+type CheckoutAt = { dir: string; workspace: string; workspacesDir?: string };
+
 /** 実 adapter を盤面に載せる。transcript の器の dir は adapter が `deps.transcripts.dir` で引ける。 */
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
   provider: Provider,
+  at: CheckoutAt,
 ) {
   const proc = recordingSpawn();
   const transcriptDir = await tempDir("transcript-store-");
@@ -69,7 +74,7 @@ async function bootWithAdapter(
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts,
-    workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
+    workerAdapter: (deps) => withHealthyUsage(opensCheckoutAtWorkspace(build(deps), deps.db, at), deps.clock),
   });
   return { proc, transcripts, transcriptDir };
 }
@@ -90,6 +95,7 @@ async function bootClaude(registryFiles: Record<string, string> = {}, extra: Par
         ...extra,
       }),
     "anthropic",
+    { dir: registryDir, workspace: "tidepool" },
   );
 }
 
@@ -124,6 +130,7 @@ async function bootCodex() {
         boardCall: closedCodexSkillsCall(),
       }),
     "openai",
+    { dir: registryDir, workspace: "work", workspacesDir: tmpdir() },
   );
   return { ...booted, workspace };
 }

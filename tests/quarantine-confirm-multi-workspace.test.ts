@@ -1,5 +1,3 @@
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
@@ -34,9 +32,9 @@ it("非既定 workspace(prod)の quarantine は、ツリーがクリーンな状
   const inProd = await registerWork(t, "runs in prod", "prod");
   await t.clock.advance(HOUR);
 
-  // break prod's tree rule so completing it quarantines only "prod"
-  commitWork(prod.path, "junk.txt", "uncommittable\n");
-  await rm(join(prod.path, ".git"), { recursive: true, force: true });
+  // break prod's release so completing it quarantines only "prod": an out-of-band commit on prod's main moves a ref the
+  // board did not write (ADR 0351). 旧: prod の .git を消した —— 完了の門が tip を引けず完了を拒むようになった(ADR 0356 決定3)
+  commitWork(prod.path, "junk.txt", "out of band\n");
   const client = await mcpClient(t.mcpBaseUrl, inProd.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -50,10 +48,8 @@ it("非既定 workspace(prod)の quarantine は、ツリーがクリーンな状
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.id)).not.toContain(stuckInProd.id);
 
-  // repair prod for real
-  git(prod.path, "init", "-b", "main");
-  git(prod.path, "add", "-A");
-  git(prod.path, "commit", "-m", "manual repair");
+  // repair prod for real: the out-of-band commit stays, and acceptance retakes the baseline (ADR 0351 決定4)
+  expect(git(prod.path, "status", "--porcelain")).toBe("");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["repaired by hand"],
