@@ -20,8 +20,9 @@ commit が足されていれば ref が進んで祖先へ運ばれる、未 comm
    消失・view の上限超過)で着地を進めるのは fail-open だが、守るものが無い —— tip は門で確定し、名前の場所は汚れていない —— ので、既定の
    fail-closed の例外として明示する。checkout は解放の最後の step で今日どおり消す: 解放は失敗しておらず、worker の振る舞いの記録は
    transcript が持つ(ADR 0149)。
-4. **verb の時点の名前の場所の失敗のうち、資源の署名を持つもの(ref の門の `RefsMovedError` = ADR 0351 の人間の書き込み)は、ADR 0331
-   決定1 の線で名前の場所の quarantine を登録してから拒む。** 署名の無い git の一過性の失敗(lock・disk)は拒むだけで、停止は登録しない。
+4. **verb の時点の名前の場所の失敗は資源の停止を登録せず、拒むだけである。** そこで起きる失敗は lock・disk・`update-ref` の旧値の不一致で、
+   どれも資源の署名を持たない(ADR 0331 決定1 の「署名の無い throw」)。ref の門(`writeBoardRefs`)は verb では基準を比較せず、人間の
+   ref の移動は解放の基準比較(ADR 0351)が今日どおり名前の場所の quarantine にする。
 5. **ADR 0356 決定2 の「worker の repo の故障は task の失敗」は決着していない task(`todo` に戻る解放)に限る。** `done` の task では
    決定3 の観測である。ADR 0357 決定2 の view の上限超過も、完了済みの解放では fetch が走らないので決定3 の「読めない」観測になる。
 
