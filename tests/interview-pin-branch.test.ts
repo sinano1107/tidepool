@@ -84,7 +84,7 @@ it("面接室は規約の基点の下の root の id に、盤面名義の空コ
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-room-open-");
   failGitCommits();
-  expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("/nonexistent-gpg");
+  expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("fixture commit failed");
   vi.unstubAllEnvs();
   const room = realpathSync(join(base, root.id));
   expect(interviewRoomPath(db, root.id)).toBeUndefined();
@@ -252,7 +252,7 @@ it("解放は受験者の checkout で tree rule を通して main に戻し、�
   db.close();
 });
 
-it("global の insteadOf が面接室の path を http へ書き換えていれば、受験者の checkout の作成は網に出ず `transport 'http' not allowed` で落ちる(ADR 0339 Status 追記)", async () => {
+it("global の insteadOf が面接室の path を http へ書き換えても、受験者の checkout は網に出ず作成する(ADR 0356 決定5)", async () => {
   const db = openDb(":memory:");
   const { room, examinees, base } = await posedInRoom(db);
   const remote = await startDenyingHttpRemote();
@@ -263,7 +263,9 @@ it("global の insteadOf が面接室の path を http へ書き換えていれ�
   const askpass = await humanAskpass();
 
   try {
-    expect(() => openExamineeCheckout(db, examinees[0] as Task, base, NOW)).toThrow("transport 'http' not allowed");
+    const examinee = examinees[0] as Task;
+    openExamineeCheckout(db, examinee, base, NOW);
+    expect(examineeCheckoutPath(db, examinee.id)).toBeDefined();
     expect({ askpass: askpass.tripped(), requests: remote.requests() }).toEqual({ askpass: false, requests: [] });
   } finally {
     vi.unstubAllEnvs();

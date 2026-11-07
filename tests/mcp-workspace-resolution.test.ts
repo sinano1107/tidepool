@@ -69,7 +69,8 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
       arguments: { handoff: fullHandoff },
     });
     expect(denied.isError).toBe(true);
-    expect(denied.content[0].text).toContain("uncommitted changes");
+    expect(denied.content[0].text).toContain("with a message whose body says what changed and why in a few lines, readable from the git history alone, then call complete_task again");
+    expect(denied.content[0].text).toContain("\n- notes.txt");
 
     commitWork(prod.path, "notes.txt", "half-finished\n");
     const res: any = await client.callTool({

@@ -3801,15 +3801,14 @@ it("merge back が conflict して後始末が閉じても、修理の内容が 
   expect(github.merged).toEqual([]);
 });
 
-// ADR 0243 決定4: 後始末の merge back は merge commit を merge-tree で先に作るので、conflict は checkout に何も残さない
-it("後始末の merge back が conflict しても、MERGE_HEAD を残さず作業ツリーは帰り先の tip のまま quarantine に落ちる", async () => {
-  const { workspace, work, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
+// ADR 0356 決定5: merge-back conflict leaves the worker's checkout in place.
+it("後始末の merge back が conflict しても、MERGE_HEAD を残さず子の checkout のまま quarantine に落ちる", async () => {
+  const { workspace, repair, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
 
   // まだ答えていない question なので、出口の文は「答え直す」と結ばない
   expect(question.purpose).toContain("`; then answer. ");
   expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
-  expect(head(workspace)).toBe(`task/${work.id}`);
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(originHead(workspace, work.id));
+  expect(head(workspace)).toBe(`task/${repair.id}`);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
 
@@ -3921,6 +3920,8 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
 ])("merge back の conflict を%s後の受理は通り、収束を突き、続く収束が根へ push して積み残しが消える", async (_, repairByHand) => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-repaired", "escalate");
   const { workspace, db, clock, work, repair, question, landing } = pr;
+  // ADR 0356 決定5: the board has not switched to the merge target.
+  git(workspace.path, "checkout", `task/${work.id}`);
   repairByHand(workspace, repair.id);
   const pollNow = vi.fn();
 
@@ -3935,18 +3936,19 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
 
 it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む", async () => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-running", "escalate");
-  const { workspace, db, clock, work, question } = pr;
+  const { workspace, db, clock, repair, question } = pr;
   pickupTask(db, landingWork(db, clock), "worker", clock.now());
 
   await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
     new DomainError(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`),
   );
 
-  expect(head(workspace)).toBe(`task/${work.id}`);
+  // ADR 0356 決定5: the checkout is still on the repair branch.
+  expect(head(workspace)).toBe(`task/${repair.id}`);
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
-it("merge が始まる前に落ちても、取り消す merge の無いまま git の理由で拒み、checkout は休止位置に戻っている", async () => {
+it("受理は index で隠した変更を拒み、checkout を動かさない(ADR 0356 決定3)", async () => {
   const pr = await openPushedPr("redo-merge-back-refused-to-start", "escalate");
   const { workspace, db, clock, work } = pr;
   const repair = attachUnsettledChild(db, clock, work.id);
@@ -3954,16 +3956,17 @@ it("merge が始まる前に落ちても、取り消す merge の無いまま gi
   commitWork(workspace.path, "README.md", "repaired\n");
   git(workspace.path, "checkout", `task/${work.id}`);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
-  // status に出ないローカルの変更が merge を始まる前に止める
+  // The board now sees the change before attempting merge-back or parking.
   git(workspace.path, "update-index", "--skip-worktree", "README.md");
   writeFileSync(join(workspace.path, "README.md"), "local\n");
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
 
   await expect(answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!)).rejects.toThrow(
-    /would be overwritten by merge/,
+    /still has uncommitted changes/,
   );
 
-  expect(head(workspace)).toBe("main");
+  expect(head(workspace)).toBe(`task/${work.id}`);
+  expect(readFileSync(join(workspace.path, "README.md"), "utf8")).toBe("local\n");
 });
 
 it("purely-local な workspace で、やり直しの前に帯域外に動いた保護ブランチは、やり直しの後も着地で帯域外と読まれる", async () => {
@@ -4512,6 +4515,8 @@ it("修理の merge back が conflict して quarantine に落ちた間のロー
   expect(git(workspace.path, "rev-parse", "main")).toBe(protectedHead);
   expect(getTask(db, question.id)!.status).toBe("todo");
 
+  // ADR 0356 決定5: checkout the target before repairing the merge by hand.
+  git(workspace.path, "checkout", `task/${work.id}`);
   expect(() => git(workspace.path, "merge", `task/${repair.id}`)).toThrow();
   commitWork(workspace.path, "repair.txt", "fixed and conflicting\n");
   await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantine);
@@ -4918,7 +4923,7 @@ async function moveRefBeforeTheLandingWrite(repo: string, ref: string, sha: stri
   const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
   writeFileSync(
     join(shimDir, "git"),
-    `#!/bin/sh\ncase " $* " in *" --abbrev-ref HEAD "*) "${real}" -C "${repo}" update-ref ${ref} ${sha};; esac\nexec "${real}" "$@"\n`,
+    `#!/bin/sh\ncase " $* " in *" symbolic-ref -q HEAD "*) "${real}" -C "${repo}" update-ref ${ref} ${sha};; esac\nexec "${real}" "$@"\n`,
     { mode: 0o755 },
   );
   vi.stubEnv("PATH", `${shimDir}:${process.env.PATH}`);

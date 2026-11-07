@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { git, gitWithEnv } from "../src/git.js";
+import { git, gitWithEnv, localGitEnv } from "../src/git.js";
 import { loadRegistry } from "../src/registry.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
@@ -25,6 +25,19 @@ function thrown(fn: () => unknown): Error {
   }
   throw new Error("did not throw");
 }
+
+it("local git ignores global and system config even when ambient or supplied env opts in (ADR 0356 決定5)", () => {
+  vi.stubEnv("GIT_CONFIG_GLOBAL", "/ambient.gitconfig");
+  vi.stubEnv("GIT_CONFIG_PARAMETERS", "'core.hooksPath=/ambient/hooks'");
+  vi.stubEnv("GIT_DIR", "/ambient.git");
+  const env = localGitEnv({ GIT_CONFIG_NOSYSTEM: "0" });
+  expect(env).toMatchObject({
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  });
+  expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+  expect(env.GIT_DIR).toBeUndefined();
+});
 
 it("cwd が無い git は subcommand と在り処を名指して投げ、元の spawn の失敗を cause に持つ(issue #2722)", async () => {
   const missing = join(await tempDir("tidepool-git-"), "gone");

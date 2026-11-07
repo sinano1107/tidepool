@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ResourceStop } from "./events.js";
-import { git, gitStatus, gitWithEnv, gitWithInput } from "./git.js";
+import { boardReadTree, boardWorktreeStatus, git, gitWithEnv, gitWithInput, withBoardGit } from "./git.js";
 import {
   type GitHubAuth,
   originRepo,
@@ -195,7 +195,7 @@ export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: 
     const head = resolvablePosedHead(db, room, examinee);
     git(path, "init", "--quiet", "--initial-branch=main");
     // FETCH_HEAD に面接室の在り処を残さない(ADR 0276 決定1)。submodule も辿らない
-    git(path, "fetch", "--quiet", "--no-write-fetch-head", "--no-recurse-submodules", room.path, head);
+    git(path, "fetch", "--quiet", "--no-auto-gc", "--no-write-fetch-head", "--no-recurse-submodules", room.path, head);
     git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
   });
 }
@@ -381,8 +381,10 @@ function writeMergeTree(
   left: string,
   right: string,
 ): string | undefined {
+  const [leftTip, rightTip] = git(workspace.path, "rev-parse", `${left}^{commit}`, `${right}^{commit}`).split("\n");
   try {
-    return git(workspace.path, "merge-tree", "--write-tree", left, right);
+    // ADR 0356 決定5: merge-tree can run a repository's custom merge driver even though it leaves the worktree alone.
+    return withBoardGit(workspace.path, (view) => view(["merge-tree", "--write-tree", leftTip!, rightTip!]).trim());
   } catch (err) {
     if ((err as { status?: number } | null)?.status !== 1) throw err;
     return undefined;
@@ -518,10 +520,57 @@ export function lineageTaskBranch(
  *  ADR 0352 決定1・2: 名前の場所では、離れる branch が無視するものは行き先でも無視されるものと入れ子 repo も消す ——
  *  受験者の checkout は再開にも自分の ignored の生成物を残す(ADR 0276 決定1)。 */
 function checkoutThroughGate(db: Db, workspace: WorkspaceConfig, branch: string): void {
-  boardRefWriter(db, workspace)("HEAD", symrefValue(`refs/heads/${branch}`), () => {
-    if (snapshotKey(workspace) === workspace.name) git(workspace.path, "clean", "-q", "-ffdX");
-    git(workspace.path, "checkout", branch);
+  const ref = `refs/heads/${branch}`;
+  const oldTip = git(workspace.path, "rev-parse", "--verify", "HEAD");
+  let tip: string;
+  const writes: Array<[string, string]> = [["HEAD", symrefValue(ref)]];
+  try {
+    tip = git(workspace.path, "rev-parse", "--verify", "--quiet", ref);
+  } catch (err) {
+    if ((err as { status?: number }).status !== 1 || !isRemoteBacked(workspace) || branch !== protectedBranch(workspace)) throw err;
+    // ADR 0356 決定5: preserve checkout's creation of a missing local protected branch from origin.
+    tip = git(workspace.path, "rev-parse", "--verify", protectedBranchRef(workspace));
+    writes.push([ref, tip]);
+  }
+  writeBoardRefs(db, workspace, writes, () => {
+    if (snapshotKey(workspace) === workspace.name) {
+      gitWithEnv({ GIT_WORK_TREE: resolve(workspace.path) }, workspace.path, "clean", "-q", "-ffdX");
+    }
+    writeWithWorktree(db, workspace, oldTip, tip, () => {
+      if (writes.length > 1) git(workspace.path, "update-ref", ref, tip, "");
+      git(workspace.path, "symbolic-ref", "HEAD", ref);
+    });
   });
+}
+
+/** ADR 0356 決定5: advancing a checked-out branch and following it are one ref-gate step. */
+function advanceBranch(db: Db, workspace: WorkspaceConfig, ref: string, oldTip: string, tip: string): void {
+  const follows = headValue(workspace) === symrefValue(ref);
+  boardRefWriter(db, workspace)(ref, tip, () => {
+    const write = () => git(workspace.path, "update-ref", ref, tip, oldTip);
+    if (follows) writeWithWorktree(db, workspace, oldTip, tip, write);
+    else write();
+  });
+}
+
+/** ADR 0356 決定5: check worktree overwrites before the ref write and roll back if the ref write fails. */
+function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, tip: string, write: () => void): void {
+  if (oldTip === tip) {
+    write();
+    return;
+  }
+  const sparse = checkoutSparsePolicy(workspace, db);
+  boardReadTree(workspace.path, oldTip, tip, sparse);
+  try {
+    write();
+  } catch (cause) {
+    try {
+      boardReadTree(workspace.path, tip, oldTip, sparse);
+    } catch (rollback) {
+      throw new AggregateError([cause, rollback], `${String(cause)}; worktree rollback failed: ${String(rollback)}`);
+    }
+    throw cause;
+  }
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
@@ -557,6 +606,22 @@ const BOARD_SETTINGS_LINE = "!/.claude/settings.json";
 
 const configEnabled = (workspace: WorkspaceConfig, key: string) =>
   git(workspace.path, "config", "--type=bool", "--default=false", "--get", key) === "true";
+
+function checkoutSparsePolicy(workspace: WorkspaceConfig, db?: Db) {
+  const snapshot = db && storedSparseSnapshot(db, workspace);
+  if (snapshot) {
+    const base = snapshot.mode === "disabled" ? "/*\n" : snapshot.pattern;
+    return { pattern: `${base.trimEnd()}\n${BOARD_SETTINGS_LINE}\n`, cone: false };
+  }
+  const patternPath = sparsePatternPath(workspace);
+  return existsSync(patternPath) && configEnabled(workspace, "core.sparseCheckout")
+    ? { pattern: readFileSync(patternPath, "utf8"), cone: configEnabled(workspace, "core.sparseCheckoutCone") }
+    : undefined;
+}
+
+function checkoutStatus(workspace: WorkspaceConfig, db?: Db): string[] {
+  return boardWorktreeStatus(workspace.path, checkoutSparsePolicy(workspace, db));
+}
 
 /** DB の写しを失った checkout に盤面の行が残っていれば、その行を外した pattern を non-cone の写しと読む(ADR 0293 決定7)。
  *  無効な sparse の行は死んでいるので読まない。探りの失敗(checkout が無い・git repository でない)は「印なし」。
@@ -615,7 +680,7 @@ export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConf
     );
   }
   // このファイルだけを見る: tracked な settings.json を持つ repo はすべてここを通るので(ADR 0346 決定2)、無関係な untracked で止めない
-  if (git(workspace.path, "status", "--porcelain", "--", ".claude/settings.json") !== "") {
+  if (git(workspace.path, "diff-index", "--cached", "--name-only", "HEAD", "--", ".claude/settings.json") !== "") {
     throw new Error(
       `workspace ${workspace.name}: .claude/settings.json has staged changes, which hiding it would leave in the index — commit or unstage them`,
     );
@@ -765,10 +830,10 @@ export async function prepareWorkspaceAtPickup(
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
   if (rootId === undefined || task.type === "interview") {
-    const changes = gitStatus(workspace.path);
-    if (changes !== "") {
+    const changes = checkoutStatus(workspace, db);
+    if (changes.length > 0) {
       throw new PickupGateError(workspace, new Error(
-        `workspace ${workspace.name} has uncommitted changes while resting: ${changes} — a process wrote them after the board moved the checkout`,
+        `workspace ${workspace.name} has uncommitted changes while resting: ${changes.join("\n")} — a process wrote them after the board moved the checkout`,
       ));
     }
   }
@@ -1044,16 +1109,14 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
  *  ここを読む —— 判定を2箇所に複製すると、片方だけが残骸を数えて無実の拒否か取りこぼしが
  *  生まれる。
  *
- *  `gitStatus` の `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
+ *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
  *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
  *  `.claude/agents` だけの残骸が dirty に数えられる。
  *
  *  **観測できなければ投げる。** 飲むかどうかは呼び手の判断であり、経路ごとに違う。 */
-function uncommittedChanges(workspace: WorkspaceConfig): string[] {
+function uncommittedChanges(workspace: WorkspaceConfig, db?: Db): string[] {
   const remnants = new Set<string>(shadowRemnants(workspace));
-  return gitStatus(workspace.path)
-    .split("\n")
-    .filter((line) => line !== "" && !remnants.has(line.slice(3)));
+  return checkoutStatus(workspace, db).filter((line) => !remnants.has(line.slice(3)));
 }
 
 /** shadow 残骸(ADR 0069 の3条件)を消す。tree rule の退避も完了経路の検査も、判定の
@@ -1068,17 +1131,18 @@ function removeShadowRemnants(workspace: WorkspaceConfig): void {
 /** ADR 0084 の完了の門が読む「作業ツリーに未コミットの変更が残っているか」。tree rule と
  *  同じ基準(上記)で、こちらは**何も変えない**。
  *
- *  **観測に失敗したら `false` を返す**(ADR 0084 決定2): git repository 自体が壊れている
+ *  **観測に失敗したら空配列を返す**(ADR 0084 決定2): git repository 自体が壊れている
  *  workspace で「commit してから呼び直せ」は worker に実行不能なことを求める指示になる。
  *  握り潰しをここに置くのは、飲むのを**観測に限る**ためである —— 呼び出し側のロジックの
  *  失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでもない: 直後の解放で tree rule
  *  が同じ git に躓き、quarantine が人間に届く。**その網は完了経路には無い**(tree rule が
  *  検査に置き換わる)ので、そちらは飲まない —— `assertNothingWrittenAfterCompletion`。 */
-export function treeIsDirty(workspace: WorkspaceConfig): boolean {
+export function completionTreePaths(workspace: WorkspaceConfig, db?: Db): string[] {
   try {
-    return uncommittedChanges(workspace).length > 0;
-  } catch {
-    return false;
+    return uncommittedChanges(workspace, db).map((line) => line.slice(3));
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err;
+    return [];
   }
 }
 
@@ -1100,15 +1164,15 @@ function wipSubject(task: Task): string {
  *  a WIP commit on the task branch, and the tree is verified clean before the
  *  slot goes free. Mechanical, on every release — completion, escalation or
  *  failure alike — so nothing rests on the agent having tidied up. */
-export function releaseTree(workspace: WorkspaceConfig, task: Task): void {
+function releaseTree(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const taskId = task.id;
   assertOnTaskBranch(workspace, taskId);
   removeShadowRemnants(workspace);
   git(workspace.path, "add", "-A");
-  if (git(workspace.path, "status", "--porcelain") !== "") {
+  if (git(workspace.path, "diff-index", "--cached", "--name-only", "HEAD") !== "") {
     git(workspace.path, "commit", "-m", wipSubject(task));
   }
-  if (git(workspace.path, "status", "--porcelain") !== "") {
+  if (checkoutStatus(workspace, db).length > 0) {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);
   }
 }
@@ -1155,10 +1219,10 @@ export function completionTreeGateApplies(task: Task): boolean {
  *  tree rule と同じ手前の位置で走る。**観測の失敗は飲まない**: 門の側の握り潰しが安全なのは
  *  直後の解放で tree rule が同じ git に躓いて quarantine が人間に届くからであり、完了経路
  *  ではその tree rule がこの検査に置き換わっていて網が無い(ADR 0109 決定3)。 */
-function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: Task): void {
+function assertNothingWrittenAfterCompletion(db: Db, workspace: WorkspaceConfig, task: Task): void {
   assertOnTaskBranch(workspace, task.id);
   removeShadowRemnants(workspace);
-  if (uncommittedChanges(workspace).length > 0) {
+  if (uncommittedChanges(workspace, db).length > 0) {
     // 完了報告の後の書き込みは session の成果物ではない —— 後始末は session の持ち物(ADR 0109)
     throw new Error(
       `workspace ${workspace.name} was written to after task ${task.id} reported done — ` +
@@ -1178,9 +1242,9 @@ function boardMovedHead(db: Db, workspace: WorkspaceConfig, taskId: string): boo
 /** ADR 0345 決定3: 盤面が checkout を動かした後の再実行の検査。退避も ref の比較も1度しか成り立たないので撃たず、
  *  ツリーの変更だけを読み、あれば fail-closed に quarantine へ落とす。ignored は HEAD を動かす前に消すので(ADR 0352 決定1)、
  *  ここへ来るのは盤面が動かした後に書かれた形である。 */
-function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, task: Task): void {
+function assertNothingWrittenAfterBoardMovedHead(db: Db, workspace: WorkspaceConfig, task: Task): void {
   removeShadowRemnants(workspace);
-  const changes = uncommittedChanges(workspace);
+  const changes = uncommittedChanges(workspace, db);
   if (changes.length > 0) {
     throw new Error(
       `workspace ${workspace.name} has uncommitted changes after the board moved its checkout off ` +
@@ -1189,28 +1253,8 @@ function assertNothingWrittenAfterBoardMovedHead(workspace: WorkspaceConfig, tas
   }
 }
 
-/** ADR 0052 決定7: 「クリーンに戻す」には**休止位置**も含まれる —— 退避のあと checkout を
- *  保護ブランチへ戻し、remote 正本を宣言した workspace ではリモートへ追従させてから戻す。
- *
- *  理由は盤面の正しさではなく**人間の誤読**である。盤面はもう checkout の位置を読まない
- *  (fork 元も読み取りもリモートの ref)が、人間はホスト上でその checkout を覗く。最後に
- *  走ったタスクのブランチが居座った clone は、覗いた人間に「今この workspace はこう
- *  なっている」と嘘をつく(#210 のグリリング中、実際に一度その誤読が起きた)。
- *
- *  追従は **ff-only** で撃つ。`checkout -B <protected> <remote ref>` なら常に成功するが、
- *  それは帯域外の手作業でローカルに載ったコミットを黙って捨てる —— quarantine すべき
- *  食い違いを、無かったことにする形で通してしまう。
- *
- *  **成立の判定は ff コマンドの成否ではなく位置の一致で行う**(/code-review Spec 軸の
- *  指摘)。ローカルがリモートより**先行しているだけ**のとき `merge --ff-only` は
- *  「もう最新」として exit 0 で通るが、その休止位置は嘘である —— そこに載っているのは
- *  push されていないローカル専用のコミットで、リモートを見ている人間の理解と食い違う。
- *  決定7 が求めるのは「追従していること」なので、ff のあと HEAD がリモートの ref と
- *  同じコミットを指していることまで要求する。分岐(両側に差がある)は merge 自身が
- *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
- *  `releaseWorkspace` と pickup の後半が受ける)。
- *
- *  checkout と ff は口で書く(ADR 0243 決定4 / ADR 0345 決定2 / ADR 0351 決定3)。 */
+/** ADR 0052 決定7 / ADR 0356 決定5: the resting checkout shows the protected branch's current tree.
+ *  A remote-backed place follows origin only by fast-forward, preserving ahead or diverged commits for repair. */
 function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   try {
@@ -1222,15 +1266,19 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   if (!isRemoteBacked(workspace)) return;
   const ref = protectedBranchRef(workspace);
   const remoteSha = git(workspace.path, "rev-parse", ref);
-  // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
-  // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
+  const localRef = `refs/heads/${branch}`;
+  const localSha = git(workspace.path, "rev-parse", localRef);
   try {
-    boardRefWriter(db, workspace)(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
+    if (localSha === remoteSha) return;
+    if (isAncestor(workspace, localSha, remoteSha)) {
+      advanceBranch(db, workspace, localRef, localSha, remoteSha);
+      return;
+    }
+    if (!isAncestor(workspace, remoteSha, localSha)) throw new Error("the local and remote histories diverged");
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  if (git(workspace.path, "rev-parse", "HEAD") === remoteSha) return;
   throw new Error(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
       "commits were never pushed, so parking here would show a state the remote does not have",
@@ -1242,18 +1290,19 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
  *  a clean tree — dirty, or not even a usable git repository — is treated
  *  the same, fail-closed, same posture as the tree rule's own dirty-after-
  *  WIP-commit check. */
-export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
+export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db): void {
   assertOwnGitDirectory(workspace.path);
-  let status: string;
+  let status: string[];
   try {
-    status = gitStatus(workspace.path);
+    status = checkoutStatus(workspace, db);
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err;
     throw new Error(
       `workspace ${workspace.name} is not a usable git repository: ` +
         (err instanceof Error ? err.message : String(err)),
     );
   }
-  if (status !== "") {
+  if (status.length > 0) {
     throw new Error(`workspace ${workspace.name} still has uncommitted changes`);
   }
 }
@@ -1406,12 +1455,12 @@ export function releaseWorkspace(
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
   try {
     if (boardMovedHead(db, workspace, task.id)) {
-      assertNothingWrittenAfterBoardMovedHead(workspace, task);
+      assertNothingWrittenAfterBoardMovedHead(db, workspace, task);
     } else {
       if (completed && completionTreeGateApplies(task)) {
-        assertNothingWrittenAfterCompletion(workspace, task);
+        assertNothingWrittenAfterCompletion(db, workspace, task);
       } else {
-        releaseTree(workspace, task);
+        releaseTree(db, workspace, task);
       }
       // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
       // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する。
@@ -1438,11 +1487,8 @@ export function releaseWorkspace(
   }
 }
 
-/** 後始末の merge back の一歩 —— 帰り先を checkout し、届いていなければ ff 先か merge commit を先に作って、口を通して
- *  `merge --ff-only` で checkout ごと進める(ADR 0243 決定4)。conflict は merge-tree の段階で分かり、checkout は帰り先の
- *  tip のまま何も残さない —— 出口を2つ示して投げる(ADR 0239 帰結)。それ以外の失敗(dirty なツリーを ff が拒む等)は
- *  git の理由のまま投げる。workspace の quarantine の受理の検査も同じ一歩を踏む(ADR 0240 決定4)。出口の文の結びだけが
- *  呼び手で違う —— 後始末の文はまだ答えていない quarantine の question に載る。 */
+/** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict leaves
+ *  the checkout in place and reports the same repair options to teardown and quarantine acceptance (ADR 0239 / ADR 0240). */
 function mergeBackInto(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1452,11 +1498,12 @@ function mergeBackInto(
 ): void {
   const source = taskBranch(taskId);
   const ref = `refs/heads/${target}`;
-  checkoutThroughGate(db, workspace, target);
-  if (isAncestor(workspace, source, ref)) return;
-  const sha = isAncestor(workspace, ref, source)
-    ? git(workspace.path, "rev-parse", `refs/heads/${source}`)
-    : mergeCommit(workspace, ref, `refs/heads/${source}`, `Merge ${source} into ${target}`);
+  const oldTip = git(workspace.path, "rev-parse", ref);
+  const sourceTip = git(workspace.path, "rev-parse", `refs/heads/${source}`);
+  if (isAncestor(workspace, sourceTip, oldTip)) return;
+  const sha = isAncestor(workspace, oldTip, sourceTip)
+    ? sourceTip
+    : mergeCommit(workspace, oldTip, sourceTip, `Merge ${source} into ${target}`);
   if (sha === undefined) {
     throw new Error(
       `${source} does not merge cleanly into '${target}' — either merge it there by hand in workspace ` +
@@ -1464,7 +1511,7 @@ function mergeBackInto(
         thenAnswer,
     );
   }
-  boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "merge", "--ff-only", sha));
+  advanceBranch(db, workspace, ref, oldTip, sha);
 }
 
 /** ADR 0240 決定4: 内容が帰り先(lineage が指す祖先のタスクブランチ)に届いていない done の work と、その帰り先。
@@ -1558,10 +1605,8 @@ function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: st
   }
 }
 
-/** ADR 0105 決定2: a root that outlived a squash/rebase-landed fork source
- *  catches its task branch up to the protected ref without touching HEAD,
- *  the index, or the worktree. Parent order preserves the task branch as the
- *  first-parent history and records the protected ref as the second parent. */
+/** ADR 0105 決定2: catch the task branch up to the protected ref with the task branch as first parent.
+ *  ADR 0356 決定5: a checked-out branch's worktree follows its ref. */
 export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string): void {
   const branch = taskBranch(taskId);
   const ref = `refs/heads/${branch}`;
@@ -1575,7 +1620,7 @@ export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: st
         "resolve it by hand, then retry PR promotion",
     );
   }
-  boardRefWriter(db, workspace)(ref, merged, () => git(workspace.path, "update-ref", ref, merged, taskSha));
+  advanceBranch(db, workspace, ref, taskSha, merged);
 }
 
 /** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
@@ -1616,20 +1661,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
     ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
     : mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
   if (landed === undefined) throw landingConflict(workspace, branch, task);
-  // 着地は人間面から入るので、同じ workspace で**別のタスクが走っている最中**に来る
-  // (ADR 0064 決定4 が挙げる並行そのもの)。checkout はその worker の作業ツリーを
-  // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
-  // —— HEAD が保護ブランチに無ければ ff でもそうでなくても ref だけを進める(ADR 0243 決定4)。`update-ref` に旧 sha を添えるのは
-  // 安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
-  // ここで落ちる(同じ workspace への2枚の着地回答が競えば、負けた側が回答の拒否で落ちる)。
-  //
-  // 枝は DB の走っている行ではなく HEAD の位置で選ぶ: 保護ブランチを checkout している worker の下で `update-ref` を
-  // 撃てば、index と作業ツリーが古い位置に取り残され、着地が運んだ変更が幻の削除として見える(#1872 の実測)。
-  // HEAD が保護ブランチにあれば、走っている session の有無によらず checkout ごと ff する —— 被る WIP があれば ff が
-  // 拒んで何も動かさず、その理由がそのまま人間へ返る(quarantine ではない —— ADR 0103 決定4)
-  const write = boardRefWriter(db, workspace);
-  if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
-    write(ref, landed, () => git(workspace.path, "update-ref", ref, landed, protectedSha));
-  } else write(ref, landed, () => git(workspace.path, "merge", "--ff-only", landed));
+  // ADR 0064 決定4 / ADR 0356 決定5: a human landing may race with a session, so follow only if HEAD is on this ref.
+  advanceBranch(db, workspace, ref, protectedSha, landed);
   return landed;
 }

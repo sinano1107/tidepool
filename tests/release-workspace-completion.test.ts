@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -6,11 +6,11 @@ import { listEvents } from "../src/events.js";
 import { completeTask, getTask, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
+  completionTreePaths,
   ensureTaskBranch,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   releaseWorkspace,
-  treeIsDirty,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
@@ -54,6 +54,71 @@ async function pickedUpSession(type: TaskType = "work"): Promise<{
 function releaseAfterCompletion(db: Db, ws: WorkspaceConfig, task: Task): void {
   releaseWorkspace(db, ws, task, NOW, task.type === "work", undefined, undefined, true);
 }
+
+const treeIsDirty = (workspace: WorkspaceConfig) => completionTreePaths(workspace).length > 0;
+
+it("完了の門は worker の index や info/exclude で隠した変更を読み、.gitignore は尊重する(ADR 0356 決定3)", async () => {
+  const { db, ws } = await pickedUpSession();
+  try {
+    commitWork(ws.path, ".gitignore", "ignored.txt\n");
+    writeFileSync(join(ws.path, "ignored.txt"), "generated\n");
+    expect(completionTreePaths(ws, db)).toEqual([]);
+
+    git(ws.path, "update-index", "--assume-unchanged", "--", "README.md");
+    writeFileSync(join(ws.path, "README.md"), "hidden tracked change\n");
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(completionTreePaths(ws, db)).toEqual(["README.md"]);
+
+    writeFileSync(join(ws.path, ".git/info/exclude"), "hidden.txt\n");
+    writeFileSync(join(ws.path, "hidden.txt"), "hidden untracked change\n");
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(completionTreePaths(ws, db)).toEqual(["README.md", "hidden.txt"]);
+  } finally {
+    db.close();
+  }
+});
+
+it("worker が設定した fsmonitor は完了の門・退避・次の pickup で実行しない(ADR 0356 決定3)", async () => {
+  const { db, task, ws } = await pickedUpSession();
+  try {
+    const script = join(ws.path, ".git", "fsmonitor-probe");
+    const marker = join(ws.path, ".git", "fsmonitor-ran");
+    writeFileSync(script, '#!/bin/sh\ntouch "$(dirname "$0")/fsmonitor-ran"\nexit 1\n', { mode: 0o755 });
+    git(ws.path, "config", "core.fsmonitor", script);
+    git(ws.path, "status", "--porcelain");
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    expect(treeIsDirty(ws)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+    writeFileSync(join(ws.path, "work.txt"), "work in progress\n");
+    releaseWorkspace(db, ws, task, NOW);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+    expect(git(ws.path, "show", `task/${task.id}:work.txt`)).toBe("work in progress");
+
+    const next = registerTask(db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+    await prepareWorkspaceAtPickup(db, ws, next);
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了の門は作業ツリーを HEAD に戻した後も staged な変更を読む(ADR 0084 決定1)", async () => {
+  const { db, ws } = await pickedUpSession();
+  try {
+    const path = join(ws.path, "README.md");
+    const original = git(ws.path, "show", "HEAD:README.md");
+    writeFileSync(path, "a staged edit\n");
+    git(ws.path, "add", "README.md");
+    writeFileSync(path, `${original}\n`);
+
+    expect(completionTreePaths(ws, db)).toEqual(["README.md"]);
+  } finally {
+    db.close();
+  }
+});
 
 it("完了の merge back は ignored の生成物と入れ子 repo を消してから帰り、次のタスクは clean に始まる(ADR 0352 決定1・2)", async () => {
   const db = openDb(":memory:");
@@ -162,9 +227,9 @@ it("汚れが shadow 残骸の3条件だけを満たすなら、削除された�
 it("観測そのものが失敗したら完了経路は clean に倒さず quarantine に落ちる —— 門の握り潰しはここには無い", async () => {
   const { db, task, ws } = await pickedUpSession();
   commitWork(ws.path, "deliverable.txt", "the real work\n");
-  // **汚れの観測だけ**が落ちる workspace。checkout も rev-parse も通るので、飲まれた
-  // ときは解放が最後まで走り切ってしまう —— 「飲まない」を測れる形はこれである
-  git(ws.path, "config", "--local", "status.relativePaths", "notabool");
+  // ADR 0356 決定3: the board no longer reads status config. Leave HEAD resolvable but break the tree it observes.
+  const tree = git(ws.path, "rev-parse", "HEAD^{tree}");
+  rmSync(join(ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
 
   // 門(ADR 0084 決定2)は観測の失敗を clean に倒す —— 直後の解放で tree rule が
   // 同じ git に躓いて quarantine が人間に届くからである

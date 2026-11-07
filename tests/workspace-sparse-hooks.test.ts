@@ -8,6 +8,7 @@ import { appendEvent } from "../src/events.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
 import {
+  completionTreePaths,
   excludeWorkspaceProjectSettings,
   materializeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
@@ -33,6 +34,29 @@ afterEach(async () => {
   db = undefined;
   await tidepool?.stop();
   tidepool = undefined;
+});
+
+it("完了の門は sparse settings の意図した欠落と、index で隠した tracked な変更を区別する(ADR 0293 / ADR 0356 決定3)", async () => {
+  const workspace = await makeWorkspace("sparse-completion");
+  db = openDb(":memory:");
+  await mkdir(join(workspace.path, ".claude"));
+  commitWork(workspace.path, ".claude/settings.json", "{}\n");
+  const now = new Date(0);
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(db, workspace, task);
+  excludeWorkspaceProjectSettings(db, workspace);
+
+  expect(completionTreePaths(workspace, db)).toEqual([]);
+  git(workspace.path, "update-index", "--skip-worktree", "--", "README.md");
+  writeFileSync(join(workspace.path, "README.md"), "changed\n");
+  expect(completionTreePaths(workspace, db)).toEqual(["README.md"]);
+
+  git(workspace.path, "update-index", "--no-skip-worktree", "--", "README.md");
+  git(workspace.path, "checkout", "HEAD", "--", "README.md");
+  releaseWorkspace(db, workspace, task, now, false, undefined, undefined, true);
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  materializeWorkspaceProjectSettings(db, workspace);
+  expect(readFileSync(join(workspace.path, ".claude/settings.json"), "utf8")).toBe("{}\n");
 });
 
 it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜず、worker 回収後に戻せる", async () => {

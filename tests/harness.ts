@@ -1006,18 +1006,16 @@ export function openTestExamineeCheckout(db: Db, examinee: Task): string {
   return path;
 }
 
-/** setup のみ: このプロセスの git の commit だけを落とす(署名を求め、署名の program は無い)。他の git は通る。
- *  config は既存の `GIT_CONFIG_*`(vitest.config.ts の env)の後ろに足す。途中で戻すのは `vi.unstubAllEnvs()`、テストの終わりには必ず戻る。 */
+/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。 */
 export function failGitCommits(): void {
+  const dir = mkdtempSync(join(tmpdir(), "tidepool-git-commit-failure-"));
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = commit ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
   onTestFinished(() => {
     vi.unstubAllEnvs();
+    return rm(dir, { recursive: true, force: true });
   });
-  const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
-  vi.stubEnv("GIT_CONFIG_COUNT", String(n + 2));
-  vi.stubEnv(`GIT_CONFIG_KEY_${n}`, "commit.gpgsign");
-  vi.stubEnv(`GIT_CONFIG_VALUE_${n}`, "true");
-  vi.stubEnv(`GIT_CONFIG_KEY_${n + 1}`, "gpg.program");
-  vi.stubEnv(`GIT_CONFIG_VALUE_${n + 1}`, "/nonexistent-gpg");
 }
 
 /** `body` の間に撃たれた `unhandledRejection` の理由を集める。reject は後の macrotask で届くので、1つ流してから外す。 */

@@ -301,9 +301,9 @@ export function authedFetch(auth: GitHubAuth | undefined, checkout: string, time
   inBoardRepo(auth, checkout, timeoutMs, "fetch", (call, url) => {
     // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
     const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
-    runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
+    runAuthedGit(call, ["fetch", "--quiet", "--no-auto-gc", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
     // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通らず(`git` の床)、submodule も辿らない
-    git(checkout, "fetch", "--quiet", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
+    git(checkout, "fetch", "--quiet", "--no-auto-gc", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
   });
 }
 

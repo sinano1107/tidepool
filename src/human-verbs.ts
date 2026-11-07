@@ -648,7 +648,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       if (room) target.path = interviewRoomPath(deps.db, value!) ?? target.path;
       // clean tree は受験者の checkout には当てない(WIP を残す、ADR 0329 決定12)。
       if (!room || placeHasRepository(target.path)) {
-        await refuseOnError(() => verifyWorkspaceClean(target));
+        await refuseOnError(() => verifyWorkspaceClean(target, deps.db));
         if (deps.boardState) {
           const overlap = boardStateOverlap(target.path, deps.boardState);
           if (overlap) throw new DomainError(overlap.reason);
