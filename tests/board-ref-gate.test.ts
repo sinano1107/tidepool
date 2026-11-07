@@ -1,4 +1,5 @@
-import { writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -9,7 +10,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { commitRoomCopy, ensureTaskBranch, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, prepareWorkspaceAtPickup, quarantineWorkspace, refValues, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { catchUpTaskBranch, commitRoomCopy, ensureTaskBranch, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, prepareWorkspaceAtPickup, quarantineWorkspace, refValues, releaseWorkspace, retakeRefBaselines, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -40,6 +41,142 @@ function expectRowsCurrent(db: Db, key: string, ws: WorkspaceConfig, refs: strin
   for (const ref of refs) expect([ref, row.get(ref)]).toEqual([ref, git(ws.path, "rev-parse", ref)]);
 }
 
+const BLOCKED_COMMANDS = ["post-checkout", "reference-transaction", "gpg"];
+
+function installHookAndSigningProbes(ws: WorkspaceConfig): string {
+  const hooks = join(ws.path, ".git", "custom-hooks");
+  mkdirSync(hooks);
+  for (const name of BLOCKED_COMMANDS) {
+    writeFileSync(join(hooks, name), '#!/bin/sh\ntouch "$0.ran"\nexit 1\n', { mode: 0o755 });
+  }
+  git(ws.path, "config", "core.hooksPath", hooks);
+  git(ws.path, "config", "commit.gpgsign", "true");
+  git(ws.path, "config", "gpg.program", join(hooks, "gpg"));
+  return hooks;
+}
+
+function expectHooksAndSigningInactive(hooks: string): void {
+  for (const name of BLOCKED_COMMANDS) expect(existsSync(join(hooks, `${name}.ran`)), name).toBe(false);
+}
+
+it.each([false, true])("catch-up follows the updated tip when the task branch is checked out (shallow: %s, ADR 0356 決定5)", async (shallow) => {
+  const source = await makeWorkspace("gate-catch-up");
+  const ws = { ...source };
+  if (shallow) {
+    commitWork(source.path, "shallow-base.txt", "the fork point\n");
+    ws.path = await tempDir("gate-catch-up-shallow-");
+    git(source.path, "clone", "--depth=1", `file://${source.path}`, ws.path);
+    git(ws.path, "remote", "remove", "origin");
+  }
+  const db = openDb(":memory:");
+  try {
+    const task = work(db, "catch up");
+    git(ws.path, "branch", `task/${task.id}`);
+    commitWork(ws.path, "upstream.txt", "from main\n");
+    await prepareWorkspaceAtPickup(db, ws, task);
+    commitWork(ws.path, "task.txt", "from the task\n");
+
+    catchUpTaskBranch(db, ws, task.id);
+
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(ws.path, "upstream.txt"), "utf8")).toBe("from main\n");
+    expect(readFileSync(join(ws.path, "task.txt"), "utf8")).toBe("from the task\n");
+  } finally {
+    db.close();
+  }
+});
+
+it("merge back and parking ignore repo-local hooks, signing and merge drivers (ADR 0356 決定5)", async () => {
+  const ws = await makeWorkspace("gate-merge-back-config");
+  const db = openDb(":memory:");
+  try {
+    commitWork(ws.path, ".gitattributes", "shared.txt merge=probe\n");
+    const shared = (first: string, last: string) => `${first}\na\nb\nc\nd\ne\n${last}\n`;
+    commitWork(ws.path, "shared.txt", shared("base", "base"));
+    const parent = work(db, "parent");
+    const child = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+    git(ws.path, "branch", `task/${child.id}`);
+    git(ws.path, "checkout", "-b", `task/${parent.id}`);
+    commitWork(ws.path, "shared.txt", shared("parent", "base"));
+    await prepareWorkspaceAtPickup(db, ws, child);
+    commitWork(ws.path, "shared.txt", shared("base", "child"));
+
+    const hooks = installHookAndSigningProbes(ws);
+    writeFileSync(join(hooks, "merge-driver"), '#!/bin/sh\ntouch "$0.ran"\nexit 1\n', { mode: 0o755 });
+    git(ws.path, "config", "merge.probe.driver", `"${join(hooks, "merge-driver")}"`);
+
+    releaseWorkspace(db, ws, child, NOW, true, undefined, undefined, true);
+
+    expect(existsSync(join(hooks, "merge-driver.ran"))).toBe(false);
+    expectHooksAndSigningInactive(hooks);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "show", `task/${parent.id}:shared.txt`)).toBe(shared("parent", "child").trimEnd());
+    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+  } finally {
+    db.close();
+  }
+});
+
+it("local landing follows HEAD without executing a repo-local smudge command (ADR 0356 決定5)", async () => {
+  const ws = await makeWorkspace("gate-landing-filter");
+  const db = openDb(":memory:");
+  try {
+    const task = work(db, "land a filtered path");
+    await prepareWorkspaceAtPickup(db, ws, task);
+    commitWork(ws.path, ".gitattributes", "landed.txt filter=probe\n");
+    commitWork(ws.path, "landed.txt", "landed content\n");
+    releaseWorkspace(db, ws, task, NOW, false, undefined, undefined, true);
+    const other = work(db, "land a divergent change first");
+    await prepareWorkspaceAtPickup(db, ws, other);
+    commitWork(ws.path, "other.txt", "other content\n");
+    releaseWorkspace(db, ws, other, NOW, false, undefined, undefined, true);
+    mergeTaskToProtected(db, ws, other.id);
+
+    const hooks = installHookAndSigningProbes(ws);
+    const script = join(ws.path, ".git", "smudge-probe");
+    writeFileSync(script, '#!/bin/sh\ntouch "$0.ran"\ncat\n', { mode: 0o755 });
+    git(ws.path, "config", "filter.probe.smudge", `"${script}"`);
+    git(ws.path, "config", "core.splitIndex", "true");
+    git(ws.path, "update-index", "--split-index");
+
+    const landed = mergeTaskToProtected(db, ws, task.id);
+
+    expect(existsSync(`${script}.ran`)).toBe(false);
+    expectHooksAndSigningInactive(hooks);
+    expect(git(ws.path, "rev-parse", "HEAD")).toBe(landed);
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(ws.path, "landed.txt"), "utf8")).toBe("landed content\n");
+    expect(readFileSync(join(ws.path, "other.txt"), "utf8")).toBe("other content\n");
+  } finally {
+    db.close();
+  }
+});
+
+it("local landing restores the old worktree when Git cannot lock the protected ref (ADR 0356 決定5)", async () => {
+  const ws = await makeWorkspace("gate-landing-ref-lock");
+  const db = openDb(":memory:");
+  try {
+    const task = work(db, "land with a blocked ref");
+    const before = git(ws.path, "rev-parse", "HEAD");
+    await prepareWorkspaceAtPickup(db, ws, task);
+    commitWork(ws.path, "landed.txt", "landed content\n");
+    releaseWorkspace(db, ws, task, NOW, false, undefined, undefined, true);
+    const lock = join(ws.path, ".git", "refs", "heads", "main.lock");
+    writeFileSync(lock, "");
+
+    expect(() => mergeTaskToProtected(db, ws, task.id)).toThrow("cannot lock ref");
+
+    expect(git(ws.path, "rev-parse", "HEAD")).toBe(before);
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(existsSync(join(ws.path, "landed.txt"))).toBe(false);
+    rmSync(lock);
+    expect(mergeTaskToProtected(db, ws, task.id)).toBe(git(ws.path, "rev-parse", "HEAD"));
+  } finally {
+    db.close();
+  }
+});
+
 it("remote-backed の完了の後始末の merge back の fetch の後、基準の refs/remotes/origin/<protected> の行は fetch 先の1値で、休止位置の ff も違反と読まれない(#2459 項目1)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("gate-release");
   const db = openDb(":memory:");
@@ -47,12 +184,76 @@ it("remote-backed の完了の後始末の merge back の fetch の後、基準�
   await prepareWorkspaceAtPickup(db, workspace, task);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   commitWork(workspace.path, "work.txt", "work\n");
+  const hooks = installHookAndSigningProbes(workspace);
 
   releaseWorkspace(db, workspace, task, NOW, true, undefined, undefined, true);
 
   expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expectHooksAndSigningInactive(hooks);
   expectRowsCurrent(db, workspace.name, workspace, ["refs/remotes/origin/main", "refs/heads/main"]);
+  expect(readFileSync(join(workspace.path, "merged.txt"), "utf8")).toBe("landed on the remote\n");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
   db.close();
+});
+
+it("parking can recreate a missing local protected branch from origin (ADR 0356 決定5)", async () => {
+  const { workspace: ws, publish } = await makeRemoteBackedWorkspace("gate-missing-local-protected");
+  const db = openDb(":memory:");
+  try {
+    git(ws.path, "checkout", "-b", "other");
+    git(ws.path, "branch", "-D", "main");
+    publish("remote.txt", "new remote content\n", "new remote commit");
+    const task = work(db, "uses the remote fork source");
+
+    await prepareWorkspaceAtPickup(db, ws, task);
+    releaseWorkspace(db, ws, task, NOW);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    expect(git(ws.path, "rev-parse", "main")).toBe(git(ws.path, "rev-parse", "origin/main"));
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(ws.path, "remote.txt"), "utf8")).toBe("new remote content\n");
+  } finally {
+    db.close();
+  }
+});
+
+it("fetch leaves loose objects unpacked and never runs pre-auto-gc (ADR 0356 決定5)", async () => {
+  const { workspace: ws, publish } = await makeRemoteBackedWorkspace("gate-fetch-no-gc");
+  const db = openDb(":memory:");
+  try {
+    const loose = [];
+    git(ws.path, "checkout", "-b", "gc-fixture");
+    for (let i = 0; loose.length < 2; i++) {
+      const blob = `auto-gc fixture ${i}\n`;
+      const sha = createHash("sha1").update(`blob ${blob.length}\0${blob}`).digest("hex");
+      if (!sha.startsWith("17")) continue;
+      const input = join(ws.path, `gc-${i}.txt`);
+      writeFileSync(input, blob);
+      git(ws.path, "add", input);
+      loose.push(join(ws.path, ".git", "objects", "17", sha.slice(2)));
+    }
+    git(ws.path, "commit", "-m", "reachable auto-gc fixtures");
+    git(ws.path, "checkout", "main");
+    git(ws.path, "config", "gc.auto", "1");
+    git(ws.path, "config", "maintenance.autoDetach", "false");
+    git(ws.path, "config", "gc.autoDetach", "false");
+    const marker = join(ws.path, ".git", "gc-ran");
+    writeFileSync(join(ws.path, ".git", "hooks", "pre-auto-gc"), '#!/bin/sh\ntouch .git/gc-ran\nexit 1\n', { mode: 0o755 });
+    git(ws.path, "-c", "maintenance.auto=true", "gc", "--auto");
+    expect(existsSync(marker)).toBe(true);
+    const boardMarker = join(ws.path, ".git", "board-gc-ran");
+    writeFileSync(join(ws.path, ".git", "hooks", "pre-auto-gc"), '#!/bin/sh\ntouch .git/board-gc-ran\nexit 1\n', { mode: 0o755 });
+    publish("remote.txt", "new remote content\n", "new remote commit");
+
+    await prepareWorkspaceAtPickup(db, ws, work(db, "fetch without auto-gc"));
+
+    expect(loose.every((path) => existsSync(path))).toBe(true);
+    expect(existsSync(boardMarker)).toBe(false);
+    expect(git(ws.path, "show", "main:remote.txt")).toBe("new remote content");
+  } finally {
+    db.close();
+  }
 });
 
 it("ensureTaskBranch の後、基準にタスクブランチの行(fork 元の sha)と HEAD の行(symref)が予告どおりの1値で入り、再開は HEAD の行を戻す(ADR 0351 決定3 / ADR 0345 決定2)", async () => {
@@ -141,8 +342,9 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
   await prepareWorkspaceAtPickup(db, workspace, earlier);
   releaseWorkspace(db, workspace, earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
-  // clean 検査と fetch の後、休止位置への checkout が呼ぶ hook で ff を塞ぐ(ADR 0351 決定5)。
-  writeFileSync(join(workspace.path, ".git/hooks/post-checkout"), '#!/bin/sh\nprintf "left untracked on the host\\n" > merged.txt\n', { mode: 0o755 });
+  // ADR 0356 決定5: checkout hook は走らないので、履歴の分岐で ff を塞ぐ。
+  commitWork(workspace.path, "local.txt", "local commit\n");
+  retakeRefBaselines(db, [workspace]);
 
   await expect(prepareWorkspaceAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
 

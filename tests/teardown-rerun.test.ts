@@ -142,9 +142,10 @@ it("基準の行が無い workspace の HEAD は盤面が動かしたと読ま�
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`is on 'main', not '${s.branch}' — refusing to commit`);
 });
 
-it("盤面が休止させた後に書かれたツリーは、退避せず、変わったファイルと休止後の書き込みを名指す workspace Quarantine に落ちる(ADR 0345 決定3)", async () => {
+it.each([false, true])("盤面が休止させた後の書き込みは quarantine に落ちる(info/exclude: %s、ADR 0345 決定3 / ADR 0356 決定3)", async (hidden) => {
   const s = await settledSession("completed");
   await teardownThrewAfterTreeRule(s);
+  if (hidden) writeFileSync(join(s.ws.path, ".git/info/exclude"), "late.txt\n");
   writeFileSync(join(s.ws.path, "late.txt"), "written by a process that outlived the board\n");
   const tips = () => [git(s.ws.path, "rev-parse", "main"), git(s.ws.path, "rev-parse", s.branch)];
   const before = tips();
@@ -157,7 +158,7 @@ it("盤面が休止させた後に書かれたツリーは、退避せず、変�
   expect(purpose).toContain("a process wrote them");
   expect(purpose).not.toContain("ignored only on the task branch");
   expect(tips()).toEqual(before);
-  expect(git(s.ws.path, "status", "--porcelain")).toBe("?? late.txt");
+  expect(git(s.ws.path, "status", "--porcelain")).toBe(hidden ? "" : "?? late.txt");
   expect(head(s)).toBe("main");
 });
 
@@ -243,19 +244,17 @@ it("退避の commit が落ちて Quarantine に返った tree rule の受理は
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
-  expectOneQuestionRefiredOnce(s, "/nonexistent-gpg");
+  expectOneQuestionRefiredOnce(s, "fixture commit failed");
   expect(head(s)).toBe(s.branch);
 });
 
-it("merge back の conflict で Quarantine に返った tree rule の受理は、帰り先に居るまま同じ conflict に着き、同じ question に quarantine_refired を1つ足す(ADR 0345 決定3・4)", async () => {
+it("merge back の conflict で Quarantine に返った tree rule の受理は、子の HEAD のまま同じ conflict に着き、同じ question に quarantine_refired を1つ足す(ADR 0345 決定3・4 / ADR 0356 決定5)", async () => {
   const s = await settledSession("completed", { parent: "conflicts" });
   await teardownThrewAfterTreeRule(s);
-  expect(head(s)).toBe(s.parentBranch);
-
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
   expectOneQuestionRefiredOnce(s, "does not merge cleanly");
-  expect(head(s)).toBe(s.parentBranch);
+  expect(head(s)).toBe(s.branch);
   expect(git(s.ws.path, "status", "--porcelain")).toBe("");
 });
 
@@ -284,7 +283,38 @@ it.each([
   expect(git(s.ws.path, "log", "-1", "--format=%s", s.branch)).toContain(tipSubject);
 });
 
-it("merge back が conflict しても、帰り先への checkout の前に ignored の入れ子 repo は消えている(ADR 0352 決定1)", async () => {
+it.each(["single interruption", "late write", "repeated interruption"])("teardown preserves the WIP tip across parking recovery (%s, ADR 0356 決定5)", async (scenario) => {
+  const s = await settledSession("interrupted");
+  commitWork(s.ws.path, "wip.txt", "work saved before parking\n");
+  const tip = git(s.ws.path, "rev-parse", "HEAD");
+  boardRefWriter(s.db, s.ws)(`refs/heads/${s.branch}`, tip, () => {});
+  dropBoardAtHeadFold(s, () => git(s.ws.path, "read-tree", "-u", "-m", "HEAD", "main"));
+  if (scenario === "late write") writeFileSync(join(s.ws.path, "README.md"), "a late write\n");
+  if (scenario === "repeated interruption") {
+    // A failed retry's fold could keep a two-value row, so fail the second write regardless of its contents.
+    let writes = 0;
+    s.db.function("fixture_second_ref_write", () => ++writes === 2 ? 1 : 0);
+    s.db.exec("CREATE TEMP TRIGGER drop_retry_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
+      "WHEN fixture_second_ref_write() BEGIN SELECT RAISE(ABORT, 'the board dropped again'); END");
+    expect(() => boardRefWriter(s.db, s.ws)("HEAD", "symref=refs/heads/main", () => {})).toThrow("the board dropped again");
+    s.db.exec("DROP TRIGGER drop_retry_fold");
+  }
+  const deps = restarted(s);
+
+  await resumeUnfinishedTeardown(deps);
+
+  if (scenario === "late write") {
+    expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("parking was interrupted");
+    expect(head(s)).toBe(s.branch);
+    expect(git(s.ws.path, "status", "--porcelain")).toContain("README.md");
+  } else {
+    expectCleanRerun(s, deps, "todo");
+  }
+  expect(git(s.ws.path, "rev-parse", s.branch)).toBe(tip);
+  expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("work saved before parking");
+});
+
+it("merge back の conflict は HEAD を動かさず、ignored の入れ子 repo は残る(ADR 0352 決定1 / ADR 0356 決定5)", async () => {
   const s = await settledSession("completed", { parent: "conflicts" });
   commitWork(s.ws.path, ".gitignore", "build/\n");
   const nested = join(s.ws.path, "build", "nested");
@@ -295,8 +325,8 @@ it("merge back が conflict しても、帰り先への checkout の前に ignor
   await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("does not merge cleanly");
-  expect(head(s)).toBe(s.parentBranch);
-  expect(existsSync(join(s.ws.path, "build"))).toBe(false);
+  expect(head(s)).toBe(s.branch);
+  expect(existsSync(join(s.ws.path, "build"))).toBe(true);
 });
 
 it("帰り先へ届いた merge back の後の再実行は、帰り先を動かさず休止位置へ戻る(ADR 0345 決定3)", async () => {

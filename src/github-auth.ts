@@ -303,7 +303,8 @@ export function authedFetch(auth: GitHubAuth | undefined, checkout: string, time
     const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
     runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
     // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通らず(`git` の床)、submodule も辿らない
-    git(checkout, "fetch", "--quiet", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
+    // ADR 0356 決定5: the named checkout disables auto-GC explicitly. The network runner already disables it under ADR 0339 決定1.
+    git(checkout, "fetch", "--quiet", "--no-auto-gc", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
   });
 }
 

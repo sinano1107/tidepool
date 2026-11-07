@@ -254,6 +254,13 @@ export function openDb(path: string): Db {
       sparse_snapshot TEXT
     );
 
+    -- ADR 0356 決定3: the board's read policy is pinned before workers can edit it.
+    -- JSON null means the checkout has no approved sparse omissions.
+    CREATE TABLE IF NOT EXISTS workspace_sparse_policies (
+      name   TEXT PRIMARY KEY,
+      policy TEXT NOT NULL
+    );
+
     -- ADR 0098: a Provider probe is one observation with zero or more
     -- account/model windows.  model is stored as the empty string so the
     -- compound key stays unique for the account-wide window in SQLite.

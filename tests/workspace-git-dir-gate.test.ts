@@ -114,3 +114,12 @@ it("修理確認の検証は status.showUntrackedFiles=no でも untracked を�
 
   expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
 });
+
+it("修理確認の検証は info/exclude で隠したファイルを拒否する(ADR 0356 決定3)", async () => {
+  const workspace = await makeWorkspace("verify-excluded");
+  await writeFile(join(workspace.path, ".git/info/exclude"), "late.txt\n");
+  await writeFile(join(workspace.path, "late.txt"), "written after repair\n");
+
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
+});

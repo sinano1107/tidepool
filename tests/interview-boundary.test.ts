@@ -884,7 +884,7 @@ it("面接室が作れなかった pickup は面接室の quarantine に落ち�
   failGitCommits();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   vi.unstubAllEnvs();
-  expect((await servedQuarantineQuestion(t, "workspace", root.id)).purpose).toContain("/nonexistent-gpg");
+  expect((await servedQuarantineQuestion(t, "workspace", root.id)).purpose).toContain("fixture commit failed");
   await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("todo"));
   // slot が空いて盤面は流れ続ける(ADR 0274 決定1)—— root は面接室の quarantine が外し、走ったのは他の task だけ
   expect(t.worker.started.map((s) => s.id)).not.toContain(root.id);
@@ -893,7 +893,7 @@ it("面接室が作れなかった pickup は面接室の quarantine に落ち�
   expect(open.map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
   expect(open.filter((q) => q.type === "question" && q.parent_id === root.id)).toEqual([]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
-    { kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("/nonexistent-gpg") },
+    { kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("fixture commit failed") },
   ]);
   const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);

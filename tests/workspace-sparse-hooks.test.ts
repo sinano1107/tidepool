@@ -8,6 +8,7 @@ import { appendEvent } from "../src/events.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
 import {
+  completionTreePaths,
   excludeWorkspaceProjectSettings,
   materializeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
@@ -33,6 +34,57 @@ afterEach(async () => {
   db = undefined;
   await tidepool?.stop();
   tidepool = undefined;
+});
+
+it("完了の門は sparse settings の意図した欠落と、index で隠した tracked な変更を区別する(ADR 0293 / ADR 0356 決定3)", async () => {
+  const workspace = await makeWorkspace("sparse-completion");
+  db = openDb(":memory:");
+  await mkdir(join(workspace.path, ".claude"));
+  commitWork(workspace.path, ".claude/settings.json", "{}\n");
+  const now = new Date(0);
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(db, workspace, task);
+  excludeWorkspaceProjectSettings(db, workspace);
+
+  expect(completionTreePaths(workspace, db)).toEqual([]);
+  expect(existsSync(join(workspace.path, ".claude/settings.json"))).toBe(false);
+  git(workspace.path, "update-index", "--skip-worktree", "--", "README.md");
+  writeFileSync(join(workspace.path, "README.md"), "changed\n");
+  expect(completionTreePaths(workspace, db)).toEqual(["README.md"]);
+
+  git(workspace.path, "update-index", "--no-skip-worktree", "--", "README.md");
+  git(workspace.path, "checkout", "HEAD", "--", "README.md");
+  writeFileSync(join(workspace.path, "unfinished.txt"), "unrelated work in progress\n");
+  releaseWorkspace(db, workspace, task, now);
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expect(git(workspace.path, "log", "-1", "--format=%s", `task/${task.id}`)).toContain(`WIP: task ${task.id}`);
+  expect(git(workspace.path, "show", `task/${task.id}:unfinished.txt`)).toBe("unrelated work in progress");
+  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.json`)).toBe("{}");
+  materializeWorkspaceProjectSettings(db, workspace);
+  expect(readFileSync(join(workspace.path, ".claude/settings.json"), "utf8")).toBe("{}\n");
+});
+
+it("a worker cannot hide a tracked deletion by changing sparse rules after pickup (ADR 0356 決定3)", async () => {
+  const workspace = await makeWorkspace("sparse-policy-pin");
+  const dbPath = join(await tempDir("sparse-policy-db-"), "board.sqlite");
+  db = openDb(dbPath);
+  const now = new Date(0);
+  commitWork(workspace.path, "human-omitted.txt", "human sparse policy\n");
+  git(workspace.path, "sparse-checkout", "set", "--no-cone", "/*", "!/human-omitted.txt");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(db, workspace, task);
+  expect(existsSync(join(workspace.path, "human-omitted.txt"))).toBe(false);
+  expect(completionTreePaths(workspace, db)).toEqual([]);
+
+  git(workspace.path, "sparse-checkout", "set", "--no-cone", "/*", "!/human-omitted.txt", "!/README.md");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(completionTreePaths(workspace, db)).toEqual(["README.md"]);
+
+  db.close();
+  db = openDb(dbPath);
+  releaseWorkspace(db, workspace, task, now, false, undefined, undefined, true);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("written to after task");
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
 });
 
 it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜず、worker 回収後に戻せる", async () => {

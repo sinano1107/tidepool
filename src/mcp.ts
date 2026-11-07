@@ -11,6 +11,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
+import { displayWorktreePath } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -109,9 +110,9 @@ import {
   buildWorkspaceResolver,
   commitRoomCopy,
   completionTreeGateApplies,
+  completionTreePaths,
   resolveOrQuarantine,
   taskRunPlace,
-  treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -330,13 +331,15 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | unde
 /** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
-function assertWorkTreeCommitted(_deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
+function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
   if (!completionTreeGateApplies(task)) return;
-  if (!treeIsDirty(workspace)) return;
+  const paths = completionTreePaths(workspace, deps.db);
+  if (paths.length === 0) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
       "with a message whose body says what changed and why in a few lines, readable from " +
-      "the git history alone, then call complete_task again",
+      "the git history alone, then call complete_task again\n" +
+      paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n"),
   );
 }
 
