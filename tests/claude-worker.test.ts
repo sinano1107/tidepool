@@ -69,7 +69,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, sessionId, stubHostEnvDecoys, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
+import { failQuarantineQuestion, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, sessionId, stubHostEnvDecoys, unhandledRejectionsDuring, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -3261,8 +3261,8 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("checkUsage は board 自身の cwd で claude --safe-mode を、折り返しを避ける広い桁幅で起動する(ADR 0028)", async () => {
+    stubHostEnvDecoys();
     vi.stubEnv("DISABLE_PROMPT_CACHING", undefined);
-    onTestFinished(() => { vi.unstubAllEnvs(); });
     const rec = recordingPty();
     const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
@@ -3292,6 +3292,8 @@ describe("ClaudeCodeWorker", () => {
     // 不在は他の Board call と同じく明示的に綴る。
     expect(rec.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
     expect(rec.calls[0]!.env.DISABLE_PROMPT_CACHING).toBeUndefined();
+    // ADR 0358 決定1 の外: 組み立てた env では使用量パネルが出なかった(2.1.286 の VM 実測)ので、host の env をそのまま継ぐ
+    expect(rec.calls[0]!.env).toMatchObject(HOST_ENV_DECOYS);
     // ホストの TUI 設定に依らず fullscreen renderer を強制する(classic の
     // cursor-position 描画は ANSI 除去後に語が連結し parseUsage が読めない)
     const args = rec.calls[0]!.args;

@@ -562,11 +562,14 @@ export function boardCallEnv(temp?: string): NodeJS.ProcessEnv {
   return { ...workerBaseEnv(temp), ...anthropicAuthEnv(), ...BOARD_CLI_CLOSED };
 }
 
-/** The `/usage` scrape's env — **outside ADR 0358 決定1**: a pty TUI whose
- *  dependence on `TERM` and the like is unmeasured, so it inherits the board's
- *  `process.env`, and with it any host var such as `ANTHROPIC_BASE_URL`. Like
- *  every Board call it closes the advisor and the autoupdater. */
-export function usageScrapeEnv(): NodeJS.ProcessEnv {
+/** The `/usage` scrape's env — **outside ADR 0358 決定1**: it inherits the
+ *  board's `process.env`, and with it any host var such as `ANTHROPIC_BASE_URL`.
+ *  Measured on 2.1.286 in the Lima VM (2026-11-07, same subscription login):
+ *  the built env (base + Claude injections; node-pty sets `TERM` itself) yields
+ *  no usage panel while the inherited env does — which host var the TUI needs
+ *  is unidentified. Like every Board call it closes the advisor and the
+ *  autoupdater. */
+function usageScrapeEnv(): NodeJS.ProcessEnv {
   return { ...process.env, ...BOARD_CLI_CLOSED };
 }
 

@@ -7,10 +7,9 @@ import {
   boardCallEnvWithoutThinking,
   claudeMcpReachabilityThrough,
   moonshotCliAuthEnv,
-  usageScrapeEnv,
 } from "../src/claude-worker.js";
 import { specRecordingCall } from "./fakes.js";
-import { HOST_ENV_DECOYS, stubHostEnvDecoys } from "./harness.js";
+import { stubHostEnvDecoys } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** Board call(盤面呼び出し / ADR 0044): 盤面が自分の機能のために回す CLI 呼び出しは
@@ -94,13 +93,6 @@ describe("Board call の env", () => {
       ANTHROPIC_AUTH_TOKEN: "sk-moonshot-test-key",
       ANTHROPIC_MODEL: "kimi-k3[1m]",
     });
-  });
-
-  // ADR 0358 決定1 の外(pty の TUI が TERM 等に依るかが未測): 盤面の env を継ぐのが意図である釘
-  it("/usage scrape の env は host の env をそのまま継ぐ(列挙の外)", () => {
-    stubHostEnvDecoys();
-
-    expect(usageScrapeEnv()).toMatchObject({ ...HOST_ENV_DECOYS, PATH: "/usr/bin:/bin", CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1", DISABLE_AUTOUPDATER: "1" });
   });
 
   // 盤面プロセスの env に立てる案を採らなかったことの裏返し —— それを採ると
