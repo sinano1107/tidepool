@@ -13,9 +13,10 @@ import { parseGitHubRepo } from "./repo-access.js";
  *
  *  ADR 0024's seam is unchanged: the token is injected into each child's env at
  *  the moment of the call, never written to the board's own process.env —
- *  workers inherit that wholesale and hold zero GitHub credentials — and never
- *  committed to the registry. Every board-driven GitHub network call flows
- *  through this module: credentials take effect in exactly one place.
+ *  which the `/usage` scrape still inherits (outside ADR 0358 決定1); workers
+ *  hold zero GitHub credentials — and never committed to the registry. Every
+ *  board-driven GitHub network call flows through this module: credentials
+ *  take effect in exactly one place.
  *
  *  Acquisition and injection are **split** because acquisition is now a network
  *  round trip while injection must stay synchronous: ADR 0066 決定5 requires

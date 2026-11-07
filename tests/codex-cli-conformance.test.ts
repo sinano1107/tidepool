@@ -8,6 +8,7 @@ import {
   SKILL_CLOSURE_MARKERS,
   type SkillClosureObservation,
 } from "../src/codex-cli-conformance.js";
+import { boardConfigRequirements, conformingConfigLayers } from "./fakes.js";
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
 
@@ -56,6 +57,10 @@ const OBSERVED: CodexAppServerProbeResult = {
 //   workspace で、`project_doc_max_bytes=0` を付けずに撃ったもの。workspace のパスだけ無害な固定値へ置換してある
 // skills-list-closed-unreadable は採ったものではない: 実物の codex-skills-list-closed.json の workspace B の entry に、
 // `errors[]` を2つ足して作った。`errors[]` の形は `SkillErrorInfo` の生成 schema、message は #1972 の実測の stderr の文面
+// 実測の層の形は fakes の `conformingConfigLayers`(codex-cli 0.163.0、Lima VM)
+const configRead = (layers: unknown[]) => ({ config: {}, origins: {}, layers });
+const MEASURED_LAYERS = conformingConfigLayers("/tmp/ch3041-eEYy");
+
 const passing = (): ConformanceObservations => ({
   compatibility: async () => ({ ok: true, cliVersion: "codex-cli 0.147.0" }),
   appServer: async () => OBSERVED,
@@ -73,9 +78,10 @@ const passing = (): ConformanceObservations => ({
     unreadablePaths: [NO_DESCRIPTION, NO_FRONTMATTER],
     authorizationSent: false,
   }),
+  configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: boardConfigRequirements }),
 });
 
-it("各面の観測が盤面の読み取りを通れば、10面すべてが合格で ok", async () => {
+it("各面の観測が盤面の読み取りを通れば、11面すべてが合格で ok", async () => {
   const { rows, ok } = await judgeConformance(passing());
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
@@ -89,8 +95,15 @@ it("各面の観測が盤面の読み取りを通れば、10面すべてが合�
     ["unlisted domain → 403 blocked-by-allowlist", true],
     ["AGENTS.md layer", true],
     ["skill closure", true],
+    ["config layers (config/read / configRequirements/read)", true],
   ]);
   expect(ok).toBe(true);
+});
+
+it("config 層の面は実物の層の type と requirements の「無し」の綴りを detail に出す(ADR 0358 決定4)", async () => {
+  const { rows } = await judgeConformance(passing());
+  expect(rows.find((row) => row.surface === "config layers (config/read / configRequirements/read)")!.detail)
+    .toBe('layers sessionFlags, user, system; requirements {"allowedLoginMethods":["chatgpt"]}');
 });
 
 /** 合格の観測の skill の閉鎖を一部だけ差し替える。 */
@@ -273,6 +286,41 @@ it.each<[string, string, Partial<ConformanceObservations>, string]>([
     "skill closure",
     withSkillClosure({ closedRequest: "" }),
     prompt,
+  ],
+  [
+    "config/read の層に sessionFlags が無い",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS.slice(1)), requirementsRead: boardConfigRequirements }) },
+    "lack sessionFlags",
+  ],
+  [
+    "config/read が includeLayers を無視して layers を返さない",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: { config: {}, origins: {}, layers: null }, requirementsRead: boardConfigRequirements }) },
+    "threw:",
+  ],
+  [
+    "user の層が file を報告しない",
+    "config layers (config/read / configRequirements/read)",
+    {
+      configLayers: async () => ({
+        configRead: configRead([MEASURED_LAYERS[0], { name: { type: "user", profile: null }, version: "sha256:0", config: {} }]),
+        requirementsRead: boardConfigRequirements,
+      }),
+    },
+    "the user layer reports no file",
+  ],
+  [
+    "requirements が盤面自身の形でない",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: { requirements: { allowedLoginMethods: ["apikey"] } } }) },
+    'allowedLoginMethods: ["apikey"]',
+  ],
+  [
+    "configRequirements/read に requirements の欄が無い",
+    "config layers (config/read / configRequirements/read)",
+    { configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: { supportsIndependentSpeedModes: true } }) },
+    "no requirements field",
   ],
 ])("%s: その面だけが不合格で、ok は false", async (_case, surface, changed, detail) => {
   const { rows, ok } = await judgeConformance({ ...passing(), ...changed });

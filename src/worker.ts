@@ -5,11 +5,22 @@ import { canonicalHarness, type Harness } from "./registry.js";
 import type { SessionStoppedByResource, Task } from "./tasks.js";
 import type { TeardownAction } from "./teardown.js";
 
-/** worker session に継承させない host の資格情報 env。どの Harness も自分の認証に使わないので、Harness を問わず spawn env から
- *  消す —— host が export しても worker に届かない。GitHub の2本は ADR 0024 決定3(worker は GitHub credential ゼロ)、
- *  OpenAI の2本は ADR 0098(API key の経路を開けない)。env 名はベンダー知識だが、2つの adapter が同じ一覧を引くので
- *  adapter の定数(ADR 0005)でなくここに置く。 */
-export const HOST_CREDENTIAL_ENVS = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"] as const;
+/** 盤面の env から名指しで写す(ADR 0358 決定2)—— 盤面に無い名前は鍵ごと載せない。 */
+export function boardEnvByName(...names: string[]): NodeJS.ProcessEnv {
+  return Object.fromEntries(names.flatMap((name) => (process.env[name] === undefined ? [] : [[name, process.env[name]]])));
+}
+
+/** ADR 0358 決定2: worker の形の env の土台 —— Harness の adapter はこの上に自分の注入一式だけを載せる。盤面の env は名指しで
+ *  読み、spread しない(列挙の外は届かない、決定1)。`HOME` は Claude の credentials の置き場のため(ADR 0354 決定1)、git config の
+ *  2つは `HOME` が運ぶ host の git config を閉じる。`TMPDIR` は temp を渡す呼び出しだけが持つ。 */
+export function workerBaseEnv(temp?: string): NodeJS.ProcessEnv {
+  return {
+    ...boardEnvByName("PATH", "HOME"),
+    ...(temp === undefined ? {} : { TMPDIR: temp }),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
 
 /** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。
  *  `model_swaps` は `worker_exited.model_swaps` の写し(ADR 0215 決定5)で、差し替えが無ければ欠ける —— event 側と違い

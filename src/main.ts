@@ -127,7 +127,8 @@ function vapidConfig(): VapidConfig | undefined {
 
 // ADR 0036 / issue #153: 人間面の credential。盤面が持つのはハッシュだけで、
 // 平文は生成した瞬間に一度表示されるだけ — process.env には**載せない**
-// (claude-worker.ts の spawn は `{ ...process.env }` を worker に渡す)。
+// (worker の形の process が受け取るのは盤面が列挙したものだけ —— ADR 0358 決定1 —— で、
+// 列挙の外の `/usage` scrape は process.env を継ぐ)。
 // cookie はオリジン単位なので、盤面は自分が公開されている URL を知っている必要が
 // ある(自力では導出できない)。Pi なら tailnet の公開 URL をここに設定する。
 const { credential, messages } = openHumanCredential({
@@ -169,9 +170,9 @@ const server = await startServer(
     codexOnPath,
     // ADR 0093 / issue #50: the board's GitHub identity is the GitHub App, and
     // this mode-600 file holds the user token the board presents to the broker
-    // — no file, no identity. Neither token ever enters process.env: workers
-    // inherit that wholesale. The broker URL is a public default (ADR 0093
-    // 決定1), overridable for forks running their own App.
+    // — no file, no identity. Neither token ever enters process.env, which the
+    // `/usage` scrape still inherits (outside ADR 0358 決定1). The broker URL is
+    // a public default (ADR 0093 決定1), overridable for forks running their own App.
     githubAuth: loadGitHubAuth(githubTokenFile, process.env.TIDEPOOL_GITHUB_BROKER_URL),
     // the settings surface re-reads this path per request, so a login that
     // happens while the board runs shows up without a restart (ADR 0093 決定5)

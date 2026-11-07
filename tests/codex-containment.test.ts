@@ -25,6 +25,7 @@ import { ProcessContainers } from "../src/process-container.js";
 import {
   codexSkillsList,
   codexSkillsListAt,
+  conformingConfigLayers,
   containerHarness,
   driveCodexPreflight,
   emptySkillsList,
@@ -41,7 +42,9 @@ import { tempDir } from "./temp-dir.js";
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-/** 盤面が `installBoardHook` で置く hook のパス。preflight はこのパスから期待する登録を組む。 */
+/** 盤面所有の CODEX_HOME。preflight はここから期待する hook の登録と、内容を問わない user 層の file を組む。 */
+const BOARD_CODEX_HOME = "/board/codex-home";
+/** 盤面が `installBoardHook` で置く hook のパス。 */
 const BOARD_HOOK_PATH = "/board/codex-home/tidepool-hooks/main-thread-mcp.mjs";
 /** 盤面が Codex に登録されていることを要求する hook —— ADR 0130 決定3 の4項目
  *  (event・matcher・enabled・source)に #731 が `command` を足したもの。
@@ -62,6 +65,12 @@ const VALID: CodexCapabilityObservation = {
   workerPrompts: [CODEX_PROMPT_MARKER],
   agentsMdLayer: [],
   hookDiagnostics: [],
+  // ADR 0358 決定4: 列挙した2層(盤面の `-c` と盤面所有の user 層)だけが内容を持つ
+  configLayers: [
+    { type: "sessionFlags", path: null, identity: null, empty: false, disabledReason: null },
+    { type: "user", path: "/board/codex-home/config.toml", identity: null, empty: false, disabledReason: null },
+  ],
+  requirements: null,
 };
 
 it("preflight は Board call の口を通り、口が答えを返さなければ(上限到達)封じ込めを不成立に倒す", async () => {
@@ -245,8 +254,38 @@ it.each([
   }
 });
 
+it("preflight は hooks/list と同じ app-server session で config/read(includeLayers、空の cwd)と configRequirements/read を撃つ(ADR 0358 決定4 / ADR 0259 決定4)", async () => {
+  const { capability, workAppServerRequests, listedCwd } = await driveCodexPreflight("complete");
+
+  expect(workAppServerRequests.map(({ method, params }) => ({ method, params }))).toEqual([
+    { method: "initialize", params: expect.anything() },
+    { method: "initialized", params: undefined },
+    { method: "hooks/list", params: { cwds: [] } },
+    { method: "config/read", params: { includeLayers: true, cwd: listedCwd } },
+    { method: "configRequirements/read", params: null },
+  ]);
+  // 既定の応答は 0.163.0 の実測の形: sessionFlags・盤面所有の user・config が空の system
+  expect(await capability).toEqual({ available: true });
+});
+
+it.each([
+  [
+    "project の層は dotCodexFolder を path に、disabledReason をそのまま写す",
+    { name: { type: "project", dotCodexFolder: "/ws/.codex" }, version: "sha256:1", config: { model: "y" }, disabledReason: "untrusted" },
+    "project (/ws/.codex, disabled: untrusted)",
+  ],
+  [
+    "path の無い mdm の層は domain と key で名乗る",
+    { name: { type: "mdm", domain: "com.openai.codex", key: "config_toml_base64" }, version: "sha256:1", config: { model: "y" } },
+    "mdm (domain com.openai.codex, key config_toml_base64)",
+  ],
+] as const)("実 probe は config/read の層の type・path・内容の有無を観測に写す —— %s(ADR 0358 決定4)", async (_, extra, expected) => {
+  const { capability } = await driveCodexPreflight("complete", { configLayers: (codexHome) => [...conformingConfigLayers(codexHome), extra] });
+  expect(await capability).toMatchObject({ available: false, reason: expect.stringContaining(`config layer mismatch: expected [], observed ["${expected}"]`) });
+});
+
 it("宣言どおりの観測は封じ込めを成立させる", async () => {
-  expect(await checkCodexCapability(async () => VALID, BOARD_HOOK_PATH)).toEqual({ available: true });
+  expect(await checkCodexCapability(async () => VALID, BOARD_CODEX_HOME)).toEqual({ available: true });
 });
 
 it.each([
@@ -267,18 +306,71 @@ it.each([
   // 盤面の書いていない指示が task と同じ user 層に載った(ADR 0148 決定2)
   ["agents.md", { agentsMdLayer: ["# AGENTS.md instructions"] }],
 ] as const)("Codex %s surface drift fails its Harness preflight closed", async (_, changed) => {
-  const capability = await checkCodexCapability(async () => ({ ...VALID, ...changed }), BOARD_HOOK_PATH);
+  const capability = await checkCodexCapability(async () => ({ ...VALID, ...changed }), BOARD_CODEX_HOME);
   expect(capability.available).toBe(false);
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
 });
 
+/** 内容を持つ config 層1つ(`config/read` の `name.type` と path)。 */
+const layer = (type: string, path: string | null, changed: Partial<CodexCapabilityObservation["configLayers"][number]> = {}) =>
+  ({ type, path, identity: null, empty: false, disabledReason: null, ...changed });
+
+it.each([
+  ["system に内容", [layer("system", "/etc/codex/config.toml")], "system (/etc/codex/config.toml)"],
+  ["legacy managed config に内容", [layer("legacyManagedConfigTomlFromFile", "/etc/codex/managed_config.toml")], "legacyManagedConfigTomlFromFile (/etc/codex/managed_config.toml)"],
+  ["盤面所有でない user に内容", [layer("user", "/home/human/.codex/config.toml")], "user (/home/human/.codex/config.toml)"],
+  ["project に内容", [layer("project", "/ws/.codex")], "project (/ws/.codex)"],
+  ["無効化された層でも内容があれば", [layer("system", "/etc/codex/config.toml", { disabledReason: "untrusted" })], "system (/etc/codex/config.toml, disabled: untrusted)"],
+  ["列挙に無い未知の type に内容", [layer("vendorNewLayer", null)], "vendorNewLayer"],
+  ["path の無い層は名乗りで", [layer("enterpriseManaged", null, { identity: "id acme, name codex" })], "enterpriseManaged (id acme, name codex)"],
+])("列挙の外の config 層(%s)は封じ込めを不成立にし、理由文に層の type と path を挙げる(ADR 0358 決定4)", async (_, extra, named) => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, configLayers: [...VALID.configLayers, ...extra] }), BOARD_CODEX_HOME);
+  expect(capability).toMatchObject({ available: false, reason: expect.stringContaining("config layer mismatch") });
+  if (!capability.available) expect(capability.reason).toContain(named);
+});
+
+it.each([
+  ["null", null],
+  ["空の object", {}],
+  ["盤面自身の forced_login_method が生む allowedLoginMethods だけ", { allowedLoginMethods: ["chatgpt"], allowedApprovalPolicies: null }],
+])("requirements が %s なら封じ込めは成立したまま(ADR 0358 決定4)", async (_, requirements) => {
+  expect(await checkCodexCapability(async () => ({ ...VALID, requirements }), BOARD_CODEX_HOME)).toEqual({ available: true });
+});
+
+it.each([
+  ["盤面の値でない allowedLoginMethods", { allowedLoginMethods: ["apikey"] }, 'allowedLoginMethods: [\\"apikey\\"]'],
+  ["ほかの key に値", { allowedLoginMethods: ["chatgpt"], allowedSandboxModes: ["read-only"] }, "allowedSandboxModes"],
+])("requirements に%sがあれば封じ込めを不成立にし、その key を名指す(ADR 0358 決定4)", async (_, requirements, named) => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, requirements }), BOARD_CODEX_HOME);
+  expect(capability).toMatchObject({ available: false, reason: expect.stringContaining("requirements mismatch") });
+  if (!capability.available) {
+    expect(capability.reason).toContain(named);
+    expect(capability.reason).not.toContain("allowedLoginMethods: [\\\"chatgpt\\\"]");
+  }
+});
+
+it("config が空の層は type を問わず封じ込めを成立させたまま(ADR 0358 決定4)", async () => {
+  const configLayers = [...VALID.configLayers, layer("system", "/etc/codex/config.toml", { empty: true }), layer("project", "/ws/.codex", { empty: true })];
+  expect(await checkCodexCapability(async () => ({ ...VALID, configLayers }), BOARD_CODEX_HOME)).toEqual({ available: true });
+});
+
+it("盤面所有の user 層は realpath 同士で照らし、symlink の綴り違いでも成立する(ADR 0358 決定4)", async () => {
+  const real = await tempDir("tidepool-codex-home-real-");
+  const linked = join(await tempDir("tidepool-codex-home-link-"), "codex-home");
+  symlinkSync(real, linked);
+  // 盤面の CODEX_HOME は symlink の綴り、Codex の報告は実体の綴り。config.toml 自体は無い
+  const configLayers = [layer("sessionFlags", null), layer("user", join(realpathSync(real), "config.toml"))];
+  const hooks = [{ ...BOARD_HOOK_REGISTRATION, command: join(linked, "tidepool-hooks", "main-thread-mcp.mjs") }];
+  expect(await checkCodexCapability(async () => ({ ...VALID, hooks, configLayers }), linked)).toEqual({ available: true });
+});
+
 it("版上げの適合試験が渡す固定の版は version 行の照合だけを差し替え、他の面は照合したまま(#1385)", async () => {
   const next = { ...VALID, cliVersion: "codex-cli 0.151.0" };
-  expect(await checkCodexCapability(async () => next, BOARD_HOOK_PATH, "codex-cli 0.151.0")).toEqual({ available: true });
+  expect(await checkCodexCapability(async () => next, BOARD_CODEX_HOME, "codex-cli 0.151.0")).toEqual({ available: true });
 
   const drifted = await checkCodexCapability(
     async () => ({ ...next, agentsMdLayer: ["# AGENTS.md instructions"] }),
-    BOARD_HOOK_PATH,
+    BOARD_CODEX_HOME,
     "codex-cli 0.151.0",
   );
   expect(drifted).toMatchObject({ available: false, reason: expect.stringContaining("agents.md mismatch") });
@@ -301,7 +393,7 @@ it.each([
     "computer_use (expected false, observed absent)",
   ],
 ] as const)("feature 面の%sは preflight を倒し、reason は差分だけを載せる", async (_, features, expected) => {
-  const capability = await checkCodexCapability(async () => ({ ...VALID, features }), BOARD_HOOK_PATH);
+  const capability = await checkCodexCapability(async () => ({ ...VALID, features }), BOARD_CODEX_HOME);
   expect(capability.available).toBe(false);
   if (!capability.available) {
     expect(capability.reason).toContain(expected);
@@ -310,7 +402,7 @@ it.each([
 });
 
 it("届かなかった理由は期待値と観測値の両方を名指す(ADR 0124 決定4)", async () => {
-  const capability = await checkCodexCapability(async () => ({ ...VALID, workerPrompts: [] }), BOARD_HOOK_PATH);
+  const capability = await checkCodexCapability(async () => ({ ...VALID, workerPrompts: [] }), BOARD_CODEX_HOME);
   expect(capability.available).toBe(false);
   if (!capability.available) {
     expect(capability.reason).toContain(JSON.stringify(CODEX_PROMPT_MARKER));
@@ -610,14 +702,14 @@ it.each([
 ])("hook 不一致の reason は vendor の %s を添える(#734)", async (_, diagnostic) => {
   const capability = await checkCodexCapability(
     async () => ({ ...VALID, hooks: [], hookDiagnostics: [diagnostic] }),
-    BOARD_HOOK_PATH,
+    BOARD_CODEX_HOME,
   );
   expect(capability.available).toBe(false);
   if (!capability.available) expect(capability.reason).toContain(diagnostic);
 });
 
 it("診断が空なら hook 不一致の reason は変更前と同じ文字列(#734)", async () => {
-  expect(await checkCodexCapability(async () => ({ ...VALID, hooks: [] }), BOARD_HOOK_PATH)).toEqual({
+  expect(await checkCodexCapability(async () => ({ ...VALID, hooks: [] }), BOARD_CODEX_HOME)).toEqual({
     available: false,
     reason: `Codex containment preflight hook mismatch: expected ${JSON.stringify([BOARD_HOOK_REGISTRATION])}, observed []`,
   });
@@ -626,7 +718,7 @@ it("診断が空なら hook 不一致の reason は変更前と同じ文字列(#
 it("hook 以外の行の不一致には vendor 診断を添えない(#734)", async () => {
   const capability = await checkCodexCapability(
     async () => ({ ...VALID, workerPrompts: [], hookDiagnostics: ["warning: hook skipped"] }),
-    BOARD_HOOK_PATH,
+    BOARD_CODEX_HOME,
   );
   expect(capability.available).toBe(false);
   if (!capability.available) expect(capability.reason).not.toContain("hook skipped");
@@ -634,7 +726,7 @@ it("hook 以外の行の不一致には vendor 診断を添えない(#734)", asy
 
 it("hook が一致していれば warnings があっても封じ込めは成立する(#734)", async () => {
   expect(
-    await checkCodexCapability(async () => ({ ...VALID, hookDiagnostics: ["warning: hook skipped"] }), BOARD_HOOK_PATH),
+    await checkCodexCapability(async () => ({ ...VALID, hookDiagnostics: ["warning: hook skipped"] }), BOARD_CODEX_HOME),
   ).toEqual({ available: true });
 });
 
