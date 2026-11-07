@@ -214,6 +214,10 @@ export type EventPayload =
   | { kind: "interview_room_opened"; path: string }
   // ADR 0276 決定1・4: 盤面が受験者の最初の pickup で自分の checkout を面接室の外に作った —— path はその在り処(面接室と同じ形)
   | { kind: "examinee_checkout_opened"; path: string }
+  // ADR 0356 決定2: 盤面が work / review の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
+  | { kind: "task_checkout_opened"; path: string }
+  // ADR 0356 決定2: 解放で worker の repo を読めず、task の checkout を path に残した —— reason は git の失敗の本文
+  | { kind: "task_checkout_release_failed"; path: string; reason: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // 位置を変えずに `todo` へ戻された(ADR 0333 決定1)。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である

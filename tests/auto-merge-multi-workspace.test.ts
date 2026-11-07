@@ -4,6 +4,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  checkoutOf,
   completeIntegrationReviews,
   defaultingTo,
   FULL_HANDOFF,
@@ -41,7 +42,7 @@ it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI �
 
   const task = await registerWork(t, "ship in prod", "prod");
   await t.clock.advance(HOUR);
-  addTaskChange(prod.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -66,7 +67,7 @@ it("PR open 後に付いた未決着の付帯子があれば CI を読まず行�
   });
   const task = await registerWork(t, "wait for the attached repair");
   await t.clock.advance(HOUR);
-  addTaskChange(workspace.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -91,7 +92,7 @@ it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止
   });
   const task = await registerWork(t, "recheck the gate after reading CI");
   await t.clock.advance(HOUR);
-  addTaskChange(workspace.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -123,7 +124,7 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   });
   const task = await registerWork(t, "wait for the objected repair");
   await t.clock.advance(HOUR);
-  addTaskChange(workspace.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();

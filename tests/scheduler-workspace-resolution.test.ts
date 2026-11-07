@@ -1,6 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
@@ -12,9 +13,16 @@ import { sessionInTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
 import { type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { checkoutOf, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+/** task の checkout の番地の基点(ADR 0356 決定2)—— 既定の `~/tidepool-workspaces` に書かない。 */
+function checkoutBase(): string {
+  const dir = mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-"));
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 /** 資源の停止を本物の一撃(`queueReturnHandler`)で受ける盤面。後始末の pickup の契機は scheduler へ遅延束縛する(server.ts と同じ)。
  *  収束は macrotask を1つ挟む —— 戻った task を同じ停止が拾い直す輪があれば、worker を固めずに時間切れで赤くなる。 */
@@ -36,6 +44,7 @@ function stoppingBoard(workspace: WorkspaceConfig, resolveWorkspace: (name: stri
     onRecordContainerFailed: () => {},
     onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => scheduler.pollNow() }, containers),
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    workspacesDir: checkoutBase(),
     workspace,
     resolveWorkspace,
   });
@@ -136,6 +145,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       onRecordContainerFailed: () => {},
       onPickupStopped: () => {},
       taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+      workspacesDir: checkoutBase(),
       workspace: sandbox,
       resolveWorkspace: defaultingTo(sandbox, prod),
     });
@@ -149,7 +159,11 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     await clock.advance(HOURLY);
 
     expect(worker.started.map((t) => t.id)).toEqual([task.id]);
-    expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+    // ADR 0356 決定1: タスクブランチは prod の名前の場所の ref で、worker は prod から開いた task の checkout で走る
+    // (旧: prod の HEAD がタスクブランチに乗った)
+    expect(git(prod.path, "rev-parse", "--verify", `task/${task.id}`)).not.toBe("");
+    expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(git(checkoutOf(db, task.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
     // the board's default (sandbox) checkout is untouched
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 

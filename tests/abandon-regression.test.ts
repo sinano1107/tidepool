@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, checkoutOf, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -48,7 +48,7 @@ it("failure question で「再実行」を選んでも、計画の残りは canc
   const sibling = board0.find((x: any) => x.title === "sibling 3");
 
   await t.clock.advance(HOUR); // "will fail 3" picked up
-  writeFileSync(join(ws.path, "draft3.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, failing.id), "draft3.txt"), "stuck work\n");
   await t.clock.advance(90 * MIN); // SIGTERM
   await t.clock.advance(grace); // SIGKILL — failure question registered
 

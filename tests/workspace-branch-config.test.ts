@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addTaskChange,
   bootTidepool,
+  checkoutOf,
   completeIntegrationReviews,
   defaultingTo,
   FULL_HANDOFF as fullHandoff,
@@ -33,8 +34,10 @@ describe("issue #27: workspace ごとの保護ブランチ設定", () => {
 
     const task = await registerWork(t, "runs against master", "prod");
     await t.clock.advance(HOUR);
-    addTaskChange(prod.path, task.id);
-    expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+    addTaskChange(checkoutOf(t.db, task.id), task.id);
+    // ADR 0356 決定1: タスクブランチは名前の場所の master から ref として切られ、名前の場所の HEAD は保護ブランチに居る
+    expect(git(prod.path, "merge-base", "--is-ancestor", "master", `task/${task.id}`)).toBe("");
+    expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("master");
 
     const client = await mcpClient(t.mcpBaseUrl, task.id);
     const res: any = await client.callTool({

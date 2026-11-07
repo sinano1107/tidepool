@@ -54,6 +54,7 @@ import {
   POSED_HEAD,
   poseAccepted,
   quarantineQuestion,
+  recordCheckoutAtWorkspace,
   routingJudgmentRepairTask,
   sessionId,
   type Tidepool,
@@ -336,6 +337,7 @@ You are the Codex worker.`,
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task, query?: InjectionQuery) => {
+    recordCheckoutAtWorkspace(db, value, { dir: registry, mode: "purely-local" }, "work", tmpdir());
     const started = worker.start(value, sessionId(db, value.id), executionSettingsFor(db, agent, value)[0]!, query);
     return started?.then(() => {
       const spawned = listEvents(db, value.id).filter((e) => e.kind === "worker_spawned").at(-1);
@@ -1336,6 +1338,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {
     const f = await fixture();
     for (const value of [task(f.db, "codex-tier-work"), metaReviewTask(f.db)]) {
+      recordCheckoutAtWorkspace(f.db, value, { dir: f.registry, mode: "purely-local" }, "work", tmpdir());
       await f.worker.start(value, sessionId(f.db, value.id), { provider: "openai", model: "gpt-6-astra", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
       expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({ tier_id: 3 });
     }
@@ -1344,6 +1347,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("盤面が順位で選んだ openai の設定を渡されれば、anthropic を先頭に持つ agent でも codex で走る(#544 の demo —— spawn 側の再解決は順位1位の anthropic を返して拒否になる)", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-carried-setting");
+    recordCheckoutAtWorkspace(f.db, value, { dir: f.registry, mode: "purely-local" }, "work", tmpdir());
     await f.worker.start(value, sessionId(f.db, value.id), {
       provider: "openai",
       model: "gpt-6-astra",

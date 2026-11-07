@@ -8,9 +8,9 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeAudit, getTask, listExaminees, poseProbe, registerTask } from "../src/tasks.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, PickupGateError, pickupGate, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, PickupGateError, pickupGate, releaseWorkspace, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -38,13 +38,12 @@ it("休止中に実環境の main が動くと、読む root の pickup は refs
   const workspace = await makeWorkspace("read-idle-main");
   db = openDb(":memory:");
   const earlier = work("leaves a baseline");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   commitWork(workspace.path, "by-hand.txt", "unknown commit while resting\n");
   const moved = git(workspace.path, "rev-parse", "main");
   const { root, room, reads } = await reader(workspace);
 
-  const failure = await prepareWorkspaceAtPickup(db, room, root, { reads }).catch((err: unknown) => err);
+  const failure = await prepareAtPickup(db, room, root, { reads }).catch((err: unknown) => err);
 
   expect(failure).toBeInstanceOf(PickupGateError);
   expect(failure).toMatchObject({
@@ -64,38 +63,39 @@ it.each([
   seed(workspace);
   const { root, room, reads } = await reader(workspace);
 
-  await prepareWorkspaceAtPickup(db, room, root, { reads });
+  await prepareAtPickup(db, room, root, { reads });
   releaseWorkspace(db, room, root, NOW);
-  await prepareWorkspaceAtPickup(db, room, root, { reads });
+  await prepareAtPickup(db, room, root, { reads });
   releaseWorkspace(db, room, root, NOW);
   expect(git(workspace.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   git(workspace.path, "tag", "after-first-read");
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, work("runs in the previously read environment"))).rejects.toThrow("refs/tags/after-first-read");
+  await expect(prepareAtPickup(db, workspace, work("runs in the previously read environment"))).rejects.toThrow("refs/tags/after-first-read");
 });
 
 it("読む場所の fetch・park は同じ基準へ畳み、次に走る pickup も通す —— 古い ref へ戻すと解放が拒む(ADR 0351 決定3・6)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("read-remote-advance");
   db = openDb(":memory:");
   const earlier = work("leaves a baseline");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   const before = git(workspace.path, "rev-parse", "main");
   publish("remote.txt", "remote advanced\n", "landed remotely");
   const { root, room, reads } = await reader(workspace);
 
-  await prepareWorkspaceAtPickup(db, room, root, { reads });
+  await prepareAtPickup(db, room, root, { reads });
   releaseWorkspace(db, room, root, NOW);
   const advanced = git(workspace.path, "rev-parse", "refs/remotes/origin/main");
   expect(advanced).not.toBe(before);
   expect(git(workspace.path, "rev-parse", "main")).toBe(advanced);
   const next = work("runs after the root read it");
-  await prepareWorkspaceAtPickup(db, workspace, next);
-  expect(git(workspace.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
+  const nextPlace = await prepareAtPickup(db, workspace, next);
+  // 旧: 名前の場所の HEAD がタスクブランチへ乗った。ADR 0356 決定1 の後は task の checkout が乗る
+  expect(git(nextPlace.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${next.id}`);
+  expect(git(workspace.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   git(workspace.path, "update-ref", "refs/heads/main", before);
   git(workspace.path, "update-ref", "refs/remotes/origin/main", before);
 
-  releaseWorkspace(db, workspace, next, NOW);
+  releaseWorkspace(db, nextPlace, next, NOW);
 
   const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose;
   expect(purpose).toContain(`now: ${before} refs/heads/main`);
@@ -106,14 +106,14 @@ it("root 配下の監査 review が読む面接室の変更も、面接室の名
   const workspace = await makeWorkspace("read-room-audit");
   db = openDb(":memory:");
   const { root, room, reads, base } = await reader(workspace);
-  await prepareWorkspaceAtPickup(db, room, root, { reads });
+  await prepareAtPickup(db, room, root, { reads });
   const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, room));
   releaseWorkspace(db, room, root, NOW);
   git(room.path, "tag", "unexpected-room-tag");
   const auditReads = await pickupGate(db, workspace, audit, base);
-  const auditPlace = taskRunPlace(db, audit, workspace);
-
-  await expect(prepareWorkspaceAtPickup(db, auditPlace, audit, { reads: auditReads })).rejects.toMatchObject({
+  
+  // ADR 0356 決定1: 監査 review も task の checkout で走るので、準備するのは名前の場所
+  await expect(prepareAtPickup(db, workspace, audit, { reads: auditReads })).rejects.toMatchObject({
     place: { name: root.id, path: room.path },
     message: expect.stringContaining("refs/tags/unexpected-room-tag"),
   });
@@ -125,8 +125,7 @@ it("読む実環境の ref 違反は repo アクセスを問い合わせず実�
   const workspace = await makeWorkspace("read-ref-drift-guidance");
   db = openDb(":memory:");
   const earlier = work("leaves a baseline");
-  await prepareWorkspaceAtPickup(db, workspace, earlier);
-  releaseWorkspace(db, workspace, earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   cancelTaskDirectly(db, earlier, null, NOW, {}, "webui");
   git(workspace.path, "remote", "add", "origin", "https://github.com/acme/widget.git");
   const declared = { ...workspace, repo: "https://github.com/acme/widget" };
@@ -174,7 +173,7 @@ it("symlink の基点で初めて開く受験者の checkout は読む面接室�
   const workspace = await makeWorkspace("read-examinee-alias");
   db = openDb(":memory:");
   const { root, room, reads, base } = await reader(workspace);
-  await prepareWorkspaceAtPickup(db, room, root, { reads });
+  await prepareAtPickup(db, room, root, { reads });
   const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, room));
   releaseWorkspace(db, room, root, NOW);
   completeAudit(db, audit, { verdict: "accepted", findings: "the probe measures the target" }, "auditor", NOW, "worker");
@@ -185,7 +184,7 @@ it("symlink の基点で初めて開く受験者の checkout は読む面接室�
   openExamineeCheckout(db, examinee!, alias, NOW);
   const checkout = taskRunPlace(db, examinee!, workspace);
 
-  await prepareWorkspaceAtPickup(db, checkout, examinee!, { reads: checks });
+  await prepareAtPickup(db, checkout, examinee!, { reads: checks });
 
   expect(git(checkout.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${examinee!.id}`);
   releaseWorkspace(db, checkout, examinee!, NOW);

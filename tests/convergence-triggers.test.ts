@@ -7,6 +7,7 @@ import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeViaMcp,
   FULL_HANDOFF,
@@ -64,7 +65,7 @@ it("後始末の途中で落ちた盤面は、再起動で後始末を完走し�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "deliverable.txt", "the real work\n");
+  commitWork(checkoutOf(t.db, task.id), "deliverable.txt", "the real work\n");
   t.containers.hold(task.id);
   await completeViaMcp(t, task.id);
   settleReviews(t.db, t.clock.now());

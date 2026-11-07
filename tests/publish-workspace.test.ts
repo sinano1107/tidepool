@@ -7,7 +7,7 @@ import { GitHubAuth } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
-import { prepareWorkspaceAtPickup, releaseWorkspace } from "../src/workspace.js";
+import { releaseWorkspace } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
@@ -18,7 +18,7 @@ import {
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import { startGitHttpRemote } from "./git-http-remote.js";
-import { HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
+import { HUMAN_WEBUI, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -109,8 +109,8 @@ async function runningSession(db: Db, checkout: string) {
     ...HUMAN_WEBUI,
   );
   const workspace = { name: "sandbox", path: checkout };
-  await prepareWorkspaceAtPickup(db, workspace, task);
-  return { release: () => releaseWorkspace(db, workspace, task, clock.now()) };
+  const place = await prepareAtPickup(db, workspace, task);
+  return { release: () => releaseWorkspace(db, place, task, clock.now()) };
 }
 
 /** 人間が用意する宛先(ADR 0066 決定2): 盤面は repo を作らないので、テストでも

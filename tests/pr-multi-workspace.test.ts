@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   defaultingTo,
@@ -31,7 +32,7 @@ it("prod workspace のタスクを complete すると、PR は sandbox ではな
 
   const task = await registerWork(t, "ship in prod", "prod");
   await t.clock.advance(HOUR);
-  commitWork(prod.path, "release.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "release.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

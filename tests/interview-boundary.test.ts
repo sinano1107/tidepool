@@ -20,6 +20,7 @@ import {
   type BootOptions,
   bootTidepool,
   callAsTask,
+  checkoutOf,
   children,
   commit,
   commitWork,
@@ -255,7 +256,7 @@ it("根拠の history の読み口は根拠の task の判断・記憶の書き�
   await callAsTask(t, evidence.id, "log_decision", { line: "chose a hand-written lexer" });
   // setup のみ: 記憶の書き込みの行(書く経路は tests/memory-write-record.test.ts)
   appendEvent(t.db, { taskId: evidence.id, actorId: "tako", origin: "worker", at: t.clock.now(), payload: { kind: "memory_written", line: "wrote knowledge #1 \"lexer\" at build (whole board)", created: [1], invalidated: [] } });
-  commitWork(workspacePath, "lexer.txt", "lexer\n");
+  commitWork(checkoutOf(t.db, evidence.id), "lexer.txt", "lexer\n");
   await callAsTask(t, evidence.id, "complete_task", { handoff: FULL_HANDOFF });
   // 根拠の task には子(完了時レビュー)が立つ —— その行が返らないことを下で言う
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.parent_id === evidence.id);
@@ -939,9 +940,13 @@ it("受験者の checkout が作れなかった pickup は面接室(root id)の 
 
 it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup は面接室の quarantine に落ちても後始末を落とさずに slot を空け、root は quarantine が開いている間キューで外れ、%sでも直さない回答は理由つきで拒まれ、直した回答の後の pickup が面接室を作って root を走らせる(ADR 0277 決定1〜3)", async (_board, registry) => {
   t = await bootReef(registry);
-  const base = join(t.dir, "workspaces");
-  writeFileSync(base, "not a directory\n");
+  // 旧: 基点そのものをファイルにした —— work の task の checkout も同じ基点の下に作るので(ADR 0356 決定2)、面接室の番地だけを塞ぐ
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const blocker = join(t.dir, "workspaces", root.id);
+  mkdirSync(dirname(blocker), { recursive: true });
+  writeFileSync(blocker, "not a directory\n");
+  await api(t.baseUrl, "POST", "/api/pause", { paused: false });
 
   const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload);
 
@@ -960,7 +965,7 @@ it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup �
   expect(refused.status).toBe(409);
   expect(refused.json.error).toContain("mkdir");
   expect((await servedQuarantineQuestion(t, "workspace", root.id))?.id).toBe(quarantine.id);
-  rmSync(base);
+  rmSync(blocker);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
   await runNow(t, root.id);
 

@@ -3,6 +3,7 @@ import {
   addTaskChange,
   api,
   bootTidepool,
+  checkoutOf,
   completeIntegrationReviews,
   defaultingTo,
   FULL_HANDOFF,
@@ -33,7 +34,7 @@ it("prod workspace のタスクの merge 回答は、CI チェックと merge �
 
   const task = await registerWork(t, "ship in prod", "prod");
   await t.clock.advance(HOUR);
-  addTaskChange(prod.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

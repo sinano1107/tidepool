@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -90,6 +93,8 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     const clock = new FakeClock();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
+      workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
       converge: async () => [],
       db,
       clock,
@@ -127,6 +132,8 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     const clock = new FakeClock();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
+      workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
       converge: async () => [],
       db,
       clock,

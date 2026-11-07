@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
@@ -38,24 +39,24 @@ async function landingQuestionFor(board: Tidepool, taskId: string): Promise<any>
 
 /** ADR 0103 決定2 の直列ペア(#468 のライブ実測の形): 独立に登録された2件を続けて
  *  完了させ、1件目を着地させて保護ブランチを進めたうえで、非 ff になった2件目の
- *  着地 question を返す。`occupySlot` は3件目に slot を占めさせる(HEAD がそのタスクブランチへ移る)。 */
+ *  着地 question を返す。`occupySlot` は3件目に slot を占めさせる(自分の task の checkout で走る)。 */
 async function serialPairLanding(
   board: Tidepool,
-  workspacePath: string,
+
   { occupySlot = false } = {},
 ): Promise<{ first: any; second: any; third: any; question: any }> {
   // 登録と解放はどちらも pickup の契機(ADR 0119 決定2・3)なので、後続は前のタスクの統合点
   // レビューが済んでから登録する —— 先に積むと、解放が撃つ poll がレビューより先に後続を
   // slot へ入れる。どちらも1件目の着地(下の回答)より前の保護ブランチから fork するのは同じ
   const first = await registerWork(board, "first of the serial pair");
-  commitWork(workspacePath, "one.txt", "from the first task\n");
+  commitWork(checkoutOf(board.db, first.id), "one.txt", "from the first task\n");
   await completeViaMcp(board, first.id);
   await completeIntegrationReviews(board, first.id);
   const second = await registerWork(board, "second of the serial pair");
-  commitWork(workspacePath, "two.txt", "from the second task\n");
+  commitWork(checkoutOf(board.db, second.id), "two.txt", "from the second task\n");
   await completeViaMcp(board, second.id);
   await completeIntegrationReviews(board, second.id);
-  // 3件目が登録と同時に slot を取り、HEAD は自分のタスクブランチへ移る
+  // 3件目が登録と同時に slot を取り、自分の task の checkout で走る(ADR 0356 決定1)
   const third = occupySlot
     ? await registerWork(board, "occupies the slot while the landing arrives")
     : undefined;
@@ -75,7 +76,7 @@ it("purely-local の root work 完了は PR を試みず、代わりに着地 qu
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({
@@ -106,7 +107,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   });
   const task = await registerWork(t, "ship automatically");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "automatic.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "automatic.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -129,7 +130,7 @@ it("着地 question に merge と答えると保護ブランチを task branch �
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -159,7 +160,7 @@ it("着地 question に merge と答えると保護ブランチを task branch �
 it("直列に登録された2件目の着地は、1件目が進めた保護ブランチへ merge commit で追いつく", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
-  const { first, second, question } = await serialPairLanding(t, workspace.path);
+  const { first, second, question } = await serialPairLanding(t);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -178,16 +179,19 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
 });
 
 // ADR 0103 決定3 / ADR 0064: 盤面は走っているセッションの checkout を動かさない。
-it("走行中の slot を占めたまま来た非 ff の着地は、ref だけを進め HEAD と作業ツリーに触れない", async () => {
+// 旧: 走るセッションの HEAD は名前の場所のタスクブランチにあり、着地は ref だけを進めた。今は名前の場所の HEAD は保護ブランチに居て
+// 着地がそれを追従させ、セッションは自分の task の checkout で走る
+it("走行中の slot を占めたまま来た非 ff の着地は、名前の場所の保護ブランチを進め、走るセッションの task の checkout に触れない(ADR 0356 決定1・5)", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
-  const { second, third, question } = await serialPairLanding(t, workspace.path, {
+  const { second, third, question } = await serialPairLanding(t, {
     occupySlot: true,
   });
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
-  writeFileSync(join(workspace.path, "wip.txt"), "the running session's work in progress\n");
-  const head = git(workspace.path, "rev-parse", "HEAD");
-  const status = git(workspace.path, "status", "--porcelain");
+  const checkout = checkoutOf(t.db, third.id);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  writeFileSync(join(checkout, "wip.txt"), "the running session's work in progress\n");
+  const head = git(checkout, "rev-parse", "HEAD");
+  const status = git(checkout, "status", "--porcelain");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["merge"],
@@ -197,16 +201,17 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
   expect(git(workspace.path, "rev-list", "--parents", "-1", "main").split(" ")).toHaveLength(3);
   expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
-  expect(git(workspace.path, "status", "--porcelain")).toBe(status);
-  expect(readFileSync(join(workspace.path, "wip.txt"), "utf8")).toBe(
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(git(checkout, "rev-parse", "HEAD")).toBe(head);
+  expect(git(checkout, "status", "--porcelain")).toBe(status);
+  expect(readFileSync(join(checkout, "wip.txt"), "utf8")).toBe(
     "the running session's work in progress\n",
   );
   expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
   // ADR 0243: 盤面が進めた行は予告して畳まれているので、走っていたセッションの解放は
   // 盤面自身のこの2度の書き込みを違反として読まない
-  commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
+  commitWork(checkout, "wip.txt", "the running session's work in progress\n");
   await completeViaMcp(t, third.id);
   await completeIntegrationReviews(t, third.id);
   expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
@@ -219,7 +224,7 @@ it("帯域外で進んだ保護ブランチへの merge は 409 で、理由を�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land without overwriting main");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const landingQuestion = await landingQuestionFor(t, task.id);
@@ -239,7 +244,7 @@ it("着地 question に hold と答えると保護ブランチを動かさず決
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "keep the result on its task branch");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "held.txt", "held result\n");
+  commitWork(checkoutOf(t.db, task.id), "held.txt", "held result\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

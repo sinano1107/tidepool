@@ -8,7 +8,8 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import { UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import type { WorkerFactory } from "../src/server.js";
-import { moveTask, registerTask } from "../src/tasks.js";
+import { moveTask, registerTask, taskCheckoutPath } from "../src/tasks.js";
+import type { WorkerAdapter } from "../src/worker.js";
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -22,6 +23,7 @@ import {
   QUIET_EXIT,
   questions,
   queueWork,
+  recordCheckoutAtWorkspace,
   sessionId,
   type Tidepool,
 } from "./harness.js";
@@ -417,9 +419,23 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
 // ── 実 adapter: 両 adapter で同じ結果になる ──────────────────────────────────
 // adapter の exit handler を fake の容器機構の上で走らせる。process の exit はテストが撃つ。
 
+type CheckoutAt = { dir: string; workspace: string; workspacesDir?: string };
+
+/** scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この盤面は workspace を追跡しないので、
+ *  開いた event だけを registry の workspace の在り処で先に置く。 */
+function opensCheckout(adapter: WorkerAdapter, db: Parameters<WorkerFactory>[0]["db"], at: CheckoutAt): WorkerAdapter {
+  const start = adapter.start.bind(adapter);
+  adapter.start = (task, ...rest) => {
+    if (taskCheckoutPath(db, task.id) === undefined) recordCheckoutAtWorkspace(db, task, { dir: at.dir, mode: "purely-local" }, at.workspace, at.workspacesDir);
+    start(task, ...rest);
+  };
+  return adapter;
+}
+
 /** 実 adapter を盤面に載せる。checkUsage だけは健全な固定値にする(pty を起こさない)。 */
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
+  at: CheckoutAt,
   provider: Provider = "anthropic",
 ) {
   const proc = recordingSpawn();
@@ -432,7 +448,7 @@ async function bootWithAdapter(
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: runtime,
-    workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
+    workerAdapter: (deps) => withHealthyUsage(opensCheckout(build(deps), deps.db, at), deps.clock),
   });
   return Object.assign(proc, { forceReclaims: runtime.forceReclaims });
 }
@@ -451,6 +467,7 @@ async function bootClaude() {
         logDir,
         ...noSkillPings,
       }),
+    { dir: registryDir, workspace: "tidepool" },
   );
 }
 
@@ -484,6 +501,7 @@ async function bootCodex() {
         executable: "/opt/tidepool/bin/codex",
         boardCall: closedCodexSkillsCall(),
       }),
+    { dir: registryDir, workspace: "work", workspacesDir: tmpdir() },
     "openai",
   );
 }

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
   bootTidepool,
+  checkoutOf,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
@@ -34,9 +35,11 @@ it("remote 正本を宣言した workspace のタスクブランチは、リモ�
   await t.clock.advance(HOUR);
 
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // ADR 0356 決定1: worker は task の checkout で走る(旧: 名前の場所の HEAD がタスクブランチに乗った)
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
   // タスク2は merge 済みの成果が載った地点から始まっている
-  expect(git(workspace.path, "show", "HEAD:merged.txt")).toBe("task 1's landed work");
+  expect(git(checkout, "show", "HEAD:merged.txt")).toBe("task 1's landed work");
 });
 
 // ADR 0052 決定2 の3つ目の refresh 点を workspace 側にも置く(issue #211 やること4):
@@ -56,5 +59,6 @@ it("remote 正本を宣言した workspace は pickup の直前に fetch され�
 
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
   expect(git(workspace.path, "rev-parse", "refs/remotes/origin/main")).not.toBe(staleRemoteRef);
-  expect(git(workspace.path, "show", "HEAD:merged.txt")).toBe("task 1's landed work");
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "show", "HEAD:merged.txt")).toBe("task 1's landed work");
 });

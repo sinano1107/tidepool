@@ -9,6 +9,7 @@ import { seedTierNames } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
@@ -48,6 +49,9 @@ function commitOn(path: string, file: string, body: string, message: string): vo
   git(path, "add", "-A");
   git(path, "commit", "-m", message);
 }
+
+/** 名前の場所に HEAD の上の commit を1つ作る(ref は書かない)—— 盤面の口の外で ref を動かす先。 */
+const outOfBandCommit = (path: string) => git(path, "commit-tree", git(path, "rev-parse", "HEAD^{tree}"), "-p", "HEAD", "-m", "out of band");
 
 it("保護ブランチが無い停止は落ちた項を名指し、修復回答を拒み、main を戻した回答の後に pickup できる(ADR 0329 決定10・14、#2775)", async () => {
   const workspace = await makeWorkspace("sandbox");
@@ -125,20 +129,23 @@ it("worker が別の非保護ブランチを変更して自ブランチへ戻っ
   expect((await servedQuarantineQuestion(t, "workspace", "sandbox"))?.title).toContain("workspace sandbox needs human attention");
 });
 
-// 回帰(#234 のケース1): 終了時の HEAD 検査は `releaseTree` が今も先に持っている ——
-// スナップショット比較を1本挟んでも、この最も基本的な形の理由が変わってはならない。
-it("worker が別ブランチのまま終了すると、今までどおり HEAD 検査で quarantine に落ちる", async () => {
+// 旧(#234 のケース1): worker が別ブランチのまま終了すると、終了時の HEAD 検査が commit を拒んで quarantine に落ちた。
+// worker は task の checkout で走り、盤面が読むのはタスクブランチ1本なので、checkout の HEAD の位置は読まない。
+it("worker が task の checkout で別ブランチのまま終了しても、盤面はタスクブランチを読み、quarantine に落ちない(ADR 0356 決定4)", async () => {
   const ws = await makeWorkspace("sandbox");
-  git(ws.path, "branch", "sibling");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "wanders off and stays there");
   await t.clock.advance(HOUR);
+  const checkout = checkoutOf(t.db, task.id);
+  commitOn(checkout, "work.txt", "my own work\n", "worker's own commit");
 
-  git(ws.path, "checkout", "sibling");
+  git(checkout, "checkout", "-b", "sibling");
 
   await complete(t, task.id);
 
-  expect((await servedQuarantineQuestion(t, "workspace", "sandbox"))?.purpose).toContain("refusing to commit");
+  expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
+  expect(git(ws.path, "show", `task/${task.id}:work.txt`)).toBe("my own work");
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 });
 
 // ADR 0064 の「測定」表のケース2。purely-local はここが**新規に捕まる側**である ——
@@ -212,19 +219,15 @@ it("兄弟のタスクブランチを削除しても quarantine に落ちる", a
 // **比較の両側が同じ偽値になる**ことで通り抜け、次の pickup の fetch が真の値へ戻した
 // あと、**その次の無実のセッション**の解放で位置検査が落ちる。走ったセッション自身で
 // 捕まえるのがこの検査である。
-it("refs/remotes の偽造は、偽造したセッション自身の解放で捕まる", async () => {
+// 旧: worker が名前の場所で偽造した。基準が見張るのは名前の場所だけなので(ADR 0356 決定4)、偽造は名前の場所に書かれたものとして捕まる
+it("名前の場所の refs/remotes の偽造は、その間に走ったセッション自身の解放で捕まる(ADR 0356 決定4)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "forges the remote-tracking ref");
   await t.clock.advance(HOUR);
 
-  commitOn(workspace.path, "work.txt", "my own work\n", "worker's own commit");
-  git(
-    workspace.path,
-    "update-ref",
-    "refs/remotes/origin/main",
-    git(workspace.path, "rev-parse", `task/${task.id}`),
-  );
+  commitOn(checkoutOf(t.db, task.id), "work.txt", "my own work\n", "worker's own commit");
+  git(workspace.path, "update-ref", "refs/remotes/origin/main", outOfBandCommit(workspace.path));
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({
@@ -248,7 +251,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
   t = await bootTidepool({ workspace: ws });
   const landing = await registerWork(t, "lands through the merge question");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "landed.txt", "finished\n");
+  commitWork(checkoutOf(t.db, landing.id), "landed.txt", "finished\n");
   await complete(t, landing.id);
   await completeIntegrationReviews(t, landing.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -257,7 +260,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 
   const running = await registerWork(t, "runs while the human answers");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "in-flight.txt", "still working\n");
+  commitWork(checkoutOf(t.db, running.id), "in-flight.txt", "still working\n");
 
   expect(
     (await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["merge"] }))
@@ -322,8 +325,9 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
   await t.clock.advance(HOUR);
   const before = git(ws.path, "rev-parse", "sibling");
 
-  commitOn(ws.path, "work.txt", "my own work\n", "worker's own commit");
-  git(ws.path, "branch", "-f", "sibling", `task/${task.id}`);
+  // 旧: worker が自分の commit を作って名前の場所の sibling を動かした。今は名前の場所の ref だけが基準に載る(ADR 0356 決定4)
+  commitOn(checkoutOf(t.db, task.id), "work.txt", "my own work\n", "worker's own commit");
+  git(ws.path, "branch", "-f", "sibling", outOfBandCommit(ws.path));
   const after = git(ws.path, "rev-parse", "sibling");
 
   await complete(t, task.id);
@@ -476,7 +480,7 @@ it("セッション中に publish しても、そのセッションは quarantin
   t = await bootTidepool(boot);
   const task = await registerWork(t, "runs while the human publishes");
   await t.clock.advance(HOUR);
-  commitOn(ws.path, "in-flight.txt", "still working\n", "worker's own commit");
+  commitOn(checkoutOf(t.db, task.id), "in-flight.txt", "still working\n", "worker's own commit");
 
   expect(
     (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
@@ -495,14 +499,15 @@ it("セッション中に publish しても、そのセッションは quarantin
 // 盤面が書く行だけを予告して畳むことの裏側(ADR 0243): 全 ref を撮り直せば、その瞬間までに worker が
 // 動かした ref も新しい基準に飲み込まれ、解放時の比較が素通りする。publish が触るのは
 // `refs/remotes/origin/*` だけなので、`refs/heads/*` の逸脱は今までどおり捕まる。
-it("publish が触っていない ref を worker が動かせば、今までどおり quarantine に落ちる", async () => {
+// 旧: worker が名前の場所の ref を動かした。基準は名前の場所だけが持つ(ADR 0356 決定4)
+it("publish が触っていない名前の場所の ref が動けば、今までどおり quarantine に落ちる(ADR 0356 決定4)", async () => {
   const { ws, dest, boot } = await publishableBoard("sandbox");
   git(ws.path, "branch", "sibling");
   t = await bootTidepool(boot);
   const task = await registerWork(t, "moves a sibling while the human publishes");
   await t.clock.advance(HOUR);
-  commitOn(ws.path, "work.txt", "my own work\n", "worker's own commit");
-  git(ws.path, "branch", "-f", "sibling", `task/${task.id}`);
+  commitOn(checkoutOf(t.db, task.id), "work.txt", "my own work\n", "worker's own commit");
+  git(ws.path, "branch", "-f", "sibling", outOfBandCommit(ws.path));
 
   expect(
     (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
@@ -523,7 +528,7 @@ it("publish が push していない origin ref を worker が偽造すれば qu
   t = await bootTidepool(boot);
   const task = await registerWork(t, "forges a remote-tracking ref");
   await t.clock.advance(HOUR);
-  commitOn(ws.path, "work.txt", "my own work\n", "worker's own commit");
+  commitOn(checkoutOf(t.db, task.id), "work.txt", "my own work\n", "worker's own commit");
   git(ws.path, "update-ref", "refs/remotes/origin/forged", `task/${task.id}`);
 
   expect(

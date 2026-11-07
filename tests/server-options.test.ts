@@ -23,7 +23,7 @@ import type { Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, questions, queueWork, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
+import { api, bootTidepool, git, HOUR, questions, queueWork, recordCheckoutAtWorkspace, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -88,7 +88,17 @@ it("Codex の実測した required MCP 起動失敗は合成された口を通�
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     openaiUsage: healthyOpenai,
     taskExecutionCandidates: (task) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
-    workerAdapter: (deps) => withHealthyUsage(new CodexWorker({ ...buildCodexWorkerOptions(board, deps), boardCall: closedCodexSkillsCall() }), deps.clock),
+    workerAdapter: (deps) => {
+      const worker = new CodexWorker({ ...buildCodexWorkerOptions(board, deps), boardCall: closedCodexSkillsCall() });
+      // scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この盤面は workspace を追跡しないので、
+      // 開いた event だけを registry の workspace の在り処で先に置く
+      const start = worker.start.bind(worker);
+      worker.start = (task, ...rest) => {
+        recordCheckoutAtWorkspace(deps.db, task, { dir: registryDir, mode: "purely-local" }, "work", board.workspacesDir);
+        return start(task, ...rest);
+      };
+      return withHealthyUsage(worker, deps.clock);
+    },
   });
   try {
     const task = queueWork(t, "required MCP unavailable");

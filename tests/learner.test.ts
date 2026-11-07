@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, it, onTestFinished } from "vitest";
 import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -288,6 +291,8 @@ function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspa
   const slot = new Slot();
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    // task の checkout(ADR 0356 決定2)をホームの既定の基点に作らない
+    workspacesDir: mkdtempSync(join(tmpdir(), "tidepool-task-checkouts-")),
     converge: async () => [],
     db,
     clock,

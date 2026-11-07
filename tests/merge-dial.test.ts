@@ -3,6 +3,7 @@ import {
   addTaskChange,
   api,
   bootTidepool,
+  checkoutOf,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -29,7 +30,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -60,7 +61,7 @@ it("completing a work task under the external merge dial opens the PR and stops 
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -86,7 +87,7 @@ it("completing a work task under a code-built profile carrying no dial opens the
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -101,10 +102,10 @@ it("completing a work task under a code-built profile carrying no dial opens the
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
 });
 
-async function completeUnderEscalate(t: Tidepool, path: string) {
+async function completeUnderEscalate(t: Tidepool) {
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
@@ -120,7 +121,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   t.github.scriptCiStatus("success");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -144,7 +145,7 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   t.github.scriptCiStatus("pending");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -164,7 +165,7 @@ it("a malformed POST (answer count mismatch) to an open merge question is reject
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   t.github.scriptCiStatus("success");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -188,7 +189,7 @@ it("answering \"hold\" resolves the question without checking CI or merging", as
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["hold"],
@@ -205,7 +206,7 @@ it("盤面の外で先に merge された PR の merge question は、「merge�
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   t.github.scriptMergedOutside(1);
   // merge 済み PR は CI が赤/pending でも観測決着に到達しなければならない
   t.github.scriptCiStatus("pending");
@@ -231,7 +232,7 @@ it("同じ question に「hold」で回答しても観測決着になり、hold 
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   t.github.scriptMergedOutside(1);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -258,7 +259,7 @@ it.each([
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   t.github[script](1);
 
   // 60秒面は一切広げない — CI poll の周期では走査は動かない
@@ -281,7 +282,7 @@ it("盤面の名義の merge(根の pr_merged)で回答の記録なしに閉じ�
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   // 盤面が merge した直後に落ち、回答の記録だけが失われた形(#1820): GitHub 上は盤面の名義で merge 済み、遅い走査が読む
   t.github.scriptMergedByBoard(1);
   await t.clock.advance(SCAN);
@@ -299,8 +300,8 @@ it("走査中に1枚の PR が読めなくても、走査は倒れず残りの q
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  await completeUnderEscalate(t, ws.path);
-  await completeUnderEscalate(t, ws.path);
+  await completeUnderEscalate(t);
+  await completeUnderEscalate(t);
   const questions = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((x: any) =>
     x.title.startsWith("merge PR"),
   );
@@ -327,7 +328,7 @@ it("external の PR は open な merge question を残さないので、走査�
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -352,7 +353,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -392,7 +393,7 @@ it("CI 待ち行の PR が盤面の外で merge されていたら、次の poll
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -424,7 +425,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -477,7 +478,7 @@ it("a risky decomposed child merges back, then its root integration PR asks for 
   const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.title === "risky child",
   );
-  addTaskChange(ws.path, child.id);
+  addTaskChange(checkoutOf(t.db, child.id), child.id);
   const childClient = await mcpClient(t.mcpBaseUrl, child.id);
   await childClient.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await childClient.close();
@@ -525,7 +526,7 @@ it("a settled merge-decision question cannot be re-answered into a merge", async
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t);
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["hold"],
   });

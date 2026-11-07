@@ -3,6 +3,7 @@ import {
   addTaskChange,
   api,
   bootTidepool,
+  checkoutOf,
   completeIntegrationReviews,
   defaultingTo,
   FULL_HANDOFF,
@@ -104,7 +105,7 @@ it("completing a task in a protected workspace under the external merge dial sti
 
   const task = await registerWork(t, "apply the approved diff", "registry");
   await t.clock.advance(HOUR);
-  addTaskChange(registry.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -131,7 +132,7 @@ it("completing a low-risk task in a protected workspace under auto_if_ci_green a
 
   const task = await registerWork(t, "apply the approved diff", "registry");
   await t.clock.advance(HOUR);
-  addTaskChange(registry.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

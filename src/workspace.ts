@@ -3,8 +3,20 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
-import { appendEvent, type ResourceStop } from "./events.js";
-import { boardReadTree, boardWorktreeStatus, displayWorktreePath, git, gitWithEnv, gitWithInput, type SparsePolicy, type WorktreeChange, withBoardGit } from "./git.js";
+import { appendEvent, latestEventOfTask, type ResourceStop } from "./events.js";
+import {
+  boardReadTree,
+  boardWorktreeStatus,
+  boardWriteTree,
+  displayWorktreePath,
+  git,
+  gitWithEnv,
+  gitWithInput,
+  ownWorktreeStatus,
+  type SparsePolicy,
+  type WorktreeChange,
+  withBoardGit,
+} from "./git.js";
 import {
   type GitHubAuth,
   originRepo,
@@ -40,7 +52,9 @@ import {
 import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
+  abandonConsequence,
   carriesReadOnly,
+  escalateTask,
   examineeCheckoutPath,
   getTask,
   interviewRoomPath,
@@ -48,6 +62,7 @@ import {
   issueRefPlaceholder,
   readableInterviewRooms,
   type Task,
+  taskCheckoutPath,
 } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
@@ -86,8 +101,11 @@ export interface WorkspaceConfig {
  *  They are places, not paths, so the pickup can bring a remote-backed one to its rest position the same way as the run place
  *  (issue #2223).
  *  `snapshot_key` keys the ADR 0064 ref snapshot when it is not `name` — an examinee's checkout, named after its room
- *  (ADR 0276 決定3). */
-export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; snapshot_key?: string };
+ *  (ADR 0276 決定3).
+ *  `named` is the named place a work or review task's checkout was made from and is released into (ADR 0356 決定1・2):
+ *  `path` is then the task checkout and `name` the named place's. Absent for the Interview places, which keep their
+ *  own vehicle until #3031. */
+export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; snapshot_key?: string; named?: WorkspaceConfig };
 
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
@@ -317,7 +335,12 @@ function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
   const rootId = interviewRootIdOf(db, task);
-  if (rootId === undefined) return { ...workspace, reads: roomsReadBy(db, task).map(inRealSpelling) };
+  if (rootId === undefined) {
+    // ADR 0356 決定1: work と review は名前の場所でなく、この session の task の checkout で走る
+    const path = taskCheckoutPath(db, task.id);
+    if (path === undefined) throw new PlaceNotOpenError(`the task checkout of ${task.id} is not open`);
+    return { ...workspace, path, reads: roomsReadBy(db, task).map(inRealSpelling), named: workspace };
+  }
   if (task.type !== "interview") {
     const place = examineeRunPlace(db, task.id, rootId);
     if (!place) throw new PlaceNotOpenError(`the checkout of ${task.id} is not open`);
@@ -336,6 +359,80 @@ function examineeRunPlace(db: Db, examineeId: string, rootId: string): RunPlace 
 
 /** 読む場所を実体の綴りで —— sandbox の読みの path と cwd・root に渡す在り処が同じ綴りになる(issue #1954)。 */
 const inRealSpelling = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place, path: safeRealpath(place.path) });
+
+/** 名前の場所の objects の実体の綴り —— task の checkout の alternates と sandbox の読みの path が同じ綴りになる(ADR 0356 決定2)。 */
+function namedObjects(named: WorkspaceConfig): string {
+  return realpathSync(git(named.path, "rev-parse", "--path-format=absolute", "--git-path", "objects"));
+}
+
+/** sandbox が読みだけ開く path: 読む場所と、task の checkout が alternates で借りる名前の場所の objects(ADR 0356 決定2)。
+ *  綴りは alternates の中身でなく名前の場所から引く —— worker が書き換えた alternates で読みの面を広げさせない。 */
+export function runPlaceReadPaths(place: RunPlace): string[] {
+  const borrows = place.named !== undefined && existsSync(join(place.path, ".git", "objects", "info", "alternates"));
+  return [...place.reads.map((read) => read.path), ...(borrows ? [namedObjects(place.named!)] : [])];
+}
+
+/** task の checkout の番地に repo を作れない —— 名前の場所の性質ではなく host 側の失敗で、quarantine にしない(ADR 0356 決定2)。 */
+export class TaskCheckoutHostError extends Error {}
+
+/** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
+ *  前の session が残した checkout は動かさず再利用もしない。objects は名前の場所から alternates で借り、タスクブランチだけを
+ *  fetch して checkout する。開いた event は repo ができた後に書く(ADR 0329)。 */
+function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: Date): void {
+  const pickup = latestEventOfTask(db, task.id, "task_picked_up");
+  if (!pickup) throw new Error(`task ${task.id} has no pickup to key its task checkout`);
+  const branch = taskBranch(task.id);
+  let path: string;
+  try {
+    const at = join(conventionCheckoutPath(task.id, workspacesBaseDir), String(pickup.id));
+    mkdirSync(at, { recursive: true });
+    path = realpathSync(at);
+    git(path, "init", "--quiet", "--template=", "--initial-branch=main");
+    mkdirSync(join(path, ".git", "objects", "info"), { recursive: true });
+    writeFileSync(join(path, ".git", "objects", "info", "alternates"), `${namedObjects(named)}\n`);
+  } catch (cause) {
+    throw new TaskCheckoutHostError(`the task checkout of ${task.id} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+  git(path, "fetch", "--quiet", "--no-auto-gc", "--no-write-fetch-head", "--no-recurse-submodules", named.path, `refs/heads/${branch}:refs/heads/${branch}`);
+  // alternates 越しの fetch は objects の欠けを見ないので、欠けた blob で落ちる plumbing で tree を出す(porcelain の checkout は黙って欠く)
+  git(path, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
+  git(path, "read-tree", "-u", "--reset", "HEAD");
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: now });
+}
+
+/** worker の repo が読めない(タスクブランチが無い・repo が壊れている)—— task の失敗で、名前の場所の quarantine ではない(ADR 0356 決定2)。 */
+export class TaskCheckoutUnreadableError extends Error {}
+
+/** task の checkout のタスクブランチの tip を、ref を書かずに名前の場所の objects へ引く(ADR 0356 決定3)。sha は先に `ls-remote` で知る
+ *  (ADR 0243 決定1: 書く前に値を知る)—— upload-pack は worker の repo の中で走るが protected config しか読まない。 */
+function fetchWorkerTip(named: WorkspaceConfig, checkout: string, taskId: string): string {
+  const ref = `refs/heads/${taskBranch(taskId)}`;
+  // 名前の場所の側の故障を worker の repo のせいにしない —— ここで落ちれば素の失敗(呼び手の quarantine)
+  git(named.path, "rev-parse", "--git-dir");
+  let sha: string | undefined;
+  try {
+    sha = git(named.path, "ls-remote", checkout, ref).split("\n").map((line) => line.split("\t")).find(([, name]) => name === ref)?.[0];
+    if (sha) {
+      git(named.path, "fetch", "--quiet", "--no-auto-gc", "--no-write-fetch-head", "--no-recurse-submodules", checkout, ref);
+      git(named.path, "cat-file", "-e", `${sha}^{commit}`);
+    }
+  } catch (cause) {
+    throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+  if (!sha) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no branch ${taskBranch(taskId)}`);
+  return sha;
+}
+
+/** 完了の門の前半(ADR 0356 決定3): worker の tip を名前の場所のタスクブランチにする。後始末はここで着いた ref を読むだけになる。
+ *  task の checkout で走らない場所には何もしない。worker の repo が読めなければ `TaskCheckoutUnreadableError`。 */
+export function fetchTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): void {
+  const { named } = place;
+  if (!named) return;
+  const tip = fetchWorkerTip(named, place.path, taskId);
+  const ref = `refs/heads/${taskBranch(taskId)}`;
+  const old = readRef(named, ref);
+  if (old !== tip) boardRefWriter(db, named)(ref, tip, () => git(named.path, "update-ref", ref, tip, old));
+}
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
  *  convention-derived location under the base dir. Every consumer that has to
@@ -521,8 +618,8 @@ export function lineageTaskBranch(
 }
 
 /** 盤面が checkout を動かす1手。ADR 0345 決定2: 再実行は HEAD の位置を基準から読むので、HEAD の行に予告して畳む。
- *  ADR 0352 決定1・2: 名前の場所では、離れる branch が無視するものは行き先でも無視されるものと入れ子 repo も消す ——
- *  受験者の checkout は再開にも自分の ignored の生成物を残す(ADR 0276 決定1)。 */
+ *  ADR 0352 決定1・2: 面接室では、離れる branch が無視するものは行き先でも無視されるものと入れ子 repo も消す ——
+ *  受験者の checkout は再開にも自分の ignored の生成物を残す(ADR 0276 決定1)。work / review はこれを通らない(ADR 0356 決定1)。 */
 function checkoutThroughGate(db: Db, workspace: WorkspaceConfig, branch: string): void {
   const ref = `refs/heads/${branch}`;
   const oldTip = git(workspace.path, "rev-parse", "--verify", "HEAD");
@@ -537,7 +634,8 @@ function checkoutThroughGate(db: Db, workspace: WorkspaceConfig, branch: string)
     writes.push([ref, tip]);
   }
   writeBoardRefs(db, workspace, writes, () => {
-    if (snapshotKey(workspace) === workspace.name) {
+    // ADR 0356 決定5: 名前の場所では worker が走らないので、人間の checkout で削除を繰り返さない —— 消すのは #3031 まで root が走る面接室だけ
+    if (snapshotKey(workspace) === workspace.name && interviewRoomPath(db, workspace.name) !== undefined) {
       gitWithEnv({ GIT_WORK_TREE: resolve(workspace.path) }, workspace.path, "clean", "-q", "-ffdX");
     }
     writeWithWorktree(db, workspace, oldTip, tip, () => {
@@ -581,13 +679,17 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
  *  A fresh task forks from its live lineage — an examinee, with no lineage, from its own checkout's `main`, which is the
  *  head its probe recorded (ADR 0276 決定1); a resumed task only checks its existing branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
-  const branch = taskBranch(task.id);
-  // ADR 0351 決定3: 作成と checkout も口を通す —— 作成は無い行に fork 元の sha を予告する
-  if (!taskBranchExists(workspace, task.id)) {
-    const source = lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace);
-    boardRefWriter(db, workspace)(`refs/heads/${branch}`, git(workspace.path, "rev-parse", source), () => git(workspace.path, "branch", branch, source));
-  }
-  checkoutThroughGate(db, workspace, branch);
+  createTaskBranch(db, workspace, task);
+  checkoutThroughGate(db, workspace, taskBranch(task.id));
+}
+
+/** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。 */
+function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
+  if (taskBranchExists(workspace, task.id)) return;
+  const ref = `refs/heads/${taskBranch(task.id)}`;
+  const source = lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace);
+  const sha = git(workspace.path, "rev-parse", `${source}^{commit}`);
+  boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "update-ref", ref, sha, ""));
 }
 
 /** sparse snapshot: 盤面が settings.json を隠す前の人間の sparse-checkout(ADR 0293 決定1)。pattern ファイルの無い
@@ -669,7 +771,14 @@ function snapshotFromBoardLine(workspace: WorkspaceConfig, adopt = false): Spars
 
 /** 「盤面が settings.json を隠している最中か」の印 —— 写し、無ければ残った盤面の行。S bit は読まない(ADR 0293 決定3)。 */
 export function projectSettingsHiddenByBoard(db: Db, workspace: WorkspaceConfig): boolean {
-  return (storedSparseSnapshot(db, workspace) ?? snapshotFromBoardLine(workspace)) !== undefined;
+  // ADR 0356 決定2: task の checkout は写しを持たない —— 盤面が作り解放で消すので、戻すものが無い
+  const snapshot = (workspace as RunPlace).named ? undefined : storedSparseSnapshot(db, workspace);
+  return (snapshot ?? snapshotFromBoardLine(workspace)) !== undefined;
+}
+
+/** task の checkout を読む view の sparse(#3035): 盤面が settings.json を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。 */
+function taskCheckoutSparse(place: WorkspaceConfig): SparsePolicy | undefined {
+  return snapshotFromBoardLine(place) ? { pattern: settingsExcluded(), cone: false } : undefined;
 }
 
 /** Keep shared project settings (ADR 0158) in Git but out of the worker's physical checkout:
@@ -679,7 +788,8 @@ export function projectSettingsHiddenByBoard(db: Db, workspace: WorkspaceConfig)
 export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConfig): void {
   // 写しは DB に無いときだけ撮る —— 回収前の2本目が盤面の形を人間の状態として写さない(ADR 0293 決定1)。
   // 残った盤面の行から読んだ写しも DB に写す —— この session の回収が worker の書いた pattern を読み直さない(決定7)
-  let snapshot = storedSparseSnapshot(db, workspace);
+  // ADR 0356 決定2: task の checkout は盤面が作って解放で消すので、写しを撮らず盤面の行だけを書く
+  let snapshot = (workspace as RunPlace).named ? { mode: "disabled" as const, pattern: null } : storedSparseSnapshot(db, workspace);
   if (!snapshot) {
     snapshot = snapshotFromBoardLine(workspace, true);
     if (!snapshot) {
@@ -846,13 +956,20 @@ export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: PickupPrep & { reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }> } = {},
+  board: PickupPrep & {
+    reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }>;
+    /** task の checkout の番地の基点と、開いた event の時刻(ADR 0356 決定2)。 */
+    workspacesBaseDir: string;
+    now: Date;
+  },
 ): Promise<void> {
   prepareRefBaseline(db, workspace);
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無く、記録である受験者の checkout は除く。
+  // ADR 0356 決定3: 名前の場所は自分の git で読む —— 盤面の view は worker が走った checkout のもので、人間の登録前の
+  // `info/exclude` を永久の quarantine にしない。面接室は #3031 まで root が走るので view のまま
   if (rootId === undefined || task.type === "interview") {
-    const changes = checkoutStatus(workspace, db);
+    const changes = rootId === undefined ? ownWorktreeStatus(workspace.path) : checkoutStatus(workspace, db);
     if (changes.length > 0) {
       throw new PickupGateError(workspace, new Error(
         `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout`,
@@ -875,7 +992,13 @@ export async function prepareWorkspaceAtPickup(
     : task.type === "interview" ? roomPickupPredicates(db, rootId, "") : examineePickupPredicates(db, task, rootId, "");
   await firePickupPredicates(db, workspace, predicates, "after-open", board);
   if (board.live?.() === false) return;
-  ensureTaskBranch(db, workspace, task);
+  if (rootId !== undefined) {
+    ensureTaskBranch(db, workspace, task);
+    return;
+  }
+  // ADR 0356 決定1・2: タスクブランチは名前の場所の ref として作るだけで、worker は fetch した task の checkout で走る
+  createTaskBranch(db, workspace, task);
+  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, board.now);
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も
@@ -1134,13 +1257,26 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
  *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
  *  完了の門(ADR 0084)の dirty 判定は同じ集合を見なければならない —— 2箇所に綴りが
  *  分かれれば、片方だけが残骸を数えて無実の拒否や取りこぼしが生まれる。 */
-function shadowRemnants(workspace: WorkspaceConfig): string[] {
+function shadowRemnants(workspace: WorkspaceConfig, tracked = (path: string) => git(workspace.path, "ls-files", "--cached", "--", path) !== ""): string[] {
   return SANDBOX_SHADOW_PATHS.filter((path) => {
     const stat = lstatSync(join(workspace.path, path), { throwIfNoEntry: false });
     if (!stat?.isFile() || stat.size !== 0) return false;
-    return git(workspace.path, "ls-files", "--cached", "--", path) === "";
+    return !tracked(path);
   });
 }
+
+/** task の checkout の shadow 残骸: tracked は worker の index でなく名前の場所のタスクブランチの tip で読む(ADR 0356 決定3)。 */
+const taskCheckoutRemnants = (place: RunPlace & { named: WorkspaceConfig }, tip: string): string[] =>
+  shadowRemnants(place, (path) => git(place.named.path, "ls-tree", "--name-only", tip, "--", path) !== "");
+
+/** task の checkout の worktree を、名前の場所のタスクブランチの tip に対して盤面の view で読む(ADR 0356 決定3)。shadow 残骸は除く。 */
+function taskCheckoutChanges(place: RunPlace & { named: WorkspaceConfig }, taskId: string): WorktreeChange[] {
+  const tip = git(place.named.path, "rev-parse", "--verify", `refs/heads/${taskBranch(taskId)}`);
+  const remnants = new Set(taskCheckoutRemnants(place, tip));
+  return boardWorktreeStatus(place.path, taskCheckoutSparse(place), tip, place.named.path).filter(({ path }) => !remnants.has(path));
+}
+
+const isTaskCheckout = (place: WorkspaceConfig): place is RunPlace & { named: WorkspaceConfig } => (place as RunPlace).named !== undefined;
 
 /** shadow 残骸(ADR 0069 の3条件)を除いた「作業ツリーに残っている未コミットの変更」の
  *  観測。**綴りはこの1つである**(ADR 0084 決定3): 門の dirty 判定も完了経路の検査も
@@ -1175,9 +1311,9 @@ function removeShadowRemnants(workspace: WorkspaceConfig): void {
  *  失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでもない: 直後の解放で tree rule
  *  が同じ git に躓き、quarantine が人間に届く。**その網は完了経路には無い**(tree rule が
  *  検査に置き換わる)ので、そちらは飲まない —— `assertNothingWrittenAfterCompletion`。 */
-export function completionTreePaths(workspace: WorkspaceConfig, db?: Db): string[] {
+export function completionTreePaths(workspace: WorkspaceConfig, taskId: string, db?: Db): string[] {
   try {
-    return uncommittedChanges(workspace, db).map(({ path }) => path);
+    return (isTaskCheckout(workspace) ? taskCheckoutChanges(workspace, taskId) : uncommittedChanges(workspace, db)).map(({ path }) => path);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err;
     return [];
@@ -1258,9 +1394,16 @@ export function completionTreeGateApplies(task: Task): boolean {
  *  直後の解放で tree rule が同じ git に躓いて quarantine が人間に届くからであり、完了経路
  *  ではその tree rule がこの検査に置き換わっていて網が無い(ADR 0109 決定3)。 */
 function assertNothingWrittenAfterCompletion(db: Db, workspace: WorkspaceConfig, task: Task): void {
-  assertOnTaskBranch(workspace, task.id);
-  removeShadowRemnants(workspace);
-  if (uncommittedChanges(workspace, db).length > 0) {
+  let changes: WorktreeChange[];
+  if (isTaskCheckout(workspace)) {
+    // ADR 0356 決定3: 完了の門が着けた名前の場所の tip と比べる —— 完了報告の後の commit もここで差分として見える
+    changes = taskCheckoutChanges(workspace, task.id);
+  } else {
+    assertOnTaskBranch(workspace, task.id);
+    removeShadowRemnants(workspace);
+    changes = uncommittedChanges(workspace, db);
+  }
+  if (changes.length > 0) {
     // 完了報告の後の書き込みは session の成果物ではない —— 後始末は session の持ち物(ADR 0109)
     throw new Error(
       `workspace ${workspace.name} was written to after task ${task.id} reported done — ` +
@@ -1316,7 +1459,9 @@ function assertNothingWrittenAfterBoardMovedHead(db: Db, workspace: WorkspaceCon
 function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   try {
-    checkoutThroughGate(db, workspace, branch);
+    // ADR 0356 決定1: 名前の場所の HEAD は保護ブランチを離れないので、残るのは remote への追従だけ。HEAD を戻すのは #3031 まで
+    // worker が走る面接室と受験者の checkout
+    if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
@@ -1348,11 +1493,12 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
  *  a clean tree — dirty, or not even a usable git repository — is treated
  *  the same, fail-closed, same posture as the tree rule's own dirty-after-
  *  WIP-commit check. */
-export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db): void {
+export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db, workerRunsHere = false): void {
   assertOwnGitDirectory(workspace.path);
   let status: WorktreeChange[];
   try {
-    status = checkoutStatus(workspace, db);
+    // ADR 0356 決定3: 名前の場所は自分の git で読む。#3031 まで worker が走る面接室だけ盤面の view
+    status = workerRunsHere ? checkoutStatus(workspace, db) : ownWorktreeStatus(workspace.path);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err;
     throw new Error(
@@ -1510,6 +1656,10 @@ export function releaseWorkspace(
    *  退避する: そこでの WIP はタスクブランチに留まり、merge-back に載らない。 */
   completed = false,
 ): void {
+  if (isTaskCheckout(workspace)) {
+    releaseTaskCheckout(db, workspace, task, now, mergeBack, githubAuth, tokenFailure, completed);
+    return;
+  }
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
   try {
     if (recoverBoardMovedHead(db, workspace, task.id)) {
@@ -1525,24 +1675,122 @@ export function releaseWorkspace(
       // ADR 0345 決定2: HEAD の行は比較に畳まない —— 終わりに自分のブランチに居ることは手前の HEAD 検査が持つ
       compareAndFoldBaseline(db, workspace, [taskRef, "HEAD"], "during the session");
     }
-    // ADR 0351 決定2: タスクブランチの行を現在値へ畳む —— session の後に動かないので冪等で、再実行の経路でも撃つ
-    updateBaseline(db, workspace, (values) => values.set(taskRef, readRef(workspace, taskRef)));
-    // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
-    // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
-    // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
-    // 同じ quarantine(ADR 0052)。呼び出し元で投げると slot が解放されない。
-    if (mergeBack) {
-      if (tokenFailure !== undefined) throw tokenFailure;
-      // ADR 0351 決定3: 基準は切れないので、後始末の fetch も口を通す
-      if (isRemoteBacked(workspace)) fetchBranchCopy(workspace.path, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
-    }
-    const target = mergeBack && lineageTaskBranch(db, workspace, task);
-    if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
-    parkOnProtectedBranch(db, workspace);
+    settleBranches(db, workspace, task, mergeBack, githubAuth, tokenFailure);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, workspace.name, err, now);
   }
+}
+
+/** 解放の名前の場所の側の後半: タスクブランチの行を畳み、完了なら帰り先へ merge back し、休止位置へ戻す。 */
+function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBack: boolean, githubAuth: GitHubAuth | undefined, tokenFailure: unknown): void {
+  const taskRef = `refs/heads/${taskBranch(task.id)}`;
+  // ADR 0351 決定2: タスクブランチの行を現在値へ畳む —— session の後に動かないので冪等で、再実行の経路でも撃つ
+  updateBaseline(db, workspace, (values) => values.set(taskRef, readRef(workspace, taskRef)));
+  // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
+  // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
+  // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
+  // 同じ quarantine(ADR 0052)。呼び出し元で投げると slot が解放されない。
+  if (mergeBack) {
+    if (tokenFailure !== undefined) throw tokenFailure;
+    // ADR 0351 決定3: 基準は切れないので、後始末の fetch も口を通す
+    if (isRemoteBacked(workspace)) fetchBranchCopy(workspace.path, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
+  }
+  const target = mergeBack && lineageTaskBranch(db, workspace, task);
+  if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
+  parkOnProtectedBranch(db, workspace);
+}
+
+/** ADR 0356 決定2・3: task の checkout の解放。worker の tip を名前の場所へ引き、worktree を盤面の view で WIP にして
+ *  タスクブランチを1度の口で書き(fetch → 退避 → `update-ref`)、名前の場所の側を済ませてから、最後に checkout を消す。
+ *  再実行は記録から決まる —— 名前の場所の tip が worker の tip を含めば WIP は着いている、checkout が無ければ読むものが無い。
+ *  worker の repo が読めない失敗は task の失敗で(`failTaskOnRelease`)、名前の場所の側の失敗は今日どおり quarantine。
+ *  どちらでも checkout は残す。削除の失敗(EBUSY / ENOTEMPTY)は quarantine に包まず投げ、後始末の再実行が撃ち直す。 */
+function releaseTaskCheckout(
+  db: Db,
+  place: RunPlace & { named: WorkspaceConfig },
+  task: Task,
+  now: Date,
+  mergeBack: boolean,
+  githubAuth: GitHubAuth | undefined,
+  tokenFailure: unknown,
+  completed: boolean,
+): void {
+  const { named, path: checkout } = place;
+  const taskRef = `refs/heads/${taskBranch(task.id)}`;
+  const present = placeHasRepository(checkout);
+  // ADR 0109 決定3: 門の掛かる完了は門が tip を既に名前の場所へ引いた —— 後始末はそこへの書き込みを検査するだけ
+  const gated = completed && completionTreeGateApplies(task);
+  let stash: { base: string; tree: string } | undefined;
+  if (present && !gated) {
+    try {
+      const tip = fetchWorkerTip(named, checkout, task.id);
+      const recorded = readRef(named, taskRef);
+      const base = recorded !== "" && isAncestor(named, tip, recorded) ? recorded : tip;
+      let tree: string;
+      try {
+        tree = boardWriteTree(checkout, base, named.path, taskCheckoutSparse(place), taskCheckoutRemnants(place, base));
+      } catch (cause) {
+        throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      }
+      stash = { base, tree };
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+      if (err instanceof TaskCheckoutUnreadableError) failTaskOnRelease(db, task, checkout, err, now);
+      else quarantineWorkspace(db, named.name, err, now);
+      return;
+    }
+  }
+  try {
+    if (stash) {
+      const { base, tree } = stash;
+      const tip = tree === git(named.path, "rev-parse", `${base}^{tree}`) ? base : git(named.path, "commit-tree", tree, "-p", base, "-m", wipSubject(task));
+      const old = readRef(named, taskRef);
+      if (old !== tip) boardRefWriter(db, named)(taskRef, tip, () => git(named.path, "update-ref", taskRef, tip, old));
+    }
+    if (present && gated) assertNothingWrittenAfterCompletion(db, place, task);
+    // ADR 0064 決定5 / ADR 0356 決定4: 基準は名前の場所だけが持ち、task の checkout の ref の移動は読まない
+    compareAndFoldBaseline(db, named, [taskRef, "HEAD"], "during the session");
+    settleBranches(db, named, task, mergeBack, githubAuth, tokenFailure);
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+    quarantineWorkspace(db, named.name, err, now);
+    return;
+  }
+  rmSync(checkout, { recursive: true, force: true, maxRetries: 3 });
+}
+
+/** ADR 0356 決定2: 解放で worker の repo を読めなかった。checkout を残して event に在り処と理由を刻み、`todo` に戻る決着なら
+ *  failure question を立てる —— 既に立っている(倒された session)なら足さない。 */
+function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: Date): void {
+  const reason = err instanceof Error ? err.message : String(err);
+  db.transaction(() => {
+    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_release_failed", path, reason }, at: now });
+    const current = getTask(db, task.id)!;
+    if (current.status === "done" || current.status === "cancelled") return;
+    const open = db
+      .prepare(
+        `SELECT 1 FROM tasks WHERE type = 'question' AND status = 'todo' AND parent_id = ?
+           AND question_cancel_option IS NOT NULL AND question_breached_decision IS NULL`,
+      )
+      .get(task.id);
+    if (open) return;
+    escalateTask(
+      db,
+      current,
+      {
+        context:
+          `${reason}\n\nThe board kept the task checkout at ${path}: what it holds beyond the task branch is not on the task branch.\n\n` +
+          `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. ` +
+          abandonConsequence(db, current),
+        questions: [{ title: `task checkout could not be released: ${current.title}`, options: ["retry", "abandon"], recommendation: "retry" }],
+        question_kind: { kind: "failure", cancel_option: "abandon" },
+      },
+      BOARD_ACTOR_ID,
+      now,
+      "board",
+    );
+  })();
 }
 
 /** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict leaves

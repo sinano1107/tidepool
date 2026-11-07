@@ -8,6 +8,7 @@ import { resolveTaskBranchLineage } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviewViaMcp,
   FULL_HANDOFF,
@@ -94,7 +95,7 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
   const parent = await registerWork(t, "integrate the feature");
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(workspace.path, "parent.txt"), "parent work\n");
+  writeFileSync(join(checkoutOf(t.db, parent.id), "parent.txt"), "parent work\n");
   const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await parentClient.callTool({
     name: "decompose",
@@ -117,7 +118,7 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
   await t.clock.advance(HOUR);
   expect(git(workspace.path, "show", `task/${child.id}:parent.txt`)).toBe("parent work");
 
-  commitWork(workspace.path, "child.txt", "child work\n");
+  commitWork(checkoutOf(t.db, child.id), "child.txt", "child work\n");
   await complete(child.id);
 
   expect(git(workspace.path, "show", `task/${parent.id}:child.txt`)).toBe("child work");
@@ -131,7 +132,10 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
   // 自ブランチへ戻る —— 休止位置の main はその pickup が動かす
   await settle();
   expect(t.worker.started.map((task) => task.id)).toEqual([parent.id, child.id, parent.id]);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${parent.id}`);
+  // ADR 0356 決定2: 親の再開は merge back の後の自ブランチから task の checkout を作り直す(旧: 名前の場所の HEAD が親のブランチへ戻った)
+  const resumed = checkoutOf(t.db, parent.id);
+  expect(git(resumed, "show", "HEAD:child.txt")).toBe("child work");
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 });
 
 it("完了時 review は元 PR が merge 済みでも被レビュータスクの恒久ブランチから切られる", async () => {
@@ -139,7 +143,7 @@ it("完了時 review は元 PR が merge 済みでも被レビュータスクの
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship reviewed work");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "review this\n");
+  commitWork(checkoutOf(t.db, reviewed.id), "reviewed.txt", "review this\n");
   await complete(reviewed.id);
 
   git(workspace.path, "merge", "--no-ff", `task/${reviewed.id}`, "-m", "merge reviewed work");
@@ -161,7 +165,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "review without branch pollution");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "reviewed work\n");
+  commitWork(checkoutOf(t.db, reviewed.id), "reviewed.txt", "reviewed work\n");
   await complete(reviewed.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -169,11 +173,11 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
   );
   await t.clock.advance(HOUR);
   const reviewedHead = git(workspace.path, "rev-parse", `task/${reviewed.id}`);
-  commitWork(workspace.path, "review-output.txt", "generated during review\n");
+  commitWork(checkoutOf(t.db, review.id), "review-output.txt", "generated during review\n");
 
-  const client = await mcpClient(t.mcpBaseUrl, review.id);
-  await client.callTool({ name: "complete_task", arguments: {} });
-  await client.close();
+  // 旧: `complete_task` を呼んでいた —— 統合点レビューの verb ではないので拒まれ、review の commit が名前の場所の HEAD に乗って
+  // いたから測れていた。ADR 0356 決定2 の後は review の成果は解放の fetch でだけタスクブランチに届くので、本物の完了の verb で解放する
+  expect((await completeIntegrationReviewViaMcp(t, review.id)).isError ?? false).toBe(false);
 
   expect(git(workspace.path, "rev-parse", `task/${reviewed.id}`)).toBe(reviewedHead);
   expect(
@@ -186,7 +190,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship repairable work");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "needs review\n");
+  commitWork(checkoutOf(t.db, reviewed.id), "reviewed.txt", "needs review\n");
   await complete(reviewed.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -202,7 +206,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
     git(workspace.path, "rev-parse", `task/${reviewed.id}`),
   );
 
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "fixed\n");
   await complete(repair.id);
 
   expect(git(workspace.path, "show", `task/${reviewed.id}:repair.txt`)).toBe("fixed");
@@ -222,7 +226,7 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship merged work");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "merged work\n");
+  commitWork(checkoutOf(t.db, reviewed.id), "reviewed.txt", "merged work\n");
   // 外での merge は review の session の外で起こす —— 後始末の完走は pickup の契機なので
   // (ADR 0119 決定3)、止めておかないと review が先に枠へ入り、この push を session 中の ref の
   // 変化として quarantine に落とす
@@ -248,7 +252,7 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
     git(workspace.path, "rev-parse", "main"),
   );
 
-  commitWork(workspace.path, "repair.txt", "fixed after merge\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "fixed after merge\n");
   await complete(repair.id);
 
   // 被レビュー work 側の PR は付帯子(review)の決着待ちで開かない(ADR 0092 決定1)
@@ -264,7 +268,7 @@ it.each(["squash", "rebase"] as const)(
     t = await bootTidepool({ workspace });
     const reviewed = await registerWork(t, `ship ${method}-merged work`);
     await t.clock.advance(HOUR);
-    commitWork(workspace.path, "reviewed.txt", "merged work\n");
+    commitWork(checkoutOf(t.db, reviewed.id), "reviewed.txt", "merged work\n");
     await complete(reviewed.id);
     if (method === "squash") await squashTaskIntoOrigin(workspace, reviewed.id);
     else await rebaseLandOutside(workspace.path, reviewed.id);
@@ -285,7 +289,7 @@ it.each(["squash", "rebase"] as const)(
     expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).not.toBe(
       git(workspace.path, "rev-parse", `task/${reviewed.id}`),
     );
-    commitWork(workspace.path, "repair.txt", `fixed after ${method} merge\n`);
+    commitWork(checkoutOf(t.db, repair.id), "repair.txt", `fixed after ${method} merge\n`);
     await complete(repair.id);
 
     expect(t.github.requests).toHaveLength(1);
@@ -324,14 +328,14 @@ it("入れ子の decompose はルートから親まで候補を進め、直近�
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "parent integration");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "parent.txt"), "parent\n");
+  writeFileSync(join(checkoutOf(t.db, parent.id), "parent.txt"), "parent\n");
   await decompose(parent.id, "first child");
 
   const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.parent_id === parent.id,
   );
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "child.txt"), "child\n");
+  writeFileSync(join(checkoutOf(t.db, child.id), "child.txt"), "child\n");
   await decompose(child.id, "nested child");
   expect(git(workspace.path, "diff", "--name-only", `task/${parent.id}..task/${child.id}`)).toBe(
     "child.txt",
@@ -371,7 +375,7 @@ it("先行する兄弟の merge back 後に pickup された兄弟は、その�
     (task: any) => task.parent_id === parent.id,
   );
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "first.txt", "first result\n");
+  commitWork(checkoutOf(t.db, children[0].id), "first.txt", "first result\n");
   await complete(children[0].id);
   await t.clock.advance(HOUR);
 
@@ -407,14 +411,14 @@ it("decompose 子の review 修理は、着地済みの子ブランチを飛ば�
     (task: any) => task.parent_id === parent.id && task.type === "work",
   );
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "child.txt", "child result\n");
+  commitWork(checkoutOf(t.db, child.id), "child.txt", "child result\n");
   await complete(child.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.parent_id === child.id && task.type === "review",
   );
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "parent-progress.txt"), "new parent work\n");
+  writeFileSync(join(checkoutOf(t.db, parent.id), "parent-progress.txt"), "new parent work\n");
   // 解放系 verb の後始末の完走は pickup の契機(ADR 0119 決定3)なので、次に枠へ入れたい行は
   // verb の前に先頭へ置き、verb の後に作られる行は pause の間に先頭へ置いてから再開する
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
@@ -445,7 +449,7 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "work that lands during repair");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "reviewed work\n");
+  commitWork(checkoutOf(t.db, reviewed.id), "reviewed.txt", "reviewed work\n");
   await complete(reviewed.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -470,7 +474,7 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
   git(merger, "merge", "--no-ff", "landed", "-m", "merge reviewed work");
   git(merger, "push", "origin", "main");
 
-  commitWork(workspace.path, "repair.txt", "repair after landing\n");
+  commitWork(checkoutOf(t.db, repair.id), "repair.txt", "repair after landing\n");
   await complete(repair.id);
 
   // 祖先の PR は付帯子(review)の決着待ちで開かない(ADR 0092 決定1)ので、開くのは
@@ -487,7 +491,7 @@ it("merge back が conflict すると完了は維持したまま workspace を q
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "conflicting integration");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "shared.txt"), "base\n");
+  writeFileSync(join(checkoutOf(t.db, parent.id), "shared.txt"), "base\n");
   const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await parentClient.callTool({
     name: "decompose",
@@ -530,11 +534,11 @@ it("merge back が conflict すると完了は維持したまま workspace を q
   );
 
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "shared.txt", "parent version\n");
+  commitWork(checkoutOf(t.db, sibling.id), "shared.txt", "parent version\n");
   await complete(sibling.id);
 
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["mine"] });
-  commitWork(workspace.path, "shared.txt", "child version\n");
+  commitWork(checkoutOf(t.db, child.id), "shared.txt", "child version\n");
 
   await complete(child.id);
 
@@ -566,7 +570,7 @@ it("兄弟が親ブランチを進めた後の merge back は ff-only にせず�
     (task: any) => task.parent_id === parent.id && task.type === "work",
   );
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "paused.txt"), "paused result\n");
+  writeFileSync(join(checkoutOf(t.db, children[0].id), "paused.txt"), "paused result\n");
   const pausedClient = await mcpClient(t.mcpBaseUrl, children[0].id);
   await pausedClient.callTool({
     name: "escalate",
@@ -590,7 +594,7 @@ it("兄弟が親ブランチを進めた後の merge back は ff-only にせず�
     (task: any) => task.type === "question" && task.parent_id === children[0].id,
   );
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "finished.txt", "finished result\n");
+  commitWork(checkoutOf(t.db, children[1].id), "finished.txt", "finished result\n");
   await complete(children[1].id);
 
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["continue"] });
@@ -618,7 +622,7 @@ it("watchdog の slot 解放は WIP を子ブランチに残し、親へ merge b
   // 分解の後始末の完走が契機になり、子は tick を待たずに枠へ入る(ADR 0119 決定3)
   await settle();
   expect(t.worker.started.map((task) => task.id)).toEqual([parent.id, child.id]);
-  writeFileSync(join(workspace.path, "timed-out.txt"), "unfinished child work\n");
+  writeFileSync(join(checkoutOf(t.db, child.id), "timed-out.txt"), "unfinished child work\n");
 
   await t.clock.advance(MINUTE);
   await t.clock.advance(MINUTE);

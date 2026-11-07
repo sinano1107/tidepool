@@ -3,6 +3,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
@@ -170,7 +171,7 @@ async function exerciseSettlement(surface: HumanSurface, verb: SettlementVerb) {
   pools.push(landingPool);
   const root = await registerWork(landingPool, `${surface} ${verb} landing root`);
   await landingPool.clock.advance(HOUR);
-  commitWork(workspace.path, `${surface}-${verb}.txt`, "finished\n");
+  commitWork(checkoutOf(landingPool.db, root.id), `${surface}-${verb}.txt`, "finished\n");
   const attached = attachChild(landingPool, root.id, `${surface} attached child`, "human");
   await completeViaMcp(landingPool, root.id);
   await completeIntegrationReviews(landingPool, root.id);

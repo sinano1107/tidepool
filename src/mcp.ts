@@ -111,7 +111,10 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   completionTreePaths,
+  fetchTaskCheckoutTip,
+  type RunPlace,
   resolveOrQuarantine,
+  TaskCheckoutUnreadableError,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -333,7 +336,14 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | unde
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
 function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
   if (!completionTreeGateApplies(task)) return;
-  const paths = completionTreePaths(workspace, deps.db);
+  // ADR 0356 決定3: worker の tip を先に名前の場所へ引く —— 引けなければ完了を拒み、後始末は着いた ref を読むだけになる
+  try {
+    fetchTaskCheckoutTip(deps.db, workspace as RunPlace, task.id);
+  } catch (err) {
+    if (err instanceof TaskCheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
+    throw err;
+  }
+  const paths = completionTreePaths(workspace, task.id, deps.db);
   if (paths.length === 0) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +

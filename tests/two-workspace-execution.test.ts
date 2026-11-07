@@ -1,9 +1,11 @@
-import { rm } from "node:fs/promises";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   defaultingTo,
@@ -38,7 +40,9 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     const inSandbox = queueWork(t, "runs in sandbox");
     await t.clock.advance(HOUR);
     expect(t.worker.started.map((x) => x.id)).toEqual([inSandbox.id]);
-    expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${inSandbox.id}`);
+    // ADR 0356 決定1: タスクブランチはその workspace の名前の場所の ref で、worker はそこから開いた task の checkout で走る
+    // (旧: 名前の場所の HEAD がタスクブランチに乗った)
+    expectRunsFrom(sandbox, inSandbox.id);
 
     const c1 = await mcpClient(t.mcpBaseUrl, inSandbox.id);
     await c1.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -50,13 +54,14 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
 
     await t.clock.advance(HOUR);
     expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([inSandbox.id, inProd.id]);
-    expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${inProd.id}`);
+    expectRunsFrom(prod, inProd.id);
+    expect(() => git(sandbox.path, "rev-parse", "--verify", `task/${inProd.id}`)).toThrow();
     // sandbox's own checkout was left clean and untouched by prod's pickup
     expect(git(sandbox.path, "status", "--porcelain")).toBe("");
 
-    // break prod's tree rule so completing it quarantines only "prod"
-    commitWork(prod.path, "junk.txt", "uncommittable\n");
-    await rm(join(prod.path, ".git"), { recursive: true, force: true });
+    // break prod's release so completing it quarantines only "prod": an out-of-band commit on prod's main moves a ref
+    // the board did not write (ADR 0351). 旧: prod の .git を消した —— 完了の門が tip を引けず完了を拒むようになった(ADR 0356 決定3)
+    commitWork(prod.path, "junk.txt", "out of band\n");
     const c2 = await mcpClient(t.mcpBaseUrl, inProd.id);
     await c2.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
     await c2.close();
@@ -78,8 +83,15 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
       runsInSandbox.id,
     ]);
     expect(t.worker.started.map((x) => x.id)).not.toContain(stuckInProd.id);
-    expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
-      `task/${runsInSandbox.id}`,
-    );
+    expectRunsFrom(sandbox, runsInSandbox.id);
   });
 });
+
+/** task の checkout がその名前の場所から開き(alternates がその objects を指す)タスクブランチに乗り、名前の場所の HEAD は main のまま。 */
+function expectRunsFrom(named: WorkspaceConfig, taskId: string): void {
+  const checkout = checkoutOf(t.db, taskId);
+  expect(git(checkout, "symbolic-ref", "--short", "HEAD")).toBe(`task/${taskId}`);
+  expect(readFileSync(join(checkout, ".git", "objects", "info", "alternates"), "utf8").trim()).toBe(realpathSync(join(named.path, ".git", "objects")));
+  expect(git(named.path, "rev-parse", "--verify", `task/${taskId}`)).not.toBe("");
+  expect(git(named.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+}

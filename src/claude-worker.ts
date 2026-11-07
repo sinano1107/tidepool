@@ -62,6 +62,7 @@ import {
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
+  runPlaceReadPaths,
   taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -1727,7 +1728,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       try {
         const reclaimed = this.containers.open(String(sessionId)).reclaimed;
         excludeWorkspaceProjectSettings(this.options.db, place);
-        this.restoreProjectSettingsAfterReclaim(reclaimed, place);
+        // ADR 0356 決定2: task の checkout は解放で消えるので戻さない
+        if (!place.named) this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
         if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
@@ -2073,7 +2075,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             taskTemp,
             configDir,
             lib64: existsSync("/lib64"),
-            readPaths: place.reads.map((read) => read.path),
+            readPaths: runPlaceReadPaths(place),
           }),
         ),
       );

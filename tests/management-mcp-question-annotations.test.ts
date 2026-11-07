@@ -3,6 +3,7 @@ import { createBehaviorCandidate } from "../src/memory.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
@@ -121,7 +122,7 @@ it("着地 question は list_board と get_task で HTTP と同じ landing を�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const question = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find(

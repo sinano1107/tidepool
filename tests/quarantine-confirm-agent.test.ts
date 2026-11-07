@@ -4,6 +4,7 @@ import { UnknownAgentError } from "../src/registry.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviewViaMcp,
   completeViaMcp,
@@ -124,7 +125,7 @@ it("PR を開く時点で profile が読めず agent 名の quarantine が抱え
   });
   const work = await registerWork(t, "ship reviewable work");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "v1\n");
+  commitWork(checkoutOf(t.db, work.id), "feature.txt", "v1\n");
   await completeViaMcp(t, work.id);
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === work.id,

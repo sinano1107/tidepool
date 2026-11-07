@@ -2,8 +2,8 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
-import { registerTask } from "../src/tasks.js";
-import { prepareWorkspaceAtPickup, refreshProtectedBranch, releaseWorkspace } from "../src/workspace.js";
+import { registerTask, taskCheckoutPath } from "../src/tasks.js";
+import { refreshProtectedBranch, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -16,6 +16,7 @@ import {
   makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
+  prepareAtPickup,
   quarantineQuestion,
   registerWork,
   servedQuarantineQuestion,
@@ -40,15 +41,15 @@ async function complete(board: Tidepool, taskId: string): Promise<void> {
 }
 
 // ADR 0052 決定7: 「クリーンに戻す」には**休止位置**も含まれる。理由は盤面の正しさでは
-// なく**人間の誤読**である —— 盤面はもう checkout の位置を読まないが、人間はホスト上で
-// その checkout を覗く。最後に走ったタスクのブランチが居座った clone は、覗いた人間に
-// 「今この workspace はこうなっている」と嘘をつく。
-it("slot 解放で checkout が保護ブランチへ戻る", async () => {
+// なく**人間の誤読**である —— 人間はホスト上でその checkout を覗く。ADR 0356 決定1 の後は worker が task の checkout で
+// 走るので、名前の場所の HEAD は保護ブランチを離れない(旧: 解放が HEAD をタスクブランチから保護ブランチへ戻していた)。
+it("session の間も解放の後も名前の場所は保護ブランチに居て、成果は解放でタスクブランチに届く(ADR 0356 決定1)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "leaves work behind");
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "notes.txt", "half-finished work\n");
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  commitWork(taskCheckoutPath(t.db, task.id)!, "notes.txt", "half-finished work\n");
   // 解放は pickup の契機(ADR 0119 決定3)—— 統合点レビューが空いた checkout を動かす前の
   // 休止位置を見るため、次の pickup を止めておく
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
@@ -88,20 +89,19 @@ it("remote-backed の解放が休止位置の ff でローカルの保護ブラ�
   const db = openDb(":memory:");
   const now = new Date("2026-10-22T00:00:00.000Z");
   const task = registerTask(db, { type: "work", title: "work", purpose: "release while the remote moves", completion_criteria: "released" }, now, ...HUMAN_WEBUI);
-  await prepareWorkspaceAtPickup(db, workspace, task);
+  const place = await prepareAtPickup(db, workspace, task);
   const pickedUp = git(workspace.path, "rev-parse", "main");
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   // 写しは口を通して進める(後始末の fetch の代わり)
   await refreshProtectedBranch(db, workspace, undefined);
-  commitWork(workspace.path, "notes.txt", "work\n");
-  releaseWorkspace(db, workspace, task, now);
+  commitWork(place.path, "notes.txt", "work\n");
+  releaseWorkspace(db, place, task, now);
   const parked = git(workspace.path, "rev-parse", "main");
   expect(parked).not.toBe(pickedUp);
 
   // 同じ基準で解放をやり直す: 行が ff 先の1値なら、pickup の位置へ戻したローカルの保護ブランチは ff 先の値から動いたと名指しされる
-  git(workspace.path, "checkout", `task/${task.id}`);
   git(workspace.path, "update-ref", "refs/heads/main", pickedUp);
-  releaseWorkspace(db, workspace, task, now);
+  releaseWorkspace(db, place, task, now);
 
   expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${parked} refs/heads/main`);
   db.close();
@@ -147,7 +147,7 @@ it("ローカルの保護ブランチがリモートより先行しているだ�
   const db = openDb(":memory:");
   const task = registerTask(db, { type: "work", title: "work", purpose: "pick up an ahead checkout", completion_criteria: "never runs" }, new Date("2026-10-19T00:00:00.000Z"), ...HUMAN_WEBUI);
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, task)).rejects.toThrow(
+  await expect(prepareAtPickup(db, workspace, task)).rejects.toThrow(
     "workspace sandbox: local 'main' is ahead of refs/remotes/origin/main — out-of-band local commits were never pushed",
   );
   expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");

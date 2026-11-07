@@ -6,6 +6,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  checkoutOf,
   completeIntegrationReviews,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -32,7 +33,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({
@@ -68,7 +69,7 @@ it("human retry maps failure to a visible error, then lands while excluding the 
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -129,7 +130,7 @@ it("abandoning PR promotion settles the failure question without changing comple
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -165,7 +166,7 @@ it("a settled failure question cannot be re-answered into a retry", async () => 
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -198,7 +199,7 @@ it("a typo'd answer is rejected outright instead of silently settling the questi
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -228,7 +229,7 @@ it("a malformed POST (answer count mismatch) to an open promotion-failure questi
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();

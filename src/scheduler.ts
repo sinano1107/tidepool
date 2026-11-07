@@ -101,6 +101,7 @@ import {
   RefsMovedError,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
+  TaskCheckoutHostError,
   taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -652,11 +653,14 @@ export function startScheduler(deps: {
           }
         }
         // ADR 0329 決定10・11: 読む場所も remote の有無で絞らず、同じ一覧の後半で休止させる。
-        const place = taskRunPlace(db, picked, resolved);
+        // ADR 0356 決定1: work と review は名前の場所を準備し、準備の最後に task の checkout が開く
+        const place = rootId === undefined ? resolved : taskRunPlace(db, picked, resolved);
         try {
-          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks });
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now() });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+          // ADR 0356 決定2: task の checkout の番地に repo を作れないのは host 側の失敗 —— 名前の場所を quarantine せず spawn の失敗へ
+          if (err instanceof TaskCheckoutHostError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
           // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、落ちた場所の名前で止める(受験者は root id、ADR 0276 決定3)
           if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {

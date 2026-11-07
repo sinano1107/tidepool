@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
@@ -7,9 +8,9 @@ import { Slot } from "../src/slot.js";
 import { getTask, listChildren, pickupTask, registerTask } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { recordHumanStop, startWatchdog } from "../src/watchdog.js";
-import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { answerQuestionViaWebui, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, QUIET_EXIT, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 const MIN = 60 * 1000;
 function fixture(workspace?: WorkspaceConfig, timeLimits: { work?: number } = {}, grace = 2 * MIN) {
@@ -32,8 +33,8 @@ function fixture(workspace?: WorkspaceConfig, timeLimits: { work?: number } = {}
 it("human stop sends graceful stop, waits the grace, force-reclaims, and releases only on the empty observation", async () => {
   const ws = await makeWorkspace("human-stop");
   const f = fixture(ws);
-  await prepareWorkspaceAtPickup(f.db, ws, f.task);
-  commitWork(ws.path, "draft.txt", "unfinished work\n");
+  const place = await prepareAtPickup(f.db, ws, f.task);
+  commitWork(place.path, "draft.txt", "unfinished work\n");
   expect(f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop", f.clock.now(), "webui"))).toBeUndefined();
   expect(f.worker.gracefulStops).toEqual([f.task.id]);
   expect(f.slot.inTeardown).toBe(true);
@@ -43,13 +44,15 @@ it("human stop sends graceful stop, waits the grace, force-reclaims, and release
   expect(f.runtime.forceReclaims).toEqual([String(sessionId(f.db, f.task.id))]);
   expect(f.slot.currentTaskId).toBe(f.task.id);
   expect(f.pickups()).toBe(0);
-  expect(git(ws.path, "branch", "--show-current")).toBe(`task/${f.task.id}`);
+  expect(existsSync(place.path)).toBe(true);
   f.runtime.fireEmpty(String(sessionId(f.db, f.task.id)));
   await new Promise((resolve) => setImmediate(resolve));
   expect(f.slot.currentTaskId).toBeNull();
   expect(sessionInTeardown(f.db)).toBeUndefined();
   expect(f.pickups()).toBe(1);
-  expect(git(ws.path, "branch", "--show-current")).toBe("main");
+  // ADR 0356 決定2: 解放は worker の commit を名前の場所へ引いてから task の checkout を消す(旧: HEAD を保護ブランチへ戻した)
+  expect(existsSync(place.path)).toBe(false);
+  expect(git(ws.path, "show", `task/${f.task.id}:draft.txt`)).toBe("unfinished work");
 }, GIT_FIXTURE_TEST_TIMEOUT);
 
 it("nothing running and already ending refuse before the record callback", () => {

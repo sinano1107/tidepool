@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
@@ -71,9 +72,9 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
   });
   const task = queueWork(t, "long haul");
 
-  await t.clock.advance(HOUR); // picked up at t = 60min, checked out onto its task branch
+  await t.clock.advance(HOUR); // picked up at t = 60min, its task checkout opened on its task branch(ADR 0356 決定1)
   // the killed session left work mid-flight, uncommitted
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, task.id), "draft.txt"), "stuck work\n");
 
   await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
   // 次の todo は slot が埋まっている間に積まれる(毎時のティックでは拾われない)
@@ -198,7 +199,7 @@ it("failure question が開いている間、失敗タスクと同判断の兄�
   const sibling = board0.find((x: any) => x.title === "sibling");
 
   await t.clock.advance(HOUR); // "will fail" picked up (lower sort_key)
-  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  writeFileSync(join(checkoutOf(t.db, board0.find((x: any) => x.title === "will fail").id), "draft.txt"), "stuck work\n");
   await t.clock.advance(90 * MIN); // t: 畳み込み停止
   await t.clock.advance(grace); // 強制回収 → 回収済み観測 → failure question
 

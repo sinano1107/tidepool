@@ -1,5 +1,3 @@
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
@@ -33,9 +31,9 @@ it("workspace が quarantine された間、その workspace の todo タスク�
   const inProd = await registerWork(t, "runs in prod", "prod");
   await t.clock.advance(HOUR);
 
-  // break prod's tree rule so completing it quarantines "prod"
-  commitWork(prod.path, "junk.txt", "uncommittable\n");
-  await rm(join(prod.path, ".git"), { recursive: true, force: true });
+  // break prod's release so completing it quarantines "prod": an out-of-band commit on prod's main moves a ref the
+  // board did not write (ADR 0351). 旧: prod の .git を消した —— 完了の門が名前の場所へ tip を引けず完了を拒むようになった(ADR 0356 決定3)
+  commitWork(prod.path, "junk.txt", "out of band\n");
   const client = await mcpClient(t.mcpBaseUrl, inProd.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();

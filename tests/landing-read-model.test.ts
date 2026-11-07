@@ -3,6 +3,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
@@ -30,7 +31,7 @@ async function landedQuestion(): Promise<any> {
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   return task;

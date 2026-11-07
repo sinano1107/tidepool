@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
+  checkoutOf,
   commitWork,
   completeIntegrationReviews,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -46,7 +47,7 @@ it("issue参照タスクの complete_task 成立後、PR の title は GitHub �
   });
 
   await t.clock.advance(HOUR);
-  commitWork(ws.path, "issue-fix.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "issue-fix.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({

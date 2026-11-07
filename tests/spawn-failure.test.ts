@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
@@ -6,6 +7,7 @@ import { FakeContainerRuntime, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  checkoutOf,
   defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -14,6 +16,7 @@ import {
   makeWorkspace,
   questions,
   queueWork,
+  recordCheckoutAtWorkspace,
   sessionId,
   type Tidepool,
   unhandledRejectionsDuring,
@@ -74,9 +77,14 @@ it("start が同期で投げた瞬間に failure question が立ち、後始末�
     message: "registry went bad after boot",
   });
 
-  // 後始末が完走している: 休止位置 → slot 解放 → 次の todo が tick なしで拾われる
+  // 後始末が完走している: task の checkout を消す → slot 解放 → 次の todo が tick なしで拾われる
+  // (旧: 名前の場所の HEAD が次の task のブランチに乗った —— ADR 0356 決定1 の後、名前の場所は保護ブランチに居る)
   expect(await status(task.id)).toBe("blocked");
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${next.id}`);
+  const failedCheckout = checkoutOf(t.db, task.id);
+  const nextCheckout = checkoutOf(t.db, next.id);
+  expect(existsSync(failedCheckout)).toBe(false);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(git(nextCheckout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${next.id}`);
   expect(started()).toEqual([task.id, next.id]);
 
   // 時間制限を越えても、走っていない session へ畳み込み停止は送られない
@@ -116,7 +124,10 @@ it("後始末の途中で再起動しても failure question は残り、cap と
   t.containers.hold(task.id);
   t.worker.scriptStartFailure(new Error("mkdtemp failed"));
   await t.clock.advance(HOUR);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  // 旧: 名前の場所の HEAD がタスクブランチに乗っていた —— ADR 0356 決定1 の後は task の checkout がそこに居る
+  const checkout = checkoutOf(t.db, task.id);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 
   await t.stopServer();
   t = await bootTidepool({ dir: t.dir, workspace: ws, watchdog: WATCHDOG });
@@ -127,6 +138,7 @@ it("後始末の途中で再起動しても failure question は残り、cap と
   expect(await status(task.id)).toBe("blocked");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(existsSync(checkout)).toBe(false);
   await t.clock.advance(HOUR);
   expect(started()).toEqual([]);
 });
@@ -206,6 +218,13 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
         logDir,
         transcripts: new TranscriptStore(logDir),
       });
+      // scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この盤面は workspace を追跡しないので、
+      // 開いた event だけを registry の workspace の在り処で先に置く
+      const start = worker.start.bind(worker);
+      worker.start = (task, ...rest) => {
+        recordCheckoutAtWorkspace(db, task, { dir: registryDir, mode: "purely-local" }, "tidepool");
+        start(task, ...rest);
+      };
       return withHealthyUsage(worker, clock);
     },
   });
