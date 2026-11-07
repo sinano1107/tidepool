@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type BoardCallAnswer, type BoardCallSetting, type BoardCallUsage, BoardCallUsageError } from "./board-call-usage.js";
 import {
-  boardCallEnv,
+  answerBoardCallEnv,
   boardCallEnvWithoutThinking,
   type ExecFn,
   emptyToolSurfaceFlags,
@@ -144,7 +144,7 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
       // host's own advisorModel rode along on every JIT draft poll and burned
       // opus, unrecorded anywhere — a haiku main model is no protection either
       // (measured 2026-08-04). Translation also closes reasoning (ADR 0062 決定2).
-      reasoning ? boardCallEnv() : boardCallEnvWithoutThinking(),
+      reasoning ? answerBoardCallEnv() : boardCallEnvWithoutThinking(),
       prompt,
     );
   } catch (err) {

@@ -13,6 +13,7 @@ import { POSTURE_FLAGS } from "../src/claude-board-call-spec.js";
 import {
   agentGitIdentityEnv,
   ClaudeCodeWorker,
+  claudeMcpReachabilityThrough,
   type EnumerateSkillsFn,
   enumerateHostSkills,
   enumerateToolsThrough,
@@ -3314,6 +3315,7 @@ describe("ClaudeCodeWorker", () => {
     // が、それはベンダーの TUI の性質であって盤面が置いた性質ではないので、
     // 不在は他の Board call と同じく明示的に綴る。
     expect(rec.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+    expect(rec.calls[0]!.env.DISABLE_PROMPT_CACHING).toBeUndefined();
     // ホストの TUI 設定に依らず fullscreen renderer を強制する(classic の
     // cursor-position 描画は ANSI 除去後に語が連結し parseUsage が読めない)
     const args = rec.calls[0]!.args;
@@ -5758,6 +5760,17 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
   });
 });
 
+it.each([
+  ["skill enumeration", (call: BoardCall) => enumerateWorkspaceSkills(call)("/workspaces/sandbox")],
+  ["tool surface", (call: BoardCall) => enumerateToolsThrough(call)()],
+  ["Worker MCP reachability", (call: BoardCall) => claudeMcpReachabilityThrough(call)("http://localhost:4589/mcp")],
+] as const)("%s probe preserves worker prompt caching", async (_name, probe) => {
+  const { call, specs } = specRecordingCall();
+  await probe(call);
+  expect(specs).toHaveLength(1);
+  expect(specs[0]!.env.DISABLE_PROMPT_CACHING).toBeUndefined();
+});
+
 describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
   // worker-shaped の probe が見るものは worker が見るもの —— 姿勢の一覧と worker 本体の spawn をずらさない(決定4)
   it("worker 本体の spawn の argv は worker-shaped の姿勢のフラグをどれも運ぶ", async () => {
@@ -5765,6 +5778,7 @@ describe("Claude の Board call は姿勢を名指す(ADR 0341)", () => {
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
+    expect(calls[0]!.env.DISABLE_PROMPT_CACHING).toBeUndefined();
     const { args } = calls[0]!;
     for (const flag of POSTURE_FLAGS["worker-shaped"]) expect(args).toContain(flag);
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");

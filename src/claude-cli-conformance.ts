@@ -6,6 +6,7 @@ import { claudeBoardCallSpec } from "./claude-board-call-spec.js";
 import { readResultEvent } from "./claude-stream-reader.js";
 import {
   ANSWER_CALL_LIMIT_MS,
+  answerBoardCallEnv,
   boardCallEnv,
   checkAutoMemoryClosed,
   pinnedModelFlags,
@@ -31,7 +32,7 @@ export const boardCallShotSpec = ({ kind, cwd, input }: ShotOrder): BoardCallSpe
     command: "claude",
     args: ["-p", ...pinnedModelFlags("haiku", "low"), ...BOARD_CALL_ONE_TURN_FLAGS],
     cwd,
-    env: boardCallEnv(),
+    env: answerBoardCallEnv(),
     limitMs: ANSWER_CALL_LIMIT_MS,
     input,
   });

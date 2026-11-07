@@ -346,3 +346,14 @@ async function moonshotKeyFile(): Promise<string> {
   writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
   return keyFile;
 }
+
+it.each(["authentication", "model"])("Claude %s probe disables prompt caching", async (kind) => {
+  let observed: NodeJS.ProcessEnv | undefined;
+  const command: CliAuthCommand = async (_command, _args, { env }) => {
+    observed = env;
+    return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "OK" }) };
+  };
+  if (kind === "authentication") await createClaudeCliAuthCheck(command)();
+  else await createClaudeModelProbe(command)("claude-sonnet-5-5");
+  expect(observed?.DISABLE_PROMPT_CACHING).toBe("1");
+});

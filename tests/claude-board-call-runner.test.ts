@@ -12,6 +12,17 @@ const schema = z.object({ ok: z.boolean() });
 /** usage を報告した封筒 */
 const answered = (envelope: object): ExecFn => async () => boardCallStream({ ...envelope, ...CLI_ENVELOPE_USAGE });
 
+it.each([true, false])("answer calls disable prompt caching with reasoning %s", async (reasoning) => {
+  let observed: NodeJS.ProcessEnv | undefined;
+  const exec: ExecFn = async (_command, _args, env) => {
+    observed = env;
+    return boardCallStream({ result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
+  };
+  await runClaudeBoardCallJson({ ...call(exec), reasoning }, schema);
+  expect(observed?.DISABLE_PROMPT_CACHING).toBe("1");
+  if (!reasoning) expect(observed?.MAX_THINKING_TOKENS).toBe("0");
+});
+
 // Synthetic pinned-CLI stream shapes; natural Board call refusal is unobserved (#1615).
 const swap = { type: "system", subtype: "model_refusal_fallback", original_model: "claude-sonnet-5-5", fallback_model: "claude-opus-4-8", api_refusal_category: "category one" };
 const refusal = (id: string, category: string | null) => ({ type: "assistant", parent_tool_use_id: null, message: { id, stop_reason: "refusal", stop_details: { category } } });

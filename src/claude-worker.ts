@@ -441,6 +441,9 @@ const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
  *  the same call). No CLI flag spells this; the env is the only spelling. */
 const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
 
+/** ADR 0355 決定1: one-shot answers disable cache writes; a typo silently fails open. */
+const DISABLE_PROMPT_CACHING = "DISABLE_PROMPT_CACHING";
+
 /** 盤面が起動する `claude` の自動更新を閉じる env(ADR 0186 決定4)。`ADVISOR_DISABLE_ENV` と
  *  同じ理由で1か所に名付ける —— 3つの env 関数のどこかで綴りを誤れば、黙って開く。 */
 const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
@@ -608,16 +611,21 @@ export function boardCallEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/** ADR 0355 決定1: answer calls disable caching without changing worker-shaped observations. */
+export function answerBoardCallEnv(): NodeJS.ProcessEnv {
+  return { ...boardCallEnv(), [DISABLE_PROMPT_CACHING]: "1" };
+}
+
 /** A Board call that additionally declares the absence of reasoning (ADR 0062
  *  決定2) — display-time translation, and only it. Layered **on top of**
- *  `boardCallEnv` rather than folded into it: "no reasoning" is not true of
+ *  `answerBoardCallEnv` rather than folded into it: "no reasoning" is not true of
  *  every Board call — the AI draft assembles a task from a brain dump and
  *  judges whether an issue may be registered, a generation task where
  *  reasoning can be part of the job. Folding it in would redo, on a second
  *  axis, the failure ADR 0044 prevented: lumping calls together under "it's a
  *  Board call" and flattening what each one actually is. */
 export function boardCallEnvWithoutThinking(): NodeJS.ProcessEnv {
-  return { ...boardCallEnv(), [MAX_THINKING_TOKENS_ENV]: "0" };
+  return { ...answerBoardCallEnv(), [MAX_THINKING_TOKENS_ENV]: "0" };
 }
 
 /** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults

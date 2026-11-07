@@ -192,6 +192,7 @@ it("Board call の形の1ターンは runner と同じフラグの定数から�
   const spec = boardCallShotSpec({ kind: "conformance result line", cwd: "/board", input: "OK?" });
   const { args } = spec;
   expect(spec).toMatchObject({ posture: "answer", cwd: "/board", input: "OK?" });
+  expect(spec.env.DISABLE_PROMPT_CACHING).toBe("1");
   expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
   expect(args).toContain("--verbose");
   // 最終の argv: 答えの姿勢(ADR 0303 決定1)と runner の1ターンのフラグ
@@ -204,6 +205,7 @@ it("worker の形の1ターンは project tier を読み、盤面の定数で la
   const spec = workerShotSpec({ kind: "conformance language (worker)", cwd: "/cwd", systemPromptFile: "/session/system.txt", configDir: "/config", input: "q" });
   const { args } = spec;
   expect(spec).toMatchObject({ posture: "worker-shaped", cwd: "/cwd", input: "q" });
+  expect(spec.env.DISABLE_PROMPT_CACHING).toBeUndefined();
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
   expect(args.filter((arg) => arg === "--setting-sources")).toHaveLength(1);
   expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
