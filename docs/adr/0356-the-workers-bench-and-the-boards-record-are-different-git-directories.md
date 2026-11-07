@@ -20,6 +20,9 @@ checkout、registry 書き込みの使い捨て worktree(ADR 0052 決定6)、受
    quarantine ではない。準備(`init` / fetch)の失敗は fetch 元の性質として名前の場所の quarantine(ADR 0276 決定3 の線)。受験者の
    ADR 0276 決定1「再開は同じ checkout」は同じ線に揃え、決定4(決着した最後の checkout は記録として残る)は保つ。session を越える ignored の
    生成物は失うが、ADR 0352 決定2 が既に手放したものである。
+   Interview の場所(root・受験者)は alternates を使わず複製で作る(面接室は小さく、ADR 0276 の線をそのまま保つ)。受験者の WIP と tip は
+   解放の fetch で**面接室の `task/<id>`** に着く —— 盤面は worker の `.git` に書かないので、答案の ref の置き場は面接室になる。次の受験者は
+   自分の branch だけを fetch する(clone でも alternates でもない)ので兄弟の答案は見えない(ADR 0276 決定1 の退けた clone とは別)。
 3. **盤面は worker の `.git` を GIT_DIR にしない。** 退避・完了の門・再実行と pickup の検査は、盤面所有の使い捨て GIT_DIR + worker の worktree
    (`GIT_WORK_TREE`)+ 新規 index + 名前の場所の objects(`GIT_OBJECT_DIRECTORY`)で読み書きし、worker の commit は fetch で引く(upload-pack の
    hook は protected config しか読まない)。順は fetch → 退避 → `update-ref` を1つの口の中で詰める(`update-ref` 前の loose object は未到達)。
