@@ -114,6 +114,22 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work"]);
 });
 
+it("untracked を隠す Git 設定がある checkout の修理回答も HTTP 409 に写り、Confirmation は開いたまま残る", async () => {
+  const workspace = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace });
+  quarantineWorkspace(t.db, workspace.name, new Error("repair the checkout"), t.clock.now());
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
+  git(workspace.path, "config", "status.showUntrackedFiles", "no");
+  writeFileSync(join(workspace.path, "late.txt"), "written after repair\n");
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+
+  expect(res.status).toBe(409);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+});
+
 it("ツリーがクリーンだと確認されれば question が done になり、pickup が即時再開する。自由記述の回答は question_answer に残る", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });

@@ -106,3 +106,11 @@ it("修理確認の検証は、未 commit の変更が残る checkout を拒否�
 
   expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
 });
+
+it("修理確認の検証は status.showUntrackedFiles=no でも untracked を拒否する", async () => {
+  const workspace = await makeWorkspace("verify-hidden-untracked");
+  git(workspace.path, "config", "status.showUntrackedFiles", "no");
+  await writeFile(join(workspace.path, "late.txt"), "written after repair\n");
+
+  expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
+});

@@ -29,6 +29,11 @@ export function git(cwd: string, ...args: string[]): string {
   return run(cwd, args).toString().trim();
 }
 
+/** Machine-readable working-tree status, including every untracked file regardless of Git config. */
+export function gitStatus(cwd: string): string {
+  return git(cwd, "status", "--porcelain", "--untracked-files=all");
+}
+
 /** `git` に env を足したもの(一時 index の `GIT_INDEX_FILE` 用)。 */
 export function gitWithEnv(env: NodeJS.ProcessEnv, cwd: string, ...args: string[]): string {
   return run(cwd, args, env).toString().trim();
