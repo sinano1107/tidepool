@@ -9,9 +9,11 @@ import {
   checkCodexCliVersion,
   codexCommandThrough,
   createCodexAppServerProbe,
+  probeEnv,
 } from "../src/codex-app-server.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
+import { stubHostEnvDecoys } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -128,6 +130,21 @@ function writeCompatibleSchemas(out: string): void {
     }),
   );
 }
+
+// ADR 0358 決定1・2・5: Codex の Board call の env は worker と同じ土台 + CODEX_HOME だけ —— API key は列挙に無いので届かず
+// (ADR 0098)、task を持たないので TMPDIR も無い(OS 既定)
+it("Codex の probe env は列挙と完全一致し、host の囮は届かない", () => {
+  stubHostEnvDecoys();
+  vi.stubEnv("CODEX_API_KEY", "decoy-codex-api-key");
+
+  expect(probeEnv("/board/codex-home")).toStrictEqual({
+    PATH: "/usr/bin:/bin",
+    HOME: "/home/board",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    CODEX_HOME: "/board/codex-home",
+  });
+});
 
 it("fixed Codex app-server stdio returns authenticated, normalized primary and secondary windows", async () => {
   vi.stubEnv("OPENAI_API_KEY", "must-not-reach-codex");

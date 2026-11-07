@@ -60,7 +60,7 @@ import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
+import { type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -343,12 +343,6 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
       : "false";
   } & Record<string, "true" | "false">
 > = FEATURE_STATES;
-const SECRET_ENV = [
-  ...HOST_CREDENTIAL_ENVS,
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-] as const;
 
 export type CodexSpawnFn = ContainerSpawn;
 
@@ -1401,28 +1395,24 @@ export function createCodexWorkspaceCheck(options: {
   };
 }
 
+/** ADR 0358 決定2: 土台の上に Codex の注入一式だけを載せる —— API key も GitHub の token も列挙に無いので届かない(ADR 0098 / ADR 0024 決定3)。 */
 function workerEnv(
   executable: string,
   codexHome: string,
   taskTemp: string,
   agentName: string,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  return {
+    ...workerBaseEnv(taskTemp),
     CODEX_HOME: codexHome,
     PATH: [dirname(executable), dirname(process.execPath), "/Library/Developer/CommandLineTools/usr/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(delimiter),
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
     XDG_CONFIG_HOME: join(taskTemp, "xdg"),
-    TMPDIR: taskTemp,
     npm_config_cache: join(taskTemp, "npm-cache"),
     npm_config_userconfig: "/dev/null",
     npm_config_offline: "true",
     npm_config_update_notifier: "false",
     ...agentGitIdentityEnv(agentName),
   };
-  for (const name of SECRET_ENV) delete env[name];
-  return env;
 }
 
 /** ADR 0261 決定2 / ADR 0348 決定1・4: 1度の読みから満杯の窓と資源の停止を導き、Throttle には書かない。 */

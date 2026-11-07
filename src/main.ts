@@ -170,9 +170,9 @@ const server = await startServer(
     codexOnPath,
     // ADR 0093 / issue #50: the board's GitHub identity is the GitHub App, and
     // this mode-600 file holds the user token the board presents to the broker
-    // — no file, no identity. Neither token ever enters process.env: workers
-    // inherit that wholesale. The broker URL is a public default (ADR 0093
-    // 決定1), overridable for forks running their own App.
+    // — no file, no identity. Neither token ever enters process.env, which the
+    // `/usage` scrape still inherits (outside ADR 0358 決定1). The broker URL is
+    // a public default (ADR 0093 決定1), overridable for forks running their own App.
     githubAuth: loadGitHubAuth(githubTokenFile, process.env.TIDEPOOL_GITHUB_BROKER_URL),
     // the settings surface re-reads this path per request, so a login that
     // happens while the board runs shows up without a restart (ADR 0093 決定5)
