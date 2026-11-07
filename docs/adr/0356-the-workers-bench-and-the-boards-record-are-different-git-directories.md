@@ -1,5 +1,7 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
+**Status 追記: 決定2 の「worker の repo の故障は task の失敗」は決着していない task(`todo` に戻る解放)に限る —— `done` の task の解放は記録の tip だけを運び、読めない checkout は報告後の書き込みの観測として記録する([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定2・3・5、2026-11-08、issue #3053)。**
+
 **Status 追記: 決定3 の「worktree の FIFO で盤面の git が止まる形(#3018)はこれでは閉じない」は [ADR 0357](0357-the-boards-git-on-a-workers-tree-is-bounded-and-expiry-is-a-worker-repo-failure.md) が閉じる —— view の git は有界で、超過は決定2 の worker の repo の故障(2026-11-07、issue #2966)。**
 
 2026-11-07 の grilling(issue #2956、#2912 / ADR 0352 の族の根)で決定。worker が走った checkout には ref にも tracked content にも無く

@@ -1,5 +1,7 @@
 # 盤面が worker の tree に撃つ git は有界で、上限で止まった手は worker の repo の故障である —— 観測の失敗でも名前の場所の quarantine でもない
 
+**Status 追記: 決定2 の分類は完了済みの解放には当たらない —— そこでは fetch が走らず、view の上限超過は報告後の書き込みの「読めない」観測になる([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定5、2026-11-08、issue #3053)。**
+
 2026-11-07 の grilling(issue #2966、派生 #3018)で決定。#2966 の sparse pattern ファイルの site は ADR 0356 で消えるが、残る形は
 GIT_DIR に依らない —— worker は worktree に FIFO を置け、`.gitignore`(root、または走査される dir の中)や `.gitattributes` が
 FIFO なら、盤面の `git status` / `add -A` / `ls-files --exclude-standard` / `diff` はそれを open して永久に止まる(実測、macOS git 2.47。

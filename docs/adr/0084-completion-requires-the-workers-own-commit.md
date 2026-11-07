@@ -1,5 +1,7 @@
 # 完了は worker 自身のコミットを門で要求する — 盤面は本文を起草しない
 
+**Status 追記: 決定2 の「ツリーを観測できないタスクは素通し」は task の checkout には掛からない —— 完了の門は worker の tip が名前の場所の `task/<id>` になるまで `done` にせず、名前の場所の側で書けなければ拒む([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定1、2026-11-08、issue #3053)。**
+
 **Status 追記: 決定2 の「観測に失敗したら `false`」は git が即座に失敗した場合に限る —— 盤面の view の git が上限で止まった手は観測の失敗ではなく worker の repo の故障で、門は開かず session を倒す([ADR 0357](0357-the-boards-git-on-a-workers-tree-is-bounded-and-expiry-is-a-worker-repo-failure.md)、2026-11-07、issue #2966)。**
 
 **Status 追記: 決定2 の「quarantine 中のタスク — 門をスキップ」は ADR 0350 決定1 で覆った —— 門の述語は task の種別だけを読み、workspace の Quarantine 中でも掛かる(2026-11-02、issue #2910)。**

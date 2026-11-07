@@ -1,5 +1,7 @@
 # 完了の門の述語は task の種別だけを読み、workspace の Quarantine では門をスキップしない
 
+**Status 追記: 決定1 の「ツリーを観測できない git の素通しは変えない」は task の checkout には掛からない —— 完了の門は名前の場所の側で書けなければ拒み、後始末の検査は止めずに記録する([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定1・3、2026-11-08、issue #3053)。**
+
 2026-11-02 の grilling(issue #2910、#2889 の実装で見えた形)で決定。完了の門(ADR 0084)と完了経路の後始末の検査(ADR 0109 決定3)は
 `completionTreeGateApplies` = 「work タスクかつ workspace が needs-human でない」を共有していた。ADR 0109 決定3 の「同じ述語」は
 **範囲**の話だが、同じ関数を verb の時点と後始末の時点で読み直すと、`needs-human`(今 workspace の question が開いているか)は時間で

@@ -1,5 +1,7 @@
 # 通常完了の解放も回収済み観測を門とし、後始末は worker session の一部である
 
+**Status 追記: 決定3 の「退避せず quarantine に落とす」は task の checkout では「記録の tip だけを運び、報告後の書き込みは event に記録する」に替わる —— 名前の場所は worker が書けず、merge back は記録の tip しか運ばない([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定2・3、2026-11-08、issue #3053)。**
+
 **Status 追記: 決定2 の「slot を占めるのは session」は鍵にも及ぶ —— `Slot` は握っている session の pickup event id を持ち、「まだ決着していない session か」はその一致で問う([ADR 0353](0353-the-container-ledger-the-slot-and-the-watch-record-are-keyed-by-the-sessions-pickup-event-id-and-a-session-originated-hand-names-its-own-session.md) 決定1・2、2026-11-02、issue #2919)。**
 
 **Status 追記: 決定3 の「同じ述語」は範囲の話であり、述語は時間に依らない `task.type === "work"` だけになった(ADR 0350 決定1、2026-11-02、issue #2910)—— needs-human を含む述語を後始末で読み直すと、verb の後に開いた question が検査を切り、報告後の書き込みを WIP として親へ運んだ。**
