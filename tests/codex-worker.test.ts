@@ -442,12 +442,11 @@ describe("CodexWorker (ADR 0098)", () => {
   it("spawns the pinned Codex route with isolated auth home and closed worker surfaces", async () => {
     const f = await fixture();
     const value = task(f.db);
-    process.env.OPENAI_API_KEY = "must-not-leak";
-    process.env.GITHUB_TOKEN = "must-not-leak";
+    vi.stubEnv("OPENAI_API_KEY", "must-not-leak");
+    vi.stubEnv("GITHUB_TOKEN", "must-not-leak");
+    onTestFinished(() => { vi.unstubAllEnvs(); });
 
     await f.start(value);
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.GITHUB_TOKEN;
 
     const call = f.process.calls[0]!;
     expect(call.command).toBe("/opt/tidepool/bin/codex");
@@ -537,6 +536,7 @@ describe("CodexWorker (ADR 0098)", () => {
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "decoy-anthropic-auth-token");
     await f.start(task(f.db));
     const { env } = f.process.calls[0]!;
+    expect(env.TMPDIR).toEqual(expect.any(String));
     expect(env).toStrictEqual({
       PATH: ["/opt/tidepool/bin", dirname(process.execPath), "/Library/Developer/CommandLineTools/usr/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(delimiter),
       HOME: "/home/board",
@@ -554,7 +554,6 @@ describe("CodexWorker (ADR 0098)", () => {
       GIT_COMMITTER_NAME: "codex-agent",
       GIT_COMMITTER_EMAIL: "codex-agent@tidepool.invalid",
     });
-    expect(env.TMPDIR).toEqual(expect.any(String));
   });
 
   it("allowed_domains を持たない workspace では network の許可は 127.0.0.1 だけのまま(issue #763)", async () => {
