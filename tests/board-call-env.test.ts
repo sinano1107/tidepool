@@ -1,5 +1,16 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { boardCallEnv, boardCallEnvWithoutThinking } from "../src/claude-worker.js";
+import {
+  answerBoardCallEnv,
+  boardCallEnv,
+  boardCallEnvWithoutThinking,
+  claudeMcpReachabilityThrough,
+  moonshotCliAuthEnv,
+} from "../src/claude-worker.js";
+import { specRecordingCall } from "./fakes.js";
+import { stubHostEnvDecoys } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** Board call(盤面呼び出し / ADR 0044): 盤面が自分の機能のために回す CLI 呼び出しは
  *  worker session ではなく、したがって advisor を持たない。ここが見張るのは
@@ -19,24 +30,74 @@ describe("Board call の env", () => {
     expect(boardCallEnv().DISABLE_AUTOUPDATER).toBe("1");
   });
 
-  // 差分ではなく完全な env を返す契約(ADR 0044 決定3)。呼び出し側が
-  // `{ ...process.env, ...boardCallEnv() }` と綴る形にすると、`...process.env` を
-  // 書き忘れたサイトが PATH も認証も失って壊れる —— 書き忘れられる余地を残さない。
-  it("ホストの env を丸ごと引き継ぐ(差分ではなく完全形)", () => {
-    const previous = process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE;
-    process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE = "carried";
-    try {
-      expect(boardCallEnv().TIDEPOOL_BOARD_CALL_ENV_PROBE).toBe("carried");
-      expect(boardCallEnv().PATH).toBe(process.env.PATH);
-    } finally {
-      if (previous === undefined) delete process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE;
-      else process.env.TIDEPOOL_BOARD_CALL_ENV_PROBE = previous;
-    }
+  // 差分ではなく完全な env を返す契約(ADR 0044 決定3)は保ったまま、中身は盤面が列挙したものだけ(ADR 0358 決定1・2)。
+  // 答えの Board call も anthropic を喋る(ADR 0096)ので盤面 env の token を受け取り、API key は列挙に無い(ADR 0070 決定1)。
+  // TMPDIR は持たない(OS 既定)。
+  it("答えの Board call の env は列挙と完全一致し、host の囮は届かない", () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "board-oauth-token");
+
+    expect(answerBoardCallEnv()).toStrictEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "board-oauth-token",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      DISABLE_AUTOUPDATER: "1",
+      DISABLE_PROMPT_CACHING: "1",
+    });
+  });
+
+  // worker の形の Board call(ADR 0341)は盤面所有の config dir(ADR 0354 決定1)を運び、MCP 到達性 probe だけは
+  // 使い捨て dir を TMPDIR に渡す(sandbox の proxy socket を閉じた /tmp に置かない)
+  it("worker の形の Board call の env は列挙と完全一致し、host の囮は届かない", async () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "board-oauth-token");
+    const { call, specs } = specRecordingCall();
+
+    await claudeMcpReachabilityThrough(call)("http://localhost:4589/mcp");
+
+    const { env, cwd } = specs[0]!;
+    expect(env).toStrictEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      TMPDIR: cwd,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "board-oauth-token",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      DISABLE_AUTOUPDATER: "1",
+      CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toEqual(expect.any(String));
+  });
+
+  // Moonshot の認証 probe は Moonshot の worker spawn と同じ組み立て: Claude の subscription は列挙に無く、
+  // routing 一式は key file から。資格情報は provider ごとに分かれる(ADR 0097 決定4 / ADR 0358 決定2)
+  it("Moonshot の認証 probe の env は列挙と完全一致し、host の囮も Claude の token も届かない", async () => {
+    stubHostEnvDecoys();
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "board-oauth-token");
+    const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
+    await writeFile(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+
+    expect(moonshotCliAuthEnv(keyFile)).toStrictEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/board",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+      DISABLE_AUTOUPDATER: "1",
+      ANTHROPIC_BASE_URL: "https://api.moonshot.ai/anthropic",
+      ANTHROPIC_AUTH_TOKEN: "sk-moonshot-test-key",
+      ANTHROPIC_MODEL: "kimi-k3[1m]",
+    });
   });
 
   // 盤面プロセスの env に立てる案を採らなかったことの裏返し —— それを採ると
-  // worker spawn が `process.env` ごと継承して advisor を持つはずの全 worker が
-  // 黙って advisor を失う(ADR 0044)。ここで閉じるのは呼び出し1回ぶんだけである。
+  // process.env を継ぐ呼び出し(`/usage` scrape、ADR 0358 決定1 の外)と盤面自身の読み手に
+  // 漏れる(ADR 0044)。ここで閉じるのは呼び出し1回ぶんだけである。
   it("盤面プロセス自身の env は汚さない", () => {
     // 「呼んでも変わらない」を見る —— `undefined` であることを直接主張すると、それは
     // コードではなく**テストホストの性質**の検査になり、まさに決定4 が想定した
@@ -47,13 +108,13 @@ describe("Board call の env", () => {
   });
 
   // Board call は anthropic 固定(ADR 0096)なので、anthropic の worker spawn と
-  // 同じ双方向 scrub がこちらにも掛かる(ADR 0097 決定4 / issue #445)—— 盤面 env
+  // 同じく Moonshot の routing 一式は列挙に無い(ADR 0358 決定2 / issue #445)—— 盤面 env
   // に Moonshot 系があっても、下書き・翻訳・probe が静かに Moonshot へ流れない。
-  // ANTHROPIC_MODEL を含めて一式除去できるのは、モデルを伴う全 Board call が
+  // ANTHROPIC_MODEL を含めて一式届かなくてよいのは、モデルを伴う全 Board call が
   // --model をフラグでピン留めしており(下書き sonnet・翻訳/probe/ping haiku)、
   // 唯一フラグを持たない /usage スクレイプはモデルターンを一切起こさないから —
   // env の ANTHROPIC_MODEL はどの Board call でも legitimate には効いていない。
-  it("Board call の env からは Moonshot 注入一式(向き先・トークン・モデル)が除去される(双方向 scrub — Board call は anthropic 固定)", () => {
+  it("Moonshot の routing 一式(向き先・トークン・モデル)は列挙に無く、Board call の env に届かない(Board call は anthropic 固定)", () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
     vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
@@ -75,7 +136,7 @@ describe("Board call の env", () => {
   // issue #2351: Board call も --model / --effort をフラグで pin するが、翻訳と probe の --model は
   // `haiku` の alias で、CLAUDE_CODE_EFFORT_LEVEL は --effort に勝つ(2.1.286 実測)。host の値は
   // ここでも消す —— 盤面側の値は入れず「無い」を固定する(ADR 0005)。
-  it("Board call の env からは main の pin を上書きする host env(effort / alias 差し替え)が除去される", () => {
+  it("main の pin を上書きする host env(effort / alias 差し替え)は列挙に無く、Board call の env に届かない", () => {
     const names = ["CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"];
     for (const name of names) vi.stubEnv(name, "low");
     try {

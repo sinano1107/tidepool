@@ -51,7 +51,7 @@ import { promptInput, RecordContainerError, type Transcript, type TranscriptStor
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
+import { boardEnvByName, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
@@ -429,9 +429,9 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
 /** The one env var that closes the advisor whatever the configuration sources
  *  say (measured: it beats both the project settings tier and an explicit
  *  `--advisor` flag). Named once because "this session has no advisor" must
- *  have exactly one spelling — `boardCallEnv` sets it, `workerSpawnEnv` both
- *  sets and deletes it, and a typo in any of those three places would fail open
- *  and silently. */
+ *  have exactly one spelling — `workerSpawnEnv` sets it, and `boardCallEnv`,
+ *  `usageScrapeEnv` and `moonshotCliAuthEnv` through `BOARD_CLI_CLOSED`; a
+ *  typo in any of them would fail open and silently. */
 const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
 
 /** The env var that closes the model's own reasoning (ADR 0062 決定2), named
@@ -445,70 +445,29 @@ const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
 const DISABLE_PROMPT_CACHING = "DISABLE_PROMPT_CACHING";
 
 /** 盤面が起動する `claude` の自動更新を閉じる env(ADR 0186 決定4)。`ADVISOR_DISABLE_ENV` と
- *  同じ理由で1か所に名付ける —— 3つの env 関数のどこかで綴りを誤れば、黙って開く。 */
+ *  同じ理由で1か所に名付ける —— env 関数のどこかで綴りを誤れば、黙って開く。 */
 const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
 
-/** refusal での同じ model の再試行と差し替えを止める env(ADR 0215 決定1)。盤面は「許す」を固定するので、
- *  host が立てていても worker と Board call の env から消す(ADR 0005 / ADR 0323)。 */
-const SWAP_DISABLE_ENVS = [
-  "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK",
-  "CLAUDE_CODE_NO_MODEL_FALLBACK",
-  "CLAUDE_CODE_DISABLE_REFUSAL_RETRY",
-] as const;
+/** Board call と Moonshot の認証 probe は worker session ではないので advisor を持たず(ADR 0044)、CLI は自分で更新しない
+ *  (ADR 0186 決定4)。 */
+const BOARD_CLI_CLOSED = { [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" } as const;
 
-/** subagent の model を host が一律に差し替える env(ADR 0287 決定3)。subagent の model は親の采配で、
- *  固定版の CLI の既定(Explore の上限)はそのまま掛ける —— 盤面側の値は入れず、host が立てていても
- *  worker の spawn env から消して「無い」を固定する(ADR 0005)。`CLAUDE_CODE_SUBAGENT_MODEL` は
- *  `_FORCE` の下でも効く(#1887 の VM 実測)ので、3つとも消す。 */
-const SUBAGENT_MODEL_ENVS = [
-  "CLAUDE_CODE_SUBAGENT_MODEL",
-  "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
-  "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP",
-] as const;
+/** anthropic を喋る process(worker spawn と Board call、ADR 0096)が盤面 env にあれば名指しで受け取る認証 token(ADR 0070 決定1 /
+ *  ADR 0358 決定2)。`ANTHROPIC_API_KEY` は列挙に無い —— ADR 0070 が API key 課金を退けた。Moonshot 向きには載せない:
+ *  資格情報は provider ごとに分ける(ADR 0097 決定4)—— subscription に Kimi の仕事を課金させない。 */
+const anthropicAuthEnv = (): NodeJS.ProcessEnv => boardEnvByName("CLAUDE_CODE_OAUTH_TOKEN");
 
-/** host が workspace trust の述語を反転させる env(ADR 0354 決定1、ADR 0005 の線)。subagent の model とは別の軸なので別名で、
- *  同じ形(常に delete)で worker の spawn env から消す。 */
-const TRUST_PREDICATE_ENVS = ["CLAUDE_CODE_SANDBOXED"] as const;
-
-/** host が main の pin を上書きする env(issue #2351、ADR 0005 の線)。`CLAUDE_CODE_EFFORT_LEVEL` は
- *  `--effort` に勝つ(2.1.286 の VM 実測: env=low + `--effort high` → low、env=high + `--effort low` → high、
- *  effort null の行にも env の値が載る)ので、`worker_spawned.effort` が pin を書く記録と実走が食い違う。
- *  `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` は alias を差し替える —— 行の `--model` は concrete id
- *  (ADR 0182)なので無傷だが、`--advisor opus` と Board call の `--model haiku` は alias で、黙って別 model
- *  になる(opus / haiku は同実測、sonnet は binary の同じ alias 表の読み)。盤面側の値は入れず、worker spawn と Board call の両方で消して「無い」を固定する。 */
-const PIN_OVERRIDE_ENVS = [
-  "CLAUDE_CODE_EFFORT_LEVEL",
-  "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-] as const;
-
-/** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
- *  Bearer token envs a `provider: moonshot` spawn carries — and that an
- *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
- *  ベンダー知識なのでアダプタの定数(ADR 0005)。`ADVISOR_DISABLE_ENV` と同じ
- *  理由で名付ける: delete の綴りを typo すると fail-open で静かに漏れる。 */
-const ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL";
-const ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN";
-const ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL";
-
-/** The full Moonshot injection set — the env names a `provider: moonshot`
- *  spawn is injected with, and, the same list the other way round, the names
- *  an anthropic spawn and every Board call are scrubbed of (ADR 0097 決定4 の
- *  双方向 scrub)。注入と除去が**同じ一覧**から導かれるので、対称性は規律では
- *  なく構造 — 注入に1つ足せば除去も自動的に1つ増える。 */
-const MOONSHOT_ROUTING_ENV = [
-  ANTHROPIC_BASE_URL_ENV,
-  ANTHROPIC_AUTH_TOKEN_ENV,
-  ANTHROPIC_MODEL_ENV,
-] as const;
-
-/** The Claude subscription credentials a `provider: moonshot` spawn must
- *  never inherit (ADR 0097 決定4 の双方向 scrub のもう片側): the OAuth token
- *  would bill the subscription for Kimi-routed work, and Moonshot's own docs
- *  warn a leftover `ANTHROPIC_API_KEY` collides with `ANTHROPIC_AUTH_TOKEN`
- *  when both are present. */
-const CLAUDE_SUBSCRIPTION_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+/** The Moonshot routing set (ADR 0096 / issue #445): the endpoint, the Bearer
+ *  token and the model a `provider: moonshot` process is injected with — the
+ *  worker spawn and the auth probe both, from this one spelling. env 名は
+ *  ベンダー知識なのでアダプタの定数(ADR 0005)。anthropic 向きの env には列挙に
+ *  無いので届かない(ADR 0358 決定1)—— host の値で Board call や worker が
+ *  黙って Kimi の従量課金へ向き直ることはない。 */
+const moonshotRoutingEnv = (apiKey: string, model: string): NodeJS.ProcessEnv => ({
+  ANTHROPIC_BASE_URL: MOONSHOT_BASE_URL,
+  ANTHROPIC_AUTH_TOKEN: apiKey,
+  ANTHROPIC_MODEL: model,
+});
 
 /** Moonshot Platform's Anthropic-compatible endpoint (ADR 0096) — the only
  *  ToS-clean route for an unattended worker to speak Kimi. Vendor knowledge,
@@ -517,8 +476,9 @@ const CLAUDE_SUBSCRIPTION_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
 
 /** Where the Moonshot Platform key lives: the board's state-file home, never
- *  the board's env (ADR 0097 決定4 — human-surface-credential の「平文は
- *  process.env に乗せない — worker spawn が継承するから」と同じ doctrine)。
+ *  the board's env (ADR 0097 決定4)—— 鍵は Moonshot 向きの注入にだけ要る盤面の
+ *  秘密で、env に置く理由が無い。worker に届かないことは ADR 0358 決定2 の列挙が
+ *  どちらにしても持つ。
  *  Mirrors auth.ts's `resolveTokenFile`: one resolver so a differing HOME
  *  (sudo 越し等) can't split the board from its tooling. */
 export function resolveMoonshotApiKeyFile(configured: string | undefined): string {
@@ -571,8 +531,9 @@ function readMoonshotApiKey(keyFile: string): string {
 }
 
 /** The env every **Board call** carries (issue #174 / ADR 0044) — the board's
- *  own CLI invocations: the draft poll, display-time translation, the two
- *  `/usage` init pings, and the usage scrape. None of them is a worker session,
+ *  own CLI invocations: the draft poll, display-time translation, and the
+ *  worker-shaped pings and probes (the usage scrape has its own env,
+ *  `usageScrapeEnv`). None of them is a worker session,
  *  so none of them has an advisor: there is no in-task judgement to consult
  *  about, and no slot, assignee or decision log to attribute the cost to.
  *
@@ -586,29 +547,30 @@ function readMoonshotApiKey(keyFile: string): string {
  *  neither is a property anyone placed here for the advisor, so neither is
  *  accepted as the spelling of its absence.
  *
- *  Returns the **whole** env, not a delta, so a call site cannot half-apply it
- *  by forgetting `...process.env` and lose PATH and auth with it. Same contract
- *  as `workerSpawnEnv` below and as `ContainerSpawn`'s `opts.env`.
- *
- *  Board calls speak **anthropic only** (ADR 0096), so they get the same
- *  two-way scrub an anthropic worker spawn gets (ADR 0097 決定4): a board env
- *  carrying the Moonshot routing set must not silently reroute a draft, a
- *  translation, or a probe to metered Kimi billing. `ANTHROPIC_MODEL` is part
- *  of the scrubbed set because no Board call takes its model from the env —
- *  every model-calling one pins `--model` by flag (draft sonnet, translation
- *  and probes haiku), and the one flag-less call, the `/usage` TUI scrape,
- *  raises no model turn at all. The scrubbed list is the same
- *  `MOONSHOT_ROUTING_ENV` the moonshot spawn injects, so the symmetry is
- *  structural, not a discipline. `PIN_OVERRIDE_ENVS` is scrubbed here too
- *  (#2351): translation and the probes pin `--model haiku` by alias, which the
- *  host's `ANTHROPIC_DEFAULT_HAIKU_MODEL` remaps, and every `--effort` these
- *  calls pass loses to the host's `CLAUDE_CODE_EFFORT_LEVEL`. */
-export function boardCallEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
-  for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
-  for (const name of PIN_OVERRIDE_ENVS) delete env[name];
-  for (const name of SWAP_DISABLE_ENVS) delete env[name];
-  return env;
+ *  Returns the **whole** env, not a delta (same contract as `workerSpawnEnv`
+ *  below and as `ContainerSpawn`'s `opts.env`), built on the worker base (ADR
+ *  0358 決定1・2): the worker-shaped calls and the answer calls alike receive
+ *  only what the board enumerates. Board calls speak **anthropic only** (ADR
+ *  0096), so the board env's OAuth token is passed through and the Moonshot
+ *  routing set is not in the enumeration — a board env pointed at Moonshot
+ *  cannot reroute a draft, a translation or a probe to metered Kimi billing.
+ *  Nor are the host's pin overrides (#2351: `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+ *  remaps `--model haiku`, `CLAUDE_CODE_EFFORT_LEVEL` beats `--effort`) or the
+ *  refusal-swap stoppers (ADR 0323). `temp` is passed only by the call that
+ *  needs `TMPDIR` off the closed `/tmp` (the Worker MCP reachability probe). */
+export function boardCallEnv(temp?: string): NodeJS.ProcessEnv {
+  return { ...workerBaseEnv(temp), ...anthropicAuthEnv(), ...BOARD_CLI_CLOSED };
+}
+
+/** The `/usage` scrape's env — **outside ADR 0358 決定1**: it inherits the
+ *  board's `process.env`, and with it any host var such as `ANTHROPIC_BASE_URL`.
+ *  Measured on 2.1.286 in the Lima VM (2026-11-07, same subscription login):
+ *  the built env (base + Claude injections; node-pty sets `TERM` itself) yields
+ *  no usage panel while the inherited env does — which host var the TUI needs
+ *  is unidentified. Like every Board call it closes the advisor and the
+ *  autoupdater. */
+function usageScrapeEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, ...BOARD_CLI_CLOSED };
 }
 
 /** ADR 0355 決定1: answer calls disable caching without changing worker-shaped observations. */
@@ -646,23 +608,21 @@ export interface ProviderRouting extends ExecutionSetting {
   moonshotApiKey: string | undefined;
 }
 
-/** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
- *  identity vars. Ten **independent** concerns, deliberately not named for the
- *  advisor as a whole — only the first is advisor-scoped:
+/** The env a worker spawn receives (ADR 0358 決定1・2): the worker base (`PATH`,
+ *  `HOME`, `TMPDIR` at the task temp, host git config closed) plus the Claude
+ *  adapter's injection set, and nothing else — a host var reaches the worker
+ *  only by being enumerated here. The env-tier CLI knobs it pins (ADR 0005),
+ *  beside the git identity vars, are **independent** concerns, deliberately not
+ *  named for the advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
  *     `advisorSpawnFlags`, hence the parameter. "This session has no advisor"
  *     has this one spelling, whether the cause is a definition without the
- *     capability or the board's advisor ceiling (ADR 0208). **A present advisor
- *     actively deletes it** rather than merely not setting it (issue #174 /
- *     ADR 0044 決定4): this env is built over the board's own process env, so a
- *     host that exports the var — `/etc/default/tidepool` is a live,
- *     human-edited surface feeding exactly that — would silently strip the
- *     advisor from sessions the registry declared it for, while
- *     `worker_spawned` kept recording the advisor's name. Measured 2026-08-04:
- *     **the env beats an explicit `--advisor` flag**, so the precedence is not
- *     theoretical. This is why the whole env is built here rather than returned
- *     as a delta — a spread can add a key but can never remove one.
+ *     capability or the board's advisor ceiling (ADR 0208). A present advisor
+ *     leaves it out, and a host that exports it — `/etc/default/tidepool` is a
+ *     live, human-edited surface — cannot strip the advisor, because the var
+ *     is not in the enumeration (issue #174 / ADR 0044 決定4; measured
+ *     2026-08-04: **the env beats an explicit `--advisor` flag**).
  *  2. The two #69238 stream timeouts — **unconditional, and they must stay
  *     that way.** An advisor consultation re-reads the whole transcript
  *     uncached, so its latency grows with the conversation and can reach the
@@ -675,46 +635,37 @@ export interface ProviderRouting extends ExecutionSetting {
  *     minutes. They live here rather than in the host's
  *     `/etc/default/tidepool` because that was a second source of truth
  *     invisible to both the registry and the board's code.
- *  3. `SWAP_DISABLE_ENVS` — always deleted, so a refusal's same-model retry
- *     and model swap stay allowed whatever the host exports (ADR 0215 決定1).
- *  4. `AUTOUPDATER_DISABLE_ENV` — the CLI never updates itself under the board
+ *  3. `AUTOUPDATER_DISABLE_ENV` — the CLI never updates itself under the board
  *     (ADR 0186 決定4).
- *  5. `TMPDIR` and `CLAUDE_CODE_TMPDIR`, both at the session's task temp (ADR
+ *  4. `TMPDIR` and `CLAUDE_CODE_TMPDIR`, both at the session's task temp (ADR
  *     0257 決定2). The CLI process's own `TMPDIR` is what moves its proxy socket
  *     out of the closed `/tmp`; `CLAUDE_CODE_TMPDIR` alone left allowed domains
  *     unreachable (#1950).
- *  6. `SUBAGENT_MODEL_ENVS` — always deleted (ADR 0287 決定3): a subagent's
- *     model is the parent's call plus the pinned CLI's defaults, never the
- *     host's blanket override. `TRUST_PREDICATE_ENVS` rides the same shape (ADR
- *     0354 決定1): a host env must not flip the CLI's workspace-trust predicate.
- *  7. `PIN_OVERRIDE_ENVS` — always deleted (#2351): the host's effort env beats
- *     `--effort` and its alias remaps beat `--advisor <alias>`, so leaving them
- *     would put a pin in `worker_spawned` that the session did not run under.
- *  8. `HOST_CREDENTIAL_ENVS` — always deleted (ADR 0024 決定3 / ADR 0098): the
- *     CLI passes every env but its own credentials through to Bash (ADR 0070's
- *     measurement), so a host-exported GitHub / OpenAI token would reach the
- *     worker.
- *  9. `CLAUDE_CONFIG_DIR` at the session's board-owned config dir and
+ *  5. `CLAUDE_CONFIG_DIR` at the session's board-owned config dir and
  *     `CLAUDE_SECURESTORAGE_CONFIG_DIR` set empty (`configDirEnv`, ADR 0354
  *     決定1): the host human's `~/.claude.json` trust and include approvals never
  *     reach a worker, while credentials stay at the host's default store.
- *  10. `sparse.expectFilesOutsideOfPatterns=true` appended to `GIT_CONFIG_*`
+ *  6. `sparse.expectFilesOutsideOfPatterns=true` as `GIT_CONFIG_*` entry 0
  *     (ADR 0293 / ADR 0037 機構2): the sandbox's settings stub must not clear a
- *     sparse S bit.
+ *     sparse S bit. The host's own `GIT_CONFIG_*` is not in the enumeration.
  *
- *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
- *  both directions: an anthropic spawn never inherits the Moonshot injection
- *  set (`MOONSHOT_ROUTING_ENV` — 向き先・トークン・モデルの一式) — a board env
- *  pointed at Moonshot must not silently switch every Claude worker to metered
- *  Kimi billing. A moonshot spawn gets the compatible-endpoint set injected
+ *  Not in the enumeration, so whatever the host exports never arrives: the
+ *  refusal-swap stoppers (a refusal's same-model retry and model swap stay
+ *  allowed, ADR 0215 決定1), the subagent model overrides (ADR 0287 決定3) and
+ *  `CLAUDE_CODE_SANDBOXED` (the workspace-trust predicate, ADR 0354 決定1), the
+ *  pin overrides (#2351: the effort env beats `--effort`, the alias remaps beat
+ *  `--advisor <alias>`), and the host's GitHub / OpenAI credentials (ADR 0024
+ *  決定3 / ADR 0098 — the CLI passes every env but its own credentials through
+ *  to Bash, ADR 0070's measurement).
+ *
+ *  The provider part (issue #445): an anthropic spawn gets the board env's
+ *  OAuth token passed through (ADR 0070 決定1) and never the Moonshot routing
+ *  set — a board env pointed at Moonshot must not silently switch every Claude
+ *  worker to metered Kimi billing. A moonshot spawn gets the routing set
  *  (base URL, Bearer token read from the key file, model in the provider's
- *  notation) and the Claude subscription credentials removed — Moonshot's own
- *  docs warn a leftover `ANTHROPIC_API_KEY` collides with the auth token.
- *  Injection and scrub derive from one list, so the symmetry is structural.
- *  Scrub rather than an allowlist (ADR 0097 決定4): the set to keep out is
- *  closed — it is exactly the injection set — while the set to pass through
- *  (PATH, proxies, SSH, locale) is host-dependent, open, and silently fatal
- *  when a need goes missing. Enumerate the side you can enumerate.
+ *  notation) and no Claude subscription credential — credentials are separated
+ *  per provider (ADR 0097 決定4) and the token is simply not enumerated here
+ *  (ADR 0358 決定2).
  *  Beyond these, effort mapping and context-window knobs are #447's
  *  measurements, not guesses to bake in here. */
 export function workerSpawnEnv(
@@ -724,65 +675,44 @@ export function workerSpawnEnv(
   configDir: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    TMPDIR: taskTemp,
+    ...workerBaseEnv(taskTemp),
     CLAUDE_CODE_TMPDIR: taskTemp,
     ...configDirEnv(configDir),
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
+    ...(advisor === undefined ? { [ADVISOR_DISABLE_ENV]: "1" } : {}),
+    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear a human's or the board's sparse S bit.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns",
+    GIT_CONFIG_VALUE_0: "true",
   };
-  // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear a human's or the board's sparse S bit.
-  const gitConfigCount = Number(env.GIT_CONFIG_COUNT ?? "0");
-  env[`GIT_CONFIG_KEY_${gitConfigCount}`] = "sparse.expectFilesOutsideOfPatterns";
-  env[`GIT_CONFIG_VALUE_${gitConfigCount}`] = "true";
-  env.GIT_CONFIG_COUNT = String(gitConfigCount + 1);
-  if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
-  else delete env[ADVISOR_DISABLE_ENV];
-  for (const name of SWAP_DISABLE_ENVS) delete env[name];
-  for (const name of SUBAGENT_MODEL_ENVS) delete env[name];
-  for (const name of TRUST_PREDICATE_ENVS) delete env[name];
-  for (const name of PIN_OVERRIDE_ENVS) delete env[name];
-  for (const name of HOST_CREDENTIAL_ENVS) delete env[name];
-  if (routing.provider === "moonshot") {
-    if (routing.moonshotApiKey === undefined) {
-      // start() resolves the key before launch and refuses the pickup without
-      // one — reaching this branch keyless is an adapter bug, not an
-      // operational state
-      throw new Error("moonshot spawn without its API key");
-    }
-    for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
-    env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
-    env[ANTHROPIC_AUTH_TOKEN_ENV] = routing.moonshotApiKey;
-    env[ANTHROPIC_MODEL_ENV] = routing.model;
-  } else {
-    // scrub the full Moonshot injection set — the same list the moonshot
-    // branch above injects, so the two directions can never drift apart.
-    // ANTHROPIC_MODEL included: --model pins the model by flag (ADR 0005), so
-    // this changes the env map, never the effective behavior.
-    for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
+  if (routing.provider !== "moonshot") return { ...env, ...anthropicAuthEnv() };
+  if (routing.moonshotApiKey === undefined) {
+    // start() resolves the key before launch and refuses the pickup without
+    // one — reaching this branch keyless is an adapter bug, not an
+    // operational state
+    throw new Error("moonshot spawn without its API key");
   }
-  return env;
+  return { ...env, ...moonshotRoutingEnv(routing.moonshotApiKey, routing.model) };
 }
 
 /** The env the moonshot **auth probe** carries (issue #446 / ADR 0097 決定2)
  *  — the re-verification a provider-auth Confirmation question's answer fires.
- *  Not a Board call (those speak anthropic only, ADR 0096), but built by the
- *  same discipline as a moonshot worker spawn: the Claude subscription
- *  credentials are scrubbed and the Moonshot routing set is injected, with the
- *  key read fresh from the key file at probe time (a rotation takes effect
- *  without a board restart). The model rides `ANTHROPIC_MODEL` — the board set
- *  that env itself one line up, so no third party can repoint it; effort is
- *  not pinned because its mapping on this endpoint is #447's measurement, not
- *  a guess to bake in. Throws MoonshotApiKeyMissingError when there is no
- *  credential to authenticate with. */
+ *  Not a Board call (those speak anthropic only, ADR 0096), but built the same
+ *  way as a moonshot worker spawn (ADR 0358 決定2): the worker base plus the
+ *  Moonshot routing set, with the key read fresh from the key file at probe
+ *  time (a rotation takes effect without a board restart). The model rides
+ *  `ANTHROPIC_MODEL` — the board set that env itself, so no third party can
+ *  repoint it; effort is not pinned because its mapping on this endpoint is
+ *  #447's measurement, not a guess to bake in. Throws
+ *  MoonshotApiKeyMissingError when there is no credential to authenticate with. */
 export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
-  for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
-  env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
-  env[ANTHROPIC_AUTH_TOKEN_ENV] = readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile));
-  env[ANTHROPIC_MODEL_ENV] = MOONSHOT_DEFAULT_MODEL;
-  return env;
+  return {
+    ...workerBaseEnv(),
+    ...BOARD_CLI_CLOSED,
+    ...moonshotRoutingEnv(readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile)), MOONSHOT_DEFAULT_MODEL),
+  };
 }
 
 /** The agent's own git identity, injected into the worker child's env so the
@@ -792,7 +722,7 @@ export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessE
  *  (RFC 2606) can never resolve to a real deliverable address, so an agent
  *  name never masquerades as a person's inbox. ADR 0024 invariant: the worker
  *  env never carries a GitHub token (the board injects
- *  those per-call in github-auth.ts, never into the inherited env). */
+ *  those per-call in github-auth.ts, never into the worker env). */
 export function agentGitIdentityEnv(agentName: string): Record<string, string> {
   const email = `${agentName}@tidepool.invalid`;
   return {
@@ -886,8 +816,7 @@ export interface ClaudeWorkerOptions {
   /** ADR 0149: session ごとの transcript を開く盤面側の器。`containers` と同じく**省略できない**。 */
   transcripts: TranscriptStore;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
-   *  a mode-600 state file, never the board's env (plaintext on process.env
-   *  rides every worker spawn). Read fresh at each spawn, only for
+   *  a mode-600 state file, never the board's env. Read fresh at each spawn, only for
    *  `provider: moonshot` agents. Same class as `onWorkerExited` above: a
    *  functional field, not a test seam, so `buildWorkerOptions` owns the
    *  literal. Absent → `resolveMoonshotApiKeyFile`'s default
@@ -1242,7 +1171,7 @@ export const claudeMcpReachabilityThrough =
           args: [...SKILL_ENUM_ARGS, "--mcp-config", mcpConfig, "--settings", settings],
           cwd: dir,
           // sandbox.ts の taskTemp: CLI の TMPDIR もそこを指さないと proxy の socket が閉じた /tmp に残る
-          env: { ...boardCallEnv(), TMPDIR: dir },
+          env: boardCallEnv(dir),
           limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
         }),
         (proc) => readInitReport(proc.stdout, readInitMcpServers),
@@ -2176,17 +2105,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           systemPromptFile,
         ],
         // the agent's own commits are stamped with the agent's identity (issue
-        // #53), merged over the inherited env — never a token (ADR 0024). The
-        // the spawn-tier env knobs (issue #33) ride the same merge: the explicit
+        // #53), merged over the built env — never a token (ADR 0024). The
+        // spawn-tier env knobs (issue #33) ride the same merge: the explicit
         // "no advisor" and the #69238 stream timeouts, both pinned here rather
         // than left to the host's environment file (ADR 0005).
         {
           cwd: workspacePath,
           stdin: "pipe",
-          // workerSpawnEnv builds over process.env and may *delete* the advisor
-          // kill var (ADR 0044 決定4), so it is the base here rather than an
-          // overlay — a spread on top of it could not have removed a key. The git
-          // identity carries no key it touches, so layering it after is safe.
+          // the whole env is workerSpawnEnv's enumeration (ADR 0358 決定1); the
+          // git identity carries no key it sets, so layering it after is safe.
           env: {
             ...workerSpawnEnv(routing.advisor, routing, taskTemp, configDir),
             ...agentGitIdentityEnv(agent.name),
@@ -2484,10 +2411,10 @@ export async function checkUsageThrough(
       command: "claude",
       args: ["--settings", settingsPath],
       cwd: process.cwd(),
-      // a Board call like any other (ADR 0044): this one raises no model turn
-      // today — nothing is ever typed at the prompt — but that is a property
-      // of the vendor's TUI, not one this board placed here.
-      env: boardCallEnv(),
+      // advisor closed as on every Board call (ADR 0044): this one raises no model
+      // turn today, but that is a property of the vendor's TUI, not one this board
+      // placed here. Unlike the others its env inherits process.env (ADR 0358 決定1 の外).
+      env: usageScrapeEnv(),
       limitMs: USAGE_LIMIT_MS,
       pty: { launch, cols: PTY_COLS, rows: PTY_ROWS },
     }),

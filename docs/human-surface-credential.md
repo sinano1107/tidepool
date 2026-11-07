@@ -13,8 +13,8 @@ authority 解決のままで、credential を掛けると全 worker が死ぬ。
 存在せず、失くしたらローテーションする。理由は #151(work プロファイルの worker は `Read`
 ツールで cwd 外の任意パスを読めるため、平文はどこに置いても読まれる)。
 
-平文は **`process.env` にも載せない**。`src/claude-worker.ts` の spawn は `{ ...process.env }` を
-worker に渡すので、env に置いた時点で worker の手に渡る。
+平文は **`process.env` にも載せない**。worker の形で走る process が受け取るのは盤面が列挙した
+ものだけ(ADR 0358 決定1)だが、その外の `/usage` の scrape は `process.env` を継ぐ。
 
 ## 設定(環境変数)
 

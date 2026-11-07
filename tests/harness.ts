@@ -637,6 +637,30 @@ export function failQuarantineQuestion(db: Db): () => void {
   return () => db.exec("DROP TRIGGER fail_quarantine_question");
 }
 
+/** ADR 0358 決定5: host の env に置く囮 —— 秘密の形の名前、旧除去一覧の名前、盤面自身の秘密。どれも列挙に無い。 */
+export const HOST_ENV_DECOYS = {
+  TIDEPOOL_VAPID_PRIVATE_KEY: "decoy-vapid-private-key",
+  GITHUB_PERSONAL_ACCESS_TOKEN: "decoy-github-pat",
+  SSH_AUTH_SOCK: "/decoy/ssh-agent.sock",
+  HTTPS_PROXY: "http://decoy-proxy:3128",
+  CLAUDE_CODE_EFFORT_LEVEL: "low",
+  CLAUDE_CODE_SUBAGENT_MODEL: "haiku",
+  CLAUDE_CODE_SANDBOXED: "1",
+  CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: "1",
+  GH_TOKEN: "decoy-gh-token",
+  OPENAI_API_KEY: "decoy-openai-api-key",
+  ANTHROPIC_BASE_URL: "https://decoy.example/anthropic",
+  ANTHROPIC_API_KEY: "decoy-anthropic-api-key",
+} as const;
+
+/** 囮と、`PATH` / `HOME` の既知の値を host の env に置く(test の終わりに戻す)。expected は literal で書ける。 */
+export function stubHostEnvDecoys(): void {
+  for (const [name, value] of Object.entries(HOST_ENV_DECOYS)) vi.stubEnv(name, value);
+  vi.stubEnv("PATH", "/usr/bin:/bin");
+  vi.stubEnv("HOME", "/home/board");
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+}
+
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —
  *  stderr captured, not inherited, same as src/git.ts's `git`. */
 export function git(dir: string, ...args: string[]): string {
