@@ -1,5 +1,7 @@
 # 完了は worker 自身のコミットを門で要求する — 盤面は本文を起草しない
 
+**Status 追記: 決定2 の「観測に失敗したら `false`」は git が即座に失敗した場合に限る —— 盤面の view の git が上限で止まった手は観測の失敗ではなく worker の repo の故障で、門は開かず session を倒す([ADR 0357](0357-the-boards-git-on-a-workers-tree-is-bounded-and-expiry-is-a-worker-repo-failure.md)、2026-11-07、issue #2966)。**
+
 **Status 追記: 決定2 の「quarantine 中のタスク — 門をスキップ」は ADR 0350 決定1 で覆った —— 門の述語は task の種別だけを読み、workspace の Quarantine 中でも掛かる(2026-11-02、issue #2910)。**
 
 issue #240 / #367 バケット B(2026-08-17)で決定。友人の repo にタスクの実行結果が git 履歴として残る形が、

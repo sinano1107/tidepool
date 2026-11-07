@@ -1,5 +1,7 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
+**Status 追記: 決定3 の「worktree の FIFO で盤面の git が止まる形(#3018)はこれでは閉じない」は [ADR 0357](0357-the-boards-git-on-a-workers-tree-is-bounded-and-expiry-is-a-worker-repo-failure.md) が閉じる —— view の git は有界で、超過は決定2 の worker の repo の故障(2026-11-07、issue #2966)。**
+
 2026-11-07 の grilling(issue #2956、#2912 / ADR 0352 の族の根)で決定。worker が走った checkout には ref にも tracked content にも無く
 session を越えて残る層(ignored・index の印・`.git/info/exclude`・`.git/config`・hooks)があり、盤面の「clean」(`git status`)はその層を
 見ないか HEAD の branch で出方が変わる(#2945 / #2957 / #3011)。ADR 0352 は層の1行に持ち主を置いたが、残りを行ごとに reset するのは
