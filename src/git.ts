@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -50,7 +50,7 @@ export function withBoardGit<T>(cwd: string, use: (view: (args: string[], overri
   }
 }
 
-type SparsePolicy = { pattern: string; cone: boolean };
+export type SparsePolicy = { pattern: string; cone: boolean };
 
 function sparseOptions(gitDir: string, sparse: SparsePolicy | undefined): string[] {
   if (!sparse) return [];
@@ -63,39 +63,53 @@ function sparseOptions(gitDir: string, sparse: SparsePolicy | undefined): string
 export function boardReadTree(cwd: string, from: string, to: string, sparse?: SparsePolicy): void {
   const index = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index");
   withBoardGit(cwd, (view, dir) => {
-    view([...sparseOptions(dir, sparse), "read-tree", "-u", "-m", from, to], { GIT_INDEX_FILE: index });
+    // The index survives this view, so it cannot refer to a new sharedindex in the temporary gitdir.
+    view(["-c", "core.splitIndex=false", ...sparseOptions(dir, sparse), "read-tree", "-u", "-m", from, to], { GIT_INDEX_FILE: index });
   });
 }
 
-export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy): string[] {
+export type WorktreeChange = { path: string; status: string };
+
+export const displayWorktreePath = (path: string): string => /[\r\n\t]/.test(path) ? JSON.stringify(path) : path;
+
+export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?: string): WorktreeChange[] {
   const index = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index");
   let head: string | undefined;
   try {
-    head = git(cwd, "rev-parse", "--verify", "--quiet", "HEAD");
+    head = against ?? git(cwd, "rev-parse", "--verify", "--quiet", "HEAD");
   } catch (err) {
     if ((err as { status?: number }).status !== 1) throw err;
   }
   return withBoardGit(cwd, (view, dir) => {
     if (head !== undefined) {
-      writeFileSync(join(dir, "HEAD"), `${head}\n`);
+      view(["update-ref", "--no-deref", "HEAD", head]);
       view(["read-tree", head]);
     }
     const config = sparseOptions(dir, sparse);
     if (sparse && head !== undefined) {
-      // ADR 0293: reproduce the sparse policy on a blank tree, without trusting index marks or changing the checkout.
+      // ADR 0293 決定3 / ADR 0356 決定3: apply sparse policy on a blank tree instead of trusting the real index's marks.
       const empty = join(dir, "empty");
       mkdirSync(empty);
       view(["-C", empty, "-c", "core.bare=false", ...config, "sparse-checkout", "reapply"], { GIT_WORK_TREE: empty });
     }
-    const worktree = view([...config, "status", "--porcelain", "--untracked-files=all"]).split("\n").filter(Boolean);
+    const worktree = view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]);
+    const paths = new Map(worktree.split("\0").filter(Boolean).map((line) => [line.slice(3), line.slice(0, 2)]));
     // ADR 0084 決定1: the real index can hold staged content that is absent from the worktree.
-    const staged = view(["diff", "--cached", "--name-status", "--no-renames", "--no-ext-diff", "--ignore-submodules=none", "--"], { GIT_INDEX_FILE: index });
-    const paths = new Map(worktree.map((line) => [line.slice(3), line]));
-    for (const line of staged.split("\n").filter(Boolean)) {
-      const path = line.slice(2);
-      if (!paths.has(path)) paths.set(path, `${line[0]}  ${path}`);
+    const staged = view(["diff", "--cached", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--ignore-submodules=dirty", "--"], { GIT_INDEX_FILE: index }).split("\0");
+    for (let i = 0; i + 1 < staged.length; i += 2) {
+      const path = staged[i + 1]!;
+      if (!paths.has(path)) paths.set(path, `${staged[i]} `);
     }
-    return [...paths.values()];
+    // ADR 0356 決定3: Git's recursive status would run each populated submodule's own filters.
+    for (const entry of view(["ls-files", "--stage", "-z"]).split("\0")) {
+      if (!entry.startsWith("160000 ")) continue;
+      const path = entry.slice(entry.indexOf("\t") + 1);
+      if (paths.has(path)) continue;
+      const submodule = join(cwd, path);
+      if (!lstatSync(submodule, { throwIfNoEntry: false })?.isDirectory() || !existsSync(join(submodule, ".git"))) continue;
+      if (boardWorktreeStatus(submodule).length > 0) paths.set(path, " M");
+    }
+    return [...paths].map(([path, status]) => ({ path, status }));
   });
 }
 
@@ -138,6 +152,7 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
     return execFileSync("git", args, {
       cwd,
       env: localGitEnv(env),
+      maxBuffer: 64 * 1024 * 1024,
       input,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });

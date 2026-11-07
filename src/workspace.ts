@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ResourceStop } from "./events.js";
-import { boardReadTree, boardWorktreeStatus, git, gitWithEnv, gitWithInput, withBoardGit } from "./git.js";
+import { boardReadTree, boardWorktreeStatus, displayWorktreePath, git, gitWithEnv, gitWithInput, type SparsePolicy, type WorktreeChange, withBoardGit } from "./git.js";
 import {
   type GitHubAuth,
   originRepo,
@@ -384,7 +384,11 @@ function writeMergeTree(
   const [leftTip, rightTip] = git(workspace.path, "rev-parse", `${left}^{commit}`, `${right}^{commit}`).split("\n");
   try {
     // ADR 0356 決定5: merge-tree can run a repository's custom merge driver even though it leaves the worktree alone.
-    return withBoardGit(workspace.path, (view) => view(["merge-tree", "--write-tree", leftTip!, rightTip!]).trim());
+    return withBoardGit(workspace.path, (view, gitDir) => {
+      const shallow = git(workspace.path, "rev-parse", "--path-format=absolute", "--git-path", "shallow");
+      if (existsSync(shallow)) writeFileSync(join(gitDir, "shallow"), readFileSync(shallow));
+      return view(["merge-tree", "--write-tree", leftTip!, rightTip!]).trim();
+    });
   } catch (err) {
     if ((err as { status?: number } | null)?.status !== 1) throw err;
     return undefined;
@@ -607,20 +611,39 @@ const BOARD_SETTINGS_LINE = "!/.claude/settings.json";
 const configEnabled = (workspace: WorkspaceConfig, key: string) =>
   git(workspace.path, "config", "--type=bool", "--default=false", "--get", key) === "true";
 
-function checkoutSparsePolicy(workspace: WorkspaceConfig, db?: Db) {
-  const snapshot = db && storedSparseSnapshot(db, workspace);
-  if (snapshot) {
-    const base = snapshot.mode === "disabled" ? "/*\n" : snapshot.pattern;
-    return { pattern: `${base.trimEnd()}\n${BOARD_SETTINGS_LINE}\n`, cone: false };
-  }
+function readSparsePolicy(workspace: WorkspaceConfig): SparsePolicy | undefined {
   const patternPath = sparsePatternPath(workspace);
   return existsSync(patternPath) && configEnabled(workspace, "core.sparseCheckout")
-    ? { pattern: readFileSync(patternPath, "utf8"), cone: configEnabled(workspace, "core.sparseCheckoutCone") }
+    ? { pattern: readFileSync(patternPath, "utf8").split("\n").filter((line) => line !== BOARD_SETTINGS_LINE).join("\n"), cone: configEnabled(workspace, "core.sparseCheckoutCone") }
     : undefined;
 }
 
-function checkoutStatus(workspace: WorkspaceConfig, db?: Db): string[] {
-  return boardWorktreeStatus(workspace.path, checkoutSparsePolicy(workspace, db));
+const sparsePolicyFromSnapshot = (snapshot: SparseSnapshot): SparsePolicy | undefined =>
+  snapshot.mode === "disabled" ? undefined : { pattern: snapshot.pattern, cone: snapshot.mode === "cone" };
+
+function storedSparsePolicy(db: Db, key: string): SparsePolicy | null | undefined {
+  const row = db.prepare("SELECT policy FROM workspace_sparse_policies WHERE name = ?").pluck().get(key) as string | undefined;
+  return row === undefined ? undefined : JSON.parse(row) as SparsePolicy | null;
+}
+
+const settingsExcluded = (pattern?: string): string => `${(pattern ?? "/*").trimEnd()}\n${BOARD_SETTINGS_LINE}\n`;
+
+function checkoutSparsePolicy(workspace: WorkspaceConfig, db?: Db): SparsePolicy | undefined {
+  if (!db) return undefined;
+  const pin = storedSparsePolicy(db, snapshotKey(workspace));
+  const snapshot = storedSparseSnapshot(db, workspace);
+  if (!snapshot) return pin ?? undefined;
+  // ADR 0293 決定3: only the board's stored settings exclusion may add to the pinned policy.
+  const base = pin === undefined ? sparsePolicyFromSnapshot(snapshot) : pin;
+  return { pattern: settingsExcluded(base?.pattern), cone: false };
+}
+
+function checkoutStatus(workspace: WorkspaceConfig, db?: Db, against?: string): WorktreeChange[] {
+  return boardWorktreeStatus(workspace.path, checkoutSparsePolicy(workspace, db), against);
+}
+
+function describeChanges(changes: WorktreeChange[], separator: string): string {
+  return changes.map(({ path, status }) => `${status} ${displayWorktreePath(path)}`).join(separator);
 }
 
 /** DB の写しを失った checkout に盤面の行が残っていれば、その行を外した pattern を non-cone の写しと読む(ADR 0293 決定7)。
@@ -672,8 +695,7 @@ export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConf
        ON CONFLICT(name) DO UPDATE SET sparse_snapshot = excluded.sparse_snapshot`,
     ).run(snapshotKey(workspace), JSON.stringify(snapshot));
   }
-  const base = snapshot.mode === "disabled" ? "/*\n" : snapshot.pattern;
-  gitWithInput(`${base.trimEnd()}\n${BOARD_SETTINGS_LINE}\n`, workspace.path, "sparse-checkout", "set", "--no-cone", "--stdin");
+  gitWithInput(settingsExcluded(sparsePolicyFromSnapshot(snapshot)?.pattern), workspace.path, "sparse-checkout", "set", "--no-cone", "--stdin");
   if (lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
     throw new Error(
       `workspace ${workspace.name}: could not exclude .claude/settings.json: it has uncommitted changes, which sparse-checkout keeps in the tree — commit or revert them`,
@@ -833,7 +855,7 @@ export async function prepareWorkspaceAtPickup(
     const changes = checkoutStatus(workspace, db);
     if (changes.length > 0) {
       throw new PickupGateError(workspace, new Error(
-        `workspace ${workspace.name} has uncommitted changes while resting: ${changes.join("\n")} — a process wrote them after the board moved the checkout`,
+        `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout`,
       ));
     }
   }
@@ -909,8 +931,18 @@ function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
 }
 
 function prepareRefBaseline(db: Db, workspace: WorkspaceConfig): void {
-  if (storedRefs(db, snapshotKey(workspace)) === "") snapshotRefs(db, workspace);
-  else compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  const key = snapshotKey(workspace);
+  const first = storedRefs(db, key) === "";
+  if (!first) compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  const pin = storedSparsePolicy(db, key);
+  if (pin !== undefined && !first) return;
+  const snapshot = pin === undefined ? storedSparseSnapshot(db, workspace) : undefined;
+  // ADR 0356 決定3: an existing checkout without a pin may already carry worker-written rules.
+  const policy = snapshot ? sparsePolicyFromSnapshot(snapshot) : first && pin === undefined ? readSparsePolicy(workspace) : undefined;
+  db.transaction(() => {
+    if (first) snapshotRefs(db, workspace);
+    if (pin === undefined) db.prepare("INSERT INTO workspace_sparse_policies (name, policy) VALUES (?, ?)").run(key, JSON.stringify(policy ?? null));
+  })();
 }
 
 function writeSnapshot(db: Db, key: string, refs: string): void {
@@ -935,7 +967,10 @@ export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
 /** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の写しの行ごと消す。残すと同名を別 path で登録し直したとき
  *  旧 checkout の基準と比べる。面接室と受験者の行は消されない checkout のものなので、ここを通らない(ADR 0276 決定4)。 */
 export function dropWorkspaceState(db: Db, name: string): void {
-  db.prepare("DELETE FROM workspace_state WHERE name = ?").run(name);
+  db.transaction(() => {
+    db.prepare("DELETE FROM workspace_state WHERE name = ?").run(name);
+    db.prepare("DELETE FROM workspace_sparse_policies WHERE name = ?").run(name);
+  })();
 }
 
 function storedRefs(db: Db, workspaceName: string): string {
@@ -1044,7 +1079,7 @@ function readCheckoutValue(workspace: WorkspaceConfig, ref: string): string {
   }
 }
 
-/** ADR 0243 の口: 盤面が ref を書くときはここを通る(休止中の着地の `merge --ff-only` のように checkout ごと動かす書き込みも)。書く前に基準のその行を
+/** ADR 0243 の口: 盤面が ref を書くときはここを通る(ADR 0356 決定5 の worktree の追従も含む)。書く前に基準のその行を
  *  `<old>|<new>` に予告し、`write()` を撃ち、ref を読み返して `new` なら `{new}`、違えば `{old}` に畳む —— 読み返した
  *  値そのものを基準に入れることは無い(決定2)。`write()` が投げても畳んでから投げ直す。予告と畳みの間で盤面が
  *  落ちれば2値の行が残り、どちらの値も違反と読まれない(決定5)—— 次の比較が ref の持つ側に畳む(ADR 0351 決定4)。
@@ -1060,8 +1095,11 @@ export function writeBoardRefs(
   const before = new Map<string, string>();
   const announced = updateBaseline(db, workspace, (values) => {
     for (const [ref, newValue] of writes) {
-      before.set(ref, values.get(ref) ?? "");
-      values.set(ref, `${before.get(ref)}|${newValue}`);
+      const previous = values.get(ref) ?? "";
+      before.set(ref, previous);
+      const candidates = baselineValues(previous);
+      // ADR 0243 決定5: a retry keeps the existing announcement if it already covers this write.
+      if (candidates.length === 1 || !candidates.includes(newValue)) values.set(ref, `${previous}|${newValue}`);
     }
   });
   if (!announced) {
@@ -1114,9 +1152,9 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
  *  `.claude/agents` だけの残骸が dirty に数えられる。
  *
  *  **観測できなければ投げる。** 飲むかどうかは呼び手の判断であり、経路ごとに違う。 */
-function uncommittedChanges(workspace: WorkspaceConfig, db?: Db): string[] {
+function uncommittedChanges(workspace: WorkspaceConfig, db?: Db): WorktreeChange[] {
   const remnants = new Set<string>(shadowRemnants(workspace));
-  return checkoutStatus(workspace, db).filter((line) => !remnants.has(line.slice(3)));
+  return checkoutStatus(workspace, db).filter(({ path }) => !remnants.has(path));
 }
 
 /** shadow 残骸(ADR 0069 の3条件)を消す。tree rule の退避も完了経路の検査も、判定の
@@ -1139,7 +1177,7 @@ function removeShadowRemnants(workspace: WorkspaceConfig): void {
  *  検査に置き換わる)ので、そちらは飲まない —— `assertNothingWrittenAfterCompletion`。 */
 export function completionTreePaths(workspace: WorkspaceConfig, db?: Db): string[] {
   try {
-    return uncommittedChanges(workspace, db).map((line) => line.slice(3));
+    return uncommittedChanges(workspace, db).map(({ path }) => path);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err;
     return [];
@@ -1234,9 +1272,29 @@ function assertNothingWrittenAfterCompletion(db: Db, workspace: WorkspaceConfig,
 
 /** ADR 0345 決定3: HEAD がタスクブランチを離れ、基準が予告か畳みで持つ位置にある = 盤面が動かした。基準に HEAD の行が
  *  無ければ一致しない(fail-closed)—— セッションが自分のブランチを離れていた形は今日どおり `assertOnTaskBranch` が拒む。 */
-function boardMovedHead(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
+function recoverBoardMovedHead(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
   const head = headValue(workspace);
-  return head !== symrefValue(`refs/heads/${taskBranch(taskId)}`) && baselineAllows(recordedRef(db, snapshotKey(workspace), "HEAD"), head);
+  const key = snapshotKey(workspace);
+  const recorded = recordedRef(db, key, "HEAD");
+  if (head !== symrefValue(`refs/heads/${taskBranch(taskId)}`)) return baselineAllows(recorded, head);
+  const target = `refs/heads/${protectedBranch(workspace)}`;
+  const destination = symrefValue(target);
+  if (recorded !== `${head}|${destination}`) return false;
+
+  // ADR 0243 決定5 / ADR 0356 決定5: an interrupted move can leave the index and worktree ahead of HEAD.
+  const before = checkoutStatus(workspace, db);
+  if (before.length === 0) return false;
+  const tip = git(workspace.path, "rev-parse", "--verify", target);
+  if (!baselineAllows(recordedRef(db, key, target), tip)) {
+    throw new RefsMovedError(`workspace ${workspace.name}: ${target} changed during interrupted parking`);
+  }
+  const after = checkoutStatus(workspace, db, tip);
+  if (after.length === 0) {
+    boardRefWriter(db, workspace)("HEAD", destination, () => git(workspace.path, "symbolic-ref", "HEAD", target));
+    return true;
+  }
+  if (before.every(({ path, status }) => status === "??" && after.some((change) => change.path === path && change.status === "??"))) return false;
+  throw new Error(`workspace ${workspace.name}: parking was interrupted while moving from ${taskBranch(taskId)} to ${protectedBranch(workspace)} — restore the checkout before retrying teardown`);
 }
 
 /** ADR 0345 決定3: 盤面が checkout を動かした後の再実行の検査。退避も ref の比較も1度しか成り立たないので撃たず、
@@ -1248,7 +1306,7 @@ function assertNothingWrittenAfterBoardMovedHead(db: Db, workspace: WorkspaceCon
   if (changes.length > 0) {
     throw new Error(
       `workspace ${workspace.name} has uncommitted changes after the board moved its checkout off ` +
-        `'${taskBranch(task.id)}' for task ${task.id}: ${changes.join(", ")} — a process wrote them after the board moved the checkout`,
+        `'${taskBranch(task.id)}' for task ${task.id}: ${describeChanges(changes, ", ")} — a process wrote them after the board moved the checkout`,
     );
   }
 }
@@ -1292,7 +1350,7 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
  *  WIP-commit check. */
 export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db): void {
   assertOwnGitDirectory(workspace.path);
-  let status: string[];
+  let status: WorktreeChange[];
   try {
     status = checkoutStatus(workspace, db);
   } catch (err) {
@@ -1454,7 +1512,7 @@ export function releaseWorkspace(
 ): void {
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
   try {
-    if (boardMovedHead(db, workspace, task.id)) {
+    if (recoverBoardMovedHead(db, workspace, task.id)) {
       assertNothingWrittenAfterBoardMovedHead(db, workspace, task);
     } else {
       if (completed && completionTreeGateApplies(task)) {
@@ -1488,7 +1546,7 @@ export function releaseWorkspace(
 }
 
 /** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict leaves
- *  the checkout in place and reports the same repair options to teardown and quarantine acceptance (ADR 0239 / ADR 0240). */
+ *  the checkout in place and reports the same repair options to teardown and quarantine acceptance (ADR 0239 帰結 / ADR 0240 決定4). */
 function mergeBackInto(
   db: Db,
   workspace: WorkspaceConfig,

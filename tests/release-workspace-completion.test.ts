@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -115,6 +115,39 @@ it("完了の門は作業ツリーを HEAD に戻した後も staged な変更�
     writeFileSync(path, `${original}\n`);
 
     expect(completionTreePaths(ws, db)).toEqual(["README.md"]);
+  } finally {
+    db.close();
+  }
+});
+
+it("the gate sees dirty submodules without executing their Git filters (ADR 0356 決定3)", async () => {
+  const { db, ws } = await pickedUpSession();
+  try {
+    const source = await makeWorkspace("nested-module-source");
+    commitWork(source.path, ".gitattributes", "README.md filter=probe\n");
+    git(ws.path, "-c", "protocol.file.allow=always", "submodule", "add", source.path, "module with space");
+    git(ws.path, "commit", "-m", "add a submodule");
+    const submodule = join(ws.path, "module with space");
+    const marker = join(ws.path, ".git", "submodule-filter-ran");
+    const script = join(ws.path, ".git", "submodule-filter");
+    writeFileSync(script, '#!/bin/sh\ntouch "$(dirname "$0")/submodule-filter-ran"\ncat\n', { mode: 0o755 });
+    git(submodule, "config", "filter.probe.clean", `"${script}"`);
+    const readme = join(submodule, "README.md");
+    const modified = readFileSync(readme);
+    modified[0] = 0x78;
+    writeFileSync(readme, modified);
+    utimesSync(readme, new Date(0), new Date(0));
+    git(submodule, "status", "--porcelain");
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    expect(completionTreePaths(ws, db)).toEqual(["module with space"]);
+    expect(existsSync(marker)).toBe(false);
+    git(submodule, "config", "--unset", "filter.probe.clean");
+    git(submodule, "add", "README.md");
+    git(submodule, "commit", "-m", "advance the submodule tip");
+    expect(git(submodule, "status", "--porcelain")).toBe("");
+    expect(completionTreePaths(ws, db)).toEqual(["module with space"]);
   } finally {
     db.close();
   }

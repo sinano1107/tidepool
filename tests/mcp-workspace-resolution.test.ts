@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -61,17 +62,23 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
     // dirty the prod checkout: the completion gate (ADR 0084) must read *prod*
     // — sandbox is clean, so a gate resolving the board default would let this
     // through
-    await import("node:fs").then((fs) =>
-      fs.writeFileSync(join(prod.path, "notes.txt"), "half-finished\n"),
-    );
+    git(prod.path, "update-index", "--assume-unchanged", "--", "README.md");
+    writeFileSync(join(prod.path, "README.md"), "tracked edit\n");
+    writeFileSync(join(prod.path, ".git", "info", "exclude"), "notes.txt\n");
+    writeFileSync(join(prod.path, "notes.txt"), "half-finished\n");
+    expect(git(prod.path, "status", "--porcelain")).toBe("");
     const denied: any = await client.callTool({
       name: "complete_task",
       arguments: { handoff: fullHandoff },
     });
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain("with a message whose body says what changed and why in a few lines, readable from the git history alone, then call complete_task again");
+    expect(denied.content[0].text).toContain("\n- README.md");
     expect(denied.content[0].text).toContain("\n- notes.txt");
 
+    git(prod.path, "update-index", "--no-assume-unchanged", "--", "README.md");
+    git(prod.path, "add", "README.md");
+    writeFileSync(join(prod.path, ".git", "info", "exclude"), "");
     commitWork(prod.path, "notes.txt", "half-finished\n");
     const res: any = await client.callTool({
       name: "complete_task",

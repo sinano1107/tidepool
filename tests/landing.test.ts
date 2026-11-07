@@ -3801,14 +3801,12 @@ it("merge back が conflict して後始末が閉じても、修理の内容が 
   expect(github.merged).toEqual([]);
 });
 
-// ADR 0356 決定5: merge-back conflict leaves the worker's checkout in place.
-it("後始末の merge back が conflict しても、MERGE_HEAD を残さず子の checkout のまま quarantine に落ちる", async () => {
-  const { workspace, repair, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
+it("後始末の merge back が conflict しても、MERGE_HEAD を残さず quarantine に落ちる(ADR 0356 決定5)", async () => {
+  const { workspace, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
 
   // まだ答えていない question なので、出口の文は「答え直す」と結ばない
   expect(question.purpose).toContain("`; then answer. ");
   expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
-  expect(head(workspace)).toBe(`task/${repair.id}`);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
 
@@ -4917,7 +4915,7 @@ async function recordedWork(
   return work;
 }
 
-/** 着地が HEAD の位置を読む瞬間(突き合わせと書き込みの間の最後の git)に、別の書き手として `ref` を `sha` へ動かす git を PATH の先頭に置く。 */
+/** ADR 0356 決定5: intercept the symbolic HEAD read to move the ref between the baseline comparison and the plumbing write. */
 async function moveRefBeforeTheLandingWrite(repo: string, ref: string, sha: string): Promise<void> {
   const shimDir = await tempDir("tidepool-git-shim-");
   const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();

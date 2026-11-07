@@ -41,8 +41,33 @@ function expectRowsCurrent(db: Db, key: string, ws: WorkspaceConfig, refs: strin
   for (const ref of refs) expect([ref, row.get(ref)]).toEqual([ref, git(ws.path, "rev-parse", ref)]);
 }
 
-it("catch-up follows the updated tip when the task branch is checked out (ADR 0356 決定5)", async () => {
-  const ws = await makeWorkspace("gate-catch-up");
+const BLOCKED_COMMANDS = ["post-checkout", "reference-transaction", "gpg"];
+
+function installHookAndSigningProbes(ws: WorkspaceConfig): string {
+  const hooks = join(ws.path, ".git", "custom-hooks");
+  mkdirSync(hooks);
+  for (const name of BLOCKED_COMMANDS) {
+    writeFileSync(join(hooks, name), '#!/bin/sh\ntouch "$0.ran"\nexit 1\n', { mode: 0o755 });
+  }
+  git(ws.path, "config", "core.hooksPath", hooks);
+  git(ws.path, "config", "commit.gpgsign", "true");
+  git(ws.path, "config", "gpg.program", join(hooks, "gpg"));
+  return hooks;
+}
+
+function expectHooksAndSigningInactive(hooks: string): void {
+  for (const name of BLOCKED_COMMANDS) expect(existsSync(join(hooks, `${name}.ran`)), name).toBe(false);
+}
+
+it.each([false, true])("catch-up follows the updated tip when the task branch is checked out (shallow: %s, ADR 0356 決定5)", async (shallow) => {
+  const source = await makeWorkspace("gate-catch-up");
+  const ws = { ...source };
+  if (shallow) {
+    commitWork(source.path, "shallow-base.txt", "the fork point\n");
+    ws.path = await tempDir("gate-catch-up-shallow-");
+    git(source.path, "clone", "--depth=1", `file://${source.path}`, ws.path);
+    git(ws.path, "remote", "remove", "origin");
+  }
   const db = openDb(":memory:");
   try {
     const task = work(db, "catch up");
@@ -76,23 +101,14 @@ it("merge back and parking ignore repo-local hooks, signing and merge drivers (A
     await prepareWorkspaceAtPickup(db, ws, child);
     commitWork(ws.path, "shared.txt", shared("base", "child"));
 
-    const hooks = join(ws.path, ".git", "custom-hooks");
-    mkdirSync(hooks);
-    const probe = '#!/bin/sh\ntouch "$0.ran"\nexit 1\n';
-    for (const name of ["post-checkout", "reference-transaction", "gpg", "merge-driver"]) {
-      writeFileSync(join(hooks, name), probe, { mode: 0o755 });
-    }
-    git(ws.path, "config", "core.hooksPath", hooks);
-    git(ws.path, "config", "commit.gpgsign", "true");
-    git(ws.path, "config", "gpg.program", join(hooks, "gpg"));
+    const hooks = installHookAndSigningProbes(ws);
+    writeFileSync(join(hooks, "merge-driver"), '#!/bin/sh\ntouch "$0.ran"\nexit 1\n', { mode: 0o755 });
     git(ws.path, "config", "merge.probe.driver", `"${join(hooks, "merge-driver")}"`);
 
     releaseWorkspace(db, ws, child, NOW, true, undefined, undefined, true);
 
     expect(existsSync(join(hooks, "merge-driver.ran"))).toBe(false);
-    expect(existsSync(join(hooks, "reference-transaction.ran"))).toBe(false);
-    expect(existsSync(join(hooks, "post-checkout.ran"))).toBe(false);
-    expect(existsSync(join(hooks, "gpg.ran"))).toBe(false);
+    expectHooksAndSigningInactive(hooks);
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(git(ws.path, "show", `task/${parent.id}:shared.txt`)).toBe(shared("parent", "child").trimEnd());
     expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
@@ -111,16 +127,27 @@ it("local landing follows HEAD without executing a repo-local smudge command (AD
     commitWork(ws.path, ".gitattributes", "landed.txt filter=probe\n");
     commitWork(ws.path, "landed.txt", "landed content\n");
     releaseWorkspace(db, ws, task, NOW, false, undefined, undefined, true);
+    const other = work(db, "land a divergent change first");
+    await prepareWorkspaceAtPickup(db, ws, other);
+    commitWork(ws.path, "other.txt", "other content\n");
+    releaseWorkspace(db, ws, other, NOW, false, undefined, undefined, true);
+    mergeTaskToProtected(db, ws, other.id);
+
+    const hooks = installHookAndSigningProbes(ws);
     const script = join(ws.path, ".git", "smudge-probe");
     writeFileSync(script, '#!/bin/sh\ntouch "$0.ran"\ncat\n', { mode: 0o755 });
     git(ws.path, "config", "filter.probe.smudge", `"${script}"`);
+    git(ws.path, "config", "core.splitIndex", "true");
+    git(ws.path, "update-index", "--split-index");
 
     const landed = mergeTaskToProtected(db, ws, task.id);
 
     expect(existsSync(`${script}.ran`)).toBe(false);
+    expectHooksAndSigningInactive(hooks);
     expect(git(ws.path, "rev-parse", "HEAD")).toBe(landed);
     expect(git(ws.path, "status", "--porcelain")).toBe("");
     expect(readFileSync(join(ws.path, "landed.txt"), "utf8")).toBe("landed content\n");
+    expect(readFileSync(join(ws.path, "other.txt"), "utf8")).toBe("other content\n");
   } finally {
     db.close();
   }
@@ -157,10 +184,12 @@ it("remote-backed の完了の後始末の merge back の fetch の後、基準�
   await prepareWorkspaceAtPickup(db, workspace, task);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   commitWork(workspace.path, "work.txt", "work\n");
+  const hooks = installHookAndSigningProbes(workspace);
 
   releaseWorkspace(db, workspace, task, NOW, true, undefined, undefined, true);
 
   expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expectHooksAndSigningInactive(hooks);
   expectRowsCurrent(db, workspace.name, workspace, ["refs/remotes/origin/main", "refs/heads/main"]);
   expect(readFileSync(join(workspace.path, "merged.txt"), "utf8")).toBe("landed on the remote\n");
   expect(git(workspace.path, "status", "--porcelain")).toBe("");

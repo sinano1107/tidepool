@@ -6,7 +6,7 @@ import { openDb } from "../src/db.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
-import { prepareWorkspaceAtPickup, projectSettingsHiddenByBoard, releaseWorkspace } from "../src/workspace.js";
+import { completionTreePaths, prepareWorkspaceAtPickup, projectSettingsHiddenByBoard, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, quarantineQuestion } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, writeUnannounced } from "./registry-fixture.js";
@@ -62,6 +62,23 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
     await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, db: s.db });
 
     expectState(s, false);
+  });
+
+  it("deleting a workspace clears its pinned sparse policy before the name is reused (ADR 0351 決定7 / ADR 0356 決定3)", async () => {
+    const s = await sessionWithState("tidepool");
+    try {
+      await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, db: s.db });
+      const replacement = await makeWorkspace("tidepool");
+      commitWork(replacement.path, "omitted.txt", "new checkout policy\n");
+      git(replacement.path, "sparse-checkout", "set", "--no-cone", "/*", "!/omitted.txt");
+      const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.now, ...HUMAN_WEBUI);
+
+      await prepareWorkspaceAtPickup(s.db, replacement, next);
+
+      expect(completionTreePaths(replacement, s.db)).toEqual([]);
+    } finally {
+      s.db.close();
+    }
   });
 
   it("confirm なしで拒まれたとき、行はそのまま", async () => {

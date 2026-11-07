@@ -11,6 +11,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
+import { displayWorktreePath } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -338,7 +339,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
       "with a message whose body says what changed and why in a few lines, readable from " +
       "the git history alone, then call complete_task again\n" +
-      paths.map((path) => `- ${path}`).join("\n"),
+      paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n"),
   );
 }
 

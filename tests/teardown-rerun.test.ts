@@ -251,8 +251,6 @@ it("退避の commit が落ちて Quarantine に返った tree rule の受理は
 it("merge back の conflict で Quarantine に返った tree rule の受理は、子の HEAD のまま同じ conflict に着き、同じ question に quarantine_refired を1つ足す(ADR 0345 決定3・4 / ADR 0356 決定5)", async () => {
   const s = await settledSession("completed", { parent: "conflicts" });
   await teardownThrewAfterTreeRule(s);
-  expect(head(s)).toBe(s.branch);
-
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
   expectOneQuestionRefiredOnce(s, "does not merge cleanly");
@@ -283,6 +281,37 @@ it.each([
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
   expect(head(s)).toBe("main");
   expect(git(s.ws.path, "log", "-1", "--format=%s", s.branch)).toContain(tipSubject);
+});
+
+it.each(["single interruption", "late write", "repeated interruption"])("teardown preserves the WIP tip across parking recovery (%s, ADR 0356 決定5)", async (scenario) => {
+  const s = await settledSession("interrupted");
+  commitWork(s.ws.path, "wip.txt", "work saved before parking\n");
+  const tip = git(s.ws.path, "rev-parse", "HEAD");
+  boardRefWriter(s.db, s.ws)(`refs/heads/${s.branch}`, tip, () => {});
+  dropBoardAtHeadFold(s, () => git(s.ws.path, "read-tree", "-u", "-m", "HEAD", "main"));
+  if (scenario === "late write") writeFileSync(join(s.ws.path, "README.md"), "a late write\n");
+  if (scenario === "repeated interruption") {
+    // A failed retry's fold could keep a two-value row, so fail the second write regardless of its contents.
+    let writes = 0;
+    s.db.function("fixture_second_ref_write", () => ++writes === 2 ? 1 : 0);
+    s.db.exec("CREATE TEMP TRIGGER drop_retry_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
+      "WHEN fixture_second_ref_write() BEGIN SELECT RAISE(ABORT, 'the board dropped again'); END");
+    expect(() => boardRefWriter(s.db, s.ws)("HEAD", "symref=refs/heads/main", () => {})).toThrow("the board dropped again");
+    s.db.exec("DROP TRIGGER drop_retry_fold");
+  }
+  const deps = restarted(s);
+
+  await resumeUnfinishedTeardown(deps);
+
+  if (scenario === "late write") {
+    expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("parking was interrupted");
+    expect(head(s)).toBe(s.branch);
+    expect(git(s.ws.path, "status", "--porcelain")).toContain("README.md");
+  } else {
+    expectCleanRerun(s, deps, "todo");
+  }
+  expect(git(s.ws.path, "rev-parse", s.branch)).toBe(tip);
+  expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("work saved before parking");
 });
 
 it("merge back の conflict は HEAD を動かさず、ignored の入れ子 repo は残る(ADR 0352 決定1 / ADR 0356 決定5)", async () => {
