@@ -66,7 +66,7 @@ interface ReadWindow {
 const since = (db: Db, readerTaskId: string, args: ReadWindow) => args.since_watermark ?? previousMetaReviewWatermark(db, readerTaskId);
 
 /** shadow 行を、その pickup が開いた session の outcome と結ぶ。session = 同じ task の、行の watermark より後で次の
- *  shadow 行より前の最初の worker_spawned(spawn に辿り着かなかった pickup は session 無し)。`diverged` は学習器の推薦と
+ *  task_picked_up より前の最初の worker_spawned(次の pickup が無ければ上限無し、spawn に辿り着かなかった pickup は session 無し)。`diverged` は学習器の推薦と
  *  実際に走ったセルが違う行で、`diverged_only` でそれだけに絞る。 */
 export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindow & { diverged_only?: boolean; next?: string }) {
   const read = readPosition<ReadWindow & { diverged_only?: boolean }>("list_routing_shadow", input);
@@ -77,7 +77,7 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
 }
 
 /** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W はその pickup の `task_picked_up` の id なので、
- *  窓は event と同じ `(after, upTo]`(ADR 0319 決定1)。session は窓で切らない。 */
+ *  窓は event と同じ `(after, upTo]`(ADR 0319 決定1)。session はこの窓で切らず、同じ task の次の pickup より前で探す(無ければ上限無し、ADR 0316 決定4 Status 追記)。 */
 function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
   const rows = db
     .prepare(
@@ -97,13 +97,14 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
     created_at: string;
   }>;
   const episodes = loadEpisodes(db);
-  return rows.flatMap((row, i) => {
+  const pickups = listEventsOfKinds(db, ["task_picked_up"]);
+  return rows.flatMap((row) => {
     if (!inWindow(row.event_watermark, { after, upTo })) return [];
     const diverged = row.cell_recommended !== row.cell_actual;
-    // shortcut: 行ごとに後続の行と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
-    const next = rows.slice(i + 1).find((r) => r.task_id === row.task_id)?.event_watermark ?? Infinity;
+    // shortcut: 行ごとに全 pickup と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
+    const next = pickups.find((e) => e.task_id === row.task_id && e.id > row.event_watermark)?.id ?? Infinity;
     const session = episodes.find(
-      (e) => e.task_id === row.task_id && e.worker_spawned_event_id > row.event_watermark && e.worker_spawned_event_id <= next,
+      (e) => e.task_id === row.task_id && e.worker_spawned_event_id > row.event_watermark && e.worker_spawned_event_id < next,
     );
     const ran: { tier: Tier | null; tier_retired?: true } = session ? tierOf(db, session.tier_id) : { tier: null };
     return [

@@ -86,6 +86,29 @@ const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting, basis: 
   candidates: 2,
 });
 
+it("shadow 行の session は同じ task の次の pickup を越えない —— 次の pickup が shadow 行を書かず spawn・exit しても、前の行の session の欄はすべて null", () => {
+  const { db, spawn, exit } = board();
+  const task = registerTask(db, { type: "work", title: "retry", purpose: "p", completion_criteria: "c", workspace: "reef" }, at, ...HUMAN_WEBUI);
+  recordShadow(db, task.id, shadow(sol, opus, "prior"), at, markPickedUp(db, task.id, at));
+  // ADR 0319 決定5: 次の pickup には shadow 行が無いことがある。
+  markPickedUp(db, task.id, at);
+  const second = spawn(task.id, "reef-crab", opus);
+  exit(task.id, second, [], 1.25);
+
+  expect(listRoutingShadow(db, "", { since_watermark: 0 }).shadow).toEqual([
+    expect.objectContaining({
+      task_id: task.id,
+      worker_spawned_event_id: null,
+      agent: null,
+      workspace: null,
+      tier: null,
+      outcome: null,
+      cost_usd: null,
+      duration_ms: null,
+    }),
+  ]);
+});
+
 it("list_routing_shadow は shadow 行をその pickup が開いた session の agent・outcome・費用と結び、diverged_only で推薦と実際が分かれた行だけに絞る", () => {
   const { db, work, spawn, exit, allocate, routingReview } = board();
   const diverged = work("diverged");
