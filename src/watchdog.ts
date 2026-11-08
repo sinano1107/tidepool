@@ -23,7 +23,7 @@ import {
   teardownStep,
 } from "./teardown.js";
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
-import type { WorkerAdapter, WorkerExit, WorkerExitClassification, WorkerExitFacts } from "./worker.js";
+import type { SpawnFailure, WorkerAdapter, WorkerExit, WorkerExitClassification, WorkerExitFacts } from "./worker.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -207,21 +207,30 @@ export function recordContainerHaltHandler(
 export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record?: () => void) => void {
-  return (taskId, sessionId, failure, record) =>
+): (taskId: string, sessionId: number, failure: SpawnFailure, record?: () => void) => void {
+  return (taskId, sessionId, failure, record) => {
+    const unhideableTaskSettings = failure.kind === "unhideable-task-settings";
     settleAndReclaim(
       deps,
       containers,
       taskId,
       sessionId,
-      registerFailure(deps, (task) => [
+      (task, now) => registerFailureQuestion(
+        deps.db,
+        task,
         `worker never started for task: ${task.title}`,
         `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
           `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
           failure.message,
-      ]),
+        now,
+        unhideableTaskSettings
+          ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
+          : undefined,
+        unhideableTaskSettings ? "abandon" : undefined,
+      ),
       record,
     );
+  };
 }
 
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。

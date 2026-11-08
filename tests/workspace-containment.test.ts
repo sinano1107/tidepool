@@ -10,13 +10,12 @@ import { claudeWorkspaceContainment } from "../src/harness-containment.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine } from "../src/quarantine.js";
-import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import { queueReturnHandler } from "../src/watchdog.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { openInterviewRoom, type WorkspaceConfig } from "../src/workspace.js";
 import {
   codexSkillsListAt,
   FakeClock,
@@ -32,12 +31,15 @@ import {
   bootClaudeOn,
   bootTidepool,
   claudeSpawnOf,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   quarantineQuestion,
+  questions,
   queueWork,
   servedQuarantineQuestion,
   sessionId,
@@ -206,12 +208,13 @@ function claudePairQuestion(workspace: WorkspaceConfig) {
 
 it("組を止める理由は記録の ref・名前の場所・隠せない形の path と型を名指し、直す先には保護ブランチを挙げる(ADR 0360 決定1・3)", async () => {
   const workspace = await workspaceWithSymlinkedClaude("pair-reason");
-  const contained = claudeWorkspaceContainment(recordedSettingsDisposition(workspace.path, "HEAD"), "task/t-1", { ...workspace, branch: "trunk" });
+  git(workspace.path, "branch", "trunk");
+  const contained = claudeWorkspaceContainment({ ...workspace, branch: "trunk" });
 
   expect(contained).toEqual({
     available: false,
     reason:
-      `the recorded tree of task/t-1 in the named place ${workspace.path} has .claude as a symlink, not a directory — ` +
+      `the recorded tree of refs/heads/trunk in the named place ${workspace.path} has .claude as a symlink, not a directory — ` +
       "the board cannot hide .claude/settings.json or .claude/settings.local.json behind it from the worker's CLI, " +
       "so commit .claude as a directory on trunk",
   });
@@ -251,11 +254,14 @@ it("remote-backed な workspace の (claude-code, B) の question への回答�
   expect(status()).toBe("done");
 });
 
-it("保護ブランチの ref が読めなければ (claude-code, B) の question への回答は理由つきで拒まれて開いたまま残る(ADR 0259 決定5)", async () => {
+it("保護ブランチの ref が無く、その ref と同じ綴りの tag だけがあれば (claude-code, B) の question への回答は理由つきで拒まれて開いたまま残る(ADR 0259 決定5)", async () => {
   const workspace = await makeWorkspace("pair-answer-unreadable");
+  git(workspace.path, "tag", "refs/heads/no-such-branch");
   const { answer, status } = claudePairQuestion({ ...workspace, branch: "no-such-branch" });
 
-  await expect(answer()).rejects.toThrow(DomainError);
+  const result = answer();
+  await expect(result).rejects.toThrow(DomainError);
+  await expect(result).rejects.toThrow("refs/heads/no-such-branch");
   expect(status()).toBe("todo");
 });
 
@@ -342,7 +348,7 @@ it("公開のキューで組の停止は skipped に見え、回答で解ける(
   expect(await status()).not.toBe("skipped");
 });
 
-it("task branch の記録の .claude が symlink なら spawn せず、(claude-code, workspace) の組が止まり、同じ workspace の Codex の行は候補に残る(ADR 0360 決定1・ADR 0259 決定1)", async () => {
+it("task branch と保護ブランチの両方で .claude が symlink なら (claude-code, workspace) の組が止まり、同じ workspace の Codex の行は候補に残る(ADR 0360 決定3・ADR 0259 決定1)", async () => {
   const workspace = await workspaceWithSymlinkedClaude("pair-symlink");
   const booted = await bootClaudeOn(workspace, {
     taskExecutionCandidates: (task) =>
@@ -350,11 +356,16 @@ it("task branch の記録の .claude が symlink なら spawn せず、(claude-c
   });
   t = booted.t;
   const claude = queueWork(t, "Claude work", workspace.name);
+  git(workspace.path, "branch", `task/${claude.id}`, "refs/heads/main");
+  git(workspace.path, "tag", "main", "refs/heads/main^");
 
   await t.clock.advance(HOUR);
-  await vi.waitFor(async () => expect(await servedQuarantineQuestion(t!, "workspaceContainment", `claude-code/${workspace.name}`)).toBeDefined());
+  await vi.waitFor(async () => expect(await servedQuarantineQuestion(t!, "workspaceContainment", `claude-code/${workspace.name}`)).toMatchObject({
+    purpose: expect.stringContaining("the recorded tree of refs/heads/main"),
+  }));
   expect(claudeSpawnOf(booted.proc, claude.id)).toBeUndefined();
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
+  expect((await questions(t)).filter((question) => question.parent_id === claude.id)).toEqual([]);
 
   const codex = queueWork(t, "Codex work", workspace.name, "codex-agent");
   const queued = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
@@ -362,3 +373,84 @@ it("task branch の記録の .claude が symlink なら spawn せず、(claude-c
   expect(status(claude.id)).toBe("skipped");
   expect(status(codex.id)).not.toBe("skipped");
 });
+
+it("task branch だけに隠せない .claude があれば abandon 推奨の failure question が立ち、同じ workspace の Claude の次の task は走る(ADR 0360 決定3)", async () => {
+  const workspace = await makeWorkspace("task-symlink");
+  const booted = await bootClaudeOn(workspace);
+  t = booted.t;
+  const failed = queueWork(t, "Claude work with a symlink", workspace.name);
+  const clean = queueWork(t, "Claude work with a clean branch", workspace.name);
+  git(workspace.path, "switch", "-c", `task/${failed.id}`);
+  await commitSymlinkedClaude(workspace.path);
+  git(workspace.path, "switch", "main");
+  git(workspace.path, "tag", `task/${failed.id}`, "refs/heads/main");
+
+  await t.clock.advance(HOUR);
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failed.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "spawn_failed")).toHaveLength(1);
+  const question = (await questions(t)).find((candidate) => candidate.parent_id === failed.id);
+  expect(question.title).toBe(`worker never started for task: ${failed.title}`);
+  expect(question.question_items[0]).toMatchObject({ options: ["retry", "abandon"], recommendation: "abandon" });
+  expect(question.purpose).toContain(".claude as a symlink");
+  expect(question.purpose).toMatch(/retry.*same tree.*branch changes/i);
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
+  expect(claudeSpawnOf(booted.proc, failed.id)).toBeUndefined();
+  await vi.waitFor(() => expect(claudeSpawnOf(booted.proc, clean.id)).toBeDefined());
+});
+
+it("面接室の tree に隠せない .claude があっても Interview root の失敗になり、面接室の名前で組は止まらない(ADR 0360 決定3)", async () => {
+  const workspace = await makeWorkspace("interview-symlink");
+  const booted = await bootClaudeOn(workspace);
+  t = booted.t;
+  const root = registerTask(t.db, {
+    type: "interview",
+    title: "Interview with a symlink",
+    hypothesis: "the targets write the parser",
+    tier: "standard",
+    workspace: workspace.name,
+    interview_targets: [{ provider: "anthropic", model: "claude-opus-4-6", effort: "high" }],
+  }, t.clock.now(), ...HUMAN_WEBUI);
+  const workspacesDir = join(t.dir, "workspaces");
+  openInterviewRoom(t.db, root, workspacesDir, t.clock.now());
+  // ADR 0360 決定3: root の branch が継ぐ面接室の main に形があっても、組の検査の入力にはならない。
+  await commitSymlinkedClaude(join(workspacesDir, root.id));
+
+  await t.clock.advance(HOUR);
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "spawn_failed")).toHaveLength(1);
+  const question = (await questions(t)).find((candidate) => candidate.parent_id === root.id);
+  expect(question.question_items[0].recommendation).toBe("abandon");
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${root.id}`)).toBeUndefined();
+  expect(claudeSpawnOf(booted.proc, root.id)).toBeUndefined();
+});
+
+it("隠せない .claude を継いだ同じ分解判断の兄弟は failure question 1枚で held になり、abandon で両方 cancel される(ADR 0360 決定3・ADR 0048)", async () => {
+  const workspace = await makeWorkspace("decomposition-symlink");
+  ({ t } = await bootClaudeOn(workspace));
+  const parent = queueWork(t, "Parent with a symlink", workspace.name);
+  git(workspace.path, "switch", "-c", `task/${parent.id}`);
+  await commitSymlinkedClaude(workspace.path);
+  git(workspace.path, "switch", "main");
+  const [first, second] = humanDecomposeTaskViaWebui(t.db, parent, {
+    reason: "split the work",
+    children: [
+      { title: "First child", purpose: "first part", completion_criteria: "first part done" },
+      { title: "Second child", purpose: "second part", completion_criteria: "second part done" },
+    ],
+  }, t.clock.now());
+
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+
+  const failureQuestions = (await questions(t)).filter((question) => question.parent_id === first!.id || question.parent_id === second!.id);
+  expect(failureQuestions).toMatchObject([{ parent_id: first!.id }]);
+  const status = async (id: string) => (await api(t!.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
+  expect(await status(second!.id)).toBe("held");
+
+  const answer = await api(t.baseUrl, "POST", `/api/tasks/${failureQuestions[0].id}/answer`, { answers: ["abandon"] });
+  expect(answer.status).toBe(200);
+  expect(await status(first!.id)).toBe("cancelled");
+  expect(await status(second!.id)).toBe("cancelled");
+}, GIT_FIXTURE_TEST_TIMEOUT);

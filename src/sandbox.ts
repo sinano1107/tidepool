@@ -31,11 +31,11 @@ export interface WorkerSessionSettings {
    *  too, and the managed tier, the one source that survives it, is a
    *  root-owned host-wide file with its override env var inert on 2.1.235).
    *  What the blanket covered is re-covered without it: the recorded project
-   *  settings are kept out of the worker's physical checkout, and a `.claude`
-   *  the board cannot hide that way refuses the spawn and stops the
-   *  (claude-code, workspace) pair (`recordedSettingsDisposition`, ADR 0259 /
-   *  ADR 0360 決定1), and
-   *  the mid-session hot-load path was already independently closed by ADR
+   *  settings are kept out of the worker's physical checkout (`recordedSettingsDisposition`,
+   *  ADR 0360 決定1). An unhideable `.claude` stops the (claude-code, workspace)
+   *  pair when it comes from the protected branch and fails the task when it
+   *  appears only on the task branch or in an Interview room (ADR 0360 決定3).
+   *  The mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
    *  skills and CLAUDE.md are untouched, as before (ADR 0025). */
@@ -598,10 +598,12 @@ export const PROJECT_SETTINGS_PATHS = PROJECT_SETTINGS_FILES.map((name) => `.cla
  *  checkout for the session. `unhideable` is a `.claude` that is not a tree object: sparse cannot hide what sits behind
  *  it, so the caller stops instead. The board's own git in the named place (ADR 0357 決定1), never the worker's repo. */
 export function recordedSettingsDisposition(namedPlace: string, ref: string): RecordedSettings {
+  // Even a qualified ref can fall back to a tag of the same spelling when the exact ref is missing.
+  const tree = ref.startsWith("refs/") ? git(namedPlace, "show-ref", "--verify", "--hash", "--", ref) : ref;
   const hide: string[] = [];
   let unhideable: RecordedSettings["unhideable"];
   // ls-tree prints `.claude` itself only when it is not a tree; a tree prints the matched entries under it
-  for (const line of git(namedPlace, "ls-tree", ref, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
+  for (const line of git(namedPlace, "ls-tree", tree, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
     const [meta, path] = line.split("\t");
     const [mode, type] = meta!.split(" ");
     if (path === ".claude" && type !== "tree") unhideable = { path, type: mode === "120000" ? "symlink" : type === "commit" ? "gitlink" : "blob" };
