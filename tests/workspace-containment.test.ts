@@ -10,7 +10,6 @@ import { claudeWorkspaceContainment } from "../src/harness-containment.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine } from "../src/quarantine.js";
-import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, registerTask } from "../src/tasks.js";
@@ -209,12 +208,13 @@ function claudePairQuestion(workspace: WorkspaceConfig) {
 
 it("組を止める理由は記録の ref・名前の場所・隠せない形の path と型を名指し、直す先には保護ブランチを挙げる(ADR 0360 決定1・3)", async () => {
   const workspace = await workspaceWithSymlinkedClaude("pair-reason");
-  const contained = claudeWorkspaceContainment(recordedSettingsDisposition(workspace.path, "HEAD"), "task/t-1", { ...workspace, branch: "trunk" });
+  git(workspace.path, "branch", "trunk");
+  const contained = claudeWorkspaceContainment({ ...workspace, branch: "trunk" });
 
   expect(contained).toEqual({
     available: false,
     reason:
-      `the recorded tree of task/t-1 in the named place ${workspace.path} has .claude as a symlink, not a directory — ` +
+      `the recorded tree of refs/heads/trunk in the named place ${workspace.path} has .claude as a symlink, not a directory — ` +
       "the board cannot hide .claude/settings.json or .claude/settings.local.json behind it from the worker's CLI, " +
       "so commit .claude as a directory on trunk",
   });
@@ -254,11 +254,14 @@ it("remote-backed な workspace の (claude-code, B) の question への回答�
   expect(status()).toBe("done");
 });
 
-it("保護ブランチの ref が読めなければ (claude-code, B) の question への回答は理由つきで拒まれて開いたまま残る(ADR 0259 決定5)", async () => {
+it("保護ブランチの ref が無く、その ref と同じ綴りの tag だけがあれば (claude-code, B) の question への回答は理由つきで拒まれて開いたまま残る(ADR 0259 決定5)", async () => {
   const workspace = await makeWorkspace("pair-answer-unreadable");
+  git(workspace.path, "tag", "refs/heads/no-such-branch");
   const { answer, status } = claudePairQuestion({ ...workspace, branch: "no-such-branch" });
 
-  await expect(answer()).rejects.toThrow(DomainError);
+  const result = answer();
+  await expect(result).rejects.toThrow(DomainError);
+  await expect(result).rejects.toThrow("refs/heads/no-such-branch");
   expect(status()).toBe("todo");
 });
 
@@ -353,10 +356,12 @@ it("task branch と保護ブランチの両方で .claude が symlink なら (cl
   });
   t = booted.t;
   const claude = queueWork(t, "Claude work", workspace.name);
+  git(workspace.path, "branch", `task/${claude.id}`, "refs/heads/main");
+  git(workspace.path, "tag", "main", "refs/heads/main^");
 
   await t.clock.advance(HOUR);
   await vi.waitFor(async () => expect(await servedQuarantineQuestion(t!, "workspaceContainment", `claude-code/${workspace.name}`)).toMatchObject({
-    purpose: expect.stringContaining("the recorded tree of main"),
+    purpose: expect.stringContaining("the recorded tree of refs/heads/main"),
   }));
   expect(claudeSpawnOf(booted.proc, claude.id)).toBeUndefined();
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
@@ -378,6 +383,7 @@ it("task branch だけに隠せない .claude があれば abandon 推奨の fai
   git(workspace.path, "switch", "-c", `task/${failed.id}`);
   await commitSymlinkedClaude(workspace.path);
   git(workspace.path, "switch", "main");
+  git(workspace.path, "tag", `task/${failed.id}`, "refs/heads/main");
 
   await t.clock.advance(HOUR);
 
@@ -407,7 +413,7 @@ it("面接室の tree に隠せない .claude があっても Interview root の
   }, t.clock.now(), ...HUMAN_WEBUI);
   const workspacesDir = join(t.dir, "workspaces");
   openInterviewRoom(t.db, root, workspacesDir, t.clock.now());
-  // root の branch が継ぐ面接室の main に形があっても、組の検査の入力にはならない。
+  // ADR 0360 決定3: root の branch が継ぐ面接室の main に形があっても、組の検査の入力にはならない。
   await commitSymlinkedClaude(join(workspacesDir, root.id));
 
   await t.clock.advance(HOUR);

@@ -208,7 +208,8 @@ export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (taskId: string, sessionId: number, failure: SpawnFailure, record?: () => void) => void {
-  return (taskId, sessionId, failure, record) =>
+  return (taskId, sessionId, failure, record) => {
+    const unhideableTaskSettings = failure.kind === "unhideable-task-settings";
     settleAndReclaim(
       deps,
       containers,
@@ -222,13 +223,14 @@ export function spawnFailureHandler(
           `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
           failure.message,
         now,
-        failure.recommendation === "abandon"
+        unhideableTaskSettings
           ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
           : undefined,
-        failure.recommendation,
+        unhideableTaskSettings ? "abandon" : undefined,
       ),
       record,
     );
+  };
 }
 
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。

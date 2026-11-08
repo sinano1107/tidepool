@@ -687,7 +687,7 @@ export function startScheduler(deps: {
             payload: { kind: "spawn_failed", ...failure },
             at: clock.now(),
           }),
-        () => onSpawnFailed(picked.id, sessionId, err instanceof UnhideableTaskSettingsError ? { ...failure, recommendation: "abandon" } : failure),
+        () => onSpawnFailed(picked.id, sessionId, err instanceof UnhideableTaskSettingsError ? { ...failure, kind: "unhideable-task-settings" } : failure),
       );
     }
   }

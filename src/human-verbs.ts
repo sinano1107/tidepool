@@ -64,7 +64,6 @@ import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { interviewTitle } from "./routing-review.js";
-import { recordedSettingsDisposition } from "./sandbox.js";
 import type { PollOutcome, TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
@@ -116,7 +115,6 @@ import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   PickupGateError,
-  protectedBranchRef,
   quarantineWorkspace,
   redoMergeBacks,
   refreshProtectedBranch,
@@ -703,8 +701,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         ? await codex(target)
         : await refuseOnError(async () => {
           await refreshProtectedBranch(deps.db, target, deps.githubAuth);
-          const ref = protectedBranchRef(target);
-          return claudeWorkspaceContainment(recordedSettingsDisposition(target.path, ref), ref, target);
+          return claudeWorkspaceContainment(target);
         });
       if (!capability.available) {
         throw new DomainError(

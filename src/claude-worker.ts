@@ -20,7 +20,6 @@ import { appendEvent, type ResourceStop } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
-import { protectedBranchRef } from "./pickup-predicates.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
@@ -1620,11 +1619,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let recorded: RecordedSettings;
     let protectedContainment: ContainmentCapability | undefined;
     try {
-      recorded = recordedSettingsDisposition(place.namedPlace.path, branch);
+      recorded = recordedSettingsDisposition(place.namedPlace.path, `refs/heads/${branch}`);
       // ADR 0360 決定3: 面接室には人間の書き手がいないので、root と受験者は保護ブランチを読まない。
       if (recorded.unhideable && task.type !== "interview" && task.interview_target_id === null) {
-        const ref = protectedBranchRef(place.namedPlace);
-        protectedContainment = claudeWorkspaceContainment(recordedSettingsDisposition(place.namedPlace.path, ref), ref, place.namedPlace);
+        protectedContainment = claudeWorkspaceContainment(place.namedPlace);
       }
     } catch (err) {
       // 判定の入力が読めない名前の場所は、pickup の準備の失敗と同じく workspace の quarantine(ADR 0360 決定1)
