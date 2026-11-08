@@ -20,7 +20,7 @@ import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted, shimGit } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, openTestInterviewCheckout, openTestInterviewRoom, poseAccepted, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
@@ -321,7 +321,9 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("cancel the task that opens it");
     expect(purpose).toContain("git init");
   }, GIT_FIXTURE_TEST_TIMEOUT);
-  it("出題済みで未決着の受験者がいる名前は checkout と出題 head の検査を予告し、空 repo の出口は出さない —— 決着後は両検査を外す(ADR 0329 決定4・5)", () => {
+  // 旧: 受験者の checkout も記録された場所として「番地を作れる / repo がある」を予告した(ADR 0329 決定4)。ADR 0356 決定1・2 の後は受験者は
+  // 面接室から作り直す task の checkout で走るので、受験者ごとに残る項は出題の head だけ
+  it("出題済みで未決着の受験者がいる名前は出題 head の検査を予告し、空 repo の出口は出さない —— 決着後は外す(ADR 0329 決定4・5 / ADR 0356 決定1)", () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
@@ -330,18 +332,11 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
 
     const purpose = purposeFor(db, root.id);
     expect(purpose).toContain(examinee!.id);
-    expect(purpose).toContain("the board can create the examinee checkout directory");
+    expect(purpose).not.toContain("examinee checkout");
     expect(purpose).toContain(head);
     expect(purpose).toContain("resolves in the interview room");
     expect(purpose).not.toContain("git init");
     expect(purpose).not.toContain("empty room");
-
-    const checkout = openTestExamineeCheckout(db, examinee!);
-    rmSync(join(checkout, ".git"), { recursive: true });
-    const recorded = QUARANTINES.find((row) => row.kind === "workspace")!.prose(root.id, "the place broke", undefined, db).purpose;
-    expect(recorded).toContain(`recorded examinee checkout ${examinee!.id} at ${checkout}`);
-    expect(recorded).toContain("the board does not recreate it");
-    expect(recorded).not.toContain("git init");
 
     completeTask(db, examinee!, FULL_HANDOFF, "tako", NOW, "worker");
     const settled = QUARANTINES.find((row) => row.kind === "workspace")!.prose(root.id, "the place broke", undefined, db).purpose;
@@ -355,10 +350,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
     const room = interviewRoomPath(db, root.id)!;
-    const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(room, "rev-parse", "HEAD"));
-    const checkout = openTestExamineeCheckout(db, examinee!);
-    rmSync(join(checkout, ".git"), { recursive: true });
-    writeFileSync(join(checkout, ".git"), "gitdir: /nowhere\n");
+    // 旧: 受験者の checkout の `.git` を gitfile にして落とした。ADR 0356 決定1 の後は受験者の項は出題の head だけなので、引けない head で落とす
+    poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567");
 
     const { own, examinees } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
     const predicates = [...own, ...examinees];
@@ -366,9 +359,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
       expect.stringContaining("can be fetched"), expect.stringContaining("An unborn HEAD passes"),
     ]);
-    expect(examinees.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
-      expect.stringContaining(`for the examinee checkout of ${examinee!.id}`), expect.stringContaining("can be checked out"),
-    ]);
+    expect(examinees.filter((p) => p.phase === "after-open")).toEqual([]);
     const items = purposeFor(db, root.id).split("\n").filter((line) => /^\d+\. /.test(line)).map((line) => line.replace(/^\d+\. /, ""));
     expect(items.filter((item) => describes.includes(item))).toEqual(describes);
     const failed = predicates.filter((predicate) => {
@@ -391,19 +382,19 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     openTestInterviewRoom(db, root);
     const room = interviewRoomPath(db, root.id)!;
     const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(room, "rev-parse", "HEAD"));
-    openTestExamineeCheckout(db, examinee!);
     rmSync(join(room, ".git"), { recursive: true });
 
     const posedHead = examineePickupPredicates(db, examinee!, root.id, "/never-created").find((p) => p.describe.includes("posed head"))!;
-    expect(() => { if (posedHead.phase === "before-open") posedHead.check(); }).toThrow(gonePlaceReason(root.id, room, "interview_room_opened"));
+    expect(() => { if (posedHead.phase === "before-open") posedHead.check(); }).toThrow(gonePlaceReason(root.id, room));
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
-  it("解除の門は未決着の受験者の記録済み checkout に clean tree を当てず、WIP が残っていても回答を受理する(ADR 0329 追記 決定6)", async () => {
+  // 旧: 受験者の記録済み checkout は解除の名前に掛かり、clean tree だけを外していた(ADR 0329 追記 決定6)。ADR 0356 決定1 の後は名前に掛かるのは面接室だけ
+  it("解除の門は未決着の受験者の task の checkout を読まず、WIP が残っていても回答を受理する(ADR 0356 決定1)", async () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
     const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(interviewRoomPath(db, root.id)!, "rev-parse", "HEAD"));
-    const checkout = openTestExamineeCheckout(db, examinee!);
+    const checkout = openTestInterviewCheckout(db, examinee!);
     writeFileSync(join(checkout, "wip.txt"), "uncommitted answer\n");
 
     await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();

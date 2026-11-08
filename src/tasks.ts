@@ -576,9 +576,10 @@ export function interviewRoomPath(db: Db, rootId: string): string | undefined {
   return latestEventOfTask(db, rootId, "interview_room_opened")?.payload.path;
 }
 
-/** 受験者の checkout の在り処(ADR 0276 決定1・4): 最初の pickup が残した event から引く。まだ開いていなければ undefined。 */
+/** 受験者の最後の checkout の在り処(ADR 0276 決定4 / ADR 0356 決定2): 最後に開いた task の checkout —— 決着した受験者ではそれが記録として残る。
+ *  まだ開いていなければ undefined。 */
 export function examineeCheckoutPath(db: Db, examineeId: string): string | undefined {
-  return latestEventOfTask(db, examineeId, "examinee_checkout_opened")?.payload.path;
+  return latestEventOfTask(db, examineeId, "task_checkout_opened")?.payload.path;
 }
 
 /** この session の task の checkout の在り処(ADR 0356 決定2): 後の pickup に越されていない開いた event から引く —— 前の session が

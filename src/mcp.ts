@@ -331,7 +331,7 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): RunPlace | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  // 門と後始末は走る場所に効く —— interview の root は面接室、受験者は自分の checkout(ADR 0273 決定1・8 / ADR 0276 決定1)
+  // 門と後始末は走る場所(task の checkout、ADR 0356 決定1)に効く
   return workspace && taskRunPlace(deps.db, task, workspace);
 }
 
@@ -351,7 +351,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
   }
   let paths: string[];
   try {
-    paths = completionTreePaths(workspace, task.id, deps.db);
+    paths = completionTreePaths(workspace, task.id);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
@@ -814,12 +814,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             const audit = poseProbe(deps.db, task, input, actorId, now, "worker", head);
             return { audit_id: audit.id, parent_status: "blocked" };
           },
-          (task, room) => {
+          (task, place) => {
             assertPosable(deps.db, task);
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
             }
-            head = commitRoomCopy(deps.db, room);
+            head = commitRoomCopy(deps.db, place, task.id);
           },
         );
       },

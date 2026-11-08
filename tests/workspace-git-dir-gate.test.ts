@@ -115,13 +115,13 @@ it("修理確認の検証は status.showUntrackedFiles=no でも untracked を�
   expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
 });
 
-// 旧: 名前の場所でも info/exclude で隠したファイルを拒んだ —— 名前の場所の info/exclude は人間の宣言で、worker はそこで走らない
-it("修理確認の検証は名前の場所を自分の git で読んで info/exclude を尊重し、worker が走る面接室では隠したファイルを拒む(ADR 0356 決定3)", async () => {
+// 旧: 名前の場所でも info/exclude で隠したファイルを拒んだ —— 名前の場所の info/exclude は人間の宣言で、worker はそこで走らない。
+// 旧: worker が走る面接室だけは盤面の view で読んで拒んだ —— ADR 0356 決定1 の後は面接室でも worker は走らず、名前の場所と同じく自分の git で読む
+it("修理確認の検証は名前の場所(面接室を含む)を自分の git で読んで info/exclude を尊重する(ADR 0356 決定1・3)", async () => {
   const workspace = await makeWorkspace("verify-excluded");
   await writeFile(join(workspace.path, ".git/info/exclude"), "late.txt\n");
   await writeFile(join(workspace.path, "late.txt"), "written after repair\n");
 
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
   expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
-  expect(() => verifyWorkspaceClean(workspace, undefined, true)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
 });

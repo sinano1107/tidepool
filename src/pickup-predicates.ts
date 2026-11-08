@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import { remoteTrackingRef } from "./github-auth.js";
-import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
+import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import type { RegistrySource } from "./registry.js";
 import { getTask, interviewRoomPath, latestPosedProbe, type Task, unsettledExaminees } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -51,7 +51,7 @@ export function protectedBranchRef(workspace: WorkspaceConfig): string {
 }
 
 
-/** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室と受験者の checkout。`scope` は説明の頭に付く場所の名指し。 */
+/** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
 export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: RegistrySource, scope = "", unbornRoom = false): PickupPredicate[] {
   return [
     { phase: "before-open", describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
@@ -102,29 +102,23 @@ function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: 
 /** 面接室の述語(ADR 0329 決定4)。出題済みで受験者が未決着なら、空の面接室で走らせる出口は出題の head の述語で通らない(決定5)。 */
 export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: string, registry?: RegistrySource): PickupPredicate[] {
   const posed = unsettledExaminees(db, rootId).length > 0 && latestPosedProbe(db, rootId) !== null;
-  return recordedPlacePredicates(db, rootId, "interview_room_opened", rootId, workspacesBaseDir, registry, {
+  return recordedPlacePredicates(db, rootId, workspacesBaseDir, registry, {
     recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`,
     create: "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there).",
-    scope: "",
   });
 }
 
-/** 受験者の checkout の述語(ADR 0329 決定4): 面接室と同じ2分岐と、出題の head が面接室で引けること。 */
-export function examineePickupPredicates(db: Db, examinee: Task, rootId: string, workspacesBaseDir: string, registry?: RegistrySource): PickupPredicate[] {
+/** 受験者の述語(ADR 0329 決定4): 出題の head が面接室で引けること。受験者は面接室から fetch する task の checkout で走るので、
+ *  記録された場所の分岐は面接室の述語だけが持つ(ADR 0356 決定1)。 */
+export function examineePickupPredicates(db: Db, examinee: Task, rootId: string, workspacesBaseDir: string): PickupPredicate[] {
   const room = { name: rootId, path: interviewRoomPath(db, rootId) ?? conventionCheckoutPath(rootId, workspacesBaseDir) };
-  const scope = `for the examinee checkout of ${examinee.id}, `;
   return [
-    ...recordedPlacePredicates(db, examinee.id, "examinee_checkout_opened", rootId, workspacesBaseDir, registry, {
-      recorded: (path) => `a git repository exists at the recorded examinee checkout ${examinee.id} at ${path} — the board does not recreate it: ${GONE_POSED_PLACE_EXITS}.`,
-      create: `the board can create the examinee checkout directory for ${examinee.id} under its workspaces base directory (\`mkdir -p\` succeeds).`,
-      scope,
-    }),
     {
       phase: "before-open",
-      describe: `${scope}the posed head ${posedHeadOf(db, examinee)} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
+      describe: `for the examinee ${examinee.id}, the posed head ${posedHeadOf(db, examinee)} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
       check: () => {
         // 面接室の repo が無ければ git の生のエラー(や外側の repo での解決)ではなく、面接室が消えた理由で止まる
-        if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(rootId, room.path, "interview_room_opened"));
+        if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(rootId, room.path));
         resolvablePosedHead(db, room, examinee);
       },
     },
@@ -132,7 +126,7 @@ export function examineePickupPredicates(db: Db, examinee: Task, rootId: string,
 }
 
 /** 名前に掛かる場所すべての一覧(ADR 0329 決定4): 名前の場所そのもの(実環境なら解決した `place`、面接室なら記録から)と、面接室なら
- *  未決着の受験者ごとの checkout。決着した受験者の checkout は開く pickup が無いので掛からない。 */
+ *  未決着の受験者ごとの出題の head。決着した受験者は開く pickup が無いので掛からない。 */
 export function namePickupPredicates(
   db: Db,
   name: string,
@@ -143,45 +137,38 @@ export function namePickupPredicates(
   if (getTask(db, name)?.type !== "interview") return { own: checkoutPickupPredicates(place, registry), examinees: [] };
   return {
     own: roomPickupPredicates(db, name, workspacesBaseDir, registry),
-    examinees: unsettledExaminees(db, name).flatMap((examinee) => examineePickupPredicates(db, examinee, name, workspacesBaseDir, registry)),
+    examinees: unsettledExaminees(db, name).flatMap((examinee) => examineePickupPredicates(db, examinee, name, workspacesBaseDir)),
   };
 }
 
-/** 記録された場所の2分岐(ADR 0329 決定1): event があれば repo がある(作り直さない)、無ければ番地を作れる —— 作る前に repo が
+/** 記録された場所(面接室)の2分岐(ADR 0329 決定1): event があれば repo がある(作り直さない)、無ければ番地を作れる —— 作る前に repo が
  *  既にあれば、開いた後の checkout と同じ述語が当たる。 */
 function recordedPlacePredicates(
   db: Db,
-  taskId: string,
-  kind: RecordedPlaceKind,
-  name: string,
+  rootId: string,
   workspacesBaseDir: string,
   registry: RegistrySource | undefined,
-  text: { recorded: (path: string) => string; create: string; scope: string },
+  text: { recorded: (path: string) => string; create: string },
 ): PickupPredicate[] {
-  const recorded = recordedPlace(db, taskId, kind);
-  const place = {
-    name,
-    path: recorded?.path ?? conventionCheckoutPath(taskId, workspacesBaseDir),
-    // ADR 0276 決定1・3: 後半の休止も受験者の checkout として扱い、ignored の生成物を残す
-    ...(kind === "examinee_checkout_opened" ? { snapshot_key: taskId } : {}),
-  };
+  const recorded = recordedPlace(db, rootId);
+  const place = { name: rootId, path: recorded?.path ?? conventionCheckoutPath(rootId, workspacesBaseDir) };
   if (recorded) {
     return [
       {
         phase: "before-open",
         describe: text.recorded(place.path),
         check: () => {
-          if (!placeHasRepository(place.path)) throw new Error(gonePlaceReason(taskId, place.path, kind));
+          if (!placeHasRepository(place.path)) throw new Error(gonePlaceReason(rootId, place.path));
         },
       },
-      ...checkoutPickupPredicates(place, registry, text.scope, kind === "interview_room_opened"),
+      ...checkoutPickupPredicates(place, registry, "", true),
     ];
   }
   return [
     { phase: "before-open", describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
-    ...checkoutPickupPredicates(place, registry, text.scope, kind === "interview_room_opened").map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
+    ...checkoutPickupPredicates(place, registry, "", true).map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
       ...predicate,
-      describe: `${text.scope}${IF_REPOSITORY_PRESENT}${predicate.describe.slice(text.scope.length)}`,
+      describe: `${IF_REPOSITORY_PRESENT}${predicate.describe}`,
       check: () => {
         if (placeHasRepository(place.path)) predicate.check();
       },
@@ -229,9 +216,8 @@ export function assertOwnGitDirectory(path: string): void {
 }
 
 /** 開く手順と読む門が同じ理由で記録の欠落を止める。 */
-export function gonePlaceReason(taskId: string, path: string, kind: RecordedPlaceKind): string {
-  const place = kind === "interview_room_opened" ? "interview room" : "examinee checkout";
-  return `the ${place} ${taskId} recorded at ${path} has no git repository — the ${place}'s repository is gone`;
+export function gonePlaceReason(rootId: string, path: string): string {
+  return `the interview room ${rootId} recorded at ${path} has no git repository — the interview room's repository is gone`;
 }
 
 export function conventionCheckoutPath(name: string, workspacesBaseDir: string): string {
@@ -250,7 +236,7 @@ function posedHeadOf(db: Db, task: Task): string {
     .get(task.interview_target_id) as string;
 }
 
-/** 引けない head から黙って今の head へ逃げない —— 投げて受験者の checkout を開く失敗(面接室の quarantine)に落とす。 */
+/** 引けない head から黙って今の head へ逃げない —— 投げて受験者の pickup の失敗(面接室の quarantine)に落とす。 */
 export function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
   const head = posedHeadOf(db, task);
   try {

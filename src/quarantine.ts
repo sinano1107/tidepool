@@ -274,7 +274,7 @@ export const QUARANTINES = [
     // 解除の門が撃つ pickup の述語の一覧をそのまま予告し、解除だけの上乗せを名前の場所に添える(ADR 0329 決定4・5・追記 決定6)
     prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const room = getTask(db, name!)?.type === "interview";
-      const recorded = room ? recordedPlace(db, name!, "interview_room_opened") : undefined;
+      const recorded = room ? recordedPlace(db, name!) : undefined;
       // 予告は説明だけを読む —— 検査は撃たないので、実環境の在り処と規約の基点は要らない
       const { own, examinees } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
       const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...own.map((p) => p.describe)];

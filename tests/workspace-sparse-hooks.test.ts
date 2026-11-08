@@ -47,11 +47,11 @@ it("完了の門は sparse settings の意図した欠落と、index で隠し�
   const place = await prepareAtPickup(db, workspace, task);
   excludeWorkspaceProjectSettings(db, place);
 
-  expect(completionTreePaths(place, task.id, db)).toEqual([]);
+  expect(completionTreePaths(place, task.id)).toEqual([]);
   expect(existsSync(join(place.path, ".claude/settings.json"))).toBe(false);
   git(place.path, "update-index", "--skip-worktree", "--", "README.md");
   writeFileSync(join(place.path, "README.md"), "changed\n");
-  expect(completionTreePaths(place, task.id, db)).toEqual(["README.md"]);
+  expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
 
   git(place.path, "update-index", "--no-skip-worktree", "--", "README.md");
   git(place.path, "checkout", "HEAD", "--", "README.md");
@@ -74,13 +74,13 @@ it("a worker cannot hide a tracked deletion by changing sparse rules after picku
   const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
   const place = await prepareAtPickup(db, workspace, task);
   expect(existsSync(join(workspace.path, "human-omitted.txt"))).toBe(false);
-  expect(completionTreePaths(place, task.id, db)).toEqual([]);
+  expect(completionTreePaths(place, task.id)).toEqual([]);
   completeTask(db, task, FULL_HANDOFF, "worker", now, "worker");
 
   // ADR 0356 決定3: worker が task の checkout に書いた sparse(盤面の行を真似ても)は view に効かない
   git(place.path, "sparse-checkout", "set", "--no-cone", "/*", "!/.claude/settings.json", "!/README.md");
   expect(git(place.path, "status", "--porcelain")).toBe("");
-  expect(completionTreePaths(place, task.id, db)).toEqual(["README.md"]);
+  expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
 
   db.close();
   db = openDb(dbPath);
@@ -425,79 +425,80 @@ it("登録 path が無い workspace の探りの失敗は印なしと読み、�
 
 const BOOT = new Date("2026-10-21T00:00:00.000Z");
 
-/** 受験者の checkout を開いた姿: 受験者の event がこの checkout を指す。走る場所は pickup と同じ `taskRunPlace`(ADR 0276 決定1・3)。 */
-async function examineeCheckout(board: Db, name: string) {
-  const checkout = await monorepo(name);
-  const examinee = interviewExaminee(board, BOOT);
-  appendEvent(board, { taskId: examinee.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path: checkout.path }, at: BOOT });
-  return { examinee, place: taskRunPlace(board, examinee, checkout) };
+/** 前の盤面が面接室に写しを残した姿(root は #3031 の前まで面接室で走った): 面接室の event がこの repo を指し、写しは root id の行。 */
+async function roomWithSnapshot(board: Db, name: string) {
+  const room = await monorepo(name);
+  const rootId = interviewRootIdOf(board, interviewExaminee(board, BOOT))!;
+  appendEvent(board, { taskId: rootId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "interview_room_opened", path: room.path }, at: BOOT });
+  const place = { name: rootId, path: room.path };
+  excludeWorkspaceProjectSettings(board, place);
+  return { rootId, place };
 }
 
 const sparseSnapshotOf = (board: Db, key: string) => board.prepare("SELECT sparse_snapshot FROM workspace_state WHERE name = ?").pluck().get(key);
 
-it("起動時の復元は registry 外の受験者の checkout も写しどおり戻し、受験者の写しを消す(#2379)", async () => {
+// 旧: 受験者の checkout は受験者 id の写しを持ち、起動時に戻した(#2379 / ADR 0276 決定3)。ADR 0356 決定2・4 の後は受験者も task の checkout で走り写しを持たない
+it("受験者の task の checkout で settings.json を隠しても受験者の id の写しは作らず、起動時の復元は何も立てない(ADR 0356 決定2・4)", async () => {
   db = openDb(":memory:");
   const registered = await monorepo("sparse-boot-registered");
-  const { examinee, place } = await examineeCheckout(db, "sparse-boot-examinee");
+  const checkout = await monorepo("sparse-boot-examinee");
+  const examinee = interviewExaminee(db, BOOT);
+  const rootId = interviewRootIdOf(db, examinee)!;
+  appendEvent(db, { taskId: rootId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "interview_room_opened", path: (await monorepo("sparse-boot-examinee-room")).path }, at: BOOT });
+  appendEvent(db, { taskId: examinee.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path: checkout.path }, at: BOOT });
+  const place = taskRunPlace(db, examinee, checkout);
   excludeWorkspaceProjectSettings(db, place);
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(exists(place, ".claude/settings.json")).toBe(false);
+  expect(sparseSnapshotOf(db, examinee.id)).toBeUndefined();
+  expect(workspaceNeedsHuman(db, rootId)).toBe(false);
+});
+
+it("起動時の復元は registry 外の面接室も写しどおり戻し、root の写しを消す(#2379)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const { rootId, place } = await roomWithSnapshot(db, "sparse-boot-room");
 
   restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
 
   expect(exists(place, ".claude/settings.json")).toBe(true);
   // 人間は sparse を使っていない —— 盤面の行ごと sparse が外れる
   expect(git(place.path, "config", "--type=bool", "--default=false", "--get", "core.sparseCheckout")).toBe("false");
-  expect(sparseSnapshotOf(db, examinee.id)).toBeNull();
-  expect(workspaceNeedsHuman(db, place.name)).toBe(false);
+  expect(sparseSnapshotOf(db, rootId)).toBeNull();
+  expect(workspaceNeedsHuman(db, rootId)).toBe(false);
 });
 
-it("起動時の復元は registry 外の面接室も写しどおり戻し、root の写しを消す(#2379)", async () => {
+// 旧: 受験者の checkout の戻しの失敗を root id に立てた。受験者が写しを持たなくなったので(ADR 0356 決定2)、同じ root id の線を面接室の写しで釘にする
+it("面接室の写しの戻しの失敗は root id に quarantine を立てる(#2379、ADR 0273 決定8)", async () => {
   db = openDb(":memory:");
   const registered = await monorepo("sparse-boot-registered");
-  const room = await monorepo("sparse-boot-room");
-  const root = getTask(db, interviewRootIdOf(db, interviewExaminee(db, BOOT))!)!;
-  appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "interview_room_opened", path: room.path }, at: BOOT });
-  const place = taskRunPlace(db, root, registered);
-  excludeWorkspaceProjectSettings(db, place);
-
-  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
-
-  expect(exists(place, ".claude/settings.json")).toBe(true);
-  expect(git(place.path, "config", "--type=bool", "--default=false", "--get", "core.sparseCheckout")).toBe("false");
-  expect(sparseSnapshotOf(db, root.id)).toBeNull();
-  expect(workspaceNeedsHuman(db, root.id)).toBe(false);
-});
-
-it("受験者の checkout の戻しの失敗は面接室の root id に quarantine を立てる(#2379、ADR 0273 決定8)", async () => {
-  db = openDb(":memory:");
-  const registered = await monorepo("sparse-boot-registered");
-  const { examinee, place } = await examineeCheckout(db, "sparse-boot-examinee-broken");
-  excludeWorkspaceProjectSettings(db, place);
-  db.prepare("UPDATE workspace_state SET sparse_snapshot = 'not json' WHERE name = ?").run(examinee.id);
+  const { rootId } = await roomWithSnapshot(db, "sparse-boot-room-broken");
+  db.prepare("UPDATE workspace_state SET sparse_snapshot = 'not json' WHERE name = ?").run(rootId);
   silenceLog();
 
   restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
 
-  expect(workspaceNeedsHuman(db, interviewRootIdOf(db, examinee)!)).toBe(true);
-  expect(workspaceNeedsHuman(db, examinee.id)).toBe(false);
+  expect(workspaceNeedsHuman(db, rootId)).toBe(true);
 });
 
-it("人間が消した受験者の checkout(path ごと・.git だけ)は、起動時に写しを消して log 1行ずつ、quarantine しない(#2379)", async () => {
+// 旧: 人間が消した受験者の checkout の写しを消した。受験者が写しを持たなくなったので(ADR 0356 決定2)、同じ「消えた記録の写し」の線を面接室で釘にする
+it("人間が消した面接室(path ごと・.git だけ)は、起動時に写しを消して log 1行ずつ、quarantine しない(#2379)", async () => {
   db = openDb(":memory:");
   const registered = await monorepo("sparse-boot-registered");
-  const whole = await examineeCheckout(db, "sparse-boot-examinee-gone");
-  const dotGit = await examineeCheckout(db, "sparse-boot-examinee-dotgit");
-  excludeWorkspaceProjectSettings(db, whole.place);
-  excludeWorkspaceProjectSettings(db, dotGit.place);
+  const whole = await roomWithSnapshot(db, "sparse-boot-room-gone");
+  const dotGit = await roomWithSnapshot(db, "sparse-boot-room-dotgit");
   rmSync(whole.place.path, { recursive: true, force: true });
   rmSync(join(dotGit.place.path, ".git"), { recursive: true, force: true });
   const log = silenceLog();
 
   restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
 
-  expect(sparseSnapshotOf(db, whole.examinee.id)).toBeNull();
-  expect(sparseSnapshotOf(db, dotGit.examinee.id)).toBeNull();
-  expect(workspaceNeedsHuman(db, whole.place.name)).toBe(false);
-  expect(workspaceNeedsHuman(db, dotGit.place.name)).toBe(false);
+  expect(sparseSnapshotOf(db, whole.rootId)).toBeNull();
+  expect(sparseSnapshotOf(db, dotGit.rootId)).toBeNull();
+  expect(workspaceNeedsHuman(db, whole.rootId)).toBe(false);
+  expect(workspaceNeedsHuman(db, dotGit.rootId)).toBe(false);
   expect(log).toHaveBeenCalledTimes(2);
 });
 

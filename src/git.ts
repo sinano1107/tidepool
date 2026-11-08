@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 
 /** The board's own git identity: the author on the tree rule's WIP commits
- *  (releaseTree) and on the registry commits the WebUI flows make (issue #57,
+ *  (the task checkout release) and on the registry commits the WebUI flows make (issue #57,
  *  workspace-create.ts) — one authorship for everything tidepool itself
  *  commits. The email is the GitHub App bot's noreply (ADR 0093 決定9): the
  *  board's mechanical execution shows up under the same `tidepool-board[bot]` the
@@ -42,8 +42,8 @@ type Runner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Buffer;
 
 /** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view.
  *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's.
- *  This is the unbounded view for the board's own side (ADR 0357 決定1); a worker's tree uses `withWorkerTreeGit`. The Interview
- *  room's sites that still use it (`boardReadTree` there) move with #3031. */
+ *  This is the unbounded view for the board's own side (ADR 0357 決定1), the named places including the Interview room (ADR 0356
+ *  決定1); a worker's tree uses `withWorkerTreeGit`. */
 export function withBoardGit<T>(cwd: string, use: (view: View, gitDir: string) => T, objectsFrom = cwd): T {
   return viewWith(run, cwd, use, objectsFrom);
 }
@@ -137,39 +137,6 @@ export function boardViewStatus(cwd: string, head: string, objectsFrom: string, 
       throw new WorktreeStatusError(cause instanceof Error ? cause.message : String(cause), { cause });
     }
   }, objectsFrom);
-}
-
-/** The view over a checkout the board does not own but a worker still runs in (the Interview room, until #3031): it also reads
- *  the real index for staged content (ADR 0084 決定1) and recurses into populated submodules. */
-export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?: string): WorktreeChange[] {
-  const index = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index");
-  let head: string | undefined;
-  try {
-    head = against ?? git(cwd, "rev-parse", "--verify", "--quiet", "HEAD");
-  } catch (err) {
-    if ((err as { status?: number }).status !== 1) throw err;
-  }
-  return withWorkerTreeGit(cwd, (view, dir) => {
-    const config = seedViewIndex(view, dir, head, sparse);
-    const worktree = view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]);
-    const paths = new Map(worktree.split("\0").filter(Boolean).map((line) => [line.slice(3), line.slice(0, 2)]));
-    // ADR 0084 決定1: the real index can hold staged content that is absent from the worktree.
-    const staged = view(["diff", "--cached", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--ignore-submodules=dirty", "--"], { GIT_INDEX_FILE: index }).split("\0");
-    for (let i = 0; i + 1 < staged.length; i += 2) {
-      const path = staged[i + 1]!;
-      if (!paths.has(path)) paths.set(path, `${staged[i]} `);
-    }
-    // ADR 0356 決定3: Git's recursive status would run each populated submodule's own filters.
-    for (const entry of view(["ls-files", "--stage", "-z"]).split("\0")) {
-      if (!entry.startsWith("160000 ")) continue;
-      const path = entry.slice(entry.indexOf("\t") + 1);
-      if (paths.has(path)) continue;
-      const submodule = join(cwd, path);
-      if (!lstatSync(submodule, { throwIfNoEntry: false })?.isDirectory() || !existsSync(join(submodule, ".git"))) continue;
-      if (boardWorktreeStatus(submodule).length > 0) paths.set(path, " M");
-    }
-    return [...paths].map(([path, status]) => ({ path, status }));
-  });
 }
 
 /** `git` に env を足したもの(一時 index の `GIT_INDEX_FILE` 用)。 */
