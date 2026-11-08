@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
@@ -58,6 +58,73 @@ it("未コミットの変更を残したまま work タスクを完了しよう�
   expect(retry.isError ?? false).toBe(false);
   await client.close();
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+it("記録した tip の .claude が symlink なら完了を拒み、directory を commit し直すと同じ session で完了できる(ADR 0360 決定4)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "update the project settings layout");
+  await t.clock.advance(HOUR);
+  const checkout = checkoutOf(t.db, task.id);
+  const claudeDir = join(checkout, ".claude");
+  mkdirSync(join(checkout, "project-config"));
+  writeFileSync(join(checkout, "project-config", "settings.json"), "{}\n");
+  symlinkSync("project-config", claudeDir);
+  git(checkout, "add", "--", ".claude", "project-config");
+  git(checkout, "commit", "-m", "link project settings directory");
+  const rejectedTip = git(checkout, "rev-parse", "HEAD");
+
+  // 作業ツリーだけを直しても、記録する tip には symlink が残っている。
+  unlinkSync(claudeDir);
+  mkdirSync(claudeDir);
+  writeFileSync(join(claudeDir, "settings.json"), "{}\n");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+
+  const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain(".claude as a symlink");
+  expect(result.content[0].text).toContain("make .claude a directory");
+  expect(result.content[0].text).toContain("commit the fix on the task branch, then call complete_task again");
+  expect(git(ws.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(rejectedTip);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+
+  git(checkout, "add", "--", ".claude");
+  git(checkout, "commit", "-m", "use a project settings directory");
+  const retry: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  expect(retry.isError ?? false).toBe(false);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+it("名前の場所に replace ref があっても記録した commit の .claude が symlink なら完了を拒む(ADR 0360 決定4)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  const protectedTip = git(ws.path, "rev-parse", "HEAD");
+  const protectedBranch = git(ws.path, "branch", "--show-current");
+  git(ws.path, "switch", "-c", "settings-layout");
+  mkdirSync(join(ws.path, "project-config"));
+  writeFileSync(join(ws.path, "project-config", "settings.json"), "{}\n");
+  symlinkSync("project-config", join(ws.path, ".claude"));
+  git(ws.path, "add", "--", ".claude", "project-config");
+  git(ws.path, "commit", "-m", "link project settings directory");
+  const rejectedTip = git(ws.path, "rev-parse", "HEAD");
+  git(ws.path, "switch", protectedBranch);
+  git(ws.path, "replace", rejectedTip, protectedTip);
+
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "verify the project settings layout");
+  await t.clock.advance(HOUR);
+  git(checkoutOf(t.db, task.id), "reset", "--hard", rejectedTip);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+
+  const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain(".claude as a symlink");
+  expect(git(ws.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(rejectedTip);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 });
 
 it("workspace が Quarantine 中でも dirty な work の完了は拒み、commit 後の呼び直しは通る(ADR 0350 決定1)", async () => {

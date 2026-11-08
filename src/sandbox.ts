@@ -602,8 +602,9 @@ export function recordedSettingsDisposition(namedPlace: string, ref: string): Re
   const tree = ref.startsWith("refs/") ? git(namedPlace, "show-ref", "--verify", "--hash", "--", ref) : ref;
   const hide: string[] = [];
   let unhideable: RecordedSettings["unhideable"];
+  // ADR 0360 決定1: replace ref を通さず、記録された object の tree を読む。
   // ls-tree prints `.claude` itself only when it is not a tree; a tree prints the matched entries under it
-  for (const line of git(namedPlace, "ls-tree", tree, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
+  for (const line of git(namedPlace, "--no-replace-objects", "ls-tree", tree, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
     const [meta, path] = line.split("\t");
     const [mode, type] = meta!.split(" ");
     if (path === ".claude" && type !== "tree") unhideable = { path, type: mode === "120000" ? "symlink" : type === "commit" ? "gitlink" : "blob" };

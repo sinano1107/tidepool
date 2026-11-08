@@ -59,6 +59,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
+import { recordedSettingsDisposition } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
@@ -117,6 +118,7 @@ import {
   type RunPlace,
   recordTaskCheckoutTip,
   resolveOrQuarantine,
+  type TaskCheckoutPlace,
   TaskCheckoutUnreadableError,
   taskRunPlace,
   UnknownWorkspaceError,
@@ -326,7 +328,7 @@ export async function runVerb<R>(
 /** タスク自身の実行 workspace(issue #26 / ADR 0009 —— 盤面の既定ではない)。解決できない
  *  名前は `resolveOrQuarantine` が quarantine する**副作用を持つ**ので、1つの verb 呼び出しで
  *  2度撃たない(2度目は同じ観測を cause として重ねて記録するだけである)。 */
-function resolveTaskWorkspace(deps: McpDeps, task: Task): RunPlace | undefined {
+function resolveTaskWorkspace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
@@ -337,11 +339,12 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): RunPlace | undefined {
 /** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
-function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace): void {
+function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskCheckoutPlace): void {
   if (!completionTreeGateApplies(task)) return;
   // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
+  let tip: string;
   try {
-    recordTaskCheckoutTip(deps.db, workspace, task.id);
+    tip = recordTaskCheckoutTip(deps.db, workspace, task.id);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
@@ -350,8 +353,18 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
   }
   let paths: string[];
   try {
-    paths = completionTreePaths(workspace, task.id);
+    // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
+    const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
+    if (unhideable) {
+      const { path, type } = unhideable;
+      throw new DomainError(
+        `the task branch tip has ${path} as a ${type}, so the board cannot hide the Claude settings behind it — ` +
+          `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
+      );
+    }
+    paths = completionTreePaths(workspace, task.id, tip);
   } catch (err) {
+    if (err instanceof DomainError) throw err;
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
     throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
@@ -421,7 +434,7 @@ function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task) => (actorId: string, now: Date) => object,
-  gate?: (task: Task, workspace: RunPlace) => void,
+  gate?: (task: Task, workspace: TaskCheckoutPlace) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
     const workspace = gate ? (resolveTaskWorkspace(deps, task) ?? null) : undefined;
@@ -718,7 +731,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             const done = completeTask(deps.db, task, handoff, actorId, now, "worker");
             return { id: done.id, status: done.status };
           },
-          (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
+          (task, workspace) => assertWorkCompletionGate(deps, task, workspace),
         ),
     );
   }

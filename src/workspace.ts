@@ -107,7 +107,7 @@ export interface WorkspaceConfig {
 export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; namedPlace?: WorkspaceConfig };
 
 /** task の checkout で走る場所(ADR 0356 決定1)。 */
-type TaskCheckoutPlace = RunPlace & { namedPlace: WorkspaceConfig };
+export type TaskCheckoutPlace = RunPlace & { namedPlace: WorkspaceConfig };
 
 const isTaskCheckout = (place: WorkspaceConfig): place is TaskCheckoutPlace => (place as RunPlace).namedPlace !== undefined;
 
@@ -432,7 +432,7 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string, completedRevie
 }
 
 /** ADR 0359 決定1: worker の tip が名前の場所のタスクブランチになるまで完了の門を通さない。 */
-export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): void {
+export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): string {
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const tip = fetchWorkerTip(place, taskId);
@@ -443,8 +443,8 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   if (old.startsWith("symref=") || !baselineAllows(expected, old)) {
     throw new RefsMovedError(`workspace ${namedPlace.name}: ${ref} is not the recorded direct ref (expected ${expected ?? "absent"}, found ${old || "absent"})`);
   }
-  if (old === tip) return;
-  boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
+  if (old !== tip) boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
+  return tip;
 }
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
@@ -1104,9 +1104,9 @@ function taskCheckoutChanges(place: TaskCheckoutPlace, tip: string): WorktreeCha
 }
 
 /** ADR 0359 決定1: task の checkout の観測が落ちれば門を通さない。work は全部 task の checkout で走る(ADR 0356 決定1)。 */
-export function completionTreePaths(workspace: WorkspaceConfig, taskId: string): string[] {
+export function completionTreePaths(workspace: WorkspaceConfig, taskId: string, recordedTip?: string): string[] {
   assertTaskCheckout(workspace, taskId);
-  const tip = git(workspace.namedPlace.path, "rev-parse", "--verify", `refs/heads/${taskBranch(taskId)}`);
+  const tip = recordedTip ?? git(workspace.namedPlace.path, "rev-parse", "--verify", `refs/heads/${taskBranch(taskId)}`);
   return taskCheckoutChanges(workspace, tip).map(({ path }) => path);
 }
 
