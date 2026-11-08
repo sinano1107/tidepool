@@ -120,7 +120,6 @@ import {
   resolveOrQuarantine,
   type TaskCheckoutPlace,
   TaskCheckoutUnreadableError,
-  taskBranch,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -340,11 +339,12 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
 /** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
-function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: TaskCheckoutPlace): void {
+function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskCheckoutPlace): void {
   if (!completionTreeGateApplies(task)) return;
   // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
+  let tip: string;
   try {
-    recordTaskCheckoutTip(deps.db, workspace, task.id);
+    tip = recordTaskCheckoutTip(deps.db, workspace, task.id);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
@@ -354,7 +354,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: TaskCheck
   let paths: string[];
   try {
     // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
-    const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, `refs/heads/${taskBranch(task.id)}`);
+    const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
     if (unhideable) {
       const { path, type } = unhideable;
       throw new DomainError(
@@ -362,7 +362,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: TaskCheck
           `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
       );
     }
-    paths = completionTreePaths(workspace, task.id);
+    paths = completionTreePaths(workspace, task.id, tip);
   } catch (err) {
     if (err instanceof DomainError) throw err;
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
@@ -731,7 +731,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             const done = completeTask(deps.db, task, handoff, actorId, now, "worker");
             return { id: done.id, status: done.status };
           },
-          (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
+          (task, workspace) => assertWorkCompletionGate(deps, task, workspace),
         ),
     );
   }

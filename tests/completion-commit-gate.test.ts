@@ -73,6 +73,11 @@ it("記録した tip の .claude が symlink なら完了を拒み、directory �
   git(checkout, "add", "--", ".claude", "project-config");
   git(checkout, "commit", "-m", "link project settings directory");
   const rejectedTip = git(checkout, "rev-parse", "HEAD");
+
+  // 作業ツリーだけを直しても、記録する tip には symlink が残っている。
+  unlinkSync(claudeDir);
+  mkdirSync(claudeDir);
+  writeFileSync(join(claudeDir, "settings.json"), "{}\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
 
   const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -84,9 +89,6 @@ it("記録した tip の .claude が symlink なら完了を拒み、directory �
   expect(git(ws.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(rejectedTip);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 
-  unlinkSync(claudeDir);
-  mkdirSync(claudeDir);
-  writeFileSync(join(claudeDir, "settings.json"), "{}\n");
   git(checkout, "add", "--", ".claude");
   git(checkout, "commit", "-m", "use a project settings directory");
   const retry: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
