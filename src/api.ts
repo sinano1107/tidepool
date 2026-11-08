@@ -915,6 +915,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           confirm_required: true,
           live_checkout_signals: err.reasons,
           clone_landing: err.cloneLanding,
+          ...(err.settingsWarning ? { claude_settings_unhideable_warning: err.settingsWarning } : {}),
         } satisfies WireContract["POST /api/workspaces 409"]);
       } else {
         sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });

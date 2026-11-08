@@ -469,7 +469,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // landing place has to be readable before (the description) and after
       // (the result) — the WebUI's "see it, then decide" has no MCP shape.
       description:
-        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default. register goes through even when the path looks like a checkout a human is working in; the result then carries a notice naming what was observed and where the clone entrance would have landed instead.",
+        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default. register goes through with advisory warnings. The result includes those warnings and, for working-tree concerns, where the clone entrance would have landed if available.",
       inputSchema: createWorkspaceSchema,
     },
     async (args) => {
@@ -495,10 +495,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             return toolResult({
               path,
               notice:
-                `registered as asked. This path looks like a checkout a human is working in (${err.reasons.join(", ")})` +
+                `Registered as asked. Registration warnings (${err.reasons.join(", ")})` +
                 (err.cloneLanding === null
                   ? ". Tell the human what was observed."
-                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`),
+                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`) +
+                (err.settingsWarning ? `\n${err.settingsWarning}` : ""),
             });
           } catch (retried) {
             return registryToolError(retried);

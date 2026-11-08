@@ -9,6 +9,16 @@ import type { Cause } from "./cause.js";
 import type { AdvisorCeiling } from "./claude-model-alias.js";
 import type { HaltKind } from "./halt-kind.js";
 
+/** Stable advisory codes for registration, separate from the dangerous-value confirmation of ADR 0088. */
+export type LiveCheckoutSignal =
+  | "uncommitted_changes"
+  | "worktree_unreadable"
+  | "claude_settings_local"
+  | "claude_settings_hooks"
+  | "claude_settings_untracked"
+  | "claude_settings_unhideable"
+  | "claude_subagents";
+
 /** 盤面全体の停止の entry。 */
 export interface BoardHalt {
   kind: HaltKind;
@@ -358,12 +368,13 @@ export interface WireContract {
     /** 値集合の正本は src/workspace.ts の WorkspacesBaseDirSource(ADR 0082 決定1)。 */
     workspacesBaseDir: { path: string; source: "configured" | "default" };
   };
-  /** register の門(issue #383)。`clone_landing` は origin を持たない checkout では null。 */
+  /** register の門(issue #383)。作業ツリーの信号に clone 入口を提案できない場合、`clone_landing` は null。 */
   "POST /api/workspaces 409": {
     error: string;
     confirm_required: true;
-    live_checkout_signals: string[];
+    live_checkout_signals: LiveCheckoutSignal[];
     clone_landing: string | null;
+    claude_settings_unhideable_warning?: string;
   };
   "PATCH /api/workspaces/:name 409": DangerousValuesConflict;
   /** 残る checkout の場所(ADR 0087 決定4)。 */

@@ -2670,12 +2670,14 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   const { busy, save, dialog } = useDangerousSave(say, async () => { edit.close(); await onCreated(); }, {
     noun: 'workspace',
     confirmKey: 'confirm',
-    dialogTitle: 'Register a checkout someone is working in?',
-    dialogLead: 'This path looks like a human\'s live development checkout:',
+    dialogTitle: 'Register this checkout?',
+    dialogLead: 'Review these warnings before registering.',
     confirmOf: (err) => {
       const detail = apiErrorDetail(err, 'POST /api/workspaces 409');
       return detail?.confirm_required ? {
-        reasons: detail.live_checkout_signals,
+        reasons: detail.live_checkout_signals.map((signal) =>
+          signal === 'claude_settings_unhideable' ? detail.claude_settings_unhideable_warning ?? signal : signal
+        ),
         note: detail.clone_landing ? (
           <p style={{ margin: '8px 0 0', fontSize: 'var(--text-sm)' }}>
             The clone entrance would give the board its own checkout at{' '}

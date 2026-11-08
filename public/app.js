@@ -3290,12 +3290,14 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   }, {
     noun: "workspace",
     confirmKey: "confirm",
-    dialogTitle: "Register a checkout someone is working in?",
-    dialogLead: "This path looks like a human's live development checkout:",
+    dialogTitle: "Register this checkout?",
+    dialogLead: "Review these warnings before registering.",
     confirmOf: (err) => {
       const detail = apiErrorDetail(err, "POST /api/workspaces 409");
       return detail?.confirm_required ? {
-        reasons: detail.live_checkout_signals,
+        reasons: detail.live_checkout_signals.map(
+          (signal) => signal === "claude_settings_unhideable" ? detail.claude_settings_unhideable_warning ?? signal : signal
+        ),
         note: detail.clone_landing ? /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0", fontSize: "var(--text-sm)" } }, "The clone entrance would give the board its own checkout at", " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, detail.clone_landing), " instead \u2014 one repository, two checkouts.") : null
       } : null;
     },
