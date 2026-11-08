@@ -92,7 +92,6 @@ import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
-  openExamineeCheckout,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
@@ -102,7 +101,7 @@ import {
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   TaskCheckoutHostError,
-  taskRunPlace,
+  taskNamedPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -640,21 +639,17 @@ export function startScheduler(deps: {
           return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
         }
         if (!live()) return;
-        // ADR 0273 決定1・8 / ADR 0276 決定1・3: interview の root は面接室、受験者は面接室から fetch した自分の checkout で走る。
-        // どちらも作れなければ面接室(root id)の quarantine に落ちる
-        const rootId = interviewRootIdOf(db, picked);
-        if (rootId !== undefined) {
-          try {
-            if (picked.type === "interview") openInterviewRoom(db, picked, base, clock.now());
-            else openExamineeCheckout(db, picked, base, clock.now());
-          } catch (err) {
-            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-            return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
-          }
-        }
+        // ADR 0273 決定1・8: interview の root の最初の pickup は面接室を開く。作れなければ面接室(root id)の quarantine に落ちる
         // ADR 0329 決定10・11: 読む場所も remote の有無で絞らず、同じ一覧の後半で休止させる。
-        // ADR 0356 決定1: work と review は名前の場所を準備し、準備の最後に task の checkout が開く
-        const place = rootId === undefined ? resolved : taskRunPlace(db, picked, resolved);
+        // ADR 0356 決定1: 名前の場所(Interview の root と受験者は面接室)を準備し、準備の最後に task の checkout が開く
+        let place: WorkspaceConfig;
+        try {
+          if (picked.type === "interview") openInterviewRoom(db, picked, base, clock.now());
+          place = taskNamedPlace(db, picked, resolved);
+        } catch (err) {
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+          return stopped(quarantineWorkspace(db, interviewRootIdOf(db, picked)!, err, clock.now()));
+        }
         try {
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now() });
         } catch (err) {

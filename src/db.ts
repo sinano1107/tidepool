@@ -243,8 +243,8 @@ export function openDb(path: string): Db {
     -- objectname だが、symref の行だけは指し先 "symref=<refname>" である ——
     -- ADR 0081)。slot 解放時にこれと現在を比べ、
     -- タスクブランチ以外が1つでも動いていれば quarantine する。worker が書けない
-    -- 場所であることが要件なので git の ref ではなくここに置く。name は走る場所の
-    -- 名前、受験者の checkout だけは受験者の id(兄弟と面接室の名前を共有する —— ADR 0276 決定3)。
+    -- 場所であることが要件なので git の ref ではなくここに置く。name は名前の場所の
+    -- 名前(面接室は root id —— 基準は名前の場所だけが持つ、ADR 0356 決定4)。
     -- sparse_snapshot は盤面が settings.json を隠す前の人間の sparse-checkout の写し
     -- (JSON: pattern ファイルの中身 or null と mode)。有ることが「盤面が隠している最中」の
     -- 唯一の印で、戻しが成功した後に消す(ADR 0293)。worker が書ける .git/ には置かない。

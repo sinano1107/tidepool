@@ -422,7 +422,7 @@ const workspaceEntrySchema = z.object({
    *  (issue #27 / ADR 0023): task-branch fork point, PR base, and direct-
    *  write-ban target, all one field. Absent → "main". A reference, not a
    *  pinned fork fact — resolved fresh against the registry at every use
-   *  moment (ensureTaskBranch, PR open), never baked into a task row. */
+   *  moment (task branch creation at pickup, PR open), never baked into a task row. */
   branch: z.string().optional(),
   /** Host-independent command prefixes a review session may run despite the
    *  `--permission-mode manual` write floor (issue #144 / ADR 0035). Absent →

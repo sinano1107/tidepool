@@ -241,18 +241,18 @@ it("完了の門は worker の index や info/exclude で隠した変更を読�
     commitWork(place.path, ".gitignore", "ignored.txt\n");
     gateFetch(db, place, task);
     writeFileSync(join(place.path, "ignored.txt"), "generated\n");
-    expect(completionTreePaths(place, task.id, db)).toEqual([]);
+    expect(completionTreePaths(place, task.id)).toEqual([]);
 
     git(place.path, "update-index", "--assume-unchanged", "--", "README.md");
     writeFileSync(join(place.path, "README.md"), "hidden tracked change\n");
     expect(git(place.path, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(place, task.id, db)).toEqual(["README.md"]);
+    expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
 
     mkdirSync(join(place.path, ".git", "info"), { recursive: true });
     writeFileSync(join(place.path, ".git/info/exclude"), "hidden.txt\n");
     writeFileSync(join(place.path, "hidden.txt"), "hidden untracked change\n");
     expect(git(place.path, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(place, task.id, db)).toEqual(["README.md", "hidden.txt"]);
+    expect(completionTreePaths(place, task.id)).toEqual(["README.md", "hidden.txt"]);
   } finally {
     db.close();
   }
@@ -295,7 +295,7 @@ it("完了の門は worker の index を読まず、作業ツリーを tip に�
     git(place.path, "add", "README.md");
     writeFileSync(path, `${original}\n`);
 
-    expect(completionTreePaths(place, task.id, db)).toEqual([]);
+    expect(completionTreePaths(place, task.id)).toEqual([]);
   } finally {
     db.close();
   }
@@ -324,13 +324,13 @@ it("the gate reads a submodule by its gitlink only, without running Git in the w
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
 
-    expect(completionTreePaths(place, task.id, db)).toEqual([]);
+    expect(completionTreePaths(place, task.id)).toEqual([]);
     expect(existsSync(marker)).toBe(false);
     git(submodule, "config", "--unset", "filter.probe.clean");
     git(submodule, "add", "README.md");
     git(submodule, "commit", "-m", "advance the submodule tip");
     expect(git(submodule, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(place, task.id, db)).toEqual(["module with space"]);
+    expect(completionTreePaths(place, task.id)).toEqual(["module with space"]);
   } finally {
     db.close();
   }
@@ -476,7 +476,7 @@ it.each([
         { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") },
       ] : []);
     } else {
-      expect(() => completionTreePaths(place, task.id, db)).toThrow();
+      expect(() => completionTreePaths(place, task.id)).toThrow();
       expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     }
   } finally {

@@ -217,9 +217,7 @@ export type EventPayload =
   | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string; interview_room?: string }
   // ADR 0273 決定1: 盤面が root の最初の pickup で面接室を作った —— path はその在り処。基点が後で変わっても在り処はこれで引く
   | { kind: "interview_room_opened"; path: string }
-  // ADR 0276 決定1・4: 盤面が受験者の最初の pickup で自分の checkout を面接室の外に作った —— path はその在り処(面接室と同じ形)
-  | { kind: "examinee_checkout_opened"; path: string }
-  // ADR 0356 決定2: 盤面が work / review の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
+  // ADR 0356 決定1・2: 盤面が worker の形で走る task の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
   | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip" }
   // ADR 0356 決定2 / ADR 0359 決定2: 解放が名前の場所の側を済ませた —— path の checkout は消してよい
   // (再実行はこれを見て削除だけを撃つ)

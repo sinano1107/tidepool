@@ -4,7 +4,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
-import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
+import { appendEvent, latestEventOfTask, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -283,10 +283,11 @@ it("根拠の history の読み口は根拠の task の判断・記憶の書き�
 
 /** root の面接室: 盤面の規約の基点(harness の既定は盤面の dir の下の workspaces)の下の root の id、実体の綴り。 */
 const roomOf = (rootId: string) => realpathSync(join(t.dir, "workspaces", rootId));
-/** 受験者の checkout: 同じ基点の下の受験者の id、実体の綴り(ADR 0276 決定1)。 */
-const examineeCheckoutOf = (examineeId: string) => realpathSync(join(t.dir, "workspaces", examineeId));
+/** root・受験者の最後に開いた task の checkout(ADR 0356 決定1・2): 同じ基点の下の task id の下、pickup ごとの番地。 */
+const lastCheckoutOf = (taskId: string) => latestEventOfTask(t.db, taskId, "task_checkout_opened")!.payload.path;
 
-it("root の pickup は面接室を盤面の規約の基点の下に root の id で作って root をそこで走らせ、受験者は同じ基点の下の自分の id の checkout で走る —— 実環境に受験者のブランチは立たず、受験者の workspace 列は実環境の名前で、受験者の詳細は checkout の在り処を運び、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8 / ADR 0276 決定1・4)", async () => {
+// 旧: root は面接室で走り、面接室の HEAD が root のブランチに乗った(ADR 0273 決定1)。ADR 0356 決定1 の後は root も受験者も面接室から開いた task の checkout で走り、面接室の HEAD は main のまま
+it("root の pickup は面接室を盤面の規約の基点の下に root の id で作り、root は面接室の外の task の checkout で走り、受験者は同じ基点の下の自分の id の checkout で走る —— 面接室の HEAD は main、実環境に受験者のブランチは立たず、受験者の workspace 列は実環境の名前で、受験者の詳細は checkout の在り処を運び、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8 / ADR 0276 決定1・4 / ADR 0356 決定1)", async () => {
   const deletions: WorkspaceDeletionReferences[] = [];
   t = await boot({ workspaceAdmin: { delete: async (_input, references) => (deletions.push(references), "/checkout") } });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -294,7 +295,8 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
 
   const opened = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "interview_room_opened");
   expect(opened.map((e: any) => e.payload.path)).toEqual([room]);
-  expect(git(room, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
+  expect(git(room, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  expect(lastCheckoutOf(root.id).startsWith(`${room}/`)).toBe(false);
   const [childId] = await pose(root.id);
   await completeMetaReviews(t);
 
@@ -303,7 +305,8 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   expect(git(workspacePath, "branch", "--list", `task/${root.id}`, `task/${childId}`)).toBe("");
   const detail = (await api(t.baseUrl, "GET", `/api/tasks/${childId}`)).json;
   expect(detail.workspace).toBe("reef");
-  expect(detail.examinee_checkout).toBe(examineeCheckoutOf(childId));
+  expect(detail.examinee_checkout).toBe(lastCheckoutOf(childId));
+  expect(dirname(detail.examinee_checkout)).toBe(realpathSync(join(t.dir, "workspaces", childId)));
 
   await callAsTask(t, childId, "escalate", { context: "which format?", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
   t.worker.exit(childId);
@@ -590,7 +593,8 @@ it.each(["room", "read", "examinee"])("Interview の %s を開く session の間
   const running = place === "examinee" ? (await pose(root.id))[0] : root.id;
   await runNow(t, running);
   await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(running));
-  const path = place === "examinee" ? examineeCheckoutOf(running) : roomOf(root.id);
+  // ADR 0356 決定1: root も受験者も task の checkout で走る —— 拒まれた回答はどちらの checkout も動かさない
+  const path = lastCheckoutOf(running);
   const name = place === "read" ? "reef" : root.id;
   registerQuarantine(t.db, "workspace", name, "repair the place", t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", name);
@@ -602,67 +606,33 @@ it.each(["room", "read", "examinee"])("Interview の %s を開く session の間
   expect(git(path, "branch", "--show-current")).toBe(`task/${running}`);
 });
 
-it("受験者の後半の休止も解除で撃ち直し、main が無ければ拒み、main 上の dirty な答案は捨てずに再開する(ADR 0329 決定12)", async () => {
+// 旧: 受験者の checkout は記録された場所で、再開はそれを読み直した —— 消えた・gitfile・`main` の無い checkout は root 名で止まり、解除は
+// その checkout の述語を撃ち直した(ADR 0329 決定3・4・12 / ADR 0146)。ADR 0356 決定1・2 の後は受験者の checkout は解放で消え、再開は面接室の
+// タスクブランチから作り直す(中身の釘は interview-pin-branch.test.ts の domain 層)。受験者ごとに残る項は出題の head だけで、その撃ち直しをここで言う
+it("再開する受験者の pickup は前の checkout を読まず作り直し、出題の head が面接室で引けなければ root 名で止まり、head の復元を確かめた回答だけで受験者を再開する(ADR 0329 決定4 / ADR 0356 決定2)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [child] = await pose(root.id);
   await completeMetaReviews(t);
-  await callAsTask(t, child, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
-  t.worker.exit(child);
-  const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
-  await runNow(t, filler.id);
-  const checkout = examineeCheckoutOf(child);
-  git(checkout, "checkout", "-b", "rescue");
-  git(checkout, "branch", "-D", "main");
-  const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done")!;
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] });
-  await runNow(t, child);
-  await vi.waitFor(async () => expect(await pickupStops(child)).toHaveLength(1));
-  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
-  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored"] });
-  const refused = await answer();
-  expect(refused.status).toBe(409);
-  expect(refused.json.error).toContain(`for the examinee checkout of ${child}`);
-  git(checkout, "checkout", "-b", "main");
-  writeFileSync(join(checkout, "wip.txt"), "unfinished answer\n");
-  expect((await answer()).status).toBe(200);
-  await runNow(t, child);
-  await vi.waitFor(() => expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2));
-  expect(readFileSync(join(checkout, "wip.txt"), "utf8")).toBe("unfinished answer\n");
-});
-
-it("再開する受験者の記録済み checkout が消えたら作り直さず root 名で止め、checkout と出題 head の復元を順に確かめた回答だけで受験者を再開する(ADR 0329 決定3・4)", async () => {
-  t = await boot();
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  const [child] = await pose(root.id);
-  await completeMetaReviews(t);
-  const checkout = examineeCheckoutOf(child);
+  const checkout = lastCheckoutOf(child);
   expect((await callAsTask(t, child, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] })).isError).toBeFalsy();
   t.worker.exit(child);
   const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
   await runNow(t, filler.id);
+  expect(existsSync(checkout)).toBe(false);
   const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done")!;
-  const savedCheckout = join(t.dir, "saved-checkout-git");
-  renameSync(join(checkout, ".git"), savedCheckout);
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] })).status).toBe(200);
-  await runNow(t, child);
-
-  await vi.waitFor(async () => expect(await pickupStops(child)).toEqual([goneRoomStop(root.id, checkout)]));
-  expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(1);
-  expect(existsSync(join(checkout, ".git"))).toBe(false);
-  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
-  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
-  const missingCheckout = await answer();
-  expect(missingCheckout.status).toBe(409);
-  expect(missingCheckout.json.error).toContain(child);
-  expect(missingCheckout.json.error).toContain(checkout);
-  renameSync(savedCheckout, join(checkout, ".git"));
-
   const room = roomOf(root.id);
   const head = (await posedRecord(root.id)).events[0].payload.head;
   const savedRoom = join(t.dir, "saved-room-git");
   renameSync(join(room, ".git"), savedRoom);
   git(room, "init", "--quiet", "--initial-branch=main");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] })).status).toBe(200);
+  await runNow(t, child);
+
+  await vi.waitFor(async () => expect(await pickupStops(child)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining(head) }]));
+  expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(1);
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
   const missingHead = await answer();
   expect(missingHead.status).toBe(409);
   expect(missingHead.json.error).toContain(head);
@@ -673,38 +643,8 @@ it("再開する受験者の記録済み checkout が消えたら作り直さず
   expect((await answer()).status).toBe(200);
   await runNow(t, child);
   expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2);
-});
-
-it("再開する受験者の記録済み checkout の `.git` が gitfile なら root 名で止まり、解除は `.git` がディレクトリであることを予告して撃ち直し、戻した回答の後に受験者が走る(ADR 0146 / ADR 0329 追記 決定6)", async () => {
-  t = await boot();
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  const [child] = await pose(root.id);
-  await completeMetaReviews(t);
-  const checkout = examineeCheckoutOf(child);
-  expect((await callAsTask(t, child, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] })).isError).toBeFalsy();
-  t.worker.exit(child);
-  const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
-  await runNow(t, filler.id);
-  const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done")!;
-  renameSync(join(checkout, ".git"), join(checkout, ".git.real"));
-  writeFileSync(join(checkout, ".git"), "gitdir: /nowhere\n");
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] })).status).toBe(200);
-  await runNow(t, child);
-
-  await vi.waitFor(async () => expect(await pickupStops(child)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining(".git is not a directory") }]));
-  expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(1);
-  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
-  expect(quarantine.purpose).toContain(`for the examinee checkout of ${child}, its \`.git\` is a directory`);
-  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
-  const refused = await answer();
-  expect(refused.status).toBe(409);
-  for (const text of [child, checkout, ".git is not a directory"]) expect(refused.json.error).toContain(text);
-
-  rmSync(join(checkout, ".git"));
-  renameSync(join(checkout, ".git.real"), join(checkout, ".git"));
-  expect((await answer()).status).toBe(200);
-  await runNow(t, child);
-  expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2);
+  expect(lastCheckoutOf(child)).not.toBe(checkout);
+  expect(git(lastCheckoutOf(child), "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${child}`);
 });
 
 it("retry の旧い root の面接室の在り処が消えると、新しい root の pickup は worker を起こさずに旧い面接室の quarantine に落ちて todo へ戻る(ADR 0277 追記 決定1)", async () => {
@@ -781,7 +721,11 @@ it("監査の pickup は読む面接室を remote へ追従させない —— �
   });
 
   expect(examinees).toHaveLength(1);
-  expect((await questions(t)).filter((q) => q.status !== "done" && q.question_quarantine_kind === "workspace")).toEqual([]);
+  // 旧: 面接室の quarantine は1つも立たなかった。ADR 0356 決定1 の後は受け入れの後に拾われる受験者が面接室を名前の場所として準備するので、
+  // そこで立つ —— 監査の pickup は止まっていないことを監査の記録で言う
+  const audit = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.type === "review" && task.parent_id === root.id);
+  expect(await pickupStops(audit.id)).toEqual([]);
+  await vi.waitFor(async () => expect(await pickupStops(examinees[0]!)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("'origin' remote") }]));
 });
 
 it("面接室の quarantine が開いている間、root 配下の監査と root の行への異議の RCA はキューで外れ、slot が空いても拾われず、回答で解けると監査が拾われて走る(issue #2265 / ADR 0273 追記)", async () => {
@@ -902,40 +846,27 @@ it("面接室が作れなかった pickup は面接室の quarantine に落ち�
 
   await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(root.id));
   expect(git(roomOf(root.id), "log", "--format=%s", "main")).toBe("Initial commit");
-  expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
+  // ADR 0356 決定1: 面接室の HEAD は main のまま、root は task の checkout で走る
+  expect(git(roomOf(root.id), "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
-it("受験者の checkout が作れなかった pickup は面接室(root id)の quarantine に落ち、受験者は failure question 無しに後始末を通って todo へ戻り、人間の回答で quarantine が解けると、次の pickup が checkout を作り直して走らせる(ADR 0276 決定3 / ADR 0274 決定1)", async () => {
+// 旧: 受験者の checkout の番地に異物があると、作れなかった checkout は面接室(root id)の quarantine に落ち、回答の検査も受験者の番地を見た
+// (ADR 0277 決定1・3 / ADR 0276 決定3)。ADR 0356 決定2 の後は task の checkout の番地に repo を作れないのは host 側の失敗で、名前の場所
+// (面接室)を quarantine せず spawn の失敗になる。番地の下の `.git` の異物で init が落ちた形は、pickup ごとの番地の下に作るので起きない
+it("受験者の task の checkout の番地に異物がある pickup は面接室を quarantine せず、受験者の spawn の失敗になる(ADR 0356 決定2)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
   const [first, second] = await pose(root.id);
   await completeMetaReviews(t);
   expect(t.worker.started.at(-1)!.id).toBe(first);
-  // 2人目の在り処に repo として読めない .git を置く —— init が落ちる
-  const blocker = join(t.dir, "workspaces", second!, ".git");
-  mkdirSync(dirname(blocker), { recursive: true });
-  writeFileSync(blocker, "not a git dir\n");
+  writeFileSync(join(t.dir, "workspaces", second!), "not a directory\n");
   expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
   t.worker.exit(first);
 
-  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.some((e: any) => e.kind === "pickup_stopped")).toBe(true));
-  // todo への復帰と pickup_stopped は1つの transaction(ADR 0274 決定3)
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo");
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.find((e: any) => e.kind === "spawn_failed")?.payload).toMatchObject({ message: expect.stringContaining("cannot be created") }));
+  expect(await pickupStops(second!)).toEqual([]);
   expect(t.worker.started.map((s) => s.id)).not.toContain(second);
-  const open = (await questions(t)).filter((q) => q.status !== "done");
-  expect(open.map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
-  expect(open.filter((q) => q.type === "question" && q.parent_id === second)).toEqual([]);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
-    { kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining(".git") },
-  ]);
-
-  rmSync(blocker);
-  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
-  await runNow(t, second!);
-
-  expect(t.worker.started.at(-1)!.id).toBe(second);
-  expect(git(examineeCheckoutOf(second!), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${second}`);
+  expect((await questions(t)).filter((q) => q.status !== "done" && q.question_quarantine_kind === "workspace")).toEqual([]);
 });
 
 it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup は面接室の quarantine に落ちても後始末を落とさずに slot を空け、root は quarantine が開いている間キューで外れ、%sでも直さない回答は理由つきで拒まれ、直した回答の後の pickup が面接室を作って root を走らせる(ADR 0277 決定1〜3)", async (_board, registry) => {
@@ -973,36 +904,8 @@ it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup �
   // 受理の検査は番地を作れることを確かめるだけで、在り処の記録は次の pickup が1度だけ書く
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "interview_room_opened").map((e: any) => e.payload.path)).toEqual([roomOf(root.id)]);
   expect(git(roomOf(root.id), "log", "--format=%s", "main")).toBe("Initial commit");
-  expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
-});
-
-it("受験者の checkout の番地に異物がある pickup は面接室(root id)の quarantine に落ちても後始末を落とさず、回答の検査も受験者の番地を見て直さない回答を拒み、直した回答の後は受験者が走る(ADR 0277 決定1・3 / ADR 0276 決定3)", async () => {
-  t = await boot();
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
-  const [first, second] = await pose(root.id);
-  await completeMetaReviews(t);
-  expect(t.worker.started.at(-1)!.id).toBe(first);
-  const blocker = join(t.dir, "workspaces", second!);
-  writeFileSync(blocker, "not a directory\n");
-  expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
-  t.worker.exit(first);
-  const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload);
-
-  await vi.waitFor(async () => expect(await stops()).toHaveLength(1));
-  expect(await stops()).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("mkdir") }]);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo");
-  expect((await questions(t)).filter((q) => q.status !== "done").map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
-  const unrepaired = await servedQuarantineQuestion(t, "workspace", root.id);
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${unrepaired.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(409);
-  expect(await pickupStops(second!)).toHaveLength(1);
-
-  rmSync(blocker);
-  const repaired = await servedQuarantineQuestion(t, "workspace", root.id);
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${repaired.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
-  await runNow(t, second!);
-
-  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(second));
-  expect(git(examineeCheckoutOf(second!), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${second}`);
+  // ADR 0356 決定1: 面接室の HEAD は main のまま、root は task の checkout で走る
+  expect(git(roomOf(root.id), "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
 it("受験者の (Harness, 場所) の封じ込めの組は面接室で立つ(ADR 0273 決定8 / ADR 0259 決定1)", async () => {
@@ -1062,7 +965,7 @@ async function auditing(rootId: string) {
 async function scoring(rootId: string) {
   const [childId] = await pose(rootId);
   await completeMetaReviews(t);
-  commitWork(examineeCheckoutOf(childId), "probe.txt", "probe\n");
+  commitWork(lastCheckoutOf(childId), "probe.txt", "probe\n");
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
   return { id: rootId, args: { scores: [{ child_id: childId, verdict: "accepted" }], handoff: FINDINGS } };
@@ -1114,7 +1017,8 @@ it("出題の gate は面接室の写しを head に記録し、立った監査�
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, tier: "standard", interview_targets: [opus46] })).json;
   const rootTier = t.worker.startedSettings.at(-1)!.tier_id;
   const room = roomOf(root.id);
-  writeFileSync(join(room, "probe.txt"), "the environment\n");
+  // ADR 0356 決定1・6: root は task の checkout で組み、写しは盤面の view で面接室の objects に作る
+  writeFileSync(join(lastCheckoutOf(root.id), "probe.txt"), "the environment\n");
 
   const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
 
@@ -1142,7 +1046,7 @@ it("却下の後の出し直しは出題の gate が新しい写しを commit �
   expect((await callAsTask(t, first, "complete_audit", { verdict: "rejected", findings: "the tier below solves it" })).isError).toBeFalsy();
   t.worker.exit(first);
   await runNow(t, root.id);
-  writeFileSync(join(room, "harder.txt"), "a harder environment\n");
+  writeFileSync(join(lastCheckoutOf(root.id), "harder.txt"), "a harder environment\n");
 
   const reposed: any = await callAsTask(t, root.id, "pose_probe", POSE);
 
@@ -1158,7 +1062,7 @@ it("却下の後の出し直しは出題の gate が新しい写しを commit �
   const [examinee] = (await posedRecord(root.id)).examinees;
   await runNow(t, examinee.id);
   expect(t.worker.started.at(-1)!.id).toBe(examinee.id);
-  expect(git(examineeCheckoutOf(examinee.id), "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
+  expect(git(lastCheckoutOf(examinee.id), "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
 });
 
 // どの行がグループに入り受験者の行が出ないかは domain 層(tests/interview.test.ts の listLog)が言う。ここは線の上の形だけ
@@ -1194,7 +1098,7 @@ it("出題で立った受験者は対象で spawn され、PR も完了時レビ
 
   expect(t.worker.started.at(-1)!.id).toBe(childId);
   expect(t.worker.startedSettings.at(-1)).toMatchObject({ model: "claude-opus-4-6", tier_id: tierIdOf(t.db, "frontier"), source: { tier: "interview", provider: "interview" } });
-  commitWork(examineeCheckoutOf(childId), "probe.txt", "probe\n");
+  commitWork(lastCheckoutOf(childId), "probe.txt", "probe\n");
   expect((await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.filter((task: any) => task.parent_id === childId)).toEqual([]);
@@ -1400,7 +1304,7 @@ async function lastExaminee() {
   registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", sonnet55.model), "the provider refused", t.clock.now());
   const refusal = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${refusal.id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
-  commitWork(examineeCheckoutOf(done), "probe.txt", "probe\n");
+  commitWork(lastCheckoutOf(done), "probe.txt", "probe\n");
   expect((await callAsTask(t, done, "complete_task", { handoff: { ...FULL_HANDOFF, outcome: SIBLING_ANSWER } })).isError).toBeFalsy();
   await t.clock.advance(HOUR);
   expect(t.worker.started.at(-1)!.id).toBe(reader);

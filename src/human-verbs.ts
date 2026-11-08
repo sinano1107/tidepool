@@ -646,9 +646,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       await fire(all, "before-open");
       const room = getTask(deps.db, value!)?.type === "interview";
       if (room) target.path = interviewRoomPath(deps.db, value!) ?? target.path;
-      // clean tree は受験者の checkout には当てない(WIP を残す、ADR 0329 決定12)。
+      // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
       if (!room || placeHasRepository(target.path)) {
-        await refuseOnError(() => verifyWorkspaceClean(target, deps.db, room));
+        await refuseOnError(() => verifyWorkspaceClean(target));
         if (deps.boardState) {
           const overlap = boardStateOverlap(target.path, deps.boardState);
           if (overlap) throw new DomainError(overlap.reason);
@@ -661,7 +661,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       }
       await fire(all, "after-open");
       if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
-      // 場所は後半の項が撃った場所そのもの —— 受験者の checkout は受験者 id の鍵を持つ(ADR 0276 決定3)
+      // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
       const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];
       await refuseOnError(() => retakeRefBaselines(deps.db, places));
     },

@@ -18,7 +18,7 @@ import { type ContainerSpawn, ProcessContainers } from "../src/process-container
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task, taskCheckoutPath } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -49,7 +49,7 @@ import {
   judgmentRepairTask,
   markPickedUp,
   mcpClient,
-  openTestExamineeCheckout,
+  openTestInterviewCheckout,
   openTestInterviewRoom,
   POSED_HEAD,
   poseAccepted,
@@ -112,7 +112,7 @@ function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
   const child = poseAccepted(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
   // 受験者は自分の checkout で走る(ADR 0276 決定1)—— pickup の代わりに開く
-  openTestExamineeCheckout(db, child);
+  openTestInterviewCheckout(db, child);
   return child;
 }
 const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
@@ -609,29 +609,31 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(f.process.calls[0]!.cwd).toBe(f.workspace);
   });
 
-  it("Interview の root は面接室を cwd と -C にして work の profile で面接室に書け(.git の行も work と同じ)、実環境と開ける面接室(根拠の Interview の root のもの)は read で載る(ADR 0273 決定2)", async () => {
+  // 旧: root は面接室を cwd にして面接室に書けた(ADR 0273 決定2)。ADR 0356 決定1 の後は面接室から開いた task の checkout で走り、面接室は盤面だけが書く
+  it("Interview の root は自分の task の checkout を cwd と -C にして work の profile でそこに書け(.git の行も work と同じ)、実環境と開ける面接室(根拠の Interview の root のもの)は read で載り、自分の面接室は載らない(ADR 0273 決定2 / ADR 0356 決定1)", async () => {
     const f = await fixture();
     const evidence = interviewRoot(f.db);
     const root = registerTask(f.db, { type: "interview", assignee: "codex-agent", title: "interview", hypothesis: "h", tier: "standard", evidence_task_ids: [evidence.id], interview_targets: [SOL] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(f.db, root);
 
     await f.start(root);
+    const checkout = taskCheckoutPath(f.db, root.id)!;
 
     // spawn は実体の綴りで書く(issue #864)
     const roomOf = (id: string) => realpathSync(interviewRoomPath(f.db, id)!);
-    const room = roomOf(root.id);
     const args = f.process.calls[0]!.args;
-    expect(f.process.calls[0]!.cwd).toBe(room);
-    expect(args[args.indexOf("-C") + 1]).toBe(room);
+    expect(f.process.calls[0]!.cwd).toBe(checkout);
+    expect(args[args.indexOf("-C") + 1]).toBe(checkout);
     expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-work"');
     const rows = filesystem(args, "tidepool-work");
     for (const row of [
-      `${JSON.stringify(room)}="write"`,
-      `${JSON.stringify(join(room, ".git"))}="write"`,
-      `${JSON.stringify(join(room, ".git", "hooks"))}="read"`,
+      `${JSON.stringify(checkout)}="write"`,
+      `${JSON.stringify(join(checkout, ".git"))}="write"`,
+      `${JSON.stringify(join(checkout, ".git", "hooks"))}="read"`,
       `${JSON.stringify(f.workspace)}="read"`,
       `${JSON.stringify(roomOf(evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
+    expect(rows).not.toContain(JSON.stringify(roomOf(root.id)));
   });
 
   it("受験者は自分の checkout を cwd と -C にして走り、面接室の在り処(root の id)はそこに入らない(ADR 0276 決定1)", async () => {

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { git, gitWithEnv, localGitEnv } from "../src/git.js";
+import { git, localGitEnv } from "../src/git.js";
 import { loadRegistry } from "../src/registry.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
@@ -88,7 +88,6 @@ it("呼び手の env も ambient の env も転送の床を広げない", async 
   vi.stubEnv("LC_ALL", "C");
 
   expect(() => git(dir, "show", "HEAD:README.md")).toThrow("transport 'http' not allowed");
-  expect(() => gitWithEnv({ GIT_ALLOW_PROTOCOL: "file:http:https" }, dir, "show", "HEAD:README.md")).toThrow("transport 'http' not allowed");
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
 });
 

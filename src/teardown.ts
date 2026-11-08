@@ -8,14 +8,11 @@ import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineQuestion } from "./quarantine.js";
 
 import type { Slot } from "./slot.js";
-import { getTask, interviewRootIdOf, returnToQueue, type Task } from "./tasks.js";
+import { getTask, returnToQueue, type Task } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
-  isTaskCheckout,
-  onTaskBranch,
   PlaceNotOpenError,
-  type RunPlace,
   releaseWorkspace,
   resolveOrQuarantine,
   taskRunPlace,
@@ -392,7 +389,7 @@ async function teardown(
   const task = getTask(db, taskId);
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
-  // 後始末は走る場所に効く —— interview の root は面接室、受験者は自分の checkout(ADR 0273 決定1・8 / ADR 0276 決定1)。門が渡した workspace は解決済みの走る場所
+  // 後始末は走る場所(task の checkout、ADR 0356 決定1)に効く。門が渡した workspace は解決済みの走る場所
   let workspace = step.workspace;
   if (workspace === undefined) workspace = deps.resolve && runPlaceToRelease(deps, deps.resolve, task, step);
   const mergeBack = Boolean(step.completion) && task.type === "work";
@@ -439,34 +436,28 @@ async function teardown(
  *  (ADR 0274 決定3)—— 他の決着(エスカレーション・分解・中断)は後始末が最初の観測者なので `resolveOrQuarantine` を通す。
  *  - 完了(`completion`): `done` へ決着させる verb はどれも verb の前に workspace を解決する門を通る(`runReleasingVerb` が強制)ので、門が後始末より前に同じ名前を解決しており、解決できなければ門がそこで撃っている。再起動の
  *    復旧でも撃ち直さず当てない。解決できれば今日どおり走る場所へ当てる。
- *  - process を1つも持たなかった session(`neverRan`): worker が触った checkout を持たない —— drift は止めた Quarantine を
- *    撃ち直さず、task ブランチに乗っていない checkout は動いていないので、どちらも当てない。task ブランチに乗った
- *    checkout(準備の checkout の後で止まった)だけ今日どおり退避する。 */
+ *  - process を1つも持たなかった session(`neverRan`): drift は止めた Quarantine を撃ち直さない。準備の後で止まった
+ *    task の checkout は今日どおり退避する。 */
 function runPlaceToRelease(
   { db, clock }: TeardownDeps,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   task: Task,
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
-  let place: RunPlace;
   try {
     if (!step.completion && !step.neverRan) {
       const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
       if (!resolved) return undefined;
-      place = taskRunPlace(db, task, resolved);
-    } else {
-      place = taskRunPlace(db, task, resolve(task.workspace));
+      return taskRunPlace(db, task, resolved);
     }
+    return taskRunPlace(db, task, resolve(task.workspace));
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) return undefined;
-    // 開いた event は repo 完成後に書く(ADR 0329)。event 前に途中まで作られた場所にも process・準備・task ブランチは無く、
-    // 触る checkout が無い。この session の task の checkout が開いていなければ worker も走っていない(ADR 0356 決定2)。
-    // 記録はあって repo が消えた面接室・受験者の checkout は下の `onTaskBranch` が外す
-    if (err instanceof PlaceNotOpenError && (step.neverRan || interviewRootIdOf(db, task) === undefined)) return undefined;
+    // この session の task の checkout が開いていなければ worker も走っておらず、触る checkout が無い(ADR 0356 決定2)。
+    // 開いた event は repo 完成後に書く(ADR 0329)。repo が消えた checkout は解放が worker の repo の故障として読む
+    if (err instanceof PlaceNotOpenError) return undefined;
     throw err;
   }
-  // ADR 0356 決定2: task の checkout は開いた event が在り処を持ち、repo が消えていれば解放がそれを読み飛ばす
-  return !step.neverRan || isTaskCheckout(place) || onTaskBranch(place, task.id) ? place : undefined;
 }
 
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は

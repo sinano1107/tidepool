@@ -525,10 +525,10 @@ const interviewRoot = (db: Db, at: Date) =>
   )!;
 const PROBE = { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" };
 
-/** Interview の規律の節のうち旧本文から移した行(#2192 の匿名化の段落と ADR 0276 決定2 の1行は、文を変えずに移した)。 */
+/** Interview の規律の節のうち旧本文から移した行(#2192 の匿名化の段落と ADR 0276 決定2 の1行は、文を変えずに移した)。最初の行は root が面接室の checkout で組む形に直した(ADR 0356 決定1)。 */
 const INTERVIEW_DISCIPLINE_LINES = [
   "## Interview discipline",
-  "- Compose the environment in your working directory, the interview room, not in the real environment you read: an anonymised reproduction of the work the probe needs, not a copy of the real environment. Each target solves the probe in its own fresh checkout of the room as it stands when you pose the probe.",
+  "- Compose the environment in your working directory, your checkout of the interview room, not in the real environment you read: an anonymised reproduction of the work the probe needs, not a copy of the real environment. Each target solves the probe in its own fresh checkout of the copy of your working tree taken when you pose the probe.",
   "- Put in exactly what the probe needs and nothing more: no board vocabulary, no file that describes the board or how it works, and no name that points at the real environment. A target that can tell it is being measured, or that leans on material the probe does not need, measures the environment, not the target.",
   "- Do not list in .gitignore anything you want the targets to have: ignored files never reach their environment.",
   "- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.",

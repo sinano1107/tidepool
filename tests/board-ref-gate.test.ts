@@ -10,9 +10,9 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, openExamineeCheckout, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
@@ -362,46 +362,45 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
   db.close();
 });
 
-/** 面接室(行あり、休止位置)と、出題された未決着の受験者の checkout(行あり、自分のタスクブランチの上)。受験者は pickup の状態にしない
+/** 面接室(行あり、休止位置)と、出題された未決着の受験者の task の checkout(面接室から開いた)。受験者は pickup の状態にしない
  *  —— 走行中の session があると受理が拒む。 */
 async function roomWithPickedExaminee() {
   const db = openDb(":memory:");
   const workspace = await makeWorkspace("gate-examinee-real");
   const root = interviewRoot(db, workspace, NOW);
   openTestInterviewRoom(db, root);
-  const room = taskRunPlace(db, root, workspace);
-  await prepareAtPickup(db, room, root);
-  const head = commitRoomCopy(db, room);
+  const { room, place: rootPlace } = await pickUpInterviewRoot(db, root, workspace);
+  const head = commitRoomCopy(db, rootPlace, root.id);
   const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", head) as [Task];
-  releaseWorkspace(db, room, root, NOW);
-  openExamineeCheckout(db, examinee, dirname(room.path), NOW);
-  const checkout = taskRunPlace(db, examinee, workspace);
-  await prepareAtPickup(db, checkout, examinee);
-  expect(baseline(db, examinee.id).get("HEAD")).toBe(`symref=refs/heads/task/${examinee.id}`);
+  releaseWorkspace(db, rootPlace, root, NOW);
+  const checkout = await prepareAtPickup(db, room, examinee);
   const roomRow = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(root.id);
-  return { db, root, room, examinee, checkout, roomRow, roomBefore: roomRow() };
+  const examineeRow = () => db.prepare("SELECT 1 FROM workspace_state WHERE name = ?").get(examinee.id);
+  return { db, root, room, examinee, checkout, roomRow, examineeRow, roomBefore: roomRow() };
 }
 
-it("面接室の名前への受理の後半が受験者の checkout を休止させると受験者 id の行が変わり、面接室(root id)の行は変わらない(#2948)", async () => {
-  const { db, root, room, examinee, roomRow, roomBefore } = await roomWithPickedExaminee();
+// 旧: 受理の後半が受験者の checkout を休止させ、受験者 id の行が変わった(#2948 / ADR 0276 決定3)。ADR 0356 決定4 の後は基準は面接室だけが持つ
+it("面接室の名前への受理の後半は面接室だけを撃ち、受験者 id の行は無く、面接室(root id)の行は変わらない(#2948 / ADR 0356 決定4)", async () => {
+  const { db, root, room, roomRow, examineeRow, roomBefore } = await roomWithPickedExaminee();
   // 受理と同じ名前の項の後半だけを撃つ —— 受理は最後に面接室の行を撮り直す(ADR 0351 決定4)ので、そこまで撃つと誤った鍵の書き込みが消える
   const { own, examinees } = namePickupPredicates(db, root.id, room, dirname(room.path));
 
   await firePickupPredicates(db, room, [...own, ...examinees], "after-open");
 
-  expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
+  expect(examinees.filter((p) => p.phase === "after-open")).toEqual([]);
+  expect(examineeRow()).toBeUndefined();
   expect(roomRow()).toBe(roomBefore);
   db.close();
 });
 
-it("受験者の再開の pickup の after-open が checkout を休止させると受験者 id の行が変わり、面接室(root id)の行は変わらない(#2948)", async () => {
-  const { db, examinee, checkout, roomRow, roomBefore } = await roomWithPickedExaminee();
-  // pickup の継続の門が休止の直後に閉じる(#1973)—— タスクブランチを作る前の基準を読む
-  const live = () => git(checkout.path, "rev-parse", "--abbrev-ref", "HEAD") !== "main";
+// 旧: 受験者の再開の pickup の after-open が checkout を休止させ、受験者 id の行が変わった(#2948)。ADR 0356 決定2・4 の後は再開も面接室を準備して作り直す
+it("受験者の解放と再開の pickup は受験者 id の行を作らず、面接室(root id)の行も変えない(#2948 / ADR 0356 決定4)", async () => {
+  const { db, room, examinee, checkout, roomRow, examineeRow, roomBefore } = await roomWithPickedExaminee();
 
-  await prepareAtPickup(db, checkout, examinee, { live });
+  releaseWorkspace(db, checkout, examinee, NOW);
+  await prepareAtPickup(db, room, examinee);
 
-  expect(baseline(db, examinee.id).get("HEAD")).toBe("symref=refs/heads/main");
+  expect(examineeRow()).toBeUndefined();
   expect(roomRow()).toBe(roomBefore);
   db.close();
 });
@@ -502,8 +501,9 @@ it("検査が落ちて回答が拒否されたとき、基準の行は変わら�
   db.close();
 });
 
-it("面接室の名前への受理は面接室の行と未決着の受験者の行をそれぞれの checkout から撮り直し、受験者の値は面接室の行に入らない(ADR 0351 決定4)", async () => {
-  const { db, root, room, examinee, checkout } = await roomWithPickedExaminee();
+// 旧: 未決着の受験者の行もその checkout から撮り直した(ADR 0276 決定3)。ADR 0356 決定4 の後は受験者の task の checkout に基準は無い
+it("面接室の名前への受理は面接室の行だけを撮り直し、受験者の task の checkout の ref はどの行にも入らない(ADR 0351 決定4 / ADR 0356 決定4)", async () => {
+  const { db, root, room, checkout, examineeRow } = await roomWithPickedExaminee();
   git(room.path, "branch", "room-repair");
   git(checkout.path, "branch", "examinee-repair");
 
@@ -511,9 +511,8 @@ it("面接室の名前への受理は面接室の行と未決着の受験者の�
 
   expect(baseline(db, root.id)).toEqual(currentRefSet(room.path));
   expect(baseline(db, root.id).has("refs/heads/room-repair")).toBe(true);
-  expect(baseline(db, examinee.id)).toEqual(currentRefSet(checkout.path));
-  expect(baseline(db, examinee.id).has("refs/heads/examinee-repair")).toBe(true);
-  expect([...baseline(db, root.id).keys()].filter((ref) => ref.includes("examinee-repair") || ref.includes(examinee.id))).toEqual([]);
+  expect(baseline(db, root.id).has("refs/heads/examinee-repair")).toBe(false);
+  expect(examineeRow()).toBeUndefined();
   db.close();
 });
 

@@ -113,7 +113,6 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   completionTreePaths,
-  isTaskCheckout,
   KEPT_TASK_CHECKOUT,
   type RunPlace,
   recordTaskCheckoutTip,
@@ -331,7 +330,7 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): RunPlace | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  // 門と後始末は走る場所に効く —— interview の root は面接室、受験者は自分の checkout(ADR 0273 決定1・8 / ADR 0276 決定1)
+  // 門と後始末は走る場所(task の checkout、ADR 0356 決定1)に効く
   return workspace && taskRunPlace(deps.db, task, workspace);
 }
 
@@ -351,7 +350,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
   }
   let paths: string[];
   try {
-    paths = completionTreePaths(workspace, task.id, deps.db);
+    paths = completionTreePaths(workspace, task.id);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
@@ -368,18 +367,17 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
 
 /** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を強制回収で決着させる —— 拒めば worker
  *  は verb を繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に
- *  後始末を繋ぐ(ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。 */
-function forceReclaimOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError): never {
-  const taskCheckout = isTaskCheckout(workspace);
+ *  後始末を繋ぐ(ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。
+ *  出題の写しが root の worktree を読む手も同じ扱い(#3031 の決定)。走る場所は全部 task の checkout(ADR 0356 決定1)。 */
+function forceReclaimOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError, at = "at the completion gate"): never {
   registerFailureAndMarkTeardown(
     deps.db,
     task,
     `${err.message}: ${task.title}`,
-    `${err.message} at the completion gate, so the board ended this session: a worker's tree that stalls the board's git is a worker repo failure.` +
-      (taskCheckout ? ` If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; ${KEPT_TASK_CHECKOUT.beyondBranch}` : ""),
+    `${err.message} ${at}, so the board ended this session: a worker's tree that stalls the board's git is a worker repo failure.` +
+      ` If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; ${KEPT_TASK_CHECKOUT.beyondBranch}`,
     deps.clock.now(),
-    // ADR 0276: 受験者は自分の checkout で再開するので、新しい checkout の文は task の checkout に限る
-    taskCheckout ? KEPT_TASK_CHECKOUT.retry : undefined,
+    KEPT_TASK_CHECKOUT.retry,
   );
   reclaimIntoTeardown(teardownDeps(deps), deps.containers, task.id, deps.slot.currentSessionId!, workspace);
   throw new DomainError(SESSION_OVER_TOOL_ERROR);
@@ -784,8 +782,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Pose this Interview's probe: the title, the probe (the problem statement every target solves), the completion " +
           "criteria and the rubric you will score the answers against. Before posing, compose the environment the probe needs in your " +
-          "working directory, the interview room: the board commits a copy of its working tree, as it stands, as the head every answer " +
-          "starts from, without touching your checkout. The board logs all four as one decision, registers a review that audits the " +
+          "working directory, your checkout of the interview room: the board copies your working tree, as it stands, into the room " +
+          "as the head every answer starts from, without touching your checkout. The board logs all four as one decision, registers a review that audits the " +
           "probe, blocks this task and frees the slot. If the audit accepts it, the board registers one answer task per target in " +
           "get_current_task's interview_targets with the same title, the probe as its purpose and the same completion criteria, and " +
           "this task stays blocked until every answer settles; once they settle you resume and finish with complete_interview. If the " +
@@ -814,12 +812,21 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             const audit = poseProbe(deps.db, task, input, actorId, now, "worker", head);
             return { audit_id: audit.id, parent_status: "blocked" };
           },
-          (task, room) => {
+          (task, place) => {
             assertPosable(deps.db, task);
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
             }
-            head = commitRoomCopy(deps.db, room);
+            try {
+              head = commitRoomCopy(deps.db, place, task.id);
+            } catch (err) {
+              if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
+              // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
+              if (err instanceof TaskCheckoutUnreadableError) {
+                throw new DomainError(`${err.message} — the board cannot copy your working tree for the targets, so the probe is not posed. Restore your task branch and call pose_probe again, or escalate.`);
+              }
+              throw err;
+            }
           },
         );
       },

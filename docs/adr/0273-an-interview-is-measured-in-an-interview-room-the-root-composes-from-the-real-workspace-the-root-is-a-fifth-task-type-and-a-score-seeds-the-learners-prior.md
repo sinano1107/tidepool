@@ -1,5 +1,7 @@
 # Interview は、実環境を読む root が面接室に組んだ環境で測る —— root は第5の task type `interview` で、採点は学習器の観測ではなく事前分布の種である
 
+**Status 追記: 決定1 の「root はそこ(面接室)を cwd にして組む」は [ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定1 で「面接室から開いた task の checkout で組み、面接室は盤面だけが書く」に変わった(2026-11-07、issue #2956 / #3031)。決定3 の出題の写しは root の checkout の作業ツリーを盤面の view で面接室の objects に作る(同 決定3・6)。面接室を決着後も消さないこと、決定8 の止める単位(root id)はそのまま。**
+
 **Status 追記: 決定1 の「受験者はここ(面接室)で解く」は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で「出題の head から fetch した自分の checkout で解く」に変わった(2026-10-19)。root が面接室で組むこと、面接室を決着後も消さないこと、決定8 の止める単位(root id)はそのまま。**
 
 **Status 追記: 決定7 の種は、routing meta-review の材料の節と `list_routing_cells` に表の行の有無を問わず出る(issue #2594 / ADR 0319)。** 対象は表に無いセルが前提(ADR 0199 決定5)なので、行のある種だけを出すと種が review に届かなかった。学習器が行のある (セル, 段) の種だけで移る規則(spec #2190)は変えない。

@@ -13,17 +13,15 @@ import { queueReturnHandler } from "../src/watchdog.js";
 import {
   boardRefWriter,
   commitRoomCopy,
-  openExamineeCheckout,
   openInterviewRoom,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   releaseWorkspace,
   taskBranchExists,
-  taskRunPlace,
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 基準は切れない(ADR 0351 決定2): 行のある pickup は全撮りの代わりに比べ、release はタスクブランチの行を畳み、2値行は ref が持つ側に畳む(#2953)。
@@ -256,10 +254,9 @@ async function restedRoom(name: string, pose: boolean) {
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: ws.name, interview_targets: [target] }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir(`${name}-rooms-`);
   openInterviewRoom(db, root, base, NOW);
-  const room = taskRunPlace(db, root, ws);
-  await prepareAtPickup(db, room, root);
-  const [examinee] = pose ? (poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, room)) as [Task]) : [];
-  releaseWorkspace(db, room, root, NOW);
+  const { room, place } = await pickUpInterviewRoot(db, root, ws);
+  const [examinee] = pose ? (poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id)) as [Task]) : [];
+  releaseWorkspace(db, place, root, NOW);
   expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
   return { db, ws, root, room, base: dirname(room.path), examinee };
 }
@@ -272,10 +269,10 @@ it("在り処が消えて手で `git init` し直した面接室を、受理の�
   await quarantineChecks({ db }).workspace!(root.id);
 
   openInterviewRoom(db, root, base, NOW);
-  await prepareAtPickup(db, taskRunPlace(db, root, ws), root);
+  const { place } = await pickUpInterviewRoot(db, root, ws);
 
   expect(git(room.path, "log", "-1", "--format=%s", "main")).toBe("Initial commit");
-  releaseWorkspace(db, taskRunPlace(db, root, ws), root, NOW);
+  releaseWorkspace(db, place, root, NOW);
   expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
 });
 
@@ -291,16 +288,14 @@ it("HEAD が orphan の branch にあって main が既に在る記録済みの�
 });
 
 it("盤面が一度も開いていない受験者の checkout の在り処に repo があるまま面接室の名前の quarantine を受理しても、その受験者の最初の pickup は止まらない(ADR 0351 決定2)", async () => {
-  const { db, ws, root, base, examinee } = await restedRoom("unopened-examinee-accept", true);
+  const { db, root, room, base, examinee } = await restedRoom("unopened-examinee-accept", true);
   const leftover = conventionCheckoutPath(examinee!.id, base);
   git(base, "init", "--quiet", "--initial-branch=main", leftover);
   git(leftover, "commit", "--quiet", "--allow-empty", "-m", "left here before the board opened it");
   quarantineWorkspace(db, root.id, new Error("repaired by hand"), NOW);
   await quarantineChecks({ db, workspacesDir: base }).workspace!(root.id);
 
-  openExamineeCheckout(db, examinee!, base, NOW);
-  const checkout = taskRunPlace(db, examinee!, ws);
-  await prepareAtPickup(db, checkout, examinee!);
+  const checkout = await prepareAtPickup(db, room, examinee!, { workspacesBaseDir: base });
 
   expect(git(checkout.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${examinee!.id}`);
 });

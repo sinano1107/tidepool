@@ -577,7 +577,7 @@ const defaultRunOk: RunOkFn = (command, args) => {
 
 /** 上限を掛けない(#3033 の Implementation Decisions の `tracked()`): task の checkout は pickup ごとに作り直すので(ADR 0356
  *  決定2)、spawn の前のここではまだ worker が書いておらず、読むのは checkout 自身の index で view は無い。`ls-files` は #2966 の
- *  FIFO の表のどの置き場所でも止まらなかった。session をまたいで使い回す面接室と受験者の checkout は #3031 で移る。 */
+ *  FIFO の表のどの置き場所でも止まらなかった。Interview の root と受験者も pickup ごとに作り直す task の checkout で走る。 */
 function tracked(workspacePath: string, path: string): boolean {
   const indexed = spawnSync("git", ["ls-files", "--", path], {
     cwd: workspacePath,

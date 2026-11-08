@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -63,6 +63,7 @@ import {
   decomposeTask,
   getTask,
   humanDecomposeTask,
+  interviewRoomPath,
   interviewRootIdOf,
   isRca,
   listBoard,
@@ -91,6 +92,7 @@ import {
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   type RunPlace,
+  recordedInterviewRoom,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -768,23 +770,23 @@ export async function initWorkspaceCheckout(path: string, name: string): Promise
   return { name, path };
 }
 
-/** pickup の準備(ADR 0356 決定2): 名前の場所を準備し、work / review なら task の checkout を開いて走る場所を返す —— worker の
- *  書き込みは返った `path` に、解放は返った場所に当てる。この session の pickup の event が無ければ(未 pickup、または前の
- *  session の checkout が既に開いている再開)1つ刻む —— 番地の鍵は pickup の event id。基点は呼び手ごとの使い捨て dir。 */
+/** pickup の準備(ADR 0356 決定2): 名前の場所(Interview の root と受験者は面接室)を準備し、task の checkout を開いて走る場所を返す ——
+ *  worker の書き込みは返った `path` に、解放は返った場所に当てる。この session の pickup の event が無ければ(未 pickup、または前の
+ *  session の checkout が既に開いている再開)1つ刻む —— 番地の鍵は pickup の event id。基点は呼び手ごとの使い捨て dir。
+ *  `real` は root が読む実環境(走る場所の `reads`)で、無ければ `workspace`。 */
 export async function prepareAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: Partial<Parameters<typeof prepareWorkspaceAtPickup>[3]> = {},
+  board: Partial<Parameters<typeof prepareWorkspaceAtPickup>[3]> & { real?: WorkspaceConfig } = {},
 ): Promise<RunPlace> {
-  const checkout = interviewRootIdOf(db, task) === undefined;
   const now = board.now ?? new Date("2026-11-07T00:00:00.000Z");
-  if (checkout && (!latestEventOfTask(db, task.id, "task_picked_up") || taskCheckoutPath(db, task.id) !== undefined)) {
+  if (!latestEventOfTask(db, task.id, "task_picked_up") || taskCheckoutPath(db, task.id) !== undefined) {
     appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: { kind: "task_picked_up" }, at: now });
   }
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now });
-  return checkout && taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, workspace) : { ...workspace, reads: [] };
+  return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
 
 /** その task のこの session の task の checkout(ADR 0356 決定1)—— 盤面の pickup の後に worker が書く在り処。 */
@@ -804,7 +806,12 @@ export function recordCheckoutAtWorkspace(
   defaultWorkspace: string,
   workspacesDir?: string,
 ): void {
-  if (interviewRootIdOf(db, task) !== undefined) return;
+  const rootId = interviewRootIdOf(db, task);
+  if (rootId !== undefined) {
+    // Interview の場所は面接室から開く(ADR 0356 決定1)—— 面接室を開いていない adapter の盤面では何もしない
+    if (interviewRoomPath(db, rootId) !== undefined) openTestInterviewCheckout(db, task);
+    return;
+  }
   let path: string;
   try {
     path = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), defaultWorkspace, task.workspace, resolveWorkspacesBaseDir(workspacesDir)).path;
@@ -1100,14 +1107,31 @@ export function openTestInterviewRoom(db: Db, root: Task): void {
   openInterviewRoom(db, root, base, new Date(0));
 }
 
-/** setup のみ: 受験者の pickup が開く自分の checkout の代わりに、空コミットだけの repo を在り処として残す(ADR 0276 決定1)—— 盤面の
- *  pickup を通らずに受験者を adapter で走らせるテストが置く。 */
-export function openTestExamineeCheckout(db: Db, examinee: Task): string {
-  const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-examinee-")));
+/** setup のみ: 面接室を開いた root を scheduler と同じ順で拾う —— 面接室を名前の場所として準備し、task の checkout を開く(ADR 0356 決定1)。
+ *  基点は面接室と同じ規約の基点、`real` は root が読む実環境。 */
+export async function pickUpInterviewRoot(db: Db, root: Task, real: WorkspaceConfig, board: Parameters<typeof prepareAtPickup>[3] = {}) {
+  const room = recordedInterviewRoom(db, root.id)!;
+  const base = dirname(room.path);
+  const place = await prepareAtPickup(db, room, root, { real, workspacesBaseDir: base, ...board });
+  return { room, base, place };
+}
+
+/** setup のみ: 実環境 `name` を読む Interview の root を登録し、面接室を開いて拾った姿。 */
+export async function pickedInterviewRoot(db: Db, name: string, at: Date, targets: object[] = [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }]) {
+  const workspace = await makeWorkspace(name);
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: targets as never }, at, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  return { workspace, root, ...(await pickUpInterviewRoot(db, root, workspace)) };
+}
+
+/** setup のみ: Interview の root・受験者の pickup が面接室から開く task の checkout の代わりに、空コミットだけの repo を在り処として
+ *  残す(ADR 0356 決定1・2)—— 盤面の pickup を通らずに root や受験者を adapter で走らせるテストが置く。面接室は先に開いておく。 */
+export function openTestInterviewCheckout(db: Db, task: Task): string {
+  const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-interview-checkout-")));
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
-  appendEvent(db, { taskId: examinee.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
   return path;
 }
 
