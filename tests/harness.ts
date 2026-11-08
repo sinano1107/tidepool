@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -864,7 +864,19 @@ export function recordCheckoutAtWorkspace(
   } catch {
     return;
   }
+  if (existsSync(path)) standInTaskBranch(path, task.id);
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+}
+
+/** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。 */
+function standInTaskBranch(path: string, taskId: string): void {
+  if (!existsSync(join(path, ".git"))) git(path, "init", "--quiet", "--initial-branch=main");
+  try {
+    git(path, "rev-parse", "--verify", "--quiet", "HEAD");
+  } catch {
+    git(path, "commit", "--quiet", "--allow-empty", "-m", "stand-in for the record");
+  }
+  git(path, "update-ref", `refs/heads/task/${taskId}`, "HEAD");
 }
 
 /** adapter の `start` を包み、まだ task の checkout が開いていない task には先に `recordCheckoutAtWorkspace` を撃つ —— workspace を
@@ -1177,6 +1189,10 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+  // Interview の名前の場所は面接室 —— 記録の task branch もそこに置く(ADR 0360 決定1)
+  const rootId = interviewRootIdOf(db, task);
+  const room = rootId === undefined ? undefined : interviewRoomPath(db, rootId);
+  if (room !== undefined && existsSync(room)) standInTaskBranch(room, task.id);
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
   return path;
 }

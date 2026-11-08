@@ -64,6 +64,7 @@ import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { interviewTitle } from "./routing-review.js";
+import { recordedSettingsDisposition } from "./sandbox.js";
 import type { PollOutcome, TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
@@ -118,6 +119,7 @@ import {
   protectedBranchRef,
   quarantineWorkspace,
   redoMergeBacks,
+  refreshProtectedBranch,
   resolveWorkspacesBaseDir,
   retakeRefBaselines,
   taskBranch,
@@ -613,20 +615,20 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now(), result.reason);
     throw new DomainError(`${row} still cannot run: ${result.reason}`);
   };
+  // workspace の検査の失敗は、どれも理由をそのまま人間へ返す回答の拒否である
+  const refuseOnError = async <T>(check: () => T | Promise<T>): Promise<T> => {
+    try {
+      return await check();
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
+      throw new DomainError(err instanceof Error ? err.message : String(err));
+    }
+  };
   return {
     // resolve the named workspace fresh, then verify both its Git tree and its
     // separation from the board's own state
     workspace: async (value) => {
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
-      // workspace の検査の失敗は、どれも理由をそのまま人間へ返す回答の拒否である
-      const refuseOnError = async (check: () => void | Promise<void>) => {
-        try {
-          await check();
-        } catch (err) {
-          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
-          throw new DomainError(err instanceof Error ? err.message : String(err));
-        }
-      };
       // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back → 基準の撮り直し(ADR 0351 決定4)。
       const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
       const all = [...own, ...examinees];
@@ -695,8 +697,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       const codex: CodexWorkspaceCheck = deps.codexWorkspaceContainment ?? (async () => {
         throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
       });
-      // Claude は名前の場所の保護ブランチの tree を読み直す —— 人間が直せるのは保護ブランチで、作業ツリーではない(ADR 0360 決定3)
-      const capability = harness === "codex" ? await codex(target) : claudeWorkspaceContainment(target.path, protectedBranchRef(target));
+      // Claude は名前の場所の保護ブランチの tree を読み直す —— 人間が直せるのは保護ブランチで、作業ツリーではない(ADR 0360 決定3)。
+      // remote-backed なら人間の push を origin から引いてから読む
+      const capability = harness === "codex"
+        ? await codex(target)
+        : await refuseOnError(async () => {
+          await refreshProtectedBranch(deps.db, target, deps.githubAuth);
+          const ref = protectedBranchRef(target);
+          return claudeWorkspaceContainment(recordedSettingsDisposition(target.path, ref), ref, target);
+        });
       if (!capability.available) {
         throw new DomainError(
           `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`,

@@ -194,7 +194,28 @@ it("隠すものが無い spawn でも guard は走る: 隠しが効かなかっ
     expect(question).toBeDefined();
     return question;
   });
-  expect(stop.purpose).toContain("could not exclude .claude/settings.local.json");
+  expect(stop.purpose).toContain(".claude/settings.local.json is in the task checkout but not in the recorded tree");
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
+  expect(claudeSpawnOf(booted.proc, task.id)).toBeUndefined();
+});
+
+it("記録の settings.json を隠しても効かなかった task の checkout(変更中の tracked file は sparse が消さない)は workspace の quarantine に落ちて spawn しない(ADR 0360 決定2)", async () => {
+  const workspace = await makeWorkspace("sparse-hide-failed");
+  await mkdir(join(workspace.path, ".claude"));
+  commitWork(workspace.path, ".claude/settings.json", "{}\n");
+  const booted = await bootClaudeOn(workspace, {
+    beforeStart: (db, taskId) => writeFileSync(join(checkoutOf(db, taskId), ".claude", "settings.json"), '{"hooks":{}}\n'),
+  });
+  t = booted.t;
+  const task = queueWork(t, "work in a checkout the hide misses", workspace.name);
+
+  await t.clock.advance(HOUR);
+  const stop = await vi.waitFor(async () => {
+    const question = await servedQuarantineQuestion(t!, "workspace", workspace.name);
+    expect(question).toBeDefined();
+    return question;
+  });
+  expect(stop.purpose).toContain("could not exclude .claude/settings.json: still in the task checkout after sparse-checkout");
   expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
   expect(claudeSpawnOf(booted.proc, task.id)).toBeUndefined();
 });

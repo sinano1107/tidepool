@@ -1604,14 +1604,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
     // 迂回)。危険なのはその workspace で走る worker だけなので、封じ込め能力の
     // ような盤面全体停止ではなく workspace quarantine。Harness に依らず盤面を
-    // 損なうので、直下の settings ガードのような (Harness, workspace) の組には
+    // 損なうので、直下の settings の組の停止のような (Harness, workspace) の組には
     // 狭めない(ADR 0259)。
     //
-    // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
-    // checkout を workspace 登録した」瞬間で、その checkout は自分の
-    // `.claude/settings.local.json` を持っていることが多い。後ろに置くと真だが
-    // 的外れな診断(「隠せない settings ファイルがある」)が先に立ち、人間は
-    // settings を消して回ることになる。
+    // **settings の判定より先に見る**: この罠が現実に当たるのは「盤面自身の
+    // checkout を workspace 登録した」瞬間である。後ろに置くと、記録の読めなさや
+    // 隠せない `.claude` の組の停止、隠しの guard の quarantine といった真だが的外れな
+    // 診断が先に立ち、人間は settings を直して回ることになる。
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
       stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
@@ -1621,12 +1620,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let recorded: RecordedSettings;
     try {
       recorded = recordedSettingsDisposition(place.namedPlace.path, branch);
-    } catch {
-      // 読めない記録には隠すものが無い —— checkout に何か在れば下の guard が workspace の quarantine に落とす(ADR 0360 決定2)
-      recorded = { hide: [] };
+    } catch (err) {
+      // 判定の入力が読めない名前の場所は、pickup の準備の失敗と同じく workspace の quarantine(ADR 0360 決定1)
+      stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
+      return;
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
-    const contained = claudeWorkspaceContainment(place.namedPlace.path, branch, recorded);
+    const contained = claudeWorkspaceContainment(recorded, branch, place.namedPlace);
     if (!contained.available) {
       const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: contained.reason } as const;
       registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());

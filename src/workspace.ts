@@ -719,7 +719,8 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
   return changes.map(({ path, status }) => `${status} ${displayWorktreePath(path)}`).join(separator);
 }
 
-/** task の checkout を読む view の sparse(#3035): 盤面が settings を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。 */
+/** task の checkout を読む view の sparse(#3035): 盤面が settings を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。
+ *  shortcut: worker が書ける file を読む暫定 —— ADR 0360 決定2 はこの読みを禁じ、#3084 が記録(tip の tree)から導く形に替えて消す。 */
 function taskCheckoutSparse(place: WorkspaceConfig): SparsePolicy | undefined {
   // worker の走った repo では git を撃たない(ADR 0356 決定3)。worker が書ける file なので通常 file だけを読む —— FIFO で止まらない(ADR 0357)
   const patternPath = join(place.path, ".git", "info", "sparse-checkout");
@@ -744,9 +745,12 @@ export function excludeWorkspaceProjectSettings(place: RunPlace, taskId: string,
   if (hide.length > 0) gitWithInput(boardSparsePattern(hide.map(boardSettingsLine)), place.path, "sparse-checkout", "set", "--no-cone", "--stdin");
   // ADR 0360 決定2: 隠したか否かに依らず盤面自身の実体化を確かめる —— 残れば CLI が読む(ADR 0346 決定1)ので spawn しない
   for (const path of PROJECT_SETTINGS_PATHS) {
-    if (lstatSync(join(place.path, path), { throwIfNoEntry: false })) {
-      throw new Error(`workspace ${place.name}: could not exclude ${path}: still in the task checkout after sparse-checkout`);
-    }
+    if (!lstatSync(join(place.path, path), { throwIfNoEntry: false })) continue;
+    throw new Error(
+      hide.includes(path)
+        ? `workspace ${place.name}: could not exclude ${path}: still in the task checkout after sparse-checkout`
+        : `workspace ${place.name}: ${path} is in the task checkout but not in the recorded tree, so the board has nothing to exclude it with`,
+    );
   }
 }
 
