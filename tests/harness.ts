@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -92,6 +92,7 @@ import {
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   type RunPlace,
+  recordedInterviewRoom,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -1104,6 +1105,23 @@ export function openTestInterviewRoom(db: Db, root: Task): void {
   const base = mkdtempSync(join(tmpdir(), "tidepool-rooms-"));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   openInterviewRoom(db, root, base, new Date(0));
+}
+
+/** setup のみ: 面接室を開いた root を scheduler と同じ順で拾う —— 面接室を名前の場所として準備し、task の checkout を開く(ADR 0356 決定1)。
+ *  基点は面接室と同じ規約の基点、`real` は root が読む実環境。 */
+export async function pickUpInterviewRoot(db: Db, root: Task, real: WorkspaceConfig, board: Parameters<typeof prepareAtPickup>[3] = {}) {
+  const room = recordedInterviewRoom(db, root.id)!;
+  const base = dirname(room.path);
+  const place = await prepareAtPickup(db, room, root, { real, workspacesBaseDir: base, ...board });
+  return { room, base, place };
+}
+
+/** setup のみ: 実環境 `name` を読む Interview の root を登録し、面接室を開いて拾った姿。 */
+export async function pickedInterviewRoot(db: Db, name: string, at: Date, targets: object[] = [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }]) {
+  const workspace = await makeWorkspace(name);
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: targets as never }, at, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  return { workspace, root, ...(await pickUpInterviewRoot(db, root, workspace)) };
 }
 
 /** setup のみ: Interview の root・受験者の pickup が面接室から開く task の checkout の代わりに、空コミットだけの repo を在り処として

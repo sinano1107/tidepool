@@ -7,7 +7,7 @@ import { listEvents } from "../src/events.js";
 import { boardViewStatus, boardWriteTree } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, completionTreePaths, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -20,7 +20,7 @@ import {
   HOUR,
   HUMAN_WEBUI,
   makeWorkspace,
-  openTestInterviewRoom,
+  pickedInterviewRoot,
   poseAccepted,
   prepareAtPickup,
   quarantineQuestion,
@@ -174,19 +174,14 @@ it("task の checkout でない場所の完了経路の検査は worker の tree
 
   const failure = thrown(() => completionTreePaths(ws, "t1"));
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(failure).toMatchObject({ message: "task t1 does not run in a task checkout" });
+  expect(failure).toMatchObject({ message: `task t1 does not run in a task checkout (${ws.path})` });
   await expectNoReader(fifo);
 });
 
 /** 面接室を開いて root を拾った姿: root の task の checkout は面接室から開く(ADR 0356 決定1)。 */
 async function pickedRoot(name: string) {
-  const workspace = await makeWorkspace(name);
   db = openDb(":memory:");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, NOW, ...HUMAN_WEBUI);
-  openTestInterviewRoom(db, root);
-  const room = recordedInterviewRoom(db, root.id)!;
-  const place = await prepareAtPickup(db, room, root, { real: workspace });
-  return { db, root, room, place };
+  return { db, ...(await pickedInterviewRoot(db, name, NOW)) };
 }
 
 it("root の .gitignore が FIFO なら出題の写しは上限超過の型で投げ、面接室に出題の head を置かず git を残さない(ADR 0357 決定1 / #3031)", async () => {
@@ -234,6 +229,26 @@ it("FIFO の .gitignore を残した Interview の root の pose_probe は拒ま
   const failure = (await questions(board)).find((question) => question.parent_id === root.id);
   expect(failure.title).toMatch(/`git \S+` on the worker's tree did not finish within 1 s/);
   expect(failure.purpose).toContain("while copying the probe's environment");
+  expect(listEvents(board.db, root.id).filter(({ payload }) => payload.kind === "decision_logged")).toEqual([]);
+  expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
+});
+
+it("root が自分の .git を消した pose_probe は、読めない理由と出口を名指す tool error で拒まれ、session は続き、出題も quarantine も無い(complete_task と同じ形、#3031)", async () => {
+  const ws = await makeWorkspace("worker-tree-pose-unreadable");
+  const board = await bootTidepool({ workspace: ws });
+  t = board;
+  const root = (await api(board.baseUrl, "POST", "/api/tasks", { type: "interview", title: "interview", hypothesis: "h", tier: "frontier", interview_targets: [{ provider: "anthropic", model: "claude-opus-4-6", effort: "high" }] })).json;
+  await board.clock.advance(HOUR);
+  const checkout = checkoutOf(board.db, root.id);
+  rmSync(join(checkout, ".git"), { recursive: true });
+
+  const res = await callAsTask(board, root.id, "pose_probe", { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" });
+
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain(`the task checkout at ${checkout} has no git repository`);
+  expect(res.content[0].text).toContain("Restore your task branch and call pose_probe again, or escalate");
+  expect(board.containers.forceReclaims).toEqual([]);
+  expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
   expect(listEvents(board.db, root.id).filter(({ payload }) => payload.kind === "decision_logged")).toEqual([]);
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
 });

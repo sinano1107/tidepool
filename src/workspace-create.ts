@@ -605,7 +605,7 @@ function assertReusableOrphan(dir: string, wanted: string | undefined): void {
  *
  *  `-b main` は明示が必須である — ホストの `init.defaultBranch` は盤面の管理下に
  *  なく、`master` の環境では初期ブランチ名が保護ブランチの既定(`main`)とずれて
- *  `ensureTaskBranch`(workspace.ts)が pickup 時に落ちる。初期コミットが要るのは
+ *  pickup がタスクブランチの fork 元を引けずに落ちる。初期コミットが要るのは
  *  同じ理由で、空リポジトリには `main` が存在しない。`repo` を書かないため、生まれる
  *  workspace は構造的に purely-local である(ADR 0052 決定3)。 */
 function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): WorkspaceEntry {

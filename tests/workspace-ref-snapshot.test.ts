@@ -111,8 +111,8 @@ it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と�
 });
 
 // ADR 0064 決定1/2: 見張るのは `refs/*` 全部で、除外は自分のタスクブランチ1本のみ。
-// 別の非保護ブランチへ寄り道して戻ってくる形は、`releaseTree` の HEAD 検査を素通り
-// する —— 終了時点の HEAD は自分のタスクブランチだからである。
+// 別の非保護ブランチへ寄り道して戻ってくる形は、checkout の HEAD の位置を読んでも見えない
+// —— 終了時点の HEAD は自分のタスクブランチだからである。ref の基準の比較が拾う。
 it("worker が別の非保護ブランチを変更して自ブランチへ戻っても quarantine に落ちる", async () => {
   const ws = await makeWorkspace("sandbox");
   git(ws.path, "branch", "sibling");

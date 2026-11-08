@@ -10,9 +10,9 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordedInterviewRoom, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
@@ -369,8 +369,7 @@ async function roomWithPickedExaminee() {
   const workspace = await makeWorkspace("gate-examinee-real");
   const root = interviewRoot(db, workspace, NOW);
   openTestInterviewRoom(db, root);
-  const room = recordedInterviewRoom(db, root.id)!;
-  const rootPlace = await prepareAtPickup(db, room, root, { real: workspace });
+  const { room, place: rootPlace } = await pickUpInterviewRoot(db, root, workspace);
   const head = commitRoomCopy(db, rootPlace, root.id);
   const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", head) as [Task];
   releaseWorkspace(db, rootPlace, root, NOW);

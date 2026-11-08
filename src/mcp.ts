@@ -782,8 +782,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Pose this Interview's probe: the title, the probe (the problem statement every target solves), the completion " +
           "criteria and the rubric you will score the answers against. Before posing, compose the environment the probe needs in your " +
-          "working directory, the interview room: the board commits a copy of its working tree, as it stands, as the head every answer " +
-          "starts from, without touching your checkout. The board logs all four as one decision, registers a review that audits the " +
+          "working directory, your checkout of the interview room: the board copies your working tree, as it stands, into the room " +
+          "as the head every answer starts from, without touching your checkout. The board logs all four as one decision, registers a review that audits the " +
           "probe, blocks this task and frees the slot. If the audit accepts it, the board registers one answer task per target in " +
           "get_current_task's interview_targets with the same title, the probe as its purpose and the same completion criteria, and " +
           "this task stays blocked until every answer settles; once they settle you resume and finish with complete_interview. If the " +
@@ -821,6 +821,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               head = commitRoomCopy(deps.db, place, task.id);
             } catch (err) {
               if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
+              // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
+              if (err instanceof TaskCheckoutUnreadableError) {
+                throw new DomainError(`${err.message} — the board cannot copy your working tree for the targets, so the probe is not posed. Restore your task branch and call pose_probe again, or escalate.`);
+              }
               throw err;
             }
           },

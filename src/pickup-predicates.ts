@@ -102,7 +102,7 @@ function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: 
 /** 面接室の述語(ADR 0329 決定4)。出題済みで受験者が未決着なら、空の面接室で走らせる出口は出題の head の述語で通らない(決定5)。 */
 export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: string, registry?: RegistrySource): PickupPredicate[] {
   const posed = unsettledExaminees(db, rootId).length > 0 && latestPosedProbe(db, rootId) !== null;
-  return recordedPlacePredicates(db, rootId, workspacesBaseDir, registry, {
+  return recordedRoomPredicates(db, rootId, workspacesBaseDir, registry, {
     recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`,
     create: "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there).",
   });
@@ -143,7 +143,7 @@ export function namePickupPredicates(
 
 /** 記録された場所(面接室)の2分岐(ADR 0329 決定1): event があれば repo がある(作り直さない)、無ければ番地を作れる —— 作る前に repo が
  *  既にあれば、開いた後の checkout と同じ述語が当たる。 */
-function recordedPlacePredicates(
+function recordedRoomPredicates(
   db: Db,
   rootId: string,
   workspacesBaseDir: string,

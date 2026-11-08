@@ -39,7 +39,7 @@ import {
   safeRealpath,
 } from "./pickup-predicates.js";
 import { openQuarantineQuestion, registerResourceStop } from "./quarantine.js";
-import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
+import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import {
   fetchBranchCopy,
   fetchCommit,
@@ -111,6 +111,11 @@ type TaskCheckoutPlace = RunPlace & { namedPlace: WorkspaceConfig };
 
 export const isTaskCheckout = (place: WorkspaceConfig): place is TaskCheckoutPlace => (place as RunPlace).namedPlace !== undefined;
 
+/** worker の形で走る process は全部 task の checkout で走る(ADR 0356 決定1)—— 名前の場所に当てる門・解放・写しは無い。 */
+function assertTaskCheckout(place: WorkspaceConfig, taskId: string): asserts place is TaskCheckoutPlace {
+  if (!isTaskCheckout(place)) throw new Error(`task ${taskId} does not run in a task checkout (${place.path})`);
+}
+
 /** 盤面が repo の間で撃つ fetch の共通の旗: FETCH_HEAD に在り処を残さず、submodule を辿らず、auto-gc を撃たない(ADR 0276 決定1 / ADR 0356 決定5)。 */
 const FETCH_FLAGS = ["--quiet", "--no-auto-gc", "--no-write-fetch-head", "--no-recurse-submodules"] as const;
 
@@ -178,10 +183,17 @@ export function resolveExecutionWorkspace(
 
 /** ADR 0329: repo を作ってから開いた event を残す。記録済みの面接室は作り直さず、未生の HEAD だけ空コミットで補う。 */
 export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
-  const path = openRecordedPlace(db, root.id, "interview_room_opened", workspacesBaseDir, now, (path) => {
+  const recorded = recordedPlace(db, root.id);
+  if (recorded && !recorded.hasRepository) throw new Error(gonePlaceReason(root.id, recorded.path));
+  let path = recorded?.path;
+  if (path === undefined) {
+    const at = conventionCheckoutPath(root.id, workspacesBaseDir);
+    mkdirSync(at, { recursive: true });
+    path = realpathSync(at);
     git(path, "init", "--quiet", "--initial-branch=main");
     initialRoomCommit(path, root.id);
-  });
+    appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "interview_room_opened", path }, at: now });
+  }
   reopenUnbornRoom(db, { name: root.id, path });
 }
 
@@ -205,20 +217,6 @@ function reopenUnbornRoom(db: Db, room: WorkspaceConfig): void {
     // ADR 0329 決定13: 未生の HEAD だけ main へ向け直す —— 人間の init.defaultBranch に依らない。
     git(room.path, "symbolic-ref", "HEAD", "refs/heads/main");
   });
-}
-
-function openRecordedPlace(db: Db, taskId: string, kind: RecordedPlaceKind, workspacesBaseDir: string, now: Date, build: (path: string) => void): string {
-  const recorded = recordedPlace(db, taskId);
-  if (recorded) {
-    if (!recorded.hasRepository) throw new Error(gonePlaceReason(taskId, recorded.path));
-    return recorded.path;
-  }
-  const at = conventionCheckoutPath(taskId, workspacesBaseDir);
-  mkdirSync(at, { recursive: true });
-  const path = realpathSync(at);
-  build(path);
-  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind, path }, at: now });
-  return path;
 }
 
 /** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。 */
@@ -320,13 +318,26 @@ function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_
  *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`roomsReadBy`)。開く前の対(開く場所の列挙)は
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
-  const rootId = interviewRootIdOf(db, task);
-  const named = rootId === undefined ? workspace : recordedInterviewRoom(db, rootId);
-  if (!named) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
+  const named = taskNamedPlace(db, task, workspace);
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined) throw new PlaceNotOpenError(`the task checkout of ${task.id} is not open`);
-  const reads = task.type === "interview" ? [workspace, ...roomsReadBy(db, task)] : roomsReadBy(db, task);
+  const reads = interviewRole(db, task) === "root" ? [workspace, ...roomsReadBy(db, task)] : roomsReadBy(db, task);
   return { ...named, path, reads: reads.map(inRealSpelling), namedPlace: named };
+}
+
+/** Interview での役(ADR 0273 決定1・2 / ADR 0276): `interview` type の root か、その受験者。work・review は undefined。 */
+function interviewRole(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): "root" | "examinee" | undefined {
+  if (interviewRootIdOf(db, task) === undefined) return undefined;
+  return task.type === "interview" ? "root" : "examinee";
+}
+
+/** task の checkout を作り、解放で着ける名前の場所(ADR 0356 決定1): task の workspace、interview の root と受験者は面接室。 */
+export function taskNamedPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">, workspace: WorkspaceConfig): WorkspaceConfig {
+  const rootId = interviewRootIdOf(db, task);
+  if (rootId === undefined) return workspace;
+  const room = recordedInterviewRoom(db, rootId);
+  if (!room) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
+  return room;
 }
 
 /** 読む場所を実体の綴りで —— sandbox の読みの path と cwd・root に渡す在り処が同じ綴りになる(issue #1954)。 */
@@ -350,17 +361,17 @@ export class TaskCheckoutHostError extends Error {}
 /** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
  *  前の session が残した checkout は動かさず再利用もしない。objects は名前の場所から alternates で借り、タスクブランチだけを
  *  fetch して checkout する。Interview の場所は alternates を使わず複製で、自分のブランチだけを引くので兄弟の答案は見えない
- *  (ADR 0356 決定2 追記)。root の番地は面接室(基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。
+ *  (ADR 0356 決定2)。root の番地は面接室(基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。
  *  開いた event は repo ができた後に書く(ADR 0329)。 */
 function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: Date): void {
   const pickup = latestEventOfTask(db, task.id, "task_picked_up");
   if (!pickup) throw new Error(`task ${task.id} has no pickup to key its task checkout`);
   const branch = taskBranch(task.id);
   // 名前の場所の objects が引けないのは名前の場所の性質 —— host 側の失敗に包まず、呼び手の quarantine へ
-  const objects = interviewRootIdOf(db, task) === undefined ? namedObjects(named) : undefined;
+  const objects = interviewRole(db, task) === undefined ? namedObjects(named) : undefined;
   let path: string;
   try {
-    const at = join(conventionCheckoutPath(task.type === "interview" ? `${task.id}.checkout` : task.id, workspacesBaseDir), String(pickup.id));
+    const at = join(conventionCheckoutPath(interviewRole(db, task) === "root" ? `${task.id}.checkout` : task.id, workspacesBaseDir), String(pickup.id));
     mkdirSync(at, { recursive: true });
     path = realpathSync(at);
     git(path, "init", "--quiet", "--template=", "--initial-branch=main");
@@ -422,7 +433,7 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string, completedRevie
 
 /** ADR 0359 決定1: worker の tip が名前の場所のタスクブランチになるまで完了の門を通さない。 */
 export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): void {
-  if (!isTaskCheckout(place)) return;
+  assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const tip = fetchWorkerTip(place, taskId);
   const ref = `refs/heads/${taskBranch(taskId)}`;
@@ -540,7 +551,7 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
  *  worker の config・index・hooks は写しに効かない。ignore されたファイルと shadow 残骸は写らない(新しい clone と同じ)。ref は受験者が
  *  fetch する元(ADR 0276 決定1)で、却下された出題の写しも object として残す。 */
 export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string {
-  if (!isTaskCheckout(place)) throw new Error(`task ${taskId} does not run in a task checkout`);
+  assertTaskCheckout(place, taskId);
   const room = place.namedPlace;
   // view の index の種は worker の tip —— session の最中なのでサンドボックスの shadow 残骸がまだある。tree rule と同じ集合を外す(ADR 0069)
   const tip = fetchWorkerTip(place, taskId);
@@ -673,7 +684,7 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
 function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   if (taskBranchExists(workspace, task.id)) return;
   const ref = `refs/heads/${taskBranch(task.id)}`;
-  const sha = task.type !== "interview" && interviewRootIdOf(db, task) !== undefined
+  const sha = interviewRole(db, task) === "examinee"
     ? resolvablePosedHead(db, workspace, task)
     : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace)}^{commit}`);
   boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "update-ref", ref, sha, ""));
@@ -1246,7 +1257,7 @@ function taskCheckoutChanges(place: TaskCheckoutPlace, tip: string): WorktreeCha
 
 /** ADR 0359 決定1: task の checkout の観測が落ちれば門を通さない。work は全部 task の checkout で走る(ADR 0356 決定1)。 */
 export function completionTreePaths(workspace: WorkspaceConfig, taskId: string): string[] {
-  if (!isTaskCheckout(workspace)) throw new Error(`task ${taskId} does not run in a task checkout`);
+  assertTaskCheckout(workspace, taskId);
   const tip = git(workspace.namedPlace.path, "rev-parse", "--verify", `refs/heads/${taskBranch(taskId)}`);
   return taskCheckoutChanges(workspace, tip).map(({ path }) => path);
 }
@@ -1291,7 +1302,7 @@ function observeCheckoutAfterCompletion(place: TaskCheckoutPlace, taskId: string
 function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   try {
-    // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、人間の修理(ADR 0239 帰結の `merge -s ours`)や origin にしか無い
+    // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、人間の修理(ADR 0239 帰結の `merge -s ours`、ADR 0351 決定1・4)や origin にしか無い
     // 保護ブランチは HEAD を保護ブランチの外に置く
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
@@ -1323,8 +1334,8 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
 /** Quarantine resolution's verification gate (issue #21, GLOSSARY.md): the
  *  board never takes a repair confirmation on faith. Any failure to observe
  *  a clean tree — dirty, or not even a usable git repository — is treated
- *  the same, fail-closed, same posture as the tree rule's own dirty-after-
- *  WIP-commit check. */
+ *  the same, fail-closed, same posture as the pickup's resting check on the
+ *  named place (ADR 0351 決定5). */
 export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
   assertOwnGitDirectory(workspace.path);
   let status: WorktreeChange[];
@@ -1482,8 +1493,7 @@ export function releaseWorkspace(
   /** ADR 0359 決定2・5: 完了の解放は門が掛かる範囲で記録を運び、読めない checkout を観測にする。 */
   completed = false,
 ): void {
-  // ADR 0356 決定1: worker の形で走る process は全部 task の checkout で走る —— 名前の場所に当てる tree rule は無い
-  if (!isTaskCheckout(workspace)) throw new Error(`task ${task.id}: ${workspace.path} is not a task checkout`);
+  assertTaskCheckout(workspace, task.id);
   releaseTaskCheckout(db, workspace, task, now, mergeBack, githubAuth, tokenFailure, completed);
 }
 
@@ -1525,7 +1535,8 @@ function releaseTaskCheckout(
   if (latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path !== checkout) {
     if (!settleTaskCheckout(db, place, task, now, mergeBack, githubAuth, tokenFailure, completed)) return;
     // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない(再実行は同じ決着を撃ち直す)
-    if (task.type !== "interview" && interviewRootIdOf(db, task) !== undefined && isSettled(getTask(db, task.id)!.status)) return;
+    const current = getTask(db, task.id)!;
+    if (interviewRole(db, current) === "examinee" && isSettled(current.status)) return;
     appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
   }
   rmSync(checkout, { recursive: true, force: true, maxRetries: 3 });

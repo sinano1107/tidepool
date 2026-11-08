@@ -10,7 +10,7 @@ import { cancelTaskDirectly, completeAudit, getTask, listExaminees, poseProbe, r
 import { queueReturnHandler } from "../src/watchdog.js";
 import { commitRoomCopy, openInterviewRoom, PickupGateError, pickupGate, recordedInterviewRoom, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -61,10 +61,10 @@ it.each([
   const workspace = await makeWorkspace("first-read");
   db = openDb(":memory:");
   seed(workspace);
-  const { root, room, reads } = await reader(workspace);
+  const { root, reads } = await reader(workspace);
 
-  releaseWorkspace(db, await prepareAtPickup(db, room, root, { reads, real: workspace }), root, NOW);
-  releaseWorkspace(db, await prepareAtPickup(db, room, root, { reads, real: workspace }), root, NOW);
+  releaseWorkspace(db, (await pickUpInterviewRoot(db, root, workspace, { reads })).place, root, NOW);
+  releaseWorkspace(db, (await pickUpInterviewRoot(db, root, workspace, { reads })).place, root, NOW);
   expect(git(workspace.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   git(workspace.path, "tag", "after-first-read");
 
@@ -78,9 +78,9 @@ it("読む場所の fetch・park は同じ基準へ畳み、次に走る pickup 
   releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   const before = git(workspace.path, "rev-parse", "main");
   publish("remote.txt", "remote advanced\n", "landed remotely");
-  const { root, room, reads } = await reader(workspace);
+  const { root, reads } = await reader(workspace);
 
-  releaseWorkspace(db, await prepareAtPickup(db, room, root, { reads, real: workspace }), root, NOW);
+  releaseWorkspace(db, (await pickUpInterviewRoot(db, root, workspace, { reads })).place, root, NOW);
   const advanced = git(workspace.path, "rev-parse", "refs/remotes/origin/main");
   expect(advanced).not.toBe(before);
   expect(git(workspace.path, "rev-parse", "main")).toBe(advanced);
@@ -103,7 +103,7 @@ it("root 配下の監査 review が読む面接室の変更も、面接室の名
   const workspace = await makeWorkspace("read-room-audit");
   db = openDb(":memory:");
   const { root, room, reads, base } = await reader(workspace);
-  const rootPlace = await prepareAtPickup(db, room, root, { reads, real: workspace });
+  const rootPlace = (await pickUpInterviewRoot(db, root, workspace, { reads })).place;
   const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, rootPlace, root.id));
   releaseWorkspace(db, rootPlace, root, NOW);
   git(room.path, "tag", "unexpected-room-tag");
@@ -171,7 +171,7 @@ it("symlink の基点で初めて開く受験者の task の checkout は、読�
   const workspace = await makeWorkspace("read-examinee-alias");
   db = openDb(":memory:");
   const { root, room, reads, base } = await reader(workspace);
-  const rootPlace = await prepareAtPickup(db, room, root, { reads, real: workspace });
+  const rootPlace = (await pickUpInterviewRoot(db, root, workspace, { reads })).place;
   const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, rootPlace, root.id));
   releaseWorkspace(db, rootPlace, root, NOW);
   completeAudit(db, audit, { verdict: "accepted", findings: "the probe measures the target" }, "auditor", NOW, "worker");

@@ -192,7 +192,7 @@ describe("createWorkspace: 新規作成モード(issue #57 / ADR 0066)", () => {
 
     const checkoutDir = join(deps.workspacesBaseDir, "lagoon");
     expect(git(checkoutDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-    // 空リポジトリには main が存在しない(ensureTaskBranch が pickup 時に落ちる)
+    // 空リポジトリには main が存在しない(pickup がタスクブランチの fork 元を引けずに落ちる)
     // ので、初期コミットが実在することも押さえる
     expect(git(checkoutDir, "rev-list", "--count", "HEAD")).toBe("1");
     expect(existsSync(join(checkoutDir, "README.md"))).toBe(false);

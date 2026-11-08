@@ -98,10 +98,10 @@ import {
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   RefsMovedError,
-  recordedInterviewRoom,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   TaskCheckoutHostError,
+  taskNamedPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -640,19 +640,16 @@ export function startScheduler(deps: {
         }
         if (!live()) return;
         // ADR 0273 決定1・8: interview の root の最初の pickup は面接室を開く。作れなければ面接室(root id)の quarantine に落ちる
-        const rootId = interviewRootIdOf(db, picked);
-        if (picked.type === "interview") {
-          try {
-            openInterviewRoom(db, picked, base, clock.now());
-          } catch (err) {
-            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-            return stopped(quarantineWorkspace(db, picked.id, err, clock.now()));
-          }
-        }
         // ADR 0329 決定10・11: 読む場所も remote の有無で絞らず、同じ一覧の後半で休止させる。
         // ADR 0356 決定1: 名前の場所(Interview の root と受験者は面接室)を準備し、準備の最後に task の checkout が開く
-        const place = rootId === undefined ? resolved : recordedInterviewRoom(db, rootId);
-        if (!place) return stopped(quarantineWorkspace(db, rootId!, new Error(`the interview room of ${rootId} is not open`), clock.now()));
+        let place: WorkspaceConfig;
+        try {
+          if (picked.type === "interview") openInterviewRoom(db, picked, base, clock.now());
+          place = taskNamedPlace(db, picked, resolved);
+        } catch (err) {
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+          return stopped(quarantineWorkspace(db, interviewRootIdOf(db, picked)!, err, clock.now()));
+        }
         try {
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now() });
         } catch (err) {

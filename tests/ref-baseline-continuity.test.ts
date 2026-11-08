@@ -15,14 +15,13 @@ import {
   commitRoomCopy,
   openInterviewRoom,
   quarantineWorkspace,
-  recordedInterviewRoom,
   recordTaskCheckoutTip,
   releaseWorkspace,
   taskBranchExists,
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 基準は切れない(ADR 0351 決定2): 行のある pickup は全撮りの代わりに比べ、release はタスクブランチの行を畳み、2値行は ref が持つ側に畳む(#2953)。
@@ -255,8 +254,7 @@ async function restedRoom(name: string, pose: boolean) {
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: ws.name, interview_targets: [target] }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir(`${name}-rooms-`);
   openInterviewRoom(db, root, base, NOW);
-  const room = recordedInterviewRoom(db, root.id)!;
-  const place = await prepareAtPickup(db, room, root, { real: ws, workspacesBaseDir: base });
+  const { room, place } = await pickUpInterviewRoot(db, root, ws);
   const [examinee] = pose ? (poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id)) as [Task]) : [];
   releaseWorkspace(db, place, root, NOW);
   expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
@@ -271,7 +269,7 @@ it("在り処が消えて手で `git init` し直した面接室を、受理の�
   await quarantineChecks({ db }).workspace!(root.id);
 
   openInterviewRoom(db, root, base, NOW);
-  const place = await prepareAtPickup(db, room, root, { real: ws, workspacesBaseDir: base });
+  const { place } = await pickUpInterviewRoot(db, root, ws);
 
   expect(git(room.path, "log", "-1", "--format=%s", "main")).toBe("Initial commit");
   releaseWorkspace(db, place, root, NOW);

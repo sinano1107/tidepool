@@ -18,7 +18,7 @@ import { type ContainerSpawn, ProcessContainers } from "../src/process-container
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task, taskCheckoutPath } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -617,7 +617,7 @@ describe("CodexWorker (ADR 0098)", () => {
     openTestInterviewRoom(f.db, root);
 
     await f.start(root);
-    const checkout = examineeCheckoutPath(f.db, root.id)!;
+    const checkout = taskCheckoutPath(f.db, root.id)!;
 
     // spawn は実体の綴りで書く(issue #864)
     const roomOf = (id: string) => realpathSync(interviewRoomPath(f.db, id)!);

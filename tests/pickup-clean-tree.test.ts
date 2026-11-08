@@ -4,8 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
-import { commitRoomCopy, PickupGateError, recordedInterviewRoom, releaseWorkspace } from "../src/workspace.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted, prepareAtPickup } from "./harness.js";
+import { commitRoomCopy, PickupGateError, releaseWorkspace } from "../src/workspace.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 const NOW = new Date("2026-11-06T00:00:00.000Z");
@@ -71,8 +71,7 @@ async function restingRoom() {
     interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }],
   }, NOW, ...HUMAN_WEBUI);
   openTestInterviewRoom(db, root);
-  const room = recordedInterviewRoom(db, root.id)!;
-  const place = await prepareAtPickup(db, room, root, { real: workspace });
+  const { room, place } = await pickUpInterviewRoot(db, root, workspace);
   const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id));
   releaseWorkspace(db, place, root, NOW);
   return { workspace, root, room, examinee: examinee! };

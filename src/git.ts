@@ -139,11 +139,6 @@ export function boardViewStatus(cwd: string, head: string, objectsFrom: string, 
   }, objectsFrom);
 }
 
-/** `git` に env を足したもの(一時 index の `GIT_INDEX_FILE` 用)。 */
-export function gitWithEnv(env: NodeJS.ProcessEnv, cwd: string, ...args: string[]): string {
-  return run(cwd, args, env).toString().trim();
-}
-
 /** `git` に stdin を渡したもの(`--stdin` を取る subcommand 用)。 */
 export function gitWithInput(input: string, cwd: string, ...args: string[]): string {
   return run(cwd, args, undefined, input).toString().trim();
