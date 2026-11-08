@@ -113,7 +113,6 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   completionTreePaths,
-  isTaskCheckout,
   KEPT_TASK_CHECKOUT,
   type RunPlace,
   recordTaskCheckoutTip,
@@ -368,18 +367,17 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
 
 /** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を強制回収で決着させる —— 拒めば worker
  *  は verb を繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に
- *  後始末を繋ぐ(ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。 */
-function forceReclaimOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError): never {
-  const taskCheckout = isTaskCheckout(workspace);
+ *  後始末を繋ぐ(ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。
+ *  出題の写しが root の worktree を読む手も同じ扱い(#3031 の決定)。走る場所は全部 task の checkout(ADR 0356 決定1)。 */
+function forceReclaimOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError, at = "at the completion gate"): never {
   registerFailureAndMarkTeardown(
     deps.db,
     task,
     `${err.message}: ${task.title}`,
-    `${err.message} at the completion gate, so the board ended this session: a worker's tree that stalls the board's git is a worker repo failure.` +
-      (taskCheckout ? ` If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; ${KEPT_TASK_CHECKOUT.beyondBranch}` : ""),
+    `${err.message} ${at}, so the board ended this session: a worker's tree that stalls the board's git is a worker repo failure.` +
+      ` If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; ${KEPT_TASK_CHECKOUT.beyondBranch}`,
     deps.clock.now(),
-    // ADR 0276: 受験者は自分の checkout で再開するので、新しい checkout の文は task の checkout に限る
-    taskCheckout ? KEPT_TASK_CHECKOUT.retry : undefined,
+    KEPT_TASK_CHECKOUT.retry,
   );
   reclaimIntoTeardown(teardownDeps(deps), deps.containers, task.id, deps.slot.currentSessionId!, workspace);
   throw new DomainError(SESSION_OVER_TOOL_ERROR);
@@ -819,7 +817,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
             }
-            head = commitRoomCopy(deps.db, place, task.id);
+            try {
+              head = commitRoomCopy(deps.db, place, task.id);
+            } catch (err) {
+              if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
+              throw err;
+            }
           },
         );
       },
