@@ -1,4 +1,4 @@
-import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
@@ -25,11 +25,15 @@ import {
 } from "./fakes.js";
 import {
   api,
+  bootClaudeOn,
   bootTidepool,
+  claudeSpawnOf,
+  git,
   HOUR,
   HUMAN_WEBUI,
   makeWorkspace,
   quarantineQuestion,
+  queueWork,
   servedQuarantineQuestion,
   sessionId,
   type Tidepool,
@@ -160,39 +164,6 @@ it.each([
   },
 );
 
-it("組の question への回答は、組の検査がまだ不成立なら拒まれて開いたまま残り、成立すれば受理される(ADR 0259 決定5)", async () => {
-  const db = openDb(":memory:");
-  const clock = new FakeClock();
-  const path = await tempDir("tidepool-ws-");
-  const settings = join(path, ".claude", "settings.local.json");
-  await mkdir(join(path, ".claude"));
-  await writeFile(settings, JSON.stringify({ permissions: { allow: ["Bash(*)"] } }));
-  registerQuarantine(db, "workspaceContainment", "claude-code/B", "unsafe settings", clock.now());
-  const question = quarantineQuestion(db, "workspaceContainment", "claude-code/B")!;
-  const deps = {
-    db,
-    pollNow() {},
-    landing: unusedLanding,
-    quarantineChecks: quarantineChecks({
-      db,
-      resolveWorkspace: (name) => ({ name: name!, path, branch: "main" }),
-    }),
-  };
-  const answer = () => submitAnswer(deps, question, ["repaired by hand"], undefined, () => clock.now(), "webui");
-
-  await expect(answer()).rejects.toThrow(".claude/settings.local.json");
-  expect(getTask(db, question.id)?.status).toBe("todo");
-
-  await rm(settings);
-  await answer();
-  expect(getTask(db, question.id)?.status).toBe("done");
-  expect(listEvents(db, question.id).at(-1)?.payload).toMatchObject({
-    kind: "quarantine_released",
-    quarantine: "workspaceContainment",
-    value: "claude-code/B",
-  });
-});
-
 it("(codex, B) の question への回答は、その workspace の skill の列挙と観測をもう一度走らせ、閉じきれないうちは拒まれて開いたまま残り、閉じきれれば受理される(ADR 0259 決定5)", async () => {
   const db = openDb(":memory:");
   const clock = new FakeClock();
@@ -274,4 +245,64 @@ it("公開のキューで組の停止は skipped に見え、回答で解ける(
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
   expect(res.status).toBe(200);
   expect(await status()).not.toBe("skipped");
+});
+
+/** `.claude` を `shared` への symlink として保護ブランチ(main)に commit した workspace —— 盤面が隠せない形(ADR 0360 決定1)。 */
+async function workspaceWithSymlinkedClaude(name: string) {
+  const workspace = await makeWorkspace(name);
+  await mkdir(join(workspace.path, "shared"));
+  await writeFile(join(workspace.path, "shared", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:9" } }));
+  await symlink("shared", join(workspace.path, ".claude"));
+  git(workspace.path, "add", "-A");
+  git(workspace.path, "commit", "-m", "share settings through a symlink");
+  return workspace;
+}
+
+it("task branch の記録の .claude が symlink なら spawn せず、(claude-code, workspace) の組が path と型を名指して止まり、同じ workspace の Codex の行は候補に残る(ADR 0360 決定1・ADR 0259 決定1)", async () => {
+  const workspace = await workspaceWithSymlinkedClaude("pair-symlink");
+  const booted = await bootClaudeOn(workspace, {
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t!.db, { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }], tier: undefined }, task),
+  });
+  t = booted.t;
+  const claude = queueWork(t, "Claude work", workspace.name);
+
+  await t.clock.advance(HOUR);
+  const stop = await vi.waitFor(async () => {
+    const question = await servedQuarantineQuestion(t!, "workspaceContainment", `claude-code/${workspace.name}`);
+    expect(question).toBeDefined();
+    return question;
+  });
+  expect(stop.purpose).toContain(`task/${claude.id}`);
+  expect(stop.purpose).toContain("has .claude as a symlink");
+  expect(claudeSpawnOf(booted.proc, claude.id)).toBeUndefined();
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
+
+  const codex = queueWork(t, "Codex work", workspace.name, "codex-agent");
+  const queued = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  const status = (id: string) => queued.find((x) => x.id === id)?.status;
+  expect(status(claude.id)).toBe("skipped");
+  expect(status(codex.id)).not.toBe("skipped");
+});
+
+it("組の question への回答は、名前の場所の作業ツリーに何があっても保護ブランチの tree にまだ隠せない形があれば拒まれ、保護ブランチを書き直せば受理される(ADR 0360 決定3・ADR 0259 決定5)", async () => {
+  const workspace = await workspaceWithSymlinkedClaude("pair-answer");
+  t = await bootTidepool({ workspace });
+  registerQuarantine(t.db, "workspaceContainment", `claude-code/${workspace.name}`, "unhideable .claude", t.clock.now());
+  const question = await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`);
+  const answer = () => api(t!.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+
+  // 作業ツリーでは .claude は実ディレクトリだが、保護ブランチの記録は symlink のまま
+  await rm(join(workspace.path, ".claude"));
+  await mkdir(join(workspace.path, ".claude"));
+  await writeFile(join(workspace.path, ".claude", "settings.json"), "{}");
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("has .claude as a symlink");
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeDefined();
+
+  git(workspace.path, "add", "-A");
+  git(workspace.path, "commit", "-m", "make .claude a directory");
+  expect((await answer()).status).toBe(200);
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
 });

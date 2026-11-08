@@ -33,7 +33,8 @@ import {
   AUTO_MEMORY_CLOSED,
   buildSandboxSettings,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
-  workspaceSettingsDisposition,
+  type RecordedSettings,
+  recordedSettingsDisposition,
 } from "./sandbox.js";
 import { closeSessionActions, taskTempPrefix } from "./session-close.js";
 import { type CheckoutSkills, resolveSkillAllowlist } from "./skill-allowlist.js";
@@ -61,6 +62,7 @@ import {
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   runPlaceReadPaths,
+  taskBranch,
   taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -1038,7 +1040,7 @@ export const enumerateToolsThrough =
     // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
     // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
     // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
-    // `workspaceSettingsDisposition` が置き場所で隠すか止める(ADR 0346 決定2)。
+    // spawn の前に記録から隠すか止める(`recordedSettingsDisposition`、ADR 0360 決定1)。
     atNeutralCwd("tidepool-tools-", (cwd) =>
       atBoardOwnedConfigDir((configDir) =>
         call(toolSurfaceProbeSpec(cwd, configDir), (proc) => readInitReport(proc.stdout, readToolSurface)),
@@ -1591,12 +1593,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the *workspace's*
     // own `.claude/settings.json` with the per-task `--settings` floor below, and
     // the board wants no key of it in the worker's process (measured — see
-    // workspaceSettingsDisposition, ADR 0346 決定1). A checkout with a local or
-    // untracked settings file stops the (claude-code, workspace) pair on its
-    // presence — sparse-checkout cannot safely hide them, and only the claude CLI
-    // reads them, so the workspace's Codex tasks keep running (ADR 0259 決定1). A
-    // tracked settings.json is hidden for the session instead, whatever it holds
-    // (ADR 0158 / ADR 0346 決定2).
+    // recordedSettingsDisposition, ADR 0346 決定1). The judgment reads the record —
+    // the task branch's tree in the named place — not the task checkout (ADR 0360
+    // 決定1): every settings entry in it is hidden for the session, whatever it
+    // holds; a `.claude` that is not a directory stops the (claude-code, workspace)
+    // pair — only the claude CLI reads these files, so the workspace's Codex tasks
+    // keep running (ADR 0259 決定1).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
@@ -1615,21 +1617,27 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
       return;
     }
+    const branch = taskBranch(task.id);
+    let recorded: RecordedSettings;
+    try {
+      recorded = recordedSettingsDisposition(place.namedPlace.path, branch);
+    } catch {
+      // 読めない記録には隠すものが無い —— checkout に何か在れば下の guard が workspace の quarantine に落とす(ADR 0360 決定2)
+      recorded = { hide: [] };
+    }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
-    const contained = claudeWorkspaceContainment(place.path);
+    const contained = claudeWorkspaceContainment(place.namedPlace.path, branch, recorded);
     if (!contained.available) {
       const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: contained.reason } as const;
       registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
       stopped(stop);
       return;
     }
-    if (workspaceSettingsDisposition(place.path).excludeProjectSettings) {
-      try {
-        excludeWorkspaceProjectSettings(place, task.id);
-      } catch (err) {
-        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
-        return;
-      }
+    try {
+      excludeWorkspaceProjectSettings(place, task.id, recorded.hide);
+    } catch (err) {
+      stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
+      return;
     }
     // a review task's unset assignee resolves to the Auditor pointer, not
     // this worker's configured default agent (issue #42 / GLOSSARY.md's

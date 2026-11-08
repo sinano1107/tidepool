@@ -1,15 +1,14 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
-import { claudeWorkspaceContainment } from "../src/harness-containment.js";
 import {
   buildSandboxSettings,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
+  recordedSettingsDisposition,
   type WorkerSessionSettingsInput,
-  workspaceSettingsDisposition,
 } from "../src/sandbox.js";
 import { git } from "./harness.js";
 
@@ -241,8 +240,8 @@ describe("buildSandboxSettings の interview の root の床(ADR 0273 決定2)",
  *
  *  この hook は ADR 0037 の `disableAllHooks: true` と排他だった(実測: 同じ
  *  flag tier の hook も巻き添えで死ぬ)。そこで blanket は外し、workspace 側
- *  hook は tracked project file なら worker checkout から物理排除し、それ以外は
- *  workspaceSettingsDisposition の置き場所の判定で組ごと止まる(issue #382 / ADR 0346 決定2)。
+ *  hook は記録の project file なら worker checkout から物理排除し、隠せない形の `.claude` は
+ *  recordedSettingsDisposition の判定で組ごと止まる(issue #382 / ADR 0360 決定1)。
  *  hot-load 経路(worker が settings を書いて次の呼び出しで hook を効かせる)は
  *  ADR 0037 の書き込み2層(sandbox denyWrite + Edit() deny)が既に独立に閉じて
  *  いる。 */
@@ -384,27 +383,26 @@ describe("buildSandboxSettings の config dir(ADR 0354 決定1)", () => {
   });
 });
 
-/** `.claude/<name>` を持つ git checkout。`tracked` なら commit まで進める。 */
-function withSettings(name: string, body: unknown, tracked: boolean, check: (workspace: string) => void) {
-  withPlaced(name, (file) => writeFileSync(file, JSON.stringify(body)), tracked, check);
-}
-
-/** `.claude/<name>` を `place` が置いた git checkout。`tracked` なら commit まで進める。 */
-function withPlaced(name: string, place: (file: string, workspace: string) => void, tracked: boolean, check: (workspace: string) => void) {
-  const workspace = mkdtempSync(join(tmpdir(), "tidepool-settings-place-"));
-  mkdirSync(join(workspace, ".claude"));
-  place(join(workspace, ".claude", name), workspace);
+/** `arrange` が作業ツリーを整え、`add -A -f` で全部を commit した git repo(名前の場所の代わり)。 */
+function withRecorded(arrange: (workspace: string) => void, check: (workspace: string) => void) {
+  const workspace = mkdtempSync(join(tmpdir(), "tidepool-settings-record-"));
   git(workspace, "init", "--quiet");
-  if (tracked) {
-    git(workspace, "add", `.claude/${name}`);
-    git(workspace, "commit", "--quiet", "-m", "share settings");
-  }
+  git(workspace, "commit", "--quiet", "--allow-empty", "-m", "init");
+  arrange(workspace);
+  // -f: settings.local.json を ignore する host の global gitignore に依らない
+  git(workspace, "add", "-A", "-f");
+  git(workspace, "commit", "--quiet", "--allow-empty", "-m", "record");
   try {
     check(workspace);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 }
+
+const putSettings = (workspace: string, name: string, body: unknown) => {
+  mkdirSync(join(workspace, ".claude"), { recursive: true });
+  writeFileSync(join(workspace, ".claude", name), JSON.stringify(body));
+};
 
 /** ADR 0303 決定2: worker の記録の言語を repo / host の `language` / `outputStyle` に動かさせない。
  *  値1つのキーなので flag tier が丸ごと置き換え(#2454 の実測)、拒否ではなく上書きで閉じる。workspace の tracked な
@@ -422,99 +420,69 @@ describe("Harness の language / outputStyle の固定(ADR 0303 決定2)", () =>
   });
 
   it("tracked な .claude/settings.json が language / outputStyle を持っていても拒否せず、隠す", () => {
-    withSettings("settings.json", { language: "japanese", outputStyle: "Explanatory" }, true, (workspace) => {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+    withRecorded((workspace) => putSettings(workspace, "settings.json", { language: "japanese", outputStyle: "Explanatory" }), (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [".claude/settings.json"] });
     });
   });
 });
 
-/** ADR 0346 決定2: 判定は置き場所だけで、中身は読まない。 */
-describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決定2)", () => {
-  it.each([
-    ["空の {}", {}],
-    ["apiKeyHelper だけ", { apiKeyHelper: "./helper.sh" }],
-    ["env だけ", { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:9" } }],
-  ])("tracked な settings.json は %s でも隠す", (_case, body) => {
-    withSettings("settings.json", body, true, (workspace) => {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+/** ADR 0360 決定1: 判定の入力は記録(名前の場所の ref の tree)だけ。settings の entry は種類を問わず外し、`.claude` が tree object で
+ *  ない tree は盤面が隠せない形。 */
+describe("recordedSettingsDisposition は ref の tree で決める(ADR 0360 決定1)", () => {
+  it("通常の dir の settings.json は外す", () => {
+    withRecorded((workspace) => putSettings(workspace, "settings.json", { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:9" } }), (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [".claude/settings.json"] });
     });
   });
 
-  it.each([
-    ["untracked な settings.json の language / outputStyle(ADR 0346 決定4)", "settings.json", { language: "japanese", outputStyle: "Explanatory" }],
-    ["untracked な settings.json の {}", "settings.json", {}],
-    ["settings.local.json の {}", "settings.local.json", {}],
-  ])("%s は存在だけで止まる", (_case, name, body) => {
-    withSettings(name, body, false, (workspace) => {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
+  it("tracked な settings.local.json があれば両方外す", () => {
+    withRecorded((workspace) => {
+      putSettings(workspace, "settings.json", {});
+      putSettings(workspace, "settings.local.json", { permissions: { allow: ["Bash(*)"] } });
+    }, (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [".claude/settings.json", ".claude/settings.local.json"] });
     });
   });
 
-  it("tracked でも読めない settings.json は隠さず止まる", () => {
-    withSettings("settings.json", {}, true, (workspace) => {
-      const file = join(workspace, ".claude", "settings.json");
-      rmSync(file);
-      mkdirSync(file);
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
+  it("tree として commit された settings.json も外す", () => {
+    withRecorded((workspace) => {
+      mkdirSync(join(workspace, ".claude", "settings.json"), { recursive: true });
+      writeFileSync(join(workspace, ".claude", "settings.json", "inner"), "x");
+    }, (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [".claude/settings.json"] });
     });
   });
 
-  /** link の先は開かない —— FIFO は open で、/dev/zero は read で event loop ごと止めるので、vitest の timeout は発火しない。
-   *  判定は子 process で上限つきで走らせ、止まれば kill されて落ちる(#2935)。 */
-  function dispositionInChild(workspace: string): unknown {
-    const module = JSON.stringify(new URL("../src/sandbox.ts", import.meta.url).href);
-    const child = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", `const { workspaceSettingsDisposition } = await import(${module}); console.log(JSON.stringify(workspaceSettingsDisposition(${JSON.stringify(workspace)})));`],
-      { timeout: 5000, encoding: "utf8" },
-    );
-    expect({ signal: child.signal, status: child.status }, child.stderr).toEqual({ signal: null, status: 0 });
-    return JSON.parse(child.stdout);
-  }
-
-  const danglingTarget = () => "../dang.json";
-  const LINK_TARGETS: [string, (workspace: string) => string][] = [
-    ["在らない先(dangling)", danglingTarget],
-    ["FIFO", (workspace) => {
-      execFileSync("mkfifo", [join(workspace, "f.fifo")]);
-      return "../f.fifo";
-    }],
-    ["/dev/zero", () => "/dev/zero"],
-  ];
-
-  it.each(LINK_TARGETS)("tracked な settings.json が %s を指す symlink なら、先を開かず隠す", (_case, makeTarget) => {
-    withPlaced("settings.json", (file, workspace) => symlinkSync(makeTarget(workspace), file), true, (workspace) => {
-      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: true });
+  it("symlink の .claude は隠せない形(symlink)", () => {
+    withRecorded((workspace) => {
+      putSettings(join(workspace, "real"), "settings.json", {});
+      symlinkSync("real/.claude", join(workspace, ".claude"));
+    }, (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [], unhideable: { path: ".claude", type: "symlink" } });
     });
   });
 
-  it.each([
-    ...LINK_TARGETS.map(([label, makeTarget]) => [`untracked な settings.json の ${label}`, "settings.json", makeTarget] as const),
-    ["settings.local.json の 在らない先(dangling)", "settings.local.json", danglingTarget] as const,
-  ])("%s を指す symlink は、先を開かず存在だけで止まる", (_case, name, makeTarget) => {
-    withPlaced(name, (file, workspace) => symlinkSync(makeTarget(workspace), file), false, (workspace) => {
-      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
+  it("gitlink の .claude は隠せない形(gitlink)", () => {
+    withRecorded((workspace) => {
+      // 入れ子の repo を add すると gitlink として記録される
+      const nested = join(workspace, ".claude");
+      mkdirSync(nested);
+      git(nested, "init", "--quiet");
+      git(nested, "commit", "--quiet", "--allow-empty", "-m", "nested");
+    }, (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [], unhideable: { path: ".claude", type: "gitlink" } });
     });
   });
 
-  // ADR 0346 決定2「読めないファイルは従来どおり止める」—— 読み権限は access で見て、開かない(#2935)
-  it.skipIf(process.getuid?.() === 0)("tracked でも読み権限の無い通常ファイルの settings.json は隠さず止まる", () => {
-    withSettings("settings.json", {}, true, (workspace) => {
-      chmodSync(join(workspace, ".claude", "settings.json"), 0o000);
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: ["settings.json"], excludeProjectSettings: false });
+  it("blob の .claude は隠せない形(blob)", () => {
+    withRecorded((workspace) => writeFileSync(join(workspace, ".claude"), "not a directory"), (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [], unhideable: { path: ".claude", type: "blob" } });
     });
   });
 
-  it("組を止める理由は置き場所の語で書き、鍵を列挙しない(claudeWorkspaceContainment)", () => {
-    withSettings("settings.local.json", {}, false, (workspace) => {
-      const contained = claudeWorkspaceContainment(workspace);
-      expect(contained.available).toBe(false);
-      const reason = contained.available ? "" : contained.reason;
-      expect(reason).toContain(".claude/settings.local.json");
-      expect(reason).toContain("local or untracked settings file");
-      expect(reason).toContain("unreadable");
-      expect(reason).toContain("the board can hide only a Git-tracked .claude/settings.json");
-      expect(reason).not.toMatch(/sandbox|permissions|hooks|invalid JSON/);
+  it(".claude が無ければ何も無い", () => {
+    withRecorded((workspace) => writeFileSync(join(workspace, "README.md"), "x"), (workspace) => {
+      expect(recordedSettingsDisposition(workspace, "HEAD")).toEqual({ hide: [] });
     });
   });
 });

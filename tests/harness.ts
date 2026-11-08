@@ -22,7 +22,7 @@ import {
 import type { BoardCall } from "../src/board-call.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
-import { moonshotKeyAbsence } from "../src/claude-worker.js";
+import { ClaudeCodeWorker, moonshotKeyAbsence } from "../src/claude-worker.js";
 import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
 import type { Clock } from "../src/clock.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
@@ -108,9 +108,13 @@ import {
   FakeGitHubClient,
   FakePushClient,
   fakeHead,
+  noSkillPings,
   pinnedCliVersions,
+  recordingSpawn,
   ScriptedWorker,
+  withHealthyUsage,
 } from "./fakes.js";
+import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -482,6 +486,48 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     stop: () => (removing ??= stopServer().then(() => rm(dir, { recursive: true, force: true }))),
   };
 }
+
+/** 実物の Claude adapter で `workspace` を追跡する盤面を起こす(spawn は `proc` が記録するだけ)。`beforeStart` は pickup の準備の後・
+ *  adapter の start の前に撃つ。 */
+export async function bootClaudeOn(
+  workspace: WorkspaceConfig,
+  options: { beforeStart?: (db: Db, taskId: string) => void; taskExecutionCandidates?: TaskExecutionCandidates } = {},
+): Promise<{ t: Tidepool; proc: ReturnType<typeof recordingSpawn> }> {
+  const dir = await tempDir("tidepool-claude-board-");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `${workspace.name}:\n  path: ${JSON.stringify(workspace.path)}\n` });
+  const logDir = await tempDir("tidepool-claude-board-logs-");
+  const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs);
+  const t = await bootTidepool({
+    dir,
+    workspace,
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
+    taskExecutionCandidates: options.taskExecutionCandidates,
+    workerAdapter: (deps) => {
+      const worker = new ClaudeCodeWorker({
+        ...deps,
+        registry: { dir: registryDir, mode: "purely-local" },
+        agent: "deckhand",
+        workspace: workspace.name,
+        workspacesDir: join(dir, "workspaces"),
+        mcpUrl: "http://127.0.0.1:1/mcp",
+        logDir,
+        ...noSkillPings,
+      });
+      const start = worker.start.bind(worker);
+      worker.start = (task, ...rest) => {
+        options.beforeStart?.(deps.db, task.id);
+        start(task, ...rest);
+      };
+      return withHealthyUsage(worker, deps.clock);
+    },
+  });
+  return { t, proc };
+}
+
+/** `bootClaudeOn` の `proc` が記録した、その task の worker session の spawn(無ければ undefined)。 */
+export const claudeSpawnOf = (proc: ReturnType<typeof recordingSpawn>, taskId: string) =>
+  proc.calls.find((call) => call.args.some((arg) => arg.endsWith(`${taskId}.sandbox.json`)));
 
 /** この harness が起こした盤面の worker、MCP の口の URL 引き。解放系 verb を撃った
  *  client に「session がそこで終わる」を演じさせるために要る(下記)。 */

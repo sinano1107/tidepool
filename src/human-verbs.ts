@@ -115,6 +115,7 @@ import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   PickupGateError,
+  protectedBranchRef,
   quarantineWorkspace,
   redoMergeBacks,
   resolveWorkspacesBaseDir,
@@ -694,7 +695,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       const codex: CodexWorkspaceCheck = deps.codexWorkspaceContainment ?? (async () => {
         throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
       });
-      const capability = harness === "codex" ? await codex(target) : claudeWorkspaceContainment(target.path);
+      // Claude は名前の場所の保護ブランチの tree を読み直す —— 人間が直せるのは保護ブランチで、作業ツリーではない(ADR 0360 決定3)
+      const capability = harness === "codex" ? await codex(target) : claudeWorkspaceContainment(target.path, protectedBranchRef(target));
       if (!capability.available) {
         throw new DomainError(
           `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`,
