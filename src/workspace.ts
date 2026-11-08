@@ -107,7 +107,7 @@ export interface WorkspaceConfig {
 export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; namedPlace?: WorkspaceConfig };
 
 /** task の checkout で走る場所(ADR 0356 決定1)。 */
-type TaskCheckoutPlace = RunPlace & { namedPlace: WorkspaceConfig };
+export type TaskCheckoutPlace = RunPlace & { namedPlace: WorkspaceConfig };
 
 const isTaskCheckout = (place: WorkspaceConfig): place is TaskCheckoutPlace => (place as RunPlace).namedPlace !== undefined;
 
