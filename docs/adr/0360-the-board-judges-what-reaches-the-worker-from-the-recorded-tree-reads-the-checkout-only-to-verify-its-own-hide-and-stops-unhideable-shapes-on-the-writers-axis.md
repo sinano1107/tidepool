@@ -13,13 +13,17 @@ commit した tree では `lstat` は在ると言い index は無いと言う。
 1. **判定の入力は記録だけ。** 名前の場所で tip の tree を `ls-tree` し、`.claude/settings.json` / `.claude/settings.local.json` の entry が
    あれば種類を問わず sparse で worker session 中だけ外す。祖先 `.claude` が tree object でない(symlink・gitlink・blob)tree は盤面が隠せない
    形として止める。ADR 0346 決定2 の tracked / untracked / 読めない の分類は消える —— fetch した checkout に Git 共有されていないものは無い。
-2. **checkout は盤面自身の実体化の検証にだけ読む。** 隠した後に `lstat` で消えたことを確かめる手は残し、task の checkout の `.git` は
-   何も読まない —— index も `info/sparse-checkout` も alternates の存在も判定に使わない(ADR 0356 決定3 の「GIT_DIR にしない」を
-   「読まない」へ)。view の sparse policy は「tip の tree に entry がある」から、sandbox の読み path は Interview の役から導く。
+2. **checkout は盤面自身の実体化の検証にだけ読む。** spawn の前に `.claude/settings.json` / `settings.local.json` が `lstat` で無いことを、
+   隠したか否かに依らず常に確かめる —— 決定1 の tree の模型が見落とした形を fail-closed に受ける最後の行で、当たれば盤面自身の実体化の
+   失敗(今日と同じ workspace の quarantine)。task の checkout の `.git` は判定の入力にしない —— index も `info/sparse-checkout` も
+   alternates の存在も読まず、盤面が worker の repo に撃つのは tip の fetch(ADR 0356 決定3)とこの検証だけ。view の sparse policy は
+   「tip の tree に entry がある」から、sandbox の読み path は Interview の役から導く。
 3. **止める軸は書き手。** 隠せない形が保護ブランチの tree にあれば (claude-code, workspace) の組の停止で、回答時の撃ち直しは名前の場所の
    保護ブランチを `ls-tree` する(ADR 0259 決定5 の読む tree)。task branch の tree にだけあれば worker(plumbing で disk に無い symlink も
-   commit できる)の仕業なので task の失敗 —— ADR 0118 の族の failure question に path と形を名指し、branch が変わるまで retry は同じ理由で
-   失敗すると書く。面接室には人間の書き手が居ないので、root・受験者の形は常に task の失敗。
+   commit できる)の仕業なので task の失敗 —— ADR 0118 の族の failure question に path と形を名指し、**推奨は abandon**(ADR 0118 決定4 の
+   retry 推奨は一過性の fs / git の失敗の線で、同じ tree を読む pickup には当たらない)。親が形を commit して decompose した子の branch は
+   全部その形を継ぐが、question は1枚で足りる —— failure question の held は同じ分解判断の兄弟に及び、abandon はその範囲を倒す
+   (ADR 0048)。面接室には人間の書き手が居ないので、root・受験者の形は常に task の失敗。
 4. **完了の門は隠せない形の tip を拒み、path を名指す**(ADR 0359 決定1 の門、「commit せよ」と同じ型)。非完了の解放は tip をそのまま記録へ
    引き、子は決定3 で止まる。
 5. **登録の門は保護ブランチの `ls-tree` で隠せない形を live-checkout 信号として提示する**(拒まない —— ADR 0352 / 0354 決定3 の線)。

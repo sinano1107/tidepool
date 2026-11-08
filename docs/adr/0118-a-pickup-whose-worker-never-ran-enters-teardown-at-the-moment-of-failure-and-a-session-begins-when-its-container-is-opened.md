@@ -1,5 +1,7 @@
 # worker が1度も走らなかった pickup は失敗の瞬間に後始末へ入り、session は容器を開いた瞬間に始まる
 
+**Status 追記: 決定4 の「推奨 retry」は一過性の fs / git の失敗の線 —— task branch の tree に盤面が隠せない形(symlink の `.claude` など)があって pickup が止まる failure question は同じ tree を読み直すだけなので推奨は abandon([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md) 決定3、2026-11-08、issue #3074)。**
+
 **Status 追記: 決定4 の「決定的な失敗はどれも pickup の gate が先に弾く二重防御であり、そこまで届いたら盤面のバグ」は ADR 0331 決定1 で置き換え(2026-10-30、issue #2700)** —— gate の述語と spawn の読みの同一性を担保する構造が無く、gate を抜けた資源の故障は観測点によらず資源に帰属する。残る「盤面のバグ」は資源の署名を持たない throw だけ。
 
 2026-09-12 の grilling(issue #559)で決定。`worker.start` が投げた pickup は `console.error` だけで slot を握ったままになり、タスク種別の時間制限いっぱい待った末に watchdog の梯子の底で「時間制限に達し容器を回収した」という偽の failure question が立っていた。Node の `spawn()` が非同期に失敗する経路(issue #127)も event を1つ書くだけで同じ梯子に落ちる。scheduler のコメントはこの wedge を「再起動中断と同じ、watchdog スライス(#9)が来るまで」と正当化していたが、#9 は再起動中断を起動時の即時記録にしており、待つ理由はとうに消えていた。現状調査・再現・`file:line` は issue #559 のコメントに置く。
