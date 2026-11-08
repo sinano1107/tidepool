@@ -38,10 +38,12 @@ export function gitStatus(cwd: string): string {
 }
 
 type View = (args: string[], overrides?: NodeJS.ProcessEnv) => string;
+type Runner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Buffer;
 
 /** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view.
  *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's.
- *  This one is over the named place, whose plumbing stays unbounded (ADR 0357 決定1); a worker's tree uses `withWorkerTreeGit`. */
+ *  This is the unbounded view for the board's own side (ADR 0357 決定1); a worker's tree uses `withWorkerTreeGit`. The Interview
+ *  room's sites that still use it (`boardReadTree` there) move with #3031. */
 export function withBoardGit<T>(cwd: string, use: (view: View, gitDir: string) => T, objectsFrom = cwd): T {
   return viewWith(run, cwd, use, objectsFrom);
 }
@@ -51,7 +53,7 @@ function withWorkerTreeGit<T>(cwd: string, use: (view: View, gitDir: string) => 
   return viewWith(runOnWorkerTree, cwd, use, objectsFrom);
 }
 
-function viewWith<T>(runner: typeof runOnWorkerTree, cwd: string, use: (view: View, gitDir: string) => T, objectsFrom: string): T {
+function viewWith<T>(runner: Runner, cwd: string, use: (view: View, gitDir: string) => T, objectsFrom: string): T {
   const format = git(objectsFrom, "rev-parse", "--show-object-format");
   const objects = git(objectsFrom, "rev-parse", "--path-format=absolute", "--git-path", "objects");
   const dir = mkdtempSync(join(tmpdir(), "tidepool-git-view-"));
@@ -212,8 +214,8 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
       maxBuffer: 64 * 1024 * 1024,
       input,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-      // ADR 0357: its own process group, so the kill below also reaches a child (`upload-pack`, a git blocked in `open()`);
-      // SIGTERM so git removes its lock files
+      // ADR 0334: Node's timeout kills only the parent git, so it runs in its own process group and the kill below also
+      // reaches a child (`upload-pack`, a git blocked in `open()`). SIGTERM so git removes its lock files
       ...(timeout !== undefined && { timeout, killSignal: "SIGTERM" as const, detached: true }),
     });
   } catch (err) {

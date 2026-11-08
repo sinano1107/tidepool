@@ -447,7 +447,8 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string, completedRevie
     workerRepoGit(namedPlace.path, "fetch", ...FETCH_FLAGS, checkout, ref);
     git(namedPlace.path, "cat-file", "-e", `${sha}^{commit}`);
   } catch (cause) {
-    // ADR 0359 決定5: 退避の失敗で唯一の写しを消さない。ADR 0357 決定2: 上限超過は呼び手が worker の repo の故障として扱う
+    // 完了済み review の即時の転送の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)。
+    // ADR 0357 決定2: 上限超過は呼び手が worker の repo の故障として扱う
     if (completedReview || cause instanceof WorkerTreeGitTimeoutError) throw cause;
     throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
@@ -1848,6 +1849,12 @@ function settleTaskCheckout(
   return true;
 }
 
+/** ADR 0356 決定2: 残った task の checkout を failure question が言う文 —— 中身はタスクブランチに無く、retry は新しい checkout で走る。 */
+export const KEPT_TASK_CHECKOUT = {
+  beyondBranch: "what it holds beyond the task branch is not on the task branch.",
+  retry: `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
+} as const;
+
 /** ADR 0356 決定2: 解放で worker の repo を読めなかった。checkout を残して event に在り処と理由を刻み、`todo` に戻る決着なら
  *  failure question を立てる —— 既に立っている(倒された session)なら足さない。 */
 function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: Date): void {
@@ -1867,9 +1874,9 @@ function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: 
       db,
       current,
       `task checkout could not be released: ${current.title}`,
-      `${reason}\n\nThe board kept the task checkout at ${path}: what it holds beyond the task branch is not on the task branch.`,
+      `${reason}\n\nThe board kept the task checkout at ${path}: ${KEPT_TASK_CHECKOUT.beyondBranch}`,
       now,
-      `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
+      KEPT_TASK_CHECKOUT.retry,
     );
   })();
 }

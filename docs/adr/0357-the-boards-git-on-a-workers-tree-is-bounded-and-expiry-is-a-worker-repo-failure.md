@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2 の分類は完了済みの解放には当たらない —— そこでは fetch が走らず、view の上限超過は報告後の書き込みの「読めない」観測になる([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定5、2026-11-08、issue #3053)。**
 
+**Status 追記: 決定2 の「checkout は残す」は解放でも worker の tree を読めなかったときに限る —— 門で強制回収した後の解放の再読が上限内に終われば、WIP は退避され checkout は ADR 0356 決定2 の最後の step で今日どおり消える(2026-11-08、issue #3033)。**
+
 2026-11-07 の grilling(issue #2966、派生 #3018)で決定。#2966 の sparse pattern ファイルの site は ADR 0356 で消えるが、残る形は
 GIT_DIR に依らない —— worker は worktree に FIFO を置け、`.gitignore`(root、または走査される dir の中)や `.gitattributes` が
 FIFO なら、盤面の `git status` / `add -A` / `ls-files --exclude-standard` / `diff` はそれを open して永久に止まる(実測、macOS git 2.47。
