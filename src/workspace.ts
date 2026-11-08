@@ -18,6 +18,7 @@ import {
   type WorktreeChange,
   WorktreeStatusError,
   withBoardGit,
+  workerRepoGit,
 } from "./git.js";
 import {
   type GitHubAuth,
@@ -66,6 +67,7 @@ import {
   taskCheckoutPath,
 } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
+import { WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 
 
 /** The board's workspace: registry name + path of a real git checkout. The
@@ -424,8 +426,9 @@ function readWorkerTip({ namedPlace, path: checkout }: TaskCheckoutPlace, taskId
   const ref = `refs/heads/${taskBranch(taskId)}`;
   let sha: string | undefined;
   try {
-    sha = git(namedPlace.path, "ls-remote", checkout, ref).split("\n").map((line) => line.split("\t")).find(([, name]) => name === ref)?.[0];
+    sha = workerRepoGit(namedPlace.path, "ls-remote", checkout, ref).split("\n").map((line) => line.split("\t")).find(([, name]) => name === ref)?.[0];
   } catch (cause) {
+    if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定2: 呼び手が worker の repo の故障として扱う
     throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (!sha) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no branch ${taskBranch(taskId)}`);
@@ -441,11 +444,12 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string, completedRevie
   git(namedPlace.path, "rev-parse", "--git-dir");
   const sha = readWorkerTip(place, taskId);
   try {
-    git(namedPlace.path, "fetch", ...FETCH_FLAGS, checkout, ref);
+    workerRepoGit(namedPlace.path, "fetch", ...FETCH_FLAGS, checkout, ref);
     git(namedPlace.path, "cat-file", "-e", `${sha}^{commit}`);
   } catch (cause) {
-    // ADR 0359 決定5: 退避の失敗で唯一の写しを消さない
-    if (completedReview) throw cause;
+    // 完了済み review の即時の転送の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)。
+    // ADR 0357 決定2: 上限超過は呼び手が worker の repo の故障として扱う
+    if (completedReview || cause instanceof WorkerTreeGitTimeoutError) throw cause;
     throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   return sha;
@@ -1337,7 +1341,8 @@ function removeShadowRemnants(workspace: WorkspaceConfig): void {
   }
 }
 
-/** ADR 0359 決定1: task の checkout の観測が落ちれば門を通さない。その他の場所は ADR 0084 決定2 のまま。 */
+/** ADR 0359 決定1: task の checkout の観測が落ちれば門を通さない。その他の場所は ADR 0084 決定2 のまま —— 飲むのは git が
+ *  即座に落ちた観測の失敗だけで、view の上限超過は飲まない(ADR 0357 決定3)。 */
 export function completionTreePaths(workspace: WorkspaceConfig, taskId: string, db?: Db): string[] {
   if (isTaskCheckout(workspace)) {
     const tip = git(workspace.namedPlace.path, "rev-parse", "--verify", `refs/heads/${taskBranch(taskId)}`);
@@ -1346,7 +1351,7 @@ export function completionTreePaths(workspace: WorkspaceConfig, taskId: string, 
   try {
     return uncommittedChanges(workspace, db).map(({ path }) => path);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
+    if (isBoardDbRefusal(err) || err instanceof WorkerTreeGitTimeoutError) throw err;
     return [];
   }
 }
@@ -1421,7 +1426,8 @@ function observeCheckoutAfterCompletion(place: TaskCheckoutPlace, taskId: string
     const paths = taskCheckoutChanges(place, recorded).map(({ path }) => path);
     if (paths.length > 0) return { observation: "uncommitted", paths };
   } catch (err) {
-    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorktreeStatusError)) throw err;
+    // ADR 0359 決定5: view の上限超過も、完了済みの解放では「読めない」観測
+    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorktreeStatusError || err instanceof WorkerTreeGitTimeoutError)) throw err;
     return { observation: "unreadable", reason: err.message };
   }
 }
@@ -1788,14 +1794,15 @@ function settleTaskCheckout(
       try {
         tree = boardWriteTree(checkout, base, namedPlace.path, taskCheckoutSparse(place), taskCheckoutRemnants(place, base));
       } catch (cause) {
-        if (completed) throw cause; // ADR 0359 決定5: 退避の失敗で唯一の写しを消さない
+        if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
         throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
       }
       wipTree = { base, tree };
     }
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-    if (!(err instanceof TaskCheckoutUnreadableError)) {
+    // ADR 0357 決定2: 上限超過は worker の repo の故障 —— 名前の場所を quarantine しない
+    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError)) {
       quarantineWorkspace(db, namedPlace.name, err, now);
       return false;
     }
@@ -1842,6 +1849,12 @@ function settleTaskCheckout(
   return true;
 }
 
+/** ADR 0356 決定2: 残った task の checkout を failure question が言う文 —— 中身はタスクブランチに無く、retry は新しい checkout で走る。 */
+export const KEPT_TASK_CHECKOUT = {
+  beyondBranch: "what it holds beyond the task branch is not on the task branch.",
+  retry: `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
+} as const;
+
 /** ADR 0356 決定2: 解放で worker の repo を読めなかった。checkout を残して event に在り処と理由を刻み、`todo` に戻る決着なら
  *  failure question を立てる —— 既に立っている(倒された session)なら足さない。 */
 function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: Date): void {
@@ -1861,9 +1874,9 @@ function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: 
       db,
       current,
       `task checkout could not be released: ${current.title}`,
-      `${reason}\n\nThe board kept the task checkout at ${path}: what it holds beyond the task branch is not on the task branch.`,
+      `${reason}\n\nThe board kept the task checkout at ${path}: ${KEPT_TASK_CHECKOUT.beyondBranch}`,
       now,
-      `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
+      KEPT_TASK_CHECKOUT.retry,
     );
   })();
 }

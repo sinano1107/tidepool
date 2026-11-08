@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 
 /** The board's own git identity: the author on the tree rule's WIP commits
  *  (releaseTree) and on the registry commits the WebUI flows make (issue #57,
@@ -36,16 +37,30 @@ export function gitStatus(cwd: string): string {
   return git(cwd, "status", "--porcelain", "--untracked-files=all");
 }
 
+type View = (args: string[], overrides?: NodeJS.ProcessEnv) => string;
+type Runner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Buffer;
+
 /** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view.
- *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's. */
-export function withBoardGit<T>(cwd: string, use: (view: (args: string[], overrides?: NodeJS.ProcessEnv) => string, gitDir: string) => T, objectsFrom = cwd): T {
+ *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's.
+ *  This is the unbounded view for the board's own side (ADR 0357 決定1); a worker's tree uses `withWorkerTreeGit`. The Interview
+ *  room's sites that still use it (`boardReadTree` there) move with #3031. */
+export function withBoardGit<T>(cwd: string, use: (view: View, gitDir: string) => T, objectsFrom = cwd): T {
+  return viewWith(run, cwd, use, objectsFrom);
+}
+
+/** ADR 0357 決定1: the board's view over a worker's tree runs every call through the bounded runner. */
+function withWorkerTreeGit<T>(cwd: string, use: (view: View, gitDir: string) => T, objectsFrom = cwd): T {
+  return viewWith(runOnWorkerTree, cwd, use, objectsFrom);
+}
+
+function viewWith<T>(runner: Runner, cwd: string, use: (view: View, gitDir: string) => T, objectsFrom: string): T {
   const format = git(objectsFrom, "rev-parse", "--show-object-format");
   const objects = git(objectsFrom, "rev-parse", "--path-format=absolute", "--git-path", "objects");
   const dir = mkdtempSync(join(tmpdir(), "tidepool-git-view-"));
   try {
     git(dir, "init", "--bare", "--quiet", "--template=", `--object-format=${format}`);
     const env = { GIT_DIR: dir, GIT_WORK_TREE: resolve(cwd), GIT_INDEX_FILE: join(dir, "index"), GIT_OBJECT_DIRECTORY: objects };
-    return use((args, overrides) => run(dir, args, { ...env, ...overrides }).toString(), dir);
+    return use((args, overrides) => runner(dir, args, { ...env, ...overrides }).toString(), dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -74,7 +89,7 @@ export type WorktreeChange = { path: string; status: string };
 export const displayWorktreePath = (path: string): string => /[\r\n\t]/.test(path) ? JSON.stringify(path) : path;
 
 /** The view's fresh index holds `head`'s tree, with the board's sparse policy applied on a blank tree; returns the policy's config. */
-function seedViewIndex(view: (args: string[], overrides?: NodeJS.ProcessEnv) => string, dir: string, head: string | undefined, sparse: SparsePolicy | undefined): string[] {
+function seedViewIndex(view: View, dir: string, head: string | undefined, sparse: SparsePolicy | undefined): string[] {
   if (head !== undefined) {
     view(["update-ref", "--no-deref", "HEAD", head]);
     view(["read-tree", head]);
@@ -91,7 +106,7 @@ function seedViewIndex(view: (args: string[], overrides?: NodeJS.ProcessEnv) => 
 
 /** ADR 0356 決定3: the worktree's content as a tree in `objectsFrom`'s objects, staged by `add -A` into a fresh index seeded from `head`. */
 export function boardWriteTree(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy, exclude: string[] = []): string {
-  return withBoardGit(cwd, (view, dir) => {
+  return withWorkerTreeGit(cwd, (view, dir) => {
     const config = seedViewIndex(view, dir, head, sparse);
     view([...config, "add", "-A", "--", ".", ...exclude.map((path) => `:(exclude,literal)${path}`)]);
     return view(["write-tree"]).trim();
@@ -112,11 +127,12 @@ export class WorktreeStatusError extends Error {}
 /** ADR 0356 決定3: a task checkout read only through the board's view — a fresh index from `head`'s tree and `objectsFrom`'s
  *  objects. Nothing runs in the worker's repo, so its real index and nested repos are not read; a submodule counts by its gitlink. */
 export function boardViewStatus(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy): WorktreeChange[] {
-  return withBoardGit(cwd, (view, dir) => {
+  return withWorkerTreeGit(cwd, (view, dir) => {
     const config = seedViewIndex(view, dir, head, sparse);
     try {
       return porcelainChanges(view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]));
     } catch (cause) {
+      if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定3: 上限超過は観測の失敗ではない
       // ADR 0359 決定3: 盤面の記録から index を作る段の失敗と、worker の worktree を観測する段の失敗を分ける
       throw new WorktreeStatusError(cause instanceof Error ? cause.message : String(cause), { cause });
     }
@@ -133,7 +149,7 @@ export function boardWorktreeStatus(cwd: string, sparse?: SparsePolicy, against?
   } catch (err) {
     if ((err as { status?: number }).status !== 1) throw err;
   }
-  return withBoardGit(cwd, (view, dir) => {
+  return withWorkerTreeGit(cwd, (view, dir) => {
     const config = seedViewIndex(view, dir, head, sparse);
     const worktree = view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]);
     const paths = new Map(worktree.split("\0").filter(Boolean).map((line) => [line.slice(3), line.slice(0, 2)]));
@@ -190,7 +206,7 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
-function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): Buffer {
+function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string, timeout?: number): Buffer {
   try {
     return execFileSync("git", args, {
       cwd,
@@ -198,10 +214,33 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
       maxBuffer: 64 * 1024 * 1024,
       input,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      // ADR 0334: Node's timeout kills only the parent git, so it runs in its own process group and the kill below also
+      // reaches a child (`upload-pack`, a git blocked in `open()`). SIGTERM so git removes its lock files
+      ...(timeout !== undefined && { timeout, killSignal: "SIGTERM" as const, detached: true }),
     });
   } catch (err) {
+    const { code, pid, stderr } = err as NodeJS.ErrnoException & { pid?: number; stderr?: Buffer };
+    if (timeout !== undefined && code === "ETIMEDOUT") {
+      try {
+        if (pid) process.kill(-pid, "SIGTERM");
+      } catch {
+        // the group has already exited
+      }
+      const subcommand = args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
+      throw new WorkerTreeGitTimeoutError(subcommand, timeout, stderr?.toString().split("\n")[0]?.trim() ?? "", { cause: err });
+    }
     rethrowNamingMissingCwd(err, cwd, args);
   }
+}
+
+/** ADR 0357 決定1: the one runner for the git the board runs on a worker's tree or repo, bounded by one constant. */
+function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Buffer {
+  return run(cwd, args, env, undefined, WORKER_TREE_GIT_TIMEOUT_MS);
+}
+
+/** ADR 0357 決定1: git whose argument is a worker's repo — `ls-remote` / `fetch` of a task checkout run `upload-pack` inside it. */
+export function workerRepoGit(cwd: string, ...args: string[]): string {
+  return runOnWorkerTree(cwd, args).toString().trim();
 }
 
 /** `run` と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git

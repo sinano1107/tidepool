@@ -124,9 +124,10 @@ export function registerFailureAndMarkTeardown(
   title: string,
   reason: string,
   now: Date,
+  retry?: string,
 ): void {
   db.transaction(() => {
-    registerFailureQuestion(db, task, title, reason, now);
+    registerFailureQuestion(db, task, title, reason, now, retry);
     markTeardown(db, task.id, now);
   })();
 }
@@ -329,11 +330,19 @@ function registerFailure(deps: TeardownDeps, wording: (task: Task) => [title: st
 }
 
 /** 記録の tx の後の手: 後始末へ入り、process の無い容器へも強制回収を撃ち、回収済み観測に後始末を繋ぐ。門は持たない ——
- *  受理の撃ち直しが門で空振りすると、枠は後始末中のまま回収の鎖が付かない(ADR 0342 決定6)。 */
-function reclaimIntoTeardown(deps: TeardownDeps, containers: ProcessContainers, taskId: string, sessionId: number): void {
+ *  受理の撃ち直しが門で空振りすると、枠は後始末中のまま回収の鎖が付かない(ADR 0342 決定6)。容器の無い盤面では観測は即座に
+ *  解決する。`workspace` は門が既に解決した走る場所(`TeardownStep.workspace`)。 */
+export function reclaimIntoTeardown(
+  deps: TeardownDeps,
+  containers: ProcessContainers | undefined,
+  taskId: string,
+  sessionId: number,
+  workspace?: WorkspaceConfig | null,
+): void {
   deps.slot.enterTeardown();
-  containers.forceReclaim(String(sessionId));
-  void containers.reclaimed(String(sessionId)).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+  containers?.forceReclaim(String(sessionId));
+  const reclaimed = containers?.reclaimed(String(sessionId)) ?? Promise.resolve();
+  void reclaimed.then(() => runTeardown(deps, taskId, { ...teardownStep(deps.db, taskId), ...(workspace !== undefined && { workspace }) }));
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
