@@ -8,6 +8,8 @@ import type { WorkspaceConfig } from "./workspace.js";
 
 export type HarnessContainmentCheck = (harness: Harness) => Promise<ContainmentCapability>;
 
+export class UnhideableTaskSettingsError extends Error {}
+
 /** Persist the narrowest safe stop: one Confirmation per Harness, never a
  * board-wide halt. Another canonical route remains eligible in the same poll. */
 export function harnessContainmentPickupBlocked(

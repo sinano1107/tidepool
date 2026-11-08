@@ -1622,6 +1622,7 @@ export function registerFailureQuestion(
   now: Date,
   /** What "retry" does, when the failure changes it (a kept task checkout, ADR 0356 決定2). */
   retry = `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. `,
+  recommendation: "retry" | "abandon" = "retry",
 ): void {
   escalateTask(
     db,
@@ -1631,7 +1632,7 @@ export function registerFailureQuestion(
       // declared via the system-internal failure kind below, never exposed
       // to agents.
       context: `${reason}\n\n${retry}${abandonConsequence(db, task)}`,
-      questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
+      questions: [{ title, options: ["retry", "abandon"], recommendation }],
       question_kind: { kind: "failure", cancel_option: "abandon" },
     },
     BOARD_ACTOR_ID,

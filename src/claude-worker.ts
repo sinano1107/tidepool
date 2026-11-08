@@ -18,8 +18,9 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { appendEvent, type ResourceStop } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
-import { claudeWorkspaceContainment } from "./harness-containment.js";
+import { claudeWorkspaceContainment, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
+import { protectedBranchRef } from "./pickup-predicates.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
@@ -1596,9 +1597,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // recordedSettingsDisposition, ADR 0346 決定1). The judgment reads the record —
     // the task branch's tree in the named place — not the task checkout (ADR 0360
     // 決定1): every settings entry in it is hidden for the session, whatever it
-    // holds; a `.claude` that is not a directory stops the (claude-code, workspace)
-    // pair — only the claude CLI reads these files, so the workspace's Codex tasks
-    // keep running (ADR 0259 決定1).
+    // holds. An unhideable `.claude` stops the task or pair according to who can
+    // write the tree (ADR 0360 決定3).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
@@ -1618,20 +1618,29 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     }
     const branch = taskBranch(task.id);
     let recorded: RecordedSettings;
+    let protectedContainment: ContainmentCapability | undefined;
     try {
       recorded = recordedSettingsDisposition(place.namedPlace.path, branch);
+      // ADR 0360 決定3: 面接室には人間の書き手がいないので、root と受験者は保護ブランチを読まない。
+      if (recorded.unhideable && task.type !== "interview" && task.interview_target_id === null) {
+        const ref = protectedBranchRef(place.namedPlace);
+        protectedContainment = claudeWorkspaceContainment(recordedSettingsDisposition(place.namedPlace.path, ref), ref, place.namedPlace);
+      }
     } catch (err) {
       // 判定の入力が読めない名前の場所は、pickup の準備の失敗と同じく workspace の quarantine(ADR 0360 決定1)
       stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
       return;
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
-    const contained = claudeWorkspaceContainment(recorded, branch, place.namedPlace);
-    if (!contained.available) {
-      const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: contained.reason } as const;
+    if (protectedContainment && !protectedContainment.available) {
+      const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: protectedContainment.reason } as const;
       registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
       stopped(stop);
       return;
+    }
+    if (recorded.unhideable) {
+      const { path, type } = recorded.unhideable;
+      throw new UnhideableTaskSettingsError(`the recorded tree of ${branch} has ${path} as a ${type}, so the board cannot hide the Claude settings behind it`);
     }
     try {
       excludeWorkspaceProjectSettings(place, task.id, recorded.hide);

@@ -5,6 +5,10 @@ import { canonicalHarness, type Harness } from "./registry.js";
 import type { SessionStoppedByResource, Task } from "./tasks.js";
 import type { TeardownAction } from "./teardown.js";
 
+export type SpawnFailure = Pick<Extract<EventPayload, { kind: "spawn_failed" }>, "error_code" | "message"> & {
+  recommendation?: "abandon";
+};
+
 /** 盤面の env から名指しで写す(ADR 0358 決定2)—— 盤面に無い名前は鍵ごと載せない。 */
 export function boardEnvByName(...names: string[]): NodeJS.ProcessEnv {
   return Object.fromEntries(names.flatMap((name) => (process.env[name] === undefined ? [] : [[name, process.env[name]]])));

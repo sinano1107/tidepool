@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
+import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
@@ -89,7 +89,7 @@ import { translateSource } from "./translation.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
 import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { SpawnFailure, WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   openInterviewRoom,
@@ -307,7 +307,7 @@ export function startScheduler(deps: {
   /** 盤面側 supervisor(ADR 0099 決定2): pickup が worker session の容器を作る。 */
   containers: ProcessContainers;
   /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
-  onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }) => void;
+  onSpawnFailed: (taskId: string, sessionId: number, failure: SpawnFailure) => void;
   /** ADR 0266 決定3・4: 記録の器が書けない pickup(`start` の中の transcript の open、ADR 0276 決定5)の一撃
    *  (`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, sessionId: number, err: RecordContainerError) => void;
@@ -687,7 +687,7 @@ export function startScheduler(deps: {
             payload: { kind: "spawn_failed", ...failure },
             at: clock.now(),
           }),
-        () => onSpawnFailed(picked.id, sessionId, failure),
+        () => onSpawnFailed(picked.id, sessionId, err instanceof UnhideableTaskSettingsError ? { ...failure, recommendation: "abandon" } : failure),
       );
     }
   }

@@ -23,7 +23,7 @@ import {
   teardownStep,
 } from "./teardown.js";
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
-import type { WorkerAdapter, WorkerExit, WorkerExitClassification, WorkerExitFacts } from "./worker.js";
+import type { SpawnFailure, WorkerAdapter, WorkerExit, WorkerExitClassification, WorkerExitFacts } from "./worker.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -207,19 +207,26 @@ export function recordContainerHaltHandler(
 export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
-): (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record?: () => void) => void {
+): (taskId: string, sessionId: number, failure: SpawnFailure, record?: () => void) => void {
   return (taskId, sessionId, failure, record) =>
     settleAndReclaim(
       deps,
       containers,
       taskId,
       sessionId,
-      registerFailure(deps, (task) => [
+      (task, now) => registerFailureQuestion(
+        deps.db,
+        task,
         `worker never started for task: ${task.title}`,
         `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
           `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
           failure.message,
-      ]),
+        now,
+        failure.recommendation === "abandon"
+          ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
+          : undefined,
+        failure.recommendation,
+      ),
       record,
     );
 }
