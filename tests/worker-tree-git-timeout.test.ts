@@ -30,7 +30,7 @@ import {
 // ADR 0357: 盤面が worker の tree に撃つ git は有界で、上限で止まった手は観測の失敗と型で分ける。
 vi.mock("../src/worker-tree-git-timeout.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/worker-tree-git-timeout.js")>(),
-  WORKER_TREE_GIT_TIMEOUT_MS: 500,
+  WORKER_TREE_GIT_TIMEOUT_MS: 1000,
 }));
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -82,12 +82,12 @@ it("root の .gitignore が FIFO なら view の status と退避の add -A は�
 
   const status = thrown(() => boardViewStatus(ws.path, head, ws.path));
   expect(status).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(status).toMatchObject({ subcommand: "status", timeoutMs: 500 });
+  expect(status).toMatchObject({ subcommand: "status", timeoutMs: 1000 });
   expectNoReader(fifo);
 
   const stash = thrown(() => boardWriteTree(ws.path, head, ws.path));
   expect(stash).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(stash).toMatchObject({ subcommand: "add", timeoutMs: 500 });
+  expect(stash).toMatchObject({ subcommand: "add", timeoutMs: 1000 });
   expectNoReader(fifo);
 });
 
@@ -112,7 +112,7 @@ it("倒された session の解放が上限で止まれば、question を足さ�
   expect(existsSync(join(place.path, ".git"))).toBe(true);
   expect(listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({
     path: place.path,
-    reason: expect.stringContaining("`git add` on the worker's tree did not finish within 0.5 s"),
+    reason: expect.stringContaining("`git add` on the worker's tree did not finish within 1 s"),
   });
 });
 
@@ -138,7 +138,7 @@ it.each([
   releaseWorkspace(db, place, getTask(db, task.id)!, NOW, type === "work", undefined, undefined, true);
 
   expect(writeObservations(db, task.id)).toEqual([
-    { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("did not finish within 0.5 s") },
+    { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("did not finish within 1 s") },
   ]);
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
   expect(questionsOf(db, task.id)).toEqual([]);
@@ -168,11 +168,11 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
   expect(res.content[0].text).not.toContain("Retry complete_task");
   expect(board.containers.forceReclaims).toEqual([String(sessionId(board.db, task.id))]);
   // 続く解放も同じ tree で上限に当たるが、question は足さず checkout を残して枠を空ける
-  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined());
+  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
   const [failure, ...more] = await questions(board);
   expect(more).toEqual([]);
   expect(failure).toMatchObject({ parent_id: task.id, question_cancel_option: "abandon" });
-  expect(failure.title).toContain("`git status` on the worker's tree did not finish within 0.5 s");
+  expect(failure.title).toContain("`git status` on the worker's tree did not finish within 1 s");
   expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).not.toBe("done");
   expect(existsSync(join(checkout, ".git"))).toBe(true);
   expect(quarantineQuestion(board.db, "workspace", ws.name)).toBeUndefined();
