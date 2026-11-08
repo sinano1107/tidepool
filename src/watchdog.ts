@@ -124,9 +124,10 @@ export function registerFailureAndMarkTeardown(
   title: string,
   reason: string,
   now: Date,
+  retry?: string,
 ): void {
   db.transaction(() => {
-    registerFailureQuestion(db, task, title, reason, now);
+    registerFailureQuestion(db, task, title, reason, now, retry);
     markTeardown(db, task.id, now);
   })();
 }

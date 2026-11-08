@@ -575,6 +575,8 @@ const defaultRunOk: RunOkFn = (command, args) => {
   }
 };
 
+/** ADR 0357 の上限の外: spawn の前に作ったばかりの checkout を読み、worker はまだ居ない。読むのは checkout 自身の index で、
+ *  view は無い。`ls-files` は ignore も attributes も開かないので、測ったどの FIFO の置き場所でも止まらなかった。 */
 function tracked(workspacePath: string, path: string): boolean {
   const indexed = spawnSync("git", ["ls-files", "--", path], {
     cwd: workspacePath,

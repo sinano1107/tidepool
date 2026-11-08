@@ -106,6 +106,8 @@ import {
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { readTiers } from "./tier.js";
 import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
+import { registerFailureAndMarkTeardown } from "./watchdog.js";
+import { WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 import {
   buildWorkspaceResolver,
   commitRoomCopy,
@@ -341,6 +343,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
     recordTaskCheckoutTip(deps.db, workspace, task.id);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
+    if (err instanceof WorkerTreeGitTimeoutError) fellOnWorkerTreeTimeout(deps, task, workspace, err);
     if (err instanceof TaskCheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
     throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
   }
@@ -349,6 +352,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
     paths = completionTreePaths(workspace, task.id, deps.db);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
+    if (err instanceof WorkerTreeGitTimeoutError) fellOnWorkerTreeTimeout(deps, task, workspace, err);
     throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
   }
   if (paths.length === 0) return;
@@ -358,6 +362,39 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace)
       "the git history alone, then call complete_task again\n" +
       paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n"),
   );
+}
+
+/** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を倒す —— 拒めば worker は verb を
+ *  繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に後始末を繋ぐ
+ *  (ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。 */
+function fellOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError): never {
+  registerFailureAndMarkTeardown(
+    deps.db,
+    task,
+    `${err.message}: ${task.title}`,
+    `${err.message} at the completion gate, so the board ended this session: a worker's tree that stalls the board's git is a worker repo failure. ` +
+      `If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; what it holds beyond the task branch is not on the task branch.`,
+    deps.clock.now(),
+    `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
+  );
+  deps.slot.enterTeardown();
+  const sessionId = String(deps.slot.currentSessionId);
+  deps.containers?.forceReclaim(sessionId);
+  const reclaimed = deps.containers?.reclaimed(sessionId) ?? Promise.resolve();
+  void reclaimed.then(() => runTeardown(teardownDeps(deps), task.id, { ...teardownStep(deps.db, task.id), workspace }));
+  throw new DomainError(SESSION_OVER_TOOL_ERROR);
+}
+
+function teardownDeps(deps: McpDeps): TeardownDeps {
+  return {
+    db: deps.db,
+    clock: deps.clock,
+    slot: deps.slot,
+    resolve: buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
+    githubAuth: deps.githubAuth,
+    heldForContainment: deps.heldForContainment,
+    pollNow: deps.pollNow,
+  };
 }
 
 /** 検査を持たない門: workspace を前倒しで解決するだけ(監査・Interview の完了には ADR 0084 の完了の門が無い)(`done` へ決着させる verb は門を持つ —— ADR 0274 決定3)。 */
@@ -408,17 +445,8 @@ function runReleasingVerb(
       return recorded;
     })();
     deps.slot.enterTeardown();
-    const teardown: TeardownDeps = {
-      db: deps.db,
-      clock: deps.clock,
-      slot: deps.slot,
-      resolve: buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
-      githubAuth: deps.githubAuth,
-      heldForContainment: deps.heldForContainment,
-      pollNow: deps.pollNow,
-    };
     const reclaimed = deps.containers?.reclaimed(String(deps.slot.currentSessionId)) ?? Promise.resolve();
-    void reclaimed.then(() => runTeardown(teardown, task.id, { ...teardownStep(deps.db, task.id), workspace }));
+    void reclaimed.then(() => runTeardown(teardownDeps(deps), task.id, { ...teardownStep(deps.db, task.id), workspace }));
     return { ...result, session_over: SESSION_OVER_NOTICE };
   });
 }
