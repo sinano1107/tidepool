@@ -1,5 +1,7 @@
 # 盤面は checkout の sparse-checkout を自分だけのものとして書かず、人間の状態の写しに1行足して隠し、写しどおり戻す
 
+**Status 追記: 写し・戻し・盤面の行の印の機構は消えた —— `workspace_state.sparse_snapshot`、起動時の戻し、残った盤面の行を印と読むこと(決定1・4・5・7、決定3 の印の半分)は無く、盤面は task の checkout の sparse-checkout に除外の行を書くだけである。決定3 の「S bit(index の印)は読まない」は残る(盤面の view が引く、`src/git.ts`)。Status 追記(#2943)の `sparse.expectFilesOutsideOfPatterns=true` も残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定2、2026-11-08、issue #3032)。**
+
 **Status 追記: worker が人間の checkout で走らなくなるので、人間の sparse-checkout の写しは要らず、settings.json は盤面が作った task の checkout で外す([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
 **Status 追記: Claude worker の Git env には常に `sparse.expectFilesOutsideOfPatterns=true` を載せる —— sandbox の settings stub(ADR 0037 機構2)が、盤面だけでなく人間の sparse の S bit も落とすためである。既存の `GIT_CONFIG_*` の後ろに足し、checkout の config は変えない。決定4 の戻しは Git の成功だけで終えず、`git ls-files -d -- .claude/settings.json` が空であることも確かめ、欠けていれば写しを残して決定6 の quarantine に返す。人間の sparse が外したファイルはこの検査に出ないので決定3 はそのまま(2026-11-06、issue #2943)。**

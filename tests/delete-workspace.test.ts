@@ -6,7 +6,7 @@ import { openDb } from "../src/db.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
-import { completionTreePaths, projectSettingsHiddenByBoard, releaseWorkspace } from "../src/workspace.js";
+import { completionTreePaths, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, writeUnannounced } from "./registry-fixture.js";
@@ -26,7 +26,7 @@ async function makeMainRegistry(): Promise<string> {
 /** 参照ゼロ・既定でもない盤面の事実。 */
 const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskIds: [] };
 
-/** 盤面が pickup で基準を撮った `name` の checkout。sparse の写しも行に置き、worker は自分のタスクブランチに1つ commit した。 */
+/** 盤面が pickup で基準を撮った `name` の checkout。worker は自分のタスクブランチに1つ commit した。 */
 async function sessionWithState(name: string) {
   const db = openDb(":memory:");
   const ws = await makeWorkspace(name);
@@ -34,16 +34,14 @@ async function sessionWithState(name: string) {
   const registered = registerTask(db, { type: "work", title: "t", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", now)!;
   const place = await prepareAtPickup(db, ws, task);
-  db.prepare("UPDATE workspace_state SET sparse_snapshot = ? WHERE name = ?").run('{"mode":"disabled","pattern":null}', name);
   commitWork(place.path, "work.txt", "work\n");
   return { db, ws, place, task, now };
 }
 
 type Session = Awaited<ReturnType<typeof sessionWithState>>;
 
-/** 行の有無を production の読み手で: sparse の写しは「盤面が隠している最中」の印、基準は解放の比較が読む(無ければ違反、ADR 0064 決定6)。 */
+/** 行の有無を production の読み手で: 基準は解放の比較が読む(無ければ違反、ADR 0064 決定6)。 */
 function expectState(s: Session, kept: boolean): void {
-  expect(projectSettingsHiddenByBoard(s.db, s.ws)).toBe(kept);
   releaseWorkspace(s.db, s.place, s.task, s.now);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name) === undefined).toBe(kept);
 }
@@ -56,7 +54,7 @@ const registryDeps = (dir: string) => ({
 describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
   vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-  it("削除が成立すると、その name の行(基準と sparse の写し)が無くなる", async () => {
+  it("削除が成立すると、その name の行(基準)が無くなる", async () => {
     const s = await sessionWithState("tidepool");
 
     await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, db: s.db });

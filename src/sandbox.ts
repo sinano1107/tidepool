@@ -590,20 +590,17 @@ function tracked(workspacePath: string, path: string): boolean {
 /** 置き場所だけを見る —— `lstat` で link を辿らず、ファイルを開かない(ADR 0346 決定2)。パスに何かあれば種類を問わず在る:
  *  link は先を問わず在り(dangling も)、FIFO や `/dev/zero` を指す link でも先を開かないので止まらない(#2935)。「読めない」は
  *  ENOENT 以外の `lstat` の失敗(`.claude` が通常ファイルの ENOTDIR、EACCES)、ディレクトリ、読み権限の無い通常ファイル
- *  (`access` で見る —— 開かない)。`hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある ——
- *  ADR 0293 決定3)。そのときだけ、作業ツリーに無い settings.json を index にあれば在ると読む。人間自身の sparse-checkout が外した
- *  ファイルは無いものとして扱う。 */
-function settingsFileState(workspacePath: string, name: string, hiddenByBoard: boolean): "present" | "unreadable" | undefined {
-  const path = `.claude/${name}`;
-  const file = join(workspacePath, path);
+ *  (`access` で見る —— 開かない)。作業ツリーに無いファイルは無い —— spawn の前の task の checkout は盤面がまだ隠していない
+ *  (ADR 0356 決定2、ADR 0293 追記、issue #3032)。 */
+function settingsFileState(workspacePath: string, name: string): "present" | "unreadable" | undefined {
+  const file = join(workspacePath, ".claude", name);
   try {
     const stat = lstatSync(file);
     if (stat.isDirectory()) return "unreadable";
     if (stat.isFile()) accessSync(file, constants.R_OK);
     return "present";
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
-    return name === "settings.json" && hiddenByBoard && tracked(workspacePath, path) ? "present" : undefined;
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
   }
 }
 
@@ -629,18 +626,13 @@ function settingsFileState(workspacePath: string, name: string, hiddenByBoard: b
  *  at the path counts, a symlink included whether or not its target exists; the target is never opened.
  *
  *  `untrackedProjectSettings` feeds the register gate's live-checkout signal (issue #686) — `.claude/settings.json` on
- *  disk and not in the index.
- *
- *  `hiddenByBoard` is `projectSettingsHiddenByBoard` — the sparse snapshot, or failing that the board's leftover
- *  exclusion line (ADR 0293 決定3 / 決定7): only then does a tracked `settings.json` absent from the tree count as
- *  present. Callers without that mark leave it false, so a file the human's own sparse-checkout leaves out reads as
- *  absent. */
-export function workspaceSettingsDisposition(workspacePath: string, hiddenByBoard = false) {
+ *  disk and not in the index. */
+export function workspaceSettingsDisposition(workspacePath: string) {
   const overriding: string[] = [];
   let excludeProjectSettings = false;
   let untrackedProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
-    const state = settingsFileState(workspacePath, name, hiddenByBoard);
+    const state = settingsFileState(workspacePath, name);
     if (state === undefined) continue;
     const indexed = name === "settings.json" && tracked(workspacePath, ".claude/settings.json");
     if (name === "settings.json" && !indexed) untrackedProjectSettings = true;

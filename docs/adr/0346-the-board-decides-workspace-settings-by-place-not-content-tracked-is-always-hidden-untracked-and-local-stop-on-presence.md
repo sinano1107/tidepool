@@ -1,5 +1,7 @@
 # 盤面は workspace の settings の中身を読まず置き場所で決める —— Git 共有された settings.json は常に隠し、共有されていない settings は存在で止める
 
+**Status 追記: 決定2 の存在の判定のうち「盤面が隠していて index にある」の半分は、sparse snapshot と一緒に消える([ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) の撤去)。下の ADR 0356 の追記の「untracked 側は立たなくなる」はここでは取らない —— symlink の `.claude` は fetch した checkout にも untracked に見えるファイルを置くので、止めは #3074 まで残る(2026-11-08、issue #3032)。**
+
 **Status 追記: 決定2 の untracked 側(`settings.local.json`・untracked の `settings.json` の存在で止める)は、fetch した task の checkout には untracked が無いので立たなくなる([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
 **Status 追記: 本文の「settings.json は workspace がその process に書き込める唯一の口」は誤り —— checkout の `.claude/agents/*.md` の frontmatter `hooks:` が、host の人間の `~/.claude.json` がその checkout を trust していれば host で走った(2.1.286 実測)。worker の CLI 状態を盤面所有にして閉じ、subagent 定義は名前で閉じる([ADR 0354](0354-a-claude-workers-cli-state-is-board-owned-and-fresh-per-spawn-and-a-checkouts-subagent-definitions-are-denied-by-name.md)、2026-11-06、issue #2936)。決定1〜4 はそのまま。**

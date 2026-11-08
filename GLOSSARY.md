@@ -650,7 +650,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 **保護 workspace(protected)**: 感度を資源側に張り付けるマーカー。保護 workspace を名指しする子登録は、登録者の権限に関係なく無条件で人間への承認 question に変換され、そこへの PR は merge ダイヤルに関係なく常に人間が merge する。「そこへの変更は常に人間承認」を profile 側の状態から独立させる不変条件。v1 の用途は registry 自身。
 
-**sparse snapshot(sparse-checkout の写し)**: Claude worker の session 中に Git 共有された `.claude/settings.json` を実体化から外す(ADR 0158)前に、盤面がその checkout の sparse-checkout の状態(人間が出している範囲と、その書き方)を記録したもの。checkout の sparse-checkout は人間のもので、盤面は自分だけのものとして書き換えない —— 人間の状態に settings.json 1枚の除外を足して外し、写しどおり戻す。写しの有無が「盤面が外している最中か」の印で、写しが無ければ盤面しか書かない除外の行そのものを印に読む。ファイルの隠れ方(skip-worktree)からは読まない。盤面の状態なので置き場は盤面 DB(ref の基準と同じ)。slot 解放時の WIP の「退避」とは別物(2026-10-21 の grilling、issue #1024 / ADR 0293)。 worker が人間の checkout で走らなくなった後は、settings.json を外す先は盤面が作った task の checkout で、写しの機構は要らない(2026-11-07 の grilling、issue #2956 / ADR 0356)。
+**sparse snapshot(sparse-checkout の写し)**: 退役した語(issue #3032)。旧・worker が人間の checkout で走っていた頃、盤面が Git 共有された `.claude/settings.json` を実体化から外す(ADR 0158)前に記録したその checkout の sparse-checkout の状態で、人間の状態に除外を1行足して外し、写しどおり戻した(2026-10-21 の grilling、issue #1024 / ADR 0293)。worker は盤面が作って解放で消す task の checkout で走るので、盤面はその checkout の sparse-checkout に `settings.json` の除外の行を書くだけで、写すものも戻すものも無い(2026-11-07 の grilling、issue #2956 / ADR 0356 決定2)。
 
 ## Team(チーム)
 

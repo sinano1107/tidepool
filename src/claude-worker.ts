@@ -55,9 +55,6 @@ import { boardEnvByName, type WorkerAdapter, type WorkerExit, type WorkerExitCla
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
-  isTaskCheckout,
-  materializeWorkspaceProjectSettings,
-  projectSettingsHiddenByBoard,
   quarantineWorkspace,
   type RunPlace,
   resolveExecutionWorkspace,
@@ -684,7 +681,7 @@ export function workerSpawnEnv(
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
     ...(advisor === undefined ? { [ADVISOR_DISABLE_ENV]: "1" } : {}),
-    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear a human's or the board's sparse S bit.
+    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear the board's sparse S bit.
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns",
     GIT_CONFIG_VALUE_0: "true",
@@ -1519,10 +1516,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  強制回収は容器の側なので、ここに居るのは root 1本でよい。A finished
    *  process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
-  /** Shared project settings stay hidden until every overlapping session in the
-   *  workspace has actually left its container. Slot release happens earlier,
-   *  inside the worker's final MCP call, so it is not an exit boundary. */
-  private readonly projectSettingsSessions = new Map<string, number>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
   private readonly workspacesDir: string;
@@ -1541,28 +1534,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
     this.validateDefaults(loadRegistry(options.registry.dir, options.registry.mode));
-  }
-
-  private restoreProjectSettingsAfterReclaim(
-    reclaimed: Promise<void>,
-    workspace: WorkspaceConfig,
-  ): void {
-    const key = workspace.path;
-    this.projectSettingsSessions.set(key, (this.projectSettingsSessions.get(key) ?? 0) + 1);
-    void reclaimed.then(() => {
-      const remaining = (this.projectSettingsSessions.get(key) ?? 1) - 1;
-      if (remaining > 0) {
-        this.projectSettingsSessions.set(key, remaining);
-        return;
-      }
-      this.projectSettingsSessions.delete(key);
-      try {
-        materializeWorkspaceProjectSettings(this.options.db, workspace);
-      } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
-      }
-    });
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1652,24 +1623,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       stopped(stop);
       return;
     }
-    const hidden = projectSettingsHiddenByBoard(this.options.db, place);
-    const settings = workspaceSettingsDisposition(place.path, hidden);
-    if (settings.excludeProjectSettings) {
+    if (workspaceSettingsDisposition(place.path).excludeProjectSettings) {
       try {
-        const reclaimed = this.containers.open(String(sessionId)).reclaimed;
-        excludeWorkspaceProjectSettings(this.options.db, place);
-        // ADR 0356 決定2: task の checkout は解放で消えるので戻さない
-        if (!isTaskCheckout(place)) this.restoreProjectSettingsAfterReclaim(reclaimed, place);
+        excludeWorkspaceProjectSettings(place, task.id);
       } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
-        return;
-      }
-    } else if (hidden) {
-      try {
-        materializeWorkspaceProjectSettings(this.options.db, place);
-      } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
