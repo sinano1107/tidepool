@@ -18,25 +18,20 @@ afterEach(() => {
   db = undefined;
 });
 
-it("tracked な settings.json と settings.local.json は task の checkout の sparse で外れ、完了の門はその欠落と index で隠した tracked な変更を区別する(ADR 0356 決定2・3 / ADR 0346 Status #3032)", async () => {
+it("完了の門は sparse settings の意図した欠落と、index で隠した tracked な変更を区別する(ADR 0293 / ADR 0356 決定3)", async () => {
   const workspace = await makeWorkspace("sparse-completion");
   db = openDb(":memory:");
   await mkdir(join(workspace.path, ".claude"));
   commitWork(workspace.path, ".claude/settings.json", "{}\n");
-  // ignore されがちなファイルでも commit されていれば tracked
-  writeFileSync(join(workspace.path, ".claude/settings.local.json"), "{\"local\":true}\n");
-  git(workspace.path, "add", "-f", ".claude/settings.local.json");
-  git(workspace.path, "commit", "-m", "share local settings");
   const now = new Date(0);
   const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
-  // ADR 0356 決定2: settings を隠すのは名前の場所でなく、盤面が作った task の checkout の sparse-checkout
+  // ADR 0356 決定2: settings.json を隠すのは名前の場所でなく、盤面が作った task の checkout の sparse-checkout
   const place = await prepareAtPickup(db, workspace, task);
-  excludeWorkspaceProjectSettings(place);
+  excludeWorkspaceProjectSettings(place, task.id);
 
-  expect(git(place.path, "sparse-checkout", "list").split("\n")).toEqual(["/*", "!/.claude/settings.json", "!/.claude/settings.local.json"]);
+  expect(git(place.path, "sparse-checkout", "list").split("\n")).toEqual(["/*", "!/.claude/settings.json"]);
   expect(completionTreePaths(place, task.id)).toEqual([]);
   expect(existsSync(join(place.path, ".claude/settings.json"))).toBe(false);
-  expect(existsSync(join(place.path, ".claude/settings.local.json"))).toBe(false);
   git(place.path, "update-index", "--skip-worktree", "--", "README.md");
   writeFileSync(join(place.path, "README.md"), "changed\n");
   expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
@@ -49,7 +44,6 @@ it("tracked な settings.json と settings.local.json は task の checkout の 
   expect(git(workspace.path, "log", "-1", "--format=%s", `task/${task.id}`)).toContain(`WIP: task ${task.id}`);
   expect(git(workspace.path, "show", `task/${task.id}:unfinished.txt`)).toBe("unrelated work in progress");
   expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.json`)).toBe("{}");
-  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.local.json`)).toBe("{\"local\":true}");
   expect(readFileSync(join(workspace.path, ".claude/settings.json"), "utf8")).toBe("{}\n");
 });
 
@@ -105,7 +99,7 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
   );
 
   const parentPlace = await prepareAtPickup(db, workspace, parent);
-  excludeWorkspaceProjectSettings(parentPlace);
+  excludeWorkspaceProjectSettings(parentPlace, parent.id);
   expect(existsSync(join(parentPlace.path, ".claude", "settings.json"))).toBe(false);
   commitWork(parentPlace.path, "parent.txt", "parent work\n");
   releaseWorkspace(db, parentPlace, parent, now);
@@ -124,7 +118,7 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
     ...HUMAN_WEBUI,
   );
   const childPlace = await prepareAtPickup(db, workspace, child);
-  excludeWorkspaceProjectSettings(childPlace);
+  excludeWorkspaceProjectSettings(childPlace, child.id);
   expect(readFileSync(join(childPlace.path, "parent.txt"), "utf8")).toBe("parent work\n");
   writeFileSync(join(childPlace.path, "child.txt"), "child work\n");
   releaseWorkspace(db, childPlace, child, now);

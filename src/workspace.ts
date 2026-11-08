@@ -50,7 +50,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { PROJECT_SETTINGS_FILES, SANDBOX_SHADOW_PATHS } from "./sandbox.js";
+import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
@@ -665,7 +665,7 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
     write();
     return;
   }
-  const sparse = checkoutSparsePolicy(workspace, db);
+  const sparse = storedSparsePolicy(db, workspace.name) ?? undefined;
   boardReadTree(workspace.path, oldTip, tip, sparse);
   try {
     write();
@@ -694,10 +694,11 @@ function sparsePatternPath(workspace: WorkspaceConfig): string {
   return resolve(workspace.path, git(workspace.path, "rev-parse", "--git-path", "info/sparse-checkout"));
 }
 
-/** 盤面が task の checkout の sparse-checkout に書く除外の行 —— tracked な settings ファイル1枚ずつ(ADR 0346 決定2 / Status #3032)。 */
-const BOARD_SETTINGS_LINES = PROJECT_SETTINGS_FILES.map((name) => `!/.claude/${name}`);
+/** 盤面が task の checkout の sparse-checkout に書く除外の行(ADR 0293 追記、issue #3032)。 */
+const BOARD_SETTINGS_LINE = "!/.claude/settings.json";
 
-const SETTINGS_EXCLUDED = ["/*", ...BOARD_SETTINGS_LINES, ""].join("\n");
+/** 盤面が task の checkout に書く sparse の pattern —— 全部出して tracked な settings.json だけを外す。 */
+const BOARD_SPARSE_PATTERN = `/*\n${BOARD_SETTINGS_LINE}\n`;
 
 const configEnabled = (workspace: WorkspaceConfig, key: string) =>
   git(workspace.path, "config", "--type=bool", "--default=false", "--get", key) === "true";
@@ -714,38 +715,33 @@ function storedSparsePolicy(db: Db, key: string): SparsePolicy | null | undefine
   return row === undefined ? undefined : JSON.parse(row) as SparsePolicy | null;
 }
 
-const checkoutSparsePolicy = (workspace: WorkspaceConfig, db?: Db): SparsePolicy | undefined =>
-  (db && storedSparsePolicy(db, workspace.name)) ?? undefined;
-
 function describeChanges(changes: WorktreeChange[], separator: string): string {
   return changes.map(({ path, status }) => `${status} ${displayWorktreePath(path)}`).join(separator);
 }
 
-/** task の checkout を読む view の sparse(#3035): 盤面が settings を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。 */
+/** task の checkout を読む view の sparse(#3035): 盤面が settings.json を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。 */
 function taskCheckoutSparse(place: WorkspaceConfig): SparsePolicy | undefined {
   // worker の走った repo では git を撃たない(ADR 0356 決定3)。worker が書ける file なので通常 file だけを読む —— FIFO で止まらない(ADR 0357)
   const patternPath = join(place.path, ".git", "info", "sparse-checkout");
   try {
-    if (!lstatSync(patternPath).isFile()) return undefined;
-    const lines = readFileSync(patternPath, "utf8").split("\n");
-    if (!BOARD_SETTINGS_LINES.every((line) => lines.includes(line))) return undefined;
+    if (!lstatSync(patternPath).isFile() || !readFileSync(patternPath, "utf8").split("\n").includes(BOARD_SETTINGS_LINE)) return undefined;
   } catch {
     return undefined;
   }
-  return { pattern: SETTINGS_EXCLUDED, cone: false };
+  return { pattern: BOARD_SPARSE_PATTERN, cone: false };
 }
 
-/** Keep tracked project settings (ADR 0158 / ADR 0346 決定2) in Git but out of the worker's physical checkout by writing
- *  the task checkout's own sparse-checkout before spawn. The checkout is board-made and recreated at every pickup, so
- *  there is no human sparse state to copy or restore (ADR 0356 決定2). The worker's Git env preserves the sparse S bit
- *  despite the sandbox's settings stub (ADR 0037 機構2); sparse-checkout alone cannot. */
-export function excludeWorkspaceProjectSettings(place: RunPlace): void {
-  if (!isTaskCheckout(place)) throw new Error(`project settings are hidden only in a task checkout, not ${place.path}`);
-  gitWithInput(SETTINGS_EXCLUDED, place.path, "sparse-checkout", "set", "--no-cone", "--stdin");
+/** Keep a tracked `.claude/settings.json` (ADR 0158 / ADR 0346 決定2) in Git but out of the worker's physical checkout by
+ *  writing the task checkout's own sparse-checkout before spawn. The checkout is board-made and recreated at every
+ *  pickup, so there is no human sparse state to copy or restore (ADR 0356 決定2、ADR 0293 追記、issue #3032). The
+ *  worker's Git env preserves the sparse S bit despite the sandbox's settings stub (ADR 0037 機構2); sparse-checkout
+ *  alone cannot. */
+export function excludeWorkspaceProjectSettings(place: RunPlace, taskId: string): void {
+  assertTaskCheckout(place, taskId);
+  gitWithInput(BOARD_SPARSE_PATTERN, place.path, "sparse-checkout", "set", "--no-cone", "--stdin");
   // 盤面自身の手が効いたかを確かめる —— 残れば CLI が読む(ADR 0346 決定1)ので spawn しない
-  const left = PROJECT_SETTINGS_FILES.filter((name) => lstatSync(join(place.path, ".claude", name), { throwIfNoEntry: false }));
-  if (left.length > 0) {
-    throw new Error(`workspace ${place.name}: could not exclude .claude/${left.join(", .claude/")}: still in the tree after sparse-checkout`);
+  if (lstatSync(join(place.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
+    throw new Error(`workspace ${place.name}: could not exclude .claude/settings.json: still in the tree after sparse-checkout`);
   }
 }
 
@@ -886,7 +882,7 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig): void {
   const pin = storedSparsePolicy(db, key);
   if (pin !== undefined && !first) return;
   // ADR 0356 決定3: an existing checkout without a pin may already carry worker-written rules.
-  const policy = first ? readSparsePolicy(workspace) : undefined;
+  const policy = first && pin === undefined ? readSparsePolicy(workspace) : undefined;
   db.transaction(() => {
     if (first) snapshotRefs(db, workspace);
     if (pin === undefined) db.prepare("INSERT INTO workspace_sparse_policies (name, policy) VALUES (?, ?)").run(key, JSON.stringify(policy ?? null));
@@ -912,7 +908,7 @@ export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
   })();
 }
 
-/** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の写しの行ごと消す。残すと同名を別 path で登録し直したとき
+/** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の pin の行ごと消す。残すと同名を別 path で登録し直したとき
  *  旧 checkout の基準と比べる。面接室と受験者の行は消されない checkout のものなので、ここを通らない(ADR 0276 決定4)。 */
 export function dropWorkspaceState(db: Db, name: string): void {
   db.transaction(() => {

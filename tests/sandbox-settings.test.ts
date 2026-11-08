@@ -444,9 +444,9 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
     ["untracked な settings.json の language / outputStyle(ADR 0346 決定4)", "settings.json", { language: "japanese", outputStyle: "Explanatory" }],
     ["untracked な settings.json の {}", "settings.json", {}],
     ["settings.local.json の {}", "settings.local.json", {}],
-  ])("%s は止めず隠しもしない —— fetch した task の checkout には untracked が無い(ADR 0356 決定2)", (_case, name, body) => {
+  ])("%s は存在だけで止まる", (_case, name, body) => {
     withSettings(name, body, false, (workspace) => {
-      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: false });
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
     });
   });
 
@@ -491,9 +491,9 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
   it.each([
     ...LINK_TARGETS.map(([label, makeTarget]) => [`untracked な settings.json の ${label}`, "settings.json", makeTarget] as const),
     ["settings.local.json の 在らない先(dangling)", "settings.local.json", danglingTarget] as const,
-  ])("%s を指す symlink は、先を開かず止めない(ADR 0356 決定2)", (_case, name, makeTarget) => {
+  ])("%s を指す symlink は、先を開かず存在だけで止まる", (_case, name, makeTarget) => {
     withPlaced(name, (file, workspace) => symlinkSync(makeTarget(workspace), file), false, (workspace) => {
-      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: false });
+      expect(dispositionInChild(workspace)).toMatchObject({ overriding: [name], excludeProjectSettings: false });
     });
   });
 
@@ -506,13 +506,14 @@ describe("workspaceSettingsDisposition は置き場所で決める(ADR 0346 決�
   });
 
   it("組を止める理由は置き場所の語で書き、鍵を列挙しない(claudeWorkspaceContainment)", () => {
-    withPlaced("settings.local.json", (file) => mkdirSync(file), false, (workspace) => {
+    withSettings("settings.local.json", {}, false, (workspace) => {
       const contained = claudeWorkspaceContainment(workspace);
       expect(contained.available).toBe(false);
       const reason = contained.available ? "" : contained.reason;
       expect(reason).toContain(".claude/settings.local.json");
+      expect(reason).toContain("local or untracked settings file");
       expect(reason).toContain("unreadable");
-      expect(reason).toContain("the board hides only readable Git-tracked settings files");
+      expect(reason).toContain("the board can hide only a Git-tracked .claude/settings.json");
       expect(reason).not.toMatch(/sandbox|permissions|hooks|invalid JSON/);
     });
   });

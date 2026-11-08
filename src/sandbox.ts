@@ -32,10 +32,9 @@ export interface WorkerSessionSettings {
    *  too, and the managed tier, the one source that survives it, is a
    *  root-owned host-wide file with its override env var inert on 2.1.235).
    *  What the blanket covered is re-covered without it: tracked project settings
-   *  are kept out of the worker's physical checkout, a fetched task checkout
-   *  carries no untracked ones (ADR 0356 決定2), unreadable ones stop the
-   *  (claude-code, workspace) pair (`workspaceSettingsDisposition`, ADR 0259 /
-   *  ADR 0346 決定2), and
+   *  are kept out of the worker's physical checkout, untracked/local settings
+   *  refuse the spawn and stop the (claude-code, workspace) pair
+   *  (`workspaceSettingsDisposition`, ADR 0259 / ADR 0346 決定2), and
    *  the mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
@@ -180,7 +179,7 @@ export const SANDBOX_SHADOW_PATHS = [
  *  Both live inside the checkout, so a `work` session can write them — which is
  *  what ADR 0037 closes and what `workspaceSettingsDisposition` keeps away from the CLI behind it. One
  *  list, because the two are the same fact about the CLI's merge order. */
-export const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
+const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
 /** ADR 0037's OS-layer half: the sandbox confines Bash, so this is what stops a
  *  `work` session redirecting into its own settings and re-defining the floor
@@ -591,7 +590,8 @@ function tracked(workspacePath: string, path: string): boolean {
 /** 置き場所だけを見る —— `lstat` で link を辿らず、ファイルを開かない(ADR 0346 決定2)。パスに何かあれば種類を問わず在る:
  *  link は先を問わず在り(dangling も)、FIFO や `/dev/zero` を指す link でも先を開かないので止まらない(#2935)。「読めない」は
  *  ENOENT 以外の `lstat` の失敗(`.claude` が通常ファイルの ENOTDIR、EACCES)、ディレクトリ、読み権限の無い通常ファイル
- *  (`access` で見る —— 開かない)。作業ツリーに無いファイルは無い —— spawn の前の task の checkout は盤面がまだ隠していない(ADR 0356 決定2)。 */
+ *  (`access` で見る —— 開かない)。作業ツリーに無いファイルは無い —— spawn の前の task の checkout は盤面がまだ隠していない
+ *  (ADR 0356 決定2、ADR 0293 追記、issue #3032)。 */
 function settingsFileState(workspacePath: string, name: string): "present" | "unreadable" | undefined {
   const file = join(workspacePath, ".claude", name);
   try {
@@ -620,12 +620,10 @@ function settingsFileState(workspacePath: string, name: string): "present" | "un
  *  The worker itself cannot write either file (ADR 0037 mechanism 2); this is the second wall — a file already in the
  *  checkout, whoever put it there, is caught before the CLI reads it.
  *
- *  A tracked `.claude/settings.json` or `.claude/settings.local.json` comes back as `excludeProjectSettings`, for the
- *  caller to hide during the session (ADR 0158 / ADR 0346 Status #3032). A path that is a directory or cannot be looked
- *  up comes back in `overriding`, and the caller stops the (claude-code, workspace) pair (ADR 0346 決定2「読めないファイルは
- *  従来どおり止める」). An untracked file is neither: the worker runs in a fetched task checkout, which never carries one
- *  (ADR 0356 決定2). Anything at the path counts, a symlink included whether or not its target exists; the target is
- *  never opened.
+ *  A tracked `.claude/settings.json` comes back as `excludeProjectSettings`, for the caller to hide during the session
+ *  (ADR 0158). A local or untracked file, or a path that is a directory or cannot be looked up, comes back in
+ *  `overriding`: the board can hide only a tracked file, so the caller stops the (claude-code, workspace) pair. Anything
+ *  at the path counts, a symlink included whether or not its target exists; the target is never opened.
  *
  *  `untrackedProjectSettings` feeds the register gate's live-checkout signal (issue #686) — `.claude/settings.json` on
  *  disk and not in the index. */
@@ -636,10 +634,10 @@ export function workspaceSettingsDisposition(workspacePath: string) {
   for (const name of PROJECT_SETTINGS_FILES) {
     const state = settingsFileState(workspacePath, name);
     if (state === undefined) continue;
-    const indexed = tracked(workspacePath, `.claude/${name}`);
+    const indexed = name === "settings.json" && tracked(workspacePath, ".claude/settings.json");
     if (name === "settings.json" && !indexed) untrackedProjectSettings = true;
-    if (state === "unreadable") overriding.push(name);
-    else if (indexed) excludeProjectSettings = true;
+    if (state === "unreadable" || !indexed) overriding.push(name);
+    else excludeProjectSettings = true;
   }
   return { overriding, excludeProjectSettings, untrackedProjectSettings };
 }

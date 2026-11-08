@@ -1,6 +1,6 @@
 # 盤面は checkout の sparse-checkout を自分だけのものとして書かず、人間の状態の写しに1行足して隠し、写しどおり戻す
 
-**Status 追記: 決定1〜7 の写し・戻し・印の機構は消えた —— `workspace_state.sparse_snapshot`、起動時の戻し、盤面の行の印の読みは無く、盤面は task の checkout の sparse-checkout に除外の行を書くだけである。Status 追記(#2943)の `sparse.expectFilesOutsideOfPatterns=true` は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定2、2026-11-08、issue #3032)。**
+**Status 追記: 写し・戻し・盤面の行の印の機構は消えた —— `workspace_state.sparse_snapshot`、起動時の戻し、残った盤面の行を印と読むこと(決定1・4・5・7、決定3 の印の半分)は無く、盤面は task の checkout の sparse-checkout に除外の行を書くだけである。決定3 の「S bit(index の印)は読まない」は残る(盤面の view が引く、`src/git.ts`)。Status 追記(#2943)の `sparse.expectFilesOutsideOfPatterns=true` も残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定2、2026-11-08、issue #3032)。**
 
 **Status 追記: worker が人間の checkout で走らなくなるので、人間の sparse-checkout の写しは要らず、settings.json は盤面が作った task の checkout で外す([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 

@@ -1588,14 +1588,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     if (!workspace) return;
     // 走る場所(ADR 0356 決定1): task の checkout —— interview の root と受験者は面接室から開いたもの。下の検査・cwd・封じ込めの組はこちら、層と記憶は実環境
     const place = taskRunPlace(this.options.db, task, workspace);
-    // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the checkout's own
-    // `.claude/settings.json` and `.claude/settings.local.json` with the per-task
-    // `--settings` floor below, and the board wants no key of them in the worker's
-    // process (measured — see workspaceSettingsDisposition, ADR 0346 決定1). A tracked
-    // one is hidden for the session, whatever it holds (ADR 0346 決定2 / Status #3032);
-    // the task checkout is fetched, so it never carries an untracked one (ADR 0356 決定2).
-    // An unreadable one stops the (claude-code, workspace) pair — only the claude CLI
-    // reads them, so the workspace's Codex tasks keep running (ADR 0259 決定1).
+    // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the *workspace's*
+    // own `.claude/settings.json` with the per-task `--settings` floor below, and
+    // the board wants no key of it in the worker's process (measured — see
+    // workspaceSettingsDisposition, ADR 0346 決定1). A checkout with a local or
+    // untracked settings file stops the (claude-code, workspace) pair on its
+    // presence — sparse-checkout cannot safely hide them, and only the claude CLI
+    // reads them, so the workspace's Codex tasks keep running (ADR 0259 決定1). A
+    // tracked settings.json is hidden for the session instead, whatever it holds
+    // (ADR 0158 / ADR 0346 決定2).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
@@ -1604,8 +1605,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 損なうので、直下の settings ガードのような (Harness, workspace) の組には
     // 狭めない(ADR 0259)。
     //
-    // **settings ガードより先に見る**: 交差が根なので、後ろに置くと真だが
-    // 的外れな settings の診断が先に立ち、人間は settings を直して回ることになる。
+    // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
+    // checkout を workspace 登録した」瞬間で、その checkout は自分の
+    // `.claude/settings.local.json` を持っていることが多い。後ろに置くと真だが
+    // 的外れな診断(「隠せない settings ファイルがある」)が先に立ち、人間は
+    // settings を消して回ることになる。
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
       stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
@@ -1621,7 +1625,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     }
     if (workspaceSettingsDisposition(place.path).excludeProjectSettings) {
       try {
-        excludeWorkspaceProjectSettings(place);
+        excludeWorkspaceProjectSettings(place, task.id);
       } catch (err) {
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;

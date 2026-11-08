@@ -1,6 +1,6 @@
 # 盤面は workspace の settings の中身を読まず置き場所で決める —— Git 共有された settings.json は常に隠し、共有されていない settings は存在で止める
 
-**Status 追記: task の checkout では決定2 の untracked 側の止めを外した。tracked な `settings.local.json` は存在で止めず、`settings.json` と同じく隠す —— 盤面の sparse の行は `!/.claude/settings.json` と `!/.claude/settings.local.json` の2行になる。読めないファイルは従来どおり止める([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定2、2026-11-08、issue #3032)。**
+**Status 追記: 決定2 の存在の判定のうち「盤面が隠していて index にある」の半分は、sparse snapshot と一緒に消える([ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) の撤去)。下の ADR 0356 の追記の「untracked 側は立たなくなる」はここでは取らない —— symlink の `.claude` は fetch した checkout にも untracked に見えるファイルを置くので、止めは #3074 まで残る(2026-11-08、issue #3032)。**
 
 **Status 追記: 決定2 の untracked 側(`settings.local.json`・untracked の `settings.json` の存在で止める)は、fetch した task の checkout には untracked が無いので立たなくなる([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
