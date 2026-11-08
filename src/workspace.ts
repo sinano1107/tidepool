@@ -104,12 +104,15 @@ export interface WorkspaceConfig {
  *  `namedPlace` is the named place the task checkout was made from and is released into (ADR 0356 決定1・2) — the
  *  workspace, or the interview room for an Interview root and its examinees: `path` is the task checkout and `name` the
  *  named place's. */
-export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; namedPlace?: WorkspaceConfig };
+export type RunPlace = (WorkspaceConfig & { reads: WorkspaceConfig[]; namedPlace?: never }) | TaskCheckoutPlace;
 
 /** task の checkout で走る場所(ADR 0356 決定1)。 */
-export type TaskCheckoutPlace = RunPlace & { namedPlace: WorkspaceConfig; borrowsNamedObjects: boolean };
+export type TaskCheckoutPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; namedPlace: WorkspaceConfig; borrowsNamedObjects: boolean };
 
-const isTaskCheckout = (place: WorkspaceConfig): place is TaskCheckoutPlace => (place as RunPlace).namedPlace !== undefined;
+function isTaskCheckout(place: WorkspaceConfig): place is TaskCheckoutPlace {
+  const checkout = place as Partial<TaskCheckoutPlace>;
+  return checkout.namedPlace !== undefined && typeof checkout.borrowsNamedObjects === "boolean";
+}
 
 /** worker の形で走る process は全部 task の checkout で走る(ADR 0356 決定1)—— 名前の場所に当てる門・解放・写しは無い。 */
 function assertTaskCheckout(place: WorkspaceConfig, taskId: string): asserts place is TaskCheckoutPlace {
@@ -556,7 +559,7 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   const room = place.namedPlace;
   // view の index の種は worker の tip —— session の最中なのでサンドボックスの shadow 残骸がまだある。tree rule と同じ集合を外す(ADR 0069)
   const tip = fetchWorkerTip(place, taskId);
-  const tree = boardWriteTree(place.path, tip, room.path, recordedSettingsSparsePolicy(room, tip), taskCheckoutRemnants(place, tip));
+  const tree = boardWriteTree(place.path, tip, room.path, recordedSettingsSparsePolicy(db, room, taskId, tip), taskCheckoutRemnants(place, tip));
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
   const head = git(room.path, "commit-tree", tree, "-p", git(room.path, "rev-parse", protectedBranchRef(room)), "-m", "Add the project files");
   const ref = `refs/keep-around/${head}`;
@@ -718,7 +721,10 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
 }
 
 /** ADR 0360 決定2: view の index の種にする tree に settings があれば、盤面の隠しと同じ pattern を使う。 */
-function recordedSettingsSparsePolicy(namedPlace: WorkspaceConfig, tip: string): SparsePolicy | undefined {
+function recordedSettingsSparsePolicy(db: Db, namedPlace: WorkspaceConfig, taskId: string, tip: string): SparsePolicy | undefined {
+  // ADR 0360 決定1・2: Claude の spawn だけが settings を隠す。今回の pickup で Codex が走ったなら通常どおり変更を読む。
+  const spawn = latestEventOfTask(db, taskId, "worker_spawned");
+  if (spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0)) return undefined;
   const { hide } = recordedSettingsDisposition(namedPlace.path, tip);
   return hide.length === 0 ? undefined : { pattern: boardSparsePattern(hide), cone: false };
 }
@@ -1086,16 +1092,17 @@ function taskCheckoutRemnants(place: TaskCheckoutPlace, tip: string): string[] {
 }
 
 /** task の checkout の worktree を、名前の場所のタスクブランチの tip に対して盤面の view だけで読む(ADR 0356 決定3)。shadow 残骸は除く。 */
-function taskCheckoutChanges(place: TaskCheckoutPlace, tip: string): WorktreeChange[] {
+function taskCheckoutChanges(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string): WorktreeChange[] {
   const remnants = new Set(taskCheckoutRemnants(place, tip));
-  return boardViewStatus(place.path, tip, place.namedPlace.path, recordedSettingsSparsePolicy(place.namedPlace, tip)).filter(({ path }) => !remnants.has(path));
+  const sparse = recordedSettingsSparsePolicy(db, place.namedPlace, taskId, tip);
+  return boardViewStatus(place.path, tip, place.namedPlace.path, sparse).filter(({ path }) => !remnants.has(path));
 }
 
 /** ADR 0359 決定1: task の checkout の観測が落ちれば門を通さない。work は全部 task の checkout で走る(ADR 0356 決定1)。 */
-export function completionTreePaths(workspace: WorkspaceConfig, taskId: string, recordedTip?: string): string[] {
+export function completionTreePaths(db: Db, workspace: WorkspaceConfig, taskId: string, recordedTip?: string): string[] {
   assertTaskCheckout(workspace, taskId);
   const tip = recordedTip ?? git(workspace.namedPlace.path, "rev-parse", "--verify", `refs/heads/${taskBranch(taskId)}`);
-  return taskCheckoutChanges(workspace, tip).map(({ path }) => path);
+  return taskCheckoutChanges(db, workspace, taskId, tip).map(({ path }) => path);
 }
 
 /** ADR 0084: 退避コミットの subject にタスクの title を添える —— 完了の門が入った後に
@@ -1119,12 +1126,12 @@ export function completionTreeGateApplies(task: Task): boolean {
 }
 
 /** ADR 0359 決定3: worker の checkout は観測だけに使う。着地は名前の場所の記録から進める。 */
-function observeCheckoutAfterCompletion(place: TaskCheckoutPlace, taskId: string, recorded: string | undefined): TaskCheckoutWriteObservation | undefined {
+function observeCheckoutAfterCompletion(db: Db, place: TaskCheckoutPlace, taskId: string, recorded: string | undefined): TaskCheckoutWriteObservation | undefined {
   try {
     const workerTip = readWorkerTip(place, taskId);
     if (!recorded) return;
     if (workerTip !== recorded) return { observation: "committed", worker_tip: workerTip };
-    const paths = taskCheckoutChanges(place, recorded).map(({ path }) => path);
+    const paths = taskCheckoutChanges(db, place, taskId, recorded).map(({ path }) => path);
     if (paths.length > 0) return { observation: "uncommitted", paths };
   } catch (err) {
     // ADR 0359 決定5: view の上限超過も、完了済みの解放では「読めない」観測
@@ -1407,7 +1414,7 @@ function settleTaskCheckout(
       const candidates = baselineValues(recordedRef(db, namedPlace.name, taskRef));
       const current = readRef(namedPlace, taskRef);
       const recorded = candidates.length === 1 ? candidates[0] : candidates.find((tip) => tip === current);
-      observation = observeCheckoutAfterCompletion(place, task.id, recorded);
+      observation = observeCheckoutAfterCompletion(db, place, task.id, recorded);
       // ADR 0359 決定1: 旧版の完了では tip が記録にあるとは限らない。確認できなければ checkout を残す
       const opened = latestEventOfTask(db, task.id, "task_checkout_opened")?.payload;
       if (opened?.path !== checkout || opened.completion_gate !== "recorded_tip") {
@@ -1422,7 +1429,7 @@ function settleTaskCheckout(
       const tip = fetchWorkerTip(place, task.id, completed);
       const recorded = readRef(namedPlace, taskRef);
       const base = recorded !== "" && isAncestor(namedPlace, tip, recorded) ? recorded : tip;
-      const sparse = recordedSettingsSparsePolicy(namedPlace, base);
+      const sparse = recordedSettingsSparsePolicy(db, namedPlace, task.id, base);
       let tree: string;
       try {
         tree = boardWriteTree(checkout, base, namedPlace.path, sparse, taskCheckoutRemnants(place, base));

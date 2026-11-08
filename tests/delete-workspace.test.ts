@@ -73,7 +73,7 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
 
       const place = await prepareAtPickup(s.db, replacement, next);
 
-      expect(completionTreePaths(place, next.id)).toEqual([]);
+      expect(completionTreePaths(s.db, place, next.id)).toEqual([]);
     } finally {
       s.db.close();
     }

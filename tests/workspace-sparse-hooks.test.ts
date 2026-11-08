@@ -73,11 +73,11 @@ it("完了の門には index で隠した tracked な変更も見える(ADR 0356
   excludeWorkspaceProjectSettings(place, task.id, [".claude/settings.json"]);
 
   expect(git(place.path, "sparse-checkout", "list").split("\n")).toEqual(["/*", "!/.claude/settings.json"]);
-  expect(completionTreePaths(place, task.id)).toEqual([]);
+  expect(completionTreePaths(db, place, task.id)).toEqual([]);
   expect(existsSync(join(place.path, ".claude/settings.json"))).toBe(false);
   git(place.path, "update-index", "--skip-worktree", "--", "README.md");
   writeFileSync(join(place.path, "README.md"), "changed\n");
-  expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
+  expect(completionTreePaths(db, place, task.id)).toEqual(["README.md"]);
 });
 
 it("forged sparse rules cannot hide a README deletion from completion or WIP (ADR 0360 決定2)", async () => {

@@ -81,7 +81,7 @@ it("assume-unchanged の変更と info/exclude で隠した untracked は解放�
   writeFileSync(join(place.path, "ignored.txt"), "declared ignored\n");
   // 完了の門(tip を引いてから読む)は隠した2つを名指す
   recordTaskCheckoutTip(db, place, task.id);
-  expect(completionTreePaths(place, task.id).sort()).toEqual(["README.md", "excluded.txt"]);
+  expect(completionTreePaths(db, place, task.id).sort()).toEqual(["README.md", "excluded.txt"]);
 
   releaseWorkspace(db, place, task, NOW);
 

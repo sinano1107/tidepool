@@ -169,10 +169,11 @@ it.each([
 // 旧: task の checkout でない場所(#3031 の前の受験者の checkout)でも完了経路の検査は上限超過を `[]` に飲まなかった。ADR 0356 決定1 の
 // 後は受験者も task の checkout で走り、task の checkout でない場所の完了経路の検査は site を持たない(ADR 0359 派生)—— 何も読まずに投げる
 it("task の checkout でない場所の完了経路の検査は worker の tree を読まずに投げる(ADR 0356 決定1 / ADR 0359)", async () => {
+  const board = db = openDb(":memory:");
   const ws = await makeWorkspace("worker-tree-room");
   const fifo = mkfifo(join(ws.path, ".gitignore"));
 
-  const failure = thrown(() => completionTreePaths(ws, "t1"));
+  const failure = thrown(() => completionTreePaths(board, ws, "t1"));
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
   expect(failure).toMatchObject({ message: `task t1 does not run in a task checkout (${ws.path})` });
   await expectNoReader(fifo);
