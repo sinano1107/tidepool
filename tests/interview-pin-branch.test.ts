@@ -200,14 +200,20 @@ it("root の走る場所は面接室の外の task の checkout で、実環境�
   db.close();
 });
 
-it("Interview の場所の読みの path に面接室の objects は入らない —— root は実環境だけ、受験者は何も読みに開かない(ADR 0356 決定2)", async () => {
+it("Interview の root と受験者は alternates を書いても面接室の objects を読みに開かない(ADR 0360 決定2)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, place } = await pickedRoot(db, "read-paths-real");
+  const objects = join(room.path, ".git", "objects");
+  const rootAlternates = join(place.path, ".git", "objects", "info", "alternates");
+  writeFileSync(rootAlternates, `${objects}\n`);
   expect(runPlaceReadPaths(place)).toEqual([realpathSync(workspace.path)]);
+  rmSync(rootAlternates);
   const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id)) as [Task];
   releaseWorkspace(db, place, root, NOW);
 
-  expect(runPlaceReadPaths(await pickUp(db, examinee, room, base))).toEqual([]);
+  const examineePlace = await pickUp(db, examinee, room, base);
+  writeFileSync(join(examineePlace.path, ".git", "objects", "info", "alternates"), `${objects}\n`);
+  expect(runPlaceReadPaths(examineePlace)).toEqual([]);
   db.close();
 });
 

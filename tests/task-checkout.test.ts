@@ -81,7 +81,7 @@ it("assume-unchanged の変更と info/exclude で隠した untracked は解放�
   writeFileSync(join(place.path, "ignored.txt"), "declared ignored\n");
   // 完了の門(tip を引いてから読む)は隠した2つを名指す
   recordTaskCheckoutTip(db, place, task.id);
-  expect(completionTreePaths(place, task.id).sort()).toEqual(["README.md", "excluded.txt"]);
+  expect(completionTreePaths(db, place, task.id).sort()).toEqual(["README.md", "excluded.txt"]);
 
   releaseWorkspace(db, place, task, NOW);
 
@@ -399,14 +399,16 @@ it("review は lineage の fork 元から名前の場所に作った task/<revie
   expect(git(named.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
-it.each(["work", "review"] as const)("%s の sandbox と permission の宣言: cwd は task の checkout、名前の場所の objects は読みだけ、alternates と同じ実体の綴り(ADR 0356 決定2)", async (type) => {
+it.each(["work", "review"] as const)("%s の sandbox は alternates を消しても名前の場所の objects を読みだけ開く(ADR 0356 決定2 / ADR 0360 決定2)", async (type) => {
   const { named, place } = await pickedUp(`task-checkout-posture-${type}`, type);
-  const objects = readFileSync(join(place.path, ".git", "objects", "info", "alternates"), "utf8").trim();
-  const reads = runPlaceReadPaths(place);
-  expect(reads).toEqual([objectsOf(named)]);
+  const alternates = join(place.path, ".git", "objects", "info", "alternates");
+  const objects = readFileSync(alternates, "utf8").trim();
   expect(objects).toBe(objectsOf(named));
   // alternates が解けること: 名前の場所の base commit を task の checkout の git が読める
   git(place.path, "cat-file", "-e", `${git(named.path, "rev-parse", "main")}^{commit}`);
+  rmSync(alternates);
+  const reads = runPlaceReadPaths(place);
+  expect(reads).toEqual([objectsOf(named)]);
 
   const sandbox = buildSandboxSettings({ taskType: type, workspacePath: place.path, readPaths: reads, taskTemp: "/tmp/t", configDir: "/tmp/c", lib64: false });
   expect(sandbox.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([place.path, objects]));

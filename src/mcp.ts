@@ -362,7 +362,7 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
           `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
       );
     }
-    paths = completionTreePaths(workspace, task.id, tip);
+    paths = completionTreePaths(deps.db, workspace, task.id, tip);
   } catch (err) {
     if (err instanceof DomainError) throw err;
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す

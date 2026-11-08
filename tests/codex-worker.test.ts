@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -27,26 +27,35 @@ import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watc
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import {
   answerSkillsList,
+  closedCodexSkillsCall,
   codexSkillsListAt,
   definitionPart,
   driveCodexPreflight,
   FakeClock,
   FakeContainerRuntime,
   fakeAppServerCall,
+  healthyOpenai,
   passthroughContainers,
   recordingSpawn,
   recordPrompt,
+  withHealthyUsage,
 } from "./fakes.js";
 import {
   bootTidepool,
+  callAsTask,
+  checkoutOf,
   decomposeTaskViaWorker,
   examineeRootId,
   FULL_HANDOFF,
   failTeardownMark,
   failWorkerExited,
   fireWrites,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HOUR,
   HUMAN_WEBUI,
   judgmentRepairTask,
+  makeWorkspace,
   markPickedUp,
   mcpClient,
   openTestInterviewCheckout,
@@ -69,6 +78,59 @@ const CLI_VERSION = "codex-cli 0.147.0";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+it.each(["completion", "WIP"] as const)("Codex %s sees changes to tracked Claude settings (ADR 0360 決定2)", async (operation) => {
+  const workspace = await makeWorkspace("work");
+  await mkdir(join(workspace.path, ".claude"));
+  await writeFile(join(workspace.path, ".claude", "settings.json"), "{}\n");
+  await writeFile(join(workspace.path, ".claude", "settings.local.json"), "{}\n");
+  git(workspace.path, "add", "-f", ".claude");
+  git(workspace.path, "commit", "-m", "share both settings");
+  const registryDir = await makeRegistry({
+    "agents/codex-agent.md": "---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\nprovider: openai\nskills: []\n---\nCodex worker.",
+    "workspaces.yaml": `work:\n  path: ${JSON.stringify(workspace.path)}\n`,
+  });
+  const proc = recordingSpawn();
+  const codexHome = await tempDir("codex-settings-home-");
+  t = await bootTidepool({
+    workspace,
+    openaiUsage: healthyOpenai,
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
+    taskExecutionCandidates: (value) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, value),
+    workerAdapter: (deps) => withHealthyUsage(new CodexWorker({
+      ...deps,
+      registry: { dir: registryDir, mode: "purely-local" },
+      agent: "codex-agent",
+      workspace: workspace.name,
+      workspacesDir: tmpdir(),
+      mcpUrl: "http://127.0.0.1:1/mcp",
+      codexHome,
+      cliVersion: CLI_VERSION,
+      executable: "/opt/tidepool/bin/codex",
+      boardCall: closedCodexSkillsCall(),
+    }), deps.clock),
+  });
+  const work = task(t.db, "change tracked Claude settings");
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(proc.calls).toHaveLength(1));
+  const checkout = checkoutOf(t.db, work.id);
+  await unlink(join(checkout, ".claude", "settings.json"));
+  await writeFile(join(checkout, ".claude", "settings.local.json"), '{"language":"English"}\n');
+
+  if (operation === "completion") {
+    const result = await callAsTask(t, work.id, "complete_task", { handoff: FULL_HANDOFF });
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: expect.stringContaining("- .claude/settings.json\n- .claude/settings.local.json") }],
+    });
+  } else {
+    proc.emitExit(0, null);
+    await vi.waitFor(() => expect(existsSync(checkout)).toBe(false));
+    expect(git(workspace.path, "diff", "--name-status", "main", `task/${work.id}`)).toBe(
+      "D\t.claude/settings.json\nM\t.claude/settings.local.json",
+    );
+  }
+}, GIT_FIXTURE_TEST_TIMEOUT);
 
 function task(db: ReturnType<typeof openDb>, title = "codex-task") {
   return registerTask(db, {
@@ -585,7 +647,7 @@ describe("CodexWorker (ADR 0098)", () => {
       ...HUMAN_WEBUI,
     ));
 
-    expect(filesystem(f.process.calls[0]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
+    expect(filesystem(f.process.calls[0]!.args, "tidepool-review")).not.toContain(`${JSON.stringify(join(f.workspace, ".git"))}=`);
   });
 
   it("シンボリックリンク経由で登録した workspace でも、work task の spawn は filesystem 表の workspace・.git・.git/hooks・.git/config の行と skills/list の cwds・-C・cwd を実体のパスで書く(issue #864)", async () => {
@@ -601,6 +663,7 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(join(f.workspace, ".git"))}="write"`,
       `${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`,
       `${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`,
+      `${JSON.stringify(join(f.workspace, ".git", "objects"))}="read"`,
     ]);
     const listed = { method: "skills/list", params: { cwds: [f.workspace], forceReload: true } };
     expect(f.appServer.flatMap(({ requests }) => requests)).toEqual([{ id: 2, ...listed }, { id: 2, ...listed }]);

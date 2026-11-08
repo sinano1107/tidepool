@@ -61,7 +61,7 @@ function releaseAfterCompletion(db: Db, place: RunPlace, task: Task): void {
   releaseWorkspace(db, place, task, NOW, task.type === "work", undefined, undefined, true);
 }
 
-const treeIsDirty = (place: RunPlace, task: Task) => completionTreePaths(place, task.id).length > 0;
+const treeIsDirty = (db: Db, place: RunPlace, task: Task) => completionTreePaths(db, place, task.id).length > 0;
 
 async function completedChild(legacy?: "stale" | "recorded") {
   const db = openDb(":memory:");
@@ -241,18 +241,18 @@ it("完了の門は worker の index や info/exclude で隠した変更を読�
     commitWork(place.path, ".gitignore", "ignored.txt\n");
     gateFetch(db, place, task);
     writeFileSync(join(place.path, "ignored.txt"), "generated\n");
-    expect(completionTreePaths(place, task.id)).toEqual([]);
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
 
     git(place.path, "update-index", "--assume-unchanged", "--", "README.md");
     writeFileSync(join(place.path, "README.md"), "hidden tracked change\n");
     expect(git(place.path, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
+    expect(completionTreePaths(db, place, task.id)).toEqual(["README.md"]);
 
     mkdirSync(join(place.path, ".git", "info"), { recursive: true });
     writeFileSync(join(place.path, ".git/info/exclude"), "hidden.txt\n");
     writeFileSync(join(place.path, "hidden.txt"), "hidden untracked change\n");
     expect(git(place.path, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(place, task.id)).toEqual(["README.md", "hidden.txt"]);
+    expect(completionTreePaths(db, place, task.id)).toEqual(["README.md", "hidden.txt"]);
   } finally {
     db.close();
   }
@@ -269,7 +269,7 @@ it("worker が設定した fsmonitor は完了の門・退避・次の pickup �
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
 
-    expect(treeIsDirty(place, task)).toBe(false);
+    expect(treeIsDirty(db, place, task)).toBe(false);
     expect(existsSync(marker)).toBe(false);
     writeFileSync(join(place.path, "work.txt"), "work in progress\n");
     releaseWorkspace(db, place, task, NOW);
@@ -295,7 +295,7 @@ it("完了の門は worker の index を読まず、作業ツリーを tip に�
     git(place.path, "add", "README.md");
     writeFileSync(path, `${original}\n`);
 
-    expect(completionTreePaths(place, task.id)).toEqual([]);
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
   } finally {
     db.close();
   }
@@ -324,13 +324,13 @@ it("the gate reads a submodule by its gitlink only, without running Git in the w
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
 
-    expect(completionTreePaths(place, task.id)).toEqual([]);
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
     expect(existsSync(marker)).toBe(false);
     git(submodule, "config", "--unset", "filter.probe.clean");
     git(submodule, "add", "README.md");
     git(submodule, "commit", "-m", "advance the submodule tip");
     expect(git(submodule, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(place, task.id)).toEqual(["module with space"]);
+    expect(completionTreePaths(db, place, task.id)).toEqual(["module with space"]);
   } finally {
     db.close();
   }
@@ -353,7 +353,7 @@ it("完了の merge back は ignored の生成物と入れ子 repo を名前の�
   mkdirSync(join(place.path, "node_modules"));
   writeFileSync(join(place.path, "node_modules", "cache"), "shared ignore rule\n");
   gateFetch(db, place, task);
-  expect(treeIsDirty(place, task)).toBe(false);
+  expect(treeIsDirty(db, place, task)).toBe(false);
   completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
 
   releaseAfterCompletion(db, place, getTask(db, task.id)!);
@@ -369,7 +369,7 @@ it("完了の merge back は ignored の生成物と入れ子 repo を名前の�
   const nextPlace = await prepareAtPickup(db, ws, pickedUpNext);
 
   expect(git(nextPlace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${next.id}`);
-  expect(treeIsDirty(nextPlace, pickedUpNext)).toBe(false);
+  expect(treeIsDirty(db, nextPlace, pickedUpNext)).toBe(false);
 });
 
 // 旧: pickup のタスクブランチへの checkout は、離れる main だけが無視する生成物を名前の場所から消した(ADR 0352 決定1)
@@ -386,7 +386,7 @@ it("pickup は名前の場所の ignored の生成物を消さず、task の che
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(readFileSync(join(ws.path, "build", "out.txt"), "utf8")).toBe("generated at rest\n");
   expect(existsSync(join(place.path, "build"))).toBe(false);
-  expect(treeIsDirty(place, task)).toBe(false);
+  expect(treeIsDirty(db, place, task)).toBe(false);
 });
 
 it("完了報告後の未コミットの書き込みは退避せず、記録の tip を merge back する(ADR 0359 決定3)", async () => {
@@ -476,7 +476,7 @@ it.each([
         { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") },
       ] : []);
     } else {
-      expect(() => completionTreePaths(place, task.id)).toThrow();
+      expect(() => completionTreePaths(db, place, task.id)).toThrow();
       expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     }
   } finally {
@@ -505,7 +505,7 @@ it("完了以外の解放では、着地後の書き込みが従来どおり WIP
   const resumed = await prepareAtPickup(db, ws, task);
 
   expect(git(resumed.path, "rev-parse", "HEAD")).toBe(wip);
-  expect(treeIsDirty(resumed, task)).toBe(false);
+  expect(treeIsDirty(db, resumed, task)).toBe(false);
   expect(existsSync(join(resumed.path, "build"))).toBe(false);
   expect(existsSync(join(resumed.path, "node_modules"))).toBe(false);
 });

@@ -1936,7 +1936,7 @@ describe("ClaudeCodeWorker", () => {
     const sandbox = sandboxSettings(call.args, logDir);
     expect(sandbox.filesystem.allowWrite).toEqual([call.env.TMPDIR]);
     expect(sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([real, room]));
-    expect(JSON.parse(readFileSync(call.args[call.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toEqual([`Read(/${room}/**)`]);
+    expect(JSON.parse(readFileSync(call.args[call.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toContain(`Read(/${room}/**)`);
   });
 
   // ADR 0257 決定2: CLI のプロセスの TMPDIR が task temp を指さないと、proxy の中継 socket が閉じた /tmp に
