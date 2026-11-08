@@ -1,4 +1,4 @@
-import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
@@ -165,8 +165,8 @@ it("組の question への回答は、組の検査がまだ不成立なら拒ま
   const clock = new FakeClock();
   const path = await tempDir("tidepool-ws-");
   const settings = join(path, ".claude", "settings.local.json");
-  await mkdir(join(path, ".claude"));
-  await writeFile(settings, JSON.stringify({ permissions: { allow: ["Bash(*)"] } }));
+  // 組の検査が今も止める形: 読めない(ディレクトリ)settings(ADR 0346 決定2)
+  await mkdir(settings, { recursive: true });
   registerQuarantine(db, "workspaceContainment", "claude-code/B", "unsafe settings", clock.now());
   const question = quarantineQuestion(db, "workspaceContainment", "claude-code/B")!;
   const deps = {
@@ -183,7 +183,7 @@ it("組の question への回答は、組の検査がまだ不成立なら拒ま
   await expect(answer()).rejects.toThrow(".claude/settings.local.json");
   expect(getTask(db, question.id)?.status).toBe("todo");
 
-  await rm(settings);
+  await rm(settings, { recursive: true });
   await answer();
   expect(getTask(db, question.id)?.status).toBe("done");
   expect(listEvents(db, question.id).at(-1)?.payload).toMatchObject({

@@ -50,9 +50,7 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import {
-  excludeWorkspaceProjectSettings,
 
-  projectSettingsHiddenByBoard,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
@@ -364,14 +362,6 @@ async function makeWorker(
       extraOptions.auditorName,
     );
   return { worker, start, startInCheckout, setting, logDir, db, slot, clock, registryDir, containers, stops, watchdog, enumeration, bundled, ...recorder };
-}
-
-/** `.claude/settings.json` が index から消えた branch `no-settings` を切り、main へ戻る。 */
-function makeNoSettingsBranch(path: string) {
-  git(path, "checkout", "-b", "no-settings");
-  git(path, "rm", ".claude/settings.json");
-  git(path, "commit", "-m", "stop sharing project settings");
-  git(path, "checkout", "main");
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -2059,32 +2049,26 @@ describe("ClaudeCodeWorker", () => {
     expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-sync-throw-"))).toEqual([]);
   });
 
+  // 旧: untracked な settings.json と settings.local.json は存在だけで組を止めた(ADR 0346 決定2 の untracked 側)
   it.each([
-    [
-      "untracked settings.json の sandbox + hooks",
-      "settings.json",
-      JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } }, hooks: {} }),
-    ],
-    [
-      "untracked settings.json の permissions",
-      "settings.json",
-      JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
-    ],
-    ["untracked settings.json の hooks", "settings.json", JSON.stringify({ hooks: {} })],
-    ["settings.local.json の hooks", "settings.local.json", JSON.stringify({ hooks: {} })],
-    [
-      "settings.local.json の permissions",
-      "settings.local.json",
-      JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
-    ],
-    ["壊れた untracked settings.json", "settings.json", "{ not json"],
-    // 読めないファイル: ディレクトリなら root で走る CI でも読み取りが失敗する
-    ["読めない settings.local.json", "settings.local.json", null],
-  ])("%s は spawn せず (claude-code, workspace) の組を quarantine する —— workspace は止めない(ADR 0259)", async (_case, name, body) => {
+    ["untracked settings.json", "settings.json"],
+    ["untracked settings.local.json", "settings.local.json"],
+  ])("%s では (claude-code, workspace) の組を止めず spawn する —— fetch した task の checkout には untracked が無い(ADR 0356 決定2)", async (_case, name) => {
     const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude"), { recursive: true });
-    if (body === null) await mkdir(join(wsDir, ".claude", name));
-    else await writeFile(join(wsDir, ".claude", name), body);
+    await writeFile(join(wsDir, ".claude", name), JSON.stringify({ permissions: { allow: ["Bash(*)"] } }));
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    });
+    start("task-sbx-untracked");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool")).toBeUndefined();
+  });
+
+  // ADR 0346 決定2「読めないファイルは従来どおり止める」: ディレクトリなら root で走る CI でも読み取りが失敗する
+  it("読めない settings.local.json は spawn せず (claude-code, workspace) の組を quarantine する —— workspace は止めない(ADR 0259)", async () => {
+    const wsDir = await tempDir("tidepool-ws-");
+    await mkdir(join(wsDir, ".claude", "settings.local.json"), { recursive: true });
     const { start, calls, db, stops } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
     });
@@ -2092,10 +2076,10 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     const question = quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool");
-    expect(question?.purpose).toContain(`.claude/${name}`);
+    expect(question?.purpose).toContain(".claude/settings.local.json");
     // spawn_failed にはせず、組の停止として盤面の一撃に1回渡す —— 一撃が todo へ戻して枠を空ける(ADR 0274)
     expect(listEvents(db, task.id).map((e) => e.kind)).not.toContain("spawn_failed");
-    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "claude-code/tidepool", reason: expect.stringContaining(`.claude/${name}`) }]]);
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "claude-code/tidepool", reason: expect.stringContaining(".claude/settings.local.json") }]]);
   });
 
   it("workspace が盤面の状態パスと重なっていたら spawn せず workspace を quarantine する(issue #149 / ADR 0040)", async () => {
@@ -2128,11 +2112,8 @@ describe("ClaudeCodeWorker", () => {
 
   it("重なりの検査は settings ガードより先に走る(盤面自身の checkout は自前の .claude/settings.json を持つので、後だと診断名が入れ替わる)", async () => {
     const wsDir = await tempDir("tidepool-ws-");
-    await mkdir(join(wsDir, ".claude"), { recursive: true });
-    await writeFile(
-      join(wsDir, ".claude", "settings.local.json"),
-      JSON.stringify({ permissions: { allow: ["Bash(strings *)"] } }),
-    );
+    // settings ガードが今も止める形(読めない)で置く —— 順が逆なら settings の診断が先に立つ
+    await mkdir(join(wsDir, ".claude", "settings.local.json"), { recursive: true });
     const { start, calls, db } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
       { boardState: [{ label: "the board's own checkout (process cwd)", path: wsDir }] },
@@ -2178,21 +2159,41 @@ describe("ClaudeCodeWorker", () => {
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
+  // 旧: settings.local.json は tracked でも存在だけで組を止めた(ADR 0346 決定2)
+  it("task branch に commit された settings.local.json は settings.json と同じく task の checkout で外して spawn する(ADR 0346 Status #3032 / ADR 0356 決定2)", async () => {
+    const ws = await makeWorkspace("tracked-settings-local");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    const body = JSON.stringify({ permissions: { allow: ["Bash(*)"] } });
+    await writeFile(join(ws.path, ".claude", "settings.local.json"), body);
+    git(ws.path, "add", "-f", ".claude/settings.local.json");
+    git(ws.path, "commit", "-m", "share local settings");
+    const { startInCheckout, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+    const { place } = await startInCheckout("task-sbx-tracked-local", ws.path);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool")).toBeUndefined();
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(existsSync(join(place.path, ".claude", "settings.local.json"))).toBe(false);
+    expect(git(place.path, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(ws.path, ".claude", "settings.local.json"), "utf8")).toBe(body);
+  });
+
   it("tracked settings.json を隠せなければ (claude-code, workspace) の組ではなく workspace を quarantine し、spawn しない(ADR 0259 決定1)", async () => {
     const ws = await makeWorkspace("tracked-settings-unhidable");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: {} }));
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
-    // 変更中の tracked ファイルは sparse-checkout が作業ツリーから消さない
+    // 変更中の tracked ファイルは sparse-checkout が作業ツリーから消さない —— fetch した task の checkout には無い形だが、
+    // 盤面は自分の sparse-checkout が効いたかを確かめてから spawn する(ADR 0346 決定1)
     await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
     const { start, calls, db, stops } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     const task = start("task-sbx-unhidable-settings");
     expect(calls).toEqual([]);
-    expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("could not exclude");
-    expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("commit or revert");
+    expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("could not exclude .claude/settings.json");
     expect(quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool")).toBeUndefined();
     expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("could not exclude") }]]);
   });
@@ -2211,27 +2212,6 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
-  });
-
-  it.each([
-    ["新規に staged した", false],
-    ["変更を staged した", true],
-  ])("%s settings.json は隠しても index に差分が残るので workspace を quarantine し、spawn しない", async (_case, committed) => {
-    const ws = await makeWorkspace("staged-settings");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    if (committed) {
-      await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ model: "sonnet" }));
-      git(ws.path, "add", ".claude/settings.json");
-      git(ws.path, "commit", "-m", "share project settings");
-    }
-    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ model: "opus" }));
-    git(ws.path, "add", ".claude/settings.json");
-    const { start, calls, db } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-    start("task-sbx-staged-settings");
-    expect(calls).toEqual([]);
-    expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain(".claude/settings.json has staged changes");
   });
 
   it("列挙 ping は tracked settings.json を隠した後に撃つ —— ping の瞬間に tree に無い(ADR 0346 決定1)", async () => {
@@ -2253,104 +2233,6 @@ describe("ClaudeCodeWorker", () => {
     start("task-hide-before-ping");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(seenAtPing).toEqual([false]);
-  });
-
-  it("隠れたままの tracked settings.json を戻せなければ workspace を quarantine して spawn せず、盤面の一撃で todo へ戻す(ADR 0158 / ADR 0274)", async () => {
-    const ws = await makeWorkspace("tracked-settings-unrestorable");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({}));
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project settings");
-    makeNoSettingsBranch(ws.path);
-    const { start, calls, db, stops } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-    // 前の session が隠したまま(写しが残る —— ADR 0293 決定3)、index から settings.json が消えた branch なら戻すだけの枝に入る。
-    // index を lock で塞ぐと戻せない
-    excludeWorkspaceProjectSettings(db, { ...ws, name: "tidepool" });
-    git(ws.path, "checkout", "no-settings");
-    await writeFile(join(ws.path, ".git", "index.lock"), "");
-    const task = start("task-sbx-unrestorable-settings");
-    expect(calls).toEqual([]);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
-    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("sparse-checkout") }]]);
-  });
-
-  // 旧: 回収後に隠した settings.json を戻せなければ workspace を quarantine した(#1969)
-  it("task の checkout で隠した settings.json は回収後に戻さないので、戻しの失敗で workspace を quarantine しない(ADR 0356 決定2)", async () => {
-    const ws = await makeWorkspace("tracked-settings-unrestorable-after-reclaim");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project hooks");
-    const { startInCheckout, calls, db, emitExit } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-    const { place } = await startInCheckout("task-sbx-unrestorable-after-reclaim", ws.path);
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    await writeFile(join(place.path, ".git", "index.lock"), "");
-
-    emitExit(0, null);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(quarantineQuestion(db, "workspace", "tidepool")).toBeUndefined();
-  });
-
-  it("人間の cone が .claude を外していれば、S bit が立っていても隠したものと読まず、tree を変えずに spawn する(ADR 0293 決定3)", async () => {
-    const ws = await makeWorkspace("human-cone-without-claude");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    await mkdir(join(ws.path, "pkg-a"), { recursive: true });
-    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
-    await writeFile(join(ws.path, "pkg-a", "a.txt"), "a\n");
-    git(ws.path, "add", ".");
-    git(ws.path, "commit", "-m", "monorepo");
-    git(ws.path, "sparse-checkout", "set", "pkg-a");
-    const { start, calls, db, emitExit } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-
-    start("task-human-cone");
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
-    expect(git(ws.path, "sparse-checkout", "list")).toBe("pkg-a");
-    expect(git(ws.path, "config", "--get", "core.sparseCheckoutCone")).toBe("true");
-
-    emitExit(0, null);
-    await Promise.resolve();
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
-    expect(git(ws.path, "sparse-checkout", "list")).toBe("pkg-a");
-  });
-
-  it("sparse 後に branch の settings.json が床キーへ変わっても quarantine せず、次の task も spawn する(ADR 0158)", async () => {
-    const ws = await makeWorkspace("tracked-hooks-floor-change");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    await writeFile(
-      join(ws.path, ".claude", "settings.json"),
-      JSON.stringify({ hooks: { PostToolUse: [] } }),
-    );
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project hooks");
-    git(ws.path, "checkout", "-b", "unsafe-settings");
-    await writeFile(
-      join(ws.path, ".claude", "settings.json"),
-      JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
-    );
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "replace hooks with a floor override");
-    git(ws.path, "checkout", "main");
-    const { start, calls, db } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-
-    start("task-hooks-safe");
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    git(ws.path, "checkout", "unsafe-settings");
-    start("task-hooks-unsafe");
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-
-    expect(calls).toHaveLength(2);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
-    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
-    expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
   // 旧: 同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さなかった(戻しの数え上げ)
@@ -2378,33 +2260,6 @@ describe("ClaudeCodeWorker", () => {
     emitExitAt(1, 0, null);
     await Promise.resolve();
     expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(settings);
-  });
-
-  it("sparse 後に index から settings.json が消えた branch では隠しを解いて再実体化する", async () => {
-    const ws = await makeWorkspace("tracked-settings-left-the-index");
-    await mkdir(join(ws.path, ".claude"), { recursive: true });
-    await writeFile(
-      join(ws.path, ".claude", "settings.json"),
-      JSON.stringify({ hooks: { PostToolUse: [] } }),
-    );
-    git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project hooks");
-    makeNoSettingsBranch(ws.path);
-    const { start, calls, db } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
-    });
-    const hidden = () => projectSettingsHiddenByBoard(db, { ...ws, name: "tidepool" });
-
-    start("task-hooks-safe");
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(hidden()).toBe(true);
-    git(ws.path, "checkout", "no-settings");
-    start("task-settings-gone");
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-
-    expect(hidden()).toBe(false);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
-    expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
   it("skills が空リストの agent は skill ディレクトリを一切開かない", async () => {

@@ -10,6 +10,6 @@ export function recordedPlace(db: Db, rootId: string): { path: string; hasReposi
   return path === undefined ? undefined : { path, hasRepository: placeHasRepository(path) };
 }
 
-/** sparse snapshot の「checkout が消えた」と同じ述語(ADR 0277 追記 決定1)。 */
+/** 「checkout が消えた」の述語(ADR 0277 追記 決定1)。 */
 export const placeHasRepository = (path: string): boolean => existsSync(join(path, ".git"));
 

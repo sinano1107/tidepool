@@ -55,9 +55,6 @@ import { boardEnvByName, type WorkerAdapter, type WorkerExit, type WorkerExitCla
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
-  isTaskCheckout,
-  materializeWorkspaceProjectSettings,
-  projectSettingsHiddenByBoard,
   quarantineWorkspace,
   type RunPlace,
   resolveExecutionWorkspace,
@@ -684,7 +681,7 @@ export function workerSpawnEnv(
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
     ...(advisor === undefined ? { [ADVISOR_DISABLE_ENV]: "1" } : {}),
-    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear a human's or the board's sparse S bit.
+    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear the board's sparse S bit.
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns",
     GIT_CONFIG_VALUE_0: "true",
@@ -1519,10 +1516,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  強制回収は容器の側なので、ここに居るのは root 1本でよい。A finished
    *  process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
-  /** Shared project settings stay hidden until every overlapping session in the
-   *  workspace has actually left its container. Slot release happens earlier,
-   *  inside the worker's final MCP call, so it is not an exit boundary. */
-  private readonly projectSettingsSessions = new Map<string, number>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
   private readonly workspacesDir: string;
@@ -1541,28 +1534,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
     this.validateDefaults(loadRegistry(options.registry.dir, options.registry.mode));
-  }
-
-  private restoreProjectSettingsAfterReclaim(
-    reclaimed: Promise<void>,
-    workspace: WorkspaceConfig,
-  ): void {
-    const key = workspace.path;
-    this.projectSettingsSessions.set(key, (this.projectSettingsSessions.get(key) ?? 0) + 1);
-    void reclaimed.then(() => {
-      const remaining = (this.projectSettingsSessions.get(key) ?? 1) - 1;
-      if (remaining > 0) {
-        this.projectSettingsSessions.set(key, remaining);
-        return;
-      }
-      this.projectSettingsSessions.delete(key);
-      try {
-        materializeWorkspaceProjectSettings(this.options.db, workspace);
-      } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
-      }
-    });
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1617,15 +1588,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     if (!workspace) return;
     // 走る場所(ADR 0356 決定1): task の checkout —— interview の root と受験者は面接室から開いたもの。下の検査・cwd・封じ込めの組はこちら、層と記憶は実環境
     const place = taskRunPlace(this.options.db, task, workspace);
-    // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the *workspace's*
-    // own `.claude/settings.json` with the per-task `--settings` floor below, and
-    // the board wants no key of it in the worker's process (measured — see
-    // workspaceSettingsDisposition, ADR 0346 決定1). A checkout with a local or
-    // untracked settings file stops the (claude-code, workspace) pair on its
-    // presence — sparse-checkout cannot safely hide them, and only the claude CLI
-    // reads them, so the workspace's Codex tasks keep running (ADR 0259 決定1). A
-    // tracked settings.json is hidden for the session instead, whatever it holds
-    // (ADR 0158 / ADR 0346 決定2).
+    // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the checkout's own
+    // `.claude/settings.json` and `.claude/settings.local.json` with the per-task
+    // `--settings` floor below, and the board wants no key of them in the worker's
+    // process (measured — see workspaceSettingsDisposition, ADR 0346 決定1). A tracked
+    // one is hidden for the session, whatever it holds (ADR 0346 決定2 / Status #3032);
+    // the task checkout is fetched, so it never carries an untracked one (ADR 0356 決定2).
+    // An unreadable one stops the (claude-code, workspace) pair — only the claude CLI
+    // reads them, so the workspace's Codex tasks keep running (ADR 0259 決定1).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
@@ -1634,11 +1604,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 損なうので、直下の settings ガードのような (Harness, workspace) の組には
     // 狭めない(ADR 0259)。
     //
-    // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
-    // checkout を workspace 登録した」瞬間で、その checkout は自分の
-    // `.claude/settings.local.json` を持っていることが多い。後ろに置くと真だが
-    // 的外れな診断(「隠せない settings ファイルがある」)が先に立ち、人間は
-    // settings を消して回ることになる。
+    // **settings ガードより先に見る**: 交差が根なので、後ろに置くと真だが
+    // 的外れな settings の診断が先に立ち、人間は settings を直して回ることになる。
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
       stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
@@ -1652,24 +1619,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       stopped(stop);
       return;
     }
-    const hidden = projectSettingsHiddenByBoard(this.options.db, place);
-    const settings = workspaceSettingsDisposition(place.path, hidden);
-    if (settings.excludeProjectSettings) {
+    if (workspaceSettingsDisposition(place.path).excludeProjectSettings) {
       try {
-        const reclaimed = this.containers.open(String(sessionId)).reclaimed;
-        excludeWorkspaceProjectSettings(this.options.db, place);
-        // ADR 0356 決定2: task の checkout は解放で消えるので戻さない
-        if (!isTaskCheckout(place)) this.restoreProjectSettingsAfterReclaim(reclaimed, place);
+        excludeWorkspaceProjectSettings(place);
       } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
-        return;
-      }
-    } else if (hidden) {
-      try {
-        materializeWorkspaceProjectSettings(this.options.db, place);
-      } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }

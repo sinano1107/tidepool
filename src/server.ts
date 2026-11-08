@@ -76,11 +76,7 @@ import {
 } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
 import { probeWorkerMcpReachability, type WorkerMcpReachabilityProbe } from "./worker-mcp-reachability.js";
-import {
-  buildWorkspaceResolver,
-  restoreWorkspaceProjectSettingsAtBoot,
-  type WorkspaceConfig,
-} from "./workspace.js";
+import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 import type { WorkspaceAdmin } from "./workspace-create.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
@@ -442,16 +438,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   }
   // 前提検査が通った起動だけ、後始末の復旧より前に同期で(通らなかった起動では受理の門が走らせる)
   if (runtimePreflight.available) closeLeftOpenSessions();
-  // issue #382: sparse-checkout survives a board crash while the in-memory
-  // reclamation callback does not. Only restore after the container preflight
-  // proves no process from the previous board can still hot-load the hooks.
-  if (runtimePreflight.available && options.boardState) {
-    restoreWorkspaceProjectSettingsAtBoot(
-      db,
-      options.boardState.listWorkspaces,
-      options.clock.now(),
-    );
-  }
   // ADR 0040 / issue #149: 登録済み全 workspace への一斉検査。**scheduler より
   // 前**に撃つ — 重なっている workspace のタスクが最初の poll で slot に入る前に
   // needs-human を立てておきたい。起動は拒まない(床は pickup 側)。

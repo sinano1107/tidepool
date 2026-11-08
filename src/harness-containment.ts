@@ -22,15 +22,15 @@ export function harnessContainmentPickupBlocked(
  *  1つあり、worker の起動と workspace の封じ込めの question への回答時の検査が、同じそれを呼ぶ。Claude はこれ、Codex は
  *  skill の列挙と観測(`codexWorkspaceContainment`)—— 回答時は `CodexWorkspaceCheck` の形で受け取る。 */
 export function claudeWorkspaceContainment(workspacePath: string): ContainmentCapability {
-  // 隠せない設定ファイルの拒否は ADR 0033 / ADR 0035 / ADR 0158。中身でなく置き場所で止める(ADR 0346 決定2)
+  // 隠せない設定ファイルの拒否は ADR 0033 / ADR 0035 / ADR 0158。中身でなく置き場所で止め、止まるのは読めないものだけ(ADR 0346 決定2)
   const { overriding } = workspaceSettingsDisposition(workspacePath);
   if (overriding.length === 0) return { available: true };
   return {
     available: false,
     reason:
-      `workspace carries .claude/${overriding.join(", .claude/")}: it is a local or untracked settings file, ` +
-      "or it is unreadable — the board can hide only a Git-tracked .claude/settings.json, " +
-      "so remove the file from this checkout or make it readable",
+      `workspace carries .claude/${overriding.join(", .claude/")}, which is unreadable ` +
+      "(a directory, a file without read permission, or a path that cannot be looked up) — " +
+      "the board hides only readable Git-tracked settings files, so remove it or make it a readable file",
   };
 }
 
