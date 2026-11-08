@@ -18,10 +18,8 @@ import {
 import {
   assertOwnGitDirectory,
   conventionCheckoutPath,
-  isRemoteBacked,
+  exactProtectedBranchRef,
   originUrl,
-  protectedBranch,
-  protectedBranchRef,
 } from "./pickup-predicates.js";
 import {
   assertValidAllowedDomains,
@@ -41,6 +39,7 @@ import {
 } from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
+import type { LiveCheckoutSignal } from "./wire-contract.js";
 import {
   dropWorkspaceState,
   entryCheckoutPath,
@@ -217,13 +216,13 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
   // なので、clone 入口の提案はそれを読み直さずに合成できる。
   if (input.mode === "register" && input.confirm !== true) {
     const reasons = liveCheckoutSignals(input.path);
+    const landing =
+      reasons.length === 0 || entry.repo === undefined ? null : conventionCheckoutPath(input.name, deps.workspacesBaseDir);
     const settingsWarning = unhideableSettingsWarning({ ...entry, name: input.name, path: input.path });
     if (settingsWarning) reasons.push("claude_settings_unhideable");
     if (reasons.length > 0) {
       // 提案が登録しようとしている当のパスを指すなら提案ではない —— 人間が既に
       // 規約どおりの場所にある checkout を register で拾っている場合に起きる
-      const landing =
-        entry.repo === undefined ? null : conventionCheckoutPath(input.name, deps.workspacesBaseDir);
       throw new LiveCheckoutSignalsError(
         input.path,
         reasons,
@@ -666,22 +665,6 @@ export class NotAGitRepositoryError extends Error {
   }
 }
 
-/** issue #383 の信号コード: 「このパスは人間が今日も使っている作業ツリーに見える」を
- *  数え上げる、安定した機械可読な文字列。ADR 0061 の `DangerousWorkspaceValueReason`
- *  とは**別の族**である(GLOSSARY.md「危険な値」= エージェントの権限を広げる値の列挙で
- *  あり、これらはどれも権限を広げない)。したがって 409 でも `dangerous_values` には
- *  載せず、`live_checkout_signals` という自分の欄を持つ —— 同じ欄に相乗りすると、
- *  「危険な値の確認は WebUI 専用」(ADR 0088)がこの族まで縛ると読める。管理MCP を
- *  拒否にしないという決定はまさにその逆であり、区別は注釈ではなく綴りで持たせる。 */
-type LiveCheckoutSignal =
-  | "uncommitted_changes"
-  | "worktree_unreadable"
-  | "claude_settings_local"
-  | "claude_settings_hooks"
-  | "claude_settings_untracked"
-  | "claude_settings_unhideable"
-  | "claude_subagents";
-
 /** 登録の門の hooks 信号の読み手で、盤面で settings の JSON を読む唯一の場所(ADR 0346 決定3)。
  *  `sandbox` / `permissions` の有無は見ない。壊れた JSON と object でない値は信号にしない。読むのは通常ファイルだけ ——
  *  link は辿らないので、FIFO を指す link で門が止まらない(#2935)。 */
@@ -765,17 +748,14 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
 }
 
 function unhideableSettingsWarning(workspace: WorkspaceConfig): string | undefined {
-  // ADR 0360 決定5: pickup と同じ保護 ref を読み、登録可能な unborn repo などに ref が無ければ信号は立てない。
-  const ref = isRemoteBacked(workspace) ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
   try {
-    git(workspace.path, "show-ref", "--verify", "--quiet", "--", ref);
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status === 1) return undefined;
-    throw err;
-  }
-  const { unhideable } = recordedSettingsDisposition(workspace.path, ref);
-  if (unhideable) {
-    return `The protected branch has ${unhideable.path} as a ${unhideable.type}. Claude tasks in this workspace will stop at pickup.`;
+    const { unhideable } = recordedSettingsDisposition(workspace.path, exactProtectedBranchRef(workspace));
+    if (unhideable) {
+      return `The protected branch has ${unhideable.path} as a ${unhideable.type}. Claude tasks in this workspace that inherit this shape will stop at pickup.`;
+    }
+  } catch {
+    // ADR 0360 決定5: ref が無い場合や読めない場合も、観測できた既存の信号で登録を進める。
+    return undefined;
   }
 }
 
@@ -783,9 +763,7 @@ function unhideableSettingsWarning(workspace: WorkspaceConfig): string | undefin
  *  再送(`confirm: true`)は従来どおり登録する。
  *
  *  メッセージは信号コードと clone 入口の提案を1箇所で綴る唯一の場所である —— API の
- *  409 がこれを読み、管理MCP も警告の一行を共有する。`cloneLanding` が null(origin を持たない
- *  purely-local な checkout)のときは提案の行そのものが無い: コピーはこの issue が
- *  明示的に退けた道(ADR 0052/0053)なので、出せる代替の入口が存在しない。 */
+ *  409 がこれを読み、管理MCP も警告の一行を共有する。clone 入口の提案は作業ツリーの信号に対するもの。 */
 export class LiveCheckoutSignalsError extends Error {
   constructor(
     path: string,
@@ -794,7 +772,7 @@ export class LiveCheckoutSignalsError extends Error {
     public readonly settingsWarning?: string,
   ) {
     super(
-      `${path} looks like a checkout a human is working in (${reasons.join(", ")})` +
+      `Review the registration warnings for ${path} (${reasons.join(", ")})` +
         (cloneLanding === null
           ? "; register it anyway with confirm: true"
           : `; the clone entrance would give the board its own checkout at ${cloneLanding} instead — register this path anyway with confirm: true`) +

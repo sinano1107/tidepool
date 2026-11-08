@@ -475,8 +475,9 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     await expect(createWorkspace(input, deps)).rejects.toMatchObject({
       name: "LiveCheckoutSignalsError",
       reasons: ["claude_settings_unhideable"],
+      cloneLanding: null,
       message: expect.stringContaining(
-        "The protected branch has .claude as a symlink. Claude tasks in this workspace will stop at pickup.",
+        "The protected branch has .claude as a symlink. Claude tasks in this workspace that inherit this shape will stop at pickup.",
       ),
     });
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
@@ -508,6 +509,18 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
       name: "LiveCheckoutSignalsError",
       reasons: ["uncommitted_changes"],
     });
+  });
+
+  it("保護ブランチが読めなくても、作業ツリーが clean な別ブランチなら登録できる", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await makeUpstream();
+    git(path, "checkout", "-b", "dev");
+    const missingObject = "1".repeat(git(path, "rev-parse", "HEAD").length);
+    await writeFile(join(path, ".git", "refs", "heads", "main"), missingObject + "\n");
+
+    await expect(createWorkspace({ mode: "register", name: "sandbox", path }, deps)).resolves.toBe(path);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
   });
 
   // 既に規約どおりの場所にある checkout を register で拾った場合、clone 入口の

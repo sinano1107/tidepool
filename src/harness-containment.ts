@@ -1,6 +1,6 @@
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
-import { isRemoteBacked, protectedBranch, protectedBranchRef } from "./pickup-predicates.js";
+import { exactProtectedBranchRef, protectedBranch } from "./pickup-predicates.js";
 import { quarantineUnlessClear } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition } from "./sandbox.js";
@@ -27,7 +27,7 @@ export function harnessContainmentPickupBlocked(
  *  Codex は skill の列挙と観測(`codexWorkspaceContainment`)—— 回答時は `CodexWorkspaceCheck` の形で受け取る。 */
 export function claudeWorkspaceContainment(namedPlace: WorkspaceConfig): ContainmentCapability {
   const branch = protectedBranch(namedPlace);
-  const ref = isRemoteBacked(namedPlace) ? protectedBranchRef(namedPlace) : `refs/heads/${branch}`;
+  const ref = exactProtectedBranchRef(namedPlace);
   const shape = recordedSettingsDisposition(namedPlace.path, ref).unhideable;
   if (!shape) return { available: true };
   return {

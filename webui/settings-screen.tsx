@@ -2670,8 +2670,8 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   const { busy, save, dialog } = useDangerousSave(say, async () => { edit.close(); await onCreated(); }, {
     noun: 'workspace',
     confirmKey: 'confirm',
-    dialogTitle: 'Register a checkout someone is working in?',
-    dialogLead: 'This path looks like a human\'s live development checkout:',
+    dialogTitle: 'Register this checkout?',
+    dialogLead: 'Review these warnings before registering.',
     confirmOf: (err) => {
       const detail = apiErrorDetail(err, 'POST /api/workspaces 409');
       return detail?.confirm_required ? {

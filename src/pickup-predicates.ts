@@ -50,6 +50,10 @@ export function protectedBranchRef(workspace: WorkspaceConfig): string {
   return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
 }
 
+/** ADR 0360 決定3・5: 記録の tree を読むときは、同名のタグを解決しない完全な ref を使う。 */
+export function exactProtectedBranchRef(workspace: WorkspaceConfig): string {
+  return isRemoteBacked(workspace) ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
+}
 
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
 export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: RegistrySource, scope = "", unbornRoom = false): PickupPredicate[] {
