@@ -585,7 +585,7 @@ describe("CodexWorker (ADR 0098)", () => {
       ...HUMAN_WEBUI,
     ));
 
-    expect(filesystem(f.process.calls[0]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
+    expect(filesystem(f.process.calls[0]!.args, "tidepool-review")).not.toContain(`${JSON.stringify(join(f.workspace, ".git"))}=`);
   });
 
   it("シンボリックリンク経由で登録した workspace でも、work task の spawn は filesystem 表の workspace・.git・.git/hooks・.git/config の行と skills/list の cwds・-C・cwd を実体のパスで書く(issue #864)", async () => {
@@ -601,6 +601,7 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(join(f.workspace, ".git"))}="write"`,
       `${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`,
       `${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`,
+      `${JSON.stringify(join(f.workspace, ".git", "objects"))}="read"`,
     ]);
     const listed = { method: "skills/list", params: { cwds: [f.workspace], forceReload: true } };
     expect(f.appServer.flatMap(({ requests }) => requests)).toEqual([{ id: 2, ...listed }, { id: 2, ...listed }]);

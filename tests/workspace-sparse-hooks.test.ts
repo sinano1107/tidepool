@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { listEvents } from "../src/events.js";
-import { completeTask, getTask, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import { completionTreePaths, excludeWorkspaceProjectSettings, releaseWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
 import {
+  api,
   bootClaudeOn,
+  callAsTask,
   checkoutOf,
   claudeSpawnOf,
   commitWork,
@@ -23,7 +24,6 @@ import {
   servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
-import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -37,7 +37,31 @@ afterEach(async () => {
   t = undefined;
 });
 
-it("完了の門は sparse settings の意図した欠落と、index で隠した tracked な変更を区別する(ADR 0293 / ADR 0356 決定3)", async () => {
+it("complete_task accepts the absent tracked settings after the worker removes its sparse file (ADR 0360 決定2)", async () => {
+  const workspace = await makeWorkspace("removed-sparse-completion");
+  await mkdir(join(workspace.path, ".claude"));
+  await writeFile(join(workspace.path, ".claude", "settings.json"), "{}\n");
+  await writeFile(join(workspace.path, ".claude", "settings.local.json"), "{}\n");
+  git(workspace.path, "add", "-f", ".claude");
+  git(workspace.path, "commit", "-m", "share both settings");
+  const booted = await bootClaudeOn(workspace);
+  t = booted.t;
+  const task = queueWork(t, "finish with both settings hidden", workspace.name);
+
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(claudeSpawnOf(booted.proc, task.id)).toBeDefined());
+  const checkout = checkoutOf(t.db, task.id);
+  expect(existsSync(join(checkout, ".claude", "settings.json"))).toBe(false);
+  expect(existsSync(join(checkout, ".claude", "settings.local.json"))).toBe(false);
+  await unlink(join(checkout, ".git", "info", "sparse-checkout"));
+
+  const result = await callAsTask(t, task.id, "complete_task", { handoff: FULL_HANDOFF });
+
+  expect(result, JSON.stringify(result.content)).not.toHaveProperty("isError", true);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+it("完了の門には index で隠した tracked な変更も見える(ADR 0356 決定3)", async () => {
   const workspace = await makeWorkspace("sparse-completion");
   db = openDb(":memory:");
   await mkdir(join(workspace.path, ".claude"));
@@ -54,45 +78,31 @@ it("完了の門は sparse settings の意図した欠落と、index で隠し�
   git(place.path, "update-index", "--skip-worktree", "--", "README.md");
   writeFileSync(join(place.path, "README.md"), "changed\n");
   expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
-
-  git(place.path, "update-index", "--no-skip-worktree", "--", "README.md");
-  git(place.path, "checkout", "HEAD", "--", "README.md");
-  writeFileSync(join(place.path, "unfinished.txt"), "unrelated work in progress\n");
-  releaseWorkspace(db, place, task, now);
-  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
-  expect(git(workspace.path, "log", "-1", "--format=%s", `task/${task.id}`)).toContain(`WIP: task ${task.id}`);
-  expect(git(workspace.path, "show", `task/${task.id}:unfinished.txt`)).toBe("unrelated work in progress");
-  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.json`)).toBe("{}");
-  expect(readFileSync(join(workspace.path, ".claude/settings.json"), "utf8")).toBe("{}\n");
 });
 
-it("a worker cannot hide a tracked deletion by changing sparse rules after pickup (ADR 0356 決定3)", async () => {
+it("forged sparse rules cannot hide a README deletion from completion or WIP (ADR 0360 決定2)", async () => {
   const workspace = await makeWorkspace("sparse-policy-pin");
-  const dbPath = join(await tempDir("sparse-policy-db-"), "board.sqlite");
-  db = openDb(dbPath);
-  const now = new Date(0);
   commitWork(workspace.path, "human-omitted.txt", "human sparse policy\n");
   git(workspace.path, "sparse-checkout", "set", "--no-cone", "/*", "!/human-omitted.txt");
-  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
-  const place = await prepareAtPickup(db, workspace, task);
-  expect(existsSync(join(workspace.path, "human-omitted.txt"))).toBe(false);
-  expect(completionTreePaths(place, task.id)).toEqual([]);
-  completeTask(db, task, FULL_HANDOFF, "worker", now, "worker");
+  const booted = await bootClaudeOn(workspace);
+  t = booted.t;
+  const task = queueWork(t, "try to hide a README deletion", workspace.name);
 
-  // ADR 0356 決定3: worker が task の checkout に書いた sparse(盤面の行を真似ても)は view に効かない
-  git(place.path, "sparse-checkout", "set", "--no-cone", "/*", "!/.claude/settings.json", "!/README.md");
-  expect(git(place.path, "status", "--porcelain")).toBe("");
-  expect(completionTreePaths(place, task.id)).toEqual(["README.md"]);
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(claudeSpawnOf(booted.proc, task.id)).toBeDefined());
+  const checkout = checkoutOf(t.db, task.id);
+  git(checkout, "sparse-checkout", "set", "--no-cone", "/*", "!/.claude/settings.json", "!/.claude/settings.local.json", "!/README.md");
+  expect(existsSync(join(checkout, "README.md"))).toBe(false);
+  expect(git(checkout, "status", "--porcelain")).toBe("");
 
-  db.close();
-  db = openDb(dbPath);
-  releaseWorkspace(db, place, getTask(db, task.id)!, now, false, undefined, undefined, true);
-  expect(listEvents(db, task.id).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion")).toEqual([
-    { kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["README.md"] },
-  ]);
-  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
-  expect(existsSync(place.path)).toBe(false);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  const result = await callAsTask(t, task.id, "complete_task", { handoff: FULL_HANDOFF });
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("commit them on the task branch first");
+  expect(result.content[0].text.split("\n").slice(1)).toEqual(["- README.md"]);
+  booted.proc.emitExit(0, null);
+  await vi.waitFor(() => expect(existsSync(checkout)).toBe(false));
+  expect(git(workspace.path, "diff", "--name-status", "main", `task/${task.id}`)).toBe("D\tREADME.md");
 });
 
 // 旧: 名前の場所で隠した settings を slot 解放中も sparse のまま保ち、worker 回収後に写しから戻した(ADR 0293)
@@ -152,7 +162,7 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
   expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
 });
 
-it("tracked な settings.local.json を持つ task branch の worker は止まらずに走り、session 中の task の checkout には両 settings が無く、解放後の task branch の tree には残る(ADR 0360 決定1)", async () => {
+it("非完了の解放では、worker が sparse file を消しても両 settings を WIP に残す(ADR 0360 決定1・2)", async () => {
   const workspace = await makeWorkspace("sparse-local-settings");
   await mkdir(join(workspace.path, ".claude"));
   await writeFile(join(workspace.path, ".claude", "settings.json"), "{}\n");
@@ -170,10 +180,12 @@ it("tracked な settings.local.json を持つ task branch の worker は止ま�
   expect(existsSync(join(checkout, ".claude", "settings.local.json"))).toBe(false);
   expect(await questions(t)).toEqual([]);
 
+  await unlink(join(checkout, ".git", "info", "sparse-checkout"));
+  await writeFile(join(checkout, "unfinished.txt"), "work in progress\n");
   booted.proc.emitExit(0, null);
+
   await vi.waitFor(() => expect(existsSync(checkout)).toBe(false));
-  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.json`)).toBe("{}");
-  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.local.json`)).toBe('{"permissions":{"allow":["Bash(*)"]}}');
+  expect(git(workspace.path, "diff", "--name-status", "main", `task/${task.id}`)).toBe("A\tunfinished.txt");
 });
 
 it("隠すものが無い spawn でも guard は走る: 隠しが効かなかった task の checkout(settings の path に dangling な link)は workspace の quarantine に落ちて spawn しない(ADR 0360 決定2)", async () => {
