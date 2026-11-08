@@ -1,5 +1,7 @@
 # checkout の Harness 固有の性質は (Harness, workspace) の組で止め、Codex の skill は Codex 自身に列挙させる
 
+**Status 追記: 決定5 の撃ち直しが読むのは名前の場所の working tree でなく保護ブランチの tree(`ls-tree`)—— Claude の組の停止は保護ブランチの tree にある形だけが立て、task branch にだけある形は task の失敗([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md)、2026-11-08、issue #3074)。**
+
 **Status 追記: 決定3 の「すべて `enabled: false`」は ADR 0337 決定3 で「盤面が閉じた path がすべて `enabled: false`」に** —— allowlist が開いた path は封じ込めの性質に数えない。決定2 の「Codex 自身に列挙させる」は不変で、翻訳は同じ列挙の `scope` から引く(2026-11-01、issue #2689)。
 
 **Status 追記: 2026-10-21 の追記の developer 指示の marker への差し替えは ADR 0326 決定3 の配置に追随する** —— skill の観測は本文に依らず同じ設定を当てる線を保ち、盤面の文が developer 層に載ることを worker の要件にしない(2026-10-29、issue #2692)。
