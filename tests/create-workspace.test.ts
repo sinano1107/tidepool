@@ -461,6 +461,55 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     ).rejects.toMatchObject({ name: "LiveCheckoutSignalsError", reasons: ["worktree_unreadable"] });
   });
 
+  it.each(["local", "remote"])("%s の保護 ref の .claude が symlink なら、別ブランチにいても Claude の pickup 停止を提示し、同意すれば登録する", async (source) => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const recorded = await makeUpstream();
+    symlinkSync("elsewhere", join(recorded, ".claude"));
+    commitAll(recorded, "protected branch has a symlink");
+    const path = source === "local" ? recorded : await makeExistingCheckout(recorded);
+    git(path, "checkout", "-b", "dev", "main^");
+    if (source === "remote") git(path, "branch", "-f", "main", "dev");
+    const input = { mode: "register", name: "sandbox", path } as const;
+
+    await expect(createWorkspace(input, deps)).rejects.toMatchObject({
+      name: "LiveCheckoutSignalsError",
+      reasons: ["claude_settings_unhideable"],
+      message: expect.stringContaining(
+        "The protected branch has .claude as a symlink. Claude tasks in this workspace will stop at pickup.",
+      ),
+    });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
+
+    await createWorkspace({ ...input, confirm: true }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual(
+      source === "local" ? { path } : { path, repo: recorded },
+    );
+  });
+
+  it("保護ブランチの .claude が通常の dir なら、作業ツリーだけの symlink は Claude の信号にならない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await makeUpstream();
+    await mkdir(join(path, ".claude"));
+    await writeFile(join(path, ".claude", "settings.json"), "{}");
+    commitAll(path, "protected branch has a settings directory");
+    const input = { mode: "register", name: "sandbox", path } as const;
+
+    await expect(createWorkspace({ ...input, name: "clean" }, deps)).resolves.toBe(path);
+
+    git(path, "checkout", "-b", "dev");
+    await rm(join(path, ".claude"), { recursive: true });
+    commitAll(path, "dev branch removes the settings directory");
+    symlinkSync("elsewhere", join(path, ".claude"));
+
+    await expect(createWorkspace(input, deps)).rejects.toMatchObject({
+      name: "LiveCheckoutSignalsError",
+      reasons: ["uncommitted_changes"],
+    });
+  });
+
   // 既に規約どおりの場所にある checkout を register で拾った場合、clone 入口の
   // 「代わりにこちらへ」は自分自身を指してしまう —— 提案になっていないので出さない。
   it("登録先が既に規約由来の着地先そのものなら、clone 入口の提案は出ない", async () => {

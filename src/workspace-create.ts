@@ -15,7 +15,14 @@ import {
   remoteTrackingRef,
   repoKey,
 } from "./github-auth.js";
-import { assertOwnGitDirectory, conventionCheckoutPath, originUrl } from "./pickup-predicates.js";
+import {
+  assertOwnGitDirectory,
+  conventionCheckoutPath,
+  isRemoteBacked,
+  originUrl,
+  protectedBranch,
+  protectedBranchRef,
+} from "./pickup-predicates.js";
 import {
   assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
@@ -33,12 +40,14 @@ import {
   refreshRegistryForWrite,
 } from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
+import { recordedSettingsDisposition } from "./sandbox.js";
 import {
   dropWorkspaceState,
   entryCheckoutPath,
   refValues,
   resolvesToRegistryClone,
   UnknownWorkspaceError,
+  type WorkspaceConfig,
   type WorkspacesBaseDirSource,
   writeBoardRefs,
 } from "./workspace.js";
@@ -208,6 +217,8 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
   // なので、clone 入口の提案はそれを読み直さずに合成できる。
   if (input.mode === "register" && input.confirm !== true) {
     const reasons = liveCheckoutSignals(input.path);
+    const settingsWarning = unhideableSettingsWarning({ ...entry, name: input.name, path: input.path });
+    if (settingsWarning) reasons.push("claude_settings_unhideable");
     if (reasons.length > 0) {
       // 提案が登録しようとしている当のパスを指すなら提案ではない —— 人間が既に
       // 規約どおりの場所にある checkout を register で拾っている場合に起きる
@@ -217,6 +228,7 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
         input.path,
         reasons,
         landing !== null && resolve(landing) !== resolve(input.path) ? landing : null,
+        settingsWarning,
       );
     }
   }
@@ -667,6 +679,7 @@ type LiveCheckoutSignal =
   | "claude_settings_local"
   | "claude_settings_hooks"
   | "claude_settings_untracked"
+  | "claude_settings_unhideable"
   | "claude_subagents";
 
 /** 登録の門の hooks 信号の読み手で、盤面で settings の JSON を読む唯一の場所(ADR 0346 決定3)。
@@ -751,11 +764,26 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   return reasons;
 }
 
+function unhideableSettingsWarning(workspace: WorkspaceConfig): string | undefined {
+  // ADR 0360 決定5: pickup と同じ保護 ref を読み、登録可能な unborn repo などに ref が無ければ信号は立てない。
+  const ref = isRemoteBacked(workspace) ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
+  try {
+    git(workspace.path, "show-ref", "--verify", "--quiet", "--", ref);
+  } catch (err) {
+    if ((err as { status?: number } | null)?.status === 1) return undefined;
+    throw err;
+  }
+  const { unhideable } = recordedSettingsDisposition(workspace.path, ref);
+  if (unhideable) {
+    return `The protected branch has ${unhideable.path} as a ${unhideable.type}. Claude tasks in this workspace will stop at pickup.`;
+  }
+}
+
 /** 登録の門が観測した信号を人間へ**提示**する(issue #383 — 拒否ではない)。同意した
  *  再送(`confirm: true`)は従来どおり登録する。
  *
  *  メッセージは信号コードと clone 入口の提案を1箇所で綴る唯一の場所である —— API の
- *  409 も管理MCP の結果テキストもこれを読む。`cloneLanding` が null(origin を持たない
+ *  409 がこれを読み、管理MCP も警告の一行を共有する。`cloneLanding` が null(origin を持たない
  *  purely-local な checkout)のときは提案の行そのものが無い: コピーはこの issue が
  *  明示的に退けた道(ADR 0052/0053)なので、出せる代替の入口が存在しない。 */
 export class LiveCheckoutSignalsError extends Error {
@@ -763,13 +791,15 @@ export class LiveCheckoutSignalsError extends Error {
     path: string,
     public readonly reasons: LiveCheckoutSignal[],
     public readonly cloneLanding: string | null,
+    public readonly settingsWarning?: string,
   ) {
     super(
       `${path} looks like a checkout a human is working in (${reasons.join(", ")})` +
         (cloneLanding === null
           ? "; register it anyway with confirm: true"
           : `; the clone entrance would give the board its own checkout at ${cloneLanding} instead — register this path anyway with confirm: true`) +
-        ". Workers receive only committed content: ignored files in this checkout (such as .claude/settings.local.json, .env, and node_modules) do not reach them.",
+        ". Workers receive only committed content: ignored files in this checkout (such as .claude/settings.local.json, .env, and node_modules) do not reach them." +
+        (settingsWarning ? `\n${settingsWarning}` : ""),
     );
     this.name = "LiveCheckoutSignalsError";
   }

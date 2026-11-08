@@ -498,7 +498,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
                 `registered as asked. This path looks like a checkout a human is working in (${err.reasons.join(", ")})` +
                 (err.cloneLanding === null
                   ? ". Tell the human what was observed."
-                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`),
+                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`) +
+                (err.settingsWarning ? `\n${err.settingsWarning}` : ""),
             });
           } catch (retried) {
             return registryToolError(retried);

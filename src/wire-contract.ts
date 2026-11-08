@@ -364,6 +364,7 @@ export interface WireContract {
     confirm_required: true;
     live_checkout_signals: string[];
     clone_landing: string | null;
+    claude_settings_unhideable_warning?: string;
   };
   "PATCH /api/workspaces/:name 409": DangerousValuesConflict;
   /** 残る checkout の場所(ADR 0087 決定4)。 */
