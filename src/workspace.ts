@@ -1794,7 +1794,7 @@ function settleTaskCheckout(
       try {
         tree = boardWriteTree(checkout, base, namedPlace.path, taskCheckoutSparse(place), taskCheckoutRemnants(place, base));
       } catch (cause) {
-        if (completed) throw cause; // ADR 0359 決定5: 退避の失敗で唯一の写しを消さない
+        if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
         throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
       }
       wipTree = { base, tree };
