@@ -23,7 +23,7 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "../src/teardown.js";
-import { fetchTaskCheckoutTip, type RunPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { type RunPlace, recordTaskCheckoutTip, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, sessionId } from "./harness.js";
 
@@ -78,7 +78,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
   const place = await prepareAtPickup(db, ws, picked);
   commitWork(place.path, "deliverable.txt", "the real work\n");
   // 完了の門は worker の tip を名前の場所へ引いてから done にする(ADR 0356 決定3)
-  if (route === "complete") fetchTaskCheckoutTip(db, place, picked.id);
+  if (route === "complete") recordTaskCheckoutTip(db, place, picked.id);
   const task =
     route === "complete"
       ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now(), "worker")

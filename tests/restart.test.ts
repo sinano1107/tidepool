@@ -12,7 +12,7 @@ import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { completeTask, getTask, listBoard } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
-import { fetchTaskCheckoutTip, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { recordTaskCheckoutTip, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
 import { api, bootTidepool, checkoutOf, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, servedQuarantineQuestion, sessionId, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
@@ -26,7 +26,7 @@ function gateCompleted(ws: WorkspaceConfig, taskId: string): string {
   const task = getTask(t.db, taskId)!;
   const place = taskRunPlace(t.db, task, ws);
   commitWork(place.path, "deliverable.txt", "the real work\n");
-  fetchTaskCheckoutTip(t.db, place, taskId);
+  recordTaskCheckoutTip(t.db, place, taskId);
   completeTask(t.db, task, FULL_HANDOFF, "deckhand", t.clock.now(), "worker");
   return place.path;
 }

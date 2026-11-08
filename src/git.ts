@@ -107,12 +107,19 @@ function porcelainChanges(output: string): WorktreeChange[] {
   return output.split("\0").filter(Boolean).map((line) => ({ path: line.slice(3), status: line.slice(0, 2) }));
 }
 
+export class WorktreeStatusError extends Error {}
+
 /** ADR 0356 決定3: a task checkout read only through the board's view — a fresh index from `head`'s tree and `objectsFrom`'s
  *  objects. Nothing runs in the worker's repo, so its real index and nested repos are not read; a submodule counts by its gitlink. */
 export function boardViewStatus(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy): WorktreeChange[] {
   return withBoardGit(cwd, (view, dir) => {
     const config = seedViewIndex(view, dir, head, sparse);
-    return porcelainChanges(view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]));
+    try {
+      return porcelainChanges(view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]));
+    } catch (cause) {
+      // ADR 0359 決定3: 盤面の記録から index を作る段の失敗と、worker の worktree を観測する段の失敗を分ける
+      throw new WorktreeStatusError(cause instanceof Error ? cause.message : String(cause), { cause });
+    }
   }, objectsFrom);
 }
 

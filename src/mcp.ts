@@ -105,14 +105,14 @@ import {
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { readTiers } from "./tier.js";
-import type { TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
+import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   buildWorkspaceResolver,
   commitRoomCopy,
   completionTreeGateApplies,
   completionTreePaths,
-  fetchTaskCheckoutTip,
   type RunPlace,
+  recordTaskCheckoutTip,
   resolveOrQuarantine,
   TaskCheckoutUnreadableError,
   taskRunPlace,
@@ -336,17 +336,21 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): RunPlace | undefined {
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
 function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: RunPlace): void {
   if (!completionTreeGateApplies(task)) return;
-  // ADR 0356 決定3: worker の tip を先に名前の場所へ引く —— worker の repo から引けなければ完了を拒む。名前の場所の側で落ちた観測は
-  // 飲んで門を開ける(ADR 0084 決定2)—— 完了の解放がもう一度引き、落ちればそこで quarantine になる
-  let landed: boolean;
+  // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
   try {
-    landed = fetchTaskCheckoutTip(deps.db, workspace, task.id);
+    recordTaskCheckoutTip(deps.db, workspace, task.id);
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof TaskCheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
-    throw err;
+    throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
   }
-  if (!landed) return;
-  const paths = completionTreePaths(workspace, task.id, deps.db);
+  let paths: string[];
+  try {
+    paths = completionTreePaths(workspace, task.id, deps.db);
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
+    throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
+  }
   if (paths.length === 0) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
