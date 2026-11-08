@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { git, localGitEnv } from "../src/git.js";
 import { loadRegistry } from "../src/registry.js";
-import { workspaceSettingsDisposition } from "../src/sandbox.js";
+import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
 import { git as fixtureGit, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -91,18 +91,15 @@ it("呼び手の env も ambient の env も転送の床を広げない", async 
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
 });
 
-it("部分 clone の tracked な settings.json は blob を読まず(`workspaceSettingsDisposition`)網に出ずに隠すと返す(ADR 0346 決定2)", async () => {
+it("部分 clone の記録の settings.json は blob を読まず(`recordedSettingsDisposition`)網に出ずに外すと返す(ADR 0360 決定1)", async () => {
   const workspace = await makeWorkspace("partial-clone-settings");
   mkdirSync(join(workspace.path, ".claude"));
   writeFileSync(join(workspace.path, ".claude", "settings.json"), "{}\n");
   fixtureGit(workspace.path, "add", "-A");
   fixtureGit(workspace.path, "commit", "-m", "settings");
   const { dir, offNetwork } = await partialCloneOf(workspace.path);
-  // --no-checkout の clone なので作業ツリーに置く —— 判定は置き場所と index だけを読む
-  mkdirSync(join(dir, ".claude"));
-  writeFileSync(join(dir, ".claude", "settings.json"), "{}\n");
 
-  expect(workspaceSettingsDisposition(dir)).toMatchObject({ excludeProjectSettings: true, overriding: [] });
+  expect(recordedSettingsDisposition(dir, "HEAD")).toEqual({ hide: [".claude/settings.json"] });
   expect(offNetwork()).toEqual(STAYED_OFF_THE_NETWORK);
 });
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,16 +6,35 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, getTask, registerTask } from "../src/tasks.js";
 import { completionTreePaths, excludeWorkspaceProjectSettings, releaseWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup } from "./harness.js";
+import {
+  bootClaudeOn,
+  checkoutOf,
+  claudeSpawnOf,
+  commitWork,
+  FULL_HANDOFF,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HOUR,
+  HUMAN_WEBUI,
+  makeWorkspace,
+  prepareAtPickup,
+  questions,
+  queueWork,
+  servedQuarantineQuestion,
+  type Tidepool,
+} from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let db: Db | undefined;
+let t: Tidepool | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   db?.close();
   db = undefined;
+  await t?.stop();
+  t = undefined;
 });
 
 it("完了の門は sparse settings の意図した欠落と、index で隠した tracked な変更を区別する(ADR 0293 / ADR 0356 決定3)", async () => {
@@ -27,7 +46,7 @@ it("完了の門は sparse settings の意図した欠落と、index で隠し�
   const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
   // ADR 0356 決定2: settings.json を隠すのは名前の場所でなく、盤面が作った task の checkout の sparse-checkout
   const place = await prepareAtPickup(db, workspace, task);
-  excludeWorkspaceProjectSettings(place, task.id);
+  excludeWorkspaceProjectSettings(place, task.id, [".claude/settings.json"]);
 
   expect(git(place.path, "sparse-checkout", "list").split("\n")).toEqual(["/*", "!/.claude/settings.json"]);
   expect(completionTreePaths(place, task.id)).toEqual([]);
@@ -99,7 +118,7 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
   );
 
   const parentPlace = await prepareAtPickup(db, workspace, parent);
-  excludeWorkspaceProjectSettings(parentPlace, parent.id);
+  excludeWorkspaceProjectSettings(parentPlace, parent.id, [".claude/settings.json"]);
   expect(existsSync(join(parentPlace.path, ".claude", "settings.json"))).toBe(false);
   commitWork(parentPlace.path, "parent.txt", "parent work\n");
   releaseWorkspace(db, parentPlace, parent, now);
@@ -118,7 +137,7 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
     ...HUMAN_WEBUI,
   );
   const childPlace = await prepareAtPickup(db, workspace, child);
-  excludeWorkspaceProjectSettings(childPlace, child.id);
+  excludeWorkspaceProjectSettings(childPlace, child.id, [".claude/settings.json"]);
   expect(readFileSync(join(childPlace.path, "parent.txt"), "utf8")).toBe("parent work\n");
   writeFileSync(join(childPlace.path, "child.txt"), "child work\n");
   releaseWorkspace(db, childPlace, child, now);
@@ -131,4 +150,72 @@ it("hooks settings は task の checkout でだけ隠れ、親子の WIP に混�
   );
   expect(git(workspace.path, "show", `task/${child.id}:.claude/settings.json`)).toBe(settings);
   expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
+});
+
+it("tracked な settings.local.json を持つ task branch の worker は止まらずに走り、session 中の task の checkout には両 settings が無く、解放後の task branch の tree には残る(ADR 0360 決定1)", async () => {
+  const workspace = await makeWorkspace("sparse-local-settings");
+  await mkdir(join(workspace.path, ".claude"));
+  await writeFile(join(workspace.path, ".claude", "settings.json"), "{}\n");
+  await writeFile(join(workspace.path, ".claude", "settings.local.json"), '{"permissions":{"allow":["Bash(*)"]}}\n');
+  git(workspace.path, "add", "-f", ".claude");
+  git(workspace.path, "commit", "-m", "share both settings");
+  const booted = await bootClaudeOn(workspace);
+  t = booted.t;
+  const task = queueWork(t, "work beside local settings", workspace.name);
+
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(claudeSpawnOf(booted.proc, task.id)).toBeDefined());
+  const checkout = checkoutOf(t.db, task.id);
+  expect(existsSync(join(checkout, ".claude", "settings.json"))).toBe(false);
+  expect(existsSync(join(checkout, ".claude", "settings.local.json"))).toBe(false);
+  expect(await questions(t)).toEqual([]);
+
+  booted.proc.emitExit(0, null);
+  await vi.waitFor(() => expect(existsSync(checkout)).toBe(false));
+  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.json`)).toBe("{}");
+  expect(git(workspace.path, "show", `task/${task.id}:.claude/settings.local.json`)).toBe('{"permissions":{"allow":["Bash(*)"]}}');
+});
+
+it("隠すものが無い spawn でも guard は走る: 隠しが効かなかった task の checkout(settings の path に dangling な link)は workspace の quarantine に落ちて spawn しない(ADR 0360 決定2)", async () => {
+  const workspace = await makeWorkspace("sparse-guard");
+  const booted = await bootClaudeOn(workspace, {
+    beforeStart: (db, taskId) => {
+      const checkout = checkoutOf(db, taskId);
+      mkdirSync(join(checkout, ".claude"));
+      symlinkSync("../nowhere.json", join(checkout, ".claude", "settings.local.json"));
+    },
+  });
+  t = booted.t;
+  const task = queueWork(t, "work in a mis-realised checkout", workspace.name);
+
+  await t.clock.advance(HOUR);
+  const stop = await vi.waitFor(async () => {
+    const question = await servedQuarantineQuestion(t!, "workspace", workspace.name);
+    expect(question).toBeDefined();
+    return question;
+  });
+  expect(stop.purpose).toContain(".claude/settings.local.json is in the task checkout but not in the recorded tree");
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
+  expect(claudeSpawnOf(booted.proc, task.id)).toBeUndefined();
+});
+
+it("記録の settings.json を隠しても効かなかった task の checkout(変更中の tracked file は sparse が消さない)は workspace の quarantine に落ちて spawn しない(ADR 0360 決定2)", async () => {
+  const workspace = await makeWorkspace("sparse-hide-failed");
+  await mkdir(join(workspace.path, ".claude"));
+  commitWork(workspace.path, ".claude/settings.json", "{}\n");
+  const booted = await bootClaudeOn(workspace, {
+    beforeStart: (db, taskId) => writeFileSync(join(checkoutOf(db, taskId), ".claude", "settings.json"), '{"hooks":{}}\n'),
+  });
+  t = booted.t;
+  const task = queueWork(t, "work in a checkout the hide misses", workspace.name);
+
+  await t.clock.advance(HOUR);
+  const stop = await vi.waitFor(async () => {
+    const question = await servedQuarantineQuestion(t!, "workspace", workspace.name);
+    expect(question).toBeDefined();
+    return question;
+  });
+  expect(stop.purpose).toContain("could not exclude .claude/settings.json: still in the task checkout after sparse-checkout");
+  expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
+  expect(claudeSpawnOf(booted.proc, task.id)).toBeUndefined();
 });

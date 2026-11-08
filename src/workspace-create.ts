@@ -33,7 +33,6 @@ import {
   refreshRegistryForWrite,
 } from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
-import { workspaceSettingsDisposition } from "./sandbox.js";
 import {
   dropWorkspaceState,
   entryCheckoutPath,
@@ -684,6 +683,25 @@ function settingsDeclareHooks(path: string): boolean {
   }
 }
 
+/** 人間の checkout の index が `.claude/settings.json` を知っているか。読めなければ知らない。 */
+function settingsTracked(path: string): boolean {
+  try {
+    return git(path, "ls-files", "--", ".claude/settings.json") !== "";
+  } catch {
+    return false;
+  }
+}
+
+/** `.claude/settings.json` の置き場所に何かあるか —— link を辿らず、ENOENT 以外の失敗(`.claude` が通常ファイルの ENOTDIR、EACCES)も在る。 */
+function settingsPlaced(path: string): boolean {
+  try {
+    lstatSync(join(path, ".claude", "settings.json"));
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
 /** ADR 0354 決定3: checkout の `.claude/agents` が実ディレクトリで、直下に通常ファイルの `*.md` が1つ以上あるか。
  *  中身も tracked かも見ない。link は辿らない(#2935)ので、ADR 0069 の 0-byte shadow file(通常ファイル)や
  *  ディレクトリへの link では立たない。再帰もしない —— 読まれる定義は直下だけ。 */
@@ -702,9 +720,9 @@ function hasSubagentDefinitions(path: string): boolean {
  *  `settings.local.json` の検査は `git status` の冗長ではない —— このファイルは
  *  gitignore されるので untracked としても現れない。未追跡の `settings.json` も同じ理由で
  *  独立に要る(issue #686 — ignore されていなければ `uncommitted_changes` と両方立つが、
- *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): `settings.json` の置き場所(tracked か未追跡か)は worker 向けの判定
- *  `workspaceSettingsDisposition` をそのまま使い、中身は門の信号の `settingsDeclareHooks` だけが読む。`settings.local.json` は
- *  独立に、link を辿らない `lstat` で存在だけを見る。
+ *  抑制しない)。読み手は2つに分かれる(ADR 0346 決定3): `settings.json` の置き場所(tracked か未追跡か)は人間の checkout の
+ *  作業ツリーと index を読む `settingsPlaced` / `settingsTracked`、中身は門の信号の `settingsDeclareHooks` だけが読む。worker 向けの
+ *  判定は記録を読む別物(ADR 0360 決定1)。`settings.local.json` は独立に、link を辿らない `lstat` で存在だけを見る。
  *  `.claude/agents` の subagent 定義は `hasSubagentDefinitions` が在否だけを見る(ADR 0354 決定3)。 */
 function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
@@ -716,8 +734,7 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
     }
   } catch {
     // 作業ツリーを持たないパス(bare repo は `rev-parse --git-dir` を通ってここへ
-    // 来る)。「読めなかった」を「きれい」と読ませない —— sandbox.ts の
-    // workspaceSettingsDisposition が読めない settings を止めるのと同じ fail-closed だが、この門は拒まないので
+    // 来る)。「読めなかった」を「きれい」と読ませない —— fail-closed だが、この門は拒まないので
     // 人間が見て納得すれば従来どおり登録される。素の例外を投げれば 502(盤面の
     // 故障)に化け、呼び出し側の入力の問題を盤面のせいにしてしまう
     reasons.push("worktree_unreadable");
@@ -727,9 +744,9 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
     lstatSync(join(path, ".claude", "settings.local.json"));
     reasons.push("claude_settings_local");
   } catch {}
-  const settings = workspaceSettingsDisposition(path);
-  if (settings.excludeProjectSettings && settingsDeclareHooks(path)) reasons.push("claude_settings_hooks");
-  if (settings.untrackedProjectSettings) reasons.push("claude_settings_untracked");
+  const tracked = settingsTracked(path);
+  if (tracked && settingsDeclareHooks(path)) reasons.push("claude_settings_hooks");
+  if (!tracked && settingsPlaced(path)) reasons.push("claude_settings_untracked");
   if (hasSubagentDefinitions(path)) reasons.push("claude_subagents");
   return reasons;
 }

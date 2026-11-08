@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,7 +22,7 @@ import {
 import type { BoardCall } from "../src/board-call.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
-import { moonshotKeyAbsence } from "../src/claude-worker.js";
+import { ClaudeCodeWorker, moonshotKeyAbsence } from "../src/claude-worker.js";
 import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
 import type { Clock } from "../src/clock.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
@@ -108,9 +108,13 @@ import {
   FakeGitHubClient,
   FakePushClient,
   fakeHead,
+  noSkillPings,
   pinnedCliVersions,
+  recordingSpawn,
   ScriptedWorker,
+  withHealthyUsage,
 } from "./fakes.js";
+import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -483,6 +487,48 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   };
 }
 
+/** 実物の Claude adapter で `workspace` を追跡する盤面を起こす(spawn は `proc` が記録するだけ)。`beforeStart` は pickup の準備の後・
+ *  adapter の start の前に撃つ。 */
+export async function bootClaudeOn(
+  workspace: WorkspaceConfig,
+  options: { beforeStart?: (db: Db, taskId: string) => void; taskExecutionCandidates?: TaskExecutionCandidates } = {},
+): Promise<{ t: Tidepool; proc: ReturnType<typeof recordingSpawn> }> {
+  const dir = await tempDir("tidepool-claude-board-");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `${workspace.name}:\n  path: ${JSON.stringify(workspace.path)}\n` });
+  const logDir = await tempDir("tidepool-claude-board-logs-");
+  const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTempsAndConfigDirs);
+  const t = await bootTidepool({
+    dir,
+    workspace,
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
+    taskExecutionCandidates: options.taskExecutionCandidates,
+    workerAdapter: (deps) => {
+      const worker = new ClaudeCodeWorker({
+        ...deps,
+        registry: { dir: registryDir, mode: "purely-local" },
+        agent: "deckhand",
+        workspace: workspace.name,
+        workspacesDir: join(dir, "workspaces"),
+        mcpUrl: "http://127.0.0.1:1/mcp",
+        logDir,
+        ...noSkillPings,
+      });
+      const start = worker.start.bind(worker);
+      worker.start = (task, ...rest) => {
+        options.beforeStart?.(deps.db, task.id);
+        start(task, ...rest);
+      };
+      return withHealthyUsage(worker, deps.clock);
+    },
+  });
+  return { t, proc };
+}
+
+/** `bootClaudeOn` の `proc` が記録した、その task の worker session の spawn(無ければ undefined)。 */
+export const claudeSpawnOf = (proc: ReturnType<typeof recordingSpawn>, taskId: string) =>
+  proc.calls.find((call) => call.args.some((arg) => arg.endsWith(`${taskId}.sandbox.json`)));
+
 /** この harness が起こした盤面の worker、MCP の口の URL 引き。解放系 verb を撃った
  *  client に「session がそこで終わる」を演じさせるために要る(下記)。 */
 const boards = new Map<string, ScriptedWorker>();
@@ -818,7 +864,19 @@ export function recordCheckoutAtWorkspace(
   } catch {
     return;
   }
+  if (existsSync(path)) standInTaskBranch(path, task.id);
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+}
+
+/** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。 */
+function standInTaskBranch(path: string, taskId: string): void {
+  if (!existsSync(join(path, ".git"))) git(path, "init", "--quiet", "--initial-branch=main");
+  try {
+    git(path, "rev-parse", "--verify", "--quiet", "HEAD");
+  } catch {
+    git(path, "commit", "--quiet", "--allow-empty", "-m", "stand-in for the record");
+  }
+  git(path, "update-ref", `refs/heads/task/${taskId}`, "HEAD");
 }
 
 /** adapter の `start` を包み、まだ task の checkout が開いていない task には先に `recordCheckoutAtWorkspace` を撃つ —— workspace を
@@ -1131,6 +1189,10 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+  // Interview の名前の場所は面接室 —— 記録の task branch もそこに置く(ADR 0360 決定1)
+  const rootId = interviewRootIdOf(db, task);
+  const room = rootId === undefined ? undefined : interviewRoomPath(db, rootId);
+  if (room !== undefined && existsSync(room)) standInTaskBranch(room, task.id);
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
   return path;
 }

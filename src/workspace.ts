@@ -50,7 +50,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
+import { PROJECT_SETTINGS_PATHS, SANDBOX_SHADOW_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
@@ -317,7 +317,7 @@ function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
  *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`roomsReadBy`)。開く前の対(開く場所の列挙)は
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
-export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
+export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): TaskCheckoutPlace {
   const named = taskNamedPlace(db, task, workspace);
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined) throw new PlaceNotOpenError(`the task checkout of ${task.id} is not open`);
@@ -694,11 +694,11 @@ function sparsePatternPath(workspace: WorkspaceConfig): string {
   return resolve(workspace.path, git(workspace.path, "rev-parse", "--git-path", "info/sparse-checkout"));
 }
 
-/** 盤面が task の checkout の sparse-checkout に書く除外の行(ADR 0293 追記、issue #3032)。 */
-const BOARD_SETTINGS_LINE = "!/.claude/settings.json";
+/** 盤面が task の checkout の sparse-checkout に書く除外の行(ADR 0293 追記、issue #3032)—— 外す settings の entry 1つに1行(ADR 0360 決定1)。 */
+const boardSettingsLine = (path: string) => `!/${path}`;
 
-/** 盤面が task の checkout に書く sparse の pattern —— 全部出して tracked な settings.json だけを外す。 */
-const BOARD_SPARSE_PATTERN = `/*\n${BOARD_SETTINGS_LINE}\n`;
+/** 盤面が task の checkout に書く sparse の pattern —— 全部出して、外す行だけを外す。 */
+const boardSparsePattern = (lines: string[]) => ["/*", ...lines, ""].join("\n");
 
 const configEnabled = (workspace: WorkspaceConfig, key: string) =>
   git(workspace.path, "config", "--type=bool", "--default=false", "--get", key) === "true";
@@ -719,29 +719,38 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
   return changes.map(({ path, status }) => `${status} ${displayWorktreePath(path)}`).join(separator);
 }
 
-/** task の checkout を読む view の sparse(#3035): 盤面が settings.json を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。 */
+/** task の checkout を読む view の sparse(#3035): 盤面が settings を隠したなら、その不在を削除と読まない。人間の pin は名前の場所のもの。
+ *  shortcut: worker が書ける file を読む暫定 —— ADR 0360 決定2 はこの読みを禁じ、#3084 が記録(tip の tree)から導く形に替えて消す。 */
 function taskCheckoutSparse(place: WorkspaceConfig): SparsePolicy | undefined {
   // worker の走った repo では git を撃たない(ADR 0356 決定3)。worker が書ける file なので通常 file だけを読む —— FIFO で止まらない(ADR 0357)
   const patternPath = join(place.path, ".git", "info", "sparse-checkout");
+  let lines: string[];
   try {
-    if (!lstatSync(patternPath).isFile() || !readFileSync(patternPath, "utf8").split("\n").includes(BOARD_SETTINGS_LINE)) return undefined;
+    if (!lstatSync(patternPath).isFile()) return undefined;
+    const written = readFileSync(patternPath, "utf8").split("\n");
+    lines = PROJECT_SETTINGS_PATHS.map(boardSettingsLine).filter((line) => written.includes(line));
   } catch {
     return undefined;
   }
-  return { pattern: BOARD_SPARSE_PATTERN, cone: false };
+  return lines.length === 0 ? undefined : { pattern: boardSparsePattern(lines), cone: false };
 }
 
-/** Keep a tracked `.claude/settings.json` (ADR 0158 / ADR 0346 決定2) in Git but out of the worker's physical checkout by
+/** Keep the recorded settings entries `hide` (ADR 0360 決定1) in Git but out of the worker's physical checkout by
  *  writing the task checkout's own sparse-checkout before spawn. The checkout is board-made and recreated at every
  *  pickup, so there is no human sparse state to copy or restore (ADR 0356 決定2、ADR 0293 追記、issue #3032). The
  *  worker's Git env preserves the sparse S bit despite the sandbox's settings stub (ADR 0037 機構2); sparse-checkout
  *  alone cannot. */
-export function excludeWorkspaceProjectSettings(place: RunPlace, taskId: string): void {
+export function excludeWorkspaceProjectSettings(place: RunPlace, taskId: string, hide: string[]): void {
   assertTaskCheckout(place, taskId);
-  gitWithInput(BOARD_SPARSE_PATTERN, place.path, "sparse-checkout", "set", "--no-cone", "--stdin");
-  // 盤面自身の手が効いたかを確かめる —— 残れば CLI が読む(ADR 0346 決定1)ので spawn しない
-  if (lstatSync(join(place.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
-    throw new Error(`workspace ${place.name}: could not exclude .claude/settings.json: still in the tree after sparse-checkout`);
+  if (hide.length > 0) gitWithInput(boardSparsePattern(hide.map(boardSettingsLine)), place.path, "sparse-checkout", "set", "--no-cone", "--stdin");
+  // ADR 0360 決定2: 隠したか否かに依らず盤面自身の実体化を確かめる —— 残れば CLI が読む(ADR 0346 決定1)ので spawn しない
+  for (const path of PROJECT_SETTINGS_PATHS) {
+    if (!lstatSync(join(place.path, path), { throwIfNoEntry: false })) continue;
+    throw new Error(
+      hide.includes(path)
+        ? `workspace ${place.name}: could not exclude ${path}: still in the task checkout after sparse-checkout`
+        : `workspace ${place.name}: ${path} is in the task checkout but not in the recorded tree, so the board has nothing to exclude it with`,
+    );
   }
 }
 

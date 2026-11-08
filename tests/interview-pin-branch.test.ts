@@ -361,7 +361,7 @@ it("受験者の pickup・解放・完了は workspace_state にも sparse の p
   const [interrupted, next] = examinees as [Task, Task];
   const interruptedPlace = await pickUp(db, interrupted, room, base);
   const nextPlace = await pickUp(db, next, room, base);
-  excludeWorkspaceProjectSettings(nextPlace, next.id);
+  excludeWorkspaceProjectSettings(nextPlace, next.id, [".claude/settings.json"]);
   commitWork(nextPlace.path, "answer.txt", "an answer\n");
 
   releaseWorkspace(db, interruptedPlace, interrupted, NOW);

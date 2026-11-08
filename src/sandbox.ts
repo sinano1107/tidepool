@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 
-import { localGitEnv } from "./git.js";
+import { git } from "./git.js";
 import { carriesReadOnly, type Task } from "./tasks.js";
 
 
@@ -31,10 +30,11 @@ export interface WorkerSessionSettings {
    *  mutually exclusive (measured — the blanket kills same-tier flag hooks
    *  too, and the managed tier, the one source that survives it, is a
    *  root-owned host-wide file with its override env var inert on 2.1.235).
-   *  What the blanket covered is re-covered without it: tracked project settings
-   *  are kept out of the worker's physical checkout, untracked/local settings
-   *  refuse the spawn and stop the (claude-code, workspace) pair
-   *  (`workspaceSettingsDisposition`, ADR 0259 / ADR 0346 決定2), and
+   *  What the blanket covered is re-covered without it: the recorded project
+   *  settings are kept out of the worker's physical checkout, and a `.claude`
+   *  the board cannot hide that way refuses the spawn and stops the
+   *  (claude-code, workspace) pair (`recordedSettingsDisposition`, ADR 0259 /
+   *  ADR 0360 決定1), and
    *  the mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
@@ -177,14 +177,14 @@ export const SANDBOX_SHADOW_PATHS = [
 
 /** The workspace-side settings files the CLI merges into a session's settings.
  *  Both live inside the checkout, so a `work` session can write them — which is
- *  what ADR 0037 closes and what `workspaceSettingsDisposition` keeps away from the CLI behind it. One
+ *  what ADR 0037 closes and what `recordedSettingsDisposition` keeps away from the CLI behind it. One
  *  list, because the two are the same fact about the CLI's merge order. */
 const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
 /** ADR 0037's OS-layer half: the sandbox confines Bash, so this is what stops a
  *  `work` session redirecting into its own settings and re-defining the floor
  *  for the *next* Bash call (project settings hot-reload mid-session — the
- *  escalation `workspaceSettingsDisposition`, a spawn-time check, cannot reach).
+ *  escalation `recordedSettingsDisposition`, a spawn-time check, cannot reach).
  *
  *  **File-level entries, never the `.claude` directory.** Measured on the
  *  production Pi (2.1.207): `denyWrite: [<ws>/.claude]` leaves bwrap unable to
@@ -575,69 +575,42 @@ const defaultRunOk: RunOkFn = (command, args) => {
   }
 };
 
-/** 上限を掛けない(#3033 の Implementation Decisions の `tracked()`): task の checkout は pickup ごとに作り直すので(ADR 0356
- *  決定2)、spawn の前のここではまだ worker が書いておらず、読むのは checkout 自身の index で view は無い。`ls-files` は #2966 の
- *  FIFO の表のどの置き場所でも止まらなかった。Interview の root と受験者も pickup ごとに作り直す task の checkout で走る。 */
-function tracked(workspacePath: string, path: string): boolean {
-  const indexed = spawnSync("git", ["ls-files", "--", path], {
-    cwd: workspacePath,
-    env: localGitEnv(),
-    encoding: "utf8",
-  });
-  return indexed.status === 0 && indexed.stdout !== "";
-}
+/** The workspace's settings paths the board hides from a Claude worker. */
+export const PROJECT_SETTINGS_PATHS = PROJECT_SETTINGS_FILES.map((name) => `.claude/${name}`);
 
-/** 置き場所だけを見る —— `lstat` で link を辿らず、ファイルを開かない(ADR 0346 決定2)。パスに何かあれば種類を問わず在る:
- *  link は先を問わず在り(dangling も)、FIFO や `/dev/zero` を指す link でも先を開かないので止まらない(#2935)。「読めない」は
- *  ENOENT 以外の `lstat` の失敗(`.claude` が通常ファイルの ENOTDIR、EACCES)、ディレクトリ、読み権限の無い通常ファイル
- *  (`access` で見る —— 開かない)。作業ツリーに無いファイルは無い —— spawn の前の task の checkout は盤面がまだ隠していない
- *  (ADR 0356 決定2、ADR 0293 追記、issue #3032)。 */
-function settingsFileState(workspacePath: string, name: string): "present" | "unreadable" | undefined {
-  const file = join(workspacePath, ".claude", name);
-  try {
-    const stat = lstatSync(file);
-    if (stat.isDirectory()) return "unreadable";
-    if (stat.isFile()) accessSync(file, constants.R_OK);
-    return "present";
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
-  }
-}
-
-/** What the board does with the workspace's settings is decided by where they sit; what they hold is never read
- *  (ADR 0346 決定2). A worker-shaped process gets no key of theirs (決定1): every key the board wants is on the flag
- *  tier already, and the floor binds only the worker's Bash, so these files are the workspace's one way into the CLI
- *  process itself. What a key does once it is in, measured:
+/** What the board does with the workspace's settings is decided from the record — the tree of `ref` in the named place
+ *  — never from the task checkout (ADR 0360 決定1); what they hold is never read (ADR 0346 決定2). A worker-shaped
+ *  process gets no key of theirs (決定1): every key the board wants is on the flag tier already, and the floor binds
+ *  only the worker's Bash, so these files are the workspace's one way into the CLI process itself. What a key does once
+ *  it is in, measured:
  *
  *  - 2.1.286 (#2846 / #2885): a committed `apiKeyHelper` runs on the host, outside the sandbox, with the board's
  *    authority; a committed `env.ANTHROPIC_BASE_URL` carries the worker's credentials to the workspace's destination.
+ *  - 2.1.286 (#3074): settings behind a committed symlink `.claude` reach the CLI, and the sparse line
+ *    `!/.claude/settings.json` leaves the symlink in place.
  *  - 2.1.220: `sandbox` merges with the per-task `--settings`. `sandbox.enabled: false` loses to the flag tier, but
  *    `sandbox.filesystem.allowRead` merges — and since `allowRead` beats `denyRead`, a workspace can re-open anything it
  *    names. Neither `--setting-sources user` nor `--setting-sources ""` stops it.
  *  - 2.1.220: a `permissions.allow` entry in `settings.local.json` lifts review's `--permission-mode manual` write
  *    floor (ADR 0035; `sh -c '… > f'` went through).
  *
- *  The worker itself cannot write either file (ADR 0037 mechanism 2); this is the second wall — a file already in the
- *  checkout, whoever put it there, is caught before the CLI reads it.
- *
- *  A tracked `.claude/settings.json` comes back as `excludeProjectSettings`, for the caller to hide during the session
- *  (ADR 0158). A local or untracked file, or a path that is a directory or cannot be looked up, comes back in
- *  `overriding`: the board can hide only a tracked file, so the caller stops the (claude-code, workspace) pair. Anything
- *  at the path counts, a symlink included whether or not its target exists; the target is never opened.
- *
- *  `untrackedProjectSettings` feeds the register gate's live-checkout signal (issue #686) — `.claude/settings.json` on
- *  disk and not in the index. */
-export function workspaceSettingsDisposition(workspacePath: string) {
-  const overriding: string[] = [];
-  let excludeProjectSettings = false;
-  let untrackedProjectSettings = false;
-  for (const name of PROJECT_SETTINGS_FILES) {
-    const state = settingsFileState(workspacePath, name);
-    if (state === undefined) continue;
-    const indexed = name === "settings.json" && tracked(workspacePath, ".claude/settings.json");
-    if (name === "settings.json" && !indexed) untrackedProjectSettings = true;
-    if (state === "unreadable" || !indexed) overriding.push(name);
-    else excludeProjectSettings = true;
+ *  `hide` lists every entry at a settings path, whatever its object type, for the caller to drop from the task
+ *  checkout for the session. `unhideable` is a `.claude` that is not a tree object: sparse cannot hide what sits behind
+ *  it, so the caller stops instead. The board's own git in the named place (ADR 0357 決定1), never the worker's repo. */
+export function recordedSettingsDisposition(namedPlace: string, ref: string): RecordedSettings {
+  const hide: string[] = [];
+  let unhideable: RecordedSettings["unhideable"];
+  // ls-tree prints `.claude` itself only when it is not a tree; a tree prints the matched entries under it
+  for (const line of git(namedPlace, "ls-tree", ref, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
+    const [meta, path] = line.split("\t");
+    const [mode, type] = meta!.split(" ");
+    if (path === ".claude" && type !== "tree") unhideable = { path, type: mode === "120000" ? "symlink" : type === "commit" ? "gitlink" : "blob" };
+    else if (PROJECT_SETTINGS_PATHS.includes(path!)) hide.push(path!);
   }
-  return { overriding, excludeProjectSettings, untrackedProjectSettings };
+  return unhideable ? { hide, unhideable } : { hide };
+}
+
+export interface RecordedSettings {
+  hide: string[];
+  unhideable?: { path: string; type: "symlink" | "gitlink" | "blob" };
 }
