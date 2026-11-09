@@ -20,7 +20,7 @@ checkout に揃えたのに、読む場所だけが名前の場所を直接開�
    ADR 0360 決定1 と同じ向き)。出題の head が無い面接室(出題前に落ちた root)は環境が無いので checkout は空 —— root の WIP branch は
    足さない。異議の RCA が読む root の判断は decision log と handoff にあり、git には無い。読む場所の**名前**は面接室の root id のままで、
    quarantine と封じ込めの組の単位(ADR 0273 決定8 / 追記 #2265)は変わらない —— fetch 元は面接室なので、準備の失敗は面接室の性質
-   (ADR 0276 決定3 の線)。面接室の `.git` を開く worker は居なくなる。#2248(読み手が覗くと作業ツリーが空)は同じ変更で消える。
+   (ADR 0276 決定3 の線)。寿命は task の checkout と同じ session で、解放で消す。面接室の `.git` を開く worker は居なくなる。#2248 のうち worker の読み手の側(監査・retry の root が覗くと作業ツリーが空)は同じ変更で消え、人間が面接室の path を覗く側は残る(人間は git で読む —— ADR 0273 決定1 の線のまま、#2248 で問う)。
 2. **答案の ref の置き場は面接室のまま。** 決定1 の後、面接室を読む worker は居ないので、答案の ref が面接室にあっても採点者には届かない。
    答案の器を分けるのは、面接室を読む worker が1人でも要る日だけ。人間が読む答案の記録は面接室の `task/<受験者 id>`(ADR 0359 決定1 の
    門を通った tip)で、決着した最後の checkout(ADR 0276 決定4)は副次(#3072 の主題)。
@@ -40,4 +40,4 @@ checkout に揃えたのに、読む場所だけが名前の場所を直接開�
 ## 派生
 
 - Status 追記: ADR 0273 決定4・9(読む面接室 → 出題の head の checkout)、ADR 0276 決定4、ADR 0356 決定2。GLOSSARY.md: 面接室、task の checkout。
-- 実装は `/to-spec`(1 slice —— 読む場所の列挙・sandbox の読み path・停止の門の名前は変えない)。#2248 は同じ PR の `Closes`。#3072 は決定2 に依る別 issue。
+- 実装は `/to-spec`(1 slice —— 読む場所の列挙・sandbox の読み path・停止の門の名前は変えない)。#2248 は worker の側だけ閉じるので `Closes` にせず、spec にコメントで寄せる。#3072 は決定2 に依る別 issue。
