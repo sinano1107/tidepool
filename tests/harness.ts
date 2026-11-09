@@ -1852,6 +1852,18 @@ export const defaultingTo = (fallback: WorkspaceConfig, ...others: WorkspaceConf
   return found;
 };
 
+/** 後から名前を registry から消せる(drift)盤面の resolver: `drifted` を立てると `workspace`(と null)が解けなくなる。`others` は解け続ける。 */
+export function driftable(workspace: WorkspaceConfig, ...others: WorkspaceConfig[]) {
+  const registry = {
+    drifted: false,
+    resolveWorkspace: (name: string | null): WorkspaceConfig => {
+      if (registry.drifted && (name ?? workspace.name) === workspace.name) throw new UnknownWorkspaceError(workspace.name);
+      return defaultingTo(workspace, ...others)(name);
+    },
+  };
+  return registry;
+}
+
 /** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
  *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。
  *  `allocationClient` を渡すと work に worker session を置き、統合点レビューの完了で配分評価が撃たれる。 */

@@ -3,7 +3,7 @@ import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
+import { quarantineWorkspace } from "../src/workspace.js";
 import {
   addSubmodule,
   api,
@@ -11,6 +11,7 @@ import {
   callAsTask,
   checkoutOf,
   commitWork,
+  driftable,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -358,14 +359,8 @@ it("workspace が Quarantine 中でも dirty な work の完了は拒み、commi
 /** 名前を後から registry から消せる(drift)盤面で、worker が task の checkout に commit した走行中の work。 */
 async function committedThenDrifted(title: string) {
   const ws = await makeWorkspace("sandbox");
-  const registry = { drifted: false };
-  t = await bootTidepool({
-    workspace: ws,
-    resolveWorkspace: (name) => {
-      if (registry.drifted) throw new UnknownWorkspaceError(name ?? ws.name);
-      return ws;
-    },
-  });
+  const registry = driftable(ws);
+  t = await bootTidepool({ workspace: ws, resolveWorkspace: registry.resolveWorkspace });
   const task = await registerWork(t, title);
   await t.clock.advance(HOUR);
   const checkout = checkoutOf(t.db, task.id);
@@ -393,7 +388,7 @@ it("実行中に名前が registry から消えた(drift)work の complete_task 
   expect(await quarantineQuestions()).toEqual([]);
 });
 
-it("issue #3094 の再現: drift の後の完了は拒まれ、escalate の後始末が Quarantine を1枚立てて残した checkout を名指し、worker の commit は checkout にだけ残って記録の task branch に入らない(ADR 0363 決定1・4)", async () => {
+it("issue #3094 の再現: drift の後の完了は拒まれ、escalate の後始末が Quarantine を1枚立て、worker の commit は checkout にだけ残って記録の task branch に入らない(ADR 0363 決定1・4)", async () => {
   const { ws, task, checkout, client } = await committedThenDrifted("ship while the registry loses the workspace");
   const tip = git(checkout, "rev-parse", "HEAD");
 
@@ -410,8 +405,6 @@ it("issue #3094 の再現: drift の後の完了は拒まれ、escalate の後�
   const [quarantine, ...others] = await quarantineQuestions();
   expect(others).toEqual([]);
   expect(quarantine).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: ws.name });
-  expect(quarantine.purpose).toContain(`The board kept the task checkout at ${checkout}`);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${quarantine.id}/events`)).json.map((e: any) => e.kind)).not.toContain("quarantine_refired");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).not.toBe("done");
   expect(git(checkout, "rev-parse", "HEAD")).toBe(tip);
   expect(git(ws.path, "rev-parse", `task/${task.id}`)).not.toBe(tip);

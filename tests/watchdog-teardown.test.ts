@@ -631,16 +631,21 @@ it.each([
   expectDriftObservedOnce(f, slot);
 });
 
-it("エスカレーションした session の後始末は drift の最初の観測者なので、解決できない workspace を quarantine し、理由に残した task の checkout の在り処を書く(ADR 0363 決定2・4)", async () => {
+it.each([
+  ["そのまま", false],
+  ["再起動を跨いで", true],
+])("エスカレーションした session の後始末は drift の最初の観測者なので、解決できない workspace を quarantine し、理由に残した task の checkout の在り処を書く —— %s(ADR 0363 決定2・4)", async (_, restart) => {
   const f = await driftedAfterCheckout();
   escalateTask(f.db, f.task, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", f.clock.now(), "worker");
   markTeardown(f.db, f.task.id, f.clock.now());
   f.slot.enterTeardown();
   expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
 
-  await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
+  const slot = restart ? restartMidTeardown(f, f.gone) : f.slot;
+  if (!restart) await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
+  await settle();
 
-  expectDriftObservedOnce(f, f.slot);
+  expectDriftObservedOnce(f, slot);
 });
 
 it("準備が checkout より前に落ちた pickup の後始末が再起動で途切れても、起動時の復旧は途切れなかった後始末と同じところへ着く(ADR 0274 決定3)", async () => {

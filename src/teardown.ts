@@ -16,8 +16,8 @@ import {
   PlaceNotOpenError,
   quarantineWorkspace,
   releaseWorkspace,
+  resolveUnlessDrifted,
   taskRunPlace,
-  UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -440,15 +440,16 @@ function runPlaceToRelease(
   task: Task,
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
+  const workspace = resolveUnlessDrifted(resolve, task.workspace, (err) => {
+    if (step.neverRan) return;
+    // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
+    const kept = taskCheckoutPath(db, task.id);
+    quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
+  });
+  if (!workspace) return undefined;
   try {
-    return taskRunPlace(db, task, resolve(task.workspace));
+    return taskRunPlace(db, task, workspace);
   } catch (err) {
-    if (err instanceof UnknownWorkspaceError) {
-      // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
-      const kept = taskCheckoutPath(db, task.id);
-      if (!step.neverRan) quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
-      return undefined;
-    }
     // この session の task の checkout が開いていなければ worker も走っておらず、触る checkout が無い(ADR 0356 決定2)。
     // 開いた event は repo 完成後に書く(ADR 0329)。repo が消えた checkout は解放が worker の repo の故障として読む
     if (err instanceof PlaceNotOpenError) return undefined;

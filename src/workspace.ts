@@ -1330,12 +1330,24 @@ export function resolveOrQuarantine(
   now: Date,
   onStop?: (stop: ResourceStop) => void,
 ): WorkspaceConfig | undefined {
+  return resolveUnlessDrifted(resolve, taskWorkspace, (err) => {
+    const stop = quarantineWorkspace(db, err.workspaceName, err, now);
+    onStop?.(stop);
+  });
+}
+
+/** 名前が registry に無い(drift)ときだけ `onDrift` に渡して undefined を返す。他の失敗は投げる。drift を登録するか・拒むかは
+ *  呼び手が決める(ADR 0363 決定2: 登録するのは pickup の門と後始末だけ)。 */
+export function resolveUnlessDrifted(
+  resolve: (taskWorkspace: string | null) => WorkspaceConfig,
+  taskWorkspace: string | null,
+  onDrift: (err: UnknownWorkspaceError) => void = () => {},
+): WorkspaceConfig | undefined {
   try {
     return resolve(taskWorkspace);
   } catch (err) {
     if (!(err instanceof UnknownWorkspaceError)) throw err;
-    const stop = quarantineWorkspace(db, err.workspaceName, err, now);
-    onStop?.(stop);
+    onDrift(err);
     return undefined;
   }
 }

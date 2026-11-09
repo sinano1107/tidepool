@@ -119,6 +119,7 @@ import {
   RoomCopyGitlinkError,
   type RunPlace,
   recordTaskCheckoutTip,
+  resolveUnlessDrifted,
   type TaskCheckoutPlace,
   TaskCheckoutUnreadableError,
   taskForkSource,
@@ -333,24 +334,22 @@ export async function runVerb<R>(
 function resolveGatedPlace(deps: McpDeps, task: Task, recorded: string): TaskCheckoutPlace | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
-  let workspace: WorkspaceConfig;
-  try {
-    workspace = resolve(task.workspace);
-  } catch (err) {
-    if (!(err instanceof UnknownWorkspaceError)) throw err;
+  const workspace = resolveUnlessDrifted(resolve, task.workspace, (err) => {
     const kept = taskCheckoutPath(deps.db, task.id);
+    // ADR 0273 決定1: 受験者の workspace は root の実環境の名前 —— 受験者には伏せる
+    const name = task.interview_target_id === null ? ` "${err.workspaceName}"` : "";
     throw new DomainError(
-      `this task's workspace "${err.workspaceName}" is not in the workspace registry, so the board cannot record ${recorded}${ESCALATE_UNFIXABLE}` +
+      `this task's workspace${name} is not in the workspace registry, so the board cannot record ${recorded}${ESCALATE_UNFIXABLE}` +
         (kept ? `. Your work stays in the task checkout at ${kept}` : ""),
     );
-  }
-  return taskRunPlace(deps.db, task, workspace);
+  });
+  return workspace && taskRunPlace(deps.db, task, workspace);
 }
 
 /** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。返すのは門が検査した走る場所(後始末が解放する)。 */
-function assertWorkCompletionGate(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
+function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
   if (!completionTreeGateApplies(task)) return undefined;
   const workspace = resolveGatedPlace(deps, task, "the task branch tip");
   if (!workspace) return undefined;
@@ -495,13 +494,8 @@ function runReleasingVerb(
  *  読みに開いている)と、その宣言のうち受験者に効く部分。 */
 function interviewEnvelope(deps: McpDeps, task: Task) {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  let workspace: WorkspaceConfig | undefined;
-  try {
-    workspace = resolve?.(task.workspace);
-  } catch (err) {
-    // ADR 0363 決定2: 読む verb も drift を登録しない —— 解けなければ実環境を載せないだけ
-    if (!(err instanceof UnknownWorkspaceError)) throw err;
-  }
+  // ADR 0363 決定2: 読む verb も drift を登録しない —— 解けなければ実環境を載せないだけ
+  const workspace = resolve && resolveUnlessDrifted(resolve, task.workspace);
   return {
     ...interviewFields(deps.db, task.id),
     measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
@@ -766,7 +760,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             const done = completeTask(deps.db, task, handoff, actorId, now, "worker");
             return { id: done.id, status: done.status };
           },
-          (task) => assertWorkCompletionGate(deps, task),
+          (task) => completionGatedPlace(deps, task),
         ),
     );
   }
@@ -855,7 +849,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           attributedTaskId,
           (task) => (actorId, now) => {
             if (head === undefined) {
-              throw new DomainError(`this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
+              throw new DomainError(`this board tracks no workspace, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
             }
             const audit = poseProbe(deps.db, task, input, actorId, now, "worker", head);
             return { audit_id: audit.id, parent_status: "blocked" };

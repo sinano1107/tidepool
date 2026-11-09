@@ -1058,8 +1058,7 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
 
 /** worker の verb の Memory のスコープ = task の workspace に固定。listLog と同じ解決で、null の workspace は盤面の
  *  既定を継ぐ。worker の verb(read verb も同じ helper を通るので込みで)と Board call の起草は null に解決されるなら
- *  拒否する(issue #623)。meta-review の専用 verb はここを通らず引数の scope を使う(ADR 0122 決定1)。
- *  resolveTaskWorkspace は quarantine の副作用を持つので使わない。 */
+ *  拒否する(issue #623)。meta-review の専用 verb はここを通らず引数の scope を使う(ADR 0122 決定1)。 */
 export function memoryScope(board: { workspace?: { name: string } }, task: Pick<Task, "workspace">): string {
   const scope = task.workspace ?? board.workspace?.name ?? null;
   if (scope === null) throw new DomainError("memory verbs need a task workspace — this board has none configured");
