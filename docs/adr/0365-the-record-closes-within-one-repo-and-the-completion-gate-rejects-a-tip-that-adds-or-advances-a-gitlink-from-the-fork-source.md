@@ -17,14 +17,19 @@ ADR 0356 決定3「submodule は gitlink だけで読み、入れ子の repo で
    allowlist)—— ので、存在を判定することもできない。
 2. **完了の門は、fork 元との merge-base から gitlink を足した・進めた tip を path を名指して拒む。** 比較の起点と「直して commit し直せ」の型は
    ADR 0362 決定2 と同じで、軸が違う —— 人間しか書けない path ではなく、記録が持てない entry。gitlink を消す・blob や tree に置き換える変更は
-   記録が持てるので通す。各段は自分の delta にだけ答え、spawn 時の停止は足さない(ADR 0362 決定2 と同じ)。
+   記録が持てるので通す。各段は自分の delta にだけ答え、spawn 時の停止は足さない(ADR 0362 決定2 と同じ)。**出題の写し**(root の
+   worktree を面接室に commit する口、ADR 0273 決定1)も記録に worker の tree を書くので同じ分類で、面接室の保護ブランチの head との差に
+   gitlink を足す・進める tree は path を名指して拒み、root が直して呼び直す —— 完了の門は Interview の root に掛からず、受験者は populate
+   できない gitlink を環境として受け取ることになる。
 3. **入れ子の repo の中身は記録の外で、運ばれない。** commit 済みでも未 commit でも、名前の場所にも WIP にも入らない —— 宣言であって
    観測ではない。観測するには入れ子の repo で git を撃つ(ADR 0356 決定3 とぶつかる)か、worker が書ける `.git/modules` の object を借りる
    (ADR 0360 決定2 / ADR 0364 決定1 とぶつかる)しかないので、観測できないものは記録にも残さない。決定2 の下で失うのは「submodule の中で
-   始めて gitlink を commit しなかった作業」だけになる。
+   始めて gitlink を commit しなかった作業」だけになる。完了以外の解放の WIP は進んだ gitlink の **pointer** を `task/<id>` に運ぶが中身は
+   運ばない —— 再開の checkout はそれを populate できず、次の完了の門が決定2 で拒む。WIP は拒めない(退避の口)ので、ここは変えない。
 
-名指す代償: submodule を upstream に追従させる(gitlink を進める)仕事は worker にできず、人間の仕事になる。需要は観測されておらず、tidepool
-自身は `.gitmodules` を持たない。
+名指す代償: submodule を upstream に追従させる(gitlink を進める)仕事と、submodule の path を移す仕事(`git mv` は diff で D + A になり、
+A は「足す」に当たる —— sha が同じでも一律に拒む)は worker にできず、人間の仕事になる。需要は観測されておらず、tidepool 自身は
+`.gitmodules` を持たない。
 
 ## 退けた形
 
