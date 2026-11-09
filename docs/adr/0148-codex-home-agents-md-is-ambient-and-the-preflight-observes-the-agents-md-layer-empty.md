@@ -1,5 +1,7 @@
 # `$CODEX_HOME` の AGENTS.md も ambient であり、フラグでは除けないので Codex preflight が AGENTS.md の層を空と観測する
 
+**Status 追記: 決定1 の「フラグで除くは成り立っていなかった」は rules にも当てはまる** —— `--ignore-rules` は system 層(`/etc/codex/rules`)のrules を除かない(0.163.0 の実測、issue #3042)。塞ぐ手段は決定2 と同じく封じ込め能力の観測で、config 層の行が folder の存在で止める(ADR 0358 決定4 の Status 追記、2026-11-09)。
+
 2026-09-22 の triage → grilling(issue #697)で決定。ADR 0098 決定3 は `--ignore-user-config`・`--ignore-rules`・`--ephemeral` によって
 ambient な設定を経路から除くと書いたが、`--ignore-user-config` が落とすのは `$CODEX_HOME/config.toml` だけで、
 `$CODEX_HOME/AGENTS.md`(および `AGENTS.override.md`)は読まれ続ける。0.147.0 の実測で、盤面と同じフラグの `codex exec` の

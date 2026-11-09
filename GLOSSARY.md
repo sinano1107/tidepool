@@ -462,7 +462,7 @@ worker の能力に対する保証のうち、**モデルの判断を通らな�
 
 OS サンドボックスの読みは、Harness によらず既定拒否である —— worker が読めるのは自分の workspace、その task の一時ディレクトリ、OS とツール一式の置き場所だけで、他の workspace、他の task の一時物、VM から見えるホストのホームには届かない(2026-10-14 の grilling、issue #1950 / ADR 0257。Codex 側は ADR 0256)。
 
-worker の CLI process 自身には床が無いので、その process が読む host 側の状態は盤面が持つ。Claude worker の CLI 状態(`~/.claude.json` の per-checkout の trust と承認)は盤面所有で spawn ごとに新規、credentials だけ host の置き場に残す —— Codex の `CODEX_HOME`、git / gh の子の盤面所有 HOME と同じ線で、人間が自分の checkout に与えた trust は worker session に届かない(2026-11-06 の grilling、issue #2936 / ADR 0354)。 host 側の状態には env と Codex の machine-wide な config 層(system / managed)も含まれる —— worker の形で走る process は host の状態を既定で隔てられ、受け取るのは盤面が列挙したものだけで、env は継承ではなく盤面が組み立て、列挙の外の Codex の config 層は封じ込め能力の不成立になる(2026-11-07 の grilling、issue #2998 / #3017 / ADR 0358)。
+worker の CLI process 自身には床が無いので、その process が読む host 側の状態は盤面が持つ。Claude worker の CLI 状態(`~/.claude.json` の per-checkout の trust と承認)は盤面所有で spawn ごとに新規、credentials だけ host の置き場に残す —— Codex の `CODEX_HOME`、git / gh の子の盤面所有 HOME と同じ線で、人間が自分の checkout に与えた trust は worker session に届かない(2026-11-06 の grilling、issue #2936 / ADR 0354)。 host 側の状態には env と Codex の machine-wide な config 層(system / managed)も含まれる —— worker の形で走る process は host の状態を既定で隔てられ、受け取るのは盤面が列挙したものだけで、env は継承ではなく盤面が組み立て、列挙の外の Codex の config 層は封じ込め能力の不成立になる(2026-11-07 の grilling、issue #2998 / #3017 / ADR 0358)。層の広がりは `config.toml` の中身でなくその folder で、host が folder を置いているだけで列挙の外である(2026-11-09 の grilling、issue #3042)。
 
 _Avoid_: ガードレール(深層防御の一枚と、床そのものの区別を曖昧にする)
 

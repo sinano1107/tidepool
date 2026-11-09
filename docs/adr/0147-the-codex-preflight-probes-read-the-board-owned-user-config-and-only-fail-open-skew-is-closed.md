@@ -1,5 +1,7 @@
 # Codex preflight の probe は盤面所有の user config を読む面を観測し、塞ぐのは判定を緩める向きのずれだけ
 
+**Status 追記: 冒頭の「worker は rules を剥がした面で走る」は user / project の rules に限る** —— `--ignore-rules` は system 層(`/etc/codex/rules`)を外さない(0.163.0 の実測、issue #3042)。system 層は封じ込め能力の config 層の行が folder の存在で止める(ADR 0358 決定4 の Status 追記、2026-11-09)。
+
 2026-09-22 の grilling(issue #698)で決定。ADR 0098 決定4 の照合は「worker が走る面を観測する」ことを前提にしているが、worker の spawn(`codex exec`)が渡す `--ignore-user-config` / `--ignore-rules` を、probe の `codex debug prompt-input` / `codex features list` / `codex app-server` は受けない(pin した 0.147.0 の実物で確認)。probe は盤面所有 `$CODEX_HOME/config.toml` と rules が効いた面を観測し、worker はそれらを剥がした面で走る。この config.toml は盤面が書かなくても Codex 自身が project trust を書き込むので、空に保つ不変条件は置けない。実測表と vendor source の `file:line` は issue #698 のコメントに置く。
 
 ## 決定

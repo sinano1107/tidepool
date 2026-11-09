@@ -1,5 +1,7 @@
 # Provider は1つの正準 Harness を選び、Codex の experimental probe は固定と適合試験で閉じ込める
 
+**Status 追記: 決定3 の `--ignore-rules` が外すのは user / project 層の rules だけで、system 層(`/etc/codex/rules`)の rules は worker に効く(0.163.0 の Lima VM 実測、issue #3042)** —— system 層は封じ込め能力の config 層の行が folder の存在で止める(ADR 0358 決定4 の Status 追記、2026-11-09)。
+
 2026-08-24 の grilling(issue #195)で決定。Kimi 対応で Provider と Harness を分離した ADR 0097 は、すべての worker を Claude Code で起動する実装の上に第2の推論提供元を載せた。OpenAI / Codex を加えるには Provider と Harness の組み合わせ、サブスクリプション認証、使用量観測、安全床、停止範囲を明示しなければならない。
 
 ## 決定

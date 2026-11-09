@@ -1,5 +1,7 @@
 # worker の形で走る process は盤面が列挙したものだけを host から受け取る —— env は組み立て、Codex の列挙外の config 層は封じ込め能力の不成立
 
+**Status 追記: 決定4 の「内容を持つ層」は `config/read` の `config` でなく層の folder で読む** —— path を報告する列挙外の層は、`file` の親(または `dotCodexFolder`)が **存在するだけ**で不成立。path の無い層(mdm / enterpriseManaged / legacy managed)は `config` の中身のまま。列挙内の `user` 層は folder も所有で覆う(`--ignore-user-config` は user 層を空の config のまま stack に残すので `CODEX_HOME/agents` は worker に載るが、盤面所有で worker は書けない)—— 観測は足さない。folder の stat は ENOENT だけが「無い」で、他の失敗は不成立。理由: Codex 自身の層の広がりは `config_folder()` 1つの規則で、agents・rules・skills・hooks.json・requirements.toml はすべてその folder から読まれる(0.163.0 の source)。`config` だけを見るのは口の形の写しで、`/etc/codex/agents/*.toml` だけの host が層の行を通った(#3017 / #3041 の実測)。「`config.toml` 以外の項目があれば」でなく存在で拒むのは、写す規則を「folder は file の親」1つに保ち、同じ層への観測を1本にするため—— 空の dir / 空の `config.toml` も host が置いたもので、人間が消す先は表示で分かる。`--ignore-rules` が外すのは User / Project の rules だけで、system の rules はこの行が持つ(ADR 0098 決定3 / 0147 / 0148 / 0326 決定3 に追記)。退けた mount namespace へ移る条件は文面どおり(2026-11-09、issue #3042)。
+
 **Status 追記: 決定4 の「requirements が空でなければ不成立」は「盤面の `sessionFlags` が作る値の外に requirements があれば不成立」と読む** ——
 固定版 0.163.0 の実物は、盤面自身が渡す `-c forced_login_method="chatgpt"`(ADR 0098)を `configRequirements/read` の
 `allowedLoginMethods: ["chatgpt"]` として報告し、`/etc/codex` の無い host でも requirements は空にならなかった。成立は、各欄が null か、

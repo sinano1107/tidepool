@@ -1,5 +1,7 @@
 # 伸びる prompt は argv の外へ出し、Codex worker は1つの user turn にまとめ、記録は持ち主・task・配置を区別する
 
+**Status 追記: 決定3 の「`--ignore-rules` と既存の封じ込めを保つ」の `--ignore-rules` が閉じるのは user / project の rules だけ** —— system 層のrules は封じ込め能力の config 層の行が folder の存在で止める(0.163.0 の実測、issue #3042、ADR 0358 決定4 の Status 追記、2026-11-09)。
+
 **Status 追記: 決定4 の記憶の出所の維持は、帰責の読み口を prompt 記録へ移す決定ではない** —— prompt 記録は注入した文面を逐語で持ち、帰責の `memory_read` は従来どおり注入・pull の event と不変の entry 本文から読む(ADR 0314 の退けた形、2026-10-29 の再確認、issue #2692)。
 
 2026-10-29 の triage → grilling(issue #2692、spec #2691 の派生)で決定。Board call と worker が長い文面を argv の1引数で渡し、
