@@ -16,6 +16,7 @@ import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js
 import type { WorkspaceDeletionReferences } from "../src/workspace-create.js";
 import { FakeContainerRuntime, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
+  addSubmodule,
   api,
   type BootOptions,
   bootTidepool,
@@ -44,6 +45,7 @@ import {
   runNow,
   servedQuarantineQuestion,
   startFirstMetaReviewViaWebui,
+  submoduleSource,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -951,6 +953,22 @@ it("root の workspace が registry から消えた(registry drift)まま出題�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
   expect((await callAsTask(t, root.id, "get_current_task", {})).isError).toBeFalsy();
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeDefined();
+});
+
+// 分類は pickup-clean-tree.test.ts の domain 層が言う。ここは RoomCopyGitlinkError の tool error への写像だけ(ADR 0107 決定3)
+it("root の checkout が gitlink を足していれば、出題は path を名指して pose_probe の呼び直しを指す tool error で拒まれ、出題の event も受験者も残らない(ADR 0365 決定2)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const checkout = lastCheckoutOf(root.id);
+  addSubmodule(checkout, await submoduleSource("pose-gitlink-source"));
+  git(checkout, "commit", "-m", "add the library as a submodule");
+
+  const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
+
+  expect(posed.isError).toBe(true);
+  expect(posed.content[0].text).toContain("call pose_probe again");
+  expect(posed.content[0].text.split("\n")).toContain("- mod");
+  expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
 });
 
 /** 監査を拾った盤面: 監査の id と complete_audit の引数。 */
