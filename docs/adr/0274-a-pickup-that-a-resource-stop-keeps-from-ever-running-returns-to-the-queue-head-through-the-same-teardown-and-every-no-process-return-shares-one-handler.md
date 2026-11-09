@@ -1,5 +1,7 @@
 # 資源の停止で worker が1度も走らなかった pickup は、同じ後始末を通って todo の先頭へ戻り、process を持たない復帰は一撃を1本で共有する
 
+**Status 追記: 決定3 の「完了した session の後始末は、門が既に観測した drift を解き直さない」は引退 —— verb は drift に資源の停止を登録せず拒むだけになり、走った後の drift の観測者は決着の種類を問わず後始末 1 人([ADR 0363](0363-drift-is-observed-by-the-pickup-gate-before-running-and-by-teardown-after-and-the-completion-gate-rejects-an-unresolvable-name.md) 決定2、2026-11-09、issue #3094)。**
+
 **Status 追記: 決定3 の「pickup が名前の場所を休止位置から動かしたか」の導出は、task の checkout では「開いた event があるか」に替わる([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
 **Status 追記: 決定1・4 の「todo の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 位置を変えずに `todo` へ戻る。1 transaction に後始末の印を置く形(決定3)と一撃を1本で共有する形(決定4)は変わらない。

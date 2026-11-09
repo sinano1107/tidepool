@@ -1,5 +1,7 @@
 # 完了の門は tip を記録に着けるまで `done` にせず、完了済みの解放は記録の tip だけを運ぶ —— 報告後の書き込みは記録され、名前の場所を止めない
 
+**Status 追記: 決定4 の「verb の時点の名前の場所の失敗は資源の停止を登録せず拒むだけ」は、署名を持つ drift(名前が解けない)にも広がる —— 後始末が一歩あとに同じ drift を観測するので verb で登録しても止まるものが無い([ADR 0363](0363-drift-is-observed-by-the-pickup-gate-before-running-and-by-teardown-after-and-the-completion-gate-rejects-an-unresolvable-name.md) 決定2、2026-11-09、issue #3094)。**
+
 2026-11-08 の grilling(issue #3053、#3030 の実装で見えた形)で決定。ADR 0356 の後、完了の門は worker の tip を名前の場所の `task/<id>` へ引いてから
 `done` にするが、名前の場所の側の失敗は飲んで `done` にする(ADR 0084 決定2 の写し)。飲むので「記録に tip があるか」が記録から分からず、
 完了済みの解放が worker の checkout を tip の出所として**読み直す** —— #3030 の確認済み決定1「`done` の後の解放は名前の場所に既にある ref を
