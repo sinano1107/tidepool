@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
 import {
   boardReadTree,
@@ -51,7 +52,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_SHADOW_PATHS } from "./sandbox.js";
+import { forkDeltaEntries, gitlinkChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_SHADOW_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
@@ -562,7 +563,16 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   const tip = fetchWorkerTip(place, taskId);
   const tree = boardWriteTree(place.path, tip, room.path, recordedSettingsSparsePolicy(db, room, taskId, tip), taskCheckoutRemnants(place, tip));
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
-  const head = git(room.path, "commit-tree", tree, "-p", git(room.path, "rev-parse", protectedBranchRef(room)), "-m", "Add the project files");
+  const parent = git(room.path, "rev-parse", protectedBranchRef(room));
+  const head = git(room.path, "commit-tree", tree, "-p", parent, "-m", "Add the project files");
+  // ADR 0365 決定2: 受験者は populate できない gitlink を環境として受け取る —— 足す・進める tree は ref を書く前に拒み、root が直して呼び直す
+  const gitlinks = gitlinkChanges(forkDeltaEntries(room.path, parent, head));
+  if (gitlinks.length > 0) {
+    throw new DomainError(
+      "the probe's environment adds or advances a submodule (gitlink); the interview room carries only this repository and the targets " +
+        `cannot populate it — remove the submodule from your working tree and call pose_probe again\n${gitlinks.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`,
+    );
+  }
   const ref = `refs/keep-around/${head}`;
   boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
   return head;

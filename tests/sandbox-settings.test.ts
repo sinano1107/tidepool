@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
 import {
   buildSandboxSettings,
+  forkDeltaEntries,
+  gitlinkChanges,
   humanOnlyPathChanges,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   recordedSettingsDisposition,
@@ -419,7 +421,7 @@ function humanOnlyBetween(base: (workspace: string) => void, tip: (workspace: st
     tip(workspace);
     git(workspace, "add", "-A", "-f");
     git(workspace, "commit", "--quiet", "--allow-empty", "-m", "tip");
-    changes = humanOnlyPathChanges(workspace, "HEAD~1", "HEAD");
+    changes = humanOnlyPathChanges(forkDeltaEntries(workspace, "HEAD~1", "HEAD"));
   });
   return changes.sort();
 }
@@ -504,6 +506,71 @@ describe("humanOnlyPathChanges は2つの tree の間で人間しか書けない
 
   it("mode だけの変更も返す", () => {
     expect(humanOnlyBetween(BASE, (workspace) => chmodSync(join(workspace, "kept/.mcp.json"), 0o755))).toEqual(["kept/.mcp.json"]);
+  });
+});
+
+/** `base` を commit し、続けて `tip` を commit した repo で、2つの commit の間で gitlink を足した・進めた path。`base` / `tip` は
+ *  submodule の取得元(commit 1つの使い捨て repo)を受け取る。 */
+function gitlinksBetween(base: (workspace: string, source: string) => void, tip: (workspace: string, source: string) => void): string[] {
+  const source = mkdtempSync(join(tmpdir(), "tidepool-gitlink-source-"));
+  git(source, "init", "--quiet");
+  git(source, "commit", "--quiet", "--allow-empty", "-m", "source");
+  let changes: string[] = [];
+  try {
+    withRecorded((workspace) => base(workspace, source), (workspace) => {
+      tip(workspace, source);
+      git(workspace, "add", "-A", "-f");
+      git(workspace, "commit", "--quiet", "--allow-empty", "-m", "tip");
+      changes = gitlinkChanges(forkDeltaEntries(workspace, "HEAD~1", "HEAD"));
+    });
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+  }
+  return changes;
+}
+
+const addSubmodule = (workspace: string, source: string) =>
+  git(workspace, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source, "mod");
+
+const advanceSubmodule = (workspace: string) => {
+  git(join(workspace, "mod"), "commit", "--quiet", "--allow-empty", "-m", "advance");
+  git(workspace, "add", "-f", "mod");
+};
+
+/** ADR 0365 決定2: 記録が持てない entry —— 2つの commit の間で gitlink を足した・進めた path だけを返す。 */
+describe("gitlinkChanges は2つの commit の間で gitlink を足した・進めた path を返す(ADR 0365 決定2)", () => {
+  it("gitlink を足せば path を返す", () => {
+    expect(gitlinksBetween(() => {}, addSubmodule)).toEqual(["mod"]);
+  });
+
+  it("gitlink を進めれば path を返す", () => {
+    expect(gitlinksBetween(addSubmodule, advanceSubmodule)).toEqual(["mod"]);
+  });
+
+  it("gitlink を消しても返さない", () => {
+    expect(gitlinksBetween(addSubmodule, (workspace) => git(workspace, "rm", "--quiet", "-f", "mod"))).toEqual([]);
+  });
+
+  it("gitlink を tree の file に置き換えても返さない", () => {
+    expect(gitlinksBetween(addSubmodule, (workspace) => {
+      git(workspace, "rm", "--quiet", "-f", "mod");
+      put(workspace, "mod/a", "a\n");
+    })).toEqual([]);
+  });
+
+  it("fork 元にあって触っていない gitlink は返さない", () => {
+    expect(gitlinksBetween(addSubmodule, (workspace) => put(workspace, "README.md", "changed\n"))).toEqual([]);
+  });
+
+  it(".gitmodules の ignore = all が名指す gitlink を進めても返す", () => {
+    expect(gitlinksBetween((workspace, source) => {
+      addSubmodule(workspace, source);
+      git(workspace, "config", "-f", ".gitmodules", "submodule.mod.ignore", "all");
+    }, advanceSubmodule)).toEqual(["mod"]);
+  });
+
+  it("submodule の path を git mv で移せば移動先の path を返す", () => {
+    expect(gitlinksBetween(addSubmodule, (workspace) => git(workspace, "mv", "mod", "moved"))).toEqual(["moved"]);
   });
 });
 

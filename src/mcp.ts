@@ -59,7 +59,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
-import { humanOnlyPathChanges, recordedSettingsDisposition } from "./sandbox.js";
+import { forkDeltaEntries, gitlinkChanges, humanOnlyPathChanges, recordedSettingsDisposition } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
@@ -366,12 +366,22 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
     // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
     // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
     const { namedPlace } = workspace;
-    const humanOnly = humanOnlyPathChanges(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
+    const delta = forkDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
+    const humanOnly = humanOnlyPathChanges(delta);
     if (humanOnly.length > 0) {
       throw refusalNamingPaths(
         "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
           "take the change out of the task branch and commit",
         humanOnly,
+      );
+    }
+    // ADR 0365 決定2: 同じ delta で、記録が持てない entry(gitlink の参照先は別 repo の commit)を足した・進めた tip を拒む
+    const gitlinks = gitlinkChanges(delta);
+    if (gitlinks.length > 0) {
+      throw refusalNamingPaths(
+        "the task branch tip adds or advances a submodule (gitlink) from its fork source; the record carries only this repository and " +
+          "cannot hold a submodule's commits — reset the gitlink to the fork source's value or remove the submodule, and commit",
+        gitlinks,
       );
     }
     paths = completionTreePaths(deps.db, workspace, task.id, tip);
