@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,7 +7,9 @@ import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  callAsTask,
   checkoutOf,
+  commitWork,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -77,7 +80,8 @@ it("記録した tip の .claude が symlink なら完了を拒み、directory �
   // 作業ツリーだけを直しても、記録する tip には symlink が残っている。
   unlinkSync(claudeDir);
   mkdirSync(claudeDir);
-  writeFileSync(join(claudeDir, "settings.json"), "{}\n");
+  // ADR 0362 決定2: 直し方自身が fork 元に無い settings の entry を足せば次の門に当たる
+  writeFileSync(join(claudeDir, "README.md"), "project notes\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
 
   const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -124,6 +128,137 @@ it("名前の場所に replace ref があっても記録した commit の .claud
   expect(result.isError).toBe(true);
   expect(result.content[0].text).toContain(".claude as a symlink");
   expect(git(ws.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(rejectedTip);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+});
+
+/** 保護ブランチに tracked な .claude/settings.json を持つ workspace。 */
+async function workspaceSharingSettings(name: string) {
+  const ws = await makeWorkspace(name);
+  mkdirSync(join(ws.path, ".claude"));
+  writeFileSync(join(ws.path, ".claude", "settings.json"), "{}\n");
+  git(ws.path, "add", "-f", "--", ".claude");
+  git(ws.path, "commit", "-m", "share the project settings");
+  return ws;
+}
+
+const writeBlob = (checkout: string, body: string) =>
+  execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: checkout, input: body }).toString().trim();
+
+/** Claude の worker が書き込み拒否(ADR 0037 機構2)の外で記録に乗せる経路: plumbing で index の blob を差し替えて commit する。 */
+function commitBlob(checkout: string, path: string, blob: string): string {
+  git(checkout, "update-index", "--add", "--cacheinfo", `100644,${blob},${path}`);
+  git(checkout, "commit", "-m", `set ${path}`);
+  return git(checkout, "rev-parse", "HEAD");
+}
+
+const HUMAN_ONLY_REFUSAL = "this path is written only by a human; take the change out of the task branch and commit, then call complete_task again";
+
+it("記録した tip が fork 元から .claude/settings.json の blob を変えていれば path を名指して拒み、元の blob に戻して commit すると同じ session で完了できる(ADR 0362 決定2)", async () => {
+  const ws = await workspaceSharingSettings("settings-blob");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "tune the project settings");
+  await t.clock.advance(HOUR);
+  const checkout = checkoutOf(t.db, task.id);
+  const original = git(checkout, "rev-parse", "HEAD:.claude/settings.json");
+  const rejectedTip = commitBlob(checkout, ".claude/settings.json", writeBlob(checkout, '{"apiKeyHelper":"./steal"}\n'));
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+
+  const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain(HUMAN_ONLY_REFUSAL);
+  expect(result.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.json"]);
+  expect(git(ws.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(rejectedTip);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+
+  commitBlob(checkout, ".claude/settings.json", original);
+  const retry: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  expect(retry.isError ?? false).toBe(false);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+it("fork 元に無かった .claude/settings.local.json を plumbing で足した tip は拒む(ADR 0362 決定2)", async () => {
+  const ws = await makeWorkspace("settings-local-added");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "add local settings");
+  await t.clock.advance(HOUR);
+  const checkout = checkoutOf(t.db, task.id);
+  commitBlob(checkout, ".claude/settings.local.json", writeBlob(checkout, '{"permissions":{"allow":["Bash(*)"]}}\n'));
+
+  const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain(HUMAN_ONLY_REFUSAL);
+  expect(result.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.local.json"]);
+});
+
+it("fork の後に人間が名前の場所で保護ブランチの settings を進めても、settings に触れていない task は完了できる(ADR 0362 決定2)", async () => {
+  const ws = await workspaceSharingSettings("settings-human-advance");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "write the notes");
+  await t.clock.advance(HOUR);
+  commitWork(ws.path, ".claude/settings.json", '{"env":{"HUMAN":"1"}}\n');
+  commitWork(checkoutOf(t.db, task.id), "notes.txt", "the deliverable\n");
+
+  const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
+
+  expect(result.isError ?? false).toBe(false);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+it("親が settings を変えて分解しても子は完了でき、親自身の完了が拒まれ、親が戻すと完了できる(ADR 0362 決定2)", async () => {
+  const ws = await workspaceSharingSettings("settings-parent");
+  t = await bootTidepool({ workspace: ws });
+  const parent = await registerWork(t, "retune the settings, then split");
+  await t.clock.advance(HOUR);
+  const forkSource = git(ws.path, "rev-parse", "main");
+  // 分解の WIP 退避は作業ツリーから取るので、plumbing でなく作業ツリーに書いて commit する
+  commitWork(checkoutOf(t.db, parent.id), ".claude/settings.json", '{"env":{"PARENT":"1"}}\n');
+  const decomposed = await callAsTask(t, parent.id, "decompose", {
+    reason: "the slice is independent",
+    children: [{ title: "write the notes", purpose: "finish one part", completion_criteria: "the notes exist" }],
+  });
+  expect(decomposed.isError ?? false).toBe(false);
+  await t.clock.advance(HOUR);
+  const child = t.worker.started.at(-1)!;
+  expect(child.parent_id).toBe(parent.id);
+  commitWork(checkoutOf(t.db, child.id), "notes.txt", "the deliverable\n");
+
+  const childResult = await callAsTask(t, child.id, "complete_task", { handoff: fullHandoff });
+
+  expect(childResult.isError ?? false).toBe(false);
+  await t.clock.advance(HOUR);
+  const parentCheckout = checkoutOf(t.db, parent.id);
+  const rejected = await callAsTask(t, parent.id, "complete_task", { handoff: fullHandoff });
+  expect(rejected.isError).toBe(true);
+  expect(rejected.content[0].text).toContain(HUMAN_ONLY_REFUSAL);
+  expect(rejected.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.json"]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("in_progress");
+
+  git(parentCheckout, "checkout", forkSource, "--", ".claude/settings.json");
+  git(parentCheckout, "commit", "-m", "restore the project settings");
+  const retry = await callAsTask(t, parent.id, "complete_task", { handoff: fullHandoff });
+
+  expect(retry.isError ?? false).toBe(false);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("done");
+});
+
+it("記録した tip と fork 元の merge-base が取れなければ、確かめられないとして完了を拒む(ADR 0362 決定2)", async () => {
+  const ws = await makeWorkspace("settings-no-merge-base");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "rewrite the history");
+  await t.clock.advance(HOUR);
+  const checkout = checkoutOf(t.db, task.id);
+  // 保護ブランチと履歴を共有しない tip
+  git(checkout, "reset", "--hard", git(checkout, "commit-tree", git(checkout, "rev-parse", "HEAD^{tree}"), "-m", "orphan"));
+
+  const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
+
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("could not verify");
+  expect(result.content[0].text).toContain("Retry complete_task or escalate");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 });
 

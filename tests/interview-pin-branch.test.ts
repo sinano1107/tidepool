@@ -15,6 +15,7 @@ import {
   recordTaskCheckoutTip,
   releaseWorkspace,
   runPlaceReadPaths,
+  taskForkSource,
   taskRunPlace,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -265,6 +266,18 @@ it("出題の後、head は面接室で引けて keep-around から到達でき�
   // 面接室の在り処(root の id を持つ)は受験者の `.git` のどのファイルにも残らない —— FETCH_HEAD・config・reflog・packed-refs も
   const gitFiles = readdirSync(join(checkout, ".git"), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile());
   for (const file of gitFiles) expect(readFileSync(join(file.parentPath, file.name), "latin1")).not.toContain(root.id);
+  db.close();
+});
+
+it("受験者の fork 元は出題の head で、pickup が受験者のタスクブランチを切った sha と同じ(ADR 0362 決定2 / ADR 0276 決定1)", async () => {
+  const db = openDb(":memory:");
+  const { room, head, examinees, base } = await posedInRoom(db);
+  const [first] = examinees as [Task];
+
+  await pickUp(db, first, room, base);
+
+  expect(taskForkSource(db, room, first)).toBe(head);
+  expect(git(room.path, "rev-parse", `task/${first.id}`)).toBe(head);
   db.close();
 });
 

@@ -123,6 +123,13 @@ it.each(["completion", "WIP"] as const)("Codex %s sees changes to tracked Claude
       isError: true,
       content: [{ text: expect.stringContaining("- .claude/settings.json\n- .claude/settings.local.json") }],
     });
+    // ADR 0362 決定2: Codex が普通に書いた settings も、commit すれば完了の門が Harness に依らず拒む
+    git(checkout, "add", "-A", "-f", "--", ".claude");
+    git(checkout, "commit", "-m", "change tracked Claude settings");
+    const committed = await callAsTask(t, work.id, "complete_task", { handoff: FULL_HANDOFF });
+    expect(committed.isError).toBe(true);
+    expect(committed.content[0].text).toContain("this path is written only by a human");
+    expect(committed.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.json", "- .claude/settings.local.json"]);
   } else {
     proc.emitExit(0, null);
     await vi.waitFor(() => expect(existsSync(checkout)).toBe(false));

@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
 import {
   buildSandboxSettings,
+  humanOnlyPathChanges,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   recordedSettingsDisposition,
   type WorkerSessionSettingsInput,
@@ -403,6 +404,92 @@ const putSettings = (workspace: string, name: string, body: unknown) => {
   mkdirSync(join(workspace, ".claude"), { recursive: true });
   writeFileSync(join(workspace, ".claude", name), JSON.stringify(body));
 };
+
+const put = (workspace: string, path: string, body = "{}\n") => {
+  mkdirSync(dirname(join(workspace, path)), { recursive: true });
+  writeFileSync(join(workspace, path), body);
+};
+
+const link = (workspace: string, path: string, target: string) => {
+  mkdirSync(dirname(join(workspace, path)), { recursive: true });
+  symlinkSync(target, join(workspace, path));
+};
+
+/** `base` を commit し、続けて `tip` を commit した repo で、2つの commit の間の人間しか書けない path(並びは揃える)。 */
+function humanOnlyBetween(base: (workspace: string) => void, tip: (workspace: string) => void): string[] {
+  let changes: string[] = [];
+  withRecorded(base, (workspace) => {
+    tip(workspace);
+    git(workspace, "add", "-A", "-f");
+    git(workspace, "commit", "--quiet", "--allow-empty", "-m", "tip");
+    changes = humanOnlyPathChanges(workspace, "HEAD~1", "HEAD");
+  });
+  return changes.sort();
+}
+
+/** ADR 0362 決定2 と Status 追記2つ: 2つの tree の間で entry が違う path のうち、人間の CLI が起動時に読む形だけを返す。 */
+describe("humanOnlyPathChanges は2つの tree の間で人間しか書けない path の entry の違いを返す(ADR 0362 決定2)", () => {
+  const BASE = (workspace: string) => {
+    put(workspace, ".claude/settings.json");
+    put(workspace, ".mcp.json");
+    put(workspace, "kept/.claude/settings.json");
+    put(workspace, "kept/.claude/settings.local.json");
+    put(workspace, "kept/.mcp.json");
+    put(workspace, "kept/.codex/config.toml");
+    put(workspace, "kept/.codex/rules/default.rules");
+    link(workspace, "kept-link/.claude", "../kept/.claude");
+    put(workspace, ".codex/hooks.json");
+    put(workspace, ".codex/agents/reviewer.toml");
+    put(workspace, ".claude/agents/reviewer.md");
+  };
+
+  it("深さを問わず settings・settings.local・.mcp.json・.codex/config.toml・.codex/rules 以下と tree でない .claude / .codex / .codex/rules の追加・変更・削除を返す", () => {
+    expect(humanOnlyBetween(BASE, (workspace) => {
+      put(workspace, ".claude/settings.json", '{"apiKeyHelper":"./steal"}\n');
+      put(workspace, ".claude/settings.local.json");
+      rmSync(join(workspace, ".mcp.json"));
+      put(workspace, "sub/.claude/settings.json");
+      put(workspace, "sub/.claude/settings.local.json");
+      put(workspace, "sub/.mcp.json");
+      put(workspace, ".codex/config.toml");
+      put(workspace, "sub/.codex/config.toml");
+      put(workspace, ".codex/rules/default.rules");
+      put(workspace, "sub/.codex/rules/deep/allow.rules");
+      link(workspace, "linked/.claude", "../payload");
+      link(workspace, "linked/.codex", "../payload");
+      link(workspace, "rules-linked/.codex/rules", "../../payload");
+      put(workspace, "blob/.claude", "not a directory");
+    })).toEqual([
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+      ".codex/config.toml",
+      ".codex/rules/default.rules",
+      ".mcp.json",
+      "blob/.claude",
+      "linked/.claude",
+      "linked/.codex",
+      "rules-linked/.codex/rules",
+      "sub/.claude/settings.json",
+      "sub/.claude/settings.local.json",
+      "sub/.codex/config.toml",
+      "sub/.codex/rules/deep/allow.rules",
+      "sub/.mcp.json",
+    ].sort());
+  });
+
+  it("fork 元に既にあって変わっていない nested の entry と、.codex/hooks.json・.codex/agents/*.toml・.claude/agents の変更は返さない", () => {
+    expect(humanOnlyBetween(BASE, (workspace) => {
+      put(workspace, ".codex/hooks.json", '{"hooks":{}}\n');
+      put(workspace, ".codex/agents/reviewer.toml", 'model = "changed"\n');
+      put(workspace, ".claude/agents/reviewer.md", "changed\n");
+      put(workspace, "README.md", "changed\n");
+    })).toEqual([]);
+  });
+
+  it("mode だけの変更も返す", () => {
+    expect(humanOnlyBetween(BASE, (workspace) => chmodSync(join(workspace, "kept/.mcp.json"), 0o755))).toEqual(["kept/.mcp.json"]);
+  });
+});
 
 /** ADR 0303 決定2: worker の記録の言語を repo / host の `language` / `outputStyle` に動かさせない。
  *  値1つのキーなので flag tier が丸ごと置き換え(#2454 の実測)、拒否ではなく上書きで閉じる。workspace の tracked な

@@ -11,7 +11,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
-import { displayWorktreePath } from "./git.js";
+import { displayWorktreePath, git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -59,7 +59,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
-import { recordedSettingsDisposition } from "./sandbox.js";
+import { humanOnlyPathChanges, recordedSettingsDisposition } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
@@ -120,6 +120,7 @@ import {
   resolveOrQuarantine,
   type TaskCheckoutPlace,
   TaskCheckoutUnreadableError,
+  taskForkSource,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -360,6 +361,17 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
       throw new DomainError(
         `the task branch tip has ${path} as a ${type}, so the board cannot hide the Claude settings behind it — ` +
           `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
+      );
+    }
+    // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。名前の場所の git だけを読む(ADR 0357 / 0360)
+    const { namedPlace } = workspace;
+    const forkPoint = git(namedPlace.path, "--no-replace-objects", "merge-base", tip, taskForkSource(deps.db, namedPlace, task));
+    const humanOnly = humanOnlyPathChanges(namedPlace.path, forkPoint, tip);
+    if (humanOnly.length > 0) {
+      throw new DomainError(
+        "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
+          "take the change out of the task branch and commit, then call complete_task again\n" +
+          humanOnly.map((path) => `- ${displayWorktreePath(path)}`).join("\n"),
       );
     }
     paths = completionTreePaths(deps.db, workspace, task.id, tip);
