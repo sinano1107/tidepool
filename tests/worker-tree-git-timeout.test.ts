@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, existsSync, openSync, rmSync } from "node:fs";
+import { closeSync, constants, existsSync, openSync, readdirSync, rmSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -7,7 +7,7 @@ import { listEvents } from "../src/events.js";
 import { boardViewStatus, boardWriteTree } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace, TaskCheckoutUnreadableError } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -30,6 +30,7 @@ import {
   sessionId,
   type Tidepool,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 // ADR 0357: 盤面が worker の tree に撃つ git は有界で、上限で止まった手は観測の失敗と型で分ける。
 vi.mock("../src/worker-tree-git-timeout.js", async (importOriginal) => ({
@@ -122,8 +123,8 @@ const questionsOf = (db: Db, taskId: string) => listChildren(db, taskId).filter(
 const writeObservations = (db: Db, taskId: string) =>
   listEvents(db, taskId).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion");
 
-/** worker の入力の読みを止める FIFO: `.git/packed-refs` は ls-remote の upload-pack を、worker の commit が足した blob の
- *  loose object は fetch の object の転送だけを(ref の広告は commit までしか読まない)、`.gitignore` は view を止める。 */
+/** worker の入力の読みを止める FIFO: `.git/packed-refs` は旧い ls-remote の upload-pack を、worker の commit が足した blob の
+ *  loose object は旧い fetch の object の転送だけを(ref の広告は commit までしか読まない)、`.gitignore` は view を止める。 */
 const stall = {
   "ls-remote": (checkout: string) => mkfifo(join(checkout, ".git", "packed-refs")),
   fetch: (checkout: string) => {
@@ -134,13 +135,15 @@ const stall = {
   view: (checkout: string) => mkfifo(join(checkout, ".gitignore")),
 } as const;
 
-it.each(["ls-remote", "fetch"] as const)("worker の .git の FIFO で止まった %s の upload-pack も上限で落とし、子の git を残さない(ADR 0357 決定1)", async (stage) => {
+// 旧: upload-pack が worker の .git の FIFO で止まり上限で落ちた。ADR 0364 決定3 の後は盤面が worker の .git を git に開かせず、lstat が
+// FIFO を open の前に拒む
+it.each(["ls-remote", "fetch"] as const)("旧い %s の upload-pack を止めた worker の .git の FIFO は lstat で拒まれ、上限を待たず worker の repo の故障で、誰も open しない(ADR 0364 決定1・3)", async (stage) => {
   const { db, task, place } = await pickedUp(`worker-tree-fifo-${stage}`);
   const fifo = stall[stage](place.path);
 
-  const expiry = thrown(() => recordTaskCheckoutTip(db, place, task.id));
-  expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(expiry).toMatchObject({ subcommand: stage });
+  const failure = thrown(() => recordTaskCheckoutTip(db, place, task.id));
+  expect(failure).toBeInstanceOf(TaskCheckoutUnreadableError);
+  expect(failure).toMatchObject({ message: expect.stringContaining("is not a regular file") });
   await expectNoReader(fifo);
 });
 
@@ -150,7 +153,7 @@ it.each([
   ["review", "ls-remote"],
   ["review", "fetch"],
   ["review", "view"],
-] as const)("完了済み %s の解放で %s が上限で止まれば「読めない」観測で、quarantine も question も無い(ADR 0359 決定3・5)", async (type, stage) => {
+] as const)("完了済み %s の解放で %s の FIFO があれば「読めない」観測で、quarantine も question も無い(ADR 0359 決定3・5 / ADR 0364 決定1)", async (type, stage) => {
   const { db, named, task, place } = await pickedUp(`worker-tree-completed-${type}-${stage}`, type);
   if (type === "work") recordTaskCheckoutTip(db, place, task.id);
   completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
@@ -159,11 +162,34 @@ it.each([
   releaseWorkspace(db, place, getTask(db, task.id)!, NOW, type === "work", undefined, undefined, true);
 
   expect(writeObservations(db, task.id)).toEqual([
-    { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(`\`git ${stage === "view" ? (type === "work" ? "status" : "add") : stage}\` on the worker's tree did not finish within 1 s`) },
+    {
+      kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable",
+      reason: expect.stringContaining(stage === "view" ? `\`git ${type === "work" ? "status" : "add"}\` on the worker's tree did not finish within 1 s` : "is not a regular file"),
+    },
   ]);
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
   expect(questionsOf(db, task.id)).toEqual([]);
   expect(existsSync(place.path)).toBe(false);
+});
+
+it("objects/ の穴だらけの巨大 file の写しは上限で止まって worker の repo の故障になり、tmp に写しを残さない(ADR 0364 決定3)", async () => {
+  const { db, task, place } = await pickedUp("worker-tree-sparse");
+  commitWork(place.path, "work.txt", "work\n");
+  const blob = git(place.path, "rev-parse", "HEAD:work.txt");
+  const object = join(place.path, ".git", "objects", blob.slice(0, 2), blob.slice(2));
+  rmSync(object);
+  closeSync(openSync(object, "w"));
+  truncateSync(object, 2 ** 40);
+  const tmp = await tempDir("tidepool-sparse-tmp-");
+  vi.stubEnv("TMPDIR", tmp);
+  try {
+    const expiry = thrown(() => recordTaskCheckoutTip(db, place, task.id));
+    expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
+    expect(expiry).toMatchObject({ message: "reading the git files of the worker's tree did not finish within 1 s" });
+    expect(readdirSync(tmp)).toEqual([]);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 // 旧: task の checkout でない場所(#3031 の前の受験者の checkout)でも完了経路の検査は上限超過を `[]` に飲まなかった。ADR 0356 決定1 の

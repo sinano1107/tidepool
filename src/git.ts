@@ -206,9 +206,15 @@ function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv): 
   return run(cwd, args, env, undefined, WORKER_TREE_GIT_TIMEOUT_MS);
 }
 
-/** ADR 0357 決定1: git whose argument is a worker's repo — `ls-remote` / `fetch` of a task checkout run `upload-pack` inside it. */
+/** ADR 0357 決定1 / ADR 0364 決定3: git that reads bytes a worker wrote — the verification inside the board's copy of a task checkout's
+ *  git files and the fetch from that copy. */
 export function workerRepoGit(cwd: string, ...args: string[]): string {
   return runOnWorkerTree(cwd, args).toString().trim();
+}
+
+/** `workerRepoGit` に stdin を渡したもの —— 写しの中の `pack-objects` も worker が書いた byte を読む(ADR 0364 決定3)。 */
+export function workerRepoGitWithInput(input: string, cwd: string, ...args: string[]): string {
+  return run(cwd, args, undefined, input, WORKER_TREE_GIT_TIMEOUT_MS).toString().trim();
 }
 
 /** `run` と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git
