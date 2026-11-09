@@ -15,18 +15,25 @@ clone・盤面自身の repo)の object を名前の場所へ送り、`cat-file 
 
 1. **盤面は spawn の後、task の checkout の `.git` を git にリポジトリとして開かせない。** 読むのは allowlist の regular file だけ(`lstat` で
    regular を確かめ、symlink を辿らずに開く): `refs/heads/task/<id>` の file、無ければ `packed-refs` の行(worker の `gc` は正当に pack する)、
-   `objects/[0-9a-f]{2}/` の loose、`objects/pack/` の `.pack` / `.idx`。盤面所有の使い捨ての `.git` に写し、その alternates を名前の場所の
-   objects に向け、**名前の場所が fetch する元は盤面所有の repo**にする(fetch の検証と旗は今日のまま)。symref・symlink・`.git` が dir でない
-   形・写した object と名前の場所で tip が解けない形は worker の repo の故障。不変条件: **記録に入る object は、名前の場所に既にあるか、
-   worker が自分の checkout の `objects/` に regular file として書いたもののみ**。4つの役(work・review・root・受験者)とも同じ1つの手で、
-   複製で走る Interview の2役は履歴全部の写しになるが面接室は小さい(ADR 0356 決定2)。「checkout が消えた」の述語も同じ線で `.git` が
-   dir であることを `lstat` で見る。tip が fork 元と無関係な commit でもよいのは今日どおり —— worker が読める object だけで作れる。
+   `objects/[0-9a-f]{2}/` の loose、`objects/pack/` の `.pack`(`.idx` は写さず作り直す)。途中の dir(`.git`・`refs/heads/task`・
+   `objects/xx`・`objects/pack`)も `lstat` で dir であることを確かめ、完了の門は worker が生きている最中に読むので、Linux では open した
+   file の実体(`/proc/self/fd`)が checkout の下にあることも確かめる(盤面が worker を拾う host は Linux だけ、ADR 0100 決定6)。盤面所有の
+   使い捨ての `.git` に byte で写し(hardlink は inode を worker と共有する)、**tip の閉包の全 object の内容と到達可能性を写しの中で検証して
+   から、名前の場所はその盤面所有の repo から fetch する**(fetch の旗は今日のまま)。写しの alternates は work / review(名前の場所の
+   objects を借りる役)だけ名前の場所に向け、複製で走る Interview の2役は閉包が全部写しの中で解けることを要求する —— 受験者が sha を
+   言い当てても兄弟の答案は記録に入らない(ADR 0276 決定1 を記録側でも保つ。面接室は小さい、ADR 0356 決定2)。symref・symlink・`.git` が
+   dir でない形・閉包が解けない / 内容が合わない形は worker の repo の故障。不変条件: **記録に入る object は、名前の場所に既にあるか、
+   worker が自分の checkout の `objects/` に regular file として書いたもののみ**。4つの役とも同じ1つの手。共有の「checkout が消えた」述語
+   (面接室・名前の場所も使う)は触らず、写す段が自分で確かめる。tip が fork 元と無関係な commit でもよいのは今日どおり —— worker が読める
+   object だけで作れる。
 2. **帰責は段で分ける。** checkout の file を盤面の repo に写し tip が解けることを確かめる段の失敗は worker の repo の故障(決着していない
    task なら task の失敗、`done` なら ADR 0359 決定3 の観測)。盤面の repo から名前の場所へ fetch し ref を書く段の失敗は名前の場所の側
    (解放なら quarantine、verb なら ADR 0359 決定4 の拒むだけ)。#3061 の「読めたのに書けない」が worker の故障になる共通 catch はこの
-   分割で消える。ADR 0357 決定2 の上限超過は worker の repo の故障のまま。
+   分割で消える。**写しを作る host の失敗**(tmp の `mkdtemp` / `init` / ENOSPC)は第3の段で、worker でも名前の場所でもない —— pickup の
+   `TaskCheckoutHostError` と同じ線で、決着していない task なら task の失敗(retry 推奨、checkout は残す)、完了済みなら今日どおり名前の場所の
+   quarantine で checkout を残す(唯一の写しを消さずに止める器が他に無い、#3053)。ADR 0357 決定2 の上限超過は worker の repo の故障のまま。
 3. **有界の対象は path の持ち主でなく byte の出所。** ADR 0357 決定1 の「cwd か引数が task の checkout の git」は、決定1 の後は「worker が
-   書いた byte を読む git」—— 盤面所有の写しからの fetch(`index-pack` が噛む pack は worker の byte)を含む。file の写しは `lstat` 先行で
+   書いた byte を読む git」—— 写しの中の検証(`pack-objects` / `index-pack --strict`)と、盤面所有の写しからの fetch を含む。file の写しは `lstat` 先行で
    FIFO を open せず、サイズの上限は置かない(worker が自分の disk で既に占めている量の2倍で有界)。
 
 ## 退けた形
