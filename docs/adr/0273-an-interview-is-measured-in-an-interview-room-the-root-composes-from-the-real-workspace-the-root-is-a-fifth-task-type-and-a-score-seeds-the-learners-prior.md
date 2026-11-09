@@ -1,5 +1,7 @@
 # Interview は、実環境を読む root が面接室に組んだ環境で測る —— root は第5の task type `interview` で、採点は学習器の観測ではなく事前分布の種である
 
+**Status 追記: 決定4・9 の「面接室を読む」(監査・RCA・人間登録の review 子、retry の root の旧い面接室)は、面接室の `.git` を開くのではなく、盤面が出題の head だけを fetch した読み専用の checkout を読む —— 名前と停止の単位(決定8 / 追記 #2265)はそのまま([ADR 0361](0361-interview-readers-read-a-checkout-of-the-posed-head-not-the-rooms-git-and-the-answers-stay-in-the-room.md)、2026-11-09、issue #3071)。**
+
 **Status 追記: 決定1 の「root はそこ(面接室)を cwd にして組む」は [ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定1 で「面接室から開いた task の checkout で組み、面接室は盤面だけが書く」に変わった(2026-11-07、issue #2956 / #3031)。決定3 の出題の写しは root の checkout の作業ツリーを盤面の view で面接室の objects に作る(同 決定3・6)。面接室を決着後も消さないこと、決定8 の止める単位(root id)はそのまま。**
 
 **Status 追記: 決定1 の「受験者はここ(面接室)で解く」は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で「出題の head から fetch した自分の checkout で解く」に変わった(2026-10-19)。root が面接室で組むこと、面接室を決着後も消さないこと、決定8 の止める単位(root id)はそのまま。**
