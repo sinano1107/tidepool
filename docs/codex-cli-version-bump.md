@@ -146,7 +146,9 @@ functions. It prints one row per surface as a Markdown table:
   the same host. It passes only if the exec output has a `Rejected(…)` line with the rule's
   justification and the preflight fails as `system (/etc/codex)`. A turn that never runs the
   command fails the row. The test removes `/etc/codex` afterwards. The row fails, and is not
-  skipped, if `sudo -n` does not work or `/etc/codex` already exists
+  skipped, if `sudo -n` does not work or `/etc/codex` already exists. If a run was interrupted, the
+  row's own `/etc/codex/rules/tidepool-conformance.rules` is left behind: delete `/etc/codex` and
+  run the test again
 - each openai seed row runs one minimal `codex exec --json` turn at this version, read by the
   worker's output reading as completed (ADR 0187 決定4)
 
@@ -197,10 +199,10 @@ nothing checks is left to the board's fail-closed handling.
 | `turn.completed.usage` always carries `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens` and `output_tokens` (codex fills `cache_write_input_tokens` with a serde default) | #2410 | Conformance seed rows (step 7) |
 | A turn that received no usage report writes an all-zero `turn.completed.usage` (`Usage::default()`), which the board reads as missing | #2426 | Conformance seed rows (step 7): the worker's usage normalization fails them |
 | `turn.completed.usage` sums the parent thread's turn sampling responses only: subagent (child thread) consumption, remote compaction V2 calls and the websocket prewarm are not in it. V1 compaction is gone: V2 is chosen by provider capability, and `remote_compaction_v2` is stage `removed` | ADR 0297 決定1 (#2427, #2430) | Not checked: it needs a model run that compacts and spawns a subagent. #2430's comment has the run |
-| The worker's exec flags: `--ask-for-approval never`, `exec --json --ephemeral --ignore-user-config --ignore-rules --strict-config --dangerously-bypass-hook-trust` | ADR 0098 決定3 | Conformance row `skill closure` runs them without `--dangerously-bypass-hook-trust`; the seed rows run part of them (step 7) |
+| The worker's exec flags: `--ask-for-approval never`, `exec --json --ephemeral --ignore-user-config --ignore-rules --strict-config --dangerously-bypass-hook-trust` | ADR 0098 決定3 | Conformance rows `skill closure` and `system layer folder` run them without `--dangerously-bypass-hook-trust`; the seed rows run part of them (step 7) |
 | Every spawn `-c` key parses under `--strict-config` | ADR 0142 決定1 | The containment preflight (step 5) |
 | The hook gate's registration and the `hooks/list` shape | ADR 0130 決定3 (#734) | The containment preflight (step 5) |
-| The `config/read` (`includeLayers: true`) layer shape (`name.type`, `name.file` / `dotCodexFolder`, `config`) and the `configRequirements/read` shape, where the board's `forced_login_method` flag shows up as `allowedLoginMethods`. A layer's folder is the parent of its `file` (or its `dotCodexFolder`), Codex reads that folder (`rules/`, `agents/`), and `--ignore-rules` leaves the system layer's rules on | ADR 0358 決定4 | Conformance rows `config layers` and `system layer folder` (step 7) and the containment preflight (step 5) |
+| The `config/read` (`includeLayers: true`) layer shape (`name.type`, `name.file` / `dotCodexFolder`, `config`) and the `configRequirements/read` shape, where the board's `forced_login_method` flag shows up as `allowedLoginMethods`. A layer's folder is the parent of its `file` (or its `dotCodexFolder`), Codex reads that folder, and `--ignore-rules` leaves the system layer's rules on. The row exercises `rules/`; `agents/` is the same folder-presence observation | ADR 0358 決定4 | Conformance rows `config layers` and `system layer folder` (step 7) and the containment preflight (step 5) |
 | The PreToolUse hook's stdin carries `agent_id` only for a subagent | ADR 0130 決定1 | Not checked: which call it selects cannot be observed without a model call (決定3) |
 | `mcp_servers.tidepool.default_tools_approval_mode="approve"` takes effect | ADR 0129 決定1 | Not checked |
 | Board-authored context reaches the intended prompt position, in the user-turn prefix, with task text separately identifiable | ADR 0326 決定3・4 (revises ADR 0124 決定4) | The containment prompt probe (step 5): one user item equals the shared worker input, including the board/task separator; short `developer_instructions=""` override. `debug prompt-input` does not read stdin, so its short constant probe uses argv |

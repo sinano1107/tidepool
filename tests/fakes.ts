@@ -1297,7 +1297,7 @@ export async function requestedSkillsListCwd(proc: RecordedProcess): Promise<str
 // 2026-11-07 に Lima VM で codex-cli 0.163.0 の実物へ撃った `config/read`(includeLayers: true、cwd は空のディレクトリ、`-c model="x"`)
 // と `configRequirements/read`(盤面の `forced_login_method` の `-c` を当てた session)の result。version の hash を省き、
 // requirements の他の key(すべて null)を省いてある
-/** 盤面の列挙の内側の層だけを返す `config/read` の `layers`(ADR 0358 決定4)。system は file が無いので config が空で報告される。 */
+/** 盤面の列挙の内側の層と、内容を持たない system の層を返す `config/read` の `layers`(ADR 0358 決定4)。system は file が無いので config が空で報告される。 */
 export const conformingConfigLayers = (codexHome: string): unknown[] => [
   { name: { type: "sessionFlags" }, version: "sha256:0", config: { model: "x" } },
   { name: { type: "user", file: join(codexHome, "config.toml"), profile: null }, version: "sha256:0", config: {} },

@@ -67,8 +67,8 @@ const VALID: CodexCapabilityObservation = {
   hookDiagnostics: [],
   // ADR 0358 決定4: 列挙した2層(盤面の `-c` と盤面所有の user 層)だけが内容を持つ
   configLayers: [
-    { type: "sessionFlags", folder: null, identity: null, empty: false, folderPresent: false, disabledReason: null },
-    { type: "user", folder: "/board/codex-home", identity: null, empty: false, folderPresent: true, disabledReason: null },
+    { type: "sessionFlags", path: null, folder: null, identity: null, empty: false, folderPresent: false, disabledReason: null },
+    { type: "user", path: "/board/codex-home/config.toml", folder: "/board/codex-home", identity: null, empty: false, folderPresent: true, disabledReason: null },
   ],
   requirements: null,
 };
@@ -270,7 +270,7 @@ it("preflight は hooks/list と同じ app-server session で config/read(includ
 
 it.each([
   [
-    "project の層は dotCodexFolder を path に、disabledReason をそのまま写す",
+    "project の層は dotCodexFolder を folder に、disabledReason をそのまま写す",
     [{ name: { type: "project", dotCodexFolder: "/ws/.codex" }, version: "sha256:1", config: { model: "y" }, disabledReason: "untrusted" }],
     null,
     "project (/ws/.codex, disabled: untrusted)",
@@ -283,7 +283,7 @@ it.each([
   ],
   // ADR 0358 決定4 追記: 既定の system の層は `config: {}` —— file の親が在るだけで内容を持つ層と読む
   ["config が空の system でも file の親が在れば folder で名乗る", [], "/etc/codex", "system (/etc/codex)"],
-] as const)("実 probe は config/read の層の type・path・内容の有無を観測に写す —— %s(ADR 0358 決定4)", async (_, extra, present, expected) => {
+] as const)("実 probe は config/read の層の type・folder・内容の有無を観測に写す —— %s(ADR 0358 決定4)", async (_, extra, present, expected) => {
   const statFolder = (folder: string) => {
     if (folder !== present) throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
   };
@@ -318,9 +318,9 @@ it.each([
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
 });
 
-/** 内容を持つ config 層1つ(`config/read` の `name.type` と層の folder)。 */
+/** 内容を持つ config 層1つ(`config/read` の `name.type` と層の folder。報告された path は既定で folder と同じ)。 */
 const layer = (type: string, folder: string | null, changed: Partial<CodexCapabilityObservation["configLayers"][number]> = {}) =>
-  ({ type, folder, identity: null, empty: false, folderPresent: folder !== null, disabledReason: null, ...changed });
+  ({ type, path: folder, folder, identity: null, empty: false, folderPresent: folder !== null, disabledReason: null, ...changed });
 
 it.each([
   ["system に内容", [layer("system", "/etc/codex")], "system (/etc/codex)"],
@@ -330,7 +330,7 @@ it.each([
   ["無効化された層でも内容があれば", [layer("system", "/etc/codex", { disabledReason: "untrusted" })], "system (/etc/codex, disabled: untrusted)"],
   ["列挙に無い未知の type に内容", [layer("vendorNewLayer", null)], "vendorNewLayer"],
   ["path の無い層は名乗りで", [layer("enterpriseManaged", null, { identity: "id acme, name codex" })], "enterpriseManaged (id acme, name codex)"],
-])("列挙の外の config 層(%s)は封じ込めを不成立にし、理由文に層の type と path を挙げる(ADR 0358 決定4)", async (_, extra, named) => {
+])("列挙の外の config 層(%s)は封じ込めを不成立にし、理由文に層の type と folder を挙げる(ADR 0358 決定4)", async (_, extra, named) => {
   const capability = await checkCodexCapability(async () => ({ ...VALID, configLayers: [...VALID.configLayers, ...extra] }), BOARD_CODEX_HOME);
   expect(capability).toMatchObject({ available: false, reason: expect.stringContaining("config layer mismatch") });
   if (!capability.available) expect(capability.reason).toContain(named);
@@ -384,7 +384,7 @@ it("盤面所有の user 層は realpath 同士で照らし、symlink の綴り�
   const linked = join(await tempDir("tidepool-codex-home-link-"), "codex-home");
   symlinkSync(real, linked);
   // 盤面の CODEX_HOME は symlink の綴り、Codex の報告は実体の綴り。config.toml 自体は無い
-  const configLayers = [layer("sessionFlags", null), layer("user", realpathSync(real))];
+  const configLayers = [layer("sessionFlags", null), layer("user", realpathSync(real), { path: join(realpathSync(real), "config.toml") })];
   const hooks = [{ ...BOARD_HOOK_REGISTRATION, command: join(linked, "tidepool-hooks", "main-thread-mcp.mjs") }];
   expect(await checkCodexCapability(async () => ({ ...VALID, hooks, configLayers }), linked)).toEqual({ available: true });
 });

@@ -214,6 +214,8 @@ async function systemRules(): Promise<SystemRulesObservation> {
       `prefix_rule(pattern=["echo", "${ruled}"], decision="forbidden", justification="${justification}")\n`,
     );
     const execOutput = await inDisposable(async ({ workspace }) => {
+      // 空の .git だけでは exec が trusted directory でないと拒む —— skill closure の行と同じく本物の repo にする
+      execFileSync("git", ["init", "-q", workspace], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
       const result = await run({
         kind: "conformance system rules",
         args: ["--ask-for-approval", "never", "exec", "--json", ...WORKER_EXEC_FLAGS, "-C", workspace, "-c", 'developer_instructions=""'],

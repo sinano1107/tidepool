@@ -237,13 +237,13 @@ const SURFACES: Array<[string, (obs: ConformanceObservations) => Promise<Verdict
     async (obs) => {
       // ADR 0358 決定4: 口と層の名前は 0.163.0 の source の読み —— 盤面の読み取りが実物の応答の形を読めるかをここで照らす
       const { configRead, requirementsRead } = await obs.configLayers();
-      // この行は層の形だけを読み、folder の在否は見ない —— 在否の効きは system rules の行が実物で照らす
+      // この行は層の形だけを判定し、`folderPresent` を読まない —— stat は撃たずどの folder も「在る」と写す。在否の効きは system rules の行が実物で照らす
       const { configLayers, requirements } = observedConfigLayers(configRead, requirementsRead, () => undefined);
       const types = configLayers.map((layer) => layer.type);
       const missing = [...ENUMERATED_CONFIG_LAYERS.keys()].filter((type) => !types.includes(type));
       if (missing.length > 0) return fail(`config/read layers lack ${missing.join(", ")}; observed ${types.join(", ")}`);
-      // 盤面所有の user 層は folder(file の親)の照合で認める —— file を報告しなければ preflight は常に倒れる
-      if (configLayers.some((layer) => layer.type === "user" && layer.folder === null)) return fail("the user layer reports no file");
+      // 盤面所有の user 層は file の照合で認める —— file を報告しなければ preflight は常に倒れる
+      if (configLayers.some((layer) => layer.type === "user" && layer.path === null)) return fail("the user layer reports no file");
       // 盤面自身の `-c` だけの session で preflight と同じ述語が空 —— requirements の「無し」の綴りを釘にする(#3041 追記)
       const outside = requirementsOutsideBoard(requirements);
       return outside.length > 0

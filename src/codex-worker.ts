@@ -544,7 +544,9 @@ export interface CodexCapabilityObservation {
 
 interface CodexConfigLayer {
   type: string;
-  /** 層の folder —— `file` の親か `dotCodexFolder`(Codex の `config_folder()` の写し)。path を報告しない層は null。 */
+  /** `file` か `dotCodexFolder`。盤面所有の user 層の照合はこれで読む。 */
+  path: string | null;
+  /** 層の folder —— `file` の親か `dotCodexFolder`(Codex の `config_folder()` の写し)。表示と stat はこれで読む。path を報告しない層は null。 */
   folder: string | null;
   /** path の無い層の名乗り —— name の他の文字列欄(mdm の domain・key、enterpriseManaged の id・name)。人間が消す先を知るためだけ。 */
   identity: string | null;
@@ -567,7 +569,7 @@ const configReadResponse = z.object({
 });
 
 /** 層の folder が在るか。ENOENT だけが「無い」で、他の失敗は folder を名指して投げる(ADR 0358 決定4 追記: fail-closed)。 */
-function folderPresent(folder: string, statFolder: (folder: string) => unknown): boolean {
+function statsAsPresent(folder: string, statFolder: (folder: string) => unknown): boolean {
   try {
     statFolder(folder);
     return true;
@@ -578,7 +580,7 @@ function folderPresent(folder: string, statFolder: (folder: string) => unknown):
 }
 
 /** `config/read` と `configRequirements/read` の `result` を観測へ写す(ADR 0358 決定4)。`requirements` の欄が無ければ投げる。
- *  `statFolder` は層の folder の stat(盤面は `statSync`)—— domain 層は IO を持たない。 */
+ *  `statFolder` は層の folder の stat —— probe は `statSync` を渡し、テストは差し替えて実機の `/etc/codex` を読まない。 */
 export function observedConfigLayers(
   configRead: unknown,
   requirementsRead: unknown,
@@ -590,14 +592,16 @@ export function observedConfigLayers(
   return {
     configLayers: configReadResponse.parse(configRead).layers.map(({ name: { type, file, dotCodexFolder, ...rest }, config, disabledReason }) => {
       // ADR 0358 決定4 追記: 層の単位は folder —— agents / rules ほかは `file` の親から読まれる
+      const path = file ?? dotCodexFolder ?? null;
       const folder = file !== undefined ? dirname(file) : dotCodexFolder ?? null;
       const identity = Object.entries(rest).filter(([, value]) => typeof value === "string").map(([key, value]) => `${key} ${value}`).join(", ");
       return {
         type,
+        path,
         folder,
         identity: folder === null && identity !== "" ? identity : null,
         empty: Object.keys(config).length === 0,
-        folderPresent: folder !== null && folderPresent(folder, statFolder),
+        folderPresent: folder !== null && statsAsPresent(folder, statFolder),
         disabledReason: disabledReason ?? null,
       };
     }),
@@ -612,15 +616,16 @@ function comparablePath(path: string): string | null {
 }
 
 /** ADR 0358 決定4: 盤面が渡す config 層の列挙 —— 内容を持ってよい層の type と、その層が盤面のものである条件。`sessionFlags` は盤面の
- *  `-c`、`user` は folder が盤面所有の `CODEX_HOME` のときだけ(Codex 自身が trust を書くので内容は問わない。folder も所有で覆う —— 追記)。
- *  適合試験の config 層の行も、実物がこの type を報告することをここから照らす。 */
-export const ENUMERATED_CONFIG_LAYERS: ReadonlyMap<string, (folder: string | null, codexHome: string) => boolean> = new Map([
+ *  `-c`、`user` は file が盤面所有の `CODEX_HOME/config.toml` のときだけ(Codex 自身が trust を書くので内容は問わない)。
+ *  user 層の folder も同じ所有で覆う(追記): `--ignore-user-config` は user 層を stack に残すので `CODEX_HOME/agents` は載るが、
+ *  `CODEX_HOME` は盤面所有で worker は書けない。適合試験の config 層の行も、実物がこの type を報告することをここから照らす。 */
+export const ENUMERATED_CONFIG_LAYERS: ReadonlyMap<string, (path: string | null, codexHome: string) => boolean> = new Map([
   ["sessionFlags", () => true],
   [
     "user",
-    (folder: string | null, codexHome: string) => {
-      const reported = folder === null ? null : comparablePath(folder);
-      return reported !== null && reported === comparablePath(codexHome);
+    (path: string | null, codexHome: string) => {
+      const reported = path === null ? null : comparablePath(path);
+      return reported !== null && reported === comparablePath(join(codexHome, "config.toml"));
     },
   ],
 ]);
@@ -629,7 +634,7 @@ export const ENUMERATED_CONFIG_LAYERS: ReadonlyMap<string, (folder: string | nul
  *  denylist ではないので、未知の type も無効化された層も内容があれば拾う。 */
 function layersOutsideEnumeration(layers: readonly CodexConfigLayer[], codexHome: string): string[] {
   return layers
-    .filter((layer) => !(layer.empty && !layer.folderPresent) && !ENUMERATED_CONFIG_LAYERS.get(layer.type)?.(layer.folder, codexHome))
+    .filter((layer) => (!layer.empty || layer.folderPresent) && !ENUMERATED_CONFIG_LAYERS.get(layer.type)?.(layer.path, codexHome))
     .map((layer) => {
       const notes = [layer.folder ?? layer.identity, layer.disabledReason && `disabled: ${layer.disabledReason}`].filter(Boolean);
       return notes.length === 0 ? layer.type : `${layer.type} (${notes.join(", ")})`;
