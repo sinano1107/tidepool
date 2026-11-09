@@ -9,7 +9,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { completionTreePaths, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig } from "../src/workspace.js";
+import { completionTreePaths, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -189,6 +189,25 @@ it("名前の場所の ref を書けなければ完了の門は拒み、lock を
   releaseWorkspace(db, place, getTask(db, child.id)!, NOW, true, undefined, undefined, true);
   expect(git(named.path, "show", `task/${parent.id}:child.txt`)).toBe("child");
   expect(existsSync(place.path)).toBe(false);
+});
+
+it("fork 元は根なら保護ブランチ、子なら親の work branch の sha で、pickup がタスクブランチを切った sha と同じ(ADR 0362 決定2 / ADR 0053)", async () => {
+  const named = await makeWorkspace("task-checkout-fork-source");
+  db = openDb(":memory:");
+  const parent = register();
+  git(named.path, "switch", "-c", `task/${parent.id}`);
+  commitWork(named.path, "parent.txt", "parent\n");
+  git(named.path, "switch", "main");
+  const child = pickupTask(db, register("work", parent.id), "deckhand", NOW)!;
+  const root = register();
+
+  await prepareAtPickup(db, named, child);
+  await prepareAtPickup(db, named, root);
+
+  expect(taskForkSource(db, named, child)).toBe(git(named.path, "rev-parse", `task/${parent.id}`));
+  expect(git(named.path, "rev-parse", `task/${child.id}`)).toBe(taskForkSource(db, named, child));
+  expect(taskForkSource(db, named, root)).toBe(git(named.path, "rev-parse", "main"));
+  expect(git(named.path, "rev-parse", `task/${root.id}`)).toBe(taskForkSource(db, named, root));
 });
 
 it("完了の門をやり直すと、先に引いた commit ではなく現在の worker tip を記録する(ADR 0359 決定1)", async () => {

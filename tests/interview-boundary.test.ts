@@ -1092,7 +1092,12 @@ it("盤面の行は root と受験者の実環境の名前(workspace)と root �
 it("出題で立った受験者は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  // ADR 0362 決定2: 受験者の fork 元は出題の head —— そこに在る settings は受験者の delta ではない
+  mkdirSync(join(lastCheckoutOf(root.id), ".claude"));
+  writeFileSync(join(lastCheckoutOf(root.id), ".claude", "settings.json"), '{"env":{"PROBE":"1"}}\n');
   const [childId] = await pose(root.id);
+  const { head } = (await posedRecord(root.id)).events[0].payload;
+  expect(git(roomOf(root.id), "ls-tree", "--name-only", head, "--", ".claude/settings.json")).toBe(".claude/settings.json");
   // 上限の書き込みが routing meta-review の材料になるので、先に済ませる(setup)
   await completeMetaReviews(t);
 

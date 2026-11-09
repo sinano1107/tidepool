@@ -59,7 +59,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
-import { recordedSettingsDisposition } from "./sandbox.js";
+import { humanOnlyPathChanges, recordedSettingsDisposition } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
@@ -120,6 +120,7 @@ import {
   resolveOrQuarantine,
   type TaskCheckoutPlace,
   TaskCheckoutUnreadableError,
+  taskForkSource,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -362,6 +363,17 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
           `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
       );
     }
+    // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
+    // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
+    const { namedPlace } = workspace;
+    const humanOnly = humanOnlyPathChanges(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
+    if (humanOnly.length > 0) {
+      throw refusalNamingPaths(
+        "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
+          "take the change out of the task branch and commit",
+        humanOnly,
+      );
+    }
     paths = completionTreePaths(deps.db, workspace, task.id, tip);
   } catch (err) {
     if (err instanceof DomainError) throw err;
@@ -370,13 +382,17 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
     throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
   }
   if (paths.length === 0) return;
-  throw new DomainError(
+  throw refusalNamingPaths(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
       "with a message whose body says what changed and why in a few lines, readable from " +
-      "the git history alone, then call complete_task again\n" +
-      paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n"),
+      "the git history alone",
+    paths,
   );
 }
+
+/** 完了の門の「直して commit し、呼び直せ」の拒否: 直し方の文の後に path を1行ずつ名指す。 */
+const refusalNamingPaths = (fix: string, paths: string[]) =>
+  new DomainError(`${fix}, then call complete_task again\n${paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`);
 
 /** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を強制回収で決着させる —— 拒めば worker
  *  は verb を繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に

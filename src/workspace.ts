@@ -26,6 +26,7 @@ import {
   assertOwnGitDirectory,
   checkoutPickupPredicates,
   conventionCheckoutPath,
+  exactProtectedBranchRef,
   examineePickupPredicates,
   gonePlaceReason,
   isRemoteBacked,
@@ -683,14 +684,19 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
   }
 }
 
-/** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。
- *  受験者は系譜を持たず、面接室の出題の head から切る(ADR 0276 決定1)。 */
+/** タスクブランチを切る sha(ADR 0053)。受験者は系譜を持たず、面接室の出題の head から切る(ADR 0276 決定1)。
+ *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
+export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
+  return interviewRole(db, task) === "examinee"
+    ? resolvablePosedHead(db, workspace, task)
+    : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? exactProtectedBranchRef(workspace)}^{commit}`);
+}
+
+/** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。 */
 function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   if (taskBranchExists(workspace, task.id)) return;
   const ref = `refs/heads/${taskBranch(task.id)}`;
-  const sha = interviewRole(db, task) === "examinee"
-    ? resolvablePosedHead(db, workspace, task)
-    : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace)}^{commit}`);
+  const sha = taskForkSource(db, workspace, task);
   boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "update-ref", ref, sha, ""));
 }
 
