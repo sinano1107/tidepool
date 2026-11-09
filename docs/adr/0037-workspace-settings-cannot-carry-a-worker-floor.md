@@ -1,5 +1,7 @@
 # workspace 自身の settings は worker の床を運べない: hooks を殺し、settings ファイルへの書き込みを二層で塞ぐ
 
+**Status 追記: 機構2(書き込みの二層)の理由は worker 自身の session を守ることだけになる —— 「書けても検出する」の commit 側は、記録の中で `.claude/settings*.json` を人間しか書けない path と決め、完了の門が fork 元と entry が違う tip を Harness に依らず拒むことで持つ([ADR 0362](0362-the-workspaces-claude-settings-are-human-only-paths-in-the-record-and-the-completion-gate-rejects-a-tip-whose-entries-differ-from-the-fork-source.md)、2026-11-09、issue #3078)。**
+
 **Status 追記: `FLOOR_DEFINING_KEYS` の spawn 時 guard(「深層防御として残す」)は [ADR 0346](0346-the-board-decides-workspace-settings-by-place-not-content-tracked-is-always-hidden-untracked-and-local-stop-on-presence.md) で退役 —— 盤面は settings の中身を読まず、tracked は隠し untracked / local は存在で止める(2026-11-02、issue #2846)。機構2(書き込みの二層)はそのまま。**
 
 **Status 追記: 追記(issue #382)の「worker session 中だけ Git の sparse-checkout で実体化から外し、回収を観測してから戻す」の書き方は [ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) で定め直した(2026-10-21)—— 人間の sparse-checkout の写しに1行足して隠し、写しどおり戻す。外す・戻すという線はそのまま。**
