@@ -1,5 +1,7 @@
 # 盤面は worker の `.git` をリポジトリとして開かない —— regular file だけを盤面所有の repo に写し、tip はそこから fetch する
 
+**Status 追記: 決定1 の閉包の検証(到達可能性)は gitlink の参照先を見ない —— git の到達可能性は gitlink を辿らないので、参照先がどこにも無い gitlink でも閉包は解ける。記録の外を指す entry は完了の門が fork 元との差で拒み、入れ子の repo の中身は運ばない([ADR 0365](0365-the-record-closes-within-one-repo-and-the-completion-gate-rejects-a-tip-that-adds-or-advances-a-gitlink-from-the-fork-source.md)、2026-11-09、issue #3052)。**
+
 2026-11-09 の grilling(issue #3097、#3084 のレビューの派生)で決定。ADR 0360 決定2 の後も、盤面が worker の repo に撃つ手が1つ残っていた ——
 解放・完了の門・出題の写しが tip を引く `ls-remote` / `fetch` で、local path への fetch は送り側の `upload-pack` を **worker の `.git` の中で、
 非 sandbox の盤面ユーザーとして**走らせる。ADR 0356 決定3 が保証したのは `upload-pack` の入力のうち config 1つ(protected config)で、git が
