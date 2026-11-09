@@ -136,7 +136,17 @@ functions. It prints one row per surface as a Markdown table:
   the board's `forced_login_method`, answers `config/read` (`includeLayers: true`, an empty
   directory as `cwd`) and `configRequirements/read`. The board's own reading parses both, the
   layer types include `sessionFlags` and `user`, the `user` layer reports its file, and the
-  requirements carry nothing beyond what the board's own flags produce
+  requirements carry nothing beyond what the board's own flags produce. The board reads a layer's
+  folder (the parent of its `file`, or its `dotCodexFolder`): outside the enumeration, a layer whose
+  folder exists fails the preflight even with an empty `config`. The next row checks that on the
+  real CLI
+- system layer folder (ADR 0358 決定4): the test writes a `forbidden` rule into
+  `/etc/codex/rules/` with `sudo -n`, asks a `codex exec` with the worker's flags
+  (`WORKER_EXEC_FLAGS`) to run the command that rule forbids, and runs the containment preflight on
+  the same host. It passes only if the exec output has a `Rejected(…)` line with the rule's
+  justification and the preflight fails as `system (/etc/codex)`. A turn that never runs the
+  command fails the row. The test removes `/etc/codex` afterwards. The row fails, and is not
+  skipped, if `sudo -n` does not work or `/etc/codex` already exists
 - each openai seed row runs one minimal `codex exec --json` turn at this version, read by the
   worker's output reading as completed (ADR 0187 決定4)
 
@@ -190,7 +200,7 @@ nothing checks is left to the board's fail-closed handling.
 | The worker's exec flags: `--ask-for-approval never`, `exec --json --ephemeral --ignore-user-config --ignore-rules --strict-config --dangerously-bypass-hook-trust` | ADR 0098 決定3 | Conformance row `skill closure` runs them without `--dangerously-bypass-hook-trust`; the seed rows run part of them (step 7) |
 | Every spawn `-c` key parses under `--strict-config` | ADR 0142 決定1 | The containment preflight (step 5) |
 | The hook gate's registration and the `hooks/list` shape | ADR 0130 決定3 (#734) | The containment preflight (step 5) |
-| The `config/read` (`includeLayers: true`) layer shape (`name.type`, `name.file` / `dotCodexFolder`, `config`) and the `configRequirements/read` shape, where the board's `forced_login_method` flag shows up as `allowedLoginMethods` | ADR 0358 決定4 | Conformance row `config layers` (step 7) and the containment preflight (step 5) |
+| The `config/read` (`includeLayers: true`) layer shape (`name.type`, `name.file` / `dotCodexFolder`, `config`) and the `configRequirements/read` shape, where the board's `forced_login_method` flag shows up as `allowedLoginMethods`. A layer's folder is the parent of its `file` (or its `dotCodexFolder`), Codex reads that folder (`rules/`, `agents/`), and `--ignore-rules` leaves the system layer's rules on | ADR 0358 決定4 | Conformance rows `config layers` and `system layer folder` (step 7) and the containment preflight (step 5) |
 | The PreToolUse hook's stdin carries `agent_id` only for a subagent | ADR 0130 決定1 | Not checked: which call it selects cannot be observed without a model call (決定3) |
 | `mcp_servers.tidepool.default_tools_approval_mode="approve"` takes effect | ADR 0129 決定1 | Not checked |
 | Board-authored context reaches the intended prompt position, in the user-turn prefix, with task text separately identifiable | ADR 0326 決定3・4 (revises ADR 0124 決定4) | The containment prompt probe (step 5): one user item equals the shared worker input, including the board/task separator; short `developer_instructions=""` override. `debug prompt-input` does not read stdin, so its short constant probe uses argv |

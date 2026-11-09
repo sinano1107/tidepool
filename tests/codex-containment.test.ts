@@ -67,8 +67,8 @@ const VALID: CodexCapabilityObservation = {
   hookDiagnostics: [],
   // ADR 0358 決定4: 列挙した2層(盤面の `-c` と盤面所有の user 層)だけが内容を持つ
   configLayers: [
-    { type: "sessionFlags", path: null, identity: null, empty: false, disabledReason: null },
-    { type: "user", path: "/board/codex-home/config.toml", identity: null, empty: false, disabledReason: null },
+    { type: "sessionFlags", folder: null, identity: null, empty: false, folderPresent: false, disabledReason: null },
+    { type: "user", folder: "/board/codex-home", identity: null, empty: false, folderPresent: true, disabledReason: null },
   ],
   requirements: null,
 };
@@ -271,16 +271,23 @@ it("preflight は hooks/list と同じ app-server session で config/read(includ
 it.each([
   [
     "project の層は dotCodexFolder を path に、disabledReason をそのまま写す",
-    { name: { type: "project", dotCodexFolder: "/ws/.codex" }, version: "sha256:1", config: { model: "y" }, disabledReason: "untrusted" },
+    [{ name: { type: "project", dotCodexFolder: "/ws/.codex" }, version: "sha256:1", config: { model: "y" }, disabledReason: "untrusted" }],
+    null,
     "project (/ws/.codex, disabled: untrusted)",
   ],
   [
     "path の無い mdm の層は domain と key で名乗る",
-    { name: { type: "mdm", domain: "com.openai.codex", key: "config_toml_base64" }, version: "sha256:1", config: { model: "y" } },
+    [{ name: { type: "mdm", domain: "com.openai.codex", key: "config_toml_base64" }, version: "sha256:1", config: { model: "y" } }],
+    null,
     "mdm (domain com.openai.codex, key config_toml_base64)",
   ],
-] as const)("実 probe は config/read の層の type・path・内容の有無を観測に写す —— %s(ADR 0358 決定4)", async (_, extra, expected) => {
-  const { capability } = await driveCodexPreflight("complete", { configLayers: (codexHome) => [...conformingConfigLayers(codexHome), extra] });
+  // ADR 0358 決定4 追記: 既定の system の層は `config: {}` —— file の親が在るだけで内容を持つ層と読む
+  ["config が空の system でも file の親が在れば folder で名乗る", [], "/etc/codex", "system (/etc/codex)"],
+] as const)("実 probe は config/read の層の type・path・内容の有無を観測に写す —— %s(ADR 0358 決定4)", async (_, extra, present, expected) => {
+  const statFolder = (folder: string) => {
+    if (folder !== present) throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+  };
+  const { capability } = await driveCodexPreflight("complete", { configLayers: (codexHome) => [...conformingConfigLayers(codexHome), ...extra], statFolder });
   expect(await capability).toMatchObject({ available: false, reason: expect.stringContaining(`config layer mismatch: expected [], observed ["${expected}"]`) });
 });
 
@@ -311,16 +318,16 @@ it.each([
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
 });
 
-/** 内容を持つ config 層1つ(`config/read` の `name.type` と path)。 */
-const layer = (type: string, path: string | null, changed: Partial<CodexCapabilityObservation["configLayers"][number]> = {}) =>
-  ({ type, path, identity: null, empty: false, disabledReason: null, ...changed });
+/** 内容を持つ config 層1つ(`config/read` の `name.type` と層の folder)。 */
+const layer = (type: string, folder: string | null, changed: Partial<CodexCapabilityObservation["configLayers"][number]> = {}) =>
+  ({ type, folder, identity: null, empty: false, folderPresent: folder !== null, disabledReason: null, ...changed });
 
 it.each([
-  ["system に内容", [layer("system", "/etc/codex/config.toml")], "system (/etc/codex/config.toml)"],
-  ["legacy managed config に内容", [layer("legacyManagedConfigTomlFromFile", "/etc/codex/managed_config.toml")], "legacyManagedConfigTomlFromFile (/etc/codex/managed_config.toml)"],
-  ["盤面所有でない user に内容", [layer("user", "/home/human/.codex/config.toml")], "user (/home/human/.codex/config.toml)"],
+  ["system に内容", [layer("system", "/etc/codex")], "system (/etc/codex)"],
+  ["legacy managed config に内容", [layer("legacyManagedConfigTomlFromFile", "/etc/codex")], "legacyManagedConfigTomlFromFile (/etc/codex)"],
+  ["盤面所有でない user に内容", [layer("user", "/home/human/.codex")], "user (/home/human/.codex)"],
   ["project に内容", [layer("project", "/ws/.codex")], "project (/ws/.codex)"],
-  ["無効化された層でも内容があれば", [layer("system", "/etc/codex/config.toml", { disabledReason: "untrusted" })], "system (/etc/codex/config.toml, disabled: untrusted)"],
+  ["無効化された層でも内容があれば", [layer("system", "/etc/codex", { disabledReason: "untrusted" })], "system (/etc/codex, disabled: untrusted)"],
   ["列挙に無い未知の type に内容", [layer("vendorNewLayer", null)], "vendorNewLayer"],
   ["path の無い層は名乗りで", [layer("enterpriseManaged", null, { identity: "id acme, name codex" })], "enterpriseManaged (id acme, name codex)"],
 ])("列挙の外の config 層(%s)は封じ込めを不成立にし、理由文に層の type と path を挙げる(ADR 0358 決定4)", async (_, extra, named) => {
@@ -349,9 +356,27 @@ it.each([
   }
 });
 
-it("config が空の層は type を問わず封じ込めを成立させたまま(ADR 0358 決定4)", async () => {
-  const configLayers = [...VALID.configLayers, layer("system", "/etc/codex/config.toml", { empty: true }), layer("project", "/ws/.codex", { empty: true })];
+it("config が空で folder も無い層は type を問わず封じ込めを成立させたまま(ADR 0358 決定4 追記)", async () => {
+  const absent = { empty: true, folderPresent: false };
+  const configLayers = [...VALID.configLayers, layer("system", "/etc/codex", absent), layer("project", "/ws/.codex", absent)];
   expect(await checkCodexCapability(async () => ({ ...VALID, configLayers }), BOARD_CODEX_HOME)).toEqual({ available: true });
+});
+
+it.each([
+  ["system の folder", layer("system", "/etc/codex", { empty: true }), "system (/etc/codex)"],
+  ["project の dotCodexFolder", layer("project", "/ws/.codex", { empty: true }), "project (/ws/.codex)"],
+])("config が空でも%sが在れば封じ込めを不成立にし、folder を名指す(ADR 0358 決定4 追記)", async (_, extra, named) => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, configLayers: [...VALID.configLayers, extra] }), BOARD_CODEX_HOME);
+  expect(capability).toMatchObject({ available: false, reason: expect.stringContaining(`config layer mismatch: expected [], observed ["${named}"]`) });
+});
+
+it("folder の stat が ENOENT 以外で失敗すれば preflight failed に倒し、理由文に folder を挙げる(ADR 0358 決定4 追記)", async () => {
+  const eacces = (folder: string) => {
+    if (folder === "/etc/codex") throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+  };
+  const { capability } = await driveCodexPreflight("complete", { statFolder: eacces });
+  expect(await capability).toMatchObject({ available: false, reason: expect.stringMatching(/^Codex containment preflight failed: .*\/etc\/codex/) });
 });
 
 it("盤面所有の user 層は realpath 同士で照らし、symlink の綴り違いでも成立する(ADR 0358 決定4)", async () => {
@@ -359,7 +384,7 @@ it("盤面所有の user 層は realpath 同士で照らし、symlink の綴り�
   const linked = join(await tempDir("tidepool-codex-home-link-"), "codex-home");
   symlinkSync(real, linked);
   // 盤面の CODEX_HOME は symlink の綴り、Codex の報告は実体の綴り。config.toml 自体は無い
-  const configLayers = [layer("sessionFlags", null), layer("user", join(realpathSync(real), "config.toml"))];
+  const configLayers = [layer("sessionFlags", null), layer("user", realpathSync(real))];
   const hooks = [{ ...BOARD_HOOK_REGISTRATION, command: join(linked, "tidepool-hooks", "main-thread-mcp.mjs") }];
   expect(await checkCodexCapability(async () => ({ ...VALID, hooks, configLayers }), linked)).toEqual({ available: true });
 });

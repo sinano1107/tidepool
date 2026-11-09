@@ -1312,6 +1312,7 @@ export const boardConfigRequirements = { supportsIndependentSpeedModes: true, re
  *  review app-server(7)。停止点までの段は exit 0 で、照合を通る応答で通す —— 固定版の --version、skills/list は
  *  `skillsList(cwd)`(既定は skill 無し)、prompt-input は user item の marker だけ、features list は snapshot どおり、
  *  work app-server は盤面の hook の登録・`configLayers(codexHome)`(既定は列挙の内側だけ)・盤面自身の requirements。
+ *  層の folder の stat は `statFolder`(既定はどの folder も ENOENT —— 実機の `/etc/codex` を test が読まない)。
  *  `complete` は review app-server まで通して検査を終わらせる。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
  *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
  *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
@@ -1323,12 +1324,16 @@ export async function driveCodexPreflight(
     codexHome?: string;
     skillsList?: (cwd: string) => unknown;
     configLayers?: (codexHome: string) => unknown[];
+    statFolder?: (folder: string) => unknown;
   } = {},
 ) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
   const codexHome = overrides.codexHome ?? await tempDir("tidepool-codex-home-");
-  const capability = createCodexCapabilityCheck({ executable: "/opt/tidepool/bin/codex", codexHome, call: boardCall })();
+  const statFolder = overrides.statFolder ?? (() => {
+    throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+  });
+  const capability = createCodexCapabilityCheck({ executable: "/opt/tidepool/bin/codex", codexHome, call: boardCall, statFolder })();
 
   let listedCwd = "";
   const before = stop === "sandboxProbe" ? [0, 1, 2, 3] : [0, 1, 2, 3, 4, 5];

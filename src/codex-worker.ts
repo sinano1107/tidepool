@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -543,12 +544,14 @@ export interface CodexCapabilityObservation {
 
 interface CodexConfigLayer {
   type: string;
-  /** `file` か `dotCodexFolder`。 */
-  path: string | null;
+  /** 層の folder —— `file` の親か `dotCodexFolder`(Codex の `config_folder()` の写し)。path を報告しない層は null。 */
+  folder: string | null;
   /** path の無い層の名乗り —— name の他の文字列欄(mdm の domain・key、enterpriseManaged の id・name)。人間が消す先を知るためだけ。 */
   identity: string | null;
   /** `config` が `{}`。file の無い層もこう報告される(0.163.0 の system)。 */
   empty: boolean;
+  /** folder が在る。folder の無い層は false。 */
+  folderPresent: boolean;
   disabledReason: string | null;
 }
 
@@ -563,23 +566,38 @@ const configReadResponse = z.object({
   ),
 });
 
-/** `config/read` と `configRequirements/read` の `result` を観測へ写す(ADR 0358 決定4)。`requirements` の欄が無ければ投げる。 */
+/** 層の folder が在るか。ENOENT だけが「無い」で、他の失敗は folder を名指して投げる(ADR 0358 決定4 追記: fail-closed)。 */
+function folderPresent(folder: string, statFolder: (folder: string) => unknown): boolean {
+  try {
+    statFolder(folder);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(`config layer folder ${folder} could not be read: ${String(error)}`);
+  }
+}
+
+/** `config/read` と `configRequirements/read` の `result` を観測へ写す(ADR 0358 決定4)。`requirements` の欄が無ければ投げる。
+ *  `statFolder` は層の folder の stat(盤面は `statSync`)—— domain 層は IO を持たない。 */
 export function observedConfigLayers(
   configRead: unknown,
   requirementsRead: unknown,
+  statFolder: (folder: string) => unknown,
 ): Pick<CodexCapabilityObservation, "configLayers" | "requirements"> {
   if (!requirementsRead || typeof requirementsRead !== "object" || !("requirements" in requirementsRead)) {
     throw new Error("configRequirements/read returned no requirements field");
   }
   return {
     configLayers: configReadResponse.parse(configRead).layers.map(({ name: { type, file, dotCodexFolder, ...rest }, config, disabledReason }) => {
-      const path = file ?? dotCodexFolder ?? null;
+      // ADR 0358 決定4 追記: 層の単位は folder —— agents / rules ほかは `file` の親から読まれる
+      const folder = file !== undefined ? dirname(file) : dotCodexFolder ?? null;
       const identity = Object.entries(rest).filter(([, value]) => typeof value === "string").map(([key, value]) => `${key} ${value}`).join(", ");
       return {
         type,
-        path,
-        identity: path === null && identity !== "" ? identity : null,
+        folder,
+        identity: folder === null && identity !== "" ? identity : null,
         empty: Object.keys(config).length === 0,
+        folderPresent: folder !== null && folderPresent(folder, statFolder),
         disabledReason: disabledReason ?? null,
       };
     }),
@@ -594,25 +612,26 @@ function comparablePath(path: string): string | null {
 }
 
 /** ADR 0358 決定4: 盤面が渡す config 層の列挙 —— 内容を持ってよい層の type と、その層が盤面のものである条件。`sessionFlags` は盤面の
- *  `-c`、`user` は file が盤面所有の `CODEX_HOME/config.toml` のときだけ(Codex 自身が trust を書くので内容は問わない)。
+ *  `-c`、`user` は folder が盤面所有の `CODEX_HOME` のときだけ(Codex 自身が trust を書くので内容は問わない。folder も所有で覆う —— 追記)。
  *  適合試験の config 層の行も、実物がこの type を報告することをここから照らす。 */
-export const ENUMERATED_CONFIG_LAYERS: ReadonlyMap<string, (path: string | null, codexHome: string) => boolean> = new Map([
+export const ENUMERATED_CONFIG_LAYERS: ReadonlyMap<string, (folder: string | null, codexHome: string) => boolean> = new Map([
   ["sessionFlags", () => true],
   [
     "user",
-    (path: string | null, codexHome: string) => {
-      const reported = path === null ? null : comparablePath(path);
-      return reported !== null && reported === comparablePath(join(codexHome, "config.toml"));
+    (folder: string | null, codexHome: string) => {
+      const reported = folder === null ? null : comparablePath(folder);
+      return reported !== null && reported === comparablePath(codexHome);
     },
   ],
 ]);
 
-/** 列挙の外で内容を持つ層を `type (path)` で拾う。悪い type を数える denylist ではないので、未知の type も無効化された層も内容があれば拾う。 */
+/** 列挙の外で内容を持つ層を `type (folder)` で拾う。内容は `config` か folder の存在(ADR 0358 決定4 追記)。悪い type を数える
+ *  denylist ではないので、未知の type も無効化された層も内容があれば拾う。 */
 function layersOutsideEnumeration(layers: readonly CodexConfigLayer[], codexHome: string): string[] {
   return layers
-    .filter((layer) => !layer.empty && !ENUMERATED_CONFIG_LAYERS.get(layer.type)?.(layer.path, codexHome))
+    .filter((layer) => !(layer.empty && !layer.folderPresent) && !ENUMERATED_CONFIG_LAYERS.get(layer.type)?.(layer.folder, codexHome))
     .map((layer) => {
-      const notes = [layer.path ?? layer.identity, layer.disabledReason && `disabled: ${layer.disabledReason}`].filter(Boolean);
+      const notes = [layer.folder ?? layer.identity, layer.disabledReason && `disabled: ${layer.disabledReason}`].filter(Boolean);
       return notes.length === 0 ? layer.type : `${layer.type} (${notes.join(", ")})`;
     });
 }
@@ -1058,6 +1077,7 @@ async function probeWorkAppServer(
   env: NodeJS.ProcessEnv,
   emptyCwd: string,
   config: (taskType: Task["type"]) => string[],
+  statFolder: (folder: string) => unknown,
 ): Promise<ReturnType<typeof observedHooks> & ReturnType<typeof observedConfigLayers>> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
   // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`failed` に倒れる
@@ -1074,7 +1094,7 @@ async function probeWorkAppServer(
     ],
   );
   await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("review"))], []);
-  return { ...observedHooks(listed), ...observedConfigLayers(configRead, requirementsRead) };
+  return { ...observedHooks(listed), ...observedConfigLayers(configRead, requirementsRead, statFolder) };
 }
 
 const PERMISSION_CANARY = `
@@ -1273,6 +1293,7 @@ async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
   call: BoardCall;
+  statFolder?: (folder: string) => unknown;
 }): Promise<CodexCapabilityObservation> {
   const { call } = options;
   // 作ったディレクトリはどれも finally で消す —— 途中の mkdtemp / realpath が投げても先に作った分を残さない
@@ -1336,7 +1357,7 @@ async function actualCodexCapability(options: {
           executable: options.executable,
           skills,
           hook,
-        })),
+        }), options.statFolder ?? statSync),
       features: observedFeatures,
     };
   } finally {
@@ -1352,6 +1373,8 @@ export function createCodexCapabilityCheck(options: {
   call: BoardCall;
   /** version 行の差し替え口(`checkCodexCapability`)。盤面は渡さない。 */
   pinnedVersion?: string;
+  /** config 層の folder の stat の差し替え口。盤面は渡さない(`statSync`)。 */
+  statFolder?: (folder: string) => unknown;
 }): () => Promise<ContainmentCapability> {
   if (options.onPath === false) {
     return async () => ({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH when the board started" });

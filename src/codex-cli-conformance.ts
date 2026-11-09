@@ -30,7 +30,23 @@ export interface ConformanceObservations {
   /** 盤面の CODEX_HOME と、盤面の `forced_login_method` ほか `-c` を当てた app-server の `config/read`(includeLayers: true、cwd は空のディレクトリ)と
    *  `configRequirements/read` の result。 */
   configLayers: () => Promise<{ configRead: unknown; requirementsRead: unknown }>;
+  /** `SYSTEM_RULE` の forbidden の rule を `/etc/codex/rules/` に置いた host での観測。script が `sudo -n` で置いて消す —— 置けなければ投げる。 */
+  systemRules: () => Promise<SystemRulesObservation>;
 }
+
+export interface SystemRulesObservation {
+  /** worker の形の `codex exec --json`(`WORKER_EXEC_FLAGS`)に `echo <command>` を頼んだ stdout + stderr。 */
+  execOutput: string;
+  /** 同じ host での盤面の封じ込め能力の検査(`checkCodexCapability`)の答え。 */
+  capability: ContainmentCapability;
+}
+
+/** system rules の行が置く rule。`folder` は Codex が literal で読む system 層の folder(0.163.0 の source、`/etc/codex/config.toml` の親)。 */
+export const SYSTEM_RULE = {
+  folder: "/etc/codex",
+  command: "tidepool-conformance-system-rule",
+  justification: "TIDEPOOL_CONFORMANCE_SYSTEM_RULE",
+} as const;
 
 export interface SkillClosureObservation {
   /** 盤面の検査(`codexWorkspaceContainment`)の答え —— 閉じた設定の下で有効と報告された skill が無ければ成り立つ。 */
@@ -221,17 +237,33 @@ const SURFACES: Array<[string, (obs: ConformanceObservations) => Promise<Verdict
     async (obs) => {
       // ADR 0358 決定4: 口と層の名前は 0.163.0 の source の読み —— 盤面の読み取りが実物の応答の形を読めるかをここで照らす
       const { configRead, requirementsRead } = await obs.configLayers();
-      const { configLayers, requirements } = observedConfigLayers(configRead, requirementsRead);
+      // この行は層の形だけを読み、folder の在否は見ない —— 在否の効きは system rules の行が実物で照らす
+      const { configLayers, requirements } = observedConfigLayers(configRead, requirementsRead, () => undefined);
       const types = configLayers.map((layer) => layer.type);
       const missing = [...ENUMERATED_CONFIG_LAYERS.keys()].filter((type) => !types.includes(type));
       if (missing.length > 0) return fail(`config/read layers lack ${missing.join(", ")}; observed ${types.join(", ")}`);
-      // 盤面所有の user 層は file の照合で認める —— file を報告しなければ preflight は常に倒れる
-      if (configLayers.some((layer) => layer.type === "user" && layer.path === null)) return fail("the user layer reports no file");
+      // 盤面所有の user 層は folder(file の親)の照合で認める —— file を報告しなければ preflight は常に倒れる
+      if (configLayers.some((layer) => layer.type === "user" && layer.folder === null)) return fail("the user layer reports no file");
       // 盤面自身の `-c` だけの session で preflight と同じ述語が空 —— requirements の「無し」の綴りを釘にする(#3041 追記)
       const outside = requirementsOutsideBoard(requirements);
       return outside.length > 0
         ? fail(`requirements beyond the board's own flags: ${outside.join("; ")}`)
         : { pass: true, detail: `layers ${types.join(", ")}; requirements ${JSON.stringify(requirements)}` };
+    },
+  ],
+  [
+    "system layer folder (/etc/codex/rules)",
+    async (obs) => {
+      // ADR 0358 決定4 追記: 「Codex が folder を読む」と「folder は file の親」の写しを同じ host で効きとして釘にする
+      const { execOutput, capability } = await obs.systemRules();
+      // 該当 command を撃たなかった turn は拒否の観測にならない —— 置いた rule の拒否行だけを成立にする
+      const rejected = execOutput.split("\n").some((line) => line.includes("Rejected(") && line.includes(SYSTEM_RULE.justification));
+      if (!rejected) return fail(`the worker-shaped exec shows no Rejected(…) line with ${SYSTEM_RULE.justification}; a turn that never ran the command is not a rejection`);
+      if (capability.available) return fail(`the containment preflight holds with ${SYSTEM_RULE.folder}/rules present`);
+      const named = `system (${SYSTEM_RULE.folder})`;
+      return capability.reason.includes("config layer mismatch") && capability.reason.includes(named)
+        ? { pass: true, detail: `the worker's exec refused the system rule; the preflight fails as ${named}` }
+        : fail(capability.reason);
     },
   ],
 ];
