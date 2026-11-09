@@ -174,7 +174,10 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
-function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string, timeout?: number): Buffer {
+const subcommandOf = (args: string[]): string => args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
+
+/** `timeout` kills the call; `bound` is the limit its expiry names (the stage's, when the call ran on what remained of it). */
+function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string, timeout?: number, bound = timeout): Buffer {
   try {
     return execFileSync("git", args, {
       cwd,
@@ -194,27 +197,29 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
       } catch {
         // the group has already exited
       }
-      const subcommand = args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
-      throw new WorkerTreeGitTimeoutError(subcommand, timeout, stderr?.toString().split("\n")[0]?.trim() ?? "", { cause: err });
+      throw new WorkerTreeGitTimeoutError(subcommandOf(args), bound ?? timeout, stderr?.toString().split("\n")[0]?.trim() ?? "", { cause: err });
     }
     rethrowNamingMissingCwd(err, cwd, args);
   }
 }
 
-/** ADR 0357 決定1: the one runner for the git the board runs on a worker's tree or repo, bounded by one constant. */
-function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Buffer {
-  return run(cwd, args, env, undefined, WORKER_TREE_GIT_TIMEOUT_MS);
+/** ADR 0357 決定1: the one runner for the git the board runs on a worker's tree or repo, bounded by one constant. ADR 0364 決定3: a call
+ *  inside one bounded stage runs on what remains before the stage's `deadline`, and its expiry names the constant. */
+function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string, deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS): Buffer {
+  const remaining = deadline - Date.now();
+  // execFileSync の timeout 0 は無期限 —— 使い切った段では撃たない
+  if (remaining <= 0) throw new WorkerTreeGitTimeoutError(subcommandOf(args), WORKER_TREE_GIT_TIMEOUT_MS, "");
+  return run(cwd, args, env, input, remaining, WORKER_TREE_GIT_TIMEOUT_MS);
 }
 
-/** ADR 0357 決定1 / ADR 0364 決定3: git that reads bytes a worker wrote — the verification inside the board's copy of a task checkout's
- *  git files and the fetch from that copy. */
+/** ADR 0357 決定1 / ADR 0364 決定3: git that reads bytes a worker wrote — the fetch from the board's copy of a task checkout's git files. */
 export function workerRepoGit(cwd: string, ...args: string[]): string {
   return runOnWorkerTree(cwd, args).toString().trim();
 }
 
-/** `workerRepoGit` に stdin を渡したもの —— 写しの中の `pack-objects` も worker が書いた byte を読む(ADR 0364 決定3)。 */
-export function workerRepoGitWithInput(input: string, cwd: string, ...args: string[]): string {
-  return run(cwd, args, undefined, input, WORKER_TREE_GIT_TIMEOUT_MS).toString().trim();
+/** ADR 0364 決定3: git inside the copy-and-verify stage, all bounded by the stage's one `deadline`. */
+export function workerRepoGitUntil(deadline: number, cwd: string, args: string[], input?: string): string {
+  return runOnWorkerTree(cwd, args, undefined, input, deadline).toString().trim();
 }
 
 /** `run` と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git

@@ -3,6 +3,7 @@ import {
   constants,
   existsSync,
   fstatSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -14,6 +15,7 @@ import {
   realpathSync,
   rmdirSync,
   rmSync,
+  statfsSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -35,7 +37,7 @@ import {
   WorktreeStatusError,
   withBoardGit,
   workerRepoGit,
-  workerRepoGitWithInput,
+  workerRepoGitUntil,
 } from "./git.js";
 import {
   type GitHubAuth,
@@ -431,10 +433,20 @@ export class RoomCopyGitlinkError extends Error {
 /** ADR 0364 決定2: 盤面所有の写しから名前の場所へ tip を fetch する段の失敗 —— 名前の場所の側(解放なら quarantine、verb なら拒むだけ)。 */
 export class NamedPlaceFetchError extends Error {}
 
-const unreadable = (checkout: string, why: string) => new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${why}`);
+const unreadable = (checkout: string, why: string, cause?: unknown) =>
+  new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${why}`, cause === undefined ? undefined : { cause });
+
+/** 盤面が worker の `.git` を読む1つの有界の段: 読む checkout と、段全体の上限の時刻(ADR 0364 決定3 / ADR 0357 決定1)。 */
+type WorkerRead = { checkout: string; deadline: number };
+
+const workerRead = (checkout: string): WorkerRead => ({ checkout, deadline: Date.now() + WORKER_TREE_GIT_TIMEOUT_MS });
+
+function assertBeforeDeadline({ deadline }: WorkerRead): void {
+  if (Date.now() > deadline) throw new WorkerGitCopyTimeoutError(WORKER_TREE_GIT_TIMEOUT_MS);
+}
 
 /** ADR 0364 決定1: worker の `.git` の `rel` を lstat し、あれば `kind` であることを確かめる(symlink を辿らない)。 */
-function workerEntry(checkout: string, rel: string, kind: "directory" | "regular file"): boolean {
+function workerEntry({ checkout }: WorkerRead, rel: string, kind: "directory" | "regular file"): boolean {
   const stat = lstatSync(join(checkout, rel), { throwIfNoEntry: false });
   if (stat && !(kind === "directory" ? stat.isDirectory() : stat.isFile())) throw unreadable(checkout, `${rel} is not a ${kind}`);
   return stat !== undefined;
@@ -442,11 +454,14 @@ function workerEntry(checkout: string, rel: string, kind: "directory" | "regular
 
 const WORKER_FILE_CHUNK = 1 << 16;
 
-/** ADR 0364 決定1・3: lstat で regular と確かめた file を symlink を辿らずに開き(FIFO は open しない)、上限の時刻まで chunk ごとに読む ——
- *  sparse file はサイズでなく時間で縛る。Linux では開いた実体が checkout の下にあることも確かめる: 途中の dir の lstat と open の間に
- *  symlink へ差し替えられても辿った先を読まない(盤面が worker を拾う host は Linux だけ、ADR 0100 決定6)。`use` が false で読み止める。 */
-function readWorkerFile(checkout: string, rel: string, deadline: number, use: (chunk: Buffer) => boolean | void): void {
-  if (!workerEntry(checkout, rel, "regular file")) throw unreadable(checkout, `${rel} is missing`);
+/** ADR 0364 決定1・3: lstat で regular と確かめた file を symlink を辿らずに開き(FIFO は open しない)、段の上限の時刻まで chunk ごとに
+ *  読む —— sparse file はサイズでなく時間で縛り、空の file の数でも上限を越えない。Linux では開いた実体が checkout の下にあることも
+ *  確かめる: 途中の dir の lstat と open の間に symlink へ差し替えられても辿った先を読まない(盤面が worker を拾う host は Linux だけ、
+ *  ADR 0100 決定6)。`use` が false で読み止める。 */
+function readWorkerFile(read: WorkerRead, rel: string, use: (chunk: Buffer) => boolean | void): void {
+  const { checkout } = read;
+  assertBeforeDeadline(read);
+  if (!workerEntry(read, rel, "regular file")) throw unreadable(checkout, `${rel} is missing`);
   const fd = openSync(join(checkout, rel), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!fstatSync(fd).isFile()) throw unreadable(checkout, `${rel} is not a regular file`);
@@ -454,7 +469,7 @@ function readWorkerFile(checkout: string, rel: string, deadline: number, use: (c
     const buffer = Buffer.allocUnsafe(WORKER_FILE_CHUNK);
     for (let n = readSync(fd, buffer); n > 0; n = readSync(fd, buffer)) {
       if (use(buffer.subarray(0, n)) === false) return;
-      if (Date.now() > deadline) throw new WorkerGitCopyTimeoutError(WORKER_TREE_GIT_TIMEOUT_MS);
+      assertBeforeDeadline(read);
     }
   } finally {
     closeSync(fd);
@@ -462,14 +477,14 @@ function readWorkerFile(checkout: string, rel: string, deadline: number, use: (c
 }
 
 /** worker の text file の行のうち `pick` が値を返す最初のもの。行の長さは縛る —— 改行の無い sparse file でメモリを埋めない。 */
-function findWorkerLine(checkout: string, rel: string, deadline: number, pick: (line: string) => string | undefined): string | undefined {
+function findWorkerLine(read: WorkerRead, rel: string, pick: (line: string) => string | undefined): string | undefined {
   let rest = "";
   let found: string | undefined;
-  readWorkerFile(checkout, rel, deadline, (chunk) => {
+  readWorkerFile(read, rel, (chunk) => {
     const lines = (rest + chunk.toString("latin1")).split("\n");
     rest = lines.pop()!;
     found = lines.map(pick).find((hit) => hit !== undefined);
-    if (rest.length > WORKER_FILE_CHUNK) throw unreadable(checkout, `${rel} has a line longer than ${WORKER_FILE_CHUNK} bytes`);
+    if (rest.length > WORKER_FILE_CHUNK) throw unreadable(read.checkout, `${rel} has a line longer than ${WORKER_FILE_CHUNK} bytes`);
     return found === undefined;
   });
   return found ?? pick(rest);
@@ -478,29 +493,29 @@ function findWorkerLine(checkout: string, rel: string, deadline: number, pick: (
 /** 写す段の失敗は worker の repo の故障に包む。上限超過と host の失敗は型のまま(ADR 0357 決定2 / ADR 0364 決定2)。 */
 function asWorkerRepoFailure(checkout: string, cause: unknown): Error {
   if (cause instanceof TaskCheckoutUnreadableError || cause instanceof WorkerTreeGitTimeoutError || cause instanceof TaskCheckoutHostError) return cause;
-  return new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  return unreadable(checkout, cause instanceof Error ? cause.message : String(cause), cause);
 }
 
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 /** ADR 0243 決定1: 書く前に値を知る。ADR 0364 決定1: tip は `refs/heads/task/<id>` の file、無ければ `packed-refs` の行(worker の
  *  `gc` は正当に pack する)—— git に worker の `.git` を開かせない。symref は worker の repo の故障。 */
-function readWorkerTip(checkout: string, taskId: string): string {
-  const dotGit = lstatSync(join(checkout, ".git"), { throwIfNoEntry: false });
-  if (!dotGit) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no git repository`);
+function readWorkerTip(read: WorkerRead, taskId: string): string {
+  const { checkout } = read;
   const ref = `refs/heads/${taskBranch(taskId)}`;
-  const deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS;
   let sha: string | undefined;
   try {
+    const dotGit = lstatSync(join(checkout, ".git"), { throwIfNoEntry: false });
+    if (!dotGit) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no git repository`);
     if (!dotGit.isDirectory()) throw unreadable(checkout, ".git is not a directory");
-    // packed-refs もリポジトリ定義の一部 —— loose の ref があっても種類を確かめる
-    const packed = workerEntry(checkout, ".git/packed-refs", "regular file");
+    // ADR 0364 決定1: packed-refs もリポジトリ定義の一部 —— loose の ref があっても種類を確かめる
+    const packed = workerEntry(read, ".git/packed-refs", "regular file");
     const parents = ref.split("/").slice(0, -1).map((_, i, parts) => `.git/${parts.slice(0, i + 1).join("/")}`);
-    if (parents.every((dir) => workerEntry(checkout, dir, "directory")) && workerEntry(checkout, `.git/${ref}`, "regular file")) {
-      sha = findWorkerLine(checkout, `.git/${ref}`, deadline, (line) => line);
+    if (parents.every((dir) => workerEntry(read, dir, "directory")) && workerEntry(read, `.git/${ref}`, "regular file")) {
+      sha = findWorkerLine(read, `.git/${ref}`, (line) => line);
       if (!OID.test(sha ?? "")) throw unreadable(checkout, `${ref} is not a direct ref`);
     } else if (packed) {
-      sha = findWorkerLine(checkout, ".git/packed-refs", deadline, (line) => {
+      sha = findWorkerLine(read, ".git/packed-refs", (line) => {
         const [oid, name] = line.split(" ");
         return name === ref && OID.test(oid ?? "") ? oid : undefined;
       });
@@ -524,11 +539,29 @@ function hostStep<T>(step: () => T): T {
   }
 }
 
-/** checkout の `rel` の byte を写しの `to` へ。hardlink は inode を worker と共有するので使わない(ADR 0364 決定1)。 */
-function copyWorkerFile(checkout: string, rel: string, to: string, deadline: number): void {
+/** ADR 0364 決定2: 写しの中の git の失敗が tmp の容量切れと重なれば host の失敗 —— worker の byte のせいにしない。 */
+function outOfSpace(dir: string, cause: unknown): boolean {
+  if ((cause as NodeJS.ErrnoException | null)?.code === "ENOSPC" || String((cause as { stderr?: unknown } | null)?.stderr ?? "").includes("No space left on device")) return true;
+  try {
+    return statfsSync(dir).bavail === 0;
+  } catch {
+    return false;
+  }
+}
+
+const ZERO_CHUNK = Buffer.alloc(WORKER_FILE_CHUNK);
+
+/** checkout の `rel` の byte を写しの `to` へ。hardlink は inode を worker と共有するので使わない(ADR 0364 決定1)。0 だけの chunk は
+ *  書かずに穴にする —— byte は同じで、sparse file が tmp を実体で埋めない(`core.compression=0` の pack は正当に 0 の連なりを持つ)。 */
+function copyWorkerFile(read: WorkerRead, rel: string, to: string): void {
   const out = hostStep(() => openSync(to, "wx"));
   try {
-    readWorkerFile(checkout, rel, deadline, (chunk) => void hostStep(() => writeSync(out, chunk)));
+    let position = 0;
+    readWorkerFile(read, rel, (chunk) => {
+      if (!chunk.equals(ZERO_CHUNK.subarray(0, chunk.length))) hostStep(() => writeSync(out, chunk, 0, chunk.length, position));
+      position += chunk.length;
+    });
+    hostStep(() => ftruncateSync(out, position));
   } finally {
     closeSync(out);
   }
@@ -537,36 +570,37 @@ function copyWorkerFile(checkout: string, rel: string, to: string, deadline: num
 /** 写して検証する段(ADR 0364 決定1): checkout の loose と `.pack` だけを `raw` へ写し(`.idx` は作り直す、`info/alternates` は辿らない)、
  *  tip の閉包を1つの pack にして `verified` で `index-pack --strict` する —— 欠けは rev-list / pack-objects が、zlib の破損は
  *  pack-objects が、中身と名前の不一致は worker の byte を持たない `verified` の検査が落とす。名前の場所の objects を借りる役は
- *  名前の場所の ref から届く閉包を pack に入れない。ref は `verified` にだけ書く。 */
-function copyAndVerifyWorkerTip(place: TaskCheckoutPlace, raw: string, verified: string, sha: string, ref: string, format: string): void {
-  const checkout = place.path;
-  const deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS;
+ *  名前の場所の ref から届く閉包を pack に入れない。ref は `verified` にだけ書く。git も file の写しも段の1つの上限の中(決定3)。 */
+function copyAndVerifyWorkerTip(place: TaskCheckoutPlace, read: WorkerRead, raw: string, verified: string, sha: string, ref: string, format: string): void {
+  const { checkout, deadline } = read;
   const looseName = new RegExp(`^[0-9a-f]{${format === "sha256" ? 62 : 38}}$`);
   try {
-    if (workerEntry(checkout, ".git/objects", "directory")) {
+    if (workerEntry(read, ".git/objects", "directory")) {
       for (const dir of readdirSync(join(checkout, ".git", "objects")).filter((name) => /^[0-9a-f]{2}$/.test(name))) {
-        workerEntry(checkout, `.git/objects/${dir}`, "directory");
+        workerEntry(read, `.git/objects/${dir}`, "directory");
         hostStep(() => mkdirSync(join(raw, "objects", dir)));
         for (const file of readdirSync(join(checkout, ".git", "objects", dir)).filter((name) => looseName.test(name))) {
-          copyWorkerFile(checkout, `.git/objects/${dir}/${file}`, join(raw, "objects", dir, file), deadline);
+          copyWorkerFile(read, `.git/objects/${dir}/${file}`, join(raw, "objects", dir, file));
         }
       }
-      if (workerEntry(checkout, ".git/objects/pack", "directory")) {
+      if (workerEntry(read, ".git/objects/pack", "directory")) {
         for (const file of readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack"))) {
-          copyWorkerFile(checkout, `.git/objects/pack/${file}`, join(raw, "objects", "pack", file), deadline);
-          workerRepoGit(raw, "index-pack", join(raw, "objects", "pack", file));
+          copyWorkerFile(read, `.git/objects/pack/${file}`, join(raw, "objects", "pack", file));
+          workerRepoGitUntil(deadline, raw, ["index-pack", join(raw, "objects", "pack", file)]);
         }
       }
     }
     // ADR 0364 決定1: Interview の2役は閉包が全部写しの中で解けること —— 受験者が sha を言い当てても兄弟の答案は記録に入らない
-    const objects = workerRepoGit(raw, "rev-list", "--objects", sha, ...(place.borrowsNamedObjects ? ["--not", "--alternate-refs"] : []));
-    const pack = join(verified, "objects", "pack", `pack-${workerRepoGitWithInput(objects && `${objects}\n`, raw, "pack-objects", "--quiet", join(verified, "objects", "pack", "pack"))}`);
+    const objects = workerRepoGitUntil(deadline, raw, ["rev-list", "--objects", sha, ...(place.borrowsNamedObjects ? ["--not", "--alternate-refs"] : [])]);
+    const packBase = join(verified, "objects", "pack", "pack");
+    const pack = `${packBase}-${workerRepoGitUntil(deadline, raw, ["pack-objects", "--quiet", packBase], objects && `${objects}\n`)}`;
     // pack-objects の idx は worker が付けた loose の名前を信じる —— 捨てて中身から作り直す
     for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
-    workerRepoGit(verified, "index-pack", "--strict", `${pack}.pack`);
-    workerRepoGit(verified, "update-ref", ref, sha);
+    workerRepoGitUntil(deadline, verified, ["index-pack", "--strict", `${pack}.pack`]);
+    workerRepoGitUntil(deadline, verified, ["update-ref", ref, sha]);
   } catch (cause) {
-    throw asWorkerRepoFailure(checkout, cause);
+    const failure = asWorkerRepoFailure(checkout, cause);
+    throw failure !== cause && outOfSpace(raw, cause) ? copyHostError(cause) : failure;
   }
 }
 
@@ -578,7 +612,9 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string): string {
   // 名前の場所の側の故障を worker の repo のせいにしない —— ここで落ちれば素の失敗(呼び手の quarantine)
   const format = git(namedPlace.path, "rev-parse", "--show-object-format");
   const alternates = place.borrowsNamedObjects ? `${namedObjects(namedPlace)}\n` : undefined;
-  const sha = readWorkerTip(checkout, taskId);
+  // ADR 0364 決定3: tip の読みから閉包の検証までが1つの有界の段
+  const read = workerRead(checkout);
+  const sha = readWorkerTip(read, taskId);
   // ADR 0364 決定1: 写しは盤面 process の tmp —— worker は書けない(task temp でも checkout の中でもない)
   const dir = hostStep(() => mkdtempSync(join(tmpdir(), "tidepool-worker-tip-")));
   try {
@@ -589,7 +625,7 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string): string {
         if (alternates) writeFileSync(join(repo, "objects", "info", "alternates"), alternates);
       });
     }
-    copyAndVerifyWorkerTip(place, raw, verified, sha, ref, format);
+    copyAndVerifyWorkerTip(place, read, raw, verified, sha, ref, format);
     try {
       workerRepoGit(namedPlace.path, "fetch", ...FETCH_FLAGS, verified, ref);
       git(namedPlace.path, "cat-file", "-e", `${sha}^{commit}`);
@@ -1305,7 +1341,7 @@ export function completionTreeGateApplies(task: Task): boolean {
 /** ADR 0359 決定3: worker の checkout は観測だけに使う。着地は名前の場所の記録から進める。 */
 function observeCheckoutAfterCompletion(db: Db, place: TaskCheckoutPlace, taskId: string, recorded: string | undefined): TaskCheckoutWriteObservation | undefined {
   try {
-    const workerTip = readWorkerTip(place.path, taskId);
+    const workerTip = readWorkerTip(workerRead(place.path), taskId);
     if (!recorded) return;
     if (workerTip !== recorded) return { observation: "committed", worker_tip: workerTip };
     const paths = taskCheckoutChanges(db, place, taskId, recorded).map(({ path }) => path);

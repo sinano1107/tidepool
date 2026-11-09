@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, existsSync, openSync, readdirSync, rmSync, truncateSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -29,6 +29,7 @@ import {
   servedQuarantineQuestion,
   sessionId,
   type Tidepool,
+  writeObservations,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -38,6 +39,17 @@ vi.mock("../src/worker-tree-git-timeout.js", async (importOriginal) => ({
   WORKER_TREE_GIT_TIMEOUT_MS: 1000,
 }));
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+// 盤面が閉じる fd の割り当てを見る口(写しが実体化しないことの観測)—— 既定は素通し
+const fsHook = vi.hoisted(() => ({ beforeClose: undefined as ((fd: number) => void) | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  const closeSync = ((fd: number) => {
+    fsHook.beforeClose?.(fd);
+    fs.closeSync(fd);
+  }) as typeof fs.closeSync;
+  return { ...fs, default: { ...fs, closeSync }, closeSync };
+});
 
 const NOW = new Date("2026-11-08T00:00:00.000Z");
 let db: Db | undefined;
@@ -120,8 +132,6 @@ it("強制回収した session の解放が上限で止まれば、question を�
 
 const questionsOf = (db: Db, taskId: string) => listChildren(db, taskId).filter(({ type }) => type === "question");
 
-const writeObservations = (db: Db, taskId: string) =>
-  listEvents(db, taskId).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion");
 
 /** worker の入力の読みを止める FIFO: `.git/packed-refs` は旧い ls-remote の upload-pack を、worker の commit が足した blob の
  *  loose object は旧い fetch の object の転送だけを(ref の広告は commit までしか読まない)、`.gitignore` は view を止める。 */
@@ -181,15 +191,36 @@ it("objects/ の穴だらけの巨大 file の写しは上限で止まって wor
   closeSync(openSync(object, "w"));
   truncateSync(object, 2 ** 40);
   const tmp = await tempDir("tidepool-sparse-tmp-");
+  const source = lstatSync(object).ino;
+  let allocated = 0;
+  fsHook.beforeClose = (fd) => {
+    const { ino, blocks } = fstatSync(fd);
+    if (ino !== source) allocated = Math.max(allocated, blocks * 512);
+  };
   vi.stubEnv("TMPDIR", tmp);
   try {
     const expiry = thrown(() => recordTaskCheckoutTip(db, place, task.id));
     expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
     expect(expiry).toMatchObject({ message: "reading the git files of the worker's tree did not finish within 1 s" });
     expect(readdirSync(tmp)).toEqual([]);
+    // 写しは 0 の chunk を穴にする —— 上限までの読みが tmp を実体で埋めない
+    expect(allocated).toBeLessThan(1 << 20);
   } finally {
+    fsHook.beforeClose = undefined;
     vi.unstubAllEnvs();
   }
+});
+
+it("空の loose object の名の file を数で積んでも、写しは段の1つの上限で止まる(ADR 0364 決定3)", async () => {
+  const { db, task, place } = await pickedUp("worker-tree-empty-files");
+  const dir = join(place.path, ".git", "objects", "ff");
+  mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 30_000; i++) closeSync(openSync(join(dir, i.toString(16).padStart(38, "0")), "w"));
+
+  const expiry = thrown(() => recordTaskCheckoutTip(db, place, task.id));
+  expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
+  // 止めたのは写しそのもの —— 写しが上限を越えた後の git ではない
+  expect(expiry).toMatchObject({ message: "reading the git files of the worker's tree did not finish within 1 s" });
 });
 
 // 旧: task の checkout でない場所(#3031 の前の受験者の checkout)でも完了経路の検査は上限超過を `[]` に飲まなかった。ADR 0356 決定1 の

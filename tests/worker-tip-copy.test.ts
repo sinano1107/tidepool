@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -26,6 +26,7 @@ import {
   registerWork,
   servedQuarantineQuestion,
   type Tidepool,
+  writeObservations,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -106,8 +107,6 @@ const inNamed = (named: WorkspaceConfig, sha: string) => {
 };
 
 const releaseFailure = (db: Db, task: Task) => listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload;
-const writeObservations = (db: Db, task: Task) =>
-  listEvents(db, task.id).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion");
 
 it.each(Object.keys(pointers) as (keyof typeof pointers)[])("%s の checkout の tip は完了の門で worker の repo の故障として拒まれ、外部の object は名前の場所に入らない(ADR 0364 決定1・2)", async (form) => {
   const { db, named, task, place } = await pickedUp();
@@ -137,7 +136,7 @@ it.each(Object.keys(pointers) as (keyof typeof pointers)[])("%s の checkout の
 
   releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, true);
 
-  expect(writeObservations(db, task)).toEqual([
+  expect(writeObservations(db, task.id)).toEqual([
     { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(place.path) },
   ]);
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
@@ -204,7 +203,7 @@ it.each(
   if (type === "work") {
     expect(releaseFailure(db, task)).toMatchObject({ path: place.path, reason: expect.stringContaining("cannot be read") });
   } else {
-    expect(writeObservations(db, task)).toMatchObject([{ observation: "unreadable", reason: expect.stringContaining("cannot be read") }]);
+    expect(writeObservations(db, task.id)).toMatchObject([{ observation: "unreadable", reason: expect.stringContaining("cannot be read") }]);
   }
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
   expect(inNamed(named, tip)).toBe(false);
@@ -225,16 +224,6 @@ it.each([
 
   expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(TaskCheckoutUnreadableError);
   expect(inNamed(named, tip)).toBe(false);
-});
-
-it("objects/ の FIFO の名は lstat で拒み、open せずに worker の repo の故障にする(ADR 0364 決定3)", async () => {
-  const { db, task, place } = await pickedUp();
-  commitWork(place.path, "work.txt", "work\n");
-  const object = looseObject(place.path, git(place.path, "rev-parse", "HEAD:work.txt"));
-  rmSync(object);
-  execFileSync("mkfifo", [object]);
-
-  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(/is not a regular file/);
 });
 
 /** checkout の中で `blob` を指す tree の commit を tip にする —— worker は blob を持たなくても sha だけで tree を書ける。 */
@@ -313,6 +302,52 @@ it("写しの tmp が作れない未決着の解放は task の失敗で checkou
   expect(readFileSync(join(place.path, "unfinished.txt"), "utf8")).toBe("work in flight\n");
 });
 
+it("checkout の root を読めなくした未決着の解放は worker の repo の故障で、名前の場所を quarantine しない(ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  chmodSync(place.path, 0o000);
+  try {
+    releaseWorkspace(db, place, task, NOW);
+  } finally {
+    chmodSync(place.path, 0o755);
+  }
+
+  expect(releaseFailure(db, task)).toMatchObject({ path: place.path, reason: expect.stringContaining("cannot be read") });
+  expect(listChildren(db, task.id)).toMatchObject([{ type: "question", question_cancel_option: "abandon" }]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+});
+
+it("写しの中の git が tmp の容量切れで落ちれば host の失敗で、完了済み review の解放は「読めない」観測にせず quarantine する(ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp("review");
+  completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+  const shim = await tempDir("tidepool-enospc-git-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(
+    join(shim, "git"),
+    `#!/bin/sh\nif [ "$1" = index-pack ] && [ "$2" = --strict ]; then\n  echo 'fatal: unable to write file: No space left on device' >&2\n  exit 128\nfi\nexec "${realGit}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+
+  releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, true);
+  vi.unstubAllEnvs();
+
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeDefined();
+  expect(writeObservations(db, task.id)).toEqual([]);
+  expect(existsSync(join(place.path, ".git"))).toBe(true);
+});
+
+it("pack の 0 の連なりは写しで穴にしても byte が保たれ、tip は記録に着く(core.compression=0、ADR 0364 決定3)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  writeFileSync(join(place.path, "zeros.bin"), Buffer.alloc(4 << 20));
+  git(place.path, "add", "zeros.bin");
+  git(place.path, "commit", "-q", "-m", "zeros");
+  git(place.path, "-c", "pack.compression=0", "repack", "-a", "-d", "-l", "-q");
+  const tip = git(place.path, "rev-parse", "HEAD");
+
+  expect(recordTaskCheckoutTip(db, place, task.id)).toBe(tip);
+  expect(git(named.path, "cat-file", "-s", `${tip}:zeros.bin`)).toBe(String(4 << 20));
+});
+
 /** 名前の場所の object DB を書けなくする(#3061 の再現)。戻す手を返す。 */
 function freezeObjects(repo: string): () => void {
   const chmodDirs = (mode: string) => execFileSync("find", [join(repo, ".git", "objects"), "-type", "d", "-exec", "chmod", mode, "{}", "+"]);
@@ -376,6 +411,6 @@ it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の 
   expect(res.content[0].text).toContain("Retry pose_probe or escalate");
   expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
   expect(board.containers.forceReclaims).toEqual([]);
-  expect(listEvents(board.db, root.id).filter(({ payload }) => payload.kind === "decision_logged")).toEqual([]);
+  expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
 });
