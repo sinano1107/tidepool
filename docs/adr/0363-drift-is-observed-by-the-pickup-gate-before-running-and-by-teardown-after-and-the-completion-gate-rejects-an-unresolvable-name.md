@@ -19,6 +19,8 @@ fail-open になる。門の失敗の扱いが失敗の性質でなくコード�
    workspace の pickup は無く、後始末が一歩あとに同じ drift を必ず観測するので、verb で登録しても止まるものが無い」という理由で drift へ広げる。
    走った後の drift の観測者は後始末 1 人(再起動の復旧も同じ経路)、走る前は pickup の門 1 人。verb で撃たないので、後始末が `done` から
    「撃ち済み」を導く例外(ADR 0274 決定3)と、呼び直すたびの `quarantine_refired` は要らなくなる。
+   読む verb も同じ —— Interview の root の envelope(`get_current_task`、監査 review の写し)が実環境の名前を解く手は登録せず、解けなければ
+   `real_environment` を載せないだけである。
 3. **門を持つ verb は記録へ書く手を持つものだけ**(work の `complete_task`、`pose_probe`)。監査・Interview の完了は前倒しの解決を持たず、後始末が
    escalate と同じく最初の観測者になる。`runReleasingVerb` の不変条件は「門を渡さずに `done` へ決着した」から「完了の門が掛かる task が門なしに
    `done` になった」に絞る。
