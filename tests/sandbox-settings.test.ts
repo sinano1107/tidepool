@@ -6,14 +6,14 @@ import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
 import {
   buildSandboxSettings,
-  forkDeltaEntries,
   gitlinkChanges,
   humanOnlyPathChanges,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   recordedSettingsDisposition,
+  treeDeltaEntries,
   type WorkerSessionSettingsInput,
 } from "../src/sandbox.js";
-import { git } from "./harness.js";
+import { addSubmodule, git } from "./harness.js";
 
 /** 呼び出し側が渡すホストの事実(ADR 0257): task temp のパスと `/lib64` の有無。関数は純粋なまま、
  *  在るかの判定は呼び出し側が持つ。 */
@@ -421,7 +421,7 @@ function humanOnlyBetween(base: (workspace: string) => void, tip: (workspace: st
     tip(workspace);
     git(workspace, "add", "-A", "-f");
     git(workspace, "commit", "--quiet", "--allow-empty", "-m", "tip");
-    changes = humanOnlyPathChanges(forkDeltaEntries(workspace, "HEAD~1", "HEAD"));
+    changes = humanOnlyPathChanges(treeDeltaEntries(workspace, "HEAD~1", "HEAD"));
   });
   return changes.sort();
 }
@@ -521,16 +521,13 @@ function gitlinksBetween(base: (workspace: string, source: string) => void, tip:
       tip(workspace, source);
       git(workspace, "add", "-A", "-f");
       git(workspace, "commit", "--quiet", "--allow-empty", "-m", "tip");
-      changes = gitlinkChanges(forkDeltaEntries(workspace, "HEAD~1", "HEAD"));
+      changes = gitlinkChanges(treeDeltaEntries(workspace, "HEAD~1", "HEAD"));
     });
   } finally {
     rmSync(source, { recursive: true, force: true });
   }
   return changes;
 }
-
-const addSubmodule = (workspace: string, source: string) =>
-  git(workspace, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source, "mod");
 
 const advanceSubmodule = (workspace: string) => {
   git(join(workspace, "mod"), "commit", "--quiet", "--allow-empty", "-m", "advance");

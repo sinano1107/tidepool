@@ -59,7 +59,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
-import { forkDeltaEntries, gitlinkChanges, humanOnlyPathChanges, recordedSettingsDisposition } from "./sandbox.js";
+import { gitlinkChanges, humanOnlyPathChanges, recordedSettingsDisposition, treeDeltaEntries } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
@@ -115,6 +115,7 @@ import {
   completionTreeGateApplies,
   completionTreePaths,
   KEPT_TASK_CHECKOUT,
+  RoomCopyGitlinkError,
   type RunPlace,
   recordTaskCheckoutTip,
   resolveOrQuarantine,
@@ -366,7 +367,7 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
     // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
     // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
     const { namedPlace } = workspace;
-    const delta = forkDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
+    const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
     const humanOnly = humanOnlyPathChanges(delta);
     if (humanOnly.length > 0) {
       throw refusalNamingPaths(
@@ -400,9 +401,9 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
   );
 }
 
-/** 完了の門の「直して commit し、呼び直せ」の拒否: 直し方の文の後に path を1行ずつ名指す。 */
-const refusalNamingPaths = (fix: string, paths: string[]) =>
-  new DomainError(`${fix}, then call complete_task again\n${paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`);
+/** 「直して呼び直せ」の拒否: 直し方の文の後に path を1行ずつ名指す。既定の verb は完了の門の complete_task。 */
+const refusalNamingPaths = (fix: string, paths: string[], verb = "complete_task") =>
+  new DomainError(`${fix}, then call ${verb} again\n${paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`);
 
 /** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を強制回収で決着させる —— 拒めば worker
  *  は verb を繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に
@@ -863,6 +864,15 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
               if (err instanceof TaskCheckoutUnreadableError) {
                 throw new DomainError(`${err.message} — the board cannot copy your working tree for the targets, so the probe is not posed. Restore your task branch and call pose_probe again, or escalate.`);
+              }
+              // ADR 0365 決定2: 受験者は populate できない gitlink を環境として受け取る —— root が直して呼び直す
+              if (err instanceof RoomCopyGitlinkError) {
+                throw refusalNamingPaths(
+                  "the probe's environment adds or advances a submodule (gitlink); the interview room carries only this repository and the targets " +
+                    "cannot populate it — remove the submodule from your working tree",
+                  err.paths,
+                  "pose_probe",
+                );
               }
               throw err;
             }

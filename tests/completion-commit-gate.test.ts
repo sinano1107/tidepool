@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import { quarantineWorkspace } from "../src/workspace.js";
 import {
+  addSubmodule,
   api,
   bootTidepool,
   callAsTask,
@@ -18,6 +19,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  submoduleSource,
   type Tidepool,
 } from "./harness.js";
 
@@ -244,16 +246,6 @@ it("親が settings を変えて分解しても子は完了でき、親自身の
   expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("done");
 });
 
-/** submodule の取得元: commit を1つ持つ使い捨て repo。 */
-async function submoduleSource(name: string) {
-  const source = await makeWorkspace(name);
-  commitWork(source.path, "lib.txt", "v1\n");
-  return source.path;
-}
-
-const addSubmodule = (checkout: string, source: string) =>
-  git(checkout, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source, "mod");
-
 const GITLINK_REFUSAL =
   "the task branch tip adds or advances a submodule (gitlink) from its fork source; the record carries only this repository and " +
   "cannot hold a submodule's commits — reset the gitlink to the fork source's value or remove the submodule, and commit, then call complete_task again";
@@ -274,14 +266,16 @@ it("記録した tip が fork 元に無い gitlink を足していれば path �
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 });
 
-it("同じ tip が人間しか書けない path と gitlink の両方を変えていれば、人間しか書けない path の拒否が先に出る(ADR 0365 決定2)", async () => {
+// 門の順(人間しか書けない path → gitlink)は #3052 の spec コメントの決定
+it("同じ tip が人間しか書けない path と gitlink の両方を変えていれば、人間しか書けない path の拒否が先に出る(#3052)", async () => {
   const ws = await makeWorkspace("gitlink-and-settings");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "vendor the library with settings");
   await t.clock.advance(HOUR);
   const checkout = checkoutOf(t.db, task.id);
   addSubmodule(checkout, await submoduleSource("gitlink-and-settings-source"));
-  commitBlob(checkout, ".claude/settings.local.json", writeBlob(checkout, "{}\n"));
+  const tip = commitBlob(checkout, ".claude/settings.local.json", writeBlob(checkout, "{}\n"));
+  expect(git(checkout, "ls-tree", tip, "--", "mod")).toMatch(/^160000 commit /);
 
   const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
 

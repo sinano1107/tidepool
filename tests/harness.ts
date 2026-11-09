@@ -734,6 +734,17 @@ export function git(dir: string, ...args: string[]): string {
     .trim();
 }
 
+/** submodule の取得元: commit を1つ持つ使い捨て repo の path。 */
+export async function submoduleSource(name: string): Promise<string> {
+  const source = await makeWorkspace(name);
+  commitWork(source.path, "lib.txt", "v1\n");
+  return source.path;
+}
+
+/** `checkout` に `source` を submodule `mod` として足す(stage まで、commit はしない)。 */
+export const addSubmodule = (checkout: string, source: string) =>
+  git(checkout, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source, "mod");
+
 /** 「ワーカーが成果を書き、本文を付けてコミットした」の fixture(ADR 0084)。完了を
  *  測るテストはこれを使う —— 書きっぱなしのツリーは完了の門に弾かれる。逆に WIP 退避を
  *  測るテストは素の `writeFileSync` のままでよい(escalate / decompose / review)。 */

@@ -624,17 +624,18 @@ export interface RecordedSettings {
  *  file に解決するので、大文字に畳んでから照らす(`ſ` → `S`、`ﬁ` → `FI` も畳まれる)。 */
 const HUMAN_ONLY_PATH = /(^|\/)(\.claude(\/settings(\.local)?\.json)?|\.mcp\.json|\.codex(\/config\.toml|\/rules(\/.*)?)?)$/is;
 
-export interface ForkDeltaEntry {
+interface TreeDeltaEntry {
   dstMode: string;
   path: string;
 }
 
-/** ADR 0362 決定2 / ADR 0365 決定2: `forkSource` と `tip` の merge-base から `tip` までに entry(mode と blob、在る↔無い)が変わった行。
+/** `base` と `tip` の merge-base から `tip` までに entry(mode と blob、在る↔無い)が変わった行。`base` は完了の門では fork 元
+ *  (ADR 0362 決定2 / ADR 0365 決定2)、出題の写しでは面接室の保護ブランチの head(写しの親なので merge-base はそれ自身)。
  *  名前の場所の盤面の git で、replace ref を通さず記録された object を読む(ADR 0360 決定1)。merge-base が無ければ投げる。
  *  `.gitmodules` の `ignore` に gitlink を伏せさせない。行は `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`。 */
-export function forkDeltaEntries(namedPlace: string, forkSource: string, tip: string): ForkDeltaEntry[] {
-  const fields = git(namedPlace, "--no-replace-objects", "diff-tree", "-r", "--raw", "-z", "--ignore-submodules=none", "--merge-base", forkSource, tip).split("\0");
-  const entries: ForkDeltaEntry[] = [];
+export function treeDeltaEntries(namedPlace: string, base: string, tip: string): TreeDeltaEntry[] {
+  const fields = git(namedPlace, "--no-replace-objects", "diff-tree", "-r", "--raw", "-z", "--ignore-submodules=none", "--merge-base", base, tip).split("\0");
+  const entries: TreeDeltaEntry[] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
     entries.push({ dstMode: fields[i]!.split(" ")[1]!, path: fields[i + 1]! });
   }
@@ -642,12 +643,12 @@ export function forkDeltaEntries(namedPlace: string, forkSource: string, tip: st
 }
 
 /** ADR 0362 決定2: fork 元から entry が変わった、人間しか書けない path。 */
-export function humanOnlyPathChanges(delta: ForkDeltaEntry[]): string[] {
+export function humanOnlyPathChanges(delta: TreeDeltaEntry[]): string[] {
   return delta.map(({ path }) => path).filter((path) => HUMAN_ONLY_PATH.test(path.toUpperCase()));
 }
 
-/** ADR 0365 決定2: fork 元から gitlink を足した・進めた path —— 参照先は別 repo の commit で、記録は持てない。diff-tree は変わった entry
+/** ADR 0365 決定2: base から gitlink を足した・進めた path —— 参照先は別 repo の commit で、記録は持てない。diff-tree は変わった entry
  *  しか出さないので、行き先が gitlink の行がちょうど「足す」と「進める」。消す・blob や tree に置き換える行は行き先が gitlink でない。 */
-export function gitlinkChanges(delta: ForkDeltaEntry[]): string[] {
+export function gitlinkChanges(delta: TreeDeltaEntry[]): string[] {
   return delta.filter(({ dstMode }) => dstMode === "160000").map(({ path }) => path);
 }
