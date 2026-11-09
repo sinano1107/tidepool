@@ -31,10 +31,11 @@ clone・盤面自身の repo)の object を名前の場所へ送り、`cat-file 
    (解放なら quarantine、verb なら ADR 0359 決定4 の拒むだけ)。#3061 の「読めたのに書けない」が worker の故障になる共通 catch はこの
    分割で消える。**写しを作る host の失敗**(tmp の `mkdtemp` / `init` / ENOSPC)は第3の段で、worker でも名前の場所でもない —— pickup の
    `TaskCheckoutHostError` と同じ線で、決着していない task なら task の失敗(retry 推奨、checkout は残す)、完了済みなら今日どおり名前の場所の
-   quarantine で checkout を残す(唯一の写しを消さずに止める器が他に無い、#3053)。ADR 0357 決定2 の上限超過は worker の repo の故障のまま。
+   quarantine で checkout を残す(唯一の写しを消さずに止める器が他に無い、#3053)。verb の時点では名前の場所の側と同じく拒むだけ(ADR 0359 決定4)。ADR 0357 決定2 の上限超過は worker の repo の故障のまま。
 3. **有界の対象は path の持ち主でなく byte の出所。** ADR 0357 決定1 の「cwd か引数が task の checkout の git」は、決定1 の後は「worker が
-   書いた byte を読む git」—— 写しの中の検証(`pack-objects` / `index-pack --strict`)と、盤面所有の写しからの fetch を含む。file の写しは `lstat` 先行で
-   FIFO を open せず、サイズの上限は置かない(worker が自分の disk で既に占めている量の2倍で有界)。
+   書いた byte を読む git」—— 写しの中の検証(`pack-objects` / `index-pack --strict`)と、盤面所有の写しからの fetch を含む。file の写しも同じ上限の中に
+   置く —— サイズでは縛れない(sparse file は disk をほぼ使わずに byte copy だけを膨らませる)ので時間で縛り、超過は決定2 の worker の repo の
+   故障。正当な写しは小さい: `git gc` は `repack -l` で alternates 側を pack に入れず、面接室は小さい。`lstat` 先行で FIFO は open しない。
 
 ## 退けた形
 
