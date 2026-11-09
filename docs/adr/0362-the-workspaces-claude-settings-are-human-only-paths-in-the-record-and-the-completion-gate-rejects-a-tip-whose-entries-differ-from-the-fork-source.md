@@ -4,6 +4,8 @@
 
 **Status 追記: 列は Codex の形も持つ —— 人間の Codex(0.161.0)は trust 済みの project で、root から cwd までの各 `.codex/config.toml` を重ね、`mcp_servers` を承認なしに起動し、`sandbox_mode` / `approval_policy` を人間の user config より優先して適用する(trust は path 単位で、値を変えても問い直さない)。`.codex/rules/*.rules` の `allow` は問わずに sandbox の外で実行させる。人間しか書けない形に、`.codex/config.toml` の path・`.codex/rules` 以下の path・tree でない `.codex` / `.codex/rules` entry(どれも深さを問わない)を足す。`.codex/hooks.json` は hook の hash ごとの review で守られ(docs の読み、実測ではない)、`.codex/agents/*.toml` は起動時に読まれず(toml の `mcp_servers` は起動しなかった)model が選んだときに効くので、`.claude/agents` と同じく review の主題 —— tidepool 自身がどちらも tracked で持つ。Codex は `.mcp.json` を読まない。ログイン後の TUI・Codex app は未測定。実測の表は #3108 のコメント(2026-11-09、issue #3108)。**
 
+**Status 追記: 「basename が当たる」は綴りの照合ではなく、人間の FS が同じ file に解決するかで読む —— 大文字小文字を区別しない FS(macOS の APFS)では `.claude/SETTINGS.json`・`ſettings.json`・`.codex/conﬁg.toml` が本物の file に解決する(#3078 の ponytail-review の実測、Node の `readFileSync`。CLI が開くことは未測定)。門は path を大文字に畳んで(`ſ` → `S`、`ﬁ` → `FI`)照らす。人間しか書けない形の集合は変えない。worker 側の隠しの判定(ADR 0360 決定1)の同じ穴は #3114(2026-11-09、PR #3115)。**
+
 2026-11-09 の grilling(issue #3078、ADR 0360 の派生)で決定。worker が task branch の `.claude/settings.json` / `settings.local.json` を変えると、
 盤面はそれをどの process にも読ませない(worker は sparse で隠し、Board call は neutral cwd、面接室も隠す)まま merge back → PR → 無人 merge で
 保護ブランチへ運び、読むのは pull した人間の Claude CLI だけである —— `apiKeyHelper` / `env` / hooks は起動時に人間の資格情報で効く
