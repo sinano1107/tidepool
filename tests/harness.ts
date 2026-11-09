@@ -1444,6 +1444,10 @@ export function quarantineQuestion(db: Db, kind: QuarantineKind, value: string |
   return open && getTask(db, open.id);
 }
 
+/** task の報告後の書き込みの観測(ADR 0359 決定3)。 */
+export const writeObservations = (db: Db, taskId: string) =>
+  listEvents(db, taskId).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion");
+
 /** slot task を MCP の `complete_task` で完了させる: `fullHandoff` は全欄、false は work 以外に要る outcome だけ(ADR 0278 決定6)。 */
 export async function completeViaMcp(t: Tidepool, taskId: string, fullHandoff = true): Promise<any> {
   return callAsTask(t, taskId, "complete_task", { handoff: fullHandoff ? FULL_HANDOFF : { outcome: FULL_HANDOFF.outcome } });

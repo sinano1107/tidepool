@@ -8,3 +8,11 @@ export class WorkerTreeGitTimeoutError extends Error {
     super(`\`git ${subcommand}\` on the worker's tree did not finish within ${timeoutMs / 1000} s${stderrLine ? `: ${stderrLine}` : ""}`, options);
   }
 }
+
+/** ADR 0364 決定3: 盤面が worker の `.git` の file を読み写す手も同じ上限で、超過は同じ型(worker の repo の故障)。 */
+export class WorkerGitCopyTimeoutError extends WorkerTreeGitTimeoutError {
+  constructor(timeoutMs: number) {
+    super("", timeoutMs, "");
+    this.message = `reading the git files of the worker's tree did not finish within ${timeoutMs / 1000} s`;
+  }
+}
