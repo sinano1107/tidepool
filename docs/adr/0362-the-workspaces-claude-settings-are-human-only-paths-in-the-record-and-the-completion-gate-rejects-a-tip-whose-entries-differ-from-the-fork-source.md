@@ -14,13 +14,14 @@ ADR 0037 の「書けても検出する」は ADR 0346 で退役している。�
    人間しか書けない path であり、これは記録の軸の決定で Harness に依らない。読み側の「盤面はこの file を1鍵も届けない」(ADR 0346 決定1)と対。
    ADR 0037 機構2 は worker 自身の session を守る理由だけになる(Status 追記)。
 2. **完了の門は、tip の2 path の entry(mode と blob、在る↔無いを含む)が fork 元との merge-base と違えば path を名指して拒む**
-   (ADR 0360 決定4 と同じ「直して commit し直せ」の型)。fork 元は `resolveTaskBranchLineage` と同じ —— 子は親の work branch、根は保護
-   ブランチ。各段は自分の delta にだけ答え、親が仕込んだ変更は親自身の門が見る。spawn 時の停止(ADR 0360 決定3 の形)は足さない ——
+   (ADR 0360 決定4 と同じ「直して commit し直せ」の型)。fork 元はタスクブランチを切った sha と同じ出所 —— 子は親の work branch、根は保護
+   ブランチ、受験者は出題の head(ADR 0276 決定1)。出所は1つの関数が持ち、作成と門が同じものを読む。各段は自分の delta にだけ答え、
+   親が仕込んだ変更は親自身の門が見る。spawn 時の停止(ADR 0360 決定3 の形)は足さない ——
    内容は子に隠れていて届かない。
 3. **人間しか書けない path はこの2つだけ。** 軸は「人間が repo を使わなくても、CLI を起動した時点で実行される」。`.claude/agents/*.md`
    (trust 済み checkout で frontmatter `hooks:` が host で走る、#2936)・skills・commands・CLAUDE.md は人間の model が選んだときに効く
-   repo 内容で、tidepool 自身の task が正当に編集する(帰責が skill に落ちた修理子を含む)ので review の主題のまま。`.mcp.json` の人間側は
-   未測定で派生 issue。
+   repo 内容で、tidepool 自身の task が正当に編集する(帰責が skill に落ちた修理子を含む)ので review の主題のまま。列挙は Claude CLI の
+   読みで、`.mcp.json` の人間側と、人間の Codex が tracked な `.codex/` を読むかは未測定で派生 issue。
 
 ## 退けた形
 
@@ -37,5 +38,5 @@ ADR 0037 の「書けても検出する」は ADR 0346 で退役している。�
 ## 派生
 
 - Status 追記: ADR 0037(機構2 の理由)、ADR 0360(派生の行)。GLOSSARY.md: 完了の門、task の checkout。
-- 派生 issue: Codex の nested `read` の実測(low)、`.mcp.json` の人間側の承認の実測(疑いのまま high)。
+- 派生 issue: Codex の nested `read` の実測(#3106、low)、`.mcp.json` の人間側の承認の実測(#3107)と人間の Codex の `.codex/` の読みの実測(#3108)—— どちらも疑いのまま high。
 - 実装は1 slice、#3078 のコメントが spec。
