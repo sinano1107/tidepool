@@ -101,7 +101,8 @@ function seedViewIndex(view: View, dir: string, head: string | undefined, sparse
     mkdirSync(empty);
     view(["-C", empty, "-c", "core.bare=false", ...config, "sparse-checkout", "reapply"], { GIT_WORK_TREE: empty });
   }
-  return config;
+  // ADR 0360 決定2: worker の git env と同じ鍵で hidden path を読む —— sandbox の stub や worker の中身で S bit を落とさない(#3075)
+  return sparse ? [...config, "-c", "sparse.expectFilesOutsideOfPatterns=true"] : config;
 }
 
 /** ADR 0356 決定3: the worktree's content as a tree in `objectsFrom`'s objects, staged by `add -A` into a fresh index seeded from `head`. */

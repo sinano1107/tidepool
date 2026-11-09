@@ -80,6 +80,36 @@ it("完了の門には index で隠した tracked な変更も見える(ADR 0356
   expect(completionTreePaths(db, place, task.id)).toEqual(["README.md"]);
 });
 
+it.each([
+  [".claude/settings.json", ""],
+  [".claude/settings.json", '{"env":{"WORKER":"1"}}\n'],
+  [".claude/settings.local.json", ""],
+  [".claude/settings.local.json", '{"env":{"WORKER":"1"}}\n'],
+])("隠した %s に %j が置かれても門は名指さず、WIP は記録の blob を運ぶ(ADR 0360 決定2、#3075)", async (hidden, content) => {
+  const workspace = await makeWorkspace("sparse-stub");
+  db = openDb(":memory:");
+  await mkdir(join(workspace.path, ".claude"));
+  await writeFile(join(workspace.path, ".claude", "settings.json"), "{}\n");
+  await writeFile(join(workspace.path, ".claude", "settings.local.json"), "{}\n");
+  git(workspace.path, "add", "-f", ".claude");
+  git(workspace.path, "commit", "-m", "share both settings");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, new Date(0), ...HUMAN_WEBUI);
+  const place = await prepareAtPickup(db, workspace, task);
+  excludeWorkspaceProjectSettings(place, task.id, [".claude/settings.json", ".claude/settings.local.json"]);
+  const recorded = git(workspace.path, "rev-parse", `task/${task.id}:${hidden}`);
+  // sandbox の stub(0 byte)も worker の中身も、worker の git env では S bit のまま clean に見える(#2943)
+  mkdirSync(join(place.path, ".claude"), { recursive: true });
+  writeFileSync(join(place.path, hidden), content);
+
+  expect(completionTreePaths(db, place, task.id)).toEqual([]);
+
+  writeFileSync(join(place.path, "half-done.txt"), "work in flight\n");
+  releaseWorkspace(db, place, task, new Date(0));
+
+  expect(git(workspace.path, "log", "-1", "--format=%s", `task/${task.id}`)).toContain("WIP");
+  expect(git(workspace.path, "rev-parse", `task/${task.id}:${hidden}`)).toBe(recorded);
+});
+
 it("forged sparse rules cannot hide a README deletion from completion or WIP (ADR 0360 決定2)", async () => {
   const workspace = await makeWorkspace("sparse-policy-pin");
   commitWork(workspace.path, "human-omitted.txt", "human sparse policy\n");
