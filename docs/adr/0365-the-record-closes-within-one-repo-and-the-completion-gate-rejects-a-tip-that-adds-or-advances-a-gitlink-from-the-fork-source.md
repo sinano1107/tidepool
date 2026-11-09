@@ -21,11 +21,20 @@ ADR 0356 決定3「submodule は gitlink だけで読み、入れ子の repo で
    worktree を面接室に commit する口、ADR 0273 決定1)も記録に worker の tree を書くので同じ分類で、面接室の保護ブランチの head との差に
    gitlink を足す・進める tree は path を名指して拒み、root が直して呼び直す —— 完了の門は Interview の root に掛からず、受験者は populate
    できない gitlink を環境として受け取ることになる。
-3. **入れ子の repo の中身は記録の外で、運ばれない。** commit 済みでも未 commit でも、名前の場所にも WIP にも入らない —— 宣言であって
-   観測ではない。観測するには入れ子の repo で git を撃つ(ADR 0356 決定3 とぶつかる)か、worker が書ける `.git/modules` の object を借りる
-   (ADR 0360 決定2 / ADR 0364 決定1 とぶつかる)しかないので、観測できないものは記録にも残さない。決定2 の下で失うのは「submodule の中で
-   始めて gitlink を commit しなかった作業」だけになる。完了以外の解放の WIP は進んだ gitlink の **pointer** を `task/<id>` に運ぶが中身は
-   運ばない —— 再開の checkout はそれを populate できず、次の完了の門が決定2 で拒む。WIP は拒めない(退避の口)ので、ここは変えない。
+3. **盤面は gitlink の値を記録からしか読まない —— worktree は gitlink の値を供給しない。** 入れ子の repo(`.git` という entry を持つ dir ——
+   その `.git` が dir でも `gitdir:` の file でも symlink でも)は盤面の view(WIP の `add -A`、完了の門と出題の写しの観測)から除き、記録に
+   書く gitlink は base の tree にある値だけ。WIP は gitlink を足さず進めず、untracked の入れ子の repo は記録に入らず、submodule の dir が
+   消えていれば gitlink の削除は今日どおり通る(記録が持てる変更)。入れ子の repo の中身は記録の外で運ばれない —— commit 済みでも未 commit
+   でも、名前の場所にも WIP にも入らない。宣言であって観測ではない: 観測するには入れ子の repo で git を撃つ(ADR 0356 決定3 とぶつかる)か、
+   worker が書ける `.git/modules` の object を借りる(ADR 0360 決定2 / ADR 0364 決定1 とぶつかる)しかないので、観測できないものは記録にも
+   残さない。決定2 の下で失うのは「submodule の中で始めて gitlink を commit しなかった作業」だけになる。門から見えなくなる「submodule の tip を
+   進めて commit していない」の信号は、従っても決定2 で拒まれる行き止まりなので残さない。
+   **旧(2026-11-09 の初版)**: 「完了以外の解放の WIP は進んだ gitlink の pointer を運ぶ」—— その pointer の値は git が worktree の入れ子の
+   `.git` を開いて決めており、worker が書いた gitfile の先の repo(盤面の user が読める任意の repo)の HEAD や手書きの任意の sha がそのまま
+   `task/<id>` に入り、commit の無い入れ子の repo では `add -A` が落ちて WIP 全体が task の失敗 / quarantine になった(#3117、macOS git 2.47、
+   `boardWriteTree` を直接呼んだ実測)。値の出所を記録に置けば3形とも同じ1つの規則で消える。worker が自分の commit で gitlink を進める経路は
+   残るので決定2 はそのまま要る。検査と読みの間の窓(列挙の後に worker が入れ子の `.git` を作る)は、書いた tree の gitlink を base と比べる
+   釘で閉じる —— 違えば worker の repo の故障。
 
 名指す代償: submodule を upstream に追従させる(gitlink を進める)仕事と、submodule の path を移す仕事(`git mv` は diff で D + A になり、
 A は「足す」に当たる —— sha が同じでも一律に拒む)は worker にできず、人間の仕事になる。需要は観測されておらず、tidepool 自身は
@@ -40,6 +49,9 @@ A は「足す」に当たる —— sha が同じでも一律に拒む)は work
   あっても意味を持たない。変更は一律に拒む。
 - **入れ子の worktree を読んで未 commit を拒む** —— 読み方は2つしかなく、どちらも上の ADR とぶつかる(決定3)。
 - **worker が submodule を populate できるかを測ってから決める** —— 直す形が測定結果で変わらない。
+- **`--ignore-submodules=all` で黙らせる**(決定3)—— tracked な gitlink の前進しか覆わず、untracked の入れ子の repo で `add -A` が落ちるのは
+  防げない。
+- **入れ子の `.git` の形(gitfile・symlink)を検査して拒む**(決定3)—— ADR 0364 が退けた denylist と同じで、検査と読みの間に窓が残る。
 
 ## 射程の境界
 
@@ -51,3 +63,5 @@ A は「足す」に当たる —— sha が同じでも一律に拒む)は work
 - Status 追記: ADR 0364(閉包の検証は gitlink を見ない)、ADR 0356 決定3(gitlink だけで読む → 足す・進めるは門が拒む)。GLOSSARY.md:
   完了の門、task の checkout。
 - 実装は1 slice、#3052 のコメントが spec。
+- 決定3 の書き直し(2026-11-09、issue #3117): Status 追記: ADR 0356 決定3(gitlink の値の出所)、ADR 0364(入れ子の `.git` も view が
+  開いていた)。GLOSSARY.md: task の checkout。実装は1 slice、#3117 のコメントが spec。
