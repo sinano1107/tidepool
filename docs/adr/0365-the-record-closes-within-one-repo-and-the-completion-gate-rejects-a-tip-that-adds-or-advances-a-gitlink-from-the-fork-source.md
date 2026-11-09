@@ -21,9 +21,11 @@ ADR 0356 決定3「submodule は gitlink だけで読み、入れ子の repo で
    worktree を面接室に commit する口、ADR 0273 決定1)も記録に worker の tree を書くので同じ分類で、面接室の保護ブランチの head との差に
    gitlink を足す・進める tree は path を名指して拒み、root が直して呼び直す —— 完了の門は Interview の root に掛からず、受験者は populate
    できない gitlink を環境として受け取ることになる。
-3. **盤面は gitlink の値を記録からしか読まない —— worktree は gitlink の値を供給しない。** 入れ子の repo(`.git` という entry を持つ dir ——
-   その `.git` が dir でも `gitdir:` の file でも symlink でも)は盤面の view(WIP の `add -A`、完了の門と出題の写しの観測)から除き、記録に
-   書く gitlink は base の tree にある値だけ。WIP は gitlink を足さず進めず、untracked の入れ子の repo は記録に入らず、submodule の dir が
+3. **盤面は gitlink の値を記録からしか読まない —— worktree は gitlink の値を供給しない。** 入れ子の repo(git が repository と認める dir —— その `.git` が dir でも
+   `gitdir:` の file でも symlink でも。無効な `.git` を持つ dir は git 自身が普通の dir として扱い、`.git` という path は決して記録に入らない)は
+   盤面の view(WIP の `add -A`、完了の門と出題の写しの観測)から除き、記録に書く gitlink は base の tree にある値だけ。除外の列は git 自身に
+   数えさせる —— base の tree の gitlink と、untracked の列挙が「中へ降りない dir」として返す入れ子の repo の和 —— ので、ignore された dir の
+   中は `add -A` と同じ規則で飛び、列挙は盤面が worker の tree に撃つ手の上限(ADR 0357 決定1)の中にある。WIP は gitlink を足さず進めず、untracked の入れ子の repo は記録に入らず、submodule の dir が
    消えていれば gitlink の削除は今日どおり通る(記録が持てる変更)。入れ子の repo の中身は記録の外で運ばれない —— commit 済みでも未 commit
    でも、名前の場所にも WIP にも入らない。宣言であって観測ではない: 観測するには入れ子の repo で git を撃つ(ADR 0356 決定3 とぶつかる)か、
    worker が書ける `.git/modules` の object を借りる(ADR 0360 決定2 / ADR 0364 決定1 とぶつかる)しかないので、観測できないものは記録にも
