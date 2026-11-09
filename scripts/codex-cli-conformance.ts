@@ -8,7 +8,7 @@
  *
  *  使い方: CODEX_HOME=~/.tidepool/codex systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/codex-cli-conformance.ts */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -32,6 +32,8 @@ import {
   judgeSeedRows,
   SKILL_CLOSURE_MARKERS,
   type SkillClosureObservation,
+  SYSTEM_RULE,
+  type SystemRulesObservation,
 } from "../src/codex-cli-conformance.js";
 import {
   closedSkillsConfig,
@@ -199,6 +201,37 @@ async function skillClosure(): Promise<SkillClosureObservation> {
   }
 }
 
+// system rules の行(ADR 0358 決定4 追記): `/etc/codex/rules/` に forbidden の rule を `sudo -n` で置き、worker の形の exec と盤面の
+// 封じ込め能力の検査を同じ host で撃って、置いた folder ごと消す。もとから folder の在る host では投げる —— 人間の置いたものは消さない
+async function systemRules(): Promise<SystemRulesObservation> {
+  const { folder, command: ruled, justification } = SYSTEM_RULE;
+  if (existsSync(folder)) throw new Error(`${folder} already exists; this row needs a host without it and does not remove what is there`);
+  const sudo = (args: string[], input?: string) => execFileSync("sudo", ["-n", ...args], { input, stdio: ["pipe", "ignore", "pipe"] });
+  try {
+    sudo(["mkdir", "-p", join(folder, "rules")]);
+    sudo(
+      ["tee", join(folder, "rules", "tidepool-conformance.rules")],
+      `prefix_rule(pattern=["echo", "${ruled}"], decision="forbidden", justification="${justification}")\n`,
+    );
+    const execOutput = await inDisposable(async ({ workspace }) => {
+      // 空の .git だけでは exec が trusted directory でないと拒む —— skill closure の行と同じく本物の repo にする
+      execFileSync("git", ["init", "-q", workspace], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+      const result = await run({
+        kind: "conformance system rules",
+        args: ["--ask-for-approval", "never", "exec", "--json", ...WORKER_EXEC_FLAGS, "-C", workspace, "-c", 'developer_instructions=""'],
+        input: promptInput(workerPromptRecord("codex", [], `Run the shell command \`echo ${ruled}\` exactly once, then reply with its output.`)).user,
+        cwd: workspace,
+        env,
+        limitMs: 5 * 60_000,
+      });
+      return result.stdout + result.stderr;
+    });
+    return { execOutput, capability: await createCodexCapabilityCheck({ executable, onPath, codexHome, call, pinnedVersion })() };
+  } finally {
+    sudo(["rm", "-rf", folder]);
+  }
+}
+
 const appServerOptions = { executable, codexHome, command, pinnedVersion };
 const probe = createCodexAppServerProbe(appServerOptions);
 let appServer: Promise<CodexAppServerProbeResult> | undefined;
@@ -238,6 +271,7 @@ const { rows } = await judgeConformance({
       ]);
       return { configRead, requirementsRead };
     }),
+  systemRules,
 });
 
 // 種の openai 行は、1ターンの `exec --json` を worker の出力の読み取りで読む(ADR 0187 決定4)。

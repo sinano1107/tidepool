@@ -7,6 +7,7 @@ import {
   judgeSeedRows,
   SKILL_CLOSURE_MARKERS,
   type SkillClosureObservation,
+  SYSTEM_RULE,
 } from "../src/codex-cli-conformance.js";
 import { boardConfigRequirements, conformingConfigLayers } from "./fakes.js";
 
@@ -60,6 +61,16 @@ const OBSERVED: CodexAppServerProbeResult = {
 // 実測の層の形は fakes の `conformingConfigLayers`(codex-cli 0.163.0、Lima VM)
 const configRead = (layers: unknown[]) => ({ config: {}, origins: {}, layers });
 const MEASURED_LAYERS = conformingConfigLayers("/tmp/ch3041-eEYy");
+// system rules の行の exec の出力の代わり。拒否の文面は sweep の実測(#3042、0.163.0)の `Rejected("… rejected: <justification>")`、
+// それを載せる JSONL の item の形は採ったものではない —— 判定が読むのは行の中の `Rejected(` と justification だけ
+const execLine = (output: string) =>
+  JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: `/bin/bash -lc 'echo ${SYSTEM_RULE.command}'`, aggregated_output: output } });
+const REJECTED_EXEC = [
+  JSON.stringify({ type: "thread.started" }),
+  execLine(`Rejected("\`/bin/bash -lc 'echo ${SYSTEM_RULE.command}'\` rejected: ${SYSTEM_RULE.justification}")`),
+  JSON.stringify({ type: "turn.completed" }),
+].join("\n");
+const SYSTEM_FOLDER_MISMATCH = 'Codex containment preflight config layer mismatch: expected [], observed ["system (/etc/codex)"]';
 
 const passing = (): ConformanceObservations => ({
   compatibility: async () => ({ ok: true, cliVersion: "codex-cli 0.147.0" }),
@@ -79,9 +90,10 @@ const passing = (): ConformanceObservations => ({
     authorizationSent: false,
   }),
   configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: boardConfigRequirements }),
+  systemRules: async () => ({ execOutput: REJECTED_EXEC, capability: { available: false, reason: SYSTEM_FOLDER_MISMATCH } }),
 });
 
-it("各面の観測が盤面の読み取りを通れば、11面すべてが合格で ok", async () => {
+it("各面の観測が盤面の読み取りを通れば、12面すべてが合格で ok", async () => {
   const { rows, ok } = await judgeConformance(passing());
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
@@ -96,6 +108,7 @@ it("各面の観測が盤面の読み取りを通れば、11面すべてが合�
     ["AGENTS.md layer", true],
     ["skill closure", true],
     ["config layers (config/read / configRequirements/read)", true],
+    ["system layer folder (/etc/codex/rules)", true],
   ]);
   expect(ok).toBe(true);
 });
@@ -321,6 +334,36 @@ it.each<[string, string, Partial<ConformanceObservations>, string]>([
     "config layers (config/read / configRequirements/read)",
     { configLayers: async () => ({ configRead: configRead(MEASURED_LAYERS), requirementsRead: { supportsIndependentSpeedModes: true } }) },
     "no requirements field",
+  ],
+  [
+    "worker の形の exec が該当 command を1度も撃たなかった —— 拒否の行が無い turn は「拒まれた」と読まない",
+    "system layer folder (/etc/codex/rules)",
+    { systemRules: async () => ({ execOutput: JSON.stringify({ type: "turn.completed" }), capability: { available: false, reason: SYSTEM_FOLDER_MISMATCH } }) },
+    "no Rejected(",
+  ],
+  [
+    "拒否の行が置いた rule の justification でない(別の host rule が拒んだ)",
+    "system layer folder (/etc/codex/rules)",
+    { systemRules: async () => ({ execOutput: execLine("Rejected(\"echo rejected: someone else's rule\")"), capability: { available: false, reason: SYSTEM_FOLDER_MISMATCH } }) },
+    "no Rejected(",
+  ],
+  [
+    "rule が効いても封じ込め能力が成立したまま(folder の写しが外れた)",
+    "system layer folder (/etc/codex/rules)",
+    { systemRules: async () => ({ execOutput: REJECTED_EXEC, capability: { available: true } }) },
+    "holds",
+  ],
+  [
+    "封じ込め能力が system の folder でない理由で不成立",
+    "system layer folder (/etc/codex/rules)",
+    { systemRules: async () => ({ execOutput: REJECTED_EXEC, capability: { available: false, reason: "Codex containment preflight version mismatch" } }) },
+    "version mismatch",
+  ],
+  [
+    "sudo -n で rule を置けない —— skip にせず不成立",
+    "system layer folder (/etc/codex/rules)",
+    { systemRules: async () => Promise.reject(new Error("sudo: a password is required")) },
+    "threw: sudo",
   ],
 ])("%s: その面だけが不合格で、ok は false", async (_case, surface, changed, detail) => {
   const { rows, ok } = await judgeConformance({ ...passing(), ...changed });
