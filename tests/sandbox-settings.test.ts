@@ -400,15 +400,12 @@ function withRecorded(arrange: (workspace: string) => void, check: (workspace: s
   }
 }
 
-const putSettings = (workspace: string, name: string, body: unknown) => {
-  mkdirSync(join(workspace, ".claude"), { recursive: true });
-  writeFileSync(join(workspace, ".claude", name), JSON.stringify(body));
-};
-
 const put = (workspace: string, path: string, body = "{}\n") => {
   mkdirSync(dirname(join(workspace, path)), { recursive: true });
   writeFileSync(join(workspace, path), body);
 };
+
+const putSettings = (workspace: string, name: string, body: unknown) => put(workspace, `.claude/${name}`, JSON.stringify(body));
 
 const link = (workspace: string, path: string, target: string) => {
   mkdirSync(dirname(join(workspace, path)), { recursive: true });
@@ -459,6 +456,10 @@ describe("humanOnlyPathChanges は2つの tree の間で人間しか書けない
       link(workspace, "linked/.codex", "../payload");
       link(workspace, "rules-linked/.codex/rules", "../../payload");
       put(workspace, "blob/.claude", "not a directory");
+      put(workspace, "kept/.claude/settings.json", '{"env":{"WORKER":"1"}}\n');
+      // 大文字小文字を区別しない FS では同じ file に解決する綴り
+      put(workspace, "fold/.claude/SETTINGS.json");
+      put(workspace, "fold/.codex/con\uFB01g.toml");
     })).toEqual([
       ".claude/settings.json",
       ".claude/settings.local.json",
@@ -466,6 +467,9 @@ describe("humanOnlyPathChanges は2つの tree の間で人間しか書けない
       ".codex/rules/default.rules",
       ".mcp.json",
       "blob/.claude",
+      "fold/.claude/SETTINGS.json",
+      "fold/.codex/con\uFB01g.toml",
+      "kept/.claude/settings.json",
       "linked/.claude",
       "linked/.codex",
       "rules-linked/.codex/rules",
@@ -484,6 +488,18 @@ describe("humanOnlyPathChanges は2つの tree の間で人間しか書けない
       put(workspace, ".claude/agents/reviewer.md", "changed\n");
       put(workspace, "README.md", "changed\n");
     })).toEqual([]);
+  });
+
+  it(".gitmodules の ignore = all が名指す gitlink の .claude の追加も返す", () => {
+    expect(humanOnlyBetween(
+      (workspace) => put(workspace, ".gitmodules", '[submodule "gl"]\n\tpath = gl/.claude\n\turl = ./nowhere\n\tignore = all\n'),
+      (workspace) => {
+        const nested = join(workspace, "gl", ".claude");
+        mkdirSync(nested, { recursive: true });
+        git(nested, "init", "--quiet");
+        git(nested, "commit", "--quiet", "--allow-empty", "-m", "nested");
+      },
+    )).toEqual(["gl/.claude"]);
   });
 
   it("mode だけの変更も返す", () => {

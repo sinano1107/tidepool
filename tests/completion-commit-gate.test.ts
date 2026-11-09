@@ -151,7 +151,12 @@ function commitBlob(checkout: string, path: string, blob: string): string {
   return git(checkout, "rev-parse", "HEAD");
 }
 
-const HUMAN_ONLY_REFUSAL = "this path is written only by a human; take the change out of the task branch and commit, then call complete_task again";
+/** 人間しか書けない path の拒否であることを確かめ、名指された path の行を返す。 */
+function humanOnlyRefusal(result: any): string[] {
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("this path is written only by a human; take the change out of the task branch and commit, then call complete_task again");
+  return result.content[0].text.split("\n").slice(1);
+}
 
 it("記録した tip が fork 元から .claude/settings.json の blob を変えていれば path を名指して拒み、元の blob に戻して commit すると同じ session で完了できる(ADR 0362 決定2)", async () => {
   const ws = await workspaceSharingSettings("settings-blob");
@@ -165,9 +170,7 @@ it("記録した tip が fork 元から .claude/settings.json の blob を変え
 
   const result: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
 
-  expect(result.isError).toBe(true);
-  expect(result.content[0].text).toContain(HUMAN_ONLY_REFUSAL);
-  expect(result.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.json"]);
+  expect(humanOnlyRefusal(result)).toEqual(["- .claude/settings.json"]);
   expect(git(ws.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(rejectedTip);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 
@@ -189,9 +192,7 @@ it("fork 元に無かった .claude/settings.local.json を plumbing で足し�
 
   const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
 
-  expect(result.isError).toBe(true);
-  expect(result.content[0].text).toContain(HUMAN_ONLY_REFUSAL);
-  expect(result.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.local.json"]);
+  expect(humanOnlyRefusal(result)).toEqual(["- .claude/settings.local.json"]);
 });
 
 it("fork の後に人間が名前の場所で保護ブランチの settings を進めても、settings に触れていない task は完了できる(ADR 0362 決定2)", async () => {
@@ -232,9 +233,7 @@ it("親が settings を変えて分解しても子は完了でき、親自身の
   await t.clock.advance(HOUR);
   const parentCheckout = checkoutOf(t.db, parent.id);
   const rejected = await callAsTask(t, parent.id, "complete_task", { handoff: fullHandoff });
-  expect(rejected.isError).toBe(true);
-  expect(rejected.content[0].text).toContain(HUMAN_ONLY_REFUSAL);
-  expect(rejected.content[0].text.split("\n").slice(1)).toEqual(["- .claude/settings.json"]);
+  expect(humanOnlyRefusal(rejected)).toEqual(["- .claude/settings.json"]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("in_progress");
 
   git(parentCheckout, "checkout", forkSource, "--", ".claude/settings.json");

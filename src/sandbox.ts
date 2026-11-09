@@ -620,13 +620,15 @@ export interface RecordedSettings {
 
 /** ADR 0362 の Status 追記2つ: 人間の Claude CLI / Codex が起動時に読む、記録の中で人間しか書けない形。どれも深さを問わない。
  *  `diff-tree -r` は tree を行に出さないので、名前が `.claude` / `.codex` / `.codex/rules` で終わる行は tree でない entry。
- *  `.codex/hooks.json` と `.codex/agents/*.toml` は review の主題で入らない。 */
-const HUMAN_ONLY_PATH = /(^|\/)(\.claude(\/settings(\.local)?\.json)?|\.mcp\.json|\.codex(\/config\.toml|\/rules(\/.*)?)?)$/s;
+ *  `.codex/hooks.json` と `.codex/agents/*.toml` は review の主題で入らない。大文字小文字を区別しない FS では綴りの違う path も同じ
+ *  file に解決するので、大文字に畳んでから照らす(`ſ` → `S`、`ﬁ` → `FI` も畳まれる)。 */
+const HUMAN_ONLY_PATH = /(^|\/)(\.claude(\/settings(\.local)?\.json)?|\.mcp\.json|\.codex(\/config\.toml|\/rules(\/.*)?)?)$/is;
 
-/** ADR 0362 決定2: `base` と `tip` の tree の間で entry(mode と blob、在る↔無い)が違う、人間しか書けない path。
- *  名前の場所の盤面の git で、replace ref を通さず記録された object を読む(ADR 0360 決定1)。 */
-export function humanOnlyPathChanges(namedPlace: string, base: string, tip: string): string[] {
-  return git(namedPlace, "--no-replace-objects", "diff-tree", "-r", "-z", "--name-only", base, tip)
+/** ADR 0362 決定2: `forkSource` と `tip` の merge-base から `tip` までに entry(mode と blob、在る↔無い)が変わった、人間しか書けない
+ *  path。名前の場所の盤面の git で、replace ref を通さず記録された object を読む(ADR 0360 決定1)。merge-base が無ければ投げる。
+ *  `.gitmodules` の `ignore` に gitlink を伏せさせない。 */
+export function humanOnlyPathChanges(namedPlace: string, forkSource: string, tip: string): string[] {
+  return git(namedPlace, "--no-replace-objects", "diff-tree", "-r", "-z", "--name-only", "--ignore-submodules=none", "--merge-base", forkSource, tip)
     .split("\0")
-    .filter((path) => HUMAN_ONLY_PATH.test(path));
+    .filter((path) => HUMAN_ONLY_PATH.test(path.toUpperCase()));
 }

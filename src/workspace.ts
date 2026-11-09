@@ -26,6 +26,7 @@ import {
   assertOwnGitDirectory,
   checkoutPickupPredicates,
   conventionCheckoutPath,
+  exactProtectedBranchRef,
   examineePickupPredicates,
   gonePlaceReason,
   isRemoteBacked,
@@ -688,7 +689,7 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
   return interviewRole(db, task) === "examinee"
     ? resolvablePosedHead(db, workspace, task)
-    : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace)}^{commit}`);
+    : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? exactProtectedBranchRef(workspace)}^{commit}`);
 }
 
 /** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。 */
