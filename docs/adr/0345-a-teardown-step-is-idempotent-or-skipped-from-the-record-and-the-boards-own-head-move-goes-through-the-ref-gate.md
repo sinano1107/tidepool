@@ -1,5 +1,7 @@
 # 後始末の step は冪等であるか記録から2度目を飛ばせなければならず、盤面自身の HEAD の移動も ref の口を通る
 
+**Status 追記: 決定4 の「`registerQuarantine` が開いた question に `quarantine_refired` を足す」は引退 —— `quarantine_refired` は廃止され、Quarantine の登録は開いていれば何もしない。再実行が同じ観測に着く(question は1枚のまま)ことは変わらず、投げた本文は受理の拒否文が運ぶ([ADR 0366](0366-quarantine-registration-is-idempotent-and-the-open-question-is-the-only-record-of-a-stop.md) 決定1・2、2026-11-10、issue #3121)。**
+
 **Status 追記: 決定2・3 の「盤面が HEAD を動かした」の読みは、名前の場所の HEAD が動かなくなり task の checkout が session ごとに消えるので要らなくなる。決定1 は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
 **Status 追記: 決定3 の dirty 検査に「タスクブランチの `.gitignore` だけが無視していたファイル」は来なくなる —— 盤面が HEAD をタスクブランチの外へ動かす手がそれを先に消す([ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md)、2026-11-02、issue #2912)。**

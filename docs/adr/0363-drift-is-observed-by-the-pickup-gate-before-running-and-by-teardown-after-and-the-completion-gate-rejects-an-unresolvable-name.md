@@ -1,5 +1,7 @@
 # drift の観測者は走る前なら pickup の門、走った後なら後始末であり、verb は拒むだけ —— 完了の門は名前が解けないときも tip の記録を待って `done` にしない
 
+**Status 追記: 決定2 の「走った後の drift の観測者は後始末 1 人」は slot を握る session の中の話で、session の後に PR が待つ間に名前を読む landing の 2 つの poll も観測者である。「呼び直すたびの `quarantine_refired` は要らなくなる」は登録口の冪等化で機構ごと消えた([ADR 0366](0366-quarantine-registration-is-idempotent-and-the-open-question-is-the-only-record-of-a-stop.md) 決定1・4、2026-11-10、issue #3121 / #3122)。**
+
 **Status 追記: 決定1〜3 の「名前の場所の解決」は名前の場所が実環境である work の話で、Interview の root と受験者の名前の場所は面接室(ADR 0356 決定1)—— 記録へ書く門(受験者の完了の門、root の `pose_probe`)と後始末は実環境の名前を registry で解かず、面接室へ tip / 出題の head を記録して面接室を解放する。実環境は spawn が許可ドメインと層を読む pickup にだけ要り、その drift の観測者は次の pickup の門(root の再 pickup か同じ実環境の work)。「走った後の観測者は決着の種類を問わず後始末 1 人」は work に限る(2026-11-09 の triage、issue #3120)。**
 
 2026-11-09 の grilling(issue #3094、ADR 0359 の派生)で決定。work の `complete_task` は verb の前に task の workspace 名を registry から解いて
