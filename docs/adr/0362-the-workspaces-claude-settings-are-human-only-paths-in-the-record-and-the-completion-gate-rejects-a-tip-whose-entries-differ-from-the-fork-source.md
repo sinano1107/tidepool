@@ -1,5 +1,7 @@
 # workspace の Claude settings は記録の中で人間しか書けない path であり、完了の門は fork 元と entry が違う tip を harness に依らず拒む
 
+**Status 追記: 決定3 の列は2 path ではなく形で決まる —— 人間の Claude CLI(2.1.319)は cwd を基点に読む。人間しか書けない形は、basename が `.claude/settings.json` / `.claude/settings.local.json` / `.mcp.json` の path(深さを問わない)と、tree でない `.claude` entry(深さを問わない —— symlink の `.claude` は先の `settings.json` を読ませ、先の path は basename に当たらない)。完了の門は決定2 の比較をこの集合で行い、集合は1つの関数が持つ。`.mcp.json` が軸に乗る理由: `-p` は trust も承認も問わず project server を起動し、対話の承認は server の名前で`settings.local.json` の `enabledMcpjsonServers` に記録されるので、承認済みの名前の command を変えると問わずに起動する。`settings*.json` は cwd の `.claude` だけが読まれ、root のものは subdir の cwd では読まれない。射程の境界に1行足す: 人間が以前に commit した symlink の先の中身を worker が変える形は path の比較に見えず、`scripts/*` と同じ線で review の仕事。盤面の pin(2.1.286)と git root より上の祖先は未測定。実測の表は #3107 のコメント(2026-11-09、issue #3107)。**
+
 2026-11-09 の grilling(issue #3078、ADR 0360 の派生)で決定。worker が task branch の `.claude/settings.json` / `settings.local.json` を変えると、
 盤面はそれをどの process にも読ませない(worker は sparse で隠し、Board call は neutral cwd、面接室も隠す)まま merge back → PR → 無人 merge で
 保護ブランチへ運び、読むのは pull した人間の Claude CLI だけである —— `apiKeyHelper` / `env` / hooks は起動時に人間の資格情報で効く
