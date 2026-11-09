@@ -1,5 +1,7 @@
 # 盤面は worker に届くものを記録(tip の tree)で判定し、checkout は自分の隠しの検証にだけ読む —— 隠せない形は書き手の軸で止める
 
+**Status 追記: 決定2 の「盤面が worker の repo に撃つのは tip の fetch とこの検証だけ」の fetch も消える —— tip の fetch は worker の `.git` の中で upload-pack を走らせていた。盤面は regular file だけを写し、盤面所有の repo から fetch する([ADR 0364](0364-the-board-never-opens-the-workers-git-as-a-repository-and-fetches-the-tip-from-a-board-owned-copy-of-its-regular-files.md)、2026-11-09、issue #3097)。**
+
 **Status 追記: 派生の行(worker が settings の blob を変えた tip が landing 後に人間の CLI に届く)は [ADR 0362](0362-the-workspaces-claude-settings-are-human-only-paths-in-the-record-and-the-completion-gate-rejects-a-tip-whose-entries-differ-from-the-fork-source.md) で決着 —— 2 path は記録の中で人間しか書けず、完了の門が fork 元との merge-base と entry を比べて拒む。決定4 と同じ「直して commit し直せ」の型で、決定3 の spawn 時の停止は足さない(2026-11-09、issue #3078)。**
 
 2026-11-08 の grilling(issue #3074、#3032 のレビューの派生)で決定。盤面が「worker の CLI に settings が届くか / 自分が隠したか」を

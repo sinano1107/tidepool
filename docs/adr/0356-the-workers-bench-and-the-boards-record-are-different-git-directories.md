@@ -1,5 +1,7 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
+**Status 追記: 決定3 の「upload-pack は protected config しか読まない」は保証が足りなかった —— config でないリポジトリ定義(`gitdir:`・alternates・ref の symlink)も worker が書け、盤面ユーザーの upload-pack がそれを辿る。盤面は worker の `.git` をリポジトリとして開かず、regular file だけを盤面所有の repo に写してそこから fetch する([ADR 0364](0364-the-board-never-opens-the-workers-git-as-a-repository-and-fetches-the-tip-from-a-board-owned-copy-of-its-regular-files.md)、2026-11-09、issue #3097)。**
+
 **Status 追記: 決定2 の「答案の ref は面接室の `task/<id>` に着く」はそのまま。検討していなかった読み手(retry の root・root 配下の review)は面接室の `.git` を開かず、出題の head の checkout を読む([ADR 0361](0361-interview-readers-read-a-checkout-of-the-posed-head-not-the-rooms-git-and-the-answers-stay-in-the-room.md)、2026-11-09、issue #3071)。**
 
 **Status 追記: 決定3 の「GIT_DIR にしない」は「task の checkout の `.git` を判定の入力にしない」に広がる —— 盤面が worker の repo に撃つのは tip の fetch と自分の隠しの `lstat` 検証だけで、index・`info/sparse-checkout`・alternates の存在を判定に使わず、view の sparse policy は tip の tree から、sandbox の読み path は Interview の役から導く([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md)、2026-11-08、issue #3074)。**
