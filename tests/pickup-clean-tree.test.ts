@@ -4,8 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
-import { commitRoomCopy, PickupGateError, releaseWorkspace } from "../src/workspace.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup } from "./harness.js";
+import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { addSubmodule, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, submoduleSource } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 const NOW = new Date("2026-11-06T00:00:00.000Z");
@@ -65,17 +65,60 @@ it("status.showUntrackedFiles=no でも休止後の untracked を pickup で拒�
 /** 面接室を開いて root を1度拾い、出題して解放した盤面 —— 面接室は休止中、受験者は1人立っている。 */
 async function restingRoom() {
   const workspace = await makeWorkspace("pickup-room-real");
+  const { root, room, place } = await pickedRoot(workspace);
+  const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id));
+  releaseWorkspace(db, place, root, NOW);
+  return { workspace, root, room, examinee: examinee! };
+}
+
+/** 面接室を開いて root を拾った盤面。`arrange` は拾う前の面接室に手を入れる。 */
+async function pickedRoot(workspace: WorkspaceConfig, arrange: (room: string) => void = () => {}) {
   db = openDb(":memory:");
   const root = registerTask(db, {
     type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name,
     interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }],
   }, NOW, ...HUMAN_WEBUI);
   openTestInterviewRoom(db, root);
-  const { room, place } = await pickUpInterviewRoot(db, root, workspace);
-  const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id));
-  releaseWorkspace(db, place, root, NOW);
-  return { workspace, root, room, examinee: examinee! };
+  arrange(recordedInterviewRoom(db, root.id)!.path);
+  return { root, ...(await pickUpInterviewRoot(db, root, workspace)) };
 }
+
+const commitSubmodule = (checkout: string, source: string) => {
+  addSubmodule(checkout, source);
+  git(checkout, "commit", "-m", "add the library as a submodule");
+};
+
+// ADR 0365 決定2: 出題の写しも記録に worker の tree を書く —— 面接室の保護ブランチの head から gitlink を足す・進める tree は ref を書く前に拒む
+it("root の checkout が gitlink を足していれば、出題の写しは path を名指して拒み、面接室の保護ブランチも keep-around の ref も動かない(ADR 0365 決定2)", async () => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-gitlink"));
+  commitSubmodule(place.path, await submoduleSource("room-copy-gitlink-source"));
+  const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
+
+  const failure = (() => {
+    try {
+      commitRoomCopy(db, place, root.id);
+    } catch (err) {
+      return err;
+    }
+  })();
+
+  expect(failure).toBeInstanceOf(RoomCopyGitlinkError);
+  expect((failure as RoomCopyGitlinkError).paths).toEqual(["mod"]);
+  expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
+  expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
+});
+
+it("面接室の保護ブランチの時点で gitlink があり root が触っていなければ、出題の写しは通る(ADR 0365 決定2)", async () => {
+  const source = await submoduleSource("room-copy-gitlink-kept-source");
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-gitlink-kept"), (room) => commitSubmodule(room, source));
+  const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
+  commitWork(place.path, "probe.txt", "the environment\n");
+
+  const head = commitRoomCopy(db, place, root.id);
+
+  expect(git(room.path, "rev-parse", `${head}:mod`)).toBe(git(room.path, "rev-parse", `${protectedHead}:mod`));
+  expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
+});
 
 // 旧: 受験者の記録用 checkout が dirty でも pickup は通した(ADR 0276)。ADR 0356 決定1・2 の後は受験者も面接室から作り直す task の checkout で
 // 走るので、休止の検査は名前の場所(面接室)にだけ当たり、root の pickup と同じく面接室の名前で止まる

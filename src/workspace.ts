@@ -51,7 +51,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_SHADOW_PATHS } from "./sandbox.js";
+import { gitlinkChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_SHADOW_PATHS, treeDeltaEntries } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
@@ -401,6 +401,13 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
 /** ADR 0356 決定2 / ADR 0359 決定5: worker の repo が読めない。完了の解放では観測、todo に戻る解放では task の失敗になる。 */
 export class TaskCheckoutUnreadableError extends Error {}
 
+/** ADR 0365 決定2: 出題の写しの tree が面接室の保護ブランチの head から gitlink を足す・進める —— 文は verb の側で書く。 */
+export class RoomCopyGitlinkError extends Error {
+  constructor(readonly paths: string[]) {
+    super(`the probe's environment adds or advances a submodule (gitlink): ${paths.join(", ")}`);
+  }
+}
+
 /** ADR 0243 決定1: 書く前に値を知る。ADR 0356 決定3: upload-pack は worker の repo の中で走るが protected config しか読まない。 */
 function readWorkerTip({ namedPlace, path: checkout }: TaskCheckoutPlace, taskId: string): string {
   if (!placeHasRepository(checkout)) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no git repository`);
@@ -562,7 +569,11 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   const tip = fetchWorkerTip(place, taskId);
   const tree = boardWriteTree(place.path, tip, room.path, recordedSettingsSparsePolicy(db, room, taskId, tip), taskCheckoutRemnants(place, tip));
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
-  const head = git(room.path, "commit-tree", tree, "-p", git(room.path, "rev-parse", protectedBranchRef(room)), "-m", "Add the project files");
+  const parent = git(room.path, "rev-parse", protectedBranchRef(room));
+  const head = git(room.path, "commit-tree", tree, "-p", parent, "-m", "Add the project files");
+  // ADR 0365 決定2: 受験者は populate できない gitlink を環境として受け取る —— 足す・進める tree は ref を書く前に拒み、root が直して呼び直す
+  const gitlinks = gitlinkChanges(treeDeltaEntries(room.path, parent, head));
+  if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
   const ref = `refs/keep-around/${head}`;
   boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
   return head;
