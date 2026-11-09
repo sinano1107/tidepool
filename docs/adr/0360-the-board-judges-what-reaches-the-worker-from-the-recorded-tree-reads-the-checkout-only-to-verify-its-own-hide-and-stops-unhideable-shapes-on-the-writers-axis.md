@@ -1,5 +1,7 @@
 # 盤面は worker に届くものを記録(tip の tree)で判定し、checkout は自分の隠しの検証にだけ読む —— 隠せない形は書き手の軸で止める
 
+**Status 追記: 決定2 の sparse policy で seed する view(完了の門・退避・完了後の観測・出題の写し)は、worker の git env と同じ鍵 `sparse.expectFilesOutsideOfPatterns=true` で hidden path を読む —— 既定の検査では sandbox の stub(background の Bash が生きている間 host に見える 0 byte のファイル)や worker の中身で S bit が落ち、門はその path を名指すのに退避の `add -A` は運ばず、worker からは commit するものが無い。隠した entry は誰がバイトを置いても運ばない。policy の無い view(Codex の pickup、settings の無い tree)と名前の場所の `boardReadTree` は変えない(2026-11-09、issue #3075)。**
+
 **Status 追記: 決定2 の「盤面が worker の repo に撃つのは tip の fetch とこの検証だけ」の fetch も消える —— tip の fetch は worker の `.git` の中で upload-pack を走らせていた。盤面は regular file だけを写し、盤面所有の repo から fetch する([ADR 0364](0364-the-board-never-opens-the-workers-git-as-a-repository-and-fetches-the-tip-from-a-board-owned-copy-of-its-regular-files.md)、2026-11-09、issue #3097)。**
 
 **Status 追記: 派生の行(worker が settings の blob を変えた tip が landing 後に人間の CLI に届く)は [ADR 0362](0362-the-workspaces-claude-settings-are-human-only-paths-in-the-record-and-the-completion-gate-rejects-a-tip-whose-entries-differ-from-the-fork-source.md) で決着 —— 2 path は記録の中で人間しか書けず、完了の門が fork 元との merge-base と entry を比べて拒む。決定4 と同じ「直して commit し直せ」の型で、決定3 の spawn 時の停止は足さない(2026-11-09、issue #3078)。**

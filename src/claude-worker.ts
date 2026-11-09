@@ -18,6 +18,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { appendEvent, type ResourceStop } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
+import { EXPECT_FILES_OUTSIDE_OF_PATTERNS } from "./git.js";
 import { claudeWorkspaceContainment, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
@@ -685,8 +686,8 @@ export function workerSpawnEnv(
     ...(advisor === undefined ? { [ADVISOR_DISABLE_ENV]: "1" } : {}),
     // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear the board's sparse S bit.
     GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "sparse.expectFilesOutsideOfPatterns",
-    GIT_CONFIG_VALUE_0: "true",
+    GIT_CONFIG_KEY_0: EXPECT_FILES_OUTSIDE_OF_PATTERNS.key,
+    GIT_CONFIG_VALUE_0: EXPECT_FILES_OUTSIDE_OF_PATTERNS.value,
   };
   if (routing.provider !== "moonshot") return { ...env, ...anthropicAuthEnv() };
   if (routing.moonshotApiKey === undefined) {

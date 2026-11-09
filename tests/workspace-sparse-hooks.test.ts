@@ -30,6 +30,14 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 let db: Db | undefined;
 let t: Tidepool | undefined;
 
+async function shareBothSettings(path: string): Promise<void> {
+  await mkdir(join(path, ".claude"));
+  await writeFile(join(path, ".claude", "settings.json"), "{}\n");
+  await writeFile(join(path, ".claude", "settings.local.json"), "{}\n");
+  git(path, "add", "-f", ".claude");
+  git(path, "commit", "-m", "share both settings");
+}
+
 afterEach(async () => {
   db?.close();
   db = undefined;
@@ -39,11 +47,7 @@ afterEach(async () => {
 
 it("complete_task accepts the absent tracked settings after the worker removes its sparse file (ADR 0360 決定2)", async () => {
   const workspace = await makeWorkspace("removed-sparse-completion");
-  await mkdir(join(workspace.path, ".claude"));
-  await writeFile(join(workspace.path, ".claude", "settings.json"), "{}\n");
-  await writeFile(join(workspace.path, ".claude", "settings.local.json"), "{}\n");
-  git(workspace.path, "add", "-f", ".claude");
-  git(workspace.path, "commit", "-m", "share both settings");
+  await shareBothSettings(workspace.path);
   const booted = await bootClaudeOn(workspace);
   t = booted.t;
   const task = queueWork(t, "finish with both settings hidden", workspace.name);
@@ -78,6 +82,32 @@ it("完了の門には index で隠した tracked な変更も見える(ADR 0356
   git(place.path, "update-index", "--skip-worktree", "--", "README.md");
   writeFileSync(join(place.path, "README.md"), "changed\n");
   expect(completionTreePaths(db, place, task.id)).toEqual(["README.md"]);
+});
+
+it.each([
+  [".claude/settings.json", ""],
+  [".claude/settings.json", '{"env":{"WORKER":"1"}}\n'],
+  [".claude/settings.local.json", ""],
+  [".claude/settings.local.json", '{"env":{"WORKER":"1"}}\n'],
+])("隠した %s に %j が置かれても完了の門は名指さず、WIP は記録の blob を運ぶ(ADR 0360 決定2、#3075)", async (hidden, content) => {
+  const workspace = await makeWorkspace("sparse-stub");
+  db = openDb(":memory:");
+  await shareBothSettings(workspace.path);
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, new Date(0), ...HUMAN_WEBUI);
+  const place = await prepareAtPickup(db, workspace, task);
+  excludeWorkspaceProjectSettings(place, task.id, [".claude/settings.json", ".claude/settings.local.json"]);
+  const recorded = git(workspace.path, "rev-parse", `task/${task.id}:${hidden}`);
+  // sandbox の stub(0 byte)も worker の中身も、worker の git env では S bit のまま clean に見える(ADR 0293 追記)
+  mkdirSync(join(place.path, ".claude"), { recursive: true });
+  writeFileSync(join(place.path, hidden), content);
+
+  expect(completionTreePaths(db, place, task.id)).toEqual([]);
+
+  writeFileSync(join(place.path, "half-done.txt"), "work in flight\n");
+  releaseWorkspace(db, place, task, new Date(0));
+
+  expect(git(workspace.path, "log", "-1", "--format=%s", `task/${task.id}`)).toContain("WIP");
+  expect(git(workspace.path, "rev-parse", `task/${task.id}:${hidden}`)).toBe(recorded);
 });
 
 it("forged sparse rules cannot hide a README deletion from completion or WIP (ADR 0360 決定2)", async () => {

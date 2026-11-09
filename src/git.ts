@@ -88,7 +88,12 @@ export type WorktreeChange = { path: string; status: string };
 
 export const displayWorktreePath = (path: string): string => /[\r\n\t]/.test(path) ? JSON.stringify(path) : path;
 
-/** The view's fresh index holds `head`'s tree, with the board's sparse policy applied on a blank tree; returns the policy's config. */
+/** ADR 0293 追記: the Git config that keeps a sparse S bit when a file sits at a path outside the patterns. The Claude worker's
+ *  git env carries it, and so does a board view seeded with a sparse policy (ADR 0360 決定2). */
+export const EXPECT_FILES_OUTSIDE_OF_PATTERNS = { key: "sparse.expectFilesOutsideOfPatterns", value: "true" } as const;
+
+/** The view's fresh index holds `head`'s tree, with the board's sparse policy applied on a blank tree; returns the policy's
+ *  config plus the key that makes the view read hidden paths as the worker's git env does. */
 function seedViewIndex(view: View, dir: string, head: string | undefined, sparse: SparsePolicy | undefined): string[] {
   if (head !== undefined) {
     view(["update-ref", "--no-deref", "HEAD", head]);
@@ -101,7 +106,8 @@ function seedViewIndex(view: View, dir: string, head: string | undefined, sparse
     mkdirSync(empty);
     view(["-C", empty, "-c", "core.bare=false", ...config, "sparse-checkout", "reapply"], { GIT_WORK_TREE: empty });
   }
-  return config;
+  // ADR 0360 決定2: worker の git env と同じ鍵で hidden path を読む —— sandbox の stub や worker の中身で S bit を落とさない(#3075)
+  return sparse ? [...config, "-c", `${EXPECT_FILES_OUTSIDE_OF_PATTERNS.key}=${EXPECT_FILES_OUTSIDE_OF_PATTERNS.value}`] : config;
 }
 
 /** ADR 0356 決定3: the worktree's content as a tree in `objectsFrom`'s objects, staged by `add -A` into a fresh index seeded from `head`. */
