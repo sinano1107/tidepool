@@ -4,14 +4,9 @@ import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { runTeardown, type TeardownDeps } from "../src/teardown.js";
-import {
-
-  resolveOrQuarantine,
-  UnknownWorkspaceError,
-  type WorkspaceConfig,
-} from "../src/workspace.js";
+import { completeTask, escalateTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
+import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import {
   FULL_HANDOFF,
@@ -89,48 +84,26 @@ it("枠の主が入れ替わっていたら何もしない —— 他人の slot
   expect(git(checkout, "status", "--porcelain")).not.toBe("");
 });
 
-it("門が既に解決した workspace は後始末で解決し直さない —— 同じ観測で2度撃たない", async () => {
-  const db = openDb(":memory:");
-  const clock = new FakeClock();
-  const slot = new Slot();
-  const registered = registerTask(
-    db,
-    {
-      type: "work",
-      title: "one",
-      purpose: "why",
-      completion_criteria: "done",
-      workspace: "ghost",
-    },
-    clock.now(),
-    ...HUMAN_WEBUI,
-  );
-  const task = pickupTask(db, registered, "deckhand", clock.now())!;
-  slot.occupy(task.id, sessionId(db, task.id));
+it("drift を観測する後始末は1つの session につき1度だけ解決する —— 2度目は枠の再観測で落ち、同じ観測を2度撃たない(ADR 0363 決定2)", async () => {
+  const { deps, task } = await pickedUpSession();
   let resolveCalls = 0;
-  const resolve = () => {
+  const resolve = (name: string | null): WorkspaceConfig => {
     resolveCalls++;
-    throw new UnknownWorkspaceError("ghost");
+    throw new UnknownWorkspaceError(name ?? "sandbox");
   };
+  // 完了の門は drift を拒むだけで登録しない —— worker は escalate する
+  escalateTask(deps.db, task, { context: "the workspace is gone", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", deps.clock.now(), "worker");
 
-  // 完了の門(`runReleasingVerb`)が verb の**手前**で解決する —— 解決できない名前は
-  // ここで quarantine される。その結果は「解決済み・該当なし」として後始末へ渡る
-  const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
-  expect(resolved).toBeUndefined();
-  await runTeardown({ db, clock, slot, resolve, pollNow: () => {} }, task.id, {
-    completion: true,
-    workspace: resolved ?? null,
-  });
+  await runTeardown({ ...deps, resolve }, task.id, teardownStep(deps.db, task.id));
+  await runTeardown({ ...deps, resolve }, task.id, teardownStep(deps.db, task.id));
 
   expect(resolveCalls).toBe(1);
-  const quarantine = quarantineQuestion(db, "workspace", "ghost");
+  const quarantine = quarantineQuestion(deps.db, "workspace", "sandbox");
   expect(quarantine).toBeDefined();
   // 2度目は同じ観測を cause として重ねて記録するだけ = 人間には理由が二重に見える
-  expect(listEvents(db, quarantine?.id ?? "").map((e) => e.payload.kind)).not.toContain(
-    "quarantine_refired",
-  );
+  expect(listEvents(deps.db, quarantine?.id ?? "").map((e) => e.payload.kind)).not.toContain("quarantine_refired");
   // 門が閉じたわけではない: 枠はきちんと空く
-  expect(slot.currentTaskId).toBeNull();
+  expect(deps.slot.currentTaskId).toBeNull();
 });
 
 /** 完了済みの session を枠に置き、後始末が撃つ契機を1本の列に記録する deps を返す。 */

@@ -236,6 +236,29 @@ it("root の get_current_task は仮説・測る仕事・根拠の id・測る�
   });
 });
 
+it("実環境の名前が registry から消えた(drift)root の get_current_task は、実環境を載せず許可ドメインを空にし、Quarantine を立てない(ADR 0363 決定2)", async () => {
+  const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"] };
+  let drifted = false;
+  t = await boot({
+    workspace,
+    resolveWorkspace: (name) => {
+      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
+      return workspace;
+    },
+  });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await runNow(t, root.id);
+  drifted = true;
+
+  const read: any = await callAsTask(t, root.id, "get_current_task", {});
+
+  expect(read.isError).toBeFalsy();
+  const { interview } = JSON.parse(read.content[0].text);
+  expect(interview).not.toHaveProperty("real_environment");
+  expect(interview.allowed_domains).toEqual([]);
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
+});
+
 it("管理 MCP の register_task に空の測る仕事を渡すと、root の get_current_task の interview に測る仕事が載らない(ADR 0273 決定9)", async () => {
   t = await boot();
   const client = await managementMcpClient(t.baseUrl);
@@ -930,7 +953,7 @@ async function posedRecord(rootId: string) {
   return { events, examinees };
 }
 
-it("root の workspace が registry から消えた(registry drift)まま出題すると、head を記録できないので拒まれ escalate を指し、出題の event も受験者も残らず、session は続き、workspace の quarantine が立つ(ADR 0263 追記5)", async () => {
+it("root の workspace が registry から消えた(registry drift)まま出題すると、head を記録できないので拒まれ escalate を指し、出題の event も受験者も残らず、session は続き、Quarantine は立たない(ADR 0263 追記5 / ADR 0363 決定2・3)", async () => {
   const workspace = await makeWorkspace("reef");
   let drifted = false;
   t = await boot({
@@ -947,12 +970,12 @@ it("root の workspace が registry から消えた(registry drift)まま出題�
   const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
 
   expect(posed.isError).toBe(true);
-  expect(posed.content[0].text).toContain("workspace cannot be resolved");
+  expect(posed.content[0].text).toContain(`"${workspace.name}" is not in the workspace registry`);
   expect(posed.content[0].text).toContain("escalate");
   expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
   expect((await callAsTask(t, root.id, "get_current_task", {})).isError).toBeFalsy();
-  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeDefined();
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
 });
 
 // 分類は pickup-clean-tree.test.ts の domain 層が言う。ここは RoomCopyGitlinkError の tool error への写像だけ(ADR 0107 決定3)
@@ -992,7 +1015,7 @@ async function scoring(rootId: string) {
 it.each([
   ["complete_audit", auditing],
   ["complete_interview", scoring],
-])("%s の時に workspace が registry から消えていても(registry drift)、門がその名前の Quarantine を1枚だけ立て、task は done になり枠が空いて次の pickup が走る(ADR 0274 決定3 / issue #2259)", async (verb, arrange) => {
+])("%s の時に workspace が registry から消えていても(registry drift)、verb は workspace を解かずに done にし、後始末がその名前の Quarantine を1枚だけ立て、枠が空いて次の pickup が走る(ADR 0363 決定2・3 / issue #2259)", async (verb, arrange) => {
   const workspace = await makeWorkspace("reef");
   const other = await makeWorkspace("other");
   let drifted = false;
@@ -1010,9 +1033,8 @@ it.each([
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   drifted = true;
 
+  // drift は後始末まで続く —— 後始末が観測者なので、その前に戻すと後始末が解決できてしまう
   const completed: any = await callAsTask(t, id, verb, args);
-  // drift は verb の間だけ —— 後の pickup が同じ名前を解決し直すと、門が撃ったかどうかが見えなくなる
-  drifted = false;
 
   expect(completed.isError).toBeFalsy();
   t.worker.exit(id);

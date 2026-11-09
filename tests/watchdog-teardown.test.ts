@@ -592,44 +592,55 @@ it.each([
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
+/** task の checkout を開いた後に registry から名前が消えた(drift)session と、その名前を解けない resolver。 */
+async function driftedAfterCheckout() {
+  const f = await stoppedBeforeSpawn();
+  const gone = (name: string | null): WorkspaceConfig => {
+    throw new UnknownWorkspaceError(name ?? f.ws.name);
+  };
+  return { ...f, checkout: f.place!.path, gone, deps: { db: f.db, clock: f.clock, slot: f.slot, resolve: gone, pollNow: () => f.triggered.push("pollNow") } };
+}
+
+/** 後始末が drift の観測者として Quarantine を1枚だけ立て、理由に残した task の checkout の在り処を書き、解放は飛ばして checkout を残し、枠と印を空けた。 */
+function expectDriftObservedOnce(f: Awaited<ReturnType<typeof driftedAfterCheckout>>, slot: Slot): void {
+  const question = openQuarantineQuestion(f.db, "workspace", f.ws.name)!;
+  expect(questions(f.db).filter((q) => q.question_quarantine_kind !== null).map((q) => q.id)).toEqual([question.id]);
+  expect(getTask(f.db, question.id)?.purpose).toContain(`unknown workspace: ${f.ws.name}`);
+  expect(getTask(f.db, question.id)?.purpose).toContain(`The board kept the task checkout at ${f.checkout}`);
+  expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
+  expect(existsSync(f.checkout)).toBe(true);
+  expect(slot.currentTaskId).toBeNull();
+  expect(markedSession(f.db)).toBeUndefined();
+  expect(f.triggered).toEqual(["pollNow"]);
+}
+
 it.each([
   ["そのまま", false],
   ["再起動を跨いで", true],
-])("完了の門が解決できない workspace を quarantine した完了の後始末は、同じ名前に Quarantine を撃ち直さずに枠を空ける —— %s(ADR 0274 決定3 / issue #2259)", async (_, restart) => {
-  const f = await stoppedBeforeSpawn("ghost");
-  expect(getTask(f.db, f.task.id)?.workspace).toBe("ghost");
-  // 完了の門(`resolveTaskWorkspace`)が drift を観測して撃つ
-  expect(resolveOrQuarantine(f.db, f.resolve, "ghost", f.clock.now())).toBeUndefined();
-  const question = openQuarantineQuestion(f.db, "workspace", "ghost")!;
+])("門が成功した後、後始末までの間に drift した完了の後始末は、Quarantine を1枚立てて解放を飛ばし、理由に task の checkout の在り処を含む —— %s(ADR 0363 決定2・4)", async (_, restart) => {
+  const f = await driftedAfterCheckout();
   completeTask(f.db, f.task, FULL_HANDOFF, "deckhand", f.clock.now(), "worker");
   markTeardown(f.db, f.task.id, f.clock.now());
   f.slot.enterTeardown();
 
-  const deps = { db: f.db, clock: f.clock, slot: f.slot, resolve: f.resolve, pollNow: () => f.triggered.push("pollNow") };
-  const slot = restart ? restartMidTeardown(f, f.resolve) : f.slot;
-  if (!restart) await runTeardown(deps, f.task.id, { ...teardownStep(f.db, f.task.id), workspace: null });
+  const slot = restart ? restartMidTeardown(f, f.gone) : f.slot;
+  if (!restart) await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
   await settle();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("done");
-  expect(questions(f.db).map((q) => q.id)).toEqual([question.id]);
-  expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
-  expect(slot.currentTaskId).toBeNull();
-  expect(markedSession(f.db)).toBeUndefined();
-  expect(f.triggered).toEqual(["pollNow"]);
+  expectDriftObservedOnce(f, slot);
 });
 
-it("エスカレーションした session の後始末は門を持たない決着の最初の観測者なので、解決できない workspace を今日どおり quarantine する(ADR 0274 決定3 / issue #2259)", async () => {
-  const f = await stoppedBeforeSpawn("ghost");
+it("エスカレーションした session の後始末は drift の最初の観測者なので、解決できない workspace を quarantine し、理由に残した task の checkout の在り処を書く(ADR 0363 決定2・4)", async () => {
+  const f = await driftedAfterCheckout();
   escalateTask(f.db, f.task, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", f.clock.now(), "worker");
   markTeardown(f.db, f.task.id, f.clock.now());
   f.slot.enterTeardown();
-  expect(openQuarantineQuestion(f.db, "workspace", "ghost")).toBeUndefined();
+  expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
 
-  await runTeardown({ db: f.db, clock: f.clock, slot: f.slot, resolve: f.resolve, pollNow: () => f.triggered.push("pollNow") }, f.task.id, teardownStep(f.db, f.task.id));
+  await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
 
-  expect(getTask(f.db, openQuarantineQuestion(f.db, "workspace", "ghost")!.id)?.purpose).toContain("unknown workspace: ghost");
-  expect(f.slot.currentTaskId).toBeNull();
-  expect(f.triggered).toEqual(["pollNow"]);
+  expectDriftObservedOnce(f, f.slot);
 });
 
 it("準備が checkout より前に落ちた pickup の後始末が再起動で途切れても、起動時の復旧は途切れなかった後始末と同じところへ着く(ADR 0274 決定3)", async () => {

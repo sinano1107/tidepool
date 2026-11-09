@@ -3,7 +3,7 @@ import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { quarantineWorkspace } from "../src/workspace.js";
+import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import {
   addSubmodule,
   api,
@@ -18,6 +18,7 @@ import {
   HUMAN_WEBUI,
   makeWorkspace,
   mcpClient,
+  questions,
   registerWork,
   submoduleSource,
   type Tidepool,
@@ -352,6 +353,68 @@ it("workspace が Quarantine 中でも dirty な work の完了は拒み、commi
 
   expect(retry.isError ?? false).toBe(false);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
+/** 名前を後から registry から消せる(drift)盤面で、worker が task の checkout に commit した走行中の work。 */
+async function committedThenDrifted(title: string) {
+  const ws = await makeWorkspace("sandbox");
+  const registry = { drifted: false };
+  t = await bootTidepool({
+    workspace: ws,
+    resolveWorkspace: (name) => {
+      if (registry.drifted) throw new UnknownWorkspaceError(name ?? ws.name);
+      return ws;
+    },
+  });
+  const task = await registerWork(t, title);
+  await t.clock.advance(HOUR);
+  const checkout = checkoutOf(t.db, task.id);
+  commitWork(checkout, "feature.txt", "the deliverable\n");
+  registry.drifted = true;
+  return { ws, task, checkout, client: await mcpClient(t.mcpBaseUrl, task.id) };
+}
+
+const quarantineQuestions = async () => (await questions(t)).filter((q: any) => q.question_quarantine_kind !== null);
+
+it("実行中に名前が registry から消えた(drift)work の complete_task は done にせず、名前・escalate・残る task の checkout の在り処を言って拒み、呼び直しても Quarantine を立てない(ADR 0363 決定1・2・4)", async () => {
+  const { ws, task, checkout, client } = await committedThenDrifted("finish after the registry lost the workspace");
+
+  const first: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  const again: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  for (const refused of [first, again]) {
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain(`"${ws.name}" is not in the workspace registry`);
+    expect(refused.content[0].text).toContain("escalate");
+    expect(refused.content[0].text).toContain(checkout);
+  }
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+  expect(await quarantineQuestions()).toEqual([]);
+});
+
+it("issue #3094 の再現: drift の後の完了は拒まれ、escalate の後始末が Quarantine を1枚立てて残した checkout を名指し、worker の commit は checkout にだけ残って記録の task branch に入らない(ADR 0363 決定1・4)", async () => {
+  const { ws, task, checkout, client } = await committedThenDrifted("ship while the registry loses the workspace");
+  const tip = git(checkout, "rev-parse", "HEAD");
+
+  const refused: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  const escalated: any = await client.callTool({
+    name: "escalate",
+    arguments: { context: "the workspace left the registry", questions: [{ title: "where now?", options: ["restore it", "drop it"], recommendation: "restore it" }] },
+  });
+  await client.close();
+
+  expect(refused.isError).toBe(true);
+  expect(escalated.isError ?? false).toBe(false);
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined());
+  const [quarantine, ...others] = await quarantineQuestions();
+  expect(others).toEqual([]);
+  expect(quarantine).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: ws.name });
+  expect(quarantine.purpose).toContain(`The board kept the task checkout at ${checkout}`);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${quarantine.id}/events`)).json.map((e: any) => e.kind)).not.toContain("quarantine_refired");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).not.toBe("done");
+  expect(git(checkout, "rev-parse", "HEAD")).toBe(tip);
+  expect(git(ws.path, "rev-parse", `task/${task.id}`)).not.toBe(tip);
 });
 
 // 門は tree rule と同じ基準で dirty を数える(ADR 0069 の3条件)。`.claude/agents` は

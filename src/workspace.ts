@@ -1321,7 +1321,8 @@ export function buildWorkspaceResolver(
  *  never escapes to the caller; it quarantines the name in its place and the
  *  caller treats the workspace step as absent for this cycle. A human's own
  *  synchronous request (registration, a quarantine/merge answer) is not this
- *  seam — those fail fast with a DomainError instead (ADR 0009). `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。 */
+ *  seam — those fail fast with a DomainError instead (ADR 0009). `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。
+ *  ADR 0363 決定2: worker の verb は呼ばない —— 走った後の drift の観測者は後始末で、verb は拒むだけ。 */
 export function resolveOrQuarantine(
   db: Db,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
@@ -1509,6 +1510,7 @@ function settleTaskCheckout(
 /** ADR 0356 決定2: 残った task の checkout を failure question が言う文 —— 中身はタスクブランチに無く、retry は新しい checkout で走る。 */
 export const KEPT_TASK_CHECKOUT = {
   beyondBranch: "what it holds beyond the task branch is not on the task branch.",
+  at: (path: string): string => `The board kept the task checkout at ${path}: ${KEPT_TASK_CHECKOUT.beyondBranch}`,
   retry: `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
 } as const;
 
@@ -1531,7 +1533,7 @@ function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: 
       db,
       current,
       `task checkout could not be released: ${current.title}`,
-      `${reason}\n\nThe board kept the task checkout at ${path}: ${KEPT_TASK_CHECKOUT.beyondBranch}`,
+      `${reason}\n\n${KEPT_TASK_CHECKOUT.at(path)}`,
       now,
       KEPT_TASK_CHECKOUT.retry,
     );
