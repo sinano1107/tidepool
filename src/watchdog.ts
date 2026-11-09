@@ -346,12 +346,12 @@ export function reclaimIntoTeardown(
   containers: ProcessContainers | undefined,
   taskId: string,
   sessionId: number,
-  workspace?: WorkspaceConfig | null,
+  workspace?: WorkspaceConfig,
 ): void {
   deps.slot.enterTeardown();
   containers?.forceReclaim(String(sessionId));
   const reclaimed = containers?.reclaimed(String(sessionId)) ?? Promise.resolve();
-  void reclaimed.then(() => runTeardown(deps, taskId, { ...teardownStep(deps.db, taskId), ...(workspace !== undefined && { workspace }) }));
+  void reclaimed.then(() => runTeardown(deps, taskId, { ...teardownStep(deps.db, taskId), workspace }));
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the

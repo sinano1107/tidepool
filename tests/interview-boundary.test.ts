@@ -26,6 +26,7 @@ import {
   commit,
   commitWork,
   completeMetaReviews,
+  driftable,
   FULL_HANDOFF,
   failGitCommits,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -234,6 +235,23 @@ it("root の get_current_task は仮説・測る仕事・根拠の id・測る�
     real_environment: realpathSync(workspace.path),
     allowed_domains: ["registry.npmjs.org"],
   });
+});
+
+it("実環境の名前が registry から消えた(drift)root の get_current_task は、実環境を載せず許可ドメインを空にし、Quarantine を立てない(ADR 0363 決定2)", async () => {
+  const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"] };
+  const registry = driftable(workspace);
+  t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await runNow(t, root.id);
+  registry.drifted = true;
+
+  const read: any = await callAsTask(t, root.id, "get_current_task", {});
+
+  expect(read.isError).toBeFalsy();
+  const { interview } = JSON.parse(read.content[0].text);
+  expect(interview).not.toHaveProperty("real_environment");
+  expect(interview.allowed_domains).toEqual([]);
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
 });
 
 it("管理 MCP の register_task に空の測る仕事を渡すと、root の get_current_task の interview に測る仕事が載らない(ADR 0273 決定9)", async () => {
@@ -930,29 +948,23 @@ async function posedRecord(rootId: string) {
   return { events, examinees };
 }
 
-it("root の workspace が registry から消えた(registry drift)まま出題すると、head を記録できないので拒まれ escalate を指し、出題の event も受験者も残らず、session は続き、workspace の quarantine が立つ(ADR 0263 追記5)", async () => {
+it("root の workspace が registry から消えた(registry drift)まま出題すると、head を記録できないので拒まれ escalate を指し、出題の event も受験者も残らず、session は続き、Quarantine は立たない(ADR 0263 追記5 / ADR 0363 決定2・3)", async () => {
   const workspace = await makeWorkspace("reef");
-  let drifted = false;
-  t = await boot({
-    workspace,
-    resolveWorkspace: (name) => {
-      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
-      return workspace;
-    },
-  });
+  const registry = driftable(workspace);
+  t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   expect(t.worker.started.at(-1)!.id).toBe(root.id);
-  drifted = true;
+  registry.drifted = true;
 
   const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
 
   expect(posed.isError).toBe(true);
-  expect(posed.content[0].text).toContain("workspace cannot be resolved");
+  expect(posed.content[0].text).toContain(`"${workspace.name}" is not in the workspace registry`);
   expect(posed.content[0].text).toContain("escalate");
   expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
   expect((await callAsTask(t, root.id, "get_current_task", {})).isError).toBeFalsy();
-  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeDefined();
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
 });
 
 // 分類は pickup-clean-tree.test.ts の domain 層が言う。ここは RoomCopyGitlinkError の tool error への写像だけ(ADR 0107 決定3)
@@ -969,6 +981,28 @@ it("root の checkout が gitlink を足していれば、出題は path を名�
   expect(posed.content[0].text).toContain("call pose_probe again");
   expect(posed.content[0].text.split("\n")).toContain("- mod");
   expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
+});
+
+it("受験者の complete_task は実環境の名前が registry から消えると(drift)拒まれ、文は escalate と残る task の checkout を指し、実環境の名前を載せない(ADR 0273 決定1 / ADR 0363 決定4)", async () => {
+  const workspace = await makeWorkspace("reef");
+  const registry = driftable(workspace);
+  t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [childId] = await pose(root.id);
+  await completeMetaReviews(t);
+  const checkout = lastCheckoutOf(childId);
+  commitWork(checkout, "probe.txt", "probe\n");
+  registry.drifted = true;
+
+  const refused: any = await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
+
+  expect(refused.isError).toBe(true);
+  const text: string = refused.content[0].text;
+  expect(text).toContain("is not in the workspace registry");
+  expect(text).toContain("escalate");
+  expect(text).toContain(checkout);
+  expect(text).not.toContain(`"${workspace.name}"`);
+  expect(text).not.toContain(workspace.path);
 });
 
 /** 監査を拾った盤面: 監査の id と complete_audit の引数。 */
@@ -992,27 +1026,19 @@ async function scoring(rootId: string) {
 it.each([
   ["complete_audit", auditing],
   ["complete_interview", scoring],
-])("%s の時に workspace が registry から消えていても(registry drift)、門がその名前の Quarantine を1枚だけ立て、task は done になり枠が空いて次の pickup が走る(ADR 0274 決定3 / issue #2259)", async (verb, arrange) => {
+])("%s の時に workspace が registry から消えていても(registry drift)、verb は workspace を解かずに done にし、後始末がその名前の Quarantine を1枚だけ立て、枠が空いて次の pickup が走る(ADR 0363 決定2・3 / issue #2259)", async (verb, arrange) => {
   const workspace = await makeWorkspace("reef");
   const other = await makeWorkspace("other");
-  let drifted = false;
-  t = await boot({
-    workspace,
-    resolveWorkspace: (name) => {
-      if (name === other.name) return other;
-      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
-      return workspace;
-    },
-  });
+  const registry = driftable(workspace, other);
+  t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const { id, args } = await arrange(root.id);
   // 枠が空いたことと pickup の契機は、別の workspace で待つ task が拾われることで見る
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
-  drifted = true;
+  registry.drifted = true;
 
+  // drift は後始末まで続く —— 後始末が観測者なので、その前に戻すと後始末が解決できてしまう
   const completed: any = await callAsTask(t, id, verb, args);
-  // drift は verb の間だけ —— 後の pickup が同じ名前を解決し直すと、門が撃ったかどうかが見えなくなる
-  drifted = false;
 
   expect(completed.isError).toBeFalsy();
   t.worker.exit(id);

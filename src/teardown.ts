@@ -8,15 +8,16 @@ import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineQuestion } from "./quarantine.js";
 
 import type { Slot } from "./slot.js";
-import { getTask, returnToQueue, type Task } from "./tasks.js";
+import { getTask, returnToQueue, type Task, taskCheckoutPath } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
+  KEPT_TASK_CHECKOUT,
   PlaceNotOpenError,
+  quarantineWorkspace,
   releaseWorkspace,
-  resolveOrQuarantine,
+  resolveUnlessDrifted,
   taskRunPlace,
-  UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -53,15 +54,13 @@ export interface TeardownStep {
    *  ときだけ)。 */
   ready?: (task: Task) => boolean;
   /** 完了経路(ADR 0109 決定1・3): 退避ではなく検査を走らせ、work タスクなら
-   *  merge-back まで進む。解決できない名前は quarantine しない(`done` へ決着させる verb はどれも verb の前に workspace を解決する門を通り、門が既に撃った。ADR 0274 決定3)。 */
+   *  merge-back まで進む。 */
   completion?: boolean;
   /** process を1つも持たなかった session(ADR 0274 決定3): task ブランチに乗っていない checkout と解決できない名前には
    *  tree rule を当てない。 */
   neverRan?: boolean;
-  /** 門が既に解決した workspace。「解決済み・該当なし」を `null` で、「まだ解決していない」を
-   *  `undefined` で言い分ける。解決できない名前を quarantine しない側は `completion` と
-   *  `neverRan` の2つで、どちらも記録(`settlementOf`)から導くので復旧はこの欄に依存しない。 */
-  workspace?: WorkspaceConfig | null;
+  /** 完了の門が検査した走る場所(ADR 0363 決定1: 門は名前が解けなければ拒むので、渡るのは解けた場所だけ)。無ければ後始末が解く。 */
+  workspace?: WorkspaceConfig;
 }
 
 type Settlement = "completed" | "released" | "interrupted" | "never_ran";
@@ -390,8 +389,7 @@ async function teardown(
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
   // 後始末は走る場所(task の checkout、ADR 0356 決定1)に効く。門が渡した workspace は解決済みの走る場所
-  let workspace = step.workspace;
-  if (workspace === undefined) workspace = deps.resolve && runPlaceToRelease(deps, deps.resolve, task, step);
+  const workspace = step.workspace ?? (deps.resolve && runPlaceToRelease(deps, deps.resolve, task, step));
   const mergeBack = Boolean(step.completion) && task.type === "work";
   // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の取得だけが
   // ネットワークなので、同期の `releaseWorkspace` の手前で撃つ。失敗は投げずに持ち越す
@@ -432,27 +430,26 @@ async function teardown(
   deps.pollNow();
 }
 
-/** 後始末が tree rule を当てる走る場所(無ければ当てない)。解決できない名前(drift)を quarantine しないのは2種類だけである
- *  (ADR 0274 決定3)—— 他の決着(エスカレーション・分解・中断)は後始末が最初の観測者なので `resolveOrQuarantine` を通す。
- *  - 完了(`completion`): `done` へ決着させる verb はどれも verb の前に workspace を解決する門を通る(`runReleasingVerb` が強制)ので、門が後始末より前に同じ名前を解決しており、解決できなければ門がそこで撃っている。再起動の
- *    復旧でも撃ち直さず当てない。解決できれば今日どおり走る場所へ当てる。
- *  - process を1つも持たなかった session(`neverRan`): drift は止めた Quarantine を撃ち直さない。準備の後で止まった
- *    task の checkout は今日どおり退避する。 */
+/** 後始末が tree rule を当てる走る場所(無ければ当てない)。ADR 0363 決定2: 走った後の drift(解決できない名前)の観測者は決着の
+ *  種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は拒むだけで登録しない。process を1つも持たなかった session
+ *  (`neverRan`)の drift は止めた pickup の門が既に Quarantine にしたので撃ち直さない(ADR 0274 決定3)。準備の後で止まった
+ *  task の checkout は今日どおり退避する。 */
 function runPlaceToRelease(
   { db, clock }: TeardownDeps,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   task: Task,
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
+  const workspace = resolveUnlessDrifted(resolve, task.workspace, (err) => {
+    if (step.neverRan) return;
+    // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
+    const kept = taskCheckoutPath(db, task.id);
+    quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
+  });
+  if (!workspace) return undefined;
   try {
-    if (!step.completion && !step.neverRan) {
-      const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
-      if (!resolved) return undefined;
-      return taskRunPlace(db, task, resolved);
-    }
-    return taskRunPlace(db, task, resolve(task.workspace));
+    return taskRunPlace(db, task, workspace);
   } catch (err) {
-    if (err instanceof UnknownWorkspaceError) return undefined;
     // この session の task の checkout が開いていなければ worker も走っておらず、触る checkout が無い(ADR 0356 決定2)。
     // 開いた event は repo 完成後に書く(ADR 0329)。repo が消えた checkout は解放が worker の repo の故障として読む
     if (err instanceof PlaceNotOpenError) return undefined;

@@ -100,6 +100,7 @@ import {
   resolveTaskAgent,
   type Task,
   type TaskType,
+  taskCheckoutPath,
   taskHistoryRows,
   taskVerbSwap,
   type Unstored,
@@ -118,7 +119,7 @@ import {
   RoomCopyGitlinkError,
   type RunPlace,
   recordTaskCheckoutTip,
-  resolveOrQuarantine,
+  resolveUnlessDrifted,
   type TaskCheckoutPlace,
   TaskCheckoutUnreadableError,
   taskForkSource,
@@ -327,22 +328,31 @@ export async function runVerb<R>(
   }
 }
 
-/** タスク自身の実行 workspace(issue #26 / ADR 0009 —— 盤面の既定ではない)。解決できない
- *  名前は `resolveOrQuarantine` が quarantine する**副作用を持つ**ので、1つの verb 呼び出しで
- *  2度撃たない(2度目は同じ観測を cause として重ねて記録するだけである)。 */
-function resolveTaskWorkspace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
+/** 門が記録へ書く走る場所(task の checkout、ADR 0356 決定1)。workspace はタスク自身のもの(issue #26 / ADR 0009 —— 盤面の
+ *  既定ではない)。workspace 追跡の無い盤面では undefined。ADR 0363 決定1・2・4: 名前が解けない(drift)のも門が記録を置けない
+ *  1形で、資源の停止を登録せずに拒み —— 観測者は後始末 —— 残る task の checkout の在り処と escalate を指す。 */
+function resolveGatedPlace(deps: McpDeps, task: Task, recorded: string): TaskCheckoutPlace | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
-  const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  // 門と後始末は走る場所(task の checkout、ADR 0356 決定1)に効く
+  const workspace = resolveUnlessDrifted(resolve, task.workspace, (err) => {
+    const kept = taskCheckoutPath(deps.db, task.id);
+    // ADR 0273 決定1: 受験者の workspace は root の実環境の名前 —— 受験者には伏せる
+    const name = task.interview_target_id === null ? ` "${err.workspaceName}"` : "";
+    throw new DomainError(
+      `this task's workspace${name} is not in the workspace registry, so the board cannot record ${recorded}${ESCALATE_UNFIXABLE}` +
+        (kept ? `. Your work stays in the task checkout at ${kept}` : ""),
+    );
+  });
   return workspace && taskRunPlace(deps.db, task, workspace);
 }
 
 /** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
- *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
-function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskCheckoutPlace): void {
-  if (!completionTreeGateApplies(task)) return;
+ *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。返すのは門が検査した走る場所(後始末が解放する)。 */
+function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
+  if (!completionTreeGateApplies(task)) return undefined;
+  const workspace = resolveGatedPlace(deps, task, "the task branch tip");
+  if (!workspace) return undefined;
   // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
   let tip: string;
   try {
@@ -392,7 +402,7 @@ function assertWorkCompletionGate(deps: McpDeps, task: Task, workspace: TaskChec
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
     throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
   }
-  if (paths.length === 0) return;
+  if (paths.length === 0) return workspace;
   throw refusalNamingPaths(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
       "with a message whose body says what changed and why in a few lines, readable from " +
@@ -435,9 +445,6 @@ function teardownDeps(deps: McpDeps): TeardownDeps {
   };
 }
 
-/** 検査を持たない門: workspace を前倒しで解決するだけ(監査・Interview の完了には ADR 0084 の完了の門が無い)(`done` へ決着させる verb は門を持つ —— ADR 0274 決定3)。 */
-const resolveOnly = (): void => {};
-
 /** Verbs that end the slot session (complete, decompose, escalate, and the other
  *  releasing verbs registered below): run the
  *  domain verb attributed to the slot worker, then hand the release to the
@@ -449,23 +456,18 @@ const resolveOnly = (): void => {};
  *  workspace の解放と slot の解放**だけ**が回収済み観測の後ろへ移る。worker exit と
  *  回収済み観測を待つ循環待ちは作らない(待つのは `void` の先である)。
  *
- *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の面接室の写し —— ADR 0273 決定3)。workspace が解決できなければ
- *  門は飛ばす —— 出題の verb だけは head を記録できないので verb の側で拒む(追記5)。門を持つ verb だけが workspace を
- *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
- *  error で終わった escalate / decompose にまでその副作用が及ぶ。`done` へ決着させる verb は
- *  どれも門を持ち、持たずに `done` へ決着させれば記録ごと拒む(ADR 0274 決定3 —— 後始末は
- *  `done` から「門が既に観測した」と導く)。門が解決した走る場所は**解決できなかったとき
- *  (`null`)も含めて**そのまま後始末へ渡し、後始末は門が検査した場所を解放する(`null` なら
- *  完了の後始末は解決し直さないので撃ち直さない)。 */
+ *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の面接室の写し —— ADR 0273 決定3)。ADR 0363 決定3: 門を持つのは
+ *  記録へ書く手を持つ verb だけで、門は自分で走る場所を解き(`resolveGatedPlace`)、検査した場所を返す。返した場所は後始末へ
+ *  渡り、後始末は門が検査した場所を解放する。返さなければ後始末が自分で解き、drift の観測者になる(ADR 0363 決定2)。
+ *  完了の門が掛かる task が門なしに `done` へ決着すれば記録ごと拒む —— `done` ⇔ tip が記録にある(ADR 0359 決定1)。 */
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task) => (actorId: string, now: Date) => object,
-  gate?: (task: Task, workspace: TaskCheckoutPlace) => void,
+  gate?: (task: Task) => TaskCheckoutPlace | undefined,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
-    const workspace = gate ? (resolveTaskWorkspace(deps, task) ?? null) : undefined;
-    if (gate && workspace) gate(task, workspace);
+    const workspace = gate?.(task);
     // `verb(task)` は transaction の外: 拒否でも残す副作用(authority の quarantine)はここに置き、返す記録だけが中で走る
     const record = verb(task);
     // 後始末に入った(GLOSSARY.md「後始末」)。枠を握っているのは task ではなく
@@ -474,9 +476,8 @@ function runReleasingVerb(
     const result = deps.db.transaction(() => {
       const now = deps.clock.now();
       const recorded = record(attributedActorId(deps, task), now);
-      // ADR 0274 決定3: 後始末は `done` から「門が workspace を既に観測した」と導く —— 門を渡さずに `done` へ決着させた verb は
-      // その導出を偽にするので、記録ごと巻き戻す(門の callback が飛ばされたかではなく、解決が前倒しで走ったかを問う)
-      if (!gate && getTask(deps.db, task.id)?.status === "done") {
+      // ADR 0363 決定3: 完了の門が掛かる task を門なしに `done` へ決着させた verb は、tip を記録へ置かずに完了させるので記録ごと巻き戻す
+      if (!gate && completionTreeGateApplies(task) && getTask(deps.db, task.id)?.status === "done") {
         throw new Error(`task ${task.id}: a verb settled it done without the completion gate`);
       }
       markTeardown(deps.db, task.id, now);
@@ -493,7 +494,8 @@ function runReleasingVerb(
  *  読みに開いている)と、その宣言のうち受験者に効く部分。 */
 function interviewEnvelope(deps: McpDeps, task: Task) {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  const workspace = resolve && resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+  // ADR 0363 決定2: 読む verb も drift を登録しない —— 解けなければ実環境を載せないだけ
+  const workspace = resolve && resolveUnlessDrifted(resolve, task.workspace);
   return {
     ...interviewFields(deps.db, task.id),
     measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
@@ -633,14 +635,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
   // ADR 0310 決定4: 材料が停止の RCA の verb の文は材料の停止を指す
   const stopRca = attributedTaskId !== null && materialStop(deps.db, attributedTaskId) !== undefined;
-  /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
+  /** `done` へ決着させる種別ごとの完了の verb の handler(門は持たない —— ADR 0363 決定3): 完了した task の id と status を返す。 */
   const completing =
     <I>(complete: (db: Db, task: Task, input: I, actorId: string, now: Date, origin: "worker") => Task) =>
     async (input: I) =>
       runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
         const done = complete(deps.db, task, input, actorId, now, "worker");
         return { id: done.id, status: done.status };
-      }, resolveOnly);
+      });
 
   server.registerTool(
     "get_current_task",
@@ -758,7 +760,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             const done = completeTask(deps.db, task, handoff, actorId, now, "worker");
             return { id: done.id, status: done.status };
           },
-          (task, workspace) => assertWorkCompletionGate(deps, task, workspace),
+          (task) => completionGatedPlace(deps, task),
         ),
     );
   }
@@ -840,19 +842,21 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
       async (input) => {
         // ADR 0273 決定3: 出題の head は面接室の写しの commit。拒まれる出題は写さない —— 検査を写しの前に置く。
-        // 門が走らない(workspace が解決できない)出題は head を記録できないので拒む(ADR 0263 追記5)
+        // 門が走らない(workspace 追跡の無い盤面)出題は head を記録できないので拒む(ADR 0263 追記5)。名前が解けなければ門が拒む(ADR 0363 決定1)
         let head: string | undefined;
         return runReleasingVerb(
           deps,
           attributedTaskId,
           (task) => (actorId, now) => {
             if (head === undefined) {
-              throw new DomainError(`this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
+              throw new DomainError(`this board tracks no workspace, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
             }
             const audit = poseProbe(deps.db, task, input, actorId, now, "worker", head);
             return { audit_id: audit.id, parent_status: "blocked" };
           },
-          (task, place) => {
+          (task) => {
+            const place = resolveGatedPlace(deps, task, "the head the probe forks from");
+            if (!place) return undefined;
             assertPosable(deps.db, task);
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
@@ -876,6 +880,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               }
               throw err;
             }
+            return place;
           },
         );
       },

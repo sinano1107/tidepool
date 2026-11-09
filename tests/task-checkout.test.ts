@@ -364,7 +364,7 @@ it("子は名前の場所の親のブランチから fork し、子の done の�
   const childPlace = await prepareAtPickup(db, named, child);
   expect(git(childPlace.path, "rev-parse", "HEAD")).toBe(parentTip);
   commitWork(childPlace.path, "child.txt", "child\n");
-  // 完了の門が tip を名前の場所へ引く(`assertWorkCompletionGate` の前半)
+  // 完了の門が tip を名前の場所へ引く(`completionGatedPlace` の前半)
   recordTaskCheckoutTip(db, childPlace, child.id);
   completeTask(db, child, FULL_HANDOFF, "worker", NOW, "worker");
   releaseWorkspace(db, childPlace, getTask(db, child.id)!, NOW, true, undefined, undefined, true);

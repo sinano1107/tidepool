@@ -52,7 +52,7 @@ async function pickedUpSession(type: TaskType = "work"): Promise<{
   return { db, task, ws, place };
 }
 
-/** 完了の門の前半(`assertWorkCompletionGate`): worker の tip を名前の場所のタスクブランチにする。 */
+/** 完了の門の前半(`completionGatedPlace`): worker の tip を名前の場所のタスクブランチにする。 */
 const gateFetch = (db: Db, place: RunPlace, task: Task) => recordTaskCheckoutTip(db, place, task.id);
 
 /** 完了経路の後始末そのもの(`runTeardown` が組み立てる引数と同じ形)—— work タスクの
