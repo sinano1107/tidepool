@@ -1,5 +1,7 @@
 # Quarantine の登録は冪等で、開いた question が停止の唯一の記録 —— 再発火の event は持たない
 
+**Status 追記: 決定2 が挙げる session 側の記録は、停止が session を止めた経路のものである(2026-11-11、issue #3146)** —— 走行中の session の verb が開いた agent の Quarantine に当たる経路(`attributedAuthorityOrQuarantine`、ADR 0224)は session を止めず、verb を拒否文で拒むだけで、`pickup_stopped` / `session_stopped_by_resource` / failure question のどれも書かない。当たった事実の持ち主は worker の transcript(ADR 0149 決定1)で、Episode の投影はその verb を失敗した行動として持つ。盤面 DB の event には写さない —— transcript を読まずに session を跨いで数える読み手(meta-review の材料、Episode、WebUI、人間の手順)は無い。その読み手が現れたら session 側の event を足す。
+
 2026-11-10 の grilling(issue #3121 / #3122、#3094 の実装 review の派生)で決定。Quarantine の登録口 `registerQuarantine` は、鍵
 (kind, value)の question が開いていれば既存の question に `quarantine_refired` を足していた。「開いていれば足してよい2度目」と「足しては
 いけない2度目」を分ける線は登録口に無く、呼び手ごとに別の書き方で守られていた —— pickup の門はループが止めた資源を読み直す、
