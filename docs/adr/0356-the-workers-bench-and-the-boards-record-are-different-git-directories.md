@@ -1,5 +1,7 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
+**Status 追記: 決定2 の「解放のどの失敗でも checkout は残して既存の失敗経路へ」の、残した checkout の告知 —— 既存の失敗経路(failure question・名前の場所の quarantine)の本文は在り処を運ばず、残した checkout は開いた event と解放の event から導いて、開いた question を読むときの注釈で告げる。盤面は残した checkout に戻らない([ADR 0369](0369-a-task-checkout-the-release-left-is-derived-from-the-opened-and-released-events-and-told-by-an-annotation-on-open-questions-not-by-their-text.md)、2026-11-11、issue #3147)。**
+
 **Status 追記: 決定3 の view の `add -A` は名前の場所の objects に直接書かない —— worktree は盤面所有の repo に stage し、名前の場所へは fetch で運ぶ。決定2 の「worker の repo の故障は task の失敗」は stage する段の失敗に限り、名前の場所へ運ぶ段の失敗は名前の場所の quarantine([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定1・4、2026-11-10、issue #3141)。**
 
 **Status 追記: 決定3 の view の「sparse policy は tip の tree から導く」は、運ばない path を tip の tree から導いて pathspec で外す形に置き換わる —— view は sparse で seed しない([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md) Status 追記、2026-11-10、issue #3111)。**

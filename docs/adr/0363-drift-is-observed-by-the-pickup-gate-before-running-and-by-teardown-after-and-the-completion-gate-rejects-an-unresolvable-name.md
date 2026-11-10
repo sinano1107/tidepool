@@ -1,5 +1,7 @@
 # drift の観測者は走る前なら pickup の門、走った後なら後始末であり、verb は拒むだけ —— 完了の門は名前が解けないときも tip の記録を待って `done` にしない
 
+**Status 追記: 決定4 の「立てる Quarantine の理由にその在り処を書く」は、開いた question を読むときの注釈に置き換わった —— 理由は登録した観測者が知っていたことしか載らず、登録が冪等になった後は別の観測者が先に立てると在り処が消える。残した checkout は開いた event と解放の event から導く。「盤面は残した成果を運ばない」と worker への拒否文の在り処は変わらない([ADR 0369](0369-a-task-checkout-the-release-left-is-derived-from-the-opened-and-released-events-and-told-by-an-annotation-on-open-questions-not-by-their-text.md) 決定1〜3、2026-11-11、issue #3147)。**
+
 **Status 追記: #3120 の Status 追記の「その drift の観測者は次の pickup の門(root の再 pickup か同じ実環境の work)」には受験者の pickup も入る —— 受験者の pickup も実環境の名前を解き、停止の門は受験者をその名前で外す([ADR 0368](0368-a-resource-stop-returns-a-pickup-to-todo-only-when-the-stop-gate-holds-that-task-and-an-examinee-is-also-stopped-by-its-workspace-column.md) 決定3、2026-11-10、issue #3144)。**
 
 **Status 追記: 決定2 の「走った後の drift の観測者は後始末 1 人」は slot を握る session の中の話で、session の後に PR が待つ間に名前を読む landing の 2 つの poll も観測者である。「呼び直すたびの `quarantine_refired` は要らなくなる」は登録口の冪等化で機構ごと消えた([ADR 0366](0366-quarantine-registration-is-idempotent-and-the-open-question-is-the-only-record-of-a-stop.md) 決定1・4、2026-11-10、issue #3121 / #3122)。**
