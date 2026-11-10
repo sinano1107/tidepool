@@ -178,7 +178,8 @@ export function boardViewStatus(cwd: string, head: string, objectsFrom: string, 
     seedViewIndex(view, head);
     const gitlinks = seededGitlinks(view, head);
     try {
-      return porcelainChanges(view(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", ...viewPathspec([...exclude, ...nestedRepos(view, cwd, gitlinks)])]));
+      // dirty: 外さない gitlink の path が symlink だと、git は中の worktree を調べに行き status ごと落ちる(#3117 の実測、git 2.47)
+      return porcelainChanges(view(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty", ...viewPathspec([...exclude, ...nestedRepos(view, cwd, gitlinks)])]));
     } catch (cause) {
       if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定3: 上限超過は観測の失敗ではない
       // ADR 0359 決定3: 盤面の記録から index を作る段の失敗と、worker の worktree を観測する段の失敗を分ける

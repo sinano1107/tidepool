@@ -85,6 +85,18 @@ it("submodule の dir を regular file に置き換えれば、WIP は blob を�
   expect(boardViewStatus(path, head, path)).toEqual([{ path: "mod", status: " T" }]);
 });
 
+it("submodule の dir を repo への symlink に置き換えれば、WIP は symlink を入れ status は T を出す", async () => {
+  const { path, head } = await withSubmodule("nested-to-symlink");
+  git(path, "clone", "--quiet", await otherRepo("nested-to-symlink-target"), "aside");
+  rmSync(join(path, "mod"), { recursive: true, force: true });
+  symlinkSync(join(path, "aside"), join(path, "mod"));
+
+  const tree = boardWriteTree(path, head, path, ["aside"]);
+
+  expect(entries(path, tree).filter((entry) => entry.includes(" mod"))).toEqual(["120000 mod"]);
+  expect(boardViewStatus(path, head, path, ["aside"])).toEqual([{ path: "mod", status: " T" }]);
+});
+
 it("head で regular file を持つ dir を入れ子の repo に変えても、worker の編集は普通の blob で入り gitlink は入らない", async () => {
   const { path } = await checkout("nested-over-tracked");
   mkdirSync(join(path, "mod"));
