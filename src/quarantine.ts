@@ -8,7 +8,7 @@
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
-import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
+import type { ListedRefusal, ResourceStop, RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
@@ -395,7 +395,7 @@ export const QUARANTINES = [
   {
     // 行の拒否(GLOSSARY.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)——
     // 例外は CLI の版の古さで、構造化された証拠が区別するので原因を名指す(ADR 0187 決定3)。原因は値に
-    // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
+    // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は何も足さず文面は最初の原因のまま(ADR 0366 決定1)
     kind: "tableRow",
     scope: "row",
     prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause): QuarantineProse => {
@@ -583,8 +583,8 @@ export function registerResourceStop(
   return { quarantine, value, reason };
 }
 
-/** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
- *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類。 */
+/** 唯一の登録口で冪等: 鍵が開いていれば何もしない、閉じていれば確認を1枚立てる(ADR 0366 決定1)—— 呼び手は開いているかを
+ *  先に読まない。ある session が開いた停止に当たった事実は session 側の記録が持つ(決定2)。`cause` は文面へ渡す行の拒否の証拠の種類。 */
 export function registerQuarantine(
   db: Db,
   kind: QuarantineKind,
@@ -593,17 +593,7 @@ export function registerQuarantine(
   now: Date,
   cause?: RowRefusalCause,
 ): void {
-  const existing = openQuarantineQuestion(db, kind, value);
-  if (existing) {
-    appendEvent(db, {
-      taskId: existing.id,
-      actorId: BOARD_ACTOR_ID,
-      origin: "board",
-      payload: { kind: "quarantine_refired", reason },
-      at: now,
-    });
-    return;
-  }
+  if (openQuarantineQuestion(db, kind, value)) return;
   const row = QUARANTINES.find((r) => r.kind === kind)!;
   const { question, ...prose } = row.prose(value, reason, cause, db);
   registerTask(
@@ -639,7 +629,7 @@ export async function quarantineUnlessClear(
   return true;
 }
 
-/** 行でない Interview の対象を Provider が断った(ADR 0199 決定4): 対象を名指す question を立てる(開いていれば再発火)。
+/** 行でない Interview の対象を Provider が断った(ADR 0199 決定4): 対象を名指す question を立てる(開いていれば何もしない)。
  *  鍵は原因で決まり、一覧が effort を広告しないときだけ (provider, model, effort)(ADR 0218 決定2)。理由は断られた子の Interview を名指す。 */
 export function questionRefusedTarget(
   db: Db,

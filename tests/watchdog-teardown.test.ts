@@ -648,6 +648,27 @@ it.each([
   expectDriftObservedOnce(f, slot);
 });
 
+// issue #3121 の観測: 後始末が drift の Quarantine を commit した後、印を消す前に process が落ちた盤面
+it.each([
+  ["エスカレーション", "escalate"],
+  ["完了", "complete"],
+] as const)("drift の Quarantine を立てた後で印を消す前に落ちた%sの後始末の起動時の復旧は、開いた question に何も足さずに枠と印を空ける(ADR 0366 決定1)", async (_, settle_) => {
+  const f = await driftedAfterCheckout();
+  if (settle_ === "escalate") escalateTask(f.db, f.task, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", f.clock.now(), "worker");
+  else completeTask(f.db, f.task, FULL_HANDOFF, "deckhand", f.clock.now(), "worker");
+  markTeardown(f.db, f.task.id, f.clock.now());
+  quarantineWorkspace(f.db, f.ws.name, new UnknownWorkspaceError(f.ws.name), f.clock.now());
+  const question = openQuarantineQuestion(f.db, "workspace", f.ws.name)!;
+
+  const slot = restartMidTeardown(f, f.gone);
+  await settle();
+
+  expect(listEvents(f.db, question.id).map((e) => e.kind)).toEqual(["task_registered"]);
+  expect(slot.currentTaskId).toBeNull();
+  expect(markedSession(f.db)).toBeUndefined();
+  expect(f.triggered).toEqual(["pollNow"]);
+});
+
 it("準備が checkout より前に落ちた pickup の後始末が再起動で途切れても、起動時の復旧は途切れなかった後始末と同じところへ着く(ADR 0274 決定3)", async () => {
   const f = await stoppedBeforeCheckout(true);
   f.runtime.hold(String(sessionId(f.db, f.task.id)));

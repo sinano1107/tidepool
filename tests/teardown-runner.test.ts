@@ -843,7 +843,9 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
     const refused = await answering.then(() => undefined, (err: unknown) => err);
     expect(refused).toBeInstanceOf(DomainError);
     expect((refused as DomainError).message).toBe(`the teardown for task ${b.task.id} threw again: ${thrown}`);
-    expect(openQuarantineQuestion(b.db, "failedTeardown", b.task.id)).toBeDefined();
+    // ADR 0366 決定2: 投げた本文は拒否文が運び、question は1枚のまま何も足さない
+    const question = openQuarantineQuestion(b.db, "failedTeardown", b.task.id)!;
+    expect(listEvents(b.db, question.id).map((e) => e.kind)).toEqual(["task_registered"]);
     expect(boardHalts(b.db)).toEqual([{ kind: "failedTeardown" }]);
     expect(b.slot.currentTaskId).toBe(b.task.id);
     expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(true);

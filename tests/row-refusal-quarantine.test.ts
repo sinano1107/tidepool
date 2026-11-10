@@ -151,9 +151,9 @@ it("CLI の版の古さで終わった session も行の Quarantine を1枚立�
   expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 
-it("同じ行への2度目の観測は question を増やさず、開いている question に再発火を刻む", async () => {
+it("同じ行への2度目の観測は question を増やさず何も足さず、2度目の session の記録に row_refused が残る(ADR 0366 決定1・2)", async () => {
   const proc = await bootClaude();
-  queueWork(t, "second observation");
+  const second = queueWork(t, "second observation");
   await t.clock.advance(HOUR);
   // 1度目の観測で開いた Quarantine が、走っている session の途中に既にある
   registerQuarantine(t.db, "tableRow", tableRowValue("anthropic", "claude-sonnet-5-5"), "first observation", t.clock.now());
@@ -164,7 +164,8 @@ it("同じ行への2度目の観測は question を増やさず、開いてい�
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
-  expect((await events(question.id)).map((e) => e.kind)).toContain("quarantine_refired");
+  expect((await events(question.id)).map((e) => e.kind)).toEqual(["task_registered"]);
+  expect((await events(second.id)).map((e) => e.kind)).toContain("row_refused");
 });
 
 it("moonshot の session も同じ経路を通る —— 帰属は spawn 時の (provider, model)", async () => {
@@ -481,10 +482,7 @@ it("AI 下書きの3用途は、表の行で撃った Board call が断られる
   ]);
   expect(await rowQuarantines()).toEqual([[SONNET_ROW, "The task draft Board call ended with API error 404 for this model id"]]);
   const [question] = await questions(t);
-  expect((await events(question.id)).filter((e) => e.kind === "quarantine_refired").map((e) => e.payload.reason)).toEqual([
-    `The handoff draft Board call for task ${human.id} ended with API error 404 for this model id`,
-    "The issue inspection Board call ended with API error 404 for this model id",
-  ]);
+  expect((await events(question.id)).map((e) => e.kind)).toEqual(["task_registered"]);
 });
 
 it("表示時翻訳が 404 を受けても、行の Quarantine は立たない(ADR 0202 帰結)", async () => {
@@ -801,7 +799,7 @@ it("「この対象は測らない」で cancel された子は、root が統合
   expect(JSON.stringify(current.history)).not.toContain("claude-sonnet-5-5");
 });
 
-it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず再発火だけが刻まれる", async () => {
+it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず何も足さず、断られた子の記録に target_refused が残る(ADR 0366 決定1・2)", async () => {
   const proc = await bootClaude();
   const { childIds: [medium] } = await poseInterview(proc, [SONNET_MEDIUM]);
   await t.clock.advance(HOUR);
@@ -812,7 +810,7 @@ it("question が開いている間に同じ (provider, model) の対象がもう
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
-  expect((await events(question.id)).map((e) => e.kind)).toContain("quarantine_refired");
+  expect((await events(question.id)).map((e) => e.kind)).toEqual(["task_registered"]);
   expect((await events(medium!)).map((e) => e.kind)).toContain("target_refused");
   expect(await queueStatus(medium!)).toBe("skipped");
 });

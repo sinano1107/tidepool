@@ -89,8 +89,7 @@ interface WatchRecord {
   humanStop?: boolean;
   /** 後始末の梯子(`teardownTick`)を、底に落ちた1度で止める。立てるのは梯子の底の2つ
    *  (`onTeardownReclaimTimeout` と、後始末へ入る `onReclaimTimeout`)—— 立たなければ以後の tick ごとに containment の
-   *  quarantine を撃ち直す(開いている間は `quarantine_refired` を積み、回答後は question を
-   *  刷り直す)。 */
+   *  quarantine を撃ち直し、回答後は question を刷り直す(開いている間の登録は何も足さない、ADR 0366 決定1)。 */
   settled: boolean;
   /** 観測した root の exit。読むのは梯子の底の question だけで、どの判定にも使わない(ADR 0191) */
   exit?: WorkerExit;
@@ -171,8 +170,9 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
  *  1度も走らなかった pickup(`pickup_stopped`)と盤面の記録の器が書けない pickup(`record_container_unwritable`、ADR 0266 決定3・4)で、
  *  Quarantine の登録はどちらも呼び手が先に済ませている —— 資源はもうその question を持つので failure question は立てない。
  *  形は行の拒否(ADR 0184 決定4)と同じ: `todo` への復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
- *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— drift で解決できない
- *  workspace の Quarantine を撃ち直さず、動いていない checkout に触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。
+ *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— 動いていない checkout に
+ *  触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。drift で解決できない workspace の開いた Quarantine に何も足さないのは
+ *  登録口である(ADR 0366 決定1)。
  *  process の無い容器へ強制回収を撃つのは `spawnFailureHandler` と同じ。process が起きた session の `todo` への復帰は exit の決定
  *  (`onWorkerExited`)が持つ(ADR 0338 決定2)。 */
 export function queueReturnHandler(

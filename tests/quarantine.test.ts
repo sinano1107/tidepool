@@ -55,7 +55,7 @@ const questions = (db: ReturnType<typeof openDb>) =>
 describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (kind) => {
   const [value, other] = SAMPLE[kind];
 
-  it("同じ (kind, value) の確認型 question は1枚で、開いている間の再発火は既存の question に quarantine_refired を追記する", () => {
+  it("同じ (kind, value) の確認型 question は1枚で、開いている間の2度目の登録は何も足さない(ADR 0366 決定1)", () => {
     const db = openDb(":memory:");
     registerQuarantine(db, kind, value, "first cause", NOW);
     registerQuarantine(db, kind, value, "second cause", NOW);
@@ -65,11 +65,7 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
     expect(question!.question_quarantine_kind).toBe(kind);
     expect(question!.question_quarantine_value).toBe(value);
     expect(openQuarantineQuestion(db, kind, value)?.id).toBe(question!.id);
-    expect(
-      listEvents(db, question!.id)
-        .map((e) => e.payload)
-        .filter((p) => p.kind === "quarantine_refired"),
-    ).toEqual([{ kind: "quarantine_refired", reason: "second cause" }]);
+    expect(listEvents(db, question!.id).map((e) => e.kind)).toEqual(["task_registered"]);
   });
 
   it.skipIf(other === undefined)("別の値は別の確認型 question になる", () => {

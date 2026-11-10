@@ -1627,7 +1627,8 @@ export function resolveOrQuarantine(
 }
 
 /** 名前が registry に無い(drift)ときだけ `onDrift` に渡して undefined を返す。他の失敗は投げる。drift を登録するか・拒むかは
- *  呼び手が決める(ADR 0363 決定2: 登録するのは pickup の門と後始末だけ)。 */
+ *  呼び手が決める —— 登録するのは観測者の3人: 走る前の pickup の門、走った後の後始末、session の後に PR が待つ間の landing の
+ *  2 つの poll(ADR 0363 決定2 / ADR 0366 決定4)。worker の verb は拒むだけ。 */
 export function resolveUnlessDrifted(
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   taskWorkspace: string | null,

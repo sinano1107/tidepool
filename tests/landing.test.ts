@@ -3416,6 +3416,29 @@ it("遅い走査で UnknownWorkspaceError を投げる workspace は quarantine 
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
+// issue #3122 の観測: session の後に PR が待つ間の名前の読み手(ADR 0366 決定4)は、tick ごとに読み直しても開いた question に何も足さない
+it.each(["auto_merge", "outside_merge"] as const)("%s の poll は drift した workspace の Quarantine を1枚立て、次の tick は何も足さない(ADR 0366 決定1・4)", async (poll) => {
+  const { db, clock } = await openBoard();
+  if (poll === "auto_merge") queueAutoMerge(db, clock, 1);
+  else escalatedRoot(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    resolveWorkspace: (name) => {
+      throw new UnknownWorkspaceError(name ?? "reef");
+    },
+    github: new FakeGitHubClient(),
+  });
+
+  await landing.tick(poll, clock.now());
+  await landing.tick(poll, clock.now());
+
+  const drifted = listBoard(db).filter((q) => q.question_quarantine_kind === "workspace");
+  expect(drifted).toHaveLength(1);
+  expect(listEvents(db, drifted[0]!.id).map((e) => e.kind)).toEqual(["task_registered"]);
+});
+
 // ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面がその head を知ってから5分の猶予の間だけ待つ
 const FIVE_MINUTES = 5 * 60_000;
 

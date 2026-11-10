@@ -2318,8 +2318,13 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("ずれたまま何セッション走っても question は1枚(封じ込めは1資源につき確認1枚)", async () => {
-    const { start, processes, db } = await makeWorker();
-    start("task-init-dup-1", null, "deckhand", "work");
+    const recorder = recordingSpawn();
+    onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
+    const runtime = new FakeContainerRuntime(recorder.spawn);
+    const { start, db } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
+    const { processes } = recorder;
+    const reclaimedSessions = (...tasks: Task[]) => tasks.map((task) => String(sessionId(db, task.id)));
+    const first = start("task-init-dup-1", null, "deckhand", "work");
     await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     const question = await vi.waitFor(() => {
@@ -2327,26 +2332,23 @@ describe("ClaudeCodeWorker", () => {
       expect(q).toBeDefined();
       return q!;
     });
-    const refiredCount = () =>
-      listEvents(db, question.id)
-        .map((e) => e.payload)
-        .filter((p) => p.kind === "quarantine_refired").length;
 
     // 2セッション目・3セッション目はそれぞれ別の process(別セッション)で起こす —
     // 同じ process の stdout に3回書くだけでは1セッションしか検査を走らせない
-    // (issue #873)。各セッションが実際に照合されたことは、既存 question への
-    // `quarantine_refired` 追記が1つずつ増えることで確かめる。
-    start("task-init-dup-2", null, "deckhand", "work");
+    // (issue #873)。各セッションが実際に照合されたことは、観測したその session の
+    // 容器の強制回収が1つずつ増えることで確かめる —— question 側には何も足さない(ADR 0366 決定2)。
+    const second = start("task-init-dup-2", null, "deckhand", "work");
     await vi.waitFor(() => expect(processes).toHaveLength(2));
     processes[1]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
-    await vi.waitFor(() => expect(refiredCount()).toBe(1));
+    await vi.waitFor(() => expect(runtime.forceReclaims).toEqual(reclaimedSessions(first, second)));
 
-    start("task-init-dup-3", null, "deckhand", "work");
+    const third = start("task-init-dup-3", null, "deckhand", "work");
     await vi.waitFor(() => expect(processes).toHaveLength(3));
     processes[2]!.stdout.write(initLine(["Bash", "Read", "RemoteTrigger"]));
-    await vi.waitFor(() => expect(refiredCount()).toBe(2));
+    await vi.waitFor(() => expect(runtime.forceReclaims).toEqual(reclaimedSessions(first, second, third)));
 
     expect(listBoard(db).filter((t) => t.type === "question")).toHaveLength(1);
+    expect(listEvents(db, question.id).map((e) => e.kind)).toEqual(["task_registered"]);
   });
 
   it("init 行を持たないセッションは判定しない — 盤面の照合は観測があったときだけ動く", async () => {
