@@ -13,8 +13,9 @@
    対象は task ごとの列挙で外す 3 種 —— `workspace`・`agent`・`workspaceContainment` の組。`workspace` と `agent` は、停止の門が
    その task を候補から外すこと。組が外すのは task ではなく Harness の行なので、確かめるのは組の workspace が task の数える名前に
    入ること —— 別の Harness の行が残る task は今までどおり戻って選び直す(ADR 0274 決定1)。Provider の認証・盤面全体の封じ込め・
-   Worker MCP 到達性は task の列挙に依らずに外すので、確かめるものが無い。ADR 0274 決定1 の「同じ枝をくり返さない」は、前提から
-   戻す口の性質になる。
+   Worker MCP 到達性は task の列挙に依らずに外すので、確かめるものが無い。戻す口は worker が 1 度も走らなかった pickup
+   (`pickup_stopped`)のもので、0 ターンで終わった session の停止(ADR 0331)は別の口から戻り、この 3 種を載せないので対象に
+   しない。ADR 0274 決定1 の「同じ枝をくり返さない」は、前提から戻す口の性質になる。
 2. **門が外さない停止で戻そうとした pickup は、worker が 1 度も走らなかった pickup の失敗(ADR 0118 の `spawn_failed` と failure
    question)に落とす。** 新しい event kind は作らない。ADR 0274 決定2 が `spawn_failed` の流用を退けたのは、同じ原因で question が
    2 枚立つからだった。ここの 2 枚目の原因は資源の故障ではなく盤面の列挙の不整合で、理由には止めた資源と「門がこの task を外さない」
