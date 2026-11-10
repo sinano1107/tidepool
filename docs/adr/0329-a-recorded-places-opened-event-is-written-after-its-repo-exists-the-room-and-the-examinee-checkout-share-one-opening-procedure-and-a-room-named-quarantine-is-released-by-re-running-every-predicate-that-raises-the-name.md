@@ -1,5 +1,7 @@
 # 記録された場所の開いた event は repo ができた後に書く —— 面接室と受験者の checkout は1つの開く手順で開き、面接室の名前の quarantine は、その名前を立てうる門の述語をすべて撃ち直して解く
 
+**Status 追記: 追記 決定7 の「pickup の純粋な一覧を撃つ場所の集合は、停止の門が数える集合と同じ」は、受験者では成り立たない —— 停止の門は受験者の `workspace` 列の実環境も数えるが、受験者は実環境を開かないので pickup の門は撃たない。停止の門の集合は pickup の門が撃つ場所を含む、が残る([ADR 0368](0368-a-resource-stop-returns-a-pickup-to-todo-only-when-the-stop-gate-holds-that-task-and-an-examinee-is-also-stopped-by-its-workspace-column.md) 決定3、2026-11-10、issue #3144)。**
+
 **Status 追記: 決定5 の「出題の head の述語が並ぶ名前(出題済みで受験者が未決着)」は「出題済みの名前」に広がった —— 読み手は受験者の決着後も出題の head を面接室から fetch する([ADR 0361](0361-interview-readers-read-a-checkout-of-the-posed-head-not-the-rooms-git-and-the-answers-stay-in-the-room.md) 決定1)ので、出題の head が引けることは面接室の項として並び、「手で `git init` して空のまま走らせる」は出題前の名前だけに予告する(2026-11-10、issue #3105 の実装レビュー)。**
 
 **Status 追記: 決定1・2 の受験者の checkout の側(event の後の「作る」、共有の開く手順、再開で読み直す記録)は [ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定1・2 で外れた(2026-11-07、issue #2956 / #3031)—— 受験者は pickup ごとに面接室から作り直す task の checkout で走り、開く手順を持つのは面接室だけ。決定4 で受験者ごとに撃ち直す述語は出題の head だけになる。面接室の側の決定はそのまま。**
