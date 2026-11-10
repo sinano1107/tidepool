@@ -419,10 +419,6 @@ export type EventPayload =
        *  written before it have no `paths`, read as empty. */
       skills: { workspace: string[]; host: string[]; permitted: string[]; paths?: Record<string, string> };
     }
-  // ADR 0137: a quarantine key that already has an open Confirmation question
-  // fired again — recorded on that same question rather than opening a second
-  // one (GLOSSARY.md's Quarantine: 1資源につき確認は最大1枚)
-  | { kind: "quarantine_refired"; reason: string }
   // ADR 0137 決定4: a quarantine Confirmation question's answer passed its
   // kind's check and was accepted — pickup resumes for what that kind stops.
   // 回答なしで盤面名義に決着したときだけ observed_event_id を持つ: 行の Quarantine は表の編集がその行を消したとき

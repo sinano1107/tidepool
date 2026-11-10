@@ -3,7 +3,7 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
 
-import { quarantineFailedTeardown, quarantineUnclosedSession, thrownTextOfHaltReason } from "./failed-teardown.js";
+import { quarantineFailedTeardown, quarantineUnclosedSession } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineQuestion } from "./quarantine.js";
 
@@ -58,9 +58,6 @@ export interface TeardownStep {
   /** 完了経路(ADR 0109 決定1・3): 退避ではなく検査を走らせ、work タスクなら
    *  merge-back まで進む。 */
   completion?: boolean;
-  /** process を1つも持たなかった session(ADR 0274 決定3): task ブランチに乗っていない checkout と解決できない名前には
-   *  tree rule を当てない。 */
-  neverRan?: boolean;
   /** 完了の門が検査した走る場所(ADR 0363 決定1: 門は名前が解けなければ拒むので、渡るのは解けた場所だけ)。無ければ後始末が解く。 */
   workspace?: WorkspaceConfig;
 }
@@ -99,7 +96,6 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
       transition: (current, now) => returnToQueue(db, current, { kind: "cap_interrupted" }, now),
     };
   }
-  if (settlement === "never_ran") return { neverRan: true };
   return { completion: settlement === "completed" };
 }
 
@@ -133,6 +129,12 @@ export async function runTeardown(
 /** 後始末の1手: 同期か Promise を返す関数(経路ごとの差分の `TeardownStep` とは別物)。`closesSpawn` は束の手の印で、値は spawn event id。 */
 export type TeardownAction = (() => unknown) & { closesSpawn?: number };
 
+/** 投げた手から先と、最後に投げた手の例外(ADR 0342 決定6 / ADR 0366 決定2)。 */
+export interface TeardownRest {
+  actions: TeardownAction[];
+  cause: unknown;
+}
+
 /** session を閉じる手に印を付ける。runner は投げた手の印で停止の kind を選ぶ —— 枠の主かでは分けない(ADR 0344 決定1)。 */
 export function sessionCloseSteps(spawnId: number, actions: TeardownAction[]): TeardownAction[] {
   return actions.map((action) => Object.assign(() => action(), { closesSpawn: spawnId }));
@@ -140,24 +142,25 @@ export function sessionCloseSteps(spawnId: number, actions: TeardownAction[]): T
 
 /** 閉じ切らなかった session の残り(ADR 0344 決定2): spawn event id → 投げた手から先。枠の解放で消えないので `Slot` の欄にしない。
  *  鍵に `Slot` を使うのは盤面の process に1つで寿命が同じだから —— memory なので再起動を越えず、越えた受理は記録から閉じ直す。 */
-const unclosedRests = new WeakMap<Slot, Map<number, TeardownAction[]>>();
+const unclosedRests = new WeakMap<Slot, Map<number, TeardownRest>>();
 
-function unclosedRestsOf(slot: Slot): Map<number, TeardownAction[]> {
+function unclosedRestsOf(slot: Slot): Map<number, TeardownRest> {
   let rests = unclosedRests.get(slot);
   if (!rests) unclosedRests.set(slot, (rests = new Map()));
   return rests;
 }
 
-function appendUnclosedRest(slot: Slot, spawnId: number, actions: TeardownAction[]): void {
+/** `Slot.appendFailedTeardownRest` と同じ形: 先の手の後ろに継ぎ、cause は継いだ側のもの。 */
+function appendUnclosedRest(slot: Slot, spawnId: number, { actions, cause }: TeardownRest): void {
   const rests = unclosedRestsOf(slot);
-  rests.set(spawnId, [...(rests.get(spawnId) ?? []), ...actions]);
+  rests.set(spawnId, { actions: [...(rests.get(spawnId)?.actions ?? []), ...actions], cause });
 }
 
-function takeUnclosedRest(slot: Slot, spawnId: number): TeardownAction[] | undefined {
+function takeUnclosedRest(slot: Slot, spawnId: number): TeardownRest | undefined {
   const rests = unclosedRestsOf(slot);
-  const actions = rests.get(spawnId);
+  const rest = rests.get(spawnId);
   rests.delete(spawnId);
-  return actions;
+  return rest;
 }
 
 /** その spawn が task の今の pickup のものか。後の pickup が来ていれば、その spawn の session はもう枠の主ではない。 */
@@ -185,8 +188,10 @@ export function sessionHaltOpen(db: Db, taskId: string, answeredSpawn?: number):
 export function deferToSessionRest({ db, slot }: Pick<TeardownDeps, "db" | "slot">, taskId: string, action: TeardownAction): boolean {
   if (slot.deferToFailedTeardownRest(taskId, action)) return true;
   const spawnId = spawnOfCurrentPickup(db, taskId);
-  if (spawnId === undefined || !unclosedRestsOf(slot).has(spawnId)) return false;
-  appendUnclosedRest(slot, spawnId, [action]);
+  if (spawnId === undefined) return false;
+  const rest = unclosedRestsOf(slot).get(spawnId);
+  if (!rest) return false;
+  appendUnclosedRest(slot, spawnId, { actions: [action], cause: rest.cause });
   return true;
 }
 
@@ -223,12 +228,12 @@ export function runTeardownSteps(
     const spawnId = rest[0]?.closesSpawn;
     if (spawnId !== undefined) {
       quarantineUnclosedSession(deps.db, spawnId, taskId, cause, deps.clock.now());
-      appendUnclosedRest(deps.slot, spawnId, rest);
+      appendUnclosedRest(deps.slot, spawnId, { actions: rest, cause });
       return;
     }
     if (deps.slot.currentTaskId !== taskId) return;
     quarantineFailedTeardown(deps.db, taskId, cause, deps.clock.now());
-    deps.slot.appendFailedTeardownRest(taskId, rest);
+    deps.slot.appendFailedTeardownRest(taskId, { actions: rest, cause });
   };
   try {
     return drive(actions)?.catch(fail);
@@ -290,9 +295,8 @@ export type UnclosedSessionCheck = (spawnId: number) => Promise<() => void>;
 
 /** 受理が kind ごとに違うもの。 */
 interface Rerun {
-  row: { kind: "failedTeardown" | "unclosedSession"; value: string };
-  take: () => TeardownAction[] | undefined;
-  giveBack: (rest: TeardownAction[]) => void;
+  take: () => TeardownRest | undefined;
+  giveBack: (rest: TeardownRest) => void;
   /** 残りが無いとき —— 再起動を跨いだ受理 —— に撃つ手。 */
   fallback: () => TeardownAction[];
   overlapRefusal: string;
@@ -307,16 +311,17 @@ async function acceptRerun(deps: TeardownDeps, rerun: Rerun): Promise<() => void
   // 重なった回答は拒む: 残りは先の受理が取り出した後なので、2つ目は空の残りを見て question を閉じる。印は同期に取り、question は開いたまま
   const releaseAcceptance = deps.slot.takeTeardownAcceptanceMark();
   if (!releaseAcceptance) throw new DomainError(rerun.overlapRefusal);
+  const threwAgain = (cause: unknown) => new DomainError(rerun.threwAgain(cause instanceof Error ? cause.message : String(cause)));
   try {
     // ADR 0112 決定3 / ADR 0342 の Status 追記: 撃っている間に継がれた手も撃つ —— 残したまま通すと、枠を握ったまま question だけが閉じる
-    for (let actions: TeardownAction[] | undefined = rerun.take() ?? rerun.fallback(); actions; actions = rerun.take()) await drive(actions);
+    for (let actions: TeardownAction[] | undefined = rerun.take()?.actions ?? rerun.fallback(); actions; actions = rerun.take()?.actions) await drive(actions);
   } catch (err) {
     releaseAcceptance();
     const { cause, rest } = err as TeardownThrew;
     // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
     if (isBoardDbRefusal(cause)) throw cause;
-    rerun.giveBack(rest);
-    throw new DomainError(rerun.threwAgain(cause instanceof Error ? cause.message : String(cause)));
+    rerun.giveBack({ actions: rest, cause });
+    throw threwAgain(cause);
   }
   // ADR 0343 決定1: 通っても拒んでも印を放す —— 残すと、立った残りを撃ち直す次の回答まで拒む
   return () => {
@@ -324,10 +329,8 @@ async function acceptRerun(deps: TeardownDeps, rerun: Rerun): Promise<() => void
     const rest = rerun.take();
     if (!rest) return;
     rerun.giveBack(rest);
-    // 残りは `fail` が開いている question に積んでから立てるので、この question の最後の撃ち直しが投げた step である
-    const question = openQuarantineQuestion(deps.db, rerun.row.kind, rerun.row.value)!;
-    const { reason } = latestEventOfTask(deps.db, question.id, "quarantine_refired")!.payload;
-    throw new DomainError(rerun.threwAgain(thrownTextOfHaltReason(reason)));
+    // ADR 0366 決定2: 投げた本文は残りに添えた cause が運ぶ —— 残りは投げた手が立てるので cause は必ず在る
+    throw threwAgain(rest.cause);
   };
 }
 
@@ -341,7 +344,6 @@ async function acceptRerun(deps: TeardownDeps, rerun: Rerun): Promise<() => void
  *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
 export function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<() => void> {
   return acceptRerun(deps, {
-    row: { kind: "failedTeardown", value: taskId },
     // ADR 0342 決定6: process が生きていれば投げた手から撃ち直す
     take: () => deps.slot.takeFailedTeardownRest(taskId),
     giveBack: (rest) => deps.slot.appendFailedTeardownRest(taskId, rest),
@@ -363,7 +365,6 @@ export function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Pr
  *  撃ち切る。無ければ記録から閉じ直す —— 既に閉じていれば no-op で通り、行が起動時の再開を止めていた後始末はその後ろで走らせる。 */
 export function acceptUnclosedSession(deps: TeardownDeps, spawnId: number, closeFromRecord: () => void): Promise<() => void> {
   return acceptRerun(deps, {
-    row: { kind: "unclosedSession", value: String(spawnId) },
     take: () => takeUnclosedRest(deps.slot, spawnId),
     giveBack: (rest) => appendUnclosedRest(deps.slot, spawnId, rest),
     fallback: () => [closeFromRecord, () => resumeUnfinishedTeardown(deps, spawnId)],
@@ -391,7 +392,7 @@ async function teardown(
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
   // 後始末は走る場所(task の checkout、ADR 0356 決定1)に効く。門が渡した workspace は解決済みの走る場所
-  const workspace = step.workspace ?? runPlaceToRelease(deps, task, step);
+  const workspace = step.workspace ?? runPlaceToRelease(deps, task);
   const mergeBack = Boolean(step.completion) && task.type === "work";
   // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の取得だけが
   // ネットワークなので、同期の `releaseWorkspace` の手前で撃つ。失敗は投げずに持ち越す
@@ -434,16 +435,15 @@ async function teardown(
 
 /** 後始末が tree rule を当てる走る場所(無ければ当てない)。ADR 0363 決定2: 走った後の drift(解決できない名前)の観測者は work では
  *  決着の種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は拒むだけで登録しない。Interview の root と受験者は面接室を
- *  解放し、実環境を解かない(ADR 0363 決定1〜3 の Status 追記)。process を1つも持たなかった session(`neverRan`)の drift は止めた pickup の門が
- *  既に Quarantine にしたので撃ち直さない(ADR 0274 決定3)。準備の後で止まった task の checkout は今日どおり退避する。 */
-function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task, step: TeardownStep): WorkspaceConfig | undefined {
+ *  解放し、実環境を解かない(ADR 0363 決定1〜3 の Status 追記)。process を1つも持たなかった session の drift も同じく登録する ——
+ *  止めた pickup の門が開いた question は登録口が冪等なのでそのまま(ADR 0366 決定1・3)。準備の後で止まった task の checkout は今日どおり退避する。 */
+function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task): WorkspaceConfig | undefined {
   try {
     return taskRunPlaceForBoard(db, task, resolve);
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) {
       // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
       releaseReadCheckouts(db, task.id);
-      if (step.neverRan) return undefined;
       // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
       const kept = taskCheckoutPath(db, task.id);
       quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());

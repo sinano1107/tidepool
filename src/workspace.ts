@@ -1607,12 +1607,13 @@ export function buildWorkspaceResolver(
 
 /** The shared shape behind every async, board-driven use of a task's
  *  execution workspace (issue #26 / ADR 0009: pickup, release, watchdog,
- *  restart) — `resolve` throwing `UnknownWorkspaceError` (registry drift)
+ *  restart, landing) — `resolve` throwing `UnknownWorkspaceError` (registry drift)
  *  never escapes to the caller; it quarantines the name in its place and the
  *  caller treats the workspace step as absent for this cycle. A human's own
  *  synchronous request (registration, a quarantine/merge answer) is not this
  *  seam — those fail fast with a DomainError instead (ADR 0009). `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。
- *  ADR 0363 決定2: worker の verb は呼ばない —— 走った後の drift の観測者は後始末で、verb は拒むだけ。 */
+ *  ADR 0363 決定2: worker の verb は呼ばない —— 走った後の drift の観測者は後始末、session の後に PR が待つ間は landing の
+ *  2 つの poll で(ADR 0366 決定4)、verb は拒むだけ。 */
 export function resolveOrQuarantine(
   db: Db,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
@@ -1627,7 +1628,8 @@ export function resolveOrQuarantine(
 }
 
 /** 名前が registry に無い(drift)ときだけ `onDrift` に渡して undefined を返す。他の失敗は投げる。drift を登録するか・拒むかは
- *  呼び手が決める(ADR 0363 決定2: 登録するのは pickup の門と後始末だけ)。 */
+ *  呼び手が決める —— 登録するのは観測者の3人: 走る前の pickup の門、走った後の後始末、session の後に PR が待つ間の landing の
+ *  2 つの poll(ADR 0363 決定2 / ADR 0366 決定4)。worker の verb は拒むだけ。 */
 export function resolveUnlessDrifted(
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   taskWorkspace: string | null,

@@ -427,12 +427,10 @@ export function startScheduler(deps: {
     lastPollFailure = { at: now.toISOString(), message: err instanceof Error ? err.message : String(err) };
     streak = { first: streak?.first ?? lastPollFailure, count: (streak?.count ?? 0) + 1 };
     const { first, count } = streak;
-    // 開いていれば立てない —— registerQuarantine は開いた鍵に quarantine_refired を積むので、poll ごとの event になる
     if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER) return;
     // 失敗そのものが DB の故障なら question も書けない —— ここで投げれば poll が投げ、`idle` を待つ収束まで倒れる(ADR 0294 決定1)。
     // 盤面 DB の拒否だけは投げる —— 床が process を終えるので倒れる収束は無い(ADR 0342 決定4)
     try {
-      if (openQuarantineQuestion(db, "pollFailure", null)) return;
       registerQuarantine(
         db,
         "pollFailure",
@@ -469,8 +467,7 @@ export function startScheduler(deps: {
     const first = issueStreak?.first ?? latest;
     const count = (issueStreak?.count ?? 0) + 1;
     issueStreak = { first, latest, count, ref };
-    // 開いていれば立てない —— registerQuarantine は開いた鍵に quarantine_refired を積むので、poll ごとの event になる
-    if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER || openQuarantineQuestion(db, "issueExpansion", null)) return;
+    if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER) return;
     registerQuarantine(
       db,
       "issueExpansion",

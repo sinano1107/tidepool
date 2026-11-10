@@ -207,10 +207,12 @@ it("task の checkout の shadow 残骸は完了の後の書き込みに数え�
   expectCleanRerun(s, s.deps, "done");
 });
 
-function expectOneQuestionRefiredOnce(s: Session, reason: string): void {
+/** 再実行が同じ観測に着いても question は最初の登録の1枚のまま、何も足さない(ADR 0366 決定1)。 */
+function expectOneQuestionUnchanged(s: Session, reason: string): void {
   const question = quarantineQuestion(s.db, "workspace", s.ws.name)!;
   expect(listBoard(s.db).filter((t) => t.title === question.title).map((t) => t.id)).toEqual([question.id]);
-  expect(listEvents(s.db, question.id).flatMap((e) => (e.payload.kind === "quarantine_refired" ? [e.payload.reason] : []))).toEqual([expect.stringContaining(reason)]);
+  expect(question.purpose).toContain(reason);
+  expect(listEvents(s.db, question.id).map((e) => e.kind)).toEqual(["task_registered"]);
   expect(s.deps.slot.currentTaskId).toBeNull();
 }
 
@@ -247,7 +249,7 @@ it("報告後の書き込みを観測した解放の後で盤面が落ちても�
   expectLateWriteRecorded(s, deps);
 });
 
-it("退避の commit が落ちて Quarantine に返った tree rule の受理は、同じ question に quarantine_refired を1つ足す(ADR 0345 決定4)", async () => {
+it("退避の commit が落ちて Quarantine に返った tree rule の受理は、同じ question を1枚のまま何も足さない(ADR 0345 決定4 / ADR 0366 決定1)", async () => {
   const s = await settledSession("interrupted");
   writeFileSync(join(s.place.path, "wip.txt"), "wip\n");
   failGitCommits("commit-tree");
@@ -256,16 +258,16 @@ it("退避の commit が落ちて Quarantine に返った tree rule の受理は
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
-  expectOneQuestionRefiredOnce(s, "fixture commit failed");
+  expectOneQuestionUnchanged(s, "fixture commit failed");
   expect(head(s)).toBe("main");
 });
 
-it("merge back の conflict で Quarantine に返った tree rule の受理は、同じ conflict に着き、同じ question に quarantine_refired を1つ足す(ADR 0345 決定3・4 / ADR 0356 決定5)", async () => {
+it("merge back の conflict で Quarantine に返った tree rule の受理は、同じ conflict に着き、同じ question を1枚のまま何も足さない(ADR 0345 決定3・4 / ADR 0356 決定5 / ADR 0366 決定1)", async () => {
   const s = await settledSession("completed", { parent: "conflicts" });
   await teardownThrewAfterTreeRule(s);
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
-  expectOneQuestionRefiredOnce(s, "does not merge cleanly");
+  expectOneQuestionUnchanged(s, "does not merge cleanly");
   expect(head(s)).toBe("main");
   expect(git(s.ws.path, "status", "--porcelain")).toBe("");
 });

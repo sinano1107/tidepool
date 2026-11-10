@@ -493,7 +493,7 @@ it("完了と解放の間に別の理由で workspace が Quarantine になっ�
     releaseAfterCompletion(db, place, task);
 
     expect(quarantineQuestion(db, "workspace", ws.name)).toMatchObject({ id: question.id, purpose: question.purpose });
-    expect(listEvents(db, question.id).some(({ kind }) => kind === "quarantine_refired")).toBe(false);
+    expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
     expect(writeObservations(db, task)).toEqual([
       { kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["late.txt"] },
     ]);

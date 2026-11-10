@@ -151,9 +151,9 @@ it("CLI の版の古さで終わった session も行の Quarantine を1枚立�
   expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 
-it("同じ行への2度目の観測は question を増やさず、開いている question に再発火を刻む", async () => {
+it("同じ行への2度目の観測は question を増やさず、2度目の session の記録に row_refused が残る(ADR 0366 決定2)", async () => {
   const proc = await bootClaude();
-  queueWork(t, "second observation");
+  const second = queueWork(t, "second observation");
   await t.clock.advance(HOUR);
   // 1度目の観測で開いた Quarantine が、走っている session の途中に既にある
   registerQuarantine(t.db, "tableRow", tableRowValue("anthropic", "claude-sonnet-5-5"), "first observation", t.clock.now());
@@ -162,9 +162,8 @@ it("同じ行への2度目の観測は question を増やさず、開いてい�
   proc.emitExit(1, null);
   await settle();
 
-  const [question, ...more] = await questions(t);
-  expect(more).toEqual([]);
-  expect((await events(question.id)).map((e) => e.kind)).toContain("quarantine_refired");
+  expect(await questions(t)).toHaveLength(1);
+  expect((await events(second.id)).map((e) => e.kind)).toContain("row_refused");
 });
 
 it("moonshot の session も同じ経路を通る —— 帰属は spawn 時の (provider, model)", async () => {
@@ -365,7 +364,7 @@ it("一覧が gpt-5.5 に max を広告しないとき、gpt-5.5 / max の行だ
   expect(t.worker.startedSettings.map((setting) => [setting.model, setting.effort])).toEqual([["gpt-5.5", "high"]]);
 });
 
-// 1鍵につき1枚(再発火は既存の question に刻む)は種類の表の総なめ(quarantine.test.ts)が言う
+// 1鍵につき1枚(開いている間の2度目の登録は何も足さない)は種類の表の総なめ(quarantine.test.ts)が言う
 it("effort の Quarantine の question は行を (provider, model, effort) で名指し、CLI の版と一覧の観測を書いて表の修正を先に促す", async () => {
   await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
   addGpt55Rows();
@@ -480,11 +479,6 @@ it("AI 下書きの3用途は、表の行で撃った Board call が断られる
     [503, `${refusal} See server logs for full details.`],
   ]);
   expect(await rowQuarantines()).toEqual([[SONNET_ROW, "The task draft Board call ended with API error 404 for this model id"]]);
-  const [question] = await questions(t);
-  expect((await events(question.id)).filter((e) => e.kind === "quarantine_refired").map((e) => e.payload.reason)).toEqual([
-    `The handoff draft Board call for task ${human.id} ended with API error 404 for this model id`,
-    "The issue inspection Board call ended with API error 404 for this model id",
-  ]);
 });
 
 it("表示時翻訳が 404 を受けても、行の Quarantine は立たない(ADR 0202 帰結)", async () => {
@@ -801,7 +795,7 @@ it("「この対象は測らない」で cancel された子は、root が統合
   expect(JSON.stringify(current.history)).not.toContain("claude-sonnet-5-5");
 });
 
-it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず再発火だけが刻まれる", async () => {
+it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず、断られた子の記録に target_refused が残る(ADR 0366 決定2)", async () => {
   const proc = await bootClaude();
   const { childIds: [medium] } = await poseInterview(proc, [SONNET_MEDIUM]);
   await t.clock.advance(HOUR);
@@ -810,9 +804,7 @@ it("question が開いている間に同じ (provider, model) の対象がもう
 
   await refuseLatestSession(proc, REFUSED_404);
 
-  const [question, ...more] = await questions(t);
-  expect(more).toEqual([]);
-  expect((await events(question.id)).map((e) => e.kind)).toContain("quarantine_refired");
+  expect(await questions(t)).toHaveLength(1);
   expect((await events(medium!)).map((e) => e.kind)).toContain("target_refused");
   expect(await queueStatus(medium!)).toBe("skipped");
 });
