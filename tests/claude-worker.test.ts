@@ -43,7 +43,7 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, sessionReadCheckouts, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, sessionReadCheckoutOf, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -1931,7 +1931,7 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
-    const read = sessionReadCheckouts(db, task.id).find((place) => place.name === root.id)!.path;
+    const read = sessionReadCheckoutOf(db, task.id, root.id)!;
     const [call] = calls as [(typeof calls)[0]];
     expect(call.cwd).toBe(real);
     expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("manual");

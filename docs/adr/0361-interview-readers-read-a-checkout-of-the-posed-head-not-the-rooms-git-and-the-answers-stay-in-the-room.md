@@ -40,4 +40,5 @@ checkout に揃えたのに、読む場所だけが名前の場所を直接開�
 ## 派生
 
 - Status 追記: ADR 0273 決定4・9(読む面接室 → 出題の head の checkout)、ADR 0276 決定4、ADR 0356 決定2。GLOSSARY.md: 面接室、task の checkout。
+- 出題の head が面接室で引けることは面接室の pickup の項(解除の門も撃つ)になり、出題済みの面接室には `git init` の出口を予告しない —— Status 追記: ADR 0277 追記 決定2、ADR 0329 決定5(issue #3105 の実装レビュー)。
 - 実装は `/to-spec`(1 slice —— 読む場所の列挙・sandbox の読み path・停止の門の名前は変えない)。#2248 は worker の側だけ閉じるので `Closes` にせず、spec にコメントで寄せる。#3072 は決定2 に依る別 issue。

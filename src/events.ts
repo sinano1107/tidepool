@@ -218,8 +218,8 @@ export type EventPayload =
   // ADR 0273 決定1: 盤面が root の最初の pickup で面接室を作った —— path はその在り処。基点が後で変わっても在り処はこれで引く
   | { kind: "interview_room_opened"; path: string }
   // ADR 0356 決定1・2: 盤面が worker の形で走る task の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
-  // reads は同じ session の読み専用の checkout(ADR 0361 決定1): 面接室の名前(root id)と在り処。面接室を読む task だけ
-  | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip"; reads?: Array<{ name: string; path: string }> }
+  // reads は同じ session の読み専用の checkout(ADR 0361 決定1)。面接室を読む task だけ
+  | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip"; reads?: ReadCheckout[] }
   // ADR 0356 決定2 / ADR 0359 決定2: 解放が名前の場所の側を済ませた —— path の checkout は消してよい
   // (再実行はこれを見て削除だけを撃つ)
   | { kind: "task_checkout_released"; path: string }
@@ -804,6 +804,9 @@ export type Judgment =
     };
 
 /** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
+/** 読み専用の checkout(ADR 0361 決定1): 読む面接室の名前(root id)と、盤面がその session に作った checkout の在り処。 */
+export type ReadCheckout = { name: string; path: string };
+
 export interface AuditVerdict {
   verdict: InterviewVerdict;
   findings: string;

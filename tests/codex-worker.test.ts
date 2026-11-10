@@ -18,7 +18,7 @@ import { type ContainerSpawn, ProcessContainers } from "../src/process-container
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, sessionReadCheckouts, type Task, taskCheckoutPath } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, sessionReadCheckoutOf, type Task, taskCheckoutPath } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -250,8 +250,6 @@ function configValue<T>(args: string[], prefix: string): T {
 
 /** `-c permissions.<name>.filesystem=` の値(TOML の inline table のまま)。 */
 const filesystem = (args: string[], name: string) => configEntry(args, `permissions.${name}.filesystem=`);
-/** task のこの session の、root の面接室の読み専用の checkout(ADR 0361 決定1)。 */
-const readCheckoutOf = (db: ReturnType<typeof openDb>, taskId: string, rootId: string) => sessionReadCheckouts(db, taskId).find((read) => read.name === rootId)!.path;
 
 /** `-c skills.config=` の引数(ADR 0259 決定2)。 */
 const skills = (args: readonly string[]) => configEntry([...args], "skills.config=");
@@ -704,7 +702,7 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(join(checkout, ".git"))}="write"`,
       `${JSON.stringify(join(checkout, ".git", "hooks"))}="read"`,
       `${JSON.stringify(f.workspace)}="read"`,
-      `${JSON.stringify(readCheckoutOf(f.db, root.id, evidence.id))}="read"`,
+      `${JSON.stringify(sessionReadCheckoutOf(f.db, root.id, evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
     for (const id of [root.id, evidence.id]) expect(rows).not.toContain(JSON.stringify(roomOf(id)));
   });
@@ -733,7 +731,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-review"');
     const rows = filesystem(args, "tidepool-review");
     expect(rows).toContain(`${JSON.stringify(f.workspace)}="read"`);
-    expect(rows).toContain(`${JSON.stringify(readCheckoutOf(f.db, audit.id, root.id))}="read"`);
+    expect(rows).toContain(`${JSON.stringify(sessionReadCheckoutOf(f.db, audit.id, root.id))}="read"`);
     expect(rows).not.toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, root.id)!))}="read"`);
   });
 
@@ -746,7 +744,7 @@ describe("CodexWorker (ADR 0098)", () => {
     await f.start(root);
 
     const rows = filesystem(f.process.calls[0]!.args, "tidepool-work");
-    expect(rows).toContain(`${JSON.stringify(readCheckoutOf(f.db, root.id, previous.id))}="read"`);
+    expect(rows).toContain(`${JSON.stringify(sessionReadCheckoutOf(f.db, root.id, previous.id))}="read"`);
     expect(rows).not.toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, previous.id)!))}="read"`);
   });
 

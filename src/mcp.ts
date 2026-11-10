@@ -97,7 +97,7 @@ import {
   redecompose,
   reportBrokenProbe,
   resolveTaskAgent,
-  sessionReadCheckouts,
+  sessionReadCheckoutOf,
   type Task,
   type TaskType,
   taskCheckoutPath,
@@ -506,15 +506,13 @@ function interviewEnvelope(deps: McpDeps, task: Task) {
   };
 }
 
-/** ADR 0361 決定1: worker の面の `interview_room` は「面接室をどこで読むか」—— この session のその面接室(名前は root id)の読み専用の
- *  checkout。記録と人間の面は面接室の在り処のまま。この session が読まない面接室は undefined(path を載せない)。 */
-const readCheckoutOf = (db: Db, taskId: string, room: string) => sessionReadCheckouts(db, taskId).find((read) => read.name === room)?.path;
-
-/** worker が読む history の `retry_of` の面接室を、読む task のこの session の読み専用の checkout にする(ADR 0361 決定1)。 */
+/** worker が読む history の `retry_of` の面接室を、読む task のこの session の読み専用の checkout にする。ADR 0361 決定1: worker の面の
+ *  `interview_room`(監査の envelope・根拠の読み口も)は「面接室をどこで読むか」で、記録と人間の面は面接室の在り処のまま。この session が
+ *  読まない面接室は path を載せない。 */
 function withReadCheckout(db: Db, readerId: string, row: HistoryRow): HistoryRow {
   if (!("retry_of" in row.entry)) return row;
   const { interview_room: _, ...retry_of } = row.entry.retry_of;
-  const room = readCheckoutOf(db, readerId, retry_of.previous_root_id);
+  const room = sessionReadCheckoutOf(db, readerId, retry_of.previous_root_id);
   return { ...row, entry: { ...row.entry, retry_of: { ...retry_of, ...(room !== undefined && { interview_room: room }) } } };
 }
 
@@ -523,7 +521,7 @@ function auditedProbeEnvelope(deps: McpDeps, task: Task) {
   const posedId = auditedPosedEventId(deps.db, task.id);
   if (posedId === undefined) return undefined;
   const { head, root_id } = posedProbe(deps.db, posedId);
-  return { interview_audit: { head, interview_room: readCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
+  return { interview_audit: { head, interview_room: sessionReadCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
 }
 
 /** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
@@ -1273,7 +1271,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           const evidenceId = read.args.task_id ?? "";
           const rows = evidenceHistoryRows(deps.db, task.id, evidenceId);
           // 根拠が Interview の root なら、その面接室も読みに開いている(ADR 0273 決定9)—— 読み専用の checkout で(ADR 0361 決定1)
-          const room = readCheckoutOf(deps.db, task.id, evidenceId);
+          const room = sessionReadCheckoutOf(deps.db, task.id, evidenceId);
           return packItems(read, "history", rows.map((row) => row.entry), room === undefined ? {} : { interview_room: room }, { keyOf: (_, i) => rows[i]!.id });
         }),
     );

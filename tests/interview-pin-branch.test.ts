@@ -4,7 +4,9 @@ import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { Slot } from "../src/slot.js";
+import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { runTeardown, teardownStep } from "../src/teardown.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import {
   commitRoomCopy,
@@ -12,6 +14,7 @@ import {
   openInterviewRoom,
   PickupGateError,
   PlaceNotOpenError,
+  pickupGate,
   type RunPlace,
   recordedInterviewRoom,
   recordTaskCheckoutTip,
@@ -19,11 +22,13 @@ import {
   runPlaceReadPaths,
   taskForkSource,
   taskRunPlace,
+  UnknownWorkspaceError,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
+import { FakeClock } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, sessionId } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、root と受験者の task の checkout(ADR 0356 決定1・2 / ADR 0276)。
@@ -556,18 +561,53 @@ it("決着した受験者の下に repair の work を登録すると拒まれ�
 
 // 読み専用の checkout(ADR 0361 決定1): 面接室の読み手は面接室の `.git` でなく、盤面が session ごとに出題の head だけを fetch して作る checkout を読む
 
-/** 受理した監査の完了の行への異議で立つ RCA —— root 配下の review で、root の面接室を読む。 */
-function rcaUnderAudit(db: Db, rootId: string): Task {
-  const audit = listChildren(db, rootId).find((child) => child.type === "review")!;
+/** 監査の完了の行への異議で立つ RCA —— root 配下の review で、root の面接室を読む。 */
+function rcaUnderAudit(db: Db, audit: Task): Task {
   startTriage(db, NOW);
   raiseObjection(db, taskDecisionLog(db, audit.id).at(-1)!.id, "the call is wrong", NOW);
   commitTriage(db, NOW, [], new Map());
   return listChildren(db, audit.id).find((child) => child.type === "review")!;
 }
 
+const auditOf = (db: Db, rootId: string) => listChildren(db, rootId).find((child) => child.type === "review")!;
+
 const openedReads = (db: Db, taskId: string) => listEvents(db, taskId).flatMap((e) => (e.payload.kind === "task_checkout_opened" ? [e.payload.reads] : []));
 
-it("root 配下の review の pickup は面接室ごとに出題の head だけを fetch した読み専用の checkout を alternates なしで作り、走る場所の reads と開いた event はそれを名指して面接室の path を持たない —— 作業ツリーは出題の head の tree で、root と受験者の答案は引けない(ADR 0361 決定1)", async () => {
+/** root が task の checkout で環境を組んで出題し、監査が立ち(未決着)、root が解放された姿。 */
+async function auditStanding(db: Db) {
+  const picked = await pickedRoot(db, "audit-reads-real");
+  const { root, place } = picked;
+  commitWork(place.path, "probe.txt", "the environment\n");
+  const head = commitRoomCopy(db, place, root.id);
+  const audit = poseProbe(db, root, POSE, "tako", NOW, "worker", head);
+  releaseWorkspace(db, place, root, NOW);
+  return { ...picked, head, audit };
+}
+
+/** 監査を拾った姿(scheduler の順の準備)。 */
+async function auditPickedUp(db: Db) {
+  const standing = await auditStanding(db);
+  const place = await prepareAtPickup(db, standing.workspace, standing.audit, { workspacesBaseDir: standing.base });
+  return { ...standing, place, read: place.reads[0]!.path };
+}
+
+it("監査の pickup は root の面接室の出題の head だけを fetch した読み専用の checkout を alternates なしで作り、走る場所の reads・開いた event・sandbox の読み path はそれを名指して面接室の path を持たない —— 作業ツリーは出題の head の tree で、root のブランチは引けない(ADR 0361 決定1)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, head, audit, place, read } = await auditPickedUp(db);
+
+  expect(place.reads).toEqual([{ name: root.id, path: read }]);
+  expect(read === room.path || read.startsWith(`${room.path}/`)).toBe(false);
+  expect(openedReads(db, audit.id)).toEqual([[{ name: root.id, path: read }]]);
+  expect(git(read, "for-each-ref", "--format=%(refname) %(objectname)")).toBe(`refs/heads/main ${head}`);
+  expect(git(read, "ls-files")).toBe(git(room.path, "ls-tree", "-r", "--name-only", head));
+  expect(git(read, "status", "--porcelain")).toBe("");
+  expect(() => git(read, "cat-file", "-e", `task/${root.id}`)).toThrow();
+  expect(existsSync(join(read, ".git", "objects", "info", "alternates"))).toBe(false);
+  expect(runPlaceReadPaths(place)).toEqual([read, realpathSync(join(workspace.path, ".git", "objects"))]);
+  db.close();
+});
+
+it("受験者の答案が面接室に着いた後の RCA の読み専用の checkout も出題の head だけを持ち、受験者の答案のブランチも commit も引けない(ADR 0361 決定1)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, head, examinees, base } = await posedInRoom(db);
   const examinee = examinees[0]!;
@@ -575,20 +615,32 @@ it("root 配下の review の pickup は面接室ごとに出題の head だけ�
   commitWork(answering.path, "answer.txt", "the answer\n");
   releaseWorkspace(db, answering, examinee, NOW);
   const answer = git(room.path, "rev-parse", `task/${examinee.id}`);
-  const rca = rcaUnderAudit(db, root.id);
+  const rca = rcaUnderAudit(db, auditOf(db, root.id));
 
   const place = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base });
 
   const read = place.reads[0]!.path;
   expect(place.reads).toEqual([{ name: root.id, path: read }]);
-  expect(read === room.path || read.startsWith(`${room.path}/`)).toBe(false);
-  expect(openedReads(db, rca.id)).toEqual([[{ name: root.id, path: read }]]);
   expect(git(read, "for-each-ref", "--format=%(objectname)")).toBe(head);
-  expect(git(read, "ls-files")).toBe(git(room.path, "ls-tree", "-r", "--name-only", head));
-  expect(git(read, "status", "--porcelain")).toBe("");
   for (const ref of [`task/${examinee.id}`, `task/${root.id}`, answer]) expect(() => git(read, "cat-file", "-e", ref)).toThrow();
-  expect(existsSync(join(read, ".git", "objects", "info", "alternates"))).toBe(false);
-  expect(runPlaceReadPaths(place)).toEqual([read, realpathSync(join(workspace.path, ".git", "objects"))]);
+  db.close();
+});
+
+it("却下の後に出し直した root の、却下した監査の行への RCA は、最新の出題でなくその監査が見た出題の head を読む(ADR 0361 決定1 / ADR 0273 決定3)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, base, head: rejectedHead, audit } = await auditStanding(db);
+  completeAudit(db, audit, { verdict: "rejected", findings: "the probe leaks the real environment" }, "fugu", NOW, "worker");
+  const { place: again } = await pickUpInterviewRoot(db, root, workspace);
+  commitWork(again.path, "probe.txt", "the second environment\n");
+  const latest = commitRoomCopy(db, again, root.id);
+  poseProbe(db, getTask(db, root.id)!, POSE, "tako", NOW, "worker", latest);
+  releaseWorkspace(db, again, root, NOW);
+  const rca = rcaUnderAudit(db, getTask(db, audit.id)!);
+
+  const place = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base });
+
+  expect(latest).not.toBe(rejectedHead);
+  expect(git(place.reads[0]!.path, "for-each-ref", "--format=%(objectname)")).toBe(rejectedHead);
   db.close();
 });
 
@@ -633,38 +685,46 @@ it("出題する前の root の面接室を読む task の読み専用の checko
   db.close();
 });
 
-/** 監査の受理の後、受験者の答案が面接室にあり、その監査の行への異議の RCA を拾った姿。 */
-async function rcaPickedUp(db: Db) {
-  const posed = await posedInRoom(db);
-  const rca = rcaUnderAudit(db, posed.root.id);
-  const place = await prepareAtPickup(db, posed.workspace, rca, { workspacesBaseDir: posed.base });
-  return { ...posed, rca, place, read: place.reads[0]!.path };
-}
-
-it("解放は読み専用の checkout とその番地の親を消し、解放の再実行は何もせず quarantine も立てない(ADR 0361 決定1)", async () => {
+it("解放は読み専用の checkout とその番地の親を消し、解放の再実行は何もせず quarantine も立てない(issue #3105 の spec)", async () => {
   const db = openDb(":memory:");
-  const { workspace, base, rca, place, read } = await rcaPickedUp(db);
+  const { workspace, base, audit, place, read } = await auditPickedUp(db);
 
-  releaseWorkspace(db, place, rca, NOW);
-  releaseWorkspace(db, place, rca, NOW);
+  releaseWorkspace(db, place, audit, NOW);
+  releaseWorkspace(db, place, audit, NOW);
 
   expect(existsSync(read)).toBe(false);
-  expect(existsSync(join(base, `${rca.id}.reads`))).toBe(false);
+  expect(existsSync(join(base, `${audit.id}.reads`))).toBe(false);
   expect(existsSync(place.path)).toBe(false);
   expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
   db.close();
 });
 
-it("決着が task の失敗で task の checkout を残す解放でも、読み専用の checkout は消える(ADR 0361 決定1 / ADR 0356 決定2)", async () => {
+it("決着が task の失敗で task の checkout を残す解放でも、読み専用の checkout は消える(issue #3105 の spec / ADR 0356 決定2)", async () => {
   const db = openDb(":memory:");
-  const { rca, place, read } = await rcaPickedUp(db);
+  const { audit, place, read } = await auditPickedUp(db);
   git(place.path, "checkout", "--quiet", "-b", "elsewhere");
-  git(place.path, "branch", "-D", `task/${rca.id}`);
+  git(place.path, "branch", "-D", `task/${audit.id}`);
 
-  releaseWorkspace(db, place, rca, NOW);
+  releaseWorkspace(db, place, audit, NOW);
 
   expect(existsSync(place.path)).toBe(true);
   expect(existsSync(read)).toBe(false);
+  db.close();
+});
+
+it("実環境の名前が registry から消えて(drift)後始末が解放を飛ばしても、読み専用の checkout は消え、task の checkout は残る(issue #3105 の spec / ADR 0363 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, audit, place, read } = await auditPickedUp(db);
+  const slot = new Slot();
+  slot.occupy(audit.id, sessionId(db, audit.id));
+  const drifted = () => {
+    throw new UnknownWorkspaceError(workspace.name);
+  };
+
+  await runTeardown({ db, clock: new FakeClock(), slot, resolve: drifted, pollNow: () => {} }, audit.id, teardownStep(db, audit.id));
+
+  expect(existsSync(read)).toBe(false);
+  expect(existsSync(place.path)).toBe(true);
   db.close();
 });
 
@@ -675,18 +735,15 @@ it.each([
     git(room.path, "reflog", "expire", "--expire=now", "--all");
     git(room.path, "gc", "--quiet", "--prune=now");
   }],
-])("読む面接室の %s とき、読み手の準備は面接室の名前(root id)で止まり、task の checkout も読み専用の checkout も作らない(ADR 0361 決定1 / ADR 0276 決定3)", async (_, breakRoom) => {
+])("読む面接室の %s とき、監査の pickup の門は面接室の名前(root id)で止まり、読み専用の checkout を作らない(ADR 0361 決定1 / ADR 0329 追記 決定7)", async (_, breakRoom) => {
   const db = openDb(":memory:");
-  const { workspace, root, room, base } = await posedInRoom(db);
-  const rca = rcaUnderAudit(db, root.id);
+  const { workspace, root, room, base, audit } = await auditStanding(db);
   breakRoom(room);
 
-  const failed = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base }).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, audit, base).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
-  expect(existsSync(join(base, rca.id))).toBe(false);
-  expect(existsSync(join(base, `${rca.id}.reads`))).toBe(false);
-  expect(openedReads(db, rca.id)).toEqual([]);
+  expect(existsSync(join(base, `${audit.id}.reads`))).toBe(false);
   db.close();
 });
