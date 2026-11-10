@@ -1,0 +1,44 @@
+# 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理がやり直す —— 済んでいない解放を持つ task は走らせない
+
+2026-11-11 の grilling(issue #3147、#3126 の実装 review の派生)で決定。ADR 0356 で worker の成果は名前の場所の外(task の checkout)に
+移ったが、解放が名前の場所の事情(drift、名前の場所の故障・基準違反)で済まないと、盤面は checkout を残して枠を空け、二度と戻らなかった。
+ADR 0356 の前は WIP が名前の場所の中にあり、Quarantine の受理の「working tree が clean」の検査が放置を止めていた —— その後は受理が
+checkout を見ないので、済まなかった解放を誰も負わないまま受理が通る。次の pickup はタスクブランチから作り直し、前の session の成果を
+運ばない。成果を拾えるのは在り処を知った人間だけで、その告知は残す出口ごとに別の器にあり(drift だけが Quarantine の理由に書き、
+ADR 0366 の後は別の観測者が先に登録するとそれも消える)、告知を揃える案は届かない読み手と古くなる場面を限界として積み続けた。
+実測と出口の表は #3147 に置く。
+
+## 決定
+
+1. **名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理の検査の中でやり直す。** 届かなかった merge back を受理が
+   記録から導いて撃ち直す(ADR 0240 決定4)のと同じ場所・同じ形で、退避がその対象から抜けていた。盤面が運ぶので、在り処を人間に
+   告げる必要は無い —— Quarantine を誰が先に立てたかに依らない。
+2. **やり直す対象は、解放の着け先がその名前の場所である task の、最後の session の未解放の checkout。** 決着は後始末と同じく記録から導く。
+   それより前の session が残した checkout には触らない。
+3. **撃ち直しが落ちたときの行き先は元の解放と同じ。** 名前の場所の事情なら受理を理由つきで拒む(まだ直っていない)。worker の repo の
+   故障なら task の失敗にして受理は通す(ADR 0356 決定2: worker の repo の故障は名前の場所の quarantine ではない)。
+4. **済んでいない解放を持つ task は走らせない。** 最後の session の checkout に解放の event も解放の失敗の event も無い task の pickup は、
+   着け先の workspace の Quarantine で止める。決定2 の「受理の時点で残っているのは最後の session のもの」を、停止の門からの推論ではなく
+   新しい checkout を作る直前の不変条件で守る。その task の workspace の編集も、解放を負う間は拒む —— 着け先の名前が変わると戻す
+   Quarantine が決まらない。
+5. **worker の repo の故障で残した checkout は変えない。** 出どころが壊れていて盤面には運べない。task の失敗として failure question が
+   在り処を告げ、retry は新しい checkout で進む。
+6. **drift の Quarantine の理由に在り処を書かない**(ADR 0363 決定4 の前半を外す)。Quarantine の本文には、受理が済まなかった解放を
+   やり直すことを固定の文で書く —— 登録した観測者に依らない文だけを本文に置く。
+
+## 退けた形
+
+- **盤面は運ばず、在り処を告げる**(残した checkout を開いた event と解放の event から導き、開いた question を読むときの注釈で告げる)——
+  この grilling で一度採って取り下げた。push 通知と retry した worker に届かず、question が開かない残し方は告げられず、人間が手で
+  片付けても並び続け、どの checkout かは理由文の path 頼みになった。共有する前提(盤面が運べなかった成果は人間が運ぶ)が根だった。
+- **drift の出口だけ直す**(landing が先でも理由に書き足す)—— 名前の場所の故障の出口が残り、登録の冪等(ADR 0366 決定1)に例外が要る。
+- **次の pickup の準備でやり直す**(受理ではなく)—— 再 pickup されない決着済みの task の checkout が残る。
+- **決定4 を test だけで守る** —— 今ある扉を全部数えたという主張に乗る。workspace の編集は実際にその扉だった。
+
+## 影響
+
+- Status 追記: ADR 0363 決定4 と退けた形(受理で残した checkout から tip を fetch する —— drift の読み手だけを数えた理由だった)、
+  ADR 0356 決定2、ADR 0240 決定4。
+- GLOSSARY.md: task の checkout、Slot-release tree rule(drift の後始末の文)。
+- #3057(残した checkout を片付ける契機)は、worker の repo の故障で残したものと前の session の残りに範囲が縮む。
+- 実装は 1 slice、#3147 のコメントが spec。

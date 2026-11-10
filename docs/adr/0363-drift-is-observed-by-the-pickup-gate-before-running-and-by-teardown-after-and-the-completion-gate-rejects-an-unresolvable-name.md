@@ -1,6 +1,6 @@
 # drift の観測者は走る前なら pickup の門、走った後なら後始末であり、verb は拒むだけ —— 完了の門は名前が解けないときも tip の記録を待って `done` にしない
 
-**Status 追記: 決定4 の「立てる Quarantine の理由にその在り処を書く」は、開いた question を読むときの注釈に置き換わった —— 理由は登録した観測者が知っていたことしか載らず、登録が冪等になった後は別の観測者が先に立てると在り処が消える。残した checkout は開いた event と解放の event から導く。「盤面は残した成果を運ばない」と worker への拒否文の在り処は変わらない([ADR 0369](0369-a-task-checkout-the-release-left-is-derived-from-the-opened-and-released-events-and-told-by-an-annotation-on-open-questions-not-by-their-text.md) 決定1〜3、2026-11-11、issue #3147)。**
+**Status 追記: 決定4 の「盤面は残した成果を運ばない」「立てる Quarantine の理由にその在り処を書く」と、退けた形の「Quarantine の受理で残した checkout から tip を fetch する」は反転した —— 名前の場所の事情で済まなかった解放は drift に限らず(名前の場所の故障・基準違反でも)起き、受理がやり直す。「読み手は帯域外の操作をした人間 1 人」は drift だけを数えた理由だった。理由に在り処は書かない。worker への拒否文の在り処は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定1・6、2026-11-11、issue #3147)。**
 
 **Status 追記: #3120 の Status 追記の「その drift の観測者は次の pickup の門(root の再 pickup か同じ実環境の work)」には受験者の pickup も入る —— 受験者の pickup も実環境の名前を解き、停止の門は受験者をその名前で外す([ADR 0368](0368-a-resource-stop-returns-a-pickup-to-todo-only-when-the-stop-gate-holds-that-task-and-an-examinee-is-also-stopped-by-its-workspace-column.md) 決定3、2026-11-10、issue #3144)。**
 
