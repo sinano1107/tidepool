@@ -31,9 +31,11 @@ import {
   boardWriteTree,
   displayWorktreePath,
   git,
+  gitlinkChanges,
   gitWithInput,
   ownWorktreeStatus,
   type SparsePolicy,
+  TaskCheckoutUnreadableError,
   type WorktreeChange,
   WorktreeStatusError,
   withBoardGit,
@@ -73,7 +75,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { gitlinkChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS, treeDeltaEntries } from "./sandbox.js";
+import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS, treeDeltaEntries } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   auditedPosedEventId,
@@ -478,9 +480,6 @@ function openReadCheckout(at: string, room: WorkspaceConfig, head: string | unde
   }
   return { name: room.name, path };
 }
-
-/** ADR 0356 決定2 / ADR 0359 決定5: worker の repo が読めない。完了の解放では観測、todo に戻る解放では task の失敗になる。 */
-export class TaskCheckoutUnreadableError extends Error {}
 
 /** ADR 0365 決定2: 出題の写しの tree が面接室の保護ブランチの head から gitlink を足す・進める —— 文は verb の側で書く。 */
 export class RoomCopyGitlinkError extends Error {

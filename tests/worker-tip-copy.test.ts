@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { TaskCheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
-import { commitRoomCopy, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, TaskCheckoutUnreadableError, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,

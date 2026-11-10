@@ -330,7 +330,41 @@ it("the gate reads a submodule by its gitlink only, without running Git in the w
     git(submodule, "add", "README.md");
     git(submodule, "commit", "-m", "advance the submodule tip");
     expect(git(submodule, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(db, place, task.id)).toEqual(["module with space"]);
+    // ADR 0365 決定3: 進めた tip の値は worktree から読まない —— gitlink は記録の値のまま
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+it("無関係の repo を指す gitfile を持つ untracked の dir を、完了の門は名指さない(ADR 0365 決定3)", async () => {
+  const { db, task, place } = await pickedUpSession();
+  try {
+    const other = await makeWorkspace("gate-nested-gitfile-source");
+    mkdirSync(join(place.path, "mod"));
+    writeFileSync(join(place.path, "mod", ".git"), `gitdir: ${join(other.path, ".git")}\n`);
+
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+// 旧: commit の無い入れ子の repo では退避の add -A が落ち、未決着なら task の失敗、完了済み review なら名前の場所の quarantine だった
+it.each(["undecided", "completed review"] as const)("commit の無い入れ子の repo は %s の解放を落とさず、記録にも入らない(ADR 0365 決定3)", async (form) => {
+  const { db, task, ws, place } = await pickedUpSession(form === "undecided" ? "work" : "review");
+  try {
+    if (form === "completed review") completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    mkdirSync(join(place.path, "mod"));
+    git(join(place.path, "mod"), "init", "--quiet");
+    writeFileSync(join(place.path, "work.txt"), "work in progress\n");
+
+    releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, form === "completed review");
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(git(ws.path, "show", `task/${task.id}:work.txt`)).toBe("work in progress");
+    expect(git(ws.path, "ls-tree", `task/${task.id}`, "--", "mod")).toBe("");
   } finally {
     db.close();
   }

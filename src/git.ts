@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
@@ -98,13 +98,65 @@ function seedViewIndex(view: View, head: string): void {
  *  index には seed の entry が残り、add も status も配下ごと触らない。 */
 const viewPathspec = (exclude: string[]) => ["--", ".", ...exclude.map((path) => `:(exclude,literal)${path}`)];
 
+/** ADR 0365 決定3: 記録の gitlink —— view の index の種 `head` の mode 160000 の path。 */
+function seededGitlinks(view: View, head: string): string[] {
+  return view(["ls-tree", "-r", "-z", head]).split("\0").filter((line) => line.startsWith("160000 ")).map((line) => line.slice(line.indexOf("\t") + 1));
+}
+
+/** ADR 0365 決定3: worktree は gitlink の値を供給しない —— view は入れ子の repo を外す。worktree で dir の記録の gitlink(無い・file・symlink は
+ *  削除や置き換えとして記録できるので add -A に任せる)と、untracked の列挙が中へ降りない dir として返す entry。 */
+function nestedRepos(view: View, cwd: string, gitlinks: string[]): string[] {
+  const untracked = view(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter((path) => path.endsWith("/"));
+  return [...gitlinks.filter((path) => isDirectory(join(cwd, path))), ...untracked.map((path) => path.slice(0, -1))];
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOTDIR") return false; // 祖先が dir でない
+    throw err;
+  }
+}
+
+/** ADR 0356 決定2 / ADR 0359 決定5: worker の repo が読めない。完了の解放では観測、todo に戻る解放では task の失敗になる。 */
+export class TaskCheckoutUnreadableError extends Error {}
+
 /** ADR 0356 決定3: the worktree's content as a tree in `objectsFrom`'s objects, staged by `add -A` into a fresh index seeded from `head`. */
 export function boardWriteTree(cwd: string, head: string, objectsFrom: string, exclude: string[] = []): string {
-  return withWorkerTreeGit(cwd, (view) => {
+  const tree = withWorkerTreeGit(cwd, (view) => {
     seedViewIndex(view, head);
-    view(["add", "-A", ...viewPathspec(exclude)]);
+    view(["add", "-A", ...viewPathspec([...exclude, ...nestedRepos(view, cwd, seededGitlinks(view, head))])]);
     return view(["write-tree"]).trim();
   }, objectsFrom);
+  // ADR 0365 決定3: 列挙と add -A の間に worker が入れ子の .git を作れば git はそれを開く —— 書いた tree が gitlink を足す・進めたら worker の repo の故障
+  const gitlinks = gitlinkChanges(treeDiffEntries(objectsFrom, `${head}^{tree}`, tree));
+  if (gitlinks.length > 0) {
+    throw new TaskCheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: a nested repository appeared while the board read the worktree: ${gitlinks.join(", ")}`);
+  }
+  return tree;
+}
+
+export interface TreeDeltaEntry {
+  dstMode: string;
+  path: string;
+}
+
+/** `range` の間で entry(mode と blob、在る↔無い)が変わった行。名前の場所の盤面の git で、replace ref を通さず記録された object を読む
+ *  (ADR 0360 決定1)。`.gitmodules` の `ignore` に gitlink を伏せさせない。行は `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`。 */
+export function treeDiffEntries(namedPlace: string, ...range: string[]): TreeDeltaEntry[] {
+  const fields = git(namedPlace, "--no-replace-objects", "diff-tree", "-r", "--raw", "-z", "--ignore-submodules=none", ...range).split("\0");
+  const entries: TreeDeltaEntry[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    entries.push({ dstMode: fields[i]!.split(" ")[1]!, path: fields[i + 1]! });
+  }
+  return entries;
+}
+
+/** ADR 0365 決定2: base から gitlink を足した・進めた path —— 参照先は別 repo の commit で、記録は持てない。diff-tree は変わった entry
+ *  しか出さないので、行き先が gitlink の行がちょうど「足す」と「進める」。消す・blob や tree に置き換える行は行き先が gitlink でない。 */
+export function gitlinkChanges(delta: TreeDeltaEntry[]): string[] {
+  return delta.filter(({ dstMode }) => dstMode === "160000").map(({ path }) => path);
 }
 
 /** The repo's own status: only the board's env overrides apply (ADR 0356 決定5). For the named place, whose config is the human's or the board's. */
@@ -119,12 +171,14 @@ function porcelainChanges(output: string): WorktreeChange[] {
 export class WorktreeStatusError extends Error {}
 
 /** ADR 0356 決定3: a task checkout read only through the board's view — a fresh index from `head`'s tree and `objectsFrom`'s
- *  objects. Nothing runs in the worker's repo, so its real index and nested repos are not read; a submodule counts by its gitlink. */
+ *  objects. Nothing runs in the worker's repo, so its real index is not read, and the view excludes nested repos (ADR 0365 決定3): a
+ *  submodule counts by its recorded gitlink. */
 export function boardViewStatus(cwd: string, head: string, objectsFrom: string, exclude: string[] = []): WorktreeChange[] {
   return withWorkerTreeGit(cwd, (view) => {
     seedViewIndex(view, head);
+    const gitlinks = seededGitlinks(view, head);
     try {
-      return porcelainChanges(view(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty", ...viewPathspec(exclude)]));
+      return porcelainChanges(view(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", ...viewPathspec([...exclude, ...nestedRepos(view, cwd, gitlinks)])]));
     } catch (cause) {
       if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定3: 上限超過は観測の失敗ではない
       // ADR 0359 決定3: 盤面の記録から index を作る段の失敗と、worker の worktree を観測する段の失敗を分ける
