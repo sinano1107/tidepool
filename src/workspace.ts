@@ -1730,6 +1730,7 @@ function settleTaskCheckout(
         // 残骸の lstat は worker の tree を読む —— 退避の失敗と同じ扱いにする
         tree = boardWriteTree(checkout, base, namedPlace.path, boardViewExcludes(db, place, task.id, base));
       } catch (cause) {
+        if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 運ばない path の event の読みも盤面 DB —— worker の故障に包まない
         if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
         throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
       }

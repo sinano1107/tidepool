@@ -684,7 +684,7 @@ export function workerSpawnEnv(
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
     ...(advisor === undefined ? { [ADVISOR_DISABLE_ENV]: "1" } : {}),
-    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear the board's sparse S bit.
+    // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear the task checkout's sparse S bit.
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: EXPECT_FILES_OUTSIDE_OF_PATTERNS.key,
     GIT_CONFIG_VALUE_0: EXPECT_FILES_OUTSIDE_OF_PATTERNS.value,
