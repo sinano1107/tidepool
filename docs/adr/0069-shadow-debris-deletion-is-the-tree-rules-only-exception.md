@@ -1,5 +1,7 @@
 # サンドボックスの shadow 残骸の削除は slot-release tree rule の唯一の例外である
 
+**Status 追記: 既知パスリストは `settingsDenyWrite` が tip に settings があっても無くても stub を bind する2 path(`.claude/settings.json` / `.claude/settings.local.json`)も含む —— tip に無い settings の path の 0 byte・untracked のファイルも残骸として運ばず、完了の門も名指さない([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md) Status 追記、2026-11-10、issue #3111)。**
+
 **Status 追記: 「唯一の例外」が縛るのは WIP の外へ出られるものである。タスクブランチが無視するファイルを盤面が HEAD を動かす手で消す [ADR 0352](0352-files-the-task-branch-ignores-are-removed-when-the-board-moves-head-off-it.md) は、worker 自身の宣言で `add -A` の外に居るものを消すので退避の例外には数えない。決定6 の「pickup 側には足さない」も shadow 残骸の掃除の話で、HEAD を動かす手は pickup にも当たる(2026-11-02、issue #2912)。**
 
 issue #310 のグリリング(2026-08-13)で決定。実環境動作確認 第3段(ADR 0052)で、worker セッション中に

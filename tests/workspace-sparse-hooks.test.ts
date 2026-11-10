@@ -3,8 +3,19 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { registerTask } from "../src/tasks.js";
-import { completionTreePaths, excludeWorkspaceProjectSettings, releaseWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
+import { appendEvent, listEvents } from "../src/events.js";
+import { completeTask, getTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import {
+  commitRoomCopy,
+  completionTreePaths,
+  excludeWorkspaceProjectSettings,
+  type RunPlace,
+  recordedInterviewRoom,
+  recordTaskCheckoutTip,
+  releaseWorkspace,
+  type WorkspaceConfig,
+  workspaceNeedsHuman,
+} from "../src/workspace.js";
 import {
   api,
   bootClaudeOn,
@@ -18,11 +29,14 @@ import {
   HOUR,
   HUMAN_WEBUI,
   makeWorkspace,
+  openTestInterviewRoom,
+  pickUpInterviewRoot,
   prepareAtPickup,
   questions,
   queueWork,
   servedQuarantineQuestion,
   type Tidepool,
+  WORKER_SPAWNED,
 } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -108,6 +122,128 @@ it.each([
 
   expect(git(workspace.path, "log", "-1", "--format=%s", `task/${task.id}`)).toContain("WIP");
   expect(git(workspace.path, "rev-parse", `task/${task.id}:${hidden}`)).toBe(recorded);
+});
+
+/** 両 settings を隠した task の checkout で、`.claude/settings.json` の path にディレクトリを置いた形(#3111)。`workspace` は名前の場所
+ *  —— Interview の root なら面接室。 */
+async function directoryAtHiddenSettings(name: string, role: "work" | "interview root" = "work") {
+  const real = await makeWorkspace(name);
+  db = openDb(":memory:");
+  let task: Task;
+  let workspace: WorkspaceConfig;
+  let place: RunPlace;
+  if (role === "work") {
+    await shareBothSettings(real.path);
+    const registered = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, new Date(0), ...HUMAN_WEBUI);
+    task = pickupTask(db, registered, "deckhand", new Date(0))!;
+    workspace = real;
+    place = await prepareAtPickup(db, workspace, task);
+  } else {
+    task = registerTask(db, {
+      type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: real.name,
+      interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }],
+    }, new Date(0), ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, task);
+    await shareBothSettings(recordedInterviewRoom(db, task.id)!.path);
+    ({ room: workspace, place } = await pickUpInterviewRoot(db, task, real));
+  }
+  excludeWorkspaceProjectSettings(place, task.id, [".claude/settings.json", ".claude/settings.local.json"]);
+  const recorded = git(workspace.path, "rev-parse", `task/${task.id}:.claude/settings.json`);
+  mkdirSync(join(place.path, ".claude", "settings.json", "x"), { recursive: true });
+  writeFileSync(join(place.path, ".claude", "settings.json", "x", "file"), "inside\n");
+  return { workspace, task, place, recorded };
+}
+
+it("隠した settings の path にディレクトリがあっても、非完了の解放は task を倒さず、WIP は記録の blob を運ぶ(ADR 0360 Status 追記、#3111)", async () => {
+  const { workspace, task, place, recorded } = await directoryAtHiddenSettings("settings-directory-wip");
+  writeFileSync(join(place.path, "half-done.txt"), "work in flight\n");
+
+  releaseWorkspace(db!, place, task, new Date(0));
+
+  expect(listEvents(db!, task.id).filter(({ kind }) => kind === "task_checkout_release_failed")).toEqual([]);
+  expect(git(workspace.path, "diff", "--name-status", "main", `task/${task.id}`)).toBe("A\thalf-done.txt");
+  expect(git(workspace.path, "rev-parse", `task/${task.id}:.claude/settings.json`)).toBe(recorded);
+});
+
+it("隠した settings の path にディレクトリがあっても、完了の門はその path も配下も名指さない(ADR 0360 Status 追記、#3111)", async () => {
+  const { task, place } = await directoryAtHiddenSettings("settings-directory-gate");
+  writeFileSync(join(place.path, "half-done.txt"), "work in flight\n");
+
+  expect(completionTreePaths(db!, place, task.id)).toEqual(["half-done.txt"]);
+});
+
+it("隠した settings の path にディレクトリがあっても、完了後の観測は読めると記録し、その path を名指さない(ADR 0360 Status 追記、#3111)", async () => {
+  const { task, place } = await directoryAtHiddenSettings("settings-directory-after-completion");
+  recordTaskCheckoutTip(db!, place, task.id);
+  completeTask(db!, task, FULL_HANDOFF, "worker", new Date(0), "worker");
+  writeFileSync(join(place.path, "late.txt"), "written after completion\n");
+
+  releaseWorkspace(db!, place, getTask(db!, task.id)!, new Date(0), true, undefined, undefined, true);
+
+  expect(listEvents(db!, task.id).map(({ payload }) => payload).filter(({ kind }) => kind === "task_checkout_written_after_completion")).toEqual([
+    { kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["late.txt"] },
+  ]);
+});
+
+it("root の checkout で隠した settings の path にディレクトリがあっても、出題の写しは通り、写しの settings は記録の blob のまま(ADR 0360 Status 追記、#3111)", async () => {
+  const { workspace: room, task: root, place, recorded } = await directoryAtHiddenSettings("settings-directory-room-copy", "interview root");
+  commitWork(place.path, "probe.txt", "the environment\n");
+
+  const head = commitRoomCopy(db!, place, root.id);
+
+  expect(git(room.path, "rev-parse", `${head}:.claude/settings.json`)).toBe(recorded);
+  expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
+});
+
+it.each([
+  ["settings を track しない tip、Claude の spawn", [], "claude", [".claude/settings.json", ".claude/settings.local.json"]],
+  ["settings.json だけを track する tip、Claude の spawn", [".claude/settings.json"], "claude", [".claude/settings.local.json"]],
+  ["settings を track しない tip、Codex の spawn", [], "codex", [".claude/settings.json", ".claude/settings.local.json"]],
+] as const)("%s: track しない settings の path の 0 byte の stub は shadow 残骸として完了の門が名指さず、WIP にも入らない(ADR 0069、#3111)", async (_, tracked, harness, stubs) => {
+  const workspace = await makeWorkspace("settings-stub-remnant");
+  db = openDb(":memory:");
+  mkdirSync(join(workspace.path, ".claude"));
+  for (const path of tracked) commitWork(workspace.path, path, "{}\n");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, new Date(0), ...HUMAN_WEBUI);
+  const place = await prepareAtPickup(db, workspace, task);
+  if (harness === "codex") appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: { ...WORKER_SPAWNED, harness }, at: new Date(0) });
+  else excludeWorkspaceProjectSettings(place, task.id, [...tracked]);
+  // settingsDenyWrite は tip に settings があっても無くても両 path に stub を bind する
+  mkdirSync(join(place.path, ".claude"), { recursive: true });
+  for (const path of stubs) writeFileSync(join(place.path, path), "");
+  writeFileSync(join(place.path, "half-done.txt"), "work in flight\n");
+
+  expect(completionTreePaths(db, place, task.id)).toEqual(["half-done.txt"]);
+
+  releaseWorkspace(db, place, task, new Date(0));
+
+  expect(git(workspace.path, "diff", "--name-status", "main", `task/${task.id}`)).toBe("A\thalf-done.txt");
+});
+
+it("track しない settings の path に中身のあるファイルがあれば、完了の門は変更として名指す(ADR 0069、#3111)", async () => {
+  const workspace = await makeWorkspace("settings-untracked-content");
+  db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, new Date(0), ...HUMAN_WEBUI);
+  const place = await prepareAtPickup(db, workspace, task);
+  mkdirSync(join(place.path, ".claude"));
+  writeFileSync(join(place.path, ".claude", "settings.local.json"), '{"env":{"WORKER":"1"}}\n');
+
+  expect(completionTreePaths(db, place, task.id)).toEqual([".claude/settings.local.json"]);
+});
+
+it("task の checkout の `.claude` が通常のファイルなら、完了の門はそれを名指し、非完了の解放は task を倒さず WIP に運ぶ(ADR 0069、#3111)", async () => {
+  const workspace = await makeWorkspace("claude-regular-file");
+  db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "why", completion_criteria: "done" }, new Date(0), ...HUMAN_WEBUI);
+  const place = await prepareAtPickup(db, workspace, task);
+  writeFileSync(join(place.path, ".claude"), "not a directory\n");
+
+  expect(completionTreePaths(db, place, task.id)).toEqual([".claude"]);
+
+  releaseWorkspace(db, place, task, new Date(0));
+
+  expect(listEvents(db, task.id).filter(({ kind }) => kind === "task_checkout_release_failed")).toEqual([]);
+  expect(git(workspace.path, "diff", "--name-status", "main", `task/${task.id}`)).toBe("A\t.claude");
 });
 
 it("forged sparse rules cannot hide a README deletion from completion or WIP (ADR 0360 決定2)", async () => {

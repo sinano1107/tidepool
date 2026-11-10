@@ -150,9 +150,9 @@ const OS_READ = ["/usr", "/bin", "/lib", "/sbin", "/etc", "/proc", "/dev"];
 /** ADR 0069: files created in the workspace while sandbox-runtime#139 shadows
  *  protected home paths:
  *  https://github.com/anthropic-experimental/sandbox-runtime/issues/139
- *  Only an empty, untracked file at one of these exact paths may be discarded
- *  by the slot-release tree rule. */
-export const SANDBOX_SHADOW_PATHS = [
+ *  Only an empty, untracked file at one of these exact paths (or a settings
+ *  path, `SANDBOX_STUB_PATHS`) may be discarded by the slot-release tree rule. */
+const SANDBOX_SHADOW_PATHS = [
   ".bash_profile",
   ".bashrc",
   ".gitconfig",
@@ -181,6 +181,13 @@ export const SANDBOX_SHADOW_PATHS = [
  *  list, because the two are the same fact about the CLI's merge order. */
 const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
+/** The workspace's settings paths the board hides from a Claude worker. */
+export const PROJECT_SETTINGS_PATHS = PROJECT_SETTINGS_FILES.map((name) => `.claude/${name}`);
+
+/** ADR 0069 の既知パス: sandbox が workspace に stub を置く path の全部 —— runtime#139 の shadow と、`settingsDenyWrite` が tip に
+ *  settings があっても無くても bind する2 path(ADR 0360 Status 追記、#3111)。 */
+export const SANDBOX_STUB_PATHS = [...SANDBOX_SHADOW_PATHS, ...PROJECT_SETTINGS_PATHS];
+
 /** ADR 0037's OS-layer half: the sandbox confines Bash, so this is what stops a
  *  `work` session redirecting into its own settings and re-defining the floor
  *  for the *next* Bash call (project settings hot-reload mid-session — the
@@ -197,7 +204,7 @@ const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
  *  whether or not the file exists, and Seatbelt refuses an `rm -rf` of a parent
  *  containing a protected file. */
 function settingsDenyWrite(workspacePath: string): string[] {
-  return PROJECT_SETTINGS_FILES.map((name) => `${workspacePath}/.claude/${name}`);
+  return PROJECT_SETTINGS_PATHS.map((path) => `${workspacePath}/${path}`);
 }
 
 /** ADR 0037's tool-layer half. `settingsDenyWrite` above only reaches Bash — the
@@ -574,9 +581,6 @@ const defaultRunOk: RunOkFn = (command, args) => {
     return false;
   }
 };
-
-/** The workspace's settings paths the board hides from a Claude worker. */
-export const PROJECT_SETTINGS_PATHS = PROJECT_SETTINGS_FILES.map((name) => `.claude/${name}`);
 
 /** What the board does with the workspace's settings is decided from the record — the tree of `ref` in the named place
  *  — never from the task checkout (ADR 0360 決定1); what they hold is never read (ADR 0346 決定2). A worker-shaped
