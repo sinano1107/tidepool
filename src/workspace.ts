@@ -401,7 +401,7 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
   const role = interviewRole(db, task);
   // 名前の場所の objects が引けないのは名前の場所の性質 —— host 側の失敗に包まず、呼び手の quarantine へ
   const objects = role === undefined ? namedObjects(named) : undefined;
-  // 読む面接室の性質の失敗は、どの checkout も作る前にその面接室の名前で止める
+  // ADR 0361 決定1 / ADR 0276 決定3: 読む面接室の準備の失敗は fetch 元の面接室の性質 —— どの checkout も作る前にその面接室の名前で止める
   const rooms = roomsReadBy(db, task).map((room) => ({ room, head: roomPosedHead(db, room) }));
   let path: string;
   try {
