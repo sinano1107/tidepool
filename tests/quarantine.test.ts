@@ -322,8 +322,9 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("git init");
   }, GIT_FIXTURE_TEST_TIMEOUT);
   // 旧: 受験者の checkout も記録された場所として「番地を作れる / repo がある」を予告した(ADR 0329 決定4)。ADR 0356 決定1・2 の後は受験者は
-  // 面接室から作り直す task の checkout で走るので、受験者ごとに残る項は出題の head だけ
-  it("出題済みで未決着の受験者がいる名前は出題 head の検査を予告し、空 repo の出口は出さない —— 決着後は外す(ADR 0329 決定4・5 / ADR 0356 決定1)", () => {
+  // 面接室から作り直す task の checkout で走るので、受験者ごとに残る項は出題の head だけ。
+  // 旧: 受験者が決着すると出題 head の検査を外し、空 repo の出口を戻した。ADR 0361 決定1 の後は読み手が出題の head を fetch するので、面接室の項として残る
+  it("出題済みの名前は出題 head の検査を予告し、空 repo の出口は出さない —— 受験者の決着後も面接室の項として残り、受験者の項だけ外れる(ADR 0329 決定4・5 / ADR 0356 決定1 / ADR 0361 決定1)", () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
@@ -341,8 +342,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     completeTask(db, examinee!, FULL_HANDOFF, "tako", NOW, "worker");
     const settled = QUARANTINES.find((row) => row.kind === "workspace")!.prose(root.id, "the place broke", undefined, db).purpose;
     expect(settled).not.toContain(examinee!.id);
-    expect(settled).not.toContain("resolves in the interview room");
-    expect(settled).toContain("git init");
+    expect(settled).toContain(`the posed head ${head} resolves in the interview room`);
+    expect(settled).not.toContain("git init");
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("予告の項と解除の門の検査は名前の pickup の述語の一覧から導かれ、落ちた項が拒否の理由に入る(ADR 0329 追記 決定6)", async () => {
@@ -372,7 +373,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
         return true;
       }
     });
-    expect(failed).toHaveLength(1);
+    // 引けない head は面接室の項(ADR 0361 決定1)と受験者の項の両方で落ち、先に撃つ面接室の項が理由になる
+    expect(failed.map((predicate) => predicate.describe)).toEqual([expect.stringContaining("posed head"), expect.stringContaining("posed head")]);
     await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(failed[0]!.describe);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 

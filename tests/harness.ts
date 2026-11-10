@@ -28,7 +28,7 @@ import type { Clock } from "../src/clock.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents } from "../src/events.js";
+import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents, type ReadCheckout } from "../src/events.js";
 import { type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
@@ -71,6 +71,7 @@ import {
   listExaminees,
   logDecision,
   metaReviewSubjectOf,
+  openedPlaceNames,
   poseProbe,
   presentTask,
   type RegisterTaskInput,
@@ -876,7 +877,19 @@ export function recordCheckoutAtWorkspace(
     return;
   }
   if (existsSync(path)) standInTaskBranch(path, task.id);
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
+}
+
+/** 準備が読む面接室ごとに作る読み専用の checkout(ADR 0361 決定1)の代わり —— task が開く場所の名前のうち、自分の走る面接室でない
+ *  記録された面接室ごとに、空の dir を開いた event の `reads` に置く。 */
+function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
+  const rooms = openedPlaceNames(db, task.id, undefined).filter((name) => name !== interviewRootIdOf(db, task) && interviewRoomPath(db, name) !== undefined);
+  const reads = rooms.map((name) => {
+    const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-read-checkout-")));
+    onTestFinished(() => rm(path, { recursive: true, force: true }));
+    return { name, path };
+  });
+  return reads.length > 0 ? { reads } : {};
 }
 
 /** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。 */
@@ -1204,7 +1217,7 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   const rootId = interviewRootIdOf(db, task);
   const room = rootId === undefined ? undefined : interviewRoomPath(db, rootId);
   if (room !== undefined && existsSync(room)) standInTaskBranch(room, task.id);
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
   return path;
 }
 

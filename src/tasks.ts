@@ -6,7 +6,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { type AuditVerdict, appendEvent, type DecisionLogEntry, type EventOrigin, type EventPayload, getEvent, type InterviewProbe, type InterviewVerdict, isDecisionLogEntry, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { type AuditVerdict, appendEvent, type DecisionLogEntry, type EventOrigin, type EventPayload, getEvent, type InterviewProbe, type InterviewVerdict, isDecisionLogEntry, latestEventOfTask, listEvents, type ReadCheckout, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -586,9 +586,23 @@ export function examineeCheckoutPath(db: Db, examineeId: string): string | undef
 /** この session の task の checkout の在り処(ADR 0356 決定2): 後の pickup に越されていない開いた event から引く —— 前の session が
  *  残した checkout は再利用しない。まだ開いていなければ undefined。 */
 export function taskCheckoutPath(db: Db, taskId: string): string | undefined {
+  return sessionCheckoutOpened(db, taskId)?.path;
+}
+
+/** この session の読み専用の checkout(ADR 0361 決定1): task の checkout と同じく後の pickup に越されていないもの。 */
+export function sessionReadCheckouts(db: Db, taskId: string): ReadCheckout[] {
+  return sessionCheckoutOpened(db, taskId)?.reads ?? [];
+}
+
+/** この session の、root `rootId` の面接室の読み専用の checkout の在り処。読まない面接室は undefined。 */
+export function sessionReadCheckoutOf(db: Db, taskId: string, rootId: string): string | undefined {
+  return sessionReadCheckouts(db, taskId).find((read) => read.name === rootId)?.path;
+}
+
+function sessionCheckoutOpened(db: Db, taskId: string) {
   const pickup = latestEventOfTask(db, taskId, "task_picked_up");
   const opened = latestEventOfTask(db, taskId, "task_checkout_opened");
-  return opened && (!pickup || opened.id > pickup.id) ? opened.payload.path : undefined;
+  return opened && (!pickup || opened.id > pickup.id) ? opened.payload : undefined;
 }
 
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。

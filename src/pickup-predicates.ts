@@ -103,13 +103,28 @@ function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: 
   ];
 }
 
-/** 面接室の述語(ADR 0329 決定4)。出題済みで受験者が未決着なら、空の面接室で走らせる出口は出題の head の述語で通らない(決定5)。 */
+/** 面接室の述語(ADR 0329 決定4)。出題済みなら、読み手は出題の head を面接室から fetch する(ADR 0361 決定1)ので、記録された面接室で
+ *  その head が引けることも項に並び、空の面接室で走らせる出口は予告しない(ADR 0329 決定5)。 */
 export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: string, registry?: RegistrySource): PickupPredicate[] {
-  const posed = unsettledExaminees(db, rootId).length > 0 && latestPosedProbe(db, rootId) !== null;
-  return recordedRoomPredicates(db, rootId, workspacesBaseDir, registry, {
-    recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`,
+  const head = latestPosedProbe(db, rootId)?.head;
+  const predicates = recordedRoomPredicates(db, rootId, workspacesBaseDir, registry, {
+    recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${head ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`,
     create: "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there).",
   });
+  const recorded = recordedPlace(db, rootId);
+  if (head === undefined || !recorded) return predicates;
+  const room = { name: rootId, path: recorded.path };
+  return [
+    ...predicates,
+    {
+      phase: "before-open",
+      describe: `the posed head ${head} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
+      check: () => {
+        if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(rootId, room.path));
+        if (resolvedCommit(room, head) === undefined) throw new Error(`the posed head ${head} cannot be resolved in the interview room ${rootId} at ${room.path}`);
+      },
+    },
+  ];
 }
 
 /** 受験者の述語(ADR 0329 決定4): 出題の head が面接室で引けること。受験者は面接室から fetch する task の checkout で走るので、
@@ -243,16 +258,23 @@ function posedHeadOf(db: Db, task: Task): string {
 /** 引けない head から黙って今の head へ逃げない —— 投げて受験者の pickup の失敗(面接室の quarantine)に落とす。 */
 export function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
   const head = posedHeadOf(db, task);
-  try {
-    return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
-  } catch (err) {
-    // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-  }
+  const resolved = resolvedCommit(workspace, head);
+  if (resolved !== undefined) return resolved;
   throw new Error(
     `workspace ${workspace.name}: the protected branch head the probe recorded for ${task.id} (${head}) ` +
       "cannot be resolved in this checkout, so its branch is not forked",
   );
+}
+
+/** sha がその場所で commit に引ければ sha、引けなければ undefined。 */
+export function resolvedCommit(place: WorkspaceConfig, sha: string): string | undefined {
+  try {
+    return git(place.path, "rev-parse", "--verify", "--quiet", `${sha}^{commit}`);
+  } catch (err) {
+    // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
+    return undefined;
+  }
 }
 
 /** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を

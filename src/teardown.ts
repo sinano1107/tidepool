@@ -15,6 +15,7 @@ import {
   KEPT_TASK_CHECKOUT,
   PlaceNotOpenError,
   quarantineWorkspace,
+  releaseReadCheckouts,
   releaseWorkspace,
   resolveUnlessDrifted,
   taskRunPlace,
@@ -441,6 +442,8 @@ function runPlaceToRelease(
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
   const workspace = resolveUnlessDrifted(resolve, task.workspace, (err) => {
+    // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
+    releaseReadCheckouts(db, task.id);
     if (step.neverRan) return;
     // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
     const kept = taskCheckoutPath(db, task.id);
