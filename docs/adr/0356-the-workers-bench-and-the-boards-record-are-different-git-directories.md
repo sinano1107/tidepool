@@ -1,6 +1,6 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
-**Status 追記: 決定2 の「解放のどの失敗でも checkout は残して既存の失敗経路へ」のうち、名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理がやり直し、済んでいない解放を持つ task は走らせない —— 受理は残した checkout を見ておらず、成果が名前の場所の外に置き去りになっていた。worker の repo の故障で残した checkout は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md)、2026-11-11、issue #3147)。**
+**Status 追記: 決定2 の「解放のどの失敗でも checkout は残して既存の失敗経路へ」は、成果が名前の場所の ref になる前の失敗に限る —— 着いた後の失敗(ref の比較・merge back・休止位置)は checkout を残さず、解放の event を書いて消す。名前の場所の事情で運べなかった解放は、その workspace の Quarantine の受理がやり直し、済んでいない解放を持つ task は走らせない。worker の repo の故障で残した checkout は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定1・4・7、2026-11-11、issue #3147)。**
 
 **Status 追記: 決定3 の view の `add -A` は名前の場所の objects に直接書かない —— worktree は盤面所有の repo に stage し、名前の場所へは fetch で運ぶ。決定2 の「worker の repo の故障は task の失敗」は stage する段の失敗に限り、名前の場所へ運ぶ段の失敗は名前の場所の quarantine([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定1・4、2026-11-10、issue #3141)。**
 
