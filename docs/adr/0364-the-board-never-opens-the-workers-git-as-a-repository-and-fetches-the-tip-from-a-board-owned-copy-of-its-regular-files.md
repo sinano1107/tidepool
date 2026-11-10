@@ -1,5 +1,7 @@
 # 盤面は worker の `.git` をリポジトリとして開かない —— regular file だけを盤面所有の repo に写し、tip はそこから fetch する
 
+**Status 追記: 決定2 の3段の帰責は tip の転送だけでなく WIP の退避にも当たる —— view は worktree を盤面所有の repo に stage し、名前の場所へは同じ fetch で運ぶ([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定1・5、2026-11-10、issue #3141)。**
+
 **Status 追記: 決定1 の閉包の検証(到達可能性)は gitlink の参照先を見ない —— git の到達可能性は gitlink を辿らないので、参照先がどこにも無い gitlink でも閉包は解ける。記録の外を指す entry は完了の門が fork 元との差で拒み、入れ子の repo の中身は運ばない([ADR 0365](0365-the-record-closes-within-one-repo-and-the-completion-gate-rejects-a-tip-that-adds-or-advances-a-gitlink-from-the-fork-source.md)、2026-11-09、issue #3052)。**
 
 **Status 追記: 入れ子の `.git` も worker が書いたリポジトリ定義で、view の `add -A` / `status` は gitlink の値を決めるためにそれを開いていた(#3097 の棚卸しが「変更なし」とした行)。view は入れ子の repo を除き、gitlink の値は記録から読む([ADR 0365](0365-the-record-closes-within-one-repo-and-the-completion-gate-rejects-a-tip-that-adds-or-advances-a-gitlink-from-the-fork-source.md) 決定3、2026-11-09、issue #3117)。**
