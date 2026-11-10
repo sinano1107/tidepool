@@ -1,5 +1,7 @@
 # 記録は名前の場所の1 repo で閉じる —— 完了の門は fork 元から gitlink を足す・進める tip を拒み、入れ子の repo の中身は運ばない
 
+**Status 追記: 決定3 の「書いた tree の gitlink を base と比べる釘」は、名前の場所でなく worktree を stage した盤面所有の repo で確かめる —— 釘が拒む tree は名前の場所に書かれない。列挙が外さず `add -A` が落ちる形(base の file の path に置いた commit の無い入れ子の repo)は除外に足さず、worker の repo の故障である([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定1・2、2026-11-10、issue #3141)。**
+
 **Status: 決定3 の除外の列のうち base の tree の gitlink は、worktree の同じ path の成分がどれも dir(成分ごとの `lstat`、祖先も含め symlink は辿らない、読めない成分は dir でない)のときだけ外す —— 無条件に外すと dir の削除・file への置き換えも黙って base の値に戻る(issue #3117 の実装前の実測、macOS git 2.47)。gitlink の path が dir なら git は中身に依らず base の値を保つので、外しても記録は変わらない。**
 
 2026-11-09 の grilling(issue #3052、#3030 の実装の派生)で決定。ADR 0364 決定1 の不変条件「記録に入る object は、名前の場所に既にあるか
