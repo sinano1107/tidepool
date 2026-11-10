@@ -9,7 +9,7 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue, workspaceContainmentValue } from "../src/quarantine.js";
-import { getTask } from "../src/tasks.js";
+import { getTask, sessionReadCheckouts } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
@@ -305,6 +305,8 @@ it("根拠の history の読み口は根拠の task の判断・記憶の書き�
 const roomOf = (rootId: string) => realpathSync(join(t.dir, "workspaces", rootId));
 /** root・受験者の最後に開いた task の checkout(ADR 0356 決定1・2): 同じ基点の下の task id の下、pickup ごとの番地。 */
 const lastCheckoutOf = (taskId: string) => latestEventOfTask(t.db, taskId, "task_checkout_opened")!.payload.path;
+/** task のこの session の、root の面接室の読み専用の checkout(ADR 0361 決定1)。 */
+const readCheckoutOf = (taskId: string, rootId: string) => sessionReadCheckouts(t.db, taskId).find((read) => read.name === rootId)!.path;
 
 // 旧: root は面接室で走り、面接室の HEAD が root のブランチに乗った(ADR 0273 決定1)。ADR 0356 決定1 の後は root も受験者も面接室から開いた task の checkout で走り、面接室の HEAD は main のまま
 it("root の pickup は面接室を盤面の規約の基点の下に root の id で作り、root は面接室の外の task の checkout で走り、受験者は同じ基点の下の自分の id の checkout で走る —— 面接室の HEAD は main、実環境に受験者のブランチは立たず、受験者の workspace 列は実環境の名前で、受験者の詳細は checkout の在り処を運び、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8 / ADR 0276 決定1・4 / ADR 0356 決定1)", async () => {
@@ -350,7 +352,8 @@ it("root の pickup は読む実環境を remote へ追従させる —— origi
   expect(git(workspace.path, "branch", "--list", `task/${root.id}`)).toBe("");
 });
 
-it("root の envelope は実環境の在り処を持ち、retry の新しい root は旧い面接室の在り処を retry_of で、根拠が Interview の root ならその面接室の在り処を根拠の読み口で受ける —— 面接室は root の決着後も残り、読む面接室が残っていれば pickup は止まらない(ADR 0273 決定1・9 / ADR 0277 追記 決定1)", async () => {
+// 旧: retry_of と根拠の読み口の interview_room は面接室の在り処だった(ADR 0273 決定9)。ADR 0361 決定1 の後は worker の面ではこの session の読み専用の checkout
+it("root の envelope は実環境の在り処を持ち、retry の新しい root は旧い面接室を読む在り処を retry_of で、根拠が Interview の root ならその面接室を読む在り処を根拠の読み口で受ける —— どちらも面接室の path でなくこの session の読み専用の checkout、面接室は root の決着後も残り、読む面接室が残っていれば pickup は止まらない(ADR 0273 決定1・9 / ADR 0277 追記 決定1 / ADR 0361 決定1)", async () => {
   t = await boot();
   const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await pose(first.id);
@@ -360,7 +363,8 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
   await runNow(t, measured.id);
 
   const read = JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text);
-  expect(read.interview_room).toBe(roomOf(first.id));
+  expect(read.interview_room).toBe(readCheckoutOf(measured.id, first.id));
+  expect(read.interview_room).not.toBe(roomOf(first.id));
   expect(JSON.parse((await callAsTask(t, measured.id, "get_current_task", {})).content[0].text).interview.real_environment).toBe(realpathSync(workspacePath));
 
   const retried = (await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {})).json;
@@ -370,7 +374,7 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
   await runNow(t, retried.id);
   expect(t.worker.started.at(-1)!.id).toBe(retried.id);
   const current = JSON.parse((await callAsTask(t, retried.id, "get_current_task", {})).content[0].text);
-  expect(current.history).toContainEqual({ id: expect.any(Number), retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: roomOf(first.id) }) });
+  expect(current.history).toContainEqual({ id: expect.any(Number), retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: readCheckoutOf(retried.id, first.id) }) });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).toBe("cancelled");
   expect(existsSync(join(roomOf(first.id), ".git"))).toBe(true);
   // 読む面接室がどれも残っていれば、pickup は止まらない(ADR 0277 追記 決定1)
@@ -400,7 +404,9 @@ async function expectStoppedOnGoneRoom(taskId: string, roomRootId: string, room:
   return quarantine;
 }
 
-it.each(["directory", "repository"])("根拠の root の面接室の在り処が消えると、それを読む root の pickup は worker を起こさずにその面接室の quarantine に落ちて todo へ戻り、直さない回答は在り処を名指して拒まれ、人間が在り処に repo を置いた回答の後は root が走る(ADR 0277 追記 決定1・2)", async (gone) => {
+// 旧: 人間が在り処に `git init` した空の repo を置いた回答の後に root が走り、sandbox の読みと根拠の読み口は面接室の path を運んだ(ADR 0277 追記 決定2)。
+// ADR 0361 決定1 の後は読み手が面接室から出題の head を fetch するので、出題した root の面接室は復元して走らせ、読みは読み専用の checkout
+it.each(["directory", "repository"])("根拠の root の面接室の在り処が消えると、それを読む root の pickup は worker を起こさずにその面接室の quarantine に落ちて todo へ戻り、直さない回答は在り処を名指して拒まれ、人間が在り処を復元した回答の後は root が走り、sandbox の読みと根拠の読み口は面接室でなく読み専用の checkout を運ぶ(ADR 0277 追記 決定1・2 / ADR 0361 決定1)", async (gone) => {
   t = await boot();
   const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const score = await scoring(first.id);
@@ -410,7 +416,8 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
   const measured = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [first.id], interview_targets: [opus46] })).json;
   await api(t.baseUrl, "POST", `/api/tasks/${measured.id}/move`, { after: null });
   const room = roomOf(first.id);
-  rmSync(gone === "directory" ? room : join(room, ".git"), { recursive: true });
+  const moved = gone === "directory" ? room : join(room, ".git");
+  renameSync(moved, `${room}.aside`);
   await runNow(t, measured.id);
 
   const quarantine = await expectStoppedOnGoneRoom(measured.id, first.id, room);
@@ -443,8 +450,7 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
     }), deps.clock),
   });
 
-  mkdirSync(room, { recursive: true });
-  git(room, "init", "--quiet", "--initial-branch=main");
+  renameSync(`${room}.aside`, moved);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] })).status).toBe(200);
   await runNow(t, measured.id);
 
@@ -454,8 +460,12 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
     return call!;
   });
   const settingsPath = spawned.args[spawned.args.indexOf("--settings") + 1]!;
-  expect(JSON.parse(readFileSync(settingsPath, "utf8")).sandbox.filesystem.allowRead).toContain(room);
-  expect(JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text).interview_room).toBe(room);});
+  const read = readCheckoutOf(measured.id, first.id);
+  const { allowRead } = JSON.parse(readFileSync(settingsPath, "utf8")).sandbox.filesystem;
+  expect(allowRead).toContain(read);
+  expect(allowRead).not.toContain(room);
+  expect(JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text).interview_room).toBe(read);
+});
 
 /** 面接室の `.git` を gitfile に差し替える(linked worktree・submodule の形、ADR 0146)。戻す関数を返す。 */
 function gitFileRoom(room: string): () => void {
@@ -1056,7 +1066,8 @@ it.each([
 const AUDIT_VERBS = ["get_current_task", "log_decision", "escalate", "complete_audit", "browse_memory", "search_memory", "read_memory"];
 
 // 監査の登録・blocked の理由・verb の差し替え・受理 / 却下・cancel の cascade・異議は interview.test.ts の domain 層が言う。ここは写像だけ
-it("出題の gate は面接室の写しを head に記録し、立った監査は root と同じ段で拾われ、その tools/list は review の読み系と complete_audit、envelope は head・面接室の在り処・root の構造欄と findings の行き先の1行を運ぶ(ADR 0273 決定3・4・6)", async () => {
+// 旧: 監査の envelope の interview_room は面接室の在り処だった(ADR 0273 決定4)。ADR 0361 決定1 の後は監査のこの session の読み専用の checkout
+it("出題の gate は面接室の写しを head に記録し、立った監査は root と同じ段で拾われ、その tools/list は review の読み系と complete_audit、envelope は head・面接室を読む在り処(読み専用の checkout)・root の構造欄と findings の行き先の1行を運ぶ(ADR 0273 決定3・4・6 / ADR 0361 決定1)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, tier: "standard", interview_targets: [opus46] })).json;
   const rootTier = t.worker.startedSettings.at(-1)!.tier_id;
@@ -1076,7 +1087,8 @@ it("出題の gate は面接室の写しを head に記録し、立った監査�
   expect(rootTier).toBe(tierIdOf(t.db, "frontier"));
   expect((await tools(auditId)).sort()).toEqual([...AUDIT_VERBS].sort());
   const envelope = JSON.parse((await callAsTask(t, auditId, "get_current_task", {})).content[0].text);
-  expect(envelope.interview_audit).toMatchObject({ head, interview_room: room, hypothesis: INTERVIEW.hypothesis });
+  expect(envelope.interview_audit).toMatchObject({ head, interview_room: readCheckoutOf(auditId, root.id), hypothesis: INTERVIEW.hypothesis });
+  expect(git(envelope.interview_audit.interview_room, "show", "HEAD:probe.txt")).toBe("the environment");
   // 帰り先の無い系譜の監査に権限の1行は足さない(ADR 0301 決定5)
   expect(envelope.interview_audit).not.toHaveProperty("notice");
 });

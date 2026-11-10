@@ -57,6 +57,7 @@ import {
   protectedBranch,
   protectedBranchRef,
   resolvablePosedHead,
+  resolvedCommit,
   roomPickupPredicates,
   safeRealpath,
 } from "./pickup-predicates.js";
@@ -80,8 +81,10 @@ import {
   interviewRoomPath,
   interviewRootIdOf,
   issueRefPlaceholder,
+  latestPosedProbe,
   readableInterviewRooms,
   registerFailureQuestion,
+  sessionReadCheckouts,
   type Task,
   taskCheckoutPath,
 } from "./tasks.js";
@@ -327,7 +330,7 @@ export async function firePickupPredicates(
 
 /** task が読みだけ開く面接室(ADR 0273 決定4・9): root は開ける面接室、review の親を review の鎖で辿って Interview の root に着く
  *  review(監査、root や監査の行への異議の RCA、人間登録の review 子)は root の面接室と開ける面接室。どれも記録された在り処。 */
-function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">): WorkspaceConfig[] {
+export function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">): WorkspaceConfig[] {
   const rootId = interviewRootIdOf(db, task);
   if (rootId !== undefined) return task.type === "interview" ? readableInterviewRooms(db, rootId) : [];
   let parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
@@ -340,14 +343,16 @@ function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_
 /** task が走る場所(ADR 0356 決定1): この session の task の checkout。名前の場所は task の workspace、interview の root と受験者は
  *  面接室(名前は root id —— quarantine と封じ込めの組の単位、ADR 0273 決定8 / ADR 0276 決定3)。許可ドメインと層は呼び手が
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
- *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`roomsReadBy`)。開く前の対(開く場所の列挙)は
+ *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`roomsReadBy`)。読む面接室は面接室の path でなく
+ *  この session の読み専用の checkout(ADR 0361 決定1)で、名前は面接室の root id のまま。開く前の対(開く場所の列挙)は
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): TaskCheckoutPlace {
   const named = taskNamedPlace(db, task, workspace);
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined) throw new PlaceNotOpenError(`the task checkout of ${task.id} is not open`);
   const role = interviewRole(db, task);
-  const reads = role === "root" ? [workspace, ...roomsReadBy(db, task)] : roomsReadBy(db, task);
+  const rooms = sessionReadCheckouts(db, task.id);
+  const reads = role === "root" ? [workspace, ...rooms] : rooms;
   return { ...named, path, reads: reads.map(inRealSpelling), namedPlace: named, borrowsNamedObjects: role === undefined };
 }
 
@@ -396,6 +401,8 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
   const role = interviewRole(db, task);
   // 名前の場所の objects が引けないのは名前の場所の性質 —— host 側の失敗に包まず、呼び手の quarantine へ
   const objects = role === undefined ? namedObjects(named) : undefined;
+  // 読む面接室の性質の失敗は、どの checkout も作る前にその面接室の名前で止める
+  const rooms = roomsReadBy(db, task).map((room) => ({ room, head: roomPosedHead(db, room) }));
   let path: string;
   try {
     const at = join(conventionCheckoutPath(role === "root" ? `${task.id}.checkout` : task.id, workspacesBaseDir), String(pickup.id));
@@ -414,10 +421,57 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
   // alternates 越しの fetch は objects の欠けを見ないので、欠けた blob で落ちる plumbing で tree を出す(porcelain の checkout は黙って欠く)
   git(path, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
   git(path, "read-tree", "-u", "--reset", "HEAD");
+  const readsAt = join(conventionCheckoutPath(`${task.id}.reads`, workspacesBaseDir), String(pickup.id));
+  const reads = rooms.map(({ room, head }) => openReadCheckout(join(readsAt, room.name), room, head, task.id));
   appendEvent(db, {
     taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: now,
-    payload: { kind: "task_checkout_opened", path, ...(completionTreeGateApplies(task) && { completion_gate: "recorded_tip" as const }) },
+    payload: {
+      kind: "task_checkout_opened", path,
+      ...(completionTreeGateApplies(task) && { completion_gate: "recorded_tip" as const }),
+      ...(reads.length > 0 && { reads }),
+    },
   });
+}
+
+/** 読む面接室の出題の head(ADR 0361 決定1): root の最新の出題 —— 出題し直しは前の監査の決着の後なので監査する head と同じ(ADR 0273 決定3)。
+ *  出題前の root は undefined(環境が無く checkout は空)。repo が無い・head が引けないのは fetch 元の面接室の性質なので、面接室の名前で
+ *  止める(ADR 0276 決定3 の線)。 */
+function roomPosedHead(db: Db, room: WorkspaceConfig): string | undefined {
+  try {
+    if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(room.name, room.path));
+    const head = latestPosedProbe(db, room.name)?.head;
+    if (head === undefined) return undefined;
+    const resolved = resolvedCommit(room, head);
+    if (resolved === undefined) throw new Error(`the posed head ${head} cannot be resolved in the interview room ${room.name} at ${room.path}, so it cannot be read`);
+    return resolved;
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
+    throw new PickupGateError(room, err);
+  }
+}
+
+/** ADR 0361 決定1: 読み専用の checkout —— `git init` に面接室から出題の head だけを fetch した複製(alternates なし、ADR 0356 決定2 の
+ *  Interview の線)。読み手に届くのは出題の head の tree だけで、root と受験者のブランチは引けない。番地を作れないのは host 側の失敗、
+ *  fetch の失敗は fetch 元の面接室の性質。 */
+function openReadCheckout(at: string, room: WorkspaceConfig, head: string | undefined, taskId: string): { name: string; path: string } {
+  let path: string;
+  try {
+    mkdirSync(at, { recursive: true });
+    path = realpathSync(at);
+    git(path, "init", "--quiet", "--template=", "--initial-branch=main");
+  } catch (cause) {
+    throw new TaskCheckoutHostError(`the read checkout of the interview room ${room.name} for ${taskId} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+  if (head !== undefined) {
+    try {
+      // 未生の main へ直接 fetch するので --update-head-ok。reflog にも面接室の在り処を残さない(ADR 0276 決定1 と同じ)
+      git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", room.path, `${head}:refs/heads/main`);
+      git(path, "read-tree", "-u", "--reset", "HEAD");
+    } catch (err) {
+      throw new PickupGateError(room, err);
+    }
+  }
+  return { name: room.name, path };
 }
 
 /** ADR 0356 決定2 / ADR 0359 決定5: worker の repo が読めない。完了の解放では観測、todo に戻る解放では task の失敗になる。 */
@@ -1601,19 +1655,32 @@ function releaseTaskCheckout(
   completed: boolean,
 ): void {
   const checkout = place.path;
-  if (latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path !== checkout) {
-    if (!settleTaskCheckout(db, place, task, now, mergeBack, githubAuth, tokenFailure, completed)) return;
-    // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない(再実行は同じ決着を撃ち直す)
-    const current = getTask(db, task.id)!;
-    if (interviewRole(db, current) === "examinee" && isSettled(current.status)) return;
-    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
-  }
-  rmSync(checkout, { recursive: true, force: true, maxRetries: 3 });
+  const opened = latestEventOfTask(db, task.id, "task_checkout_opened")?.payload;
+  const reads = opened?.path === checkout ? opened.reads ?? [] : [];
   try {
-    rmdirSync(dirname(checkout));
-  } catch (err) {
-    // 同じ task の残した checkout が並ぶ親は残す
-    if (!["ENOTEMPTY", "EEXIST", "ENOENT"].includes((err as NodeJS.ErrnoException).code ?? "")) throw err;
+    if (latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path !== checkout) {
+      if (!settleTaskCheckout(db, place, task, now, mergeBack, githubAuth, tokenFailure, completed)) return;
+      // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない(再実行は同じ決着を撃ち直す)
+      const current = getTask(db, task.id)!;
+      if (interviewRole(db, current) === "examinee" && isSettled(current.status)) return;
+      appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
+    }
+  } finally {
+    // ADR 0361 決定1: 読み専用の checkout は記録の価値の無い派生物 —— 決着の成否に依らず解放のたびに消す(再実行も消し直す)
+    for (const read of reads) removeBoardCheckout(read.path, 2);
+  }
+  removeBoardCheckout(checkout, 1);
+}
+
+/** 盤面が作った checkout を消し、`parents` 段までの空になった親も消す。同じ task の残した checkout が並ぶ親は残す。 */
+function removeBoardCheckout(path: string, parents: number): void {
+  rmSync(path, { recursive: true, force: true, maxRetries: 3 });
+  for (let dir = dirname(path), i = 0; i < parents; i++, dir = dirname(dir)) {
+    try {
+      rmdirSync(dir);
+    } catch (err) {
+      if (!["ENOTEMPTY", "EEXIST", "ENOENT"].includes((err as NodeJS.ErrnoException).code ?? "")) throw err;
+    }
   }
 }
 

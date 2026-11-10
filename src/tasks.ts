@@ -586,9 +586,18 @@ export function examineeCheckoutPath(db: Db, examineeId: string): string | undef
 /** この session の task の checkout の在り処(ADR 0356 決定2): 後の pickup に越されていない開いた event から引く —— 前の session が
  *  残した checkout は再利用しない。まだ開いていなければ undefined。 */
 export function taskCheckoutPath(db: Db, taskId: string): string | undefined {
+  return sessionCheckoutOpened(db, taskId)?.path;
+}
+
+/** この session の読み専用の checkout(ADR 0361 決定1): 面接室の名前(root id)と在り処。task の checkout と同じく後の pickup に越されていないもの。 */
+export function sessionReadCheckouts(db: Db, taskId: string): Array<{ name: string; path: string }> {
+  return sessionCheckoutOpened(db, taskId)?.reads ?? [];
+}
+
+function sessionCheckoutOpened(db: Db, taskId: string) {
   const pickup = latestEventOfTask(db, taskId, "task_picked_up");
   const opened = latestEventOfTask(db, taskId, "task_checkout_opened");
-  return opened && (!pickup || opened.id > pickup.id) ? opened.payload.path : undefined;
+  return opened && (!pickup || opened.id > pickup.id) ? opened.payload : undefined;
 }
 
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。

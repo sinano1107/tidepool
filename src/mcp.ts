@@ -83,7 +83,6 @@ import {
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
   interviewFields,
-  interviewRoomPath,
   interviewTargets,
   isRca,
   isRepairType,
@@ -98,6 +97,7 @@ import {
   redecompose,
   reportBrokenProbe,
   resolveTaskAgent,
+  sessionReadCheckouts,
   type Task,
   type TaskType,
   taskCheckoutPath,
@@ -506,12 +506,24 @@ function interviewEnvelope(deps: McpDeps, task: Task) {
   };
 }
 
-/** 監査 review の envelope(ADR 0273 決定3・4): 監査する出題の head と面接室の在り処、root の envelope の構造欄。 */
+/** ADR 0361 決定1: worker の面の `interview_room` は「面接室をどこで読むか」—— この session のその面接室(名前は root id)の読み専用の
+ *  checkout。記録と人間の面は面接室の在り処のまま。この session が読まない面接室は undefined(path を載せない)。 */
+const readCheckoutOf = (db: Db, taskId: string, room: string) => sessionReadCheckouts(db, taskId).find((read) => read.name === room)?.path;
+
+/** worker が読む history の `retry_of` の面接室を、読む task のこの session の読み専用の checkout にする(ADR 0361 決定1)。 */
+function withReadCheckout(db: Db, readerId: string, row: HistoryRow): HistoryRow {
+  if (!("retry_of" in row.entry)) return row;
+  const { interview_room: _, ...retry_of } = row.entry.retry_of;
+  const room = readCheckoutOf(db, readerId, retry_of.previous_root_id);
+  return { ...row, entry: { ...row.entry, retry_of: { ...retry_of, ...(room !== undefined && { interview_room: room }) } } };
+}
+
+/** 監査 review の envelope(ADR 0273 決定3・4): 監査する出題の head と面接室を読む在り処、root の envelope の構造欄。 */
 function auditedProbeEnvelope(deps: McpDeps, task: Task) {
   const posedId = auditedPosedEventId(deps.db, task.id);
   if (posedId === undefined) return undefined;
   const { head, root_id } = posedProbe(deps.db, posedId);
-  return { interview_audit: { head, interview_room: interviewRoomPath(deps.db, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
+  return { interview_audit: { head, interview_room: readCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
 }
 
 /** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
@@ -667,8 +679,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
         // 親の history の後に task の history を、decision の子ごとの行で1列に詰める(ADR 0195)。境目の鍵は行の event id
         const rows = [
-          ...(parent ? taskHistoryRows(deps.db, parent.id, task.id).map((row) => ({ ...row, list: "parent.history" })) : []),
-          ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
+          ...(parent ? taskHistoryRows(deps.db, parent.id, task.id).map((row) => ({ ...withReadCheckout(deps.db, task.id, row), list: "parent.history" })) : []),
+          ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...withReadCheckout(deps.db, task.id, row), list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
         // 対象の一覧は出題の前に読むためのもの。受験者が居れば採点の読み手から伏せる(伏せた handoff、ADR 0111 決定6)
@@ -1260,8 +1272,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           const read = readPosition<{ task_id?: string }>("read_evidence_history", input);
           const evidenceId = read.args.task_id ?? "";
           const rows = evidenceHistoryRows(deps.db, task.id, evidenceId);
-          // 根拠が Interview の root なら、その面接室も読みに開いている(ADR 0273 決定9)
-          const room = interviewRoomPath(deps.db, evidenceId);
+          // 根拠が Interview の root なら、その面接室も読みに開いている(ADR 0273 決定9)—— 読み専用の checkout で(ADR 0361 決定1)
+          const room = readCheckoutOf(deps.db, task.id, evidenceId);
           return packItems(read, "history", rows.map((row) => row.entry), room === undefined ? {} : { interview_room: room }, { keyOf: (_, i) => rows[i]!.id });
         }),
     );

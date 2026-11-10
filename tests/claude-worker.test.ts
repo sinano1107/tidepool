@@ -43,7 +43,7 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, sessionReadCheckouts, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -1907,7 +1907,8 @@ describe("ClaudeCodeWorker", () => {
     expect(childSandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
   });
 
-  it.each(["監査 review", "監査の判断行への異議から立つ RCA review(監査の子)"] as const)("Interview の%sは実環境を cwd に manual で走り、書けるのは task temp だけで、root の面接室を読みに開き Read の許可も足す —— 付帯子の review は親の読みの面を継ぐ(ADR 0273 決定1・4)", async (reviewer) => {
+  // 旧: root の面接室の path を読みに開いた(ADR 0273 決定4)。ADR 0361 決定1 の後は盤面が作る読み専用の checkout を開き、面接室は開かない
+  it.each(["監査 review", "監査の判断行への異議から立つ RCA review(監査の子)"] as const)("Interview の%sは実環境を cwd に manual で走り、書けるのは task temp だけで、root の面接室の読み専用の checkout を読みに開き Read の許可も足し、面接室の path は開かない —— 付帯子の review は親の読みの面を継ぐ(ADR 0273 決定1・4 / ADR 0361 決定1)", async (reviewer) => {
     const real = await realpath(await tempDir("tidepool-claude-real-env-"));
     const { worker, setting, slot, calls, logDir, db } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${real}\n` }, { auditorName: "deckhand" });
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
@@ -1930,13 +1931,15 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
+    const read = sessionReadCheckouts(db, task.id).find((place) => place.name === root.id)!.path;
     const [call] = calls as [(typeof calls)[0]];
     expect(call.cwd).toBe(real);
     expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("manual");
     const sandbox = sandboxSettings(call.args, logDir);
     expect(sandbox.filesystem.allowWrite).toEqual([call.env.TMPDIR]);
-    expect(sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([real, room]));
-    expect(JSON.parse(readFileSync(call.args[call.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toContain(`Read(/${room}/**)`);
+    expect(sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([real, read]));
+    expect(sandbox.filesystem.allowRead).not.toContain(room);
+    expect(JSON.parse(readFileSync(call.args[call.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toContain(`Read(/${read}/**)`);
   });
 
   // ADR 0257 決定2: CLI のプロセスの TMPDIR が task temp を指さないと、proxy の中継 socket が閉じた /tmp に

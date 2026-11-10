@@ -18,7 +18,7 @@ import { type ContainerSpawn, ProcessContainers } from "../src/process-container
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task, taskCheckoutPath } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, sessionReadCheckouts, type Task, taskCheckoutPath } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -250,6 +250,8 @@ function configValue<T>(args: string[], prefix: string): T {
 
 /** `-c permissions.<name>.filesystem=` の値(TOML の inline table のまま)。 */
 const filesystem = (args: string[], name: string) => configEntry(args, `permissions.${name}.filesystem=`);
+/** task のこの session の、root の面接室の読み専用の checkout(ADR 0361 決定1)。 */
+const readCheckoutOf = (db: ReturnType<typeof openDb>, taskId: string, rootId: string) => sessionReadCheckouts(db, taskId).find((read) => read.name === rootId)!.path;
 
 /** `-c skills.config=` の引数(ADR 0259 決定2)。 */
 const skills = (args: readonly string[]) => configEntry([...args], "skills.config=");
@@ -680,7 +682,8 @@ describe("CodexWorker (ADR 0098)", () => {
   });
 
   // 旧: root は面接室を cwd にして面接室に書けた(ADR 0273 決定2)。ADR 0356 決定1 の後は面接室から開いた task の checkout で走り、面接室は盤面だけが書く
-  it("Interview の root は自分の task の checkout を cwd と -C にして work の profile でそこに書け(.git の行も work と同じ)、実環境と開ける面接室(根拠の Interview の root のもの)は read で載り、自分の面接室は載らない(ADR 0273 決定2 / ADR 0356 決定1)", async () => {
+  // 旧(ADR 0361 決定1 の前): 開ける面接室は面接室の path が read で載った
+  it("Interview の root は自分の task の checkout を cwd と -C にして work の profile でそこに書け(.git の行も work と同じ)、実環境と開ける面接室(根拠の Interview の root のもの)の読み専用の checkout は read で載り、面接室の path は自分のものも根拠のものも載らない(ADR 0273 決定2 / ADR 0356 決定1 / ADR 0361 決定1)", async () => {
     const f = await fixture();
     const evidence = interviewRoot(f.db);
     const root = registerTask(f.db, { type: "interview", assignee: "codex-agent", title: "interview", hypothesis: "h", tier: "standard", evidence_task_ids: [evidence.id], interview_targets: [SOL] }, new Date(0), ...HUMAN_WEBUI);
@@ -701,9 +704,9 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(join(checkout, ".git"))}="write"`,
       `${JSON.stringify(join(checkout, ".git", "hooks"))}="read"`,
       `${JSON.stringify(f.workspace)}="read"`,
-      `${JSON.stringify(roomOf(evidence.id))}="read"`,
+      `${JSON.stringify(readCheckoutOf(f.db, root.id, evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
-    expect(rows).not.toContain(JSON.stringify(roomOf(root.id)));
+    for (const id of [root.id, evidence.id]) expect(rows).not.toContain(JSON.stringify(roomOf(id)));
   });
 
   it("受験者は自分の checkout を cwd と -C にして走り、面接室の在り処(root の id)はそこに入らない(ADR 0276 決定1)", async () => {
@@ -718,7 +721,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(f.process.calls[0]!.cwd).not.toContain(examineeRootId(f.db, child.id));
   });
 
-  it("Interview の監査 review は実環境を cwd に review の profile で走り、親の root の面接室を read で載せる(ADR 0273 決定4)", async () => {
+  it("Interview の監査 review は実環境を cwd に review の profile で走り、親の root の面接室の読み専用の checkout を read で載せる(ADR 0273 決定4 / ADR 0361 決定1)", async () => {
     const f = await fixture(undefined, undefined, undefined, undefined, { auditorName: "codex-agent" });
     const root = interviewRoot(f.db);
     const audit = poseProbe(f.db, root, { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" }, "codex-agent", new Date(0), "worker", POSED_HEAD);
@@ -730,10 +733,11 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-review"');
     const rows = filesystem(args, "tidepool-review");
     expect(rows).toContain(`${JSON.stringify(f.workspace)}="read"`);
-    expect(rows).toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, root.id)!))}="read"`);
+    expect(rows).toContain(`${JSON.stringify(readCheckoutOf(f.db, audit.id, root.id))}="read"`);
+    expect(rows).not.toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, root.id)!))}="read"`);
   });
 
-  it("retry の新しい root は、retry が残した旧い root の面接室を read で載せる(ADR 0273 決定9)", async () => {
+  it("retry の新しい root は、retry が残した旧い root の面接室の読み専用の checkout を read で載せる(ADR 0273 決定9 / ADR 0361 決定1)", async () => {
     const f = await fixture();
     const previous = posedInterviewRoot(f.db);
     const root = retryInterviewRoot(f.db, previous, undefined, new Date(1), {}, "webui");
@@ -742,7 +746,8 @@ describe("CodexWorker (ADR 0098)", () => {
     await f.start(root);
 
     const rows = filesystem(f.process.calls[0]!.args, "tidepool-work");
-    expect(rows).toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, previous.id)!))}="read"`);
+    expect(rows).toContain(`${JSON.stringify(readCheckoutOf(f.db, root.id, previous.id))}="read"`);
+    expect(rows).not.toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, previous.id)!))}="read"`);
   });
 
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {

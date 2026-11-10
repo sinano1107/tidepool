@@ -95,6 +95,7 @@ import {
   recordedInterviewRoom,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
+  roomsReadBy,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -876,7 +877,17 @@ export function recordCheckoutAtWorkspace(
     return;
   }
   if (existsSync(path)) standInTaskBranch(path, task.id);
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
+}
+
+/** 準備が読む面接室ごとに作る読み専用の checkout(ADR 0361 決定1)の代わり —— 面接室ごとの空の dir を開いた event の `reads` に置く。 */
+function standInReadCheckouts(db: Db, task: Task): { reads?: Array<{ name: string; path: string }> } {
+  const reads = roomsReadBy(db, task).map(({ name }) => {
+    const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-read-checkout-")));
+    onTestFinished(() => rm(path, { recursive: true, force: true }));
+    return { name, path };
+  });
+  return reads.length > 0 ? { reads } : {};
 }
 
 /** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。 */
@@ -1204,7 +1215,7 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   const rootId = interviewRootIdOf(db, task);
   const room = rootId === undefined ? undefined : interviewRoomPath(db, rootId);
   if (room !== undefined && existsSync(room)) standInTaskBranch(room, task.id);
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
   return path;
 }
 

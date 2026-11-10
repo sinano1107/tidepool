@@ -243,16 +243,23 @@ function posedHeadOf(db: Db, task: Task): string {
 /** 引けない head から黙って今の head へ逃げない —— 投げて受験者の pickup の失敗(面接室の quarantine)に落とす。 */
 export function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
   const head = posedHeadOf(db, task);
-  try {
-    return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
-  } catch (err) {
-    // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-  }
+  const resolved = resolvedCommit(workspace, head);
+  if (resolved !== undefined) return resolved;
   throw new Error(
     `workspace ${workspace.name}: the protected branch head the probe recorded for ${task.id} (${head}) ` +
       "cannot be resolved in this checkout, so its branch is not forked",
   );
+}
+
+/** sha がその場所で commit に引ければ sha、引けなければ undefined。 */
+export function resolvedCommit(place: WorkspaceConfig, sha: string): string | undefined {
+  try {
+    return git(place.path, "rev-parse", "--verify", "--quiet", `${sha}^{commit}`);
+  } catch (err) {
+    // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
+    return undefined;
+  }
 }
 
 /** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
