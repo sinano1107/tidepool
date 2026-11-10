@@ -125,9 +125,11 @@ export interface WorkspaceConfig {
   allowed_domains?: string[];
 }
 
-/** Where a task runs (`taskRunPlace`): its task checkout (ADR 0356 決定1).
- *  `reads` are the places outside it opened for reading only, in their real spelling — an Interview root's real
- *  environment and the rooms it may open, or the rooms a review under an Interview root reads. Empty for every other task.
+/** Where a task runs: its task checkout (ADR 0356 決定1) — the spawn view (`taskRunPlace`) or the view the board's gates and
+ *  teardown act on (`taskRunPlaceForBoard`).
+ *  `reads` are the places outside it opened for reading only, in their real spelling — the rooms an Interview root may open
+ *  (plus its real environment, in the spawn view only — the sandbox reads it, the gates and teardown do not: ADR 0363 決定1〜3 の
+ *  Status 追記), or the rooms a review under an Interview root reads. Empty for every other task.
  *  They are places, not paths, so the pickup can bring a remote-backed one to its rest position the same way as the run place
  *  (issue #2223).
  *  `namedPlace` is the named place the task checkout was made from and is released into (ADR 0356 決定1・2) — the
@@ -350,14 +352,35 @@ function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_
  *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く。読む面接室は面接室の path でなく、pickup が開いた
  *  event に記録したこの session の読み専用の checkout(ADR 0361 決定1)で、名前は面接室の root id のまま。開く前の対(開く場所の列挙)は
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
-export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): TaskCheckoutPlace {
-  const named = taskNamedPlace(db, task, workspace);
+export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id" | "workspace">, workspace: WorkspaceConfig): TaskCheckoutPlace {
+  const place = taskRunPlaceForBoard(db, task, () => workspace);
+  // interview type は root(ADR 0273 決定1)。root が実環境を読みだけ開くのは spawn の sandbox の読みのため —— 門も解放も読まない
+  // (ADR 0363 決定1〜3 の Status 追記)
+  return task.type === "interview" ? { ...place, reads: [inRealSpelling(workspace), ...place.reads] } : place;
+}
+
+/** 盤面の門(完了の門・`pose_probe`)と後始末が当たる走る場所(ADR 0363 決定1〜3 の Status 追記): 実環境を解くのは名前の場所が
+ *  task の workspace の task だけで、`resolve` はそのときだけ呼ぶ(drift の `UnknownWorkspaceError` は呼び手へ)。spawn の sandbox
+ *  の読み(root の実環境)は足さない —— それは `taskRunPlace`。Interview の root と受験者の名前の場所は記録にある面接室なので
+ *  `resolve` に依らず、undefined を返さない(面接室か task の checkout が開いていなければ `PlaceNotOpenError`)。それ以外で
+ *  `resolve` が無ければ undefined(ADR 0084 決定2)。 */
+export function taskRunPlaceForBoard(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id" | "workspace">, resolve: WorkspaceResolver): TaskCheckoutPlace;
+export function taskRunPlaceForBoard(
+  db: Db,
+  task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id" | "workspace">,
+  resolve: WorkspaceResolver | undefined,
+): TaskCheckoutPlace | undefined;
+export function taskRunPlaceForBoard(
+  db: Db,
+  task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id" | "workspace">,
+  resolve: WorkspaceResolver | undefined,
+): TaskCheckoutPlace | undefined {
+  const room = interviewRoomOf(db, task);
+  const named = room ?? resolve?.(task.workspace);
+  if (!named) return undefined;
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined) throw new PlaceNotOpenError(`the task checkout of ${task.id} is not open`);
-  const role = interviewRole(db, task);
-  const readCheckouts = sessionReadCheckouts(db, task.id);
-  const reads = role === "root" ? [workspace, ...readCheckouts] : readCheckouts;
-  return { ...named, path, reads: reads.map(inRealSpelling), namedPlace: named, borrowsNamedObjects: role === undefined };
+  return { ...named, path, reads: sessionReadCheckouts(db, task.id).map(inRealSpelling), namedPlace: named, borrowsNamedObjects: room === undefined };
 }
 
 /** Interview での役(ADR 0273 決定1・2 / ADR 0276): `interview` type の root か、その受験者。work・review は undefined。 */
@@ -368,8 +391,13 @@ function interviewRole(db: Db, task: Pick<Task, "id" | "type" | "interview_targe
 
 /** task の checkout を作り、解放で着ける名前の場所(ADR 0356 決定1): task の workspace、interview の root と受験者は面接室。 */
 export function taskNamedPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">, workspace: WorkspaceConfig): WorkspaceConfig {
+  return interviewRoomOf(db, task) ?? workspace;
+}
+
+/** Interview の root と受験者の名前の場所 —— 記録された面接室。他の task は undefined。 */
+function interviewRoomOf(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): WorkspaceConfig | undefined {
   const rootId = interviewRootIdOf(db, task);
-  if (rootId === undefined) return workspace;
+  if (rootId === undefined) return undefined;
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
   return room;
@@ -1565,7 +1593,9 @@ export function guardRegistryDefaultBranch(
  *  registry-backed resolver when configured, else fall back to a fixed
  *  single workspace (pre-#26 shape, and still today's shape for a caller
  *  with no registry at all). Undefined means no workspace tracking exists —
- *  the caller skips the workspace step entirely, not just resolution. */
+ *  a task whose named place is its workspace skips the workspace step
+ *  entirely, not just resolution; an Interview root and its examinees still
+ *  act on the recorded interview room (ADR 0363 決定1〜3 の Status 追記). */
 export type WorkspaceResolver = (taskWorkspace: string | null) => WorkspaceConfig;
 
 export function buildWorkspaceResolver(

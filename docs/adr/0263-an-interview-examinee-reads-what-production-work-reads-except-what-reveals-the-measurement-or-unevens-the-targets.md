@@ -2,6 +2,8 @@
 
 **Status 追記: 決定5 の「決着した pin の子のブランチの ref を外す」は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で要らなくなった(2026-10-19)—— 受験者は出題の head から fetch した自分の checkout で解き、兄弟の checkout は床の外にある。決定6 の「出題が記録した head から分岐する」はそのまま(分岐の形が fetch になる)。**
 
+**Status 追記: 追記5 の「workspace を解決できなければ出題を拒む」は [ADR 0363](0363-drift-is-observed-by-the-pickup-gate-before-running-and-by-teardown-after-and-the-completion-gate-rejects-an-unresolvable-name.md) 決定1〜3 の Status 追記で置き換わった(2026-11-10、issue #3120)—— `pose_probe` は実環境の名前を解かずに出題の head を面接室へ書く。**
+
 2026-10-15 の grilling(issue #2008)で決定。受験者(Interview の pin の子)が読む面は、漏れが見つかるたびに1か所ずつ塞いできた
 (ADR 0245 決定2、ADR 0253 決定2、#1899 のレビュー、#1932)。面を全部洗い出すと、親の欄(人間が書いた root の題・目的)は
 何も伏せておらず、兄弟の答案は親の history のほか checkout の git と記憶からも読め、対象ごとに解く土台のコードが違いうることが
