@@ -1,5 +1,7 @@
 # WIP の退避は段で帰責する —— worktree は盤面所有の repo に stage し、名前の場所へは fetch で運ぶ
 
+**Status 追記: 決定の中の「checkout は解放の最後の step で消す」の位置 —— 削除は成果が記録に着いた直後で、ref の比較・merge back・休止位置より前になった。消すこと自体は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定7、2026-11-11、issue #3147)。**
+
 2026-11-10 の grilling(issue #3141 / #3142、#3117 の実装とレビューの派生)で決定。ADR 0364 決定2 は worker の tip の転送を3段(写す段 /
 写しを作る host / 名前の場所へ fetch する段)に分けて帰責したが、同じ解放の次の手である WIP の退避には分割が入っていなかった。ADR 0356
 決定3 の view は `add -A` 1手で worker の worktree を読みながら**名前の場所の objects に直接書く**ので、落ちたときにどちらの故障かを型で
