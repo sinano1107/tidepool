@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
-import { runTeardown, teardownStep } from "../src/teardown.js";
+import { acceptTeardownQuarantine, runTeardown, teardownStep } from "../src/teardown.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import {
   commitRoomCopy,
@@ -672,6 +672,8 @@ it("retry の新しい root の pickup は、読む面接室(根拠の Interview
 it("出題する前の root の面接室を読む task の読み専用の checkout は空(ref も作業ツリーも無い)で、pickup は落ちない(ADR 0361 決定1)", async () => {
   const db = openDb(":memory:");
   const evidence = await pickedRoot(db, "unposed-evidence-real");
+  // 出題前の root の WIP は面接室の task/<root> に着く —— 読み手の checkout はそれも持たない(ADR 0361 退けた形)
+  commitWork(evidence.place.path, "draft.txt", "half composed\n");
   releaseWorkspace(db, evidence.place, evidence.root, NOW);
   const { workspace } = evidence;
   const reader = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, evidence_task_ids: [evidence.root.id], interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
@@ -680,8 +682,8 @@ it("出題する前の root の面接室を読む task の読み専用の checko
   const { place } = await pickUpInterviewRoot(db, reader, workspace);
 
   const read = place.reads.find((place) => place.name === evidence.root.id)!.path;
-  expect(git(read, "for-each-ref")).toBe("");
   expect(readdirSync(read)).toEqual([".git"]);
+  expect(git(read, "for-each-ref")).toBe("");
   db.close();
 });
 
@@ -709,6 +711,52 @@ it("決着が task の失敗で task の checkout を残す解放でも、読み
 
   expect(existsSync(place.path)).toBe(true);
   expect(existsSync(read)).toBe(false);
+  db.close();
+});
+
+it("読み専用の checkout を消せない解放は決着を撃たずに何も書かずに投げ、落ちた後始末の受理の再実行が消してから普通に決着する(issue #3105 の spec)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, audit, place, read } = await auditPickedUp(db);
+  const deps = { db, clock: new FakeClock(), slot: new Slot(), resolve: () => workspace, pollNow: () => {} };
+  deps.slot.occupy(audit.id, sessionId(db, audit.id));
+  writeFileSync(join(place.path, "notes.txt"), "the audit's notes\n");
+  const before = git(workspace.path, "rev-parse", `task/${audit.id}`);
+  // 番地の親を書けなくすると、読み専用の checkout の削除が EACCES で落ちる
+  chmodSync(dirname(read), 0o555);
+  onTestFinished(() => {
+    if (existsSync(dirname(read))) chmodSync(dirname(read), 0o755);
+  });
+
+  await runTeardown(deps, audit.id, teardownStep(db, audit.id));
+
+  expect(existsSync(read)).toBe(true);
+  expect(listEvents(db, audit.id).map((e) => e.kind)).not.toContain("task_checkout_released");
+  expect(git(workspace.path, "rev-parse", `task/${audit.id}`)).toBe(before);
+  expect(deps.slot.currentTaskId).toBe(audit.id);
+
+  chmodSync(dirname(read), 0o755);
+  await acceptTeardownQuarantine(deps, audit.id);
+
+  expect(existsSync(read)).toBe(false);
+  expect(listEvents(db, audit.id).map((e) => e.kind)).toContain("task_checkout_released");
+  expect(git(workspace.path, "show", `task/${audit.id}:notes.txt`)).toBe("the audit's notes");
+  db.close();
+});
+
+it("門を通った後に面接室から出題の head を fetch できなければ、準備は面接室の名前(root id)で項の文つきで止まり、開いた event を書かない(ADR 0361 決定1 / ADR 0276 決定3)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, head, audit } = await auditStanding(db);
+  // commit は引けるが中身の blob が欠けた面接室 —— 門の項(head が引けること)は通り、fetch が落ちる
+  const blob = git(room.path, "rev-parse", `${head}:probe.txt`);
+  rmSync(join(room.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  await pickupGate(db, workspace, audit, base);
+
+  const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`The check that failed: the posed head ${head} can be fetched from the interview room into the read checkout.`);
+  expect(openedReads(db, audit.id)).toEqual([]);
   db.close();
 });
 
