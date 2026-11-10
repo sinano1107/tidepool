@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
@@ -330,7 +330,80 @@ it("the gate reads a submodule by its gitlink only, without running Git in the w
     git(submodule, "add", "README.md");
     git(submodule, "commit", "-m", "advance the submodule tip");
     expect(git(submodule, "status", "--porcelain")).toBe("");
-    expect(completionTreePaths(db, place, task.id)).toEqual(["module with space"]);
+    // ADR 0365 決定3: 進めた tip の値は worktree から読まない —— gitlink は記録の値のまま
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+it("無関係の repo を指す gitfile を持つ untracked の dir を、完了の門は名指さない(ADR 0365 決定3)", async () => {
+  const { db, task, place } = await pickedUpSession();
+  try {
+    const other = await makeWorkspace("gate-nested-gitfile-source");
+    mkdirSync(join(place.path, "mod"));
+    writeFileSync(join(place.path, "mod", ".git"), `gitdir: ${join(other.path, ".git")}\n`);
+
+    expect(completionTreePaths(db, place, task.id)).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+// 旧: commit の無い入れ子の repo では退避の add -A が落ち、未決着なら task の失敗、完了済み review なら名前の場所の quarantine だった
+it.each(["undecided", "completed review"] as const)("commit の無い入れ子の repo は %s の解放を落とさず、記録にも入らない(ADR 0365 決定3)", async (form) => {
+  const { db, task, ws, place } = await pickedUpSession(form === "undecided" ? "work" : "review");
+  try {
+    if (form === "completed review") completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    mkdirSync(join(place.path, "mod"));
+    git(join(place.path, "mod"), "init", "--quiet");
+    writeFileSync(join(place.path, "work.txt"), "work in progress\n");
+
+    releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, form === "completed review");
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(git(ws.path, "show", `task/${task.id}:work.txt`)).toBe("work in progress");
+    expect(git(ws.path, "ls-tree", `task/${task.id}`, "--", "mod")).toBe("");
+  } finally {
+    db.close();
+  }
+});
+
+it("記録が持てない入れ子の repo で落ちた未決着の解放は、読めない理由を1度だけ書いて task の失敗にする(ADR 0365 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    commitWork(place.path, "mod", "a file\n");
+    rmSync(join(place.path, "mod"));
+    git(place.path, "clone", "--quiet", (await makeWorkspace("release-nested-over-file-source")).path, "mod");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({
+      reason: `the task checkout at ${place.path} cannot be read: the worktree has a nested repository the board does not carry: mod`,
+    });
+  } finally {
+    db.close();
+  }
+});
+
+it("gitlink の祖先を symlink に置き換えた完了済み review の解放は、名前の場所を quarantine せず symlink を記録する(ADR 0365 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    const source = await makeWorkspace("release-nested-ancestor-source");
+    git(place.path, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source.path, "a/mod");
+    git(place.path, "commit", "-m", "add the library as a nested submodule");
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    rmSync(join(place.path, "a"), { recursive: true, force: true });
+    const elsewhere = await tempDir("tidepool-release-nested-ancestor-");
+    mkdirSync(join(elsewhere, "mod"));
+    symlinkSync(elsewhere, join(place.path, "a"));
+
+    releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, true);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "ls-tree", `task/${task.id}`, "--", "a")).toMatch(/^120000 /);
   } finally {
     db.close();
   }

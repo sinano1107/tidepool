@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -117,6 +117,20 @@ it("面接室の保護ブランチの時点で gitlink があり root が触っ�
   const head = commitRoomCopy(db, place, root.id);
 
   expect(git(room.path, "rev-parse", `${head}:mod`)).toBe(git(room.path, "rev-parse", `${protectedHead}:mod`));
+  expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
+});
+
+// ADR 0365 決定3: 出題の写しも盤面の view —— worktree の入れ子の repo は gitlink の値を供給しない
+it("root の checkout の untracked の入れ子の repo は出題の写しに入らない(ADR 0365 決定3)", async () => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-nested"));
+  const source = await submoduleSource("room-copy-nested-source");
+  mkdirSync(join(place.path, "mod"));
+  writeFileSync(join(place.path, "mod", ".git"), `gitdir: ${join(source, ".git")}\n`);
+  commitWork(place.path, "probe.txt", "the environment\n");
+
+  const head = commitRoomCopy(db, place, root.id);
+
+  expect(git(room.path, "ls-tree", head, "--", "mod")).toBe("");
   expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
 });
 

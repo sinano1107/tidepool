@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { boardViewStatus, boardWriteTree } from "../src/git.js";
+import { boardViewStatus, boardWriteTree, TaskCheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace, TaskCheckoutUnreadableError } from "../src/workspace.js";
+import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -105,12 +105,12 @@ it("root の .gitignore が FIFO なら view の status と退避の add -A は�
 
   const status = thrown(() => boardViewStatus(ws.path, head, ws.path));
   expect(status).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(status).toMatchObject({ subcommand: "status", timeoutMs: 1000 });
+  expect(status).toMatchObject({ subcommand: "ls-files", timeoutMs: 1000 });
   await expectNoReader(fifo);
 
   const stash = thrown(() => boardWriteTree(ws.path, head, ws.path));
   expect(stash).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(stash).toMatchObject({ subcommand: "add", timeoutMs: 1000 });
+  expect(stash).toMatchObject({ subcommand: "ls-files", timeoutMs: 1000 });
   await expectNoReader(fifo);
 });
 
@@ -126,7 +126,7 @@ it("強制回収した session の解放が上限で止まれば、question を�
   expect(existsSync(join(place.path, ".git"))).toBe(true);
   expect(listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({
     path: place.path,
-    reason: expect.stringContaining("`git add` on the worker's tree did not finish within 1 s"),
+    reason: expect.stringContaining("`git ls-files` on the worker's tree did not finish within 1 s"),
   });
 });
 
@@ -174,7 +174,7 @@ it.each([
   expect(writeObservations(db, task.id)).toEqual([
     {
       kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable",
-      reason: expect.stringContaining(stage === "view" ? `\`git ${type === "work" ? "status" : "add"}\` on the worker's tree did not finish within 1 s` : "is not a regular file"),
+      reason: expect.stringContaining(stage === "view" ? "`git ls-files` on the worker's tree did not finish within 1 s" : "is not a regular file"),
     },
   ]);
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
@@ -249,7 +249,7 @@ it("root の .gitignore が FIFO なら出題の写しは上限超過の型で�
   const expiry = thrown(() => commitRoomCopy(db, place, root.id));
 
   expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(expiry).toMatchObject({ subcommand: "add" });
+  expect(expiry).toMatchObject({ subcommand: "ls-files" });
   expect(git(room.path, "for-each-ref", "refs/keep-around")).toBe("");
   await expectNoReader(fifo);
 });
@@ -267,7 +267,7 @@ it("未決着の受験者の解放が上限で止まれば task の失敗とし�
   expect(existsSync(join(checkout.path, ".git"))).toBe(true);
   expect(listEvents(db, examinee!.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({
     path: checkout.path,
-    reason: expect.stringContaining("`git add` on the worker's tree did not finish within 1 s"),
+    reason: expect.stringContaining("`git ls-files` on the worker's tree did not finish within 1 s"),
   });
 });
 

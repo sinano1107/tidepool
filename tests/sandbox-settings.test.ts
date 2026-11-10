@@ -4,9 +4,9 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
+import { gitlinkChanges } from "../src/git.js";
 import {
   buildSandboxSettings,
-  gitlinkChanges,
   humanOnlyPathChanges,
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   recordedSettingsDisposition,

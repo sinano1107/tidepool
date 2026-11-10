@@ -11,7 +11,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
-import { displayWorktreePath } from "./git.js";
+import { displayWorktreePath, gitlinkChanges, TaskCheckoutUnreadableError } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -59,7 +59,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
-import { gitlinkChanges, humanOnlyPathChanges, recordedSettingsDisposition, treeDeltaEntries } from "./sandbox.js";
+import { humanOnlyPathChanges, recordedSettingsDisposition, treeDeltaEntries } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, wrapEveryVerb } from "./stateless-mcp.js";
@@ -123,7 +123,6 @@ import {
   resolveUnlessDrifted,
   TaskCheckoutHostError,
   type TaskCheckoutPlace,
-  TaskCheckoutUnreadableError,
   taskForkSource,
   taskRunPlace,
   UnknownWorkspaceError,
