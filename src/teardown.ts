@@ -17,8 +17,8 @@ import {
   quarantineWorkspace,
   releaseReadCheckouts,
   releaseWorkspace,
-  resolveUnlessDrifted,
-  taskRunPlace,
+  taskRunPlaceAfterPickup,
+  UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -30,7 +30,7 @@ export interface TeardownDeps {
   clock: Clock;
   slot: Slot;
   /** watchdog / MCP と同じ resolver(`buildWorkspaceResolver` 製)。無ければ
-   *  workspace 追跡の無い盤面なので tree rule は走らない。 */
+   *  workspace 追跡の無い盤面なので work の tree rule は走らない(Interview の root と受験者は面接室に走る)。 */
   resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined;
   githubAuth?: GitHubAuth;
   /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
@@ -390,7 +390,7 @@ async function teardown(
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
   // 後始末は走る場所(task の checkout、ADR 0356 決定1)に効く。門が渡した workspace は解決済みの走る場所
-  const workspace = step.workspace ?? (deps.resolve && runPlaceToRelease(deps, deps.resolve, task, step));
+  const workspace = step.workspace ?? runPlaceToRelease(deps, task, step);
   const mergeBack = Boolean(step.completion) && task.type === "work";
   // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の取得だけが
   // ネットワークなので、同期の `releaseWorkspace` の手前で撃つ。失敗は投げずに持ち越す
@@ -431,28 +431,23 @@ async function teardown(
   deps.pollNow();
 }
 
-/** 後始末が tree rule を当てる走る場所(無ければ当てない)。ADR 0363 決定2: 走った後の drift(解決できない名前)の観測者は決着の
- *  種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は拒むだけで登録しない。process を1つも持たなかった session
- *  (`neverRan`)の drift は止めた pickup の門が既に Quarantine にしたので撃ち直さない(ADR 0274 決定3)。準備の後で止まった
- *  task の checkout は今日どおり退避する。 */
-function runPlaceToRelease(
-  { db, clock }: TeardownDeps,
-  resolve: (taskWorkspace: string | null) => WorkspaceConfig,
-  task: Task,
-  step: TeardownStep,
-): WorkspaceConfig | undefined {
-  const workspace = resolveUnlessDrifted(resolve, task.workspace, (err) => {
-    // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
-    releaseReadCheckouts(db, task.id);
-    if (step.neverRan) return;
-    // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
-    const kept = taskCheckoutPath(db, task.id);
-    quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
-  });
-  if (!workspace) return undefined;
+/** 後始末が tree rule を当てる走る場所(無ければ当てない)。ADR 0363 決定2: 走った後の drift(解決できない名前)の観測者は work では
+ *  決着の種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は拒むだけで登録しない。Interview の root と受験者は面接室を
+ *  解放し、実環境を解かない(ADR 0363 Status 追記)。process を1つも持たなかった session(`neverRan`)の drift は止めた pickup の門が
+ *  既に Quarantine にしたので撃ち直さない(ADR 0274 決定3)。準備の後で止まった task の checkout は今日どおり退避する。 */
+function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task, step: TeardownStep): WorkspaceConfig | undefined {
   try {
-    return taskRunPlace(db, task, workspace);
+    return taskRunPlaceAfterPickup(db, task, resolve);
   } catch (err) {
+    if (err instanceof UnknownWorkspaceError) {
+      // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
+      releaseReadCheckouts(db, task.id);
+      if (step.neverRan) return undefined;
+      // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
+      const kept = taskCheckoutPath(db, task.id);
+      quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
+      return undefined;
+    }
     // この session の task の checkout が開いていなければ worker も走っておらず、触る checkout が無い(ADR 0356 決定2)。
     // 開いた event は repo 完成後に書く(ADR 0329)。repo が消えた checkout は解放が worker の repo の故障として読む
     if (err instanceof PlaceNotOpenError) return undefined;
