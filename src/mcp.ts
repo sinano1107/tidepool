@@ -124,7 +124,7 @@ import {
   TaskCheckoutHostError,
   type TaskCheckoutPlace,
   taskForkSource,
-  taskRunPlaceAfterPickup,
+  taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -329,13 +329,18 @@ export async function runVerb<R>(
   }
 }
 
-/** 完了の門が記録へ書く走る場所(task の checkout、ADR 0356 決定1)。workspace はタスク自身のもの(issue #26 / ADR 0009 —— 盤面の
- *  既定ではない)。workspace 追跡の無い盤面の work では undefined。ADR 0363 決定1・2・4: 名前が解けない(drift)のも門が記録を置けない
- *  1形で、資源の停止を登録せずに拒み —— 観測者は後始末 —— 残る task の checkout の在り処と escalate を指す。受験者の名前の場所は
- *  面接室で、実環境の名前を解かない(ADR 0363 Status 追記)。 */
-function completionPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
+/** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
+ *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
+ *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。返すのは門が検査した走る場所(後始末が解放する)。 */
+function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
+  if (!completionTreeGateApplies(task)) return undefined;
+  // 門が記録へ書く走る場所(task の checkout、ADR 0356 決定1)。workspace はタスク自身のもの(issue #26 / ADR 0009 —— 盤面の既定では
+  // ない)。受験者の名前の場所は面接室で、実環境の名前を解かない(ADR 0363 決定1〜3 の Status 追記)。ADR 0363 決定1・2・4: work の
+  // 名前が解けない(drift)のも門が記録を置けない1形で、資源の停止を登録せずに拒み —— 観測者は後始末 —— 残る task の checkout の
+  // 在り処と escalate を指す
+  let workspace: TaskCheckoutPlace | undefined;
   try {
-    return taskRunPlaceAfterPickup(deps.db, task, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
+    workspace = taskRunPlaceForBoard(deps.db, task, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
   } catch (err) {
     if (!(err instanceof UnknownWorkspaceError)) throw err;
     const kept = taskCheckoutPath(deps.db, task.id);
@@ -344,14 +349,6 @@ function completionPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefin
         (kept ? `. Your work stays in the task checkout at ${kept}` : ""),
     );
   }
-}
-
-/** 完了の門(ADR 0084 決定1・2 / ADR 0350 決定1 / issue #240)。ここに立つのは `completeTask` を人間経路
- *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
- *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。返すのは門が検査した走る場所(後始末が解放する)。 */
-function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
-  if (!completionTreeGateApplies(task)) return undefined;
-  const workspace = completionPlace(deps, task);
   if (!workspace) return undefined;
   // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
   let tip: string;
@@ -457,7 +454,7 @@ function teardownDeps(deps: McpDeps): TeardownDeps {
  *  回収済み観測を待つ循環待ちは作らない(待つのは `void` の先である)。
  *
  *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の面接室の写し —— ADR 0273 決定3)。ADR 0363 決定3: 門を持つのは
- *  記録へ書く手を持つ verb だけで、門は自分で走る場所を導き(`taskRunPlaceAfterPickup`)、検査した場所を返す。返した場所は後始末へ
+ *  記録へ書く手を持つ verb だけで、門は自分で走る場所を導き(`taskRunPlaceForBoard`)、検査した場所を返す。返した場所は後始末へ
  *  渡り、後始末は門が検査した場所を解放する。返さなければ後始末が自分で解き、drift の観測者になる(ADR 0363 決定2)。
  *  完了の門が掛かる task が門なしに `done` へ決着すれば記録ごと拒む —— `done` ⇔ tip が記録にある(ADR 0359 決定1)。 */
 function runReleasingVerb(
@@ -862,9 +859,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             return { audit_id: audit.id, parent_status: "blocked" };
           },
           (task) => {
-            // ADR 0363 Status 追記: root の名前の場所は記録にある面接室 —— 実環境を解かないので resolver を渡さない。root では undefined に
-            // ならない(開いていなければ PlaceNotOpenError)
-            const place = taskRunPlaceAfterPickup(deps.db, task, undefined)!;
+            // ADR 0363 決定1〜3 の Status 追記: root の名前の場所は記録にある面接室 —— 実環境を解かないので resolver を渡さない。root では
+            // undefined にならない(開いていなければ PlaceNotOpenError)
+            const place = taskRunPlaceForBoard(deps.db, task, undefined)!;
             assertPosable(deps.db, task);
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);

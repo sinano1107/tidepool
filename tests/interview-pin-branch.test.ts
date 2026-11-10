@@ -22,7 +22,7 @@ import {
   runPlaceReadPaths,
   taskForkSource,
   taskRunPlace,
-  taskRunPlaceAfterPickup,
+  taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -551,7 +551,7 @@ it("面接室の在り処が無い Interview の受験者の走る場所は、�
   db.close();
 });
 
-it("走った後の root と受験者の走る場所は実環境を解かず、名前の場所は面接室で、root の読みに実環境は入らない(ADR 0363 Status 追記 / ADR 0356 決定1)", async () => {
+it("走った後の root と受験者の走る場所は実環境を解かず、名前の場所は面接室で、root の読みに実環境は入らない(ADR 0363 決定1〜3 の Status 追記 / ADR 0356 決定1)", async () => {
   const db = openDb(":memory:");
   const { room, examinees, base } = await posedInRoom(db);
   const examinee = examinees[0] as Task;
@@ -561,15 +561,15 @@ it("走った後の root と受験者の走る場所は実環境を解かず、�
     throw new UnknownWorkspaceError(picked.workspace.name);
   });
 
-  const forRoot = taskRunPlaceAfterPickup(db, picked.root, resolve);
-  const forExaminee = taskRunPlaceAfterPickup(db, examinee, resolve);
+  const forRoot = taskRunPlaceForBoard(db, picked.root, resolve);
+  const forExaminee = taskRunPlaceForBoard(db, examinee, resolve);
 
   expect(resolve).not.toHaveBeenCalled();
   expect(forRoot).toMatchObject({ path: picked.place.path, namedPlace: picked.room, borrowsNamedObjects: false });
   expect(forRoot!.reads.map((read) => read.path)).not.toContain(realpathSync(picked.workspace.path));
   expect(forExaminee).toMatchObject({ path: examineePlace.path, namedPlace: room, reads: [], borrowsNamedObjects: false });
-  // Interview の役の門は workspace を追跡しない盤面でも掛かる —— 面接室は記録にある
-  expect(taskRunPlaceAfterPickup(db, examinee, undefined)).toEqual(forExaminee);
+  // ADR 0363 決定1〜3 の Status 追記: Interview の役の門は workspace を追跡しない盤面でも掛かる —— 面接室は記録にある
+  expect(taskRunPlaceForBoard(db, examinee, undefined)).toEqual(forExaminee);
   db.close();
 });
 
@@ -577,8 +577,8 @@ it("走った後の work の走る場所は task の workspace を解き、解�
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "work", purpose: "p", completion_criteria: "c", workspace: "gone" }, NOW, ...HUMAN_WEBUI);
 
-  expect(() => taskRunPlaceAfterPickup(db, work, (name) => { throw new UnknownWorkspaceError(name ?? ""); })).toThrow(UnknownWorkspaceError);
-  expect(taskRunPlaceAfterPickup(db, work, undefined)).toBeUndefined();
+  expect(() => taskRunPlaceForBoard(db, work, (name) => { throw new UnknownWorkspaceError(name ?? ""); })).toThrow(UnknownWorkspaceError);
+  expect(taskRunPlaceForBoard(db, work, undefined)).toBeUndefined();
   db.close();
 });
 

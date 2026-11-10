@@ -972,7 +972,7 @@ async function posedRecord(rootId: string) {
   return { events, examinees };
 }
 
-it("root の workspace が registry から消えた(registry drift)まま出題しても面接室へ書いて通る —— 出題の head を面接室に記録し、監査の受理で受験者が立ち、Quarantine は立たない(ADR 0363 Status 追記 / ADR 0273 決定3)", async () => {
+it("root の workspace が registry から消えた(registry drift)まま出題しても面接室へ書いて通る —— 出題の head を面接室に記録し、監査の受理で受験者が立ち、Quarantine は立たない(ADR 0363 決定1〜3 の Status 追記 / ADR 0273 決定3)", async () => {
   const workspace = await makeWorkspace("reef");
   const registry = driftable(workspace);
   t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
@@ -986,7 +986,7 @@ it("root の workspace が registry から消えた(registry drift)まま出題�
   const { head } = (await posedRecord(root.id)).events[0].payload;
   expect(git(roomOf(root.id), "rev-parse", "--verify", `${head}^{commit}`)).toBe(head);
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
-  // 監査は実環境で走り、その pickup は drift を観測する門 —— root の容器を空けて監査を拾わせる前に戻す
+  // 監査は実環境で走り、その pickup は drift を観測する門(ADR 0363 決定1〜3 の Status 追記)—— root の容器を空けて監査を拾わせる前に戻す
   registry.drifted = false;
   t.containers.fireEmpty(String(sessionId(t.db, root.id)));
   const { audit_id } = JSON.parse(posed.content[0].text);
@@ -1012,15 +1012,17 @@ it("root の checkout が gitlink を足していれば、出題は path を名�
   expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
 });
 
-it("受験者の complete_task は実環境の名前が registry から消えても(drift)面接室へ書いて通る —— 面接室の task/<id> に tip を記録して done にし、Quarantine を立てず、後始末は checkout を記録として残す(ADR 0363 Status 追記 / ADR 0356 決定1 / ADR 0276 決定4)", async () => {
+it("受験者の complete_task は実環境の名前が registry から消えても(drift)面接室へ書いて通る —— 面接室の task/<id> に tip を記録して done にし、drift のままの後始末は checkout を記録として残し、Quarantine を立てない(ADR 0363 決定1〜3 の Status 追記 / ADR 0356 決定1 / ADR 0276 決定4)", async () => {
   const workspace = await makeWorkspace("reef");
-  const registry = driftable(workspace);
+  const other = await makeWorkspace("other");
+  const registry = driftable(workspace, other);
   t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
   await completeMetaReviews(t);
   const checkout = lastCheckoutOf(childId);
   commitWork(checkout, "probe.txt", "probe\n");
+  const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   t.containers.hold(childId);
   registry.drifted = true;
 
@@ -1029,15 +1031,16 @@ it("受験者の complete_task は実環境の名前が registry から消えて
   expect(completed.isError).toBeFalsy();
   expect((await api(t.baseUrl, "GET", `/api/tasks/${childId}`)).json.status).toBe("done");
   expect(git(roomOf(root.id), "rev-parse", `task/${childId}`)).toBe(git(checkout, "rev-parse", "HEAD"));
-  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
-  // 枠が空くと再開した root が拾われ、その pickup は実環境の drift を観測する門 —— 容器を空ける前に戻す
-  registry.drifted = false;
+  // 再開した root の pickup は実環境の drift を観測する門(ADR 0363 決定1〜3 の Status 追記)—— 空いた枠は別の workspace の task に拾わせる
+  await api(t.baseUrl, "POST", `/api/tasks/${waiting.id}/move`, { after: null });
   t.containers.fireEmpty(String(sessionId(t.db, childId)));
-  await vi.waitFor(() => expect(t.worker.started.at(-1)!.id).toBe(root.id));
+  await vi.waitFor(() => expect(t.worker.started.at(-1)!.id).toBe(waiting.id));
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
   expect(existsSync(checkout)).toBe(true);
+  expect((await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace")).toEqual([]);
 });
 
-it("実環境の名前が registry から消えた(drift)まま受験者が escalate すると、後始末は実環境を解かずに WIP を面接室の task/<id> へ退避して checkout を解放し、Quarantine を立てず、枠が空いて次の pickup が走る(ADR 0363 Status 追記)", async () => {
+it("実環境の名前が registry から消えた(drift)まま受験者が escalate すると、後始末は実環境を解かずに WIP を面接室の task/<id> へ退避して checkout を解放し、Quarantine を立てず、枠が空いて次の pickup が走る(ADR 0363 決定1〜3 の Status 追記)", async () => {
   const workspace = await makeWorkspace("reef");
   const other = await makeWorkspace("other");
   const registry = driftable(workspace, other);
@@ -1077,21 +1080,19 @@ async function scoring(rootId: string) {
   return { id: rootId, args: { scores: [{ child_id: childId, verdict: "accepted" }], handoff: FINDINGS } };
 }
 
-it.each([
-  ["complete_audit", auditing],
-])("%s の時に workspace が registry から消えていても(registry drift)、verb は workspace を解かずに done にし、後始末がその名前の Quarantine を1枚だけ立て、枠が空いて次の pickup が走る(ADR 0363 決定2・3 / issue #2259)", async (verb, arrange) => {
+it("complete_audit の時に workspace が registry から消えていても(registry drift)、verb は workspace を解かずに done にし、後始末がその名前の Quarantine を1枚だけ立て、枠が空いて次の pickup が走る(ADR 0363 決定2・3 / issue #2259)", async () => {
   const workspace = await makeWorkspace("reef");
   const other = await makeWorkspace("other");
   const registry = driftable(workspace, other);
   t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  const { id, args } = await arrange(root.id);
+  const { id, args } = await auditing(root.id);
   // 枠が空いたことと pickup の契機は、別の workspace で待つ task が拾われることで見る
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   registry.drifted = true;
 
   // drift は後始末まで続く —— 後始末が観測者なので、その前に戻すと後始末が解決できてしまう
-  const completed: any = await callAsTask(t, id, verb, args);
+  const completed: any = await callAsTask(t, id, "complete_audit", args);
 
   expect(completed.isError).toBeFalsy();
   t.worker.exit(id);
@@ -1105,7 +1106,7 @@ it.each([
   expect(t.worker.started.filter((s) => s.id === waiting.id)).toHaveLength(1);
 });
 
-it("complete_interview の時に実環境の名前が registry から消えていても(registry drift)、後始末は実環境を解かずに root の checkout を面接室へ解放し、Quarantine を立てず、枠が空いて次の pickup が走る(ADR 0363 Status 追記)", async () => {
+it("complete_interview の時に実環境の名前が registry から消えていても(registry drift)、後始末は実環境を解かずに root の checkout を面接室へ解放し、Quarantine を立てず、枠が空いて次の pickup が走る(ADR 0363 決定1〜3 の Status 追記)", async () => {
   const workspace = await makeWorkspace("reef");
   const other = await makeWorkspace("other");
   const registry = driftable(workspace, other);

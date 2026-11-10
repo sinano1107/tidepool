@@ -17,7 +17,7 @@ import {
   quarantineWorkspace,
   releaseReadCheckouts,
   releaseWorkspace,
-  taskRunPlaceAfterPickup,
+  taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -30,7 +30,8 @@ export interface TeardownDeps {
   clock: Clock;
   slot: Slot;
   /** watchdog / MCP と同じ resolver(`buildWorkspaceResolver` 製)。無ければ
-   *  workspace 追跡の無い盤面なので work の tree rule は走らない(Interview の root と受験者は面接室に走る)。 */
+   *  workspace 追跡の無い盤面なので work の tree rule は走らない(Interview の root と受験者は記録にある面接室に走る、
+   *  ADR 0363 決定1〜3 の Status 追記)。 */
   resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined;
   githubAuth?: GitHubAuth;
   /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
@@ -433,11 +434,11 @@ async function teardown(
 
 /** 後始末が tree rule を当てる走る場所(無ければ当てない)。ADR 0363 決定2: 走った後の drift(解決できない名前)の観測者は work では
  *  決着の種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は拒むだけで登録しない。Interview の root と受験者は面接室を
- *  解放し、実環境を解かない(ADR 0363 Status 追記)。process を1つも持たなかった session(`neverRan`)の drift は止めた pickup の門が
+ *  解放し、実環境を解かない(ADR 0363 決定1〜3 の Status 追記)。process を1つも持たなかった session(`neverRan`)の drift は止めた pickup の門が
  *  既に Quarantine にしたので撃ち直さない(ADR 0274 決定3)。準備の後で止まった task の checkout は今日どおり退避する。 */
 function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task, step: TeardownStep): WorkspaceConfig | undefined {
   try {
-    return taskRunPlaceAfterPickup(db, task, resolve);
+    return taskRunPlaceForBoard(db, task, resolve);
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) {
       // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
