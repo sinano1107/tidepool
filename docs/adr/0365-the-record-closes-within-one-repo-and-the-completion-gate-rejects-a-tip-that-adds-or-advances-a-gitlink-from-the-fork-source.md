@@ -1,5 +1,7 @@
 # 記録は名前の場所の1 repo で閉じる —— 完了の門は fork 元から gitlink を足す・進める tip を拒み、入れ子の repo の中身は運ばない
 
+**Status: 決定3 の除外の列のうち base の tree の gitlink は、worktree の同じ path が dir(`lstat`、symlink は辿らない)のときだけ外す —— 無条件に外すと dir の削除・file への置き換えも黙って base の値に戻る(issue #3117 の実装前の実測、macOS git 2.47)。gitlink の path が dir なら git は中身に依らず base の値を保つので、外しても記録は変わらない。**
+
 2026-11-09 の grilling(issue #3052、#3030 の実装の派生)で決定。ADR 0364 決定1 の不変条件「記録に入る object は、名前の場所に既にあるか
 worker が自分の checkout の `objects/` に書いたもののみ」は、tip の閉包を object の到達可能性で検証する。git の到達可能性は gitlink を辿らない ——
 gitlink(mode `160000`)は tree の中で submodule を指す entry で、中身は**別の repo の commit の sha** だけ、object は親 repo に無い。だから worker が
