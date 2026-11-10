@@ -73,8 +73,8 @@ export class Slot {
 
   /** 落ちた後始末の残りを持っていれば `action` をその後ろに継いで true —— 呼び手は自分では撃たず、受理に任せる(ADR 0112 決定4)。 */
   deferToFailedTeardownRest(taskId: string, action: TeardownAction): boolean {
-    const rest = this.failedTeardownRest;
-    if (rest?.taskId !== taskId) return false;
+    if (!this.hasFailedTeardownRest(taskId)) return false;
+    const rest = this.failedTeardownRest!;
     this.failedTeardownRest = { ...rest, actions: [...rest.actions, action] };
     return true;
   }

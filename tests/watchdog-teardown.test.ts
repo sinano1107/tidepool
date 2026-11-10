@@ -1111,7 +1111,7 @@ it("回収 timeout に落ちた watchdog の session は後始末へ入り、続
 
   const containment = questions(f.db).find((q) => q.title.includes("containment"))!;
   await f.clock.advance(60 * MIN);
-  // 開いている question への撃ち直しは2枚目を刷らず `quarantine_refired` を積む —— それも無い
+  // 開いている question への撃ち直しは2枚目を刷らず何も足さない(ADR 0366 決定1)
   expect(listEvents(f.db, containment.id).map((e) => e.kind)).not.toContain("quarantine_refired");
   expect(questions(f.db).filter((q) => q.title.includes("containment"))).toHaveLength(1);
   expect(f.runtime.forceReclaims).toEqual([String(sessionId(f.db, f.task.id))]);
