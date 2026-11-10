@@ -185,7 +185,7 @@ const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 export const PROJECT_SETTINGS_PATHS = PROJECT_SETTINGS_FILES.map((name) => `.claude/${name}`);
 
 /** ADR 0069 の既知パス: sandbox が workspace に stub を置く path の全部 —— runtime#139 の shadow と、`settingsDenyWrite` が tip に
- *  settings があっても無くても bind する2 path(#3111)。 */
+ *  settings があっても無くても bind する2 path(ADR 0360 Status 追記、#3111)。 */
 export const SANDBOX_STUB_PATHS = [...SANDBOX_SHADOW_PATHS, ...PROJECT_SETTINGS_PATHS];
 
 /** ADR 0037's OS-layer half: the sandbox confines Bash, so this is what stops a

@@ -18,7 +18,6 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { appendEvent, type ResourceStop } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
-import { EXPECT_FILES_OUTSIDE_OF_PATTERNS } from "./git.js";
 import { claudeWorkspaceContainment, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
@@ -609,6 +608,9 @@ const STREAM_IDLE_TIMEOUT_MS = 600_000;
 export interface ProviderRouting extends ExecutionSetting {
   moonshotApiKey: string | undefined;
 }
+
+/** ADR 0293 追記: the Git config that keeps a sparse S bit when a file sits at a path outside the patterns. */
+const EXPECT_FILES_OUTSIDE_OF_PATTERNS = { key: "sparse.expectFilesOutsideOfPatterns", value: "true" } as const;
 
 /** The env a worker spawn receives (ADR 0358 決定1・2): the worker base (`PATH`,
  *  `HOME`, `TMPDIR` at the task temp, host git config closed) plus the Claude

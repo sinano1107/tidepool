@@ -15,6 +15,7 @@ import {
   realpathSync,
   rmdirSync,
   rmSync,
+  type Stats,
   statfsSync,
   writeFileSync,
   writeSync,
@@ -996,8 +997,8 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
 function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string): string[] {
   // ADR 0360 決定1・2: Claude の spawn だけが settings を隠す。今回の pickup で Codex が走ったなら通常どおり変更を読む。
   const spawn = latestEventOfTask(db, taskId, "worker_spawned");
-  const codex = spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0);
-  return [...(codex ? [] : recordedSettingsDisposition(place.namedPlace.path, tip).hide), ...taskCheckoutRemnants(place, tip)];
+  const codexPickup = spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0);
+  return [...(codexPickup ? [] : recordedSettingsDisposition(place.namedPlace.path, tip).hide), ...taskCheckoutRemnants(place, tip)];
 }
 
 /** Keep the recorded settings entries `hide` (ADR 0360 決定1) in Git but out of the worker's physical checkout by
@@ -1356,7 +1357,14 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
  *  tracked は worker の index でなく名前の場所のタスクブランチの tip で読む(ADR 0356 決定3)。 */
 function taskCheckoutRemnants(place: TaskCheckoutPlace, tip: string): string[] {
   return SANDBOX_STUB_PATHS.filter((path) => {
-    const stat = lstatSync(join(place.path, path), { throwIfNoEntry: false });
+    let stat: Stats | undefined;
+    try {
+      stat = lstatSync(join(place.path, path), { throwIfNoEntry: false });
+    } catch (err) {
+      // 祖先がディレクトリでない path(worker が `.claude` をファイルにした形)に 0 byte の stub は置けない(ADR 0069 の既知パス)
+      if ((err as NodeJS.ErrnoException).code === "ENOTDIR") return false;
+      throw err;
+    }
     if (!stat?.isFile() || stat.size !== 0) return false;
     return git(place.namedPlace.path, "ls-tree", "--name-only", tip, "--", path) === "";
   });
@@ -1725,12 +1733,12 @@ function settleTaskCheckout(
       const tip = fetchWorkerTip(place, task.id);
       const recorded = readRef(namedPlace, taskRef);
       const base = recorded !== "" && isAncestor(namedPlace, tip, recorded) ? recorded : tip;
+      // ADR 0359 決定3: 運ばない path を導く名前の場所の読みの失敗は名前の場所のもの —— worker の tree を読む退避の try の外で(ADR 0360 Status 追記、#3111)
+      const exclude = boardViewExcludes(db, place, task.id, base);
       let tree: string;
       try {
-        // 残骸の lstat は worker の tree を読む —— 退避の失敗と同じ扱いにする
-        tree = boardWriteTree(checkout, base, namedPlace.path, boardViewExcludes(db, place, task.id, base));
+        tree = boardWriteTree(checkout, base, namedPlace.path, exclude);
       } catch (cause) {
-        if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 運ばない path の event の読みも盤面 DB —— worker の故障に包まない
         if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
         throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
       }

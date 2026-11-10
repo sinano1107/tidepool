@@ -88,10 +88,6 @@ export type WorktreeChange = { path: string; status: string };
 
 export const displayWorktreePath = (path: string): string => /[\r\n\t]/.test(path) ? JSON.stringify(path) : path;
 
-/** ADR 0293 追記: the Git config that keeps a sparse S bit when a file sits at a path outside the patterns. The Claude worker's
- *  git env carries it. */
-export const EXPECT_FILES_OUTSIDE_OF_PATTERNS = { key: "sparse.expectFilesOutsideOfPatterns", value: "true" } as const;
-
 /** The view's fresh index holds `head`'s tree. */
 function seedViewIndex(view: View, head: string): void {
   view(["update-ref", "--no-deref", "HEAD", head]);
