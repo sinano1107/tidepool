@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
@@ -365,6 +365,45 @@ it.each(["undecided", "completed review"] as const)("commit の無い入れ子�
     expect(listChildren(db, task.id)).toEqual([]);
     expect(git(ws.path, "show", `task/${task.id}:work.txt`)).toBe("work in progress");
     expect(git(ws.path, "ls-tree", `task/${task.id}`, "--", "mod")).toBe("");
+  } finally {
+    db.close();
+  }
+});
+
+it("記録が持てない入れ子の repo で落ちた未決着の解放は、読めない理由を1度だけ書いて task の失敗にする(ADR 0365 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    commitWork(place.path, "mod", "a file\n");
+    rmSync(join(place.path, "mod"));
+    git(place.path, "clone", "--quiet", (await makeWorkspace("release-nested-over-file-source")).path, "mod");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({
+      reason: `the task checkout at ${place.path} cannot be read: the worktree has a nested repository the board does not carry: mod`,
+    });
+  } finally {
+    db.close();
+  }
+});
+
+it("gitlink の祖先を symlink に置き換えた完了済み review の解放は、名前の場所を quarantine せず symlink を記録する(ADR 0365 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    const source = await makeWorkspace("release-nested-ancestor-source");
+    git(place.path, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source.path, "a/mod");
+    git(place.path, "commit", "-m", "add the library as a nested submodule");
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    rmSync(join(place.path, "a"), { recursive: true, force: true });
+    const elsewhere = await tempDir("tidepool-release-nested-ancestor-");
+    mkdirSync(join(elsewhere, "mod"));
+    symlinkSync(elsewhere, join(place.path, "a"));
+
+    releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, true);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "ls-tree", `task/${task.id}`, "--", "a")).toMatch(/^120000 /);
   } finally {
     db.close();
   }

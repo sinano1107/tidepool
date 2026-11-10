@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 
-import { git, type TreeDeltaEntry, treeDiffEntries } from "./git.js";
+import { diffTreeEntries, git, type TreeDeltaEntry } from "./git.js";
 import { carriesReadOnly, type Task } from "./tasks.js";
 
 
@@ -632,7 +632,7 @@ const HUMAN_ONLY_PATH = /(^|\/)(\.claude(\/settings(\.local)?\.json)?|\.mcp\.jso
  *  (ADR 0362 決定2 / ADR 0365 決定2)、出題の写しでは面接室の保護ブランチの head(写しの親なので merge-base はそれ自身)。
  *  merge-base が無ければ投げる。 */
 export function treeDeltaEntries(namedPlace: string, base: string, tip: string): TreeDeltaEntry[] {
-  return treeDiffEntries(namedPlace, "--merge-base", base, tip);
+  return diffTreeEntries(namedPlace, base, tip, { mergeBase: true });
 }
 
 /** ADR 0362 決定2: fork 元から entry が変わった、人間しか書けない path。 */

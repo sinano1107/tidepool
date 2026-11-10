@@ -992,7 +992,8 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
 }
 
 /** 盤面の view が運ばない path(ADR 0360 Status 追記、#3111): view の index の種 `tip` から導く hidden settings と、ADR 0069 の shadow 残骸。
- *  出題の写し・非完了の退避・完了の門・完了後の観測はこの集合だけを外す —— 綴りが割れれば門が名指すものを退避が運ばない。 */
+ *  出題の写し・非完了の退避・完了の門・完了後の観測は同じこの集合を外す —— 綴りが割れれば門が名指すものを退避が運ばない。入れ子の repo は
+ *  view 自身が外す(ADR 0365 決定3)。 */
 function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string): string[] {
   // ADR 0360 決定1・2: Claude の spawn だけが settings を隠す。今回の pickup で Codex が走ったなら通常どおり変更を読む。
   const spawn = latestEventOfTask(db, taskId, "worker_spawned");
@@ -1739,6 +1740,7 @@ function settleTaskCheckout(
         tree = boardWriteTree(checkout, base, namedPlace.path, exclude);
       } catch (cause) {
         if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
+        if (cause instanceof TaskCheckoutUnreadableError) throw cause; // 既に checkout を名指している
         throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
       }
       wipTree = { base, tree };
