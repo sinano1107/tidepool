@@ -1,7 +1,5 @@
 # 完了の門は tip を記録に着けるまで `done` にせず、完了済みの解放は記録の tip だけを運ぶ —— 報告後の書き込みは記録され、名前の場所を止めない
 
-**Status 追記: 決定3 の「checkout は解放の最後の step で消す」の位置 —— 削除は成果が記録に着いたことを確かめた直後で、ref の比較・merge back・休止位置より前になった。消すこと自体は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定7、2026-11-11、issue #3147)。**
-
 **Status 追記: 決定5 の「`done` の task では観測」は、門の掛からない完了済みの解放の WIP の退避にも当たる —— worktree を stage する段の失敗は種類を問わず「読めない」観測で、名前の場所は quarantine しない([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定3、2026-11-10、issue #3141)。**
 
 **Status 追記: 決定2・5 の「完了済みの解放」は門の掛かる work の解放を指す —— review と Interview の役は門を持たないので、完了済みでも解放の fetch が初回の転送を担い、その失敗の帰責は写す段 / fetch する段 / host の3段([ADR 0364](0364-the-board-never-opens-the-workers-git-as-a-repository-and-fetches-the-tip-from-a-board-owned-copy-of-its-regular-files.md) 決定2、2026-11-09、issue #3097)。**
