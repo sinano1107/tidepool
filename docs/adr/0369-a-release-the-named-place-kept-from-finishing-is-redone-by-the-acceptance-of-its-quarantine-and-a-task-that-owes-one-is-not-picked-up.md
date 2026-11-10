@@ -53,4 +53,4 @@ ADR 0366 の後は別の観測者が先に登録するとそれも消える)、�
   ADR 0356 決定2(「解放のどの失敗でも checkout は残す」は成果が記録に着く前の失敗に限る)、ADR 0240 決定4。
 - GLOSSARY.md: task の checkout、Slot-release tree rule(drift の後始末の文)、Quarantine(受理が検査するもの)。
 - #3057(残した checkout を片付ける契機)は、worker の repo の故障で残したものと前の session の残りに範囲が縮む。
-- 実装は 1 slice、#3147 のコメントが spec。
+- 実装の spec は #3152。実測の表と箇所の一覧は #3147 のコメント。
