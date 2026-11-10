@@ -1,5 +1,7 @@
 # 積み残しは、merge の門では GitHub が報告した head と、収束では盤面が最後に push した head と比べる
 
+**Status 追記: 決定4 の「捨てる」手段は、workspace のタスクブランチを GitHub の head に合わせてから、子孫のブランチではなく**旧い tip**を `merge -s ours` で記録して push する、に変わる —— 子孫のブランチを記録する形は基準の値を祖先から落とし、Quarantine の受理が拒む。文面は、手の書き込みが確認の question を経ることも告げる([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定5・7、2026-11-11、issue #3151)。**
+
 **Status: 決定1 はローカル着地の merge 回答にも及ぶ(ADR 0289)—— 比べる head は着地の面が merge する head で、ローカルではローカルのタスクブランチ**
 
 2026-10-13 の grilling(issue #1837、発端は #1766 の grilling)で決定。ADR 0239 決定1 は candidate を「merge される

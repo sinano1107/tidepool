@@ -1,6 +1,6 @@
 # checkout は最初の pickup 以降、休止中も盤面の専有領域であり、ref の基準は切れない
 
-**Status 追記: 決定2 の比較の置き場所は、pickup と解放の2時点から、名前の場所の ref を読んで書く操作すべての最初へ広がる。決定4 の受理は全 ref を基準と比べ、見せた移動だけを受け入れる —— 全撮りは今の値が見せた値と同じ回答の後にだけ走り、完了の門を通った `done` の task の `task/<id>` は基準の値が辿れない移動を受理しない([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定1・3・5、2026-11-11、issue #3151)。**
+**Status 追記: 決定2 の比較の置き場所は、pickup と解放の2時点から、名前の場所の ref を読んで書く操作すべての最初へ広がる。決定4 の受理は全 ref を基準と比べ、見せた移動だけを受け入れる —— 全撮りは今の値が見せた値と同じ回答の後にだけ走り、完了の門を通った `done` の task の `task/<id>` は、基準の値に今の値にも帰り先にも届いていない内容がある移動を受理しない([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定1・3・5、2026-11-11、issue #3151)。**
 
 **Status 追記: 決定2 の release 側の比較と task branch の行の畳み、決定5 の pickup の clean 検査の対象は、worker が書かない名前の場所だけになる。決定1・3・4・6・7 は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 

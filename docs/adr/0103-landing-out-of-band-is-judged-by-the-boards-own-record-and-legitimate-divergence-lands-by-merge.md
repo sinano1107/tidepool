@@ -1,5 +1,7 @@
 # purely-local の着地の帯域外判定は盤面自身の記録で行い、正当な非 ff は Tidepool 名義の merge で追いつかせる
 
+**Status 追記: 決定4 の回答拒否に従った手の解決は、名前の場所の ref を動かすので、次の回答の最初の比較に当たって workspace の Quarantine を1枚経る —— 文面はそれを告げる([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定1・7、2026-11-11、issue #3151)。**
+
 **Status 追記: 決定3 の「走行中は checkout を動かさない」の分岐は消え、保護ブランチの ref の書き込みは常に worktree の追従と対の plumbing([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
 **Status 追記: 決定1 が読む基準は次の pickup の全撮りで作り直されなくなった([ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定2、2026-11-02、issue #2911)—— 旧・休止中に保護ブランチが動いたとき、着地の回答が次の pickup より前なら quarantine、後なら通っていた。決定1 の文はそのまま。**

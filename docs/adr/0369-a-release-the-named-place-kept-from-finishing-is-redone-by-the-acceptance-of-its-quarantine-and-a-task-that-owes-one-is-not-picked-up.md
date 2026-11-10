@@ -1,6 +1,6 @@
 # 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理がやり直す —— 済んでいない解放を持つ task は走らせない
 
-**Status 追記: 決定3 の「受理そのものの範囲は #3151」は決着した —— 決定3・7 の述語(門の記録した tip が今の `task/<id>` から辿れる)は受理の全体に掛かる。決定7 の「走らなかった ref の比較はやり直さず、受理の全撮りがその時点の ref を受け入れる」は、受理が全 ref を基準と比べて見せた移動だけを受け入れる、に変わる([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定3・5、2026-11-11、issue #3151)。**
+**Status 追記: 決定3 の「受理そのものの範囲は #3151」は決着した —— 受理は、門を通った内容がどこにも届かないまま記録から外れる移動を、見せた後でも拒む。決定3・7 の確認(門の記録した tip が今の `task/<id>` から辿れる)は checkout を消す手前のものとして、そのまま残る。決定7 の「走らなかった ref の比較はやり直さず、受理の全撮りがその時点の ref を受け入れる」は、受理が全 ref を基準と比べて見せた移動だけを受け入れる、に変わる([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定3・5、2026-11-11、issue #3151)。**
 
 2026-11-11 の grilling(issue #3147、#3126 の実装 review の派生)で決定。ADR 0356 で worker の成果は名前の場所の外(task の checkout)に
 移ったが、解放が名前の場所の事情(drift、名前の場所の故障・基準違反)で済まないと、盤面は checkout を残して枠を空け、二度と戻らなかった。
