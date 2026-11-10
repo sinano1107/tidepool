@@ -66,33 +66,6 @@ it("task の応答は quarantine を kind と value の2欄で運び、種類ご
   ]);
 });
 
-// v1 has one board workspace and slot concurrency 1 (GLOSSARY.md), so a
-// second tree-rule failure on an already-quarantined workspace can never
-// arise through the ordinary scheduler/HTTP/MCP path — the pickup gate
-// (workspaceNeedsHuman) already keeps any second task out of the slot. The
-// dedup guard exists for #26's future per-workspace execution, so it's driven
-// directly against the running board's own sqlite file, same as
-// worker-failure.test.ts drops to the scheduler/tasks seam when the full
-// stack can't reach the scenario. Git itself is still real, never faked.
-it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の reason イベントを追記する", async () => {
-  const ws = await makeWorkspace("sandbox");
-  t = await bootTidepool({ workspace: ws });
-  await triggerQuarantine(t, ws, "doomed work");
-
-  const question = await servedQuarantineQuestion(t, "workspace", ws.name);
-
-  quarantineWorkspace(t.db, ws.name, new Error("second, unrelated tree-rule failure"), t.clock.now());
-
-  const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(after.filter((x: any) => (x.question_quarantine_kind === "workspace" && x.question_quarantine_value === ws.name))).toHaveLength(1);
-  expect(after.find((x: any) => x.id === question.id).status).toBe("todo");
-
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(
-    events.some((e: any) => e.payload.reason?.includes("second, unrelated tree-rule failure")),
-  ).toBe(true);
-});
-
 it("quarantine question への回答はツリーが汚れたままだと拒否され、question は open のまま残り、その workspace は quarantine されたまま", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });

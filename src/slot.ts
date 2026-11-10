@@ -65,8 +65,8 @@ export class Slot {
 
   /** 落ちた後始末の残り —— 投げた手から先(ADR 0342 決定6)。受理が撃ち直す。memory なので再起動を越えず、
    *  越えた受理は後始末そのものを撃ち直す。1つの task の分だけ持ち、受理の後始末が枠を空けた後に投げた手は枠が空いたまま持つ。
-   *  先に残った手は捨てず、その後ろに継ぐ。`cause` は最後に投げた手の例外で、受理の確認が拒否文に載せる(ADR 0366 決定2)。 */
-  appendFailedTeardownRest(taskId: string, actions: TeardownAction[], cause: unknown): void {
+   *  先に残った手は捨てず、その後ろに継ぐ。`cause` は継いだ側の(最後に投げた手の)例外で、受理の確認が拒否文に載せる(ADR 0366 決定2)。 */
+  appendFailedTeardownRest(taskId: string, { actions, cause }: TeardownRest): void {
     const earlier = this.failedTeardownRest?.taskId === taskId ? this.failedTeardownRest.actions : [];
     this.failedTeardownRest = { taskId, actions: [...earlier, ...actions], cause };
   }
@@ -74,8 +74,7 @@ export class Slot {
   /** 落ちた後始末の残りを持っていれば `action` をその後ろに継いで true —— 呼び手は自分では撃たず、受理に任せる(ADR 0112 決定4)。 */
   deferToFailedTeardownRest(taskId: string, action: TeardownAction): boolean {
     if (!this.hasFailedTeardownRest(taskId)) return false;
-    const rest = this.failedTeardownRest!;
-    this.failedTeardownRest = { ...rest, actions: [...rest.actions, action] };
+    this.appendFailedTeardownRest(taskId, { actions: [action], cause: this.failedTeardownRest!.cause });
     return true;
   }
 

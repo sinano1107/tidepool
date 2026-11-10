@@ -573,7 +573,7 @@ function restartMidTeardown(f: { db: Db; clock: FakeClock; triggered: string[] }
 it.each([
   ["そのまま", false],
   ["再起動を跨いで", true],
-])("registry drift で止まった pickup の後始末は、解決できない workspace の quarantine をもう一度撃たずに枠を空ける —— %s(ADR 0274 決定3)", async (_, restart) => {
+])("registry drift で止まった pickup の後始末は、解決できない workspace の開いた quarantine に何も足さずに枠を空ける —— %s(ADR 0274 決定3)", async (_, restart) => {
   const f = await stoppedBeforeSpawn("ghost");
   expect(resolveOrQuarantine(f.db, f.resolve, "ghost", f.clock.now())).toBeUndefined();
   const question = openQuarantineQuestion(f.db, "workspace", "ghost")!;
@@ -646,6 +646,17 @@ it.each([
   await settle();
 
   expectDriftObservedOnce(f, slot);
+});
+
+it("process を持たなかった session の後始末も、開いた question が無ければ drift の観測者として Quarantine を1枚立て、理由に残した task の checkout の在り処を書く(ADR 0366 決定3 / ADR 0363 決定4)", async () => {
+  const f = await driftedAfterCheckout();
+  expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
+
+  queueReturnHandler(f.deps, f.containers)(f.task.id, sessionId(f.db, f.task.id), { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" });
+  await settle();
+
+  expect(getTask(f.db, f.task.id)?.status).toBe("todo");
+  expectDriftObservedOnce(f, f.slot);
 });
 
 // issue #3121 の観測: 後始末が drift の Quarantine を commit した後、印を消す前に process が落ちた盤面
@@ -1249,9 +1260,9 @@ it("再起動後の確認回答は、起動時の復旧がすでに枠を握っ�
 });
 
 it.each([
-  ["exit が無ければ process を持たなかった session", false, { neverRan: true }],
-  ["exit があれば走った session —— exit が never-ran の決着に勝つ", true, { completion: false }],
-] as const)("spawn の後に記録の器の失敗で todo へ戻った pickup の後始末は、%s(ADR 0316 決定4)", (_, exited, step) => {
+  ["exit が無ければ process を持たなかった session", false, "never_ran"],
+  ["exit があれば走った session —— exit が never-ran の決着に勝つ", true, "released"],
+] as const)("spawn の後に記録の器の失敗で todo へ戻った pickup の後始末は、%s(ADR 0316 決定4)", (_, exited, settlement) => {
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
   const at = new Date("2026-10-27T00:00:00Z");
@@ -1259,6 +1270,7 @@ it.each([
   const spawned = appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   if (exited) appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
   returnToQueue(db, task, { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" }, at);
+  markTeardown(db, task.id, at);
 
-  expect(teardownStep(db, task.id)).toEqual(step);
+  expect(markedSession(db)?.settlement).toBe(settlement);
 });

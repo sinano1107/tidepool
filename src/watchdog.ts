@@ -170,9 +170,9 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
  *  1度も走らなかった pickup(`pickup_stopped`)と盤面の記録の器が書けない pickup(`record_container_unwritable`、ADR 0266 決定3・4)で、
  *  Quarantine の登録はどちらも呼び手が先に済ませている —— 資源はもうその question を持つので failure question は立てない。
  *  形は行の拒否(ADR 0184 決定4)と同じ: `todo` への復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
- *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— 動いていない checkout に
- *  触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。drift で解決できない workspace の開いた Quarantine に何も足さないのは
- *  登録口である(ADR 0366 決定1)。
+ *  経路は process を1つも持たなかった session の決着(`never_ran`)に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— 開いていない
+ *  task の checkout に触れないのは後始末の走る場所の解決で(再起動を跨ぐ)、drift で解決できない workspace の開いた Quarantine に
+ *  何も足さないのは登録口である(ADR 0366 決定1・3)。
  *  process の無い容器へ強制回収を撃つのは `spawnFailureHandler` と同じ。process が起きた session の `todo` への復帰は exit の決定
  *  (`onWorkerExited`)が持つ(ADR 0338 決定2)。 */
 export function queueReturnHandler(

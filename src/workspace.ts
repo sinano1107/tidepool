@@ -1607,12 +1607,13 @@ export function buildWorkspaceResolver(
 
 /** The shared shape behind every async, board-driven use of a task's
  *  execution workspace (issue #26 / ADR 0009: pickup, release, watchdog,
- *  restart) — `resolve` throwing `UnknownWorkspaceError` (registry drift)
+ *  restart, landing) — `resolve` throwing `UnknownWorkspaceError` (registry drift)
  *  never escapes to the caller; it quarantines the name in its place and the
  *  caller treats the workspace step as absent for this cycle. A human's own
  *  synchronous request (registration, a quarantine/merge answer) is not this
  *  seam — those fail fast with a DomainError instead (ADR 0009). `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。
- *  ADR 0363 決定2: worker の verb は呼ばない —— 走った後の drift の観測者は後始末で、verb は拒むだけ。 */
+ *  ADR 0363 決定2: worker の verb は呼ばない —— 走った後の drift の観測者は後始末、session の後に PR が待つ間は landing の
+ *  2 つの poll で(ADR 0366 決定4)、verb は拒むだけ。 */
 export function resolveOrQuarantine(
   db: Db,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,

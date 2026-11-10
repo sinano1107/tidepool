@@ -412,14 +412,14 @@ it("破られた契約への備え: 分類の Promise が reject しても(adapt
 });
 
 /** 束の書く step(ADR 0342 決定6 / ADR 0338 決定4): 手ごとに撃った順を残し、`broken` の間だけ2つ目の手が投げる。 */
-function writeSteps() {
+function writeSteps(thrown = "write step bug") {
   const steps: { broken: boolean; fired: string[]; writes: TeardownAction[] } = {
     broken: true,
     fired: [],
     writes: [
       () => steps.fired.push("exit"),
       () => {
-        if (steps.broken) throw new Error("write step bug");
+        if (steps.broken) throw new Error(thrown);
         steps.fired.push("temp");
       },
       () => steps.fired.push("project"),
@@ -908,8 +908,8 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
     }
 
     /** 同じ session に遅れて届く、Promise 分類の exit の書く step(直っていないので投げる)。 */
-    function lateExit(b: Board) {
-      const late = writeSteps();
+    function lateExit(b: Board, thrown?: string) {
+      const late = writeSteps(thrown);
       b.watchdog.onWorkerExited(b.task.id, QUIET_EXIT, { sessionId: sessionId(b.db, b.task.id), workerSpawnedEventId: b.spawned, turnRan: true, classification: Promise.resolve({ capInterrupted: false }), writes: late.writes });
       return late;
     }
@@ -927,12 +927,13 @@ describe("受理が証明するのは、投げた step の再実行が回答を�
 
       let late!: ReturnType<typeof writeSteps>;
       const refused = await answerUnclosed(b, { check: closeThen(b, () => {
-        late = lateExit(b);
+        late = lateExit(b, "late write step bug");
         return settle();
       }) }).then(() => undefined, (err: unknown) => err);
 
       expect(refused).toBeInstanceOf(DomainError);
-      expect((refused as DomainError).message).toBe(`the re-run for worker session ${b.spawned} threw again: write step bug`);
+      // ADR 0366 決定2: 拒否文は最初の throw でなく、受理の後に投げた手の本文を運ぶ
+      expect((refused as DomainError).message).toBe(`the re-run for worker session ${b.spawned} threw again: late write step bug`);
       expectUnclosed(b);
       expect(late.fired).toEqual(["exit"]);
     });

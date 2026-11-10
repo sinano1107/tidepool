@@ -22,7 +22,7 @@ describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般
     expect(question?.question_items?.[0]?.recommendation).toBe("repaired by hand");
   });
 
-  it("同一 agent 名への2度目の quarantine は question を増やさず、既存 question に再発火の cause イベントを追記する", () => {
+  it("同一 agent 名への2度目の quarantine は question を増やさない", () => {
     const db = openDb(":memory:");
     quarantineAgent(db, "navigator", new Error("first failure"), new Date(0));
     quarantineAgent(db, "navigator", new Error("second, unrelated failure"), new Date(1));
