@@ -89,32 +89,24 @@ export type WorktreeChange = { path: string; status: string };
 export const displayWorktreePath = (path: string): string => /[\r\n\t]/.test(path) ? JSON.stringify(path) : path;
 
 /** ADR 0293 追記: the Git config that keeps a sparse S bit when a file sits at a path outside the patterns. The Claude worker's
- *  git env carries it, and so does a board view seeded with a sparse policy (ADR 0360 決定2). */
+ *  git env carries it. */
 export const EXPECT_FILES_OUTSIDE_OF_PATTERNS = { key: "sparse.expectFilesOutsideOfPatterns", value: "true" } as const;
 
-/** The view's fresh index holds `head`'s tree, with the board's sparse policy applied on a blank tree; returns the policy's
- *  config plus the key that makes the view read hidden paths as the worker's git env does. */
-function seedViewIndex(view: View, dir: string, head: string | undefined, sparse: SparsePolicy | undefined): string[] {
-  if (head !== undefined) {
-    view(["update-ref", "--no-deref", "HEAD", head]);
-    view(["read-tree", head]);
-  }
-  const config = sparseOptions(dir, sparse);
-  if (sparse && head !== undefined) {
-    // ADR 0293 決定3 / ADR 0356 決定3: apply sparse policy on a blank tree instead of trusting the real index's marks.
-    const empty = join(dir, "empty");
-    mkdirSync(empty);
-    view(["-C", empty, "-c", "core.bare=false", ...config, "sparse-checkout", "reapply"], { GIT_WORK_TREE: empty });
-  }
-  // ADR 0360 決定2: worker の git env と同じ鍵で hidden path を読む —— sandbox の stub や worker の中身で S bit を落とさない(#3075)
-  return sparse ? [...config, "-c", `${EXPECT_FILES_OUTSIDE_OF_PATTERNS.key}=${EXPECT_FILES_OUTSIDE_OF_PATTERNS.value}`] : config;
+/** The view's fresh index holds `head`'s tree. */
+function seedViewIndex(view: View, head: string): void {
+  view(["update-ref", "--no-deref", "HEAD", head]);
+  view(["read-tree", head]);
 }
 
+/** ADR 0360 Status 追記(#3111): view が運ばない path は sparse でなく pathspec で外す —— その path が無くても、ディレクトリでも、stub でも
+ *  index には seed の entry が残り、add も status も配下ごと触らない。 */
+const viewPathspec = (exclude: string[]) => ["--", ".", ...exclude.map((path) => `:(exclude,literal)${path}`)];
+
 /** ADR 0356 決定3: the worktree's content as a tree in `objectsFrom`'s objects, staged by `add -A` into a fresh index seeded from `head`. */
-export function boardWriteTree(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy, exclude: string[] = []): string {
-  return withWorkerTreeGit(cwd, (view, dir) => {
-    const config = seedViewIndex(view, dir, head, sparse);
-    view([...config, "add", "-A", "--", ".", ...exclude.map((path) => `:(exclude,literal)${path}`)]);
+export function boardWriteTree(cwd: string, head: string, objectsFrom: string, exclude: string[] = []): string {
+  return withWorkerTreeGit(cwd, (view) => {
+    seedViewIndex(view, head);
+    view(["add", "-A", ...viewPathspec(exclude)]);
     return view(["write-tree"]).trim();
   }, objectsFrom);
 }
@@ -132,11 +124,11 @@ export class WorktreeStatusError extends Error {}
 
 /** ADR 0356 決定3: a task checkout read only through the board's view — a fresh index from `head`'s tree and `objectsFrom`'s
  *  objects. Nothing runs in the worker's repo, so its real index and nested repos are not read; a submodule counts by its gitlink. */
-export function boardViewStatus(cwd: string, head: string, objectsFrom: string, sparse?: SparsePolicy): WorktreeChange[] {
-  return withWorkerTreeGit(cwd, (view, dir) => {
-    const config = seedViewIndex(view, dir, head, sparse);
+export function boardViewStatus(cwd: string, head: string, objectsFrom: string, exclude: string[] = []): WorktreeChange[] {
+  return withWorkerTreeGit(cwd, (view) => {
+    seedViewIndex(view, head);
     try {
-      return porcelainChanges(view([...config, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty"]));
+      return porcelainChanges(view(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=dirty", ...viewPathspec(exclude)]));
     } catch (cause) {
       if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定3: 上限超過は観測の失敗ではない
       // ADR 0359 決定3: 盤面の記録から index を作る段の失敗と、worker の worktree を観測する段の失敗を分ける

@@ -72,7 +72,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { gitlinkChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_SHADOW_PATHS, treeDeltaEntries } from "./sandbox.js";
+import { gitlinkChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS, treeDeltaEntries } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   auditedPosedEventId,
@@ -819,9 +819,9 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
 export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string {
   assertTaskCheckout(place, taskId);
   const room = place.namedPlace;
-  // view の index の種は worker の tip —— session の最中なのでサンドボックスの shadow 残骸がまだある。tree rule と同じ集合を外す(ADR 0069)
+  // view の index の種は worker の tip —— session の最中なのでサンドボックスの shadow 残骸がまだある。退避と同じ集合を外す(ADR 0069)
   const tip = fetchWorkerTip(place, taskId);
-  const tree = boardWriteTree(place.path, tip, room.path, recordedSettingsSparsePolicy(db, room, taskId, tip), taskCheckoutRemnants(place, tip));
+  const tree = boardWriteTree(place.path, tip, room.path, boardViewExcludes(db, place, taskId, tip));
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
   const parent = git(room.path, "rev-parse", protectedBranchRef(room));
   const head = git(room.path, "commit-tree", tree, "-p", parent, "-m", "Add the project files");
@@ -969,7 +969,7 @@ function sparsePatternPath(workspace: WorkspaceConfig): string {
   return resolve(workspace.path, git(workspace.path, "rev-parse", "--git-path", "info/sparse-checkout"));
 }
 
-/** ADR 0360 決定1・2: spawn と盤面の view は、外す settings の entry 1つにつき同じ除外の行を使う。 */
+/** ADR 0360 決定1・2: spawn は外す settings の entry 1つにつき除外の行を1つ書く。 */
 const boardSparsePattern = (hide: string[]) => ["/*", ...hide.map((path) => `!/${path}`), ""].join("\n");
 
 const configEnabled = (workspace: WorkspaceConfig, key: string) =>
@@ -991,13 +991,13 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
   return changes.map(({ path, status }) => `${status} ${displayWorktreePath(path)}`).join(separator);
 }
 
-/** ADR 0360 決定2: view の index の種にする tree に settings があれば、盤面の隠しと同じ pattern を使う。 */
-function recordedSettingsSparsePolicy(db: Db, namedPlace: WorkspaceConfig, taskId: string, tip: string): SparsePolicy | undefined {
+/** 盤面の view が運ばない path(ADR 0360 Status 追記、#3111): view の index の種 `tip` から導く hidden settings と、ADR 0069 の shadow 残骸。
+ *  出題の写し・非完了の退避・完了の門・完了後の観測はこの集合だけを外す —— 綴りが割れれば門が名指すものを退避が運ばない。 */
+function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string): string[] {
   // ADR 0360 決定1・2: Claude の spawn だけが settings を隠す。今回の pickup で Codex が走ったなら通常どおり変更を読む。
   const spawn = latestEventOfTask(db, taskId, "worker_spawned");
-  if (spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0)) return undefined;
-  const { hide } = recordedSettingsDisposition(namedPlace.path, tip);
-  return hide.length === 0 ? undefined : { pattern: boardSparsePattern(hide), cone: false };
+  const codex = spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0);
+  return [...(codex ? [] : recordedSettingsDisposition(place.namedPlace.path, tip).hide), ...taskCheckoutRemnants(place, tip)];
 }
 
 /** Keep the recorded settings entries `hide` (ADR 0360 決定1) in Git but out of the worker's physical checkout by
@@ -1355,18 +1355,16 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
  *  分かれれば、片方だけが残骸を数えて無実の拒否や取りこぼしが生まれる。
  *  tracked は worker の index でなく名前の場所のタスクブランチの tip で読む(ADR 0356 決定3)。 */
 function taskCheckoutRemnants(place: TaskCheckoutPlace, tip: string): string[] {
-  return SANDBOX_SHADOW_PATHS.filter((path) => {
+  return SANDBOX_STUB_PATHS.filter((path) => {
     const stat = lstatSync(join(place.path, path), { throwIfNoEntry: false });
     if (!stat?.isFile() || stat.size !== 0) return false;
     return git(place.namedPlace.path, "ls-tree", "--name-only", tip, "--", path) === "";
   });
 }
 
-/** task の checkout の worktree を、名前の場所のタスクブランチの tip に対して盤面の view だけで読む(ADR 0356 決定3)。shadow 残骸は除く。 */
+/** task の checkout の worktree を、名前の場所のタスクブランチの tip に対して盤面の view だけで読む(ADR 0356 決定3)。運ばない path は除く。 */
 function taskCheckoutChanges(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string): WorktreeChange[] {
-  const remnants = new Set(taskCheckoutRemnants(place, tip));
-  const sparse = recordedSettingsSparsePolicy(db, place.namedPlace, taskId, tip);
-  return boardViewStatus(place.path, tip, place.namedPlace.path, sparse).filter(({ path }) => !remnants.has(path));
+  return boardViewStatus(place.path, tip, place.namedPlace.path, boardViewExcludes(db, place, taskId, tip));
 }
 
 /** ADR 0359 決定1: task の checkout の観測が落ちれば門を通さない。work は全部 task の checkout で走る(ADR 0356 決定1)。 */
@@ -1727,10 +1725,10 @@ function settleTaskCheckout(
       const tip = fetchWorkerTip(place, task.id);
       const recorded = readRef(namedPlace, taskRef);
       const base = recorded !== "" && isAncestor(namedPlace, tip, recorded) ? recorded : tip;
-      const sparse = recordedSettingsSparsePolicy(db, namedPlace, task.id, base);
       let tree: string;
       try {
-        tree = boardWriteTree(checkout, base, namedPlace.path, sparse, taskCheckoutRemnants(place, base));
+        // 残骸の lstat は worker の tree を読む —— 退避の失敗と同じ扱いにする
+        tree = boardWriteTree(checkout, base, namedPlace.path, boardViewExcludes(db, place, task.id, base));
       } catch (cause) {
         if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
         throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });

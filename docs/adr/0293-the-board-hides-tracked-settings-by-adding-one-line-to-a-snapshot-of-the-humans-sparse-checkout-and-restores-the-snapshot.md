@@ -1,5 +1,7 @@
 # 盤面は checkout の sparse-checkout を自分だけのものとして書かず、人間の状態の写しに1行足して隠し、写しどおり戻す
 
+**Status 追記: 決定3 の「S bit は読まない」を引く盤面の view は sparse を使わなくなった —— 運ばない path は pathspec 除外で外し、view は `sparse.expectFilesOutsideOfPatterns=true` も付けない。鍵は Claude worker の Git env にだけ残る([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md) Status 追記、2026-11-10、issue #3111)。**
+
 **Status 追記: 盤面の行 `!/.claude/settings.json` は tracked な `settings.local.json` にも同じ形で及び、symlink の `.claude` には効かない(2.1.286 実測)ので、その形は書く前に止める。門の view が「盤面が隠したか」を読むのは checkout の pattern ファイルでなく tip の tree([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md)、2026-11-08、issue #3074)。**
 
 **Status 追記: 写し・戻し・盤面の行の印の機構は消えた —— `workspace_state.sparse_snapshot`、起動時の戻し、残った盤面の行を印と読むこと(決定1・4・5・7、決定3 の印の半分)は無く、盤面は task の checkout の sparse-checkout に除外の行を書くだけである。決定3 の「S bit(index の印)は読まない」は残る(盤面の view が引く、`src/git.ts`)。Status 追記(#2943)の `sparse.expectFilesOutsideOfPatterns=true` も残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md) 決定2、2026-11-08、issue #3032)。**
