@@ -628,8 +628,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     workspace: async (value) => {
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
       // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back → 基準の撮り直し(ADR 0351 決定4)。
-      const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
-      const all = [...own, ...examinees];
+      const { own, openers } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+      const all = [...own, ...openers];
       const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
         try {
           await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });

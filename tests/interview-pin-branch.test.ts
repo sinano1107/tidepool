@@ -4,6 +4,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
+import { quarantineChecks } from "../src/human-verbs.js";
+import { openQuarantineQuestion, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, runTeardown, teardownStep } from "../src/teardown.js";
@@ -29,7 +31,7 @@ import {
 } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, sessionId } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, FULL_HANDOFF, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, sessionId } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、root と受験者の task の checkout(ADR 0356 決定1・2 / ADR 0276)。
@@ -778,10 +780,10 @@ it("読み専用の checkout を消せない解放は決着を撃たずに何も
 it("門を通った後に面接室から出題の head を fetch できなければ、準備は面接室の名前(root id)で項の文つきで止まり、開いた event を書かない(ADR 0361 決定1 / ADR 0276 決定3)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, head, audit } = await auditStanding(db);
-  // commit は引けるが中身の blob が欠けた面接室 —— 門の項(head が引けること)は通り、fetch が落ちる
-  const blob = git(room.path, "rev-parse", `${head}:probe.txt`);
-  rmSync(join(room.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  // 門を通った後に中身の blob が欠けた面接室 —— 準備は門の前半を撃ち直さない(後半だけ)ので、fetch が落ちる
+  // 旧: 門の前に blob を消していた。ADR 0329 決定4 の Status 追記の後は門の項が閉包まで見て門で止まる
   await pickupGate(db, workspace, audit, base);
+  dropObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
 
   const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
 
@@ -825,5 +827,189 @@ it.each([
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect(existsSync(join(base, `${audit.id}.reads`))).toBe(false);
+  db.close();
+});
+
+// (task, 面接室)の項(issue #3136 / ADR 0329 決定4 の Status 追記): 項は準備がその task のために面接室から fetch するものを、fetch が要る閉包まで検査する
+
+/** 却下 → 出し直し → 却下した監査の行への RCA の姿。`rejected` は却下した監査が見た出題の head で、RCA が読む head。 */
+async function rcaOnRejectedAudit(db: Db) {
+  const standing = await auditStanding(db);
+  const { workspace, root, audit } = standing;
+  completeAudit(db, audit, { verdict: "rejected", findings: "the probe leaks the real environment" }, "fugu", NOW, "worker");
+  const { place: again } = await pickUpInterviewRoot(db, root, workspace);
+  commitWork(again.path, "probe.txt", "the second environment\n");
+  const latest = commitRoomCopy(db, again, root.id);
+  poseProbe(db, getTask(db, root.id)!, POSE, "tako", NOW, "worker", latest);
+  releaseWorkspace(db, again, root, NOW);
+  return { ...standing, rejected: standing.head, latest, rca: rcaUnderAudit(db, getTask(db, audit.id)!) };
+}
+
+const looseObject = (room: WorkspaceConfig, oid: string) => join(room.path, ".git", "objects", oid.slice(0, 2), oid.slice(2));
+
+/** 面接室から loose object を1つ消す。 */
+const dropObject = (room: WorkspaceConfig, oid: string) => rmSync(looseObject(room, oid));
+
+/** 面接室から commit の keep-around と loose object を消す。戻す関数を返す。 */
+function dropFromRoom(room: WorkspaceConfig, sha: string): () => void {
+  const saved = readFileSync(looseObject(room, sha));
+  git(room.path, "update-ref", "-d", `refs/keep-around/${sha}`);
+  dropObject(room, sha);
+  return () => {
+    writeFileSync(looseObject(room, sha), saved);
+    git(room.path, "update-ref", `refs/keep-around/${sha}`, sha);
+  };
+}
+
+it("RCA が読む却下した監査の出題の head が面接室から消えると、RCA の pickup の門と面接室の名前への回答の両方がその head を名指して面接室の名前(root id)で止まり、戻すと回答が受理されて RCA の準備が通る(issue #3136 / ADR 0329 決定4 / ADR 0361 決定1)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, rejected, latest, rca } = await rcaOnRejectedAudit(db);
+  const restore = dropFromRoom(room, rejected);
+
+  const failed = await pickupGate(db, workspace, rca, base).catch((err: unknown) => err);
+
+  expect(latest).not.toBe(rejected);
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(rejected);
+  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(rejected);
+
+  restore();
+  await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();
+  const place = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base, reads: await pickupGate(db, workspace, rca, base) });
+  expect(git(place.reads[0]!.path, "for-each-ref", "--format=%(objectname)")).toBe(rejected);
+  db.close();
+});
+
+it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室の名前への回答は RCA が読んでいた head を検査せずに受理する —— 決着した task は名前を開かない(issue #3136 / ADR 0329 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { room, root, rejected, audit } = await rcaOnRejectedAudit(db);
+  dropFromRoom(room, rejected);
+  const rcas = listChildren(db, audit.id).filter((child) => child.type === "review");
+  for (const rca of rcas) answerQuestionViaWebui(db, failureQuestion(db, rca.id, NOW), ["abandon"], NOW);
+
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["cancelled", "cancelled"]);
+  await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();
+  db.close();
+});
+
+it.each([
+  ["出題の head の blob", (room: WorkspaceConfig, head: string) => git(room.path, "rev-parse", `${head}:probe.txt`)],
+  ["出題の head の先祖の commit", (room: WorkspaceConfig, head: string) => git(room.path, "rev-parse", `${head}^`)],
+])("出題の head の commit が残り、%s が欠けた面接室では、監査の pickup の門と面接室の名前への回答の両方が面接室の名前(root id)で拒む(issue #3136 / ADR 0329 決定4)", async (_, missing) => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, head, audit } = await auditStanding(db);
+  const oid = missing(room, head);
+  dropObject(room, oid);
+
+  const failed = await pickupGate(db, workspace, audit, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(oid);
+  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(oid);
+  db.close();
+});
+
+it("出題の head の commit が残り blob が欠けた面接室では、未決着の受験者の pickup の門と面接室の名前への回答の両方が面接室の名前(root id)で拒む(issue #3136 / ADR 0329 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, head, examinees } = await posedInRoom(db);
+  const blob = git(room.path, "rev-parse", `${head}:probe.txt`);
+  dropObject(room, blob);
+
+  const failed = await pickupGate(db, workspace, examinees[0]!, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(blob);
+  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(blob);
+  db.close();
+});
+
+it("面接室の名前の Quarantine の本文は、未決着の異議の RCA が読む却下した監査の出題の head の項を並べ、決着した監査の項は並べない(issue #3136 / ADR 0329 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { root, audit, rejected, latest } = await rcaOnRejectedAudit(db);
+  const rcas = listChildren(db, audit.id).filter((child) => child.type === "review");
+
+  registerQuarantine(db, "workspace", root.id, "the place broke", NOW);
+  const purpose = getTask(db, openQuarantineQuestion(db, "workspace", root.id)!.id)!.purpose;
+
+  for (const rca of rcas) expect(purpose).toContain(`the posed head ${rejected} that ${rca.id} reads`);
+  expect(purpose).not.toContain(audit.id);
+  expect(purpose).toContain(latest);
+  db.close();
+});
+
+it("面接室が記録に無い受験者の pickup の門は、受験者の (task, 面接室) の項で面接室の名前(root id)で止まり、面接室の番地を作らない(issue #3136 / ADR 0329 追記 決定7)", async () => {
+  const db = openDb(":memory:");
+  const workspace = await makeWorkspace("examinee-unrecorded-room");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567") as [Task];
+  const base = dirname(workspace.path);
+
+  const failed = await pickupGate(db, workspace, examinee, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`The check that failed: every object reachable from the task branch \`task/${examinee.id}\` of the examinee ${examinee.id}`);
+  expect(existsSync(join(base, root.id))).toBe(false);
+  db.close();
+});
+
+it.each([
+  ["受験者", async (db: Db) => {
+    const { workspace, root, room, base, examinees } = await posedInRoom(db);
+    const examinee = examinees[0]!;
+    const answering = await pickUp(db, examinee, room, base);
+    commitWork(answering.path, "answer.txt", "the answer\n");
+    releaseWorkspace(db, answering, examinee, NOW);
+    return { workspace, root, room, base, task: examinee };
+  }],
+  ["root", async (db: Db) => {
+    const { workspace, root, room, base, place } = await pickedRoot(db, "dangling-root-branch-real");
+    commitWork(place.path, "draft.txt", "half composed\n");
+    releaseWorkspace(db, place, root, NOW);
+    return { workspace, root, room, base, task: root };
+  }],
+])("面接室の %s のタスクブランチの ref が残り tip の commit が欠けると、pickup の門と面接室の名前への回答の両方が面接室の名前(root id)で拒む —— 無いブランチとは読まない(issue #3136 / ADR 0242 決定3)", async (_, picked) => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, task } = await picked(db);
+  const tip = git(room.path, "rev-parse", `task/${task.id}`);
+  dropObject(room, tip);
+
+  const failed = await pickupGate(db, workspace, getTask(db, task.id)!, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`task/${task.id}`);
+  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(`task/${task.id}`);
+  db.close();
+});
+
+it.each([
+  ["根拠に読む root", async (db: Db, evidence: Awaited<ReturnType<typeof posedInRoom>>) => {
+    const reader = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: evidence.workspace.name, evidence_task_ids: [evidence.root.id], interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, reader);
+    return reader;
+  }],
+  ["retry の新しい root", async (db: Db, evidence: Awaited<ReturnType<typeof posedInRoom>>) => {
+    const again = retryInterviewRoot(db, getTask(db, evidence.root.id)!, undefined, NOW, {}, "webui");
+    openTestInterviewRoom(db, again);
+    return again;
+  }],
+])("%s が読む面接室の最新の出題の head の blob が欠けると、その面接室の名前への回答は head と読む root を名指して拒み、読む root の pickup の門はその面接室の名前で止まる(issue #3136 / ADR 0329 決定4)", async (_, reading) => {
+  const db = openDb(":memory:");
+  const evidence = await posedInRoom(db);
+  const { workspace, root, room, head, base } = evidence;
+  const reader = await reading(db, evidence);
+  dropObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
+
+  const refused = quarantineChecks({ db }).workspace!(root.id);
+
+  await expect(refused).rejects.toThrow(`the posed head ${head} that ${reader.id} reads`);
+  const failed = await pickupGate(db, workspace, getTask(db, reader.id)!, base).catch((err: unknown) => err);
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(head);
   db.close();
 });

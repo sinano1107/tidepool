@@ -276,13 +276,13 @@ export const QUARANTINES = [
       const room = getTask(db, name!)?.type === "interview";
       const recorded = room ? recordedPlace(db, name!) : undefined;
       // 予告は説明だけを読む —— 検査は撃たないので、実環境の在り処と規約の基点は要らない
-      const { own, examinees } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
+      const { own, openers } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
       const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...own.map((p) => p.describe)];
       if (!room || recorded?.hasRepository !== false) checks.push(...[
         "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
         "the workspace path does not overlap the board's own state paths.",
       ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
-      checks.push(...examinees.map((p) => p.describe));
+      checks.push(...openers.map((p) => p.describe));
       return {
         title: `workspace ${name} needs human attention`,
         purpose:
@@ -291,6 +291,8 @@ export const QUARANTINES = [
           "Answering confirms the repair — the board re-checks all of the following before " +
           "it accepts the answer, and refuses it if any fails:\n\n" +
           checks.map((check, i) => `${i + 1}. ${check}\n`).join("") +
+          // 本文は1度だけ書かれ、解除の門は名前を開く未決着の task を回答時に数え直す(ADR 0329 決定4 の Status 追記)
+          (room ? "\nA task that starts opening this name after this question was opened adds its own check of the same kind when the answer is checked.\n" : "") +
           // ADR 0351 決定4: 受理は基準を撮り直す —— 回答は動いた ref の受け入れでもある
           "\nAccepting the answer also records every ref in the checkout(s) under this name, as they are then, as the board's baseline — " +
           "refs moved since the board last recorded them are accepted as correct.\n" +

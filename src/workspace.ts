@@ -51,7 +51,6 @@ import {
   checkoutPickupPredicates,
   conventionCheckoutPath,
   exactProtectedBranchRef,
-  examineePickupPredicates,
   gonePlaceReason,
   isRemoteBacked,
   type PickupPredicate,
@@ -59,9 +58,14 @@ import {
   pathIsRegistryClone,
   protectedBranch,
   protectedBranchRef,
+  readHeadOf,
   resolvablePosedHead,
   roomPickupPredicates,
+  roomPlace,
   safeRealpath,
+  taskBranch,
+  taskBranchExists,
+  taskRoomPickupPredicates,
 } from "./pickup-predicates.js";
 import { openQuarantineQuestion, registerResourceStop } from "./quarantine.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
@@ -78,14 +82,12 @@ import {
 import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS, treeDeltaEntries } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
-  auditedPosedEventId,
   carriesReadOnly,
   getTask,
+  interviewRole,
   interviewRoomPath,
   interviewRootIdOf,
   issueRefPlaceholder,
-  latestPosedProbe,
-  posedProbe,
   readableInterviewRooms,
   registerFailureQuestion,
   sessionReadCheckouts,
@@ -153,7 +155,7 @@ function assertTaskCheckout(place: WorkspaceConfig, taskId: string): asserts pla
 /** 盤面が repo の間で撃つ fetch の共通の旗: FETCH_HEAD に在り処を残さず、submodule を辿らず、auto-gc を撃たない(ADR 0276 決定1 / ADR 0356 決定5)。 */
 const FETCH_FLAGS = ["--quiet", "--no-auto-gc", "--no-write-fetch-head", "--no-recurse-submodules"] as const;
 
-export { protectedBranch, protectedBranchRef } from "./pickup-predicates.js";
+export { protectedBranch, protectedBranchRef, taskBranch, taskBranchExists } from "./pickup-predicates.js";
 
 /** ADR 0018: the base directory a workspace entry's path derives from when
  *  the entry omits `path`. `configured` is `TIDEPOOL_WORKSPACES_DIR` as read
@@ -267,16 +269,22 @@ export class PickupGateError extends Error {
 }
 
 /** pickup の門(ADR 0329 追記 決定7・8): task が開く場所すべてを、走る場所を開く**前**に種類付きで列挙し、種類ごとの一覧を撃つ。
- *  集合は停止の門(tasks.ts の `openedPlaceNamesSql`)が数える名前と同じ —— 受験者は面接室(fetch 元、ADR 0356 決定1)と出題の head、root は
+ *  集合は停止の門(tasks.ts の `openedPlaceNamesSql`)が数える名前に含まれる(停止の門は受験者の `workspace` 列の実環境も数える、
+ *  ADR 0368 決定3)—— 受験者は面接室(fetch 元、ADR 0356 決定1)、root は
  *  `workspace` 列の実環境と読む面接室と自分の面接室、root 配下の review は実環境と読む面接室、他は実環境。番地は記録があれば event の綴り、
- *  無ければ規約の番地。読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
+ *  無ければ規約の番地。面接室には場所の項とこの task の (task, 面接室) の項を撃つ(ADR 0329 決定4 の Status 追記)。
+ *  読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
  *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
  *  最初に落ちた場所で `PickupGateError` を投げる。 */
 export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, registry?: RegistrySource, live?: () => boolean) {
-  const room = (rootId: string) => ({
-    name: rootId,
-    path: interviewRoomPath(db, rootId) ?? conventionCheckoutPath(rootId, workspacesBaseDir),
-    predicates: () => roomPickupPredicates(db, rootId, workspacesBaseDir, registry),
+  // (task, 面接室) の項は場所の項の後 —— 受験者だけは先(下)
+  const room = (rootId: string, fetchedFirst = false) => ({
+    ...roomPlace(db, rootId, workspacesBaseDir),
+    predicates: () => {
+      const own = roomPickupPredicates(db, rootId, workspacesBaseDir, registry);
+      const fetched = taskRoomPickupPredicates(db, [task], rootId, workspacesBaseDir);
+      return fetchedFirst ? [...fetched, ...own] : [...own, ...fetched];
+    },
   });
   const real = { ...workspace, predicates: () => checkoutPickupPredicates(workspace, registry) };
   const reads = roomsReadBy(db, task).map((read) => room(read.name));
@@ -286,8 +294,8 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       ? [real, ...reads]
       : task.type === "interview"
         ? [real, ...reads, room(rootId)]
-        // 出題の head が先 —— 面接室が記録に無い受験者に面接室の作る分岐(`mkdir -p`)を撃たない
-        : [{ ...room(rootId), predicates: () => [...examineePickupPredicates(db, task, rootId, workspacesBaseDir), ...roomPickupPredicates(db, rootId, workspacesBaseDir, registry)] }];
+        // 受験者の (task, 面接室) の項が先 —— 面接室が記録に無い受験者に面接室の作る分岐(`mkdir -p`)を撃たない
+        : [room(rootId, true)];
   const checks = [];
   for (const { predicates, ...place } of places) {
     if (live?.() === false) return checks;
@@ -383,12 +391,6 @@ export function taskRunPlaceForBoard(
   return { ...named, path, reads: sessionReadCheckouts(db, task.id).map(inRealSpelling), namedPlace: named, borrowsNamedObjects: room === undefined };
 }
 
-/** Interview での役(ADR 0273 決定1・2 / ADR 0276): `interview` type の root か、その受験者。work・review は undefined。 */
-function interviewRole(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): "root" | "examinee" | undefined {
-  if (interviewRootIdOf(db, task) === undefined) return undefined;
-  return task.type === "interview" ? "root" : "examinee";
-}
-
 /** task の checkout を作り、解放で着ける名前の場所(ADR 0356 決定1): task の workspace、interview の root と受験者は面接室。 */
 export function taskNamedPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">, workspace: WorkspaceConfig): WorkspaceConfig {
   return interviewRoomOf(db, task) ?? workspace;
@@ -459,7 +461,9 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
   // alternates 越しの fetch は objects の欠けを見ないので、欠けた blob で落ちる plumbing で tree を出す(porcelain の checkout は黙って欠く)
   git(path, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
   git(path, "read-tree", "-u", "--reset", "HEAD");
-  // 面接室と出題の head が引けることは pickup の門の項(roomPickupPredicates)が先に確かめている
+  // 読み手の出題の head と、門の時点のタスクブランチ(受験者は無ければ fork 元の出題の head)の閉包が面接室にあることは、pickup の門の
+  // (task, 面接室) の項(taskRoomPickupPredicates)が先に確かめている。門の後に欠けたものは上のタスクブランチの fetch か下の読み専用の
+  // checkout の fetch で落ち、後者は fetch 元の面接室の性質として面接室の名前で止まる(ADR 0276 決定3)
   const reads = roomsReadBy(db, task).map((room) =>
     openReadCheckout(CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name), room, readHeadOf(db, task, room.name), task.id));
   appendEvent(db, {
@@ -470,19 +474,6 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
       ...(reads.length > 0 && { reads }),
     },
   });
-}
-
-/** 読む面接室の出題の head(ADR 0361 決定1): review の鎖が監査を通るなら、その監査が見た出題(却下の後に出し直した root の旧い head
- *  —— 異議の RCA は監査と同じ環境を読む)。他は root の最新の出題で、出し直しは前の監査の決着の後なので監査する head と同じ
- *  (ADR 0273 決定3)。出題前の root は undefined(環境が無く checkout は空)。 */
-function readHeadOf(db: Db, task: Pick<Task, "id" | "type" | "parent_id">, rootId: string): string | undefined {
-  for (let reader: Pick<Task, "id" | "type" | "parent_id"> | undefined = task; reader?.type === "review"; reader = reader.parent_id === null ? undefined : getTask(db, reader.parent_id)) {
-    const posedId = auditedPosedEventId(db, reader.id);
-    if (posedId === undefined) continue;
-    const posed = posedProbe(db, posedId);
-    if (posed.root_id === rootId) return posed.head;
-  }
-  return latestPosedProbe(db, rootId)?.head;
 }
 
 /** ADR 0361 決定1: 読み専用の checkout —— `git init` に面接室から出題の head だけを fetch した複製(alternates なし、ADR 0356 決定2 の
@@ -774,10 +765,6 @@ export function listRegisteredWorkspaces(
   }));
 }
 
-export function taskBranch(taskId: string): string {
-  return `task/${taskId}`;
-}
-
 /** `merge-tree`'s one answer-shaped failure: undefined means conflict; every
  *  other nonzero exit remains an honest tool failure. */
 function writeMergeTree(
@@ -859,17 +846,6 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   const ref = `refs/keep-around/${head}`;
   boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
   return head;
-}
-
-/** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。 */
-export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
-  try {
-    git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
-    return true;
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-    return false;
-  }
 }
 
 /** ADR 0053 / ADR 0105: the live integration branch plus the lineage fact a
