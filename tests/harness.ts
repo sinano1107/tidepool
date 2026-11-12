@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -755,6 +755,34 @@ export function commitWork(path: string, file: string, body: string): void {
   // 残している sandbox shadow まで巻き込んで測りたい差を消す
   git(path, "add", "--", file);
   git(path, "commit", "-m", `add ${file}`);
+}
+
+export const STAGING_FAILURES = [
+  { shape: "unborn nested repo", reason: "does not have a commit checked out", symlink: undefined },
+  { shape: "symlink over hidden settings", reason: "beyond a symbolic link", symlink: "missing" },
+  { shape: "symlink loop", reason: "ELOOP", symlink: ".claude" },
+] as const;
+
+export const gitObjectFileCount = (repo: string) =>
+  readdirSync(join(repo, ".git", "objects"), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).length;
+
+/** Leave a working tree Git cannot stage. The returned repair restores the tracked path. */
+export function breakCheckoutStaging(checkout: string, { symlink }: (typeof STAGING_FAILURES)[number]): () => void {
+  const entry = symlink === undefined ? "mod" : ".claude";
+  const path = join(checkout, entry);
+  if (symlink !== undefined) mkdirSync(path, { recursive: true });
+  commitWork(checkout, symlink === undefined ? entry : `${entry}/settings.json`, "tracked\n");
+  rmSync(path, { recursive: true });
+  if (symlink === undefined) {
+    mkdirSync(path);
+    git(path, "init", "--quiet");
+  } else {
+    symlinkSync(symlink, path);
+  }
+  return () => {
+    rmSync(path, { recursive: true });
+    git(checkout, "restore", "--", entry);
+  };
 }
 
 /** 「ワーカーがこのタスクの成果を出した」の fixture。ADR 0084 の完了の門が入って以降、

@@ -108,7 +108,7 @@ it("root の .gitignore が FIFO なら view の status と退避の add -A は�
   expect(status).toMatchObject({ subcommand: "ls-files", timeoutMs: 1000 });
   await expectNoReader(fifo);
 
-  const stash = thrown(() => boardWriteTree(ws.path, head, ws.path));
+  const stash = thrown(() => boardWriteTree(ws.path, head, ws.path, () => undefined));
   expect(stash).toBeInstanceOf(WorkerTreeGitTimeoutError);
   expect(stash).toMatchObject({ subcommand: "ls-files", timeoutMs: 1000 });
   await expectNoReader(fifo);
@@ -336,12 +336,13 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
-it("特別でない tracked な path の FIFO では git は即座に落ち、今日の形で投げる(ADR 0357 決定3)", async () => {
+it("特別でない tracked な path の FIFO では git は即座に落ち、worker の repo の故障を投げる(ADR 0357 決定3 / ADR 0367 決定1)", async () => {
   const ws = await makeWorkspace("worker-tree-fifo-plain");
   const head = git(ws.path, "rev-parse", "HEAD");
   mkfifo(join(ws.path, "README.md"));
 
-  const failure = thrown(() => boardWriteTree(ws.path, head, ws.path));
+  const failure = thrown(() => boardWriteTree(ws.path, head, ws.path, () => undefined));
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(failure).toMatchObject({ status: expect.any(Number) });
+  expect(failure).toBeInstanceOf(TaskCheckoutUnreadableError);
+  expect(failure).toMatchObject({ cause: { status: expect.any(Number) } });
 });

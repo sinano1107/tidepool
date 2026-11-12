@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -13,7 +13,6 @@ import {
   commitWork,
 
   FULL_HANDOFF,
-  failGitCommits,
   failTeardownMark,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -249,16 +248,20 @@ it("報告後の書き込みを観測した解放の後で盤面が落ちても�
   expectLateWriteRecorded(s, deps);
 });
 
-it("退避の commit が落ちて Quarantine に返った tree rule の受理は、同じ question を1枚のまま何も足さない(ADR 0345 決定4 / ADR 0366 決定1)", async () => {
+it("退避の fetch が落ちて Quarantine に返った tree rule の受理は、同じ question を1枚のまま何も足さない(ADR 0345 決定4 / ADR 0366 決定1)", async () => {
   const s = await settledSession("interrupted");
   writeFileSync(join(s.place.path, "wip.txt"), "wip\n");
-  failGitCommits("commit-tree");
+  recordTaskCheckoutTip(s.db, s.place, s.task.id);
+  git(s.ws.path, "config", "fetch.unpackLimit", "1");
+  const packDir = join(s.ws.path, ".git", "objects", "pack");
+  rmSync(packDir, { recursive: true });
+  writeFileSync(packDir, "");
   await teardownThrewAfterTreeRule(s);
   expect(existsSync(join(s.place.path, "wip.txt"))).toBe(true);
 
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
-  expectOneQuestionUnchanged(s, "fixture commit failed");
+  expectOneQuestionUnchanged(s, "the WIP commit");
   expect(head(s)).toBe("main");
 });
 

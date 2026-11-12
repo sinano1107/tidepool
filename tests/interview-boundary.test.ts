@@ -20,6 +20,7 @@ import {
   api,
   type BootOptions,
   bootTidepool,
+  breakCheckoutStaging,
   callAsTask,
   checkoutOf,
   children,
@@ -44,6 +45,7 @@ import {
   registerQuestion,
   routingMaterialViaWebui,
   runNow,
+  STAGING_FAILURES,
   servedQuarantineQuestion,
   sessionId,
   startFirstMetaReviewViaWebui,
@@ -994,6 +996,29 @@ it("root の workspace が registry から消えた(registry drift)まま出題�
   expect((await callAsTask(t, audit_id, "complete_audit", { verdict: "accepted", findings: "the probe asks for the measured tier's work" })).isError).toBeFalsy();
   expect((await posedRecord(root.id)).examinees).toHaveLength(1);
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
+});
+
+it.each(STAGING_FAILURES)("出題の $shape は修理を促す tool error になり、同じ session で直して出題できる(ADR 0367 決定1)", async (failure) => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const checkout = lastCheckoutOf(root.id);
+  const repair = breakCheckoutStaging(checkout, failure);
+
+  const refused = await callAsTask(t, root.id, "pose_probe", POSE);
+
+  expect(refused.isError).toBe(true);
+  expect(refused.content[0].text).toContain(failure.reason);
+  expect(refused.content[0].text).toContain("Restore your task branch and call pose_probe again, or escalate");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
+  expect(t.containers.forceReclaims).toEqual([]);
+  expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
+  expect(await servedQuarantineQuestion(t, "workspace", root.id)).toBeUndefined();
+
+  repair();
+  const posed = await callAsTask(t, root.id, "pose_probe", POSE);
+
+  expect(posed.isError).toBeFalsy();
+  expect((await posedRecord(root.id)).events).toHaveLength(1);
 });
 
 // 分類は pickup-clean-tree.test.ts の domain 層が言う。ここは RoomCopyGitlinkError の tool error への写像だけ(ADR 0107 決定3)

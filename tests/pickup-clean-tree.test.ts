@@ -2,10 +2,11 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { TaskCheckoutUnreadableError } from "../src/git.js";
 import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
 import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
-import { addSubmodule, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, submoduleSource } from "./harness.js";
+import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 const NOW = new Date("2026-11-06T00:00:00.000Z");
@@ -88,11 +89,22 @@ const commitSubmodule = (checkout: string, source: string) => {
   git(checkout, "commit", "-m", "add the library as a submodule");
 };
 
+it.each(STAGING_FAILURES)("出題の写しで $shape を拒んだら面接室に object は増えない(ADR 0367 決定1)", async (failure) => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-stage-failure"));
+  breakCheckoutStaging(place.path, failure);
+  writeFileSync(join(place.path, "notes.txt"), "only in the working tree\n");
+  const before = gitObjectFileCount(room.path);
+
+  expect(() => commitRoomCopy(db, place, root.id)).toThrow(TaskCheckoutUnreadableError);
+  expect(gitObjectFileCount(room.path)).toBe(before);
+});
+
 // ADR 0365 決定2: 出題の写しも記録に worker の tree を書く —— 面接室の保護ブランチの head から gitlink を足す・進める tree は ref を書く前に拒む
 it("root の checkout が gitlink を足していれば、出題の写しは path を名指して拒み、面接室の保護ブランチも keep-around の ref も動かない(ADR 0365 決定2)", async () => {
   const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-gitlink"));
   commitSubmodule(place.path, await submoduleSource("room-copy-gitlink-source"));
   const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
+  const before = gitObjectFileCount(room.path);
 
   const failure = (() => {
     try {
@@ -106,6 +118,7 @@ it("root の checkout が gitlink を足していれば、出題の写しは pat
   expect((failure as RoomCopyGitlinkError).paths).toEqual(["mod"]);
   expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
   expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
+  expect(gitObjectFileCount(room.path)).toBe(before);
 });
 
 it("面接室の保護ブランチの時点で gitlink があり root が触っていなければ、出題の写しは通る(ADR 0365 決定2)", async () => {

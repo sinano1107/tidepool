@@ -371,6 +371,22 @@ it("名前の場所の objects に書けない未決着の解放は名前の場�
   expect(listChildren(db, task.id)).toEqual([]);
 });
 
+it("WIP の objects を名前の場所に書けなければ quarantine し、task の失敗にせず checkout を残す(ADR 0367 決定4)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  writeFileSync(join(place.path, "wip.txt"), "only in the working tree\n");
+  const thaw = freezeObjects(named.path);
+  try {
+    releaseWorkspace(db, place, task, NOW);
+  } finally {
+    thaw();
+  }
+
+  expect(quarantineQuestion(db, "workspace", named.name)?.purpose).toContain("WIP commit");
+  expect(releaseFailure(db, task)).toBeUndefined();
+  expect(listChildren(db, task.id)).toEqual([]);
+  expect(existsSync(place.path)).toBe(true);
+});
+
 /** verb の時点で名前の場所の側か写しの host で tip を記録できない形。戻す手を返す。 */
 const recordFailures = {
   "named place": (named: string) => freezeObjects(named),
@@ -398,12 +414,12 @@ it.each(["named place", "host"] as const)("complete_task は %s の側で tip �
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
-it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の tip を面接室へ引けなければ拒むだけで、資源を止めず出題も記録しない(ADR 0364 決定2 / ADR 0359 決定4)", async (side) => {
+it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の写しを面接室に記録できなければ拒むだけで、資源を止めない(ADR 0367 決定1 / ADR 0359 決定4)", async (side) => {
   const ws = await makeWorkspace("tip-copy-pose");
   const board = (t = await bootTidepool({ workspace: ws }));
   const root = (await api(board.baseUrl, "POST", "/api/tasks", { type: "interview", title: "interview", hypothesis: "h", tier: "frontier", interview_targets: [{ provider: "anthropic", model: "claude-opus-4-6", effort: "high" }] })).json;
   await board.clock.advance(HOUR);
-  commitWork(checkoutOf(board.db, root.id), "env.txt", "the probe's environment\n");
+  writeFileSync(join(checkoutOf(board.db, root.id), "env.txt"), "the probe's environment\n");
 
   const restore = recordFailures[side](interviewRoomPath(board.db, root.id)!);
   const res = await callAsTask(board, root.id, "pose_probe", { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }).finally(restore);
