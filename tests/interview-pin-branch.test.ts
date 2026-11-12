@@ -944,3 +944,19 @@ it("面接室の名前の Quarantine の本文は、未決着の異議の RCA �
   expect(items.filter((item) => describes.includes(item))).toEqual(describes);
   db.close();
 });
+
+it("面接室が記録に無い受験者の pickup の門は、受験者の (task, 面接室) の項で面接室の名前(root id)で止まり、面接室の番地を作らない(issue #3136 / ADR 0329 追記 決定7)", async () => {
+  const db = openDb(":memory:");
+  const workspace = await makeWorkspace("examinee-unrecorded-room");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567") as [Task];
+  const base = dirname(workspace.path);
+
+  const failed = await pickupGate(db, workspace, examinee, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`The check that failed: every object reachable from the task branch \`task/${examinee.id}\` of the examinee ${examinee.id}`);
+  expect(existsSync(join(base, root.id))).toBe(false);
+  db.close();
+});

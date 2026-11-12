@@ -151,14 +151,14 @@ export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, 
           shas.add(sha);
         }
         const missing = missingObjects(room, [...shas]);
-        if (missing.length > 0) throw new Error(`objects reachable from ${what} are missing from the interview room ${rootId} at ${room.path}: ${missing.join(", ")}`);
+        if (missing.length > 0) throw new Error(`objects reachable from ${what} (${[...shas].join(", ")}) are missing from the interview room ${rootId} at ${room.path}: ${missing.join(", ")}`);
       },
     },
   ];
 }
 
-/** 準備が task のためにその面接室から fetch するもの: 面接室で走る task(受験者・root)は自分のタスクブランチ —— 無ければ受験者は
- *  fork 元の出題の head(準備がそこから切る)、root は fork 元が面接室の保護ブランチで場所の項が持つので無い。面接室を読む task は
+/** 準備が task のためにその面接室から fetch するもの: 面接室で走る task(受験者・root)は自分のタスクブランチ(ADR 0356 決定2)
+ *  —— 無ければ受験者は fork 元の出題の head(準備がそこから切る、ADR 0276 決定1)、root は fork 元が面接室の保護ブランチで場所の項が持つので無い。面接室を読む task は
  *  `readHeadOf` の出題の head(出題前は無い)。root の項は記録された面接室だけ —— 未記録なら場所の項の「作る」分岐が当たる。 */
 function roomFetchOf(db: Db, task: Task, rootId: string): { what: string; rev: (room: WorkspaceConfig) => string | undefined } | undefined {
   const branch = `refs/heads/${taskBranch(task.id)}`;
