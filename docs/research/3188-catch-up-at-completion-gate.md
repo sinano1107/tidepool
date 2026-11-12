@@ -7,22 +7,26 @@
 
 想定の形(#3188 本文): 完了の門が「tip が帰り先の今の値を祖先に持たない、または clean に merge できない」完了を拒み、worker が自分の task の checkout で merge して呼び直す。
 
+**この文書は「tip が帰り先の今の値を祖先に持つこと」を門が要求する読みで分析する。** 「祖先に持たなくても clean に merge できれば通す」読みでは、後始末の merge back は ff でなく盤面の merge commit になり、5 の「ff の枝に入る」は当てはまらない(その場合の検査の delta は fixture F6)。
+
 ## 走らせたもの
 
 - `gh issue view`、`grep`、ファイルの読み。
-- **合成 fixture 1本**(素の git 2.47.0、この Mac、scratchpad の使い捨て repo 5つ。盤面の関数・test suite・Lima VM・Pi はどれも走らせていない)。`openTaskCheckout` と同じ手順(`git init --template=` → `objects/info/alternates` に名前の場所役の objects → 自分の branch だけ fetch → `read-tree -u --reset`、`sparse-checkout set --no-cone` で `.claude/settings.json` を外す)で checkout 役を作り、名前の場所役で親の branch を進めてから、下の F1〜F9 を測った。script は末尾の付録。sandbox の中ではない。
+- **合成 fixture 1本**(素の git 2.47.0、この Mac、scratchpad の使い捨て repo 5つ。盤面の関数・test suite・Lima VM・Pi はどれも走らせていない。盤面の host(VM / Pi)の git の版は見ていない —— sparse の下の merge の挙動(F3・F8)は版に依りうる)。`openTaskCheckout` と同じ手順(`git init --template=` → `objects/info/alternates` に名前の場所役の objects → 自分の branch だけ fetch → `read-tree -u --reset`、`sparse-checkout set --no-cone` で `.claude/settings.json` を外す)で checkout 役を作り、名前の場所役で親の branch を進めてから、下の F0〜F9 を測った。走らせた script は末尾の付録にそのまま置く。sandbox の中ではない。
 
 | # | 測ったもの | 結果 |
 |---|---|---|
+| F0 | `sparse-checkout set --no-cone` の後の checkout 役の `.claude/` | file 0 個 |
 | F1 | checkout を作った**後**に名前の場所役で作った commit(loose、`gc` 後は pack)を、checkout 役から `cat-file -t <sha>` | 両方 `commit`。checkout 役の ref は自分の `task/C1` 1本だけ |
 | F3 | checkout 役で `git merge <帰り先の sha>`(帰り先は sparse で外した `.claude/settings.json` も変えている) | 成功。`.claude/` は実体化されず、`ls-files -t` は `S`(skip-worktree)のまま、tip の blob は帰り先の値、`status` は空 |
-| F2 | merge した tip で `rev-list --objects <tip> --not --alternate-refs` | 5 object(worker の commit 2つ・tree 2つ・blob 1つ)。帰り先の側は入らない |
+| F2 | merge した tip で `rev-list --objects <tip> --not --alternate-refs` | 5 object(件数だけ出した。内訳は見ていない)。同じ tip の全閉包より少なく、帰り先の ref から届く分は入らない —— 後半は `--alternate-refs` の意味からの**推論** |
 | F2 | `diff-tree -r --raw --merge-base <帰り先> <tip>` | `M a.txt` だけ。帰り先が変えた `.claude/settings.json` と `shared.txt` は出ない |
 | F4 | `merge-base --is-ancestor <帰り先> <tip>` | yes |
 | F5 | 門の後に帰り先をもう1 commit 進める(`a.txt` と `.claude/settings.json`) | `is-ancestor` は no、`merge-tree --write-tree` は conflict。`--merge-base` の delta は `M a.txt` のまま |
 | F6 | 追いつかない tip(今日の形)を、進んだ帰り先と `--merge-base` で比べる | `A c2.txt` だけ |
 | F7 | worker が merge して、人間しか書けない path だけ自分側(旧い値)に戻して commit | delta に `M .claude/settings.json` が出る |
 | F8 | sparse で外した path を帰り先が変え、別の file で conflict する merge | exit 1、unmerged は `a.txt` だけ、`.claude/` は実体化されない |
+| F9 | 門の後に進んだ帰り先の commit を、fetch せずに最初の checkout 役から `cat-file -t` | `commit` |
 
 ## 前提として読んだ機構(6項目が共有する)
 
@@ -38,7 +42,7 @@
 - work / review の task の checkout は `objects/info/alternates` に名前の場所の objects の実体の path を書く(`src/workspace.ts:446`、`:453–456`)。fetch するのは自分の `refs/heads/task/<id>` 1本だけ(`:461`)。**読み**
 - sandbox の読み取り範囲に、その objects の path が入る: `runPlaceReadPaths` は `borrowsNamedObjects` のとき `namedObjects(namedPlace)` を足し(`src/workspace.ts:420–423`、`borrowsNamedObjects` は面接室でないとき true `:394`)、Claude は `allowRead` に(`src/sandbox.ts:446–453`、渡すのは `src/claude-worker.ts:1983`)、Codex は `read` に(`src/codex-worker.ts:762`、渡すのは `:1555`)入れる。**読み**(sandbox の中で実際に読めるかは測っていない)
 - alternates は directory を借りるので、checkout を作った後に名前の場所へ入った object(兄弟の merge back が `commit-tree` で作る merge commit、門が fetch した兄弟の tip)も見える。**fixture F1 で測った**(loose と pack の両方)。
-- **worker の checkout に帰り先の ref は無く、名前の場所の `refs/` は読み取り範囲に無い**(開くのは objects の path だけ、`src/workspace.ts:415–423`)。worker が帰り先の sha を知る手段は今の code に無い。門の拒否文が sha を運ばなければ、worker は merge する相手を名指せない。**読み + 推論**
+- **worker の checkout に帰り先の ref は無く、名前の場所の `refs/` は読み取り範囲に無い**(開くのは objects の path だけ、`src/workspace.ts:415–423`)。fork 元や帰り先の値を worker に渡す箇所は、`src/mcp.ts`・`src/worker.ts`・`src/claude-worker.ts`・`src/codex-worker.ts`・`src/scheduler.ts`・`src/board-prose.ts` の grep(`taskForkSource` / `lineageTaskBranch` / `fork` を含む欄名)では門の1箇所(`src/mcp.ts:375`)だけだった。読んだ範囲では worker が帰り先の sha を知る手段が無く、門の拒否文が sha を運ばなければ worker は merge する相手を名指せない。**読み + 推論**(spawn の envelope と `get_current_task` の返す欄の本文は読んでいない)
 - worker の checkout は書ける(Claude `allowWrite: [workspacePath, taskTemp]` `src/sandbox.ts:454`、Codex は `.git` を `write` `src/codex-worker.ts:756–760`)ので、merge commit を作ること自体は床に当たらない。**読み**(committer の身元と hooks の扱いは読んでいない)
 - merge した tip を門が写す段は、名前の場所の ref から届く閉包を pack に入れない(`rev-list --objects <sha> --not --alternate-refs`、`src/workspace.ts:662`)。帰り先の今の値は名前の場所の ref の値なので、写す量は worker の分だけになる。**読み、fixture F2 で同じ git の手を測った**
 - **受験者・Interview の root**: alternates を使わない複製で(`src/workspace.ts:444–446`)、sandbox も名前の場所の objects を開かない(`:421`)。受験者は `parent_id` を持たずに登録され(`src/tasks.ts:2773–2783`)、系譜の下りは祖先が空なので帰り先は undefined(`src/workspace.ts:887–907`)。Interview の root は type が `interview` で、門も merge back も掛からない(`:1426–1428`、`src/teardown.ts:396`)。**読み**
@@ -105,26 +109,30 @@
 
 **H5(積み残し)はどこから来るか。** H5 の question は、根を push した後に `leftBehindTargets` のどれかが push した head を変え、かつ workspace の Quarantine が開いていないときに立つ(`src/landing.ts:1102–1121`、`:245–255`、`:239–243`)。Quarantine が開いていれば収束は `quarantined` を返して H5 を立てない(`:1108`)。受理は届いていない merge back が無くなるまで拒む(`src/workspace.ts:1928–1932`、conflict なら投げる)ので、**merge back の conflict(H1)が Quarantine を経て H5 に流れる道は、読んだ範囲では受理が塞いでいる**。Quarantine を経ずに積み残しが生まれる道として読めたのは、上の 2(人間の完了の扉)だけである(走る場所の名前が解けずに解放を飛ばす後始末は、その名前を quarantine する、`src/teardown.ts:440–451`)。**H5 の発生源を全部は列挙できていない** —— `leftBehindTargets` は「根自身」も数え(`src/landing.ts:250`)、比べる相手は帰り先でなく push した head なので、merge back の述語と一致しない。**読み + 推論**
 
-**`redoMergeBacks` は何を撃つことになるか。** 述語は変わらず「その workspace の、親を持つ done の work で、ブランチがあり、帰り先を変える内容を持つもの」を新しい行から(`src/workspace.ts:1884–1901`)。想定の形の下では、門を通って同じ後始末で ff された task はここに現れない。現れるのは上の 1・2・3・6。1 で帰り先が門の時点のままなら ff で通り、人間が帰り先を**巻き戻して**いた場合も `isAncestor(帰り先, tip)` が真なので ff になり、巻き戻した内容が tip ごと戻る(`:1867–1870`)。conflict するのは、人間が帰り先に、門の時点の値から分かれた内容を足したときである。conflict した1件で loop は止まり、同じ帰り先の残りは次の回答まで撃たれない(`:1928–1934`)。**読み + 推論**
+**`redoMergeBacks` は何を撃つことになるか。** 述語は変わらず「その workspace の、親を持つ done の work で、ブランチがあり、帰り先を変える内容を持つもの」を新しい行から(`src/workspace.ts:1884–1901`)。想定の形の下では、門を通って同じ後始末で ff された task はここに現れない。現れるのは上の 1・2・3・6。1 で帰り先が門の時点のままなら ff で通り、人間が帰り先を**巻き戻して**いた場合も `isAncestor(帰り先, tip)` が真なので ff になり、巻き戻した内容が tip ごと戻る(`:1867–1870`)。conflict するのは、人間が帰り先に、門の時点の値から分かれた内容を足したときである。conflict した1件で loop は止まり、同じ帰り先の残りは次の回答まで撃たれない(`:1928–1934`)。届いていない done の work が帰り先になっている間は、その下の修理の merge back はその work のブランチへ着き、受理の loop が「子孫を先に子へ、子を親へ」の順で運ぶ(`:1881–1883`、`:1927`)—— 門を通った後に子孫の内容が足された tip が、門を通らずに帰り先へ撃たれる(ADR 0370 退けた形「受理の merge back を門の tip に固定する —— 門の後に子孫から届いた内容を落とす」が同じ事実を書く)。**読み + 推論**
+
+`undeliveredMergeBacks` と走行中の検査は行の `workspace` 列を `COALESCE(workspace, 既定)` で絞る(`src/workspace.ts:1892`、`:1917`)。work の行は自分の列で走る場所が決まり、祖先から導くのは review だけ(`src/tasks.ts:972–978`)なので、work の merge back の数え漏れにはならない。**読み**
 
 ## 6. 既存の ADR
 
-読んだ範囲に、**完了の門で帰り先へ追いつかせる形を退けた決定は無い。前提にした決定も無い。** 当たる決定:
+読んだ範囲に、**完了の門で帰り先へ追いつかせる形を退けた決定は無い。前提にした決定も無い。** `docs/adr/*.md` 全体に `追いつかせ` / `worker (に|が|自身が)…(merge|rebase)` / `conflict…worker` / `worker…conflict` を grep して当たったのは 0053・0103・0105(盤面が merge で追いつかせる側)と 0109 の Status 追記だけで、worker に追いつかせる形に触れる行は無かった(grep の語に依る —— 別の言い回しの決定は拾えていない)。当たる決定:
 
 | ADR | 関係 |
 |---|---|
 | **0053 決定2**(merge back を決めた ADR) | 「**ff-only では撃たない。正当な非 ff が起きる** —— C1 が escalate で中断している間に C2 が完了して親ブランチを進め、その後 C1 が再開して完了する順序では、C1 の merge back は真の merge になる」。conflict は workspace の quarantine。想定の形はこの「正当な非 ff」を門で ff に変える —— 決定の理由になっている場面が消える。帰り先は記録せず完了時に規則を走らせ直す、も同じ決定 |
 | 0053 決定4 | 「worker がタスクブランチの土台を動かすことは検知しない」。worker が自分のブランチへ祖先を merge するのは合法と書く。Considered options は「worker への明示指示として作法を文書化する」を「モデルの判断は floor ではない」で退けているが、対象は fork 元の作り直しを**指示だけ**に任せる形で、門が拒む形ではない |
 | 0084 決定1・4 | 門の拒否は domain error で、worker は同じ session で直して呼び直す —— 想定の形はこの型に乗る。「merge-back のコミットは変更しない」 |
-| 0240 決定4 | merge back は受理の検査の中でやり直し、conflict は「手で解くか `-s ours`」。人間が解くことを前提にしている。想定の形でも 5 の 1 が残るので、この決定の受け皿は要るまま |
+| 0240 決定4 | merge back は受理の検査の中でやり直し、conflict は「手で解くか `-s ours`」。人間が解くことを前提にしている。想定の形でも 5 の 1 はこの決定が受ける場面として残る |
 | 0239 帰結 | 捨てる出口は `git merge -s ours`。0240 と同じ前提 |
 | 0356 決定2・6 | work は alternates で名前の場所の objects を「読み専用で借りる —— 今日と同じ可視性」。merge back は名前の場所の中で `merge-tree` + `commit-tree` + `update-ref`。worker 側で merge することは決めても退けてもいない |
 | 0359 決定1・2・4 | `done` ⇔ tip が記録にある。完了済みの解放は記録の tip だけを運ぶ。**verb の時点では基準を比較しない**(人間の ref の移動は解放の比較が quarantine にする)—— 想定の形が門で帰り先の ref を読むなら、基準と比べない読みが1つ増える(今の fork 元の読みと同じ位置) |
 | 0362 決定2 | delta は fork 元との merge-base から。「各段は自分の delta にだけ答え」る。退けた形「保護ブランチと比べる」は親の変更で子が拒まれるから —— merge した tip でも merge-base が帰り先になるので、この線は保たれる(4) |
-| 0364 決定1 | 「tip が fork 元と無関係な commit でもよいのは今日どおり」(`docs/adr/0364-…md:33`)。門は祖先を検査しない、が今の決定。想定の形はここに祖先の検査を足す |
+| 0364 決定1 | 「tip が fork 元と無関係な commit でもよいのは今日どおり」(`docs/adr/0364-…md:33`)。門は祖先を検査しない、が今の決定。想定の形はここに祖先の検査を足す。退けた形4つ(ポインタの denylist、sandbox 内の `upload-pack`、fetch 前の検査、Lima の測定待ち)に追いつきは無い |
+| 0365 決定2 | gitlink の検査も fork 元との merge-base から。退けた形「保護ブランチと比べる」は 0362 と同じ理由。追いつきは無い |
 | 0105 決定2 | 根の追いつきは盤面が保護ブランチを merge し、合わなければ PR 昇格失敗 question で「人間がセッション外で手で解決」。対象は根で、merge back ではない |
 | 0064 | 自分のタスクブランチ以外の ref は session の間動かない、が不変条件。2 の「同じ session の中で帰り先は正当に動かない」の根拠 |
-| 0369(未実装)・0370 | 0369 は受理が済まなかった解放をやり直し、merge back の手前で撃つ。0370 決定7 は積み残しの merge back の拒否文に触れる。どちらも追いつきの形は決めていない(決定の見出し行だけ読んだ) |
+| 0369(未実装) | 受理が、済まなかった解放の「運ぶ」段をやり直し、merge back のやり直しの手前に置く(決定1)。「merge back と休止位置は冪等で再走できる」「走らなかった ref の比較はやり直さず、受理の全撮りがその時点の ref を受け入れる」(決定7)。5 の 1 の経路をそのまま残し、門を通った tip が `task/<id>` から辿れなければ受理を拒む(決定3)を足す。退けた形5つに追いつきは無い |
+| 0370 | 決定1 は着地の読みを基準の比較の後に限る(対象は着地で、完了の門ではない。「verb は比べないと決めてあり(ADR 0359 決定4)」と退けた形に書く)。「残る穴と根」は「Quarantine が開いている間に動いた ref は、見せられないまま受け入れられ、merge back で親のブランチへ運ばれる」と書く —— 5 の 1 と同じ場面。取り下げた決定5(門を通った `done` の `task/<id>` は内容を落とす移動を受理しない)と、退けた形「受理の merge back を門の tip に固定する」は、どちらも門の後の tip の扱いで、追いつきの形ではない。決定7 は積み残しの merge back を手で書いた後の retry が Quarantine を1枚経ることを書く |
 
 ## #3182 の暫定の決定と当たる点
 
@@ -140,20 +148,30 @@
 - `src/landing.ts` は `:80–112`、`:140–275`、`:350–380`、`:425–470`、`:514–519`、`:560–585`、`:1030–1330` だけ。`settleMerged`、無人 merge の tick、`outsidePushDropNotice` は未読。
 - `src/teardown.ts` の `runTeardownSteps`・`drive`・`deferToSessionRest`、`src/watchdog.ts`、`src/scheduler.ts`、起動の他の段(`src/server.ts` は `:548–600` だけ)。
 - cancel の本体(`cancelTaskDirectly` 以下)。祖先の cancel が門と merge back の間に入ったときの帰り先は読んでいない(GLOSSARY は「cancelled の work の祖先を挟む task の成果は捨てられて」いると書く)。
-- ADR は 0053(全文)、0084(全文)、0239(決定2 以降)、0240(全文)、0356(決定と退けた形)、0359(全文)、0362(決定〜射程)、0105(決定2 と Considered options の頭)、0241 決定7。0064・0364・0369・0370 は該当行と見出しだけ。0365 と 0103・0243 の本文は読んでいない。
+- ADR は 0053(全文)、0084(全文)、0239(決定2 以降)、0240(全文)、0356(決定と退けた形)、0359(全文)、0362(決定〜射程)、0369(決定と退けた形)、0370(決定2〜7・残る穴と根・退けた形。決定1 の本文は見出し行だけ)、0364(該当行と退けた形)、0365(決定の見出し行と退けた形)、0105(決定2 と Considered options の頭)、0241 決定7。0064 は見出しだけ、0103・0243 の本文は読んでいない。merge back に触れる ADR は 31 本あり、残りは上の grep だけ。
+- spawn の envelope と `get_current_task` が worker に返す欄。
 - test は `tests/task-branch-lineage.test.ts:489–548` の本文と、`tests/teardown-rerun.test.ts` の該当 test の題だけ。
 - H5 の発生源の全列挙(5)。
 
 ## 付録: fixture の script
 
-`bash fx3188.sh <空の dir>`。`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null`、author / committer は固定。
+走らせたそのまま。`bash fx3188.sh <空の dir>`。
 
 ```bash
+#!/bin/bash
+# Synthetic fixture for #3188: plain git only, throwaway repos. Not the board.
+set -u
+S="$1"
+rm -rf "$S"; mkdir -p "$S"; cd "$S" || exit 1
+export GIT_AUTHOR_NAME=a GIT_AUTHOR_EMAIL=a@x GIT_COMMITTER_NAME=a GIT_COMMITTER_EMAIL=a@x GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+git --version
+# named place
 git init -q --initial-branch=main N; cd N
 mkdir .claude; echo '{"v":1}' > .claude/settings.json; echo base > shared.txt; echo a > a.txt; git add -A; git commit -qm base
 git branch task/P; git branch task/C1 task/P; git branch task/C2 task/P
 cd ..
-mk_checkout() { # dir branch —— openTaskCheckout と同じ手順
+# borrower = task checkout of C1 (same recipe as openTaskCheckout)
+mk_checkout() { # dir branch
   mkdir "$1"; git -C "$1" init -q --template= --initial-branch=main
   mkdir -p "$1/.git/objects/info"; (cd N && git rev-parse --path-format=absolute --git-path objects) > "$1/.git/objects/info/alternates"
   git -C "$1" -c core.logAllRefUpdates=false fetch -q --no-tags "$S/N" "refs/heads/$2:refs/heads/$2"
@@ -161,28 +179,42 @@ mk_checkout() { # dir branch —— openTaskCheckout と同じ手順
 }
 mk_checkout B task/C1
 printf '/*\n!/.claude/settings.json\n' | git -C B sparse-checkout set --no-cone --stdin
-# checkout の後に帰り先を進める(人間しか書けない path も変える)
-cd N; git checkout -q task/P; echo "parent version" > shared.txt; echo '{"v":2}' > .claude/settings.json; echo sib > sib.txt
-git add -A; git commit -qm "sibling content on P"; T1=$(git rev-parse HEAD); git checkout -q main; cd ..
-git -C B cat-file -t "$T1"; git -C N gc -q; git -C B cat-file -t "$T1"                      # F1
-cd B; echo mine > a.txt; git commit -qam "child work"; git merge -q --no-edit "$T1"          # F3
-ls .claude; git cat-file -p HEAD:.claude/settings.json; git status --porcelain; git ls-files -t .claude/settings.json
+echo "F0 files in B/.claude after sparse: $(ls B/.claude 2>/dev/null | wc -l | tr -d ' ')"
+# AFTER the checkout exists: target moves in N (loose objects), incl. a human-only path change
+cd N; git checkout -q task/P; echo "parent version" > shared.txt; echo '{"v":2}' > .claude/settings.json; echo sib > sib.txt; git add -A; git commit -qm "sibling content on P"; T1=$(git rev-parse HEAD); git checkout -q main; cd ..
+echo "F1 T1 (loose in N) visible in B via alternates: $(git -C B cat-file -t "$T1")"
+echo "F1 refs in B: $(git -C B for-each-ref --format='%(refname)' | tr '\n' ' ')"
+git -C N gc -q; echo "F1 after gc in N: $(git -C B cat-file -t "$T1")"
+# worker work: non-conflicting file, then merge target by sha
+cd B; echo mine > a.txt; git commit -qam "child work"
+git merge -q --no-edit "$T1" && echo "F3 merge of T1 by sha: ok"
+echo "F3 B/.claude after merge: [$(ls .claude 2>/dev/null | tr '\n' ' ')]"
+echo "F3 tip settings blob: $(git cat-file -p HEAD:.claude/settings.json)"
+echo "F3 status: [$(git status --porcelain | tr '\n' ' ')]"
+echo "F3 ls-files -t: $(git ls-files -t .claude/settings.json)"
 TIP=$(git rev-parse HEAD); cd ..
-git -C B rev-list --objects "$TIP" --not --alternate-refs | wc -l                            # F2
+echo "F2 objects the gate would pack (rev-list --objects tip --not --alternate-refs): $(git -C B rev-list --objects "$TIP" --not --alternate-refs | wc -l | tr -d ' ')"
 git -C N fetch -q --no-tags "$S/B" refs/heads/task/C1; git -C N update-ref refs/heads/task/C1 "$TIP"
-git -C N diff-tree -r --raw --merge-base "$T1" "$TIP"                                        # F2
-git -C N merge-base --is-ancestor "$T1" "$TIP"                                               # F4
-cd N; git checkout -q task/P; echo '{"v":3}' > .claude/settings.json; echo theirs > a.txt
-git add -A; git commit -qm "P moves after gate"; T2=$(git rev-parse HEAD); git checkout -q main; cd ..
-git -C N merge-base --is-ancestor "$T2" "$TIP"; git -C N merge-tree --write-tree "$T2" "$TIP" # F5
-git -C N diff-tree -r --raw --merge-base "$T2" "$TIP"                                        # F5
-mk_checkout B2 task/C2; cd B2; echo c2 > c2.txt; git add -A; git commit -qm "c2 work"; TIP2=$(git rev-parse HEAD); cd ..
+echo "F2 delta merge-base(T1,tip)..tip: $(git -C N diff-tree -r --raw --merge-base "$T1" "$TIP" | awk '{print $5,$6}' | tr '\n' ';')"
+echo "F4 isAncestor(T1, tip): $(git -C N merge-base --is-ancestor "$T1" "$TIP" && echo yes || echo no)"
+# target moves again after the gate (T2), touching the human-only path and a.txt (conflicting with child)
+cd N; git checkout -q task/P; echo '{"v":3}' > .claude/settings.json; echo theirs > a.txt; git add -A; git commit -qm "P moves after gate"; T2=$(git rev-parse HEAD); git checkout -q main; cd ..
+echo "F5 after target moved to T2: isAncestor(T2,tip)=$(git -C N merge-base --is-ancestor "$T2" "$TIP" && echo yes || echo no); merge-tree: $(git -C N merge-tree --write-tree "$T2" "$TIP" >/dev/null 2>&1 && echo clean || echo conflict)"
+echo "F5 delta merge-base(T2,tip)..tip: $(git -C N diff-tree -r --raw --merge-base "$T2" "$TIP" | awk '{print $5,$6}' | tr '\n' ';')"
+# F6: no catch-up (today's shape): child C2 forked at base, never merges; delta vs moved target
+mk_checkout B2 task/C2
+cd B2; echo c2 > c2.txt; git add -A; git commit -qm "c2 work"; TIP2=$(git rev-parse HEAD); cd ..
 git -C N fetch -q --no-tags "$S/B2" refs/heads/task/C2; git -C N update-ref refs/heads/task/C2 "$TIP2"
-git -C N diff-tree -r --raw --merge-base "$T2" "$TIP2"                                       # F6
-mk_checkout B3 task/C2; cd B3; git reset -q --hard "$TIP2"; git merge -q --no-commit "$T2"
-git checkout -q HEAD -- .claude/settings.json; git commit -qm "merge keeping old settings"; TIP3=$(git rev-parse HEAD); cd ..
+echo "F6 no catch-up: delta merge-base(T2,tip2)..tip2: $(git -C N diff-tree -r --raw --merge-base "$T2" "$TIP2" | awk '{print $5,$6}' | tr '\n' ';')"
+# F7: worker merges but resolves the human-only path to the OLD value (keeps ours)
+mk_checkout B3 task/C2
+cd B3; git reset -q --hard "$TIP2"; git merge -q --no-commit "$T2" 2>/dev/null; git checkout -q HEAD -- .claude/settings.json 2>/dev/null; git commit -qm "merge keeping old settings"; TIP3=$(git rev-parse HEAD); cd ..
 git -C N fetch -q --no-tags "$S/B3" refs/heads/task/C2
-git -C N diff-tree -r --raw --merge-base "$T2" "$TIP3"                                       # F7
-mk_checkout B4 task/C1; printf '/*\n!/.claude/settings.json\n' | git -C B4 sparse-checkout set --no-cone --stdin
-cd B4; git reset -q --hard "$TIP"; git merge --no-edit "$T2"; ls .claude; git diff --name-only --diff-filter=U   # F8
+echo "F7 merge keeping ours on human-only path: delta merge-base(T2,tip3)..tip3: $(git -C N diff-tree -r --raw --merge-base "$T2" "$TIP3" | awk '{print $5,$6}' | tr '\n' ';')"
+# F8: sparse-hidden path with a real conflict on it is impossible for worker (can't write); instead conflict in visible file while hidden path changed on theirs
+mk_checkout B4 task/C1
+printf '/*\n!/.claude/settings.json\n' | git -C B4 sparse-checkout set --no-cone --stdin
+cd B4; git reset -q --hard "$TIP"; git merge --no-edit "$T2" >/dev/null 2>&1; echo "F8 conflicting merge exit=$?; B4/.claude: [$(ls .claude 2>/dev/null | tr '\n' ' ')]; unmerged: [$(git diff --name-only --diff-filter=U | tr '\n' ' ')]"; cd ..
+# F9: fetch by ref name from the named place path is what a worker cannot do without reading N's refs; by sha objects are enough
+echo "F9 B has T2 object without any fetch: $(git -C B cat-file -t "$T2")"
 ```
