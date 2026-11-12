@@ -1,5 +1,7 @@
 # 着地は入口が撃たず、記録と内容から根を導く1本の収束が撃つ
 
+**Status 追記: 決定3 の「門は workspace の quarantine より先に読む」は、名前の場所の ref が基準から動いている場合に限って譲る —— 収束は workspace ごとに回の最初(lineage と内容を読む前)に全 ref を基準と比べ、動いていれば門が閉じた根も含めてその回は workspace の Quarantine で止まる。動いていなければ順は今のまま([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 **Status: 帰結の「ローカル着地の question を持つ根は撃たない」は ADR 0289 で置き換えられた —— 外すのは開いている question・hold の head から変わらない内容・merge の記録で、行の存在では外さない**
 
 2026-10-12 の grilling(issue #1838、発端は #1766 / ADR 0240)で決定。着地は、後始末・人間の完了・cancel・retry・abandon

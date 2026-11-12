@@ -1,6 +1,6 @@
 # purely-local の着地の帯域外判定は盤面自身の記録で行い、正当な非 ff は Tidepool 名義の merge で追いつかせる
 
-**Status 追記: 決定1 の「着地経路で quarantine するのはこれだけ」は広がる —— 着地の回答は merge の前に全 ref を基準と比べ、保護ブランチ以外の ref の帯域外の移動も workspace の Quarantine に落ちる。決定4 の回答拒否に従った手の解決は ref を動かすので、次の回答はこの比較に当たって Quarantine を1枚経る —— 文面はそれを告げる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
+**Status 追記: 決定1 の「着地経路で quarantine するのは**これだけ**」は広がる —— 着地の回答は ref を読む手前で全 ref を基準と比べ、保護ブランチ以外の ref の帯域外の移動も workspace の Quarantine に落ちる。同じ比較は収束と無人 merge の tick からも立つ。「snapshot に保護ブランチの行が無いときも不一致」は、基準はあるがその ref の行が無い場合に限り、基準の行そのものが無ければ着地が最初の撮りをする。決定4 の回答拒否に従った手の解決は ref を動かすので、次の回答はこの比較に当たって Quarantine を1枚経る —— 文面はそれを告げる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
 
 **Status 追記: 決定3 の「走行中は checkout を動かさない」の分岐は消え、保護ブランチの ref の書き込みは常に worktree の追従と対の plumbing([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 

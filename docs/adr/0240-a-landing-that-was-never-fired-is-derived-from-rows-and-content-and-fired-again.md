@@ -1,5 +1,7 @@
 # 撃たれなかった着地は、印ではなく行の状態と内容から導いて撃ち直す
 
+**Status 追記: 決定4 が引く「ADR 0103 の帯域外の quarantine は人間の回答から立ち」は、着地の収束と無人 merge の tick からも立つようになる —— 走っている session を止めないことは変わらない([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 **Status 追記: 決定4 の「受理の検査の中でやり直す」ものに、名前の場所の事情で済まなかった解放(task の checkout の退避と削除)が加わる —— 運ぶだけをやり直し、merge back の手前で撃つ([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定1〜3、2026-11-11、issue #3147)。**
 
 **Status 追記: 決定4 の「帰り先を checkout して merge し」「conflict すれば merge を取り消して」は、[ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) 決定4 で「merge commit を merge-tree で先に作り、口を通して `merge --ff-only` で進める。conflict は merge-tree の段階で分かり、取り消す merge は始まらない」に置き換わった(2026-10-22、#1874)。やり直す場所・拒否文の2つの出口・休止位置へ戻すことはそのまま。**

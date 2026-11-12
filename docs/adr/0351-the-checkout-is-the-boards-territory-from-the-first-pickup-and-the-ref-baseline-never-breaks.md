@@ -1,6 +1,6 @@
 # checkout は最初の pickup 以降、休止中も盤面の専有領域であり、ref の基準は切れない
 
-**Status 追記: 決定2 の比較の置き場所に着地が加わる —— 着地の収束・着地の回答・無人 merge と外部 merge の走査は、運ぶ前と記録を書く前に全 ref を基準と比べる。決定4 の受理は変えていない: Quarantine が開いている間に動いた ref を見せないまま受け入れる穴は実測済みで、直し方は人間の内容の扉の設計(#3158)に渡した([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+**Status 追記: 決定2 の比較の置き場所に着地が加わる —— 着地は名前の場所の ref を読んで運ぶ前と、ref から記録を決める前に全 ref を基準と比べ、基準の行そのものが無い workspace では着地も最初の撮りをする。決定7 の「次の pickup で1枚の question が立ち」は、着地の候補があれば収束の比較が先に立てる。決定4 の受理は変えていない: Quarantine が開いている間に動いた ref を見せないまま受け入れる穴は実測済みで、直し方は人間の内容の扉の設計(#3158)に渡した([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 **Status 追記: 決定2 の release 側の比較と task branch の行の畳み、決定5 の pickup の clean 検査の対象は、worker が書かない名前の場所だけになる。決定1・3・4・6・7 は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
