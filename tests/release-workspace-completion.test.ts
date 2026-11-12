@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { completeTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { completeTask, finishTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
   completionTreePaths,
@@ -17,14 +17,17 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import {
+  breakCheckoutStaging,
   commitWork,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
   makeWorkspace,
+  pickedInterviewRoot,
   prepareAtPickup,
   quarantineQuestion,
+  STAGING_FAILURES,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -388,6 +391,87 @@ it("記録が持てない入れ子の repo で落ちた未決着の解放は、�
   }
 });
 
+it.each(STAGING_FAILURES)("未決着の解放で $shape があれば task の失敗として checkout を残す(ADR 0367 決定1・2)", async (failure) => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    breakCheckoutStaging(place.path, failure);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(listEvents(db, task.id).filter(({ kind }) => kind === "task_checkout_release_failed").map(({ payload }) => payload)).toEqual([
+      { kind: "task_checkout_release_failed", path: place.path, reason: expect.stringContaining(failure.reason) },
+    ]);
+    expect(listChildren(db, task.id)).toHaveLength(1);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(existsSync(place.path)).toBe(true);
+  } finally {
+    db.close();
+  }
+});
+
+it.each(STAGING_FAILURES)("完了した Interview root の解放で $shape があれば unreadable を1度観測して checkout を消す(ADR 0367 決定3)", async (failure) => {
+  const db = openDb(":memory:");
+  try {
+    const { root, room, place } = await pickedInterviewRoot(db, "release-staging-failure", NOW);
+    const completed = finishTask(db, root, FULL_HANDOFF, "worker", NOW, "worker");
+    breakCheckoutStaging(place.path, failure);
+
+    releaseAfterCompletion(db, place, completed);
+
+    expect(writeObservations(db, root)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(failure.reason) },
+    ]);
+    expect(workspaceNeedsHuman(db, room.name)).toBe(false);
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("退避の基準に使う名前の場所の tip が読めなければ checkout を残して quarantine する(ADR 0367 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const workerTip = git(place.path, "rev-parse", "HEAD");
+    commitWork(place.path, "recorded.txt", "already recorded\n");
+    const recorded = gateFetch(db, place, task);
+    git(place.path, "reset", "--hard", workerTip);
+    const tree = git(ws.path, "rev-parse", `${recorded}^{tree}`);
+    rmSync(join(ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain("ls-tree");
+    expect(listEvents(db, task.id).filter(({ kind }) => kind === "task_checkout_release_failed")).toEqual([]);
+    expect(existsSync(place.path)).toBe(true);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了した Interview root の退避の基準にある nested tree が読めなければ面接室を quarantine して WIP を残す(ADR 0367 決定1)", async () => {
+  const db = openDb(":memory:");
+  try {
+    const { root, room, place } = await pickedInterviewRoot(db, "release-corrupt-room-base", NOW);
+    const workerTip = git(place.path, "rev-parse", "HEAD");
+    mkdirSync(join(place.path, "nested"));
+    commitWork(place.path, "nested/recorded.txt", "already recorded\n");
+    const recorded = gateFetch(db, place, root);
+    git(place.path, "reset", "--hard", workerTip);
+    const completed = finishTask(db, root, FULL_HANDOFF, "worker", NOW, "worker");
+    writeFileSync(join(place.path, "wip.txt"), "only worker copy\n");
+    const tree = git(room.path, "rev-parse", `${recorded}:nested`);
+    rmSync(join(room.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+
+    releaseAfterCompletion(db, place, completed);
+
+    expect(quarantineQuestion(db, "workspace", room.name)).toMatchObject({ purpose: expect.stringContaining("read-tree") });
+    expect(writeObservations(db, root)).toEqual([]);
+    expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("only worker copy\n");
+  } finally {
+    db.close();
+  }
+});
+
 it("gitlink の祖先を symlink に置き換えた完了済み review の解放は、名前の場所を quarantine せず symlink を記録する(ADR 0365 決定3)", async () => {
   const { db, task, ws, place } = await pickedUpSession("review");
   try {
@@ -565,6 +649,7 @@ it("完了以外の解放では、着地後の書き込みが従来どおり WIP
     writeFileSync(join(place.path, dir, "cache"), "generated\n");
   }
   writeFileSync(join(place.path, "half-done.txt"), "work in flight\n");
+  writeFileSync(join(place.path, "README.md"), "edited tracked file\n");
 
   // escalate / decompose は完了経路ではない —— 退避が生まれる従来の解放
   releaseWorkspace(db, place, task, NOW);
@@ -572,6 +657,7 @@ it("完了以外の解放では、着地後の書き込みが従来どおり WIP
   expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
   expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).toContain("WIP");
   expect(git(ws.path, "show", `task/${task.id}:half-done.txt`)).toBe("work in flight");
+  expect(git(ws.path, "show", `task/${task.id}:README.md`)).toBe("edited tracked file");
   expect(git(ws.path, "ls-tree", "--name-only", `task/${task.id}`).split("\n")).toEqual([".gitignore", "README.md", "half-done.txt"]);
   const wip = git(ws.path, "rev-parse", `task/${task.id}`);
 

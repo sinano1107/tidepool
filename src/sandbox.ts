@@ -600,15 +600,16 @@ const defaultRunOk: RunOkFn = (command, args) => {
  *
  *  `hide` lists every entry at a settings path, whatever its object type, for the caller to drop from the task
  *  checkout for the session. `unhideable` is a `.claude` that is not a tree object: sparse cannot hide what sits behind
- *  it, so the caller stops instead. The board's own git in the named place (ADR 0357 決定1), never the worker's repo. */
-export function recordedSettingsDisposition(namedPlace: string, ref: string): RecordedSettings {
+ *  it, so the caller stops instead. The board reads the named place, or uses bounded Git for the verified worker tip
+ *  when preparing an Interview copy (ADR 0364 決定3 / ADR 0367 決定1). */
+export function recordedSettingsDisposition(repo: string, ref: string, readGit = git): RecordedSettings {
   // Even a qualified ref can fall back to a tag of the same spelling when the exact ref is missing.
-  const tree = ref.startsWith("refs/") ? git(namedPlace, "show-ref", "--verify", "--hash", "--", ref) : ref;
+  const tree = ref.startsWith("refs/") ? readGit(repo, "show-ref", "--verify", "--hash", "--", ref) : ref;
   const hide: string[] = [];
   let unhideable: RecordedSettings["unhideable"];
   // ADR 0360 決定1: replace ref を通さず、記録された object の tree を読む。
   // ls-tree prints `.claude` itself only when it is not a tree; a tree prints the matched entries under it
-  for (const line of git(namedPlace, "--no-replace-objects", "ls-tree", tree, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
+  for (const line of readGit(repo, "--no-replace-objects", "ls-tree", tree, "--", ".claude", ...PROJECT_SETTINGS_PATHS).split("\n")) {
     const [meta, path] = line.split("\t");
     const [mode, type] = meta!.split(" ");
     if (path === ".claude" && type !== "tree") unhideable = { path, type: mode === "120000" ? "symlink" : type === "commit" ? "gitlink" : "blob" };

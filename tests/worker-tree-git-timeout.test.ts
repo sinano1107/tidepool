@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, truncateSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -108,7 +108,7 @@ it("root の .gitignore が FIFO なら view の status と退避の add -A は�
   expect(status).toMatchObject({ subcommand: "ls-files", timeoutMs: 1000 });
   await expectNoReader(fifo);
 
-  const stash = thrown(() => boardWriteTree(ws.path, head, ws.path));
+  const stash = thrown(() => boardWriteTree(ws.path, head, ws.path, () => undefined));
   expect(stash).toBeInstanceOf(WorkerTreeGitTimeoutError);
   expect(stash).toMatchObject({ subcommand: "ls-files", timeoutMs: 1000 });
   await expectNoReader(fifo);
@@ -254,6 +254,25 @@ it("root の .gitignore が FIFO なら出題の写しは上限超過の型で�
   await expectNoReader(fifo);
 });
 
+it.each([
+  ["hidden settings", "--no-replace-objects ls-tree"],
+  ["shadow remnants", "ls-tree --name-only"],
+])("出題の写しで %s を検証済みの worker tip から読む手も有界(ADR 0364 決定3)", async (_, command) => {
+  const { db, root, place } = await pickedRoot("worker-tree-pose-exclusions");
+  writeFileSync(join(place.path, ".bashrc"), "");
+  const bin = await tempDir("tidepool-git-slow-tree-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1 $2" = '${command}' ]; then sleep 2; fi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    const expiry = thrown(() => commitRoomCopy(db, place, root.id));
+    expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
+    expect(expiry).toMatchObject({ subcommand: "ls-tree", timeoutMs: 1000 });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 it("未決着の受験者の解放が上限で止まれば task の失敗として checkout を残し、面接室を quarantine しない(ADR 0357 決定2 / ADR 0356 決定2)", async () => {
   const { db, root, room, place } = await pickedRoot("worker-tree-examinee-release");
   const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id));
@@ -336,12 +355,13 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
-it("特別でない tracked な path の FIFO では git は即座に落ち、今日の形で投げる(ADR 0357 決定3)", async () => {
+it("特別でない tracked な path の FIFO では git は即座に落ち、worker の repo の故障を投げる(ADR 0357 決定3 / ADR 0367 決定1)", async () => {
   const ws = await makeWorkspace("worker-tree-fifo-plain");
   const head = git(ws.path, "rev-parse", "HEAD");
   mkfifo(join(ws.path, "README.md"));
 
-  const failure = thrown(() => boardWriteTree(ws.path, head, ws.path));
+  const failure = thrown(() => boardWriteTree(ws.path, head, ws.path, () => undefined));
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(failure).toMatchObject({ status: expect.any(Number) });
+  expect(failure).toBeInstanceOf(TaskCheckoutUnreadableError);
+  expect(failure).toMatchObject({ cause: { status: expect.any(Number) } });
 });

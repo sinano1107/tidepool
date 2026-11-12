@@ -116,12 +116,10 @@ import {
   completionTreeGateApplies,
   completionTreePaths,
   KEPT_TASK_CHECKOUT,
-  NamedPlaceFetchError,
   RoomCopyGitlinkError,
   type RunPlace,
   recordTaskCheckoutTip,
   resolveUnlessDrifted,
-  TaskCheckoutHostError,
   type TaskCheckoutPlace,
   taskForkSource,
   taskRunPlaceForBoard,
@@ -869,14 +867,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             try {
               head = commitRoomCopy(deps.db, place, task.id);
             } catch (err) {
+              if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
               if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
               // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
               if (err instanceof TaskCheckoutUnreadableError) {
                 throw new DomainError(`${err.message} — the board cannot copy your working tree for the targets, so the probe is not posed. Restore your task branch and call pose_probe again, or escalate.`);
-              }
-              // ADR 0364 決定2 / ADR 0359 決定4: 写しの host の失敗と面接室の側の失敗は資源を止めずに拒むだけ
-              if (err instanceof TaskCheckoutHostError || err instanceof NamedPlaceFetchError) {
-                throw new DomainError("The board could not bring your task branch tip into the interview room, so the probe is not posed. Retry pose_probe or escalate.");
               }
               // ADR 0365 決定2: 受験者は populate できない gitlink を環境として受け取る —— root が直して呼び直す
               if (err instanceof RoomCopyGitlinkError) {
@@ -887,7 +882,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                   "pose_probe",
                 );
               }
-              throw err;
+              // ADR 0367 決定1 / ADR 0359 決定4: 写しの host と面接室の側の失敗は資源を止めずに拒むだけ。
+              throw new DomainError("The board could not record your probe's environment in the interview room. Retry pose_probe or escalate.");
             }
             return place;
           },

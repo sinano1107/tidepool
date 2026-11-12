@@ -16,7 +16,6 @@ import {
   rmdirSync,
   rmSync,
   type Stats,
-  statfsSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -29,12 +28,16 @@ import {
   boardReadTree,
   boardViewStatus,
   boardWriteTree,
+  diffTreeEntries,
   displayWorktreePath,
   git,
   gitlinkChanges,
   gitWithInput,
+  outOfSpace,
   ownWorktreeStatus,
   type SparsePolicy,
+  stagingHostStep,
+  TaskCheckoutHostError,
   TaskCheckoutUnreadableError,
   type WorktreeChange,
   WorktreeStatusError,
@@ -79,7 +82,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS, treeDeltaEntries } from "./sandbox.js";
+import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
@@ -427,9 +430,7 @@ const CHECKOUT_LAYOUT = {
   read: { at: (base: string, taskId: string, pickup: number, rootId: string) => join(conventionCheckoutPath(`${taskId}.reads`, base), String(pickup), rootId), parents: 2 },
 } as const;
 
-/** task の checkout の番地に repo を作れない、または盤面が tip を写す tmp を作れない —— 名前の場所の性質ではなく host 側の失敗で、
- *  決着していない task の失敗にする(ADR 0356 決定2 / ADR 0364 決定2)。 */
-export class TaskCheckoutHostError extends Error {}
+export { TaskCheckoutHostError } from "./git.js";
 
 /** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
  *  前の session が残した checkout は動かさず再利用もしない。objects は名前の場所から alternates で借り、タスクブランチだけを
@@ -616,16 +617,6 @@ function hostStep<T>(step: () => T): T {
   }
 }
 
-/** ADR 0364 決定2: 写しの中の git の失敗が tmp の容量切れと重なれば host の失敗 —— worker の byte のせいにしない。 */
-function outOfSpace(dir: string, cause: unknown): boolean {
-  if ((cause as NodeJS.ErrnoException | null)?.code === "ENOSPC" || String((cause as { stderr?: unknown } | null)?.stderr ?? "").includes("No space left on device")) return true;
-  try {
-    return statfsSync(dir).bavail === 0;
-  } catch {
-    return false;
-  }
-}
-
 const ZERO_CHUNK = Buffer.alloc(WORKER_FILE_CHUNK);
 
 /** checkout の `rel` の byte を写しの `to` へ。hardlink は inode を worker と共有するので使わない(ADR 0364 決定1)。0 だけの chunk は
@@ -681,9 +672,8 @@ function copyAndVerifyWorkerTip(place: TaskCheckoutPlace, read: WorkerRead, raw:
   }
 }
 
-/** task の checkout のタスクブランチの tip を、ref を書かずに名前の場所の objects へ引く。ADR 0364 決定1・2: 段は3つ —— tip を写して
- *  検証する(worker の repo の故障)、写しの tmp を作る(host の失敗)、写しから名前の場所へ fetch する(名前の場所の側)。 */
-function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string): string {
+/** ADR 0364 決定1・2: worker の tip を検証済みの盤面所有の repo として開く。 */
+function withVerifiedWorkerTip<T>(place: TaskCheckoutPlace, taskId: string, use: (sha: string, repo: string, ref: string) => T): T {
   const { namedPlace, path: checkout } = place;
   const ref = `refs/heads/${taskBranch(taskId)}`;
   // 名前の場所の側の故障を worker の repo のせいにしない —— ここで落ちれば素の失敗(呼び手の quarantine)
@@ -703,16 +693,38 @@ function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string): string {
       });
     }
     copyAndVerifyWorkerTip(place, read, raw, verified, sha, ref, format);
-    try {
-      workerRepoGit(namedPlace.path, "fetch", ...FETCH_FLAGS, verified, ref);
-      git(namedPlace.path, "cat-file", "-e", `${sha}^{commit}`);
-    } catch (cause) {
-      if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定2: 上限超過は worker の repo の故障
-      throw new NamedPlaceFetchError(`workspace ${namedPlace.name}: the task branch tip ${sha} cannot be fetched into the named workspace: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
-    }
+    return use(sha, verified, ref);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** task の checkout のタスクブランチの tip を、ref を書かずに名前の場所の objects へ引く。 */
+function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string): string {
+  return withVerifiedWorkerTip(place, taskId, (sha, repo, ref) => {
+    fetchFromBoardCopy(place.namedPlace, repo, ref, sha, "the task branch tip");
+    return sha;
+  });
+}
+
+/** ADR 0364 決定2・3 / ADR 0367 決定5: worker の byte を読む fetch は、盤面所有の repo からでも有界。 */
+function fetchFromBoardCopy(namedPlace: WorkspaceConfig, repo: string, ref: string, sha: string, description: string): void {
+  try {
+    workerRepoGit(namedPlace.path, "fetch", ...FETCH_FLAGS, repo, ref);
+    git(namedPlace.path, "cat-file", "-e", `${sha}^{commit}`);
+  } catch (cause) {
+    if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定2: 上限超過は worker の repo の故障
+    throw new NamedPlaceFetchError(`workspace ${namedPlace.name}: ${description} ${sha} cannot be fetched into the named workspace: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+}
+
+function fetchStagedTree(namedPlace: WorkspaceConfig, repo: string, tree: string, parent: string, subject: string, description: string): string {
+  const sha = stagingHostStep(() => {
+    const commit = workerRepoGit(repo, "commit-tree", tree, "-p", parent, "-m", subject);
+    workerRepoGit(repo, "update-ref", "--no-deref", "HEAD", commit);
+    return commit;
+  });
+  fetchFromBoardCopy(namedPlace, repo, "HEAD", sha, description);
   return sha;
 }
 
@@ -827,25 +839,30 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
   return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
 }
 
-/** 出題の写し(ADR 0273 決定3): root の task の checkout の作業ツリーを盤面の view で面接室の objects に tree にし(ADR 0356 決定3・6)、
- *  面接室の保護ブランチの head を親にした盤面名義の commit にして ref を1本置き、その sha を返す。root の `.git` は読まない ——
- *  worker の config・index・hooks は写しに効かない。ignore されたファイルと shadow 残骸は写らない(新しい clone と同じ)。ref は受験者が
- *  fetch する元(ADR 0276 決定1)で、却下された出題の写しも object として残す。 */
+/** 出題の写し(ADR 0273 決定3): root の作業ツリーを面接室の保護ブランチの head を親にした盤面名義の commit にし、
+ *  受験者が fetch する ref を置く(ADR 0276 決定1)。ADR 0367 決定1: tip の検証と tree の検査は面接室へ運ぶ前に済ませる。 */
 export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string {
   assertTaskCheckout(place, taskId);
   const room = place.namedPlace;
-  // view の index の種は worker の tip —— session の最中なのでサンドボックスの shadow 残骸がまだある。退避と同じ集合を外す(ADR 0069)
-  const tip = fetchWorkerTip(place, taskId);
-  const tree = boardWriteTree(place.path, tip, room.path, boardViewExcludes(db, place, taskId, tip));
-  // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
-  const parent = git(room.path, "rev-parse", protectedBranchRef(room));
-  const head = git(room.path, "commit-tree", tree, "-p", parent, "-m", "Add the project files");
-  // ADR 0365 決定2: 受験者は populate できない gitlink を環境として受け取る —— 足す・進める tree は ref を書く前に拒み、root が直して呼び直す
-  const gitlinks = gitlinkChanges(treeDeltaEntries(room.path, parent, head));
-  if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
-  const ref = `refs/keep-around/${head}`;
-  boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
-  return head;
+  return withVerifiedWorkerTip(place, taskId, (tip, verified) => {
+    const parent = git(room.path, "rev-parse", protectedBranchRef(room));
+    if (!place.borrowsNamedObjects) {
+      // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。検証後は写しの親を読むために面接室の objects を借りる。
+      const objects = namedObjects(room);
+      stagingHostStep(() => writeFileSync(join(verified, "objects", "info", "alternates"), `${objects}\n`));
+    }
+    const exclude = boardViewExcludes(db, place, taskId, tip, verified);
+    return boardWriteTree(place.path, tip, verified, (tree, repo) => {
+      // ADR 0365 決定2: 受験者が populate できない gitlink を足す・進める tree は、面接室へ運ぶ前に拒む。
+      const gitlinks = gitlinkChanges(diffTreeEntries(repo, `${parent}^{tree}`, tree, { workerTree: true }));
+      if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
+      // ADR 0273 決定1: 受験者の git の履歴に載るので、盤面の語を持たない件名。
+      const head = fetchStagedTree(room, repo, tree, parent, "Add the project files", "the probe's environment");
+      const ref = `refs/keep-around/${head}`;
+      boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
+      return head;
+    }, exclude);
+  });
 }
 
 /** ADR 0053 / ADR 0105: the live integration branch plus the lineage fact a
@@ -998,11 +1015,15 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
 /** 盤面の view が運ばない path(ADR 0360 Status 追記、#3111): view の index の種 `tip` から導く hidden settings と、ADR 0069 の shadow 残骸。
  *  出題の写し・非完了の退避・完了の門・完了後の観測は同じこの集合を外す —— 綴りが割れれば門が名指すものを退避が運ばない。入れ子の repo は
  *  view 自身が外す(ADR 0365 決定3)。 */
-function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string): string[] {
+function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string, verifiedTipRepo?: string): string[] {
   // ADR 0360 決定1・2: Claude の spawn だけが settings を隠す。今回の pickup で Codex が走ったなら通常どおり変更を読む。
   const spawn = latestEventOfTask(db, taskId, "worker_spawned");
   const codexPickup = spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0);
-  return [...(codexPickup ? [] : recordedSettingsDisposition(place.namedPlace.path, tip).hide), ...taskCheckoutRemnants(place, tip)];
+  const tipRepo = verifiedTipRepo ?? place.namedPlace.path;
+  const readGit = verifiedTipRepo === undefined ? git : workerRepoGit;
+  const hide = codexPickup ? [] : recordedSettingsDisposition(tipRepo, tip, readGit).hide;
+  const remnants = taskCheckoutRemnants(place.path, (path) => readGit(tipRepo, "ls-tree", "--name-only", tip, "--", path) !== "");
+  return [...hide, ...remnants];
 }
 
 /** Keep the recorded settings entries `hide` (ADR 0360 決定1) in Git but out of the worker's physical checkout by
@@ -1358,19 +1379,19 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
  *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
  *  完了の門(ADR 0084)の dirty 判定は同じ集合を見なければならない —— 2箇所に綴りが
  *  分かれれば、片方だけが残骸を数えて無実の拒否や取りこぼしが生まれる。
- *  tracked は worker の index でなく名前の場所のタスクブランチの tip で読む(ADR 0356 決定3)。 */
-function taskCheckoutRemnants(place: TaskCheckoutPlace, tip: string): string[] {
+ *  tracked は盤面が読む tip の tree で決める(ADR 0356 決定3 / ADR 0367 決定1)。 */
+function taskCheckoutRemnants(checkout: string, isTracked: (path: string) => boolean): string[] {
   return SANDBOX_STUB_PATHS.filter((path) => {
     let stat: Stats | undefined;
     try {
-      stat = lstatSync(join(place.path, path), { throwIfNoEntry: false });
+      stat = lstatSync(join(checkout, path), { throwIfNoEntry: false });
     } catch (err) {
       // 祖先がディレクトリでない path(worker が `.claude` をファイルにした形)に 0 byte の stub は置けない(ADR 0069 の既知パス)
       if ((err as NodeJS.ErrnoException).code === "ENOTDIR") return false;
-      throw err;
+      // ADR 0367 決定1: 既知の残骸を探すために worker の worktree を読む手も stage と同じ帰責。
+      throw asWorkerRepoFailure(checkout, err);
     }
-    if (!stat?.isFile() || stat.size !== 0) return false;
-    return git(place.namedPlace.path, "ls-tree", "--name-only", tip, "--", path) === "";
+    return stat?.isFile() && stat.size === 0 && !isTracked(path);
   });
 }
 
@@ -1718,7 +1739,7 @@ function settleTaskCheckout(
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
   // ADR 0359 決定2: 門の掛かる完了は、名前の場所に既に記録された tip を運ぶ
   const gated = completed && completionTreeGateApplies(task);
-  let wipTree: { base: string; tree: string } | undefined;
+  let wipTip: string | undefined;
   let observation: TaskCheckoutWriteObservation | undefined;
   try {
     if (gated) {
@@ -1741,17 +1762,10 @@ function settleTaskCheckout(
       const tip = fetchWorkerTip(place, task.id);
       const recorded = readRef(namedPlace, taskRef);
       const base = recorded !== "" && isAncestor(namedPlace, tip, recorded) ? recorded : tip;
-      // ADR 0359 決定3: 運ばない path を導く名前の場所の読みの失敗は名前の場所のもの —— worker の tree を読む退避の try の外で(ADR 0360 Status 追記、#3111)
       const exclude = boardViewExcludes(db, place, task.id, base);
-      let tree: string;
-      try {
-        tree = boardWriteTree(checkout, base, namedPlace.path, exclude);
-      } catch (cause) {
-        if (completed) throw cause; // 完了済み review の即時の退避の失敗は盤面側の書き込み失敗と区別できず、唯一の写しを消さない(#3053)
-        if (cause instanceof TaskCheckoutUnreadableError) throw cause; // 既に checkout を名指している
-        throw new TaskCheckoutUnreadableError(`the worktree of the task checkout at ${checkout} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
-      }
-      wipTree = { base, tree };
+      const baseTree = git(namedPlace.path, "rev-parse", `${base}^{tree}`);
+      wipTip = boardWriteTree(checkout, base, namedPlace.path, (tree, repo) =>
+        tree === baseTree ? base : fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit"), exclude);
     }
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
@@ -1765,7 +1779,7 @@ function settleTaskCheckout(
       failTaskOnRelease(db, task, checkout, err, now);
       return false;
     }
-    // ADR 0359 決定5: review の完了でも checkout が読めなければ観測を残して解放する
+    // ADR 0359 決定5 / ADR 0367 決定3: 門の無い完了でも checkout が読めなければ観測を残して解放する
     observation = { observation: "unreadable", reason: err.message };
   }
   // ADR 0345 決定1: `task_checkout_released` を刻む前に止まっても、同じ checkout の観測を重ねない
@@ -1776,9 +1790,8 @@ function settleTaskCheckout(
     });
   }
   try {
-    if (wipTree) {
-      const { base, tree } = wipTree;
-      const tip = tree === git(namedPlace.path, "rev-parse", `${base}^{tree}`) ? base : git(namedPlace.path, "commit-tree", tree, "-p", base, "-m", wipSubject(task));
+    const tip = wipTip;
+    if (tip) {
       const old = readRef(namedPlace, taskRef);
       if (old !== tip) boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", taskRef, tip, old));
     }

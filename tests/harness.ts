@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -757,6 +757,34 @@ export function commitWork(path: string, file: string, body: string): void {
   git(path, "commit", "-m", `add ${file}`);
 }
 
+export const STAGING_FAILURES = [
+  { shape: "unborn nested repo", reason: "does not have a commit checked out", symlink: undefined },
+  { shape: "symlink over hidden settings", reason: "beyond a symbolic link", symlink: "missing" },
+  { shape: "symlink loop", reason: "ELOOP", symlink: ".claude" },
+] as const;
+
+export const gitObjectFileCount = (repo: string) =>
+  readdirSync(join(repo, ".git", "objects"), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).length;
+
+/** Leave a working tree Git cannot stage. The returned repair restores the tracked path. */
+export function breakCheckoutStaging(checkout: string, { symlink }: (typeof STAGING_FAILURES)[number]): () => void {
+  const entry = symlink === undefined ? "mod" : ".claude";
+  const path = join(checkout, entry);
+  if (symlink !== undefined) mkdirSync(path, { recursive: true });
+  commitWork(checkout, symlink === undefined ? entry : `${entry}/settings.json`, "tracked\n");
+  rmSync(path, { recursive: true });
+  if (symlink === undefined) {
+    mkdirSync(path);
+    git(path, "init", "--quiet");
+  } else {
+    symlinkSync(symlink, path);
+  }
+  return () => {
+    rmSync(path, { recursive: true });
+    git(checkout, "restore", "--", entry);
+  };
+}
+
 /** 「ワーカーがこのタスクの成果を出した」の fixture。ADR 0084 の完了の門が入って以降、
  *  成果はコミット済みでなければ完了できない —— 書きっぱなしにすると完了が拒否され、
  *  着地も PR も測れない。 */
@@ -1221,11 +1249,11 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   return path;
 }
 
-/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。task の checkout の WIP は `commit-tree` で積む(決定3)。 */
-export function failGitCommits(verb: "commit" | "commit-tree" = "commit"): void {
+/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。 */
+export function failGitCommits(): void {
   const dir = mkdtempSync(join(tmpdir(), "tidepool-git-commit-failure-"));
   const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = ${verb} ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = commit ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
   vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
   onTestFinished(() => {
     vi.unstubAllEnvs();
