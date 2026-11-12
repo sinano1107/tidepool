@@ -1,6 +1,6 @@
 # 着地済みは履歴ではなく内容で測り、fork 元に先立たれた根は merge で追いついてから PR を開く
 
-**Status 追記: 決定2 の「人間がセッション外で手で解決すれば通る」は、解決が名前の場所の ref を動かすので、retry の最初の比較に当たって workspace の Quarantine を1枚経る —— 文面はそれを告げる([ADR 0370](0370-the-ref-baseline-is-compared-at-the-start-of-every-board-operation-that-reads-the-named-place-and-acceptance-accepts-only-the-moves-it-has-shown.md) 決定1・7、2026-11-11、issue #3151)。**
+**Status 追記: 決定2 の「人間がセッション外で手で解決すれば通る」は、解決が名前の場所の ref を動かすので、retry が着地の比較に当たって workspace の Quarantine を1枚経てから、もう一度 retry で通る —— 文面はそれを告げる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
 
 **Status: 決定4 は ADR 0217 で広げられた — merge の瞬間には門に加えて着地の面(保護・ダイヤル・risk flag)も読み直し、面が変わった PR はキューから外れる**
 
