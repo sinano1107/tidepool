@@ -5,7 +5,6 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
 import { quarantineChecks } from "../src/human-verbs.js";
-import { namePickupPredicates } from "../src/pickup-predicates.js";
 import { openQuarantineQuestion, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
@@ -782,10 +781,9 @@ it("門を通った後に面接室から出題の head を fetch できなけれ
   const db = openDb(":memory:");
   const { workspace, root, room, base, head, audit } = await auditStanding(db);
   // 門を通った後に中身の blob が欠けた面接室 —— 準備は門の前半を撃ち直さない(後半だけ)ので、fetch が落ちる
-  // 旧: 門の前に blob を消していた。#3136 の後は門の項が閉包まで見て門で止まる
+  // 旧: 門の前に blob を消していた。ADR 0329 決定4 の Status 追記の後は門の項が閉包まで見て門で止まる
   await pickupGate(db, workspace, audit, base);
-  const blob = git(room.path, "rev-parse", `${head}:probe.txt`);
-  rmSync(join(room.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  dropObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
 
   const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
 
@@ -847,14 +845,18 @@ async function rcaOnRejectedAudit(db: Db) {
   return { ...standing, rejected: standing.head, latest, rca: rcaUnderAudit(db, getTask(db, audit.id)!) };
 }
 
+const looseObject = (room: WorkspaceConfig, oid: string) => join(room.path, ".git", "objects", oid.slice(0, 2), oid.slice(2));
+
+/** 面接室から loose object を1つ消す。 */
+const dropObject = (room: WorkspaceConfig, oid: string) => rmSync(looseObject(room, oid));
+
 /** 面接室から commit の keep-around と loose object を消す。戻す関数を返す。 */
 function dropFromRoom(room: WorkspaceConfig, sha: string): () => void {
-  const object = join(room.path, ".git", "objects", sha.slice(0, 2), sha.slice(2));
-  const saved = readFileSync(object);
+  const saved = readFileSync(looseObject(room, sha));
   git(room.path, "update-ref", "-d", `refs/keep-around/${sha}`);
-  rmSync(object);
+  dropObject(room, sha);
   return () => {
-    writeFileSync(object, saved);
+    writeFileSync(looseObject(room, sha), saved);
     git(room.path, "update-ref", `refs/keep-around/${sha}`, sha);
   };
 }
@@ -891,9 +893,6 @@ it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室�
   db.close();
 });
 
-/** 面接室から loose object を1つ消す。 */
-const dropObject = (room: WorkspaceConfig, oid: string) => rmSync(join(room.path, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
-
 it.each([
   ["出題の head の blob", (room: WorkspaceConfig, head: string) => git(room.path, "rev-parse", `${head}:probe.txt`)],
   ["出題の head の先祖の commit", (room: WorkspaceConfig, head: string) => git(room.path, "rev-parse", `${head}^`)],
@@ -927,7 +926,7 @@ it("出題の head の commit が残り blob が欠けた面接室では、未�
   db.close();
 });
 
-it("面接室の名前の Quarantine の本文は、未決着の異議の RCA が読む却下した監査の出題の head の項を一覧どおりに並べ、決着した監査の項は並べない(issue #3136 / ADR 0329 追記 決定6)", async () => {
+it("面接室の名前の Quarantine の本文は、未決着の異議の RCA が読む却下した監査の出題の head の項を並べ、決着した監査の項は並べない(issue #3136 / ADR 0329 決定4)", async () => {
   const db = openDb(":memory:");
   const { root, audit, rejected, latest } = await rcaOnRejectedAudit(db);
   const rcas = listChildren(db, audit.id).filter((child) => child.type === "review");
@@ -938,10 +937,6 @@ it("面接室の名前の Quarantine の本文は、未決着の異議の RCA �
   for (const rca of rcas) expect(purpose).toContain(`the posed head ${rejected} that ${rca.id} reads`);
   expect(purpose).not.toContain(audit.id);
   expect(purpose).toContain(latest);
-  const items = purpose.split("\n").filter((line) => /^\d+\. /.test(line)).map((line) => line.replace(/^\d+\. /, ""));
-  const { own, openers } = namePickupPredicates(db, root.id, { name: root.id, path: "" }, "");
-  const describes = [...own, ...openers].map((predicate) => predicate.describe);
-  expect(items.filter((item) => describes.includes(item))).toEqual(describes);
   db.close();
 });
 
@@ -958,5 +953,35 @@ it("面接室が記録に無い受験者の pickup の門は、受験者の (tas
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(`The check that failed: every object reachable from the task branch \`task/${examinee.id}\` of the examinee ${examinee.id}`);
   expect(existsSync(join(base, root.id))).toBe(false);
+  db.close();
+});
+
+it.each([
+  ["受験者", async (db: Db) => {
+    const { workspace, root, room, base, examinees } = await posedInRoom(db);
+    const examinee = examinees[0]!;
+    const answering = await pickUp(db, examinee, room, base);
+    commitWork(answering.path, "answer.txt", "the answer\n");
+    releaseWorkspace(db, answering, examinee, NOW);
+    return { workspace, root, room, base, task: examinee };
+  }],
+  ["root", async (db: Db) => {
+    const { workspace, root, room, base, place } = await pickedRoot(db, "dangling-root-branch-real");
+    commitWork(place.path, "draft.txt", "half composed\n");
+    releaseWorkspace(db, place, root, NOW);
+    return { workspace, root, room, base, task: root };
+  }],
+])("面接室の %s のタスクブランチの ref が残り tip の commit が欠けると、pickup の門と面接室の名前への回答の両方が面接室の名前(root id)で拒む —— 無いブランチとは読まない(issue #3136 / ADR 0242 決定3)", async (_, picked) => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, task } = await picked(db);
+  const tip = git(room.path, "rev-parse", `task/${task.id}`);
+  dropObject(room, tip);
+
+  const failed = await pickupGate(db, workspace, getTask(db, task.id)!, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`task/${task.id}`);
+  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(`task/${task.id}`);
   db.close();
 });

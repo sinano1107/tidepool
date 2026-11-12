@@ -318,7 +318,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("git init");
   }, GIT_FIXTURE_TEST_TIMEOUT);
   // 旧: 受験者の checkout も記録された場所として「番地を作れる / repo がある」を予告した(ADR 0329 決定4)。ADR 0356 決定1・2 の後は受験者は
-  // 面接室から作り直す task の checkout で走るので、受験者ごとに残る項は出題の head だけ。
+  // 面接室から作り直す task の checkout で走るので、受験者ごとに残る項は面接室から fetch するもの(タスクブランチ、無ければ出題の head)だけ
+  // (ADR 0329 決定4 の Status 追記)。
   // 旧: 受験者が決着すると出題 head の検査を外し、空 repo の出口を戻した。ADR 0361 決定1 の後は読み手が出題の head を fetch するので、面接室の項として残る
   it("出題済みの名前は出題 head の検査を予告し、空 repo の出口は出さない —— 受験者の決着後も面接室の項として残り、受験者の項だけ外れる(ADR 0329 決定4・5 / ADR 0356 決定1 / ADR 0361 決定1)", () => {
     const db = openDb(":memory:");
@@ -347,7 +348,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
     const room = interviewRoomPath(db, root.id)!;
-    // 旧: 受験者の checkout の `.git` を gitfile にして落とした。ADR 0356 決定1 の後は受験者の項は出題の head だけなので、引けない head で落とす
+    // 旧: 受験者の checkout の `.git` を gitfile にして落とした。ADR 0356 決定1 の後は受験者の項は面接室から fetch するもの
+    // (ブランチが無ければ出題の head、ADR 0329 決定4 の Status 追記)だけなので、引けない head で落とす
     poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567");
 
     const { own, openers } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
@@ -374,7 +376,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(failed[0]!.describe);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
-  it("受験者の出題 head の項は、面接室の repo が無ければ git の生のエラーでなく面接室が消えた理由で止まる", () => {
+  it("受験者の (task, 面接室) の項は、面接室の repo が無ければ git の生のエラーでなく面接室が消えた理由で止まる", () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);

@@ -571,6 +571,12 @@ export function interviewRootIdOf(db: Db, task: Pick<Task, "id" | "type" | "inte
   return db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(task.interview_target_id) as string;
 }
 
+/** Interview での役(ADR 0273 決定1・2 / ADR 0276): `interview` type の root か、その受験者。work・review は undefined。 */
+export function interviewRole(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): "root" | "examinee" | undefined {
+  if (interviewRootIdOf(db, task) === undefined) return undefined;
+  return task.type === "interview" ? "root" : "examinee";
+}
+
 /** 面接室の在り処(ADR 0273 決定1): root の最初の pickup が残した event から引く。まだ開いていなければ undefined。 */
 export function interviewRoomPath(db: Db, rootId: string): string | undefined {
   return latestEventOfTask(db, rootId, "interview_room_opened")?.payload.path;
@@ -3924,7 +3930,8 @@ function gitHubReadingSql(taskRef: string): string {
  *  受験者は面接室(対象の root id)だけ。それ以外は `workspace` 列(無ければ `@defaultWorkspaceName`)に加えて、interview の root と
  *  review の親を review の鎖で辿って着く root には、その root の面接室と他に読める面接室
  *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。
- *  門の側の対(同じ集合を種類付きの場所として開く前に列挙し、一覧を撃つ)は workspace.ts の `pickupGate`(ADR 0329 追記 決定7)。 */
+ *  門の側の対(同じ集合を種類付きの場所として開く前に列挙し、一覧を撃つ)は workspace.ts の `pickupGate`(ADR 0329 追記 決定7)。
+ *  名前の軸の逆引き(名前を開く未決着の task)は `unsettledOpenersOf`。 */
 function openedPlaceNamesSql(taskRef: string): string {
   return `WITH RECURSIVE chain(id, type, parent_id) AS (
               SELECT ${taskRef}.id, ${taskRef}.type, ${taskRef}.parent_id
@@ -3939,7 +3946,8 @@ function openedPlaceNamesSql(taskRef: string): string {
 }
 
 /** 名前を開く未決着の task —— `openedPlaceNamesSql` の名前の軸の逆引き。修理の予告と回答が (task, 場所) の項を撃つ集合
- *  (ADR 0329 決定4 の Status 追記、issue #3136)。決着した task は開く pickup が無いので掛からない。 */
+ *  (ADR 0329 決定4 の Status 追記、issue #3136)。決着した task は開く pickup が無いので掛からない。`@defaultWorkspaceName` を
+ *  NULL で束ねるので、既定の workspace に落ちる task は数えない —— 面接室の名前(root id)の逆引きにだけ使う。 */
 export function unsettledOpenersOf(db: Db, name: string): Task[] {
   const rows = db
     .prepare(`SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t WHERE ${unsettledSql("t.status")} AND @name IN (${openedPlaceNamesSql("t")}) ORDER BY t.sort_key`)
