@@ -10,10 +10,10 @@
 
 基準の行を持つ名前の場所で、盤面が予告せずに `refs/*` を変える経路:
 
-| # | 経路 | 予告なしに変わる ref | 条件 | 「基準へ戻す」が巻き戻すもの |
-|---|---|---|---|---|
-| X1 | registry clone の口の fallback(`src/server-options.ts:506–518`): registry clone に当たる workspace を引けなければ `write()` を素で撃つ | remote-backed: registry clone の `refs/remotes/origin/main`(fetch の写し `src/registry.ts:717–720`、push の後の写し `src/registry-write.ts:165–167`)。purely-local: `refs/heads/main`(`src/registry-write.ts:169–171`) | registry clone が workspace として登録され基準の行を持ち、かつその書き込みの瞬間に `registeredWorkspaces(board)` が投げる(registry が読めない、`src/server-options.ts:550–553`) | 写しを盤面が fetch する前の commit へ戻す(= 読めなかった registry の commit へ戻す)。purely-local なら着地した registry の commit を `main` から外す |
-| X2 | publish の巻き戻しの `git remote remove origin`(`src/workspace-create.ts:555`)。口の内側だが、予告した N 本以外も消す | その時点で在る `refs/remotes/origin/*` の全部と `refs/remotes/origin/HEAD` | publish する checkout に、`remote.origin` の節が無いのに写しが残っていて、push か registry の commit が落ちる | 消えた残りの写しを作り直す(盤面の削除を巻き戻す)。内容は失われない |
+| # | 経路 | 予告なしに変わる ref | 条件 | 「基準へ戻す」が巻き戻すもの | 確かめ方 |
+|---|---|---|---|---|---|
+| X1 | registry clone の口の fallback(`src/server-options.ts:506–518`): registry clone に当たる workspace を引けなければ `write()` を素で撃つ | remote-backed: registry clone の `refs/remotes/origin/main`(fetch の写し `src/registry.ts:717–720`、push の後の写し `src/registry-write.ts:165–167`)。purely-local: `refs/heads/main`(`src/registry-write.ts:169–171`) | registry clone が workspace として登録され基準の行を持ち、かつその書き込みの瞬間に `registeredWorkspaces(board)` が投げる(registry が読めない、`src/server-options.ts:550–553`) | 写しを盤面が fetch する前の commit へ戻す(= 読めなかった registry の commit へ戻す)。purely-local なら着地した registry の commit を `main` から外す | 経路と条件は読み。起きた例は見ていない。巻き戻すものは推論 |
+| X2 | publish の巻き戻しの `git remote remove origin`(`src/workspace-create.ts:555`)。口の内側だが、予告した N 本以外も消す | その時点で在る `refs/remotes/origin/*` の全部と `refs/remotes/origin/HEAD` | publish する checkout に、`remote.origin` の節が無いのに写しが残っていて、push か registry の commit が落ちる | 消えた残りの写しを作り直す(盤面の削除を巻き戻す)。内容は失われない | `remote remove` が消す範囲は実測(M-D)。盤面がそこへ届く経路は読み。巻き戻すものは推論 |
 
 それ以外の、名前の場所の `refs/*` と HEAD への盤面の書き込みは、全部 `writeBoardRefs` / `boardRefWriter` / `advanceBranch` の内側にある(§2)。口の外にあって基準の行より**前**に走る書き込み(面接室の最初の build、clone、create)は、行が無いので決定6 の「比べるものが無いので何もせず通す」に入る(§2.3)。git が副作用で `refs/*` を書く経路は見つからなかった(§2.4、実測)。
 
@@ -27,7 +27,7 @@
 
 | 印 | 意味 |
 |---|---|
-| **実測** | 素の git 2.47.0(macOS)を使い捨てのディレクトリで走らせた。env は `localGitEnv`(`src/git.ts:257–278`)を shell に写したもの。盤面の関数も test も走らせていない。script と出力は付録。 |
+| **実測** | 素の git 2.47.0(macOS)を使い捨てのディレクトリで走らせた。env は `localGitEnv`(`src/git.ts:257–278`)を shell に写したもの。盤面の関数も test も走らせていない。script の全文と出力は付録(§7)。 |
 | **読み** | コード・ADR・git の man page(この Mac の git 2.47.0 に付属のもの)を読んだだけ。 |
 | **推論** | 読みと実測から導いたが、その形そのものは走らせていない。 |
 | **未確認** | 読んでも走らせてもいない。 |
@@ -63,14 +63,14 @@
 
 ### 2.2 口の外で、基準の行があるときに走りうるもの
 
-**X1. registry clone の口の fallback(読み)。** `registryRefWriter` は書くたびに `registeredWorkspaces(board)` で registry clone に当たる workspace を探し、それが投げると warn を出して `write()` だけを撃つ(`src/server-options.ts:509–517`)。コメントは「説明の欠けは次の比較が誤検知の quarantine として大きな音で出す、ADR 0351 決定2」と書いていて、意図された穴である。`registeredWorkspaces` は `loadBoardRegistry` → `loadRegistry` を通るので、registry の手元の写しが parse できない commit を指している間は投げる(`src/server-options.ts:422–425`・`550–553`)。
+**X1. registry clone の口の fallback(読み)。** `registryRefWriter` は書くたびに `registeredWorkspaces(board)` で registry clone に当たる workspace を探し、それが投げると warn を出して `write()` だけを撃つ(`src/server-options.ts:509–517`)。コメントは「説明の欠けは次の比較が誤検知の quarantine として大きな音で出す、ADR 0351 決定2」と書いていて、意図された穴である。`registeredWorkspaces` は `loadBoardRegistry` → `loadRegistry` を通る(`src/server-options.ts:422–425`・`550–553`)。`loadRegistry` が投げるのは、registry の ref が解けない、agent か authority の file が1つでも parse できない、`workspaces.yaml` が無い・schema に合わない・`assertValidWorkspaces` に落ちる、のどれか(`src/registry.ts:1054–1080`)。手元の写しがそういう commit を指している間は、registry clone への書き込みは全部予告なしになる。
 
 - 届く呼び手: 起動時の refresh(`src/server-options.ts:834`)、pickup と回答時の到達性の検査(`893`)、書き込み verb の入口の `refreshRegistryForWrite`(`src/registry-write.ts:33`)、`land` の両 mode(`165–171`)。
 - remote-backed で届く形(推論): origin に壊れた registry が入り、手元の写しがそれを指す → 人間が origin を直す → 次の refresh は、書く瞬間にはまだ壊れた写しを読むので workspace を引けず、予告なしで `refs/remotes/origin/main` を直った commit へ進める。registry clone の基準の行は壊れた commit のまま残る。次にその workspace を比べたとき(pickup か解放)、盤面自身の書き込みが違反と読まれる。
 - 「基準へ戻す」が巻き戻すもの(推論): 写しを壊れた commit へ戻す。object は残っているので決定6 では拒まれない。今の出口は `repaired by hand` の受理の撮り直し(`retakeRefBaselines`、`src/human-verbs.ts:667`)だが、決定3 は「`repaired by hand` は、基準と違う ref があれば名指しして拒む」なので、この形の出口は「基準へ戻す」だけになる。戻した直後に同じ回答の中で後半の fetch(`src/human-verbs.ts:663`、口を通る)が写しを進め直すかは、その workspace の保護ブランチが registry の branch と同じかどうかと、戻した後に registry を読む検査が先に落ちないかに依る —— **未確認**。
 - purely-local の `refs/heads/main`(`src/registry-write.ts:169–171`)も同じ fallback を通るが、`commitToRegistry` の呼び手は書く前に registry を読めている(例 `src/workspace-create.ts:404–405`)ので、その直後に `registeredWorkspaces` が投げる形は見つけていない(推論)。
 
-**X2. publish の巻き戻し(実測 + 読み)。** `publishWorkspace` は `git remote add origin` の後、その時点の `refs/heads/*` の N 本について写し N 行を予告し、口の中で push → 写しの `update-ref` → registry の commit を撃つ。どれかが落ちると口の中で `git remote remove origin` を撃つ(`src/workspace-create.ts:521`・`528–559`)。
+**X2. publish の巻き戻し(実測 + 読み)。** `publishWorkspace` は `git remote add origin` の後、その時点の `refs/heads/*` の N 本について写し N 行を予告し、口の中で push → 写しの `update-ref` → registry の commit を撃つ。どれかが落ちると口の中で `git remote remove origin` を撃つ(`src/workspace-create.ts:521`・`526–559`)。
 
 - `git remote remove origin` は `refs/remotes/origin/*` を全部と `refs/remotes/origin/HEAD` を消す。`remote.origin` の節が無いまま写しだけが残っていた checkout に `remote add` → `remote remove` を撃つと、残っていた写し(`origin/main`・`origin/old`・`origin/HEAD`)が全部消えた(実測 M-D)。
 - 予告した N 本のうち元から写しが在ったものは、畳みが `before`(元の値)へ戻すが ref は消えている。予告していない写し(local に branch が無いもの、`origin/HEAD`)は行がそのまま残る。どちらも次の比較で違反になる(読み)。
@@ -167,7 +167,7 @@ checkout 中の branch を進める書き込み(`advanceBranch` の `follows`、
 
 - この状態: ref = `old`(基準の `old|new` と一致)、`git status --porcelain` は `M  f`(index に staged)。次の pickup は ref の比較を通り、休止中の未コミットの変更で止まる(`src/workspace.ts:1109–1114`)—— G-D、後半は読み。
 - **`git checkout -- .` と `git clean -fd` では clean にならない**(index が新しい tree を持つので、index から worktree を戻しても同じ)。`git read-tree -u --reset HEAD` で clean になった(G-D)。決定12 の H11 の直し方(`git checkout -- .` / `git clean`)は、この形と、人間が `git add` しただけの形を直せない。
-- 盤面が同じ書き込みを撃ち直すと自分で直る: 同じ `old → new` の `read-tree -u -m` は成功し、`update-ref` の後は clean(R-A)。同じ tree の別 commit でも成功(R-B)。**tree の違う `new3`** への撃ち直しは `Entry 'f' would be overwritten by merge` で落ちる(R-C)。ただし pickup は park より前に dirty で止まるので、pickup 経由ではこの撃ち直しに届かない(読み)。
+- 盤面が同じ書き込みを撃ち直すと自分で直る: 同じ `old → new` の `read-tree -u -m` は成功し、`update-ref` の後は clean(R-A)。同じ tree の別 commit でも成功(R-B)。**tree の違う `new3`** への撃ち直しは `Entry 'f' would be overwritten by merge` で落ちる(R-C)。ただし pickup は park より前に dirty で止まるので、pickup 経由ではこの撃ち直しに届かない(読み)。再起動後の後始末の再実行(`settleBranches` → park)が pickup より先に同じ書き込みを撃ち直して R-A の形で直るかは**未確認**。
 - 逆向き: 書き終えた後(ref = `new`、tree = `new`)に ref だけ `old` へ戻すと `M  f` になる(R-D)。決定5 の「書いた後に盤面が tree を HEAD へ揃える」が要る場面はこれで、決定7 の2値行の戻しにも同じく要る。
 
 ## 4. 基準の行が無い / 古いまま Quarantine に答えられる時点(読み)
@@ -264,10 +264,12 @@ gc が走る契機は、人間がその checkout で porcelain を撃つこと�
 - 受験者の名前の行(ADR 0276 決定4 が言う「受験者の行」)が今も書かれるかは追っていない。`prepareRefBaseline` の呼び手は走る名前の場所と読む場所だけだった。
 - linked worktree(人間が `git worktree add` したもの)の HEAD は基準に入らない(#3179 の範囲)。ここでは registry の書き込みが作る使い捨ての worktree だけを見た。
 - 頻度(§5.4)は形の列挙で、数ではない。
+- ADR の決定番号は、本文を読んだ ADR 0243 を除き、コードのコメントが引いている番号をそのまま写した。ADR の本文と照合していない。
+- 再起動後に後始末がどの順で何を撃ち直すか(`src/teardown.ts`)は読んでいない。
 
 ## 7. 付録: fixture
 
-3本とも素の git、使い捨てのディレクトリ。env は共通:
+3本とも素の git、使い捨てのディレクトリ。script の全文は §7.4。env は共通:
 
 ```sh
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
@@ -438,4 +440,201 @@ read-tree old->new3 exit: 128
 == R-D: write completed (ref=new, tree=new), then the ref alone is put back to old (the 'restore to baseline' of a 2-valued row) ==
 after the completed write: []
 after ref put back without touching the tree: [M  f]
+```
+
+### 7.4 script の全文
+
+`fx1.sh` —— §7.1(M-A〜M-E)
+
+```sh
+#!/bin/bash
+# Synthetic fixture for #3194. Plain git in a temp dir, with the board's local git env (src/git.ts localGitEnv).
+set -u
+BASE="$(cd "$(dirname "$0")" && pwd)"
+W=$(mktemp -d "$BASE/run.XXXXXX"); cd "$W"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
+export GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=core.excludesFile GIT_CONFIG_VALUE_3=/dev/null
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+FMT='--format=%(if)%(symref)%(then)symref=%(symref)%(else)%(objectname)%(end) %(refname)'
+snap(){ (cd "$1"; echo "$(git symbolic-ref -q HEAD || git rev-parse HEAD) HEAD"; git for-each-ref "$FMT"); }
+git --version
+
+echo "== M-A: origin with tags; named place = clone =="
+git init -q -b main --bare origin.git
+git init -q -b main seed; (cd seed; git commit -q --allow-empty -m c1; git tag v1; git remote add origin ../origin.git; git push -q origin main v1)
+git clone -q "$W/origin.git" named
+echo "-- after clone:"; snap named
+(cd seed; git commit -q --allow-empty -m c2; git tag v2; git commit -q --allow-empty -m c3; git push -q origin main v2)
+C3=$(cd seed; git rev-parse HEAD)
+
+echo "== M-B: board fetch spellings into named place =="
+git init -q --bare src.git; (cd seed; git push -q ../src.git main:refs/heads/task/x v2)
+snap named > before.txt
+(cd named; git fetch --quiet --no-auto-gc --no-write-fetch-head --no-recurse-submodules "$W/src.git" refs/heads/task/x)
+snap named > after1.txt; diff before.txt after1.txt && echo "FETCH_FLAGS <repo> <ref>: refs+HEAD unchanged"; echo "FETCH_HEAD files: $(ls named/.git | grep -c FETCH_HEAD)"
+(cd named; git cat-file -e "$C3^{commit}" && echo "object present")
+git init -q --bare board.git; (cd seed; git commit -q --allow-empty -m c4; git push -q ../board.git HEAD:refs/board/fetched; git push -q --tags ../board.git)
+(cd named; git fetch --quiet --no-auto-gc --no-recurse-submodules "$W/board.git" refs/board/fetched)
+snap named > after2.txt; diff before.txt after2.txt && echo "hop2 fetch: refs+HEAD unchanged"; echo "FETCH_HEAD files: $(ls named/.git | grep -c FETCH_HEAD)"
+(cd named; git symbolic-ref -d refs/remotes/origin/HEAD; git fetch --quiet --no-auto-gc --no-recurse-submodules "$W/board.git" refs/board/fetched; git symbolic-ref -q refs/remotes/origin/HEAD || echo "origin/HEAD stays absent after path fetch")
+
+echo "== M-C: reflogs written by update-ref / symbolic-ref (non-bare, default config) =="
+(cd named
+ A=$(git rev-parse HEAD)
+ git update-ref refs/heads/task/x "$C3" ""
+ git update-ref refs/remotes/origin/main "$C3"
+ git update-ref "refs/keep-around/$C3" "$C3"
+ git update-ref refs/heads/main "$C3" "$A"
+ git symbolic-ref HEAD refs/heads/task/x
+ for r in HEAD refs/heads/task/x refs/heads/main refs/remotes/origin/main "refs/keep-around/$C3"; do printf '%s reflog entries: ' "$r"; git reflog show "$r" 2>/dev/null | wc -l; done
+ git config --get core.logAllRefUpdates || echo "core.logAllRefUpdates unset (default)"
+ echo "-- HEAD reflog:"; git reflog show HEAD
+ git symbolic-ref HEAD refs/heads/main)
+
+echo "== M-D: remote remove deletes leftover copies without a remote section =="
+git init -q -b main local; (cd local; git commit -q --allow-empty -m c1
+ S=$(git rev-parse HEAD)
+ git update-ref refs/remotes/origin/main "$S"; git update-ref refs/remotes/origin/old "$S"; git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+ echo "-- before (no remote section):"; git for-each-ref "$FMT"; echo "remotes: [$(git remote)]"
+ git remote add origin https://example.invalid/x.git; echo "-- after remote add:"; git for-each-ref "$FMT"
+ git remote remove origin; echo "-- after remote remove:"; git for-each-ref "$FMT")
+
+echo "== M-E: registry-style worktree add/commit/remove leaves main repo refs alone =="
+snap named > wb.txt
+(cd named; git worktree prune; git worktree add -q --detach "$W/wt" refs/remotes/origin/main; cd "$W/wt"; echo x > f; git add -A; git commit -q -m w; cd "$W/named"; git worktree remove --force "$W/wt")
+snap named > wa.txt; diff wb.txt wa.txt && echo "worktree add/commit/remove: refs+HEAD unchanged"
+echo "W=$W"
+```
+
+`fx2.sh` —— §7.2(G-A〜G-E)
+
+```sh
+#!/bin/bash
+# Synthetic fixture 2 for #3194: auto-gc triggers, object survival, crash inside the worktree-following write.
+set -u
+BASE="$(cd "$(dirname "$0")" && pwd)"
+W=$(mktemp -d "$BASE/run2.XXXXXX"); cd "$W"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
+export GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false GIT_CONFIG_KEY_2=commit.gpgsign GIT_CONFIG_VALUE_2=false GIT_CONFIG_KEY_3=core.excludesFile GIT_CONFIG_VALUE_3=/dev/null
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+git --version
+# which children does a command spawn? (GIT_TRACE prints "run_command: git maintenance run --auto ..." etc.)
+kids(){ label="$1"; shift; out=$( { GIT_TRACE=1 "$@" >/dev/null; } 2>&1 ); printf '%-52s -> ' "$label"; echo "$out" | grep -oE 'run_command: (git )?(maintenance|gc)[^\n]*|built-in: git (gc|maintenance|prune|repack|reflog|pack-refs)[^\n]*' | sed 's/run_command: //' | sort -u | tr '\n' ';'; echo; }
+
+echo "== G-A: which board spellings start auto maintenance (gc.auto=1 so that any --auto run would act) =="
+git init -q -b main named; cd named
+echo a > f; git add f; git commit -q -m c1; A=$(git rev-parse HEAD)
+echo b > f; git commit -q -am c2; B=$(git rev-parse HEAD)
+git config gc.auto 1; git config gc.autoDetach false
+git init -q --bare "$W/src.git"; git push -q "$W/src.git" main:refs/board/fetched
+kids "fetch --no-auto-gc (FETCH_FLAGS) <path> <ref>" git fetch --quiet --no-auto-gc --no-write-fetch-head --no-recurse-submodules "$W/src.git" refs/board/fetched
+kids "fetch (no --no-auto-gc) <path> <ref> [contrast]" git fetch --quiet "$W/src.git" refs/board/fetched
+T=$(git rev-parse "$B^{tree}")
+kids "commit-tree" git commit-tree "$T" -p "$B" -m m
+kids "merge-tree --write-tree" git merge-tree --write-tree "$A" "$B"
+kids "update-ref" git update-ref refs/heads/task/x "$B" ""
+kids "symbolic-ref HEAD" git symbolic-ref HEAD refs/heads/main
+kids "read-tree -u -m" git read-tree -u -m "$B" "$B"
+kids "for-each-ref" git for-each-ref
+kids "worktree prune" git worktree prune
+kids "worktree add --detach" git worktree add -q --detach "$W/wt" main
+echo x > "$W/wt/g"; git -C "$W/wt" add -A
+echo "loose objects before commit in linked worktree: $(git count-objects | cut -d' ' -f1), packs: $(ls .git/objects/pack | grep -c '\.pack$')"
+kids "commit (in linked worktree, registry-write.ts:143)" git -C "$W/wt" commit -q -m w
+echo "loose objects after: $(git count-objects | cut -d' ' -f1), packs: $(ls .git/objects/pack | grep -c '\.pack$')"
+kids "worktree remove --force" git worktree remove --force "$W/wt"
+kids "commit --allow-empty (room / create, fresh repo)" git commit -q --allow-empty -m e
+kids "remote add" git remote add origin https://example.invalid/x.git
+kids "remote remove" git remote remove origin
+cd "$W"
+
+echo "== G-B: object survival after a ref moves away / is deleted =="
+git init -q -b main surv; cd surv
+echo a > f; git add f; git commit -q -m base
+git branch task/keep; git branch task/gone
+git checkout -q task/gone 2>/dev/null; echo g > g; git add g; git commit -q -m gone-tip; GONE=$(git rev-parse HEAD); git checkout -q main
+git update-ref refs/heads/side "$(git commit-tree "$(git rev-parse HEAD^{tree})" -p HEAD -m side-tip)"; SIDE=$(git rev-parse refs/heads/side)
+echo "reflog files before delete: $(cd .git/logs/refs/heads && find . -type f | sort | tr '\n' ' ')"
+git branch -q -D task/gone; git update-ref -d refs/heads/side
+echo "reflog files after delete : $(cd .git/logs/refs/heads && find . -type f | sort | tr '\n' ' ')"
+echo "HEAD reflog still names gone-tip (it was checked out): $(git reflog show HEAD | grep -c "${GONE:0:7}")"
+echo "side-tip (never checked out) in any reflog: $(git reflog show --all | grep -c "${SIDE:0:7}")"
+chk(){ git cat-file -e "$1^{commit}" 2>/dev/null && echo present || echo MISSING; }
+git gc -q; echo "after 'git gc' (default gc.pruneExpire=2.weeks.ago): gone-tip=$(chk "$GONE") side-tip=$(chk "$SIDE")"
+git gc -q --prune=now; echo "after 'git gc --prune=now': gone-tip=$(chk "$GONE") [held by HEAD reflog] side-tip=$(chk "$SIDE")"
+cd "$W"
+
+echo "== G-C: prune goes by object mtime, not by when the object became unreachable =="
+git init -q -b main age; cd age
+echo a > f; git add f; git commit -q -m base
+OLD=$(git commit-tree "$(git rev-parse HEAD^{tree})" -p HEAD -m old-loose); git update-ref refs/heads/b "$OLD"
+# backdate the loose object by 20 days, as if the ref had been written long ago; then delete the ref *now*
+touch -t "$(date -v-20d +%Y%m%d%H%M 2>/dev/null || date -d '20 days ago' +%Y%m%d%H%M)" ".git/objects/${OLD:0:2}/${OLD:2}"
+git update-ref -d refs/heads/b
+git gc -q; echo "loose, 20 days old, ref deleted just now, then default 'git gc': $(git cat-file -e "$OLD^{commit}" 2>/dev/null && echo present || echo MISSING)"
+cd "$W"
+
+echo "== G-D: crash between read-tree (worktree follow) and update-ref =="
+git init -q -b main crash; cd crash
+echo a > f; git add f; git commit -q -m c1; O=$(git rev-parse HEAD)
+N=$(git commit-tree "$(echo b > f; git add f; git write-tree)" -p "$O" -m c2); git read-tree -u --reset "$O"
+echo "clean before: [$(git status --porcelain)]"
+git read-tree -u -m "$O" "$N"      # boardReadTree(old -> new); the process dies here, update-ref never runs
+echo "ref still old: $([ "$(git rev-parse refs/heads/main)" = "$O" ] && echo yes)"
+echo "status after the crash: [$(git status --porcelain)]"
+git checkout -- . ; echo "after 'git checkout -- .': [$(git status --porcelain)]"
+git clean -fdq; echo "after 'git clean -fd': [$(git status --porcelain)]"
+git read-tree -u --reset HEAD; echo "after 'git read-tree -u --reset HEAD': [$(git status --porcelain)]"
+cd "$W"
+
+echo "== G-E: do --no-auto-gc fetches leave loose objects for the next porcelain command? =="
+git init -q -b main loose; cd loose; git commit -q --allow-empty -m base
+echo "fetch.unpackLimit / transfer.unpackLimit: [$(git config --get fetch.unpackLimit)] [$(git config --get transfer.unpackLimit)] (unset = 100)"
+git fetch --quiet --no-auto-gc --no-write-fetch-head "$W/src.git" refs/board/fetched
+git count-objects -v | grep -E '^(count|in-pack|packs):' | tr '\n' ' '; echo
+echo "W=$W"
+```
+
+`fx3.sh` —— §7.3(R-A〜R-D)
+
+```sh
+#!/bin/bash
+# Synthetic fixture 3 for #3194: re-firing the worktree-following write after a crash, and from a rolled-back ref.
+set -u
+BASE="$(cd "$(dirname "$0")" && pwd)"
+W=$(mktemp -d "$BASE/run3.XXXXXX"); cd "$W"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+mk(){ git init -q -b main "$1"; cd "$1"; echo a > f; git add f; git commit -q -m c1; O=$(git rev-parse HEAD)
+      N=$(git commit-tree "$(echo b > f; git add f; git write-tree)" -p "$O" -m c2); git read-tree -u --reset "$O"; }
+
+echo "== R-A: crash after read-tree, before update-ref; the same write is fired again =="
+mk a
+git read-tree -u -m "$O" "$N"                       # died here
+git read-tree -u -m "$O" "$N"; echo "second read-tree old->new exit: $?"
+git update-ref refs/heads/main "$N" "$O"; echo "update-ref exit: $?; status: [$(git status --porcelain)]"
+cd "$W"
+
+echo "== R-B: crash after read-tree; the retry computes a different new value (a fresh merge commit) =="
+mk b
+N2=$(git commit-tree "$(git rev-parse "$N^{tree}")" -p "$O" -m c2-again-later-timestamp-differs-in-real-life)
+git read-tree -u -m "$O" "$N"                       # died here
+git read-tree -u -m "$O" "$N2"; echo "read-tree old->new2 (same tree) exit: $?"
+cd "$W"
+
+echo "== R-C: crash after read-tree; the retry's new value has a different tree =="
+mk c
+N3=$(git commit-tree "$(echo z > f; git add f; git write-tree)" -p "$O" -m c3); git read-tree --reset "$N"; echo b > f
+echo "state: index+worktree at new, ref at old: [$(git status --porcelain)]"
+git read-tree -u -m "$O" "$N3" 2>&1 | head -2; echo "read-tree old->new3 exit: ${PIPESTATUS[0]}"
+cd "$W"
+
+echo "== R-D: write completed (ref=new, tree=new), then the ref alone is put back to old (the 'restore to baseline' of a 2-valued row) =="
+mk d
+git read-tree -u -m "$O" "$N"; git update-ref refs/heads/main "$N" "$O"; echo "after the completed write: [$(git status --porcelain)]"
+git update-ref refs/heads/main "$O" "$N"; echo "after ref put back without touching the tree: [$(git status --porcelain)]"
+echo "W=$W"
 ```
