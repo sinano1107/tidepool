@@ -1730,6 +1730,13 @@ export interface ResourceStops {
   assignees: string[];
 }
 
+export interface ResourceStopDefaults {
+  defaultWorkspaceName?: string;
+  defaultAgentName?: string;
+  auditorName?: string;
+  interviewerName?: string;
+}
+
 /** 子を塞いでいる閉じた根(ADR 0265 決定6)—— 盤面の外で閉じた PR の根と、その PR。 */
 export interface ClosedRoot {
   task_id: string;
@@ -3907,7 +3914,7 @@ export function typeAwareDefaultAgentSql(table: string): string {
 }
 
 /** 「このタスクは資源単位の停止で止まっている」の唯一の SQL(ADR 0137 決定6)。
- *  `nextSlotTask` の pickup 述語と `listQueue` の skipped 表示が共有し、乖離させない。
+ *  `nextSlotTask` の pickup 述語、`listQueue` の skipped 表示、停止からの復帰(ADR 0368 決定1)が共有する。
  *  workspace の側は task が開く場所すべての名前(`openedPlaceNamesSql`。既定が無い盤面では門ごと効かない、ADR 0009)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
  *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。 */
@@ -3918,6 +3925,19 @@ function stoppedSql(taskRef: string, fallback: string): string {
              WHERE value = COALESCE(${taskRef}.assignee, ${fallback})))`;
 }
 
+/** ADR 0368 決定1: pickup を止めた workspace / agent の停止だけで、門がその task を外すか。 */
+export function taskIsStopped(db: Db, taskId: string, stopped: ResourceStops, defaults: ResourceStopDefaults): boolean {
+  return db.prepare(`SELECT 1 FROM tasks t WHERE t.id = @taskId AND ${stoppedSql("t", typeAwareDefaultAgentSql("t"))}`).get({
+    taskId,
+    defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
+    defaultAgentName: defaults.defaultAgentName ?? null,
+    auditorName: defaults.auditorName ?? null,
+    interviewerName: defaults.interviewerName ?? null,
+    stoppedWorkspaces: JSON.stringify(stopped.workspaces),
+    stoppedAssignees: JSON.stringify(stopped.assignees),
+  }) !== undefined;
+}
+
 /** pickup で GitHub を読む task(ADR 0328 決定2): issue-backed task と、issue-backed の親を持つ子。親の参照の有無で引くので、
  *  GitHub を読まない材料つきの RCA 子も入る —— streak 中の過剰除外として受け入れ、述語に材料の有無を持ち込まない。
  *  `@excludeGitHubReading` が立つ間だけ効く。pickup(`nextSlotTask`)と skipped 表示(`listQueue`)はこの1本を通る。 */
@@ -3926,18 +3946,18 @@ function gitHubReadingSql(taskRef: string): string {
              OR EXISTS (SELECT 1 FROM tasks p WHERE p.id = ${taskRef}.parent_id AND p.github_issue_number IS NOT NULL)))`;
 }
 
-/** task が開く場所すべての名前(ADR 0273 決定8・追記、issue #2265)の唯一の SQL —— 資源の停止と封じ込めの組はこの集合と比べる。
- *  受験者は面接室(対象の root id)だけ。それ以外は `workspace` 列(無ければ `@defaultWorkspaceName`)に加えて、interview の root と
- *  review の親を review の鎖で辿って着く root には、その root の面接室と他に読める面接室
+/** 資源の停止と封じ込めの組が比べる名前の唯一の SQL(ADR 0368 決定3・4 / ADR 0273 追記)。
+ *  どの task も `workspace` 列(無ければ `@defaultWorkspaceName`)を数え、受験者は対象の面接室(root id)を足す。
+ *  interview の root と review の親を review の鎖で辿って着く root には、その root の面接室と他に読める面接室
  *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。
- *  門の側の対(同じ集合を種類付きの場所として開く前に列挙し、一覧を撃つ)は workspace.ts の `pickupGate`(ADR 0329 追記 決定7)。
+ *  workspace.ts の `pickupGate` はこのうち実際に開く場所を検査する(ADR 0329 追記 決定7)。受験者の実環境の repo は開かない。
  *  名前の軸の逆引き(名前を開く未決着の task)は `unsettledOpenersOf`。 */
 function openedPlaceNamesSql(taskRef: string): string {
   return `WITH RECURSIVE chain(id, type, parent_id) AS (
               SELECT ${taskRef}.id, ${taskRef}.type, ${taskRef}.parent_id
               UNION ALL SELECT p.id, p.type, p.parent_id FROM tasks p JOIN chain c ON p.id = c.parent_id WHERE c.type = 'review'),
             roots(id) AS (SELECT id FROM chain WHERE type = 'interview')
-          SELECT COALESCE(${derivedWorkspaceSql(taskRef)}, @defaultWorkspaceName) AS name WHERE ${taskRef}.interview_target_id IS NULL
+          SELECT COALESCE(${derivedWorkspaceSql(taskRef)}, @defaultWorkspaceName) AS name
           UNION ALL SELECT it.task_id FROM interview_targets it WHERE it.id = ${taskRef}.interview_target_id
           UNION ALL SELECT id FROM roots
           UNION ALL SELECT e.value FROM roots JOIN interviews i ON i.task_id = roots.id, json_each(i.evidence_task_ids) e

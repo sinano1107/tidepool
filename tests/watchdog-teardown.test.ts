@@ -12,6 +12,7 @@ import { applyExecutionSettingsChange, loadExecutionSettingTable } from "../src/
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine, registerResourceStop } from "../src/quarantine.js";
+import { questionKindOf } from "../src/question-kind.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, DROP_TARGET_OPTION, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task, unrowedTarget } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
@@ -471,7 +472,7 @@ async function stoppedBeforeSpawn(taskWorkspace?: string) {
     if (name === "ghost") throw new UnknownWorkspaceError(name);
     return ws;
   };
-  const handler = queueReturnHandler({ db, clock, slot, resolve, pollNow: () => triggered.push("pollNow") }, containers);
+  const handler = queueReturnHandler({ db, clock, slot, resolve, pollNow: () => triggered.push("pollNow") }, containers, { defaultWorkspaceName: ws.name });
   return { db, clock, ws, place, slot, runtime, containers, task, triggered, resolve, handler };
 }
 
@@ -506,6 +507,26 @@ it("worker を起動する前に資源の Quarantine が止めた pickup は、f
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
+it("停止の門が外さない workspace の停止は spawn_failed と failure question になり、task は blocked になる(ADR 0368 決定1・2)", async () => {
+  const f = await stoppedBeforeSpawn("sandbox");
+  const stop = { quarantine: "workspace", value: "other", reason: "unknown workspace: other" } as const;
+  registerQuarantine(f.db, stop.quarantine, stop.value, stop.reason, f.clock.now());
+
+  f.handler(f.task.id, sessionId(f.db, f.task.id), { kind: "pickup_stopped", ...stop });
+  await settle();
+
+  expect(listBoard(f.db).find(({ id }) => id === f.task.id)?.status).toBe("blocked");
+  const events = listEvents(f.db, f.task.id);
+  const message = expect.stringMatching(/stop gate does not exclude this task.*workspace.*other/);
+  expect(events.filter(({ kind }) => kind === "spawn_failed").map(({ payload }) => payload)).toEqual([
+    { kind: "spawn_failed", error_code: null, message },
+  ]);
+  expect(events.map(({ kind }) => kind)).not.toContain("pickup_stopped");
+  const [question] = questions(f.db).filter(({ parent_id }) => parent_id === f.task.id);
+  expect(questionKindOf(question!).kind).toBe("failure");
+  expect(question!.purpose).toMatch(/stop gate does not exclude this task.*workspace.*other/);
+});
+
 /** 準備が task ブランチへの checkout より前に落ちた pickup(ADR 0274 決定3)。git は動く —— remote 正本の宣言に origin が無く、
  *  準備は checkout の前に fetch で投げる(宣言と clone の照合は手前の pickup の門、ADR 0329 追記 決定7)。`prior` は同じ workspace で別の task が先に拾われ、後始末まで終えていたか。 */
 async function stoppedBeforeCheckout(prior: boolean) {
@@ -534,7 +555,7 @@ async function stoppedBeforeCheckout(prior: boolean) {
   const failure = await prepareAtPickup(db, { ...ws, repo: "https://github.com/acme/elsewhere.git" }, task).then(() => undefined, (err: unknown) => err);
   expect(failure).toBeInstanceOf(Error);
   const stop = quarantineWorkspace(db, ws.name, failure, clock.now());
-  const handler = queueReturnHandler(deps, containers);
+  const handler = queueReturnHandler(deps, containers, { defaultWorkspaceName: ws.name });
   return { db, clock, ws, slot, runtime, containers, task, triggered, deps, stop, handler };
 }
 
@@ -652,7 +673,7 @@ it("process を持たなかった session の後始末も、開いた question �
   const f = await driftedAfterCheckout();
   expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
 
-  queueReturnHandler(f.deps, f.containers)(f.task.id, sessionId(f.db, f.task.id), { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" });
+  queueReturnHandler(f.deps, f.containers, {})(f.task.id, sessionId(f.db, f.task.id), { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" });
   await settle();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("todo");
@@ -762,7 +783,7 @@ async function rootHeldMidTeardown(roomBroken: "mkdir" | "git") {
   expect(listEvents(db, task.id).filter((e) => e.kind === "interview_room_opened")).toHaveLength(0);
   const stop = quarantineWorkspace(db, task.id, failure, clock.now());
   runtime.hold(String(sessionId(db, task.id)));
-  queueReturnHandler(deps, containers)(task.id, sessionId(db, task.id), { kind: "pickup_stopped", ...stop });
+  queueReturnHandler(deps, containers, { defaultWorkspaceName: ws.name })(task.id, sessionId(db, task.id), { kind: "pickup_stopped", ...stop });
   await settle();
   expect(markedSession(db)?.taskId).toBe(task.id);
   return { db, clock, ws, slot, runtime, task, triggered };
@@ -842,7 +863,7 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
 });
 
 it.each([
-  { kind: "pickup_stopped", quarantine: "agent", value: "ghost", reason: "unknown agent" },
+  { kind: "pickup_stopped", quarantine: "agent", value: "deckhand", reason: "unknown agent" },
   { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: 1 },
 ] as const)("資源の停止で後始末の印の書き込みが落ちると、$kind は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async (payload) => {
   const f = await stoppedBeforeSpawn();

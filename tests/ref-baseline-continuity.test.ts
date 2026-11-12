@@ -84,7 +84,7 @@ it("通常の完走の後に休止中の main へ載った帯域外の commit �
     github,
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
-    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => declared, pollNow: () => scheduler.pollNow() }, containers),
+    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => declared, pollNow: () => scheduler.pollNow() }, containers, { defaultWorkspaceName: declared.name }),
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     workspace: declared,
     resolveWorkspace: () => declared,

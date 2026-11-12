@@ -142,7 +142,7 @@ it("読む実環境の ref 違反は repo アクセスを問い合わせず実�
     db, clock, slot, worker, containers, github,
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
-    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => declared, pollNow: () => scheduler.pollNow() }, containers),
+    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => declared, pollNow: () => scheduler.pollNow() }, containers, { defaultWorkspaceName: declared.name }),
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     workspace: declared,
     resolveWorkspace: () => declared,

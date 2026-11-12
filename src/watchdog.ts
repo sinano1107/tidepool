@@ -7,9 +7,9 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, getEvent, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
-import { questionRefusedTarget, registerQuarantine } from "./quarantine.js";
+import { parseWorkspaceContainmentValue, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { getTask, type QueueReturnPayload, registerFailureQuestion, registerTask, returnToQueue, type Task, type TaskType, unrowedTarget } from "./tasks.js";
+import { getTask, openedPlaceNames, type PickupStopped, type QueueReturnPayload, type ResourceStopDefaults, registerFailureQuestion, registerTask, returnToQueue, type Task, type TaskType, taskIsStopped, unrowedTarget } from "./tasks.js";
 import {
   deferToSessionRest,
   markTeardown,
@@ -168,7 +168,8 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
 
 /** process を1つも持たないまま失敗にせず位置を変えずに `todo` へ戻す pickup の盤面側の一撃(ADR 0274 決定3・4 / ADR 0333 決定1)。入口は資源の停止で worker が
  *  1度も走らなかった pickup(`pickup_stopped`)と盤面の記録の器が書けない pickup(`record_container_unwritable`、ADR 0266 決定3・4)で、
- *  Quarantine の登録はどちらも呼び手が先に済ませている —— 資源はもうその question を持つので failure question は立てない。
+ *  Quarantine の登録はどちらも呼び手が先に済ませている。停止の門が受け取った資源で task を外せなければ、列挙の不整合を failure
+ *  question にする(ADR 0368 決定1・2)。
  *  形は行の拒否(ADR 0184 決定4)と同じ: `todo` への復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
  *  経路は process を1つも持たなかった session の決着(`never_ran`)に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— 開いていない
  *  task の checkout に触れないのは後始末の走る場所の解決で(再起動を跨ぐ)、drift で解決できない workspace の開いた Quarantine に
@@ -178,8 +179,32 @@ function registerRowRefusal(db: Db, task: Task, refusal: RowRefusal, now: Date):
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
+  defaults: ResourceStopDefaults,
 ): (taskId: string, sessionId: number, payload: Extract<QueueReturnPayload, { kind: "pickup_stopped" | "record_container_unwritable" }>) => void {
-  return (taskId, sessionId, payload) => settleAndReclaim(deps, containers, taskId, sessionId, (task, now) => returnToQueue(deps.db, task, payload, now));
+  const { db } = deps;
+  return (taskId, sessionId, payload) => settleAndReclaim(deps, containers, taskId, sessionId, (task, now) => {
+    if (payload.kind === "pickup_stopped" && !pickupStopApplies(db, task, payload, defaults)) {
+      const failure = { error_code: null, message: `the stop gate does not exclude this task for ${payload.quarantine} ${JSON.stringify(payload.value)}` };
+      appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "spawn_failed", ...failure }, at: now });
+      registerSpawnFailureQuestion(db, task, failure, now);
+      return;
+    }
+    returnToQueue(db, task, payload, now);
+  });
+}
+
+function pickupStopApplies(db: Db, task: Task, stop: PickupStopped, defaults: ResourceStopDefaults): boolean {
+  switch (stop.quarantine) {
+    case "workspace":
+      return stop.value !== null && taskIsStopped(db, task.id, { workspaces: [stop.value], assignees: [] }, defaults);
+    case "agent":
+      return stop.value !== null && taskIsStopped(db, task.id, { workspaces: [], assignees: [stop.value] }, defaults);
+    case "workspaceContainment":
+      // ADR 0368 決定1・4: 組が外すのは Harness の行。別の Harness で走れる task も位置を保って戻す。
+      return stop.value !== null && openedPlaceNames(db, task.id, defaults.defaultWorkspaceName).includes(parseWorkspaceContainmentValue(stop.value).workspace);
+    default:
+      return true;
+  }
 }
 
 /** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は transcript の open(ADR 0276 決定5)で、観測点は
@@ -208,29 +233,25 @@ export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (taskId: string, sessionId: number, failure: SpawnFailure, record?: () => void) => void {
-  return (taskId, sessionId, failure, record) => {
-    const unhideableTaskSettings = failure.kind === "unhideable-task-settings";
-    settleAndReclaim(
-      deps,
-      containers,
-      taskId,
-      sessionId,
-      (task, now) => registerFailureQuestion(
-        deps.db,
-        task,
-        `worker never started for task: ${task.title}`,
-        `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
-          `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
-          failure.message,
-        now,
-        unhideableTaskSettings
-          ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
-          : undefined,
-        unhideableTaskSettings ? "abandon" : undefined,
-      ),
-      record,
-    );
-  };
+  return (taskId, sessionId, failure, record) => settleAndReclaim(deps, containers, taskId, sessionId,
+    (task, now) => registerSpawnFailureQuestion(deps.db, task, failure, now), record);
+}
+
+function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure, now: Date): void {
+  const unhideableTaskSettings = failure.kind === "unhideable-task-settings";
+  registerFailureQuestion(
+    db,
+    task,
+    `worker never started for task: ${task.title}`,
+    `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
+      `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
+      failure.message,
+    now,
+    unhideableTaskSettings
+      ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
+      : undefined,
+    unhideableTaskSettings ? "abandon" : undefined,
+  );
 }
 
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。

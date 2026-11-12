@@ -118,7 +118,7 @@ it.each([
     const containers = passthroughContainers();
     const started: Array<[string, Provider]> = [];
     // Claude adapter の同期の検査と同じく、start の中で組を quarantine して盤面の一撃を同期に呼ぶ(初回だけ)
-    const onPickupStopped = queueReturnHandler({ db, clock, slot, resolve: undefined, pollNow: () => scheduler.pollNow() }, containers);
+    const onPickupStopped = queueReturnHandler({ db, clock, slot, resolve: undefined, pollNow: () => scheduler.pollNow() }, containers, {});
     const worker: WorkerAdapter = {
       id: "claude-agent",
       start: (task, _sessionId, setting) => {
