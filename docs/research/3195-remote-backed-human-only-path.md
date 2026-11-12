@@ -33,6 +33,7 @@
 | D2 | その merge commit の `.claude/settings.json` と、M1 との delta | 人間の値 `{"v":1}`、delta は `M a.txt` だけ |
 | D3 | task 側も `.claude/settings.json` を変えた tip(M0 から fork)を M1 と比べる / merge する | delta に `M .claude/settings.json`、`merge-tree` は conflict(exit 1) |
 | E1 | 人間が**名前の場所役で** commit して origin へ push した後に変わった行 | `refs/heads/main`、`refs/remotes/origin/main`(と解決値の `origin/HEAD`) |
+| E2 | origin が進んだ後、人間が名前の場所役で素の `git fetch` だけをした後に変わった行 | `refs/remotes/origin/main`(と解決値の `origin/HEAD`) |
 
 ## 1. pickup が origin から保護ブランチを引く経路と、基準に入る位置
 
@@ -60,7 +61,7 @@ pickup の準備 `prepareWorkspaceAtPickup`(`src/workspace.ts:1093–1133`)の�
 
 **Quarantine になる場合(この経路の例外):**
 
-- **人間が名前の場所で commit して push した。** local の保護ブランチと写しが push で動く(**測定** E1)。次の pickup の比較(`:1181`)が `RefsMovedError` を投げ、workspace の Quarantine になる(`src/scheduler.ts:651–661`)。人間が名前の場所で `git fetch` しただけでも写しが動いて同じ。「origin 経由」は**自前の clone から**でなければ成り立たない。**読み + 測定**(Quarantine まで走らせてはいない)
+- **人間が名前の場所で commit して push した。** local の保護ブランチと写しが push で動く(**測定** E1)。次の pickup の比較(`:1181`)が `RefsMovedError` を投げ、workspace の Quarantine になる(`src/scheduler.ts:651–661`)。人間が名前の場所で `git fetch` しただけでも写しが動き(**測定** E2)、同じ比較に当たる。「origin 経由」は**自前の clone から**でなければ成り立たない。**読み + 測定**(Quarantine まで走らせてはいない)
 - **origin の保護ブランチを non-ff に書き換えた(force-push)。** `fetchBranchCopy` は sha が何であれ写しに書く(祖先かを見ない、`src/registry.ts:709–722`)。その後の `parkOnProtectedBranch` が「the local and remote histories diverged」を投げ(`src/workspace.ts:1468`、**測定** C2 で互いに祖先でない)、`PickupGateError` として workspace の Quarantine になる(`src/scheduler.ts:658–663`)。写しは Quarantine の前に書き換え後の値になっている。**読み**
 - **origin に届かない・token が出ない。** fetch の失敗として Quarantine(`tests/workspace-remote-quarantine.test.ts:45`・`:164`)。path に依らない既存の挙動。**読み**
 - **名前の場所の worktree に、push された path と同じ untracked の file がある。** 休止中の未 commit の検査(`:1109`)か worktree の追従(`:959`)が止めるはずだが、どちらが先に何と言うかは読んでいない。**推論**
@@ -76,7 +77,7 @@ pickup の準備 `prepareWorkspaceAtPickup`(`src/workspace.ts:1093–1133`)の�
 
 **出る形(逆向き: tip がその変更を持ち、門が読む fork 元が持たない)。** **測定** C1 で、この形なら delta にその path が出て、worker は書いていない変更で「take the change out of the task branch」(`src/mcp.ts:378–382`)と拒まれる。盤面がこの形に到達する道:
 
-- **origin の保護ブランチの履歴の書き換え。** M1 から fork した task が走っている間に、人間が M1 を含まない履歴を force-push し、盤面のどれかの fetch が写しを書き換え後の値にする(上の 1 のとおり `fetchBranchCopy` は祖先を見ない。`refreshProtectedBranch` と解放の fetch は park を撃たないので、そこでは止まらない)。その task の門は書き換え後の写しと比べ、delta に人間の変更が出る(**測定** C2)。git の挙動は測定、盤面がこの順で門に達することは**推論**(走らせていない)。保護ブランチの force-push 自体が稀で、次の pickup は park で Quarantine になる。
+- **origin の保護ブランチの履歴の書き換え。** M1 から fork した task が走っている間に、人間が M1 を含まない履歴を force-push し、盤面のどれかの fetch が写しを書き換え後の値にする(上の 1 のとおり `fetchBranchCopy` は祖先を見ない。`refreshProtectedBranch` は fetch だけで休止位置の ff を撃たない(`src/workspace.ts:1068–1072`)。pickup と解放 `settleBranches`(`:1677`・`:1681`)は fetch の後に休止位置の ff を撃って投げるが、どちらも写しを書いた後)。その task の門は書き換え後の写しと比べ、delta に人間の変更が出る(**測定** C2)。git の挙動は測定、盤面がこの順で門に達することは**推論**(走らせていない)。保護ブランチの force-push 自体が稀で、次の pickup は休止位置の ff で Quarantine になる。解放の側で投げた後の行き先は読んでいない。
 - **worker が merge の解決でその path を fork 元と違う値にした。** #3188 の F7。今日の worker は追いつかないので、起点は worker 自身の merge。
 - **門の時点で fork 元が保護ブランチから祖先のブランチへ切り替わる。** `taskForkSource` は作成時の sha を覚えず、門のたびに `lineageTaskBranch` を引き直す。保護ブランチ(変更あり)から fork した task の門で、候補が変更を持たない祖先のブランチに替われば同じ形になる。決着済みの祖先のブランチに後から内容が着く順序が要る。**その順序が盤面で起きるかは辿り切っていない**(下の「読んでいない」)。
 
@@ -107,11 +108,11 @@ conflict するのは task 側もその path を変えているときだけ(**�
 
 **欠けているもの(扉ではない)**
 
-1. **記録。** 人間しか書けない path が保護ブランチに入ったことを残す event も question も無い。`fetchBranchCopy` は event を書かず(`src/registry.ts:709–722`)、`task_checkout_opened` の payload は fork 元の sha を持たない(`src/events.ts:222`)。残るのは git の履歴(origin の commit の author)だけ。purely-local 側は #3184 の決定4 の「取り込む」が盤面の回答として残るので、2つのセルで記録の有無が割れる。**読み**
-2. **「人間しか書けない」を支えるもの。** `fetchBranchCopy` は origin が持つ sha を何であれ取る。remote-backed でこの性質を支えるのは origin の保護ブランチへの書き込み権限と、task の PR が門を通った tip しか運ばないこと(と PR の review)だけで、盤面は入ってくる側を検査しない。ADR 0362 は書き手の道を言わない(決定1)。worker の push の身元が保護ブランチへ直接届くかは読んでいない。**読み + 推論**
+1. **記録。** 人間しか書けない path が保護ブランチに入ったことを残す event も question も無い。この場面に question と受理が無いことは #3181 の訂正のとおり。event は**部分の読み**: `fetchBranchCopy` 自体は event を書かず(`src/registry.ts:709–722`)、`task_picked_up`(`src/events.ts:203`)と `task_checkout_opened`(`:222`)の payload は fork 元の sha を持たない。`fetchBranchCopy` の呼び手すべてと `openTaskCheckout` の中に event の書き込みが無いことまでは確かめていない。見つけた範囲で残るのは git の履歴(origin の commit の author)だけ。purely-local 側は #3184 の決定4 の「取り込む」(決定で、未実装)が盤面の回答として残る形なので、実装されれば2つのセルで記録の有無が割れる。
+2. **「人間しか書けない」を支えるもの。** `fetchBranchCopy` は origin が持つ sha を何であれ取る。remote-backed でこの性質を支えるのは origin の保護ブランチへの書き込み権限と、worker の完了が門を通ること(門の外から task のブランチに内容が着く道は #3188 の 3 にある)と PR の review だけで、盤面は入ってくる側を検査しない。ADR 0362 は書き手の道を言わない(決定1)。worker の push の身元が保護ブランチへ直接届くかは読んでいない。**読み + 推論**
 3. **例外の文面。** 名前の場所から push した人間は基準の違反の Quarantine に当たる(1、E1)。門の拒否文(`src/mcp.ts:378–382`)は worker に「取り除け」と言うだけで、人間に「自前の clone から origin へ push する」とは言わない。文面は #3191 の射程。**読み**
 4. **履歴の書き換えの下の誤拒否。** 2 の逆向きの形。稀で、次の pickup は Quarantine になるが、走っている task の門は理由の合わない拒否文を返す。**推論**
-5. **届く範囲。** 系譜の子と、既に fork 済みの task には届かない。Claude の worker には、その path は sparse で隠される(`src/workspace.ts:1034–1036`)ので届く・届かないの差は出ない。Codex の `.codex/config.toml` / `.codex/rules` を走っている task に届けたい場面があるかは、この問いでは確かめていない。**読み**
+5. **届く範囲。** 系譜の子と、既に fork 済みの task には届かない。Claude の worker の checkout からは `.claude/settings.json` / `.claude/settings.local.json` が sparse で外される(`src/workspace.ts:1034–1036`、`src/sandbox.ts:185`)ので、この2つは届く・届かないの差が出ない。`.mcp.json`、`.codex/config.toml`、`.codex/rules` が worker の checkout でどう扱われるか、それを走っている task に届けたい場面があるかは確かめていない。**読み**(2 path の分だけ)
 6. **隠せない形の push。** 人間が `.claude` を symlink / blob / gitlink にして push すると、次の pickup の spawn が `unhideable-task-settings` で落ちる(`src/scheduler.ts:687`)。これは封じ込めの修理(H18)の側の話で、H19 の扉の有無には関わらない。**読み**(spawn の経路は辿っていない)
 
 ## 読んでいない・確かめていない
@@ -119,6 +120,8 @@ conflict するのは task 側もその path を変えているときだけ(**�
 - 盤面の関数は1つも走らせていない。test も読んだだけ。
 - 2 の「fork 元が保護ブランチから祖先のブランチへ切り替わる」順序が盤面で起きるか。`resolveTaskBranchLineage` と `branchMergeEffect`(`src/workspace.ts:819–834`)は読んだが、決着済みの祖先のブランチに後から内容が着く経路を file:line で1本通していない。欠陥としては報告しない。
 - `authedFetch` の 2 hop の中身(`src/github-auth.ts`)。fixture の `git fetch origin <sha>` と同じく `refs/` に書かないことは `src/registry.ts:699–702` のコメントの読みだけ。
+- `openTaskCheckout` の中身と、`.mcp.json` / `.codex/*` の worker 側の扱い。
+- 解放の休止位置の ff が投げた後の行き先(Quarantine になるはずだが辿っていない)。
 - GitHub 側(conflict する PR の mergeable、check、merge API、保護ブランチの ruleset)。
 - worker の sandbox から origin への push が保護ブランチに届くか(身元と権限)。
 - Codex の worker の fork 元の tree の読み方(`src/codex-worker.ts`)。
@@ -218,4 +221,12 @@ g clone -q O N2
 B2=$(g -C N2 for-each-ref --format='%(objectname) %(refname)')
 echo '{"v":9}' > N2/.claude/settings.json; g -C N2 commit -q -am "human writes in the named place"; g -C N2 push -q origin HEAD:main
 echo "E1 rows that differ in the named place after its own commit+push: $(diff <(echo "$B2") <(g -C N2 for-each-ref --format='%(objectname) %(refname)') | grep '^>' | awk '{print $3}' | tr '\n' ';')"
+# E2: the human only runs a bare fetch in the named place after origin moved
+g clone -q O N3
+B3=$(g -C N3 for-each-ref --format='%(objectname) %(refname)')
+g -C H reset -q --hard origin/main 2>/dev/null || true
+g -C H pull -q origin main
+echo y > H/y.txt; g -C H add -A; g -C H commit -q -m "another push"; g -C H push -q origin HEAD:main
+g -C N3 fetch -q
+echo "E2 rows that differ in the named place after a bare fetch: $(diff <(echo "$B3") <(g -C N3 for-each-ref --format='%(objectname) %(refname)') | grep '^>' | awk '{print $3}' | tr '\n' ';')"
 ```
