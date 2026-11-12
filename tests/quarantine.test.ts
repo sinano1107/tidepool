@@ -5,7 +5,7 @@ import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks } from "../src/human-verbs.js";
-import { examineePickupPredicates, gonePlaceReason, namePickupPredicates } from "../src/pickup-predicates.js";
+import { gonePlaceReason, namePickupPredicates, taskRoomPickupPredicates } from "../src/pickup-predicates.js";
 import {
   openQuarantineQuestion,
   parseTableRowEffortValue,
@@ -350,13 +350,13 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     // 旧: 受験者の checkout の `.git` を gitfile にして落とした。ADR 0356 決定1 の後は受験者の項は出題の head だけなので、引けない head で落とす
     poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567");
 
-    const { own, examinees } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
-    const predicates = [...own, ...examinees];
+    const { own, openers } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
+    const predicates = [...own, ...openers];
     const describes = predicates.map((predicate) => predicate.describe);
     expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
       expect.stringContaining("can be fetched"), expect.stringContaining("An unborn HEAD passes"),
     ]);
-    expect(examinees.filter((p) => p.phase === "after-open")).toEqual([]);
+    expect(openers.filter((p) => p.phase === "after-open")).toEqual([]);
     const items = purposeFor(db, root.id).split("\n").filter((line) => /^\d+\. /.test(line)).map((line) => line.replace(/^\d+\. /, ""));
     expect(items.filter((item) => describes.includes(item))).toEqual(describes);
     const failed = predicates.filter((predicate) => {
@@ -382,7 +382,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(room, "rev-parse", "HEAD"));
     rmSync(join(room, ".git"), { recursive: true });
 
-    const posedHead = examineePickupPredicates(db, examinee!, root.id, "/never-created").find((p) => p.describe.includes("posed head"))!;
+    const posedHead = taskRoomPickupPredicates(db, [examinee!], root.id, "/never-created").find((p) => p.describe.includes("posed head"))!;
     expect(() => { if (posedHead.phase === "before-open") posedHead.check(); }).toThrow(gonePlaceReason(root.id, room));
   }, GIT_FIXTURE_TEST_TIMEOUT);
 

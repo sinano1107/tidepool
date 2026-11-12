@@ -1,5 +1,7 @@
 # Interview の読み手は面接室の `.git` ではなく出題の head の checkout を読む —— 面接室を開く worker は居なくなり、答案の ref は面接室のまま、書き手側の trailer 対策は採らない
 
+**Status 追記: 決定1 の「出題の head」は読み手ごとに決まる —— review の鎖が監査を通る読み手(監査、その行への異議の RCA)はその監査が見た出題の head を、他の読み手は root の最新の出題の head を読む。却下の後に出し直した root では、却下した監査への異議の RCA が読むのは最新でない head である。面接室の pickup の項はこの head を読み手ごとに、読み手の checkout の fetch が要る閉包まで検査する([ADR 0329](0329-a-recorded-places-opened-event-is-written-after-its-repo-exists-the-room-and-the-examinee-checkout-share-one-opening-procedure-and-a-room-named-quarantine-is-released-by-re-running-every-predicate-that-raises-the-name.md) 決定4 の Status 追記、2026-11-12、issue #3136)。**
+
 2026-11-09 の grilling(issue #3071、#3031 の実装で見えた疑い。#2248 / #3072 は同じ族)で決定。ADR 0356 決定2 は受験者の答案の ref を
 面接室の `task/<受験者 id>` に着けたが、その根拠は「盤面は worker の `.git` に書かないので置き場は面接室になる」という消去法で、検討した
 読み手は兄弟の受験者だけだった。一方、retry の新しい root・出題の監査・異議の RCA・人間登録の review 子は、面接室を**path 丸ごと**

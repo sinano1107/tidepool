@@ -383,11 +383,11 @@ async function roomWithPickedExaminee() {
 it("面接室の名前への受理の後半は面接室だけを撃ち、受験者 id の行は無く、面接室(root id)の行は変わらない(#2948 / ADR 0356 決定4)", async () => {
   const { db, root, room, roomRow, examineeRow, roomBefore } = await roomWithPickedExaminee();
   // 受理と同じ名前の項の後半だけを撃つ —— 受理は最後に面接室の行を撮り直す(ADR 0351 決定4)ので、そこまで撃つと誤った鍵の書き込みが消える
-  const { own, examinees } = namePickupPredicates(db, root.id, room, dirname(room.path));
+  const { own, openers } = namePickupPredicates(db, root.id, room, dirname(room.path));
 
-  await firePickupPredicates(db, room, [...own, ...examinees], "after-open");
+  await firePickupPredicates(db, room, [...own, ...openers], "after-open");
 
-  expect(examinees.filter((p) => p.phase === "after-open")).toEqual([]);
+  expect(openers.filter((p) => p.phase === "after-open")).toEqual([]);
   expect(examineeRow()).toBeUndefined();
   expect(roomRow()).toBe(roomBefore);
   db.close();

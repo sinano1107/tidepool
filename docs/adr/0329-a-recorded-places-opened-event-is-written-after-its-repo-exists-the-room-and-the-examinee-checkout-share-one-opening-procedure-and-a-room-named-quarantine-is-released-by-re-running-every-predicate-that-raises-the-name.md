@@ -1,5 +1,7 @@
 # 記録された場所の開いた event は repo ができた後に書く —— 面接室と受験者の checkout は1つの開く手順で開き、面接室の名前の quarantine は、その名前を立てうる門の述語をすべて撃ち直して解く
 
+**Status 追記: 決定4 の撃ち直す述語の単位は、場所ではなく (task, 場所) になった。面接室の項は、場所だけの項(記録分岐・`.git` の形・最新の出題の head が引ける、など)と、準備がその task のために面接室から fetch するものの項に分かれる —— 読み手は [ADR 0361](0361-interview-readers-read-a-checkout-of-the-posed-head-not-the-rooms-git-and-the-answers-stay-in-the-room.md) 決定1 の Status 追記の出題の head、受験者は自分のタスクブランチ(無ければ fork 元の出題の head)、root は記録された面接室にある自分のタスクブランチ。pickup の門は task が開く面接室ごとにその task の項を撃ち、解除の門と予告は名前を開く未決着の task すべての項を並べる。名前 → task は停止の門と同じ task → 名前の持ち主(`openedPlaceNamesSql`)の逆引きで、受験者を特別な分類にしない —— 決定4 の「受験者ごと」は、task ごとに違う項を持つのが受験者だけだった時点の写しだった。項の深さは commit が引けるかではなく、準備の fetch が要る閉包(`--depth` を付けないので履歴全体の object)。却下の後に出し直した root への異議の RCA が読む旧い head と、欠けた tree・blob が門で止まらず、準備で止まって回答の受理の後にまた止まっていた(2026-11-12、issue #3136)。**
+
 **Status 追記: 追記 決定7 の「pickup の純粋な一覧を撃つ場所の集合は、停止の門が数える集合と同じ」は、受験者では成り立たない —— 停止の門は受験者の `workspace` 列の実環境も数えるが、受験者は実環境を開かないので pickup の門は撃たない。停止の門の集合は pickup の門が撃つ場所を含む、が残る([ADR 0368](0368-a-resource-stop-returns-a-pickup-to-todo-only-when-the-stop-gate-holds-that-task-and-an-examinee-is-also-stopped-by-its-workspace-column.md) 決定3、2026-11-10、issue #3144)。**
 
 **Status 追記: 決定5 の「出題の head の述語が並ぶ名前(出題済みで受験者が未決着)」は「出題済みの名前」に広がった —— 読み手は受験者の決着後も出題の head を面接室から fetch する([ADR 0361](0361-interview-readers-read-a-checkout-of-the-posed-head-not-the-rooms-git-and-the-answers-stay-in-the-room.md) 決定1)ので、出題の head が引けることは面接室の項として並び、「手で `git init` して空のまま走らせる」は出題前の名前だけに予告する(2026-11-10、issue #3105 の実装レビュー)。**

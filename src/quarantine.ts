@@ -276,13 +276,13 @@ export const QUARANTINES = [
       const room = getTask(db, name!)?.type === "interview";
       const recorded = room ? recordedPlace(db, name!) : undefined;
       // 予告は説明だけを読む —— 検査は撃たないので、実環境の在り処と規約の基点は要らない
-      const { own, examinees } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
+      const { own, openers } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
       const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...own.map((p) => p.describe)];
       if (!room || recorded?.hasRepository !== false) checks.push(...[
         "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
         "the workspace path does not overlap the board's own state paths.",
       ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
-      checks.push(...examinees.map((p) => p.describe));
+      checks.push(...openers.map((p) => p.describe));
       return {
         title: `workspace ${name} needs human attention`,
         purpose:

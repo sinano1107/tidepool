@@ -3938,6 +3938,15 @@ function openedPlaceNamesSql(taskRef: string): string {
           UNION ALL SELECT json_extract(ev.payload, '$.previous_root_id') FROM roots JOIN events ev ON ev.task_id = roots.id AND ev.kind = 'interview_retried'`;
 }
 
+/** 名前を開く未決着の task —— `openedPlaceNamesSql` の名前の軸の逆引き。修理の予告と回答が (task, 場所) の項を撃つ集合
+ *  (ADR 0329 決定4 の Status 追記、issue #3136)。決着した task は開く pickup が無いので掛からない。 */
+export function unsettledOpenersOf(db: Db, name: string): Task[] {
+  const rows = db
+    .prepare(`SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t WHERE ${unsettledSql("t.status")} AND @name IN (${openedPlaceNamesSql("t")}) ORDER BY t.sort_key`)
+    .all({ name, defaultWorkspaceName: null }) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
 /** `openedPlaceNamesSql` を1 task について引く(TS の読み手 —— scheduler の封じ込めの組の検査)。 */
 export function openedPlaceNames(db: Db, taskId: string, defaultWorkspaceName: string | undefined): string[] {
   const names = db
@@ -4619,11 +4628,6 @@ export function listExaminees(db: Db, rootId: string): Task[] {
     )
     .all(rootId) as TaskRow[];
   return rows.map(rowToTask);
-}
-
-/** 修理の予告と回答が検査する、まだ checkout を開きうる受験者(ADR 0329 決定4)。 */
-export function unsettledExaminees(db: Db, rootId: string): Task[] {
-  return listExaminees(db, rootId).filter((task) => !isSettled(task.status));
 }
 
 /** The queue head the slot may take: lowest-sort_key todo that is
