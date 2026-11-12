@@ -985,3 +985,31 @@ it.each([
   await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(`task/${task.id}`);
   db.close();
 });
+
+it.each([
+  ["根拠に読む root", async (db: Db, evidence: Awaited<ReturnType<typeof posedInRoom>>) => {
+    const reader = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: evidence.workspace.name, evidence_task_ids: [evidence.root.id], interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, reader);
+    return reader;
+  }],
+  ["retry の新しい root", async (db: Db, evidence: Awaited<ReturnType<typeof posedInRoom>>) => {
+    const again = retryInterviewRoot(db, getTask(db, evidence.root.id)!, undefined, NOW, {}, "webui");
+    openTestInterviewRoom(db, again);
+    return again;
+  }],
+])("%s が読む面接室の最新の出題の head の blob が欠けると、その面接室の名前への回答は head と読む root を名指して拒み、読む root の pickup の門はその面接室の名前で止まる(issue #3136 / ADR 0329 決定4)", async (_, reading) => {
+  const db = openDb(":memory:");
+  const evidence = await posedInRoom(db);
+  const { workspace, root, room, head, base } = evidence;
+  const reader = await reading(db, evidence);
+  dropObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
+
+  const refused = quarantineChecks({ db }).workspace!(root.id);
+
+  await expect(refused).rejects.toThrow(`the posed head ${head} that ${reader.id} reads`);
+  const failed = await pickupGate(db, workspace, getTask(db, reader.id)!, base).catch((err: unknown) => err);
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(head);
+  db.close();
+});
