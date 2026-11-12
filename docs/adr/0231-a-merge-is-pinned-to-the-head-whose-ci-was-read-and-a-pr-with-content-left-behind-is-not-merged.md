@@ -1,5 +1,7 @@
 # merge は CI を読んだ head に固定し、積み残しのある PR は merge しない
 
+**Status 追記: 決定3 の人間の merge 回答と無人 merge は、積み残しを読む同期区間の頭で名前の場所の全 ref を基準と比べる(fetch の await の後は比べ直す)—— 動いていれば、回答は拒まれて question は開いたまま残り、無人 merge はキューに残り、どちらも workspace の Quarantine を登録する([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 **Status: 決定2 の測り方は ADR 0239 で改められた — 積み残しは後始末の印ではなく、分解ツリーの done の work それぞれを merge される head と内容で比べて測る**
 
 **Status: 決定3 の読む場所は ADR 0242 で改められた — 回答時と merge 時(GitHub が報告した head と比べる)に加え、収束の push 判定と push 後(盤面が最後に push した head と比べる)でも読む。盤面の外の push が内容を落とした head は、キューに残さず推奨 hold の merge question に倒す**

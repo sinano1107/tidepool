@@ -1,5 +1,7 @@
 # 運ぶものが無い完了は着地を要求しない
 
+**Status 追記: `nothing_to_land` を決める内容の読みは、同じ同期区間の頭で名前の場所の全 ref を基準と比べた後に読む —— 動いていれば刻まず、その根はその回 workspace の Quarantine で止まる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 **Status: 「運ぶものが無い」の判定は ADR 0105 で履歴(独自コミットの有無)から内容へ置き換え済み** — 同一内容が既に着地していれば、独自コミットがあっても着地対象なし。決定そのものは維持される。
 
 issue #313 のグリリング(2026-08-13)で決定。ADR 0052 の実環境動作確認 第3段で、ファイルを1つも

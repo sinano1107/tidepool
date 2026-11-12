@@ -11,19 +11,24 @@ Quarantine の受理は比べずに今の `task/<id>` を merge back し、全�
 
 ## 決定
 
-1. **着地が名前の場所の ref を読んで、運ぶか記録を決めるとき、その読みは、同じ同期区間の頭で全 ref を基準と比べた後のものに限る。**
-   await をまたいだら比べ直す。運ぶ手は push・local 着地の merge・追いつきの merge、記録は `nothing_to_land` / `landing_finished` /
-   断念・hold した根の問い直し / 閉じた PR の下に取り残された子の告知で、GitHub の merge を決める積み残しの読み(PR の merge の回答と
-   無人 merge の tick)も同じである。比較器は pickup と同じ1つ、範囲は全 ref(ADR 0351 決定2、ADR 0064 決定1)。比較が落ちた根は、その回
-   workspace の Quarantine で止まる —— 門が閉じていても同じで、「門は quarantine より先に読む」(ADR 0241 決定3)はこの場合に限って譲る。
-   tick で落ちた PR はキューに残す(ADR 0229 決定1 の残し方)。動いた ref は、新しく立つ Quarantine の理由が名指しする。既に開いて
-   いれば question は増えず、回答の拒否文が名指しする。着地は人間の内容の入口ではないので、着地が読む ref の帯域外の移動は違反で、
-   新しい状態を足さずに今の Quarantine で止まる。
+1. **着地が名前の場所の ref を読んで、運ぶか書き込みを決めるとき、その読みは、同じ同期区間の頭で全 ref を基準と比べた後のものに限る。**
+   await をまたいだら比べ直す(確かめた値を await の後に運ぶのは構わない)。ref の読みから決まる書き込みはどれも対象で、次は例で
+   ある: 運ぶ手(push、local 着地の merge、追いつきの merge)、event(`nothing_to_land` / `landing_finished` / `landing_deferred`)、
+   question の登録と引退(失敗 question、local merge question、断念・hold した根の問い直し)、GitHub の merge とキューの取り下げを決める
+   積み残しの読み(PR の merge の回答と無人 merge の tick)、根かどうかを決める lineage の読み。比較器は pickup と同じ1つ、範囲は全 ref
+   (ADR 0351 決定2、ADR 0064 決定1)。比較が落ちた根は、その回 workspace の Quarantine で止まる —— ref を読んだ根は門が閉じていても
+   同じで、「門は quarantine より先に読む」(ADR 0241 決定3)はこの場合に限って譲る(ref を読まずに門で返る、親の無い断念・hold の根は
+   今どおり門で待つ)。tick で落ちた PR はキューに残す(ADR 0229 決定1 の残し方)。動いた ref は、新しく立つ Quarantine の理由が名指し
+   する。既に開いていれば question は増えず、回答の拒否文が名指しする。着地は人間の内容の入口ではないので、着地が読む ref の帯域外の
+   移動は違反で、新しい状態を足さずに今の Quarantine で止まる(走っている session は止めない。受理は session が終わるまで拒まれる)。
+   比較は、盤面が落ちた後に残った2値行を ref の側へ畳むので、tick と回答の経路でも基準を書く。
    - ref を読まない手は対象でない: GitHub の PR の状態の観測と、GitHub が報告する PR の head(ローカルの ref ではない —— ADR 0242 決定1)。
-   - 例外は hold と断念の head の記録だけで、比べずに書く(何も運ばない —— 「読めなくても hold は拒まない」ADR 0289 決定3 を保つ)。
-   - workspace の Quarantine が開いているだけでは、local 着地と PR の merge の回答は今どおり拒まない(ADR 0289 決定2)。tick は今の
-     コードどおり走り、retry は今どおり拒まれる(ADR 0241 決定6)。比較は Quarantine の有無によらず走る。
-   - 基準の行そのものが無い workspace(削除して再登録した後に、PR を持つ根・hold した根・断念した根が残る)では、着地が pickup と同じ
+     同じ読みを使う表示と扉(着地を待つ task の数え上げ、削除の扉)は着地ではないので、ここでは変えない。
+   - 例外は2つで、比べずに書く: hold と断念の head の記録(何も運ばず、head が読めなくても hold を拒まない今の振る舞いを保つ)と、
+     閉じた PR の下に取り残された子の告知(何も運ばない1度きりの知らせで、やり直しが無い —— 比較で落とすと失われる)。
+   - workspace の Quarantine が開いているだけでは、local 着地と PR の merge の回答は今どおり拒まない(ADR 0289 決定2)。tick と retry も
+     今のコードどおりである(retry は、運ぶ内容があって門が開いていれば Quarantine で拒まれる)。比較は Quarantine の有無によらず走る。
+   - 基準の行そのものが無い workspace(削除して再登録した後に、開いた question もキューの行も持たない PR の根・hold した根・断念した根が残る)では、着地が pickup と同じ
      手続きで最初の撮りをする(ADR 0351 決定2)。違反として止めると出口が無い: 受理は行を作らず、pickup は収束の後にしか来ない。再登録
      した checkout をそのまま信じるのは最初の pickup と同じで、今は止まる local 着地の回答が通るようになる。ADR 0103 決定1 の
      「行が無いときも不一致」は、基準はあるがその ref の行が無い場合に限る。
@@ -68,8 +73,8 @@ Quarantine の受理は比べずに今の `task/<id>` を merge back し、全�
 
 ## 影響
 
-- Status 追記: ADR 0351 決定2・7、ADR 0064 決定6、ADR 0103 決定1・4、ADR 0105 決定2、ADR 0225 決定2、ADR 0229 決定1、ADR 0240 決定4、
-  ADR 0241 決定3、ADR 0242 決定4、ADR 0265 決定3、ADR 0289 決定2・3、ADR 0366 決定4、ADR 0369 決定3。
+- Status 追記: ADR 0351 決定2・7、ADR 0064 決定6、ADR 0073、ADR 0103 決定1・4、ADR 0105 決定2、ADR 0225 決定2、ADR 0229 決定1、
+  ADR 0231 決定3、ADR 0240 決定4、ADR 0241 決定3、ADR 0242 決定1・4、ADR 0265 決定3・6、ADR 0289 決定2・3、ADR 0366 決定4、ADR 0369 決定3。
 - GLOSSARY.md: Quarantine(契機と、受理に残る穴)、Branch discipline、着地、Workspace。
 - 実装の spec は #3151。ADR 0369 の実装(#3152)とは受理のコードを共有しなくなった。spec で実測する点(収束ごとの比較の費用、収束が
   await をまたぐ間の盤面自身の書き込み、帯域外の移動が無人 merge まで届かないことの回帰 test)は #3151 のコメントに置く。
