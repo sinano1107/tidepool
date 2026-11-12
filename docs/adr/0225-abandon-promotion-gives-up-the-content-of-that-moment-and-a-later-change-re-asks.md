@@ -1,5 +1,7 @@
 # abandon promotion が断念するのはその時点の内容の昇格であり、後の内容の変化は昇格の question を立て直す
 
+**Status 追記: 決定2 の「内容が変わっていれば question を立て直す」の内容の読みは、同じ同期区間の頭で名前の場所の全 ref を基準と比べた後に読む —— 動いていれば立て直さず、その根はその回 workspace の Quarantine で止まる。決定1 の断念の head の記録は比べずに書く([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 2026-10-09 の grilling(issue #1642、発端は #1630 の spec review / ADR 0217 決定4)で決定。PR 昇格失敗の question に
 `abandon promotion` と答えたタスクは、どの着地済みの記録も刻まれないので、その木の付帯子が後で決着すると
 `relandAncestors` が着地し直していた。内容が何も変わらない決着(何も見つけない review)でも PR が開き、profile が読めな

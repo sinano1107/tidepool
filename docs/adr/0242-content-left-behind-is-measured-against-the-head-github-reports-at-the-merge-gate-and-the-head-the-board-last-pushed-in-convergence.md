@@ -1,6 +1,6 @@
 # 積み残しは、merge の門では GitHub が報告した head と、収束では盤面が最後に push した head と比べる
 
-**Status 追記: 決定4 の文面に従った手の書き込みは名前の場所の ref を動かすので、回答し直しは着地の比較に当たり、workspace の Quarantine を1枚経る —— 文面はそれを告げる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
+**Status 追記: 決定4 の文面に従った手の書き込みは名前の場所の ref を動かすので、回答し直しは着地の比較に当たり、workspace の Quarantine を1枚経る —— 文面はそれを告げる。「捨てる」手順(`git reset --hard origin/task/<id>`)は、名前の場所の HEAD が保護ブランチに居る今はローカルの保護ブランチを動かすので、文面を直すときに手順ごと直す。決定1 の GitHub が報告する PR の head はローカルの ref ではないので、着地の比較の対象でない([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
 
 **Status: 決定1 はローカル着地の merge 回答にも及ぶ(ADR 0289)—— 比べる head は着地の面が merge する head で、ローカルではローカルのタスクブランチ**
 

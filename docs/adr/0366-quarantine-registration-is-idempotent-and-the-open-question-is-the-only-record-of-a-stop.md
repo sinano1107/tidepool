@@ -1,6 +1,6 @@
 # Quarantine の登録は冪等で、開いた question が停止の唯一の記録 —— 再発火の event は持たない
 
-**Status 追記: 決定4 の landing の poll のうち無人 merge の tick は、drift に加えて ref の帯域外の移動の観測者にもなる —— 積み残しを読む手前で全 ref を基準と比べ、動いていれば workspace の Quarantine を登録する。外部 merge の走査は名前の場所の ref を読まないので比べない。決定4 が挙げていない収束も同じ比較をする([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+**Status 追記: 決定4 の landing の poll は、drift に加えて ref の帯域外の移動の観測者にもなる —— 無人 merge の tick は積み残しを読む同期区間の頭で、外部 merge の走査は閉じた PR の下に取り残された子を告げる読み(lineage と内容)の頭で、全 ref を基準と比べ、動いていれば workspace の Quarantine を登録する。走査が PR の状態を観測して刻むところは ref を読まないので比べない。決定4 が挙げていない収束も同じ比較をする([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 **Status 追記: 決定2 が挙げる session 側の記録は、停止が session を止めた経路のものである(2026-11-11、issue #3146)** —— 走行中の session の verb が開いた agent の Quarantine に当たる経路(`attributedAuthorityOrQuarantine`、ADR 0224)は session を止めず、verb を拒否文で拒むだけで、`pickup_stopped` / `session_stopped_by_resource` / failure question のどれも書かない。当たった事実の持ち主は worker の transcript(ADR 0149 決定1)で、Episode の投影はその verb を失敗した行動として持つ。盤面 DB の event には写さない —— transcript を読まずに session を跨いで数える読み手(meta-review の材料、Episode、WebUI、人間の手順)は無い。その読み手が現れたら session 側の event を足す。
 

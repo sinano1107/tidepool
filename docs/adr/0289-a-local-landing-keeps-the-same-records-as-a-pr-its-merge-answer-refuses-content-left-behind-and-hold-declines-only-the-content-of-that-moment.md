@@ -1,5 +1,7 @@
 # ローカル着地も根に記録を持つ —— merge 回答は積み残しで拒み、hold が断るのはその時点の内容である
 
+**Status 追記: 決定2 の「workspace の quarantine 単独では拒まない」は変わらない —— ただし local 着地の merge の回答は、ref を読む同期区間の頭で名前の場所の全 ref を基準と比べ、動いていれば拒む。決定3 の hold の後の立て直しも同じ比較の後の読みから決め、hold の head の記録だけは比べずに書く(「読めなくても hold は拒まない」を保つ)([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 2026-10-21 の grilling(issue #1780、発端は #1769 / ADR 0231 と #1777 / ADR 0239)で決定。purely-local の着地は、merge の
 執行・hold・終わりを根に刻まず、local merge question の行が存在することを収束の除外条件にしていた(ADR 0241 帰結)。PR
 着地が後から得た記録の規律(ADR 0231 / 0236 / 0242 / 0265)はローカルに写されていない。そのため、ローカル着地の merge

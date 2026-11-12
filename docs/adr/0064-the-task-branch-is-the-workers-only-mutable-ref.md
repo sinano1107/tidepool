@@ -1,6 +1,6 @@
 # タスクブランチは worker の唯一の可変 ref である
 
-**Status 追記: 決定6 の「行が無い / NULL を『まだ持ったことがない』と読んで最初の撮りをする」のは、pickup に加えて着地もである —— 基準の行そのものが無い workspace で着地が比べると出口が無い(受理は行を作らず、pickup は収束の後にしか来ない)。release での行無しは今日どおり違反([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+**Status 追記: 決定6 の「未設定に分岐は書かない」は、ADR 0351 で pickup が、行そのものが無い場合を「まだ持ったことがない」と読んで最初の撮りをする形に変わっていた。着地も同じ側に立つ —— 行そのものが無い workspace で着地が違反として止めると出口が無い(受理は行を作らず、pickup は収束の後にしか来ない)。release での行無しは今日どおり違反([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 **Status 追記: 基準を持つのは名前の場所だけで、見張る相手は人間と盤面自身になる(worker は task の checkout で走り、盤面が読むのは `task/<id>` 1本)([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 

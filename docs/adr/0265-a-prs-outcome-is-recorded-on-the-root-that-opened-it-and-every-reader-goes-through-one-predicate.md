@@ -1,5 +1,7 @@
 # PR の決着は PR を開いた根に刻み、読み手は1本の述語を通る —— `external` の根は内容で終わり、読めなければ止まる
 
+**Status 追記: 決定3 の内容で終わる `landing_finished` は、同じ同期区間の頭で名前の場所の全 ref を基準と比べた後の読みから決める —— 動いていれば刻まず、その根はその回 workspace の Quarantine で止まる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
+
 2026-10-16 の grilling(issue #2054、同日の triage sweep が立てた family の根)で決定。PR の決着(merge された・閉じられた)を
 書く経路は2つの id に割れていた —— 人間の `merge` 回答と merge question 面の観測は question の id に、無人 merge の tick と
 収束は根(PR を開いた work)の id に刻む。読み手は task id だけ(収束の閉じた根の除外・観測の重複除け・retry)、両方の join
