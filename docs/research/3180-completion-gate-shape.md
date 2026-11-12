@@ -49,6 +49,7 @@
 - **門に祖先の検査は無い。** A11 は旧値の CAS だけで、新しい tip が旧値の子孫であることを確かめない。ADR 0364 決定1 は「tip が fork 元と無関係な commit でもよいのは今日どおり」と書く。祖先・merge-base を読むのは A13 の delta(merge-base が取れないと拒む —— `tests/completion-commit-gate.test.ts:318–333`。このとき tip は A11 で既に ref に入っている)と、門の外の2か所: WIP の退避の base 選び(`src/workspace.ts:1764`)と merge back(`:1867–1870`)。
 - **門が書く ref は呼んだ task 自身の `refs/heads/task/<id>` 1本だけ。** 他の task のブランチ・保護ブランチ・HEAD を外の tip から書く手は門に無い。
 - A10 は基準全体の比較ではない(ADR 0359 決定4)。他の ref が帯域外に動いていても門は通る。
+- **門が何も検査せずに verb へ進む枝が1つある。** workspace の resolver が無い盤面では `taskRunPlaceForBoard` が undefined を返し、`completionGatedPlace` は `src/mcp.ts:350` で undefined を返して A7〜A15 を全部飛ばす(受験者は面接室が記録にあるのでこの枝に入らない)。`gate` 自体は渡されているので `:475` の不変条件にも掛からない。どの構成で resolver が無くなるかは読んでいない。
 
 ### B. `done` の後(後始末、非同期)
 
@@ -89,14 +90,14 @@
 | A14 gitlink | 同上(同じ delta) | `src/git.ts:218–220` |
 | A15 未 commit | **前提にする**: task の checkout の worktree、task の `worker_spawned` / `task_picked_up` event(Harness で除外が変わる) | `src/workspace.ts:1018–1027`、`:1399–1408` |
 | 門の中の上限超過 | **前提にする**: slot の session id、容器(session を強制回収で決着させる) | `forceReclaimOnWorkerTreeTimeout` `src/mcp.ts:417–429` |
-| A16 verb 本体 | task の行(未決着、子)、handoff。actor は **agent の身元**(未指定は既定の agent、人間にならない)、origin は `worker`。`completeTask` 自体は人間の扉と共有 | `src/tasks.ts:1415–1484`、`src/mcp.ts:244–258` |
+| A16 verb 本体 | task の行(未決着、子)、handoff。actor は **task の担当の名前**(`assignee`、未指定なら種別ごとの既定の agent)、origin は `worker`。`completeTask` 自体は人間の扉と共有 | `src/tasks.ts:1415–1484`、`src/mcp.ts:244–258`、`resolveTaskAgent` `src/tasks.ts:3882–3892` |
 | A16 の不変条件 | 門が掛かる task が門なしに `done` になれば巻き戻す —— **この検査は worker の扉(`runReleasingVerb`)にだけある** | `src/mcp.ts:474–477` |
 | A17・B1 後始末 | **前提にする**: slot、session の回収済み観測 | `src/mcp.ts:481–483`、`src/teardown.ts:386–394` |
 | B2 | **前提にする**: `task_checkout_opened` の `completion_gate: "recorded_tip"`(無ければ旧版の完了として別扱い)、task の checkout | `src/workspace.ts:1752–1760` |
 | B3・B4・B6 | 名前の場所だけ | `src/workspace.ts:1269–1287`、`:1447–1477` |
 | B5 merge back | task の行の系譜と `type === "work"`。引数は名前の場所・帰り先・task id・記録の tip | `src/workspace.ts:1679–1680`、`:1855–1879` |
 
-封じ込めについて: 門のコードは封じ込めの成立を検査しない(検査は pickup / spawn の側で、この調査では読んでいない)。門が持つのは、checkout の byte を信用しない読み方(A7・A8)だけである。ADR 0364 決定1 の不変条件は「記録に入る object は、名前の場所に既にあるか、worker が自分の checkout の `objects/` に regular file として書いたもののみ」。
+封じ込めについて: 門のコードは封じ込めの成立を検査しない(検査は pickup / spawn の側で、この調査では読んでいない)。門が持つのは、checkout の byte を信用しない読み方(A7・A8)である。封じ込めを前提として**書いている**箇所は、写しの置き場のコメント「盤面 process の tmp —— worker は書けない」(`src/workspace.ts:685`)、ADR 0359 決定3 の「名前の場所は worker が書けない」、後始末の `heldForContainment`(`src/teardown.ts:389`)。ADR 0364 決定1 の不変条件は「記録に入る object は、名前の場所に既にあるか、worker が自分の checkout の `objects/` に regular file として書いたもののみ」。
 
 ## 3. 人間の commit(別の git ディレクトリで作ったもの)を同じ経路に通すとき、欠ける前提
 
@@ -105,14 +106,14 @@
 1. **入口の帰属が無い。** 経路の入口は Worker MCP の `?task=` と slot の一致で、人間の扉(HTTP / 管理 MCP)はここを通らない。人間の完了の扉 `completeThroughHumanDoor`(`src/human-verbs.ts:948–973`)は担当が人間の task だけを受け、`in_progress` を拒み、**門を通さずに** `completeTask` を呼ぶ。
 2. **走っている session が無い。** A6 の checkout の path は、この pickup の `task_checkout_opened` からしか引けない。path を運ぶ入力は無く、event を書くのは `openTaskCheckout` だけである。人間が担当した work は「盤面のタスクブランチに内容を持たない」と `src/landing.ts:430–431` のコメントが書く。
 3. **読む ref の名前が固定。** A7 が読むのは、その checkout の `refs/heads/task/<呼んだ task の id>` だけ。sha や branch 名を受ける引数は `recordTaskCheckoutTip(db, place, taskId)` に無い。
-4. **`.git` の形。** A7・A8 は `.git` が dir であること、objects が自分の `objects/` の loose か `.pack`、または名前の場所に既にあることを要求する。`.git` が file の checkout(`git worktree`)、bare repo、その repo 自身の alternates の先にしか無い object は「worker の repo の故障」になる。閉包が名前の場所に無い場合、`.pack` を丸ごと写す段が 30 秒の上限の中にある。
-5. **書く先が自分の `task/<id>` 1本。** #3158 の表で人間の内容の行き先になっている ref(H1 の帰り先 = 親の `task/<id>`、H7・H18・H19・H21 の保護ブランチ)へ、外の tip を書く手は門に無い。保護ブランチと親のブランチに盤面が書く手は、名前の場所の中の ref どうしの merge(`mergeBackInto`、`mergeTaskToProtected`)と origin からの fetch である。
-6. **基準の行。** A10 は名前の場所の `task/<id>` が基準の値のままであることを要求する。#3158 の場面の多くは、その ref か別の ref が既に帯域外に動いた後(Quarantine が開いている)である。A10 は自分の1本しか見ないが、B3(解放の全体比較)は全 ref を見る。
+4. **`.git` の形。** A7・A8 は `.git` が dir であること、objects が自分の `objects/` の loose か `.pack`、または名前の場所に既にあることを要求する。`.git` が file の checkout(`git worktree`)、bare repo、その repo 自身の alternates の先にしか無い object は「worker の repo の故障」になる。checkout の `objects/pack/` の `.pack` は、閉包が名前の場所にあるかに依らず全部写して `index-pack` する(`src/workspace.ts:654–659`)。その段が 30 秒の上限の中にある。
+5. **書く先が自分の `task/<id>` 1本。** #3158 の表で人間の内容の行き先になっている ref(H1 の帰り先 = 親の `task/<id>`、H7・H18・H19・H21 の保護ブランチ)へ、外の tip を書く手は門に無い。読んだ範囲で、親のブランチと保護ブランチに盤面が書く手は、名前の場所に既にある ref どうしの merge back(`mergeBackInto`)と休止位置の ff(`parkOnProtectedBranch`)、origin からの保護ブランチの fetch である(`mergeTaskToProtected` / `catchUpTaskBranch` の本体は読んでいない)。
+6. **基準の行。** A10 は名前の場所の `task/<id>` が基準の値(pickup が予告した fork 元か、盤面が後から書いた値)のままであることを要求する。A10 は自分の1本しか見ないが、B3(解放の全体比較)は全 ref と HEAD を見る。
 7. **Quarantine 中は session が始まらない。** 門自体は workspace の Quarantine で変わらない(ADR 0350 決定1、`tests/completion-commit-gate.test.ts:335`)が、Quarantine が開いている間その workspace の task は slot に入らない(`src/workspace.ts:1507–1511` のコメントの読み。pickup の停止の門は読んでいない)。
-8. **fork 元。** A13・A14 の base は task の行の系譜から導く。系譜を持たない commit には base が無い。merge-base が取れなければ拒む。
+8. **fork 元。** A13・A14 の base は task の行(`parent_id` の鎖、種別、役)から導く。task の行が無ければ base を導く入力が無い。base と tip の merge-base が取れなければ拒む。
 9. **人間しか書けない path の検査は書き手を見ない。** A13 は path の形で拒むので、人間の commit がこの門を通ると、人間しか書けない path の変更(#3158 の H18・H19 の内容そのもの)は拒まれる側に入る。
 10. **未 commit の検査の対象。** A15 は task の checkout の worktree を読む。
-11. **actor と origin。** A16 の event は agent 名と `worker` で刻まれる。`attributedActorId` は人間を返さない(`src/mcp.ts:244–250`)。
+11. **actor と origin。** A16 の event は task の担当の名前と origin `worker` で刻まれる。`src/mcp.ts:244–250` のコメントは「MCP の call は必ず agent の session に帰属し、人間にはならない」と書くが、`resolveTaskAgent` の本体は `assignee` が非 null ならそのまま返す(`src/tasks.ts:3889`)—— 人間が担当の task が pickup されないことに依る主張で、そこは読んでいない。
 12. **`done` の後の運び。** merge back と休止位置は後始末(slot と session の回収済み観測)が駆動する。`completion_gate: "recorded_tip"` の印は pickup が開いた event にしか付かない。
 
 ## 4. 人間向けの回答の面が今運べるもの
@@ -120,7 +121,7 @@
 - **入力の形**: `answers: string[]`(項目ごとに1つ、非空)、`comment?: string`、`amendment?: Record<string, unknown>`(`answerInputSchema` `src/human-verbs.ts:1128–1140`)。HTTP は `triage?: boolean` を足す(`src/api.ts:431`)。扉は `POST /api/tasks/:id/answer`(`src/api.ts:1494`)と管理 MCP の `answer_question`(`src/management-mcp.ts:1244`)で、どちらも `submitAnswer`(`src/human-verbs.ts:1148`)。
 - **`question_kind`**(12 種、`src/question-kind.ts:6–30`)が持つ値: task id(`stop_reason` / `local_merge` / `pr_promotion_retry`)、`cancel_option`、分解判断の番号、破綻の理由、`pending_child`、PR 番号、`proposal`、quarantine の種類と値(workspace 名など)、期限。**sha も branch も無い。**
 - **`amendment`** は提案の approve だけが受け、形は routing の行(tier / effort)、段の追加(name / description / position)、段の説明、Interview(hypothesis / measured_work / workspace / targets)、agent の tier(`to`)、memory(title / text / addressee ほか)(`src/human-verbs.ts:1168–1177`、`src/execution-setting.ts:632–775`、`src/memory.ts:1002`)。git の値を持つ形は無い。
-- **#3158 の主張「sha やブランチを運ぶ回答は無い」は、構造を持つ欄については確認できた。** 補正が1つ: 選択肢に縛られるのは 8 種(`failure` / `premise_breach` / `broken_probe` / `approval` / `pr_merge` / `local_merge` / `pr_promotion_retry` / `proposal`)で、`escalation` / `quarantine` / `stop_reason` / `cli_auth_expiry_warning` は**自由文を受ける**(`isFixedChoiceQuestion` `src/tasks.ts:2036–2053`、`assertAnswerable` `:1969–2001`)。Quarantine の確認の項目の選択肢は「repaired by hand」1つ(`src/quarantine.ts:606–608`)だが、回答の文はそれに縛られず「repair note」として受ける(`src/tasks.ts:2033–2035` のコメント)。回答と comment は event `question_answered` にそのまま残る(`src/tasks.ts:2155–2163`)。Quarantine の検査に渡るのは `kind.value` だけで、回答の文は渡らない(`src/human-verbs.ts:1318–1329`)。つまり文字列として sha を書くことはできるが、それを git の値として読むコードは見つからなかった。
+- **#3158 の主張「sha やブランチを運ぶ回答は無い」は、構造を持つ欄については確認できた。** 補正が1つ: 選択肢に縛られるのは 8 種(`failure` / `premise_breach` / `broken_probe` / `approval` / `pr_merge` / `local_merge` / `pr_promotion_retry` / `proposal`)で、`escalation` / `quarantine` / `stop_reason` / `cli_auth_expiry_warning` は**自由文を受ける**(`isFixedChoiceQuestion` `src/tasks.ts:2036–2053`、`assertAnswerable` `:1969–2001`)。Quarantine の確認の項目は、種類の行が自分の項目を持たなければ「repaired by hand」1つ(`src/quarantine.ts:606–608`。workspace の行は自分の項目を持たない `:287–301`、自分の項目を持つ行は `:111`・`:121`・`:147`・`:340` にあり本文は読んでいない)だが、回答の文はそれに縛られない。workspace の Quarantine の本文自身が「Any answer text is kept as a repair note」「refs moved since the board last recorded them are accepted as correct」と書く(`src/quarantine.ts:297–299`)。回答と comment は event `question_answered` にそのまま残る(`src/tasks.ts:2155–2163`)。Quarantine の回答の文を読むコードは1か所で、Interview の対象の2種類の Quarantine で `answers[0]` が「do not measure this target」かを見る(`dropsRefusedTarget` `src/tasks.ts:755–757`、`src/human-verbs.ts:1323`)。それ以外は、検査に渡るのは `kind.value` だけである(`src/human-verbs.ts:1324–1328`)。つまり文字列として sha を書くことはできるが、それを git の値として読むコードは読んだ範囲に無い。
 - **回答が刻む git の値は盤面が読んだもの**: `local_merge_executed` の `sha`、`local_merge_held` の `head`、`pr_merged`(`src/human-verbs.ts:1221–1236`、`:1314`)。
 - **git の object id を受ける人間の verb / HTTP route**: 見つからなかった。確かめ方は、`src/api.ts` の route の一覧(`router.get/post/patch/delete` 全行)、入力 schema(`:206–368`、`:423–431` は全文、`:369–565` は欄名の列挙)、管理 MCP の全 tool 名と `inputSchema` の欄名の列挙。git に関わる入力は workspace の `path`(register)、`repo`(clone / publish)、task の `workspace`(名前)、`github_issue_number` だけで、PR 番号も回答の入力には無い(question の列が持つ)。registry の workspace entry の `branch`(`src/registry.ts:426`)は branch 名で、HTTP の作成・更新 schema には無い。
 
@@ -128,7 +129,7 @@
 
 - 「別の git ディレクトリから commit を運ぶ仕組み(`fetchWorkerTip` など)は worker 専用」: **呼び手と入口は worker の session に限られるが、中の部品は一様ではない。** `fetchFromBoardCopy`・`boardRefWriter`・`recordedSettingsDisposition`・`treeDeltaEntries` は task も session も引数に取らない。task の checkout・`task/<id>` の名前・役を取るのは `readWorkerTip` / `withVerifiedWorkerTip` / `recordTaskCheckoutTip` / `completionTreePaths` である(§2)。
 - 「worker の tip が完了の門を通るのと同じ形」: 門の形は「祖先を確かめて受け取る」ではない。旧値の CAS + 自分の1本の基準検査で ref を書き、**書いた後に**中身を検査して `done` を拒む(§1)。記録の ref に入ることと門を通ることは同じでない。
-- 「回答は意図を運ばない(選択肢は repaired by hand の1つ)」: 選択肢は1つだが、Quarantine の回答は自由文を受けて記録に残る。読み手のコードは無い(§4)。
+- 「回答は意図を運ばない(選択肢は repaired by hand の1つ)」: workspace の Quarantine の選択肢は1つだが、回答は自由文を受けて記録に残る。その文を git の値や意図として読むコードは読んだ範囲に無い(§4)。
 - #3158 の行番号は `f7c172ed` / `c6ea7378` のもので、`25c84551` では門は `src/mcp.ts:333–407`、1本の検査は `src/workspace.ts:737–742`、比較器は `:1269`、全撮りは `:1203`。
 
 ## 読んだ範囲 / 読んでいない範囲
@@ -138,9 +139,9 @@
 - `src/mcp.ts:225–486`、`:560–900`、`:1905–1942`
 - `src/workspace.ts:120–170`、`:340–745`、`:780–1070`、`:1090–1500`、`:1640–1880`
 - `src/git.ts:1–339`、`src/sandbox.ts:585–642`、`src/tasks.ts:585–612`、`:1404–1484`、`:1969–2053`、`:2117–2163`(一部)
-- `src/human-verbs.ts:600–724`、`:925–973`、`:1105–1334`、`src/question-kind.ts` 全文、`src/quarantine.ts:585–615`
+- `src/human-verbs.ts:600–724`、`:925–973`、`:1105–1334`、`src/question-kind.ts` 全文、`src/quarantine.ts:285–306`、`:585–615`、`src/tasks.ts:748–757`、`:3882–3892`
 - `src/api.ts:200–368`、`:423–431`、`:1470–1562`、`src/teardown.ts:384–432`、`src/slot.ts:1–60`
-- ADR 0359 全文、ADR 0356・0362・0363・0364・0367 の決定の節と Status 追記
+- ADR 0359 全文、ADR 0356・0362・0363・0364・0367 の決定の節と Status 追記(0362 の Status 追記は各行の先頭 600 字まで)
 - テスト: `tests/completion-commit-gate.test.ts` の test 名の一覧と `:165–188`、`:312–345`
 
 **読んでいない**:
