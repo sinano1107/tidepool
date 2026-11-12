@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { boardViewStatus, boardWriteTree, TaskCheckoutUnreadableError } from "../src/git.js";
-import { addSubmodule, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, makeWorkspace, submoduleSource } from "./harness.js";
+import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, makeWorkspace, STAGING_FAILURES, submoduleSource } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -20,28 +20,19 @@ async function checkout(name: string) {
 }
 
 it.each([
-  { shape: "an unborn nested repo", reason: "does not have a commit checked out" },
-  { shape: "a symlink over hidden settings", reason: "beyond a symbolic link" },
-])("staging rejects $shape without writing objects to the named place", async ({ shape, reason }) => {
+  { ...STAGING_FAILURES[0], exclude: [] },
+  { ...STAGING_FAILURES[1], exclude: [".claude/settings.json"] },
+])("staging rejects $shape without writing objects to the named place", async (failure) => {
   const { path } = await checkout("stage-rejected");
-  const exclude = shape === "an unborn nested repo" ? [] : [".claude/settings.json"];
-  if (exclude.length === 0) {
-    commitWork(path, "mod", "a file\n");
-    rmSync(join(path, "mod"));
-    mkdirSync(join(path, "mod"));
-    git(join(path, "mod"), "init", "--quiet");
-  } else {
-    mkdirSync(join(path, ".claude"));
-    commitWork(path, ".claude/settings.json", "{}\n");
-    rmSync(join(path, ".claude"), { recursive: true });
-    symlinkSync("missing", join(path, ".claude"));
-  }
+  breakCheckoutStaging(path, failure);
   writeFileSync(join(path, "README.md"), "only in the working tree\n");
   const head = git(path, "rev-parse", "HEAD");
   const before = gitObjectFileCount(path);
 
-  expect(() => boardWriteTree(path, head, path, () => undefined, exclude)).toThrow(TaskCheckoutUnreadableError);
-  expect(() => boardWriteTree(path, head, path, () => undefined, exclude)).toThrow(reason);
+  expect(() => boardWriteTree(path, head, path, () => undefined, failure.exclude)).toThrow(expect.objectContaining({
+    constructor: TaskCheckoutUnreadableError,
+    cause: expect.objectContaining({ message: expect.stringContaining(failure.reason) }),
+  }));
   expect(gitObjectFileCount(path)).toBe(before);
 });
 

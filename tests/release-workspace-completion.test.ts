@@ -448,6 +448,30 @@ it("退避の基準に使う名前の場所の tip が読めなければ checkou
   }
 });
 
+it("完了した Interview root の退避の基準にある nested tree が読めなければ面接室を quarantine して WIP を残す(ADR 0367 決定1)", async () => {
+  const db = openDb(":memory:");
+  try {
+    const { root, room, place } = await pickedInterviewRoot(db, "release-corrupt-room-base", NOW);
+    const workerTip = git(place.path, "rev-parse", "HEAD");
+    mkdirSync(join(place.path, "nested"));
+    commitWork(place.path, "nested/recorded.txt", "already recorded\n");
+    const recorded = gateFetch(db, place, root);
+    git(place.path, "reset", "--hard", workerTip);
+    const completed = finishTask(db, root, FULL_HANDOFF, "worker", NOW, "worker");
+    writeFileSync(join(place.path, "wip.txt"), "only worker copy\n");
+    const tree = git(room.path, "rev-parse", `${recorded}:nested`);
+    rmSync(join(room.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+
+    releaseAfterCompletion(db, place, completed);
+
+    expect(quarantineQuestion(db, "workspace", room.name)).toMatchObject({ purpose: expect.stringContaining("read-tree") });
+    expect(writeObservations(db, root)).toEqual([]);
+    expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("only worker copy\n");
+  } finally {
+    db.close();
+  }
+});
+
 it("gitlink の祖先を symlink に置き換えた完了済み review の解放は、名前の場所を quarantine せず symlink を記録する(ADR 0365 決定3)", async () => {
   const { db, task, ws, place } = await pickedUpSession("review");
   try {

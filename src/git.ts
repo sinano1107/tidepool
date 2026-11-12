@@ -42,8 +42,8 @@ type Runner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Buffer;
 
 /** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view.
  *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's.
- *  This is the unbounded view for the board's own side (ADR 0357 決定1), the named places including the Interview room (ADR 0356
- *  決定1); a worker's tree uses `withWorkerTreeGit`. */
+ *  This is the unbounded view for the board's own side, including the Interview room (ADR 0356 決定1).
+ *  Worker status and staging use bounded Git (ADR 0357 決定1). */
 export function withBoardGit<T>(cwd: string, use: (view: View, gitDir: string) => T, objectsFrom = cwd): T {
   return viewWith(run, cwd, use, objectsFrom);
 }
@@ -53,7 +53,8 @@ function withWorkerTreeGit<T>(cwd: string, use: (view: View, gitDir: string) => 
   return viewWith(runOnWorkerTree, cwd, use, objectsFrom);
 }
 
-function viewWith<T>(runner: Runner, cwd: string, use: (view: View, gitDir: string) => T, objectsFrom: string, stage = false): T {
+function viewWith<T>(runner: Runner, cwd: string, use: (view: View, gitDir: string) => T, objectsFrom: string, mode: "view" | "stage" = "view"): T {
+  const stage = mode === "stage";
   const format = git(objectsFrom, "rev-parse", "--show-object-format");
   const objects = git(objectsFrom, "rev-parse", "--path-format=absolute", "--git-path", "objects");
   const makeDirectory = () => mkdtempSync(join(tmpdir(), "tidepool-git-view-"));
@@ -164,19 +165,26 @@ export function outOfSpace(dir: string, cause: unknown): boolean {
  *  The tree is available for `use` while that repo is open. */
 export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string, use: (tree: string, gitDir: string) => T, exclude: string[] = []): T {
   return viewWith(runOnWorkerTree, cwd, (view, gitDir) => {
+    try {
+      // ADR 0367 決定1: 盤面の記録から index を作る失敗は、worker の worktree を読む失敗と分ける。
+      seedViewIndex(view, head);
+    } catch (cause) {
+      if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(gitDir, cause)) throw stagingHostError(cause);
+      throw cause;
+    }
+    const gitlinks = seededGitlinks(view, head);
     let tree: string;
     try {
-      seedViewIndex(view, head);
-      const paths = viewPathspecs([...exclude, ...nestedRepos(view, cwd, seededGitlinks(view, head))]);
+      const paths = viewPathspecs([...exclude, ...nestedRepos(view, cwd, gitlinks)]);
       // 入れ子の repo は worker が幾つでも作れる —— argv でなく file で渡す(E2BIG)
       const pathspecs = join(gitDir, "pathspecs");
       stagingHostStep(() => writeFileSync(pathspecs, paths.join("\0")));
       view(["add", "-A", `--pathspec-from-file=${pathspecs}`, "--pathspec-file-nul"]);
       tree = view(["write-tree"]).trim();
       // ADR 0365 決定3: 列挙が外さなかった入れ子の repo が足した・進めた gitlink は worker の repo の故障
-      const gitlinks = gitlinkChanges(diffTreeEntries(gitDir, `${head}^{tree}`, tree, { workerTree: true }));
-      if (gitlinks.length > 0) {
-        throw new TaskCheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: the worktree has a nested repository the board does not carry: ${gitlinks.join(", ")}`);
+      const added = gitlinkChanges(diffTreeEntries(gitDir, `${head}^{tree}`, tree, { workerTree: true }));
+      if (added.length > 0) {
+        throw new TaskCheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: the worktree has a nested repository the board does not carry: ${added.join(", ")}`);
       }
     } catch (cause) {
       if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof TaskCheckoutUnreadableError || cause instanceof TaskCheckoutHostError) throw cause;
@@ -184,7 +192,7 @@ export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string
       throw new TaskCheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     }
     return use(tree, gitDir);
-  }, objectsFrom, true);
+  }, objectsFrom, "stage");
 }
 
 export interface TreeDeltaEntry {
@@ -193,7 +201,7 @@ export interface TreeDeltaEntry {
 }
 
 /** `from` から `to` まで(`mergeBase` なら2つの merge-base から `to` まで —— commit に限る)に entry(mode と blob、在る↔無い)が変わった行。
- *  名前の場所の盤面の git で、replace ref を通さず記録された object を読む(ADR 0360 決定1)。`.gitmodules` の `ignore` に gitlink を伏せさせない。
+ *  盤面所有の repo で、replace ref を通さず object を読む(ADR 0360 決定1)。`.gitmodules` の `ignore` に gitlink を伏せさせない。
  *  行は `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`。 */
 export function diffTreeEntries(repo: string, from: string, to: string, { mergeBase = false, workerTree = false } = {}): TreeDeltaEntry[] {
   const read = workerTree ? workerRepoGit : git;
@@ -307,7 +315,7 @@ function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv, i
   return run(cwd, args, env, input, remaining, WORKER_TREE_GIT_TIMEOUT_MS);
 }
 
-/** ADR 0357 決定1 / ADR 0364 決定3: git that reads bytes a worker wrote — the fetch from the board's copy of a task checkout's git files. */
+/** ADR 0357 決定1 / ADR 0364 決定3: bounded Git for worker bytes, including reads and fetches from board-owned copies. */
 export function workerRepoGit(cwd: string, ...args: string[]): string {
   return runOnWorkerTree(cwd, args).toString().trim();
 }

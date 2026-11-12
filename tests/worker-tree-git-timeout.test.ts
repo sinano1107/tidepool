@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, truncateSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -252,6 +252,25 @@ it("root の .gitignore が FIFO なら出題の写しは上限超過の型で�
   expect(expiry).toMatchObject({ subcommand: "ls-files" });
   expect(git(room.path, "for-each-ref", "refs/keep-around")).toBe("");
   await expectNoReader(fifo);
+});
+
+it.each([
+  ["hidden settings", "--no-replace-objects ls-tree"],
+  ["shadow remnants", "ls-tree --name-only"],
+])("出題の写しで %s を検証済みの worker tip から読む手も有界(ADR 0364 決定3)", async (_, command) => {
+  const { db, root, place } = await pickedRoot("worker-tree-pose-exclusions");
+  writeFileSync(join(place.path, ".bashrc"), "");
+  const bin = await tempDir("tidepool-git-slow-tree-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1 $2" = '${command}' ]; then sleep 2; fi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    const expiry = thrown(() => commitRoomCopy(db, place, root.id));
+    expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
+    expect(expiry).toMatchObject({ subcommand: "ls-tree", timeoutMs: 1000 });
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("未決着の受験者の解放が上限で止まれば task の失敗として checkout を残し、面接室を quarantine しない(ADR 0357 決定2 / ADR 0356 決定2)", async () => {

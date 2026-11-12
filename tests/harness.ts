@@ -1249,11 +1249,11 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   return path;
 }
 
-/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。task の checkout の WIP は `commit-tree` で積む(決定3)。 */
-export function failGitCommits(verb: "commit" | "commit-tree" = "commit"): void {
+/** ADR 0356 決定5: 署名設定は盤面に届かないので、git の commit 自体を失敗させる。 */
+export function failGitCommits(): void {
   const dir = mkdtempSync(join(tmpdir(), "tidepool-git-commit-failure-"));
   const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = ${verb} ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(dir, "git"), `#!/bin/sh\nif [ "$1" = commit ]; then\n  echo 'fixture commit failed' >&2\n  exit 1\nfi\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
   vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
   onTestFinished(() => {
     vi.unstubAllEnvs();

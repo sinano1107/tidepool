@@ -1015,11 +1015,15 @@ function describeChanges(changes: WorktreeChange[], separator: string): string {
 /** 盤面の view が運ばない path(ADR 0360 Status 追記、#3111): view の index の種 `tip` から導く hidden settings と、ADR 0069 の shadow 残骸。
  *  出題の写し・非完了の退避・完了の門・完了後の観測は同じこの集合を外す —— 綴りが割れれば門が名指すものを退避が運ばない。入れ子の repo は
  *  view 自身が外す(ADR 0365 決定3)。 */
-function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string, tipRepo = place.namedPlace.path): string[] {
+function boardViewExcludes(db: Db, place: TaskCheckoutPlace, taskId: string, tip: string, verifiedTipRepo?: string): string[] {
   // ADR 0360 決定1・2: Claude の spawn だけが settings を隠す。今回の pickup で Codex が走ったなら通常どおり変更を読む。
   const spawn = latestEventOfTask(db, taskId, "worker_spawned");
   const codexPickup = spawn?.payload.harness === "codex" && spawn.id > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0);
-  return [...(codexPickup ? [] : recordedSettingsDisposition(tipRepo, tip).hide), ...taskCheckoutRemnants(place.path, tipRepo, tip)];
+  const tipRepo = verifiedTipRepo ?? place.namedPlace.path;
+  const readGit = verifiedTipRepo === undefined ? git : workerRepoGit;
+  const hide = codexPickup ? [] : recordedSettingsDisposition(tipRepo, tip, readGit).hide;
+  const remnants = taskCheckoutRemnants(place.path, (path) => readGit(tipRepo, "ls-tree", "--name-only", tip, "--", path) !== "");
+  return [...hide, ...remnants];
 }
 
 /** Keep the recorded settings entries `hide` (ADR 0360 決定1) in Git but out of the worker's physical checkout by
@@ -1375,8 +1379,8 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
  *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
  *  完了の門(ADR 0084)の dirty 判定は同じ集合を見なければならない —— 2箇所に綴りが
  *  分かれれば、片方だけが残骸を数えて無実の拒否や取りこぼしが生まれる。
- *  tracked は worker の index でなく名前の場所のタスクブランチの tip で読む(ADR 0356 決定3)。 */
-function taskCheckoutRemnants(checkout: string, tipRepo: string, tip: string): string[] {
+ *  tracked は盤面が読む tip の tree で決める(ADR 0356 決定3 / ADR 0367 決定1)。 */
+function taskCheckoutRemnants(checkout: string, isTracked: (path: string) => boolean): string[] {
   return SANDBOX_STUB_PATHS.filter((path) => {
     let stat: Stats | undefined;
     try {
@@ -1387,8 +1391,7 @@ function taskCheckoutRemnants(checkout: string, tipRepo: string, tip: string): s
       // ADR 0367 決定1: 既知の残骸を探すために worker の worktree を読む手も stage と同じ帰責。
       throw asWorkerRepoFailure(checkout, err);
     }
-    if (!stat?.isFile() || stat.size !== 0) return false;
-    return git(tipRepo, "ls-tree", "--name-only", tip, "--", path) === "";
+    return stat?.isFile() && stat.size === 0 && !isTracked(path);
   });
 }
 
