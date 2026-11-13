@@ -114,7 +114,7 @@ const FAILURE_QUESTION_AFTER = 10 * 60 * 1000;
 export type ExecutionCandidateTarget = Pick<Task, "id" | "type" | "assignee" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
 
-/** 開いた workspace の封じ込めの組(ADR 0259 決定1)を、task の候補から外す式。外れるのは、task が開く場所のどれか
+/** 開いた workspace の封じ込めの組(ADR 0259 決定1)を、task の候補から外す式。外れるのは、停止の門が task に数える場所のどれか
  *  (`openedPlaceNames`)と行の正準 Harness がどちらも止まった組と一致する行だけ —— poll 全体の除外(`pickupExclusions`)にも `ResourceStops` にも
  *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。
  *  断られた行でない Interview の対象(ADR 0199 決定4)の question か、対象に当たる行の Quarantine(ADR 0184 決定2)が
@@ -129,7 +129,7 @@ function withoutStopped(
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
     if (pairs.length === 0) return candidates(task);
-    // 組も task が開く場所すべての名前と比べる(ADR 0273 追記、issue #2265)—— `stoppedSql` と同じ断片から引く
+    // ADR 0368 決定4: 組も `stoppedSql` と同じ場所の名前と比べる。
     const places = openedPlaceNames(db, task.id, defaultWorkspaceName);
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => places.includes(pair.workspace) && pair.harness === canonicalHarness(setting.provider)),

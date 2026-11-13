@@ -20,7 +20,7 @@ type BoardReturn = (deps: TeardownDeps, containers: ProcessContainers, task: Tas
 
 const RETURNS: [string, BoardReturn][] = [
   ["cap_interrupted", (deps, _, task) => teardownStep(deps.db, task.id).transition!(task, deps.clock.now())],
-  ["pickup_stopped", (deps, containers, task) => queueReturnHandler(deps, containers)(task.id, sessionId(deps.db, task.id), { kind: "pickup_stopped", quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" })],
+  ["pickup_stopped", (deps, containers, task) => queueReturnHandler(deps, containers, { defaultWorkspaceName: "ghost" })(task.id, sessionId(deps.db, task.id), { kind: "pickup_stopped", quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" })],
   ["record_container_unwritable", (deps, containers, task) => recordContainerHaltHandler(deps, containers)(task.id, sessionId(deps.db, task.id), new RecordContainerError(task.id, "/logs", "EACCES"))],
   ["session_stopped_by_resource", (deps, containers, task) => {
     const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });

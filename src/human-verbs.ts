@@ -657,7 +657,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       }
       // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。
       const sessions = deps.db.prepare("SELECT id FROM tasks WHERE status = 'in_progress' OR teardown_started_at IS NOT NULL").pluck().all() as string[];
-      if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name).includes(value!))) {
+      if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name, "open").includes(value!))) {
         throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
       }
       await fire(all, "after-open");

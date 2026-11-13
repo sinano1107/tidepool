@@ -12,10 +12,12 @@ import { applyExecutionSettingsChange, loadExecutionSettingTable } from "../src/
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine, registerResourceStop } from "../src/quarantine.js";
+import { questionKindOf } from "../src/question-kind.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, DROP_TARGET_OPTION, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task, unrowedTarget } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
-import { queueReturnHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { RecordContainerError } from "../src/transcript-store.js";
+import { queueReturnHandler, recordContainerHaltHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import type { WorkerExitFacts } from "../src/worker.js";
 import {
   openInterviewRoom,
@@ -471,7 +473,7 @@ async function stoppedBeforeSpawn(taskWorkspace?: string) {
     if (name === "ghost") throw new UnknownWorkspaceError(name);
     return ws;
   };
-  const handler = queueReturnHandler({ db, clock, slot, resolve, pollNow: () => triggered.push("pollNow") }, containers);
+  const handler = queueReturnHandler({ db, clock, slot, resolve, pollNow: () => triggered.push("pollNow") }, containers, { defaultWorkspaceName: ws.name });
   return { db, clock, ws, place, slot, runtime, containers, task, triggered, resolve, handler };
 }
 
@@ -497,13 +499,35 @@ it("worker を起動する前に資源の Quarantine が止めた pickup は、f
   expect(questions(f.db).map((q) => q.id)).toEqual([openQuarantineQuestion(f.db, "workspaceContainment", "codex/sandbox")!.id]);
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(existsSync(f.place!.path)).toBe(false);
-  expect(existsSync(f.place!.path)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
   expect(markedSession(f.db)).toBeUndefined();
   expect(f.runtime.forceReclaims).toEqual([String(sessionId(f.db, f.task.id))]);
   f.containers.preflight();
   expect(f.runtime.preflightLive.at(-1)).toEqual(new Set());
   expect(f.triggered).toEqual(["pollNow"]);
+});
+
+it.each([
+  { quarantine: "workspace", value: "other", reason: "unknown workspace: other" },
+  { quarantine: "agent", value: "other-agent", reason: "unknown agent: other-agent" },
+  { quarantine: "workspaceContainment", value: "codex/other", reason: "unsafe settings" },
+] as const)("停止の門が外さない $quarantine の停止は spawn_failed と failure question になり、task は blocked になる(ADR 0368 決定1・2)", async (stop) => {
+  const f = await stoppedBeforeSpawn("sandbox");
+  registerQuarantine(f.db, stop.quarantine, stop.value, stop.reason, f.clock.now());
+
+  f.handler(f.task.id, sessionId(f.db, f.task.id), { kind: "pickup_stopped", ...stop });
+  await settle();
+
+  expect(listBoard(f.db).find(({ id }) => id === f.task.id)?.status).toBe("blocked");
+  const events = listEvents(f.db, f.task.id);
+  const message = `the stop gate does not exclude this task for ${stop.quarantine} "${stop.value}"`;
+  expect(events.filter(({ kind }) => kind === "spawn_failed").map(({ payload }) => payload)).toEqual([
+    { kind: "spawn_failed", error_code: null, message },
+  ]);
+  expect(events.map(({ kind }) => kind)).not.toContain("pickup_stopped");
+  const [question] = questions(f.db).filter(({ parent_id }) => parent_id === f.task.id);
+  expect(questionKindOf(question!).kind).toBe("failure");
+  expect(question!.purpose).toContain(message);
 });
 
 /** 準備が task ブランチへの checkout より前に落ちた pickup(ADR 0274 決定3)。git は動く —— remote 正本の宣言に origin が無く、
@@ -534,7 +558,7 @@ async function stoppedBeforeCheckout(prior: boolean) {
   const failure = await prepareAtPickup(db, { ...ws, repo: "https://github.com/acme/elsewhere.git" }, task).then(() => undefined, (err: unknown) => err);
   expect(failure).toBeInstanceOf(Error);
   const stop = quarantineWorkspace(db, ws.name, failure, clock.now());
-  const handler = queueReturnHandler(deps, containers);
+  const handler = queueReturnHandler(deps, containers, { defaultWorkspaceName: ws.name });
   return { db, clock, ws, slot, runtime, containers, task, triggered, deps, stop, handler };
 }
 
@@ -546,6 +570,7 @@ function expectUntouchedReturn(f: Awaited<ReturnType<typeof stoppedBeforeCheckou
   const returned = getTask(f.db, f.task.id)!;
   expect(returned.status).toBe("todo");
   expect(returned.sort_key).toBe(f.task.sort_key);
+  expect(listEvents(f.db, f.task.id).filter((e) => e.kind === "pickup_stopped").map((e) => e.payload)).toEqual([{ kind: "pickup_stopped", ...f.stop }]);
   expect(slot.currentTaskId).toBeNull();
   expect(markedSession(f.db)).toBeUndefined();
   expect(f.triggered).toEqual(["pollNow"]);
@@ -604,7 +629,7 @@ async function driftedAfterCheckout() {
 /** 後始末が drift の観測者として Quarantine を1枚だけ立て、理由に残した task の checkout の在り処を書き、解放は飛ばして checkout を残し、枠と印を空けた。 */
 function expectDriftObservedOnce(f: Awaited<ReturnType<typeof driftedAfterCheckout>>, slot: Slot): void {
   const question = openQuarantineQuestion(f.db, "workspace", f.ws.name)!;
-  expect(questions(f.db).filter((q) => q.question_quarantine_kind !== null).map((q) => q.id)).toEqual([question.id]);
+  expect(questions(f.db).filter((q) => q.question_quarantine_kind === "workspace").map((q) => q.id)).toEqual([question.id]);
   expect(getTask(f.db, question.id)?.purpose).toContain(`unknown workspace: ${f.ws.name}`);
   expect(getTask(f.db, question.id)?.purpose).toContain(`The board kept the task checkout at ${f.checkout}`);
   expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
@@ -652,7 +677,7 @@ it("process を持たなかった session の後始末も、開いた question �
   const f = await driftedAfterCheckout();
   expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
 
-  queueReturnHandler(f.deps, f.containers)(f.task.id, sessionId(f.db, f.task.id), { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" });
+  recordContainerHaltHandler(f.deps, f.containers)(f.task.id, sessionId(f.db, f.task.id), new RecordContainerError(f.task.id, "/logs", "EACCES"));
   await settle();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("todo");
@@ -762,7 +787,7 @@ async function rootHeldMidTeardown(roomBroken: "mkdir" | "git") {
   expect(listEvents(db, task.id).filter((e) => e.kind === "interview_room_opened")).toHaveLength(0);
   const stop = quarantineWorkspace(db, task.id, failure, clock.now());
   runtime.hold(String(sessionId(db, task.id)));
-  queueReturnHandler(deps, containers)(task.id, sessionId(db, task.id), { kind: "pickup_stopped", ...stop });
+  queueReturnHandler(deps, containers, { defaultWorkspaceName: ws.name })(task.id, sessionId(db, task.id), { kind: "pickup_stopped", ...stop });
   await settle();
   expect(markedSession(db)?.taskId).toBe(task.id);
   return { db, clock, ws, slot, runtime, task, triggered };
@@ -842,7 +867,7 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
 });
 
 it.each([
-  { kind: "pickup_stopped", quarantine: "agent", value: "ghost", reason: "unknown agent" },
+  { kind: "pickup_stopped", quarantine: "agent", value: "deckhand", reason: "unknown agent" },
   { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: 1 },
 ] as const)("資源の停止で後始末の印の書き込みが落ちると、$kind は残らず、タスクは in_progress のまま、落ちた後始末が1枚立つ(issue #1935 / ADR 0342 決定6)", async (payload) => {
   const f = await stoppedBeforeSpawn();

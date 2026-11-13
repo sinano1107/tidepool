@@ -41,7 +41,7 @@ function stoppingBoard(workspace: WorkspaceConfig, resolveWorkspace: (name: stri
     containers,
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
-    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => scheduler.pollNow() }, containers),
+    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => scheduler.pollNow() }, containers, { defaultWorkspaceName: workspace.name }),
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     workspacesDir: checkoutBase(),
     workspace,

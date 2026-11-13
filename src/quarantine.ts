@@ -500,21 +500,30 @@ export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | n
  *  無い kind の値は誰も止めない。 */
 export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string[]) => string[]>>;
 
+function addResourceStops(stops: ResourceStops, row: (typeof QUARANTINES)[number], values: string[], resolvers: QuarantineResolvers): void {
+  if (values.length === 0) return;
+  if (row.scope === "workspace") stops.workspaces.push(...values);
+  if (row.scope === "assignees") {
+    const resolve = "resolveAssignees" in row ? row.resolveAssignees : resolvers[row.kind];
+    stops.assignees.push(...(resolve?.(values) ?? []));
+  }
+}
+
+/** ADR 0137 決定6 / ADR 0368 決定1: 1件の停止の範囲を、開いている停止の集計と同じ行から引く。 */
+export function quarantineStop(kind: "workspace" | "agent", value: string): ResourceStops {
+  const stops: ResourceStops = { workspaces: [], assignees: [] };
+  addResourceStops(stops, QUARANTINES.find((row) => row.kind === kind)!, [value], {});
+  return stops;
+}
+
 /** 開いた quarantine が止めるもの(ADR 0137 決定6)。資源単位の行を停止範囲で畳む:
  *  workspace 単位は開いている値そのもの、assignee 群単位は値を写した agent 名。
  *  pickup 述語・キューの skipped・直接 cancel の門はこの1つの答えを受け取る。 */
 export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   for (const row of QUARANTINES) {
-    if (row.scope === "board" || row.scope === "row" || row.scope === "pair" || row.scope === "target" || row.scope === "none") continue;
-    const values = openQuarantineValues(db, row.kind) as string[];
-    if (values.length === 0) continue;
-    if (row.scope === "workspace") {
-      stops.workspaces.push(...values);
-      continue;
-    }
-    const resolve = "resolveAssignees" in row ? row.resolveAssignees : resolvers[row.kind];
-    stops.assignees.push(...(resolve?.(values) ?? []));
+    if (row.scope !== "workspace" && row.scope !== "assignees") continue;
+    addResourceStops(stops, row, openQuarantineValues(db, row.kind) as string[], resolvers);
   }
   return stops;
 }

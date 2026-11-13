@@ -652,6 +652,22 @@ it.each(["room", "read", "examinee"])("Interview の %s を開く session の間
   expect(git(path, "branch", "--show-current")).toBe(`task/${running}`);
 });
 
+it("受験者が走っている間も、開いていない実環境の修復回答を受理する(ADR 0064 / ADR 0368 決定3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [examinee] = await pose(root.id);
+  await runNow(t, examinee);
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(examinee));
+  registerQuarantine(t.db, "workspace", "reef", "repair the place", t.clock.now());
+  const question = await servedQuarantineQuestion(t, "workspace", "reef");
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
+
+  expect(answered.status).toBe(200);
+  expect(await servedQuarantineQuestion(t, "workspace", "reef")).toBeUndefined();
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${examinee}`)).json.status).toBe("in_progress");
+});
+
 // 旧: 受験者の checkout は記録された場所で、再開はそれを読み直した —— 消えた・gitfile・`main` の無い checkout は root 名で止まり、解除は
 // その checkout の述語を撃ち直した(ADR 0329 決定3・4・12 / ADR 0146)。ADR 0356 決定1・2 の後は受験者の checkout は解放で消え、再開は面接室の
 // タスクブランチから作り直す(中身の釘は interview-pin-branch.test.ts の domain 層)。受験者ごとに残る項は出題の head だけで、その撃ち直しをここで言う
@@ -714,26 +730,27 @@ it("retry の旧い root の面接室の在り処が消えると、新しい roo
 /** キューの読み口でのその task の status(skipped = 資源の停止で外れている)。 */
 const queueStatus = async (taskId: string) => (await api(t.baseUrl, "GET", "/api/queue")).json.tasks.find((task: any) => task.id === taskId).status;
 
-it("資源の停止は走る場所の単位 —— 実環境の quarantine と (Harness, 実環境) の封じ込めの組は interview の root の pickup を止めるが受験者を止めず、面接室の quarantine は受験者を止める(ADR 0273 決定8)", async () => {
+it("実環境の quarantine は Interview の root と受験者を止め、面接室の quarantine も受験者を止める(ADR 0368 決定3)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
   // 監査は実環境で走るので、実環境の停止は受験者が立ってから
   const [first, second] = await pose(root.id);
-  registerQuarantine(t.db, "workspace", "reef", "the real environment broke", t.clock.now());
-  registerQuarantine(t.db, "workspaceContainment", workspaceContainmentValue("claude-code", "reef"), "its settings widen the floor", t.clock.now());
-  // 監査の pickup が立てた meta-review を終えて枠を空ける
-  await completeMetaReviews(t);
+  registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
+  expect(await queueStatus(second!)).toBe("skipped");
 
-  expect(t.worker.started.at(-1)!.id).toBe(first);
+  registerQuarantine(t.db, "workspace", "reef", "the real environment broke", t.clock.now());
+  const room = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${room.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+
+  expect(t.worker.started.map((task) => task.id)).not.toContain(first);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   expect(t.worker.started.map((task) => task.id)).not.toContain(waiting.id);
   expect(await queueStatus(waiting.id)).toBe("skipped");
-  expect(await queueStatus(second!)).toBe("todo");
-  registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
+  expect(await queueStatus(first)).toBe("skipped");
   expect(await queueStatus(second!)).toBe("skipped");
 });
 
-it("root の pickup で読む実環境の refresh が落ちると実環境の quarantine に落ち、root は failure question 無しに todo へ戻り、受験者の pickup は止まらない(issue #2223 / ADR 0273 決定8 / ADR 0274 決定1)", async () => {
+it("root の pickup で読む実環境の refresh が落ちると実環境の quarantine に落ち、root は failure question 無しに todo へ戻り、受験者の pickup も止まる(issue #2223 / ADR 0368 決定3 / ADR 0274 決定1)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("reef");
   t = await boot({ workspace });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
@@ -748,7 +765,8 @@ it("root の pickup で読む実環境の refresh が落ちると実環境の qu
   expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
   t.worker.exit(first);
 
-  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(second));
+  await vi.waitFor(async () => expect(await queueStatus(second!)).toBe("skipped"));
+  expect(t.worker.started.map((s) => s.id)).not.toContain(second);
   expect(t.worker.started.map((s) => s.id)).not.toContain(waiting.id);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${waiting.id}`)).json.status).toBe("todo");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${waiting.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
@@ -1085,6 +1103,74 @@ it("実環境の名前が registry から消えた(drift)まま受験者が esca
   expect(git(roomOf(root.id), "show", `task/${childId}:probe.txt`)).toBe("unfinished");
   expect(existsSync(checkout)).toBe(false);
   expect((await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace")).toEqual([]);
+});
+
+function boundedInterviewDrift(workspace: WorkspaceConfig, other: WorkspaceConfig) {
+  const registry = driftable(workspace, other);
+  let attempts = 0;
+  const resolveWorkspace = (name: string | null) => {
+    // #3144 の回帰で同じ pickup を繰り返しても、テストの event loop を塞がない。
+    if (registry.drifted && (name ?? workspace.name) === workspace.name && ++attempts > 8) throw new Error("repeated drift resolution");
+    return registry.resolveWorkspace(name);
+  };
+  return { registry, resolveWorkspace };
+}
+
+it("受験者の escalate 後、実環境の drift で次の受験者は一度だけ止まり、別の workspace の task が走る(issue #3144 / ADR 0368 決定3)", async () => {
+  const workspace = await makeWorkspace("reef");
+  const other = await makeWorkspace("other");
+  const { registry, resolveWorkspace } = boundedInterviewDrift(workspace, other);
+  t = await boot({ workspace, resolveWorkspace });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  const [first, second] = await pose(root.id);
+  await completeMetaReviews(t);
+  writeFileSync(join(lastCheckoutOf(first), "probe.txt"), "unfinished\n");
+  const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
+  registry.drifted = true;
+
+  const escalated = await callAsTask(t, first, "escalate", { context: "which format?", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
+
+  expect(escalated.isError).toBeFalsy();
+  t.worker.exit(first);
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(waiting.id));
+  expect(await pickupStops(second!)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: workspace.name, reason: `unknown workspace: ${workspace.name}` }]);
+  expect(await queueStatus(second!)).toBe("skipped");
+  const quarantines = (await questions(t)).filter((q) => q.question_quarantine_kind === "workspace");
+  expect(quarantines.map((q) => q.question_quarantine_value)).toEqual([workspace.name]);
+});
+
+it("実環境が drift したまま再起動しても、決着した受験者の後始末は面接室の記録と checkout を残す(issue #3144 / ADR 0363 決定1〜3 の Status 追記)", async () => {
+  const workspace = await makeWorkspace("reef");
+  const other = await makeWorkspace("other");
+  const { registry, resolveWorkspace } = boundedInterviewDrift(workspace, other);
+  t = await boot({ workspace, resolveWorkspace });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  const [first] = await pose(root.id);
+  await completeMetaReviews(t);
+  const checkout = lastCheckoutOf(first);
+  const room = roomOf(root.id);
+  commitWork(checkout, "probe.txt", "probe\n");
+  const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
+  t.containers.hold(first);
+  registry.drifted = true;
+  expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: first });
+  writeFileSync(join(checkout, "after-completion.txt"), "late write\n");
+
+  const dir = t.dir;
+  await t.stopServer();
+  t = await bootTidepool({ dir, workspace, resolveWorkspace });
+
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(waiting.id));
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${first}`)).json.status).toBe("done");
+  expect(git(room, "show", `task/${first}:probe.txt`)).toBe("probe");
+  expect(existsSync(checkout)).toBe(true);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${first}/events`)).json;
+  expect(events.map((e: any) => e.kind)).toContain("task_checkout_written_after_completion");
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+  const quarantines = (await questions(t)).filter((q) => q.question_quarantine_kind === "workspace");
+  expect(quarantines.length).toBeLessThanOrEqual(1);
+  expect(quarantines.filter((q) => q.question_quarantine_value !== workspace.name)).toEqual([]);
 });
 
 /** 監査を拾った盤面: 監査の id と complete_audit の引数。 */

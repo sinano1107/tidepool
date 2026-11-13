@@ -9,7 +9,8 @@ import { registerThroughHumanDoor } from "../src/human-verbs.js";
 import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
-import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
+import { quarantineStops, registerQuarantine, tableRowEffortValue, tableRowValue, workspaceContainmentValue } from "../src/quarantine.js";
+import { entryExclusionPredicate } from "../src/scheduler.js";
 import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, logDecision, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerFailureQuestion, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget, whyNoReturnDestination } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
@@ -585,7 +586,7 @@ it("断られた対象の question が開いたまま root を retry すると�
   expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("quarantine_released");
 });
 
-it("task が開く場所の名前は、受験者は面接室(root id)だけ、root は実環境・自分の面接室・他に読める面接室(根拠の root と retry の旧い root)、root 配下の review は親が review でも実環境・root の面接室・root の他に読める面接室、その他は workspace 列だけ —— 面接室の在り処は見ない(ADR 0273 追記、issue #2265)", () => {
+it("停止の門は受験者も実環境と面接室で止め、root と配下の review はさらに読む面接室を数える —— 面接室の在り処は見ない(ADR 0368 決定3 / ADR 0273 追記、issue #2265)", () => {
   const db = openDb(":memory:");
   const plain = registerTask(db, { type: "work", ...PLAIN }, new Date(0), ...HUMAN_WEBUI);
   const { root: evidence } = registerInterview(db);
@@ -596,7 +597,7 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   const again = retryRoot(db, root);
   const names = (task: Task) => openedPlaceNames(db, task.id, "sandbox").sort();
 
-  expect(names(examinee)).toEqual([root.id]);
+  expect(names(examinee)).toEqual(["reef", root.id].sort());
   expect(names(root)).toEqual(["reef", root.id, evidence.id].sort());
   expect(names(again)).toEqual(["reef", again.id, evidence.id, root.id].sort());
   for (const review of [audit, nested]) expect(names(review)).toEqual(["reef", root.id, evidence.id].sort());
@@ -606,6 +607,21 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   logDecision(db, repairUnderAudit, "drop entry 3", "tako", new Date(0), "worker");
   const reviewUnderRepair = rcaOf(db, repairUnderAudit.id, new Date(0));
   for (const task of [repairUnderAudit, reviewUnderRepair]) expect(names(task)).toEqual(["reef"]);
+});
+
+it("既定の実環境を数える受験者は workspace の停止で候補から外れ、封じ込めの組で唯一の Harness の行を外される(ADR 0368 決定3・4)", () => {
+  const { db, root } = registerInterview();
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
+  const isExcluded = () => entryExclusionPredicate(db, (task) =>
+    executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task), "reef")(examinee);
+  expect(nextSlotTask(db, "reef")?.id).toBe(examinee.id);
+  expect(isExcluded()).toBe(false);
+
+  registerQuarantine(db, "workspaceContainment", workspaceContainmentValue("claude-code", "reef"), "unsafe settings", new Date(0));
+  expect(isExcluded()).toBe(true);
+
+  registerQuarantine(db, "workspace", "reef", "workspace drift", new Date(0));
+  expect(nextSlotTask(db, "reef", undefined, undefined, quarantineStops(db))).toBeUndefined();
 });
 
 it("workspace を指定しない付帯子の review が開く場所の名前は、既定でなく最も近い固定済みの祖先の名前(ADR 0290 決定5)", () => {

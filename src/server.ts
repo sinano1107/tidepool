@@ -473,9 +473,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   };
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
-  // ADR 0274: process を持たないまま `todo` へ戻す pickup の一撃。資源の停止は scheduler と adapter の両方の観測点が呼ぶ
-  const onPickupStopped = queueReturnHandler(sessionTeardown, containers);
-  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。停止を登録してから上と同じ一撃を通る
+  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。盤面全体の停止と `todo` への復帰を同じ transaction に置く。
   const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown, containers);
   // ADR 0149: 走ってから transcript が書けなくなった session の一撃
   options.transcripts.onFailed = transcriptFailureHandler(sessionTeardown, containers);
@@ -488,7 +486,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     openaiUsage: options.openaiUsage,
     onSpawnFailed,
     onRecordContainerFailed,
-    onPickupStopped,
+    onPickupStopped: (taskId, sessionId, payload) => onPickupStopped(taskId, sessionId, payload),
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く。exit は pickup の後でしか来ず pickup は組み上がった後に始まる —— 無ければ束の書く step を黙って落とさず投げる
     onWorkerExited: (taskId, exit, facts) => watchdog!.onWorkerExited(taskId, exit, facts),
     onSessionCloseStep: (taskId, spawnId, step) => runTeardownSteps(sessionTeardown, taskId, ...sessionCloseSteps(spawnId, [step])),
@@ -531,6 +529,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // depth.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
   const interviewerName = options.interviewerName ?? DEFAULT_INTERVIEWER_NAME;
+  // ADR 0368 決定1: scheduler と adapter から戻す pickup は、停止の門と同じ既定で確かめる。
+  const onPickupStopped = queueReturnHandler(sessionTeardown, containers, {
+    defaultWorkspaceName: options.workspace?.name,
+    defaultAgentName: worker.id,
+    auditorName,
+    interviewerName,
+  });
   const landing = createLanding({
     db,
     clock: options.clock,
