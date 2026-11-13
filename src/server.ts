@@ -473,7 +473,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   };
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
-  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。停止を登録してから上と同じ一撃を通る
+  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。盤面全体の停止と `todo` への復帰を同じ transaction に置く。
   const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown, containers);
   // ADR 0149: 走ってから transcript が書けなくなった session の一撃
   options.transcripts.onFailed = transcriptFailureHandler(sessionTeardown, containers);

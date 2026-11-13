@@ -16,7 +16,8 @@ import { questionKindOf } from "../src/question-kind.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, DROP_TARGET_OPTION, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueue, type Task, unrowedTarget } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
-import { queueReturnHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { RecordContainerError } from "../src/transcript-store.js";
+import { queueReturnHandler, recordContainerHaltHandler, recordHumanStop, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import type { WorkerExitFacts } from "../src/worker.js";
 import {
   openInterviewRoom,
@@ -498,7 +499,6 @@ it("worker を起動する前に資源の Quarantine が止めた pickup は、f
   expect(questions(f.db).map((q) => q.id)).toEqual([openQuarantineQuestion(f.db, "workspaceContainment", "codex/sandbox")!.id]);
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(existsSync(f.place!.path)).toBe(false);
-  expect(existsSync(f.place!.path)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
   expect(markedSession(f.db)).toBeUndefined();
   expect(f.runtime.forceReclaims).toEqual([String(sessionId(f.db, f.task.id))]);
@@ -507,9 +507,12 @@ it("worker を起動する前に資源の Quarantine が止めた pickup は、f
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
-it("停止の門が外さない workspace の停止は spawn_failed と failure question になり、task は blocked になる(ADR 0368 決定1・2)", async () => {
+it.each([
+  { quarantine: "workspace", value: "other", reason: "unknown workspace: other" },
+  { quarantine: "agent", value: "other-agent", reason: "unknown agent: other-agent" },
+  { quarantine: "workspaceContainment", value: "codex/other", reason: "unsafe settings" },
+] as const)("停止の門が外さない $quarantine の停止は spawn_failed と failure question になり、task は blocked になる(ADR 0368 決定1・2)", async (stop) => {
   const f = await stoppedBeforeSpawn("sandbox");
-  const stop = { quarantine: "workspace", value: "other", reason: "unknown workspace: other" } as const;
   registerQuarantine(f.db, stop.quarantine, stop.value, stop.reason, f.clock.now());
 
   f.handler(f.task.id, sessionId(f.db, f.task.id), { kind: "pickup_stopped", ...stop });
@@ -517,14 +520,14 @@ it("停止の門が外さない workspace の停止は spawn_failed と failure 
 
   expect(listBoard(f.db).find(({ id }) => id === f.task.id)?.status).toBe("blocked");
   const events = listEvents(f.db, f.task.id);
-  const message = expect.stringMatching(/stop gate does not exclude this task.*workspace.*other/);
+  const message = `the stop gate does not exclude this task for ${stop.quarantine} "${stop.value}"`;
   expect(events.filter(({ kind }) => kind === "spawn_failed").map(({ payload }) => payload)).toEqual([
     { kind: "spawn_failed", error_code: null, message },
   ]);
   expect(events.map(({ kind }) => kind)).not.toContain("pickup_stopped");
   const [question] = questions(f.db).filter(({ parent_id }) => parent_id === f.task.id);
   expect(questionKindOf(question!).kind).toBe("failure");
-  expect(question!.purpose).toMatch(/stop gate does not exclude this task.*workspace.*other/);
+  expect(question!.purpose).toContain(message);
 });
 
 /** 準備が task ブランチへの checkout より前に落ちた pickup(ADR 0274 決定3)。git は動く —— remote 正本の宣言に origin が無く、
@@ -625,7 +628,7 @@ async function driftedAfterCheckout() {
 /** 後始末が drift の観測者として Quarantine を1枚だけ立て、理由に残した task の checkout の在り処を書き、解放は飛ばして checkout を残し、枠と印を空けた。 */
 function expectDriftObservedOnce(f: Awaited<ReturnType<typeof driftedAfterCheckout>>, slot: Slot): void {
   const question = openQuarantineQuestion(f.db, "workspace", f.ws.name)!;
-  expect(questions(f.db).filter((q) => q.question_quarantine_kind !== null).map((q) => q.id)).toEqual([question.id]);
+  expect(questions(f.db).filter((q) => q.question_quarantine_kind === "workspace").map((q) => q.id)).toEqual([question.id]);
   expect(getTask(f.db, question.id)?.purpose).toContain(`unknown workspace: ${f.ws.name}`);
   expect(getTask(f.db, question.id)?.purpose).toContain(`The board kept the task checkout at ${f.checkout}`);
   expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
@@ -673,7 +676,7 @@ it("process を持たなかった session の後始末も、開いた question �
   const f = await driftedAfterCheckout();
   expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
 
-  queueReturnHandler(f.deps, f.containers, {})(f.task.id, sessionId(f.db, f.task.id), { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" });
+  recordContainerHaltHandler(f.deps, f.containers)(f.task.id, sessionId(f.db, f.task.id), new RecordContainerError(f.task.id, "/logs", "EACCES"));
   await settle();
 
   expect(getTask(f.db, f.task.id)?.status).toBe("todo");

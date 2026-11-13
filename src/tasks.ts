@@ -1751,11 +1751,7 @@ export type ClosedRootOf = (task: Pick<Task, "type" | "parent_id" | "workspace">
  *  unset workspace/assignee against (issue #130), same fallbacks the pickup
  *  gate uses (ADR 0009 / issue #36 / issue #42), plus what open quarantines
  *  stop. Absent `quarantined` → no quarantine gates any cancel. */
-export interface CancelDefaults {
-  defaultWorkspaceName?: string;
-  defaultAgentName?: string;
-  auditorName?: string;
-  interviewerName?: string;
+export interface CancelDefaults extends ResourceStopDefaults {
   quarantined?: ResourceStops;
   /** 閉じた根に塞がれた子は範囲に入る(ADR 0265 決定6)。pickup が飛ばすのと同じ1本。Absent → 広げない。 */
   closedRootOf?: ClosedRootOf;
@@ -3915,26 +3911,32 @@ export function typeAwareDefaultAgentSql(table: string): string {
 
 /** 「このタスクは資源単位の停止で止まっている」の唯一の SQL(ADR 0137 決定6)。
  *  `nextSlotTask` の pickup 述語、`listQueue` の skipped 表示、停止からの復帰(ADR 0368 決定1)が共有する。
- *  workspace の側は task が開く場所すべての名前(`openedPlaceNamesSql`。既定が無い盤面では門ごと効かない、ADR 0009)、
+ *  workspace の側は task が依存する場所の名前(`openedPlaceNamesSql`。既定が無い盤面では門ごと効かない、ADR 0009)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
  *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。 */
-function stoppedSql(taskRef: string, fallback: string): string {
+function stoppedSql(taskRef: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces)
-             WHERE value IN (${openedPlaceNamesSql(taskRef)})))
+             WHERE value IN (${openedPlaceNamesSql(taskRef, "stop")})))
            OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
-             WHERE value = COALESCE(${taskRef}.assignee, ${fallback})))`;
+             WHERE value = COALESCE(${taskRef}.assignee, ${typeAwareDefaultAgentSql(taskRef)})))`;
 }
 
-/** ADR 0368 決定1: pickup を止めた workspace / agent の停止だけで、門がその task を外すか。 */
-export function taskIsStopped(db: Db, taskId: string, stopped: ResourceStops, defaults: ResourceStopDefaults): boolean {
-  return db.prepare(`SELECT 1 FROM tasks t WHERE t.id = @taskId AND ${stoppedSql("t", typeAwareDefaultAgentSql("t"))}`).get({
-    taskId,
+function stoppedSqlBindings(defaults: ResourceStopDefaults, stopped?: ResourceStops) {
+  return {
     defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
     defaultAgentName: defaults.defaultAgentName ?? null,
     auditorName: defaults.auditorName ?? null,
     interviewerName: defaults.interviewerName ?? null,
-    stoppedWorkspaces: JSON.stringify(stopped.workspaces),
-    stoppedAssignees: JSON.stringify(stopped.assignees),
+    stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
+    stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
+  };
+}
+
+/** ADR 0368 決定1: pickup を止めた workspace / agent の停止だけで、門がその task を外すか。 */
+export function taskIsStopped(db: Db, taskId: string, stopped: ResourceStops, defaults: ResourceStopDefaults): boolean {
+  return db.prepare(`SELECT 1 FROM tasks t WHERE t.id = @taskId AND ${stoppedSql("t")}`).get({
+    taskId,
+    ...stoppedSqlBindings(defaults, stopped),
   }) !== undefined;
 }
 
@@ -3946,18 +3948,19 @@ function gitHubReadingSql(taskRef: string): string {
              OR EXISTS (SELECT 1 FROM tasks p WHERE p.id = ${taskRef}.parent_id AND p.github_issue_number IS NOT NULL)))`;
 }
 
-/** 資源の停止と封じ込めの組が比べる名前の唯一の SQL(ADR 0368 決定3・4 / ADR 0273 追記)。
- *  どの task も `workspace` 列(無ければ `@defaultWorkspaceName`)を数え、受験者は対象の面接室(root id)を足す。
+/** task が依存する場所の名前(ADR 0368 決定3・4 / ADR 0273 追記)。
+ *  停止の門はどの task も `workspace` 列(無ければ `@defaultWorkspaceName`)を数え、受験者は対象の面接室(root id)を足す。
  *  interview の root と review の親を review の鎖で辿って着く root には、その root の面接室と他に読める面接室
  *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。
- *  workspace.ts の `pickupGate` はこのうち実際に開く場所を検査する(ADR 0329 追記 決定7)。受験者の実環境の repo は開かない。
+ *  `pickupGate` と修復回答が検査するのは実際に開く場所(ADR 0329 追記 決定7)。受験者の実環境の repo は開かない。
  *  名前の軸の逆引き(名前を開く未決着の task)は `unsettledOpenersOf`。 */
-function openedPlaceNamesSql(taskRef: string): string {
+function openedPlaceNamesSql(taskRef: string, forGate: "stop" | "open"): string {
+  const where = forGate === "open" ? ` WHERE ${taskRef}.interview_target_id IS NULL` : "";
   return `WITH RECURSIVE chain(id, type, parent_id) AS (
               SELECT ${taskRef}.id, ${taskRef}.type, ${taskRef}.parent_id
               UNION ALL SELECT p.id, p.type, p.parent_id FROM tasks p JOIN chain c ON p.id = c.parent_id WHERE c.type = 'review'),
             roots(id) AS (SELECT id FROM chain WHERE type = 'interview')
-          SELECT COALESCE(${derivedWorkspaceSql(taskRef)}, @defaultWorkspaceName) AS name
+          SELECT COALESCE(${derivedWorkspaceSql(taskRef)}, @defaultWorkspaceName) AS name${where}
           UNION ALL SELECT it.task_id FROM interview_targets it WHERE it.id = ${taskRef}.interview_target_id
           UNION ALL SELECT id FROM roots
           UNION ALL SELECT e.value FROM roots JOIN interviews i ON i.task_id = roots.id, json_each(i.evidence_task_ids) e
@@ -3970,15 +3973,15 @@ function openedPlaceNamesSql(taskRef: string): string {
  *  NULL で束ねるので、既定の workspace に落ちる task は数えない —— 面接室の名前(root id)の逆引きにだけ使う。 */
 export function unsettledOpenersOf(db: Db, name: string): Task[] {
   const rows = db
-    .prepare(`SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t WHERE ${unsettledSql("t.status")} AND @name IN (${openedPlaceNamesSql("t")}) ORDER BY t.sort_key`)
+    .prepare(`SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t WHERE ${unsettledSql("t.status")} AND @name IN (${openedPlaceNamesSql("t", "open")}) ORDER BY t.sort_key`)
     .all({ name, defaultWorkspaceName: null }) as TaskRow[];
   return rows.map(rowToTask);
 }
 
-/** `openedPlaceNamesSql` を1 task について引く(TS の読み手 —— scheduler の封じ込めの組の検査)。 */
-export function openedPlaceNames(db: Db, taskId: string, defaultWorkspaceName: string | undefined): string[] {
+/** 1 task の停止の門が数える名前。修復回答は repo を実際に開く名前を読む(ADR 0064 決定6)。 */
+export function openedPlaceNames(db: Db, taskId: string, defaultWorkspaceName: string | undefined, forGate: "stop" | "open" = "stop"): string[] {
   const names = db
-    .prepare(`SELECT (SELECT json_group_array(name) FROM (${openedPlaceNamesSql("t")})) FROM tasks t WHERE t.id = @taskId`)
+    .prepare(`SELECT (SELECT json_group_array(name) FROM (${openedPlaceNamesSql("t", forGate)})) FROM tasks t WHERE t.id = @taskId`)
     .pluck()
     .get({ taskId, defaultWorkspaceName: defaultWorkspaceName ?? null }) as string;
   return (JSON.parse(names) as (string | null)[]).filter((name): name is string => name !== null);
@@ -4279,8 +4282,8 @@ export function listBoard(
  *  display-only and queue-view-only (GLOSSARY.md's Quarantine) — it never
  *  reaches `listBoard`/`presentTask`, so the board keeps showing plain `todo`
  *  while the condition holds. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
- *  gate (every place the task opens, `openedPlaceNamesSql`, whose own workspace is
- *  the derived one falling back to the board's default — ADR 0009 / ADR 0290) —
+ *  gate (`openedPlaceNamesSql`: the derived workspace or board default, plus
+ *  Interview rooms — ADR 0009 / ADR 0290 / ADR 0368 decision 3) —
  *  absent, no workspace tracking exists and the gate is skipped entirely.
  *  `defaultAgentName`/`auditorName` resolve an unset assignee the same
  *  type-aware way (`typeAwareDefaultAgentSql`, issue #42 / GLOSSARY.md's
@@ -4309,19 +4312,13 @@ export function listQueue(
   /** issue 展開の一時的失敗が続く間(ADR 0328 決定7): GitHub を読む task を skipped に見せる。`nextSlotTask` と同じ引数。 */
   excludeGitHubReading = false,
 ): BoardTask[] {
-  const fallback = typeAwareDefaultAgentSql("tasks");
   const rows = boardRows(
     db,
-    `WHEN status = 'todo' AND type <> 'question' AND (${stoppedSql("tasks", fallback)} OR ${gitHubReadingSql("tasks")}) THEN 'skipped'`,
+    `WHEN status = 'todo' AND type <> 'question' AND (${stoppedSql("tasks")} OR ${gitHubReadingSql("tasks")}) THEN 'skipped'`,
     [
       {
         excludeGitHubReading: excludeGitHubReading ? 1 : 0,
-        defaultWorkspaceName: defaultWorkspaceName ?? null,
-        defaultAgentName: defaultAgentName ?? null,
-        auditorName: auditorName ?? null,
-        interviewerName: interviewerName ?? null,
-        stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
-        stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
+        ...stoppedSqlBindings({ defaultWorkspaceName, defaultAgentName, auditorName, interviewerName }, stopped),
       },
     ],
   );
@@ -4666,9 +4663,9 @@ export function listExaminees(db: Db, rootId: string): Task[] {
  *  takes the same slot — `human` is the one assignee that always sits outside
  *  it (issue #13's your tasks), never resolved against the registry at all.
  *
- *  `stopped.workspaces` is matched against every place the task opens
- *  (`openedPlaceNamesSql`: its derived workspace falling back to
- *  `defaultWorkspaceName` — ADR 0009 / ADR 0290 — plus Interview rooms) — a
+ *  `stopped.workspaces` is matched against the derived workspace falling back to
+ *  `defaultWorkspaceName` (ADR 0009 / ADR 0290), plus Interview rooms
+ *  (`openedPlaceNamesSql`, ADR 0368 decision 3) — a
  *  quarantined todo is skipped in favor of the next runnable one, so
  *  quarantine halts only the workspace it's on, never the whole board.
  *  Absent `defaultWorkspaceName` (a workspaceless board) skips the workspace
@@ -4702,7 +4699,6 @@ export function nextSlotTask(
   /** この poll で issue 展開が一時的に失敗した(ADR 0328 決定2): pickup で GitHub を読む task を外す。 */
   excludeGitHubReading = false,
 ): Task | undefined {
-  const fallback = typeAwareDefaultAgentSql("t");
   const statement = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
@@ -4712,22 +4708,18 @@ export function nextSlotTask(
          AND t.assignee IS NOT @humanWorkerId
          AND (NOT ${unfinishedChildSql("t.id")} OR ${earlyIntegrationReturnSql("t.id")})
          AND NOT ${heldSql("t.id")}
-         AND NOT ${stoppedSql("t", fallback)}
+         AND NOT ${stoppedSql("t")}
          AND NOT ${gitHubReadingSql("t")}
          AND (@excludedTaskIds IS NULL
            OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
     );
   const excluded = [...(excludedTaskIds ?? [])];
+  const stopBindings = stoppedSqlBindings({ defaultWorkspaceName, defaultAgentName, auditorName, interviewerName }, stopped);
   for (;;) {
     const row = statement.get({
-      defaultWorkspaceName: defaultWorkspaceName ?? null,
-      defaultAgentName: defaultAgentName ?? null,
-      auditorName: auditorName ?? null,
-      interviewerName: interviewerName ?? null,
+      ...stopBindings,
       humanWorkerId: HUMAN_ACTOR_ID,
-      stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
-      stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
       excludedTaskIds: excluded.length ? JSON.stringify(excluded) : null,
       excludeGitHubReading: excludeGitHubReading ? 1 : 0,
     }) as TaskRow | undefined;
