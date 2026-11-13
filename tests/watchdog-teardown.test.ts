@@ -570,6 +570,7 @@ function expectUntouchedReturn(f: Awaited<ReturnType<typeof stoppedBeforeCheckou
   const returned = getTask(f.db, f.task.id)!;
   expect(returned.status).toBe("todo");
   expect(returned.sort_key).toBe(f.task.sort_key);
+  expect(listEvents(f.db, f.task.id).filter((e) => e.kind === "pickup_stopped").map((e) => e.payload)).toEqual([{ kind: "pickup_stopped", ...f.stop }]);
   expect(slot.currentTaskId).toBeNull();
   expect(markedSession(f.db)).toBeUndefined();
   expect(f.triggered).toEqual(["pollNow"]);
