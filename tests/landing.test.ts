@@ -50,6 +50,7 @@ import {
   redoMergeBacks,
   refreshProtectedBranch,
   releaseWorkspace,
+  taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   writeBoardRefs,
@@ -166,6 +167,25 @@ function finish(board: Db, clock: FakeClock, task: Task): Task {
   completeTask(board, getTask(board, task.id)!, FULL_HANDOFF, "worker", clock.now(), "worker");
   settleReviews(board, clock.now());
   return getTask(board, task.id)!;
+}
+
+/** 盤面の経路で `task`(done の根でもよい)のタスクブランチに commit を1つ載せる: 拾い、task の checkout で commit し、解放する。
+ *  名前の場所は保護ブランチに休む(ADR 0356 決定1)。基準の後に名前の場所へ手で書くと、着地の比較が帯域外と読む(ADR 0370 決定1)。 */
+async function commitThroughTaskCheckout(board: Db, clock: FakeClock, workspace: WorkspaceConfig, task: Task, file: string, content: string) {
+  const place = await prepareAtPickup(board, workspace, task);
+  commitWork(place.path, file, content);
+  releaseWorkspace(board, place, getTask(board, task.id)!, clock.now());
+}
+
+/** 盤面の経路で `task` を完了させる: 拾い(lineage の帰り先から fork)、task の checkout で commit し、完了の門が tip を名前の場所へ
+ *  引き(ADR 0356 決定3)、完了の後始末が帰り先へ merge back する(ADR 0053 決定2 —— 帰り先が保護ブランチなら merge back しない)。 */
+async function completeThroughTaskCheckout(board: Db, clock: FakeClock, workspace: WorkspaceConfig, task: Task, file: string, content: string) {
+  const place = await prepareAtPickup(board, workspace, task);
+  commitWork(place.path, file, content);
+  recordTaskCheckoutTip(board, place, task.id);
+  const done = finish(board, clock, task);
+  releaseWorkspace(board, place, done, clock.now(), true, undefined, undefined, true);
+  return done;
 }
 
 // ADR 0241 決定1: 着地は入口が名指しせず、収束が記録と内容から根を導いて撃つ
@@ -638,7 +658,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, task, "repair.txt", "fixed\n");
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
     kind: "landed",
@@ -716,7 +736,7 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, task, "repair.txt", "fixed\n");
   github.scriptMergedOutside(1);
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
@@ -738,8 +758,8 @@ it.each([
   ["盤面の名義", "pr_merged", (github: FakeGitHubClient) => github.scriptMergedByBoard(1)],
   ["人間の名義", "pr_merge_observed", (github: FakeGitHubClient) => github.scriptMergedOutside(1)],
 ] as const)("%sで merge 済みの PR を収束が読むと、根に %s を1件だけ刻む", async (_, kind, scriptMerged) => {
-  const { workspace, db, github, landing, root } = await rootWithOpenedPr("landing-converge-merged-by");
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-converge-merged-by");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "fixed\n");
   scriptMerged(github);
 
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ reason: "pull_request_already_merged" });
@@ -758,7 +778,7 @@ it("盤面の外で閉じた PR を持つ根の収束は push せず、閉じた
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, task, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
@@ -1312,7 +1332,9 @@ it("retry の時点で運ぶ内容が無ければ回答を受理し、着地対�
   registerPrPromotionFailureQuestion(db, task, "token expired", clock.now());
   const failures = promotionFailures(db, task.id);
   github.scriptFailure(null);
-  git(workspace.path, "update-ref", "refs/remotes/origin/main", `refs/heads/task/${task.id}`);
+  // 内容は盤面の外で保護ブランチに届き、盤面の fetch が写しを進める
+  await squashTaskIntoOrigin(workspace, task.id);
+  await refreshProtectedBranch(db, workspace, undefined);
 
   await answerPromotion(db, clock, landing, workspace, failures[0]!, "retry");
 
@@ -1433,13 +1455,14 @@ it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の�
   git(workspace.path, "checkout", "-b", `task/${first.id}`);
   commitWork(workspace.path, "feature.txt", "first\n");
   finish(db, clock, first);
+  // もう1つの根の内容は最初の回より前に置く —— 回の途中に名前の場所へ手で書くと、基準の後の帯域外の移動になる(ADR 0370 決定1)
+  const second = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${second.id}`, "main");
+  commitWork(workspace.path, "second.txt", "second\n");
 
   const running = landing.converge();
   await window.entered;
   // 回の途中で、もう1つの根が完了し、突きが3回届く
-  const second = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${second.id}`, "main");
-  commitWork(workspace.path, "second.txt", "second\n");
   finish(db, clock, second);
   const pokes = [landing.converge(), landing.converge(), landing.converge()];
   window.open();
@@ -1640,7 +1663,7 @@ function boardMerged(db: Db, clock: FakeClock, taskId: string, prNumber: number)
 it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった事実を1回刻み、次の回からは git も読まない", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-finished");
   await squashTaskIntoOrigin(workspace, root.id);
-  git(workspace.path, "fetch", "origin", "main");
+  await refreshProtectedBranch(db, workspace, undefined);
   boardMerged(db, clock, root.id, 1);
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
@@ -1693,19 +1716,19 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   finish(db, clock, nested);
   finish(db, clock, child);
   // 読めば壊れていると分かる checkout でも、PR の開いた根の子孫の lineage は読まれない(記録で外れる)
-  const childTip = git(workspace.path, "rev-parse", `task/${child.id}`);
   git(workspace.path, "branch", "-D", `task/${child.id}`);
   await expect(landing.converge()).resolves.toEqual([
     { taskId: work.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
   ]);
-  git(workspace.path, "branch", `task/${child.id}`, childTip);
+  // 消えた子のブランチは、拾い直しが lineage の帰り先(子の内容を merge 済みの根のブランチ)から盤面の書き込みで作り直す ——
+  // 手で書き戻すと基準の後の帯域外の移動になる(ADR 0370 決定1)
+  const reopened = await prepareAtPickup(db, workspace, child);
+  releaseWorkspace(db, reopened, getTask(db, child.id)!, clock.now());
 
   await squashTaskIntoOrigin(workspace, work.id);
-  git(workspace.path, "fetch", "origin", "main");
+  await refreshProtectedBranch(db, workspace, undefined);
   const repair = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
-  commitWork(workspace.path, "repair.txt", "after the merge\n");
-  finish(db, clock, repair);
+  await completeThroughTaskCheckout(db, clock, workspace, repair, "repair.txt", "after the merge\n");
 
   // 根へ帰っていた子孫も自分で根になるが、その内容は根の PR と一緒に届いている
   await expect(landing.converge()).resolves.toEqual([
@@ -1797,7 +1820,7 @@ it("merge の後に根のブランチへ帰った修理は、失敗 question を
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-repair");
   await mergeOnGitHub(workspace, root.id);
   boardMerged(db, clock, root.id, 1);
-  commitWork(workspace.path, "repair.txt", "merged back after the merge\n");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "merged back after the merge\n");
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({
     kind: "failed",
@@ -1814,12 +1837,10 @@ it("merge の後に根のブランチへ帰った修理は、失敗 question を
 it("merge の後に完了して自分で根になった子孫は自分の PR を開き、merge 済みの根には偽の失敗 question が立たない", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-descendant");
   await squashTaskIntoOrigin(workspace, root.id);
-  git(workspace.path, "fetch", "origin", "main");
+  await refreshProtectedBranch(db, workspace, undefined);
   boardMerged(db, clock, root.id, 1);
   const repair = attachUnsettledChild(db, clock, root.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
-  commitWork(workspace.path, "repair.txt", "after the merge\n");
-  finish(db, clock, repair);
+  await completeThroughTaskCheckout(db, clock, workspace, repair, "repair.txt", "after the merge\n");
 
   await expect(landing.converge()).resolves.toEqual([
     { taskId: root.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
@@ -1831,7 +1852,7 @@ it("merge の後に完了して自分で根になった子孫は自分の PR を
 
 it("PR の状態を読んだ後に merge され、その後に push した修理は、merge された head に無いので失敗 question を1回だけ立て、着地が終わったとは刻まない", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-after-read");
-  commitWork(workspace.path, "repair.txt", "pushed after the merge\n");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "pushed after the merge\n");
   const readState = github.getPullRequestState.bind(github);
   github.getPullRequestState = async (ref) => {
     const state = await readState(ref);
@@ -1885,18 +1906,16 @@ it.each(["closed", "abandoned"] as const)("%s の根の内容が保護ブラン�
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr(`landing-carried-${shape}`);
   if (shape === "closed") {
     github.scriptClosedOutside(1);
-    commitWork(workspace.path, "repair.txt", "a repair the closed PR never gets\n");
+    await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "a repair the closed PR never gets\n");
     await landing.converge();
   } else {
     registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
     await answerPromotion(db, clock, landing, workspace, promotionFailures(db, root.id)[0]!, "abandon promotion");
   }
   await squashTaskIntoOrigin(workspace, root.id);
-  git(workspace.path, "fetch", "origin", "main");
+  await refreshProtectedBranch(db, workspace, undefined);
   const child = attachUnsettledChild(db, clock, root.id);
-  git(workspace.path, "checkout", "-b", `task/${child.id}`, "refs/remotes/origin/main");
-  commitWork(workspace.path, "child.txt", "the child's own change\n");
-  finish(db, clock, child);
+  await completeThroughTaskCheckout(db, clock, workspace, child, "child.txt", "the child's own change\n");
 
   await expect(convergeOn(landing, child.id)).resolves.toEqual({ kind: "landed", form: "pull_request_opened", prNumber: 2 });
   expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`, `task/${child.id}`]);
@@ -1905,11 +1924,7 @@ it.each(["closed", "abandoned"] as const)("%s の根の内容が保護ブラン�
 it("PR が開いている根の下で完了し、根のブランチへ帰る子孫は撃たれず、根がその内容を push する", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-carried-open");
   const child = attachUnsettledChild(db, clock, root.id);
-  git(workspace.path, "checkout", "-b", `task/${child.id}`);
-  commitWork(workspace.path, "repair.txt", "merged back\n");
-  git(workspace.path, "checkout", `task/${root.id}`);
-  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
-  finish(db, clock, child);
+  await completeThroughTaskCheckout(db, clock, workspace, child, "repair.txt", "merged back\n");
 
   await expect(landing.converge()).resolves.toEqual([
     { taskId: root.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
@@ -1921,15 +1936,11 @@ it("PR が開いている根の下で完了し、根のブランチへ帰る子�
 it("閉じた PR の根の内容が保護ブランチに無いまま、根のブランチへ帰って完了した子孫は撃たれず、根にも push せず、question も立たない", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-carried-closed-back");
   github.scriptClosedOutside(1);
-  commitWork(workspace.path, "repair.txt", "a repair the closed PR never gets\n");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "a repair the closed PR never gets\n");
   await landing.converge();
   expect(boardEvents(db, root.id, "pr_close_observed")).toHaveLength(1);
   const child = attachUnsettledChild(db, clock, root.id);
-  git(workspace.path, "checkout", "-b", `task/${child.id}`);
-  commitWork(workspace.path, "child.txt", "merged back\n");
-  git(workspace.path, "checkout", `task/${root.id}`);
-  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
-  finish(db, clock, child);
+  await completeThroughTaskCheckout(db, clock, workspace, child, "child.txt", "merged back\n");
 
   await expect(landing.converge()).resolves.toEqual([]);
   expect(github.pushes).toEqual([]);
@@ -2095,7 +2106,7 @@ it("retry が答えている根を回が撃たなければ、閉じた PR・未�
 
   db.prepare("UPDATE tasks SET teardown_started_at = NULL WHERE id = ?").run(repair.id);
   github.scriptClosedOutside(1);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "fixed\n");
   await convergeOn(landing, root.id, failure!.id);
   await expect(convergeOn(landing, root.id, failure!.id)).resolves.toEqual({
     kind: "excluded",
@@ -3267,7 +3278,7 @@ async function escalatedRootWithOpenedPr(name: string) {
 // 観測の重複除け: 根の決着は経路の順によらず1件だけ刻まれ、question は回答なしの done で閉じる
 it("収束が先に閉じた PR を観測した根の merge question は、遅い走査が回答なしで閉じ、根に閉じた観測を重ねない", async () => {
   const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-converge-then-scan");
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
   const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
 
@@ -3281,7 +3292,7 @@ it("収束が先に閉じた PR を観測した根の merge question は、遅�
 
 it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測を刻めば、収束は観測を重ねない", async () => {
   const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-during-converge");
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, root, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
   const gate = awaitWindow();
   const read = github.getPullRequestState.bind(github);
@@ -3517,7 +3528,7 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   finish(db, clock, work);
   await landing.converge();
   await clock.advance(4 * 60_000);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await commitThroughTaskCheckout(db, clock, workspace, work, "repair.txt", "fixed\n");
   await landing.converge();
   github.scriptCiStatus("unreported");
 
@@ -3786,21 +3797,21 @@ async function openPushedPr(name: string, merge: MergeDial) {
   return { workspace, publish, db, clock, github, work: getTask(db, work.id)!, landing };
 }
 
-/** 修理(`parentId` の付帯子)を着地するタスクのブランチから fork し、`repair.txt` を commit して done にする。
- *  merge back はしない。門は開いている。checkout は着地するタスクのブランチに戻す。 */
-function settleRepairNotMergedBack(
-  db: Db,
-  clock: FakeClock,
-  workspace: WorkspaceConfig,
-  landingTaskId: string,
-  parentId = landingTaskId,
-) {
+/** 修理(`parentId` の付帯子)を盤面の経路で done にする: 拾い(lineage の帰り先から fork し、名前の場所は保護ブランチに休む)、
+ *  task の checkout で `repair.txt` を commit し、完了の門が tip を名前の場所へ引く(ADR 0356 決定3)。後始末(解放の merge back)は
+ *  まだ走っていない —— 走らせるのは `tearDownRepair`。門は開いている。 */
+async function settleRepairNotMergedBack(db: Db, clock: FakeClock, workspace: WorkspaceConfig, parentId: string) {
   const repair = attachUnsettledChild(db, clock, parentId);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${landingTaskId}`);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  git(workspace.path, "checkout", `task/${landingTaskId}`);
+  const place = await prepareAtPickup(db, workspace, repair);
+  commitWork(place.path, "repair.txt", "fixed\n");
+  recordTaskCheckoutTip(db, place, repair.id);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
   return getTask(db, repair.id)!;
+}
+
+/** `settleRepairNotMergedBack` の修理の後始末: 完了の後始末と同じ旗で解放し、記録した tip を帰り先へ merge back する(ADR 0053 決定2)。 */
+function tearDownRepair(db: Db, clock: FakeClock, workspace: WorkspaceConfig, repair: Task) {
+  releaseWorkspace(db, taskRunPlaceForBoard(db, repair, () => workspace), getTask(db, repair.id)!, clock.now(), true, undefined, undefined, true);
 }
 
 /** #1777 の形: 修理の merge back が後始末で conflict し、workspace が quarantine に落ちる。名前の場所は保護ブランチに、
@@ -3886,7 +3897,9 @@ it("merge back の conflict に手を付けないままの受理は、merge back
 it("merge back が走らなかった修理は、受理の検査が帰り先へ merge して休止位置へ戻し、受理する", async () => {
   const pr = await openPushedPr("redo-merge-back-clean", "escalate");
   const { workspace, db, clock, work } = pr;
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  // 名前の場所が休止位置の外に居る(受理の検査が戻す)
+  git(workspace.path, "checkout", `task/${work.id}`);
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
   const question = quarantineQuestion(db, "workspace", workspace.name)!;
   const pollNow = vi.fn();
@@ -3911,9 +3924,9 @@ it.each([
   const earlierPlace = await prepareAtPickup(db, workspace, earlier);
   commitWork(earlierPlace.path, "earlier.txt", "work\n");
   releaseWorkspace(db, earlierPlace, earlier, clock.now());
-  git(workspace.path, "checkout", `task/${work.id}`);
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   // 修理が分かれた後に帰り先が進む —— merge back は ff にならず merge commit を作る
+  git(workspace.path, "checkout", `task/${work.id}`);
   commitWork(workspace.path, "landing.txt", "moved on\n");
   const targetBefore = git(workspace.path, "rev-parse", `task/${work.id}`);
   // 原本の保護ブランチも進む —— やり直しの休止位置の ff がローカルの保護ブランチを動かす
@@ -4010,7 +4023,9 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   const place = await prepareAtPickup(db, workspace, work);
   commitWork(place.path, "feature.txt", "ready\n");
   releaseWorkspace(db, place, work, clock.now());
-  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  // 名前の場所が休止位置の外に居る(やり直しが戻す)
+  git(workspace.path, "checkout", `task/${work.id}`);
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
   // やり直しそのものを撃つ —— 受理は検査の後に基準を撮り直し、動いた ref を回答で受け入れる(ADR 0351 決定4)
@@ -4031,7 +4046,7 @@ it("内容が帰り先に届いていない done の work が無ければ、merg
 
 it("done の子孫のブランチに merge される head に無い内容があれば積み残しで、CI 緑でも無人 merge されず、event も question も無くキューに残る", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-descendant", "auto_if_ci_green");
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   const events = listEvents(db, work.id).length;
 
   await landing.tick("auto_merge", clock.now());
@@ -4041,7 +4056,7 @@ it("done の子孫のブランチに merge される head に無い内容があ�
   expect(listEvents(db, work.id)).toHaveLength(events);
 
   // キューに残っている —— 修理を merge back し、着地が push した後の tick で merge される
-  git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
+  tearDownRepair(db, clock, workspace, repair);
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
   await landing.tick("auto_merge", clock.now());
@@ -4051,7 +4066,9 @@ it("done の子孫のブランチに merge される head に無い内容があ�
 it("cancelled の祖先の下に残った done の work の内容は積み残しではなく、無人 merge される", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-cancelled", "auto_if_ci_green");
   const abandoned = attachUnsettledChild(db, clock, work.id);
-  const inner = settleRepairNotMergedBack(db, clock, workspace, work.id, abandoned.id);
+  // 祖先も走っていた: 拾いが task/<abandoned> を作り、修理はそこから fork する。祖先は cancel される走りの途中なので解放しない
+  await prepareAtPickup(db, workspace, abandoned);
+  const inner = await settleRepairNotMergedBack(db, clock, workspace, abandoned.id);
   cancelTaskDirectly(db, getTask(db, abandoned.id)!, null, clock.now(), {}, "webui");
   expect(getTask(db, inner.id)!.status).toBe("done");
 
@@ -4062,8 +4079,12 @@ it("cancelled の祖先の下に残った done の work の内容は積み残し
 
 it("修理の内容がローカルの着地するタスクのブランチに無くても、merge される head に載っていれば積み残しではない", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-on-origin", "auto_if_ci_green");
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
-  git(workspace.path, "push", "origin", `task/${repair.id}:task/${work.id}`);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  // 盤面の外の clone が修理を PR のブランチへ push する —— 名前の場所の ref は動かさない
+  const clone = await tempDir("tidepool-outside-push-");
+  git(clone, "clone", workspace.repo!, ".");
+  git(clone, "fetch", workspace.path, `task/${repair.id}`);
+  git(clone, "push", "origin", `FETCH_HEAD:refs/heads/task/${work.id}`);
 
   await landing.tick("auto_merge", clock.now());
 
@@ -4072,7 +4093,8 @@ it("修理の内容がローカルの着地するタスクのブランチに無�
 
 it("着地するタスクのブランチに修理を `merge -s ours` で記録して push すれば、捨てた修理は積み残しではない", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-discarded", "auto_if_ci_green");
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  git(workspace.path, "checkout", `task/${work.id}`);
   git(workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
   git(workspace.path, "push", "origin", `task/${work.id}`);
 
@@ -4132,8 +4154,8 @@ function answerMergeQuestion({
 async function dropRepairOutsideBoard(pr: Awaited<ReturnType<typeof openPushedPr>>) {
   const { workspace, db, clock, work, landing } = pr;
   const beforeRepair = git(workspace.path, "rev-parse", "HEAD");
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
-  git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  tearDownRepair(db, clock, workspace, repair);
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
   await pushOutsideBoard(workspace, work.id, beforeRepair);
@@ -4191,6 +4213,7 @@ it("外の push が落とした内容を、workspace でタスクブランチを
   const pr = await openPushedPr("left-behind-dropped-outside-discarded", "auto_if_ci_green");
   const repair = await dropRepairOutsideBoard(pr);
   await pr.landing.tick("auto_merge", pr.clock.now());
+  git(pr.workspace.path, "checkout", `task/${pr.work.id}`);
   git(pr.workspace.path, "fetch", "origin");
   git(pr.workspace.path, "reset", "--hard", `origin/task/${pr.work.id}`);
   git(pr.workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
@@ -4338,7 +4361,7 @@ it("PR を開いた後に積み残しが残れば landed を返さず、内容�
   const work = landingWork(db, clock);
   git(workspace.path, "checkout", "-b", `task/${work.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   finish(db, clock, work);
 
   await expect(convergeOn(landing, work.id)).resolves.toEqual({
@@ -4351,6 +4374,7 @@ it("PR を開いた後に積み残しが残れば landed を返さず、内容�
   const failures = promotionFailures(db, work.id);
   expect(failures.map((q) => q.purpose)).toEqual([expect.stringContaining(`task/${repair.id}`)]);
 
+  git(workspace.path, "checkout", `task/${work.id}`);
   git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
   await expect(convergeOn(landing, work.id, failures[0]!.id)).resolves.toMatchObject({
     kind: "landed",
@@ -4360,7 +4384,7 @@ it("PR を開いた後に積み残しが残れば landed を返さず、内容�
 
 it("開いている PR へ push した後に積み残しが残れば landed を返さず、失敗 question を1枚立てる", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-after-push", "escalate");
-  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   finish(db, clock, work);
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "content_left_behind" });
@@ -4377,7 +4401,7 @@ it("開いている PR へ push した後に積み残しが残れば landed を�
 
 it("push の後に積み残しが残っても、workspace の quarantine が抱えていれば失敗 question を立てず、その quarantine を名乗る", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-quarantined", "escalate");
-  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  await settleRepairNotMergedBack(db, clock, workspace, work.id);
   finish(db, clock, work);
   afterEachPush(github, () => quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now()));
 
@@ -4421,11 +4445,11 @@ it.each([
 const STILL_CARRYING = "the board is still carrying it; answer again later";
 const carriedBy = (surface: string, questionId: string) =>
   `the open ${surface} question (${questionId}) carries it; answer that question first, then answer again`;
-it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
+it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string | Promise<string>]>([
   [
     "子孫の merge back 前",
-    ({ workspace, db, clock, work }) => {
-      settleRepairNotMergedBack(db, clock, workspace, work.id);
+    async ({ workspace, db, clock, work }) => {
+      await settleRepairNotMergedBack(db, clock, workspace, work.id);
       return STILL_CARRYING;
     },
   ],
@@ -4438,8 +4462,8 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
   ],
   [
     "merge back が workspace の quarantine に落ちた",
-    ({ workspace, db, clock, work }) => {
-      settleRepairNotMergedBack(db, clock, workspace, work.id);
+    async ({ workspace, db, clock, work }) => {
+      await settleRepairNotMergedBack(db, clock, workspace, work.id);
       quarantineWorkspace(db, workspace.name, new Error("merge back conflicted"), clock.now());
       return carriedBy("workspace quarantine", quarantineQuestion(db, "workspace", workspace.name)!.id);
     },
@@ -4457,7 +4481,7 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
   async (_, leaveBehind) => {
     const pr = await openPushedPr("left-behind-answer", "escalate");
     const { db, github } = pr;
-    const carrier = leaveBehind(pr);
+    const carrier = await leaveBehind(pr);
     const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
     await expect(answerMergeQuestion(pr)).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${carrier}`));
     expect(github.merged).toEqual([]);
@@ -5692,8 +5716,10 @@ function answerPromotion(
   );
 }
 
-/** 付帯子を登録し、`repair` があれば親のブランチの内容を変えてから決着させる。 */
-function settleAttachedChild(
+/** 付帯子を登録して決着させる。`repair` があれば盤面の経路で親のブランチの内容を変える: 拾い(親のブランチから fork)、task の
+ *  checkout で commit し、完了の門が tip を名前の場所へ引き(ADR 0356 決定3)、決着の後の後始末が親のブランチへ merge back する
+ *  (ADR 0053 決定2)。 */
+async function settleAttachedChild(
   board: Db,
   clock: FakeClock,
   workspace: WorkspaceConfig,
@@ -5701,12 +5727,13 @@ function settleAttachedChild(
   repair?: string,
 ) {
   const child = attachUnsettledChild(board, clock, parentId);
-  if (repair) {
-    git(workspace.path, "checkout", `task/${parentId}`);
-    commitWork(workspace.path, `${repair}.txt`, "fixed\n");
-    git(workspace.path, "checkout", "main");
-  }
-  return completeTask(board, child, FULL_HANDOFF, "tako", clock.now(), "worker");
+  if (!repair) return completeTask(board, child, FULL_HANDOFF, "tako", clock.now(), "worker");
+  const place = await prepareAtPickup(board, workspace, child);
+  commitWork(place.path, `${repair}.txt`, "fixed\n");
+  recordTaskCheckoutTip(board, place, child.id);
+  const settled = completeTask(board, child, FULL_HANDOFF, "tako", clock.now(), "worker");
+  releaseWorkspace(board, place, settled, clock.now(), true, undefined, undefined, true);
+  return settled;
 }
 
 function openPromotionQuestions(board: Db, taskId: string) {
@@ -5720,7 +5747,7 @@ it("PR 昇格を abandon した後、内容を変えない付帯子が決着し�
     throw new UnknownAgentError("tako");
   };
 
-  settleAttachedChild(db, clock, workspace, work.id);
+  await settleAttachedChild(db, clock, workspace, work.id);
 
   await landing.converge();
 
@@ -5737,7 +5764,7 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
     throw new UnknownAgentError("tako");
   };
 
-  settleAttachedChild(db, clock, workspace, work.id, "repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
 
   await landing.converge();
 
@@ -5762,10 +5789,12 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
 
 it("立て直した question への retry の時点で運ぶ内容が無ければ、回答を受理して着地対象なしを1件だけ刻む", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-reasked-nothing");
-  settleAttachedChild(db, clock, workspace, work.id, "repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await landing.converge();
   const [reasked] = openPromotionQuestions(db, work.id);
-  git(workspace.path, "update-ref", "refs/remotes/origin/main", `refs/heads/task/${work.id}`);
+  // 内容は盤面の外で保護ブランチに届き、盤面の fetch が写しを進める
+  await squashTaskIntoOrigin(workspace, work.id);
+  await refreshProtectedBranch(db, workspace, undefined);
 
   await answerPromotion(db, clock, landing, workspace, reasked!, "retry");
 
@@ -5779,7 +5808,7 @@ it("PR 昇格を abandon した後に内容が変わっても、別の付帯子�
   const { db, clock, workspace, landing, work } = await abandonedPromotion("landing-abandon-gate");
   const pending = attachUnsettledChild(db, clock, work.id);
 
-  settleAttachedChild(db, clock, workspace, work.id, "repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await expect(landing.converge()).resolves.toEqual([
     { taskId: work.id, verdict: { kind: "deferred", reason: "attached_children", count: 1 } },
   ]);
@@ -5794,7 +5823,7 @@ it("PR 昇格を abandon した後に内容が変わっても、別の付帯子�
 
 it("立て直した question にもう一度 abandon と答えるとその時点の head が刻まれ、内容を変えない次の決着では何も起きない", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-again");
-  settleAttachedChild(db, clock, workspace, work.id, "repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await landing.converge();
   const [reasked] = openPromotionQuestions(db, work.id);
 
@@ -5808,7 +5837,7 @@ it("立て直した question にもう一度 abandon と答えるとその時点
     { kind: "pr_promotion_abandoned", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
   ]);
 
-  settleAttachedChild(db, clock, workspace, work.id);
+  await settleAttachedChild(db, clock, workspace, work.id);
 
   await landing.converge();
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
@@ -5821,7 +5850,7 @@ it("head を刻めなかった abandon は、内容を変えない次の決着�
   });
   expect(latestEventOfTask(db, work.id, "pr_promotion_abandoned")?.payload.head).toBeNull();
 
-  settleAttachedChild(db, clock, workspace, work.id);
+  await settleAttachedChild(db, clock, workspace, work.id);
 
   await landing.converge();
 
@@ -5844,7 +5873,7 @@ it("PR 昇格を abandon した後、workspace を解決できないまま内容
     github,
     resolveAuthority: () => profile("escalate"),
   });
-  settleAttachedChild(db, clock, workspace, work.id);
+  await settleAttachedChild(db, clock, workspace, work.id);
   drifted = true;
 
   await landing.converge();
@@ -5877,8 +5906,7 @@ async function abandonedPushToOpenPr(name: string) {
   completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
   settleReviews(db, clock.now());
   await landing.converge();
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  git(workspace.path, "checkout", "main");
+  await commitThroughTaskCheckout(db, clock, workspace, work, "repair.txt", "fixed\n");
   github.scriptPushFailure(new Error("push rejected"));
   await landing.converge();
   github.scriptPushFailure(null);
@@ -5895,7 +5923,7 @@ it("PR を持つ根の昇格を abandon した後、内容を変えない付帯�
   };
   const pushed = github.pushes.length;
 
-  settleAttachedChild(db, clock, workspace, work.id);
+  await settleAttachedChild(db, clock, workspace, work.id);
 
   await landing.converge();
 
@@ -5908,7 +5936,7 @@ it("PR を持つ根の昇格を abandon した後、修理が内容を変えて�
   const { db, clock, workspace, github, landing, work } = await abandonedPushToOpenPr("landing-abandon-with-pr");
   const pushed = github.pushes.length;
 
-  settleAttachedChild(db, clock, workspace, work.id, "second-repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "second-repair");
 
   await landing.converge();
 
@@ -5924,11 +5952,11 @@ it("PR を持つ根の昇格を abandon した後、修理が内容を変えて�
 
 it("abandon の後の retry が着地させた根は、次の修理の決着で問い直さずに開いた PR へ push する", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-superseded");
-  settleAttachedChild(db, clock, workspace, work.id, "repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await landing.converge();
   await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "retry");
 
-  settleAttachedChild(db, clock, workspace, work.id, "second-repair");
+  await settleAttachedChild(db, clock, workspace, work.id, "second-repair");
 
   await landing.converge();
 
