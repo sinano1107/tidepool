@@ -1,0 +1,86 @@
+# lima-tidepool git version 2.53.0
+1-01 PASS moved branch keeps old sha in its reflog
+1-01 INFO expire defaults: reflogExpire=unset/90d unreachable=unset/30d
+1-02 PASS deleted branch loses its reflog
+1-03 PASS never-checked-out branch shas are absent from HEAD reflog
+1-04 PASS refs/keep-around has no reflog
+1-05 PASS old-mtime tip gone after first gc once ref deleted
+1-05c PASS control: fresh unreachable object survives the same gc
+1-06 INFO auto-maintenance spawned: commit=3 | commit-tree=0 | update-ref=0
+1-07 INFO fetch(no dst, --no-auto-gc)=0 | fetch(plain, control)=3 | merge=0
+1-10 PASS 2nd stash entry lives only in refs/stash reflog
+1-09 PASS deleting refs/stash + gc --prune=now drops both entries
+2-08d PASS update-ref -d passes on a branch checked out in a linked worktree
+2-01 FAIL after delete: unborn HEAD, content staged, uncommitted change kept [AM f;A  n;]
+2-06a PASS dir and .git/worktrees registration remain
+2-11 PASS dst fetch into the unborn checked-out branch refused
+2-11 MSG fatal: refusing to fetch into branch 'refs/heads/nba' checked out at '/home/<user>.guest/t3241-11f133ec/row7/lw1a' 
+2-02 PASS commit regrows the branch as a root commit
+2-14 PASS switch --detach <sha> works from the unborn state, staged carried [ M f;A  n;]
+2-08r PASS update-ref rewind passes on a checked-out branch
+2-03 PASS rewound branch: advanced part shows staged [M  f;]
+2-06b PASS rewind does not move the worktree tree
+2-04 PASS commit advances the branch again, parent = rewound value
+2-13 PASS reset --hard cleans the rewound shape
+2-12 PASS worktree remove refused with staged leftovers, --force passes
+2-12 MSG fatal: '../lw2c' contains modified or untracked files, use --force to delete it 
+2-09 PASS branch -D refused for a branch checked out in a linked worktree
+2-09 MSG error: cannot delete branch 'eba' used by worktree at '/home/<user>.guest/t3241-11f133ec/row7/lw2a' 
+2-10 PASS dst fetch into checked-out branch refused
+2-10 MSG fatal: refusing to fetch into branch 'refs/heads/eba' checked out at '/home/<user>.guest/t3241-11f133ec/row7/lw2a' 
+2-05 PASS --detach worktree: add + commit move no refs
+2-07 PASS linked worktree HEAD not in for-each-ref
+2-21 PASS worktree add <path> <existing branch> moves no refs
+2-20 PASS argument-less worktree add creates refs/heads/<basename>
+2-22 PASS refs/worktree/* and refs/bisect/* written in a linked worktree are invisible to main for-each-ref
+2-23 PASS main-side refs/bisect/* shows in for-each-ref
+2-24 PASS stash in a linked worktree writes the shared refs/stash
+2-25 PASS branch advanced from outside: linked worktree index stays old [M  f;]
+2-26 PASS human commit there stacks a commit undoing the advance
+2-27 PASS push into a branch checked out in a linked worktree refused
+2-15 PASS prune drops the registration of a removed dir
+2-16 PASS inner linked worktree shows as ?? inner/ [?? inner/;]
+2-17 PASS restore + clean -fd leave the inner worktree
+2-18 PASS clean -ffd (dry-run) would remove inner/
+2-19 PASS worktree remove --force inner -> status empty
+3-01 PASS new 3 commands (discard): tree == GitHub head, commit has both tips as ancestors
+3-01p PASS …and the result pushes without force
+3-02 PASS rewound-to-ancestor: merge says Already up to date, commit has 1 parent, 3 commands pass
+3-11 PASS current H4 wording typed on the protected branch: local main and origin/task/x copy move, task/x does not
+3-12 PASS …and the bare git push lands on origin's protected branch (rc=0)
+3-03 PASS checkout -- . + clean -fd leave staged changes [M  f;A  n;]
+3-04 PASS restore --staged --worktree . + clean -fd -> status empty, refs/HEAD unchanged
+3-04r PASS refs unchanged
+3-05 PASS untracked nested git repo survives clean -fd
+3-05f PASS clean -ffd removes it
+3-06 PASS ref back at old value with index/worktree new -> staged M [M  f;]
+3-07 PASS checkout -- . + clean do not clean it
+3-10 PASS restore --staged --worktree . + clean -fd cleans it, HEAD stays old
+3-08 PASS read-tree -u --reset HEAD cleans it
+3-13a PASS stash creates refs/stash
+3-13b PASS checkout -- . / clean move no refs
+4-04 PASS origin advanced outside, local tip == last pushed: force-less push refused (rc=1)
+4-04 MSG  ! [rejected]        task/r -> task/r (fetch first) hint: Updates were rejected because the remote contains work that you do not 
+4-01 PASS with an unpushed repair on top: refused non-fast-forward (rc=1)
+4-01 MSG  ! [rejected]        task/r -> task/r (fetch first) hint: Updates were rejected because the remote contains work that you do not 
+4-07 PASS after origin is force-pushed back to last pushed sha, board push passes
+4-02 PASS then merging the outside commit and pushing again passes; head has both
+4-06 PASS after origin branch is deleted, board push passes
+4-08 PASS ls-remote of a missing branch: empty output, exit 0
+4-03 PASS rewritten head + clean local merge keeps the file the outside push dropped (rc=0)
+4-10 PASS revert added on origin: origin head still not an ancestor of the local tip
+5-04 PASS dst-less fetch writes FETCH_HEAD only
+5-01 PASS dst-less fetch of a branch (2nd spelling) writes no refs
+5-05 PASS fetch by sha writes no refs
+5-03 PASS remote add writes no refs
+5-08a PASS remote set-url writes no refs
+5-08b PASS fetch after remote add creates the copies
+5-15 PASS origin/HEAD symref follows the remote default branch on set-head (refs/remotes/origin/main -> refs/remotes/origin/other)
+5-15b PASS a plain fetch does not move origin/HEAD by itself
+5-06 PASS remote remove deletes every refs/remotes/origin/* incl. origin/HEAD
+5-09 PASS config --remove-section leaves the copies with no remote section
+5-17 PASS clone creates a copy for every origin branch
+5-16 PASS hand git init: refs empty, HEAD unborn at init.defaultBranch (refs/heads/master)
+5-11 PASS pushing a rewind back from the named place moves no refs
+5-14 PASS push from the named place moves the origin/<protected> copy
+# row7 done

@@ -1,0 +1,67 @@
+
+## [vm] sender git version 2.47.0 / receiver git version 2.53.0; ssh round trip: 102ms
+
+## row6 over ssh: clone/fetch FROM kaN and push INTO kaN
+ka0: clone 151ms refs-in-clone=5 | no-op fetch 127ms adv-lines=3 keep-around-in-fetch-adv=0 | push new branch 129ms rc=0 adv-lines=3 keep-around-in-push-adv=0 | 2nd push 126ms | updateInstead push to main 131ms rc=0
+ka500: clone 142ms refs-in-clone=5 | no-op fetch 128ms adv-lines=503 keep-around-in-fetch-adv=500 | push new branch 144ms rc=0 adv-lines=503 keep-around-in-push-adv=500 | 2nd push 141ms | updateInstead push to main 145ms rc=0
+ka5000: clone 199ms refs-in-clone=5 | no-op fetch 179ms adv-lines=5003 keep-around-in-fetch-adv=5000 | push new branch 306ms rc=0 adv-lines=5003 keep-around-in-push-adv=5000 | 2nd push 292ms | updateInstead push to main 289ms rc=0
+
+## row9: human clone over ssh has B; origin rewound to A from outside; push B back without force
+origin rewound to 687d29f
+$ git push origin task/root
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git
+       687d29f..3ddb597  task/root -> task/root
+    => exit 0
+origin task/root=3ddb597
+B=3ddb597
+
+## row9 variant: clone never checked out task/root (only the remote-tracking ref holds B), origin rewound; push the tracking ref
+$ git push origin refs/remotes/origin/task/root:refs/heads/task/root
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git
+       687d29f..3ddb597  origin/task/root -> task/root
+    => exit 0
+
+## row9 variant: same, but the human fetched first (tracking ref forced back to A); B only by sha
+$ git fetch origin
+    From ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin
+     + 3ddb597...687d29f task/root  -> origin/task/root  (forced update)
+    => exit 0
+tracking=687d29f B object present: commit
+$ git push origin 3ddb597af7005cc1175d4ac6d07f9a2f1f4a8a66:refs/heads/task/root
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git
+       687d29f..3ddb597  3ddb597af7005cc1175d4ac6d07f9a2f1f4a8a66 -> task/root
+    => exit 0
+
+## row9 variant: fresh clone made after the rewind (no B object)
+B object: fatal: git cat-file: could not get object info
+$ git push origin 3ddb597af7005cc1175d4ac6d07f9a2f1f4a8a66:refs/heads/task/root
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git
+     ! [rejected]        3ddb597af7005cc1175d4ac6d07f9a2f1f4a8a66 -> task/root (needs force)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git'
+    hint: You cannot update a remote ref that points at a non-commit object,
+    hint: or update a remote ref to make it point at a non-commit object,
+    hint: without using the '--force' option.
+    => exit 1
+
+## row9 variant: origin rewound AND advanced with a different commit (diverged) -> pushing B
+origin=a615dfe
+$ git push origin task/root
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git
+     ! [rejected]        task/root -> task/root (fetch first)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/r9/origin.git'
+    hint: Updates were rejected because the remote contains work that you do not
+    hint: have locally. This is usually caused by another repository pushing to
+    hint: the same ref. If you want to integrate the remote changes, use
+    hint: 'git pull' before pushing again.
+    hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+    => exit 1
+
+## row4 supplement: board re-points board/base non-fast-forward on the host; default fetch follows
+before: 177e744
+02cd43a
+$ git fetch wb
+    From ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     + 177e744...02cd43a board/base -> wb/board/base  (forced update)
+    => exit 0
+
+## client done [vm]

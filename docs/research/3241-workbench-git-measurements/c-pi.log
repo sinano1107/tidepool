@@ -1,0 +1,67 @@
+
+## [pi] sender git version 2.47.0 / receiver git version 2.39.5; ssh round trip: 923ms
+
+## row6 over ssh: clone/fetch FROM kaN and push INTO kaN
+ka0: clone 1050ms refs-in-clone=5 | no-op fetch 1165ms adv-lines=3 keep-around-in-fetch-adv=0 | push new branch 1040ms rc=0 adv-lines=3 keep-around-in-push-adv=0 | 2nd push 1308ms | updateInstead push to main 1039ms rc=0
+ka500: clone 1217ms refs-in-clone=5 | no-op fetch 1075ms adv-lines=503 keep-around-in-fetch-adv=500 | push new branch 1168ms rc=0 adv-lines=503 keep-around-in-push-adv=500 | 2nd push 1155ms | updateInstead push to main 1240ms rc=0
+ka5000: clone 1688ms refs-in-clone=5 | no-op fetch 2757ms adv-lines=5003 keep-around-in-fetch-adv=5000 | push new branch 2513ms rc=0 adv-lines=5003 keep-around-in-push-adv=5000 | 2nd push 2394ms | updateInstead push to main 3063ms rc=0
+
+## row9: human clone over ssh has B; origin rewound to A from outside; push B back without force
+origin rewound to 2337abb
+$ git push origin task/root
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git
+       2337abb..f2ad10e  task/root -> task/root
+    => exit 0
+origin task/root=f2ad10e
+B=f2ad10e
+
+## row9 variant: clone never checked out task/root (only the remote-tracking ref holds B), origin rewound; push the tracking ref
+$ git push origin refs/remotes/origin/task/root:refs/heads/task/root
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git
+       2337abb..f2ad10e  origin/task/root -> task/root
+    => exit 0
+
+## row9 variant: same, but the human fetched first (tracking ref forced back to A); B only by sha
+$ git fetch origin
+    From ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin
+     + f2ad10e...2337abb task/root  -> origin/task/root  (forced update)
+    => exit 0
+tracking=2337abb B object present: commit
+$ git push origin f2ad10e8733b92459d88c8bc6fe941b3db9a80cf:refs/heads/task/root
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git
+       2337abb..f2ad10e  f2ad10e8733b92459d88c8bc6fe941b3db9a80cf -> task/root
+    => exit 0
+
+## row9 variant: fresh clone made after the rewind (no B object)
+B object: fatal: git cat-file: could not get object info
+$ git push origin f2ad10e8733b92459d88c8bc6fe941b3db9a80cf:refs/heads/task/root
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git
+     ! [rejected]        f2ad10e8733b92459d88c8bc6fe941b3db9a80cf -> task/root (needs force)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git'
+    hint: You cannot update a remote ref that points at a non-commit object,
+    hint: or update a remote ref to make it point at a non-commit object,
+    hint: without using the '--force' option.
+    => exit 1
+
+## row9 variant: origin rewound AND advanced with a different commit (diverged) -> pushing B
+origin=5e035a0
+$ git push origin task/root
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git
+     ! [rejected]        task/root -> task/root (fetch first)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/r9/origin.git'
+    hint: Updates were rejected because the remote contains work that you do not
+    hint: have locally. This is usually caused by another repository pushing to
+    hint: the same ref. If you want to integrate the remote changes, use
+    hint: 'git pull' before pushing again.
+    hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+    => exit 1
+
+## row4 supplement: board re-points board/base non-fast-forward on the host; default fetch follows
+before: 8a1fb93
+aa31662
+$ git fetch wb
+    From ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     + 8a1fb93...aa31662 board/base -> wb/board/base  (forced update)
+    => exit 0
+
+## client done [pi]

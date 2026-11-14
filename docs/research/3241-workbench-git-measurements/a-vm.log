@@ -1,0 +1,217 @@
+
+## [vm] versions: sender git version 2.47.0 / receiver git version 2.53.0
+
+## setup remote: named place np, workbench wb (--template=), wbtpl (template with active hooks), wbsparse
+wb hooks dir: ls: cannot access 'wb/.git/hooks': No such file or directory 
+wbtpl hooks: post-receive post-update pre-receive reference-transaction update 
+wbsparse worktree: ./dirA/a.txt ./root.txt 
+
+## row4: remote add + default fetch brings board/* and task/H
+$ git remote add wb ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+    => exit 0
+$ git fetch wb
+    From ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     * [new branch]      board/base     -> wb/board/base
+     * [new branch]      board/incoming -> wb/board/incoming
+     * [new branch]      task/H         -> wb/task/H
+    => exit 0
+$ git for-each-ref --format=%(refname) %(objectname:short)
+    refs/remotes/wb/board/base 57b0af1
+    refs/remotes/wb/board/incoming 57b0af1
+    refs/remotes/wb/task/H 57b0af1
+    => exit 0
++refs/heads/*:refs/remotes/wb/*
+
+## row1: push to checked-out task/H (clean worktree)
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       57b0af1..6b15c03  task/H -> task/H
+    => exit 0
+HEAD=6b15c03 branch=task/H
+status: []
+a.txt: a c1 
+ls: cannot access '/home/<user>.guest/t3241-11f133ec/marker': No such file or directory
+
+## row1 dirty: unrelated tracked file modified, unstaged (push touches dirA/a.txt)
+remote status before: [ M root.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Working directory has unstaged changes)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=6b15c03 status after: [ M root.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       6b15c03..1e54708  task/H -> task/H
+    => exit 0
+
+## row1 dirty: unrelated tracked file modified AND staged
+remote status before: [M  root.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Working directory has staged changes)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=1e54708 status after: [M  root.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       1e54708..751e6bd  task/H -> task/H
+    => exit 0
+
+## row1 dirty: same file modified unstaged
+remote status before: [ M dirA/a.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Working directory has unstaged changes)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=751e6bd status after: [ M dirA/a.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       751e6bd..d27c49d  task/H -> task/H
+    => exit 0
+
+## row1 dirty: untracked unrelated file
+remote status before: [?? untracked.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       d27c49d..02cd43a  task/H -> task/H
+    => exit 0
+remote HEAD=02cd43a status after: [?? untracked.txt;]
+
+## row1 dirty: untracked file colliding with a pushed new path
+remote status before: [?? newfile.txt;]
+$ git push wb task/H
+    error: Untracked working tree file 'newfile.txt' would be overwritten by merge.
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Could not update working tree to new HEAD)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=02cd43a status after: [?? newfile.txt;]
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       02cd43a..bbbbc66  task/H -> task/H
+    => exit 0
+
+## row1 non-ff: amend then push without force, then with --force
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     ! [rejected]        task/H -> task/H (non-fast-forward)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb'
+    hint: Updates were rejected because the tip of your current branch is behind
+    hint: its remote counterpart. If you want to integrate the remote changes,
+    hint: use 'git pull' before pushing again.
+    hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+    => exit 1
+$ git push --force wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     + bbbbc66...45686e6 task/H -> task/H (forced update)
+    => exit 0
+remote HEAD=45686e6 subject=c6-amended status: []
+
+## row1 fallback shape: push to another branch name, then host-side merge --ff-only
+$ git push wb task/H:refs/heads/incoming/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     * [new branch]      task/H -> incoming/H
+    => exit 0
+ 1 file changed, 1 insertion(+)
+remote HEAD=177e744
+$ git fetch wb
+    From ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       45686e6..177e744  task/H     -> wb/task/H
+    => exit 0
+
+## row4: can the own clone push into refs/heads/board/*? and delete it?
+$ git push wb task/H:refs/heads/board/base
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       57b0af1..177e744  task/H -> board/base
+    => exit 0
+$ git push wb :refs/heads/board/incoming
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     - [deleted]         board/incoming
+    => exit 0
+refs/heads/board/base 177e744
+refs/heads/incoming/H 177e744
+refs/heads/task/H 177e744
+
+## row4: board re-points board/base non-ff on the host; default fetch follows; push of task/H still works
+fatal: other: not a valid SHA1
+refs/heads/board/base 177e744
+refs/heads/board/incoming 57b0af1
+$ git fetch wb
+    From ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+     * [new branch]      board/incoming -> wb/board/incoming
+    => exit 0
+$ git push wb task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wb
+       177e744..16b9fbd  task/H -> task/H
+    => exit 0
+$ git push wb
+    Everything up-to-date
+    => exit 0
+wb/task/H
+
+## row3: hooks — wb (--template=) marker after all pushes above
+ls: cannot access 'marker': No such file or directory
+ls: cannot access 'wb/.git/hooks': No such file or directory
+
+## row3 positive control: same push into wbtpl (template carries active hooks)
+$ git remote add wbtpl ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbtpl
+    => exit 0
+$ git push wbtpl task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbtpl
+       57b0af1..16b9fbd  task/H -> task/H
+    => exit 0
+marker: pre-receive update reference-transaction reference-transaction post-receive post-update 
+wbtpl HEAD=16b9fbd
+
+## row2: sparse (cone dirA) workbench — push inside cone, outside cone, new file outside cone
+$ git remote add wbsparse ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse
+    => exit 0
+
+## row2: catch-up push (all commits so far; touches dirA only + newfile.txt at root)
+$ git push wbsparse task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse
+       57b0af1..16b9fbd  task/H -> task/H
+    => exit 0
+HEAD=16b9fbd status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 1
+
+## row2: change outside cone (dirB/b.txt)
+$ git push wbsparse task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse
+       16b9fbd..cedad5e  task/H -> task/H
+    => exit 0
+HEAD=cedad5e status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 1
+
+## row2: new file outside cone (dirC/c.txt)
+$ git push wbsparse task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse
+       cedad5e..fd6c51f  task/H -> task/H
+    => exit 0
+HEAD=fd6c51f status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 2
+
+## row2: inside cone (dirA/a.txt)
+$ git push wbsparse task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse
+       fd6c51f..ede496e  task/H -> task/H
+    => exit 0
+HEAD=ede496e status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 2
+
+## row2: sparse + dirty file outside cone materialised by hand on the host
+status: [ M dirB/b.txt;]
+$ git push wbsparse task/H
+    To ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse
+     ! [remote rejected] task/H -> task/H (Working directory has unstaged changes)
+    error: failed to push some refs to 'ssh://lima-tidepool/home/<user>.guest/t3241-11f133ec/wbsparse'
+    => exit 1
+HEAD=ede496e status: [ M dirB/b.txt;]
+stray 
+## done [vm]

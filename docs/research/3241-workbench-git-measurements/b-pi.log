@@ -1,0 +1,42 @@
+
+## host raspberrypi git version 2.39.5 user=masaki
+
+## row5: ownership
+wb owner=masaki mode=755
+49478ba
+safe.directory: []
+control (GIT_TEST_ASSUME_DIFFERENT_OWNER=1):
+fatal: detected dubious ownership in repository at '/mnt/workspaces/t3241-11f133ec/wb'
+To add an exception for this directory, call:
+
+tidepool.service UMask=0022 User=masaki 
+/mnt/ssd/tidepool owner=masaki mode=755
+.git
+
+## row8: human-only path arriving via merge back shows in the parent's gate delta
+ff variant: gate delta(F, P) paths = [.claude/settings.json .mcp.json ]
+merge-tree rc=0 tree=c78be61
+merge variant: gate delta(F, P) paths = [.claude/settings.json .mcp.json g ]
+control (Q merged main that carries .codex/config.toml): gate delta(main, Q) = [q ]  gate delta(F, Q) = [.codex/config.toml .mcp.json q ]
+
+## row9 setup: bare origin (stand-in for GitHub), board pushes A then B, outside rewinds to A
+A=2337abb B=f2ad10e origin task/root=f2ad10e
+
+## row6 setup: repos with N keep-around refs (distinct unreachable commits)
+ka0: refs=3 keep-around=0 build=0s loose=0 packed-refs=2 for-each-ref: 7ms rc=0
+ka500: refs=503 keep-around=500 build=3s loose=500 packed-refs=2 for-each-ref: 56ms rc=0
+ka5000: refs=5003 keep-around=5000 build=27s loose=5000 packed-refs=2 for-each-ref: 322ms rc=0
+ka0 fetch from upstream (1 new commit): 37ms haves=16 wants=1
+ka0 no-op fetch: 22ms
+ka0 local clone (worker-like): 23ms refs-in-clone=3
+ka0 status: 9ms rc=0  rev-list --all: 8ms rc=0  gc --auto: 6ms rc=0
+ka500 fetch from upstream (1 new commit): 183ms haves=496 wants=5
+ka500 no-op fetch: 87ms
+ka500 local clone (worker-like): 63ms refs-in-clone=3
+ka500 status: 9ms rc=0  rev-list --all: 64ms rc=0  gc --auto: 7ms rc=0
+ka5000 fetch from upstream (1 new commit): 1476ms haves=5060 wants=9
+ka5000 no-op fetch: 659ms
+ka5000 local clone (worker-like): 239ms refs-in-clone=3
+ka5000 status: 11ms rc=0  rev-list --all: 576ms rc=0  gc --auto: 6ms rc=0
+
+## host done

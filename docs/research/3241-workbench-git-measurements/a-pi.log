@@ -1,0 +1,217 @@
+
+## [pi] versions: sender git version 2.47.0 / receiver git version 2.39.5
+
+## setup remote: named place np, workbench wb (--template=), wbtpl (template with active hooks), wbsparse
+wb hooks dir: ls: 'wb/.git/hooks' にアクセスできません: そのようなファイルやディレクトリはありません 
+wbtpl hooks: post-receive post-update pre-receive reference-transaction update 
+wbsparse worktree: ./dirA/a.txt ./root.txt 
+
+## row4: remote add + default fetch brings board/* and task/H
+$ git remote add wb ssh://masaki@<pi>/mnt/workspaces/t3241-11f133ec/wb
+    => exit 0
+$ git fetch wb
+    From ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     * [new branch]      board/base     -> wb/board/base
+     * [new branch]      board/incoming -> wb/board/incoming
+     * [new branch]      task/H         -> wb/task/H
+    => exit 0
+$ git for-each-ref --format=%(refname) %(objectname:short)
+    refs/remotes/wb/board/base 2be0489
+    refs/remotes/wb/board/incoming 2be0489
+    refs/remotes/wb/task/H 2be0489
+    => exit 0
++refs/heads/*:refs/remotes/wb/*
+
+## row1: push to checked-out task/H (clean worktree)
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       2be0489..11a1a75  task/H -> task/H
+    => exit 0
+HEAD=11a1a75 branch=task/H
+status: []
+a.txt: a c1 
+ls: '/mnt/workspaces/t3241-11f133ec/marker' にアクセスできません: そのようなファイルやディレクトリはありません
+
+## row1 dirty: unrelated tracked file modified, unstaged (push touches dirA/a.txt)
+remote status before: [ M root.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Working directory has unstaged changes)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=11a1a75 status after: [ M root.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       11a1a75..22e9e7e  task/H -> task/H
+    => exit 0
+
+## row1 dirty: unrelated tracked file modified AND staged
+remote status before: [M  root.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Working directory has staged changes)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=22e9e7e status after: [M  root.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       22e9e7e..fc148a3  task/H -> task/H
+    => exit 0
+
+## row1 dirty: same file modified unstaged
+remote status before: [ M dirA/a.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Working directory has unstaged changes)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=fc148a3 status after: [ M dirA/a.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       fc148a3..ed9281a  task/H -> task/H
+    => exit 0
+
+## row1 dirty: untracked unrelated file
+remote status before: [?? untracked.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       ed9281a..aa31662  task/H -> task/H
+    => exit 0
+remote HEAD=aa31662 status after: [?? untracked.txt;]
+
+## row1 dirty: untracked file colliding with a pushed new path
+remote status before: [?? newfile.txt;]
+$ git push wb task/H
+    error: Untracked working tree file 'newfile.txt' would be overwritten by merge.
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     ! [remote rejected] task/H -> task/H (Could not update working tree to new HEAD)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb'
+    => exit 1
+remote HEAD=aa31662 status after: [?? newfile.txt;]
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       aa31662..fc517f4  task/H -> task/H
+    => exit 0
+
+## row1 non-ff: amend then push without force, then with --force
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     ! [rejected]        task/H -> task/H (non-fast-forward)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb'
+    hint: Updates were rejected because the tip of your current branch is behind
+    hint: its remote counterpart. If you want to integrate the remote changes,
+    hint: use 'git pull' before pushing again.
+    hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+    => exit 1
+$ git push --force wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     + fc517f4...1b95e5c task/H -> task/H (forced update)
+    => exit 0
+remote HEAD=1b95e5c subject=c6-amended status: []
+
+## row1 fallback shape: push to another branch name, then host-side merge --ff-only
+$ git push wb task/H:refs/heads/incoming/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     * [new branch]      task/H -> incoming/H
+    => exit 0
+ 1 file changed, 1 insertion(+)
+remote HEAD=8a1fb93
+$ git fetch wb
+    From ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       1b95e5c..8a1fb93  task/H     -> wb/task/H
+    => exit 0
+
+## row4: can the own clone push into refs/heads/board/*? and delete it?
+$ git push wb task/H:refs/heads/board/base
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       2be0489..8a1fb93  task/H -> board/base
+    => exit 0
+$ git push wb :refs/heads/board/incoming
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     - [deleted]         board/incoming
+    => exit 0
+refs/heads/board/base 8a1fb93
+refs/heads/incoming/H 8a1fb93
+refs/heads/task/H 8a1fb93
+
+## row4: board re-points board/base non-ff on the host; default fetch follows; push of task/H still works
+refs/heads/board/base 8a1fb93
+refs/heads/board/incoming 2be0489
+fatal: other: not a valid SHA1
+$ git fetch wb
+    From ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+     * [new branch]      board/incoming -> wb/board/incoming
+    => exit 0
+$ git push wb task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wb
+       8a1fb93..49478ba  task/H -> task/H
+    => exit 0
+$ git push wb
+    Everything up-to-date
+    => exit 0
+wb/task/H
+
+## row3: hooks — wb (--template=) marker after all pushes above
+ls: 'marker' にアクセスできません: そのようなファイルやディレクトリはありません
+ls: 'wb/.git/hooks' にアクセスできません: そのようなファイルやディレクトリはありません
+
+## row3 positive control: same push into wbtpl (template carries active hooks)
+$ git remote add wbtpl ssh://masaki@<pi>/mnt/workspaces/t3241-11f133ec/wbtpl
+    => exit 0
+$ git push wbtpl task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbtpl
+       2be0489..49478ba  task/H -> task/H
+    => exit 0
+marker: pre-receive update reference-transaction reference-transaction post-receive post-update 
+wbtpl HEAD=49478ba
+
+## row2: sparse (cone dirA) workbench — push inside cone, outside cone, new file outside cone
+$ git remote add wbsparse ssh://masaki@<pi>/mnt/workspaces/t3241-11f133ec/wbsparse
+    => exit 0
+
+## row2: catch-up push (all commits so far; touches dirA only + newfile.txt at root)
+$ git push wbsparse task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbsparse
+       2be0489..49478ba  task/H -> task/H
+    => exit 0
+HEAD=49478ba status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 1
+
+## row2: change outside cone (dirB/b.txt)
+$ git push wbsparse task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbsparse
+       49478ba..f139a6a  task/H -> task/H
+    => exit 0
+HEAD=f139a6a status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 1
+
+## row2: new file outside cone (dirC/c.txt)
+$ git push wbsparse task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbsparse
+       f139a6a..a7d188f  task/H -> task/H
+    => exit 0
+HEAD=a7d188f status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 2
+
+## row2: inside cone (dirA/a.txt)
+$ git push wbsparse task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbsparse
+       a7d188f..b53fc83  task/H -> task/H
+    => exit 0
+HEAD=b53fc83 status: []
+files: ./dirA/a.txt ./newfile.txt ./root.txt 
+sparse: dirA  skip-worktree count: 2
+
+## row2: sparse + dirty file outside cone materialised by hand on the host
+status: [ M dirB/b.txt;]
+$ git push wbsparse task/H
+    To ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbsparse
+     ! [remote rejected] task/H -> task/H (Working directory has unstaged changes)
+    error: failed to push some refs to 'ssh://<pi>/mnt/workspaces/t3241-11f133ec/wbsparse'
+    => exit 1
+HEAD=b53fc83 status: [ M dirB/b.txt;]
+stray 
+## done [pi]
