@@ -583,7 +583,7 @@ export function interviewRoomPath(db: Db, rootId: string): string | undefined {
 }
 
 /** 受験者の最後の checkout の在り処(ADR 0276 決定4 / ADR 0356 決定2): 最後に開いた task の checkout —— 決着した受験者ではそれが記録として残る。
- *  まだ開いていないか、解放で消えた(`task_checkout_released` がその在り処を名指す)なら undefined。 */
+ *  ADR 0369 決定7: まだ開いていないか、解放で削除してよい(`task_checkout_released` がその在り処を名指す)なら undefined。 */
 export function examineeCheckoutPath(db: Db, examineeId: string): string | undefined {
   const path = latestEventOfTask(db, examineeId, "task_checkout_opened")?.payload.path;
   return path !== undefined && latestEventOfTask(db, examineeId, "task_checkout_released")?.payload.path !== path ? path : undefined;

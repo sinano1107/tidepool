@@ -1,13 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
 import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
-import { firePickupPredicates, type RunPlace, recordTaskCheckoutTip, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { firePickupPredicates, type RunPlace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import {
   commitWork,
@@ -24,6 +26,7 @@ import {
   sessionId,
   WORKER_SPAWNED,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 // 後始末の再実行(ADR 0345): tree rule を通った後にもう1度撃つ経路の振る舞い。ADR 0356 の後、worker は task の checkout で走り、
 // 名前の場所の HEAD は保護ブランチを離れない —— 再実行は開いた event と checkout の有無から残りを決める。
@@ -86,8 +89,236 @@ async function teardownThrewAfterTreeRule(s: Session): Promise<void> {
 /** 再起動で枠の in-memory は消える。 */
 const restarted = (s: Session): TeardownDeps => ({ ...s.deps, slot: new Slot() });
 
+/** 作業がタスクブランチに着き、解放を刻んだ直後に盤面が落ちた形。 */
+function recordReleaseBeforeRestart(s: Session): void {
+  appendEvent(s.db, { taskId: s.task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: s.place.path }, at: s.clock.now() });
+}
+
 const head = (s: Session) => git(s.ws.path, "rev-parse", "--abbrev-ref", "HEAD");
 const release = (s: Session, place: RunPlace = s.place) => releaseWorkspace(s.db, place, getTask(s.db, s.task.id)!, s.clock.now());
+
+it("別の ref が動いても、作業がタスクブランチに着いた解放は刻まれ、checkout を消す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("interrupted");
+  escalateTask(s.db, s.task, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", s.clock.now(), "worker");
+  writeFileSync(join(s.place.path, "wip.txt"), "wip\n");
+  git(s.ws.path, "branch", "moved-by-hand", "main");
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(git(s.ws.path, "show", `${s.branch}:work.txt`)).toBe("work");
+  expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("refs/heads/moved-by-hand");
+  expect(listEvents(s.db, s.task.id).filter(({ kind }) => kind === "task_checkout_released").map(({ payload }) => payload)).toEqual([
+    { kind: "task_checkout_released", path: s.place.path },
+  ]);
+  expect(existsSync(s.place.path)).toBe(false);
+});
+
+it.each([
+  { containsTip: true, removeGit: false },
+  { containsTip: false, removeGit: false },
+  { containsTip: false, removeGit: true },
+])("完了の門の tip が今のタスクブランチに含まれる場合だけ checkout を消す (contains tip=$containsTip, .git removed=$removeGit、ADR 0369 決定7)", async ({ containsTip, removeGit }) => {
+  const s = await settledSession("completed", { parent: "delivers" });
+  if (containsTip) {
+    git(s.ws.path, "switch", s.branch);
+    commitWork(s.ws.path, "by-hand.txt", "added after completion\n");
+    git(s.ws.path, "switch", "main");
+  } else {
+    git(s.ws.path, "update-ref", `refs/heads/${s.branch}`, "main");
+  }
+  if (removeGit) rmSync(join(s.place.path, ".git"), { recursive: true });
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`now: ${git(s.ws.path, "rev-parse", s.branch)} refs/heads/${s.branch}`);
+  if (containsTip) expect(git(s.ws.path, "show", `${s.branch}:work.txt`)).toBe("work");
+  expect(git(s.ws.path, "ls-tree", "--name-only", s.parentBranch, "--", "by-hand.txt", "work.txt")).toBe("");
+  const events = listEvents(s.db, s.task.id);
+  expect(events.some(({ kind }) => kind === "task_checkout_released")).toBe(containsTip);
+  expect(events.find(({ kind }) => kind === "task_checkout_written_after_completion")?.payload).toEqual(removeGit ?
+    { kind: "task_checkout_written_after_completion", path: s.place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") } : undefined);
+  expect(existsSync(s.place.path)).toBe(!containsTip);
+});
+
+it.each(["current", "old", "new"] as const)("完了の門の予告が残っていても、タスクブランチに含まれる記録から解放する (recorded tip=%s、ADR 0369 決定7)", async (recorded) => {
+  const s = await settledSession("completed", { parent: "delivers" });
+  const ref = `refs/heads/${s.branch}`;
+  const gateTip = git(s.ws.path, "rev-parse", s.branch);
+  const base = git(s.ws.path, "rev-parse", "main");
+  git(s.ws.path, "switch", s.branch);
+  commitWork(s.ws.path, "by-hand.txt", "added after completion\n");
+  git(s.ws.path, "switch", "main");
+  const current = git(s.ws.path, "rev-parse", s.branch);
+  const announcement = { current: `${gateTip}|${current}`, old: `${gateTip}|${"a".repeat(40)}`, new: `${base}|${gateTip}` }[recorded];
+  s.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?")
+    .run(`${gateTip} ${ref}`, `${announcement} ${ref}`, s.ws.name);
+  if (recorded === "current") {
+    // The worker left the tip whose gate write the board last announced.
+    git(s.place.path, "fetch", s.ws.path, s.branch);
+    git(s.place.path, "reset", "--hard", "FETCH_HEAD");
+  }
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  const events = listEvents(s.db, s.task.id);
+  expect(events.some(({ kind }) => kind === "task_checkout_written_after_completion")).toBe(false);
+  expect(events.some(({ kind }) => kind === "task_checkout_released")).toBe(true);
+  expect(existsSync(s.place.path)).toBe(false);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose?.includes(ref) ?? false).toBe(recorded !== "current");
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(recorded === "current" ? current : base);
+});
+
+it.each(["replace", "graft"] as const)("履歴の差し替えで門の tip が見えても、実際のタスクブランチから辿れなければ checkout を残す (%s、ADR 0369 決定7)", async (mode) => {
+  const s = await settledSession("completed");
+  const gateTip = git(s.ws.path, "rev-parse", s.branch);
+  git(s.ws.path, "switch", "--detach", gateTip);
+  commitWork(s.ws.path, "child.txt", "descendant\n");
+  const descendant = git(s.ws.path, "rev-parse", "HEAD");
+  git(s.ws.path, "switch", "main");
+  commitWork(s.ws.path, "unrelated.txt", "different history\n");
+  const unrelated = git(s.ws.path, "rev-parse", "main");
+  if (mode === "replace") git(s.ws.path, "replace", unrelated, descendant);
+  else writeFileSync(join(s.ws.path, ".git", "info", "grafts"), `${unrelated} ${gateTip}\n`);
+  git(s.ws.path, "update-ref", `refs/heads/${s.branch}`, unrelated);
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(readFileSync(join(s.place.path, "work.txt"), "utf8")).toBe("work\n");
+});
+
+async function moveTaskRefDuringGit(s: Session, tip: string, trigger: string, beforeCommand = true): Promise<void> {
+  const bin = await tempDir("tidepool-release-ref-reset-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "reset-ref"), `${realGit}\n${s.ws.path}\nrefs/heads/${s.branch}\n${tip}\n`);
+  writeFileSync(join(bin, "git"), [
+    "#!/bin/sh",
+    '{ IFS= read -r git; IFS= read -r repo; IFS= read -r ref; IFS= read -r tip; } < "${0%/*}/reset-ref"',
+    `if ${trigger}; then`,
+    ...(!beforeCommand ? ['  "$git" "$@" || exit'] : []),
+    '  (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY; "$git" -C "$repo" update-ref "$ref" "$tip") || exit',
+    ...(!beforeCommand ? ["  exit 0"] : []),
+    "fi",
+    'exec "$git" "$@"',
+    "",
+  ].join("\n"), { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+}
+
+it("門の tree を読んでいる間にタスクブランチが戻されたら checkout を残す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("completed");
+  const ref = `refs/heads/${s.branch}`;
+  writeFileSync(join(s.place.path, "late.txt"), "written after completion\n");
+  await moveTaskRefDuringGit(s, "main", '[ "$1" = --no-replace-objects ] && [ "$2" = ls-tree ] && [ "$3" = -r ]');
+  try {
+    await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  expect(git(s.ws.path, "rev-parse", ref)).toBe(git(s.ws.path, "rev-parse", "main"));
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(ref);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(existsSync(s.place.path)).toBe(true);
+});
+
+it.each([false, true])("名前の場所と worker の repo が同時に読めなくても、報告後の観測を刻んで checkout を残す (announced=%s、ADR 0359 決定3 / ADR 0369 決定7)", async (announced) => {
+  const s = await settledSession("completed");
+  if (announced) {
+    const ref = `refs/heads/${s.branch}`;
+    const tip = git(s.ws.path, "rev-parse", ref);
+    const base = git(s.ws.path, "rev-parse", "main");
+    s.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?").run(`${tip} ${ref}`, `${base}|${tip} ${ref}`, s.ws.name);
+  }
+  rmSync(join(s.ws.path, ".git"), { recursive: true });
+  rmSync(join(s.place.path, ".git"), { recursive: true });
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+  const events = listEvents(s.db, s.task.id);
+  expect(events.some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+  expect(events.find(({ kind }) => kind === "task_checkout_written_after_completion")?.payload).toMatchObject({
+    path: s.place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository"),
+  });
+  expect(existsSync(s.place.path)).toBe(true);
+});
+
+it.each(["staging", "write"])("中断の退避の間にタスクブランチが動いたら checkout を残す (during=%s、ADR 0369 決定7)", async (during) => {
+  const s = await settledSession("interrupted");
+  const ref = `refs/heads/${s.branch}`;
+  const main = git(s.ws.path, "rev-parse", "main");
+  git(s.ws.path, "switch", "--detach", "main");
+  commitWork(s.ws.path, "by-hand.txt", "unrelated work\n");
+  const byHand = git(s.ws.path, "rev-parse", "HEAD");
+  git(s.ws.path, "switch", "main");
+  writeFileSync(join(s.place.path, "wip.txt"), "keep this WIP\n");
+  const trigger = during === "staging" ? '[ "$1" = write-tree ]' : '[ "$1" = update-ref ] && { [ "$2" = "$ref" ] || [ "$3" = "$ref" ]; }';
+  await moveTaskRefDuringGit(s, byHand, trigger, during === "staging");
+  try {
+    await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  expect(git(s.ws.path, "rev-parse", ref)).toBe(byHand);
+  expect(git(s.ws.path, "rev-parse", "main")).toBe(main);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(ref);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(readFileSync(join(s.place.path, "wip.txt"), "utf8")).toBe("keep this WIP\n");
+});
+
+it("中断のタスクブランチが main を指す symref に変わったら、main には運ばず checkout を残す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("interrupted");
+  const ref = `refs/heads/${s.branch}`;
+  const main = git(s.ws.path, "rev-parse", "main");
+  git(s.ws.path, "symbolic-ref", ref, "refs/heads/main");
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(git(s.ws.path, "rev-parse", "main")).toBe(main);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`symref=refs/heads/main ${ref}`);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(readFileSync(join(s.place.path, "work.txt"), "utf8")).toBe("work\n");
+});
+
+it("タスクブランチが門の tip を指す別 ref への symref に変わったら checkout を残す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("completed");
+  const ref = `refs/heads/${s.branch}`;
+  git(s.ws.path, "branch", "points-to-gate-tip", s.branch);
+  git(s.ws.path, "symbolic-ref", ref, "refs/heads/points-to-gate-tip");
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`symref=refs/heads/points-to-gate-tip ${ref}`);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(existsSync(s.place.path)).toBe(true);
+});
+
+it.each([
+  { treePath: "root", removeGit: false },
+  { treePath: "nested", removeGit: false },
+  { treePath: "nested", removeGit: true },
+])("門が記録した tree が読めなければ checkout を残す (tree=$treePath, .git removed=$removeGit、ADR 0369 決定7)", async ({ treePath, removeGit }) => {
+  const s = await settledSession("completed", { work: (checkout) => {
+    mkdirSync(join(checkout, "nested"));
+    commitWork(checkout, "nested/deliverable.txt", "the real work\n");
+  } });
+  const tree = git(s.ws.path, "rev-parse", treePath === "root" ? `${s.branch}^{tree}` : `${s.branch}:nested`);
+  rmSync(join(s.ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+  if (removeGit) rmSync(join(s.place.path, ".git"), { recursive: true });
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+  expect(readFileSync(join(s.place.path, "nested/deliverable.txt"), "utf8")).toBe("the real work\n");
+  const events = listEvents(s.db, s.task.id);
+  expect(events.some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+  expect(events.find(({ kind }) => kind === "task_checkout_written_after_completion")?.payload).toEqual(removeGit ?
+    { kind: "task_checkout_written_after_completion", path: s.place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository") } : undefined);
+});
 
 function expectCleanRerun(s: Session, deps: TeardownDeps, status: string): void {
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
@@ -135,6 +366,48 @@ it("完了の tree rule の後に question も無く落ちた盤面の次の起�
   expectCleanRerun(s, deps, "done");
 });
 
+it("解放を刻んだ直後に停止しても、再起動が merge back と休止位置への追従を済ませて checkout を消す (ADR 0369 決定7)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-restart-after-release");
+  const s = await settledSession("completed", { workspace, parent: "delivers" });
+  publish("merged.txt", "merged on GitHub\n", "merged before the teardown");
+  recordReleaseBeforeRestart(s);
+  writeFileSync(join(s.place.path, "late.txt"), "written after the release\n");
+  const deps = restarted(s);
+
+  await resumeUnfinishedTeardown(deps);
+
+  expectCleanRerun(s, deps, "done");
+  expect(git(s.ws.path, "show", `${s.parentBranch}:work.txt`)).toBe("work");
+  expect(readFileSync(join(s.ws.path, "merged.txt"), "utf8")).toBe("merged on GitHub\n");
+  expect(listEvents(s.db, s.task.id).filter(({ kind }) => kind === "task_checkout_released")).toHaveLength(1);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_written_after_completion");
+});
+
+it("解放を刻んだ後に名前の場所が drift しても、再起動が Quarantine を立てて checkout を消す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("completed");
+  recordReleaseBeforeRestart(s);
+  const deps = { ...restarted(s), resolve: () => { throw new UnknownWorkspaceError(s.ws.name); } };
+
+  await resumeUnfinishedTeardown(deps);
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`unknown workspace: ${s.ws.name}`);
+  expect(existsSync(s.place.path)).toBe(false);
+  expect(sessionInTeardown(s.db)).toBeUndefined();
+});
+
+it("中断の解放を刻んだ後にタスクブランチが動くと、再起動は変更を基準に入れず Quarantine に落とす (ADR 0369 決定7)", async () => {
+  const s = await settledSession("interrupted");
+  recordTaskCheckoutTip(s.db, s.place, s.task.id);
+  recordReleaseBeforeRestart(s);
+  const ref = `refs/heads/${s.branch}`;
+  git(s.ws.path, "update-ref", ref, "main");
+
+  await resumeUnfinishedTeardown(restarted(s));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(ref);
+  expect(existsSync(s.place.path)).toBe(false);
+});
+
 // 旧: worker がタスクブランチを離れていると commit を拒んで quarantine に落ちた(#234 ケース1)
 it.each([
   ["別のブランチ", (checkout: string) => git(checkout, "checkout", "-b", "elsewhere")],
@@ -151,15 +424,14 @@ it.each([
   expect(head(s)).toBe("main");
 });
 
-// 旧: 基準の行が無い workspace の HEAD は盤面が動かしたと読まず commit を拒んだ(ADR 0345 決定3)。ADR 0356 決定2 の後、解放を
-// 刻んだ再実行は削除だけを撃つので、基準を失うのは解放より前
-it("基準の行を失った名前の場所の解放は、動いていない ref も違反と読んで quarantine に落ちる(fail-closed、ADR 0064 決定6 / ADR 0356 決定4)", async () => {
+it("基準の行を失った名前の場所の完了の解放は quarantine に落ちて checkout を残す (ADR 0369 決定7)", async () => {
   const s = await settledSession("completed");
   s.db.exec("DELETE FROM workspace_state");
 
   await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain("changed during the session");
+  expect(existsSync(s.place.path)).toBe(true);
 });
 
 // 旧: 盤面が HEAD を動かした後の名前の場所への書き込みを再実行が quarantine にした(ADR 0345 決定3)。worker はもう名前の場所で
@@ -265,14 +537,22 @@ it("退避の fetch が落ちて Quarantine に返った tree rule の受理は�
   expect(head(s)).toBe("main");
 });
 
-it("merge back の conflict で Quarantine に返った tree rule の受理は、同じ conflict に着き、同じ question を1枚のまま何も足さない(ADR 0345 決定3・4 / ADR 0356 決定5 / ADR 0366 決定1)", async () => {
+it("merge back の conflict で checkout を消し、後始末の受理では同じ Quarantine を保つ (ADR 0369 決定7 / ADR 0366 決定1)", async () => {
   const s = await settledSession("completed", { parent: "conflicts" });
+  writeFileSync(join(s.place.path, "late.txt"), "written after completion\n");
   await teardownThrewAfterTreeRule(s);
+  expect(existsSync(s.place.path)).toBe(false);
+
   await acceptTeardownQuarantine(s.deps, s.task.id);
 
   expectOneQuestionUnchanged(s, "does not merge cleanly");
   expect(head(s)).toBe("main");
   expect(git(s.ws.path, "status", "--porcelain")).toBe("");
+  expect(git(s.ws.path, "show", `${s.branch}:work.txt`)).toBe("work");
+  expect(listEvents(s.db, s.task.id).filter(({ kind }) => kind === "task_checkout_written_after_completion" || kind === "task_checkout_released").map(({ payload }) => payload)).toEqual([
+    { kind: "task_checkout_written_after_completion", path: s.place.path, observation: "uncommitted", paths: ["late.txt"] },
+    { kind: "task_checkout_released", path: s.place.path },
+  ]);
 });
 
 // 旧: HEAD の2値行(予告と畳みの間で落ちた休止)と parking の回復(ADR 0243 決定2 / ADR 0345 決定3 / ADR 0356 決定5)。名前の場所の
@@ -337,9 +617,29 @@ it("帰り先へ届いた merge back の後の再実行は、帰り先を動か�
   expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
 });
 
-// 旧: 再実行が fetch と park の ff-only を撃ち直して休止位置を remote に追従させた(ADR 0345 決定3)。解放を刻んだ再実行は削除だけで、
-// 追従は次の pickup の鮮度の段が持つ(issue #2223)
-it("remote-backed の完了の merge back の後の再実行は名前の場所に触れず、その後に remote が進んでも次の pickup が休止位置を追従させる(ADR 0345 決定3 / ADR 0356 決定2)", async () => {
+it("checkout の削除が投げた時点で merge back と休止位置への追従は済んでいる (ADR 0369 決定7)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-delete-failure");
+  const s = await settledSession("completed", { workspace, parent: "delivers" });
+  publish("merged.txt", "merged on GitHub\n", "merged before the teardown");
+  const parent = join(s.place.path, "..");
+  chmodSync(parent, 0o555);
+  try {
+    await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+    expect(sessionInTeardown(s.db)).toBeDefined();
+    expect(existsSync(s.place.path)).toBe(true);
+    expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).toContain("task_checkout_released");
+    expect(git(s.ws.path, "show", `${s.parentBranch}:work.txt`)).toBe("work");
+    expect(readFileSync(join(s.ws.path, "merged.txt"), "utf8")).toBe("merged on GitHub\n");
+  } finally {
+    chmodSync(parent, 0o755);
+  }
+
+  await acceptTeardownQuarantine(s.deps, s.task.id);
+
+  expectCleanRerun(s, s.deps, "done");
+});
+
+it("remote-backed の完了の再実行は済んだ merge back を保ち、休止位置を最新の remote に追従させる (ADR 0369 決定7)", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-rerun-remote");
   const s = await settledSession("completed", { workspace, parent: "delivers" });
   // 後始末の前に remote が進み、1度目の fetch が写しを動かす
@@ -353,8 +653,6 @@ it("remote-backed の完了の merge back の後の再実行は名前の場所�
 
   expectCleanRerun(s, s.deps, "done");
   expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(delivered);
-  const next = registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, s.clock.now(), ...HUMAN_WEBUI);
-  await prepareAtPickup(s.db, s.ws, next);
   expect(git(s.ws.path, "rev-parse", "main")).toBe(git(s.ws.path, "rev-parse", "origin/main"));
   expect(git(s.ws.path, "show", "main:merged.txt")).toBe("merged on GitHub");
 });

@@ -32,6 +32,11 @@ export function git(cwd: string, ...args: string[]): string {
   return run(cwd, args).toString().trim();
 }
 
+/** ADR 0369 決定7: confirm what the recorded objects contain without local history overrides. */
+export function gitWithoutHistoryOverrides(cwd: string, ...args: string[]): string {
+  return run(cwd, ["--no-replace-objects", ...args], { GIT_GRAFT_FILE: "/dev/null" }).toString().trim();
+}
+
 /** Machine-readable working-tree status, including every untracked file regardless of Git config. */
 export function gitStatus(cwd: string): string {
   return git(cwd, "status", "--porcelain", "--untracked-files=all");
