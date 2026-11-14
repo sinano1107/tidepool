@@ -1,0 +1,43 @@
+git version 2.53.0
+== M-A: origin with tags; named place = clone ==
+-- after clone:
+refs/heads/main HEAD
+0f345c287679c2306d599e60329248e293eda073 refs/heads/main
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+0f345c287679c2306d599e60329248e293eda073 refs/remotes/origin/main
+0f345c287679c2306d599e60329248e293eda073 refs/tags/v1
+== M-B: board fetch spellings into named place ==
+FETCH_FLAGS <repo> <ref>: refs+HEAD unchanged
+FETCH_HEAD files: 0
+object present
+hop2 fetch: refs+HEAD unchanged
+FETCH_HEAD files: 1
+origin/HEAD stays absent after path fetch
+== M-C: reflogs written by update-ref / symbolic-ref (non-bare, default config) ==
+HEAD reflog entries: 3
+refs/heads/task/x reflog entries: 1
+refs/heads/main reflog entries: 2
+refs/remotes/origin/main reflog entries: 1
+refs/keep-around/0e20841e237465f8aae0459ffa27bc51719213f0 reflog entries: 0
+true
+-- HEAD reflog:
+0e20841 HEAD@{0}: 
+0e20841 HEAD@{1}: 
+0f345c2 HEAD@{2}: clone: from /home/<user>.guest/t3241-11f133ec/orig/run.irMaAv/origin.git
+== M-D: remote remove deletes leftover copies without a remote section ==
+-- before (no remote section):
+0f345c287679c2306d599e60329248e293eda073 refs/heads/main
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+0f345c287679c2306d599e60329248e293eda073 refs/remotes/origin/main
+0f345c287679c2306d599e60329248e293eda073 refs/remotes/origin/old
+remotes: []
+-- after remote add:
+0f345c287679c2306d599e60329248e293eda073 refs/heads/main
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+0f345c287679c2306d599e60329248e293eda073 refs/remotes/origin/main
+0f345c287679c2306d599e60329248e293eda073 refs/remotes/origin/old
+-- after remote remove:
+0f345c287679c2306d599e60329248e293eda073 refs/heads/main
+== M-E: registry-style worktree add/commit/remove leaves main repo refs alone ==
+worktree add/commit/remove: refs+HEAD unchanged
+W=/home/<user>.guest/t3241-11f133ec/orig/run.irMaAv

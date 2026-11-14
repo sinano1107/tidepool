@@ -1,0 +1,73 @@
+## purely-local template baseline (no origin)
+symref=refs/heads/main HEAD
+e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+2fdd8624c881b1e1bbabcfa8e5d6a326d8bbfbf7 refs/heads/task/C
+591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+
+## L-H1 purely-local: merge back conflict by hand, HEAD left on the target
+### L-H1
+was: symref=refs/heads/main HEAD
+now: symref=refs/heads/task/P HEAD
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: ea4464aae1db1a5411a8dc48a949a1156a09db81 refs/heads/task/P
+
+## L-H7a purely-local: merge the protected branch into task/<id> by hand, back on main
+### L-H7a
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: 53abdaedd311ec01e775370ea0afda40f2d3151e refs/heads/task/P
+
+## L-H7b purely-local: merge task/<id> into the protected branch by hand
+### L-H7b
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/main
+
+## L-H10 purely-local: protected branch missing, recreated by hand
+### L-H10 git branch main <sha>
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/heads/main
+
+### L-H10 then git checkout main
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 HEAD
+now: symref=refs/heads/main HEAD
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/heads/main
+
+## L-H11 purely-local: stash
+### L-H11a git stash
+now: f1858ad015a1d85791123e683b03e17db9b636c8 refs/stash
+
+## L-H18/19/21 purely-local: human commit on the protected branch
+### L-H18/19/21
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 948c7f6cf14733dd47fad8999c651b81fef1f9fd refs/heads/main
+
+## H3b outside push diverged (dropped the repair and added its own commit); human merges and pushes from the named place
+plain push exit=1 :  ! [rejected]        task/P -> task/P (fetch first)
+### H3b after the rejected push
+(baseline text identical)
+
+### H3b after git fetch origin
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: cf13e40826a0e11ac31b27a7f67b38d622054d82 refs/remotes/origin/task/P
+
+### H3b after checkout task/P + merge origin/task/P + push (HEAD left on task/P)
+was: symref=refs/heads/main HEAD
+now: symref=refs/heads/task/P HEAD
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: 4d2d3b970fa5a5f1b91f74e44e860c6b1230d4e3 refs/heads/task/P
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 4d2d3b970fa5a5f1b91f74e44e860c6b1230d4e3 refs/remotes/origin/task/P
+
+## H4c discard recipe read as 'check out task/<id> first'
+git push origin task/P exit=0 :    61a9a2a..5077a96  task/P -> task/P
+### H4c after checkout task/P + fetch + reset --hard + merge -s ours + push
+was: symref=refs/heads/main HEAD
+now: symref=refs/heads/task/P HEAD
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: 5077a963f734280d6286b159e611a2ba7bb1bcbd refs/heads/task/P
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 5077a963f734280d6286b159e611a2ba7bb1bcbd refs/remotes/origin/task/P
+
+## point-in-time: a ref moved and moved back between two comparisons
+### T1 moved and restored
+(baseline text identical)
+
+reflog entries of HEAD after T1: 7

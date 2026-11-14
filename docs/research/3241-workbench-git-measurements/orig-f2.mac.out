@@ -1,0 +1,39 @@
+git version 2.47.0
+== G-A: which board spellings start auto maintenance (gc.auto=1 so that any --auto run would act) ==
+fetch --no-auto-gc (FETCH_FLAGS) <path> <ref>        -> 
+fetch (no --no-auto-gc) <path> <ref> [contrast]      -> built-in: git maintenance ru;git maintenance ru;
+commit-tree                                          -> 
+merge-tree --write-tree                              -> 
+update-ref                                           -> 
+symbolic-ref HEAD                                    -> 
+read-tree -u -m                                      -> 
+for-each-ref                                         -> 
+worktree prune                                       -> 
+worktree add --detach                                -> 
+loose objects before commit in linked worktree: 8, packs: 0
+commit (in linked worktree, registry-write.ts:143)   -> built-in: git maintenance ru;git maintenance ru;
+loose objects after: 10, packs: 0
+worktree remove --force                              -> 
+commit --allow-empty (room / create, fresh repo)     -> built-in: git maintenance ru;git maintenance ru;
+remote add                                           -> 
+remote remove                                        -> 
+== G-B: object survival after a ref moves away / is deleted ==
+reflog files before delete: ./main ./side ./task/gone ./task/keep 
+reflog files after delete : ./main ./task/keep 
+HEAD reflog still names gone-tip (it was checked out): 1
+side-tip (never checked out) in any reflog: 0
+after 'git gc' (default gc.pruneExpire=2.weeks.ago): gone-tip=present side-tip=present
+after 'git gc --prune=now': gone-tip=present [held by HEAD reflog] side-tip=MISSING
+== G-C: prune goes by object mtime, not by when the object became unreachable ==
+loose, 20 days old, ref deleted just now, then default 'git gc': MISSING
+== G-D: crash between read-tree (worktree follow) and update-ref ==
+clean before: []
+ref still old: yes
+status after the crash: [M  f]
+after 'git checkout -- .': [M  f]
+after 'git clean -fd': [M  f]
+after 'git read-tree -u --reset HEAD': []
+== G-E: do --no-auto-gc fetches leave loose objects for the next porcelain command? ==
+fetch.unpackLimit / transfer.unpackLimit: [] [] (unset = 100)
+count: 8 in-pack: 0 packs: 0 
+W=/private/tmp/claude-501/-Users-<user>-tidepool/11f133ec-41f4-41cb-8567-0e25e54d2c23/scratchpad/origmac/run2.WsB7zJ

@@ -1,0 +1,207 @@
+git version: git version 2.47.0
+
+## template baseline (remote-backed named place)
+symref=refs/heads/main HEAD
+e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+2fdd8624c881b1e1bbabcfa8e5d6a326d8bbfbf7 refs/heads/task/C
+591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/remotes/origin/main
+591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+
+## H1 merge back conflict resolved by hand
+merge exit=1 (conflict expected)
+### H1 after merge+commit (HEAD left on task/P)
+was: symref=refs/heads/main HEAD
+now: symref=refs/heads/task/P HEAD
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: ecc3014ec99eee7043ff2f560500192802e24ced refs/heads/task/P
+
+### H1 after the human also switches back to main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: ecc3014ec99eee7043ff2f560500192802e24ced refs/heads/task/P
+
+non-ref leftovers: FETCH_HEAD ORIG_HEAD 
+
+## H2 discard with merge -s ours
+### H2 after checkout task/P + merge -s ours task/C
+was: symref=refs/heads/main HEAD
+now: symref=refs/heads/task/P HEAD
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: 81cbad9c73b54684e614f528f21e5e51375456dd refs/heads/task/P
+
+## H3 outside push dropped content; push it back
+plain push exit=0 :    61a9a2a..591dcf6  task/P -> task/P
+### H3 after 'git push origin task/P' from the named place
+(baseline text identical)
+
+## H4 literal discard recipe: git fetch origin; git reset --hard origin/task/P; git merge -s ours task/C; git push
+### H4 step1 after git fetch origin
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/remotes/origin/task/P
+
+### H4 step2 after git reset --hard origin/task/P (HEAD is on main)
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/heads/main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/remotes/origin/task/P
+
+### H4 step3 after git merge -s ours task/C
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 20003c451cbaed9847521b7e3b570bcd6fa3bc75 refs/heads/main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/remotes/origin/task/P
+
+git push exit=128 :
+    fatal: The current branch main has no upstream branch.
+    To push the current branch and set the remote as upstream, use
+    
+        git push --set-upstream origin main
+    
+    To have this happen automatically for branches without a tracking
+    upstream, see 'push.autoSetupRemote' in 'git help config'.
+    
+git push (push.default=current) exit=0 :
+    To /private/tmp/claude-501/-Users-<user>-tidepool/11f133ec-41f4-41cb-8567-0e25e54d2c23/scratchpad/origmac/h1run/origin.git
+       e261881..20003c4  main -> main
+### H4 step4 after push
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 20003c451cbaed9847521b7e3b570bcd6fa3bc75 refs/heads/main
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/remotes/origin/main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 20003c451cbaed9847521b7e3b570bcd6fa3bc75 refs/remotes/origin/main
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/remotes/origin/task/P
+
+origin now: 20003c4 refs/heads/main;61a9a2a refs/heads/task/P;
+
+## H4b same recipe where main tracks origin/main (as in a cloned checkout): plain git push
+git push exit=0 :
+    To /private/tmp/claude-501/-Users-<user>-tidepool/11f133ec-41f4-41cb-8567-0e25e54d2c23/scratchpad/origmac/h1run/origin.git
+       e261881..20003c4  main -> main
+### H4b after fetch + reset --hard + merge -s ours + push
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 20003c451cbaed9847521b7e3b570bcd6fa3bc75 refs/heads/main
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/remotes/origin/main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+now: 20003c451cbaed9847521b7e3b570bcd6fa3bc75 refs/remotes/origin/main
+now: 61a9a2a6425106ffdac7574bd645c2437be64af5 refs/remotes/origin/task/P
+
+local task/P: 591dcf6  origin: 20003c4 refs/heads/main;61a9a2a refs/heads/task/P;
+status: ## main...origin/main
+
+## H5 / H6 / H7 merges by hand on a task branch or the protected branch
+### H5 merge the child into task/<root>, back on main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: 81cbad9c73b54684e614f528f21e5e51375456dd refs/heads/task/P
+
+### H6 merge origin/main into task/<id>, back on main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: d4517889bd49b7ba41b61691f50c8733d7fbea8b refs/heads/task/P
+
+### H7 variant b: merge task/<id> into the protected branch by hand (HEAD on main)
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/main
+
+## H9 local protected branch ahead of origin
+### H9a git reset --hard origin/main
+was: 30e38e1c267c8405e6f338f9199a7d4f84c5f41d refs/heads/main
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+
+### H9b git push origin main
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/remotes/origin/main
+now: 30e38e1c267c8405e6f338f9199a7d4f84c5f41d refs/remotes/origin/main
+
+## H10 protected branch missing
+branch 'main' set up to track 'origin/main'.
+### H10 git branch main origin/main (HEAD detached before)
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+
+## H11 dirty resting tree
+### H11 dirty file only
+(baseline text identical)
+
+### H11a git stash
+now: f1858ad015a1d85791123e683b03e17db9b636c8 refs/stash
+
+### H11b git commit -am on main
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/main
+now: b97d510f377384ef6c3dfec4bd9679019517f379 refs/heads/main
+
+### H11c git checkout -- . ; git clean -fd
+(baseline text identical)
+
+## H12 origin / repo mismatch
+### H12a git remote remove origin
+was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+was: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/remotes/origin/main
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+
+### H12b git remote add origin (no fetch)
+(baseline text identical)
+
+### H12c then git fetch origin
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/remotes/origin/main
+now: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/remotes/origin/task/P
+
+### H12d git remote set-url origin <other>
+(baseline text identical)
+
+## H13 path replaced by another checkout (fresh clone of origin)
+### H13 baseline of the old place vs a fresh clone
+was: 2fdd8624c881b1e1bbabcfa8e5d6a326d8bbfbf7 refs/heads/task/C
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+
+## H14 origin/HEAD symref
+### H14a origin/HEAD repointed
+was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+now: symref=refs/remotes/origin/task/P refs/remotes/origin/HEAD
+
+### H14b git remote set-head origin -d
+was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+
+### H14c git fetch origin after the symref was deleted
+(baseline text identical)
+
+## H15 interview room recreated with git init
+### H15 baseline text of a room made by bare 'git init' (no init.defaultBranch configured)
+symref=refs/heads/master HEAD
+
+## H16 / H17 put a tip into task/<id> by hand
+### H16/H17 git fetch <kept checkout> task/P:refs/heads/task/P
+was: 591dcf6b59f50c48bc17dcce25bdb54404b43184 refs/heads/task/P
+now: d3658869cbf75a9c535e1cd83eee9401ce16885b refs/heads/task/P
+
+### H16/H17 git fetch <kept checkout> task/P (no destination ref; FETCH_HEAD only)
+(baseline text identical)
+
+## H18 / H19 / H21 a human commit on the protected branch of a named place
+### H18/H19/H21 commit on main in the named place
+was: b2cb50cc4ae0cd7e037b047db19c8d2ffd934b70 refs/heads/main
+now: 6eaa12999a3462cbac69be0a56774682229dc93a refs/heads/main
+
+## things outside refs/ and HEAD
+### X1 .git/config, info/exclude, hooks, sparse-checkout init
+(baseline text identical)
+
+### X2 linked worktree with a detached HEAD, one commit there
+(baseline text identical)
+
+### X3 git worktree add -b scratch
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/heads/scratch
+
+### X4 tag, notes, refs/custom
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/custom/x
+now: 251ff8e252d28e22f4384fec6b49d7ceab392f90 refs/notes/commits
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 refs/tags/v1
+
+### X5 git checkout --detach main (same commit)
+was: symref=refs/heads/main HEAD
+now: e2618817ed8335b9a118fea06d2bcb78fa2d5be6 HEAD
+
+### X6 gc + pack-refs --all
+(baseline text identical)
+
+### X7 branch rename
+was: 2fdd8624c881b1e1bbabcfa8e5d6a326d8bbfbf7 refs/heads/task/C
+now: 2fdd8624c881b1e1bbabcfa8e5d6a326d8bbfbf7 refs/heads/task/C2
+

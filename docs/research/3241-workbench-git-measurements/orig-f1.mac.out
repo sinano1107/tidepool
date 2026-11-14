@@ -1,0 +1,43 @@
+git version 2.47.0
+== M-A: origin with tags; named place = clone ==
+-- after clone:
+refs/heads/main HEAD
+a18829b75dca7f5cb04dd9983e062ddcafa82cfa refs/heads/main
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+a18829b75dca7f5cb04dd9983e062ddcafa82cfa refs/remotes/origin/main
+a18829b75dca7f5cb04dd9983e062ddcafa82cfa refs/tags/v1
+== M-B: board fetch spellings into named place ==
+FETCH_FLAGS <repo> <ref>: refs+HEAD unchanged
+FETCH_HEAD files: 0
+object present
+hop2 fetch: refs+HEAD unchanged
+FETCH_HEAD files: 1
+origin/HEAD stays absent after path fetch
+== M-C: reflogs written by update-ref / symbolic-ref (non-bare, default config) ==
+HEAD reflog entries:        3
+refs/heads/task/x reflog entries:        1
+refs/heads/main reflog entries:        2
+refs/remotes/origin/main reflog entries:        1
+refs/keep-around/db8ba920e21675bcd735aa2ce0777b0bb787279f reflog entries:        0
+true
+-- HEAD reflog:
+db8ba92 HEAD@{0}: 
+db8ba92 HEAD@{1}: 
+a18829b HEAD@{2}: clone: from /private/tmp/claude-501/-Users-<user>-tidepool/11f133ec-41f4-41cb-8567-0e25e54d2c23/scratchpad/origmac/run.TXtkSl/origin.git
+== M-D: remote remove deletes leftover copies without a remote section ==
+-- before (no remote section):
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/heads/main
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/remotes/origin/main
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/remotes/origin/old
+remotes: []
+-- after remote add:
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/heads/main
+symref=refs/remotes/origin/main refs/remotes/origin/HEAD
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/remotes/origin/main
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/remotes/origin/old
+-- after remote remove:
+0f262a500a5baa921f2d8a613c627686b1cf052f refs/heads/main
+== M-E: registry-style worktree add/commit/remove leaves main repo refs alone ==
+worktree add/commit/remove: refs+HEAD unchanged
+W=/private/tmp/claude-501/-Users-<user>-tidepool/11f133ec-41f4-41cb-8567-0e25e54d2c23/scratchpad/origmac/run.TXtkSl

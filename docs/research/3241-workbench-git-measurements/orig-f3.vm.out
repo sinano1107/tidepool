@@ -1,0 +1,13 @@
+== R-A: crash after read-tree, before update-ref; the same write is fired again ==
+second read-tree old->new exit: 0
+update-ref exit: 0; status: []
+== R-B: crash after read-tree; the retry computes a different new value (a fresh merge commit) ==
+read-tree old->new2 (same tree) exit: 0
+== R-C: crash after read-tree; the retry's new value has a different tree ==
+state: index+worktree at new, ref at old: [M  f]
+error: Entry 'f' would be overwritten by merge. Cannot merge.
+read-tree old->new3 exit: 128
+== R-D: write completed (ref=new, tree=new), then the ref alone is put back to old (the 'restore to baseline' of a 2-valued row) ==
+after the completed write: []
+after ref put back without touching the tree: [M  f]
+W=/home/<user>.guest/t3241-11f133ec/orig/run3.4y3hab

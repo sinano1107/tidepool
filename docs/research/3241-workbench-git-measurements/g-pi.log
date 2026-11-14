@@ -1,0 +1,39 @@
+# raspberrypi git version 2.39.5
+[loose] N=0 for-each-ref: 6 6 6 ms | rev-parse HEAD: 6 5 6 ms
+[loose] N=0 hop2 fetch (object new): 29ms haves=16 | again (object present): 16 17 16 ms
+[loose] N=0 fetch with --negotiation-tip=<origin copies>: 36ms haves=16
+[loose] N=0 plain fetch origin (human's spelling): 35ms haves=16
+[loose] N=500 for-each-ref: 43 37 37 ms | rev-parse HEAD: 5 5 5 ms
+[loose] N=500 hop2 fetch (object new): 159ms haves=512 | again (object present): 67 67 66 ms
+[loose] N=500 fetch with --negotiation-tip=<origin copies>: 155ms haves=32
+[loose] N=500 plain fetch origin (human's spelling): 186ms haves=512
+[loose] N=5000 for-each-ref: 380 323 327 ms | rev-parse HEAD: 6 5 5 ms
+[loose] N=5000 hop2 fetch (object new): 1344ms haves=5572 | again (object present): 528 543 530 ms
+[loose] N=5000 fetch with --negotiation-tip=<origin copies>: 1252ms haves=48
+[loose] N=5000 plain fetch origin (human's spelling): 1551ms haves=5572
+[packed] N=0 for-each-ref: 7 6 7 ms | rev-parse HEAD: 6 5 6 ms
+[packed] N=0 hop2 fetch (object new): 29ms haves=5588 | again (object present): 16 17 17 ms
+[packed] N=0 fetch with --negotiation-tip=<origin copies>: 35ms haves=64
+[packed] N=0 plain fetch origin (human's spelling): 35ms haves=5588
+[packed] N=500 for-each-ref: 27 28 26 ms | rev-parse HEAD: 6 6 6 ms
+[packed] N=500 hop2 fetch (object new): 170ms haves=6084 | again (object present): 55 57 56 ms
+[packed] N=500 fetch with --negotiation-tip=<origin copies>: 119ms haves=80
+[packed] N=500 plain fetch origin (human's spelling): 152ms haves=6084
+[packed] N=5000 for-each-ref: 223 224 225 ms | rev-parse HEAD: 6 5 6 ms
+[packed] N=5000 hop2 fetch (object new): 1156ms haves=11144 | again (object present): 476 435 438 ms
+[packed] N=5000 fetch with --negotiation-tip=<origin copies>: 881ms haves=96
+[packed] N=5000 plain fetch origin (human's spelling): 1199ms haves=11144
+
+## non-cone sparse workbench + updateInstead (local path push; receiver is this host's git)
+worktree: ./dirA/a ./dirB/b 
+push (inside patterns): rc=0 remote status=[] settings in worktree=n S-bits=1
+push (excluded path changed): rc=0 remote status=[] settings in worktree=n S-bits=1
+
+## #3188: alternates checkout sees later objects; sha-named merge; sparse-excluded path changed by the return target
+object added to the named place after the checkout is visible: commit
+merge <sha> rc=0 status=[] settings materialised=n S-bit=S .claude/settings.json tip blob==target blob: y
+gate delta(target now, tip) = [c ]
+
+## 4-03 natural form: outside rewrites the head from the base (drops A's file), local merges it cleanly
+merge rc=0 files: a f x  (a = dropped by the outside push)
+# extra done
