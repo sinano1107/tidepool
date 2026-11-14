@@ -12,7 +12,7 @@ import {
   quarantineCliAuthForProvider,
   recordProbeBoardCall,
 } from "./cli-auth.js";
-import type { Clock } from "./clock.js";
+import { type Clock, SystemClock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
@@ -100,8 +100,9 @@ import {
   settleQuestionAsObserved,
   type Task,
   taskIdForPr,
+  tasksOwingReleaseOn,
 } from "./tasks.js";
-import type { FailedTeardownCheck, UnclosedSessionCheck } from "./teardown.js";
+import { type FailedTeardownCheck, teardownStep, type UnclosedSessionCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
@@ -117,10 +118,12 @@ import {
   PickupGateError,
   quarantineWorkspace,
   redoMergeBacks,
+  redoOwedRelease,
   refreshProtectedBranch,
   resolveWorkspacesBaseDir,
   retakeRefBaselines,
   taskBranch,
+  taskRunPlaceForBoard,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
@@ -661,6 +664,13 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
       }
       await fire(all, "after-open");
+      // ADR 0369 決定1〜3: 済まなかった解放の「運ぶ」をやり直す —— merge back のやり直しの手前、基準の撮り直しより前。決着は後始末と同じく記録から導く
+      await refuseOnError(() => {
+        const now = (deps.clock ?? new SystemClock()).now();
+        for (const task of tasksOwingReleaseOn(deps.db, value!, deps.workspace?.name)) {
+          redoOwedRelease(deps.db, taskRunPlaceForBoard(deps.db, task, () => target), task, now, teardownStep(deps.db, task.id).completion === true);
+        }
+      });
       if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
       // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
       const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];

@@ -8,17 +8,15 @@ import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineQuestion } from "./quarantine.js";
 
 import type { Slot } from "./slot.js";
-import { getTask, returnToQueue, type Task, taskCheckoutPath } from "./tasks.js";
+import { getTask, returnToQueue, type Task } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
-  KEPT_TASK_CHECKOUT,
   PlaceNotOpenError,
   quarantineWorkspace,
   releaseReadCheckouts,
   releaseWorkspace,
   removeReleasedTaskCheckout,
-  taskCheckoutWasReleased,
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -446,10 +444,8 @@ function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task): Wo
     if (err instanceof UnknownWorkspaceError) {
       // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
       releaseReadCheckouts(db, task.id);
-      // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
-      const checkout = taskCheckoutPath(db, task.id);
-      const kept = checkout && !taskCheckoutWasReleased(db, task.id, checkout) ? checkout : undefined;
-      quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
+      // ADR 0369 決定6: 理由は解決の失敗だけ —— 残した checkout は受理が運ぶので、在り処を告げない
+      quarantineWorkspace(db, err.workspaceName, err, clock.now());
       removeReleasedTaskCheckout(db, task.id);
       return undefined;
     }

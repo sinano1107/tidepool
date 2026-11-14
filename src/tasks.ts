@@ -595,6 +595,27 @@ export function taskCheckoutPath(db: Db, taskId: string): string | undefined {
   return sessionCheckoutOpened(db, taskId)?.path;
 }
 
+/** ADR 0369 決定2・4: task が解放を負う —— 最後の pickup が開いた task の checkout を名指す `task_checkout_released` も
+ *  `task_checkout_release_failed` も無く、session が走っておらず後始末の印も無い。決着した受験者の最後の checkout は記録として
+ *  残るので負わない(ADR 0276 決定4)。受理のやり直し・pickup の門・workspace の編集の扉がこの1本を読む。 */
+export function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
+  const path = taskCheckoutPath(db, task.id);
+  if (path === undefined || task.status === "in_progress") return false;
+  if (interviewRole(db, task) === "examinee" && isSettled(task.status)) return false;
+  if (db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").pluck().get(task.id) !== null) return false;
+  return latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path !== path &&
+    latestEventOfTask(db, task.id, "task_checkout_release_failed")?.payload.path !== path;
+}
+
+/** 解放を負い、その解放の着け先が `name` の task(ADR 0369 決定2): Interview の root と受験者は面接室(root の id)、ほかは registry を
+ *  読まない名前(導出した workspace、無ければ既定)。停止の門の名前の集合(`openedPlaceNames`)は使わない —— 読むだけの場所まで含む。
+ *  shortcut: task の checkout を開いたことのある task を全部読む。回答のたびなので、遅くなれば解放済みを SQL で外す。 */
+export function tasksOwingReleaseOn(db: Db, name: string, defaultWorkspaceName: string | undefined): Task[] {
+  const ids = db.prepare("SELECT DISTINCT task_id FROM events WHERE kind = 'task_checkout_opened' ORDER BY task_id").pluck().all() as string[];
+  return ids.map((id) => getTask(db, id)!).filter((task) =>
+    owesTaskCheckoutRelease(db, task) && (interviewRootIdOf(db, task) ?? derivedWorkspace(db, task) ?? defaultWorkspaceName) === name);
+}
+
 /** この session の読み専用の checkout(ADR 0361 決定1): task の checkout と同じく後の pickup に越されていないもの。 */
 export function sessionReadCheckouts(db: Db, taskId: string): ReadCheckout[] {
   return sessionCheckoutOpened(db, taskId)?.reads ?? [];

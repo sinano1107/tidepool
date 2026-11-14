@@ -1698,12 +1698,13 @@ function releaseTaskCheckout(
   // 決着より前に消す: 決着の失敗を覆わず、消せなければ何も書かずに投げて後始末の再実行が消し直す
   releaseReadCheckouts(db, task.id);
   const released = taskCheckoutWasReleased(db, task.id, checkout);
-  if (!released && !bringTaskCheckout(db, place, task, now, completed, gated)) return;
-  // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない。
   if (!released) {
-    const current = getTask(db, task.id)!;
-    if (interviewRole(db, current) !== "examinee" || !isSettled(current.status)) {
-      appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
+    try {
+      if (!bringTaskCheckout(db, place, task, now, completed, gated)) return;
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+      quarantineWorkspace(db, namedPlace.name, err, now);
+      return;
     }
   }
   try {
@@ -1755,7 +1756,15 @@ function removeBoardCheckout(path: string, parents: number): void {
   }
 }
 
-/** ADR 0369 決定7: tip と WIP が名前の場所のタスクブランチに着けば true、失敗を記録したら false。 */
+/** ADR 0369 決定1〜3: 済まなかった解放の「運ぶ」だけをやり直す(workspace の Quarantine の受理の検査)。後の段は撃たない ——
+ *  session の間の ref の比較はやり直さず、merge back は受理がこの後にやり直す。名前の場所の事情の失敗は呼び手へ投げる ——
+ *  Quarantine は既に開いていて、登録し直すと理由が消える。worker の repo の故障は後始末と同じく task の失敗にして返る。 */
+export function redoOwedRelease(db: Db, place: TaskCheckoutPlace, task: Task, now: Date, completed: boolean): void {
+  if (bringTaskCheckout(db, place, task, now, completed, completed && completionTreeGateApplies(task))) removeReleasedTaskCheckout(db, task.id);
+}
+
+/** ADR 0369 決定7: tip と WIP が名前の場所のタスクブランチに着けば `task_checkout_released` を刻んで true、worker の repo の故障を
+ *  task の失敗に記録したら false。名前の場所の事情の失敗は投げる —— 後始末は Quarantine に、受理のやり直しは回答の拒否にする。 */
 function bringTaskCheckout(
   db: Db,
   place: TaskCheckoutPlace,
@@ -1815,13 +1824,9 @@ function bringTaskCheckout(
         tree === baseTree ? base : fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit"), exclude);
     }
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     // ADR 0357 決定2: 上限超過は worker の repo の故障 —— 名前の場所を quarantine しない。ADR 0364 決定2: 写しの host の失敗は
     // 決着していない task の失敗、完了済みなら唯一の写しを消さずに止める器が quarantine しか無い(#3053)
-    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError || (err instanceof TaskCheckoutHostError && !completed))) {
-      quarantineWorkspace(db, namedPlace.name, err, now);
-      return false;
-    }
+    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError || (err instanceof TaskCheckoutHostError && !completed))) throw err;
     if (!completed) {
       failTaskOnRelease(db, task, checkout, err, now);
       return false;
@@ -1836,33 +1841,32 @@ function bringTaskCheckout(
       payload: { kind: "task_checkout_written_after_completion", path: checkout, ...observation }, at: now,
     });
   }
-  try {
-    if (tipLookupFailure !== undefined) throw tipLookupFailure;
-    const tip = wipTip;
-    if (tip) {
-      const old = readRefSnapshotValue(namedPlace, taskRef);
-      if (old !== evacuationBaseRef) throw releaseRefMoved(namedPlace, taskRef, evacuationBaseRef, old);
-      if (old !== tip) {
-        boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", "--no-deref", taskRef, tip, old));
-        const current = readRefSnapshotValue(namedPlace, taskRef);
-        if (current !== tip) throw releaseRefMoved(namedPlace, taskRef, tip, current);
-      }
-    }
-    if (gated) {
-      // ADR 0369 決定7: tree を先に読み、最後に今のタスクブランチが門の tip を持つことを確かめる。
-      if (recorded) gitWithoutHistoryOverrides(namedPlace.path, "ls-tree", "-r", "--format=%(objectmode)", recorded);
+  if (tipLookupFailure !== undefined) throw tipLookupFailure;
+  const tip = wipTip;
+  if (tip) {
+    const old = readRefSnapshotValue(namedPlace, taskRef);
+    if (old !== evacuationBaseRef) throw releaseRefMoved(namedPlace, taskRef, evacuationBaseRef, old);
+    if (old !== tip) {
+      boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", "--no-deref", taskRef, tip, old));
       const current = readRefSnapshotValue(namedPlace, taskRef);
-      if (!recorded || !current || current.startsWith("symref=")) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
-      if (recorded !== current) {
-        if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
-        const latest = readRefSnapshotValue(namedPlace, taskRef);
-        if (latest !== current) throw releaseRefMoved(namedPlace, taskRef, recorded, latest);
-      }
+      if (current !== tip) throw releaseRefMoved(namedPlace, taskRef, tip, current);
     }
-  } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-    quarantineWorkspace(db, namedPlace.name, err, now);
-    return false;
+  }
+  if (gated) {
+    // ADR 0369 決定7: tree を先に読み、最後に今のタスクブランチが門の tip を持つことを確かめる。
+    if (recorded) gitWithoutHistoryOverrides(namedPlace.path, "ls-tree", "-r", "--format=%(objectmode)", recorded);
+    const current = readRefSnapshotValue(namedPlace, taskRef);
+    if (!recorded || !current || current.startsWith("symref=")) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
+    if (recorded !== current) {
+      if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
+      const latest = readRefSnapshotValue(namedPlace, taskRef);
+      if (latest !== current) throw releaseRefMoved(namedPlace, taskRef, recorded, latest);
+    }
+  }
+  // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない。
+  const settled = getTask(db, task.id)!;
+  if (interviewRole(db, settled) !== "examinee" || !isSettled(settled.status)) {
+    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
   }
   return true;
 }
