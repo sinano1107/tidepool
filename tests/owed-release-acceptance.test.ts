@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -8,7 +8,7 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { quarantineStops } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, owesTaskCheckoutRelease, pickupTask, recordPrOpened, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pickupTask, recordPrOpened, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
@@ -119,7 +119,9 @@ it.each(["auto_merge", "outside_merge"] as const)("%s の poll が先に drift �
   expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
 });
 
-const baseline = (s: Session) => s.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(s.ws.name) as string;
+/** 名前の場所の基準と ref を比べる次の task の pickup(ADR 0351 決定2): 基準に無い ref の移動を名指して止まる。 */
+const nextPickup = (s: Session) =>
+  prepareAtPickup(s.db, s.ws, registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done", workspace: s.ws.name }, s.clock.now(), ...HUMAN_WEBUI), { now: s.clock.now() });
 
 it("やり直しがまだ名前の場所の事情で落ちれば、回答は理由つきで拒まれ、question も checkout も残り、基準は撮り直されない(ADR 0369 決定3)", async () => {
   const s = await sessionWithWork("owed-still-broken");
@@ -127,7 +129,6 @@ it("やり直しがまだ名前の場所の事情で落ちれば、回答は理�
   breakNamedPlace(s, "broken");
   await tearDown(s);
   git(s.ws.path, "branch", "moved-by-hand", "main");
-  const before = baseline(s);
 
   const answer = answerQuarantine(s);
 
@@ -136,8 +137,7 @@ it("やり直しがまだ名前の場所の事情で落ちれば、回答は理�
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
   expect(readFileSync(join(s.checkout, "wip.txt"), "utf8")).toBe("wip\n");
   expect(released(s.db, s.task.id)).toEqual([]);
-  expect(baseline(s)).toBe(before);
-  expect(before).not.toContain("refs/heads/moved-by-hand");
+  await expect(nextPickup(s)).rejects.toThrow("refs/heads/moved-by-hand");
 });
 
 it("やり直しが worker の repo の故障で落ちれば、task の失敗にして回答は通る(ADR 0369 決定3 / ADR 0356 決定2)", async () => {
@@ -197,16 +197,15 @@ it("門を通った完了の後始末が drift で飛び、Quarantine の間に�
   repair();
   moveTaskBranch(s, "unreachable");
   git(s.ws.path, "branch", "moved-by-hand", "main");
-  const before = baseline(s);
 
   const answer = answerQuarantine(s);
 
   await expect(answer).rejects.toThrow(DomainError);
-  await expect(answer).rejects.toThrow(`was: ${gateTip} refs/heads/${s.branch}, now: ${git(s.ws.path, "rev-parse", "main")} refs/heads/${s.branch}`);
+  await expect(answer).rejects.toThrow(`refs changed out of band — was: ${gateTip} refs/heads/${s.branch}, now: ${git(s.ws.path, "rev-parse", "main")} refs/heads/${s.branch}`);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
   expect(existsSync(s.checkout)).toBe(true);
   expect(released(s.db, s.task.id)).toEqual([]);
-  expect(baseline(s)).toBe(before);
+  await expect(nextPickup(s)).rejects.toThrow("refs/heads/moved-by-hand");
 });
 
 it("session の間にタスクブランチが門の tip を含まない所へ動いた完了は、ref が tip を含み直すまで回答が拒まれ、含み直せば checkout が消える(ADR 0369 決定3・7)", async () => {
@@ -216,12 +215,35 @@ it("session の間にタスクブランチが門の tip を含まない所へ動
   await tearDown(s);
   expect(existsSync(s.checkout)).toBe(true);
 
-  await expect(answerQuarantine(s)).rejects.toThrow(`was: ${gateTip} refs/heads/${s.branch}`);
+  await expect(answerQuarantine(s)).rejects.toThrow(`refs changed out of band — was: ${gateTip} refs/heads/${s.branch}`);
   git(s.ws.path, "update-ref", `refs/heads/${s.branch}`, gateTip);
   await answerQuarantine(s);
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
   expect(released(s.db, s.task.id)).toEqual([{ kind: "task_checkout_released", path: s.checkout }]);
+  expect(existsSync(s.checkout)).toBe(false);
+});
+
+it("運んだ checkout を消せなくても回答の merge back はやり直され、消せるようになった後の回答が消す(ADR 0369 決定7)", async () => {
+  const s = await sessionWithWork("owed-delete-fails", { parent: true, wip: false });
+  completeThroughGate(s);
+  const repair = breakNamedPlace(s, "drift");
+  await tearDown(s);
+  repair();
+  const parent = join(s.checkout, "..");
+  chmodSync(parent, 0o555);
+  try {
+    await expect(answerQuarantine(s)).rejects.toThrow(DomainError);
+    expect(git(s.ws.path, "show", `${s.parentBranch}:work.txt`)).toBe("work");
+    expect(released(s.db, s.task.id)).toEqual([{ kind: "task_checkout_released", path: s.checkout }]);
+    expect(existsSync(s.checkout)).toBe(true);
+  } finally {
+    chmodSync(parent, 0o755);
+  }
+
+  await answerQuarantine(s);
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
   expect(existsSync(s.checkout)).toBe(false);
 });
 
@@ -237,7 +259,7 @@ it("drift に加えて名前の場所の別の ref も帯域外で動いてい�
 
   expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
   expect(existsSync(s.checkout)).toBe(false);
-  expect(baseline(s)).toContain(`${git(s.ws.path, "rev-parse", "main")} refs/heads/moved-by-hand`);
+  await expect(nextPickup(s)).resolves.toBeDefined();
 });
 
 it("退避が名前の場所の事情で落ちた完了済み review の唯一の写しを、修理の後の回答が運ぶ(ADR 0369 決定1)", async () => {
@@ -338,7 +360,6 @@ it("決着した受験者の最後の checkout は、面接室の Quarantine の
   completeTask(s.db, s.task, FULL_HANDOFF, "deckhand", s.clock.now(), "worker");
   await tearDown(s);
   expect(existsSync(s.checkout)).toBe(true);
-  expect(owesTaskCheckoutRelease(s.db, getTask(s.db, s.task.id)!)).toBe(false);
   quarantineWorkspace(s.db, s.root.id, new Error("repaired by hand"), s.clock.now());
 
   await answerQuarantine(s, s.root.id);
