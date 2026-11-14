@@ -220,8 +220,8 @@ export type EventPayload =
   // ADR 0356 決定1・2: 盤面が worker の形で走る task の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
   // reads は同じ session の読み専用の checkout(ADR 0361 決定1)。面接室を読む task だけ
   | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip"; reads?: ReadCheckout[] }
-  // ADR 0356 決定2 / ADR 0359 決定2: 解放が名前の場所の側を済ませた —— path の checkout は消してよい
-  // (再実行はこれを見て削除だけを撃つ)
+  // ADR 0369 決定7: 成果が名前の場所の task/<id> に着いた —— path の checkout は消してよい。
+  // 再実行では運ぶ段を飛ばし、名前の場所の後半を走らせてから消す。
   | { kind: "task_checkout_released"; path: string }
   | ({ kind: "task_checkout_written_after_completion"; path: string } & TaskCheckoutWriteObservation)
   // ADR 0356 決定2: 解放で worker の repo を読めず、task の checkout を path に残した —— reason は git の失敗の本文

@@ -17,6 +17,7 @@ import {
   quarantineWorkspace,
   releaseReadCheckouts,
   releaseWorkspace,
+  removeReleasedTaskCheckout,
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -445,8 +446,10 @@ function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task): Wo
       // issue #3105 の spec: 読み専用の checkout は記録の価値が無いので、解放を飛ばしても消す
       releaseReadCheckouts(db, task.id);
       // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
-      const kept = taskCheckoutPath(db, task.id);
+      const checkout = taskCheckoutPath(db, task.id);
+      const kept = latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path === checkout ? undefined : checkout;
       quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
+      removeReleasedTaskCheckout(db, task.id);
       return undefined;
     }
     // この session の task の checkout が開いていなければ worker も走っておらず、触る checkout が無い(ADR 0356 決定2)。
