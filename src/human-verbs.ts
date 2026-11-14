@@ -12,7 +12,7 @@ import {
   quarantineCliAuthForProvider,
   recordProbeBoardCall,
 } from "./cli-auth.js";
-import type { Clock } from "./clock.js";
+import { type Clock, SystemClock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
@@ -101,7 +101,7 @@ import {
   type Task,
   taskIdForPr,
 } from "./tasks.js";
-import type { FailedTeardownCheck, UnclosedSessionCheck } from "./teardown.js";
+import { type FailedTeardownCheck, teardownStep, type UnclosedSessionCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
@@ -117,7 +117,9 @@ import {
   PickupGateError,
   quarantineWorkspace,
   redoMergeBacks,
+  redoOwedReleases,
   refreshProtectedBranch,
+  removeReleasedTaskCheckoutsOn,
   resolveWorkspacesBaseDir,
   retakeRefBaselines,
   taskBranch,
@@ -627,7 +629,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // separation from the board's own state
     workspace: async (value) => {
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
-      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back → 基準の撮り直し(ADR 0351 決定4)。
+      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) → merge-back →
+      // 運んだ checkout の削除(ADR 0369 決定7) → 基準の撮り直し(ADR 0351 決定4)。
       const { own, openers } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
       const all = [...own, ...openers];
       const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
@@ -661,7 +664,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
       }
       await fire(all, "after-open");
+      // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
+      await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, (deps.clock ?? new SystemClock()).now(), (task) => teardownStep(deps.db, task.id).completion === true));
       if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
+      // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
+      await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value!, deps.workspace?.name));
       // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
       const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];
       await refuseOnError(() => retakeRefBaselines(deps.db, places));

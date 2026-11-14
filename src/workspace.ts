@@ -92,11 +92,15 @@ import {
   interviewRoomPath,
   interviewRootIdOf,
   issueRefPlaceholder,
+  keepsCheckoutAsRecord,
   readableInterviewRooms,
   registerFailureQuestion,
   sessionReadCheckouts,
   type Task,
   taskCheckoutPath,
+  taskCheckoutWasReleased,
+  tasksOwingReleaseOn,
+  tasksReleasedOn,
 } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerGitCopyTimeoutError, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
@@ -1698,12 +1702,13 @@ function releaseTaskCheckout(
   // 決着より前に消す: 決着の失敗を覆わず、消せなければ何も書かずに投げて後始末の再実行が消し直す
   releaseReadCheckouts(db, task.id);
   const released = taskCheckoutWasReleased(db, task.id, checkout);
-  if (!released && !bringTaskCheckout(db, place, task, now, completed, gated)) return;
-  // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない。
   if (!released) {
-    const current = getTask(db, task.id)!;
-    if (interviewRole(db, current) !== "examinee" || !isSettled(current.status)) {
-      appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
+    try {
+      if (!bringTaskCheckout(db, place, task, now, completed, "during the session")) return;
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+      quarantineWorkspace(db, namedPlace.name, err, now);
+      return;
     }
   }
   try {
@@ -1733,10 +1738,6 @@ export function removeReleasedTaskCheckout(db: Db, taskId: string): void {
   }
 }
 
-export function taskCheckoutWasReleased(db: Db, taskId: string, checkout: string): boolean {
-  return latestEventOfTask(db, taskId, "task_checkout_released")?.payload.path === checkout;
-}
-
 /** この session の読み専用の checkout を消す(冪等)。issue #3105 の spec: 記録の価値の無い派生物なので、決着が落ちて task の checkout を
  *  唯一の写しとして残す解放(ADR 0356 決定2)でも、解放を飛ばす後始末(ADR 0363 決定4)でも消す。 */
 export function releaseReadCheckouts(db: Db, taskId: string): void {
@@ -1755,17 +1756,41 @@ function removeBoardCheckout(path: string, parents: number): void {
   }
 }
 
-/** ADR 0369 決定7: tip と WIP が名前の場所のタスクブランチに着けば true、失敗を記録したら false。 */
+/** ADR 0369 決定1〜3: workspace の Quarantine の受理の検査が、着け先が `place` の済まなかった解放の「運ぶ」だけをやり直す。後の段は
+ *  撃たない —— session の間の ref の比較はやり直さず、merge back は受理がこの後にやり直し、checkout はその後で消す。名前の場所の
+ *  事情の失敗は呼び手へ投げる —— Quarantine は既に開いていて、登録し直すと理由が消える。worker の repo の故障は後始末と同じく
+ *  task の失敗にして続ける。決着が完了かは `completed` が後始末と同じく記録から導く。 */
+export function redoOwedReleases(
+  db: Db,
+  place: WorkspaceConfig,
+  defaultWorkspaceName: string | undefined,
+  now: Date,
+  completed: (task: Task) => boolean,
+): void {
+  for (const task of tasksOwingReleaseOn(db, place.name, defaultWorkspaceName)) {
+    bringTaskCheckout(db, taskRunPlaceForBoard(db, task, () => place), task, now, completed(task), "out of band");
+  }
+}
+
+/** ADR 0369 決定7: 着け先が `name` の、解放済みでまだ残る最後の session の checkout を消す —— 消せずに投げても、次の回答が消し直す。 */
+export function removeReleasedTaskCheckoutsOn(db: Db, name: string, defaultWorkspaceName: string | undefined): void {
+  for (const task of tasksReleasedOn(db, name, defaultWorkspaceName)) removeReleasedTaskCheckout(db, task.id);
+}
+
+/** ADR 0369 決定7: tip と WIP が名前の場所のタスクブランチに着けば `task_checkout_released` を刻んで true、worker の repo の故障を
+ *  task の失敗に記録したら false。名前の場所の事情の失敗は投げる —— 後始末は Quarantine に、受理のやり直しは回答の拒否にする。 */
 function bringTaskCheckout(
   db: Db,
   place: TaskCheckoutPlace,
   task: Task,
   now: Date,
   completed: boolean,
-  gated: boolean,
+  /** タスクブランチの移動を告げる文の時(後始末は「session の間」、受理のやり直しは帯域外)。 */
+  when: string,
 ): boolean {
   const { namedPlace, path: checkout } = place;
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
+  const gated = completed && completionTreeGateApplies(task);
   let recorded: string | undefined;
   let tipLookupFailure: unknown;
   let evacuationBaseRef = "";
@@ -1815,13 +1840,9 @@ function bringTaskCheckout(
         tree === baseTree ? base : fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit"), exclude);
     }
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     // ADR 0357 決定2: 上限超過は worker の repo の故障 —— 名前の場所を quarantine しない。ADR 0364 決定2: 写しの host の失敗は
-    // 決着していない task の失敗、完了済みなら唯一の写しを消さずに止める器が quarantine しか無い(#3053)
-    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError || (err instanceof TaskCheckoutHostError && !completed))) {
-      quarantineWorkspace(db, namedPlace.name, err, now);
-      return false;
-    }
+    // 決着していない task の失敗、完了済みなら唯一の写しを消さずに名前の場所の失敗として投げる(#3053)
+    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError || (err instanceof TaskCheckoutHostError && !completed))) throw err;
     if (!completed) {
       failTaskOnRelease(db, task, checkout, err, now);
       return false;
@@ -1836,39 +1857,37 @@ function bringTaskCheckout(
       payload: { kind: "task_checkout_written_after_completion", path: checkout, ...observation }, at: now,
     });
   }
-  try {
-    if (tipLookupFailure !== undefined) throw tipLookupFailure;
-    const tip = wipTip;
-    if (tip) {
-      const old = readRefSnapshotValue(namedPlace, taskRef);
-      if (old !== evacuationBaseRef) throw releaseRefMoved(namedPlace, taskRef, evacuationBaseRef, old);
-      if (old !== tip) {
-        boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", "--no-deref", taskRef, tip, old));
-        const current = readRefSnapshotValue(namedPlace, taskRef);
-        if (current !== tip) throw releaseRefMoved(namedPlace, taskRef, tip, current);
-      }
-    }
-    if (gated) {
-      // ADR 0369 決定7: tree を先に読み、最後に今のタスクブランチが門の tip を持つことを確かめる。
-      if (recorded) gitWithoutHistoryOverrides(namedPlace.path, "ls-tree", "-r", "--format=%(objectmode)", recorded);
+  if (tipLookupFailure !== undefined) throw tipLookupFailure;
+  const tip = wipTip;
+  if (tip) {
+    const old = readRefSnapshotValue(namedPlace, taskRef);
+    if (old !== evacuationBaseRef) throw releaseRefMoved(namedPlace, taskRef, when, evacuationBaseRef, old);
+    if (old !== tip) {
+      boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", "--no-deref", taskRef, tip, old));
       const current = readRefSnapshotValue(namedPlace, taskRef);
-      if (!recorded || !current || current.startsWith("symref=")) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
-      if (recorded !== current) {
-        if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
-        const latest = readRefSnapshotValue(namedPlace, taskRef);
-        if (latest !== current) throw releaseRefMoved(namedPlace, taskRef, recorded, latest);
-      }
+      if (current !== tip) throw releaseRefMoved(namedPlace, taskRef, when, tip, current);
     }
-  } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
-    quarantineWorkspace(db, namedPlace.name, err, now);
-    return false;
+  }
+  if (gated) {
+    // ADR 0369 決定7: tree を先に読み、最後に今のタスクブランチが門の tip を持つことを確かめる。
+    if (recorded) gitWithoutHistoryOverrides(namedPlace.path, "ls-tree", "-r", "--format=%(objectmode)", recorded);
+    const current = readRefSnapshotValue(namedPlace, taskRef);
+    if (!recorded || !current || current.startsWith("symref=")) throw releaseRefMoved(namedPlace, taskRef, when, recorded, current);
+    if (recorded !== current) {
+      if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw releaseRefMoved(namedPlace, taskRef, when, recorded, current);
+      const latest = readRefSnapshotValue(namedPlace, taskRef);
+      if (latest !== current) throw releaseRefMoved(namedPlace, taskRef, when, recorded, latest);
+    }
+  }
+  // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない。
+  if (!keepsCheckoutAsRecord(db, getTask(db, task.id)!)) {
+    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
   }
   return true;
 }
 
-function releaseRefMoved(workspace: WorkspaceConfig, ref: string, expected: string | undefined, current: string): RefsMovedError {
-  return new RefsMovedError(`workspace ${workspace.name}: refs changed during the session — was: ${expected || "absent"} ${ref}, now: ${current || "absent"} ${ref}`);
+function releaseRefMoved(workspace: WorkspaceConfig, ref: string, when: string, expected: string | undefined, current: string): RefsMovedError {
+  return new RefsMovedError(`workspace ${workspace.name}: refs changed ${when} — was: ${expected || "absent"} ${ref}, now: ${current || "absent"} ${ref}`);
 }
 
 /** ADR 0356 決定2: 残った task の checkout を failure question が言う文 —— 中身はタスクブランチに無く、retry は新しい checkout で走る。 */

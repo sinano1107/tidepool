@@ -42,6 +42,8 @@ const MIN = 60 * 1000;
 const CONFIG = { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN };
 /** 後始末は fire-and-forget の `void` の先にある。 */
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+/** workspace の Quarantine の本文の固定の文(ADR 0369 決定6)。 */
+const OWED_RELEASE_SENTENCE = "Accepting the answer also finishes the releases this workspace kept from finishing, bringing each such task's last session's work to its task branch.";
 
 interface Fixture {
   db: Db;
@@ -626,12 +628,14 @@ async function driftedAfterCheckout() {
   return { ...f, checkout: f.place!.path, gone, deps: { db: f.db, clock: f.clock, slot: f.slot, resolve: gone, pollNow: () => f.triggered.push("pollNow") } };
 }
 
-/** 後始末が drift の観測者として Quarantine を1枚だけ立て、理由に残した task の checkout の在り処を書き、解放は飛ばして checkout を残し、枠と印を空けた。 */
+/** 後始末が drift の観測者として Quarantine を1枚だけ立て、解放は飛ばして checkout を残し、枠と印を空けた。理由は解決の失敗だけで在り処を書かず、
+ *  本文は受理が済まなかった解放をやり直すと告げる(ADR 0369 決定6 —— 旧: 理由に在り処を書いた ADR 0363 決定4 の前半)。 */
 function expectDriftObservedOnce(f: Awaited<ReturnType<typeof driftedAfterCheckout>>, slot: Slot): void {
   const question = openQuarantineQuestion(f.db, "workspace", f.ws.name)!;
   expect(questions(f.db).filter((q) => q.question_quarantine_kind === "workspace").map((q) => q.id)).toEqual([question.id]);
   expect(getTask(f.db, question.id)?.purpose).toContain(`unknown workspace: ${f.ws.name}`);
-  expect(getTask(f.db, question.id)?.purpose).toContain(`The board kept the task checkout at ${f.checkout}`);
+  expect(getTask(f.db, question.id)?.purpose).not.toContain("The board kept the task checkout at");
+  expect(getTask(f.db, question.id)?.purpose).toContain(OWED_RELEASE_SENTENCE);
   expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
   expect(existsSync(f.checkout)).toBe(true);
   expect(slot.currentTaskId).toBeNull();
@@ -642,7 +646,7 @@ function expectDriftObservedOnce(f: Awaited<ReturnType<typeof driftedAfterChecko
 it.each([
   ["そのまま", false],
   ["再起動を跨いで", true],
-])("門が成功した後、後始末までの間に drift した完了の後始末は、Quarantine を1枚立てて解放を飛ばし、理由に task の checkout の在り処を含む —— %s(ADR 0363 決定2・4)", async (_, restart) => {
+])("門が成功した後、後始末までの間に drift した完了の後始末は、Quarantine を1枚立てて解放を飛ばし、checkout を残す —— %s(ADR 0363 決定2 / ADR 0369 決定6)", async (_, restart) => {
   const f = await driftedAfterCheckout();
   completeTask(f.db, f.task, FULL_HANDOFF, "deckhand", f.clock.now(), "worker");
   markTeardown(f.db, f.task.id, f.clock.now());
@@ -659,7 +663,7 @@ it.each([
 it.each([
   ["そのまま", false],
   ["再起動を跨いで", true],
-])("エスカレーションした session の後始末は drift の最初の観測者なので、解決できない workspace を quarantine し、理由に残した task の checkout の在り処を書く —— %s(ADR 0363 決定2・4)", async (_, restart) => {
+])("エスカレーションした session の後始末は drift の最初の観測者なので、解決できない workspace を quarantine し、checkout を残す —— %s(ADR 0363 決定2 / ADR 0369 決定6)", async (_, restart) => {
   const f = await driftedAfterCheckout();
   escalateTask(f.db, f.task, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", f.clock.now(), "worker");
   markTeardown(f.db, f.task.id, f.clock.now());
@@ -673,7 +677,7 @@ it.each([
   expectDriftObservedOnce(f, slot);
 });
 
-it("process を持たなかった session の後始末も、開いた question が無ければ drift の観測者として Quarantine を1枚立て、理由に残した task の checkout の在り処を書く(ADR 0366 決定3 / ADR 0363 決定4)", async () => {
+it("process を持たなかった session の後始末も、開いた question が無ければ drift の観測者として Quarantine を1枚立て、checkout を残す(ADR 0366 決定3 / ADR 0369 決定6)", async () => {
   const f = await driftedAfterCheckout();
   expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
 
