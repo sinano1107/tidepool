@@ -8,7 +8,7 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { quarantineStops } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pickupTask, recordPrOpened, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, owesTaskCheckoutRelease, pickupTask, recordPrOpened, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
@@ -338,6 +338,7 @@ it("決着した受験者の最後の checkout は、面接室の Quarantine の
   completeTask(s.db, s.task, FULL_HANDOFF, "deckhand", s.clock.now(), "worker");
   await tearDown(s);
   expect(existsSync(s.checkout)).toBe(true);
+  expect(owesTaskCheckoutRelease(s.db, getTask(s.db, s.task.id)!)).toBe(false);
   quarantineWorkspace(s.db, s.root.id, new Error("repaired by hand"), s.clock.now());
 
   await answerQuarantine(s, s.root.id);
