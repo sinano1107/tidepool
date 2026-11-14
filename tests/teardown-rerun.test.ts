@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -25,6 +26,7 @@ import {
   sessionId,
   WORKER_SPAWNED,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 // 後始末の再実行(ADR 0345): tree rule を通った後にもう1度撃つ経路の振る舞い。ADR 0356 の後、worker は task の checkout で走り、
 // 名前の場所の HEAD は保護ブランチを離れない —— 再実行は開いた event と checkout の有無から残りを決める。
@@ -149,8 +151,8 @@ it.each(["current", "old", "new"] as const)("完了の門の予告が残って�
   git(s.ws.path, "switch", "main");
   const current = git(s.ws.path, "rev-parse", s.branch);
   const announcement = { current: `${gateTip}|${current}`, old: `${gateTip}|${"a".repeat(40)}`, new: `${base}|${gateTip}` }[recorded];
-  const snapshot = s.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(s.ws.name) as string;
-  s.db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(snapshot.replace(`${gateTip} ${ref}`, `${announcement} ${ref}`), s.ws.name);
+  s.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?")
+    .run(`${gateTip} ${ref}`, `${announcement} ${ref}`, s.ws.name);
   if (recorded === "current") {
     // The worker left the tip whose gate write the board last announced.
     git(s.place.path, "fetch", s.ws.path, s.branch);
@@ -167,7 +169,7 @@ it.each(["current", "old", "new"] as const)("完了の門の予告が残って�
   expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(recorded === "current" ? current : base);
 });
 
-it("置換 ref が門の tip を見せても、実際のタスクブランチから辿れなければ checkout を残す (ADR 0369 決定7)", async () => {
+it.each(["replace", "graft"] as const)("履歴の差し替えで門の tip が見えても、実際のタスクブランチから辿れなければ checkout を残す (%s、ADR 0369 決定7)", async (mode) => {
   const s = await settledSession("completed");
   const gateTip = git(s.ws.path, "rev-parse", s.branch);
   git(s.ws.path, "switch", "--detach", gateTip);
@@ -176,12 +178,108 @@ it("置換 ref が門の tip を見せても、実際のタスクブランチか
   git(s.ws.path, "switch", "main");
   commitWork(s.ws.path, "unrelated.txt", "different history\n");
   const unrelated = git(s.ws.path, "rev-parse", "main");
-  git(s.ws.path, "replace", unrelated, descendant);
+  if (mode === "replace") git(s.ws.path, "replace", unrelated, descendant);
+  else writeFileSync(join(s.ws.path, ".git", "info", "grafts"), `${unrelated} ${gateTip}\n`);
   git(s.ws.path, "update-ref", `refs/heads/${s.branch}`, unrelated);
 
   await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(readFileSync(join(s.place.path, "work.txt"), "utf8")).toBe("work\n");
+});
+
+async function moveTaskRefDuringGit(s: Session, tip: string, trigger: string, beforeCommand = true): Promise<void> {
+  const bin = await tempDir("tidepool-release-ref-reset-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "reset-ref"), `${realGit}\n${s.ws.path}\nrefs/heads/${s.branch}\n${tip}\n`);
+  writeFileSync(join(bin, "git"), [
+    "#!/bin/sh",
+    '{ IFS= read -r git; IFS= read -r repo; IFS= read -r ref; IFS= read -r tip; } < "${0%/*}/reset-ref"',
+    `if ${trigger}; then`,
+    ...(!beforeCommand ? ['  "$git" "$@" || exit'] : []),
+    '  (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY; "$git" -C "$repo" update-ref "$ref" "$tip") || exit',
+    ...(!beforeCommand ? ["  exit 0"] : []),
+    "fi",
+    'exec "$git" "$@"',
+    "",
+  ].join("\n"), { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+}
+
+it("門の tree を読んでいる間にタスクブランチが戻されたら checkout を残す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("completed");
+  const ref = `refs/heads/${s.branch}`;
+  writeFileSync(join(s.place.path, "late.txt"), "written after completion\n");
+  await moveTaskRefDuringGit(s, "main", '[ "$1" = --no-replace-objects ] && [ "$2" = ls-tree ] && [ "$3" = -r ]');
+  try {
+    await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  expect(git(s.ws.path, "rev-parse", ref)).toBe(git(s.ws.path, "rev-parse", "main"));
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(ref);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(existsSync(s.place.path)).toBe(true);
+});
+
+it.each([false, true])("名前の場所と worker の repo が同時に読めなくても、報告後の観測を刻んで checkout を残す (announced=%s、ADR 0359 決定3 / ADR 0369 決定7)", async (announced) => {
+  const s = await settledSession("completed");
+  if (announced) {
+    const ref = `refs/heads/${s.branch}`;
+    const tip = git(s.ws.path, "rev-parse", ref);
+    const base = git(s.ws.path, "rev-parse", "main");
+    s.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?").run(`${tip} ${ref}`, `${base}|${tip} ${ref}`, s.ws.name);
+  }
+  rmSync(join(s.ws.path, ".git"), { recursive: true });
+  rmSync(join(s.place.path, ".git"), { recursive: true });
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+  const events = listEvents(s.db, s.task.id);
+  expect(events.some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+  expect(events.find(({ kind }) => kind === "task_checkout_written_after_completion")?.payload).toMatchObject({
+    path: s.place.path, observation: "unreadable", reason: expect.stringContaining("has no git repository"),
+  });
+  expect(existsSync(s.place.path)).toBe(true);
+});
+
+it.each(["staging", "write"])("中断の退避の間にタスクブランチが動いたら checkout を残す (during=%s、ADR 0369 決定7)", async (during) => {
+  const s = await settledSession("interrupted");
+  const ref = `refs/heads/${s.branch}`;
+  const main = git(s.ws.path, "rev-parse", "main");
+  git(s.ws.path, "switch", "--detach", "main");
+  commitWork(s.ws.path, "by-hand.txt", "unrelated work\n");
+  const byHand = git(s.ws.path, "rev-parse", "HEAD");
+  git(s.ws.path, "switch", "main");
+  writeFileSync(join(s.place.path, "wip.txt"), "keep this WIP\n");
+  const trigger = during === "staging" ? '[ "$1" = write-tree ]' : '[ "$1" = update-ref ] && { [ "$2" = "$ref" ] || [ "$3" = "$ref" ]; }';
+  await moveTaskRefDuringGit(s, byHand, trigger, during === "staging");
+  try {
+    await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  expect(git(s.ws.path, "rev-parse", ref)).toBe(byHand);
+  expect(git(s.ws.path, "rev-parse", "main")).toBe(main);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(ref);
+  expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
+  expect(readFileSync(join(s.place.path, "wip.txt"), "utf8")).toBe("keep this WIP\n");
+});
+
+it("中断のタスクブランチが main を指す symref に変わったら、main には運ばず checkout を残す (ADR 0369 決定7)", async () => {
+  const s = await settledSession("interrupted");
+  const ref = `refs/heads/${s.branch}`;
+  const main = git(s.ws.path, "rev-parse", "main");
+  git(s.ws.path, "symbolic-ref", ref, "refs/heads/main");
+
+  await runTeardown(s.deps, s.task.id, teardownStep(s.db, s.task.id));
+
+  expect(git(s.ws.path, "rev-parse", "main")).toBe(main);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`symref=refs/heads/main ${ref}`);
   expect(listEvents(s.db, s.task.id).map(({ kind }) => kind)).not.toContain("task_checkout_released");
   expect(readFileSync(join(s.place.path, "work.txt"), "utf8")).toBe("work\n");
 });

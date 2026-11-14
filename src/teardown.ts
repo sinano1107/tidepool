@@ -18,6 +18,7 @@ import {
   releaseReadCheckouts,
   releaseWorkspace,
   removeReleasedTaskCheckout,
+  taskCheckoutWasReleased,
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -447,7 +448,7 @@ function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task): Wo
       releaseReadCheckouts(db, task.id);
       // ADR 0363 決定4: 解放を飛ばして残す task の checkout の在り処を理由に書く —— 盤面は残した成果を運ばない
       const checkout = taskCheckoutPath(db, task.id);
-      const kept = latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path === checkout ? undefined : checkout;
+      const kept = checkout && !taskCheckoutWasReleased(db, task.id, checkout) ? checkout : undefined;
       quarantineWorkspace(db, err.workspaceName, kept ? `${err.message}\n\n${KEPT_TASK_CHECKOUT.at(kept)}` : err, clock.now());
       removeReleasedTaskCheckout(db, task.id);
       return undefined;

@@ -33,6 +33,7 @@ import {
   git,
   gitlinkChanges,
   gitWithInput,
+  gitWithoutHistoryOverrides,
   outOfSpace,
   ownWorktreeStatus,
   type SparsePolicy,
@@ -1310,9 +1311,9 @@ function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<s
   return true;
 }
 
-function readRef(workspace: WorkspaceConfig, ref: string, gitOptions: readonly string[] = []): string {
+function readRef(workspace: WorkspaceConfig, ref: string, readGit = git): string {
   try {
-    return git(workspace.path, ...gitOptions, "rev-parse", "--verify", "--quiet", ref);
+    return readGit(workspace.path, "rev-parse", "--verify", "--quiet", ref);
   } catch {
     return "";
   }
@@ -1696,7 +1697,7 @@ function releaseTaskCheckout(
   const gated = completed && completionTreeGateApplies(task);
   // 決着より前に消す: 決着の失敗を覆わず、消せなければ何も書かずに投げて後始末の再実行が消し直す
   releaseReadCheckouts(db, task.id);
-  const released = latestEventOfTask(db, task.id, "task_checkout_released")?.payload.path === checkout;
+  const released = taskCheckoutWasReleased(db, task.id, checkout);
   if (!released && !bringTaskCheckout(db, place, task, now, completed, gated)) return;
   // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない。
   if (!released) {
@@ -1727,9 +1728,13 @@ function releaseTaskCheckout(
 /** ADR 0369 決定7: drift で名前を解けなくても、運び終えた session の checkout は消せる。 */
 export function removeReleasedTaskCheckout(db: Db, taskId: string): void {
   const checkout = taskCheckoutPath(db, taskId);
-  if (checkout !== undefined && latestEventOfTask(db, taskId, "task_checkout_released")?.payload.path === checkout) {
+  if (checkout !== undefined && taskCheckoutWasReleased(db, taskId, checkout)) {
     removeBoardCheckout(checkout, CHECKOUT_LAYOUT.task.parents);
   }
+}
+
+export function taskCheckoutWasReleased(db: Db, taskId: string, checkout: string): boolean {
+  return latestEventOfTask(db, taskId, "task_checkout_released")?.payload.path === checkout;
 }
 
 /** この session の読み専用の checkout を消す(冪等)。issue #3105 の spec: 記録の価値の無い派生物なので、決着が落ちて task の checkout を
@@ -1761,39 +1766,49 @@ function bringTaskCheckout(
 ): boolean {
   const { namedPlace, path: checkout } = place;
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
-  // ADR 0369 決定7: 帯域外の置換 ref によって、門の tip が着いたと誤認しない。
-  const gateGitOptions = ["--no-replace-objects"];
   let recorded: string | undefined;
+  let tipLookupFailure: unknown;
+  let evacuationBaseRef = "";
   let wipTip: string | undefined;
   let observation: TaskCheckoutWriteObservation | undefined;
   try {
     if (gated) {
       // ADR 0359 決定3・4: 名前の場所の帯域外の値と比べず、checkout の観測と基準比較を独立に行う
-      const baseline = recordedRef(db, namedPlace.name, taskRef);
-      const candidates = baselineValues(baseline);
-      const current = readRefSnapshotValue(namedPlace, taskRef);
+      const candidates = baselineValues(recordedRef(db, namedPlace.name, taskRef));
       const opened = latestEventOfTask(db, task.id, "task_checkout_opened")?.payload;
       const gateRecordedTip = opened?.path === checkout && opened.completion_gate === "recorded_tip";
-      recorded = candidates.length === 1 ? candidates[0] : candidates.find((tip) => tip === current);
-      if (recorded === undefined && gateRecordedTip && current && !current.startsWith("symref=")) {
-        // ADR 0369 決定7: 予告の新値から探し、今の ref が門の tip を含むことを確かめる。
-        recorded = candidates.reverse().find((tip) =>
-          tip && readRef(namedPlace, `${tip}^{commit}`, gateGitOptions) && isAncestor(namedPlace, tip, current, gateGitOptions));
+      if (candidates.length === 1) {
+        recorded = candidates[0];
+      } else {
+        // ADR 0359 決定3: 名前の場所が読めなくても、worker の repo が読めないことは観測する。
+        try {
+          const current = readRefSnapshotValue(namedPlace, taskRef);
+          recorded = candidates.find((tip) => tip === current);
+          if (recorded === undefined && gateRecordedTip && current && !current.startsWith("symref=")) {
+            // ADR 0369 決定7: 予告の新値から探し、今の ref が門の tip を含むことを確かめる。
+            recorded = candidates.reverse().find((tip) =>
+              tip && readRef(namedPlace, `${tip}^{commit}`, gitWithoutHistoryOverrides) && isAncestor(namedPlace, tip, current, gitWithoutHistoryOverrides));
+          }
+        } catch (err) {
+          tipLookupFailure = err;
+        }
       }
       observation = observeCheckoutAfterCompletion(db, place, task.id, recorded);
       // ADR 0359 決定1: 旧版の完了では tip が記録にあるとは限らない。確認できなければ checkout を残す
-      if (!gateRecordedTip) {
-        if (!recorded || observation?.observation === "committed" || observation?.observation === "unreadable") {
-          throw new Error(
-            `The task completed under an earlier board version and its recorded tip could not be verified against the task checkout at ${checkout}. ` +
-            "Inspect the retained checkout and restore the intended completion tip before answering.",
-          );
-        }
+      if (!gateRecordedTip && tipLookupFailure === undefined &&
+        (!recorded || observation?.observation === "committed" || observation?.observation === "unreadable")) {
+        throw new Error(
+          `The task completed under an earlier board version and its recorded tip could not be verified against the task checkout at ${checkout}. ` +
+          "Inspect the retained checkout and restore the intended completion tip before answering.",
+        );
       }
     } else {
       const tip = fetchWorkerTip(place, task.id);
-      const recorded = readRef(namedPlace, taskRef);
-      const base = recorded !== "" && isAncestor(namedPlace, tip, recorded) ? recorded : tip;
+      evacuationBaseRef = readRefSnapshotValue(namedPlace, taskRef);
+      if (evacuationBaseRef.startsWith("symref=")) {
+        throw new RefsMovedError(`workspace ${namedPlace.name}: expected a direct task ref, found ${evacuationBaseRef} ${taskRef}`);
+      }
+      const base = evacuationBaseRef !== "" && isAncestor(namedPlace, tip, evacuationBaseRef) ? evacuationBaseRef : tip;
       const exclude = boardViewExcludes(db, place, task.id, base);
       const baseTree = git(namedPlace.path, "rev-parse", `${base}^{tree}`);
       wipTip = boardWriteTree(checkout, base, namedPlace.path, (tree, repo) =>
@@ -1822,18 +1837,27 @@ function bringTaskCheckout(
     });
   }
   try {
+    if (tipLookupFailure !== undefined) throw tipLookupFailure;
     const tip = wipTip;
     if (tip) {
-      const old = readRef(namedPlace, taskRef);
-      if (old !== tip) boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", taskRef, tip, old));
+      const old = readRefSnapshotValue(namedPlace, taskRef);
+      if (old !== evacuationBaseRef) throw releaseRefMoved(namedPlace, taskRef, evacuationBaseRef, old);
+      if (old !== tip) {
+        boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", "--no-deref", taskRef, tip, old));
+        const current = readRefSnapshotValue(namedPlace, taskRef);
+        if (current !== tip) throw releaseRefMoved(namedPlace, taskRef, tip, current);
+      }
     }
     if (gated) {
+      // ADR 0369 決定7: tree を先に読み、最後に今のタスクブランチが門の tip を持つことを確かめる。
+      if (recorded) gitWithoutHistoryOverrides(namedPlace.path, "ls-tree", "-r", "--format=%(objectmode)", recorded);
       const current = readRefSnapshotValue(namedPlace, taskRef);
-      if (!recorded || !current || current.startsWith("symref=") || (recorded !== current && !isAncestor(namedPlace, recorded, current, gateGitOptions))) {
-        throw new RefsMovedError(`workspace ${namedPlace.name}: refs changed during the session — was: ${recorded || "absent"} ${taskRef}, now: ${current || "absent"} ${taskRef}`);
+      if (!recorded || !current || current.startsWith("symref=")) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
+      if (recorded !== current) {
+        if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw releaseRefMoved(namedPlace, taskRef, recorded, current);
+        const latest = readRefSnapshotValue(namedPlace, taskRef);
+        if (latest !== current) throw releaseRefMoved(namedPlace, taskRef, recorded, latest);
       }
-      // ADR 0369 決定7: 名前の場所で門の tip の tree が読めるまで、checkout を消してよいとは刻まない。
-      git(namedPlace.path, ...gateGitOptions, "ls-tree", "-r", "--format=%(objectmode)", recorded);
     }
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
@@ -1841,6 +1865,10 @@ function bringTaskCheckout(
     return false;
   }
   return true;
+}
+
+function releaseRefMoved(workspace: WorkspaceConfig, ref: string, expected: string | undefined, current: string): RefsMovedError {
+  return new RefsMovedError(`workspace ${workspace.name}: refs changed during the session — was: ${expected || "absent"} ${ref}, now: ${current || "absent"} ${ref}`);
 }
 
 /** ADR 0356 決定2: 残った task の checkout を failure question が言う文 —— 中身はタスクブランチに無く、retry は新しい checkout で走る。 */
@@ -1876,8 +1904,8 @@ function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: 
   })();
 }
 
-/** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict leaves
- *  the checkout in place and reports the same repair options to teardown and quarantine acceptance (ADR 0239 帰結 / ADR 0240 決定4). */
+/** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict reports the same repair options
+ *  to teardown and quarantine acceptance (ADR 0239 帰結 / ADR 0240 決定4). */
 function mergeBackInto(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1985,9 +2013,9 @@ export class OutOfBandProtectedBranchError extends Error {
 /** `ancestor` が `descendant` に含まれているか = ff で運べるか。git の述語系コマンドは
  *  「答えが no」も非零で返すので、答え(1)と**道具の失敗**(128 等)を終了コードで分ける ——
  *  後者を no と読み替えると、壊れた checkout が「コンフリクト」という嘘の理由で人間に届く。 */
-function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: string, gitOptions: readonly string[] = []): boolean {
+function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: string, readGit = git): boolean {
   try {
-    git(workspace.path, ...gitOptions, "merge-base", "--is-ancestor", ancestor, descendant);
+    readGit(workspace.path, "merge-base", "--is-ancestor", ancestor, descendant);
     return true;
   } catch (err) {
     if ((err as { status?: number } | null)?.status !== 1) throw err;
