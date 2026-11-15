@@ -1,5 +1,7 @@
 # 盤面が完了を材料として読む review は種別ごとの完了 verb で終わり、verb が運ぶのは記録が示せない判断だけで、判断1つが対象を名指す判断ログ1行になる
 
+**Status 追記: 決定6 の「人間 assignee の完了は免除」は、タスクブランチを持たない(`task_branch_created` の無い)人間担当の task に限られる —— タスクブランチを持つ人間担当の work の完了は、agent の work と同じ handoff の全欄を必須にする([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定10、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2・決定5・追記3 の値 `no_findings` は `nothing_to_repair` に、`no_proposal` は `no_act` に改名(issue #2580)** —— 統合レビューは修理するものが無い判断で、RCA は行為(記憶・修理子)の無い所見の印である。
 
 **Status 追記: RCA の所見の欄 `entries` は `material` に改名(issue #2577)** —— `complete_rca` の `findings[].material` と、判断ログの型つきの欄(kind `rca`)。

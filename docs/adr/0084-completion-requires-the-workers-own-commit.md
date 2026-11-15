@@ -1,5 +1,7 @@
 # 完了は worker 自身のコミットを門で要求する — 盤面は本文を起草しない
 
+**Status 追記: 決定1 の理由と退けた形 (c) の「人間タスクの完了はワークスペースを持たず、コミットを求める相手もいない」は、タスクブランチを持たない(`task_branch_created` の無い)人間担当の task に限られる —— タスクブランチを持つ人間担当の work の完了は、人間の完了の扉が作業台の tip を検査してから取り込み、作業ツリーが tip と違えば拒む。worker の `complete_task` の門はそのまま([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定1・6、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の「workspace が解決できない → 門をスキップ」も task の checkout には掛からない —— 名前の場所の解決は門の一部で、解けなければ ADR 0359 決定1 の拒否([ADR 0363](0363-drift-is-observed-by-the-pickup-gate-before-running-and-by-teardown-after-and-the-completion-gate-rejects-an-unresolvable-name.md) 決定1、2026-11-09、issue #3094)。**
 
 **Status 追記: 決定2 の「ツリーを観測できないタスクは素通し」は task の checkout には掛からない —— 完了の門は worker の tip が名前の場所の `task/<id>` になるまで `done` にせず、名前の場所の側で書けなければ拒む([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定1、2026-11-08、issue #3053)。**

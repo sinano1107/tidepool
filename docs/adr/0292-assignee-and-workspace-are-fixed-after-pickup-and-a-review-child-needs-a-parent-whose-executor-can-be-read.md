@@ -1,5 +1,7 @@
 # pickup 済みの task の assignee / workspace は Edit で動かず、Executor の引けない親に review 子は付かない
 
+**Status 追記: 決定1 の鍵は、assignee の側でも2つになる —— pickup の event か `task_work_started`(人間の「書き始める」が残す event)を持つ task の `assignee` は Edit で変えられない。`task_branch_created` を assignee の鍵にしないことはそのまま([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定4、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定1 の鍵は、workspace の側では2つになる —— pickup の event か `task_branch_created` を持つ task の `workspace` は Edit で変えられない。「ADR 0233 決定5 …は一度も pickup されていない task に限られる」は、workspace ではどちらの event も持たない task に限られる。pickup の event を持つ task が凍ることはそのままで、assignee の鍵にこの event は足さない([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定5、2026-11-15、issue #1796 / #3178。実装は #1796)。**
 
 **Status 追記: `HUMAN_WORKER_ID` は `src/actor-id.ts` の `HUMAN_ACTOR_ID` に改名済み**(2026-10-26、issue #2581)。登録の門は変わらない。

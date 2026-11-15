@@ -1,5 +1,7 @@
 # merge ダイヤルは3値必須 — `external` が盤面の外の merge を宣言し、正典の主張は盤面決裁の merge に狭まる
 
+**Status 追記: 決定1 のダイヤルは agent の authority profile の欄のままだが、面がダイヤルの外で決まる場合が1つ足される —— 人間担当の根は profile を持たず、常に盤面の merge question に住む([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定13、2026-11-15、issue #3178)。**
+
 **Status: 決定3 の契機は ADR 0217 で4つ目が加わった — agent 名の quarantine でスキップされた CI 待ちの PR は merge 失敗時の検査に届かないので、その quarantine への回答の受理直前に観測する**
 
 **Status 追記: 決定3 の観測は ADR 0229 で閉じた PR にも広がった — merge されずに閉じられた PR も、盤面が決裁を持つ面すべてで観測して決裁を引退させる**

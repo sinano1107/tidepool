@@ -1,5 +1,7 @@
 # 既定への参照は pickup で終わり、解決した名前をタスクに書く
 
+**Status 追記: 決定2 の列の書き込み点に、人間の「書き始める」が加わる —— pickup と同じ固定の瞬間として自分の空の `tasks.workspace` を書き、未着手の祖先も固定する(祖先が人間担当でも同じ規則)。`tasks.assignee` を書くのは pickup のまま。決定5 の「空に戻すことは許す」は、assignee では `task_work_started` を持つ task にも当たらない([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定2〜4、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定1 の workspace の側(「既定への参照は pickup で終わる」「タスクブランチも PR も pickup で解決した workspace にしか無く」)、決定2 の「付帯子や子タスクへの写し」と書き込み点が自分の pickup 1つという前提、決定5 の「既定への参照に戻り」、追記4 の「一度も pickup されていない task に限る」は置き換わる —— 列は登録時に親から写さず、空の列は列が埋まっている最も近い祖先 → 既定と読み、子孫の pickup が未着手の祖先の列とタスクブランチも書き、workspace は `task_branch_created` を持つ task でも空に戻せない。決定4 の記録は `task_branch_created` にも足される。既定 agent と assignee の側、「書くのは空の列だけ」、追記2 の受験者の列はそのまま([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定1〜5、2026-11-15、issue #1796 / #3178。実装は #1796)。**
 
 2026-10-10 の grilling(issue #1728、#1738)で決定。workspace 未指定・assignee 未指定のタスクは、完了した後も着地のたびに

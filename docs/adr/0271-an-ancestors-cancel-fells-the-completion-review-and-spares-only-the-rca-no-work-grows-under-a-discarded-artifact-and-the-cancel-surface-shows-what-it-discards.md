@@ -1,5 +1,7 @@
 # 祖先の cancel は完了時レビューを倒して RCA だけ残し、捨てられた成果の下に work は生えず、cancel の面は捨てる done の work を見せる
 
+**Status 追記: 決定4 の括弧「(agent が実行したもの)」は「ブランチに成果を持つもの」に替わる —— agent が実行した done の work に加えて、タスクブランチ(`task_branch_created`)を持つ人間担当の done の work も見せる([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定17、2026-11-15、issue #3178)。**
+
 2026-10-17 の grilling(issue #2152)で決定。ADR 0268 決定4 で cancel の cascade が review の付帯子を残すようになり、
 abandon / 直接 cancel された祖先の下の **done の子に付いた完了時レビュー** も残る。実測(#2152 のコメント)で、残った review は
 pickup され、`decompose` で修理 work を立て、修理は pickup されて完了し、その成果は **cancelled の根のブランチへ merge back

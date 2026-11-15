@@ -1,5 +1,7 @@
 # エージェントのレビュー要請は flag で開き、type では開かない
 
+**Status 追記: 第1項の「`review_flag` の宣言者は登録者」は、人間担当の task では完了する人間になる —— 登録と Edit は人間の task の flag を今どおり拒み(ADR 0111 追記8)、タスクブランチを持つ人間担当の非根の work を個別にレビューへ出すかは、完了の扉で選ぶ([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定15、2026-11-15、issue #3178)。**
+
 2026-07-15 の grilling(「review flag の opt-in を誰が宣言できるか」)で決定。実装上 `review_flag` は人間の登録経路にのみ存在し、decompose の `ChildSpec` には無かった — エージェント発のレビュー要請はゼロ経路であり、それが意図した線なのか未実装の穴なのかが未記録だった。
 
 決定:
