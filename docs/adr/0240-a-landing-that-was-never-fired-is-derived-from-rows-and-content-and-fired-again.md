@@ -1,6 +1,6 @@
 # 撃たれなかった着地は、印ではなく行の状態と内容から導いて撃ち直す
 
-**Status 追記: 決定4 の merge back の撃ち手に、人間の完了の扉が加わる —— タスクブランチを持つ人間担当の work の完了は、帰り先との conflict を `done` の前に拒み、`done` の後にその1件の merge back を撃つ。落ちた分は今どおり受理と `retry` が拾う。決定2 の「後始末が未了の行」は完了の扉も読み、子孫に後始末が済んでいない task があれば完了を拒む([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定8・9、2026-11-15、issue #3178)。**
+**Status 追記: 決定4 の merge back の撃ち手に、人間の完了の扉が加わる —— タスクブランチを持つ人間担当の work の完了は、帰り先との conflict を `done` の前に拒み、`done` の後にその1件の merge back を撃つ。落ちた分は受理と積み残しの `retry` が拾う。決定2 の「後始末が未了の行」は完了の扉も読み、子孫に後始末が済んでいない task があれば完了を拒む([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定8・9、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定4 の拒否文の出口2つ(手で merge を解く / `git merge -s ours` で記録する)は、どちらも作業台で commit して答え直す形になり、回答がその tip を取り込む —— 名前の場所への手の書き込みは求めない。積み残しの失敗 question の `retry` も merge back を撃ち直す(決定4 の「受理の検査の中でやり直す」に撃ち手が足される)([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1〜3・10)。conflict の作業台は、conflict に当たった操作の中で開く —— 解放の中でも受理の中でも([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定9、2026-11-15、issue #3178)。**
 
