@@ -1,5 +1,7 @@
 # 「失われた ref を諦めて基準へ戻す」は失われたタスクブランチの後始末も持つ —— git の成果が実際に失われた task は「成果が捨てられた」に数え、その根の着地はそこで終わる
 
+**Status 追記: 決定3・5 は ADR 0380 が置き換えた —— 失われた側の「成果が捨てられた」は `parent_id` の祖先でなく task 自身の系譜で読み、失われた task は記録で「透明」(作成時から動いていない、または内容が着地済み)か「死んだ」と読む。「根なら PR を開いていない」の条件は消え、盤面は数える前に origin から失われた sha を取りに行く。決定4 が倒すのは `parent_id` の子孫でなく数えられた task の付帯子で、決定5 の「飛ばす」は死んだ祖先を数える task だけに当たる。決定7 の「編集があった根」は「死んだ根」と読む。帰結の「問われていない」の最初の2件は決まった([ADR 0380](0380-a-lost-task-branch-is-read-through-the-lineage-as-transparent-or-dead-the-board-fetches-the-lost-sha-from-origin-before-counting-and-the-cancel-term-stays-on-the-tree.md) 決定1〜5、2026-11-15、issue #3178)。**
+
 2026-11-15 の wayfinder(map #3178、ticket #3249)で決定。ADR 0373 決定5 は、戻す先の object が無い ref を名指しの選択肢で基準に入れる道を
 決め、失われた `task/<id>` を持つ task の後始末を別の ADR に送った。後始末が無いと、ブランチを失った着地待ちの根は着地の question の
 `merge` が git の生のエラーを返し続け、通る回答は `hold` だけになる(#3242 の実測)。以下はコードの読みである —— `hold` の後も昇格失敗の

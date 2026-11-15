@@ -1,6 +1,6 @@
 # workspace の列は場所が固定された事実だけを持ち、pickup は未着手の祖先も固定し、系譜はタスクブランチを持つ同じ workspace の祖先だけを数える
 
-**Status 追記: 前文が送った2点は ADR 0375 が決めた —— 決定2 の `task_branch_created` は作成時の sha も運び、「ブランチが失われた」event はその後に `task_branch_created` が無い間だけ効く。決定4 の系譜の読みは、タスクブランチが失われた祖先を系譜から外して保護ブランチへ帰すのではなく、その祖先を帰り先にする task を飛ばす(帰り先が無いので運べない)([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定2・5、2026-11-15、issue #3178)。**
+**Status 追記: 前文が送った2点は ADR 0375 が決めた —— 決定2 の `task_branch_created` は作成時の sha も運び、「ブランチが失われた」event はその後に `task_branch_created` が無い間だけ効く。決定4 の系譜の読みは、タスクブランチが失われた祖先に git を当てず記録で読む —— 「透明」な祖先(作成時から動いていない、または内容が着地済み)は系譜から外し、「死んだ」祖先を数える task は「帰り先なし」として飛ばす。系譜の答えは、祖先のブランチ・保護ブランチ・帰り先なしの3つになる([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定2、[ADR 0380](0380-a-lost-task-branch-is-read-through-the-lineage-as-transparent-or-dead-the-board-fetches-the-lost-sha-from-origin-before-counting-and-the-cancel-term-stays-on-the-tree.md) 決定1・3、2026-11-15、issue #3178)。**
 
 2026-11-14 の grilling(issue #1796 の族。map #3178 の ticket #3213 の中で一緒に決めた)で決定。木を先に登録すると、盤面は必ず子を先に
 pickup する。子の系譜は未決着の親を無条件に候補に数える(ADR 0053 決定1)ので、まだ作られていない `task/<親>` を読み、workspace を
