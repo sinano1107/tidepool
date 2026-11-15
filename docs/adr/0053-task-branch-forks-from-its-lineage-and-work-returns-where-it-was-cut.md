@@ -1,5 +1,7 @@
 # タスクブランチの fork 元は系譜が決め、成果は切られた場所へ帰る
 
+**Status 追記: 決定1 の「未決着の祖先は無条件に候補」は置き換わる —— 系譜が数えるのは、タスクブランチを持ち(`task_branch_created`)、`workspace` の列が自分と同じ work の祖先だけで、それ以外は決着・未決着を問わず飛ばす。根拠4 の前提(親のブランチは decompose の前に在る)は、未着手の親では子の pickup が親のブランチを作ることで成り立つ。決定3 と下の Status の「人間の手は分解ツリー1本につき1回」は、木1本でなく同じ workspace でつながる系譜につき1回になる(別の workspace の子は自分の保護ブランチへ自分で着地する)。review の透明と内容の判定(ADR 0105)はそのまま([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定3・4、2026-11-15、issue #1796 / #3178。実装は #1796)。**
+
 **Status: 決定3 の hold(恒久の「着地しない」)は ADR 0289 で改められた —— hold が断るのはその時点の内容で、内容が変われば question を立て直す。merge の執行は根に記録する**
 
 **Status: 決定1 の着地判定(`rev-list` による履歴の収束)は ADR 0105 で「内容で測る」に置き換え済み。決定3 の ff-only 着地と決定4 の事後検知の一点は ADR 0103 で置き換え済み** — 「ff できない = 帯域外の手作業」の前提は、盤面自身の着地が保護ブランチを進める直列運用(issue #468)で破れた。帯域外の判定は ff の成否ではなく盤面自身の ref snapshot との一致で行い、一致下の非 ff は Tidepool 名義の merge で追いつかせる。merge question を通る着地の形と「人間の手は分解ツリー1本につき1回」の線は維持される。

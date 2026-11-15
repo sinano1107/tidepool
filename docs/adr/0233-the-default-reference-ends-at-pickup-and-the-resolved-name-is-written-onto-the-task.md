@@ -1,5 +1,7 @@
 # 既定への参照は pickup で終わり、解決した名前をタスクに書く
 
+**Status 追記: 決定1 の workspace の側(「既定への参照は pickup で終わる」「タスクブランチも PR も pickup で解決した workspace にしか無く」)、決定2 の「付帯子や子タスクへの写し」と書き込み点が自分の pickup 1つという前提、決定5 の「既定への参照に戻り」、追記4 の「一度も pickup されていない task に限る」は置き換わる —— 列は登録時に親から写さず、空の列は列が埋まっている最も近い祖先 → 既定と読み、子孫の pickup が未着手の祖先の列とタスクブランチも書き、workspace は `task_branch_created` を持つ task でも空に戻せない。決定4 の記録は `task_branch_created` にも足される。既定 agent と assignee の側、「書くのは空の列だけ」、追記2 の受験者の列はそのまま([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定1〜5、2026-11-15、issue #1796 / #3178。実装は #1796)。**
+
 2026-10-10 の grilling(issue #1728、#1738)で決定。workspace 未指定・assignee 未指定のタスクは、完了した後も着地のたびに
 その時の既定へ解決されていた。既定を差し替えて再起動すると、無人 merge の tick は新しい既定の repo で同じ番号の PR の
 CI を読んで merge しうる。ダイヤルも新しい既定 agent の profile から読む。旧既定の削除の扉と agent の着地待ちの数えも、
