@@ -1,5 +1,7 @@
 # 面接室・受験者の checkout の在り処は規約から導く —— `*_opened` event は実体の綴りの記録で、repo の無い在り処は後始末が触る checkout ではない
 
+**Status 追記: 追記 決定2 の「盤面は作り直さない」と出口「空の面接室で走らせると決めて手で作る(`git init`)」は、面接室の Quarantine の選択肢「空の面接室で走らせる」に替わる —— 出題前で在り処に repo が無いとき、盤面が面接室の基準の行を消して `git init` する。既定では作り直さない(fail-closed)は残り、名指しの選択肢への回答が記録になる([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定11、2026-11-15、issue #3178)。**
+
 **Status 追記: 追記 決定2 の出口「空の面接室で走らせると決めて手で作る(`git init`)」は、面接室の root がまだ出題していない間だけ予告し受理する。出題済みの面接室は読み手が出題の head を fetch する([ADR 0361](0361-interview-readers-read-a-checkout-of-the-posed-head-not-the-rooms-git-and-the-answers-stay-in-the-room.md) 決定1)ので、その head が面接室で引けることが面接室の pickup の項に並び、出口は復元か cancel だけになる(2026-11-10、issue #3105 の実装レビュー)。**
 
 2026-10-19 の grilling(issue #2225 —— #2192 の code-review の残り)で決定。面接室(ADR 0273 決定1)と受験者の checkout(ADR 0276 決定1)は

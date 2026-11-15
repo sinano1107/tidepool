@@ -1,5 +1,7 @@
 # 着地は運ぶ前と記録を書く前に名前の場所の全 ref を基準と比べる —— 受理が見せていない移動を受け入れる穴は、人間の内容の扉の設計に渡す
 
+**Status 追記: 決定1 の「基準の行そのものが無い workspace では、着地が pickup と同じ手続きで最初の撮りをする」には確認が掛かる —— 基準の行を持つ workspace が全部、引けて基準どおりであるときだけ撮る。止まったときに Quarantine が立つのは欠けた名前の側で、出口はそこにある。「残る穴と根」の受理の穴は閉じる —— 受理は全 ref が基準と同じであることを確かめ、全撮りをしない([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定1・7・13、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定7 の3手(retry が拒まれる → Quarantine に回答 → もう一度 retry)は無くなる —— 文面は名前の場所での手の merge を求めず、作業台の path とそこで打つ merge を言い、答え直した回答がその tip を取り込む。人間は名前の場所の ref を動かさないので、決定1 の比較に当たらない。ADR 0242 決定4 の「捨てる」手順は作業台の merge commit に替わる。「残る穴と根」が #3158 に渡した扉のうち、人間が書く場所と取り込みはここで決まった([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1・2・10・11、2026-11-15、issue #3178)。**
 
 2026-11-11 の grilling(issue #3151、#3147 の派生)で決定し、翌日、同じ grilling の見直しで縮めた。ADR 0351 決定2 は「基準は切れない」を

@@ -1,5 +1,7 @@
 # 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理がやり直す —— 済んでいない解放を持つ task は走らせない
 
+**Status 追記: 決定3 の「『回答は動いた ref を受け入れる』(ADR 0351 決定4)より…を先に立てる」は、比べる相手が無くなる —— 受理は動いた ref を受け入れない。決定7 の末文「走らなかった ref の比較はやり直さず、受理の全撮りがその時点の ref を受け入れる」は、受理の先頭の比較に置き換わる。決定1 の受理の順には、比較2回と「基準へ戻す」の書き戻しが足される。下の追記の「受理は変えていない」はここで閉じる([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定1・3・7、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定3 の「受理そのものの範囲は #3151」は、人間の内容の扉の設計(#3158)に移った —— 受理が見せていない移動を受け入れる穴は実測済みで、受理は変えていない([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md)、2026-11-12、issue #3151)。**
 
 2026-11-11 の grilling(issue #3147、#3126 の実装 review の派生)で決定。ADR 0356 で worker の成果は名前の場所の外(task の checkout)に

@@ -1,5 +1,7 @@
 # 盤面自身の ref の書き込みは、書く前に基準へ予告し、書いた後に畳む
 
+**Status 追記: 決定1・2 の「2値」は1回の書き込みの形で、落ちて残った行に次の予告が重なると行は3値以上になる。Quarantine の選択肢「基準へ戻す」は、ref がどの値とも違う行を、予告の前に行が持っていた値へ戻す。決定2 の「基準の行に入る値は pickup で撮った値と盤面が予告した値だけ」に、「失われた ref を諦めて基準へ戻す」が入れる今の値が足される([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定3・5、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定4 の走行中 / 休止中の2形は消え、名前の場所の merge は常に `merge-tree` + `commit-tree` + `update-ref` + worktree の追従([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
 **Status 追記: 決定5 の「落ちて残った2値行は次の pickup の全撮りで消えるに任せる」は [ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定4 で「次の比較で ref が持つ側に畳む」に置き換わった(2026-11-02、issue #2911)—— 基準は切れないので全撮りは来ない。決定4 の口を通る書き込みに pickup の fetch・park・タスクブランチの作成・checkout、release の merge back の fetch、読む場所の fetch・park が加わる(同 決定3)。**

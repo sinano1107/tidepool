@@ -1,5 +1,7 @@
 # 完了の門は tip を記録に着けるまで `done` にせず、完了済みの解放は記録の tip だけを運ぶ —— 報告後の書き込みは記録され、名前の場所を止めない
 
+**Status 追記: 決定1 の「`done` ⇔ tip が記録にある」は、Quarantine の選択肢「失われた ref を諦めて基準へ戻す」が失われた `task/<id>` を今の値で基準に入れた task で破れ、event `lost_refs_accepted` がその例外を記録する。決定4 の「verb では基準を比較せず」は全 ref の比較をしないという意味で、門は自分の `task/<id>` の1行を基準と突き合わせる —— 門の掛からない解放も、同じ形で書く前に突き合わせる。完了の門が Quarantine を立てない点は変わらない([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定5・12、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定5 の「`done` の task では観測」は、門の掛からない完了済みの解放の WIP の退避にも当たる —— worktree を stage する段の失敗は種類を問わず「読めない」観測で、名前の場所は quarantine しない([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定3、2026-11-10、issue #3141)。**
 
 **Status 追記: 決定2・5 の「完了済みの解放」は門の掛かる work の解放を指す —— review と Interview の役は門を持たないので、完了済みでも解放の fetch が初回の転送を担い、その失敗の帰責は写す段 / fetch する段 / host の3段([ADR 0364](0364-the-board-never-opens-the-workers-git-as-a-repository-and-fetches-the-tip-from-a-board-owned-copy-of-its-regular-files.md) 決定2、2026-11-09、issue #3097)。**
