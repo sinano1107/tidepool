@@ -54,6 +54,6 @@
 - spec が決める(#3178 の「Spec へ渡すもの」): GitHub の URL として読めない origin の比べ方。origin が読めない workspace を保護と扱うか。
   default branch の検査が local の symref を読むままか remote を直接読むか。保護剥奪の拒否の名前と文面。一覧と wire の `registrySelf` と
   `protected` を計算の結果に合わせるか。registry の fetch に「値を先に知る」形(ADR 0243 決定3)を残すか —— ticket は決めていない。
-- 限界: ADR 0013 は床を「データの状態に依存させない」と書き、決定6 は checkout の origin を読む。ticket はこの2つを照合していない ——
-  origin が宣言と別の repo を指す workspace は ADR 0378 決定3 が止めるので、判定が読むのは宣言と同じ repo である。ADR 0064 の
+- 限界: ADR 0013 は床を「データの状態に依存させない」と書き、決定6 は checkout の origin を読む。ticket はこの2つを照合していない
+  (origin が宣言と別の repo を指す workspace は ADR 0378 決定3 が pickup で止める、までが書く session の読み)。ADR 0064 の
   Considered options が registry の書き込みを理由に退けた案(盤面自身の書き込みの直列化)は、理由が当たらなくなるが、採り直さない。

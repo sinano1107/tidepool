@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 帰結が番号なしで別の ADR に送った「どの repo が origin かを盤面が宣言から決める」は ADR 0378 が決めた —— workspace の網の行き先は宣言 `repo` から決まり、origin が別の repo を指すか、宣言が覚えた repo と違えば workspace の Quarantine になる。決定10・11 は変わらない([ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定1・3・6、2026-11-15、issue #3178)。**
+
 2026-11-13〜14 の wayfinder(map #3178、ticket #3203・#3233・#3205、決定9 は #3190)で決定。外の push が origin の `task/<root>` を進めると、
 盤面の push は force 無しなので拒まれ、PR 昇格失敗 question の `retry` は同じ理由で落ち、`merge` の回答はその question を名指して拒む ——
 2つの question が互いを指して閉じない(実 GitHub の盤面で再現、#3250)。盤面が GitHub の head を local のタスクブランチへ入れる経路は無い。
