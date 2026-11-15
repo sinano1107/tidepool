@@ -2,6 +2,8 @@
 
 **Status 追記: 帰結が番号なしで別の ADR に送った「どの repo が origin かを盤面が宣言から決める」は ADR 0378 が決めた —— workspace の網の行き先は宣言 `repo` から決まり、origin が別の repo を指すか、宣言が覚えた repo と違えば workspace の Quarantine になる。決定10・11 は変わらない([ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定1・3・6、2026-11-15、issue #3178)。**
 
+**Status 追記: 決定7 は merge dial を問わない —— 文は無人 merge キューの行を前提に書かれているが、キューの行も merge question も持たない `external` の根でも、収束は同じ推奨 hold の merge question を立てる。問いは head についてで、誰が merge するかについてではない。`merge` と答えれば盤面が取り込んで push し、PR も merge する(回答は dial を読まない)。merge を盤面の外に保つなら `hold` のまま、落とされた commit を origin へ push し直す(2026-11-16、spec #3273 の seam の確認、ユーザー確認済み)。**
+
 2026-11-13〜14 の wayfinder(map #3178、ticket #3203・#3233・#3205、決定9 は #3190)で決定。外の push が origin の `task/<root>` を進めると、
 盤面の push は force 無しなので拒まれ、PR 昇格失敗 question の `retry` は同じ理由で落ち、`merge` の回答はその question を名指して拒む ——
 2つの question が互いを指して閉じない(実 GitHub の盤面で再現、#3250)。盤面が GitHub の head を local のタスクブランチへ入れる経路は無い。
