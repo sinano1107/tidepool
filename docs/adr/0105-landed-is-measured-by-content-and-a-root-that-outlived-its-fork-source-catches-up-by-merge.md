@@ -1,6 +1,6 @@
 # 着地済みは履歴ではなく内容で測り、fork 元に先立たれた根は merge で追いついてから PR を開く
 
-**Status 追記: 決定2 の「追いついてから PR を開く」の前に段が1つ足される —— 順は 人間の tip の取り込み → 追いつき → push。origin のブランチに盤面の知らない commit があれば、盤面は追いつきも push もせず、人間が作業台で merge を commit して retry と答える。追いつきを撃つ条件は変わらない([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定4・8、2026-11-15、issue #3178)。**
+**Status 追記: 決定2 の「追いついてから PR を開く」の前に段が1つ足される —— 順は 人間の tip の取り込み → 追いつき → push。origin のブランチに盤面の知らない commit があれば、盤面は自分では merge も push もせず、人間が作業台で merge を commit して retry と答える。追いつきを撃つ条件は変わらない([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定4・8、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定2 の「人間がセッション外で手で解決すれば通る」と、下の追記の「workspace の Quarantine を1枚経てから、もう一度 retry で通る」は置き換わる —— 盤面は昇格の失敗の時点で作業台を開き、人間はそこで merge を commit して retry と答える。回答がその tip を取り込むので、人間は名前の場所の ref を動かさず、Quarantine は経ない([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1・2・7・11、2026-11-15、issue #3178)。**
 

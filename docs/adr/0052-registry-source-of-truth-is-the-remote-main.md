@@ -1,6 +1,6 @@
 # 盤面が読む正本はリモートの保護ブランチであり、ホスト上の clone はキャッシュである
 
-**Status 追記: 下の追記の「写しは push の成功を見て盤面が書く」は、タスクブランチの写しに読み手を持つようになる —— PR が無いか未記録の根では、収束がその写しを「盤面が最後に push した値」として読む。remote-backed の workspace で人間しか書けない path を入れる道は origin の保護ブランチのままで、扉も記録も足さない(決定1 の「origin が正本」に乗る)([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定3・10、2026-11-15、issue #3178)。**
+**Status 追記: 下の ADR 0339 由来の追記の「写しは push の成功を見て盤面が書く」に、タスクブランチの写しの読み手が足される —— PR が無いか未記録の根では、収束がその写しを「盤面が最後に push した値」として読む。remote-backed の workspace で人間しか書けない path を入れる道は origin の保護ブランチのままで、扉も記録も足さない(決定1 の「origin が正本」に乗る)([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定3・10、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定7 の休止位置へ「戻す」手は無くなる —— 名前の場所の HEAD は保護ブランチを離れず、残るのはリモートへの追従と worktree の追従([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**
 
