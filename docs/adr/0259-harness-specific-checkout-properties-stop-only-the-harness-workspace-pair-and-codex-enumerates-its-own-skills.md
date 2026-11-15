@@ -1,5 +1,7 @@
 # checkout の Harness 固有の性質は (Harness, workspace) の組で止め、Codex の skill は Codex 自身に列挙させる
 
+**Status 追記: 決定3 の「そうでなければ組を不成立にする」は2段になる —— task の checkout の検査が落ちたら、同じ検査を保護ブランチの tip の使い捨ての checkout に当て直し、そこでも落ちたときだけ組の不成立で、通れば task の失敗(`spawn_failed` の族、推奨は abandon)。Interview の root と受験者は当て直さず、常に task の失敗。決定5 の撃ち直しが Codex の組で読むのは `ls-tree` でなく、保護ブランチの tip(remote-backed は origin から引いてから)の使い捨ての checkout に撃つ `skills/list` で、名前の場所の作業ツリーは読まない。受理は先頭と fetch の後に全 ref を基準と比べ(ADR 0373 決定10)、purely-local の workspace では検査の前に作業台の tip を取り込む —— 取り込むものが無ければ検査だけ(ADR 0371 決定6)。決定2・3 の「task の workspace」は task の checkout(ADR 0356)と読む([ADR 0379](0379-the-codex-containment-check-reads-the-record-through-a-throwaway-checkout-of-the-protected-tip-and-a-spawn-failure-stops-the-pair-only-when-that-tip-fails-too.md)、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定5 の撃ち直しが読むのは名前の場所の working tree でなく保護ブランチの tree(`ls-tree`)—— Claude の組の停止は保護ブランチの tree にある形だけが立て、task branch にだけある形は task の失敗([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md)、2026-11-08、issue #3074)。**
 
 **Status 追記: 決定3 の「すべて `enabled: false`」は ADR 0337 決定3 で「盤面が閉じた path がすべて `enabled: false`」に** —— allowlist が開いた path は封じ込めの性質に数えない。決定2 の「Codex 自身に列挙させる」は不変で、翻訳は同じ列挙の `scope` から引く(2026-11-01、issue #2689)。
