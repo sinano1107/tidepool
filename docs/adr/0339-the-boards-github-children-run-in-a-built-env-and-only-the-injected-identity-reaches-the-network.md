@@ -1,6 +1,6 @@
 # 盤面の GitHub への子プロセスは組み立てた env で走り、注入した身元以外で網に出ない
 
-**Status 追記: 決定4 の「checkout の `remote.origin.url` の値から repo key を取り」は、workspace については置き換わる —— 行き先(URL・token の repo key・`gh` の `-R`)は registry の `repo` 宣言から組む。「URL の元を registry の `repo` 宣言にしない」の理由のうち「綴りを照合しない人間向けの provenance」は外れ、「registry clone 自身に宣言の行が無い」は残る —— registry clone は今どおり自分の origin を読む。GitHub なら `owner/name` から URL を組む形と、`insteadOf` 適用前の値を読むことはそのまま([ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定1・2・4、2026-11-15、issue #3178)。**
+**Status 追記: 決定4 の「checkout の `remote.origin.url` の値から repo key を取り」は、workspace については置き換わる —— 行き先(URL・token の repo key・`gh` の `-R`)は registry の `repo` 宣言から組む。「URL の元を registry の `repo` 宣言にしない」の理由のうち「綴りを照合しない人間向けの provenance」は外れ、「registry clone 自身に宣言の行が無い」は残る —— registry clone は今どおり自分の origin を読む。GitHub なら `owner/name` から URL を組む形はそのまま。workspace の checkout の origin は行き先には使わず、宣言と同じ repo を指すかの比較にだけ、`insteadOf` 適用前の値で読む([ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定1・2・4、2026-11-15、issue #3178)。**
 
 **Status 追記: 盤面の local の git の転送は `file` だけである(決定1 の env で走る子以外の全部で、決定5 の hop2 を含む)。帰結の「本 ADR の外」は config を読む半分(#2819 / #2842)に狭まる** —— 2026-11-01、issue #2861。
 local の verb でも `insteadOf`・`fetch.recurseSubmodules`・部分 clone の遅延 fetch で網に出て、人間の askpass の答えが載るので、verb を数えずに env の

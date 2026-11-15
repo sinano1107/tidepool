@@ -1,5 +1,7 @@
 # workspace エントリはホスト非依存 — path は規約導出が既定
 
+**Status 追記: 明示 `path` が残る理由に挙げた「registry 自身」は例から外れる —— registry clone は workspace にならず、entry を持たない。明示 `path` が既存パス登録モードのために残ることは変わらない([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1、2026-11-15、issue #3178)。**
+
 `workspaces.yaml` はコミットされる共有ファイル(Mac の開発クローンと Pi の本番クローン)なのに、`path` はホスト固有の絶対パスで、「各クローンで手調整する」が従来の運用だった(基点自体が違う: Mac は `~/tidepool-workspaces`、Pi は `/mnt/ssd/tidepool-workspaces`)。workspace 作成機能(issue #57)で盤面自身が registry にコミットを積み始めると、この運用は破綻する — 機械がどちらかのホストの絶対パスをコミットするたび、必ずもう一方のクローンを壊す。
 
 決定: **`path` を省略可能にし、省略時は盤面設定(基点ディレクトリの環境変数 `TIDEPOOL_WORKSPACES_DIR`)+ workspace 名から解決の瞬間に導出する。** 盤面が作るエントリ(clone / 新規作成モード)は path を書かない — エントリはホスト非依存になり、Pi からの push が Mac のクローンを壊さない。明示 `path` は手動配置のチェックアウト(registry 自身、既存パス登録モード)のために残る。導出は ADR 0009 の解決点(`resolveExecutionWorkspace`)で行う — 「使用の瞬間に解決し、値を焼き込まない」という既存の線の延長。
