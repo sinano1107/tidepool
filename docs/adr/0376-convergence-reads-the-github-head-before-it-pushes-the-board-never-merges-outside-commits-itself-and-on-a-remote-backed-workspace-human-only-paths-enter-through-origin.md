@@ -43,7 +43,8 @@
    待つと `retry` の拒否が名指す相手を持たないからである。
 8. **順は「人間の tip の取り込み → 追いつき → push」である。**
 9. **開いている PR が GitHub 上で保護ブランチと conflict したら、人間が PR の head へ外から push して解く。扉は作らない。** 人間は名前の場所の
-   ref を書かない。その push の後・PR の merge の前に修理の子が帰ると、決定4 により盤面は1度止まり、人間は自分の push した commit を作業台で
+   ref を書かない。解き方は PR の head への保護ブランチの merge で、rebase や squash して force-push した head は決定7 の書き換えに当たる
+   (読みからの推論、未実測 —— #3190)。その push の後・PR の merge の前に修理の子が帰ると、決定4 により盤面は1度止まり、人間は自分の push した commit を作業台で
    merge して `retry` と答える。盤面は push した者を見分けられないので、この費用を受け入れる。
 10. **remote-backed の workspace で、人間しか書けない path(ADR 0362)に扉は作らない。** 正規の道は origin の保護ブランチに入れること ——
     自前の clone からの fast-forward の push か、自分の PR の merge である。origin が正本で(ADR 0052)、worker は origin に書けない。盤面は
@@ -81,4 +82,6 @@
   収束が立てる merge question が、tick と同じ読み直し(ADR 0217 決定1、順は ADR 0232 決定3)を通すか。外の commit を断る道を文が言うか。
   PR が記録済みの根の「最後に push した値」を写しに寄せるか。ADR 0370 決定1 の比較との順。
 - 限界: checkout を clone し直すと写しは origin の今の値になり、決定6 の巻き戻しを見落として push する。外から消されたブランチを盤面が
-  作り直すことは知らせない。
+  作り直すことは知らせない。決定10 の道で入った変更は、既に fork した task には届かない —— その task の worker が変更を含む保護ブランチを
+  自分で merge すると、完了の門はその path で拒む(完了の門で帰り先を merge させる形を採るなら当たる、#3189)。origin の履歴の書き換えの下の
+  誤拒否は #3201 が持つ。

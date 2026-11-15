@@ -282,6 +282,6 @@ do not administer needs its admin to install the App from the link above), then 
 a workspace with **clone a repository** and its clone URL. The board refuses the registration with
 the install link when the App is missing or you cannot push to the repository.
 
-Use a dedicated clone: the board treats a workspace's checkout as its own at all times, not only
-during a task, and a checkout you also edit by hand will end up quarantined. Nothing else
+Use a dedicated clone: the board treats a workspace's checkout as its own from its first task on,
+between tasks too, and a checkout you also edit by hand will end up quarantined. Nothing else
 changes — task branches, pull requests, and a merge question you answer.
