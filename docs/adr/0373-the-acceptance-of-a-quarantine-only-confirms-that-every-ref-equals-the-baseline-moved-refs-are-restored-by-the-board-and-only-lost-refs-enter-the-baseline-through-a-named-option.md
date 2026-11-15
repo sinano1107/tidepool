@@ -1,5 +1,7 @@
 # Quarantine の受理は全 ref が基準と同じであることだけを確かめる —— 動いた ref は盤面が「基準へ戻す」で戻し、失われた ref だけが名指しの選択肢で基準に入る
 
+**Status 追記: 決定5 が別の ADR に送った「失われた `task/<id>` を持つ task の後始末」は ADR 0375 が決めた —— task ごとの event、「成果が捨てられた」の数え、着地が終わる根。決定5 の選択肢の側は変わらない([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定1・3・7、2026-11-15、issue #3178)。**
+
 2026-11-13〜15 の wayfinder(map #3178、入口は #3158)で決定。ADR 0370 は「残る穴と根」で、Quarantine の受理が比べずに全撮りし、
 開いている間に動いた ref を見せないまま受け入れて merge back で運ぶ穴を、人間の内容の扉の設計に渡した。渡された要件は「門を通った内容を、
 回答1つで落とせない」。人間が書く場所と取り込みは ADR 0371 が決めた。この ADR は、受理が何を確かめるか、動いた ref の出口、基準が

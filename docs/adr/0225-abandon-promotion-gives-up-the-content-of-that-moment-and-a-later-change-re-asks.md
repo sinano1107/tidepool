@@ -1,5 +1,7 @@
 # abandon promotion が断念するのはその時点の内容の昇格であり、後の内容の変化は昇格の question を立て直す
 
+**Status 追記: 決定1 の末尾「head を刻めなかったときは『変わった』と扱う」と決定2 の問い直しは、タスクブランチが失われて着地が終わった根では起きない —— Quarantine の選択肢「失われた ref を諦めて基準へ戻す」が、効いている「ブランチが失われた」event を持ち PR を開いていない根の着地を終わらせ、開いていた昇格失敗の question も閉じる。届く先のブランチが無いので、修理を捨てない側に倒す理由が当たらない([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定7・8、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の「内容が変わっていれば question を立て直す」の内容の読みは、同じ同期区間の頭で名前の場所の全 ref を基準と比べた後に読む —— 動いていれば立て直さず、その根はその回 workspace の Quarantine で止まる。決定1 の断念の head の記録は比べずに書く([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 2026-10-09 の grilling(issue #1642、発端は #1630 の spec review / ADR 0217 決定4)で決定。PR 昇格失敗の question に

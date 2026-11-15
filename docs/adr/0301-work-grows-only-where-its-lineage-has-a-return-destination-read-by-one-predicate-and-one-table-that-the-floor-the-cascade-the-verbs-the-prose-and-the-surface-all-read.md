@@ -1,5 +1,7 @@
 # work が立つのは帰り先のある系譜だけで、帰り先は1本の述語と1つの表で読み、床・cascade・verb・文・画面はすべてそれを読む
 
+**Status 追記: 決定1 (b) の「成果が捨てられたとき」に項が1つ足される —— 親と祖先に、git の成果が実際に失われた `done` の work(タスクブランチが失われ、編集があり、根なら PR を開いていない)があるとき。決定3 のとおり、床・cascade・verb の差し替え・画面の予告は同じ述語から読む。決定2 の表は変わらない([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定3・4、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定7 が理由に挙げた欠陥(系譜の読みが workspace を見ない、#2033)と、帰結が範囲の外に置いた #1827 は決まった —— 系譜はタスクブランチを持ち列が同じ workspace の祖先だけを数える(両 issue は #1796 の duplicate として close 済み)。決定7 そのもの(別 workspace への分解子は立たない)は変えていない —— #2510([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定4、2026-11-15、issue #1796 / #3178。実装は #1796)。**
 
 2026-10-22 の grilling(issue #2505)で決定。Interview の root の下の RCA の所見の行への異議が work の修理子を立て、修理子は祖先に

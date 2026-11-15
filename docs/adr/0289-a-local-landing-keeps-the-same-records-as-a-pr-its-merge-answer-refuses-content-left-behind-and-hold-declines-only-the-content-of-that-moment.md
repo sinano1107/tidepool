@@ -1,5 +1,7 @@
 # ローカル着地も根に記録を持つ —— merge 回答は積み残しで拒み、hold が断るのはその時点の内容である
 
+**Status 追記: 決定1 の「収束が候補から外す根」は3つから4つになる —— タスクブランチが失われて着地が終わった根(効いている「ブランチが失われた」event を持ち、PR を開いていない)が足される。編集があった根は専用の記録、handoff だけの根は `nothing_to_land` で終わる。決定3 の「head が引けなければ変わったと読み、立て直す」はその根では起きず、恒久の「着地しない」が失われたブランチに限って戻る —— 届く先のブランチが無いので、決定3 が恒久を外した理由が当たらない([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定7、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の「workspace の quarantine 単独では拒まない」は変わらない —— ただし local 着地の merge の回答は、ref を読む同期区間の頭で名前の場所の全 ref を基準と比べ、動いていれば拒む。決定3 の hold の後の立て直しも同じ比較の後の読みから決め、hold の head の記録だけは比べずに書く(head が読めなくても hold を拒まない今の振る舞いを保つ)([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 2026-10-21 の grilling(issue #1780、発端は #1769 / ADR 0231 と #1777 / ADR 0239)で決定。purely-local の着地は、merge の
