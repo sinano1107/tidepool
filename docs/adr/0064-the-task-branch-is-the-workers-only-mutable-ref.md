@@ -1,5 +1,7 @@
 # タスクブランチは worker の唯一の可変 ref である
 
+**Status 追記: 決定4 の表の registry の3行(registry の fetch・push・`update-ref`)は消え、「唯一の保護 workspace で不変条件が最も弱くなる」と、呼び忘れが「registry の fetch は読み取りのたびに走るので即座に露見する」という論拠も当たらなくなる —— registry clone は workspace にならず、registry の書き込みはどの workspace の基準にも掛からない(「呼び忘れは誤検知として quarantine を立てる」は残る)。Considered options が「registry 編集がしょっちゅう拒まれる」で退けた直列化の案は理由が当たらなくなるが、採り直していない([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・8、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定3 の「確認 question は1択」「盤面は検知するだけで巻き戻さない」と、決定7 の「ref が元へ戻っていることは要求しない」「動いた ref のほうが正しいので、そのまま受け入れる」は置き換わる —— workspace の Quarantine の選択肢は常設の3つで、受理は全 ref が基準と同じであることを確かめ、動いた ref は「基準へ戻す」を選ぶと盤面が口を通して書き戻す。Considered options で退けた「quarantine の解除に ref の復旧を要求する」を採ることになる。下の追記の「行そのものが無い workspace では最初の撮りをする」は、基準の行を持つ workspace が全部、引けて基準どおりであるときに限る([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定1〜3・13、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定6 の「未設定に分岐は書かない」は、ADR 0351 で pickup が、行そのものが無い場合を「まだ持ったことがない」と読んで最初の撮りをする形に変わっていた。着地も同じ側に立つ —— 行そのものが無い workspace で着地が違反として止めると出口が無い(受理は行を作らず、pickup は収束の後にしか来ない)。release での行無しは今日どおり違反([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**

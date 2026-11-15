@@ -1,5 +1,7 @@
 # registry はコミット済み main から読む — spawn は版を観測記録し、self RCA には当時版を注入する
 
+**Status 追記: 決定1 の末文「origin/HEAD と main の不一致を検出したら既存の workspace quarantine に落とす」の行き先は置き換わる —— registry clone は workspace でなく、不一致は registry の到達性の検査の不成立として盤面全体を止める。決定1 のほか(コミット済み main に固定、main はコード定数)はそのまま([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・7、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定3 と追記(entry ごとの解決・組み込みの履歴表)が当時版を引く出所は、ADR 0314 決定1 で spawn 時に記録した prompt の部分になった** —— 版の観測(決定2)はそのまま、本文を記録の版から組み直す読み口と「到達不能 commit」の欠落は消え、欠落は記録が読めない場合だけになる(2026-10-26 の grilling、issue #2603)。
 
 **Status 追記: 追記「0件解決は従来どおりセクションなし(主張がなければ申告も不要)」の線は引き直す —— self RCA の当時版の節が無いのは、この review の材料(異議された行か停止、ADR 0171 決定1)が無いときだけ**。anchor の出所は登録の材料である。材料があって記録が読めなければ、読めた件数に関わらず欠落を申告する(0件なら見出しと欠落の1行だけ、案内文は出さない)。旧い線は版の観測が無い session が普通にあった時点のもので、記録できなければ spawn しない(ADR 0313 決定7)今、記録が読めないのは記録を後から失った印(ADR 0314 決定2)であり、黙ると RCA は当時版が存在したことを知らずに走る —— judge が同じ場合に `agent_definition: null` で欠落を見せるのと揃える(2026-10-26 の grilling、issue #2619)。

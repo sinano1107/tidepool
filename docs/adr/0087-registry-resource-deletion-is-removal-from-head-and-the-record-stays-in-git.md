@@ -1,5 +1,7 @@
 # registry リソースの削除は HEAD からの除去であり、記録は registry の git が保つ
 
+**Status 追記: 決定3 の消せない資源から「盤面自身の registry clone」が外れる —— registry clone は workspace にならず、削除の扉が当たる entry が無い。盤面のポインタが指す先の規則はそのまま([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・8、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の拒否の理由に、その名前を名指す Quarantine が開いていて基準の行を持つ workspace が足される。決定4 の「workspace の削除は registry エントリだけ」は、基準の行と sparse の pin も消す(ADR 0351 決定7 から)。決定6 の「記録は registry の commit のみ」に、行を持たない名前の削除が閉じた Quarantine の event が足される([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定14、2026-11-15、issue #3178)。**
 
 issue #205 のグリリング(2026-08-18)で決定。workspace / agent / authority profile を人間面から消す手段が

@@ -1,5 +1,7 @@
 # checkout は最初の pickup 以降、休止中も盤面の専有領域であり、ref の基準は切れない
 
+**Status 追記: 決定2・7 の基準の行は、作るときの宣言の repo も一緒に覚える —— 盤面は行き先を決めるたびに今の宣言と比べ、publish の扉が書き換え、削除の扉が行ごと落とす。基準そのものは `refs/*` と HEAD のままで、`remote.origin.url` は足さない(置き場所は spec。[ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定5・6・10、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定7 の「path だけ差し替えた登録は…回答が受理する」は、名指しの選択肢「失われた ref を諦めて基準へ戻す」に限る —— `repaired by hand` と「基準へ戻す」は差し替えを受け入れず、正規の道は 削除の扉 → 再登録である。「面接室…の行も残る」は、「空の面接室で走らせる」が面接室の行を消す場合を除く。行の寿命は登録から削除までのままで、扉を経ずに registry から消えた名前の行は、registry から引く名前の最初の撮りを止める([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定5・6・11・13・14、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定1 の「コストは触れば1枚の1択 question」は、選択肢3つの question になる(「verb か question の回答を通ってだけ基準に入る」は残る)。決定2 の全撮りを撮る場面から quarantine の受理が外れ、最初の撮りには確認が掛かる。release の比較のうち門の掛からない解放は、書く前に `task/<id>` の行を突き合わせ、行は読み返した値でなく書いた値で畳む([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定1・2・12・13、2026-11-15、issue #3178)。**
