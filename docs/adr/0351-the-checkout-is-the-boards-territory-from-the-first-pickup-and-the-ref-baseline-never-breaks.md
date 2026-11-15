@@ -1,5 +1,7 @@
 # checkout は最初の pickup 以降、休止中も盤面の専有領域であり、ref の基準は切れない
 
+**Status 追記: 決定4 の「ADR 0239 帰結の手の `merge -s ours` は quarantine 中の checkout で行い、同じ回答で受理されるので」は偽になる —— その merge は作業台で commit し、回答が取り込む。「verb は作らない」は、この文が指す場面(conflict の修理と、修理を捨てる merge)について残る: 入口は今ある回答のままである。人間の内容のために操作を足さない、という一般則としては読めない —— purely-local の保護ブランチ向けに、作業台を開く操作を1つ足す(内容を運ぶのはその question の回答)([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定2・6、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の比較の置き場所に着地が加わる —— 着地が名前の場所の ref を読んで運ぶか記録を決めるときは、同じ同期区間の頭で全 ref を基準と比べ、基準の行そのものが無い workspace では着地も pickup と同じ手続きで最初の撮りをする。決定7 の「次の pickup で1枚の question が立ち」は、着地の候補があれば着地の比較が先に立てる。決定4 の受理は変えていない: Quarantine が開いている間に動いた ref を見せないまま受け入れる穴は実測済みで、直し方は人間の内容の扉の設計(#3158)に渡した([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 **Status 追記: 決定2 の release 側の比較と task branch の行の畳み、決定5 の pickup の clean 検査の対象は、worker が書かない名前の場所だけになる。決定1・3・4・6・7 は残る([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**

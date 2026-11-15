@@ -1,5 +1,7 @@
 # 積み残しは、merge の門では GitHub が報告した head と、収束では盤面が最後に push した head と比べる
 
+**Status 追記: 決定4 の「盤面には運ぶ手が無い」と直す手段2つは置き換わる —— 落ちた内容は人間が作業台で merge を commit し(戻すか、GitHub の head の tree を採って捨てるか)、`merge` の回答が取り込んで盤面が origin へ push する。下の追記の「workspace の Quarantine を1枚経る —— 文面はそれを告げる」と `git reset --hard origin/task/<id>` の手順は無くなる。「キューを外して推奨 hold の merge question に倒す」は変わらない([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定3・10・11、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定1 の「GitHub が報告した PR の head と比べる」のうち、GitHub の head そのものはローカルの ref ではないので着地の比較の対象でなく、比べる相手のローカルのブランチの読みは、同じ同期区間の頭で全 ref を基準と比べた後に読む。決定4 の文面に従った手の書き込みは名前の場所の ref を動かすので、回答し直しはこの比較に当たり、workspace の Quarantine を1枚経る —— 文面はそれを告げる。「捨てる」手順(`git reset --hard origin/task/<id>`)は、名前の場所の HEAD が保護ブランチに居る今はローカルの保護ブランチを動かすので、文面を直すときに手順ごと直す([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
 
 **Status: 決定1 はローカル着地の merge 回答にも及ぶ(ADR 0289)—— 比べる head は着地の面が merge する head で、ローカルではローカルのタスクブランチ**

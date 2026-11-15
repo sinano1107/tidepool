@@ -1,5 +1,7 @@
 # 盤面は worker の `.git` をリポジトリとして開かない —— regular file だけを盤面所有の repo に写し、tip はそこから fetch する
 
+**Status 追記: 決定1 の不変条件「記録に入る object は、名前の場所に既にあるか、worker が自分の checkout の `objects/` に regular file として書いたもののみ」に項が足される —— 人間が作業台に書いた object と、取り込みで盤面が作る包む commit も記録に入る。作業台の tip も同じ手(regular file を盤面所有の repo に写し、検証してから fetch)で読む([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定2・4、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の3段の帰責は tip の転送だけでなく WIP の退避にも当たる —— view は worktree を盤面所有の repo に stage し、名前の場所へは同じ fetch で運ぶ([ADR 0367](0367-the-wip-evacuation-is-attributed-by-stage-the-worktree-is-staged-in-a-board-owned-repo-and-fetched-into-the-named-place.md) 決定1・5、2026-11-10、issue #3141)。**
 
 **Status 追記: 決定1 の閉包の検証(到達可能性)は gitlink の参照先を見ない —— git の到達可能性は gitlink を辿らないので、参照先がどこにも無い gitlink でも閉包は解ける。記録の外を指す entry は完了の門が fork 元との差で拒み、入れ子の repo の中身は運ばない([ADR 0365](0365-the-record-closes-within-one-repo-and-the-completion-gate-rejects-a-tip-that-adds-or-advances-a-gitlink-from-the-fork-source.md)、2026-11-09、issue #3052)。**

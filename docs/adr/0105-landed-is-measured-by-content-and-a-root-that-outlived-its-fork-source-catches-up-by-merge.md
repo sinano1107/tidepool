@@ -1,5 +1,7 @@
 # 着地済みは履歴ではなく内容で測り、fork 元に先立たれた根は merge で追いついてから PR を開く
 
+**Status 追記: 決定2 の「人間がセッション外で手で解決すれば通る」と、下の追記の「workspace の Quarantine を1枚経てから、もう一度 retry で通る」は置き換わる —— 盤面は昇格の失敗の時点で作業台を開き、人間はそこで merge を commit して retry と答える。回答がその tip を取り込むので、人間は名前の場所の ref を動かさず、Quarantine は経ない([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1・2・7・11、2026-11-15、issue #3178)。**
+
 **Status 追記: 決定2 の「人間がセッション外で手で解決すれば通る」は、解決が名前の場所の ref を動かすので、retry が着地の比較に当たって workspace の Quarantine を1枚経てから、もう一度 retry で通る —— 文面はそれを告げる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**
 
 **Status: 決定4 は ADR 0217 で広げられた — merge の瞬間には門に加えて着地の面(保護・ダイヤル・risk flag)も読み直し、面が変わった PR はキューから外れる**

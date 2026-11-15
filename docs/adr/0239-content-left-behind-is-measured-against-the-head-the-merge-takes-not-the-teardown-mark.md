@@ -1,5 +1,7 @@
 # 積み残しは後始末の印ではなく、merge される head と内容で比べて測る
 
+**Status 追記: 帰結の「workspace で…`git merge -s ours` で記録し、そのブランチを push する」と、下の追記の「quarantine 中の checkout で行い、同じ question の回答で受理される」は置き換わる —— 修理を捨てる merge は作業台で commit し、答え直した回答が取り込む。人間は名前の場所に書かない。下の追記の「受理が基準を撮り直す」はこの追記の範囲ではない([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1〜3、2026-11-15、issue #3178)。**
+
 **Status 追記: 帰結の「人間が修理を捨てるなら workspace で `git merge -s ours` で記録する」は、[ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定1・4 の下では quarantine 中の checkout で行い、同じ question の回答で受理される(受理が基準を撮り直す)—— 休止中の盤面の checkout への手の書き込みは、それ以外では違反になる(2026-11-02、issue #2911)。**
 
 **Status: 決定1 の candidate(「盤面が読む origin 側のタスクブランチ」= 手元の remote-tracking ref)は ADR 0242 で改められた — merge の門では GitHub が報告した head、収束では盤面が最後に push した head と比べる**
