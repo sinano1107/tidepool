@@ -118,7 +118,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
   const questions = listBoard(db).filter((task) => task.type === "question");
   expect({ started: worker.started, questionTitles: questions.map((task) => task.title) }).toEqual({
     started: [],
-    questionTitles: ["registry remote is unreachable — pickup is stopped"],
+    questionTitles: ["registry is unavailable — pickup is stopped"],
   });
   // ADR 0093 決定7: user token の失効はまずここに出るので、再ログインのコマンドを名指しする
   expect(questions[0]?.purpose).toContain("npm run github-login");

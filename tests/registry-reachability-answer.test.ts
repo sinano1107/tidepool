@@ -15,7 +15,7 @@ it("registry がまだ到達不能なら確認回答を拒否し、question を�
   await t.clock.advance(HOUR);
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
   const question = tasks.find(
-    (task) => task.title === "registry remote is unreachable — pickup is stopped",
+    (task) => task.title === "registry is unavailable — pickup is stopped",
   );
 
   const response = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -25,7 +25,7 @@ it("registry がまだ到達不能なら確認回答を拒否し、question を�
 
   expect({ status: response.status, error: response.json.error, questionStatus: after.status }).toEqual({
     status: 409,
-    error: "registry remote is still unreachable: origin remains unreachable",
+    error: "registry is still unavailable: origin remains unreachable",
     questionStatus: "todo",
   });
 });
@@ -42,7 +42,7 @@ it("registry 到達性を直して回答すると確認が解除され、pickup 
   await t.clock.advance(HOUR);
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
   const question = tasks.find(
-    (candidate) => candidate.title === "registry remote is unreachable — pickup is stopped",
+    (candidate) => candidate.title === "registry is unavailable — pickup is stopped",
   );
 
   available = true;

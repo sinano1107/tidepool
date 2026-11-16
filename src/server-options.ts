@@ -74,6 +74,7 @@ import {
   type AuthorityProfile,
   assertValidAgentDefinition,
   canonicalHarness,
+  checkRegistryReachability,
   type Harness,
   InvalidAgentDefinitionError,
   loadRegistry,
@@ -84,7 +85,6 @@ import {
   type RegistryReachability,
   type RegistrySource,
   type RosterAgent,
-  refreshRegistry,
   type WritableRegistry,
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
@@ -433,8 +433,7 @@ function loadBoardRegistry(board: BoardComposition) {
  *
  *  `purely-local` を env で選ばせないのは意図的である。それは盤面を静かに壊せる
  *  スイッチになり、Pi で誤って立てれば ADR 0052 が直した穴がそのまま戻る —— 却下
- *  した推測と同じ形の footgun を、今度は設定として作ることになる。純ローカル盤面
- *  (`workspace.ts` の `guardRegistryDefaultBranch` が認める構成)は、テストが
+ *  した推測と同じ形の footgun を、今度は設定として作ることになる。純ローカル盤面は、テストが
  *  `BoardComposition` を直接組んで宣言する経路で表現できており、そちらが要ると
  *  分かるまで本番の口は開けない。 */
 export function declaredRegistryMode(registryDir: string | undefined): RegistryMode {
@@ -455,7 +454,7 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
   return board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined;
 }
 
-/** ADR 0052 決定2 の**起動時**の refresh 点。`buildServerOptions` の先頭で、
+/** ADR 0052 決定2 の**起動時**の refresh 点で、レジストリ到達性の検査を丸ごと撃つ。`buildServerOptions` の先頭で、
  *  registry を1文字も読む前に撃つ。
  *
  *  順序がこの関数の本体である。合成 root は `workspace`(workspaceConfig)と
@@ -471,15 +470,15 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
  *  throw するが、それは「registry が読めない盤面は起動しない」という ADR 0052
  *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
  *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
- *  出ることである。 */
-async function bootRefresh(board: BoardComposition, writeRef: RefWriter): Promise<void> {
+ *  出ることである。registry clone の default branch の食い違い(ADR 0377 決定7)も同じ検査なので、ここでは騒ぐだけ。 */
+async function bootRegistryCheck(board: BoardComposition, writeRef: RefWriter): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return;
-  const reachability = await refreshRegistry(registryDir, board.githubAuth, writeRef);
+  const reachability = await checkRegistryReachability(registryDir, board.githubAuth, writeRef);
   if (reachability.available) return;
   console.error(
-    "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
-      `will stop the board if this stands: ${reachability.reason ?? "registry remote is unreachable"}`,
+    "[registry] startup registry check failed; the board is starting anyway and the next pickup " +
+      `will stop the board if this stands: ${reachability.reason ?? "registry check failed"}`,
   );
 }
 
@@ -490,7 +489,7 @@ function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
   return board.registryMode === "remote-backed" ? board.registryDir : undefined;
 }
 
-/** ADR 0052 決定2 の pickup / 回答時の refresh 点。remote 正本を宣言していない
+/** ADR 0052 決定2 の pickup / 回答時の refresh 点(ADR 0377 決定7 の default branch の検査も載る)。remote 正本を宣言していない
  *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
 function registryReachabilityCheck(
   board: BoardComposition,
@@ -498,7 +497,7 @@ function registryReachabilityCheck(
 ): (() => Promise<RegistryReachability>) | undefined {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return undefined;
-  return () => refreshRegistry(registryDir, board.githubAuth, writeRef);
+  return () => checkRegistryReachability(registryDir, board.githubAuth, writeRef);
 }
 
 /** ADR 0243 決定4: registry clone の ref を書く口。registry clone が workspace として登録されていればその基準に束ねる ——
@@ -835,7 +834,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
   const writeRegistryRef = registryRefWriter(board, db);
   const source = registrySource(board);
   const writableRegistry = source && { ...source, writeRef: writeRegistryRef };
-  await bootRefresh(board, writeRegistryRef);
+  await bootRegistryCheck(board, writeRegistryRef);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);

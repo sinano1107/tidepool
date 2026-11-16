@@ -4269,10 +4269,10 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       "the board could not close a worker session"
     ),
     registryReachability: () => halt(
-      { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      { color: "var(--coral-4)", line: "registry unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
       "warn",
       "moved to front \u2014 pickup blocked",
-      "registry remote is unreachable"
+      "registry is unavailable"
     ),
     // ADR 0266 決定3: worker transcript と受験者の答案の写しを置く盤面の状態
     recordContainer: () => halt(

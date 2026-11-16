@@ -738,7 +738,7 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 /** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
  *  **非同期である**: 仲介から installation token を取る往復が中に入る(ADR 0093
  *  決定2)。fetch そのものは今も `execFileSync` の同期呼び出しで、非同期なのは
- *  token の取得だけである。起動時の refresh(`bootRefresh`)もこの await を連れて
+ *  token の取得だけである。起動時の検査(`bootRegistryCheck`)もこの await を連れて
  *  `buildServerOptions` の先頭に留まるので、「registry を1文字も読む前に撃つ」
  *  という順序は変わらない。
  *
@@ -776,6 +776,36 @@ export async function refreshRegistry(
       reason: `the registry remote main could not be refreshed (${String(err)})`,
     };
   }
+}
+
+/** ADR 0377 決定7: 盤面は registry を code 定数の `main` から読むので、registry clone の `origin/HEAD`(git の default branch)が
+ *  別の branch を指せば default でない branch を黙って読む —— 到達できないのと同じ盤面全体の停止にする。読むのは clone の local
+ *  symref。symref が無ければ通すのは spec #3273 の読み(今日どおり、ユーザー未確認)。 */
+function registryDefaultBranchCheck(dir: string): RegistryReachability {
+  let target: string;
+  try {
+    target = git(dir, "symbolic-ref", "refs/remotes/origin/HEAD");
+  } catch {
+    return { available: true };
+  }
+  return target === remoteTrackingRef(REGISTRY_BRANCH)
+    ? { available: true }
+    : {
+        available: false,
+        reason: `the registry clone's origin/HEAD does not point at origin/main. In ${dir}, run \`git remote set-head origin main\`.`,
+      };
+}
+
+/** 盤面のレジストリ到達性の検査(ADR 0052 決定2・5): pickup のゲート・quarantine の受理・起動時が撃つ。refresh の後に
+ *  default branch を見る(ADR 0377 決定7)。人間の registry 書き込み(`registry-write.ts`)は refresh だけを撃つ —— default branch
+ *  の食い違いで人間の書き込みは拒まない。 */
+export async function checkRegistryReachability(
+  dir: string,
+  auth: GitHubAuth | undefined,
+  writeRef: RefWriter,
+): Promise<RegistryReachability> {
+  const refreshed = await refreshRegistry(dir, auth, writeRef);
+  return refreshed.available ? registryDefaultBranchCheck(dir) : refreshed;
 }
 
 /** The committed registry files at `commit`, path → content, read in a fixed
