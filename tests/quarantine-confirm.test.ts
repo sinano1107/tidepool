@@ -43,13 +43,14 @@ async function triggerQuarantine(t: Tidepool, ws: WorkspaceConfig, title: string
   return task;
 }
 
-it("tree rule 失敗時の question は1択の確認型(repaired by hand)である", async () => {
+// 旧: 1択の確認型(repaired by hand)だった。ADR 0373 決定2 の後、workspace の Quarantine は常設の選択肢を持つ
+it("tree rule 失敗時の question は workspace の Quarantine の常設の選択肢を持ち、推奨は repaired by hand(ADR 0373 決定2)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
   const question = await servedQuarantineQuestion(t, "workspace", ws.name);
-  expect(question.question_items[0].options).toEqual(["repaired by hand"]);
+  expect(question.question_items[0].options).toEqual(["repaired by hand", "restore the baseline"]);
   expect(question.question_items[0].recommendation).toBe("repaired by hand");
 });
 

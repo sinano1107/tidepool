@@ -427,7 +427,7 @@ it.each(["directory", "repository"])("出題した根拠の root の面接室の
   await runNow(t, measured.id);
 
   const quarantine = await expectStoppedOnGoneRoom(measured.id, first.id, room);
-  expect(quarantine.purpose).not.toContain("git init");
+  expect(quarantine.purpose).not.toContain("answer `run with an empty room` to have the board re-create it empty");
   const refused = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] });
   expect(refused.status).toBe(409);
   expect(refused.json.error).toContain(room);
@@ -604,7 +604,9 @@ it("監査後に復帰する root は記録済みの面接室の repo が無け�
   expect(existsSync(join(room, ".git"))).toBe(false);
 });
 
-it("再開する root の消えた repo を master の未生 HEAD で復元すると回答が受理され、次の pickup で main を補って走る(ADR 0329 決定13)", async () => {
+// 旧: 人間が master の未生 HEAD で `git init` し直した面接室への回答が受理され、次の pickup が main を補って走った(ADR 0329 決定13)。
+// ADR 0373 決定11 の後は盤面が `run with an empty room` で作り直し、未生の HEAD を補う手は無い
+it("再開する root の消えた repo は `run with an empty room` への回答で盤面が作り直し、次の pickup で走る(ADR 0373 決定11)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await callAsTask(t, root.id, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
@@ -616,9 +618,9 @@ it("再開する root の消えた repo を master の未生 HEAD で復元す�
   await runNow(t, root.id);
   await vi.waitFor(async () => expect(await pickupStops(root.id)).toHaveLength(1));
   const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
-  git(room, "init", "--quiet", "--initial-branch=master");
 
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored"] })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["run with an empty room"] })).status).toBe(200);
+  expect(git(room, "log", "--format=%s", "main")).toBe("Initial commit");
   await runNow(t, root.id);
   await vi.waitFor(() => expect(t.worker.started.filter((s) => s.id === root.id)).toHaveLength(2));
   expect(await pickupStops(root.id)).toHaveLength(1);

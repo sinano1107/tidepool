@@ -27,6 +27,8 @@ import { tempDir } from "./temp-dir.js";
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
 
 const NOW = new Date("2026-09-21T00:00:00.000Z");
+/** 消えた出題前の面接室の出口の句(text B12)。出題済みの面接室の項には出ない —— 選択肢の説明(本文、text B1)は面接室の名前に常に出る。 */
+const GONE_ROOM_EMPTY_EXIT = "answer `run with an empty room` to have the board re-create it empty";
 
 /** 値を持つ種類は別の値を2つ、持たない種類(盤面全体で資源の名が無い)は null だけ。 */
 const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]> = {
@@ -306,16 +308,19 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).not.toContain("git status --porcelain");
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
-  it("開いた event が残り repo が無い面接室は、復元か開く task の cancel か手で git init する出口を予告する(ADR 0329 決定5)", () => {
+  // 旧: 出口の1つは手で `git init` することだった(ADR 0329 決定5)。ADR 0373 決定11 の後は `run with an empty room` への回答
+  it("開いた event が残り repo が無い面接室は、復元か開く task の cancel か `run with an empty room` で盤面に作り直させる出口を予告する(ADR 0329 決定5 / ADR 0373 決定11)", () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
-    rmSync(join(interviewRoomPath(db, root.id)!, ".git"), { recursive: true });
+    const room = interviewRoomPath(db, root.id)!;
+    rmSync(join(room, ".git"), { recursive: true });
     const purpose = purposeFor(db, root.id);
     expect(purpose).not.toContain("the board can create this interview room");
-    expect(purpose).toContain("the board does not recreate it");
-    expect(purpose).toContain("cancel the task that opens it");
-    expect(purpose).toContain("git init");
+    expect(purpose).toContain(
+      `a git repository exists at the recorded room ${room} — the board does not recreate it: ` +
+        "restore it there, cancel the task that opens it, or answer `run with an empty room` to have the board re-create it empty.",
+    );
   }, GIT_FIXTURE_TEST_TIMEOUT);
   // 旧: 受験者の checkout も記録された場所として「番地を作れる / repo がある」を予告した(ADR 0329 決定4)。ADR 0356 決定1・2 の後は受験者は
   // 面接室から作り直す task の checkout で走るので、受験者ごとに残る項は面接室から fetch するもの(タスクブランチ、無ければ出題の head)だけ
@@ -333,14 +338,13 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).not.toContain("examinee checkout");
     expect(purpose).toContain(head);
     expect(purpose).toContain("resolves in the interview room");
-    expect(purpose).not.toContain("git init");
-    expect(purpose).not.toContain("empty room");
+    expect(purpose).not.toContain(GONE_ROOM_EMPTY_EXIT);
 
     completeTask(db, examinee!, FULL_HANDOFF, "tako", NOW, "worker");
     const settled = QUARANTINES.find((row) => row.kind === "workspace")!.prose(root.id, "the place broke", undefined, db).purpose;
     expect(settled).not.toContain(examinee!.id);
     expect(settled).toContain(`the posed head ${head} resolves in the interview room`);
-    expect(settled).not.toContain("git init");
+    expect(settled).not.toContain(GONE_ROOM_EMPTY_EXIT);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("予告の項と解除の門の検査は名前の pickup の述語の一覧から導かれ、落ちた項が拒否の理由に入る(ADR 0329 追記 決定6)", async () => {
@@ -356,7 +360,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const predicates = [...own, ...openers];
     const describes = predicates.map((predicate) => predicate.describe);
     expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
-      expect.stringContaining("can be fetched"), expect.stringContaining("An unborn HEAD passes"),
+      expect.stringContaining("can be fetched"), expect.not.stringContaining("An unborn HEAD passes"),
     ]);
     expect(openers.filter((p) => p.phase === "after-open")).toEqual([]);
     const items = purposeFor(db, root.id).split("\n").filter((line) => /^\d+\. /.test(line)).map((line) => line.replace(/^\d+\. /, ""));

@@ -226,7 +226,7 @@ export function resolveExecutionWorkspace(
   };
 }
 
-/** ADR 0329: repo を作ってから開いた event を残す。記録済みの面接室は作り直さず、未生の HEAD だけ空コミットで補う。 */
+/** ADR 0329: repo を作ってから開いた event を残す。記録済みの面接室は作り直さない —— 作り直すのは `run with an empty room` だけ(ADR 0373 決定11)。 */
 export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
   const recorded = recordedPlace(db, root.id);
   if (recorded && !recorded.hasRepository) throw new Error(gonePlaceReason(root.id, recorded.path));
@@ -235,11 +235,23 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
     const at = conventionCheckoutPath(root.id, workspacesBaseDir);
     mkdirSync(at, { recursive: true });
     path = realpathSync(at);
-    git(path, "init", "--quiet", "--initial-branch=main");
-    initialRoomCommit(path, root.id);
+    initRoom(path, root.id);
     appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "interview_room_opened", path }, at: now });
   }
-  reopenUnbornRoom(db, { name: root.id, path });
+}
+
+/** 面接室の repo を作る —— 最初の開きと `run with an empty room` が同じ形で作る。branch は明示する(素の `git init` は VM と Pi で `master`)。 */
+function initRoom(path: string, rootId: string): void {
+  git(path, "init", "--quiet", "--initial-branch=main");
+  initialRoomCommit(path, rootId);
+}
+
+/** ADR 0373 決定11: `run with an empty room` —— 面接室の基準の行と sparse の pin を消してから、最初の開きと同じに作り直す。行が無いので
+ *  作り直しは口を通らず、次の pickup が最初の撮りをする(ADR 0351 決定2)。開いた event は元のまま在り処を指す。 */
+export function recreateEmptyRoom(db: Db, room: WorkspaceConfig): void {
+  dropWorkspaceState(db, room.name);
+  mkdirSync(room.path, { recursive: true });
+  initRoom(room.path, room.name);
 }
 
 function initialRoomCommit(path: string, rootId: string): void {
@@ -248,20 +260,6 @@ function initialRoomCommit(path: string, rootId: string): void {
   git(path, "symbolic-ref", "HEAD", "refs/heads/main");
   // 受験者の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
-}
-
-/** 手の `git init` で作り直された記録済みの面接室の未生の HEAD を補う。ADR 0351 決定3: 開き直しは基準の行を持つので口を通す ——
- *  書く前に値を知るため commit を先に作る(ADR 0243 決定1)。`main` は作るだけ —— HEAD が orphan の branch にあって `main` が既に
- *  在れば書き込みが落ち、面接室の quarantine に返る(在る `main` を上書きしない)。 */
-function reopenUnbornRoom(db: Db, room: WorkspaceConfig): void {
-  if (readRef(room, "HEAD") !== "") return;
-  // 受験者の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
-  const commit = git(room.path, "commit-tree", git(room.path, "write-tree"), "-m", "Initial commit");
-  writeBoardRefs(db, room, [["HEAD", symrefValue("refs/heads/main")], ["refs/heads/main", commit]], () => {
-    git(room.path, "update-ref", "refs/heads/main", commit, "");
-    // ADR 0329 決定13: 未生の HEAD だけ main へ向け直す —— 人間の init.defaultBranch に依らない。
-    git(room.path, "symbolic-ref", "HEAD", "refs/heads/main");
-  });
 }
 
 /** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。 */
@@ -1267,7 +1265,7 @@ export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
 }
 
 /** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の pin の行ごと消す。残すと同名を別 path で登録し直したとき
- *  旧 checkout の基準と比べる。面接室と受験者の行は消されない checkout のものなので、ここを通らない(ADR 0276 決定4)。 */
+ *  旧 checkout の基準と比べる。面接室の行を消すのは `run with an empty room` だけ(ADR 0373 決定11)。 */
 export function dropWorkspaceState(db: Db, name: string): void {
   db.transaction(() => {
     db.prepare("DELETE FROM workspace_state WHERE name = ?").run(name);
@@ -1426,6 +1424,79 @@ export function writeBoardRefs(
     throw err;
   }
   fold();
+}
+
+const inFlightNames = new WeakMap<Db, Set<string>>();
+
+/** ADR 0373 決定8: 名前の場所の ref を書く回答と操作が共有する in-flight の鍵 —— 鍵は workspace の名前1つで、盤面(DB)ごとに持つ。
+ *  取れれば放す関数を、検査中の別の回答か操作が持っていれば null を返す。 */
+export function takeWorkspaceInFlightKey(db: Db, name: string): (() => void) | null {
+  const held = inFlightNames.get(db) ?? new Set<string>();
+  inFlightNames.set(db, held);
+  if (held.has(name)) return null;
+  held.add(name);
+  return () => held.delete(name);
+}
+
+/** `restore the baseline` が外した値1つ —— keep-around の ref の名前は `refs/keep-around/<sha>`。 */
+export type KeptValue = { ref: string; sha: string };
+
+/** ADR 0373 決定3・4: 基準と違う ref を全部基準の値へ書き戻し(基準に無い ref は消す)、外す値を `refs/keep-around/<sha>` に持ち続ける。
+ *  受理の 7b の1つの同期区間で、比べ直すところから書くまでに await を挟まない。予告中の行は ref がどの値とも違うときだけ予告の前の値へ戻す。
+ *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた値だけ —— HEAD と symref の行は名前なので戻すだけ、
+ *  `refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。書いたら `baseline_restored` を残し、
+ *  外した値を返す。違いが無ければ何も書かずに空を返す。 */
+export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): KeptValue[] {
+  const baseline = refValues(storedRefs(db, workspace.name));
+  const current = refValues(currentRefs(workspace));
+  const targets = new Map<string, string>();
+  for (const ref of new Set([...baseline.keys(), ...current.keys()])) {
+    if (!baselineAllows(baseline.get(ref), current.get(ref))) targets.set(ref, baselineValues(baseline.get(ref))[0]!);
+  }
+  if (targets.size === 0) return [];
+  const isSha = (value: string) => value !== "" && !value.startsWith("symref=");
+  const lost = [...targets].filter(([, value]) => isSha(value) && !objectExists(workspace, value));
+  if (lost.length > 0) {
+    throw new Error(`${lost.map(([ref, sha]) => `cannot restore ${ref} to ${sha}: that commit no longer exists in ${workspace.path}`).join("\n")} Nothing was written.`);
+  }
+  verifyWorkspaceClean(workspace);
+  const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => {
+    const value = current.get(ref) ?? "";
+    if (ref === "HEAD" || !isSha(value)) return [];
+    // reflog の無い refs/stash(update-ref で作った)でも今の値は持つ
+    const shas = new Set([value, ...(ref === "refs/stash" ? git(workspace.path, "log", "-g", "--format=%H", ref).split("\n").filter(Boolean) : [])]);
+    return [...shas].map((sha) => ({ ref, sha }));
+  });
+  const restored = [...targets.keys()];
+  // 持ち続ける ref が先 —— 人間が作った `refs/keep-around/<その sha>` は消さずに残る(終わりの状態で書く)
+  const writes = new Map([...kept.map(({ sha }) => [`refs/keep-around/${sha}`, sha] as const), ...[...targets].filter(([ref]) => !kept.some(({ sha }) => ref === `refs/keep-around/${sha}`))]);
+  const valueAfter = (ref: string) => writes.get(ref) ?? current.get(ref) ?? "";
+  const headAfter = valueAfter("HEAD");
+  const tipAfter = headAfter.startsWith("symref=") ? valueAfter(headAfter.slice("symref=".length)) : headAfter;
+  const tipBefore = readRef(workspace, "HEAD");
+  writeBoardRefs(db, workspace, [...writes], () => {
+    const write = () => {
+      for (const [ref, value] of writes) {
+        // --no-deref: symref の行を書き換え・消しても指し先の branch に書き抜けない
+        if (value === "") git(workspace.path, "update-ref", "--no-deref", "-d", ref);
+        else if (value.startsWith("symref=")) git(workspace.path, "symbolic-ref", ref, value.slice("symref=".length));
+        else git(workspace.path, "update-ref", "--no-deref", ref, value);
+      }
+    };
+    if (tipBefore !== "" && isSha(tipAfter)) writeWithWorktree(db, workspace, tipBefore, tipAfter, write);
+    else write();
+  });
+  appendEvent(db, { taskId: null, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "baseline_restored", workspace: workspace.name, restored, kept }, at: now });
+  return kept;
+}
+
+function objectExists(workspace: WorkspaceConfig, sha: string): boolean {
+  try {
+    git(workspace.path, "cat-file", "-e", sha);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 1つの workspace の基準に束ねた1本の口(`writeBoardRefs` の1本の形)。 */

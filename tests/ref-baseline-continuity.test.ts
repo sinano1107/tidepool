@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { quarantineChecks } from "../src/human-verbs.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { conventionCheckoutPath } from "../src/pickup-predicates.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -20,7 +20,7 @@ import {
   taskBranchExists,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -261,27 +261,36 @@ async function restedRoom(name: string, pose: boolean) {
   return { db, ws, root, room, base: dirname(room.path), examinee };
 }
 
-it("在り処が消えて手で `git init` し直した面接室を、受理の後に開き直す root の pickup は止まらない —— 未生の HEAD を補う空コミットは口を通る(ADR 0351 決定3 / ADR 0329 決定13)", async () => {
-  const { db, ws, root, room, base } = await restedRoom("reopen-unborn-room", false);
+// 旧: 在り処が消えて手で `git init` し直した面接室を受理し、開き直す root の pickup が未生の HEAD を空コミットで補った(ADR 0351 決定3 / ADR 0329 決定13)。
+// ADR 0373 決定11 の後は盤面が `run with an empty room` で作り直し、補う手は無い
+it("在り処が消えた出題前の面接室を `run with an empty room` で作り直すと、面接室の基準の行と sparse の pin が消え、開き直す root の pickup は最初の撮りをして止まらない(ADR 0373 決定11 / ADR 0351 決定2)", async () => {
+  const { db, ws, root, room, base } = await restedRoom("reopen-empty-room", false);
   rmSync(room.path, { recursive: true, force: true });
-  git(dirname(room.path), "init", "--quiet", room.path);
-  // 受理の検査(ADR 0351 決定4 の撮り直しまで)を撃つ —— question は立てない: 開き直しの後の解放が quarantine を立てないことを読む
-  await quarantineChecks({ db }).workspace!(root.id);
+  quarantineWorkspace(db, root.id, new Error("the interview room is gone"), NOW);
+  const question = quarantineQuestion(db, "workspace", root.id)!;
+  const row = (table: string, column: string) => db.prepare(`SELECT ${column} FROM ${table} WHERE name = ?`).pluck().get(root.id);
 
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspacesDir: base }) }, question, ["run with an empty room"], undefined, () => NOW, "webui");
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(room.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  expect(git(room.path, "log", "--format=%s", "main")).toBe("Initial commit");
+  expect(row("workspace_state", "ref_snapshot")).toBeUndefined();
+  expect(row("workspace_sparse_policies", "policy")).toBeUndefined();
   openInterviewRoom(db, root, base, NOW);
   const { place } = await pickUpInterviewRoot(db, root, ws);
-
-  expect(git(room.path, "log", "-1", "--format=%s", "main")).toBe("Initial commit");
   releaseWorkspace(db, place, root, NOW);
   expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
 });
 
-it("HEAD が orphan の branch にあって main が既に在る記録済みの面接室を開き直すと、空コミットは main を上書きせずに落ち、面接室の quarantine の理由になる(ADR 0351 決定3)", async () => {
-  const { db, root, room, base } = await restedRoom("reopen-orphan-room", false);
+// 旧: HEAD が orphan の branch にあって main が既に在る面接室を開き直すと、未生の HEAD を補う空コミットが main を上書きせずに落ちた(ADR 0351 決定3)
+it("HEAD を orphan の branch へ移した記録済みの面接室を開き直しても盤面は何も書かず、root の pickup は HEAD を名指して止まる(ADR 0373 決定11 / ADR 0351 決定2)", async () => {
+  const { db, ws, root, room, base } = await restedRoom("reopen-orphan-room", false);
   const main = git(room.path, "rev-parse", "main");
   git(room.path, "checkout", "-q", "--orphan", "elsewhere");
 
-  expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("refs/heads/main");
+  openInterviewRoom(db, root, base, NOW);
+  await expect(pickUpInterviewRoot(db, root, ws)).rejects.toThrow("now: symref=refs/heads/elsewhere HEAD");
 
   expect(git(room.path, "rev-parse", "main")).toBe(main);
   expect(git(room.path, "symbolic-ref", "HEAD")).toBe("refs/heads/elsewhere");

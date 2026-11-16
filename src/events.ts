@@ -426,6 +426,9 @@ export type EventPayload =
   // その対象を走らせうる Interview が無くなったとき(ADR 0199 追記、issue #1992 / #1999)= その鍵を走らせうる最後の Interview を消した
   // cancel の event の id —— root が同じ transaction で cancel されたなら root の、root が残るならその鍵の受験者の
   | { kind: "quarantine_released"; quarantine: string; value: string | null; observed_event_id?: number }
+  // ADR 0373 決定3・4: `restore the baseline` が書き戻した ref と、外して `refs/keep-around/<sha>` に持ち続ける値。盤面スコープで、
+  // 名前は workspace(面接室は root の id)—— 書き戻しと一緒に書くので、回答が後の段で拒まれても残る
+  | { kind: "baseline_restored"; workspace: string; restored: string[]; kept: Array<{ ref: string; sha: string }> }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill), or when its report cannot be
@@ -820,6 +823,7 @@ const BOARD_SCOPED_KINDS = [
   "meta_review_settings_changed",
   "agent_tier_changed",
   "response_truncated",
+  "baseline_restored",
 ] as const satisfies readonly EventKind[];
 type BoardScopedKind = (typeof BOARD_SCOPED_KINDS)[number];
 /** task に帰属させて書く payload(`BOARD_SCOPED_KINDS` 以外)。 */
