@@ -49,6 +49,7 @@ import {
 } from "./git.js";
 import {
   type GitHubAuth,
+  networkDestination,
   workspaceNetworkDestination,
 } from "./github-auth.js";
 import {
@@ -83,7 +84,6 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { sameRepository } from "./repo-access.js";
 import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
@@ -781,23 +781,28 @@ export function entryCheckoutPath(
 
 export type WorkspaceOriginProtection =
   | { reason: "registry_repository"; repo: string }
-  | { reason: "unreadable_origin" }
   | { reason: "unreadable_registry_origin" };
 
 type WorkspaceProtection = WorkspaceOriginProtection | { reason: "flag" };
 
-/** ADR 0377 決定5・6: every checkout of the registry's repository requires human approval.
+/** ADR 0381 決定1・2: protected = the flag, or the declared `repo` reaches the registry clone's repository. The checkout
+ *  is never read: `path` is only the base a relative declaration resolves against, as its network destination does.
  *  Create one reader per operation so a list reads the registry's origin at most once. */
 export function workspaceProtectionReader(registryDir: string): (entry: WorkspaceEntry, path: string) => WorkspaceProtection | undefined {
   let registryOrigin: { value: string | undefined | null } | undefined;
   return (entry, path) => {
-    const origin = readCheckoutOrigin(path);
-    if (origin === null) return { reason: "unreadable_origin" };
-    if (origin !== undefined) {
+    if (entry.repo !== undefined) {
+      const declared = networkDestination(entry.repo, path);
       registryOrigin ??= { value: readCheckoutOrigin(registryDir) };
       const repo = registryOrigin.value;
       if (repo === null) return { reason: "unreadable_registry_origin" };
-      if (repo !== undefined && sameRepository(origin, repo)) return { reason: "registry_repository", repo };
+      if (repo !== undefined) {
+        // ADR 0378 決定4: GitHub by owner/name, anything else by the URL the board would reach
+        const registry = networkDestination(repo.trim(), registryDir);
+        if (declared.key || registry.key ? declared.key === registry.key : declared.url === registry.url) {
+          return { reason: "registry_repository", repo };
+        }
+      }
     }
     return entry.protected === true ? { reason: "flag" } : undefined;
   };

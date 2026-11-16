@@ -633,13 +633,12 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.githubAuth).toBe(githubAuth);
 });
 
-it("registry と同じ repo の workspace を名指しする分解は flag が無くても承認 question になる(ADR 0377 決定5・6)", async () => {
+it("宣言 repo が registry と同じ repo の workspace を名指しする分解は flag が無くても承認 question になる(ADR 0377 決定5 / ADR 0381 決定1)", async () => {
   const path = await tempDir("registry-edit-workspace-");
   const workspace = await initWorkspaceCheckout(path, "registry-edit");
-  const registryDir = await makeRegistry({ "workspaces.yaml": `${workspace.name}:\n  path: ${path}\n` });
   const origin = "/srv/git/registry.git";
+  const registryDir = await makeRegistry({ "workspaces.yaml": `${workspace.name}:\n  path: ${path}\n  repo: ${origin}\n` });
   git(registryDir, "remote", "add", "origin", origin);
-  git(path, "remote", "add", "origin", origin);
   const board = { ...composition(), registryDir, workspaceName: workspace.name, defaultAgentName: "deckhand" };
   const options = await buildOptions(board);
   const { db } = options;

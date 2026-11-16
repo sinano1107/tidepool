@@ -221,7 +221,7 @@ export function isRelativeLocalPath(value: string): boolean {
 /** ADR 0339 決定4: GitHub in any spelling becomes the
  *  https URL the board's identity exists on; a relative local path is resolved against `base`, where git itself would
  *  have resolved it; anything else is used as written. */
-function networkDestination(source: string, base: string) {
+export function networkDestination(source: string, base: string) {
   const github = parseGitHubRepo(source);
   const key = githubKey(github);
   const url = key ? `https://github.com/${key}.git` : isRelativeLocalPath(source) ? resolve(base, source) : source;

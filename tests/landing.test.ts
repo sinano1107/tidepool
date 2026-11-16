@@ -2488,7 +2488,7 @@ function mergeQuestions(db: Db) {
     });
 }
 
-it("registry と同じ repo へ開いた PR は flag が無くても人間の merge question になる(ADR 0377 決定5・6)", async () => {
+it("宣言 repo が registry と同じ repo の PR は flag が無くても人間の merge question になる(ADR 0377 決定5 / ADR 0381 決定1)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-registry-edit");
   const registryDir = await makeRegistry();
   git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));
@@ -2505,10 +2505,42 @@ it("registry と同じ repo へ開いた PR は flag が無くても人間の me
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({}, workspace.path) !== undefined,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({ repo: workspace.repo }, workspace.path) !== undefined,
   });
 
   expect(await convergeOn(landing, work.id)).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(mergeQuestions(db)).toMatchObject([
+    { pr: 1, recommendation: "merge", purpose: expect.stringContaining("always needs a human merge") },
+  ]);
+});
+
+it("宣言が registry の repo の workspace は、pickup の後に origin を別の repo へ向け替えても人間の merge question になり、盤面は merge しない(ADR 0381 決定1)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-registry-repointed");
+  const other = await makeRemoteBackedWorkspace("landing-registry-repointed-other");
+  const registryDir = await makeRegistry();
+  git(registryDir, "remote", "add", "origin", workspace.repo!);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = landingWork(db, clock, workspace.name);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, work);
+  git(workspace.path, "remote", "set-url", "origin", other.workspace.repo!);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({ repo: workspace.repo }, workspace.path) !== undefined,
+  });
+
+  expect(await convergeOn(landing, work.id)).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toMatchObject([
     { pr: 1, recommendation: "merge", purpose: expect.stringContaining("always needs a human merge") },
   ]);
@@ -2630,7 +2662,7 @@ it("キュー投入の後に registry と同じ repo の workspace が保護さ�
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({}, workspace.path) !== undefined,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({ repo: workspace.repo }, workspace.path) !== undefined,
   });
 
   git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));

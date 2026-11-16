@@ -311,16 +311,13 @@ export class WorkspaceConfirmationRequiredError extends Error {
   }
 }
 
-/** ADR 0377 決定5・6: origin-based protection requires a checkout repair or applies permanently. */
+/** ADR 0381 決定1・4: protection computed from the declaration applies permanently, or waits for a registry clone repair. */
 export class WorkspaceOriginUnprotectError extends Error {
   constructor(name: string, protection: WorkspaceOriginProtection) {
     let message: string;
     switch (protection.reason) {
       case "registry_repository":
         message = `workspace "${name}" shares the registry's repository (${repositoryLabel(protection.repo)}), so it is always protected; this cannot be bought with a confirmation.`;
-        break;
-      case "unreadable_origin":
-        message = `the origin of workspace "${name}"'s checkout cannot be read, so the workspace is treated as protected; repair the checkout first.`;
         break;
       case "unreadable_registry_origin":
         message = `the origin of the registry clone cannot be read, so workspace "${name}" is treated as protected; repair the registry checkout first.`;

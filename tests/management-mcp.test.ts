@@ -120,7 +120,7 @@ it("update_workspace は confirm を持たず、危険な値は WebUI への案�
 });
 
 it("origin による保護の解除は管理 MCP の tool error になる", async () => {
-  const refusal = new WorkspaceOriginUnprotectError("registry-edit", { reason: "unreadable_origin" });
+  const refusal = new WorkspaceOriginUnprotectError("registry-edit", { reason: "unreadable_registry_origin" });
   t = await bootTidepool({ workspaceAdmin: { update: async () => { throw refusal; } } });
   const client = await managementMcpClient(t.baseUrl);
   try {
