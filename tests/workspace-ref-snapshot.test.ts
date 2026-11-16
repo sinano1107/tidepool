@@ -408,8 +408,8 @@ it("worker が symref を付け替えれば、指し先の差として quarantin
   expect(purpose).toContain("now: symref=refs/remotes/origin/develop refs/remotes/origin/HEAD");
 });
 
-// ADR 0081: 削除は default branch の検査にも掛からない(registry clone だけを見て、`origin/HEAD` 不在は
-// 「remote 既定なし」として合格扱い。ADR 0377 決定7)—— この不変条件だけが捕まえる。
+// ADR 0081: 削除は default branch の検査にも掛からない(ADR 0377 決定7 で registry clone だけを見て、`origin/HEAD`
+// 不在は合格扱い —— spec #3273 の読み)—— この不変条件だけが捕まえる。
 it("worker が symref を削除すれば quarantine に落ちる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");

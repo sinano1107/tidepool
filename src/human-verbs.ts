@@ -776,7 +776,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         const reachability = await registryReachability();
         if (!reachability.available) {
           throw new DomainError(
-            `registry is still unavailable: ${reachability.reason ?? "refresh failed"}`,
+            `registry is still unavailable: ${reachability.reason ?? "registry check failed"}`,
           );
         }
       },

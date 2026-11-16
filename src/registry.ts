@@ -738,7 +738,7 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 /** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
  *  **非同期である**: 仲介から installation token を取る往復が中に入る(ADR 0093
  *  決定2)。fetch そのものは今も `execFileSync` の同期呼び出しで、非同期なのは
- *  token の取得だけである。起動時の refresh(`bootRefresh`)もこの await を連れて
+ *  token の取得だけである。起動時の検査(`bootRegistryCheck`)もこの await を連れて
  *  `buildServerOptions` の先頭に留まるので、「registry を1文字も読む前に撃つ」
  *  という順序は変わらない。
  *
@@ -780,8 +780,8 @@ export async function refreshRegistry(
 
 /** ADR 0377 決定7: 盤面は registry を code 定数の `main` から読むので、registry clone の `origin/HEAD`(git の default branch)が
  *  別の branch を指せば default でない branch を黙って読む —— 到達できないのと同じ盤面全体の停止にする。読むのは clone の local
- *  symref で、symref が無ければ食い違う相手が無いので通す。 */
-export function registryDefaultBranchCheck(dir: string): RegistryReachability {
+ *  symref。symref が無ければ通すのは spec #3273 の読み(今日どおり、ユーザー未確認)。 */
+function registryDefaultBranchCheck(dir: string): RegistryReachability {
   let target: string;
   try {
     target = git(dir, "symbolic-ref", "refs/remotes/origin/HEAD");

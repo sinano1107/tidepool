@@ -18,7 +18,7 @@ export function registryReachabilityPickupBlocked(
       const result = await reachability();
       return result.available
         ? { available: true }
-        : { available: false, reason: result.reason ?? "registry remote is unreachable" };
+        : { available: false, reason: result.reason ?? "registry check failed" };
     },
     now,
   );

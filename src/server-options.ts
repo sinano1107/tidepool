@@ -454,7 +454,7 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
   return board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined;
 }
 
-/** ADR 0052 決定2 の**起動時**の refresh 点。`buildServerOptions` の先頭で、
+/** ADR 0052 決定2 の**起動時**の refresh 点で、レジストリ到達性の検査を丸ごと撃つ。`buildServerOptions` の先頭で、
  *  registry を1文字も読む前に撃つ。
  *
  *  順序がこの関数の本体である。合成 root は `workspace`(workspaceConfig)と
@@ -471,14 +471,14 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
  *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
  *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
  *  出ることである。registry clone の default branch の食い違い(ADR 0377 決定7)も同じ検査なので、ここでは騒ぐだけ。 */
-async function bootRefresh(board: BoardComposition, writeRef: RefWriter): Promise<void> {
+async function bootRegistryCheck(board: BoardComposition, writeRef: RefWriter): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return;
   const reachability = await checkRegistryReachability(registryDir, board.githubAuth, writeRef);
   if (reachability.available) return;
   console.error(
     "[registry] startup registry check failed; the board is starting anyway and the next pickup " +
-      `will stop the board if this stands: ${reachability.reason ?? "registry remote is unreachable"}`,
+      `will stop the board if this stands: ${reachability.reason ?? "registry check failed"}`,
   );
 }
 
@@ -834,7 +834,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
   const writeRegistryRef = registryRefWriter(board, db);
   const source = registrySource(board);
   const writableRegistry = source && { ...source, writeRef: writeRegistryRef };
-  await bootRefresh(board, writeRegistryRef);
+  await bootRegistryCheck(board, writeRegistryRef);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);

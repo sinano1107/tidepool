@@ -168,8 +168,11 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
   expect(options.registry.mode).toBe("remote-backed");
 });
 
-it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 0052)", async () => {
+it("remote-backed registry を宣言した盤面は到達性検査を持ち、registry clone の default branch も見る(ADR 0052 / ADR 0377 決定7)", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
+  git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+  // 起動時の検査も同じ食い違いで騒ぐ(fail-open)ので、その1行は黙らせる
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
   const options = await buildOptions({
     ...composition(),
@@ -178,10 +181,14 @@ it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 
     workspaceName: "tidepool",
   });
 
-  expect(options.registryReachability).toBeTypeOf("function");
+  expect(await options.registryReachability!()).toEqual({
+    available: false,
+    reason: `the registry clone's origin/HEAD does not point at origin/main. In ${registryDir}, run \`git remote set-head origin main\`.`,
+  });
   // 上の purely-local な1本との対(ADR 0041 §5 の「解決子ごとに別々の答え」): pickup が
   // 読む `registry` の mode は**宣言から**来ていて、clone を覗いた結果ではない
   expect(options.registry).toEqual({ dir: registryDir, mode: "remote-backed" });
+  error.mockRestore();
 });
 
 // Codex のレビュー指摘そのものの筋書き。`git remote remove` は remote-tracking ref
