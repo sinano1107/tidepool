@@ -9,8 +9,8 @@ import type { RegistrySource } from "./registry.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
-/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2)。 */
-const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or create it by hand (`git init` there) to run with an empty room";
+/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2 / ADR 0373 決定11 —— 手の `git init` は選択肢に替わった)。 */
+const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or answer `run with an empty room` to have the board re-create it empty";
 
 const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens it";
 
@@ -253,11 +253,13 @@ function recordedRoomPredicates(
           if (!placeHasRepository(place.path)) throw new Error(gonePlaceReason(rootId, place.path));
         },
       },
-      ...checkoutPickupPredicates(place, registry, "", true),
+      ...checkoutPickupPredicates(place, registry),
     ];
   }
   return [
     { phase: "before-open", describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
+    // 未生の HEAD を通すのは開いた event の無い場所だけ —— 最初の開きが `main` に空コミットを補う。記録された面接室の未生の HEAD は
+    // 補わない(手の `git init` の出口は `run with an empty room` に替わった、ADR 0373 決定11)
     ...checkoutPickupPredicates(place, registry, "", true).map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
       ...predicate,
       describe: `${IF_REPOSITORY_PRESENT}${predicate.describe}`,

@@ -146,7 +146,8 @@ it("git init が落ちた面接室はディレクトリを残し、開いた eve
   db.close();
 });
 
-it.each([false, true])("記録済みの master の面接室は、未生の HEAD だけ main に向け直して空コミットを補い、生まれた HEAD は保つ(born=%s、ADR 0329 決定13)", async (born) => {
+// 旧: 未生の HEAD だけ main に向け直して空コミットを補った(ADR 0329 決定13)。ADR 0373 決定11 の後、手の `git init` の出口は `run with an empty room` で、補う手は無い
+it.each([false, true])("記録済みの master の面接室を開き直しても、盤面は未生の HEAD を補わず、生まれた HEAD も保つ(born=%s、ADR 0373 決定11)", async (born) => {
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-room-master-");
@@ -158,8 +159,8 @@ it.each([false, true])("記録済みの master の面接室は、未生の HEAD 
 
   openInterviewRoom(db, root, base, NOW);
 
-  expect(git(path, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(born ? "refs/heads/master" : "refs/heads/main");
-  expect(git(path, "log", "--format=%s")).toBe(born ? "Human history" : "Initial commit");
+  expect(git(path, "symbolic-ref", "HEAD")).toBe("refs/heads/master");
+  expect(git(path, "for-each-ref", "--format=%(refname) %(subject)", "refs/heads")).toBe(born ? "refs/heads/master Human history" : "");
   db.close();
 });
 

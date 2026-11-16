@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from "node:fs";
 import { z } from "zod";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
@@ -54,6 +55,8 @@ import {
   type QuarantineKind,
   type QuarantineResolvers,
   quarantineStops,
+  RESTORE_THE_BASELINE,
+  RUN_WITH_AN_EMPTY_ROOM,
   tableRowEffortTrigger,
 } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
@@ -86,6 +89,7 @@ import {
   type InterviewProposal,
   interviewRoomPath,
   latestChild,
+  latestPosedProbe,
   logDecision,
   MERGE_QUESTION_OPTIONS,
   openedPlaceNames,
@@ -116,12 +120,15 @@ import {
   OutOfBandProtectedBranchError,
   PickupGateError,
   quarantineWorkspace,
+  recreateEmptyRoom,
   redoMergeBacks,
   redoOwedReleases,
   refreshProtectedBranch,
   removeReleasedTaskCheckoutsOn,
   resolveWorkspacesBaseDir,
+  restoreBaseline,
   retakeRefBaselines,
+  takeWorkspaceInFlightKey,
   taskBranch,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
@@ -624,54 +631,92 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       throw new DomainError(err instanceof Error ? err.message : String(err));
     }
   };
-  return {
-    // resolve the named workspace fresh, then verify both its Git tree and its
-    // separation from the board's own state
-    workspace: async (value) => {
-      const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
-      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) → merge-back →
-      // 運んだ checkout の削除(ADR 0369 決定7) → 基準の撮り直し(ADR 0351 決定4)。
-      const { own, openers } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
-      const all = [...own, ...openers];
-      const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
-        try {
-          await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
-        } catch (err) {
-          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
-          let message = err instanceof Error ? err.message : String(err);
-          const ref = parseGitHubRepo(err instanceof PickupGateError ? err.place.repo : target.repo);
-          if (phase === "after-open" && deps.github && ref) {
-            const { guidance } = await repairRepoAccess(deps.github, ref);
-            if (guidance) message += `\n\n${guidance}`;
-          }
-          throw new DomainError(message);
-        }
-      };
-      await fire(all, "before-open");
-      const room = getTask(deps.db, value!)?.type === "interview";
-      if (room) target.path = interviewRoomPath(deps.db, value!) ?? target.path;
-      // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
-      if (!room || placeHasRepository(target.path)) {
-        await refuseOnError(() => verifyWorkspaceClean(target));
-        if (deps.boardState) {
-          const overlap = boardStateOverlap(target.path, deps.boardState);
-          if (overlap) throw new DomainError(overlap.reason);
-        }
-      }
-      // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。
+  // verify both the named place's Git tree and its separation from the board's own state.
+  // ADR 0373 決定2: 回答の文が選択肢を選ぶ —— 完全一致だけで、ほかの文(面接室でない名前への `run with an empty room` も)は `repaired by hand`
+  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig): Promise<{ notice: string } | undefined> => {
+    const room = getTask(deps.db, value)?.type === "interview";
+    const restore = answer === RESTORE_THE_BASELINE;
+    const emptyRoom = room && answer === RUN_WITH_AN_EMPTY_ROOM;
+    const now = (deps.clock ?? new SystemClock()).now();
+    // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。ADR 0373 帰結: 解放の中で立った Quarantine はどの選択肢でも
+    // その後始末が終わるまで答えられない
+    const assertNoSessionRunning = () => {
       const sessions = deps.db.prepare("SELECT id FROM tasks WHERE status = 'in_progress' OR teardown_started_at IS NOT NULL").pluck().all() as string[];
-      if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name, "open").includes(value!))) {
+      if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name, "open").includes(value))) {
         throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
       }
-      await fire(all, "after-open");
-      // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
-      await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, (deps.clock ?? new SystemClock()).now(), (task) => teardownStep(deps.db, task.id).completion === true));
-      if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
-      // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
-      await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value!, deps.workspace?.name));
-      // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
-      const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];
-      await refuseOnError(() => retakeRefBaselines(deps.db, places));
+    };
+    if (room) target.path = interviewRoomPath(deps.db, value) ?? target.path;
+    if (emptyRoom) {
+      // ADR 0373 決定11: 在り処に repo が無く出題前であることを確かめてから、行と pin を消して作り直し、前半の項から続ける。
+      // 走行中の session の検査は書く前に —— 解放の中で立った Quarantine に何も書かない(帰結)
+      if (placeHasRepository(target.path)) {
+        throw new DomainError(`the interview room ${value} at ${target.path} still holds a git repository — \`${RUN_WITH_AN_EMPTY_ROOM}\` re-creates only a room whose repository is gone`);
+      }
+      // 残ったファイルの上に作り直すと clean の検査で拒まれ、行も pin も消えた後で二度と答えられない
+      if (existsSync(target.path) && readdirSync(target.path).length > 0) {
+        throw new DomainError(`the interview room ${value} at ${target.path} is not empty — remove or empty that directory, then answer \`${RUN_WITH_AN_EMPTY_ROOM}\` again`);
+      }
+      if (latestPosedProbe(deps.db, value)) {
+        throw new DomainError(`the interview ${value} has already posed, and its readers fetch the posed head from the room — \`${RUN_WITH_AN_EMPTY_ROOM}\` re-creates only a room nothing was posed from`);
+      }
+      assertNoSessionRunning();
+      await refuseOnError(() => recreateEmptyRoom(deps.db, { name: value, path: target.path }));
+    }
+    // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 書き戻し(ADR 0373 決定3) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) →
+    // merge-back → 運んだ checkout の削除(ADR 0369 決定7) → 基準の撮り直し(ADR 0351 決定4)。
+    const { own, openers } = namePickupPredicates(deps.db, value, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+    const all = [...own, ...openers];
+    const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
+      try {
+        await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
+      } catch (err) {
+        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
+        let message = err instanceof Error ? err.message : String(err);
+        const ref = parseGitHubRepo(err instanceof PickupGateError ? err.place.repo : target.repo);
+        if (phase === "after-open" && deps.github && ref) {
+          const { guidance } = await repairRepoAccess(deps.github, ref);
+          if (guidance) message += `\n\n${guidance}`;
+        }
+        throw new DomainError(message);
+      }
+    };
+    await fire(all, "before-open");
+    // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
+    if (!room || placeHasRepository(target.path)) {
+      await refuseOnError(() => verifyWorkspaceClean(target));
+      if (deps.boardState) {
+        const overlap = boardStateOverlap(target.path, deps.boardState);
+        if (overlap) throw new DomainError(overlap.reason);
+      }
+    }
+    assertNoSessionRunning();
+    // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
+    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now)) : [];
+    await fire(all, "after-open");
+    // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
+    await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));
+    if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
+    // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
+    await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name));
+    // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
+    const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];
+    await refuseOnError(() => retakeRefBaselines(deps.db, places));
+    // spec #3273 text B11: 外した値ごとに1行
+    return kept.length > 0 ? { notice: kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`).join("\n") } : undefined;
+  };
+  return {
+    workspace: async (value, answer) => {
+      // resolve the named workspace fresh
+      const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
+      // ADR 0373 決定8: 同じ名前の場所の ref を書く回答と操作は鍵を1つ共有し、検査中の2つ目を拒む
+      const release = takeWorkspaceInFlightKey(deps.db, value!);
+      if (!release) throw new DomainError(`another answer or operation for workspace ${value} is being checked — try again once it has finished.`);
+      try {
+        return await acceptWorkspaceRepair(value!, answer, target);
+      } finally {
+        release();
+      }
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
@@ -1089,8 +1134,9 @@ export function retryInterviewThroughHumanDoor(
   }
 }
 
-/** 回答の応答: 盤面の行と同じ形に、観測で閉じた印を添える(ADR 0265 決定7)。HTTP と管理 MCP の扉がこれを返す。 */
-export type AnsweredTask = BoardTask & SettledMark;
+/** 回答の応答: 盤面の行と同じ形に、観測で閉じた印を添える(ADR 0265 決定7)。HTTP と管理 MCP の扉がこれを返す。
+ *  `notice` は盤面が回答の中で書いたこと(`restore the baseline` が外した値、ADR 0373 決定4)。 */
+export type AnsweredTask = BoardTask & SettledMark & { notice?: string };
 
 function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
   return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), settled_by_observation: settledByObservation(deps.db, task) };
@@ -1190,6 +1236,7 @@ export async function submitAnswer(
   }
 
   const mark: { release: (() => void) | null } = { release: null };
+  let notice: string | undefined;
   // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3)
   // hold の head は断った内容という事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
   let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
@@ -1330,9 +1377,10 @@ export async function submitAnswer(
         if (dropsRefusedTarget(kind, answers[0])) break;
         const check = deps.quarantineChecks?.[kind.quarantine as QuarantineKind];
         if (!check) throw new DomainError(`this board cannot verify a ${kind.quarantine} repair`);
-        const confirm = await check(kind.value);
+        const confirm = await check(kind.value, answers[0]);
         // ADR 0343 決定1: 確認から回答の transaction まで await が無いので、検査の再開までに立った条件を見落とさない
-        confirm?.();
+        if (typeof confirm === "function") confirm();
+        else if (confirm) notice = confirm.notice;
         break;
       }
       case "proposal":
@@ -1445,7 +1493,7 @@ export async function submitAnswer(
     // 受理された回答は常に poll を撃つ —— 何が pickable になったかの判定は poll の1点で行い、契機の側は判定しない
     // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)
     if (!session) deps.pollNow();
-    return presentAnswered(deps, task);
+    return { ...presentAnswered(deps, task), ...(notice !== undefined && { notice }) };
   } catch (err) {
     // 待つ間に question が閉じていた(ADR 0288 決定4): 観測で閉じていれば 200 + 印、別の回答か cancel なら拒否
     if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);

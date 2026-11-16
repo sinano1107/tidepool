@@ -19,6 +19,11 @@ import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, type QuestionItem, type
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const UNCLOSED_SESSION_QUESTION_TITLE = "the board could not close a worker session — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
+/** workspace の Quarantine の選択肢(ADR 0373 決定2)。回答の文と完全に一致したときだけ盤面の行為を選ぶ。 */
+const REPAIRED_BY_HAND = "repaired by hand";
+export const RESTORE_THE_BASELINE = "restore the baseline";
+/** 面接室の名前にだけ加わる(ADR 0373 決定11)。 */
+export const RUN_WITH_AN_EMPTY_ROOM = "run with an empty room";
 interface QuarantineProse {
   title: string;
   purpose: string;
@@ -297,11 +302,16 @@ export const QUARANTINES = [
           (room ? "\nA task that starts opening this name after this question was opened adds its own check of the same kind when the answer is checked.\n" : "") +
           // ADR 0369 決定6: 受理は済まなかった解放をやり直す —— 登録した観測者に依らない文だけを本文に置く
           "\nAccepting the answer also finishes the releases this workspace kept from finishing, bringing each such task's last session's work to its task branch.\n" +
-          // ADR 0351 決定4: 受理は基準を撮り直す —— 回答は動いた ref の受け入れでもある
-          "\nAccepting the answer also records every ref in the checkout(s) under this name, as they are then, as the board's baseline — " +
-          "refs moved since the board last recorded them are accepted as correct.\n" +
-          "\nAny answer text is kept as a repair note.",
+          // ADR 0373 決定2・16: 受理は全 ref が基準と同じことを確かめ、選択肢がそれぞれ何をするかを言う(spec #3273 text B1)
+          `\nAnswering checks that every ref of ${room ? `the interview room ${name}` : `workspace ${name}`} equals the board's baseline; nothing that moved is accepted. ` +
+          `\`${REPAIRED_BY_HAND}\`: you repaired something other than refs — the board checks and refuses if a ref differs. ` +
+          `\`${RESTORE_THE_BASELINE}\`: the board writes every differing ref back to the baseline and keeps each value it removes under \`refs/keep-around/<sha>\`. ` +
+          "If a merge back conflicts, the refusal says where to resolve it." +
+          (room ? ` \`${RUN_WITH_AN_EMPTY_ROOM}\`: the board re-creates the room empty.` : "") +
+          "\n\nAny answer text is kept as a repair note.",
         completion_criteria: "the workspace is repaired by hand",
+        // 選択肢は常設で、場面ごとに出し分けない(ADR 0373 決定2)—— 回答は自由記述のままで、選択肢と一致しない文は `repaired by hand`
+        question: [{ title: `workspace ${name} needs human attention`, options: [REPAIRED_BY_HAND, RESTORE_THE_BASELINE, ...(room ? [RUN_WITH_AN_EMPTY_ROOM] : [])], recommendation: REPAIRED_BY_HAND }],
       };
     },
   },
@@ -495,10 +505,11 @@ export const QUARANTINES = [
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
 
 /** 解除の門(ADR 0137 決定5): kind → 受理の直前に撃ち直す検査。不成立なら理由つきで
- *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。
+ *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。`answer` は回答の文 —— workspace の検査だけが読み、
+ *  選択肢で盤面の行為を選ぶ(ADR 0373 決定2)。盤面が書いたことを応答で言う検査は `notice` を返す。
  *  執行が書き込みより先に commit する検査は確認を返し、回答の書き込みと同じ同期区間で条件を読み直す。
  *  資源を検証する検査は返さない —— 資源を確かめるだけで書き込みより先に commit する執行が無く、読み直す条件が立たない(ADR 0343 決定1)。 */
-export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null) => Promise<void | (() => void)>>>;
+export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null, answer?: string) => Promise<void | (() => void) | { notice: string }>>>;
 
 /** kind → 値の集合を agent 名の集合へ写す resolver。合成 root が registry から組む。
  *  無い kind の値は誰も止めない。 */
@@ -617,7 +628,7 @@ export function registerQuarantine(
       type: "question",
       ...prose,
       question: question ?? [
-        { title: prose.title, options: ["repaired by hand"], recommendation: "repaired by hand" },
+        { title: prose.title, options: [REPAIRED_BY_HAND], recommendation: REPAIRED_BY_HAND },
       ],
       question_kind: { kind: "quarantine", quarantine: kind, value },
     },

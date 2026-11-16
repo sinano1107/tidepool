@@ -90,10 +90,12 @@ import { startWatchdog, type WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import {
+  commitRoomCopy,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   type RunPlace,
   recordedInterviewRoom,
+  releaseWorkspace,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -1224,6 +1226,21 @@ export async function pickUpInterviewRoot(db: Db, root: Task, real: WorkspaceCon
   const base = dirname(room.path);
   const place = await prepareAtPickup(db, room, root, { real, workspacesBaseDir: base, ...board });
   return { room, base, place };
+}
+
+/** setup のみ: 面接室を開いて root を1度拾って解放した盤面(面接室の基準の行と sparse の pin がある)。`pose` なら出題した受験者も返す
+ *  (受験者の checkout はまだ開かない)。 */
+export async function restedInterviewRoom(name: string, pose: boolean) {
+  const at = new Date("2026-11-03T00:00:00.000Z");
+  const db = openDb(":memory:");
+  const ws = await makeWorkspace(name);
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: ws.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI);
+  openInterviewRoom(db, root, await tempDir(`${name}-rooms-`), at);
+  const { room, place } = await pickUpInterviewRoot(db, root, ws);
+  const [examinee] = pose ? (poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", at, "worker", commitRoomCopy(db, place, root.id)) as [Task]) : [];
+  releaseWorkspace(db, place, root, at);
+  expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
+  return { db, ws, root, room, base: dirname(room.path), examinee };
 }
 
 /** setup のみ: 実環境 `name` を読む Interview の root を登録し、面接室を開いて拾った姿。 */

@@ -295,3 +295,25 @@ the install link when the App is missing or you cannot push to the repository.
 Use a dedicated clone: the board treats a workspace's checkout as its own from its first task on,
 between tasks too, and a checkout you also edit by hand will end up quarantined. Nothing else
 changes — task branches, pull requests, and a merge question you answer.
+
+## When a workspace is quarantined
+
+The board records every ref of a workspace's checkout and stops the workspace when one moves
+outside the board. Answering `restore the baseline` puts every moved ref back and keeps each value
+it removes under `refs/keep-around/<sha>`.
+
+- **Picking up what a restore removed.** The content is still there under
+  `refs/keep-around/<sha>`; merge or cherry-pick it in a workbench. A commit made in the
+  workspace's own checkout is a moved ref again.
+- **A workspace slowed by thousands of `refs/keep-around/*`.** Every fetch and comparison reads
+  them. When the workspace has no unsettled or landing-waiting task, is not the default
+  workspace and has no open quarantine question: delete the workspace, remove the refs by hand
+  (`git for-each-ref --format='delete %(refname)' refs/keep-around/ | git update-ref --stdin`),
+  and register it again. The board takes its baseline anew, and the removed values can no longer
+  be picked up.
+- **Linked worktrees.** Do not run `git worktree add` in a workspace's checkout. Without
+  arguments it creates a branch; `git stash` there writes the shared `refs/stash`; a commit on a
+  branch the board advanced stacks a commit that reverts the advance; and a commit there after a
+  restore is a moved ref again. If you made one anyway, remove it with
+  `git worktree remove --force <path>`, or keep it and run `git reset --hard` or
+  `git switch --detach <sha>` inside it.
