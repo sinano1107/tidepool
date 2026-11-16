@@ -437,21 +437,24 @@ const CHECKOUT_LAYOUT = {
 
 export { TaskCheckoutHostError } from "./git.js";
 
-/** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
- *  前の session が残した checkout は動かさず再利用もしない。objects は名前の場所から alternates で借り、タスクブランチだけを
- *  fetch して checkout する。Interview の場所は alternates を使わず複製で、自分のブランチだけを引くので兄弟の答案は見えない
- *  (ADR 0356 決定2)。root の番地は面接室(基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。
- *  開いた event は repo ができた後に書く(ADR 0329)。 */
-function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: Date): void {
-  const pickup = latestEventOfTask(db, task.id, "task_picked_up");
-  if (!pickup) throw new Error(`task ${task.id} has no pickup to key its task checkout`);
-  const branch = taskBranch(task.id);
-  const role = interviewRole(db, task);
+/** ADR 0356 決定2: 番地 `at` に自分の git directory を空の template から作り、名前の場所の `source`(ref の名前か sha)だけを
+ *  ローカルの `branch` へ fetch して checkout する。`borrow` なら objects は名前の場所から alternates で借り、借りなければ複製 ——
+ *  引いたものの閉包しか持たない。`config` は init の直後に置く git config(作業台の `receive.denyCurrentBranch=updateInstead`、
+ *  ADR 0371 決定9)。番地を作れないのは host 側の失敗(`description` が文の主語)、fetch と tree の展開の失敗は素のまま。
+ *  返すのは実体の綴りの在り処。 */
+function makeCheckout({ at, named, source, branch, borrow, description, config = {} }: {
+  at: string;
+  named: WorkspaceConfig;
+  source: string;
+  branch: string;
+  borrow: boolean;
+  description: string;
+  config?: Record<string, string>;
+}): string {
   // 名前の場所の objects が引けないのは名前の場所の性質 —— host 側の失敗に包まず、呼び手の quarantine へ
-  const objects = role === undefined ? namedObjects(named) : undefined;
+  const objects = borrow ? namedObjects(named) : undefined;
   let path: string;
   try {
-    const at = CHECKOUT_LAYOUT.task.at(workspacesBaseDir, role === "root" ? `${task.id}.checkout` : task.id, pickup.id);
     mkdirSync(at, { recursive: true });
     path = realpathSync(at);
     git(path, "init", "--quiet", "--template=", "--initial-branch=main");
@@ -459,14 +462,30 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
       mkdirSync(join(path, ".git", "objects", "info"), { recursive: true });
       writeFileSync(join(path, ".git", "objects", "info", "alternates"), `${objects}\n`);
     }
+    for (const [key, value] of Object.entries(config)) git(path, "config", key, value);
   } catch (cause) {
-    throw new TaskCheckoutHostError(`the task checkout of ${task.id} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new TaskCheckoutHostError(`${description} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  // reflog にも名前の場所の在り処を残さない —— 受験者に面接室の在り処(root id)を運ばない(ADR 0276 決定1)
-  git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, named.path, `refs/heads/${branch}:refs/heads/${branch}`);
+  // reflog にも名前の場所の在り処を残さない —— 受験者に面接室の在り処(root id)を運ばない(ADR 0276 決定1)。
+  // `branch` が未生の main(init の current branch)でも fetch できるよう --update-head-ok
+  git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", named.path, `${source}:refs/heads/${branch}`);
   // alternates 越しの fetch は objects の欠けを見ないので、欠けた blob で落ちる plumbing で tree を出す(porcelain の checkout は黙って欠く)
   git(path, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
   git(path, "read-tree", "-u", "--reset", "HEAD");
+  return path;
+}
+
+/** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
+ *  前の session が残した checkout は動かさず再利用もしない。タスクブランチだけを checkout し、objects は名前の場所から借りる。
+ *  Interview の場所は借りずに複製で、自分のブランチだけを引くので兄弟の答案は見えない(ADR 0356 決定2)。root の番地は面接室
+ *  (基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。開いた event は repo ができた後に書く(ADR 0329)。 */
+function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: Date): void {
+  const pickup = latestEventOfTask(db, task.id, "task_picked_up");
+  if (!pickup) throw new Error(`task ${task.id} has no pickup to key its task checkout`);
+  const role = interviewRole(db, task);
+  const at = CHECKOUT_LAYOUT.task.at(workspacesBaseDir, role === "root" ? `${task.id}.checkout` : task.id, pickup.id);
+  const branch = taskBranch(task.id);
+  const path = makeCheckout({ at, named, source: `refs/heads/${branch}`, branch, borrow: role === undefined, description: `the task checkout of ${task.id}` });
   // 読み手の出題の head と、門の時点のタスクブランチ(受験者は無ければ fork 元の出題の head)の閉包が面接室にあることは、pickup の門の
   // (task, 面接室) の項(taskRoomPickupPredicates)が先に確かめている。門の後に欠けたものは上のタスクブランチの fetch か下の読み専用の
   // checkout の fetch で落ち、後者は fetch 元の面接室の性質として面接室の名前で止まる(ADR 0276 決定3)
@@ -581,11 +600,12 @@ function asWorkerRepoFailure(checkout: string, cause: unknown): Error {
 
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
-/** ADR 0243 決定1: 書く前に値を知る。ADR 0364 決定1: tip は `refs/heads/task/<id>` の file、無ければ `packed-refs` の行(worker の
- *  `gc` は正当に pack する)—— git に worker の `.git` を開かせない。symref は worker の repo の故障。 */
-function readWorkerTip(read: WorkerRead, taskId: string): string {
+/** ADR 0243 決定1: 書く前に値を知る。ADR 0364 決定1: tip は `refs/heads/task/<id>`(作業台なら書く先と同じ名前の branch、ADR 0371 決定1・4)の
+ *  file、無ければ `packed-refs` の行(worker の `gc` は正当に pack する)—— git に worker の `.git` を開かせない。symref は worker の
+ *  repo の故障。読んだ ref も返す —— 呼び手が同じ綴りを作り直さない。 */
+function readWorkerTip(read: WorkerRead, branch: string): { sha: string; ref: string } {
   const { checkout } = read;
-  const ref = `refs/heads/${taskBranch(taskId)}`;
+  const ref = `refs/heads/${branch}`;
   let sha: string | undefined;
   try {
     const dotGit = lstatSync(join(checkout, ".git"), { throwIfNoEntry: false });
@@ -606,8 +626,8 @@ function readWorkerTip(read: WorkerRead, taskId: string): string {
   } catch (cause) {
     throw asWorkerRepoFailure(checkout, cause);
   }
-  if (!sha) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no branch ${taskBranch(taskId)}`);
-  return sha;
+  if (!sha) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no branch ${branch}`);
+  return { sha, ref };
 }
 
 /** 写しの tmp に書けない —— worker でも名前の場所でもない host の失敗(ADR 0364 決定2、pickup と同じ線)。 */
@@ -644,7 +664,7 @@ function copyWorkerFile(read: WorkerRead, rel: string, to: string): void {
  *  tip の閉包を1つの pack にして `verified` で `index-pack --strict` する —— 欠けは rev-list / pack-objects が、zlib の破損は
  *  pack-objects が、中身と名前の不一致は worker の byte を持たない `verified` の検査が落とす。名前の場所の objects を借りる役は
  *  名前の場所の ref から届く閉包を pack に入れない。ref は `verified` にだけ書く。git も file の写しも段の1つの上限の中(決定3)。 */
-function copyAndVerifyWorkerTip(place: TaskCheckoutPlace, read: WorkerRead, raw: string, verified: string, sha: string, ref: string, format: string): void {
+function copyAndVerifyWorkerTip(place: UntrustedCheckout, read: WorkerRead, raw: string, verified: string, sha: string, ref: string, format: string): void {
   const { checkout, deadline } = read;
   const looseName = new RegExp(`^[0-9a-f]{${format === "sha256" ? 62 : 38}}$`);
   try {
@@ -677,16 +697,19 @@ function copyAndVerifyWorkerTip(place: TaskCheckoutPlace, read: WorkerRead, raw:
   }
 }
 
-/** ADR 0364 決定1・2: worker の tip を検証済みの盤面所有の repo として開く。 */
-function withVerifiedWorkerTip<T>(place: TaskCheckoutPlace, taskId: string, use: (sha: string, repo: string, ref: string) => T): T {
+/** 盤面が git を撃たずに tip を読む checkout —— task の checkout(ADR 0364 決定1)と作業台(ADR 0371 決定4)。在り処、作った元の
+ *  名前の場所、その objects を借りるか。 */
+type UntrustedCheckout = { path: string; namedPlace: WorkspaceConfig; borrowsNamedObjects: boolean };
+
+/** ADR 0364 決定1・2: checkout の `branch` の tip を検証済みの盤面所有の repo として開く。 */
+function withVerifiedWorkerTip<T>(place: UntrustedCheckout, branch: string, use: (sha: string, repo: string, ref: string) => T): T {
   const { namedPlace, path: checkout } = place;
-  const ref = `refs/heads/${taskBranch(taskId)}`;
   // 名前の場所の側の故障を worker の repo のせいにしない —— ここで落ちれば素の失敗(呼び手の quarantine)
   const format = git(namedPlace.path, "rev-parse", "--show-object-format");
   const alternates = place.borrowsNamedObjects ? `${namedObjects(namedPlace)}\n` : undefined;
   // ADR 0364 決定3: tip の読みから閉包の検証までが1つの有界の段
   const read = workerRead(checkout);
-  const sha = readWorkerTip(read, taskId);
+  const { sha, ref } = readWorkerTip(read, branch);
   // ADR 0364 決定1: 写しは盤面 process の tmp —— worker は書けない(task temp でも checkout の中でもない)
   const dir = hostStep(() => mkdtempSync(join(tmpdir(), "tidepool-worker-tip-")));
   try {
@@ -704,9 +727,9 @@ function withVerifiedWorkerTip<T>(place: TaskCheckoutPlace, taskId: string, use:
   }
 }
 
-/** task の checkout のタスクブランチの tip を、ref を書かずに名前の場所の objects へ引く。 */
-function fetchWorkerTip(place: TaskCheckoutPlace, taskId: string): string {
-  return withVerifiedWorkerTip(place, taskId, (sha, repo, ref) => {
+/** checkout の `branch` の tip を、ref を書かずに名前の場所の objects へ引く。 */
+function fetchWorkerTip(place: UntrustedCheckout, branch: string): string {
+  return withVerifiedWorkerTip(place, branch, (sha, repo, ref) => {
     fetchFromBoardCopy(place.namedPlace, repo, ref, sha, "the task branch tip");
     return sha;
   });
@@ -737,8 +760,9 @@ function fetchStagedTree(namedPlace: WorkspaceConfig, repo: string, tree: string
 export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): string {
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
-  const tip = fetchWorkerTip(place, taskId);
-  const ref = `refs/heads/${taskBranch(taskId)}`;
+  const branch = taskBranch(taskId);
+  const tip = fetchWorkerTip(place, branch);
+  const ref = `refs/heads/${branch}`;
   const old = readRefSnapshotValue(namedPlace, ref);
   // ADR 0243 決定2 / ADR 0359 決定4: この書き込みの旧値だけを確かめ、帯域外の値を基準に取り込まない
   const expected = recordedRef(db, namedPlace.name, ref);
@@ -849,7 +873,7 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
 export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string {
   assertTaskCheckout(place, taskId);
   const room = place.namedPlace;
-  return withVerifiedWorkerTip(place, taskId, (tip, verified) => {
+  return withVerifiedWorkerTip(place, taskBranch(taskId), (tip, verified) => {
     const parent = git(room.path, "rev-parse", protectedBranchRef(room));
     if (!place.borrowsNamedObjects) {
       // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。検証後は写しの親を読むために面接室の objects を借りる。
@@ -1439,7 +1463,7 @@ export function completionTreeGateApplies(task: Task): boolean {
 /** ADR 0359 決定3: worker の checkout は観測だけに使う。着地は名前の場所の記録から進める。 */
 function observeCheckoutAfterCompletion(db: Db, place: TaskCheckoutPlace, taskId: string, recorded: string | undefined): TaskCheckoutWriteObservation | undefined {
   try {
-    const workerTip = readWorkerTip(workerRead(place.path), taskId);
+    const workerTip = readWorkerTip(workerRead(place.path), taskBranch(taskId)).sha;
     if (!recorded) return;
     if (workerTip !== recorded) return { observation: "committed", worker_tip: workerTip };
     const paths = taskCheckoutChanges(db, place, taskId, recorded).map(({ path }) => path);
@@ -1828,7 +1852,7 @@ function bringTaskCheckout(
         );
       }
     } else {
-      const tip = fetchWorkerTip(place, task.id);
+      const tip = fetchWorkerTip(place, taskBranch(task.id));
       evacuationBaseRef = readRefSnapshotValue(namedPlace, taskRef);
       if (evacuationBaseRef.startsWith("symref=")) {
         throw new RefsMovedError(`workspace ${namedPlace.name}: expected a direct task ref, found ${evacuationBaseRef} ${taskRef}`);
