@@ -3958,34 +3958,20 @@ export function typeAwareDefaultAgentSql(table: string): string {
 function stoppedSql(taskRef: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces) stopped
              WHERE stopped.value IN (${openedPlaceNamesSql(taskRef, "stop")})
-               OR (stopped.value = ${lastPickupStopSql(taskRef)} AND ${firstCaptureWaitSql(taskRef, "stopped.value")})))
+               OR ${firstCaptureWaitSql(taskRef, "stopped.value")}))
            OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
              WHERE value = COALESCE(${taskRef}.assignee, ${typeAwareDefaultAgentSql(taskRef)})))`;
 }
 
-/** ADR 0373 決定13 / spec #3273: 最初の撮りの確認は task が開かない workspace で落ちうる —— 撮りに来た task はその workspace の停止で待つ。
- *  `name` が基準の行を持ち、task が行の無い registry の名前(面接室でない)をまだ開くあいだだけ。ADR 0368 が退けた「pickup が観測した停止」の節を
- *  この場合に絞るのは、列挙の割れを黙って吸収する範囲をここに留めるため。 */
+/** ADR 0373 決定13 / spec #3273: 最初の撮りの確認は task が開かない workspace で落ちうる。最初の撮りを待つ task(行の無い面接室でない名前を
+ *  開く)は、基準の行を持つ面接室でない workspace の停止のあいだ外す —— 確認がその workspace で落ちるかは読まない。門は状態だけを数え、
+ *  戻す口の確かめ(ADR 0368 決定1)と同じ集合のまま。確認が通る停止(休止中の変更など)でも待つのは、ADR 0368 決定4 と同じく受け入れる。 */
 function firstCaptureWaitSql(taskRef: string, name: string): string {
   return `(EXISTS (SELECT 1 FROM workspace_state ws WHERE ws.name = ${name} AND ws.ref_snapshot <> '')
+            AND NOT EXISTS (SELECT 1 FROM tasks room WHERE room.id = ${name} AND room.type = 'interview')
             AND EXISTS (SELECT 1 FROM (${openedPlaceNamesSql(taskRef, "stop")}) opened WHERE opened.name IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM workspace_state ws WHERE ws.name = opened.name AND ws.ref_snapshot <> '')
               AND NOT EXISTS (SELECT 1 FROM tasks room WHERE room.id = opened.name AND room.type = 'interview')))`;
-}
-
-/** task の最後の pickup が workspace の停止で終わったなら、止めた名前。 */
-function lastPickupStopSql(taskRef: string): string {
-  return `(SELECT CASE WHEN e.kind = 'pickup_stopped' AND json_extract(e.payload, '$.quarantine') = 'workspace' THEN json_extract(e.payload, '$.value') END
-             FROM events e WHERE e.task_id = ${taskRef}.id AND e.kind IN ('task_picked_up', 'pickup_stopped') ORDER BY e.id DESC LIMIT 1)`;
-}
-
-/** ADR 0368 決定1: 戻す口が停止を刻む前に、最初の撮りを待つこの task を `name` の停止が外すか(`firstCaptureWaitSql`)。 */
-export function waitsOnFirstCapture(db: Db, taskId: string, name: string, defaults: ResourceStopDefaults): boolean {
-  return db.prepare(`SELECT 1 FROM tasks t WHERE t.id = @taskId AND @defaultWorkspaceName IS NOT NULL AND ${firstCaptureWaitSql("t", "@name")}`).get({
-    taskId,
-    name,
-    defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
-  }) !== undefined;
 }
 
 function stoppedSqlBindings(defaults: ResourceStopDefaults, stopped?: ResourceStops) {

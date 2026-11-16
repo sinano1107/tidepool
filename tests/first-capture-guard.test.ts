@@ -7,7 +7,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, getTask, registerTask } from "../src/tasks.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { openInterviewRoom, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { holdsBaseline, openInterviewRoom, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -33,11 +33,6 @@ async function rested(name: string): Promise<WorkspaceConfig> {
   return ws;
 }
 
-/** 基準の行の有無。行を読む公開の口は無い —— 直に読む。 */
-function hasBaseline(name: string): boolean {
-  return db.prepare("SELECT 1 FROM workspace_state WHERE name = ? AND ref_snapshot <> ''").get(name) !== undefined;
-}
-
 /** sparse の pin。読む公開の口は無い —— 直に読む。 */
 function sparsePin(name: string): unknown {
   const row = db.prepare("SELECT policy FROM workspace_sparse_policies WHERE name = ?").pluck().get(name) as string | undefined;
@@ -51,7 +46,7 @@ it("workspaces.yaml の手編集で改名した名前の最初の撮りは行を
 
   await expect(prepareAtPickup(db, renamed, work("comes for the new name", "new"), { resolveRegistered: defaultingTo(renamed) })).rejects.toThrow();
 
-  expect(hasBaseline("new")).toBe(false);
+  expect(holdsBaseline(db, "new")).toBe(false);
   expect(quarantineQuestion(db, "workspace", "new")).toBeUndefined();
   expect(quarantineQuestion(db, "workspace", "old")!.purpose).toContain(
     'unknown workspace: old. The board holds a baseline for "old", so no workspace captures a first baseline until it resolves again: put the entry back in the registry under that name. To remove the workspace, delete it through the deletion door after this question is closed; to rename it, delete it and register it under the new name. Tasks in this workspace',
@@ -68,7 +63,7 @@ it("面接室の最初の撮りは、workspace の行が基準と違っていて
 
   await pickUpInterviewRoot(db, root, real, { resolveRegistered: defaultingTo(broken, real) });
 
-  expect(hasBaseline(root.id)).toBe(true);
+  expect(holdsBaseline(db, root.id)).toBe(true);
   expect(quarantineQuestion(db, "workspace", "broken")).toBeUndefined();
 });
 
@@ -83,7 +78,7 @@ it("registry が読めない失敗は引けない名前に数えず、Quarantine
 
   await expect(prepareAtPickup(db, fresh, work("comes for a fresh name", "fresh"), { resolveRegistered: unreadable })).rejects.toThrow("workspaces.yaml could not be parsed");
 
-  expect(hasBaseline("fresh")).toBe(false);
+  expect(holdsBaseline(db, "fresh")).toBe(false);
   expect(quarantineQuestion(db, "workspace", old.name)).toBeUndefined();
 });
 
@@ -96,7 +91,7 @@ it("消えた名前を同じ path で戻しても、ref が動いていればそ
 
   await expect(prepareAtPickup(db, renamed, work("comes for the new name", "new"), { resolveRegistered: defaultingTo(renamed, old) })).rejects.toThrow();
 
-  expect(hasBaseline("new")).toBe(false);
+  expect(holdsBaseline(db, "new")).toBe(false);
   expect(quarantineQuestion(db, "workspace", "new")).toBeUndefined();
   expect(quarantineQuestion(db, "workspace", "old")!.purpose).toContain(`now: ${moved} refs/heads/main`);
 });
@@ -109,10 +104,10 @@ it("消えた名前を別の path で戻すと、その場所が基準と違え�
 
   await expect(prepareAtPickup(db, fresh, work("comes while old points elsewhere", "fresh"), { resolveRegistered: defaultingTo(fresh, elsewhere) })).rejects.toThrow();
   expect(quarantineQuestion(db, "workspace", "old")!.purpose).toContain("refs changed");
-  expect(hasBaseline("fresh")).toBe(false);
+  expect(holdsBaseline(db, "fresh")).toBe(false);
 
   await prepareAtPickup(db, fresh, work("comes once old is back", "fresh"), { resolveRegistered: defaultingTo(fresh, old) });
-  expect(hasBaseline("fresh")).toBe(true);
+  expect(holdsBaseline(db, "fresh")).toBe(true);
 });
 
 it("registry の無い盤面では引けない名前を数えず、最初の撮りは通る(spec #3273 pin B22)", async () => {
@@ -122,7 +117,7 @@ it("registry の無い盤面では引けない名前を数えず、最初の撮�
 
   await prepareAtPickup(db, fresh, work("comes without a registry", "fresh"));
 
-  expect(hasBaseline("fresh")).toBe(true);
+  expect(holdsBaseline(db, "fresh")).toBe(true);
   expect(quarantineQuestion(db, "workspace", "vanished")).toBeUndefined();
 });
 
