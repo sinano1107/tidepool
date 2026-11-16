@@ -1447,7 +1447,10 @@ export type KeptValue = { ref: string; sha: string };
  *  `refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。書いたら `baseline_restored` を残し、
  *  外した値を返す。違いが無ければ何も書かずに空を返す。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): KeptValue[] {
-  const baseline = refValues(storedRefs(db, workspace.name));
+  const stored = storedRefs(db, workspace.name);
+  // ADR 0373 決定7: 基準の行が無い名前は比べずに通す —— 戻す先が無い
+  if (stored === "") return [];
+  const baseline = refValues(stored);
   const current = refValues(currentRefs(workspace));
   const targets = new Map<string, string>();
   for (const ref of new Set([...baseline.keys(), ...current.keys()])) {
@@ -1468,8 +1471,14 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): 
     return [...shas].map((sha) => ({ ref, sha }));
   });
   const restored = [...targets.keys()];
-  // 持ち続ける ref が先 —— 人間が作った `refs/keep-around/<その sha>` は消さずに残る(終わりの状態で書く)
-  const writes = new Map([...kept.map(({ sha }) => [`refs/keep-around/${sha}`, sha] as const), ...[...targets].filter(([ref]) => !kept.some(({ sha }) => ref === `refs/keep-around/${sha}`))]);
+  // 持ち続ける ref が先 —— 人間が作った `refs/keep-around/<その sha>` は消さずに残る(終わりの状態で書く)。削除は書き込みより先 ——
+  // 人間が作った `refs/heads/a/b` を消してからでないと基準の `refs/heads/a` を書けない
+  const restores = [...targets].filter(([ref]) => !kept.some(({ sha }) => ref === `refs/keep-around/${sha}`));
+  const writes = new Map([
+    ...kept.map(({ sha }) => [`refs/keep-around/${sha}`, sha] as const),
+    ...restores.filter(([, value]) => value === ""),
+    ...restores.filter(([, value]) => value !== ""),
+  ]);
   const valueAfter = (ref: string) => writes.get(ref) ?? current.get(ref) ?? "";
   const headAfter = valueAfter("HEAD");
   const tipAfter = headAfter.startsWith("symref=") ? valueAfter(headAfter.slice("symref=".length)) : headAfter;

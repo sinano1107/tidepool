@@ -355,3 +355,32 @@ it("面接室の名前の Quarantine は `run with an empty room` の説明と�
   expect(question.question_items).toEqual([expect.objectContaining({ options: ["repaired by hand", "restore the baseline", "run with an empty room"], recommendation: "repaired by hand" })]);
   db.close();
 });
+
+it("基準の行が無い名前への `restore the baseline` は比べずに通り、何も書き戻さず、行も作らない(ADR 0373 決定7)", async () => {
+  const ws = await makeWorkspace("restore-without-row");
+  const db = openDb(":memory:");
+  git(ws.path, "branch", "extra");
+  quarantineWorkspace(db, ws.name, new Error("the first pickup stopped before any capture"), NOW);
+  const refsBefore = git(ws.path, "for-each-ref");
+
+  await answer(db, ws, "restore the baseline");
+
+  expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  expect(restoredEvents(db)).toEqual([]);
+  expect(stateRow(db, ws.name)).toBeUndefined();
+  db.close();
+});
+
+it("人間が作った refs/heads/a/b を消してから基準の refs/heads/a を戻す —— 書き戻しは削除が先(ADR 0373 決定3)", async () => {
+  const { ws, db } = await quarantinedWorkspace("restore-dir-file-conflict");
+  const tip = git(ws.path, "rev-parse", "main");
+  boardRefWriter(db, ws)("refs/heads/a", tip, () => git(ws.path, "update-ref", "refs/heads/a", tip));
+  git(ws.path, "update-ref", "-d", "refs/heads/a");
+  git(ws.path, "update-ref", "refs/heads/a/b", tip);
+
+  await answer(db, ws, "restore the baseline");
+
+  expect(git(ws.path, "for-each-ref", "--format=%(refname)", "refs/heads/a", "refs/heads/a/")).toBe("refs/heads/a");
+  db.close();
+});
