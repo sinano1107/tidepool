@@ -69,7 +69,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     writeFileSync(join(sandbox.path, "late.txt"), "written while resting\n");
     const { db, clock, worker, slot, scheduler } = stoppingBoard(sandbox, defaultingTo(sandbox, prod));
     // 走る側の workspace に先に基準の行を残す —— 行を持つ workspace が止まっている間、行の無い名前の最初の撮りを待つ task は外れる。
-    // 確認が通る停止(休止中の変更・branch の欠け)でも待つのは、門が数える集合を1つに保つための代償(ADR 0368 決定4、ADR 0373 決定13)
+    // 休止中の変更・branch の欠けの停止でも待つ —— 開いている Quarantine の場所の ref は受理まで誰も保証しない(ADR 0373 決定13 追記)
     await leaveBaseline(db, prod);
     const task = registerTask(db, { type: "work", title: "dirty resting tree", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
     const next = registerTask(db, { type: "work", title: "next", purpose: "p", completion_criteria: "c", workspace: "prod" }, clock.now(), ...HUMAN_WEBUI);
@@ -198,7 +198,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const sandbox = await makeWorkspace("sandbox");
     const { db, clock, worker, slot, scheduler } = stoppingBoard(sandbox, defaultingTo(sandbox, { ...prod, branch: "no-such-branch" }));
     // 走る側の workspace に先に基準の行を残す —— 行を持つ workspace が止まっている間、行の無い名前の最初の撮りを待つ task は外れる。
-    // 確認が通る停止(休止中の変更・branch の欠け)でも待つのは、門が数える集合を1つに保つための代償(ADR 0368 決定4、ADR 0373 決定13)
+    // 休止中の変更・branch の欠けの停止でも待つ —— 開いている Quarantine の場所の ref は受理まで誰も保証しない(ADR 0373 決定13 追記)
     await leaveBaseline(db, sandbox);
 
     const dangling = registerTask(

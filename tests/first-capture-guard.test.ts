@@ -1,13 +1,14 @@
-import { cpSync, existsSync } from "node:fs";
+import { cpSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { getTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, registerTask } from "../src/tasks.js";
 import { queueReturnHandler } from "../src/watchdog.js";
 import { holdsBaseline, mergeTaskToProtected, openInterviewRoom, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
@@ -43,7 +44,7 @@ it("workspaces.yaml の手編集で改名した名前の最初の撮りは行を
   expect(holdsBaseline(db, "new")).toBe(false);
   expect(quarantineQuestion(db, "workspace", "new")).toBeUndefined();
   expect(quarantineQuestion(db, "workspace", "old")!.purpose).toContain(
-    'unknown workspace: old. The board holds a baseline for "old", so no workspace captures a first baseline until it resolves again: put the entry back in the registry under that name. To remove the workspace, delete it through the deletion door after this question is closed; to rename it, delete it and register it under the new name. Tasks in this workspace',
+    'unknown workspace: old. The board holds a baseline for "old", so no workspace captures a first baseline until it resolves again: put the entry back in the registry under that name. To remove the workspace, delete it through the deletion door after this question is closed; to rename it, delete it and register it under the new name. Workspaces that have not captured a baseline yet also wait until this question is closed. Tasks in this workspace',
   );
 });
 
@@ -246,4 +247,69 @@ it("面接室の停止は、まだ撮っていない workspace の task を止�
 
   await vi.waitFor(() => expect(b.worker.started.map((t) => t.id)).toEqual([task.id]));
   expect(holdsBaseline(db, "fresh")).toBe(true);
+});
+
+it("基準の行を持つ面接室でない名前の workspace と組の封じ込めの Quarantine は、基準をまだ撮っていない workspace もその question が閉じるまで待つことを毎回言う(ADR 0373 決定13 追記)", async () => {
+  db = openDb(":memory:");
+  await rested("held");
+  const real = await makeWorkspace("real");
+  const root = interviewRoot(real, await tempDir("first-capture-rooms-"));
+  const { place } = await pickUpInterviewRoot(db, root, real);
+  releaseWorkspace(db, place, root, NOW);
+  const waits = "Workspaces that have not captured a baseline yet also wait until this question is closed. ";
+
+  quarantineWorkspace(db, "held", new Error("workspace held has uncommitted changes while resting"), NOW);
+  quarantineWorkspace(db, "never-captured", new Error("workspace never-captured has uncommitted changes while resting"), NOW);
+  quarantineWorkspace(db, root.id, new Error("the room has uncommitted changes while resting"), NOW);
+
+  expect(quarantineQuestion(db, "workspace", "held")!.purpose).toContain(`while resting. ${waits}Tasks in this workspace`);
+  expect(quarantineQuestion(db, "workspace", "never-captured")!.purpose).not.toContain(waits);
+  expect(quarantineQuestion(db, "workspace", root.id)!.purpose).not.toContain(waits);
+  for (const name of ["held", "never-captured"]) registerQuarantine(db, "workspaceContainment", workspaceContainmentValue("claude-code", name), "not contained", NOW);
+  expect(quarantineQuestion(db, "workspaceContainment", workspaceContainmentValue("claude-code", "held"))!.purpose).toContain(`not contained. ${waits}Tasks in workspace held`);
+  expect(quarantineQuestion(db, "workspaceContainment", workspaceContainmentValue("claude-code", "never-captured"))!.purpose).not.toContain(waits);
+});
+
+it("基準の行を持つ workspace が休止中の変更で止まっている間、まだ撮っていない workspace の最初の task は待ち、その Quarantine の受理の後に走る(ADR 0373 決定13 追記)", async () => {
+  db = openDb(":memory:");
+  const dirty = await rested("dirty");
+  const fresh = await makeWorkspace("fresh");
+  const b = await board(fresh, [fresh, dirty]);
+  writeFileSync(join(dirty.path, "late.txt"), "written while resting\n");
+  const stopped = work("stops on the dirty tree", "dirty");
+  await afterOnePoll(b, stopped.id, "pickup_stopped");
+  cancelTaskDirectly(db, getTask(db, stopped.id)!, null, NOW, {}, "webui");
+  const task = work("comes for a fresh name", "fresh");
+
+  await afterOnePoll(b, task.id, "task_registered");
+
+  expect(listEvents(db, task.id).map((e) => e.kind)).not.toContain("task_picked_up");
+  expect(b.worker.started).toEqual([]);
+
+  rmSync(join(dirty.path, "late.txt"));
+  const question = quarantineQuestion(db, "workspace", "dirty")!;
+  await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: fresh, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir }) }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
+
+  await vi.waitFor(() => expect(b.worker.started.map((t) => t.id)).toEqual([task.id]));
+});
+
+it("基準の行を持つ workspace の組の封じ込めの Quarantine が開いている間、まだ撮っていない workspace の最初の task は Harness を問わず待ち、その受理の後に走る(ADR 0373 決定13 追記)", async () => {
+  db = openDb(":memory:");
+  const contained = await rested("contained");
+  const fresh = await makeWorkspace("fresh");
+  const b = await board(fresh, [fresh, contained]);
+  const value = workspaceContainmentValue("codex", "contained");
+  registerQuarantine(db, "workspaceContainment", value, "codex workers cannot be contained", NOW);
+  const task = work("comes for a fresh name", "fresh");
+
+  await afterOnePoll(b, task.id, "task_registered");
+
+  expect(listEvents(db, task.id).map((e) => e.kind)).not.toContain("task_picked_up");
+  expect(b.worker.started).toEqual([]);
+
+  const question = quarantineQuestion(db, "workspaceContainment", value)!;
+  const checks = quarantineChecks({ db, workspace: fresh, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir, codexWorkspaceContainment: async () => ({ available: true }) });
+  await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: checks }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
+
+  await vi.waitFor(() => expect(b.worker.started.map((t) => t.id)).toEqual([task.id]));
 });

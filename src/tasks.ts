@@ -1769,6 +1769,8 @@ function cancelTask(
 export interface ResourceStops {
   workspaces: string[];
   assignees: string[];
+  /** 開いた組の封じ込めの workspace(ADR 0373 決定13 追記: 最初の撮りを待つ task だけを止める)。組が無ければ省く。 */
+  containmentWorkspaces?: string[];
 }
 
 export interface ResourceStopDefaults {
@@ -3958,17 +3960,30 @@ export function typeAwareDefaultAgentSql(table: string): string {
 function stoppedSql(taskRef: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces) stopped
              WHERE stopped.value IN (${openedPlaceNamesSql(taskRef, "stop")})
-               OR ${firstCaptureWaitSql(taskRef, "stopped.value")}))
+               OR ${firstCaptureWaitSql(taskRef, "stopped.value")})
+           -- ADR 0373 決定13 追記: 組の封じ込めの停止も、最初の撮りを待つ task は Harness を問わず外す(ADR 0368 決定4 の組の線と違う)
+           OR EXISTS (SELECT 1 FROM json_each(@stoppedContainmentWorkspaces) contained WHERE ${firstCaptureWaitSql(taskRef, "contained.value")}))
            OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
              WHERE value = COALESCE(${taskRef}.assignee, ${typeAwareDefaultAgentSql(taskRef)})))`;
 }
 
-/** ADR 0373 決定13 / spec #3273: 最初の撮りの確認は task が開かない workspace で落ちうる。最初の撮りを待つ task(行の無い面接室でない名前を
- *  開く)は、基準の行を持つ面接室でない workspace の停止のあいだ外す —— 確認がその workspace で落ちるかは読まない。門は状態だけを数え、
- *  戻す口の確かめ(ADR 0368 決定1)と同じ集合のまま。確認が通る停止(休止中の変更など)でも待つのは、ADR 0368 決定4 と同じく受け入れる。 */
-function firstCaptureWaitSql(taskRef: string, name: string): string {
+/** ADR 0373 決定13 追記: 名前 `name` の停止が最初の撮りを待たせるか —— 基準の行を持つ面接室でない名前。 */
+function holdsFirstCapturesSql(name: string): string {
   return `(EXISTS (SELECT 1 FROM workspace_state ws WHERE ws.name = ${name} AND ws.ref_snapshot <> '')
-            AND NOT EXISTS (SELECT 1 FROM tasks room WHERE room.id = ${name} AND room.type = 'interview')
+            AND NOT EXISTS (SELECT 1 FROM tasks room WHERE room.id = ${name} AND room.type = 'interview'))`;
+}
+
+/** ADR 0373 決定13 追記: その名前の Quarantine(workspace・組の封じ込め)が開いている間、基準をまだ撮っていない workspace も待つか ——
+ *  Quarantine の本文がそれを言う。 */
+export function holdsFirstCaptures(db: Db, name: string): boolean {
+  return db.prepare(`SELECT ${holdsFirstCapturesSql("@name")}`).pluck().get({ name }) === 1;
+}
+
+/** ADR 0373 決定13 追記: 最初の撮りの確認は task が開かない workspace で落ちうる。最初の撮りを待つ task(行の無い面接室でない名前を
+ *  開く)は、`holdsFirstCapturesSql` の名前の停止のあいだ、停止の理由を問わず外す —— 開いている Quarantine の場所の ref は受理まで
+ *  誰も保証しない。門は状態だけを数え、戻す口の確かめ(ADR 0368 決定1)と同じ集合のまま。 */
+function firstCaptureWaitSql(taskRef: string, name: string): string {
+  return `(${holdsFirstCapturesSql(name)}
             AND EXISTS (SELECT 1 FROM (${openedPlaceNamesSql(taskRef, "stop")}) opened WHERE opened.name IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM workspace_state ws WHERE ws.name = opened.name AND ws.ref_snapshot <> '')
               AND NOT EXISTS (SELECT 1 FROM tasks room WHERE room.id = opened.name AND room.type = 'interview')))`;
@@ -3981,6 +3996,7 @@ function stoppedSqlBindings(defaults: ResourceStopDefaults, stopped?: ResourceSt
     auditorName: defaults.auditorName ?? null,
     interviewerName: defaults.interviewerName ?? null,
     stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
+    stoppedContainmentWorkspaces: JSON.stringify(stopped?.containmentWorkspaces ?? []),
     stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
   };
 }
