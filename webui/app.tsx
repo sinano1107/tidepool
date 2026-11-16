@@ -399,8 +399,8 @@ function mapData(
       { color: 'var(--coral-4)', line: 'board could not close a worker session · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', 'the board could not close a worker session'),
     registryReachability: () => halt(
-      { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
-      'warn', 'moved to front — pickup blocked', 'registry remote is unreachable'),
+      { color: 'var(--coral-4)', line: 'registry unavailable · nothing starts', meta: 'see the repair question', taskId: null },
+      'warn', 'moved to front — pickup blocked', 'registry is unavailable'),
     // ADR 0266 決定3: worker transcript と受験者の答案の写しを置く盤面の状態
     recordContainer: () => halt(
       { color: 'var(--coral-4)', line: 'board record container unwritable · nothing starts', meta: 'see the repair question', taskId: null },

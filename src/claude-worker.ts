@@ -55,7 +55,6 @@ import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { boardEnvByName, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
-  guardRegistryDefaultBranch,
   quarantineWorkspace,
   type RunPlace,
   resolveExecutionWorkspace,
@@ -1558,18 +1557,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
     // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
-    // ADR 0020 part 2: `main` is read as a code constant, so verify it is still
-    // the clone's real default branch (origin/HEAD) — a mismatch drops the
-    // registry workspace into quarantine rather than silently trusting a
-    // branch that isn't the default. A side check: the current (non-registry)
-    // task keeps running regardless.
-    guardRegistryDefaultBranch(
-      this.options.db,
-      registry,
-      this.options.registry.dir,
-      this.workspacesDir,
-      this.options.clock.now(),
-    );
     // task.workspace (issue #26 / ADR 0009) and task.assignee (ADR 0012 /
     // issue #36) both take precedence over this worker's configured
     // defaults. Pickup has already written the defaults' names onto empty

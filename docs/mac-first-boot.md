@@ -81,6 +81,16 @@ If the board falls over, type the start line again. The reason it fell over is i
 limactl shell tidepool -- journalctl --user -u tidepool-board
 ```
 
+If the board stops picking up with `the registry clone's origin/HEAD does not point at origin/main`,
+point it back from the Mac and then answer the question the board raised:
+
+```bash
+limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && git -C "$TIDEPOOL_REGISTRY" remote set-head origin main'
+```
+
+With git 2.53, a `git fetch origin` you run in the registry clone yourself creates a missing
+`origin/HEAD`, so this can appear after such a fetch.
+
 ## Update Tidepool
 
 Updating is your decision, never a side effect of starting the VM. When you want the current

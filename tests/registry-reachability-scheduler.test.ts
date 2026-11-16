@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { loadRegistry, refreshRegistry } from "../src/registry.js";
+import { checkRegistryReachability, loadRegistry, refreshRegistry } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
@@ -118,9 +119,51 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
   const questions = listBoard(db).filter((task) => task.type === "question");
   expect({ started: worker.started, questionTitles: questions.map((task) => task.title) }).toEqual({
     started: [],
-    questionTitles: ["registry remote is unreachable — pickup is stopped"],
+    questionTitles: ["registry is unavailable — pickup is stopped"],
   });
   // ADR 0093 決定7: user token の失効はまずここに出るので、再ログインのコマンドを名指しする
   expect(questions[0]?.purpose).toContain("npm run github-login");
+  scheduler.stop();
+});
+
+it("registry clone の origin/HEAD が origin/main を指さない間は盤面全体の pickup を止める(ADR 0377 決定7)", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
+  execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop"], { cwd: registryDir });
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    registryReachability: () => checkRegistryReachability(registryDir, undefined, writeUnannounced),
+  });
+  registerTask(
+    db,
+    {
+      type: "work",
+      title: "queued behind the registry default branch",
+      purpose: "must wait until origin/HEAD points at origin/main",
+      completion_criteria: "runs after repair",
+    },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+
+  await clock.advance(HOURLY * 3);
+
+  const questions = listBoard(db).filter((task) => task.type === "question");
+  expect({ started: worker.started, questionCount: questions.length }).toEqual({ started: [], questionCount: 1 });
+  expect(questions[0]?.purpose).toContain(
+    `the registry clone's origin/HEAD does not point at origin/main. In ${registryDir}, run \`git remote set-head origin main\`.`,
+  );
   scheduler.stop();
 });

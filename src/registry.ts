@@ -778,6 +778,36 @@ export async function refreshRegistry(
   }
 }
 
+/** ADR 0377 決定7: 盤面は registry を code 定数の `main` から読むので、registry clone の `origin/HEAD`(git の default branch)が
+ *  別の branch を指せば default でない branch を黙って読む —— 到達できないのと同じ盤面全体の停止にする。読むのは clone の local
+ *  symref で、symref が無ければ食い違う相手が無いので通す。 */
+export function registryDefaultBranchCheck(dir: string): RegistryReachability {
+  let target: string;
+  try {
+    target = git(dir, "symbolic-ref", "refs/remotes/origin/HEAD");
+  } catch {
+    return { available: true };
+  }
+  return target === remoteTrackingRef(REGISTRY_BRANCH)
+    ? { available: true }
+    : {
+        available: false,
+        reason: `the registry clone's origin/HEAD does not point at origin/main. In ${dir}, run \`git remote set-head origin main\`.`,
+      };
+}
+
+/** 盤面のレジストリ到達性の検査(ADR 0052 決定2・5): pickup のゲート・quarantine の受理・起動時が撃つ。refresh の後に
+ *  default branch を見る(ADR 0377 決定7)。人間の registry 書き込み(`registry-write.ts`)は refresh だけを撃つ —— default branch
+ *  の食い違いで人間の書き込みは拒まない。 */
+export async function checkRegistryReachability(
+  dir: string,
+  auth: GitHubAuth | undefined,
+  writeRef: RefWriter,
+): Promise<RegistryReachability> {
+  const refreshed = await refreshRegistry(dir, auth, writeRef);
+  return refreshed.available ? registryDefaultBranchCheck(dir) : refreshed;
+}
+
 /** The committed registry files at `commit`, path → content, read in a fixed
  *  number of git spawns whatever the file count (issue #983): one `ls-tree`
  *  lists the blobs, one `cat-file --batch` streams them all. Only direct

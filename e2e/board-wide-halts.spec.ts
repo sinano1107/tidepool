@@ -47,9 +47,9 @@ test("registry remote に到達できなければ slot と queue ↑ の toast �
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
-  await expect(page.getByText("registry remote unreachable · nothing starts")).toBeVisible();
+  await expect(page.getByText("registry unavailable · nothing starts")).toBeVisible();
   await page.getByRole("button", { name: "↑", exact: true }).click();
-  await expect(page.getByText("registry remote is unreachable")).toBeVisible();
+  await expect(page.getByText("registry is unavailable")).toBeVisible();
 });
 
 // 決定1 の並び順は interface である。以前はキュー画面の pausedSlot がスロット行を

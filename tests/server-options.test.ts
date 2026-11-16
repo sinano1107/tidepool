@@ -229,7 +229,7 @@ it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ
   }).toMatchObject({
     composed: ["deckhand"],
     warnings: 1,
-    warning: expect.stringContaining("[registry] startup refresh failed"),
+    warning: expect.stringContaining("[registry] startup registry check failed"),
   });
   error.mockRestore();
 });

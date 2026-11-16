@@ -1,54 +1,36 @@
 import { execFileSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type Db, openDb } from "../src/db.js";
-import { loadRegistry } from "../src/registry.js";
-import { guardRegistryDefaultBranch, workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock } from "./fakes.js";
-import { quarantineQuestion } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { registryDefaultBranchCheck } from "../src/registry.js";
+import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
-/** A registry clone whose own workspaces.yaml carries a protected entry
- *  resolving to the clone itself (the registry workspace), with `origin/HEAD`
- *  optionally pointed at a given branch. `git symbolic-ref` sets the symref
- *  without needing a live remote — enough to exercise the default-branch guard. */
-async function setup(originHeadBranch: string | null): Promise<{ dir: string; db: Db }> {
-  const dir = await makeRegistry();
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: dir });
-  await writeFile(join(dir, "workspaces.yaml"), `registry:\n  path: ${dir}\n  protected: true\n`);
-  git("add", "-A");
-  git("commit", "-m", "registry self-entry");
-  if (originHeadBranch !== null) {
-    git("symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${originHeadBranch}`);
-  }
-  return { dir, db: openDb(":memory:") };
-}
+const git = (dir: string, ...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
 
-function guard(dir: string, db: Db): void {
-  guardRegistryDefaultBranch(db, loadRegistry(dir, "purely-local"), dir, "/unused-base", new FakeClock().now());
-}
-
-describe("guardRegistryDefaultBranch (ADR 0020 part 2)", () => {
-  it("origin/HEAD が origin/main を指すなら quarantine しない", async () => {
-    const { dir, db } = await setup("main");
-    guard(dir, db);
-    expect(workspaceNeedsHuman(db, "registry")).toBe(false);
+describe("registry clone の default branch の検査(ADR 0377 決定7)", () => {
+  it("origin/HEAD が origin/main 以外を指すなら registry は使えず、理由は直す手を名指す", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+    expect(registryDefaultBranchCheck(registryDir)).toEqual({
+      available: false,
+      reason: `the registry clone's origin/HEAD does not point at origin/main. In ${registryDir}, run \`git remote set-head origin main\`.`,
+    });
   });
 
-  it("origin/HEAD が main 以外を指すなら registry workspace を quarantine に落とす", async () => {
-    const { dir, db } = await setup("develop");
-    guard(dir, db);
-    expect(workspaceNeedsHuman(db, "registry")).toBe(true);
-    // the existing quarantine surface: a 1-choice Confirmation question stands
-    const question = quarantineQuestion(db, "workspace", "registry");
-    expect(question?.title).toContain("registry");
+  it("origin/HEAD が origin/main を指すなら使える", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    expect(registryDefaultBranchCheck(registryDir)).toEqual({ available: true });
   });
 
-  it("origin/HEAD が無い(remote 未設定のローカル clone)なら不一致ではなく、quarantine しない", async () => {
-    const { dir, db } = await setup(null);
-    guard(dir, db);
-    expect(workspaceNeedsHuman(db, "registry")).toBe(false);
+  it("origin/HEAD の symref が無いなら使える", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    expect(registryDefaultBranchCheck(registryDir)).toEqual({ available: true });
+  });
+
+  it("`git remote set-head origin main` で直せば同じ検査が通る(受理の撃ち直しが通る根拠)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+    expect(registryDefaultBranchCheck(registryDir).available).toBe(false);
+    git(registryDir, "remote", "set-head", "origin", "main");
+    expect(registryDefaultBranchCheck(registryDir)).toEqual({ available: true });
   });
 });

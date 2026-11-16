@@ -211,16 +211,18 @@ export const QUARANTINES = [
   {
     kind: "registryReachability" satisfies HaltKind,
     scope: "board",
-    // 答えの本文を修理メモに残すのは ADR 0052、github-login は ADR 0093
+    // 答えの本文を修理メモに残すのは ADR 0052、github-login は ADR 0093。原因は remote への到達と registry clone の
+    // default branch の2つなので、文はどちらにも真に書く(ADR 0377 決定7)
     prose: (_value: string | null, reason: string): QuarantineProse => ({
-      title: "registry remote is unreachable — pickup is stopped",
+      title: "registry is unavailable — pickup is stopped",
       purpose:
-        `${reason}. No agent task is picked up while this stands because every spawn depends ` +
-        "on the registry source of truth. Repair access to the registry remote, then answer — " +
-        "the board refreshes it again before accepting the answer, and keeps any answer text as " +
-        "a repair note. If the board's GitHub login was revoked or is missing, run " +
-        "`npm run github-login` on the board host first.",
-      completion_criteria: "the registry remote main is reachable again",
+        `${reason}\n\nNo agent task is picked up while this stands because every spawn depends ` +
+        "on the registry source of truth. Repair access to the registry remote or the registry clone's " +
+        "default branch, then answer — the board checks the registry again before accepting the answer, " +
+        "and keeps any answer text as a repair note. If the board's GitHub login was revoked or is missing, " +
+        "run `npm run github-login` on the board host first.",
+      completion_criteria:
+        "the registry remote main is reachable, and the registry clone's origin/HEAD points at origin/main or is absent",
     }),
   },
   {
