@@ -1,5 +1,7 @@
 # review の権限はエージェントではなくタスク型に由来する: 強制床はコードに置く
 
+**Status 追記: 次の追記の「registry clone の origin と同じ repo を origin に持つ workspace」は「宣言 `repo` が同じ repo の workspace」に替わる。子登録の承認は登録時点の同意で、後から保護が付いても遡らない —— registry の中身を守る不変条件は、着地の時点で保護を読み直す merge の門が持つ([ADR 0381](0381-the-registry-floor-is-judged-from-the-declared-repo-the-same-value-the-network-destination-comes-from-never-the-checkouts-origin.md) 決定1・6、2026-11-16、issue #3279)。**
+
 **Status 追記: 「registry 自身は保護 workspace」は置き換わる —— registry clone は workspace にならず、「registry の変更は常に人間 merge」の床は、registry clone の origin と同じ repo を origin に持つ workspace の全部に掛かる。保護は entry の flag と、この origin の比較の和で判定する([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・5・6、2026-11-15、issue #3178)。**
 
 issue #15 layer 2 のグリリングで決定。read-only は「review という行為の性質であって行為者の性質ではない」(CONTEXT.md の Review)— したがって review タスクは、実行エージェントが誰であっても(fix-forward RCA の self review を含め)、エージェント本来の authority profile ではなく**盤面固定の reviewer profile で spawn される**。task 型が profile を上書きする、権限モデルで唯一の場所である。

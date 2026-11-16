@@ -259,7 +259,7 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 同意は**列挙されたものすべてに対して**与えられる。1回の保存が複数の危険な値を含むとき、拒否の本文が理由コードを列挙し、人間が見たものと同意したものが一致する。
 
-**確認で買えないものが1つある** — registry と同じ repo を origin に持つ workspace の保護剥奪(ADR 0013 / ADR 0377 —— その保護は flag でなく計算で掛かっている)。これは同意の有無に関係なく、その扉では永久に拒まれる。
+**確認で買えないものが1つある** — 宣言 `repo` が registry と同じ repo の workspace の保護剥奪(ADR 0013 / ADR 0377 / ADR 0381 —— その保護は flag でなく計算で掛かっている)。これは同意の有無に関係なく、その扉では永久に拒まれる。
 
 ## Agent emoji(エージェント絵文字)
 
@@ -646,7 +646,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 ## Registry(レジストリ)
 
-エージェント定義(`agents/<name>.md`)・authority profile・workspaces.yaml を収める、盤面本体とは別の git リポジトリ(commit hash = agent の厳密な版 — ADR 0001)。盤面がこれを読む clone(registry clone)は workspace にならない —— 盤面の固定点として workspace の path との交差を拒まれ、基準の行も `task/<id>` も持たない。registry の repo に worker が書く道は、その repo の別の clone を workspace にした registry-edit タスクで、registry clone と同じ repo を origin に持つ workspace には保護が計算で掛かる(保護 workspace 参照。2026-11-14 の wayfinder、issue #3178 / ADR 0377 —— 旧・registry clone は v1 唯一の保護 workspace だった)。盤面が読むのは常に**リモートの main にコミット済みの内容**であり、ワーキングツリーも、ホスト上の clone のローカル `main` も決して読まれない(ADR 0020 / ADR 0052)— clone は正本ではなくリモートの読み取りキャッシュである。正本をリモート側に置くことが「人間の merge を通っていない内容が spawn に効く経路は構造的に存在しない」を**事実にする**: merge はリモート上の出来事なので、ローカルを正本と読む限りこの文の逆(merge を通った内容が spawn に効かない)が成立してしまう。変更の正規経路は2本(agent 発 = registry-edit タスク → PR → 人間 merge、人間発 = WebUI → 盤面がリモートの main へ直接コミット)で、帯域外の手編集はリモートに載らない限り無効。routing meta-review の「agent の既定 `tier` を下げる」提案の承認は人間発の扉に属する —— 承認回答は WebUI 操作と同じ人間の明示行為で、push に失敗すれば回答ごと成立しない(ADR 0150)。人間発の変更では**リモートへ載ったこと自体が「効いた」の定義**であり、載せられなかった編集は成立していない(ADR 0052 — 旧・「盤面はローカルを読むのだから既に効いている」という issue #57 の線は撤回)。
+エージェント定義(`agents/<name>.md`)・authority profile・workspaces.yaml を収める、盤面本体とは別の git リポジトリ(commit hash = agent の厳密な版 — ADR 0001)。盤面がこれを読む clone(registry clone)は workspace にならない —— 盤面の固定点として workspace の path との交差を拒まれ、基準の行も `task/<id>` も持たない。registry の repo に worker が書く道は、その repo の別の clone を workspace にした registry-edit タスクで、宣言 `repo` が registry clone の origin と同じ repo の workspace には保護が計算で掛かる(保護 workspace 参照。2026-11-14 の wayfinder、issue #3178 / ADR 0377 —— 旧・registry clone は v1 唯一の保護 workspace だった)。盤面が読むのは常に**リモートの main にコミット済みの内容**であり、ワーキングツリーも、ホスト上の clone のローカル `main` も決して読まれない(ADR 0020 / ADR 0052)— clone は正本ではなくリモートの読み取りキャッシュである。正本をリモート側に置くことが「人間の merge を通っていない内容が spawn に効く経路は構造的に存在しない」を**事実にする**: merge はリモート上の出来事なので、ローカルを正本と読む限りこの文の逆(merge を通った内容が spawn に効かない)が成立してしまう。変更の正規経路は2本(agent 発 = registry-edit タスク → PR → 人間 merge、人間発 = WebUI → 盤面がリモートの main へ直接コミット)で、帯域外の手編集はリモートに載らない限り無効。routing meta-review の「agent の既定 `tier` を下げる」提案の承認は人間発の扉に属する —— 承認回答は WebUI 操作と同じ人間の明示行為で、push に失敗すれば回答ごと成立しない(ADR 0150)。人間発の変更では**リモートへ載ったこと自体が「効いた」の定義**であり、載せられなかった編集は成立していない(ADR 0052 — 旧・「盤面はローカルを読むのだから既に効いている」という issue #57 の線は撤回)。
 
 **agent 名は専門性の連続性を担う**(ADR 0019): 定義の編集は洗練(refinement)に限られ、転生(repurposing — 専門性の別物への書き換え)は禁止。専門性を変えるときは新名で作成し、旧名は削除する(削除の余波は agent quarantine が受け止める)。この連続性が「修理・self RCA は現在の定義で走らせてよい」の根拠。
 
@@ -662,7 +662,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 「workspace 名 → リポジトリ」の対応が単射であること(同じリポジトリを複数名で登録しないこと)は、registry を組む人間が守る前提であり、盤面は強制しない — 作成の門は名前の一意性しか見ず、違反は登録時ではなく実行時に issue-backed task の確定的失敗経路が騒がしく検出する(2026-07-22 の grilling、issue #121)。
 
-**保護 workspace(protected)**: 感度を資源側に張り付けるマーカー。保護 workspace を名指しする子登録は、登録者の権限に関係なく無条件で人間への承認 question に変換され、そこへの PR は merge ダイヤルに関係なく常に人間が merge する。「そこへの変更は常に人間承認」を profile 側の状態から独立させる不変条件。v1 の用途は registry の repo である: 保護は、entry の flag が true であることと、checkout の origin が registry clone の origin と同じ repo であることの和で判定され、後者は flag なしに掛かる(ADR 0377 —— registry clone 自身は workspace にならない)。
+**保護 workspace(protected)**: 感度を資源側に張り付けるマーカー。保護 workspace を名指しする子登録は、登録者の権限に関係なく無条件で人間への承認 question に変換され、そこへの PR は merge ダイヤルに関係なく常に人間が merge する。「そこへの変更は常に人間承認」を profile 側の状態から独立させる不変条件。v1 の用途は registry の repo である: 保護は、entry の flag が true であることと、宣言 `repo` が registry clone の origin と同じ repo であることの和で判定され、後者は flag なしに掛かる(ADR 0377 —— registry clone 自身は workspace にならない、ADR 0381 —— 比べるのは盤面が出る先で、checkout の origin ではない)。merge は着地の時点の保護で決まり、子登録の承認は登録時点の保護で決まる —— 後から保護が付いても登録済みの子に承認は遡らない。
 
 **sparse snapshot(sparse-checkout の写し)**: 退役した語(issue #3032)。旧・worker が人間の checkout で走っていた頃、盤面が Git 共有された `.claude/settings.json` を実体化から外す(ADR 0158)前に記録したその checkout の sparse-checkout の状態で、人間の状態に除外を1行足して外し、写しどおり戻した(2026-10-21 の grilling、issue #1024 / ADR 0293)。worker は盤面が作って解放で消す task の checkout で走るので、盤面はその checkout の sparse-checkout に `settings.json` の除外の行を書くだけで、写すものも戻すものも無い(2026-11-07 の grilling、issue #2956 / ADR 0356 決定2)。
 
