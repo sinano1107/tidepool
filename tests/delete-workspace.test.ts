@@ -150,11 +150,13 @@ describe("deleteWorkspace: 開いた Quarantine と基準(ADR 0373 決定14)", (
     expect(getTask(s.db, question.id)!.status).toBe("todo");
   });
 
-  it("基準の行を持たない名前は消せ、開いていた Quarantine は削除が閉じて quarantine_released を残す(ADR 0373 決定14)", async () => {
+  it.each([
+    ["workspace", "workspace", "tidepool"],
+    ["封じ込め", "workspaceContainment", workspaceContainmentValue("claude-code", "tidepool")],
+  ] as const)("基準の行を持たない名前は消せ、開いていた %s の Quarantine は削除が閉じて quarantine_released を残す(ADR 0373 決定14)", async (_kind, quarantine, value) => {
     const db = openDb(":memory:");
-    const now = new Date();
-    quarantineWorkspace(db, "tidepool", "pickup failed before its first capture", now);
-    const question = quarantineQuestion(db, "workspace", "tidepool")!;
+    registerQuarantine(db, quarantine, value, "pickup failed before its first capture", new Date());
+    const question = quarantineQuestion(db, quarantine, value)!;
     const registryDir = await makeMainRegistry();
 
     await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db });
@@ -162,7 +164,7 @@ describe("deleteWorkspace: 開いた Quarantine と基準(ADR 0373 決定14)", (
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
     expect(getTask(db, question.id)!.status).toBe("done");
     expect(listEvents(db, question.id).map(({ payload }) => payload).filter(({ kind }) => kind === "quarantine_released")).toEqual([
-      { kind: "quarantine_released", quarantine: "workspace", value: "tidepool" },
+      { kind: "quarantine_released", quarantine, value },
     ]);
   });
 

@@ -874,7 +874,8 @@ export async function prepareAtPickup(
     appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: { kind: "task_picked_up" }, at: now });
   }
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
-  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now });
+  // 既定は registry の無い盤面(最初の撮りの確認は掛からない、ADR 0373 決定13)
+  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now, resolveRegistered: board.resolveRegistered });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
 

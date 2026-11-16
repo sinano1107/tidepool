@@ -87,7 +87,8 @@ function describeReason(reason: DeletionBlockedReason, resourceName: string): st
     return `${reason.count} completed task(s) still await landing through it: ${reason.task_ids.join(", ")}`;
   }
   if (reason.code === "board_default") return "it is the board's default";
-  // spec #3273 text B10
+  // spec #3273 text B10。ADR 0373 決定14: 名前を名指す Quarantine が開いていて基準の行がある間は拒む —— 削除 → 再登録 → `repaired by hand` で
+  // 比較を迂回させない
   if (reason.code === "open_quarantine") return `workspace "${resourceName}" has an open Quarantine (question ${reason.question_id}) and a baseline — answer it first.`;
   if (reason.code === "board_auditor") return "it is the board's Auditor";
   if (reason.code === "board_interviewer") return "it is the board's Interviewer";

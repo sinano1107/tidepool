@@ -22,7 +22,7 @@ import {
   exactProtectedBranchRef,
   originUrl,
 } from "./pickup-predicates.js";
-import { openQuarantineQuestion, openQuarantineQuestions, parseWorkspaceContainmentValue } from "./quarantine.js";
+import { openQuarantineQuestion, openQuarantineQuestions, parseWorkspaceContainmentValue, type QuarantineKind } from "./quarantine.js";
 import {
   assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
@@ -439,8 +439,8 @@ export async function deleteWorkspace(
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
   // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む
-  const open = namingQuarantines(deps.db, input.name);
-  if (open.length > 0 && holdsBaseline(deps.db, input.name)) reasons.push({ code: "open_quarantine", question_id: open[0]!.id });
+  const [openQuarantine] = openQuarantinesNaming(deps.db, input.name);
+  if (openQuarantine && holdsBaseline(deps.db, input.name)) reasons.push({ code: "open_quarantine", question_id: openQuarantine.id });
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
   // checkout の場所はエントリを消す前に読む —— 消した後の registry からは
@@ -457,17 +457,20 @@ export async function deleteWorkspace(
     },
     `delete workspace ${input.name} via WebUI`,
   );
-  // 行の無い名前の削除は、開いていた Quarantine を観測で閉じて event に残す(ADR 0373 決定14)
+  // 行の無い名前の削除は、開いていた Quarantine を観測で閉じて event に残す(ADR 0373 決定14)。閉じるものは行を消すのと同じ transaction で
+  // 読み直す —— 拒否の検査の後に立ったもの(この名前の B9 など)も残さない
   deps.db.transaction(() => {
     dropWorkspaceState(deps.db, input.name);
     const now = (deps.clock ?? new SystemClock()).now();
-    for (const { id, kind, value } of open) settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
+    for (const { id, kind, value } of openQuarantinesNaming(deps.db, input.name)) {
+      settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
+    }
   })();
   return checkout;
 }
 
 /** その名前を名指す開いた Quarantine(workspace と封じ込めの組)。 */
-function namingQuarantines(db: Db, name: string): Array<{ id: string; kind: "workspace" | "workspaceContainment"; value: string }> {
+function openQuarantinesNaming(db: Db, name: string): Array<{ id: string; kind: Extract<QuarantineKind, "workspace" | "workspaceContainment">; value: string }> {
   const workspace = openQuarantineQuestion(db, "workspace", name);
   const containment = [...openQuarantineQuestions(db, "workspaceContainment")]
     .filter(([value]) => parseWorkspaceContainmentValue(value!).workspace === name)
