@@ -80,8 +80,8 @@ it("盤面の registry fetch は仲介の installation token で、盤面が組�
 
   // 網に出る2つ(原本の sha を読む ls-remote と、その sha の fetch)がどちらも同じ名義で撃たれる
   for (const [verb, command] of [
-    ["ls-remote", ["ls-remote", "https://github.com/acme/registry.git", "refs/heads/main"]],
-    ["fetch", ["fetch", "--quiet", "https://github.com/acme/registry.git", `${ORIGIN_SHA}:refs/board/fetched`]],
+    ["ls-remote", ["ls-remote", "--", "https://github.com/acme/registry.git", "refs/heads/main"]],
+    ["fetch", ["fetch", "--quiet", "--", "https://github.com/acme/registry.git", `${ORIGIN_SHA}:refs/board/fetched`]],
   ] as const) {
     const { args, env } = observed(calls(), verb);
     expect({
@@ -112,8 +112,8 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
       return { command: args.slice(args.indexOf(verb)), servesToken: args.some((a) => a.includes("password=$GH_TOKEN")), token: env.GH_TOKEN };
     }),
   ).toEqual([
-    { command: ["ls-remote", "https://github.com/acme/registry.git", "refs/heads/main"], servesToken: false, token: "" },
-    { command: ["fetch", "--quiet", "https://github.com/acme/registry.git", `${ORIGIN_SHA}:refs/board/fetched`], servesToken: false, token: "" },
+    { command: ["ls-remote", "--", "https://github.com/acme/registry.git", "refs/heads/main"], servesToken: false, token: "" },
+    { command: ["fetch", "--quiet", "--", "https://github.com/acme/registry.git", `${ORIGIN_SHA}:refs/board/fetched`], servesToken: false, token: "" },
   ]);
 });
 

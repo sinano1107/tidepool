@@ -2544,6 +2544,9 @@ it("宣言が registry の repo の workspace は、pickup の後に origin を�
   expect(mergeQuestions(db)).toMatchObject([
     { pr: 1, recommendation: "merge", purpose: expect.stringContaining("always needs a human merge") },
   ]);
+  // ADR 0378 決定1: タスクブランチは向け替えた先ではなく宣言の registry の repo に届く
+  expect(git(workspace.repo!, "rev-parse", `refs/heads/task/${work.id}`)).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(git(other.workspace.repo!, "for-each-ref", "refs/heads/task")).toBe("");
 });
 
 // 着地の面(question)の理由 3 つは、question 本文の違いだけで区別される。本文を逐語で釘付けする。

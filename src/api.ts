@@ -192,7 +192,7 @@ import {
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
-  WorkspaceOriginUnprotectError,
+  WorkspaceRegistryUnprotectError,
 } from "./workspace-create.js";
 
 function formatValidationError(error: z.ZodError): string {
@@ -963,7 +963,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // true once the human accepts — same round trip a direct API caller
         // gets, no client-side pre-judgment of danger (ADR 0027)
         sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
-      } else if (err instanceof WorkspaceOriginUnprotectError) {
+      } else if (err instanceof WorkspaceRegistryUnprotectError) {
         // ADR 0377 決定6 / ADR 0381 決定1: confirmation cannot override protection computed from the declared repo.
         sendJson(res.status(403), { error: err.message });
       } else {

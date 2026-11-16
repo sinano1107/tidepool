@@ -16,6 +16,7 @@ import {
   type GitSource,
   originRepo,
   remoteTrackingRef,
+  sourceCheckout,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
@@ -717,7 +718,7 @@ export function fetchBranchCopy(source: GitSource, auth: GitHubAuth | undefined,
   const copy = remoteTrackingRef(branch);
   writeRef(copy, sha, () => {
     fetchCommit(source, auth, sha);
-    git(typeof source === "string" ? source : source.path, "update-ref", copy, sha);
+    git(sourceCheckout(source), "update-ref", copy, sha);
   });
 }
 

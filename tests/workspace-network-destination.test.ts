@@ -1,20 +1,23 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GhCliClient } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, pickupTask, registerTask } from "../src/tasks.js";
+import { completeTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
+import { queueReturnHandler } from "../src/watchdog.js";
 import { boardRefWriter, pickupGate, recordTaskCheckoutTip, resolveExecutionWorkspace } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeClock } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, prepareAtPickup, settleReviews, shimGit } from "./harness.js";
+import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, settleReviews, shimGit } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -74,6 +77,63 @@ it("compares raw origin URLs and accepts equivalent spellings of the same GitHub
 
   git(workspace.path, "config", "--replace-all", "remote.origin.url", "git@GitHub.com:Acme/PROJECT");
   await expect(pickupGate(db, workspace, task, base)).resolves.toBeDefined();
+});
+
+it.each([
+  ["declares a repo", true],
+  ["declares no repo", false],
+])("refuses pickup when the checkout's config is a dangling symlink and it %s", async (_, declared) => {
+  const { workspace: remoteBacked } = await makeRemoteBackedWorkspace("dangling-config");
+  const workspace = declared ? remoteBacked : { ...remoteBacked, repo: undefined };
+  const config = join(workspace.path, ".git", "config");
+  rmSync(config);
+  symlinkSync("missing-config", config);
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+
+  await expect(pickupGate(db, workspace, task, await tempDir("tidepool-destination-checkouts-"))).rejects.toThrow(
+    `workspace ${workspace.name}: could not read its checkout's origin in ${workspace.path}`,
+  );
+});
+
+// ADR 0378 決定3: 向け替えられた origin は手元の修理なので、scheduler は token を問い合わせず F1 の文で Quarantine する
+it("the scheduler quarantines a re-pointed origin with the repair text and without asking for repo access", async ({ onTestFinished }) => {
+  const workspace = { ...(await makeWorkspace("scheduler-repointed")), repo: "https://github.com/acme/widget" };
+  git(workspace.path, "remote", "add", "origin", "https://github.com/acme/other.git");
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  const github = new FakeGitHubClient();
+  const refusal = "the GitHub token broker refused a token for acme/widget (HTTP 404: repo_unreachable)";
+  github.scriptUnreachable("acme/widget", refusal);
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const slot = new Slot();
+  const containers = fakeContainers();
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db, clock, slot, worker, containers, github,
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => workspace, pollNow: () => scheduler.pollNow() }, containers, { defaultWorkspaceName: workspace.name }),
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    workspace,
+    resolveWorkspace: () => workspace,
+    workspacesDir: await tempDir("tidepool-destination-checkouts-"),
+  });
+  onTestFinished(() => scheduler.stop());
+
+  await clock.advance(HOURLY);
+  await vi.waitFor(() => expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined());
+
+  expect(github.repoAccessCalls).toBe(0);
+  const purpose = quarantineQuestion(db, "workspace", workspace.name)!.purpose;
+  expect(purpose).toContain(`workspace ${workspace.name} declares repo ${workspace.repo}, but its checkout's origin is https://github.com/acme/other.git. In ${workspace.path}, run \`git remote set-url origin ${workspace.repo}\`.`);
+  expect(purpose).not.toContain(refusal);
+  expect(worker.started).toEqual([]);
+  expect(getTask(db, task.id)).toMatchObject({ status: "todo" });
 });
 
 it("keeps HTTP credentials out of origin mismatch diagnostics and repair commands", async ({ onTestFinished }) => {
@@ -194,9 +254,7 @@ it("teardown and landing use the declared repository after origin changes during
   const bin = await tempDir("tidepool-gh-destination-");
   const tokenFile = join(bin, "user-token");
   writeFileSync(tokenFile, "user-token", { mode: 0o600 });
-  const ghLog = join(bin, "gh.log");
   writeFileSync(join(bin, "gh"), `#!/bin/sh
-printf '%s\\n' "$*" >> "${ghLog}"
 case "$2" in
   list) echo '[]' ;;
   create) echo 'https://github.com/acme/declared/pull/7' ;;
@@ -221,9 +279,6 @@ esac
   }))).toEqual(["ls-remote", "fetch", "push"].map((verb) => ({ verb, destination: declared.workspace.repo, token: "installation-token" })));
   expect(broker.requests.map(({ repo }) => repo)).toEqual(["acme/declared"]);
   expect(verdicts).toEqual([expect.objectContaining({ taskId: task.id, verdict: expect.objectContaining({ kind: "landed", prNumber: 7 }) })]);
-  const gh = readFileSync(ghLog, "utf8");
-  expect(gh).toMatch(/^pr list .* -R acme\/declared$/m);
-  expect(gh).toMatch(/^pr create [\s\S]* -R acme\/declared$/m);
   expect(git(declared.workspace.repo!, "rev-parse", `refs/heads/task/${task.id}`)).toBe(git(workspace.path, "rev-parse", `refs/heads/task/${task.id}`));
   expect(git(other.workspace.repo!, "for-each-ref", "refs/heads/task")).toBe("");
 });

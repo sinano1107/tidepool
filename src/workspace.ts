@@ -84,6 +84,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
+import { sameRepository } from "./repo-access.js";
 import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
@@ -116,7 +117,7 @@ export interface WorkspaceConfig {
   /** The protected branch (issue #27 / ADR 0023): lineage bottom, PR base,
    *  and direct-write-ban target, all one field. Absent → "main" —
    *  the pre-#27 shape for a `WorkspaceConfig` built outside the registry
-   *  (main.ts's fixed single-workspace fallback, test fixtures). */
+   *  (test fixtures). */
   branch?: string;
   /** ADR 0378 決定1: the registry declares the network destination in `repo`. An absent value declares a purely-local workspace. */
   repo?: string;
@@ -779,11 +780,11 @@ export function entryCheckoutPath(
   return entry.path ?? conventionCheckoutPath(name, workspacesBaseDir);
 }
 
-export type WorkspaceOriginProtection =
+export type WorkspaceRegistryProtection =
   | { reason: "registry_repository"; repo: string }
   | { reason: "unreadable_registry_origin" };
 
-type WorkspaceProtection = WorkspaceOriginProtection | { reason: "flag" };
+type WorkspaceProtection = WorkspaceRegistryProtection | { reason: "flag" };
 
 /** ADR 0381 決定1・2: protected = the flag, or the declared `repo` reaches the registry clone's repository. The checkout
  *  is never read: `path` is only the base a relative declaration resolves against, as its network destination does.
@@ -797,9 +798,7 @@ export function workspaceProtectionReader(registryDir: string): (entry: Workspac
       const repo = registryOrigin.value;
       if (repo === null) return { reason: "unreadable_registry_origin" };
       if (repo !== undefined) {
-        // ADR 0378 決定4: GitHub by owner/name, anything else by the URL the board would reach
-        const registry = networkDestination(repo.trim(), registryDir);
-        if (declared.key || registry.key ? declared.key === registry.key : declared.url === registry.url) {
+        if (sameRepository(declared.url, networkDestination(repo.trim(), registryDir).url)) {
           return { reason: "registry_repository", repo };
         }
       }

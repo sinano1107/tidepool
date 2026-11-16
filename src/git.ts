@@ -64,11 +64,11 @@ export function readCheckoutOrigin(cwd: string, selection: "first" | "last" = "l
     if (!statSync(join(repo.slice(1, -1), "config")).isFile()) return null;
     const remote = readConfig(readGit, ["--get-regexp", "^remote\\.origin\\.[^.]+$"]);
     if (remote === undefined) return undefined;
-    // ADR 0378 決定2・4: registry identity uses Git's single-key config lookup. Workspace pickup compares the fetch URL.
+    // Pickup compares the fetch URL, the first one Git fetches from. "last" is the value the board's network calls read.
     const urlKey = "remote.origin.url";
-    const urls = remote.split("\0").filter((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`));
-    const url = selection === "first" ? urls[0] : urls.at(-1);
-    const origin = url?.slice(urlKey.length + 1);
+    const origin = selection === "first"
+      ? remote.split("\0").find((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`))?.slice(urlKey.length + 1)
+      : readOriginConfig(readGit);
     return origin?.trim() ? origin : null;
   } catch {
     return null;

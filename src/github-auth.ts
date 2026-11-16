@@ -188,8 +188,8 @@ export function originRepo(cwd: string): string | undefined {
   return repoKey(originValue(cwd));
 }
 
-/** The checkout's raw `remote.origin.url` — the value before any `insteadOf` (ADR 0339 決定4), the board's one
- *  reading of "origin". `undefined` with no origin or outside a checkout. */
+/** The checkout's raw `remote.origin.url` — the value before any `insteadOf` (ADR 0339 決定4), read as the registry's
+ *  network calls read it. `undefined` with no origin or outside a checkout. */
 export function originValue(cwd: string): string | undefined {
   try {
     return checkoutOrigin(cwd, "config");
@@ -237,6 +237,11 @@ export function workspaceNetworkDestination(workspace: WorkspaceConfig & { named
 /** A workspace declaration or the path of the board's registry checkout (ADR 0378 決定1・2). */
 export type GitSource = WorkspaceConfig | string;
 
+/** The checkout a source's Git runs in. */
+export function sourceCheckout(source: GitSource): string {
+  return typeof source === "string" ? source : source.path;
+}
+
 /** リモート側のブランチを指す remote-tracking ref(写し)の**綴り**。ADR 0052 のもとで「リモートの正本を読む」は registry の役
  *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れ、書くのは push の後の `authedPush` と
  *  `fetchBranchCopy` —— 綴りそのものは1つでなければならない(2つ持つと、片方だけを直したときに黙ってずれる)。どちらの ref を
@@ -283,7 +288,7 @@ function inBoardRepo<T>(
   verb: string,
   run: (call: AuthedCall & { boardRepo: string }, url: string) => T,
 ): T {
-  const checkout = typeof source === "string" ? source : source.path;
+  const checkout = sourceCheckout(source);
   const destination = typeof source === "string"
     ? networkDestination(checkoutOrigin(source, verb), source)
     : workspaceNetworkDestination(source);
@@ -338,7 +343,7 @@ export function authedPush(
   const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
   const flags = branches.length > 1 ? ["--atomic"] : [];
   inBoardRepo(auth, source, timeoutMs, "push", (call, url) => runAuthedGit(call, ["push", ...flags, "--", url, ...refspecs]));
-  const checkout = typeof source === "string" ? source : source.path;
+  const checkout = sourceCheckout(source);
   for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch), sha);
 }
 

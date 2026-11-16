@@ -26,7 +26,7 @@ export type LiveBoardTask = Live<BoardTask>;
 const TTL_MS = 30_000;
 
 export class IssueContentCache {
-  // keyed by workspace destination and issue number (ADR 0016)
+  // keyed by checkout path, declared repo and issue number: the fetch reaches the declared repo (ADR 0378 決定1)
   private readonly entries = new Map<string, { content: TaskContent; fetchedAt: number }>();
   // one fetch per key at a time: overlapping polls (/tasks and /queue fire
   // together, or several tasks reference the same issue) share the in-flight

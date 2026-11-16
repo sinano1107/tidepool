@@ -15,7 +15,6 @@ import {
   originValue,
   remoteTrackingRef,
   repoKey,
-  workspaceNetworkDestination,
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
@@ -52,7 +51,7 @@ import {
   resolvesToRegistryClone,
   UnknownWorkspaceError,
   type WorkspaceConfig,
-  type WorkspaceOriginProtection,
+  type WorkspaceRegistryProtection,
   type WorkspacesBaseDirSource,
   workspaceProtectionReader,
   writeBoardRefs,
@@ -312,8 +311,8 @@ export class WorkspaceConfirmationRequiredError extends Error {
 }
 
 /** ADR 0381 決定1・4: protection computed from the declaration applies permanently, or waits for a registry clone repair. */
-export class WorkspaceOriginUnprotectError extends Error {
-  constructor(name: string, protection: WorkspaceOriginProtection) {
+export class WorkspaceRegistryUnprotectError extends Error {
+  constructor(name: string, protection: WorkspaceRegistryProtection) {
     let message: string;
     switch (protection.reason) {
       case "registry_repository":
@@ -324,7 +323,7 @@ export class WorkspaceOriginUnprotectError extends Error {
         break;
     }
     super(message);
-    this.name = "WorkspaceOriginUnprotectError";
+    this.name = "WorkspaceRegistryUnprotectError";
   }
 }
 
@@ -337,7 +336,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
     const path = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
     const protection = workspaceProtectionReader(deps.registry.dir)(entry, path);
     if (protection && protection.reason !== "flag") {
-      throw new WorkspaceOriginUnprotectError(input.name, protection);
+      throw new WorkspaceRegistryUnprotectError(input.name, protection);
     }
   }
   // grammar before confirmation, for the same reason as the protection floor: a
@@ -530,8 +529,8 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
   // `authedPush` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
-  const destination = { name: input.name, path: dir, repo: input.repo };
-  await deps.githubAuth.ensureToken(workspaceNetworkDestination(destination)?.key);
+  await deps.githubAuth.ensureToken(repoKey(input.repo));
+  const declaration = { name: input.name, path: dir, repo: input.repo };
   // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedPush` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
@@ -563,7 +562,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
       // (ADR 0066 決定6)。
       // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しの `remote remove` がこれも消す
-      authedPush(githubAuth, destination, GIT_NETWORK_TIMEOUT_MS, branches);
+      authedPush(githubAuth, declaration, GIT_NETWORK_TIMEOUT_MS, branches);
       commitWorkspaceEntry(
         deps,
         input.name,
@@ -866,7 +865,7 @@ export interface WorkspaceView extends WorkspaceEntry {
   name: string;
   registrySelf: boolean;
   protected: boolean;
-  protectionReason?: WorkspaceOriginProtection["reason"];
+  protectionReason?: WorkspaceRegistryProtection["reason"];
 }
 
 /** The list read with the base directory as an attribute of the list itself
