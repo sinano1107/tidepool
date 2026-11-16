@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { git, localGitEnv, rethrowNamingMissingCwd } from "./git.js";
+import { git, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
 import { parseGitHubRepo } from "./repo-access.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -187,40 +187,20 @@ export function originRepo(cwd: string): string | undefined {
  *  reading of "origin". `undefined` with no origin or outside a checkout. */
 export function originValue(cwd: string): string | undefined {
   try {
-    return readOriginConfig(cwd);
+    return checkoutOrigin(cwd, "config");
   } catch {
     return undefined;
   }
 }
 
-/** ADR 0378 決定4: compare the configured origin before applying insteadOf. */
-function readOriginConfig(cwd: string): string | undefined {
-  try {
-    return execFileSync("git", ["config", "--null", "remote.origin.url"], {
-      cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"], encoding: "utf8",
-    }).slice(0, -1);
-  } catch (err) {
-    if ((err as { status?: number }).status === 1) return undefined;
-    throw err;
-  }
-}
-
-/** A readable checkout without an origin returns undefined. An unreadable checkout throws. */
-export function readCheckoutOrigin(cwd: string): string | undefined {
-  if (git(cwd, "rev-parse", "--show-prefix") !== "") {
-    throw new Error(`the directory ${cwd} is inside another checkout`);
-  }
-  const origin = readOriginConfig(cwd);
-  if (origin === "") throw new Error(`the origin in ${cwd} is empty`);
-  return origin;
-}
-
 /** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
 function checkoutOrigin(cwd: string, verb: string): string {
   try {
-    const origin = readOriginConfig(cwd);
+    const origin = readOriginConfig((args) =>
+      execFileSync("git", args, { cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"] }),
+    );
     if (origin === undefined) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
-    return origin;
+    return origin.trim();
   } catch (err) {
     rethrowNamingMissingCwd(err, cwd, [verb]);
   }

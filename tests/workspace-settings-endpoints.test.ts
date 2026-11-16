@@ -149,8 +149,11 @@ it("文法違反の allowed_domains は 400 — confirm では買えない失敗
   expect(res.status).toBe(400);
 });
 
-it.each(["https://github.com/octocat/registry.git", undefined])("origin による保護の解除は 403(confirm があっても, repo=%s)", async (repo) => {
-  const refusal = new WorkspaceOriginUnprotectError("registry-edit", repo);
+it("origin による保護の解除は確認付きでも 403 になる", async () => {
+  const refusal = new WorkspaceOriginUnprotectError("registry-edit", {
+    reason: "registry_repository",
+    repo: "https://github.com/octocat/registry.git",
+  });
   t = await bootTidepool({
     workspaceAdmin: {
       update: async () => {

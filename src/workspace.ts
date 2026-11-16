@@ -36,6 +36,7 @@ import {
   gitWithoutHistoryOverrides,
   outOfSpace,
   ownWorktreeStatus,
+  readCheckoutOrigin,
   type SparsePolicy,
   stagingHostStep,
   TaskCheckoutHostError,
@@ -49,7 +50,6 @@ import {
 import {
   type GitHubAuth,
   originRepo,
-  readCheckoutOrigin,
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
@@ -789,27 +789,28 @@ export function entryCheckoutPath(
   return entry.path ?? conventionCheckoutPath(name, workspacesBaseDir);
 }
 
-type WorkspaceProtection =
+export type WorkspaceOriginProtection =
   | { reason: "registry_repository"; repo: string }
   | { reason: "unreadable_origin" }
-  | { reason: "flag" };
+  | { reason: "unreadable_registry_origin" };
 
-/** ADR 0377 決定5・6: every checkout of the registry's repository requires human approval. */
-export function workspaceProtection(
-  entry: WorkspaceEntry,
-  path: string,
-  registryDir: string,
-): WorkspaceProtection | undefined {
-  try {
+type WorkspaceProtection = WorkspaceOriginProtection | { reason: "flag" };
+
+/** ADR 0377 決定5・6: every checkout of the registry's repository requires human approval.
+ *  Create one reader per operation so a list reads the registry's origin at most once. */
+export function workspaceProtectionReader(registryDir: string): (entry: WorkspaceEntry, path: string) => WorkspaceProtection | undefined {
+  let registryOrigin: { value: string | undefined | null } | undefined;
+  return (entry, path) => {
     const origin = readCheckoutOrigin(path);
+    if (origin === null) return { reason: "unreadable_origin" };
     if (origin !== undefined) {
-      const repo = readCheckoutOrigin(registryDir);
+      registryOrigin ??= { value: readCheckoutOrigin(registryDir) };
+      const repo = registryOrigin.value;
+      if (repo === null) return { reason: "unreadable_registry_origin" };
       if (repo !== undefined && sameRepository(origin, repo)) return { reason: "registry_repository", repo };
     }
-  } catch {
-    return { reason: "unreadable_origin" };
-  }
-  return entry.protected === true ? { reason: "flag" } : undefined;
+    return entry.protected === true ? { reason: "flag" } : undefined;
+  };
 }
 
 /** Every registered workspace resolved to its checkout (ADR 0040's boot sweep).

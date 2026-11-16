@@ -119,8 +119,8 @@ it("update_workspace は confirm を持たず、危険な値は WebUI への案�
   }
 });
 
-it.each(["https://github.com/octocat/registry.git", undefined])("origin による保護の解除は管理 MCP の tool error になる(repo=%s)", async (repo) => {
-  const refusal = new WorkspaceOriginUnprotectError("registry-edit", repo);
+it("origin による保護の解除は管理 MCP の tool error になる", async () => {
+  const refusal = new WorkspaceOriginUnprotectError("registry-edit", { reason: "unreadable_origin" });
   t = await bootTidepool({ workspaceAdmin: { update: async () => { throw refusal; } } });
   const client = await managementMcpClient(t.baseUrl);
   try {

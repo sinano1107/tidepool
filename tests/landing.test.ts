@@ -53,7 +53,7 @@ import {
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
-  workspaceProtection,
+  workspaceProtectionReader,
   writeBoardRefs,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, fakeHead, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
@@ -2505,7 +2505,7 @@ it("registry と同じ repo へ開いた PR は flag が無くても人間の me
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtection({}, workspace.path, registryDir) !== undefined,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({}, workspace.path) !== undefined,
   });
 
   expect(await convergeOn(landing, work.id)).toMatchObject({ kind: "landed", form: "pull_request_opened" });
@@ -2630,7 +2630,7 @@ it("キュー投入の後に registry と同じ repo の workspace が保護さ�
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtection({}, workspace.path, registryDir) !== undefined,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({}, workspace.path) !== undefined,
   });
 
   git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));

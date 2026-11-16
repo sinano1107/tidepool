@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGitHubRepo, repairRepoAccess } from "../src/repo-access.js";
+import { parseGitHubRepo, repairRepoAccess, sameRepository } from "../src/repo-access.js";
 import { FakeGitHubClient } from "./fakes.js";
 
 describe("parseGitHubRepo(ADR 0067 決定1: これは github.com か、の門)", () => {
@@ -10,6 +10,14 @@ describe("parseGitHubRepo(ADR 0067 決定1: これは github.com か、の門)",
     expect(parseGitHubRepo("git@github.com:sinano1107/tidepool.git")).toEqual(ref);
     expect(parseGitHubRepo("ssh://git@github.com/sinano1107/tidepool")).toEqual(ref);
     expect(parseGitHubRepo("sinano1107/tidepool")).toEqual(ref);
+  });
+
+  it.each([
+    "https://github.com/Sinano1107/Tidepool/",
+    "https://github.com/Sinano1107/Tidepool.git/",
+    "https://git@github.com/Sinano1107/Tidepool.git",
+  ])("Git が受ける URL の綴り %s を同じ owner/name に畳む(ADR 0378 決定4)", (url) => {
+    expect(parseGitHubRepo(url)).toEqual({ owner: "sinano1107", name: "tidepool" });
   });
 
   it("github.com 以外は undefined —— 非 GitHub の remote では probe も受諾も発火しない", () => {
@@ -24,6 +32,11 @@ describe("parseGitHubRepo(ADR 0067 決定1: これは github.com か、の門)",
     expect(parseGitHubRepo("../up.git")).toBeUndefined();
     expect(parseGitHubRepo("./up")).toBeUndefined();
   });
+});
+
+it("GitHub の照合では盤面の通信と同じく URL の前後の空白を除き、他の origin は文字列のまま比べる(ADR 0378 決定4)", () => {
+  expect(sameRepository(" git@github.com:Sinano1107/Tidepool.git ", "https://github.com/sinano1107/tidepool")).toBe(true);
+  expect(sameRepository(" /srv/git/tidepool.git ", "/srv/git/tidepool.git")).toBe(false);
 });
 
 describe("repairRepoAccess(ADR 0093 決定8: 修復は「App を install する」)", () => {

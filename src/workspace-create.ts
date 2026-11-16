@@ -47,8 +47,9 @@ import {
   resolvesToRegistryClone,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  type WorkspaceOriginProtection,
   type WorkspacesBaseDirSource,
-  workspaceProtection,
+  workspaceProtectionReader,
   writeBoardRefs,
 } from "./workspace.js";
 
@@ -305,14 +306,36 @@ export class WorkspaceConfirmationRequiredError extends Error {
   }
 }
 
-/** ADR 0377 決定5・6: confirmation can remove a flag, but cannot override origin-based protection. */
+/** Remote URLs can carry credentials. The refusal only needs a label for the repository. */
+function repositoryLabel(repo: string): string {
+  const origin = repo.trim();
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(origin)) {
+    try {
+      const url = new URL(origin);
+      return `${url.protocol}//${url.host}${url.pathname}`;
+    } catch {
+      return "origin configured in the registry clone";
+    }
+  }
+  return origin.replace(/^[^:/@]+@(?=(?:\[[^\]]+\]|[^:/]+):)/, "");
+}
+
+/** ADR 0377 決定5・6: origin-based protection requires a checkout repair or applies permanently. */
 export class WorkspaceOriginUnprotectError extends Error {
-  constructor(name: string, repo?: string) {
-    super(
-      repo !== undefined
-        ? `workspace "${name}" shares the registry's repository (${repo}), so it is always protected; this cannot be bought with a confirmation.`
-        : `the origin of workspace "${name}"'s checkout cannot be read, so the workspace is treated as protected; repair the checkout first.`,
-    );
+  constructor(name: string, protection: WorkspaceOriginProtection) {
+    let message: string;
+    switch (protection.reason) {
+      case "registry_repository":
+        message = `workspace "${name}" shares the registry's repository (${repositoryLabel(protection.repo)}), so it is always protected; this cannot be bought with a confirmation.`;
+        break;
+      case "unreadable_origin":
+        message = `the origin of workspace "${name}"'s checkout cannot be read, so the workspace is treated as protected; repair the checkout first.`;
+        break;
+      case "unreadable_registry_origin":
+        message = `the origin of the registry clone cannot be read, so workspace "${name}" is treated as protected; repair the registry checkout first.`;
+        break;
+    }
+    super(message);
     this.name = "WorkspaceOriginUnprotectError";
   }
 }
@@ -324,12 +347,9 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (!entry) throw new UnknownWorkspaceError(input.name);
   if (input.protected === false) {
     const path = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
-    const protection = workspaceProtection(entry, path, deps.registry.dir);
-    if (protection?.reason === "registry_repository") {
-      throw new WorkspaceOriginUnprotectError(input.name, protection.repo);
-    }
-    if (protection?.reason === "unreadable_origin") {
-      throw new WorkspaceOriginUnprotectError(input.name);
+    const protection = workspaceProtectionReader(deps.registry.dir)(entry, path);
+    if (protection && protection.reason !== "flag") {
+      throw new WorkspaceOriginUnprotectError(input.name, protection);
     }
   }
   // grammar before confirmation, for the same reason as the protection floor: a
@@ -838,7 +858,7 @@ export interface WorkspaceView extends WorkspaceEntry {
   name: string;
   registrySelf: boolean;
   protected: boolean;
-  protectionReason?: "registry_repository" | "unreadable_origin";
+  protectionReason?: WorkspaceOriginProtection["reason"];
 }
 
 /** The list read with the base directory as an attribute of the list itself
@@ -858,10 +878,11 @@ export function listWorkspaceViews(
   source: WorkspacesBaseDirSource,
 ): WorkspaceListView {
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const readProtection = workspaceProtectionReader(deps.registry.dir);
   return {
     workspaces: Object.entries(registry.workspaces).map(([name, entry]) => {
       const path = entryCheckoutPath(entry, name, deps.workspacesBaseDir);
-      const protection = workspaceProtection(entry, path, deps.registry.dir);
+      const protection = readProtection(entry, path);
       return {
         ...entry,
         name,

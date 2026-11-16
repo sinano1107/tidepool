@@ -179,6 +179,12 @@ function PublishWorkspace({ ws, say, onPublished }: {
   );
 }
 
+const workspaceProtectionCaptions = {
+  registry_repository: "shares the registry's repository — protection stays on",
+  unreadable_origin: "the checkout's origin could not be read — protection stays on",
+  unreadable_registry_origin: "the registry clone's origin could not be read — protection stays on",
+};
+
 // One workspace as a record card (issue #57 phase 3, restructured by #204):
 // read-only until Edit, then notes + protection as a single draft — the Switch
 // no longer PATCHes the moment it is touched. path/repo/branch re-point the
@@ -235,9 +241,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
       </RecordCardHead>
       {ws.protectionReason && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          {sharesRegistryRepo
-            ? "shares the registry's repository — protection stays on"
-            : "the checkout's origin could not be read — protection stays on"}
+          {workspaceProtectionCaptions[ws.protectionReason]}
         </div>
       )}
       {!open && (

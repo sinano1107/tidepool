@@ -104,7 +104,7 @@ import {
   resolveExecutionWorkspace,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,
-  workspaceProtection,
+  workspaceProtectionReader,
 } from "./workspace.js";
 import {
   createWorkspace,
@@ -653,7 +653,7 @@ function protectedWorkspaceChecker(
     const entry = ownEntry(loadBoardRegistry(board).workspaces, name);
     if (!entry) return false;
     const path = entryCheckoutPath(entry, name, board.workspacesDir);
-    return workspaceProtection(entry, path, registryDir) !== undefined;
+    return workspaceProtectionReader(registryDir)(entry, path) !== undefined;
   };
 }
 

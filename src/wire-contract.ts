@@ -362,7 +362,7 @@ export interface WireContract {
       branch?: string;
       notes?: string;
       protected: boolean;
-      protectionReason?: "registry_repository" | "unreadable_origin";
+      protectionReason?: "registry_repository" | "unreadable_origin" | "unreadable_registry_origin";
       review_allowed_commands?: string[];
       allowed_domains?: string[];
     }>;

@@ -1510,6 +1510,11 @@ function PublishWorkspace({ ws, say, onPublished }) {
     }
   ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(repo), onClick: submit }, "Publish \u2014 pushes every branch, then commits to the registry"));
 }
+const workspaceProtectionCaptions = {
+  registry_repository: "shares the registry's repository \u2014 protection stays on",
+  unreadable_origin: "the checkout's origin could not be read \u2014 protection stays on",
+  unreadable_registry_origin: "the registry clone's origin could not be read \u2014 protection stays on"
+};
 function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   const publishable = !ws.repo && !ws.registrySelf;
@@ -1542,7 +1547,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", ws.name);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), (sharesRegistryRepo || ws.registrySelf) && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.protectionReason && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, sharesRegistryRepo ? "shares the registry's repository \u2014 protection stays on" : "the checkout's origin could not be read \u2014 protection stays on"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), (sharesRegistryRepo || ws.registrySelf) && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.protectionReason && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, workspaceProtectionCaptions[ws.protectionReason]), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: ws.repo ? "repository" : "path",

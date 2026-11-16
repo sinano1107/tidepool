@@ -275,6 +275,7 @@ describe("originRepo: 呼び出し元 checkout の origin から repo を決め�
 describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339)", () => {
   it("installation token を持つ盤面の push もローカル remote に届き、token は process.env に残らない", async () => {
     const { remote, repo } = await checkoutOfBareRemote();
+    git(repo, "remote", "set-url", "origin", ` ${remote} `);
     git(repo, "commit", "--allow-empty", "-m", "next");
 
     const broker = await openBroker(() => issuedToken("inst-token", 60));

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
@@ -23,7 +24,7 @@ import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from ".
 import { TranscriptStore } from "../src/transcript-store.js";
 import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, questions, queueWork, recordCheckoutAtWorkspace, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
+import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -531,15 +532,23 @@ it("codex の Harness の封じ込め能力の検査は、Codex 自身の prefli
  *  registry を配線する経路はここにしか無い(ADR 0027 の盤面ハーネスは
  *  `bootTidepool` 経由で、この組み立てを通らない)。 */
 it("registry があるとき、各口には対応する解決子が刺さっている(#172)", async () => {
+  // Protection opens each checkout. Git's cwd under /home can trigger the macOS automounter (#884).
+  const [tidepool, guarded, workspacesDir] = await Promise.all([
+    makeWorkspace("server-options-tidepool"),
+    makeWorkspace("server-options-guarded"),
+    tempDir("server-options-workspaces-"),
+  ]);
+  const derivedPath = join(workspacesDir, "derived");
+  await mkdir(derivedPath);
+  await initWorkspaceCheckout(derivedPath, "derived");
   const registryDir = await makeRegistry({
     // `guarded` は protected、`derived` は path を省く(ADR 0018 の基底ディレクトリ
     // 由来に落ちる)—— workspacesDir が正しく渡っていなければ後者が破綻する
     "workspaces.yaml":
-      "tidepool:\n  path: /home/pi/work/tidepool\n" +
-      "guarded:\n  path: /home/pi/work/guarded\n  protected: true\n" +
+      `tidepool:\n  path: ${tidepool.path}\n` +
+      `guarded:\n  path: ${guarded.path}\n  protected: true\n` +
       "derived: {}\n",
   });
-  const workspacesDir = "/base/workspaces";
   // composition() の既定は "configured" —— ここだけ "default" に振ることで、
   // 一覧の口が定数を焼き付けている綴りと区別がつく(ADR 0082 決定2)
   const workspacesDirSource = "default" as const;
@@ -563,10 +572,10 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // workspaceConfig: 盤面自身の workspace 名で解決され、path 省略なら
   // workspacesDir 由来に落ちる(ADR 0018)—— 名前と基底ディレクトリの両方を通す
   expect(options.workspace?.name).toBe("derived");
-  expect(options.workspace?.path).toBe(join(workspacesDir, "derived"));
+  expect(options.workspace?.path).toBe(derivedPath);
   // resolveWorkspace: タスクが名指しした workspace を優先し、null なら盤面自身へ
-  expect(options.resolveWorkspace?.("tidepool").path).toBe("/home/pi/work/tidepool");
-  expect(options.resolveWorkspace?.("derived").path).toBe(join(workspacesDir, "derived"));
+  expect(options.resolveWorkspace?.("tidepool").path).toBe(tidepool.path);
+  expect(options.resolveWorkspace?.("derived").path).toBe(derivedPath);
   expect(options.resolveWorkspace?.(null).name).toBe("derived");
   // この2つは同じ型なので、取り違えるとここで初めて分かる
   expect(options.agentRegistered?.("deckhand")).toBe(true);

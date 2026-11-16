@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
@@ -30,6 +30,48 @@ const TIDEPOOL_GIT_IDENTITY_ENV = {
  *  board's console is not the place for it. */
 export function git(cwd: string, ...args: string[]): string {
   return run(cwd, args).toString().trim();
+}
+
+/** ADR 0378 決定4: read the configured origin before applying insteadOf. */
+export function readOriginConfig(readGit: (args: string[]) => Buffer): string | undefined {
+  return readConfig(readGit, ["remote.origin.url"]);
+}
+
+function readConfig(readGit: (args: string[]) => Buffer, args: string[]): string | undefined {
+  try {
+    return readGit(["config", "--null", ...args]).toString().slice(0, -1);
+  } catch (err) {
+    if ((err as { status?: number }).status === 1) return undefined;
+    throw err;
+  }
+}
+
+const CHECKOUT_ORIGIN_TIMEOUT_MS = 2_000;
+
+/** A readable checkout without an origin returns undefined. An unreadable checkout returns null. */
+export function readCheckoutOrigin(cwd: string): string | undefined | null {
+  // Git can block opening a config include, so both reads share a deadline.
+  const deadline = Date.now() + CHECKOUT_ORIGIN_TIMEOUT_MS;
+  const readGit = (args: string[]) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("reading the checkout's origin timed out");
+    return run(cwd, args, undefined, undefined, remaining, CHECKOUT_ORIGIN_TIMEOUT_MS);
+  };
+  try {
+    const repo = readGit(["rev-parse", "--show-prefix", "--path-format=absolute", "--git-common-dir"]).toString();
+    if (!repo.startsWith("\n")) return null;
+    // Git treats a dangling config symlink like absent configuration.
+    if (!statSync(join(repo.slice(1, -1), "config")).isFile()) return null;
+    const remote = readConfig(readGit, ["--get-regexp", "^remote\\.origin\\.[^.]+$"]);
+    if (remote === undefined) return undefined;
+    // Git's single-key lookup uses the last value. A remote without a URL is unreadable.
+    const urlKey = "remote.origin.url";
+    const url = remote.split("\0").reverse().find((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`));
+    const origin = url?.slice(urlKey.length + 1);
+    return origin?.trim() ? origin : null;
+  } catch {
+    return null;
+  }
 }
 
 /** ADR 0369 決定7: confirm what the recorded objects contain without local history overrides. */

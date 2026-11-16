@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
@@ -97,7 +97,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     const registryDir = await makeMainRegistry({
       "workspaces.yaml": `registry-edits:\n  path: ${workspace.path}\n`,
     });
-    git(registryDir, "remote", "add", "origin", repo);
+    git(registryDir, "remote", "add", "origin", repo.replace("https://", "https://git:example-token@"));
     git(workspace.path, "remote", "add", "origin", "git@GitHub.COM:OctoCat/Registry");
     git(workspace.path, "config", "url.https://github.com/other/.insteadOf", "git@GitHub.COM:OctoCat/");
     const deps = await makeDeps(registryDir);
@@ -109,9 +109,25 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     );
   });
 
-  it("checkout の origin を読めなければ確認付きでも保護を解除できない(E3b)", async () => {
+  it("SCP の origin も資格情報を除いて E3 に表示する", async () => {
+    const workspace = await makeWorkspace("registry-mirror");
+    const rawOrigin = "example-user@git.example.com:registry.git";
+    git(workspace.path, "remote", "add", "origin", rawOrigin);
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": `registry-mirror:\n  path: ${workspace.path}\n`,
+    });
+    git(registryDir, "remote", "add", "origin", rawOrigin);
+
+    await expect(
+      updateWorkspace({ name: "registry-mirror", protected: false, confirm: true }, await makeDeps(registryDir)),
+    ).rejects.toThrow("shares the registry's repository (git.example.com:registry.git)");
+  });
+
+  it("checkout の config が壊れた symlink なら、origin が読めず確認付きでも保護を解除できない(E3b)", async () => {
     const workspace = await makeWorkspace("broken-origin");
-    await writeFile(join(workspace.path, ".git", "config"), "[broken\n");
+    const config = join(workspace.path, ".git", "config");
+    await rm(config);
+    await symlink("missing-config", config);
     const registryDir = await makeMainRegistry({
       "workspaces.yaml": `broken-origin:\n  path: ${workspace.path}\n`,
     });
@@ -120,6 +136,50 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
       updateWorkspace({ name: "broken-origin", protected: false, confirm: true }, await makeDeps(registryDir)),
     ).rejects.toThrow(
       `the origin of workspace "broken-origin"'s checkout cannot be read, so the workspace is treated as protected; repair the checkout first.`,
+    );
+  });
+
+  it("Git config が FIFO を include していても、origin の読み取りを打ち切って保護する", async () => {
+    const workspace = await makeWorkspace("blocking-origin");
+    const pipe = join(workspace.path, "config-pipe");
+    git(workspace.path, "config", "--add", "include.path", pipe);
+    execFileSync("mkfifo", [pipe]);
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": `blocking-origin:\n  path: ${workspace.path}\n`,
+    });
+
+    await expect(
+      updateWorkspace({ name: "blocking-origin", protected: false, confirm: true }, await makeDeps(registryDir)),
+    ).rejects.toThrow("repair the checkout first.");
+  });
+
+  it("origin は設定されているが URL が無ければ確認付きでも保護を解除できない(E3b)", async () => {
+    const workspace = await makeWorkspace("missing-origin-url");
+    git(workspace.path, "remote", "add", "origin", "/srv/git/registry.git");
+    git(workspace.path, "config", "--unset", "remote.origin.url");
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": `missing-origin-url:\n  path: ${workspace.path}\n`,
+    });
+
+    await expect(
+      updateWorkspace({ name: "missing-origin-url", protected: false, confirm: true }, await makeDeps(registryDir)),
+    ).rejects.toThrow("repair the checkout first.");
+  });
+
+  it("registry 側の origin を読めないときは registry clone の修理を示す", async () => {
+    const workspace = await makeWorkspace("maybe-registry");
+    git(workspace.path, "remote", "add", "origin", "/srv/git/registry.git");
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": `maybe-registry:\n  path: ${workspace.path}\n`,
+    });
+    const config = join(registryDir, ".git", "config");
+    await rm(config);
+    await symlink("missing-config", config);
+
+    await expect(
+      updateWorkspace({ name: "maybe-registry", protected: false, confirm: true }, await makeDeps(registryDir)),
+    ).rejects.toThrow(
+      'the origin of the registry clone cannot be read, so workspace "maybe-registry" is treated as protected; repair the registry checkout first.',
     );
   });
 });
