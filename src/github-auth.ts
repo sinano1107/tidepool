@@ -23,7 +23,7 @@ import type { WorkspaceConfig } from "./workspace.js";
  *  Acquisition and injection are **split** because acquisition is now a network
  *  round trip while injection must stay synchronous: ADR 0066 決定5 requires
  *  `publishWorkspace` to hold zero `await` between `remote add` and the registry
- *  commit. Callers `await ensureToken(repo)` first; `env(repo)` and the `authedGitBounded`
+ *  commit. Callers `await ensureToken(repo)` first; `env(repo)` and the authenticated Git
  *  helper then read the cache synchronously and fail closed when it is empty. */
 export class GitHubAuth {
   /** `owner/name` → the installation token the broker minted for it. No timer:
@@ -301,16 +301,13 @@ function inBoardRepo<T>(
   }
 }
 
-/** `ls-remote` or `push` from a checkout through a board repo (`inBoardRepo`). `args` are the verb's flags and
- *  refspecs — a push names `<sha>:<ref>`, since the board repo has no refs; `authedPush` is the one caller that pushes. */
-export function authedGitBounded(
+export function authedLsRemote(
   auth: GitHubAuth | undefined,
   source: GitSource,
   timeoutMs: number,
-  verb: "ls-remote" | "push",
-  ...args: string[]
+  ref: string,
 ): string {
-  return inBoardRepo(auth, source, timeoutMs, verb, (call, url) => runAuthedGit(call, [verb, url, ...args]));
+  return inBoardRepo(auth, source, timeoutMs, "ls-remote", (call, url) => runAuthedGit(call, ["ls-remote", "--", url, ref]));
 }
 
 /** ADR 0339 決定5: brings the commit `want` into the checkout's object store without writing any of its refs, in two
@@ -321,10 +318,10 @@ export function authedFetch(auth: GitHubAuth | undefined, source: GitSource, tim
     const checkout = call.where;
     // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
     const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
-    runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), url, `${want}:refs/board/fetched`]);
+    runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), "--", url, `${want}:refs/board/fetched`]);
     // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通らず(`git` の床)、submodule も辿らない
     // ADR 0356 決定5: the named checkout disables auto-GC explicitly. The network runner already disables it under ADR 0339 決定1.
-    git(checkout, "fetch", "--quiet", "--no-auto-gc", "--no-recurse-submodules", call.boardRepo, "refs/board/fetched");
+    git(checkout, "fetch", "--quiet", "--no-auto-gc", "--no-recurse-submodules", "--", call.boardRepo, "refs/board/fetched");
   });
 }
 
@@ -339,7 +336,8 @@ export function authedPush(
   branches: ReadonlyArray<readonly [branch: string, sha: string]>,
 ): void {
   const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
-  authedGitBounded(auth, source, timeoutMs, "push", ...(branches.length > 1 ? ["--atomic"] : []), ...refspecs);
+  const flags = branches.length > 1 ? ["--atomic"] : [];
+  inBoardRepo(auth, source, timeoutMs, "push", (call, url) => runAuthedGit(call, ["push", ...flags, "--", url, ...refspecs]));
   const checkout = typeof source === "string" ? source : source.path;
   for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch), sha);
 }
@@ -350,7 +348,7 @@ export function authedClone(auth: GitHubAuth | undefined, source: string, dir: s
   // cwd が置き場でなくなったので git clone は無い親を自分で作る —— 置き場が無ければ撃たずに名指す(issue #2722 の文)
   if (!existsSync(dirname(dir))) throw new Error(`\`git clone\` cannot run: the directory ${dirname(dir)} does not exist`);
   const env = auth ? auth.env(repoKey(source)) : githubChildEnv();
-  runAuthedGit({ env, boardRepo: undefined, where: dir, timeoutMs, origin: source }, ["clone", "--quiet", networkDestination(source, env.HOME!).url, dir]);
+  runAuthedGit({ env, boardRepo: undefined, where: dir, timeoutMs, origin: source }, ["clone", "--quiet", "--", networkDestination(source, env.HOME!).url, dir]);
 }
 
 /** The one network child (ADR 0339 決定1): the board's own `-c` only — the injected helper, ADR 0334's stall

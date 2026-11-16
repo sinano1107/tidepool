@@ -10,7 +10,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { git, localGitEnv } from "./git.js";
 import {
   authedFetch,
-  authedGitBounded,
+  authedLsRemote,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   type GitSource,
@@ -709,7 +709,7 @@ export function fetchCommit(source: GitSource, auth: GitHubAuth | undefined, sha
  *  token は呼び手が温めておく。 */
 export function fetchBranchCopy(source: GitSource, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
   const head = `refs/heads/${branch}`;
-  const sha = authedGitBounded(auth, source, GIT_NETWORK_TIMEOUT_MS, "ls-remote", head)
+  const sha = authedLsRemote(auth, source, GIT_NETWORK_TIMEOUT_MS, head)
     .split("\n")
     .map((line) => line.split("\t"))
     .find(([, name]) => name === head)?.[0];
@@ -745,7 +745,7 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
  *
  *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093 / GLOSSARY.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
- *  registry は private なので認証が要り、しかも `authedGitBounded` は組み立てた env で
+ *  registry は private なので認証が要り、しかも `authedLsRemote` は組み立てた env で
  *  撃つ —— つまりこの1行は「認証を足す」だけでなく「人間の `gh` ログインに寄りかから
  *  ない」ことを同時に成立させる(ADR 0339 決定1)。
  *

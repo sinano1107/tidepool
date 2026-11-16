@@ -567,8 +567,8 @@ it("gh は宣言から解いた repo を -R で受け、checkout の insteadOf �
   process.env.PATH = `${dir}:${originalPath}`;
   repoPath = await tempDir("tidepool-repo-");
   git(repoPath, "init", "-b", "main");
-  git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
-  git(repoPath, "config", "url.https://github.com/evil/elsewhere.git.insteadOf", "https://github.com/acme/widget.git");
+  git(repoPath, "remote", "add", "origin", "https://github.com/acme/raw-origin.git");
+  git(repoPath, "config", "url.https://github.com/evil/elsewhere.git.insteadOf", "https://github.com/acme/raw-origin.git");
 
   await new GhCliClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
 

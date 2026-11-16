@@ -10,11 +10,11 @@ import { loadRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
-import { pickupGate, recordTaskCheckoutTip, resolveExecutionWorkspace } from "../src/workspace.js";
+import { boardRefWriter, pickupGate, recordTaskCheckoutTip, resolveExecutionWorkspace } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, prepareAtPickup, settleReviews, shimGit } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, prepareAtPickup, settleReviews, shimGit } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -29,9 +29,14 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
   await leaveBaseline(db, workspace);
+  const copyRef = "refs/remotes/origin/main";
+  const announced = git(workspace.path, "commit-tree", `${copyRef}^{tree}`, "-p", copyRef, "-m", "announced before interruption");
+  const reopen = dropBoardBeforeFold(db);
+  expect(() => boardRefWriter(db, workspace)(copyRef, announced, () => {})).toThrow("the board dropped");
+  reopen();
   const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-destination-checkouts-");
-  const protectedAndCopy = () => git(workspace.path, "rev-parse", "refs/heads/main", "refs/remotes/origin/main");
+  const protectedAndCopy = () => git(workspace.path, "rev-parse", "refs/heads/main", copyRef);
   const before = protectedAndCopy();
   git(workspace.path, "remote", "set-url", "origin", other.workspace.repo!);
   const calls = await shimGit();
@@ -44,6 +49,8 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   expect(protectedAndCopy()).toBe(before);
 
   git(workspace.path, "remote", "set-url", "origin", workspace.repo!);
+  // The next comparison still accepts the announced value, which a premature fold would lose.
+  git(workspace.path, "update-ref", copyRef, announced);
   const reads = await pickupGate(db, workspace, task, base);
   await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).resolves.toBeDefined();
   await expect(accept(workspace.name, "repaired by hand")).resolves.toBeUndefined();
@@ -67,6 +74,64 @@ it("compares raw origin URLs and accepts equivalent spellings of the same GitHub
 
   git(workspace.path, "config", "--replace-all", "remote.origin.url", "git@GitHub.com:Acme/PROJECT");
   await expect(pickupGate(db, workspace, task, base)).resolves.toBeDefined();
+});
+
+it("keeps HTTP credentials out of origin mismatch diagnostics and repair commands", async ({ onTestFinished }) => {
+  const { workspace } = await makeRemoteBackedWorkspace("credentials");
+  const declared = "https://github.com/acme/project.git";
+  const origin = "https://github.com/acme/other.git";
+  workspace.repo = "https://declared-user:declared-dummy@github.com/acme/project.git";
+  git(workspace.path, "remote", "set-url", "origin", "https://origin-user:origin-dummy@github.com/acme/other.git");
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-destination-checkouts-");
+  const refusal = () => pickupGate(db, workspace, task, base).then(() => "", (err: Error) => err.message);
+
+  const mismatch = await refusal();
+  expect(mismatch).toContain(`declares repo ${declared}, but its checkout's origin is ${origin}.`);
+  expect(mismatch).toContain(`git remote set-url origin ${declared}`);
+  expect(mismatch).not.toMatch(/declared-user|origin-user|declared-dummy|origin-dummy/);
+
+  git(workspace.path, "config", "--remove-section", "remote.origin");
+  const missing = await refusal();
+  expect(missing).toContain(`declares a remote source of truth (repo: ${declared})`);
+  expect(missing).toContain(`git remote add origin ${declared}`);
+  expect(missing).not.toMatch(/declared-user|declared-dummy/);
+});
+
+it("directs repairs to the exact private declaration when redaction changes a non-GitHub repository", async ({ onTestFinished }) => {
+  const { workspace } = await makeRemoteBackedWorkspace("private-declaration");
+  const displayRepo = "https://git.example.com/acme/project.git";
+  workspace.repo = "https://dummy-user:dummy-secret@git.example.com/acme/project.git?token=dummy-query";
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-destination-checkouts-");
+  const refusal = () => pickupGate(db, workspace, task, base).then(() => "", (err: Error) => err.message);
+
+  const mismatch = await refusal();
+  expect(mismatch).toContain(`declares repo ${displayRepo}`);
+  expect(mismatch).toContain("use the exact private `repo:` value from the registry entry with `git remote set-url origin`");
+  expect(mismatch).not.toMatch(/dummy-user|dummy-secret|dummy-query/);
+
+  git(workspace.path, "config", "--remove-section", "remote.origin");
+  const missing = await refusal();
+  expect(missing).toContain("use the exact private `repo:` value from the registry entry with `git remote add origin`");
+  expect(missing).not.toMatch(/dummy-user|dummy-secret|dummy-query/);
+});
+
+it("quotes a literal repository path in the origin repair command", async ({ onTestFinished }) => {
+  const { workspace } = await makeRemoteBackedWorkspace("quoted-declaration");
+  workspace.repo = "../owner's repository; $(false)";
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-destination-checkouts-");
+
+  await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(
+    "run `git remote set-url origin '../owner'\\''s repository; $(false)'`",
+  );
 });
 
 it("refuses first pickup when registration observed a rewritten non-GitHub origin", async ({ onTestFinished }) => {

@@ -97,7 +97,8 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     const registryDir = await makeMainRegistry({
       "workspaces.yaml": `registry-edits:\n  path: ${workspace.path}\n`,
     });
-    git(registryDir, "remote", "add", "origin", repo.replace("https://", "https://git:example-token@"));
+    git(registryDir, "remote", "add", "origin", "https://github.com/octocat/other.git");
+    git(registryDir, "config", "--add", "remote.origin.url", repo.replace("https://", "https://git:example-token@"));
     git(workspace.path, "remote", "add", "origin", "git@GitHub.COM:OctoCat/Registry");
     git(workspace.path, "config", "url.https://github.com/other/.insteadOf", "git@GitHub.COM:OctoCat/");
     const deps = await makeDeps(registryDir);

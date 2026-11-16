@@ -56,6 +56,22 @@ export class RepoAccessMissingError extends Error {
   }
 }
 
+/** Strip embedded HTTP credentials and URL secrets. A Git repair command needs the SSH login. */
+export function repositoryLabel(repo: string, { preserveSshUser = false } = {}): string {
+  const origin = repo.trim();
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(origin)) {
+    try {
+      const url = new URL(origin);
+      const sshUser = preserveSshUser && url.protocol === "ssh:" && url.username ? `${url.username}@` : "";
+      if (preserveSshUser && !url.password && !url.search && !url.hash && (!url.username || sshUser)) return repo;
+      return `${url.protocol}//${sshUser}${url.host}${url.pathname}`;
+    } catch {
+      return preserveSshUser ? "configured repository" : "origin configured in the registry clone";
+    }
+  }
+  return preserveSshUser ? repo : origin.replace(/^[^:/@]+@(?=(?:\[[^\]]+\]|[^:/]+):)/, "");
+}
+
 /** github.com の repo を指す URL から `owner/name` を取り出す。**github.com 以外は
  *  `undefined`** で、それがそのまま「これは GitHub か」の門になる(ADR 0067 決定1):
  *  `clone` の入力欄は「anything git clone accepts」なので、非 GitHub の remote では

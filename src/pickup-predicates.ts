@@ -6,7 +6,7 @@ import { git, readCheckoutOrigin } from "./git.js";
 import { remoteTrackingRef } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import type { RegistrySource } from "./registry.js";
-import { sameRepository } from "./repo-access.js";
+import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -369,19 +369,33 @@ export function originUrl(checkoutPath: string): string | undefined {
 
 export class OriginRepositoryMismatchError extends Error {}
 
+function originRepairInstruction(verb: "add" | "set-url", repo: string, displayed: string): string {
+  const command = `git remote ${verb}${repo.startsWith("-") ? " --" : ""} origin`;
+  // ADR 0378 決定4: redacting a non-GitHub declaration can change the value required by the gate.
+  if (!sameRepository(repo, displayed) || /[\r\n]/.test(displayed)) {
+    return `use the exact private \`repo:\` value from the registry entry with \`${command}\``;
+  }
+  const argument = /^[\w@%+=:,./-]+$/.test(displayed) ? displayed : `'${displayed.replaceAll("'", "'\\''")}'`;
+  const ticks = (argument.match(/`+/g) ?? []).reduce((longest, run) => Math.max(longest, run.length), 0);
+  const fence = "`".repeat(ticks + 1);
+  return `run ${fence}${command} ${argument}${fence}`;
+}
+
 /** ADR 0378 決定3・4: compare the raw origin at both pickup and Quarantine acceptance. */
 function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
   const { name, path, repo } = workspace;
-  const origin = readCheckoutOrigin(path);
+  const origin = readCheckoutOrigin(path, "first");
   if (origin === null) throw new Error(`workspace ${name}: could not read its checkout's origin in ${path}`);
   if (sameRepository(repo, origin)) return;
-  if (origin === undefined) {
-    throw new Error(`workspace ${name} declares a remote source of truth (repo: ${repo}) but its checkout has no 'origin' remote. In ${path}, run \`git remote add origin ${repo}\`.`);
-  }
   if (repo === undefined) {
     throw new Error(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
   }
-  throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${repo}, but its checkout's origin is ${origin}. In ${path}, run \`git remote set-url origin ${repo}\`. To move the workspace to another repository, delete it and register it again.`);
+  const declared = repositoryLabel(repo, { preserveSshUser: true });
+  if (origin === undefined) {
+    throw new Error(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
+  }
+  const configured = repositoryLabel(origin, { preserveSshUser: true });
+  throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${originRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
 }
 
 /** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する

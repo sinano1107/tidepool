@@ -40,7 +40,7 @@ import {
   DeletionConfirmationRequiredError,
   refreshRegistryForWrite,
 } from "./registry-write.js";
-import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, sameRepository } from "./repo-access.js";
+import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, repositoryLabel, sameRepository } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
 import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
@@ -309,20 +309,6 @@ export class WorkspaceConfirmationRequiredError extends Error {
     );
     this.name = "WorkspaceConfirmationRequiredError";
   }
-}
-
-/** Remote URLs can carry credentials. The refusal only needs a label for the repository. */
-function repositoryLabel(repo: string): string {
-  const origin = repo.trim();
-  if (/^[a-z][a-z\d+.-]*:\/\//i.test(origin)) {
-    try {
-      const url = new URL(origin);
-      return `${url.protocol}//${url.host}${url.pathname}`;
-    } catch {
-      return "origin configured in the registry clone";
-    }
-  }
-  return origin.replace(/^[^:/@]+@(?=(?:\[[^\]]+\]|[^:/]+):)/, "");
 }
 
 /** ADR 0377 決定5・6: origin-based protection requires a checkout repair or applies permanently. */
