@@ -433,8 +433,7 @@ function loadBoardRegistry(board: BoardComposition) {
  *
  *  `purely-local` を env で選ばせないのは意図的である。それは盤面を静かに壊せる
  *  スイッチになり、Pi で誤って立てれば ADR 0052 が直した穴がそのまま戻る —— 却下
- *  した推測と同じ形の footgun を、今度は設定として作ることになる。純ローカル盤面
- *  (`registry.ts` の `registryDefaultBranchCheck` が `origin/HEAD` の無い clone を通す構成)は、テストが
+ *  した推測と同じ形の footgun を、今度は設定として作ることになる。純ローカル盤面は、テストが
  *  `BoardComposition` を直接組んで宣言する経路で表現できており、そちらが要ると
  *  分かるまで本番の口は開けない。 */
 export function declaredRegistryMode(registryDir: string | undefined): RegistryMode {
