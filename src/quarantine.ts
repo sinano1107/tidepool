@@ -20,7 +20,7 @@ export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed �
 export const UNCLOSED_SESSION_QUESTION_TITLE = "the board could not close a worker session — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
 /** workspace の Quarantine の選択肢(ADR 0373 決定2)。回答の文と完全に一致したときだけ盤面の行為を選ぶ。 */
-export const REPAIRED_BY_HAND = "repaired by hand";
+const REPAIRED_BY_HAND = "repaired by hand";
 export const RESTORE_THE_BASELINE = "restore the baseline";
 /** 面接室の名前にだけ加わる(ADR 0373 決定11)。 */
 export const RUN_WITH_AN_EMPTY_ROOM = "run with an empty room";
@@ -302,7 +302,7 @@ export const QUARANTINES = [
           (room ? "\nA task that starts opening this name after this question was opened adds its own check of the same kind when the answer is checked.\n" : "") +
           // ADR 0369 決定6: 受理は済まなかった解放をやり直す —— 登録した観測者に依らない文だけを本文に置く
           "\nAccepting the answer also finishes the releases this workspace kept from finishing, bringing each such task's last session's work to its task branch.\n" +
-          // ADR 0373 決定2・16: 受理は全 ref が基準と同じことを確かめ、選択肢がそれぞれ何をするかを言う(text B1)
+          // ADR 0373 決定2・16: 受理は全 ref が基準と同じことを確かめ、選択肢がそれぞれ何をするかを言う(spec #3273 text B1)
           `\nAnswering checks that every ref of ${room ? `the interview room ${name}` : `workspace ${name}`} equals the board's baseline; nothing that moved is accepted. ` +
           `\`${REPAIRED_BY_HAND}\`: you repaired something other than refs — the board checks and refuses if a ref differs. ` +
           `\`${RESTORE_THE_BASELINE}\`: the board writes every differing ref back to the baseline and keeps each value it removes under \`refs/keep-around/<sha>\`. ` +
@@ -628,7 +628,7 @@ export function registerQuarantine(
       type: "question",
       ...prose,
       question: question ?? [
-        { title: prose.title, options: ["repaired by hand"], recommendation: "repaired by hand" },
+        { title: prose.title, options: [REPAIRED_BY_HAND], recommendation: REPAIRED_BY_HAND },
       ],
       question_kind: { kind: "quarantine", quarantine: kind, value },
     },

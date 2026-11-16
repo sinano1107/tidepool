@@ -23,7 +23,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
-import { appendEvent, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
+import { appendEvent, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
 import {
   boardReadTree,
   boardViewStatus,
@@ -1214,6 +1214,11 @@ function symrefValue(target: string): string {
   return `symref=${target}`;
 }
 
+/** 基準の行の値が symref なら指し先、そうでなければ undefined(`symrefValue` の逆)。 */
+function symrefTarget(value: string): string | undefined {
+  return value.startsWith("symref=") ? value.slice("symref=".length) : undefined;
+}
+
 /** 基準の HEAD 行の値: 指し先、detached なら sha。`symbolic-ref -q` の非零は 1 が detached で、他は道具の失敗。 */
 function headValue(workspace: WorkspaceConfig): string {
   try {
@@ -1438,14 +1443,11 @@ export function takeWorkspaceInFlightKey(db: Db, name: string): (() => void) | n
   return () => held.delete(name);
 }
 
-/** `restore the baseline` が外した値1つ —— keep-around の ref の名前は `refs/keep-around/<sha>`。 */
-export type KeptValue = { ref: string; sha: string };
-
 /** ADR 0373 決定3・4: 基準と違う ref を全部基準の値へ書き戻し(基準に無い ref は消す)、外す値を `refs/keep-around/<sha>` に持ち続ける。
- *  受理の 7b の1つの同期区間で、比べ直すところから書くまでに await を挟まない。予告中の行は ref がどの値とも違うときだけ予告の前の値へ戻す。
- *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた値だけ —— HEAD と symref の行は名前なので戻すだけ、
- *  `refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。書いたら `baseline_restored` を残し、
- *  外した値を返す。違いが無ければ何も書かずに空を返す。 */
+ *  受理の 7b(spec #3273)の1つの同期区間で、比べ直すところから書くまでに await を挟まない。予告中の行は ref がどの値とも違うときだけ予告の前の値へ戻す。
+ *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた sha だけ —— symref の行(HEAD を含む)は名前なので
+ *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
+ *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): KeptValue[] {
   const stored = storedRefs(db, workspace.name);
   // ADR 0373 決定7: 基準の行が無い名前は比べずに通す —— 戻す先が無い
@@ -1457,7 +1459,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): 
     if (!baselineAllows(baseline.get(ref), current.get(ref))) targets.set(ref, baselineValues(baseline.get(ref))[0]!);
   }
   if (targets.size === 0) return [];
-  const isSha = (value: string) => value !== "" && !value.startsWith("symref=");
+  const isSha = (value: string) => value !== "" && symrefTarget(value) === undefined;
   const lost = [...targets].filter(([, value]) => isSha(value) && !objectExists(workspace, value));
   if (lost.length > 0) {
     throw new Error(`${lost.map(([ref, sha]) => `cannot restore ${ref} to ${sha}: that commit no longer exists in ${workspace.path}`).join("\n")} Nothing was written.`);
@@ -1465,37 +1467,62 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): 
   verifyWorkspaceClean(workspace);
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => {
     const value = current.get(ref) ?? "";
-    if (ref === "HEAD" || !isSha(value)) return [];
+    if (!isSha(value)) return [];
     // reflog の無い refs/stash(update-ref で作った)でも今の値は持つ
     const shas = new Set([value, ...(ref === "refs/stash" ? git(workspace.path, "log", "-g", "--format=%H", ref).split("\n").filter(Boolean) : [])]);
-    return [...shas].map((sha) => ({ ref, sha }));
+    return [...shas].filter((sha) => objectExists(workspace, sha)).map((sha) => ({ ref, sha }));
   });
-  const restored = [...targets.keys()];
-  // 持ち続ける ref が先 —— 人間が作った `refs/keep-around/<その sha>` は消さずに残る(終わりの状態で書く)。削除は書き込みより先 ——
-  // 人間が作った `refs/heads/a/b` を消してからでないと基準の `refs/heads/a` を書けない
+  // 終わりの状態で書く: 人間が作った `refs/keep-around/<その sha>` は消さずに残る。持ち続ける ref が先、削除は書き込みより先(人間が作った
+  // `refs/heads/a/b` を消してからでないと基準の `refs/heads/a` を書けない)、HEAD とその指し先は最後 —— 途中で落ちても HEAD は元の tip に居て、
+  // tree の巻き戻しが合う。HEAD が指していた branch の削除は HEAD を書いた後
+  const headTargets = [symrefTarget(current.get("HEAD") ?? ""), symrefTarget(targets.get("HEAD") ?? "")];
   const restores = [...targets].filter(([ref]) => !kept.some(({ sha }) => ref === `refs/keep-around/${sha}`));
+  const last = (ref: string) => ref === "HEAD" || headTargets.includes(ref);
   const writes = new Map([
     ...kept.map(({ sha }) => [`refs/keep-around/${sha}`, sha] as const),
-    ...restores.filter(([, value]) => value === ""),
-    ...restores.filter(([, value]) => value !== ""),
+    ...restores.filter(([ref, value]) => !last(ref) && value === ""),
+    ...restores.filter(([ref, value]) => !last(ref) && value !== ""),
+    ...restores.filter(([ref, value]) => last(ref) && ref !== "HEAD" && value !== ""),
+    ...restores.filter(([ref]) => ref === "HEAD"),
+    ...restores.filter(([ref, value]) => last(ref) && ref !== "HEAD" && value === ""),
   ]);
   const valueAfter = (ref: string) => writes.get(ref) ?? current.get(ref) ?? "";
   const headAfter = valueAfter("HEAD");
-  const tipAfter = headAfter.startsWith("symref=") ? valueAfter(headAfter.slice("symref=".length)) : headAfter;
+  const headAfterTarget = symrefTarget(headAfter);
+  const tipAfter = headAfterTarget === undefined ? headAfter : valueAfter(headAfterTarget);
   const tipBefore = readRef(workspace, "HEAD");
-  writeBoardRefs(db, workspace, [...writes], () => {
-    const write = () => {
-      for (const [ref, value] of writes) {
-        // --no-deref: symref の行を書き換え・消しても指し先の branch に書き抜けない
-        if (value === "") git(workspace.path, "update-ref", "--no-deref", "-d", ref);
-        else if (value.startsWith("symref=")) git(workspace.path, "symbolic-ref", ref, value.slice("symref=".length));
-        else git(workspace.path, "update-ref", "--no-deref", ref, value);
-      }
-    };
-    if (tipBefore !== "" && isSha(tipAfter)) writeWithWorktree(db, workspace, tipBefore, tipAfter, write);
-    else write();
-  });
-  appendEvent(db, { taskId: null, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "baseline_restored", workspace: workspace.name, restored, kept }, at: now });
+  const written = new Set<string>();
+  try {
+    writeBoardRefs(db, workspace, [...writes], () => {
+      const write = () => {
+        for (const [ref, value] of writes) {
+          const target = symrefTarget(value);
+          // --no-deref: symref の行を書き換え・消しても指し先の branch に書き抜けない
+          if (value === "") git(workspace.path, "update-ref", "--no-deref", "-d", ref);
+          else if (target !== undefined) git(workspace.path, "symbolic-ref", ref, target);
+          else git(workspace.path, "update-ref", "--no-deref", ref, value);
+          written.add(ref);
+        }
+      };
+      if (tipBefore !== "" && isSha(tipAfter)) writeWithWorktree(db, workspace, tipBefore, tipAfter, write);
+      else write();
+    });
+  } finally {
+    if (written.size > 0) {
+      appendEvent(db, {
+        taskId: null,
+        actorId: BOARD_ACTOR_ID,
+        origin: "board",
+        payload: {
+          kind: "baseline_restored",
+          workspace: workspace.name,
+          restored: restores.map(([ref]) => ref).filter((ref) => written.has(ref)),
+          kept: kept.filter(({ sha }) => written.has(`refs/keep-around/${sha}`)),
+        },
+        at: now,
+      });
+    }
+  }
   return kept;
 }
 

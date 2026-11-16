@@ -1,14 +1,14 @@
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { latestEventOfTask, listEventsOfKinds } from "../src/events.js";
-import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
-import { getTask, registerTask } from "../src/tasks.js";
+import { type QuarantineCheckDeps, quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
-import { boardRefWriter, commitRoomCopy, openInterviewRoom, quarantineWorkspace, refValues, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // workspace の Quarantine の回答が盤面の行為を選ぶ(ADR 0373 決定2〜4・8・11、#3277)。
@@ -31,14 +31,23 @@ async function quarantinedWorkspace(name: string) {
   return { ws, db, task, question: quarantineQuestion(db, "workspace", ws.name)! };
 }
 
-/** 開いている workspace の Quarantine に人間が `text` で答える(回答の口)。`ws` は回答の時点で引ける workspace。 */
-function answer(db: Db, ws: WorkspaceConfig, text: string) {
-  const question = quarantineQuestion(db, "workspace", ws.name)!;
-  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, question, [text], undefined, () => NOW, "webui");
+/** 名前 `name` の開いている workspace の Quarantine に人間が `text` で答える(回答の口)。 */
+function answerAs(db: Db, name: string, checks: Omit<QuarantineCheckDeps, "db">, text: string) {
+  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, ...checks }) }, quarantineQuestion(db, "workspace", name)!, [text], undefined, () => NOW, "webui");
 }
 
-/** 基準の行(refname → 値)。撮り直しが走らない場面で、口を通った書き込みが基準に入ったかを読む。 */
-const baseline = (db: Db, name: string) => refValues(db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(name) as string);
+/** `ws` は回答の時点で引ける workspace。 */
+const answer = (db: Db, ws: WorkspaceConfig, text: string) => answerAs(db, ws.name, { workspace: ws }, text);
+const answerRoom = (db: Db, rootId: string, base: string, text: string) => answerAs(db, rootId, { workspacesDir: base }, text);
+
+/** 次の pickup の比較の答え —— 通れば "passes"、止まればその文。基準の行が何を持つかを、盤面がそれを読む場所で読む。 */
+const nextComparison = (db: Db, ws: WorkspaceConfig) => prepareAtPickup(db, ws, work(db, "reads the baseline")).then(() => "passes", (err: Error) => err.message);
+
+/** 面接室の基準の行が残っている —— 面接室に人間が作った branch を、開き直す root の pickup の比較が名指す(行が無ければ最初の撮りで通る)。 */
+async function expectRoomRowKept(db: Db, root: Task, room: WorkspaceConfig, ws: WorkspaceConfig) {
+  git(room.path, "branch", "probe-row");
+  await expect(pickUpInterviewRoot(db, root, ws)).rejects.toThrow("refs/heads/probe-row");
+}
 
 const restoredEvents = (db: Db) => listEventsOfKinds(db, ["baseline_restored"]).map(({ payload }) => payload);
 
@@ -86,7 +95,8 @@ it("`restore the baseline` の細部: HEAD と symref の行は戻すだけで�
   expect(() => boardRefWriter(db, ws)(keep, announcedTo, () => {})).toThrow("the board dropped");
   reopen();
   git(ws.path, "update-ref", keep, movedTo);
-  git(ws.path, "checkout", "-q", "--detach");
+  // HEAD の symref の行を付け替える(tree は main と同じ)—— 名前なので戻すだけ
+  git(ws.path, "symbolic-ref", "HEAD", keep);
   git(ws.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/main");
   git(ws.path, "update-ref", "refs/keep-around/mine", human);
   git(ws.path, "update-ref", `refs/keep-around/${own}`, own);
@@ -103,11 +113,8 @@ it("`restore the baseline` の細部: HEAD と symref の行は戻すだけで�
   expect(restoredEvents(db)).toHaveLength(1);
   expect(restoredEvents(db)[0]!.kept).toEqual(expect.arrayContaining([{ ref: keep, sha: movedTo }, { ref: "refs/keep-around/mine", sha: human }, { ref: `refs/keep-around/${own}`, sha: own }]));
   expect(restoredEvents(db)[0]!.kept).toHaveLength(3);
-  // 撮り直しは走っていない —— 退避した ref は口を通って基準に入った
-  const row = baseline(db, ws.name);
-  for (const sha of [movedTo, human, own]) expect(row.get(`refs/keep-around/${sha}`)).toBe(sha);
-  expect(row.get(keep)).toBe(announcedFrom);
-  expect(row.has("refs/keep-around/mine")).toBe(false);
+  // 撮り直しは走っていない —— 退避した ref も戻した ref も口を通って基準に入り、消した人間の keep-around の ref は基準に残らない
+  expect(await nextComparison(db, ws)).toBe("passes");
   db.close();
 });
 
@@ -120,14 +127,14 @@ it("戻す先の object が1つでも無ければ、`restore the baseline` は�
   git(ws.path, "gc", "--quiet", "--prune=now");
   commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
   const refsBefore = git(ws.path, "for-each-ref");
-  const rowBefore = baseline(db, ws.name);
+  const comparisonBefore = await nextComparison(db, ws);
 
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
     `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path} Nothing was written.`,
   );
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
-  expect(baseline(db, ws.name)).toEqual(rowBefore);
+  expect(await nextComparison(db, ws)).toBe(comparisonBefore);
   expect(restoredEvents(db)).toEqual([]);
   expect(getTask(db, question.id)!.status).toBe("todo");
   db.close();
@@ -250,53 +257,30 @@ it.each(["repaired by hand", "restore the baseline", "a free-text note"])(
     const { ws, db, question } = await quarantinedWorkspace("session-running");
     git(ws.path, "branch", "extra");
     const refsBefore = git(ws.path, "for-each-ref");
-    const rowBefore = baseline(db, ws.name);
     const releasing = work(db, "its release raised the Quarantine");
     markTeardown(db, releasing.id, NOW);
 
     await expect(answer(db, ws, text)).rejects.toThrow(`a session or its teardown is still running in workspace ${ws.name} — answer again once it has finished`);
 
     expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
-    expect(baseline(db, ws.name)).toEqual(rowBefore);
     expect(restoredEvents(db)).toEqual([]);
     expect(getTask(db, question.id)!.status).toBe("todo");
+    expect(await nextComparison(db, ws)).toContain("now: ");
     db.close();
   },
 );
 
-/** 面接室を開いて root を1度拾って解放した盤面(面接室の基準の行と sparse の pin がある)。`pose` なら出題もする。 */
-async function restedRoom(name: string, pose = false) {
-  const db = openDb(":memory:");
-  const ws = await makeWorkspace(name);
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: ws.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, NOW, ...HUMAN_WEBUI);
-  const base = await tempDir(`${name}-rooms-`);
-  openInterviewRoom(db, root, base, NOW);
-  const { room, place } = await pickUpInterviewRoot(db, root, ws);
-  if (pose) poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id));
-  releaseWorkspace(db, place, root, NOW);
-  expect(baseline(db, root.id).size).toBeGreaterThan(0);
-  return { db, ws, root, room, base };
-}
-
-const sparsePin = (db: Db, name: string) => db.prepare("SELECT policy FROM workspace_sparse_policies WHERE name = ?").pluck().get(name);
-const stateRow = (db: Db, name: string) => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(name);
-
-/** 面接室の名前の Quarantine に `text` で答える。 */
-function answerRoom(db: Db, rootId: string, base: string, text: string) {
-  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspacesDir: base }) }, quarantineQuestion(db, "workspace", rootId)!, [text], undefined, () => NOW, "webui");
-}
-
 it.each(["repaired by hand", "restore the baseline"])("repo の無い面接室への `%s` は比べる前に拒まれ、何も書かない(ADR 0373 決定11)", async (text) => {
-  const { db, root, room, base } = await restedRoom("gone-room-other-option");
-  rmSync(room.path, { recursive: true, force: true });
+  const { db, ws, root, room, base } = await restedInterviewRoom("gone-room-other-option", false);
+  renameSync(room.path, `${room.path}.aside`);
   quarantineWorkspace(db, root.id, new Error("the interview room is gone"), NOW);
-  const rowBefore = stateRow(db, root.id);
 
   await expect(answerRoom(db, root.id, base, text)).rejects.toThrow("has no git repository");
 
   expect(existsSync(room.path)).toBe(false);
-  expect(stateRow(db, root.id)).toBe(rowBefore);
   expect(restoredEvents(db)).toEqual([]);
+  renameSync(`${room.path}.aside`, room.path);
+  await expectRoomRowKept(db, root, room, ws);
   db.close();
 });
 
@@ -304,31 +288,29 @@ it.each([
   ["出題済みの面接室", true, false, "has already posed"],
   ["repo が残っている面接室", false, true, "still holds a git repository"],
 ] as const)("%sへの `run with an empty room` は拒まれ、何も書かない(ADR 0373 決定11)", async (_, pose, keepRepository, refusal) => {
-  const { db, root, room, base } = await restedRoom("empty-room-refused", pose);
-  if (!keepRepository) rmSync(room.path, { recursive: true, force: true });
+  const { db, ws, root, room, base } = await restedInterviewRoom("empty-room-refused", pose);
+  if (!keepRepository) renameSync(room.path, `${room.path}.aside`);
   quarantineWorkspace(db, root.id, new Error("the interview room broke"), NOW);
-  const rowBefore = stateRow(db, root.id);
-  const pinBefore = sparsePin(db, root.id);
 
   await expect(answerRoom(db, root.id, base, "run with an empty room")).rejects.toThrow(refusal);
 
   expect(existsSync(join(room.path, ".git"))).toBe(keepRepository);
-  expect(stateRow(db, root.id)).toBe(rowBefore);
-  expect(sparsePin(db, root.id)).toBe(pinBefore);
+  if (!keepRepository) renameSync(`${room.path}.aside`, room.path);
+  await expectRoomRowKept(db, root, room, ws);
   db.close();
 });
 
 it("面接室を開く session の後始末が走っている間は、`run with an empty room` も拒まれ、何も書かない(ADR 0373 帰結)", async () => {
-  const { db, root, room, base } = await restedRoom("empty-room-teardown");
-  rmSync(room.path, { recursive: true, force: true });
+  const { db, ws, root, room, base } = await restedInterviewRoom("empty-room-teardown", false);
+  renameSync(room.path, `${room.path}.aside`);
   quarantineWorkspace(db, root.id, new Error("the interview room is gone"), NOW);
-  const rowBefore = stateRow(db, root.id);
   markTeardown(db, root.id, NOW);
 
   await expect(answerRoom(db, root.id, base, "run with an empty room")).rejects.toThrow(`a session or its teardown is still running in workspace ${root.id}`);
 
   expect(existsSync(room.path)).toBe(false);
-  expect(stateRow(db, root.id)).toBe(rowBefore);
+  renameSync(`${room.path}.aside`, room.path);
+  await expectRoomRowKept(db, root, room, ws);
   db.close();
 });
 
@@ -338,7 +320,7 @@ const B1 = (place: string) =>
   "`restore the baseline`: the board writes every differing ref back to the baseline and keeps each value it removes under `refs/keep-around/<sha>`. " +
   "If a merge back conflicts, the refusal says where to resolve it.";
 
-it("workspace の Quarantine の本文は選択肢がそれぞれ何をするかを言い、選択肢は `repaired by hand` と `restore the baseline` の常設の2つ(ADR 0373 決定2・16、text B1)", async () => {
+it("workspace の Quarantine の本文は選択肢がそれぞれ何をするかを言い、選択肢は `repaired by hand` と `restore the baseline` の常設の2つ(ADR 0373 決定2・16、#3273 text B1)", async () => {
   const { ws, question } = await quarantinedWorkspace("body-workspace");
 
   expect(question.purpose).toContain(`\n${B1(`workspace ${ws.name}`)}\n`);
@@ -346,8 +328,8 @@ it("workspace の Quarantine の本文は選択肢がそれぞれ何をするか
   expect(question.question_items).toEqual([expect.objectContaining({ options: ["repaired by hand", "restore the baseline"], recommendation: "repaired by hand" })]);
 });
 
-it("面接室の名前の Quarantine は `run with an empty room` の説明と選択肢を加える —— 出題済みでも出し分けない(ADR 0373 決定2・11、text B1)", async () => {
-  const { db, root } = await restedRoom("body-room", true);
+it("面接室の名前の Quarantine は `run with an empty room` の説明と選択肢を加える —— 出題済みでも出し分けない(ADR 0373 決定2・11、#3273 text B1)", async () => {
+  const { db, root } = await restedInterviewRoom("body-room", true);
   quarantineWorkspace(db, root.id, new Error("the interview room broke"), NOW);
   const question = quarantineQuestion(db, "workspace", root.id)!;
 
@@ -368,7 +350,9 @@ it("基準の行が無い名前への `restore the baseline` は比べずに通�
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
   expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   expect(restoredEvents(db)).toEqual([]);
-  expect(stateRow(db, ws.name)).toBeUndefined();
+  // 行を作っていれば、次の pickup の比較が後から作った branch を名指す
+  git(ws.path, "branch", "after-the-answer");
+  expect(await nextComparison(db, ws)).toBe("passes");
   db.close();
 });
 
@@ -382,5 +366,77 @@ it("人間が作った refs/heads/a/b を消してから基準の refs/heads/a �
   await answer(db, ws, "restore the baseline");
 
   expect(git(ws.path, "for-each-ref", "--format=%(refname)", "refs/heads/a", "refs/heads/a/")).toBe("refs/heads/a");
+  db.close();
+});
+
+it("detached の HEAD が持っていた sha は、ほかの値と同じに refs/keep-around/<sha> と event と応答に残る —— HEAD の symref の行は名前なので持たない(ADR 0373 決定4)", async () => {
+  const { ws, db } = await quarantinedWorkspace("restore-detached-head");
+  const main = git(ws.path, "rev-parse", "main");
+  git(ws.path, "checkout", "-q", "--detach");
+  commitWork(ws.path, "detached.txt", "committed on a detached HEAD\n");
+  const detached = git(ws.path, "rev-parse", "HEAD");
+
+  const answered = await answer(db, ws, "restore the baseline");
+
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  expect(git(ws.path, "rev-parse", "HEAD")).toBe(main);
+  expect(git(ws.path, "rev-parse", `refs/keep-around/${detached}`)).toBe(detached);
+  expect(restoredEvents(db)[0]!.kept).toEqual([{ ref: "HEAD", sha: detached }]);
+  expect(answered.notice).toBe(`HEAD was ${detached}, kept as refs/keep-around/${detached}`);
+  db.close();
+});
+
+it("書き戻しの途中で update-ref が落ちても、HEAD とその branch は元の tip のままで tree もそれに揃い、`baseline_restored` は書けた分だけを残す(ADR 0373 決定3・4)", async () => {
+  const { ws, db } = await quarantinedWorkspace("restore-fails-midway");
+  commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
+  const moved = git(ws.path, "rev-parse", "main");
+  const commit = (message: string) => git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", message);
+  const [extra, tagged] = [commit("extra"), commit("tagged")] as [string, string];
+  git(ws.path, "branch", "extra", extra);
+  git(ws.path, "tag", "x", tagged);
+  // 残った lock が refs/tags/x の削除だけを落とす
+  writeFileSync(join(ws.path, ".git", "refs", "tags", "x.lock"), "");
+
+  await expect(answer(db, ws, "restore the baseline")).rejects.toThrow("refs/tags/x");
+
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  expect(git(ws.path, "rev-parse", "main")).toBe(moved);
+  expect(existsSync(join(ws.path, "by-hand.txt"))).toBe(true);
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
+  expect(git(ws.path, "for-each-ref", "refs/heads/extra")).toBe("");
+  expect(git(ws.path, "rev-parse", "refs/tags/x")).toBe(tagged);
+  const [event] = restoredEvents(db);
+  expect(event!.restored).toEqual(["refs/heads/extra"]);
+  expect(event!.kept).toEqual(expect.arrayContaining([{ ref: "refs/heads/main", sha: moved }, { ref: "refs/heads/extra", sha: extra }, { ref: "refs/tags/x", sha: tagged }]));
+  expect(event!.kept).toHaveLength(3);
+  db.close();
+});
+
+it("object の無い値を指す ref は消すだけで、その値は refs/keep-around に持たない(ADR 0373 決定4)", async () => {
+  const { ws, db } = await quarantinedWorkspace("restore-missing-current");
+  const missing = "1111111111111111111111111111111111111111";
+  writeFileSync(join(ws.path, ".git", "refs", "heads", "ghost"), `${missing}\n`);
+
+  await answer(db, ws, "restore the baseline");
+
+  expect(git(ws.path, "for-each-ref", "refs/heads/ghost")).toBe("");
+  expect(git(ws.path, "for-each-ref", "refs/keep-around/")).toBe("");
+  expect(restoredEvents(db)[0]).toMatchObject({ restored: ["refs/heads/ghost"], kept: [] });
+  db.close();
+});
+
+it("`.git` が消えても在り処にファイルが残る面接室への `run with an empty room` は、書く前に拒まれ、在り処も行も変わらない(ADR 0373 決定11)", async () => {
+  const { db, ws, root, room, base } = await restedInterviewRoom("empty-room-leftover-files", false);
+  const aside = `${room.path}.git-aside`;
+  renameSync(join(room.path, ".git"), aside);
+  writeFileSync(join(room.path, "left-behind.txt"), "a file the gone repository left\n");
+  quarantineWorkspace(db, root.id, new Error("the interview room is gone"), NOW);
+
+  await expect(answerRoom(db, root.id, base, "run with an empty room")).rejects.toThrow(`the interview room ${root.id} at ${room.path} is not empty`);
+
+  expect(readdirSync(room.path)).toEqual(["left-behind.txt"]);
+  renameSync(aside, join(room.path, ".git"));
+  rmSync(join(room.path, "left-behind.txt"));
+  await expectRoomRowKept(db, root, room, ws);
   db.close();
 });

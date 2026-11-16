@@ -9,7 +9,7 @@ import type { RegistrySource } from "./registry.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
-/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2)。 */
+/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2 / ADR 0373 決定11 —— 手の `git init` は選択肢に替わった)。 */
 const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or answer `run with an empty room` to have the board re-create it empty";
 
 const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens it";

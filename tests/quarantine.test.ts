@@ -27,7 +27,7 @@ import { tempDir } from "./temp-dir.js";
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
 
 const NOW = new Date("2026-09-21T00:00:00.000Z");
-/** 消えた出題前の面接室の出口の句(text B12)。出題済みの面接室の項には出ない —— 選択肢の説明(本文、text B1)は面接室の名前に常に出る。 */
+/** 消えた出題前の面接室の出口の句(spec #3273 text B12)。出題済みの面接室の項には出ない —— 選択肢の説明(本文、text B1)は面接室の名前に常に出る。 */
 const GONE_ROOM_EMPTY_EXIT = "answer `run with an empty room` to have the board re-create it empty";
 
 /** 値を持つ種類は別の値を2つ、持たない種類(盤面全体で資源の名が無い)は null だけ。 */

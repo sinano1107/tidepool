@@ -1,5 +1,4 @@
 import { rmSync } from "node:fs";
-import { dirname } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -12,7 +11,6 @@ import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } fr
 import { queueReturnHandler } from "../src/watchdog.js";
 import {
   boardRefWriter,
-  commitRoomCopy,
   openInterviewRoom,
   quarantineWorkspace,
   recordTaskCheckoutTip,
@@ -21,7 +19,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 基準は切れない(ADR 0351 決定2): 行のある pickup は全撮りの代わりに比べ、release はタスクブランチの行を畳み、2値行は ref が持つ側に畳む(#2953)。
@@ -246,37 +244,22 @@ it("基準の行が無い名前の場所の release は、今日どおり違反�
   db.close();
 });
 
-/** 面接室を開いて root を1度拾って解放した盤面。`pose` なら出題した受験者も返す(受験者の checkout はまだ開かない)。 */
-async function restedRoom(name: string, pose: boolean) {
-  const db = openDb(":memory:");
-  const ws = await makeWorkspace(name);
-  const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: ws.name, interview_targets: [target] }, NOW, ...HUMAN_WEBUI);
-  const base = await tempDir(`${name}-rooms-`);
-  openInterviewRoom(db, root, base, NOW);
-  const { room, place } = await pickUpInterviewRoot(db, root, ws);
-  const [examinee] = pose ? (poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id)) as [Task]) : [];
-  releaseWorkspace(db, place, root, NOW);
-  expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
-  return { db, ws, root, room, base: dirname(room.path), examinee };
-}
-
 // 旧: 在り処が消えて手で `git init` し直した面接室を受理し、開き直す root の pickup が未生の HEAD を空コミットで補った(ADR 0351 決定3 / ADR 0329 決定13)。
 // ADR 0373 決定11 の後は盤面が `run with an empty room` で作り直し、補う手は無い
 it("在り処が消えた出題前の面接室を `run with an empty room` で作り直すと、面接室の基準の行と sparse の pin が消え、開き直す root の pickup は最初の撮りをして止まらない(ADR 0373 決定11 / ADR 0351 決定2)", async () => {
-  const { db, ws, root, room, base } = await restedRoom("reopen-empty-room", false);
+  const { db, ws, root, room, base } = await restedInterviewRoom("reopen-empty-room", false);
   rmSync(room.path, { recursive: true, force: true });
   quarantineWorkspace(db, root.id, new Error("the interview room is gone"), NOW);
   const question = quarantineQuestion(db, "workspace", root.id)!;
-  const row = (table: string, column: string) => db.prepare(`SELECT ${column} FROM ${table} WHERE name = ?`).pluck().get(root.id);
 
   await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspacesDir: base }) }, question, ["run with an empty room"], undefined, () => NOW, "webui");
 
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(git(room.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   expect(git(room.path, "log", "--format=%s", "main")).toBe("Initial commit");
-  expect(row("workspace_state", "ref_snapshot")).toBeUndefined();
-  expect(row("workspace_sparse_policies", "policy")).toBeUndefined();
+  // sparse の pin を読む公開の口は無い —— 行と一緒に消えたことだけを直に読む
+  expect(db.prepare("SELECT policy FROM workspace_sparse_policies WHERE name = ?").pluck().get(root.id)).toBeUndefined();
+  // 行が残っていれば、比較が作り直した面接室に無い root のタスクブランチを名指して止める
   openInterviewRoom(db, root, base, NOW);
   const { place } = await pickUpInterviewRoot(db, root, ws);
   releaseWorkspace(db, place, root, NOW);
@@ -285,7 +268,7 @@ it("在り処が消えた出題前の面接室を `run with an empty room` で�
 
 // 旧: HEAD が orphan の branch にあって main が既に在る面接室を開き直すと、未生の HEAD を補う空コミットが main を上書きせずに落ちた(ADR 0351 決定3)
 it("HEAD を orphan の branch へ移した記録済みの面接室を開き直しても盤面は何も書かず、root の pickup は HEAD を名指して止まる(ADR 0373 決定11 / ADR 0351 決定2)", async () => {
-  const { db, ws, root, room, base } = await restedRoom("reopen-orphan-room", false);
+  const { db, ws, root, room, base } = await restedInterviewRoom("reopen-orphan-room", false);
   const main = git(room.path, "rev-parse", "main");
   git(room.path, "checkout", "-q", "--orphan", "elsewhere");
 
@@ -297,7 +280,7 @@ it("HEAD を orphan の branch へ移した記録済みの面接室を開き直�
 });
 
 it("盤面が一度も開いていない受験者の checkout の在り処に repo があるまま面接室の名前の quarantine を受理しても、その受験者の最初の pickup は止まらない(ADR 0351 決定2)", async () => {
-  const { db, root, room, base, examinee } = await restedRoom("unopened-examinee-accept", true);
+  const { db, root, room, base, examinee } = await restedInterviewRoom("unopened-examinee-accept", true);
   const leftover = conventionCheckoutPath(examinee!.id, base);
   git(base, "init", "--quiet", "--initial-branch=main", leftover);
   git(leftover, "commit", "--quiet", "--allow-empty", "-m", "left here before the board opened it");

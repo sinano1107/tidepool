@@ -620,7 +620,6 @@ it("再開する root の消えた repo は `run with an empty room` への回�
   const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
 
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["run with an empty room"] })).status).toBe(200);
-  expect(git(room, "log", "--format=%s", "main")).toBe("Initial commit");
   await runNow(t, root.id);
   await vi.waitFor(() => expect(t.worker.started.filter((s) => s.id === root.id)).toHaveLength(2));
   expect(await pickupStops(root.id)).toHaveLength(1);
