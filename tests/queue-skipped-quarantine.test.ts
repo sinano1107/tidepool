@@ -7,6 +7,7 @@ import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
+  leaveBaseline,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -27,6 +28,9 @@ it("workspace が quarantine された間、その workspace の todo タスク�
     workspace: sandbox,
     resolveWorkspace: defaultingTo(sandbox, prod),
   });
+
+  // sandbox に先に基準の行を残す —— 基準の行を持つ prod が違反している間、行の無い名前の最初の撮りは止まる(ADR 0373 決定13)
+  await leaveBaseline(t.db, sandbox);
 
   const inProd = await registerWork(t, "runs in prod", "prod");
   await t.clock.advance(HOUR);

@@ -198,7 +198,9 @@ function pickupStopApplies(db: Db, task: Task, stop: PickupStopped, defaults: Re
       return stop.value !== null && taskIsStopped(db, task.id, quarantineStop(stop.quarantine, stop.value), defaults);
     case "workspaceContainment":
       // ADR 0368 決定1・4: 組が外すのは Harness の行。別の Harness で走れる task も位置を保って戻す。
-      return stop.value !== null && openedPlaceNames(db, task.id, defaults.defaultWorkspaceName).includes(parseWorkspaceContainmentValue(stop.value).workspace);
+      // ADR 0373 決定13 追記: 最初の撮りを待つ task は Harness を問わず組で外れる —— 門と同じ述語で確かめる
+      return stop.value !== null && (openedPlaceNames(db, task.id, defaults.defaultWorkspaceName).includes(parseWorkspaceContainmentValue(stop.value).workspace) ||
+        taskIsStopped(db, task.id, quarantineStop(stop.quarantine, stop.value), defaults));
     default:
       return true;
   }

@@ -33,6 +33,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  leaveBaseline,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   managementMcpClient,
@@ -1066,6 +1067,7 @@ it("受験者の complete_task は実環境の名前が registry から消えて
   await completeMetaReviews(t);
   const checkout = lastCheckoutOf(childId);
   commitWork(checkout, "probe.txt", "probe\n");
+  await leaveBaseline(t.db, other);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   t.containers.hold(childId);
   registry.drifted = true;
@@ -1094,6 +1096,7 @@ it("実環境の名前が registry から消えた(drift)まま受験者が esca
   await completeMetaReviews(t);
   const checkout = lastCheckoutOf(childId);
   writeFileSync(join(checkout, "probe.txt"), "unfinished\n");
+  await leaveBaseline(t.db, other);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   registry.drifted = true;
 
@@ -1126,6 +1129,7 @@ it("受験者の escalate 後、実環境の drift で次の受験者は一度�
   const [first, second] = await pose(root.id);
   await completeMetaReviews(t);
   writeFileSync(join(lastCheckoutOf(first), "probe.txt"), "unfinished\n");
+  await leaveBaseline(t.db, other);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   registry.drifted = true;
 
@@ -1134,7 +1138,7 @@ it("受験者の escalate 後、実環境の drift で次の受験者は一度�
   expect(escalated.isError).toBeFalsy();
   t.worker.exit(first);
   await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(waiting.id));
-  expect(await pickupStops(second!)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: workspace.name, reason: `unknown workspace: ${workspace.name}` }]);
+  expect(await pickupStops(second!)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: workspace.name, reason: expect.stringMatching(`^unknown workspace: ${workspace.name}\\. The board holds a baseline for "${workspace.name}"`) }]);
   expect(await queueStatus(second!)).toBe("skipped");
   const quarantines = (await questions(t)).filter((q) => q.question_quarantine_kind === "workspace");
   expect(quarantines.map((q) => q.question_quarantine_value)).toEqual([workspace.name]);
@@ -1151,6 +1155,7 @@ it("実環境が drift したまま再起動しても、決着した受験者の
   const checkout = lastCheckoutOf(first);
   const room = roomOf(root.id);
   commitWork(checkout, "probe.txt", "probe\n");
+  await leaveBaseline(t.db, other);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   t.containers.hold(first);
   registry.drifted = true;
@@ -1200,6 +1205,7 @@ it("complete_audit の時に workspace が registry から消えていても(reg
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const { id, args } = await auditing(root.id);
   // 枠が空いたことと pickup の契機は、別の workspace で待つ task が拾われることで見る
+  await leaveBaseline(t.db, other);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   registry.drifted = true;
 
@@ -1226,6 +1232,7 @@ it("complete_interview の時に実環境の名前が registry から消えて�
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const { id, args } = await scoring(root.id);
   const checkout = lastCheckoutOf(root.id);
+  await leaveBaseline(t.db, other);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   registry.drifted = true;
 

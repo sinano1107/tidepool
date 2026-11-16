@@ -14,7 +14,7 @@ import { IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const UNCLOSED_SESSION_QUESTION_TITLE = "the board could not close a worker session — pickup is stopped";
@@ -293,7 +293,7 @@ export const QUARANTINES = [
       return {
         title: `workspace ${name} needs human attention`,
         purpose:
-          `${reason}. ` +
+          `${reason}. ${firstCapturesWait(db, name!)}` +
           "Tasks in this workspace stay out of the slot until it is repaired. " +
           "Answering confirms the repair — the board re-checks all of the following before " +
           "it accepts the answer, and refuses it if any fails:\n\n" +
@@ -394,12 +394,12 @@ export const QUARANTINES = [
     // `harnessContainment` の kind で引くので、この種類は混ざらない
     kind: "workspaceContainment",
     scope: "pair",
-    prose: (value: string | null, reason: string): QuarantineProse => {
+    prose: (value: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const { harness, workspace } = parseWorkspaceContainmentValue(value!);
       return {
         title: `${harness} workers cannot be contained in workspace ${workspace}`,
         purpose:
-          `${reason}. Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
+          `${reason}. ${firstCapturesWait(db, workspace)}Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
           `other Harnesses in this workspace and ${harness} in other workspaces keep running. ` +
           "Repair the checkout as described above, then answer — the board re-runs the " +
           `${harness} check on workspace ${workspace} before it accepts the answer, and refuses it while ` +
@@ -518,6 +518,7 @@ export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string
 function addResourceStops(stops: ResourceStops, row: (typeof QUARANTINES)[number], values: string[], resolvers: QuarantineResolvers): void {
   if (values.length === 0) return;
   if (row.scope === "workspace") stops.workspaces.push(...values);
+  if (row.kind === "workspaceContainment") (stops.containmentWorkspaces ??= []).push(...values.map((value) => parseWorkspaceContainmentValue(value).workspace));
   if (row.scope === "assignees") {
     const resolve = "resolveAssignees" in row ? row.resolveAssignees : resolvers[row.kind];
     stops.assignees.push(...(resolve?.(values) ?? []));
@@ -525,7 +526,13 @@ function addResourceStops(stops: ResourceStops, row: (typeof QUARANTINES)[number
 }
 
 /** ADR 0137 決定6 / ADR 0368 決定1: 1件の停止の範囲を、開いている停止の集計と同じ行から引く。 */
-export function quarantineStop(kind: "workspace" | "agent", value: string): ResourceStops {
+/** ADR 0373 決定13 追記: 基準の行を持つ面接室でない名前の Quarantine が開いている間、行の無い名前の最初の撮りは理由を問わず待つ ——
+ *  本文はそれを毎回言う。 */
+function firstCapturesWait(db: Db, name: string): string {
+  return holdsFirstCaptures(db, name) ? "Workspaces that have not captured a baseline yet also wait until this question is closed. " : "";
+}
+
+export function quarantineStop(kind: "workspace" | "agent" | "workspaceContainment", value: string): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   addResourceStops(stops, QUARANTINES.find((row) => row.kind === kind)!, [value], {});
   return stops;
@@ -537,7 +544,7 @@ export function quarantineStop(kind: "workspace" | "agent", value: string): Reso
 export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   for (const row of QUARANTINES) {
-    if (row.scope !== "workspace" && row.scope !== "assignees") continue;
+    if (row.scope !== "workspace" && row.scope !== "assignees" && row.scope !== "pair") continue;
     addResourceStops(stops, row, openQuarantineValues(db, row.kind) as string[], resolvers);
   }
   return stops;
