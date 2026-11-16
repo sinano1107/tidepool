@@ -1,5 +1,7 @@
 # registry clone は workspace にならない —— 固定点として workspace との交差を拒み、registry の床は repo の同一性で掛ける
 
+**Status 追記: 決定5・6 の「checkout の origin」は宣言 `repo` に置き換わる —— 保護は entry の flag か、宣言 `repo` を網の行き先に組んだ値が registry clone の origin と同じ repo であることで判定し、checkout の origin は読まない。限界に書いた ADR 0013 との未照合は、`repo:` の書き手が人間面だけであることで照合された([ADR 0381](0381-the-registry-floor-is-judged-from-the-declared-repo-the-same-value-the-network-destination-comes-from-never-the-checkouts-origin.md) 決定1・5、2026-11-16、issue #3279)。**
+
 2026-11-14 の wayfinder(map #3178、ticket #3238、問いの出どころは #3234)で決定。registry clone(盤面が Registry を読む clone)は
 「Registry の正本」と「workspace」の二役を持てた。二役からは特例が出続けていた —— registry の書き込みを workspace の基準に束ねる口と
 その fallback、2つの宣言の突き合わせ、保護剥奪・削除・publish の3つの拒否、registry の default branch の Quarantine。兼ねる理由を
