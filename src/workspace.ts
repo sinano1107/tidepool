@@ -49,6 +49,7 @@ import {
 import {
   type GitHubAuth,
   originRepo,
+  readCheckoutOrigin,
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
@@ -83,6 +84,7 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
+import { sameRepository } from "./repo-access.js";
 import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
@@ -785,6 +787,29 @@ export function entryCheckoutPath(
   workspacesBaseDir: string,
 ): string {
   return entry.path ?? conventionCheckoutPath(name, workspacesBaseDir);
+}
+
+type WorkspaceProtection =
+  | { reason: "registry_repository"; repo: string }
+  | { reason: "unreadable_origin" }
+  | { reason: "flag" };
+
+/** ADR 0377 決定5・6: every checkout of the registry's repository requires human approval. */
+export function workspaceProtection(
+  entry: WorkspaceEntry,
+  path: string,
+  registryDir: string,
+): WorkspaceProtection | undefined {
+  try {
+    const origin = readCheckoutOrigin(path);
+    if (origin !== undefined) {
+      const repo = readCheckoutOrigin(registryDir);
+      if (repo !== undefined && sameRepository(origin, repo)) return { reason: "registry_repository", repo };
+    }
+  } catch {
+    return { reason: "unreadable_origin" };
+  }
+  return entry.protected === true ? { reason: "flag" } : undefined;
 }
 
 /** Every registered workspace resolved to its checkout (ADR 0040's boot sweep).
@@ -1558,8 +1583,7 @@ export function quarantineWorkspace(
 /** Whether a workspace entry's checkout is the board's own registry clone,
  *  compared by realpath so a symlinked temp dir or mount point can't split the
  *  two spellings of the same directory. A path-omitting entry compares by its
- *  convention-derived location (ADR 0018). Shared by the self-unprotect floor
- *  (workspace-create.ts) and the default-branch guard below. */
+ *  convention-derived location (ADR 0018). */
 export function resolvesToRegistryClone(
   entry: WorkspaceEntry,
   name: string,

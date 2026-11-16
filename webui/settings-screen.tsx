@@ -196,6 +196,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
   // — purely-local な workspace だけがこの扉を持ち、registry clone 自身は持たない
   // (サーバ側も RegistrySelfPublishError で拒む)
   const publishable = !ws.repo && !ws.registrySelf;
+  const sharesRegistryRepo = ws.protectionReason === 'registry_repository';
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? '');
@@ -229,12 +230,14 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <RecordCardHead editing={open} onEdit={startEdit}>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{ws.name}</span>
-        {ws.registrySelf && <Tag color="tide" mono>registry</Tag>}
+        {(sharesRegistryRepo || ws.registrySelf) && <Tag color="tide" mono>registry</Tag>}
         {ws.protected && <Tag color="sun">protected</Tag>}
       </RecordCardHead>
-      {ws.registrySelf && (
+      {ws.protectionReason && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          the board's own registry clone — protection stays on
+          {sharesRegistryRepo
+            ? "shares the registry's repository — protection stays on"
+            : "the checkout's origin could not be read — protection stays on"}
         </div>
       )}
       {!open && (
@@ -261,10 +264,8 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
         <React.Fragment>
           <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
             placeholder="setup hints for humans — e.g. run npm install before first use" />
-          {/* the board's own registry clone never offers the off position —
-              the server refuses it too (ADR 0013), this just keeps the UI honest */}
           <Switch label="protected — changes here always need human approval" checked={prot}
-            disabled={busy || (ws.registrySelf && !!ws.protected)} onChange={(next) => setProt(next)} />
+            disabled={busy || !!ws.protectionReason} onChange={(next) => setProt(next)} />
           <FreeEntryAllowlistInput values={cmds} onChange={setCmds} />
           <FreeEntryAllowlistInput values={domains} onChange={setDomains}
             label="Allowed domains"

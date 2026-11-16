@@ -140,11 +140,11 @@ import {
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   RegistrySelfPublishError,
-  RegistrySelfUnprotectError,
   RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
+  WorkspaceOriginUnprotectError,
 } from "./workspace-create.js";
 
 export interface ManagementMcpDeps {
@@ -242,7 +242,7 @@ function registryToolError(err: unknown) {
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||
-    err instanceof RegistrySelfUnprotectError ||
+    err instanceof WorkspaceOriginUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||
     err instanceof CheckoutHasOriginError ||
     err instanceof RegistrySelfPublishError ||

@@ -57,7 +57,7 @@ export class DeletionConfirmationRequiredError extends Error {
  *  件数や agent 名という**明細つき**で返る必要があるので、危険な値の裸の文字列
  *  ではなく判別可能なオブジェクトの列にする。盤面自身の registry clone だけは
  *  別クラス(`RegistrySelfDeleteError` — 出し直しでも状況が変わっても決して通ら
- *  ないので 403、`RegistrySelfUnprotectError` と同じ扱い)。 */
+ *  ないので 403)。 */
 export type DeletionBlockedReason =
   | { code: "unsettled_tasks"; count: number }
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }

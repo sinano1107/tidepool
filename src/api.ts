@@ -188,11 +188,11 @@ import {
   OrphanCheckoutMismatchError,
   RegistrySelfDeleteError,
   RegistrySelfPublishError,
-  RegistrySelfUnprotectError,
   RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
+  WorkspaceOriginUnprotectError,
 } from "./workspace-create.js";
 
 function formatValidationError(error: z.ZodError): string {
@@ -963,8 +963,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // true once the human accepts — same round trip a direct API caller
         // gets, no client-side pre-judgment of danger (ADR 0027)
         sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
-      } else if (err instanceof RegistrySelfUnprotectError) {
-        // 403, not 409: no resubmission can ever make this pass (ADR 0013)
+      } else if (err instanceof WorkspaceOriginUnprotectError) {
+        // ADR 0377 決定6: confirmation cannot override origin-based protection.
         sendJson(res.status(403), { error: err.message });
       } else {
         sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
@@ -1191,7 +1191,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (err instanceof UnknownWorkspaceError) {
         sendJson(res.status(404), { error: err.message });
       } else if (err instanceof RegistrySelfDeleteError) {
-        // 403: 出し直しでも状況の変化でも決して通らない(RegistrySelfUnprotectError と同じ)
+        // ADR 0087 決定3: 盤面自身の registry clone は削除できない
         sendJson(res.status(403), { error: err.message });
       } else {
         respondToDeletionFailure(res, err);

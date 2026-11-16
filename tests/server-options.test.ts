@@ -19,11 +19,11 @@ import {
   declaredRegistryMode,
   WATCHDOG,
 } from "../src/server-options.js";
-import type { Task } from "../src/tasks.js";
+import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, questions, queueWork, recordCheckoutAtWorkspace, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
+import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, questions, queueWork, recordCheckoutAtWorkspace, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -615,6 +615,35 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0024: workspace の pickup 時 fetch がこの名義で撃つ。落とすと private remote の
   // workspace が「認証が無い」理由で黙って quarantine に落ち続ける
   expect(options.githubAuth).toBe(githubAuth);
+});
+
+it("registry と同じ repo の workspace を名指しする分解は flag が無くても承認 question になる(ADR 0377 決定5・6)", async () => {
+  const path = await tempDir("registry-edit-workspace-");
+  const workspace = await initWorkspaceCheckout(path, "registry-edit");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `${workspace.name}:\n  path: ${path}\n` });
+  const origin = "/srv/git/registry.git";
+  git(registryDir, "remote", "add", "origin", origin);
+  git(path, "remote", "add", "origin", origin);
+  const board = { ...composition(), registryDir, workspaceName: workspace.name, defaultAgentName: "deckhand" };
+  const options = await buildOptions(board);
+  const { db } = options;
+  try {
+    const now = board.clock.now();
+    const parent = registerTask(db, { type: "work", title: "plan", purpose: "plan registry changes", completion_criteria: "registry changes proposed" }, now, ...HUMAN_WEBUI);
+    const picked = pickupTask(db, parent, "deckhand", now)!;
+
+    const children = decomposeTask(db, picked, {
+      reason: "propose one change",
+      children: [{ title: "change the registry", purpose: "edit configuration", completion_criteria: "configuration updated", workspace: workspace.name }],
+    }, "deckhand", now, { allowed_workspaces: [workspace.name] }, options.isProtectedWorkspace, "worker");
+
+    expect(children).toEqual([]);
+    expect(listBoard(db)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "question", parent_id: parent.id, purpose: expect.stringContaining('targets protected workspace "registry-edit"') }),
+    ]));
+  } finally {
+    db.close();
+  }
 });
 
 it("組み込みを shadow している盤面では、その名前は roster にも候補にも普通の agent として現れる(ADR 0235 決定1 / ADR 0228 決定2)", async () => {

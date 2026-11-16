@@ -16,6 +16,7 @@ import {
   type UpdateWorkspaceInput,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
+  WorkspaceOriginUnprotectError,
 } from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
 import {
@@ -113,6 +114,22 @@ it("update_workspace は confirm を持たず、危険な値は WebUI への案�
 
     const { tools } = await client.listTools();
     expect((tools.find((tool) => tool.name === "update_workspace") as any).inputSchema.properties.confirm).toBeUndefined();
+  } finally {
+    await client.close();
+  }
+});
+
+it.each(["https://github.com/octocat/registry.git", undefined])("origin による保護の解除は管理 MCP の tool error になる(repo=%s)", async (repo) => {
+  const refusal = new WorkspaceOriginUnprotectError("registry-edit", repo);
+  t = await bootTidepool({ workspaceAdmin: { update: async () => { throw refusal; } } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "update_workspace",
+      arguments: { name: "registry-edit", protected: false },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(refusal.message);
   } finally {
     await client.close();
   }
@@ -256,7 +273,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
       create: created,
       list: () => ({
         workspaces: [
-          { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
+          { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false, protected: true, protectionReason: "registry_repository" },
         ],
         workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" as const },
       }),
@@ -287,7 +304,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
     const list: any = await client.callTool({ name: "list_workspaces", arguments: {} });
     expect(readToolPayload(list)).toEqual({
       workspaces: [
-        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
+        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false, protected: true, protectionReason: "registry_repository" },
       ],
       workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" },
     });

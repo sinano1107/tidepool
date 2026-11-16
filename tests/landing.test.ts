@@ -53,6 +53,7 @@ import {
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  workspaceProtection,
   writeBoardRefs,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, fakeHead, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
@@ -2487,6 +2488,32 @@ function mergeQuestions(db: Db) {
     });
 }
 
+it("registry と同じ repo へ開いた PR は flag が無くても人間の merge question になる(ADR 0377 決定5・6)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-registry-edit");
+  const registryDir = await makeRegistry();
+  git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = landingWork(db, clock, workspace.name);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, work);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtection({}, workspace.path, registryDir) !== undefined,
+  });
+
+  expect(await convergeOn(landing, work.id)).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(mergeQuestions(db)).toMatchObject([
+    { pr: 1, recommendation: "merge", purpose: expect.stringContaining("always needs a human merge") },
+  ]);
+});
+
 // 着地の面(question)の理由 3 つは、question 本文の違いだけで区別される。本文を逐語で釘付けする。
 it("PR を開いた時点で question 面に倒れた理由は、保護・ダイヤル・risk のそれぞれの本文で merge question に残る", async () => {
   const { db, clock } = await openBoard();
@@ -2590,8 +2617,9 @@ it("キュー投入の後にダイヤルが escalate へ取り下げられた PR
   ]);
 });
 
-it("キュー投入の後に workspace が保護された PR も、CI 緑でも merge されず盤面の名義の merge question になる", async () => {
-  const workspace = await makeWorkspace("landing-protected-after-queue");
+it("キュー投入の後に registry と同じ repo の workspace が保護された PR は、CI 緑でも盤面の名義の merge question になる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-protected-after-queue");
+  const registryDir = await makeRegistry();
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   queueAutoMerge(db, clock, 1);
@@ -2602,9 +2630,10 @@ it("キュー投入の後に workspace が保護された PR も、CI 緑でも 
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtection({}, workspace.path, registryDir) !== undefined,
   });
 
+  git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));
   await landing.tick("auto_merge", clock.now());
   await landing.tick("auto_merge", clock.now());
 

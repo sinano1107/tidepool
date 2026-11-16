@@ -187,20 +187,41 @@ export function originRepo(cwd: string): string | undefined {
  *  reading of "origin". `undefined` with no origin or outside a checkout. */
 export function originValue(cwd: string): string | undefined {
   try {
-    return checkoutOrigin(cwd, "config");
+    return readOriginConfig(cwd);
   } catch {
     return undefined;
   }
 }
 
+/** ADR 0378 決定4: compare the configured origin before applying insteadOf. */
+function readOriginConfig(cwd: string): string | undefined {
+  try {
+    return execFileSync("git", ["config", "--null", "remote.origin.url"], {
+      cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"], encoding: "utf8",
+    }).slice(0, -1);
+  } catch (err) {
+    if ((err as { status?: number }).status === 1) return undefined;
+    throw err;
+  }
+}
+
+/** A readable checkout without an origin returns undefined. An unreadable checkout throws. */
+export function readCheckoutOrigin(cwd: string): string | undefined {
+  if (git(cwd, "rev-parse", "--show-prefix") !== "") {
+    throw new Error(`the directory ${cwd} is inside another checkout`);
+  }
+  const origin = readOriginConfig(cwd);
+  if (origin === "") throw new Error(`the origin in ${cwd} is empty`);
+  return origin;
+}
+
 /** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
 function checkoutOrigin(cwd: string, verb: string): string {
   try {
-    return execFileSync("git", ["config", "remote.origin.url"], { cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"] })
-      .toString()
-      .trim();
+    const origin = readOriginConfig(cwd);
+    if (origin === undefined) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
+    return origin;
   } catch (err) {
-    if ((err as { status?: number }).status === 1) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
     rethrowNamingMissingCwd(err, cwd, [verb]);
   }
 }

@@ -6,20 +6,12 @@ import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import {
   listWorkspaceViews,
-  RegistrySelfUnprotectError,
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
+import { makeWorkspace } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
-
-/** protected な一般 workspace を1つ足した fixture。 */
-const WORKSPACES_WITH_PROTECTED = `tidepool:
-  path: /home/pi/work/tidepool
-lagoon:
-  path: /home/pi/work/lagoon
-  protected: true
-`;
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -66,7 +58,8 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
   });
 
   it("protected の解除は confirm がなければ拒否され、コミットを積まない(#55 と同型の確認ステップ)", async () => {
-    const registryDir = await makeMainRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
+    const { path } = await makeWorkspace("lagoon");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": `lagoon:\n  path: ${path}\n  protected: true\n` });
     const before = git(registryDir, "rev-parse", "HEAD");
     const deps = await makeDeps(registryDir);
 
@@ -78,14 +71,13 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
   });
 
   it("protected の解除は confirm: true で通り、エントリから protected が消える", async () => {
-    const registryDir = await makeMainRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
+    const { path } = await makeWorkspace("lagoon");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": `lagoon:\n  path: ${path}\n  protected: true\n` });
     const deps = await makeDeps(registryDir);
 
     await updateWorkspace({ name: "lagoon", protected: false, confirm: true }, deps);
 
-    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({
-      path: "/home/pi/work/lagoon",
-    });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ path });
   });
 
   it("変更ゼロの更新(同値の notes)は失敗にならず、コミットも積まない(/code-review 指摘: no-op PATCH が 502 に見える穴)", async () => {
@@ -99,42 +91,36 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
-  it("盤面自身の registry クローンを指すエントリの解除は confirm があっても拒否される(ADR 0013: 自己防衛をワンクリック圏内に置かない)", async () => {
-    const registryDir = await makeMainRegistry();
-    // 自分自身を workspace として登録している(v1 の実運用と同じ形)
-    await writeFile(
-      join(registryDir, "workspaces.yaml"),
-      `registry:\n  path: ${registryDir}\n  protected: true\n`,
-    );
-    execFileSync(
-      "git",
-      ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-am", "self"],
-      { cwd: registryDir },
-    );
+  it("flag の無い別 clone でも、生の origin が registry と同じ GitHub repo なら保護を解除できない(ADR 0377 決定6 / E3)", async () => {
+    const workspace = await makeWorkspace("registry-edits");
+    const repo = "https://github.com/octocat/registry.git";
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": `registry-edits:\n  path: ${workspace.path}\n`,
+    });
+    git(registryDir, "remote", "add", "origin", repo);
+    git(workspace.path, "remote", "add", "origin", "git@GitHub.COM:OctoCat/Registry");
+    git(workspace.path, "config", "url.https://github.com/other/.insteadOf", "git@GitHub.COM:OctoCat/");
     const deps = await makeDeps(registryDir);
 
     await expect(
-      updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
-    ).rejects.toThrow(RegistrySelfUnprotectError);
-    expect(loadRegistry(registryDir, "purely-local").workspaces.registry?.protected).toBe(true);
+      updateWorkspace({ name: "registry-edits", protected: false, confirm: true }, deps),
+    ).rejects.toThrow(
+      `workspace "registry-edits" shares the registry's repository (${repo}), so it is always protected; this cannot be bought with a confirmation.`,
+    );
   });
 
-  it("いま未保護でも registry 自身への protected: false は拒否される — 床が現在のフラグ値に依存しない(/code-review 指摘)", async () => {
-    const registryDir = await makeMainRegistry();
-    await writeFile(
-      join(registryDir, "workspaces.yaml"),
-      `registry:\n  path: ${registryDir}\n`,
-    );
-    execFileSync(
-      "git",
-      ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-am", "self"],
-      { cwd: registryDir },
-    );
-    const deps = await makeDeps(registryDir);
+  it("checkout の origin を読めなければ確認付きでも保護を解除できない(E3b)", async () => {
+    const workspace = await makeWorkspace("broken-origin");
+    await writeFile(join(workspace.path, ".git", "config"), "[broken\n");
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": `broken-origin:\n  path: ${workspace.path}\n`,
+    });
 
     await expect(
-      updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
-    ).rejects.toThrow(RegistrySelfUnprotectError);
+      updateWorkspace({ name: "broken-origin", protected: false, confirm: true }, await makeDeps(registryDir)),
+    ).rejects.toThrow(
+      `the origin of workspace "broken-origin"'s checkout cannot be read, so the workspace is treated as protected; repair the checkout first.`,
+    );
   });
 });
 
@@ -270,11 +256,18 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
 });
 
 describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () => {
-  it("各エントリの表示用ビューを返し、盤面自身の registry クローンを指すエントリだけ registrySelf が立つ", async () => {
+  it("保護の計算結果を返し、盤面自身の clone の識別とは区別する", async () => {
     const registryDir = await makeMainRegistry();
+    const registryEdits = await makeWorkspace("registry-edits");
+    const lagoon = await makeWorkspace("lagoon");
+    const broken = await makeWorkspace("broken");
+    const origin = "/srv/git/registry.git";
+    git(registryDir, "remote", "add", "origin", origin);
+    git(registryEdits.path, "remote", "add", "origin", origin);
+    await writeFile(join(broken.path, ".git", "config"), "[broken\n");
     await writeFile(
       join(registryDir, "workspaces.yaml"),
-      `registry:\n  path: ${registryDir}\n  protected: true\nlagoon:\n  repo: https://github.com/example/lagoon.git\n  branch: trunk\n  notes: run npm install\n`,
+      `registry:\n  path: ${registryDir}\nregistry-edits:\n  path: ${registryEdits.path}\nlagoon:\n  path: ${lagoon.path}\n  branch: trunk\n  notes: run npm install\nbroken:\n  path: ${broken.path}\n`,
     );
     execFileSync(
       "git",
@@ -285,14 +278,17 @@ describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () =
     const deps = await makeDeps(registryDir);
 
     expect(listWorkspaceViews(deps, "configured").workspaces).toEqual([
-      { name: "registry", path: registryDir, protected: true, registrySelf: true },
+      { name: "registry", path: registryDir, protected: true, protectionReason: "registry_repository", registrySelf: true },
+      { name: "registry-edits", path: registryEdits.path, protected: true, protectionReason: "registry_repository", registrySelf: false },
       {
         name: "lagoon",
-        repo: "https://github.com/example/lagoon.git",
+        path: lagoon.path,
         branch: "trunk",
         notes: "run npm install",
+        protected: false,
         registrySelf: false,
       },
+      { name: "broken", path: broken.path, protected: true, protectionReason: "unreadable_origin", registrySelf: false },
     ]);
   });
 

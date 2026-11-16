@@ -2,9 +2,9 @@ import { afterEach, expect, it } from "vitest";
 import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
-  RegistrySelfUnprotectError,
   type UpdateWorkspaceInput,
   WorkspaceConfirmationRequiredError,
+  WorkspaceOriginUnprotectError,
 } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -16,8 +16,8 @@ afterEach(() => t?.stop());
 it("GET /api/workspaces は設定面向けの一覧ビューを基点ディレクトリごと返す(issue #57 フェーズ3 / ADR 0082)", async () => {
   const list = {
     workspaces: [
-      { name: "registry", path: "/srv/registry", protected: true, registrySelf: true },
-      { name: "lagoon", repo: "https://github.com/example/lagoon.git", registrySelf: false },
+      { name: "registry-edit", path: "/srv/registry-edit", protected: true, protectionReason: "registry_repository" as const, registrySelf: false },
+      { name: "lagoon", repo: "https://github.com/example/lagoon.git", protected: false, registrySelf: false },
     ],
     workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" as const },
   };
@@ -149,21 +149,23 @@ it("文法違反の allowed_domains は 400 — confirm では買えない失敗
   expect(res.status).toBe(400);
 });
 
-it("盤面自身の registry エントリの解除は 403(confirm があっても)", async () => {
+it.each(["https://github.com/octocat/registry.git", undefined])("origin による保護の解除は 403(confirm があっても, repo=%s)", async (repo) => {
+  const refusal = new WorkspaceOriginUnprotectError("registry-edit", repo);
   t = await bootTidepool({
     workspaceAdmin: {
       update: async () => {
-        throw new RegistrySelfUnprotectError("registry");
+        throw refusal;
       },
     },
   });
 
-  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/registry", {
+  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/registry-edit", {
     protected: false,
     confirm: true,
   });
 
   expect(res.status).toBe(403);
+  expect(res.json).toEqual({ error: refusal.message });
 });
 
 it("registry に居ない名前は 404", async () => {

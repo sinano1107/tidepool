@@ -37,7 +37,7 @@ import {
   DeletionConfirmationRequiredError,
   refreshRegistryForWrite,
 } from "./registry-write.js";
-import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
+import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, sameRepository } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import {
@@ -48,6 +48,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,
+  workspaceProtection,
   writeBoardRefs,
 } from "./workspace.js";
 
@@ -304,36 +305,34 @@ export class WorkspaceConfirmationRequiredError extends Error {
   }
 }
 
-/** The one unprotect no confirmation can buy (issue #57 / ADR 0013): the
- *  entry pointing at the board's own registry clone. "Changes to the registry
- *  always need human approval" is the floor everything else stands on —
- *  removing it must never be within one click's (or one curl's) reach. */
-export class RegistrySelfUnprotectError extends Error {
-  constructor(name: string) {
+/** ADR 0377 決定5・6: confirmation can remove a flag, but cannot override origin-based protection. */
+export class WorkspaceOriginUnprotectError extends Error {
+  constructor(name: string, repo?: string) {
     super(
-      `workspace "${name}" is the board's own registry clone — its protection cannot be removed here`,
+      repo !== undefined
+        ? `workspace "${name}" shares the registry's repository (${repo}), so it is always protected; this cannot be bought with a confirmation.`
+        : `the origin of workspace "${name}"'s checkout cannot be read, so the workspace is treated as protected; repair the checkout first.`,
     );
-    this.name = "RegistrySelfUnprotectError";
+    this.name = "WorkspaceOriginUnprotectError";
   }
 }
-
 
 export async function updateWorkspace(input: UpdateWorkspaceInput, deps: WorkspaceAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
-  // the self-refusal outranks confirmation — checked first so a confirmed
-  // request gets the honest "never here", not another confirm loop. It also
-  // ignores the entry's current flag: the floor must not depend on the very
-  // state it protects
-  if (
-    input.protected === false &&
-    resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)
-  ) {
-    throw new RegistrySelfUnprotectError(input.name);
+  if (input.protected === false) {
+    const path = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
+    const protection = workspaceProtection(entry, path, deps.registry.dir);
+    if (protection?.reason === "registry_repository") {
+      throw new WorkspaceOriginUnprotectError(input.name, protection.repo);
+    }
+    if (protection?.reason === "unreadable_origin") {
+      throw new WorkspaceOriginUnprotectError(input.name);
+    }
   }
-  // grammar before confirmation, for the same reason as the self-refusal: a
+  // grammar before confirmation, for the same reason as the protection floor: a
   // malformed prefix is not something a confirm can buy, and the value the
   // human read must be the one the CLI receives (ADR 0061 根拠5)
   if (input.review_allowed_commands !== undefined) {
@@ -388,8 +387,7 @@ export interface WorkspaceDeletionReferences {
   defaultWorkspaceName?: string;
 }
 
-/** 盤面自身の registry clone の削除(ADR 0087 決定3)。`RegistrySelfUnprotectError`
- *  と同じ、確認でも状況の変化でも決して通らない拒否である。 */
+/** 盤面自身の registry clone の削除は確認しても通らない(ADR 0087 決定3)。 */
 export class RegistrySelfDeleteError extends Error {
   constructor(name: string) {
     super(`workspace "${name}" is the board's own registry clone — it cannot be deleted here`);
@@ -457,8 +455,7 @@ export class WorkspaceAlreadyPublishedError extends Error {
 /** publish の2つ目の拒否(ADR 0066 決定5): エントリが盤面自身の registry clone を
  *  指している。通すと workspace エントリは remote-backed を宣言し、合成 root
  *  (`RegistryMode`)は purely-local を宣言する —— ADR 0052 が quarantine と定めた
- *  「2つの宣言の食い違い」を人間の扉が製造することになる。`RegistrySelfUnprotectError`
- *  (ADR 0013)と同じ形の、確認では買えない拒否である。 */
+ *  「2つの宣言の食い違い」を人間の扉が製造することになる。 */
 export class RegistrySelfPublishError extends Error {
   constructor(name: string) {
     super(
@@ -602,8 +599,7 @@ export class RelativeClonePathError extends Error {
  *  読むのと同じ1つの読み方(ADR 0339 決定4)。 */
 function assertReusableOrphan(dir: string, wanted: string | undefined): void {
   const origin = originValue(dir);
-  const [have, want] = [repoKey(origin), repoKey(wanted)];
-  if (have !== undefined && want !== undefined ? have === want : origin === wanted) return;
+  if (sameRepository(origin, wanted)) return;
   throw new OrphanCheckoutMismatchError(
     dir,
     `its 'origin' is ${origin ?? "absent"}, expected ${wanted ?? "none"}`,
@@ -837,13 +833,12 @@ function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps)
   return defaultBranch === "main" ? { repo } : { repo, branch: defaultBranch };
 }
 
-/** One workspace entry as the settings surface shows it (issue #57 phase 3):
- *  the entry's own fields plus which name it is and whether it is the board's
- *  own registry clone — the one whose protection the UI never offers to
- *  remove (updateWorkspace enforces the same floor server-side). */
+/** A workspace entry as the settings surface shows it, with computed protection. */
 export interface WorkspaceView extends WorkspaceEntry {
   name: string;
   registrySelf: boolean;
+  protected: boolean;
+  protectionReason?: "registry_repository" | "unreadable_origin";
 }
 
 /** The list read with the base directory as an attribute of the list itself
@@ -864,11 +859,17 @@ export function listWorkspaceViews(
 ): WorkspaceListView {
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   return {
-    workspaces: Object.entries(registry.workspaces).map(([name, entry]) => ({
-      ...entry,
-      name,
-      registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
-    })),
+    workspaces: Object.entries(registry.workspaces).map(([name, entry]) => {
+      const path = entryCheckoutPath(entry, name, deps.workspacesBaseDir);
+      const protection = workspaceProtection(entry, path, deps.registry.dir);
+      return {
+        ...entry,
+        name,
+        registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
+        protected: protection !== undefined,
+        ...(protection && protection.reason !== "flag" && { protectionReason: protection.reason }),
+      };
+    }),
     workspacesBaseDir: { path: deps.workspacesBaseDir, source },
   };
 }

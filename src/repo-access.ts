@@ -65,7 +65,7 @@ export class RepoAccessMissingError extends Error {
  *  読む誤検出)であって、owner/name の抽出は exact な操作なのでその族ではない。 */
 export function parseGitHubRepo(url: string | undefined): RepoSlug | undefined {
   const match = url?.match(GITHUB_REPO_RE);
-  return match ? { owner: match[1]!, name: match[2]! } : undefined;
+  return match ? { owner: match[1]!.toLowerCase(), name: match[2]!.toLowerCase() } : undefined;
 }
 
 // 受ける綴りは4つ: `https://github.com/o/r(.git)` / `ssh://git@github.com/o/r` /
@@ -73,4 +73,12 @@ export function parseGitHubRepo(url: string | undefined): RepoSlug | undefined {
 // 落ちる —— ローカルパスは先頭の `/` と余分な区切りで弾かれ、`..` / `.` から始まる相対 path は owner に `.` を
 // 許さないことで弾かれる(GitHub の owner は英数字と `-` だけ)。
 const GITHUB_REPO_RE =
-  /^(?:(?:https:\/\/|ssh:\/\/git@)github\.com\/|git@github\.com:)?([\w-]+)\/([\w.-]+?)(?:\.git)?$/;
+  /^(?:(?:https:\/\/|ssh:\/\/git@)github\.com\/|git@github\.com:)?([\w-]+)\/([\w.-]+?)(?:\.git)?$/i;
+
+/** ADR 0378 決定4: GitHub identity ignores URL spelling; other repositories compare as written. */
+export function sameRepository(first: string | undefined, second: string | undefined): boolean {
+  if (first === second) return true;
+  const a = parseGitHubRepo(first);
+  const b = parseGitHubRepo(second);
+  return a !== undefined && b !== undefined && a.owner === b.owner && a.name === b.name;
+}

@@ -99,10 +99,12 @@ import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
   boardRefWriter,
+  entryCheckoutPath,
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,
+  workspaceProtection,
 } from "./workspace.js";
 import {
   createWorkspace,
@@ -647,10 +649,12 @@ function protectedWorkspaceChecker(
 ): ((name: string) => boolean) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
-  // ownEntry for consistency with issue #69's sweep — a prototype hit would
-  // already answer "not protected", but bare bracket access on registry
-  // records is the exact pattern the sweep exists to remove
-  return (name) => ownEntry(loadBoardRegistry(board).workspaces, name)?.protected === true;
+  return (name) => {
+    const entry = ownEntry(loadBoardRegistry(board).workspaces, name);
+    if (!entry) return false;
+    const path = entryCheckoutPath(entry, name, board.workspacesDir);
+    return workspaceProtection(entry, path, registryDir) !== undefined;
+  };
 }
 
 /** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
