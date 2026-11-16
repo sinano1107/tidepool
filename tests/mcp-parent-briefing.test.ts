@@ -64,7 +64,7 @@ it("work 子の parent は pickup 時の issue の3欄と open 状態を保持�
     completion_criteria: "See the issue content above for completion criteria.", issue: { number: 49, state: "open" },
   };
   expect((await context(child.id)).parent).toMatchObject(expected);
-  t.github.scriptIssueFailure(new IssueGoneError({ path: "/unused", number: 49 }, "closed"));
+  t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, "closed"));
   expect((await context(child.id)).parent).toMatchObject(expected);
 });
 
@@ -72,7 +72,7 @@ it.each(["closed", "not_found"] as const)("pickup 時の親の issue が %s で�
   const workspace = await makeWorkspace("tidepool");
   t = await bootTidepool({ workspace });
   t.github.scriptIssue(49, { title: "closed parent", body: "preserved plan", comments: ["final comment"], state: "closed" });
-  if (state === "not_found") t.github.scriptIssueFailure(new IssueGoneError({ path: workspace.path, number: 49 }, state));
+  if (state === "not_found") t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, state));
   const { parent, child } = issueParentChild(workspace.path);
   await t.clock.advance(HOUR);
 

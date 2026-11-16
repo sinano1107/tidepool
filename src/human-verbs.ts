@@ -35,7 +35,7 @@ import {
   registryPinChanges,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
-import type { GitHubAuth } from "./github-auth.js";
+import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import {
   type CodexWorkspaceCheck,
   claudeWorkspaceContainment,
@@ -63,7 +63,7 @@ import { questionKindOf } from "./question-kind.js";
 import { placeHasRepository } from "./recorded-place.js";
 import type { Harness, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
-import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
+import { repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { interviewTitle } from "./routing-review.js";
@@ -252,9 +252,9 @@ export async function addIssueCommentThroughHumanDoor(
       failure: { kind: "not_configured", error: "GitHub or workspace tracking not configured" },
     };
   }
-  let path: string;
+  let workspace: WorkspaceConfig;
   try {
-    path = resolve(input.workspace).path;
+    workspace = resolve(input.workspace);
   } catch (err) {
     if (!(err instanceof UnknownWorkspaceError)) throw err;
     return {
@@ -264,7 +264,7 @@ export async function addIssueCommentThroughHumanDoor(
   }
   try {
     await deps.github.addIssueComment(
-      { path, number: input.github_issue_number },
+      { workspace, number: input.github_issue_number },
       input.body,
     );
     return { ok: true };
@@ -461,7 +461,7 @@ export async function registerThroughHumanDoor(
         let issue;
         try {
           issue = await deps.github.getIssue({
-            path: resolve(input.workspace).path,
+            workspace: resolve(input.workspace),
             number: input.github_issue_number,
           });
         } catch (err) {
@@ -673,7 +673,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       } catch (err) {
         if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
         let message = err instanceof Error ? err.message : String(err);
-        const ref = parseGitHubRepo(err instanceof PickupGateError ? err.place.repo : target.repo);
+        const ref = workspaceNetworkDestination(err instanceof PickupGateError ? err.place : target)?.github;
         if (phase === "after-open" && deps.github && ref) {
           const { guidance } = await repairRepoAccess(deps.github, ref);
           if (guidance) message += `\n\n${guidance}`;
@@ -1314,7 +1314,7 @@ export async function submitAnswer(
             "GitHub/workspace",
           );
           // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
-          const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
+          const pr = await deps.github.readPullRequest({ workspace: mergeWorkspace, number: mergePr });
           // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
           if (pr.state === "unreadable") {
             throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
@@ -1360,7 +1360,7 @@ export async function submitAnswer(
             // External merge precedes the persisted answer. Failure leaves the question open.
             // CI を読んだ head に固定する(ADR 0231 決定1)。失敗は文面で分けず DomainError に包む
             try {
-              await deps.github!.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
+              await deps.github!.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head);
             } catch (err) {
               throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
             }

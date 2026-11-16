@@ -1173,7 +1173,7 @@ export function createLanding(deps: LandingDeps): Landing {
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
       const push = async (sha: string) => {
-        const pushBranch = await github.preparePush({ path: workspace.path, branch: taskBranch(task.id) });
+        const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
           const block = landingBlock(deps.db, task.id);
           if (block) {
@@ -1193,7 +1193,7 @@ export function createLanding(deps: LandingDeps): Landing {
         });
       };
       if (task.pr_number !== null) {
-        const { state, mergedBy } = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
+        const { state, mergedBy } = await deps.github.getPullRequestState({ workspace, number: task.pr_number });
         // 決着した PR は1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。盤面の外の決着は観測、落ちた盤面
         // 自身の merge は執行(ADR 0265 決定5)。
         // 印の付いた PR の決着は執行側が書く。印と根の決着は await の後に見る —— 読んでいる間に遅い走査が
@@ -1219,7 +1219,7 @@ export function createLanding(deps: LandingDeps): Landing {
         return await afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
       }
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
-      const found = await deps.github.findPullRequestByHead({ path: workspace.path, branch: taskBranch(task.id) });
+      const found = await deps.github.findPullRequestByHead({ workspace, branch: taskBranch(task.id) });
       if (found && found.state !== "OPEN") {
         // 名義を見ない —— 盤面は記録した PR 番号にしか merge を撃たないので、番号の記録が無い PR は盤面の merge ではない
         const observed = { kind: OBSERVED[found.state], pr_number: found.number };
@@ -1246,12 +1246,12 @@ export function createLanding(deps: LandingDeps): Landing {
         if (refusal) return refusal;
         prNumber = found.number;
       } else {
-        const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
+        const { title } = await contentSourceFor(task, deps.github, () => workspace).expand();
         // PR の作成は push 済みのブランチに `gh pr create` だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
         const refusal = await push(sha);
         if (refusal) return refusal;
         const created = await deps.github.createPullRequest({
-          path: workspace.path,
+          workspace,
           branch: taskBranch(task.id),
           base: protectedBranch(workspace),
           title,
@@ -1348,7 +1348,7 @@ export function createLanding(deps: LandingDeps): Landing {
       // 決着の書き込みの失敗も呼び手(回答)へ投げる
       let read: PrStateRead;
       try {
-        read = await deps.github.getPullRequestState({ path: resolve(question.workspace).path, number: prNumber });
+        read = await deps.github.getPullRequestState({ workspace: resolve(question.workspace), number: prNumber });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
@@ -1370,7 +1370,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (task?.type !== "work" || (task.assignee ?? deps.defaultAgentName) !== agentName) continue;
         let read: PrStateRead;
         try {
-          read = await github.getPullRequestState({ path: resolve(task.workspace).path, number: pr_number });
+          read = await github.getPullRequestState({ workspace: resolve(task.workspace), number: pr_number });
         } catch {
           continue;
         }
@@ -1393,7 +1393,7 @@ export function createLanding(deps: LandingDeps): Landing {
             if (!workspace) continue;
             // 状態が読めない(網・認証)回は黙って次の tick へ回す —— 瞬断のたびにログを出さない
             const read = await github
-              .getPullRequestState({ path: workspace.path, number: pr_number })
+              .getPullRequestState({ workspace, number: pr_number })
               .catch(() => null);
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
             if (read && read.state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
@@ -1433,7 +1433,7 @@ export function createLanding(deps: LandingDeps): Landing {
             return !resolved || withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion);
           };
           if (!authorityIfGateOpen()) continue;
-          const ref = { path: workspace.path, number: pr_number };
+          const ref = { workspace, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
           const pr = await github.readPullRequest(ref);
           if (pr.state === "MERGED" || pr.state === "CLOSED") {

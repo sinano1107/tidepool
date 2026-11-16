@@ -15,6 +15,7 @@ import {
   originValue,
   remoteTrackingRef,
   repoKey,
+  workspaceNetworkDestination,
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
@@ -546,8 +547,8 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
   // `authedPush` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
-  const destination = repoKey(input.repo);
-  await deps.githubAuth.ensureToken(destination);
+  const destination = { name: input.name, path: dir, repo: input.repo };
+  await deps.githubAuth.ensureToken(workspaceNetworkDestination(destination)?.key);
   // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedPush` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
@@ -579,7 +580,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
       // (ADR 0066 決定6)。
       // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しの `remote remove` がこれも消す
-      authedPush(githubAuth, dir, GIT_NETWORK_TIMEOUT_MS, branches);
+      authedPush(githubAuth, destination, GIT_NETWORK_TIMEOUT_MS, branches);
       commitWorkspaceEntry(
         deps,
         input.name,

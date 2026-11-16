@@ -34,7 +34,8 @@ export function git(cwd: string, ...args: string[]): string {
 
 /** ADR 0378 決定4: read the configured origin before applying insteadOf. */
 export function readOriginConfig(readGit: (args: string[]) => Buffer): string | undefined {
-  return readConfig(readGit, ["remote.origin.url"]);
+  // Git fetch uses the first URL when a remote has more than one.
+  return readConfig(readGit, ["--get-all", "remote.origin.url"])?.split("\0", 1)[0];
 }
 
 function readConfig(readGit: (args: string[]) => Buffer, args: string[]): string | undefined {
@@ -64,9 +65,9 @@ export function readCheckoutOrigin(cwd: string): string | undefined | null {
     if (!statSync(join(repo.slice(1, -1), "config")).isFile()) return null;
     const remote = readConfig(readGit, ["--get-regexp", "^remote\\.origin\\.[^.]+$"]);
     if (remote === undefined) return undefined;
-    // Git's single-key lookup uses the last value. A remote without a URL is unreadable.
+    // Git fetch uses the first URL. A remote without a URL is unreadable.
     const urlKey = "remote.origin.url";
-    const url = remote.split("\0").reverse().find((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`));
+    const url = remote.split("\0").find((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`));
     const origin = url?.slice(urlKey.length + 1);
     return origin?.trim() ? origin : null;
   } catch {

@@ -18,7 +18,7 @@ it("TaskContentSource.liveIssue は GitHub から取得した issue を導出し
     body: "再現手順: ...",
     comments: ["追加情報です"],
   });
-  const source = TaskContentSource.liveIssue(github, { path: "/repo", number: 49 });
+  const source = TaskContentSource.liveIssue(github, { workspace: { name: "tidepool", path: "/repo" }, number: 49 });
 
   await expect(source.expand()).resolves.toEqual({
     title: "ログイン画面のバグ",
@@ -39,7 +39,7 @@ it("contentSourceFor は通常タスクなら保存済み内容を即座に解�
 
   const source = contentSourceFor(task, new FakeGitHubClient(), () => {
     resolved = true;
-    return "/repo";
+    return { name: "tidepool", path: "/repo" };
   });
 
   await expect(source.expand()).resolves.toEqual({
@@ -65,7 +65,7 @@ it("contentSourceFor は issue参照タスクなら GitHub から解決した内
     comments: [],
   });
 
-  const source = contentSourceFor(task, github, () => "/repo");
+  const source = contentSourceFor(task, github, () => ({ name: "tidepool", path: "/repo" }));
 
   await expect(source.expand()).resolves.toEqual({
     title: "ログイン画面のバグ",

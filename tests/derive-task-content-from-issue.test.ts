@@ -19,7 +19,7 @@ it("issue参照タスクは issue 本文の後に全コメントを取得順で�
     comments: ["追加情報です", "これも見てください"],
   });
 
-  const content = await contentSourceFor(task, github, () => "/repo").expand();
+  const content = await contentSourceFor(task, github, () => ({ name: "tidepool", path: "/repo" })).expand();
 
   expect(content.title).toBe("ログイン画面のバグ");
   expect(content.purpose).toBe(
@@ -38,7 +38,7 @@ it("issue参照タスクはコメントがない issue に空の区切りを付�
   const github = new FakeGitHubClient();
   github.scriptIssue(49, { title: "ログイン画面のバグ", body: "再現手順: ...", comments: [] });
 
-  const content = await contentSourceFor(task, github, () => "/repo").expand();
+  const content = await contentSourceFor(task, github, () => ({ name: "tidepool", path: "/repo" })).expand();
 
   expect(content.purpose).toBe("再現手順: ...");
   expect(content.completion_criteria).toBe("See the issue content above for completion criteria.");

@@ -7,6 +7,7 @@ import {
   makeRemoteBackedWorkspace,
   registerWork,
   servedQuarantineQuestion,
+  shimGit,
   type Tidepool,
 } from "./harness.js";
 
@@ -21,14 +22,14 @@ async function quarantineReason(board: Tidepool): Promise<string | undefined> {
   return (await servedQuarantineQuestion(board, "workspace", "sandbox"))?.purpose;
 }
 
-/** 修復経路が撃つのは `repo` の**宣言**に対してであって clone の origin ではない
- *  (ADR 0052 決定3: 宣言は clone を覗いた推測ではない)。テストはこの2つを分けて
- *  持てる —— 宣言は github.com を指し、origin は届く / 届かないを切り替えられる。 */
-const DECLARED = "https://github.com/sinano1107/tidepool";
+/** ADR 0378 決定1: the checkout and declaration agree, and the transport can fail independently. */
+const DECLARED = "https://github.com/sinano1107/tidepool.git";
+const UNREACHABLE = "/nonexistent/sandbox-remote";
 
 it("仲介が token を出せなければ、元の原因に install の案内を連ねて quarantine に落ちる(ADR 0093 決定8)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/sandbox-remote");
+  git(workspace.path, "remote", "set-url", "origin", DECLARED);
+  await shimGit({ route: [DECLARED, UNREACHABLE] });
 
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   t.github.scriptUnreachable("sinano1107/tidepool");
@@ -46,7 +47,8 @@ it("仲介が token を出せなければ、元の原因に install の案内を
 
 it("token は出せるのに fetch が落ちるなら、案内は足さず生の原因だけで quarantine する —— 盤面が撃ち直す手はもう無い", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/sandbox-remote");
+  git(workspace.path, "remote", "set-url", "origin", DECLARED);
+  await shimGit({ route: [DECLARED, UNREACHABLE] });
 
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   await registerWork(t, "needs the remote");
@@ -60,9 +62,9 @@ it("token は出せるのに fetch が落ちるなら、案内は足さず生の
 
 it("非 GitHub の remote では probe が発火せず、今日どおりの quarantine のままである", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/sandbox-remote");
+  git(workspace.path, "remote", "set-url", "origin", UNREACHABLE);
 
-  t = await bootTidepool({ workspace });
+  t = await bootTidepool({ workspace: { ...workspace, repo: UNREACHABLE } });
   await registerWork(t, "needs the remote");
   await t.clock.advance(HOUR);
 
@@ -74,6 +76,8 @@ it("非 GitHub の remote では probe が発火せず、今日どおりの quar
 // 数でしか確かめられないので、fake の呼び出し回数で受ける。
 it("正常に通る pickup では repo アクセスの probe が1つも撃たれない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  git(workspace.path, "remote", "set-url", "origin", DECLARED);
+  await shimGit({ route: [DECLARED, workspace.repo!] });
 
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   await registerWork(t, "reachable");

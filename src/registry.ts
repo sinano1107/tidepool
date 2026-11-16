@@ -13,6 +13,7 @@ import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
+  type GitSource,
   originRepo,
   remoteTrackingRef,
 } from "./github-auth.js";
@@ -699,24 +700,24 @@ export type RefWriter = (ref: string, newValue: string, write: () => void) => vo
 
 /** origin から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
  *  head を取る fetch(ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
-export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: string): void {
-  authedFetch(auth, dir, GIT_NETWORK_TIMEOUT_MS, sha);
+export function fetchCommit(source: GitSource, auth: GitHubAuth | undefined, sha: string): void {
+  authedFetch(auth, source, GIT_NETWORK_TIMEOUT_MS, sha);
 }
 
 /** ADR 0243 決定3: 写し `refs/remotes/origin/<branch>` を原本へ進める。`ls-remote` で原本の sha を知ってから口に予告し、
  *  その sha を取り、`update-ref` で写しを書く。原本にブランチが無ければ fetch の失敗と同じく投げる(fail-closed)。
  *  token は呼び手が温めておく。 */
-export function fetchBranchCopy(dir: string, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
+export function fetchBranchCopy(source: GitSource, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
   const head = `refs/heads/${branch}`;
-  const sha = authedGitBounded(auth, dir, GIT_NETWORK_TIMEOUT_MS, "ls-remote", head)
+  const sha = authedGitBounded(auth, source, GIT_NETWORK_TIMEOUT_MS, "ls-remote", head)
     .split("\n")
     .map((line) => line.split("\t"))
     .find(([, name]) => name === head)?.[0];
   if (!sha) throw new Error(`origin has no branch ${branch}`);
   const copy = remoteTrackingRef(branch);
   writeRef(copy, sha, () => {
-    fetchCommit(dir, auth, sha);
-    git(dir, "update-ref", copy, sha);
+    fetchCommit(source, auth, sha);
+    git(typeof source === "string" ? source : source.path, "update-ref", copy, sha);
   });
 }
 

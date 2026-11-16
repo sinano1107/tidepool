@@ -165,7 +165,7 @@ it("回答は最後に失敗した参照の読み直しで確かめる —— �
 it("読み直しが IssueGoneError なら API が答えた証拠として受理する", async () => {
   await failThreeTimesOverTenMinutes();
   const question = await servedQuarantineQuestion(t, "issueExpansion", null);
-  t.github.scriptIssueFailure(new IssueGoneError({ path: "/x", number: 49 }, "not_found"));
+  t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, "not_found"));
 
   const accepted = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
 
@@ -191,7 +191,7 @@ it("IssueGoneError は連続を戻す —— その後の失敗から10分未満
   issueBacked(49);
   t.github.scriptIssueFailure(new Error("GitHub is down"));
   await t.clock.advance(HOUR);
-  t.github.scriptIssueFailure(new IssueGoneError({ path: "/x", number: 49 }, "not_found"));
+  t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, "not_found"));
   await t.clock.advance(5 * MINUTE);
   await nextPoll(t);
 

@@ -1,5 +1,6 @@
 import type { GitHubClient } from "./github.js";
 import { type BoardTask, contentSourceFor, type TaskContent } from "./tasks.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 /** How fresh an issue-backed task's displayed content is (issue #49 §6):
  *  `live` — fetched within the cache TTL. `stale` — a refresh failed, the
@@ -25,8 +26,7 @@ export type LiveBoardTask = Live<BoardTask>;
 const TTL_MS = 30_000;
 
 export class IssueContentCache {
-  // keyed by workspace path + issue number — the same pair that identifies
-  // the content (ADR 0016's workspace 焼き込み rationale)
+  // keyed by workspace destination and issue number (ADR 0016)
   private readonly entries = new Map<string, { content: TaskContent; fetchedAt: number }>();
   // one fetch per key at a time: overlapping polls (/tasks and /queue fire
   // together, or several tasks reference the same issue) share the in-flight
@@ -36,15 +36,13 @@ export class IssueContentCache {
   async present<T extends BoardTask>(
     task: T,
     github: GitHubClient | undefined,
-    workspacePath: () => string | undefined,
+    resolveWorkspace: () => WorkspaceConfig | undefined,
     now: Date,
   ): Promise<Live<T>> {
     if (task.github_issue_number == null) return task;
-    const path = workspacePath();
-    // without a workspace path (or a GitHub seam at all) the content can't
-    // even be identified — nothing to fetch, nothing to key a cache on
-    if (path === undefined || !github) return { ...task, issue_live_state: "unavailable" };
-    const key = `${path}#${task.github_issue_number}`;
+    const workspace = resolveWorkspace();
+    if (workspace === undefined || !github) return { ...task, issue_live_state: "unavailable" };
+    const key = JSON.stringify([workspace.path, workspace.repo, task.github_issue_number]);
     const cached = this.entries.get(key);
     if (cached && now.getTime() - cached.fetchedAt < TTL_MS) {
       return { ...task, ...cached.content, issue_live_state: "live" };
@@ -52,7 +50,7 @@ export class IssueContentCache {
     try {
       let fetch = this.inFlight.get(key);
       if (!fetch) {
-        fetch = contentSourceFor(task, github, () => path).expand();
+        fetch = contentSourceFor(task, github, () => workspace).expand();
         this.inFlight.set(key, fetch);
       }
       const content = await fetch;

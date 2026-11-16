@@ -19,6 +19,7 @@ import {
   mcpClient,
   registerWork,
   servedQuarantineQuestion,
+  shimGit,
   type Tidepool,
 } from "./harness.js";
 
@@ -154,11 +155,12 @@ it("worker id が BOARD_ACTOR_ID(\"tidepool\")と衝突しても、MCP 経由の
 });
 
 /** ADR 0329 決定14: repo アクセスの案内は後半の失敗経路だけで付く。 */
-const DECLARED = "https://github.com/sinano1107/tidepool";
+const DECLARED = "https://github.com/sinano1107/tidepool.git";
 
 it("remote 正本の fetch が失敗する解除は、仲介が token を出せなければ案内つきで拒否され question は開いたままである(ADR 0329 決定14)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/sandbox-remote");
+  git(workspace.path, "remote", "set-url", "origin", DECLARED);
+  await shimGit({ route: [DECLARED, "/nonexistent/sandbox-remote"] });
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   t.github.scriptUnreachable("sinano1107/tidepool");
   quarantineWorkspace(t.db, "sandbox", new Error("fetch failed"), t.clock.now());
@@ -179,6 +181,8 @@ it("remote 正本の fetch が失敗する解除は、仲介が token を出せ�
 
 it("token が出せていれば解除はそのまま受理される —— 新しい文法は増やしていない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  git(workspace.path, "remote", "set-url", "origin", DECLARED);
+  await shimGit({ route: [DECLARED, workspace.repo!] });
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   quarantineWorkspace(t.db, "sandbox", new Error("fetch failed"), t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", "sandbox");

@@ -64,7 +64,7 @@ export class RepoAccessMissingError extends Error {
  *  ADR 0052 が拒んだのは URL の**綴りの照合**(ssh / https / ホスト名の別名を別物と
  *  読む誤検出)であって、owner/name の抽出は exact な操作なのでその族ではない。 */
 export function parseGitHubRepo(url: string | undefined): RepoSlug | undefined {
-  const match = url?.match(GITHUB_REPO_RE);
+  const match = url?.trim().match(GITHUB_REPO_RE);
   return match ? { owner: match[1]!.toLowerCase(), name: match[2]!.toLowerCase() } : undefined;
 }
 
@@ -75,7 +75,7 @@ const GITHUB_REPO_RE =
 /** ADR 0378 決定4: GitHub identity ignores URL spelling; other repositories compare as written. */
 export function sameRepository(first: string | undefined, second: string | undefined): boolean {
   if (first === second) return true;
-  const a = parseGitHubRepo(first?.trim());
-  const b = parseGitHubRepo(second?.trim());
+  const a = parseGitHubRepo(first);
+  const b = parseGitHubRepo(second);
   return a !== undefined && b !== undefined && a.owner === b.owner && a.name === b.name;
 }

@@ -52,7 +52,7 @@ it("登録ゲート: 閉じた/存在しない issue は 400 で弾き、一時�
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
   // 確定的失敗: 登録の段階で fail-fast(ADR 0009 の人間の同期リクエスト)
-  t.github.scriptIssueFailure(new IssueGoneError({ path: "/fake/path", number: 49 }, "closed"));
+  t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, "closed"));
   const gone = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     github_issue_number: 49,

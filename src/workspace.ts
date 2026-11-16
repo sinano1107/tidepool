@@ -49,7 +49,7 @@ import {
 } from "./git.js";
 import {
   type GitHubAuth,
-  originRepo,
+  workspaceNetworkDestination,
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
@@ -118,14 +118,7 @@ export interface WorkspaceConfig {
    *  the pre-#27 shape for a `WorkspaceConfig` built outside the registry
    *  (main.ts's fixed single-workspace fallback, test fixtures). */
   branch?: string;
-  /** ADR 0052 決定3 / issue #211: この workspace が**リモートの正本を持つ**という
-   *  宣言(`workspaces.yaml` の `repo`)。あり = remote-backed、無し = purely-local。
-   *  値そのものは clone URL だが、盤面が読むのは有無だけである —— 「宣言であって
-   *  推測ではない」ため、clone を覗いて remote の有無で切り替えることはしない
-   *  (remote が失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻る道を
-   *  残さない)。`branch` と同じく registry から毎回読み直され、registry の外で
-   *  組まれた `WorkspaceConfig`(main.ts の単一 workspace fallback、テスト fixture)
-   *  では不在 = purely-local の宣言になる。 */
+  /** ADR 0378 決定1: the registry declares the network destination in `repo`. An absent value declares a purely-local workspace. */
   repo?: string;
   /** Command prefixes a review session may run despite the `manual` write
    *  floor (issue #144 / ADR 0035), passed through from the registry entry the
@@ -332,7 +325,7 @@ export async function firePickupPredicates(
     fetch: async (target) => {
       await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
       if (board.live?.() === false) return;
-      if (isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), boardRefWriter(db, target));
+      if (isRemoteBacked(target)) fetchBranchCopy(target, board.githubAuth, protectedBranch(target), boardRefWriter(db, target));
     },
     park: (target) => parkOnProtectedBranch(db, target),
   };
@@ -1097,21 +1090,13 @@ export function excludeWorkspaceProjectSettings(place: RunPlace, taskId: string,
   }
 }
 
-/** ADR 0093: workspace を fetch する前に、その checkout の `origin` 宛ての
- *  installation token を用意する。取得(ネットワーク)と注入(同期)を分けるのは
- *  ADR 0066 決定5 と同じ理由で、fetch そのものを同期に保つためである —— 宣言
- *  (`repo`)ではなく `origin` から決めるのは、token が repo 単位で、fetch が実際に
- *  触る remote と宛先が一致していなければならないからである(`repo` は人間向けの
- *  provenance でもあって綴りの一致を要求しない: ADR 0052)。
- *
- *  仲介の不達はここで投げ、呼び出し元の quarantine がそのまま受ける。 */
+/** ADR 0378 決定1: warm the token for the declared repo before a synchronous fetch. */
 export async function ensureWorkspaceToken(
   workspace: WorkspaceConfig,
   auth: GitHubAuth | undefined,
   options: { fresh?: boolean } = {},
 ): Promise<void> {
-  if (!isRemoteBacked(workspace)) return;
-  await auth?.ensureToken(originRepo(workspace.path), options);
+  await auth?.ensureToken(workspaceNetworkDestination(workspace)?.key, options);
 }
 
 /** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを進める —— 写しは pickup と
@@ -1120,7 +1105,7 @@ export async function ensureWorkspaceToken(
 export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
   if (!isRemoteBacked(workspace)) return;
   await ensureWorkspaceToken(workspace, auth);
-  fetchBranchCopy(workspace.path, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
+  fetchBranchCopy(workspace, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
 }
 
 /** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、origin から sha で取る。sha の fetch は `refs/` に
@@ -1131,7 +1116,7 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
     return;
   } catch {}
   await ensureWorkspaceToken(workspace, auth);
-  fetchCommit(workspace.path, auth, sha);
+  fetchCommit(workspace, auth, sha);
 }
 
 /** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば
@@ -1841,7 +1826,7 @@ function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBac
   if (mergeBack) {
     if (tokenFailure !== undefined) throw tokenFailure;
     // ADR 0351 決定3: 基準は切れないので、後始末の fetch も口を通す
-    if (isRemoteBacked(workspace)) fetchBranchCopy(workspace.path, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
+    if (isRemoteBacked(workspace)) fetchBranchCopy(workspace, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
   }
   const target = mergeBack && lineageTaskBranch(db, workspace, task);
   if (target) mergeBackInto(db, workspace, target, task.id, "then answer", recordedTip);

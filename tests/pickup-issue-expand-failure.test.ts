@@ -51,7 +51,7 @@ it("issue参照の確定的失敗(not found / close 済み)では retry/abandon 
     ...HUMAN_WEBUI,
   );
 
-  t.github.scriptIssueFailure(new IssueGoneError({ path: "/x", number: 49 }, "closed"));
+  t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, "closed"));
   await t.clock.advance(HOUR);
 
   expect(t.worker.started).toEqual([]);

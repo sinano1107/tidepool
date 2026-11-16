@@ -1,13 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, originRepo } from "./github-auth.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
 
 /** どの checkout のどのブランチを `origin` へ push するか。 */
-export interface PushBranchInput {
-  /** The workspace path — the real git checkout `gh`/`git` run from. */
-  path: string;
+export interface PushBranchInput extends RepoRef {
   branch: string;
 }
 
@@ -26,15 +25,13 @@ export interface PrResult {
 
 /** Which workspace checkout to run `gh` from, and which PR (issue #11) — the
  *  merge dial's CI-check and merge calls both key off just these two. */
-export interface PrRef {
-  path: string;
+export interface PrRef extends RepoRef {
   number: number;
 }
 
 /** Which workspace checkout to run `gh` from, and which issue (issue #49) —
  *  same shape as PrRef, one per resource. */
-export interface IssueRef {
-  path: string;
+export interface IssueRef extends RepoRef {
   number: number;
 }
 
@@ -42,7 +39,7 @@ export interface IssueRef {
  *  #67): unlike PrRef/IssueRef there is no specific number, the listing
  *  covers the whole repository. */
 export interface RepoRef {
-  path: string;
+  workspace: WorkspaceConfig;
 }
 
 /** One open issue as the issue-number picker sees it (issue #67): just
@@ -112,7 +109,7 @@ export type PrStatus =
  *  and passes through untyped, handled as a pickup-cycle skip instead. */
 export class IssueGoneError extends Error {
   constructor(
-    ref: IssueRef,
+    ref: Pick<IssueRef, "number">,
     readonly reason: "not_found" | "closed",
   ) {
     super(`issue #${ref.number} is gone (${reason})`);
@@ -237,14 +234,14 @@ export class GhCliClient implements GitHubClient {
     this.timeoutMs = timeoutMs;
   }
 
-  /** 盤面の `gh` はすべてここを通る(ADR 0330 決定4)。installation token は repo 単位(ADR 0093 決定2)なので checkout の
-   *  `origin` から repo を読んで仲介へ往復し、`gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(決定1)。
+  /** 盤面の `gh` はすべてここを通る(ADR 0330 決定4)。宣言の repo の token を温め(ADR 0378 決定1)、
+   *  `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(ADR 0330 決定1)。
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
-  private async gh(cwd: string, args: string[]): Promise<string> {
-    // ADR 0339 決定4: repo は盤面が origin の値から解き、cwd の remote(checkout の insteadOf 適用後)から gh に解かせない
-    const repo = originRepo(cwd);
-    if (repo === undefined) throw new Error(`\`gh ${args[0]} ${args[1]}\` cannot run: the checkout ${cwd} has no origin on GitHub`);
+  private async gh(workspace: WorkspaceConfig, args: string[]): Promise<string> {
+    const cwd = workspace.path;
+    const repo = workspaceNetworkDestination(workspace)?.key;
+    if (repo === undefined) throw new Error(`\`gh ${args[0]} ${args[1]}\` cannot run: workspace ${workspace.name} has no declared GitHub repo`);
     await this.auth.ensureToken(repo);
     try {
       return (await execFileAsync("gh", [...args, "-R", repo], { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
@@ -258,13 +255,13 @@ export class GhCliClient implements GitHubClient {
   }
 
   async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {
-    await this.auth.ensureToken(originRepo(input.path));
-    return (sha) => authedPush(this.auth, input.path, this.timeoutMs, [[input.branch, sha]]);
+    await this.auth.ensureToken(workspaceNetworkDestination(input.workspace)?.key);
+    return (sha) => authedPush(this.auth, input.workspace, this.timeoutMs, [[input.branch, sha]]);
   }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     const url = (
-      await this.gh(input.path, [
+      await this.gh(input.workspace, [
         "pr",
         "create",
         "--head",
@@ -291,7 +288,7 @@ export class GhCliClient implements GitHubClient {
     let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string; mergedBy: { login: string } | null };
     try {
       parsed = JSON.parse(
-        await this.gh(ref.path, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"]),
+        await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"]),
       );
     } catch {
       return { ci: "pending", state: "unreadable" };
@@ -305,17 +302,17 @@ export class GhCliClient implements GitHubClient {
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
-    await this.gh(ref.path, ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head]);
+    await this.gh(ref.workspace, ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head]);
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
-    const output = await this.gh(ref.path, ["pr", "view", String(ref.number), "--json", "state,mergedBy"]);
+    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy"]);
     const { state, mergedBy } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null };
     return { state, mergedBy: mergedBy?.login ?? null };
   }
 
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
-    const output = await this.gh(input.path, [
+    const output = await this.gh(input.workspace, [
       "pr",
       "list",
       "--head",
@@ -345,7 +342,7 @@ export class GhCliClient implements GitHubClient {
   async getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }> {
     let output: string;
     try {
-      output = await this.gh(ref.path, ["issue", "view", String(ref.number), "--json", "title,body,comments,state"]);
+      output = await this.gh(ref.workspace, ["issue", "view", String(ref.number), "--json", "title,body,comments,state"]);
     } catch (err) {
       // gh's not-found failure ("GraphQL: Could not resolve to an issue or
       // pull request …") is the only permanent one at this surface — every
@@ -369,7 +366,7 @@ export class GhCliClient implements GitHubClient {
   }
 
   async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
-    const output = await this.gh(ref.path, [
+    const output = await this.gh(ref.workspace, [
       "issue",
       "list",
       "--state",
@@ -383,7 +380,7 @@ export class GhCliClient implements GitHubClient {
   }
 
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {
-    await this.gh(ref.path, ["issue", "comment", String(ref.number), "--body", body]);
+    await this.gh(ref.workspace, ["issue", "comment", String(ref.number), "--body", body]);
   }
 
   async tokenRefusal(ref: RepoSlug): Promise<string | null> {
