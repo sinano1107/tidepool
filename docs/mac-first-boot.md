@@ -311,6 +311,12 @@ it removes under `refs/keep-around/<sha>`.
   (`git for-each-ref --format='delete %(refname)' refs/keep-around/ | git update-ref --stdin`),
   and register it again. The board takes its baseline anew, and the removed values can no longer
   be picked up.
+- **Renaming a workspace or moving its checkout.** Delete the workspace in the settings tab, then
+  register it again under the new name or path. Do not rename the entry or change its `path` in
+  `workspaces.yaml`: while a name the board holds a baseline for is missing from the registry, no
+  new workspace takes its first baseline, and the board raises a quarantine question under the
+  missing name. The delete is refused while the workspace has an open quarantine question — answer
+  it first.
 - **Linked worktrees.** Do not run `git worktree add` in a workspace's checkout. Without
   arguments it creates a branch; `git stash` there writes the shared `refs/stash`; a commit on a
   branch the board advanced stacks a commit that reverts the advance; and a commit there after a

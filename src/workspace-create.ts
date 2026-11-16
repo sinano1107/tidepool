@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
@@ -21,6 +22,7 @@ import {
   exactProtectedBranchRef,
   originUrl,
 } from "./pickup-predicates.js";
+import { openQuarantineQuestion, openQuarantineQuestions, parseWorkspaceContainmentValue } from "./quarantine.js";
 import {
   assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
@@ -39,10 +41,12 @@ import {
 } from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, sameRepository } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
+import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import {
   dropWorkspaceState,
   entryCheckoutPath,
+  holdsBaseline,
   refValues,
   resolvesToRegistryClone,
   UnknownWorkspaceError,
@@ -417,7 +421,7 @@ export class RegistrySelfDeleteError extends Error {
 
 export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
-  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences & { db: Db },
+  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences & { db: Db; clock?: Clock },
 ): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
@@ -434,6 +438,9 @@ export async function deleteWorkspace(
   const awaiting = deps.awaitingLandingTaskIds;
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
+  // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む
+  const open = namingQuarantines(deps.db, input.name);
+  if (open.length > 0 && holdsBaseline(deps.db, input.name)) reasons.push({ code: "open_quarantine", question_id: open[0]!.id });
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
   // checkout の場所はエントリを消す前に読む —— 消した後の registry からは
@@ -450,8 +457,22 @@ export async function deleteWorkspace(
     },
     `delete workspace ${input.name} via WebUI`,
   );
-  dropWorkspaceState(deps.db, input.name);
+  // 行の無い名前の削除は、開いていた Quarantine を観測で閉じて event に残す(ADR 0373 決定14)
+  deps.db.transaction(() => {
+    dropWorkspaceState(deps.db, input.name);
+    const now = (deps.clock ?? new SystemClock()).now();
+    for (const { id, kind, value } of open) settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
+  })();
   return checkout;
+}
+
+/** その名前を名指す開いた Quarantine(workspace と封じ込めの組)。 */
+function namingQuarantines(db: Db, name: string): Array<{ id: string; kind: "workspace" | "workspaceContainment"; value: string }> {
+  const workspace = openQuarantineQuestion(db, "workspace", name);
+  const containment = [...openQuarantineQuestions(db, "workspaceContainment")]
+    .filter(([value]) => parseWorkspaceContainmentValue(value!).workspace === name)
+    .map(([value, id]) => ({ id, kind: "workspaceContainment" as const, value: value! }));
+  return [...(workspace ? [{ id: workspace.id, kind: "workspace" as const, value: name }] : []), ...containment];
 }
 
 /** ADR 0066 決定2 の入力: publish するのはどの workspace か、宛先の repo URL はどこか。

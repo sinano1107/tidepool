@@ -710,6 +710,7 @@ function workspaceAdmin(
   const deps = {
     registry,
     db,
+    clock: board.clock,
     workspacesBaseDir: board.workspacesDir,
     githubAuth: board.githubAuth,
     boardState: board.boardState,

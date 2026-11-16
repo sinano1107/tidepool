@@ -57,6 +57,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import type { Slot } from "../src/slot.js";
 import {
   answerQuestion,
+  cancelTaskDirectly,
   completeAudit,
   completeIntegrationReview,
   completeTask,
@@ -875,6 +876,15 @@ export async function prepareAtPickup(
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
+}
+
+/** setup のみ: `workspace` に盤面の基準の行を残す —— 基準の行を持つ workspace が引けないか違反している間、行の無い名前の最初の撮りは
+ *  止まる(ADR 0373 決定13)。拾う task は scheduler が拾わないよう登録と同じ同期区間で取り消してから、準備と解放だけを通す。 */
+export async function leaveBaseline(db: Db, workspace: WorkspaceConfig): Promise<void> {
+  const now = new Date();
+  const task = registerTask(db, { type: "work", title: "leaves a baseline", purpose: "p", completion_criteria: "c", workspace: workspace.name }, now, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, task, null, now, {}, "webui");
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, task), task, now);
 }
 
 /** その task のこの session の task の checkout(ADR 0356 決定1)—— 盤面の pickup の後に worker が書く在り処。 */

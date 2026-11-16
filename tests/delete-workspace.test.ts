@@ -3,10 +3,12 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
+import { registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
-import { pickupTask, registerTask } from "../src/tasks.js";
-import { completionTreePaths, releaseWorkspace } from "../src/workspace.js";
+import { getTask, pickupTask, registerTask } from "../src/tasks.js";
+import { completionTreePaths, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, writeUnannounced } from "./registry-fixture.js";
@@ -118,6 +120,63 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
     ).rejects.toThrow(RegistrySelfDeleteError);
 
     expectState(s, true);
+  });
+});
+
+describe("deleteWorkspace: 開いた Quarantine と基準(ADR 0373 決定14)", () => {
+  vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+  it.each([
+    ["workspace", (s: Session) => quarantineWorkspace(s.db, "tidepool", "refs moved", s.now) && quarantineQuestion(s.db, "workspace", "tidepool")!],
+    ["封じ込め", (s: Session) => {
+      const value = workspaceContainmentValue("claude-code", "tidepool");
+      registerQuarantine(s.db, "workspaceContainment", value, "not contained", s.now);
+      return quarantineQuestion(s.db, "workspaceContainment", value)!;
+    }],
+  ])("基準の行を持つ名前は、その名前を名指す %s の Quarantine が開いている間は confirm があっても消せず、registry のエントリも Quarantine も残る(spec #3273 text B10)", async (_kind, open) => {
+    const s = await sessionWithState("tidepool");
+    const question = open(s);
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: s.db }),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      message: `workspace "tidepool" cannot be deleted: workspace "tidepool" has an open Quarantine (question ${question.id}) and a baseline — answer it first.`,
+      reasons: [{ code: "open_quarantine", question_id: question.id }],
+    });
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeDefined();
+    expect(getTask(s.db, question.id)!.status).toBe("todo");
+  });
+
+  it("基準の行を持たない名前は消せ、開いていた Quarantine は削除が閉じて quarantine_released を残す(ADR 0373 決定14)", async () => {
+    const db = openDb(":memory:");
+    const now = new Date();
+    quarantineWorkspace(db, "tidepool", "pickup failed before its first capture", now);
+    const question = quarantineQuestion(db, "workspace", "tidepool")!;
+    const registryDir = await makeMainRegistry();
+
+    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db });
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
+    expect(getTask(db, question.id)!.status).toBe("done");
+    expect(listEvents(db, question.id).map(({ payload }) => payload).filter(({ kind }) => kind === "quarantine_released")).toEqual([
+      { kind: "quarantine_released", quarantine: "workspace", value: "tidepool" },
+    ]);
+  });
+
+  it("registry の commit の後・行を消す前に止まった盤面は、名前を戻して削除し直せば抜けられる(ADR 0373 決定14)", async () => {
+    const s = await sessionWithState("tidepool");
+    const registryDir = await makeMainRegistry();
+    // registry の commit だけが着地した —— 行は s.db に残る
+    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: openDb(":memory:") });
+    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "revert", "--no-edit", "HEAD");
+
+    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: s.db });
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
+    expectState(s, false);
   });
 });
 

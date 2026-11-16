@@ -1136,7 +1136,12 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
 
 /** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば
  *  git に進まずに戻る —— 呼び手は戻った後に同じ門を読む。 */
-type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
+type PickupPrep = {
+  githubAuth?: GitHubAuth;
+  live?: () => boolean;
+  /** registry の名前を引く口(ADR 0373 決定13 の確認が引く)。registry の無い盤面は undefined —— 確認は掛からない。 */
+  resolveRegistered?: WorkspaceResolver;
+};
 
 /** pickup の準備: 開く場所すべての ref の基準と鮮度を確かめ、走る場所だけにタスクブランチを立てる
  *  (実環境に root のブランチを立てない、ADR 0273 決定2)。
@@ -1153,7 +1158,7 @@ export async function prepareWorkspaceAtPickup(
     now: Date;
   },
 ): Promise<void> {
-  prepareRefBaseline(db, workspace);
+  prepareRefBaseline(db, workspace, board);
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無い。
   // ADR 0356 決定3: 名前の場所(面接室を含む)は自分の git で読む —— 盤面の view は worker が走った checkout のもので、人間の登録前の
@@ -1168,9 +1173,9 @@ export async function prepareWorkspaceAtPickup(
     if (safeRealpath(read.place.path) === safeRealpath(workspace.path)) continue;
     // ADR 0351 決定6: 読む場所も後半が書く前に比べ、違反は読む場所の名前で止める。
     try {
-      prepareRefBaseline(db, read.place);
+      prepareRefBaseline(db, read.place, board);
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err;
+      if (isBoardDbRefusal(err) || err instanceof FirstCaptureRefusedError) throw err;
       throw new PickupGateError(read.place, err);
     }
     await firePickupPredicates(db, read.place, read.predicates, "after-open", board);
@@ -1236,10 +1241,19 @@ function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   writeSnapshot(db, workspace.name, currentRefs(workspace));
 }
 
-function prepareRefBaseline(db: Db, workspace: WorkspaceConfig): void {
+/** ADR 0373 決定13: 最初の撮りの確認に落ちた —— 落ちた workspace の Quarantine はもう立っていて、`stop` がそれを名指す。
+ *  撮りに来た task(や着地)はこの停止で待つ(spec #3273)。 */
+export class FirstCaptureRefusedError extends Error {
+  constructor(readonly stop: ResourceStop) {
+    super(stop.reason);
+  }
+}
+
+function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered?: WorkspaceResolver; now: Date }): void {
   const key = workspace.name;
   const first = storedRefs(db, key) === "";
   if (!first) compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now);
   const pin = storedSparsePolicy(db, key);
   if (pin !== undefined && !first) return;
   // ADR 0356 決定3: an existing checkout without a pin may already carry worker-written rules.
@@ -1248,6 +1262,34 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig): void {
     if (first) snapshotRefs(db, workspace);
     if (pin === undefined) db.prepare("INSERT INTO workspace_sparse_policies (name, policy) VALUES (?, ?)").run(key, JSON.stringify(policy ?? null));
   })();
+}
+
+/** 面接室の名前(鍵は root id)。 */
+function isInterviewRoomName(db: Db, name: string): boolean {
+  return getTask(db, name)?.type === "interview";
+}
+
+/** ADR 0373 決定13: registry の名前の最初の撮りの前に、基準の行を持つ workspace(面接室を除く)が全部引けて基準どおりであることを
+ *  確かめる —— `workspaces.yaml` の手編集の改名が比べずに基準をやり直さない。比較はいつもの比較器で、通れば2値行を畳む。引けないのは
+ *  registry に名前が無いときだけで、registry が読めない失敗はそのまま投げる(数えない)。落ちた名前の Quarantine を立てて投げる。 */
+function confirmBaselinesBeforeFirstCapture(db: Db, resolveRegistered: WorkspaceResolver, now: Date): void {
+  const names = db.prepare("SELECT name FROM workspace_state WHERE ref_snapshot <> '' ORDER BY name").pluck().all() as string[];
+  for (const name of names.filter((name) => !isInterviewRoomName(db, name))) {
+    let place: WorkspaceConfig;
+    try {
+      place = resolveRegistered(name);
+    } catch (err) {
+      if (!(err instanceof UnknownWorkspaceError)) throw err;
+      throw new FirstCaptureRefusedError(quarantineWorkspace(db, name, err, now));
+    }
+    try {
+      compareAndFoldBaseline(db, place, [], "while the checkout rested since the last session");
+    } catch (err) {
+      // 読めない checkout も基準どおりとは言えない —— 違いと同じくその名前で止める
+      if (isBoardDbRefusal(err)) throw err;
+      throw new FirstCaptureRefusedError(quarantineWorkspace(db, name, err, now));
+    }
+  }
 }
 
 function writeSnapshot(db: Db, key: string, refs: string): void {
@@ -1276,6 +1318,11 @@ export function dropWorkspaceState(db: Db, name: string): void {
     db.prepare("DELETE FROM workspace_state WHERE name = ?").run(name);
     db.prepare("DELETE FROM workspace_sparse_policies WHERE name = ?").run(name);
   })();
+}
+
+/** 盤面がその名前の基準の行を持つか(ADR 0373 決定13・14)。 */
+export function holdsBaseline(db: Db, name: string): boolean {
+  return storedRefs(db, name) !== "";
 }
 
 function storedRefs(db: Db, workspaceName: string): string {
@@ -1684,7 +1731,12 @@ export function quarantineWorkspace(
   cause: unknown,
   now: Date,
 ): ResourceStop {
-  return registerResourceStop(db, "workspace", workspaceName, cause instanceof Error ? cause.message : String(cause), now);
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  // spec #3273 text B9: 基準の行を持つ名前が引けない間は、どの workspace も最初の撮りをしない(ADR 0373 決定13)
+  const held = cause instanceof UnknownWorkspaceError && holdsBaseline(db, workspaceName)
+    ? `. The board holds a baseline for "${workspaceName}", so no workspace captures a first baseline until it resolves again: put the entry back in the registry under that name. To remove the workspace, delete it through the deletion door after this question is closed; to rename it, delete it and register it under the new name`
+    : "";
+  return registerResourceStop(db, "workspace", workspaceName, `${reason}${held}`, now);
 }
 
 /** Whether a workspace entry's checkout is the board's own registry clone,

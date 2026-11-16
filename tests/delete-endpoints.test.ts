@@ -189,6 +189,22 @@ it("DELETE /api/workspaces/:name は盤面自身の registry clone を 403 で�
   expect(res.status).toBe(403);
 });
 
+it("DELETE /api/workspaces/:name は開いた Quarantine と基準の拒否を他の理由と同じ 409 で返す(ADR 0373 決定14)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: async () => {
+        throw new DeletionBlockedError("workspace", "lagoon", [{ code: "open_quarantine", question_id: "q1" }]);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
+
+  expect(res.status).toBe(409);
+  expect(res.json.blocked).toBe(true);
+  expect(res.json.reasons).toEqual([{ code: "open_quarantine", question_id: "q1" }]);
+});
+
 it("DELETE /api/profiles/:name は名前と confirm を verb へ渡し、200 を返す", async () => {
   const calls: unknown[] = [];
   t = await bootTidepool({

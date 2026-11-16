@@ -9,7 +9,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { parseWorkspaceContainmentValue, quarantineStop, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { getTask, openedPlaceNames, type PickupStopped, type QueueReturnPayload, type ResourceStopDefaults, registerFailureQuestion, registerTask, returnToQueue, type Task, type TaskType, taskIsStopped, unrowedTarget } from "./tasks.js";
+import { getTask, openedPlaceNames, type PickupStopped, type QueueReturnPayload, type ResourceStopDefaults, registerFailureQuestion, registerTask, returnToQueue, type Task, type TaskType, taskIsStopped, unrowedTarget, waitsOnFirstCapture } from "./tasks.js";
 import {
   deferToSessionRest,
   markTeardown,
@@ -194,6 +194,8 @@ export function queueReturnHandler(
 function pickupStopApplies(db: Db, task: Task, stop: PickupStopped, defaults: ResourceStopDefaults): boolean {
   switch (stop.quarantine) {
     case "workspace":
+      // ADR 0373 決定13: 最初の撮りの確認に落ちた workspace は、task が開く名前とは限らない
+      return stop.value !== null && (taskIsStopped(db, task.id, quarantineStop(stop.quarantine, stop.value), defaults) || waitsOnFirstCapture(db, task.id, stop.value, defaults));
     case "agent":
       return stop.value !== null && taskIsStopped(db, task.id, quarantineStop(stop.quarantine, stop.value), defaults);
     case "workspaceContainment":

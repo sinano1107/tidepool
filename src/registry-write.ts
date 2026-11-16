@@ -62,6 +62,7 @@ export type DeletionBlockedReason =
   | { code: "unsettled_tasks"; count: number }
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }
   | { code: "board_default" }
+  | { code: "open_quarantine"; question_id: string }
   | { code: "board_auditor" }
   | { code: "board_interviewer" }
   | { code: "built_in" }
@@ -73,12 +74,12 @@ export class DeletionBlockedError extends Error {
     resourceName: string,
     public readonly reasons: DeletionBlockedReason[],
   ) {
-    super(`${resource} "${resourceName}" cannot be deleted: ${reasons.map(describeReason).join("; ")}`);
+    super(`${resource} "${resourceName}" cannot be deleted: ${reasons.map((reason) => describeReason(reason, resourceName)).join("; ")}`);
     this.name = "DeletionBlockedError";
   }
 }
 
-function describeReason(reason: DeletionBlockedReason): string {
+function describeReason(reason: DeletionBlockedReason, resourceName: string): string {
   if (reason.code === "unsettled_tasks") {
     return `${reason.count} unsettled task(s) still reference it`;
   }
@@ -86,6 +87,8 @@ function describeReason(reason: DeletionBlockedReason): string {
     return `${reason.count} completed task(s) still await landing through it: ${reason.task_ids.join(", ")}`;
   }
   if (reason.code === "board_default") return "it is the board's default";
+  // spec #3273 text B10
+  if (reason.code === "open_quarantine") return `workspace "${resourceName}" has an open Quarantine (question ${reason.question_id}) and a baseline — answer it first.`;
   if (reason.code === "board_auditor") return "it is the board's Auditor";
   if (reason.code === "board_interviewer") return "it is the board's Interviewer";
   // ADR 0117 決定2: 組み込みは registry のファイルではないので削除の対象にならない。

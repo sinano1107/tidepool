@@ -92,6 +92,7 @@ import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { SpawnFailure, WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
+  FirstCaptureRefusedError,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
@@ -648,9 +649,11 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, interviewRootIdOf(db, picked)!, err, clock.now()));
         }
         try {
-          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now() });
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now(), resolveRegistered: resolveWorkspace });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
+          // ADR 0373 決定13: 最初の撮りの確認に落ちた —— 落ちた workspace の Quarantine はもう立っている
+          if (err instanceof FirstCaptureRefusedError) return stopped(err.stop);
           // ADR 0356 決定2: task の checkout の番地に repo を作れないのは host 側の失敗 —— 名前の場所を quarantine せず spawn の失敗へ
           if (err instanceof TaskCheckoutHostError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
