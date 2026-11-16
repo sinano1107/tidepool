@@ -23,12 +23,13 @@ import {
   windowMatchesSetting,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
-import type { GitHubAuth } from "./github-auth.js";
+import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
+import { OriginRepositoryMismatchError } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -52,7 +53,7 @@ import {
   type RegistrySource,
 } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
-import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
+import { repairRepoAccess } from "./repo-access.js";
 import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
 import type { ParentBriefing, Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
@@ -543,9 +544,13 @@ export function startScheduler(deps: {
     live: () => boolean,
   ): Promise<ResourceStop | undefined> {
     if (!live()) return undefined;
+    // ADR 0378 決定3: a different origin is a local repair. A token probe cannot change the result.
+    if (err instanceof PickupGateError && err.cause instanceof OriginRepositoryMismatchError) {
+      return quarantineWorkspace(db, workspace.name, err, clock.now());
+    }
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
-    const ref = parseGitHubRepo(workspace.repo);
+    const ref = workspaceNetworkDestination(workspace)?.github;
     let guidance: string | null = null;
     // 仲介の断りも到達失敗も `tokenRefusal` が理由の文字列に畳むので、ここは投げない
     if (github && ref) guidance = (await repairRepoAccess(github, ref)).guidance;
@@ -627,8 +632,7 @@ export function startScheduler(deps: {
         // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
         // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
         // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
-        // ADR 0329 追記 決定7・8: 走る場所を開く前に、task が開く場所すべての一覧を撃つ。落ちた場所の名前で止まり、remote 正本を
-        // 持つ場所なら修復案内込み(ADR 0067 決定2)—— 持たない場所(面接室・purely-local の実環境)は案内が無く、そのまま quarantine
+        // ADR 0329 追記 決定7・8: 走る場所を開く前に、task が開く場所すべての一覧を撃つ。落ちた場所の名前で止まる。
         const base = resolveWorkspacesBaseDir(workspacesDir);
         let checks: Awaited<ReturnType<typeof pickupGate>>;
         try {
@@ -730,8 +734,8 @@ export function startScheduler(deps: {
     if (resolve && !resolved) return { skip: "head" };
     // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
     if (!resolved) return { pass: await contentSourceFor(head, github, () => undefined).expand() };
-    const ref = { path: resolved.path, number: head.github_issue_number };
-    const read = await readGitHub(contentSourceFor(head, github, () => ref.path).expand());
+    const ref = { workspace: resolved, number: head.github_issue_number };
+    const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand());
     if ("value" in read) return { pass: read.value };
     const err = read.error;
     if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
@@ -810,7 +814,7 @@ export function startScheduler(deps: {
     const resolved = resolve && resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
     if (resolve && !resolved) return { skip: "head" };
     if (!resolved) return { pass: stored };
-    const ref = { path: resolved.path, number: parent.github_issue_number };
+    const ref = { workspace: resolved, number: parent.github_issue_number };
     const read = await readGitHub(github.getIssueWithState(ref));
     if ("error" in read) {
       const err = read.error;

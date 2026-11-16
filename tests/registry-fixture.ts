@@ -59,7 +59,6 @@ chmodSync(FIXTURE_WORKSPACE, 0o555);
 
 const WORKSPACES_YAML = `tidepool:
   path: ${FIXTURE_WORKSPACE}
-  repo: https://github.com/sinano1107/tidepool.git
   notes: run npm install before first use
 `;
 

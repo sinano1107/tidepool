@@ -42,6 +42,7 @@ import {
   questions,
   queueWork,
   sessionId,
+  shimGit,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -400,8 +401,9 @@ class HeldRefusalGitHub extends FakeGitHubClient {
 }
 
 it("準備の失敗の修復の問い合わせの間に止めた session は、その問い合わせが落ちても spawn_failed も quarantine も書かない", async () => {
-  // remote 正本を宣言しながら origin を持たない checkout —— 追従は宣言のずれで落ち、修復の問い合わせへ進む
   const workspace = { ...(await makeWorkspace("sandbox")), repo: "https://github.com/acme/sandbox.git" };
+  git(workspace.path, "remote", "add", "origin", workspace.repo);
+  await shimGit({ route: [workspace.repo, "/nonexistent/sandbox-remote"] });
   const github = new HeldRefusalGitHub();
   t = await bootTidepool({ workspace, resolveWorkspace: () => workspace, github, watchdog: WATCHDOG });
   const task = queueWork(t, "stopped while repairing");

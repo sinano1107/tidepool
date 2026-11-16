@@ -1032,7 +1032,7 @@ export async function shimGit(
 /** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
  *  持つ checkout と、そこへ**人間の merge を模して**書き込む publisher を組む。
  *  返す `WorkspaceConfig` の `repo` が「この workspace はリモートの正本を持つ」の
- *  宣言そのもので、値としては bare な origin のパス —— 盤面が読むのは有無だけである。
+ *  宣言そのもので、値としては bare な origin のパス(ADR 0378 決定1)。
  *
  *  `makeWorkspace` に remote を足さないのは意図的で、remote を持たない workspace は
  *  正当な構成(既存の全テストがその形)だから。remote が要るテストだけがこれを使う。 */

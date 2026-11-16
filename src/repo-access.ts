@@ -56,6 +56,22 @@ export class RepoAccessMissingError extends Error {
   }
 }
 
+/** Strip embedded HTTP credentials and URL secrets. A Git repair command needs the SSH login. */
+export function repositoryLabel(repo: string, { preserveSshUser = false } = {}): string {
+  const origin = repo.trim();
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(origin)) {
+    try {
+      const url = new URL(origin);
+      const sshUser = preserveSshUser && url.protocol === "ssh:" && url.username ? `${url.username}@` : "";
+      if (preserveSshUser && !url.password && !url.search && !url.hash && (!url.username || sshUser)) return repo;
+      return `${url.protocol}//${sshUser}${url.host}${url.pathname}`;
+    } catch {
+      return preserveSshUser ? "configured repository" : "origin configured in the registry clone";
+    }
+  }
+  return preserveSshUser ? repo : origin.replace(/^[^:/@]+@(?=(?:\[[^\]]+\]|[^:/]+):)/, "");
+}
+
 /** github.com の repo を指す URL から `owner/name` を取り出す。**github.com 以外は
  *  `undefined`** で、それがそのまま「これは GitHub か」の門になる(ADR 0067 決定1):
  *  `clone` の入力欄は「anything git clone accepts」なので、非 GitHub の remote では
@@ -64,7 +80,7 @@ export class RepoAccessMissingError extends Error {
  *  ADR 0052 が拒んだのは URL の**綴りの照合**(ssh / https / ホスト名の別名を別物と
  *  読む誤検出)であって、owner/name の抽出は exact な操作なのでその族ではない。 */
 export function parseGitHubRepo(url: string | undefined): RepoSlug | undefined {
-  const match = url?.match(GITHUB_REPO_RE);
+  const match = url?.trim().match(GITHUB_REPO_RE);
   return match ? { owner: match[1]!.toLowerCase(), name: match[2]!.toLowerCase() } : undefined;
 }
 
@@ -75,7 +91,7 @@ const GITHUB_REPO_RE =
 /** ADR 0378 決定4: GitHub identity ignores URL spelling; other repositories compare as written. */
 export function sameRepository(first: string | undefined, second: string | undefined): boolean {
   if (first === second) return true;
-  const a = parseGitHubRepo(first?.trim());
-  const b = parseGitHubRepo(second?.trim());
+  const a = parseGitHubRepo(first);
+  const b = parseGitHubRepo(second);
   return a !== undefined && b !== undefined && a.owner === b.owner && a.name === b.name;
 }

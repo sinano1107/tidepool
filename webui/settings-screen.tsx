@@ -181,7 +181,6 @@ function PublishWorkspace({ ws, say, onPublished }: {
 
 const workspaceProtectionCaptions = {
   registry_repository: "shares the registry's repository — protection stays on",
-  unreadable_origin: "the checkout's origin could not be read — protection stays on",
   unreadable_registry_origin: "the registry clone's origin could not be read — protection stays on",
 };
 

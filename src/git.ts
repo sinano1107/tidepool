@@ -49,7 +49,7 @@ function readConfig(readGit: (args: string[]) => Buffer, args: string[]): string
 const CHECKOUT_ORIGIN_TIMEOUT_MS = 2_000;
 
 /** A readable checkout without an origin returns undefined. An unreadable checkout returns null. */
-export function readCheckoutOrigin(cwd: string): string | undefined | null {
+export function readCheckoutOrigin(cwd: string, selection: "first" | "last" = "last"): string | undefined | null {
   // Git can block opening a config include, so both reads share a deadline.
   const deadline = Date.now() + CHECKOUT_ORIGIN_TIMEOUT_MS;
   const readGit = (args: string[]) => {
@@ -64,10 +64,11 @@ export function readCheckoutOrigin(cwd: string): string | undefined | null {
     if (!statSync(join(repo.slice(1, -1), "config")).isFile()) return null;
     const remote = readConfig(readGit, ["--get-regexp", "^remote\\.origin\\.[^.]+$"]);
     if (remote === undefined) return undefined;
-    // Git's single-key lookup uses the last value. A remote without a URL is unreadable.
+    // Pickup compares the fetch URL, the first one Git fetches from. "last" is the value the board's network calls read.
     const urlKey = "remote.origin.url";
-    const url = remote.split("\0").reverse().find((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`));
-    const origin = url?.slice(urlKey.length + 1);
+    const origin = selection === "first"
+      ? remote.split("\0").find((entry) => entry === urlKey || entry.startsWith(`${urlKey}\n`))?.slice(urlKey.length + 1)
+      : readOriginConfig(readGit);
     return origin?.trim() ? origin : null;
   } catch {
     return null;

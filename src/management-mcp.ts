@@ -144,7 +144,7 @@ import {
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
-  WorkspaceOriginUnprotectError,
+  WorkspaceRegistryUnprotectError,
 } from "./workspace-create.js";
 
 export interface ManagementMcpDeps {
@@ -242,7 +242,7 @@ function registryToolError(err: unknown) {
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||
-    err instanceof WorkspaceOriginUnprotectError ||
+    err instanceof WorkspaceRegistryUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||
     err instanceof CheckoutHasOriginError ||
     err instanceof RegistrySelfPublishError ||

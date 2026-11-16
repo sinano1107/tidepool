@@ -49,6 +49,7 @@ import {
   STAGING_FAILURES,
   servedQuarantineQuestion,
   sessionId,
+  shimGit,
   startFirstMetaReviewViaWebui,
   submoduleSource,
   type Tidepool,
@@ -760,7 +761,7 @@ it("root の pickup で読む実環境の refresh が落ちると実環境の qu
   const [first, second] = await pose(root.id);
   await completeMetaReviews(t);
   expect(t.worker.started.at(-1)!.id).toBe(first);
-  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/workspace-remote");
+  await shimGit({ route: [workspace.repo!, "/nonexistent/workspace-remote"] });
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await api(t.baseUrl, "POST", `/api/tasks/${waiting.id}/move`, { after: null });
 

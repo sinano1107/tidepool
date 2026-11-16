@@ -45,6 +45,7 @@ import type {
   RepoSlug,
 } from "../src/github.js";
 import { IssueGoneError } from "../src/github.js";
+import { remoteTrackingRef, workspaceNetworkDestination } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { Landing } from "../src/landing.js";
 import type { InjectionQuery } from "../src/memory.js";
@@ -78,6 +79,7 @@ import { TranscriptStore, workerPromptRecord } from "../src/transcript-store.js"
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { tempDir } from "./temp-dir.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
@@ -456,20 +458,29 @@ export class FakeContainerRuntime implements ContainerRuntime {
  *  (ADR 0231 決定4)。 */
 export const fakeHead = (prNumber: number) => `head-of-pr-${prNumber}`;
 
+type CheckoutObservation<T> = Omit<T, "workspace"> & { path: string };
+
+/** The fake reaches the declared repo, as the real client does (ADR 0378 決定1). */
+function declaredUrl(workspace: WorkspaceConfig): string {
+  const destination = workspaceNetworkDestination(workspace);
+  if (destination === undefined) throw new Error(`workspace ${workspace.name} has no declared repo to reach`);
+  return destination.url;
+}
+
 /** Scripted stand-in at the GitHubClient seam (issue #19): records every PR
  *  request in call order; scriptFailure lets a test make the call throw
  *  without touching a real GitHub API. */
 export class FakeGitHubClient implements GitHubClient {
-  readonly requests: CreatePrInput[] = [];
+  readonly requests: CheckoutObservation<CreatePrInput>[] = [];
   /** 開いている PR への push(PR を開く前段の push は数えない)。 */
-  readonly pushes: PushBranchInput[] = [];
-  readonly issueFetches: IssueRef[] = [];
-  readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
-  readonly ciChecks: PrRef[] = [];
-  readonly merged: PrRef[] = [];
+  readonly pushes: CheckoutObservation<PushBranchInput>[] = [];
+  readonly issueFetches: CheckoutObservation<IssueRef>[] = [];
+  readonly issueComments: Array<{ ref: CheckoutObservation<IssueRef>; body: string }> = [];
+  readonly ciChecks: CheckoutObservation<PrRef>[] = [];
+  readonly merged: CheckoutObservation<PrRef>[] = [];
   /** The head each entry of `merged` was pinned to (ADR 0231 決定1), same order. */
   readonly mergedHeads: string[] = [];
-  readonly stateChecks: PrRef[] = [];
+  readonly stateChecks: CheckoutObservation<PrRef>[] = [];
   private heads = new Map<number, string>();
   private prBranches = new Map<number, string>();
   private unreadable = new Set<number>();
@@ -487,14 +498,15 @@ export class FakeGitHubClient implements GitHubClient {
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
   private issues = new Map<number, Issue & { state?: "open" | "closed" }>();
-  readonly issueListFetches: RepoRef[] = [];
+  readonly issueListFetches: CheckoutObservation<RepoRef>[] = [];
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
   /** 本物と同じく push はしない —— 呼び手が先に `preparePush` で押したブランチに PR を開く。PR の head は origin の
    *  ブランチ先端から読む。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
-    this.requests.push(input);
+    const { workspace, ...request } = input;
+    this.requests.push({ ...request, path: workspace.path });
     // 作成の前段の push は開いている PR への push ではない —— そのブランチの最後の push を `pushes` から外す
     const last = this.pushes.map((push) => push.branch).lastIndexOf(input.branch);
     if (last !== -1) this.pushes.splice(last, 1);
@@ -506,14 +518,13 @@ export class FakeGitHubClient implements GitHubClient {
 
   /** 返す push は記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
    *  なければ、盤面が自分の書き込みを基準に畳んだか(ADR 0243)を測れない。
-   *  origin を持たない checkout(purely-local)には呼ばれない。 */
-  async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {
+   *  本物と同じく宣言の repo へ押し、写しを盤面が書く(ADR 0378 決定1)。宣言の無い workspace(purely-local)には呼ばれない。 */
+  async preparePush({ workspace, branch }: PushBranchInput): Promise<(sha: string) => void> {
     return (sha) => {
-      this.pushes.push(input);
-      execFileSync("git", ["push", "origin", `${sha}:refs/heads/${input.branch}`], {
-        cwd: input.path,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      this.pushes.push({ branch, path: workspace.path });
+      const cwd = workspace.path;
+      execFileSync("git", ["push", "--", declaredUrl(workspace), `${sha}:refs/heads/${branch}`], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["update-ref", remoteTrackingRef(branch), sha], { cwd });
       // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形 —— 畳みが失敗の
       // 報告ではなく ref の読み返しで決まること(ADR 0243 決定2)を測る
       if (this.pushFailure) throw this.pushFailure;
@@ -530,18 +541,18 @@ export class FakeGitHubClient implements GitHubClient {
     return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
   }
 
-  /** PR の head は origin のそのブランチの先端 —— 盤面の push も、別の clone からの push も映る(ADR 0242)。
+  /** PR の head は宣言の repo のそのブランチの先端 —— 盤面の push も、別の clone からの push も映る(ADR 0242)。
    *  scriptHead で置いた head が先に立つ。ブランチを知らない PR は fakeHead。 */
-  private headOf(path: string, number: number): string {
+  private headOf(workspace: WorkspaceConfig, number: number): string {
     const branch = this.prBranches.get(number);
     if (this.heads.has(number) || branch === undefined) return this.heads.get(number) ?? fakeHead(number);
-    return execFileSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: path }).toString().split("\t")[0] || fakeHead(number);
+    return execFileSync("git", ["ls-remote", "--", declaredUrl(workspace), `refs/heads/${branch}`], { cwd: workspace.path }).toString().split("\t")[0] || fakeHead(number);
   }
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
-    this.ciChecks.push(ref);
+    this.ciChecks.push({ path: ref.workspace.path, number: ref.number });
     if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
-    return { ci: this.ciStatus, head: this.headOf(ref.path, ref.number), ...this.stateRead(ref.number) };
+    return { ci: this.ciStatus, head: this.headOf(ref.workspace, ref.number), ...this.stateRead(ref.number) };
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
@@ -551,12 +562,12 @@ export class FakeGitHubClient implements GitHubClient {
       throw new Error(`PR #${ref.number} is ${this.stateOf(ref.number).toLowerCase()}`);
     }
     // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
-    if (head !== this.headOf(ref.path, ref.number)) {
+    if (head !== this.headOf(ref.workspace, ref.number)) {
       throw new Error("Head branch was modified. Review and try the merge again.");
     }
     const failure = this.mergeFailures.get(ref.number);
     if (failure) throw failure;
-    this.merged.push(ref);
+    this.merged.push({ path: ref.workspace.path, number: ref.number });
     this.mergedHeads.push(head);
   }
 
@@ -570,7 +581,7 @@ export class FakeGitHubClient implements GitHubClient {
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
     if (this.findFailure) throw this.findFailure;
     for (const [number, branch] of this.prBranches) {
-      if (branch === input.branch) return { number, state: this.stateOf(number), head: this.headOf(input.path, number) };
+      if (branch === input.branch) return { number, state: this.stateOf(number), head: this.headOf(input.workspace, number) };
     }
     return null;
   }
@@ -595,7 +606,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
-    this.stateChecks.push(ref);
+    this.stateChecks.push({ path: ref.workspace.path, number: ref.number });
     const failure = this.stateReadFailures.get(ref.number);
     if (failure) throw failure;
     return this.stateRead(ref.number);
@@ -643,7 +654,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }> {
-    this.issueFetches.push(ref);
+    this.issueFetches.push({ path: ref.workspace.path, number: ref.number });
     if (this.issueGate) await this.issueGate;
     const perNumberFailure = this.issueFailures.get(ref.number);
     if (perNumberFailure) throw perNumberFailure;
@@ -658,7 +669,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
-    this.issueListFetches.push(ref);
+    this.issueListFetches.push({ path: ref.workspace.path });
     if (this.issueListFailure) throw this.issueListFailure;
     return this.issueList ?? [];
   }
@@ -680,7 +691,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {
-    this.issueComments.push({ ref, body });
+    this.issueComments.push({ ref: { path: ref.workspace.path, number: ref.number }, body });
   }
 
   /** Scripts what getIssue(ref) returns for a given issue number (issue #49). */

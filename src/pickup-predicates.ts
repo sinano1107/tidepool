@@ -2,10 +2,11 @@
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.js";
-import { git } from "./git.js";
+import { git, readCheckoutOrigin } from "./git.js";
 import { remoteTrackingRef } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import type { RegistrySource } from "./registry.js";
+import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -66,7 +67,7 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: Regi
     },
     {
       phase: "before-open",
-      describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`).`,
+      describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`), and both point to the same repository.`,
       check: () => assertRemoteDeclarationMatchesClone(place),
     },
     ...afterOpenPredicates(place, scope, unbornRoom),
@@ -357,13 +358,7 @@ export function resolvedCommit(place: WorkspaceConfig, sha: string): string | un
   }
 }
 
-/** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
- *  訊く1つの問いで、`repo` の宣言と突き合わせる側(下の
- *  `assertRemoteDeclarationMatchesClone`)と、既存 checkout の登録時に宣言を焼く側
- *  (`workspace-create.ts` の `registerExistingCheckout`)が同じ関数で訊く ——
- *  2箇所が別々に訊くと、登録が自分で作った宣言を pickup が「ずれている」と読む余地が
- *  残る(/code-review Standards 軸の指摘)。git repository でないパスも「remote 無し」
- *  として同じ undefined に落ちる。 */
+/** The effective URL observed by the registration and publish doors. */
 export function originUrl(checkoutPath: string): string | undefined {
   try {
     return git(checkoutPath, "remote", "get-url", "origin");
@@ -372,27 +367,35 @@ export function originUrl(checkoutPath: string): string | undefined {
   }
 }
 
-/** ADR 0052 決定3 の対偶(issue #211 やること5): 宣言は clone を覗いた推測ではないので、
- *  宣言と実態がずれていたら**どこかが赤くならなければならない**。
- *
- *  ずれは両向きに害がある。宣言があって remote が無い側は fetch も fork も撃てない。
- *  宣言が無くて remote がある側のほうが危険で、黙って通れば fork 元はローカルの保護
- *  ブランチのままなので、merge 済みの成果が見えない地点からタスクが始まり続け、症状は
- *  「PR が毎回コンフリクトする」という遠い場所に出る。
- *
- *  突き合わせるのは `origin` の**有無だけ**である。URL の綴り(ssh / https / ホスト名の
- *  別名)を照合しても同じリモートを別物と読む誤検出しか増えず、`repo` は人間向けの
- *  provenance でもあるため厳密な一致を要求できない。 */
+export class OriginRepositoryMismatchError extends Error {}
+
+function originRepairInstruction(verb: "add" | "set-url", repo: string, displayed: string): string {
+  const command = `git remote ${verb}${repo.startsWith("-") ? " --" : ""} origin`;
+  // ADR 0378 決定4: redacting a non-GitHub declaration can change the value required by the gate.
+  if (!sameRepository(repo, displayed) || /[\r\n]/.test(displayed)) {
+    return `use the exact private \`repo:\` value from the registry entry with \`${command}\``;
+  }
+  const argument = /^[\w@%+=:,./-]+$/.test(displayed) ? displayed : `'${displayed.replaceAll("'", "'\\''")}'`;
+  const ticks = (argument.match(/`+/g) ?? []).reduce((longest, run) => Math.max(longest, run.length), 0);
+  const fence = "`".repeat(ticks + 1);
+  return `run ${fence}${command} ${argument}${fence}`;
+}
+
+/** ADR 0378 決定3・4: compare the raw origin at both pickup and Quarantine acceptance. */
 function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
-  const hasOrigin = originUrl(workspace.path) !== undefined;
-  if (isRemoteBacked(workspace) === hasOrigin) return;
-  throw new Error(
-    isRemoteBacked(workspace)
-      ? `workspace ${workspace.name} declares a remote source of truth (repo: ${workspace.repo}) ` +
-        "but its checkout has no 'origin' remote"
-      : `workspace ${workspace.name} declares no remote source of truth (no repo) ` +
-        "but its checkout has an 'origin' remote",
-  );
+  const { name, path, repo } = workspace;
+  const origin = readCheckoutOrigin(path, "first");
+  if (origin === null) throw new Error(`workspace ${name}: could not read its checkout's origin in ${path}`);
+  if (sameRepository(repo, origin)) return;
+  if (repo === undefined) {
+    throw new Error(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
+  }
+  const declared = repositoryLabel(repo, { preserveSshUser: true });
+  if (origin === undefined) {
+    throw new Error(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
+  }
+  const configured = repositoryLabel(origin, { preserveSshUser: true });
+  throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${originRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
 }
 
 /** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authedClone,
   authedFetch,
-  authedGitBounded,
+  authedLsRemote,
   authedPush,
   GIT_CREDENTIAL_ARGS,
   GIT_NETWORK_TIMEOUT_MS,
@@ -263,16 +263,17 @@ describe("originRepo: 呼び出し元 checkout の origin から repo を決め�
     git(repo, "init", "-b", "main");
     expect(originRepo(repo)).toBeUndefined();
 
-    git(repo, "remote", "add", "origin", "https://github.com/acme/widget.git");
+    git(repo, "remote", "add", "origin", "https://github.com/acme/first.git");
+    git(repo, "config", "--add", "remote.origin.url", "https://github.com/acme/widget.git");
     expect(originRepo(repo)).toBe("acme/widget");
 
-    git(repo, "remote", "set-url", "origin", "/srv/mirrors/widget.git");
+    git(repo, "config", "--replace-all", "remote.origin.url", "/srv/mirrors/widget.git");
     expect(originRepo(repo)).toBeUndefined();
     expect(originRepo("/no/such/checkout")).toBeUndefined();
   });
 });
 
-describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339)", () => {
+describe("盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339)", () => {
   it("installation token を持つ盤面の push もローカル remote に届き、token は process.env に残らない", async () => {
     const { remote, repo } = await checkoutOfBareRemote();
     git(repo, "remote", "set-url", "origin", ` ${remote} `);
@@ -349,10 +350,11 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const repo = await checkoutWithOrigin(origin);
     const calls = await shimGit({ fake: ["ls-remote"] });
 
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
+    authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main");
 
     const { args } = calls().find((call) => call.args.includes("ls-remote"))!;
-    expect({ url: args[args.indexOf("ls-remote") + 1], recorded: git(repo, "config", "remote.origin.url") }).toEqual({ url, recorded: origin });
+    expect(args.slice(args.indexOf("ls-remote") + 1)).toEqual(["--", url, "refs/heads/main"]);
+    expect(git(repo, "config", "remote.origin.url")).toBe(origin);
   });
 
   // 盤面所有の repo は checkout の外にあるので、相対 path の origin は checkout を起点に解いてから渡す
@@ -406,7 +408,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const topic = git(repo, "rev-parse", "HEAD");
 
     authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, merged);
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
+    authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main");
     authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["topic", topic]]);
 
     const requests = reached.requests();
@@ -461,12 +463,12 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const missing = "1".repeat(40);
 
     authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, sha);
-    authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main");
+    authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main");
     authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["copy", sha]]);
     expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, missing)).toThrow();
     expect(() => authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["copy", missing]])).toThrow();
     git(repo, "remote", "set-url", "origin", (await startDenyingHttpRemote()).url);
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main")).toThrow();
+    expect(() => authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main")).toThrow();
 
     expect(readdirSync(boardHome())).toEqual([]);
   });
@@ -501,7 +503,7 @@ describe("authedGitBounded: 盤面の網に出る git(ADR 0024 の唯一の注�
     const ssh = tripwire(repo, "fake-ssh");
     git(repo, "config", "core.sshCommand", ssh.path);
 
-    expect(() => authedGitBounded(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "ls-remote", "refs/heads/main")).toThrow(
+    expect(() => authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main")).toThrow(
       /transport 'ssh' not allowed/,
     );
     expect(ssh.tripped()).toBe(false);

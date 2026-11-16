@@ -45,7 +45,8 @@ async function quarantineReason(board: Tidepool, workspace: string): Promise<str
 it("remote 正本を宣言した workspace の refresh が失敗すると、その workspace が quarantine に落ちる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // remote は宣言どおり張られているが届かない = credential の失効やホスティング障害
-  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/workspace-remote");
+  workspace.repo = "/nonexistent/workspace-remote";
+  git(workspace.path, "remote", "set-url", "origin", workspace.repo);
 
   t = await bootTidepool({ workspace });
   await registerWork(t, "needs the remote");
@@ -131,9 +132,10 @@ it("registry clone の2つの宣言が食い違えば quarantine に落ちる �
 
 it("registry clone の2つの宣言が食い違えば quarantine に落ちる — registry は purely-local、workspace は remote-backed", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
+  const repo = git(registryDir, "remote", "get-url", "origin");
 
   t = await bootTidepool({
-    workspace: { name: "tidepool", path: registryDir, repo: "https://example.invalid/registry.git" },
+    workspace: { name: "tidepool", path: registryDir, repo },
     registry: { dir: registryDir, mode: "purely-local" },
   });
   await registerWork(t, "registry edit");
@@ -165,7 +167,8 @@ it("仲介が installation token を出せない workspace は、fetch 失敗と
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // 宣言も remote も正しく github.com を指す = token が要る形。仲介が断るので
   // fetch は撃たれる前に止まる(実ネットワークへは出ない)
-  git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/sandbox.git");
+  workspace.repo = "https://github.com/acme/sandbox.git";
+  git(workspace.path, "remote", "set-url", "origin", workspace.repo);
   const broker = await startFakeBroker(() => ({
     status: 401,
     body: { error: "invalid_user_token" },
@@ -196,7 +199,8 @@ it("完了時の merge back で仲介が token を出せなくても、WIP は�
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   const localOrigin = workspace.repo!;
   // origin の綴りは github.com(= token が要る形)、実際の往復はローカルの bare へ —— 実ネットワークへは出ない
-  git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/sandbox.git");
+  workspace.repo = "https://github.com/acme/sandbox.git";
+  git(workspace.path, "remote", "set-url", "origin", workspace.repo);
   await shimGit({ route: ["https://github.com/acme/sandbox.git", localOrigin] });
   // 1回目(pickup)は 4 分だけ有効な token を出す —— 5 分の余白を切っているので完了時の
   // ensure は取り直しに行き、2回目で仲介が断る

@@ -419,7 +419,9 @@ describe("loadRegistry", () => {
   });
 
   it("workspaces.yaml を読み込む: 名前 → パス・repo URL・セットアップメモ", async () => {
-    const dir = await makeRegistry();
+    const dir = await makeRegistry({
+      "workspaces.yaml": `tidepool:\n  path: ${FIXTURE_WORKSPACE}\n  repo: https://github.com/sinano1107/tidepool.git\n  notes: run npm install before first use\n`,
+    });
     const registry = loadRegistry(dir, "purely-local");
     const ws = registry.workspaces.tidepool!;
     expect(ws.path).toBe(FIXTURE_WORKSPACE);

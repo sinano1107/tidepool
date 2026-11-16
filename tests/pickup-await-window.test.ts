@@ -90,7 +90,7 @@ it.each([
   await vi.waitFor(() => expect(t.github.issueFetches.length).toBe(1));
   t.github.scriptIssueGate(null);
   expect((await mutate(head.id)).status).toBe(200);
-  t.github.scriptIssueFailure(new IssueGoneError({ path: "/x", number: 49 }, "closed"));
+  t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, "closed"));
   release();
   await new Promise((r) => setImmediate(r));
 

@@ -26,6 +26,7 @@ import {
   whyNoCompletionReview,
   whyReviewFlagIsInert,
 } from "./webui-rules.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
  *  no registry definition, but GLOSSARY.md's Roster still surfaces it as a
@@ -1134,7 +1135,7 @@ export class TaskContentSource {
 export function contentSourceFor(
   task: Pick<Task, "title" | "purpose" | "completion_criteria" | "github_issue_number">,
   github: GitHubClient | undefined,
-  workspacePath: () => string | undefined,
+  resolveWorkspace: () => WorkspaceConfig | undefined,
 ): TaskContentSource {
   const stored = TaskContentSource.stored({
     title: task.title,
@@ -1142,9 +1143,9 @@ export function contentSourceFor(
     completion_criteria: task.completion_criteria,
   });
   if (task.github_issue_number == null || !github) return stored;
-  const path = workspacePath();
-  if (path === undefined) return stored;
-  return TaskContentSource.liveIssue(github, { path, number: task.github_issue_number });
+  const workspace = resolveWorkspace();
+  if (workspace === undefined) return stored;
+  return TaskContentSource.liveIssue(github, { workspace, number: task.github_issue_number });
 }
 
 /** A review field that would do nothing in the task's post-change state is refused (ADR 0111 追記8): the

@@ -192,7 +192,7 @@ import {
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
-  WorkspaceOriginUnprotectError,
+  WorkspaceRegistryUnprotectError,
 } from "./workspace-create.js";
 
 function formatValidationError(error: z.ZodError): string {
@@ -847,16 +847,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(503), { error: "GitHub or workspace tracking not configured" });
       return;
     }
-    let path: string;
+    let target: WorkspaceConfig;
     try {
-      path = resolve(parsed.data.workspace).path;
+      target = resolve(parsed.data.workspace);
     } catch (err) {
       if (!(err instanceof UnknownWorkspaceError)) throw err;
       sendJson(res.status(400), { error: `unknown workspace: ${parsed.data.workspace}` });
       return;
     }
     try {
-      const issues = await github.listIssues({ path });
+      const issues = await github.listIssues({ workspace: target });
       sendJson(res, { issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
     } catch {
       sendJson(res.status(502), { error: "could not fetch open issues" });
@@ -963,8 +963,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // true once the human accepts — same round trip a direct API caller
         // gets, no client-side pre-judgment of danger (ADR 0027)
         sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
-      } else if (err instanceof WorkspaceOriginUnprotectError) {
-        // ADR 0377 決定6: confirmation cannot override origin-based protection.
+      } else if (err instanceof WorkspaceRegistryUnprotectError) {
+        // ADR 0377 決定6 / ADR 0381 決定1: confirmation cannot override protection computed from the declared repo.
         sendJson(res.status(403), { error: err.message });
       } else {
         sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
@@ -1311,7 +1311,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         const live = await issueContent.present(
           presentTask(db, parent, defaultAgentName, auditorName, interviewerName),
           github,
-          displayWorkspacePath(parent.workspace),
+          displayWorkspace(parent.workspace),
           clock.now(),
         );
         context = {
@@ -2171,9 +2171,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // board-driven async work, not viewing) — an unresolvable name just leaves
   // the row unexpanded.
   const displayResolver = buildWorkspaceResolver(resolveWorkspace, workspace);
-  const displayWorkspacePath = (taskWorkspace: string | null) => (): string | undefined => {
+  const displayWorkspace = (taskWorkspace: string | null) => (): WorkspaceConfig | undefined => {
     try {
-      return displayResolver?.(taskWorkspace).path;
+      return displayResolver?.(taskWorkspace);
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) return undefined;
       throw err;
@@ -2182,7 +2182,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   const presentLive = <T extends BoardTask>(tasks: T[]): Promise<Array<Live<T>>> =>
     Promise.all(
       tasks.map((task) =>
-        issueContent.present(task, github, displayWorkspacePath(task.workspace), clock.now()),
+        issueContent.present(task, github, displayWorkspace(task.workspace), clock.now()),
       ),
     );
 

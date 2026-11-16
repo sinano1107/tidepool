@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -924,7 +924,7 @@ it("origin が返らない push は何秒の無音で切れたかを書いて投
   const client = new GhCliClient(new GitHubAuth(join(workspace.path, "no-token")), { timeoutMs: 1000 });
 
   await straddle(db, clock, workspace, async () => {
-    const push = await client.preparePush({ path: workspace.path, branch: "task/pushed" });
+    const push = await client.preparePush({ workspace: { ...workspace, repo: remote }, branch: "task/pushed" });
     expect(() => boardRefWriter(db, workspace)(ref, pushed, () => push(pushed))).toThrow(/^`git push` stalled: no bytes for 1 s/);
     process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL");
     // 畳みの後に写しが3つ目の値へ動く —— 予告の行が2値のまま残っていれば `was: |<押した値>` が載る
@@ -2488,7 +2488,7 @@ function mergeQuestions(db: Db) {
     });
 }
 
-it("registry と同じ repo へ開いた PR は flag が無くても人間の merge question になる(ADR 0377 決定5・6)", async () => {
+it("宣言 repo が registry と同じ repo の PR は flag が無くても人間の merge question になる(ADR 0377 決定5 / ADR 0381 決定1)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-registry-edit");
   const registryDir = await makeRegistry();
   git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));
@@ -2505,13 +2505,48 @@ it("registry と同じ repo へ開いた PR は flag が無くても人間の me
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({}, workspace.path) !== undefined,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({ repo: workspace.repo }, workspace.path) !== undefined,
   });
 
   expect(await convergeOn(landing, work.id)).toMatchObject({ kind: "landed", form: "pull_request_opened" });
   expect(mergeQuestions(db)).toMatchObject([
     { pr: 1, recommendation: "merge", purpose: expect.stringContaining("always needs a human merge") },
   ]);
+});
+
+it("宣言が registry の repo の workspace は、pickup の後に origin を別の repo へ向け替えても人間の merge question になり、盤面は merge しない(ADR 0381 決定1)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-registry-repointed");
+  const other = await makeRemoteBackedWorkspace("landing-registry-repointed-other");
+  const registryDir = await makeRegistry();
+  git(registryDir, "remote", "add", "origin", workspace.repo!);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = landingWork(db, clock, workspace.name);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, work);
+  git(workspace.path, "remote", "set-url", "origin", other.workspace.repo!);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({ repo: workspace.repo }, workspace.path) !== undefined,
+  });
+
+  expect(await convergeOn(landing, work.id)).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toMatchObject([
+    { pr: 1, recommendation: "merge", purpose: expect.stringContaining("always needs a human merge") },
+  ]);
+  // ADR 0378 決定1: タスクブランチは向け替えた先ではなく宣言の registry の repo に届く
+  expect(git(workspace.repo!, "rev-parse", `refs/heads/task/${work.id}`)).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(git(other.workspace.repo!, "for-each-ref", "refs/heads/task")).toBe("");
 });
 
 // 着地の面(question)の理由 3 つは、question 本文の違いだけで区別される。本文を逐語で釘付けする。
@@ -2630,7 +2665,7 @@ it("キュー投入の後に registry と同じ repo の workspace が保護さ�
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({}, workspace.path) !== undefined,
+    isProtectedWorkspace: (name) => name === workspace.name && workspaceProtectionReader(registryDir)({ repo: workspace.repo }, workspace.path) !== undefined,
   });
 
   git(registryDir, "remote", "add", "origin", git(workspace.path, "config", "remote.origin.url"));
@@ -4292,7 +4327,7 @@ it("refspec を絞った checkout の PR への人間の merge 回答は通り�
 it("盤面自身が push した head は手元にあるので、origin に届かなくても fetch を撃たずに無人 merge される", async () => {
   const { workspace, github, work, landing, clock } = await openPrByConvergence("left-behind-no-fetch", "auto_if_ci_green");
   github.scriptHead(1, originHead(workspace, work.id));
-  git(workspace.path, "remote", "set-url", "origin", join(workspace.path, "unreachable"));
+  rmSync(workspace.repo!, { recursive: true });
 
   await landing.tick("auto_merge", clock.now());
 
@@ -6256,7 +6291,7 @@ function afterPrRead(
 /** origin を届かなくする —— 保護ブランチの読み直しが落ちる。`quarantine` なら workspace も quarantine に落とす。 */
 function breakRefresh({ workspace, db, clock }: { workspace: WorkspaceConfig; db: Db; clock: FakeClock }, quarantine: boolean) {
   return () => {
-    git(workspace.path, "remote", "set-url", "origin", join(workspace.path, "unreachable"));
+    rmSync(workspace.repo!, { recursive: true });
     if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
   };
 }

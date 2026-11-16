@@ -4,7 +4,7 @@ import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   type UpdateWorkspaceInput,
   WorkspaceConfirmationRequiredError,
-  WorkspaceOriginUnprotectError,
+  WorkspaceRegistryUnprotectError,
 } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -150,7 +150,7 @@ it("文法違反の allowed_domains は 400 — confirm では買えない失敗
 });
 
 it("origin による保護の解除は確認付きでも 403 になる", async () => {
-  const refusal = new WorkspaceOriginUnprotectError("registry-edit", {
+  const refusal = new WorkspaceRegistryUnprotectError("registry-edit", {
     reason: "registry_repository",
     repo: "https://github.com/octocat/registry.git",
   });
