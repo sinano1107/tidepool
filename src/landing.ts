@@ -1,4 +1,5 @@
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
+import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
@@ -8,7 +9,7 @@ import { git } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
 import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
-import { declaredProtectedBranchRef, isRemoteBacked } from "./pickup-predicates.js";
+import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates } from "./pickup-predicates.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
@@ -46,6 +47,7 @@ import {
   buildWorkspaceResolver,
   CatchUpConflictError,
   catchUpTaskBranch,
+  checkAcceptanceFirstHalf,
   fetchCommitIfMissing,
   type IntakeContext,
   lineageTaskBranch,
@@ -530,8 +532,8 @@ function teardownUnfinishedUnder(db: Db, taskId: string): boolean {
 
 export interface Landing {
   /** ADR 0241 決定1・2・5: 収束を突き、その回で扱った根ごとの verdict を返す。走っている回があれば、その後に
-   *  ちょうど1回走る回の結果を返す。retry だけが `answering`(答えている PR 昇格失敗 question)を渡す —— その回は
-   *  その question を開いていないと読み、引退の対象からも除く(ADR 0106 決定5)。 */
+   *  ちょうど1回走る回の結果を返す。retry だけが `answering`(答えている PR 昇格失敗 question の id と、取り込みの event に残す
+   *  回答者)を渡す —— その回はその question を開いていないと読み、引退の対象からも除く(ADR 0106 決定5)。 */
   converge(options?: { answering?: { question: string; answerer: Answerer } }): Promise<RootVerdict[]>;
   /** 回答受理直前のバックストップ(ADR 0079 決定3)。merge 済み・閉じた PR を観測で決着させたら true、該当しない
    *  (PR 番号・GitHub・workspace が無い)か PR が開いている・印が付いていれば false。PR を読めなければ DomainError を
@@ -564,6 +566,8 @@ export interface LandingDeps {
   githubAuth?: GitHubAuth;
   /** 作業台を開く基点(`resolveWorkspacesBaseDir` に渡す値、ADR 0371 決定7)—— 追いつきの conflict と、retry の取り込み。 */
   workspacesDir?: string;
+  /** 盤面の状態の在り処 —— 積み残しの retry が受理と同じ前半の項に渡す(ADR 0371 決定10)。 */
+  boardState?: BoardStatePath[];
   /** 走っている pickup の poll が終わると解ける。収束の回はこれを待ってから始まる —— 同じ checkout で pickup の
    *  fetch・checkout と着地の push が重ならない(GLOSSARY.md「収束」)。Absent → pickup を持たない盤面。 */
   pickupIdle?: () => Promise<void>;
@@ -600,14 +604,9 @@ export function registerPrPromotionFailureQuestion(
   task: Task,
   error: string,
   now: Date,
+  purpose = `Creating a PR for completed task "${task.title}" failed: ${error}`,
 ): void {
-  registerPrPromotionQuestion(
-    db,
-    task,
-    `PR promotion failed: ${task.title}`,
-    `Creating a PR for completed task "${task.title}" failed: ${error}`,
-    now,
-  );
+  registerPrPromotionQuestion(db, task, `PR promotion failed: ${task.title}`, purpose, now);
 }
 
 function registerPrPromotionQuestion(
@@ -953,8 +952,9 @@ export function createLanding(deps: LandingDeps): Landing {
     return true;
   };
   /** 収束の1回の、根ごとの文脈。`answered` は、その根の PR 昇格失敗 question に retry が答えている途中であること
-   *  (ADR 0106 決定5) —— 失敗 question を立て直さず、答えている question を引退の対象から除く。`intake` はその回答の取り込みの束。 */
-  type RootContext = { answering: ReadonlyMap<string, Answerer>; answered: boolean; intake?: IntakeContext };
+   *  (ADR 0106 決定5) —— 失敗 question を立て直さず、答えている question を引退の対象から除く。`intake` はその回答の取り込みの束で、
+   *  retry が答えている途中であることを表す。 */
+  type RootContext = { answering: ReadonlyMap<string, Answerer>; intake?: IntakeContext };
   const retireFailures = (taskId: string, ctx: RootContext) =>
     settlePrPromotionQuestionsAsObserved(deps.db, taskId, deps.clock.now(), ctx.answering);
   const failed = (
@@ -964,11 +964,9 @@ export function createLanding(deps: LandingDeps): Landing {
     ctx: RootContext,
   ): Extract<LandingVerdict, { kind: "failed" }> => {
     const message = error instanceof Error ? error.message : String(error);
-    // 追いつきの conflict は作業台を開いた文そのものが本文(text A2)
-    if (!ctx.answered && error instanceof CatchUpConflictError) {
-      registerPrPromotionQuestion(deps.db, task, `PR promotion failed: ${task.title}`, message, deps.clock.now());
-    } else if (!ctx.answered) {
-      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now());
+    if (!ctx.intake) {
+      // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict の文そのもの(text A2)
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof CatchUpConflictError ? message : undefined);
     }
     return { kind: "failed", reason, error: message };
   };
@@ -1063,14 +1061,13 @@ export function createLanding(deps: LandingDeps): Landing {
     const question = open.find((id) => answering.has(id));
     const ctx: RootContext = {
       answering,
-      answered: question !== undefined,
       intake: question === undefined ? undefined : { workbenchBase, question, entry: "promotion_retry", answerer: answering.get(question)!, now: deps.clock.now() },
     };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
-    if (open.length > 0 && !ctx.answered) return undefined;
+    if (open.length > 0 && !ctx.intake) return undefined;
     // 後始末が未了の木は、その merge back がまだ帰っていない(ADR 0240 決定2)。回の途中で後始末に入ることがあるので、撃つ直前に読む
     if (teardownUnfinishedUnder(deps.db, task.id)) {
-      return ctx.answered
+      return ctx.intake
         ? {
             kind: "excluded",
             reason: "teardown_unfinished",
@@ -1080,7 +1077,7 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、刻んだ head から
     // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
-    const abandoned = ctx.answered ? undefined : abandonEventInForce(deps.db, task.id);
+    const abandoned = ctx.intake ? undefined : abandonEventInForce(deps.db, task.id);
     if (abandoned) {
       // 門が閉じていれば他の理由より先に待つ(GLOSSARY.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
       const block = landingBlock(deps.db, task.id);
@@ -1103,7 +1100,7 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     // ADR 0289 決定3: ローカル着地の hold は断念と同じ形で読む —— 門が閉じていれば待ち(記録は刻まない)、hold した内容のままなら
     // 撃たず、変わっていれば通常の経路を進んで local merge question を立て直す。merge を執行した根は候補に入らない
-    const held = ctx.answered ? undefined : holdEventInForce(deps.db, task.id);
+    const held = ctx.intake ? undefined : holdEventInForce(deps.db, task.id);
     if (held) {
       const block = landingBlock(deps.db, task.id);
       if (block) return { kind: "deferred", reason: block.kind, count: block.count };
@@ -1135,7 +1132,7 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
         const [root, branches] = [taskBranch(task.id), left.map(taskBranch).join(", ")];
-        if (!ctx.answered) {
+        if (!ctx.intake) {
           registerPrPromotionQuestion(
             deps.db,
             task,
@@ -1150,10 +1147,13 @@ export function createLanding(deps: LandingDeps): Landing {
       };
       // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
       if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
-      // ADR 0371 決定10: retry は根の分解ツリーの届いていない merge back を受理と同じ条件で撃ち直してから収束する(積み残しの question、text A5)。
+      // ADR 0371 決定10: retry は根の分解ツリーの届いていない merge back を受理と同じ条件(前半の項と clean を含む)で撃ち直してから収束する
+      // (積み残しの question、text A5)。
       // conflict は作業台を開いて回答を拒む(text A1)
       if (ctx.intake && !workspaceNeedsHuman(deps.db, workspace.name)) {
-        await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, task.id);
+        const { own } = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
+        const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, own, true);
+        await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf });
       }
       const outcome = rootPrOutcome(deps.db, task.id);
       const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;

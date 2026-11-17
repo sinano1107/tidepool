@@ -324,6 +324,13 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
 
 /** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き込みは口(ADR 0351 決定3)で、
  *  鍵は項の場所の名前。 */
+/** spec #3273 の受理の順の前半(ADR 0329 決定14): 名前に掛かる前半の項 → 名前の場所の clean(`clean` のとき)。workspace の Quarantine の
+ *  受理と、同じ条件で merge back を撃ち直す積み残しの retry(ADR 0371 決定10)が掛ける。 */
+export async function checkAcceptanceFirstHalf(db: Db, place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
+  await firePickupPredicates(db, place, predicates, "before-open");
+  if (clean) verifyWorkspaceClean(place);
+}
+
 export async function firePickupPredicates(
   db: Db,
   place: WorkspaceConfig,
@@ -441,8 +448,11 @@ const CHECKOUT_LAYOUT = {
    *  (`<id>`・`<id>.checkout`・`<id>.reads`)のどれの番地にもならない。worker の sandbox が開くのは自分の task の checkout・task temp・
    *  読み専用の checkout だけで、基点もこの段も root にならない。
    *  shortcut: 書く先は `task/<id>` だけ —— 保護ブランチの書く先(workspace 名が鍵)はその入口を足す slice が足す。 */
-  workbench: { at: (base: string, target: string) => join(base, WORKBENCH_SEGMENT, target.slice("task/".length)), parents: 1 },
+  workbench: { at: (base: string, target: string) => join(base, WORKBENCH_SEGMENT, branchTaskId(target)), parents: 1 },
 } as const;
+
+/** `task/<id>` の id。 */
+const branchTaskId = (branch: string) => branch.slice("task/".length);
 
 /** 作業台の番地の段(`CHECKOUT_LAYOUT.workbench`)。 */
 export const WORKBENCH_SEGMENT = "@workbench";
@@ -815,7 +825,7 @@ function openWorkbench(db: Db, named: WorkspaceConfig, base: string, target: str
  *  その祖先の昇格失敗 question(積み残しの retry は根の分解ツリーの merge back を撃ち直す、ADR 0371 決定10)。 */
 function workbenchPointers(db: Db, named: WorkspaceConfig, target: string): string[] {
   const quarantine = openQuarantineQuestion(db, "workspace", named.name)?.id;
-  const id = target.slice("task/".length);
+  const id = branchTaskId(target);
   const promotions = db
     .prepare(`${ancestorsSql("?")} SELECT id FROM tasks WHERE status = 'todo' AND question_pending_pr_promotion_task_id IN (SELECT id FROM ancestors UNION SELECT ?)`)
     .pluck()
@@ -842,16 +852,22 @@ function repointBoardRefs(named: WorkspaceConfig, workbench: string): void {
     git(workbench, "update-ref", "--no-deref", "HEAD", git(workbench, "rev-parse", "HEAD"));
   }
   // `board/origin/<protected>` は盤面が origin から読んだばかりの保護ブランチ —— 追いつきの conflict が merge させる相手(text A2)。
-  // origin の他の ref は引かない: `board/origin/task/<root>` は `pr_merge` の拒否が付ける印(spec #3273 の "Refused once")
-  const origin = isRemoteBacked(named) ? [`+${remoteTrackingRef(protectedBranch(named))}:${boardRefs}origin/${protectedBranch(named)}`] : [];
-  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`, ...origin);
+  // origin の他の ref は引かない —— 開いただけの作業台が `pr_merge` の拒否の印 `board/origin/task/<root>` を付けない(spec #3273 の
+  // "Refused once")。その印も次の引き直しの `--prune` が消す(消えた印は拒否をもう1度起こすだけ)
+  const tracking = remoteTrackingRef(protectedBranch(named));
+  const protectedFromOrigin = isRemoteBacked(named) ? [`+${tracking}:refs/heads/${boardBranch(shortRef(tracking))}`] : [];
+  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`, ...protectedFromOrigin);
 }
 
 /** 取り込みの手が受け取る束: 作業台の基点、答えている question と入口、`workbench_taken_in` に残す回答者と時刻。 */
-export type IntakeContext = { workbenchBase: string; question: string; entry: IntakeEntry; answerer: Answerer; now: Date };
+export type IntakeContext = { workbenchBase: string; question?: string; entry: IntakeEntry; answerer: Answerer; now: Date };
 
 /** 取り込みの event の actor —— 回答者か呼び手(spec #3273 の識別子の表 / pin A5)。 */
 export type Answerer = { actorId: string; origin: EventOrigin };
+
+/** ref の短い名前(`refs/heads/x` → `x`、`refs/remotes/origin/x` → `origin/x`)と、作業台でそれを引き直す `board/` の下の名前。 */
+const shortRef = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
+const boardBranch = (short: string) => `${BOARD_BRANCHES}/${short}`;
 
 /** 人間の clone から同じことをする手(spec #3273 text の `{clone}`)。 */
 const fromOwnClone = (target: string, ref: string) =>
@@ -864,7 +880,7 @@ const fromOwnClone = (target: string, ref: string) =>
  *  別の ref の merge も通る)。 */
 function takeInWorkbench(db: Db, named: WorkspaceConfig, place: UntrustedCheckout, target: string, carried: string[], { entry, answerer, now }: IntakeContext): string | undefined {
   const ref = `refs/heads/${target}`;
-  const inputs = [ref, ...carried].map((full) => ({ branch: full.replace(/^refs\/(heads|remotes)\//, ""), sha: git(named.path, "rev-parse", "--verify", full) }));
+  const inputs = [ref, ...carried].map((full) => ({ branch: shortRef(full), sha: git(named.path, "rev-parse", "--verify", full) }));
   const old = inputs[0]!.sha;
   const at = place.path;
   try {
@@ -873,7 +889,7 @@ function takeInWorkbench(db: Db, named: WorkspaceConfig, place: UntrustedCheckou
       const copy = { ...named, path: verified };
       const missing = inputs.find(({ sha }) => !isAncestor(copy, sha, tip, workerRepoGit));
       if (missing) {
-        const merge = `${BOARD_BRANCHES}/${missing.branch}`;
+        const merge = boardBranch(missing.branch);
         throw new Error(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then answer again.`);
       }
       if (boardViewStatus(at, tip, verified).length > 0) {
@@ -905,16 +921,16 @@ function takeInWorkbench(db: Db, named: WorkspaceConfig, place: UntrustedCheckou
 
 /** spec #3273 の受理の 11: merge back の前に、同じ鍵の作業台が取り込める tip を持てば先に取り込んで true。 */
 const takeInMergeBack = (db: Db, named: WorkspaceConfig, { taskId, target }: { taskId: string; target: string }, intake: IntakeContext) =>
-  takeInAt(db, named, target, [`refs/heads/${taskBranch(taskId)}`], intake);
+  takeInExistingWorkbench(db, named, target, [`refs/heads/${taskBranch(taskId)}`], intake);
 
 /** ADR 0376 決定8: 昇格の retry は追いつきの前に、`task/<root>` の作業台が取り込める tip を持てば先に取り込んで true。運ばれる側は origin の
  *  保護ブランチ(text A2)。 */
 export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string, intake: IntakeContext) =>
-  takeInAt(db, workspace, taskBranch(taskId), [exactProtectedBranchRef(workspace)], intake);
+  takeInExistingWorkbench(db, workspace, taskBranch(taskId), [exactProtectedBranchRef(workspace)], intake);
 
 /** 鍵の作業台があれば取り込む。取り込んだ tip のままの作業台は、答えている question のほかに鍵を指すものが無ければ消す(spec #3273 の Lifetime)。
  *  拒否は `board/*` を引き直してから投げる。 */
-function takeInAt(db: Db, named: WorkspaceConfig, target: string, carried: string[], intake: IntakeContext): boolean {
+function takeInExistingWorkbench(db: Db, named: WorkspaceConfig, target: string, carried: string[], intake: IntakeContext): boolean {
   const workbench = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, target);
   if (!placeHasRepository(workbench)) return false;
   const place: UntrustedCheckout = { path: realpathSync(workbench), namedPlace: named, borrowsNamedObjects: true, noun: "the workbench" };
@@ -2342,8 +2358,8 @@ function mergeBackInto(
  *  (spec #3273 text A1)。開けなければその理由を言い、答え直しが開き直す(text A7d)。解放の理由は句点で閉じない —— Quarantine の本文が
  *  理由の後に句点を打つ。受理の拒否は文のまま人間に届く。 */
 function mergeBackConflict(db: Db, workspace: WorkspaceConfig, base: string, source: string, target: string, raisedBy: "release" | "acceptance"): Error {
-  const merge = `${BOARD_BRANCHES}/${source}`;
-  const exit = `To discard ${source}'s work instead, record that with \`git merge -s ours ${merge}\`. ` + (raisedBy === "release" ? "Then answer" : "Then answer again.");
+  const exit = (merge: string) =>
+    `To discard ${source}'s work instead, record that with \`git merge -s ours ${merge}\`. ` + (raisedBy === "release" ? "Then answer" : "Then answer again.");
   return new Error(workbenchConflict(db, workspace, base, { subject: source, source, target, exit }, raisedBy === "release" ? "" : "."));
 }
 
@@ -2353,7 +2369,7 @@ function workbenchConflict(
   db: Db,
   workspace: WorkspaceConfig,
   base: string,
-  { subject, source, target, exit }: { subject: string; source: string; target: string; exit: string },
+  { subject, source, target, exit }: { subject: string; source: string; target: string; exit: (merge: string) => string },
   stop: string,
 ): string {
   const conflict = `${subject} does not merge cleanly into '${target}'.`;
@@ -2364,11 +2380,11 @@ function workbenchConflict(
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は「開けなかった」の文に包まず底へ
     return `${conflict} The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); answer again and it opens it again${stop}`;
   }
-  const merge = `${BOARD_BRANCHES}/${source}`;
+  const merge = boardBranch(source);
   return (
     `${conflict} The board opened the workbench at ${path} for it. There, on ${target}, run \`git merge ${merge}\` and resolve the conflict ` +
-    `${fromOwnClone(target, merge)}. Your tip must contain both ${target} as the board has it now (\`${BOARD_BRANCHES}/${target}\`) and ${source}, ` +
-    `with nothing uncommitted. ${exit}`
+    `${fromOwnClone(target, merge)}. Your tip must contain both ${target} as the board has it now (\`${boardBranch(target)}\`) and ${source}, ` +
+    `with nothing uncommitted. ${exit(merge)}`
   );
 }
 
@@ -2409,9 +2425,12 @@ export async function redoMergeBacks(
   auth: GitHubAuth | undefined,
   /** 作業台の基点(ADR 0373 決定9)と、取り込みの event に残す回答者と時刻(spec #3273 の識別子の表 / pin A5)。 */
   intake: IntakeContext,
-  root?: string,
+  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)。 */
+  retry?: { root: string; firstHalf: () => Promise<void> },
 ): Promise<void> {
+  const root = retry?.root;
   if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return;
+  await retry?.firstHalf();
   const running = db
     .prepare(
       `SELECT 1 FROM tasks WHERE COALESCE(workspace, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
@@ -2470,7 +2489,8 @@ function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: st
   }
 }
 
-/** 追いつきの conflict(H6)。文は text A2(作業台を開けなければ A7d)で、昇格失敗 question の本文と retry の拒否にそのまま使う。 */
+/** 追いつきの conflict(H6)。ADR 0371 決定11: 開いた作業台の在り処・そこで打つ merge・tip の条件・答え直しを言う文(text A2、作業台を
+ *  開けなければ A7d)で、作業台を開いた昇格の失敗の question の本文と retry の拒否にそのまま使う。 */
 export class CatchUpConflictError extends Error {}
 
 /** ADR 0105 決定2: catch the task branch up to the protected ref with the task branch as first parent.
@@ -2485,8 +2505,8 @@ export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: st
   const merged = mergeCommit(workspace, taskSha, protectedRef, `Merge ${protectedRef} into ${branch}`);
   if (merged === undefined) {
     // 捨てる文は無い —— もう1つの出口は `abandon promotion` のまま(text A2)
-    const source = protectedRef.replace(/^refs\/remotes\//, "");
-    throw new CatchUpConflictError(workbenchConflict(db, workspace, workbenchBase, { subject: protectedBranch(workspace), source, target: branch, exit: "Then answer `retry`." }, "."));
+    const exit = () => "Then answer `retry`.";
+    throw new CatchUpConflictError(workbenchConflict(db, workspace, workbenchBase, { subject: protectedBranch(workspace), source: shortRef(protectedRef), target: branch, exit }, "."));
   }
   advanceBranch(db, workspace, ref, taskSha, merged);
 }

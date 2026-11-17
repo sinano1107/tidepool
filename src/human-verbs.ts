@@ -115,6 +115,7 @@ import type { SettledMark } from "./wire-contract.js";
 import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
+  checkAcceptanceFirstHalf,
   firePickupPredicates,
   type IntakeContext,
   mergeTaskToProtected,
@@ -132,7 +133,6 @@ import {
   takeWorkspaceInFlightKey,
   taskBranch,
   UnknownWorkspaceError,
-  verifyWorkspaceClean,
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
   withRememberedRepoCheck,
@@ -689,11 +689,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         throw new DomainError(message);
       }
     };
-    await fire(all, "before-open");
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
-    if (!room || placeHasRepository(target.path)) {
-      await refuseOnError(() => verifyWorkspaceClean(target));
-    }
+    await refuseOnError(() => checkAcceptanceFirstHalf(deps.db, target, all, !room || placeHasRepository(target.path)));
     assertNoSessionRunning();
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
     const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now)) : [];
@@ -703,7 +700,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0373 決定9 / spec #3273 の受理の 11: conflict は作業台を開いて拒み、作業台が取り込める tip を持てば先に取り込む
     const intake: IntakeContext = {
       workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
-      question: openQuarantineQuestion(deps.db, "workspace", value)?.id ?? "",
+      question: openQuarantineQuestion(deps.db, "workspace", value)?.id,
       entry: "workspace_quarantine",
       answerer: { actorId: HUMAN_ACTOR_ID, origin },
       now,

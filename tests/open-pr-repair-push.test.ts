@@ -199,7 +199,9 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
 });
 
-it("追いつき merge が合わなければ PR 昇格失敗 question を立てて作業台を開き、作業台で解いた後の retry で PR を開く", async () => {
+// 作業台の場面そのもの(本文、取り込み、PR、差分)は landing.test.ts が述べる(ADR 0107 決定3)。ここで述べるのは盤面が組んだ着地が
+// 作業台を盤面の workspacesDir の下に開くこと(server.ts の配線)と、retry が走行中の別タスクの checkout を触らないことだけ
+it("追いつき merge の conflict は盤面の workspacesDir の下に作業台を開き、そこで解いた retry は走行中の別タスクの checkout を触らない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up-conflict");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair conflicting after squash");
@@ -212,59 +214,27 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
   commitWork(checkoutOf(t.db, repair.id), "repair.txt", "task version\n");
   const completed: any = await completeViaMcp(t, repair.id);
   expect(completed.isError ?? false).toBe(false);
-
-  expect(t.github.requests).toHaveLength(1);
   const failure = (await questions(t)).find(
     (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === repair.id,
   );
-  expect(failure).toMatchObject({
-    title: expect.stringContaining("PR promotion failed"),
-    purpose: expect.stringContaining("does not merge cleanly"),
-  });
-  expect(await servedQuarantineQuestion(t, "workspace", "squash-catch-up-conflict")).toBeUndefined();
 
-  // ADR 0371 決定1・2・7: 人間は名前の場所でなく、昇格の失敗が開いた作業台で origin の保護ブランチを merge し、衝突する行を
-  // 保護ブランチと同じ内容に直す。retry はその tip を取り込み、走行中の別タスクの checkout を触らずに追いついて push する
   const workbench = realpathSync(workbenchPath(join(t.dir, "workspaces"), `task/${repair.id}`));
   expect(() => git(workbench, "merge", "board/origin/main")).toThrow();
   writeFileSync(join(workbench, "repair.txt"), "protected version\n");
-  writeFileSync(join(workbench, "repair-only.txt"), "resolved repair\n");
-  git(workbench, "add", "repair.txt", "repair-only.txt");
-  git(workbench, "commit", "--no-edit");
+  git(workbench, "commit", "-am", "resolve against the protected branch");
 
   const occupant = await registerWork(t, "keep another checkout occupied");
   await t.clock.advance(HOUR);
-  // 旧: 走行中の別タスクは名前の場所の HEAD を自分のブランチに置いていた。今は task の checkout で走り、名前の場所の HEAD は main(ADR 0356 決定1)
   await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(occupant.id));
   const occupantCheckout = checkoutOf(t.db, occupant.id);
   commitWork(occupantCheckout, "occupant.txt", "unrelated running work\n");
   const occupiedHead = git(occupantCheckout, "rev-parse", "HEAD");
 
-  const retried = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
-    answers: ["retry"],
-  });
-  expect(retried.status).toBe(200);
-  expect(t.github.requests.at(-1)).toMatchObject({
-    branch: `task/${repair.id}`,
-    base: "main",
-  });
-  expect(
-    git(
-      workspace.path,
-      "diff",
-      "--name-only",
-      `refs/remotes/origin/main...task/${repair.id}`,
-    ),
-  ).toBe("repair-only.txt");
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  expect(git(occupantCheckout, "rev-parse", "HEAD")).toBe(occupiedHead);
-  expect(git(occupantCheckout, "show", "HEAD:occupant.txt")).toBe("unrelated running work");
-  expect(git(occupantCheckout, "status", "--porcelain")).toBe("");
-  expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json.status).toBe("done");
+  const retried = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] });
 
-  await completeViaMcp(t, occupant.id);
-  expect(await servedQuarantineQuestion(t, "workspace", "squash-catch-up-conflict")).toBeUndefined();
+  expect(retried.status).toBe(200);
+  expect(git(occupantCheckout, "rev-parse", "HEAD")).toBe(occupiedHead);
+  expect(git(occupantCheckout, "status", "--porcelain")).toBe("");
 });
 
 it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇格失敗 question に残す", async () => {
