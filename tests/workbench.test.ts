@@ -386,19 +386,30 @@ it.each<[string, (leftover: string, b: Board) => void, "remade" | "kept" | "unre
   }
 });
 
-it("取り込みの間に作業台へ着いた commit があれば、作業台は読まずに消されず残る", async () => {
+// spec #3273 text C6: 作業台を残す取り込みの応答は C6 —— 着いた commit が作業台の branch を進めていれば、branch は動かさず merge を言う。
+// `board/<target>` は新しい値になる
+it("取り込みの間に作業台へ着いた commit があれば、作業台は読まずに消されず残り、応答が text C6 とその merge の句を言う", async () => {
   const c = await conflicted();
   const workbench = c.workbench();
   resolveInWorkbench(workbench, c.source);
+  const tip = git(workbench, "rev-parse", c.target);
   eventHook.onTakenIn = () => commitWork(workbench, "late.txt", "committed while the answer ran\n");
+  let answered: Awaited<ReturnType<typeof answer>>;
   try {
-    await answer(c);
+    answered = await answer(c);
   } finally {
     eventHook.onTakenIn = undefined;
   }
 
+  const commit = git(c.ws.path, "rev-parse", c.target);
+  expect(answered.notice).toBe(
+    `took ${tip} in as ${commit} on ${c.target}. In a clone, fetch the workbench and fast-forward to \`board/${c.target}\` before you write on. ` +
+      `Merge \`board/${c.target}\` into your branch before the next take-in.`,
+  );
   expect(quarantineQuestion(c.db, "workspace", c.ws.name)).toBeUndefined();
   expect(git(workbench, "show", `${c.target}:late.txt`)).toBe("committed while the answer ran");
+  expect(git(workbench, "rev-parse", `${c.target}^`)).toBe(tip);
+  expect(git(workbench, "rev-parse", `board/${c.target}`)).toBe(commit);
   expect(git(c.ws.path, "ls-tree", "--name-only", c.target, "--", "late.txt")).toBe("");
 });
 

@@ -46,8 +46,8 @@ import {
   boardRefWriter,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
+  openHumanContentWorkbench,
   openIntakeQuestionId,
-  openIntakeWorkbench,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   redoMergeBacks,
@@ -5492,7 +5492,7 @@ it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf
   git(workspace.path, "config", "fetch.recurseSubmodules", "true");
   const askpass = await humanAskpass();
 
-  const landed = mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
+  const { landed } = mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
 
   expect({ landed, protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
     landed: tip,
@@ -5832,6 +5832,24 @@ it("local 着地の merge が conflict すれば作業台を名指して拒み�
   expect(existsSync(workbenchPath(c.base, { workspace: workspace.name }, c.source))).toBe(false);
 });
 
+// ADR 0382 決定5 / spec #3273 text C6: 取り込みの後も人間の作業が残る作業台は残し、その branch を包む commit へ進め、応答が C6 を言う
+it("local 着地の取り込みの後に作業台に人間の作業が残れば、作業台を残してその branch を包む commit へ進め、応答が text C6 を言う", async () => {
+  const c = await localLandingConflict("local-landing-kept-workbench");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  const tip = c.resolve();
+  git(c.workbench(), "checkout", "--quiet", "-b", "side");
+  commitWork(c.workbench(), "side.txt", "the human's other work\n");
+  git(c.workbench(), "checkout", "--quiet", "main");
+
+  const answered = await c.answer();
+
+  const landed = git(c.workspace.path, "rev-parse", "refs/heads/main");
+  expect(answered.notice).toBe(`took ${tip} in as ${landed} on main. In a clone, fetch the workbench and fast-forward to \`board/main\` before you write on.`);
+  expect(git(c.workbench(), "rev-parse", "main")).toBe(landed);
+  expect(git(c.workbench(), "rev-parse", "board/main")).toBe(landed);
+  expect(git(c.workbench(), "status", "--porcelain")).toBe("");
+});
+
 // ADR 0371 決定3・5 / spec #3273 pin A4: 受け取る条件は保護ブランチの今の値と task の tip を祖先に持つことで、人間しか書けない path は
 // この入口では拒む。拒否は何も書かない
 it.each([
@@ -5881,7 +5899,7 @@ it("intake question が開いていれば、local 着地の merge の人間し�
   await expect(c.answer()).rejects.toThrow(c.refused());
   c.resolve();
   commitWork(c.workbench(), ".mcp.json", "{}\n");
-  openIntakeWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now());
+  openHumanContentWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now());
   const intake = openIntakeQuestionId(c.db, c.workspace.name)!;
   const nothingWritten = c.unchanged();
 

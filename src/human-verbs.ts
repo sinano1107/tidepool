@@ -133,7 +133,7 @@ import {
   resolveWorkspacesBaseDir,
   restoreBaseline,
   retakeRefBaselines,
-  takeInIntakeWorkbench,
+  takeInHumanContentWorkbench,
   takeWorkspaceInFlightKey,
   taskBranch,
   UnknownWorkspaceError,
@@ -715,14 +715,16 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       answerer: { actorId: HUMAN_ACTOR_ID, origin },
       now,
     };
-    if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake));
+    // spec #3273 text C6: 作業台を残した取り込みごとに1行
+    const keptWorkbenches = placeHasRepository(target.path) ? await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake)) : [];
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name));
     // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
     const places = [...new Set(all.flatMap((predicate) => (predicate.phase === "after-open" ? [predicate.place] : [])))];
     await refuseOnError(() => retakeRefBaselines(deps.db, places));
     // spec #3273 text B11: 外した値ごとに1行
-    return kept.length > 0 ? { notice: kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`).join("\n") } : undefined;
+    const notices = [...kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`), ...keptWorkbenches];
+    return notices.length > 0 ? { notice: notices.join("\n") } : undefined;
   };
   return {
     workspace: async (value, answer, origin) => {
@@ -887,6 +889,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       },
     }),
   };
+}
+
+/** 保護ブランチへ書く回答(local 着地の `merge` と `take in`)の失敗を回答の拒否に写す。盤面 DB の拒否は包まずに底へ(ADR 0342 決定4)。
+ *  ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも汚れたツリーも git の不調も、書き込みが失敗しただけでは
+ *  資源が実行不能だと証明しない —— question は開いたまま残り、人間は直してもう一度答えられる。 */
+function refuseProtectedBranchWrite(db: Db, workspaceName: string, err: unknown, now: Date): never {
+  if (isBoardDbRefusal(err)) throw err;
+  if (err instanceof OutOfBandProtectedBranchError) quarantineWorkspace(db, workspaceName, err, now);
+  throw new DomainError(err instanceof Error ? err.message : String(err));
 }
 
 /** ADR 0373 決定8: 同じ名前の場所の ref を書く回答と操作は in-flight の鍵を1つ共有し、検査中の2つ目を拒む(spec #3273 text B5)。 */
@@ -1296,21 +1307,15 @@ export async function submitAnswer(
           if (left.length > 0) throw leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `the task branch ${branch}`);
           try {
             // ADR 0371 決定4 / ADR 0373 決定8: 同時の回答は旧値の CAS で守る —— `merge` は in-flight の守りの対象ではない
-            const sha = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id, {
+            const { landed, kept } = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id, {
               workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
               answerer: { actorId: HUMAN_ACTOR_ID, origin },
               now: now(),
             });
-            rootRecord = { root: kind.task_id, payload: { kind: "local_merge_executed", sha } };
+            rootRecord = { root: kind.task_id, payload: { kind: "local_merge_executed", sha: landed } };
+            notice = kept;
           } catch (err) {
-            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
-            // ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも
-            // 汚れたツリーも git の不調も、着地が失敗しただけでは資源が実行不能だと証明
-            // しない —— question は開いたまま残り、人間は直してもう一度答えられる
-            if (err instanceof OutOfBandProtectedBranchError) {
-              quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
-            }
-            throw new DomainError(err instanceof Error ? err.message : String(err));
+            refuseProtectedBranchWrite(deps.db, mergeWorkspace.name, err, now());
           }
         } else {
           // ADR 0289 決定3: hold が断るのはこの時点の内容。読めなくても hold は拒まない(null は「変わった」と読まれる)
@@ -1437,16 +1442,14 @@ export async function submitAnswer(
           const intakeWorkspace = resolveWorkspaceForAnswer(deps, kind.workspace, "cannot take in");
           notice = await withWorkspaceInFlightKey(deps.db, kind.workspace, () => {
             try {
-              return takeInIntakeWorkbench(deps.db, intakeWorkspace, {
+              return takeInHumanContentWorkbench(deps.db, intakeWorkspace, {
                 workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
                 answerer: { actorId: HUMAN_ACTOR_ID, origin },
                 now: now(),
               });
             } catch (err) {
-              if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
-              // local 着地の `merge` と同じ条件(spec #3273 の入口の表): 帯域外の書き込みの証拠だけが隔離する(ADR 0103 決定4)
-              if (err instanceof OutOfBandProtectedBranchError) quarantineWorkspace(deps.db, kind.workspace, err, now());
-              throw new DomainError(err instanceof Error ? err.message : String(err));
+              // local 着地の `merge` と同じ条件(spec #3273 の入口の表)
+              refuseProtectedBranchWrite(deps.db, kind.workspace, err, now());
             }
           });
         }

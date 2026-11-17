@@ -574,7 +574,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "open_workbench",
     {
-      // ADR 0371 決定6: 名前だけでは task に効くように読めるので、何のためかを言う(spec #3273 group A)
+      // spec #3273 group A: 名前だけでは task に効くように読めるので、何のためかを言う
       description:
         "For the protected branch of a purely-local workspace: open a workbench (a checkout the board makes for you) where you commit on the protected branch yourself — human-only paths included — and raise an intake question whose `take in` answer writes your tip to the protected branch. A second call opens nothing new. Refused for a remote-backed workspace, whose protected branch is changed on origin.",
       inputSchema: z.object({ name: requiredTextSchema }),

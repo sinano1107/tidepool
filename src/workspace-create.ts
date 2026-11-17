@@ -51,12 +51,13 @@ import {
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,
-  humanWorkbenchLeft,
+  humanContentWorkbenchLeft,
+  openHumanContentWorkbench,
   openIntakeQuestionId,
-  openIntakeWorkbench,
   refValues,
   rememberPublishedRepo,
-  removeHumanWorkbench,
+  removeHumanContentWorkbench,
+  resolveExecutionWorkspace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   type WorkspaceRegistryProtection,
@@ -174,15 +175,13 @@ export interface WorkspaceAdmin {
   openWorkbench: OpenWorkbenchFn;
 }
 
-export type OpenWorkbenchFn = (input: { name: string }, origin: EventOrigin) => string;
+type OpenWorkbenchFn = (input: { name: string }, origin: EventOrigin) => string;
 
-/** `open_workbench` の扉(ADR 0371 決定6 / ADR 0373 決定9): registry に登録された workspace の名前だけを受ける —— 面接室も登録されて
- *  いないので通らない(#3184)。判定と執行は `openIntakeWorkbench` が持ち、呼んだ人間が question の登録者になる。 */
+/** `open_workbench` の扉(ADR 0371 決定6): registry に登録された workspace の名前だけを受ける —— 面接室も登録されていないので通らない
+ *  (spec #3273 group A、#3184)。判定と執行は `openHumanContentWorkbench` が持ち、呼んだ人間が question の登録者になる。 */
 export function openWorkspaceWorkbench(input: { name: string }, origin: EventOrigin, deps: WorkspaceAdminDeps & { db: Db; clock?: Clock }): string {
-  const entry = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).workspaces, input.name);
-  if (!entry) throw new UnknownWorkspaceError(input.name);
-  const workspace: WorkspaceConfig = { name: input.name, path: entryCheckoutPath(entry, input.name, deps.workspacesBaseDir), branch: entry.branch, repo: entry.repo };
-  return openIntakeWorkbench(deps.db, workspace, deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, (deps.clock ?? new SystemClock()).now());
+  const workspace = resolveExecutionWorkspace(loadRegistry(deps.registry.dir, deps.registry.mode), input.name, input.name, deps.workspacesBaseDir);
+  return openHumanContentWorkbench(deps.db, workspace, deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, (deps.clock ?? new SystemClock()).now());
 }
 
 /** publish の2つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元
@@ -439,10 +438,10 @@ export async function deleteWorkspace(
   if (openQuarantine && holdsBaseline(deps.db, input.name)) reasons.push({ code: "open_quarantine", question_id: openQuarantine.id });
   // checkout の場所はエントリを消す前に読む —— 消した後の registry からは
   // `path` も規約パスの根拠も引けない
-  const checkout = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
-  const named: WorkspaceConfig = { name: input.name, path: checkout, branch: entry.branch, repo: entry.repo };
-  const workbenchLeft = humanWorkbenchLeft(named, deps.workspacesBaseDir);
-  if (workbenchLeft !== undefined) reasons.push({ code: "human_workbench", reason: workbenchLeft });
+  const named = resolveExecutionWorkspace(registry, input.name, input.name, deps.workspacesBaseDir);
+  const checkout = named.path;
+  const workbenchLeft = humanContentWorkbenchLeft(named, deps.workspacesBaseDir);
+  if (workbenchLeft !== undefined) reasons.push({ code: "human_content_workbench", ...workbenchLeft });
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
   commitToRegistry(
@@ -465,7 +464,7 @@ export async function deleteWorkspace(
       settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
     }
   })();
-  removeHumanWorkbench(named, deps.workspacesBaseDir);
+  removeHumanContentWorkbench(named, deps.workspacesBaseDir);
   return checkout;
 }
 

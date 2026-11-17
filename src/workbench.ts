@@ -18,8 +18,8 @@ export type WorkbenchTarget = { task: string } | { workspace: string };
 
 /** ADR 0382 決定1: (書く先, 運ばれる側) の作業台の番地 —— 基点 / `@workbench` / 葉。書く先 `task/<id>` の葉は `<id>@<運ばれる側>`
  *  (task id は盤面全体で一意なので workspace は要らない)、workspace の保護ブランチを書く先にする葉は `@<workspace>@<運ばれる側>`
- *  (ADR 0382 決定4 の local 着地)。運ばれる側の無い鍵(`carried` が undefined)は `@<workspace>` だけの葉 —— 人間自身の内容の作業台
- *  (ADR 0382 決定4、`take in` と purely-local の封じ込めの回答が共有する)。運ばれる側の名前
+ *  (ADR 0382 決定4 の local 着地)。運ばれる側の無い鍵(`carried` が undefined)は `@<workspace>` だけの葉 —— 人間自身の内容の作業台。
+ *  ADR 0382 決定4 はこれを `take in` と purely-local の封じ込めの回答に共有させる(封じ込めの回答は #3288 が配線する)。運ばれる側の名前
  *  (`task/<id>`・`origin/<protected>` など)は `LEAF_ESCAPES` で `/` も `@` も `%` も持たない1対1の綴りにし、workspace の名前も task id
  *  (UUID)も `@` を持たないので、どの葉も1つの段で互いに入れ子にならず、人間の clone が `ssh://` の形で remote にしても同じ在り処を指す
  *  (ADR 0371 決定9)。`@` は名前の規則にも task id にも無いので、workspace の名前・面接室(root id)・task の checkout
@@ -47,7 +47,7 @@ export type WorkbenchOwner = { kind: "nothing" } | { kind: "mine"; lacksCarried:
  *  運ばれる側を含むときだけその入口のもの。`carried` が undefined なのは運ばれる側の無い入口。`boardMove` は入口が盤面の手を持つか ——
  *  ADR 0382 決定6: 書く先の branch の無い作業台(作りかけ)は、盤面の手のある入口では取り込むものが無く、無い入口では拒む(人間が入れたと
  *  思う commit を「無い」として落とさない)。 */
-export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | undefined, boardMove: boolean): WorkbenchOwner {
+export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | undefined, { boardMove }: { boardMove: boolean }): WorkbenchOwner {
   const { tip, verified } = read;
   if (tip === undefined && !boardMove) {
     return { kind: "refuse", reason: `the workbench at ${read.at} has no ${read.target} branch, so the board cannot tell what to take in. Open it again, then answer again.` };

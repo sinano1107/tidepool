@@ -5,15 +5,16 @@ import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listEventsOfKinds } from "../src/events.js";
+import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { quarantineStops } from "../src/quarantine.js";
-import { cancelTaskDirectly, getTask, listBoard, nextSlotTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  openHumanContentWorkbench,
   openIntakeQuestionId,
-  openIntakeWorkbench,
   quarantineWorkspace,
+  recordTaskCheckoutTip,
   releaseWorkspace,
   rememberPublishedRepo,
   takeWorkspaceInFlightKey,
@@ -22,7 +23,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -34,14 +35,17 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 const CALLER = { actorId: HUMAN_ACTOR_ID, origin: "webui" } as const;
 
 /** purely-local の workspace と、基準を撮った pickup を1度済ませた盤面(`take in` は保護ブランチが基準と一致することを求める)。
- *  `pending` はその pickup の task —— 未決着で、タスクブランチに `pending.txt` の commit を持つ。 */
+ *  `pending` はその pickup の task —— 未決着で、タスクブランチに `pending.txt` の commit を持つ。`parent` は pickup されていない未決着の
+ *  work で、`task/<parent>` を main に持つ(子の帰り先 —— 名前の場所の ref は最初の pickup の前に作る)。 */
 async function board(name = "intake") {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = await makeWorkspace(name);
   const base = await tempDir("tidepool-workbenches-");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
+  git(ws.path, "branch", `task/${parent.id}`, "main");
   const pending = await taskWithCommit(db, clock, ws, "pending.txt");
-  const open = () => openIntakeWorkbench(db, ws, base, CALLER, clock.now());
+  const open = () => openHumanContentWorkbench(db, ws, base, CALLER, clock.now());
   const workbench = () => realpathSync(workbenchPath(base, { workspace: ws.name }));
   const question = () => getTask(db, openIntakeQuestionId(db, ws.name)!)!;
   const answer = (option: string, workspace: WorkspaceConfig = ws, q: Task = question()) =>
@@ -56,7 +60,7 @@ async function board(name = "intake") {
       expect(getTask(db, id)?.status).toBe("todo");
     };
   };
-  return { db, clock, ws, base, pending, open, workbench, question, answer, unchanged };
+  return { db, clock, ws, base, parent, pending, open, workbench, question, answer, unchanged };
 }
 
 type Board = Awaited<ReturnType<typeof board>>;
@@ -68,6 +72,35 @@ async function taskWithCommit(db: Db, clock: FakeClock, ws: WorkspaceConfig, fil
   commitWork(place.path, file, `${file}\n`);
   releaseWorkspace(db, place, task, clock.now());
   return task;
+}
+
+/** pickup してタスクブランチに `file` の commit を1つ記録し、完了させた work(`parent` の子にもできる)。 */
+async function completedWork(b: Board, file: string, parent?: Task): Promise<Task> {
+  const registered = registerTask(b.db, { type: "work", title: file, purpose: "why", completion_criteria: "done", parent_id: parent?.id }, b.clock.now(), ...HUMAN_WEBUI);
+  const task = pickupTask(b.db, registered, "deckhand", b.clock.now())!;
+  const place = await prepareAtPickup(b.db, b.ws, task, { now: b.clock.now() });
+  appendEvent(b.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
+  commitWork(place.path, file, `${file}\n`);
+  recordTaskCheckoutTip(b.db, place, task.id);
+  completeTask(b.db, task, FULL_HANDOFF, "worker", b.clock.now(), "worker");
+  return getTask(b.db, task.id)!;
+}
+
+/** `task` の着地 question(purely-local の根)。 */
+function landingQuestion(b: Board, task: Task): Task {
+  return registerTask(
+    b.db,
+    {
+      type: "question",
+      title: "land it",
+      purpose: "a human decides whether to land",
+      completion_criteria: "the answer is recorded",
+      question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
+      question_kind: { kind: "local_merge", task_id: task.id },
+    },
+    b.clock.now(),
+    ...HUMAN_WEBUI,
+  );
 }
 
 /** spec #3273 text A14。 */
@@ -113,13 +146,27 @@ it("open_workbench は (workspace, 保護ブランチ) の作業台を開いて 
   expect(git(b.workbench(), "rev-parse", "main")).toBe(tip);
 });
 
+// pin A13: question が開いていて作業台が disk にあれば、2度目は作業台に何もしない —— 人間の作業が何も無い作業台も作り直さない
+// (作業台に足した remote が残る)
+it("question が開いていて作業台が disk にあれば、2度目の open_workbench は作業台に触れず question も立てない", async () => {
+  const b = await board();
+  b.open();
+  const q = b.question();
+  git(b.workbench(), "remote", "add", "mine", "/somewhere/else");
+
+  expect(b.open()).toBe(opened(b));
+
+  expect(listBoard(b.db).filter((task) => task.type === "question").map(({ id }) => id)).toEqual([q.id]);
+  expect(git(b.workbench(), "remote")).toBe("mine");
+});
+
 // pin A13: remote-backed の保護ブランチは origin で変える(text A9)。何も開かず何も立てない
 it("open_workbench は remote-backed の workspace を text A9 で拒み、作業台も question も作らない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("intake-remote");
   const db = openDb(":memory:");
   const base = await tempDir("tidepool-workbenches-");
 
-  expect(() => openIntakeWorkbench(db, workspace, base, CALLER, new Date())).toThrow(
+  expect(() => openHumanContentWorkbench(db, workspace, base, CALLER, new Date())).toThrow(
     new DomainError(
       `workspace ${workspace.name} is remote-backed, so main is changed on origin. Put the change into origin's main — a fast-forward push from your own clone, ` +
         `or a merge of your own PR. Never push from ${workspace.path}. Tasks that have already forked do not get it; it takes effect from the next fork.`,
@@ -153,7 +200,7 @@ it("intake question が開いていても、その workspace の task は pickup
 
   const head = nextSlotTask(b.db, b.ws.name, "deckhand", undefined, quarantineStops(b.db));
 
-  expect([b.pending.id, next.id]).toContain(head?.id);
+  expect([b.parent.id, b.pending.id, next.id]).toContain(head?.id);
 });
 
 // pin A13 / pin A11: `close` は何も取り込まず作業台を disk に残し、開き直すと作業台の commit はそのまま
@@ -288,45 +335,59 @@ it.each<[string, (b: Board) => void | Promise<void>, (b: Board) => string]>([
       execFileSync("rm", ["-rf", b.workbench()]);
       git(".", "init", "--quiet", "--initial-branch=other", workbenchPath(b.base, { workspace: b.ws.name }));
     },
-    (b) => `the workbench at ${b.workbench()} has no main branch, so the board cannot tell what to take in. Open it again, then answer again.`,
+    // 文は workbench-ownership.test.ts が固定する —— ここは `take in` が盤面の手の無い入口として判定を呼ぶことだけ
+    (b) => `the workbench at ${b.workbench()} has no main branch`,
   ],
 ])("take in は拒めば何も書かない —— %s", async (_case, write, says) => {
   const b = await board();
   b.open();
   await write(b);
-  const main = git(b.ws.path, "rev-parse", "refs/heads/main");
-  const id = b.question().id;
+  const nothingWritten = b.unchanged();
 
   const refused = b.answer("take in");
 
   await expect(refused).rejects.toThrow(DomainError);
   await expect(refused).rejects.toThrow(says(b));
-  expect(git(b.ws.path, "rev-parse", "refs/heads/main")).toBe(main);
-  expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toEqual([]);
-  expect(getTask(b.db, id)?.status).toBe("todo");
+  nothingWritten();
 });
 
 // text A8c: 着地を待つ task は、その着地 question を名指す
 it("take in は着地 question が開いている task のブランチの commit を含む tip を、その question を名指して拒む", async () => {
   const b = await board();
-  const landing = registerTask(
-    b.db,
-    {
-      type: "question",
-      title: "land it",
-      purpose: "a human decides whether to land",
-      completion_criteria: "the answer is recorded",
-      question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
-      question_kind: { kind: "local_merge", task_id: b.pending.id },
-    },
-    b.clock.now(),
-    ...HUMAN_WEBUI,
-  );
+  const landing = landingQuestion(b, b.pending);
   b.open();
   git(b.workbench(), "merge", "--no-edit", `board/task/${b.pending.id}`);
   const nothingWritten = b.unchanged();
 
   await expect(b.answer("take in")).rejects.toThrow(`that task's work enters main only through its landing — answer \`merge\` on question ${landing.id}.`);
+  nothingWritten();
+});
+
+// pin A14 / ADR 0382 決定4: done の子の内容は根の着地で入る —— 子のブランチの commit を含む tip は、その根の着地 question を名指して拒む
+it("take in は done の子のブランチの commit を含む tip を、その内容が着地する根の着地 question を名指して拒む", async () => {
+  const b = await board();
+  const child = await completedWork(b, "child.txt", b.parent);
+  const landing = landingQuestion(b, b.parent);
+  b.open();
+  git(b.workbench(), "merge", "--no-edit", `board/task/${child.id}`);
+  const nothingWritten = b.unchanged();
+
+  await expect(b.answer("take in")).rejects.toThrow(
+    `contains commits of task/${child.id}, and that task's work enters main only through its landing — answer \`merge\` on question ${landing.id}.`,
+  );
+  nothingWritten();
+});
+
+// pin A14 / ADR 0382 決定4: hold した根は着地待ち —— その commit を含む tip は拒む
+it("take in は着地を hold した根のブランチの commit を含む tip を拒む", async () => {
+  const b = await board();
+  const root = await completedWork(b, "held.txt");
+  await submitAnswer({ db: b.db, pollNow: () => {}, landing: unusedLanding, workspace: b.ws, workspacesDir: b.base }, landingQuestion(b, root), ["hold"], undefined, () => b.clock.now(), "webui");
+  b.open();
+  git(b.workbench(), "merge", "--no-edit", `board/task/${root.id}`);
+  const nothingWritten = b.unchanged();
+
+  await expect(b.answer("take in")).rejects.toThrow(`contains commits of task/${root.id}, and that task's work enters main only through its landing — it has not landed yet.`);
   nothingWritten();
 });
 
@@ -349,6 +410,20 @@ it.each<[string, (b: Board) => void]>([
   await b.answer("take in");
 
   expect(git(b.ws.path, "show", "main:pending.txt")).toBe("pending.txt");
+});
+
+// pin A14 / ADR 0382 決定4: cancel した親の下の done の子は着地しない —— そのブランチの merge は人間の内容として入る
+it("take in は cancel した親の下の done の子のブランチを merge した tip を取り込む", async () => {
+  const b = await board();
+  const child = await completedWork(b, "child.txt", b.parent);
+  cancelTaskDirectly(b.db, getTask(b.db, b.parent.id)!, null, b.clock.now(), {}, "webui");
+  expect(getTask(b.db, child.id)?.status).toBe("done");
+  b.open();
+  git(b.workbench(), "merge", "--no-edit", `board/task/${child.id}`);
+
+  await b.answer("take in");
+
+  expect(git(b.ws.path, "show", "main:child.txt")).toBe("child.txt");
 });
 
 // pin A14: purely-local であることは答えるときに確かめ直す(text A8d)

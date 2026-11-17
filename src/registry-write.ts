@@ -61,7 +61,7 @@ export type DeletionBlockedReason =
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }
   | { code: "board_default" }
   | { code: "open_quarantine"; question_id: string }
-  | { code: "human_workbench"; reason: string }
+  | { code: "human_content_workbench"; workbench: string; branch: string; unreadable?: { place: string; error: string } }
   | { code: "board_auditor" }
   | { code: "board_interviewer" }
   | { code: "built_in" }
@@ -80,7 +80,7 @@ export class DeletionBlockedError extends Error {
 
 function describeReason(reason: DeletionBlockedReason, resourceName: string): string {
   if (reason.code === "unsettled_tasks") {
-    // spec #3273 text A15: 開いた `intake` question も未決着に数え、閉じ方を言う
+    // spec #3273 text A15(ADR 0371 決定6: 開いた `intake` question は未決着に数え、削除の扉を塞ぐ): 閉じ方を言う
     const intake = reason.intake_question === undefined ? "" : `. Answer \`close\` on question ${reason.intake_question} first.`;
     return `${reason.count} unsettled task(s) still reference it${intake}`;
   }
@@ -91,8 +91,16 @@ function describeReason(reason: DeletionBlockedReason, resourceName: string): st
   // spec #3273 text B10。ADR 0373 決定14: 名前を名指す Quarantine が開いていて基準の行がある間は拒む —— 削除 → 再登録 → `repaired by hand` で
   // 比較を迂回させない
   if (reason.code === "open_quarantine") return `workspace "${resourceName}" has an open Quarantine (question ${reason.question_id}) and a baseline — answer it first.`;
-  // ADR 0382 決定5: 人間自身の内容の作業台に取り込まれていない作業があれば拒み、無ければ削除が作業台を消す
-  if (reason.code === "human_workbench") return reason.reason;
+  // ADR 0382 決定5: 人間自身の内容の作業台に取り込まれていない作業があれば拒み、無ければ削除が作業台を消す。名前の場所が読めなければ
+  // 判定できないので、作業台を消せとは言わず名前の場所を名指す
+  if (reason.code === "human_content_workbench") {
+    const { workbench, branch, unreadable } = reason;
+    if (unreadable === undefined) {
+      return `the workbench at ${workbench} holds work that ${branch} does not have — take it in (\`open_workbench\`, then \`take in\`) or remove the workbench by hand first`;
+    }
+    if (unreadable.place === workbench) return `the board cannot read the workbench at ${workbench} (${unreadable.error}); remove it by hand first`;
+    return `the board cannot read the workspace's checkout at ${unreadable.place} (${unreadable.error}), so it cannot tell whether the workbench at ${workbench} holds work that ${branch} does not have — repair the checkout first`;
+  }
   if (reason.code === "board_auditor") return "it is the board's Auditor";
   if (reason.code === "board_interviewer") return "it is the board's Interviewer";
   // ADR 0117 決定2: 組み込みは registry のファイルではないので削除の対象にならない。

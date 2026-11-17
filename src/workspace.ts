@@ -35,6 +35,7 @@ import {
   diffTreeEntries,
   displayWorktreePath,
   git,
+  gitAnswers,
   gitlinkChanges,
   gitWithInput,
   gitWithoutHistoryOverrides,
@@ -95,6 +96,7 @@ import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { humanOnlyPathChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
+  ancestorsSql,
   carriesReadOnly,
   getTask,
   interviewRole,
@@ -809,21 +811,23 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
  *  人間自身の内容の作業台。返すのは実体の綴りの在り処と、使い続ける作業台の持ち主の判定。 */
 function openWorkbench(named: WorkspaceConfig, base: string, target: string, carried?: string): { path: string; owner: WorkbenchOwner } {
   const at = CHECKOUT_LAYOUT.workbench.at(base, named, target, carried && shortRef(carried));
-  let owner: WorkbenchOwner = { kind: "nothing" };
-  if (placeHasRepository(at)) {
-    try {
-      // 開くのは盤面の手 —— 作りかけは作り直す(ADR 0382 決定5・6)
-      owner = judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, carried, true, (judged) => judged);
-    } catch (cause) {
-      // 作業台そのものの読みの失敗だけ —— 上限超過・host・名前の場所の側の失敗は、開き直しで直りうるので素のまま
-      if (cause instanceof CheckoutUnreadableError || cause instanceof WorktreeStatusError) throw new WorkbenchUnreadableError(at, cause);
-      throw cause;
-    }
-  }
+  // 開くのは盤面の手 —— 作りかけは作り直す(ADR 0382 決定5・6)
+  const owner: WorkbenchOwner = placeHasRepository(at) ? judgeOnDisk(named, at, target, carried) : { kind: "nothing" };
   if (owner.kind === "nothing") rmSync(at, { recursive: true, force: true, maxRetries: 3 });
   const path = existsSync(at) ? realpathSync(at) : makeWorkbench(named, at, target);
   repointBoardRefs(named, path);
   return { path, owner };
+}
+
+/** disk にある作業台を盤面の手のある入口として判定する。作業台そのものの読みの失敗だけを `WorkbenchUnreadableError` にする —— 上限超過・
+ *  host・名前の場所の側の失敗は、開き直しで直りうるので素のまま。 */
+function judgeOnDisk(named: WorkspaceConfig, at: string, target: string, carried?: string): WorkbenchOwner {
+  try {
+    return judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, { carried, boardMove: true }, (judged) => judged);
+  } catch (cause) {
+    if (cause instanceof CheckoutUnreadableError || cause instanceof WorktreeStatusError) throw new WorkbenchUnreadableError(at, cause);
+    throw cause;
+  }
 }
 
 /** 開く手が既にある作業台を読めない —— 盤面は消さないので、人間が消すまで開き直しても同じ(作り直しの失敗とは直し方が違う)。 */
@@ -845,14 +849,13 @@ function judgeWorkbench<T>(
   named: WorkspaceConfig,
   place: UntrustedCheckout,
   target: string,
-  carried: string | undefined,
-  boardMove: boolean,
+  { carried, boardMove }: { carried?: string; boardMove: boolean },
   use: (owner: WorkbenchOwner, read?: WorkbenchTip) => T,
 ): T {
   const targetSha = git(named.path, "rev-parse", "--verify", `refs/heads/${target}`);
   const carriedSha = carried && git(named.path, "rev-parse", "--verify", carried);
   const judge = (tip: string | undefined, verified: string) =>
-    workbenchOwner({ at: place.path, target, targetSha, tip, verified }, carriedSha ? { sha: carriedSha, inKey: true } : undefined, boardMove);
+    workbenchOwner({ at: place.path, target, targetSha, tip, verified }, carriedSha ? { sha: carriedSha, inKey: true } : undefined, { boardMove });
   try {
     return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef) => use(judge(tip, verified), { tip, verified, tipRef }));
   } catch (err) {
@@ -887,6 +890,39 @@ function repointBoardRefs(named: WorkspaceConfig, workbench: string): void {
   git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`, ...protectedFromOrigin);
 }
 
+/** ADR 0371 決定7: 取り込みの拒否は `board/*` を引き直してから投げる —— 盤面 DB の拒否は回答の拒否に包まず底へ、引き直しもしない(ADR 0342 決定4)。 */
+function repointingOnRefusal<T>(named: WorkspaceConfig, workbench: string, intake: () => T): T {
+  try {
+    return intake();
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err;
+    try {
+      repointBoardRefs(named, workbench);
+    } catch {
+      // 引き直せなくても拒否の理由を人間に返す —— 次の拒否か開く手が引き直す
+    }
+    throw err;
+  }
+}
+
+/** spec #3273 の入口の表の後 / text C6: 作業台を残す取り込みの後、作業台の書く先の branch を読んだ tip からの CAS で包む commit へ進め、
+ *  `board/*` を引き直して text C6 を返す。包む commit は人間の tip の tree を持つので作業ツリーは clean のまま。間に push が着いていれば
+ *  進めずにそう言う。ref も event も書いた後なので、作業台の失敗では拒まない。 */
+function advanceKeptWorkbench(named: WorkspaceConfig, workbench: string, target: string, { tip, commit }: { tip: string; commit: string }): string {
+  let advanced = false;
+  try {
+    workerRepoGit(workbench, "update-ref", `refs/heads/${target}`, commit, tip);
+    advanced = true;
+  } catch {}
+  try {
+    repointBoardRefs(named, workbench);
+  } catch {}
+  return (
+    `took ${tip} in as ${commit} on ${target}. In a clone, fetch the workbench and fast-forward to \`${boardBranch(target)}\` before you write on.` +
+    (advanced ? "" : ` Merge \`${boardBranch(target)}\` into your branch before the next take-in.`)
+  );
+}
+
 /** 取り込みの手が受け取る束: 作業台の基点、入口、`workbench_taken_in` に残す回答者と時刻。 */
 export type IntakeContext = { workbenchBase: string; entry: IntakeEntry; answerer: Answerer; now: Date };
 
@@ -913,7 +949,7 @@ function takeInWorkbench(
   target: string,
   carried: string | undefined,
   { entry, answerer, now }: IntakeContext,
-  { approved, foreign: counted, ownContent = false }: EntryChecks = {},
+  { approved, otherTasks, humanContent = false }: EntryChecks = {},
 ): { tip: string; commit: string } | undefined {
   const ref = `refs/heads/${target}`;
   const inputs = [ref, ...(carried ? [carried] : [])].map((full) => ({
@@ -923,7 +959,7 @@ function takeInWorkbench(
   const old = inputs[0]!.sha;
   const at = place.path;
   try {
-    return judgeWorkbench(named, place, target, carried, !ownContent, (owner, read) => {
+    return judgeWorkbench(named, place, target, { carried, boardMove: !humanContent }, (owner, read) => {
       if (owner.kind === "refuse") throw new Error(owner.reason);
       if (owner.kind !== "mine" || !read) return undefined;
       const { tip, verified, tipRef } = read;
@@ -933,8 +969,10 @@ function takeInWorkbench(
         const merge = boardBranch(missing.branch);
         throw new Error(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then answer again.`);
       }
-      const foreign = counted ? foreignTaskBranches(verified, named.path, tip, inputs.map(({ sha }) => sha), counted.taskBranches) : [];
-      if (foreign.length > 0) throw new Error(counted!.refusal(foreign, at));
+      if (otherTasks) {
+        const branches = otherTaskBranches(db, named, verified, tip, inputs.map(({ sha }) => sha), otherTasks.range);
+        if (branches.length > 0) throw new Error(otherTasks.refusalFor(branches, at));
+      }
       if (boardViewStatus(at, tip, verified).length > 0) {
         throw new Error(`the workbench at ${at} has uncommitted changes — commit or discard them, then answer again.`);
       }
@@ -947,9 +985,9 @@ function takeInWorkbench(
       };
       // ADR 0371 決定6: 人間自身の内容の入口は、書き込む tree が隠せない形を持てば(人間が変えたかに依らず)拒む
       const { unhideable } = recordedSettingsDisposition(verified, tip, workerRepoGit);
-      refuse(unhideable && (ownContent || differing.some(({ path }) => path === unhideable.path)) ? [unhideable.path] : [], "is a shape the board cannot hide");
+      refuse(unhideable && (humanContent || differing.some(({ path }) => path === unhideable.path)) ? [unhideable.path] : [], "is a shape the board cannot hide");
       // ADR 0371 決定5: 人間しか書けない path は purely-local の保護ブランチへ人間自身の内容を入れる入口だけが通す
-      if (!ownContent) refuse(humanOnlyPathChanges(differing), "is written only by a human", humanOnlyPathRoute(db, named));
+      if (!humanContent) refuse(humanOnlyPathChanges(differing), "is written only by a human", humanOnlyPathRoute(db, named));
       refuse(gitlinkChanges(differing), "is a gitlink");
       fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
       const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
@@ -964,22 +1002,51 @@ function takeInWorkbench(
   }
 }
 
-/** spec #3273 の受理の 11: merge back の前に、その子を運ぶ鍵の作業台が取り込める tip を持てば先に取り込んで true(ADR 0382 決定1)。 */
+/** ADR 0382 決定4 の数える task の範囲: local 着地はすべての task(決着済み・cancel 済みを含む)、`take in` と封じ込めの回答は未決着か
+ *  着地待ち(hold を含む)の task。 */
+type TaskRange = "every task" | "unsettled or landing-waiting";
+
+/** ADR 0382 決定4(#3352 の追記4): 作業台の tip が持つ、`excluded`(書く先の今の値と答えている task の tip)のどれにも無い commit を含む
+ *  task のブランチのうち、`range` の task のもの —— 入口は範囲だけを渡す。着地の済んだ task の commit は書く先にあるので、範囲に入っても拒まない。 */
+function otherTaskBranches(db: Db, named: WorkspaceConfig, verified: string, tip: string, excluded: string[], range: TaskRange): string[] {
+  const branches = refValues(git(named.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/"));
+  if (range === "unsettled or landing-waiting") {
+    for (const branch of [...branches.keys()]) if (!unsettledOrLandingWaiting(db, branch.slice("task/".length))) branches.delete(branch);
+  }
+  return foreignTaskBranches(verified, named.path, tip, excluded, branches);
+}
+
+/** ADR 0382 決定4: 未決着か着地待ち(hold は着地待ち)の task。done の task の内容は帰り先を辿って根の着地でだけ保護ブランチに入るので、
+ *  祖先に cancel のあるものは着地を待たない。盤面の知らない名前の `task/*` は task ではない。 */
+function unsettledOrLandingWaiting(db: Db, id: string): boolean {
+  const task = getTask(db, id);
+  if (task === undefined || task.status === "cancelled") return false;
+  if (!isSettled(task.status)) return true;
+  return db.prepare(`${ancestorsSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM ancestors) AND status = 'cancelled'`).get(id) === undefined;
+}
+
+/** spec #3273 の受理の 11: merge back の前に、その子を運ぶ鍵の作業台が取り込める tip を持てば先に取り込む(ADR 0382 決定1)。 */
 const takeInMergeBack = (db: Db, named: WorkspaceConfig, { taskId, target }: { taskId: string; target: string }, intake: IntakeContext) =>
-  takeInExistingWorkbench(db, named, target, `refs/heads/${taskBranch(taskId)}`, intake) !== undefined;
+  takeInExistingWorkbench(db, named, target, `refs/heads/${taskBranch(taskId)}`, intake);
 
 /** ADR 0376 決定8: 昇格の retry は追いつきの前に、(`task/<root>`, origin の保護ブランチ) の作業台が取り込める tip を持てば先に取り込んで
- *  true。運ばれる側は origin の保護ブランチ(text A2)。 */
+ *  true。運ばれる側は origin の保護ブランチ(text A2)。
+ *  shortcut: 作業台を残した取り込みの text C6 は返さない —— 昇格の retry の回答は収束の verdict しか受け取らない。回答の応答へ通すなら verdict に欄を足す。 */
 export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string, intake: IntakeContext) =>
   takeInExistingWorkbench(db, workspace, taskBranch(taskId), exactProtectedBranchRef(workspace), intake) !== undefined;
 
-/** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`foreign` は
- *  ADR 0382 決定4: 数える task のブランチ(名前 → sha)と、その commit を持つ tip の拒否文(作業台の在り処を受ける)。`ownContent` は
+/** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`otherTasks` は
+ *  ADR 0382 決定4: 数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)。`humanContent` は
  *  人間自身の内容の入口(`take in`)—— 盤面の手が無く、人間しか書けない path を通し、書き込む tree が隠せない形を持てば拒む。 */
-type EntryChecks = { approved?: string; foreign?: { taskBranches: Map<string, string>; refusal: (branches: string[], at: string) => string }; ownContent?: boolean };
+type EntryChecks = {
+  approved?: string;
+  otherTasks?: { range: TaskRange; refusalFor: (branches: string[], at: string) => string };
+  humanContent?: boolean;
+};
 
-/** 鍵の作業台があれば取り込み、包む commit を返す(取り込むものが無ければ undefined)。拒否は `board/*` を引き直してから投げる。ADR 0382 決定5:
- *  取り込んだ後、tip が取り込んだままで人間の作業が残っていなければ作業台を消す —— 回答の間に commit や push が着いていれば残す。 */
+/** 鍵の作業台があれば取り込み、包む commit と、作業台を残したときの text C6 を返す(取り込むものが無ければ undefined)。拒否は `board/*` を
+ *  引き直してから投げる。ADR 0382 決定5: 取り込んだ後、tip が取り込んだままで人間の作業が残っていなければ作業台を消し、残すなら
+ *  その branch を包む commit へ進める(`advanceKeptWorkbench`)。 */
 function takeInExistingWorkbench(
   db: Db,
   named: WorkspaceConfig,
@@ -987,31 +1054,21 @@ function takeInExistingWorkbench(
   carried: string,
   intake: IntakeContext,
   checks?: EntryChecks,
-): string | undefined {
+): { commit: string; kept: string | undefined } | undefined {
   const workbench = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, named, target, shortRef(carried));
   if (!placeHasRepository(workbench)) return undefined;
   const place = workbenchPlace(named, realpathSync(workbench));
-  let taken: { tip: string; commit: string } | undefined;
-  try {
-    taken = takeInWorkbench(db, named, place, target, carried, intake, checks);
-  } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に包まず底へ —— 引き直しもしない
-    try {
-      repointBoardRefs(named, workbench);
-    } catch {
-      // 引き直せなくても拒否の理由を人間に返す —— 次の拒否か開く手が引き直す
-    }
-    throw err;
-  }
+  const taken = repointingOnRefusal(named, workbench, () => takeInWorkbench(db, named, place, target, carried, intake, checks));
   if (taken === undefined) return undefined;
   let done = false;
   try {
-    done = judgeWorkbench(named, place, target, carried, true, (owner, read) => owner.kind === "nothing" && read?.tip === taken.tip);
+    done = judgeWorkbench(named, place, target, { carried, boardMove: true }, (owner, read) => owner.kind === "nothing" && read?.tip === taken.tip);
   } catch {
     // 読めなければ残す —— ref も event も書いた後なので拒まない
   }
-  if (done) removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
-  return taken.commit;
+  if (!done) return { commit: taken.commit, kept: advanceKeptWorkbench(named, place.path, target, taken) };
+  removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
+  return { commit: taken.commit, kept: undefined };
 }
 
 /** `intake` question の選択肢(spec #3273 の識別子の表)。 */
@@ -1046,17 +1103,21 @@ const heldCommitsClause = (owner: WorkbenchOwner, branch: string) =>
     ? ` The workbench already holds commits that ${branch} does not have; to start over from the board's value, run \`git reset --hard ${boardBranch(branch)}\` there.`
     : "";
 
-/** ADR 0371 決定6 / ADR 0373 決定9: `open_workbench` —— purely-local の workspace の (workspace, 保護ブランチ) の作業台を開き、workspace に
- *  `intake` question を1つ立てる。2度目は question を立てず同じ question を名指す。作業台は開く手の規則(ADR 0382 決定5)で開くので、
- *  question が開いていて作業台が disk に無ければ作り直す。remote-backed の workspace は拒む(text A9)。question の登録者は呼び手。返すのは text A14。 */
-export function openIntakeWorkbench(db: Db, workspace: WorkspaceConfig, base: string, caller: Answerer, now: Date): string {
+/** ADR 0371 決定6 / ADR 0382 決定5: `open_workbench` —— purely-local の workspace の人間自身の内容の作業台 (workspace, 保護ブランチ) を開き、
+ *  workspace に `intake` question を1つ立てる。question が開いていて作業台が書く先の branch とともに disk にあれば何も変えず(pin A13)、
+ *  同じ question を名指す。そうでなければ開く手の規則で開く —— question が開いていて作業台が disk に無いか作りかけなら作り直す。
+ *  remote-backed の workspace は拒む(text A9)。question の登録者は呼び手。返すのは text A14。 */
+export function openHumanContentWorkbench(db: Db, workspace: WorkspaceConfig, base: string, caller: Answerer, now: Date): string {
   const branch = protectedBranch(workspace);
   if (isRemoteBacked(withRememberedRepoCheck(db, workspace, () => now))) {
     throw new DomainError(`workspace ${workspace.name} is remote-backed, so ${branch} is changed on origin.${originRoute(workspace)}`);
   }
+  const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
+  let question = openIntakeQuestionId(db, workspace.name);
+  const leaveAlone = question !== undefined && placeHasRepository(at) && gitAnswers(() => workerRepoGit(at, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`));
   let opened: { path: string; owner: WorkbenchOwner };
   try {
-    opened = openWorkbench(workspace, base, branch);
+    opened = leaveAlone ? { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) } : openWorkbench(workspace, base, branch);
   } catch (err) {
     if (err instanceof WorkbenchUnreadableError) throw new DomainError(`the board cannot read the workbench at ${err.at} (${err.message}); remove it by hand, then open it again.`);
     if (isBoardDbRefusal(err)) throw err;
@@ -1064,7 +1125,6 @@ export function openIntakeWorkbench(db: Db, workspace: WorkspaceConfig, base: st
   }
   const { path, owner } = opened;
   const held = heldCommitsClause(owner, branch);
-  let question = openIntakeQuestionId(db, workspace.name);
   if (question === undefined) {
     // spec #3273 text A13
     const title = `take in commits for ${branch} of workspace ${workspace.name}`;
@@ -1090,13 +1150,13 @@ export function openIntakeWorkbench(db: Db, workspace: WorkspaceConfig, base: st
   return `opened the workbench at ${path} for ${branch} of workspace ${workspace.name}; answer question ${question} when your commits are there.${held}`;
 }
 
-/** ADR 0371 決定2〜6 / ADR 0382 決定4〜6: `intake` question への `take in` —— (workspace, 保護ブランチ) の作業台の tip を保護ブランチへ取り込む。
+/** ADR 0371 決定2〜6 / ADR 0382 決定4〜6: `intake` question への `take in` —— 人間自身の内容の作業台の tip を保護ブランチへ取り込む。
  *  条件は local 着地の `merge` と同じ(保護ブランチが基準と一致、workspace の Quarantine が開いていない)に、tip が保護ブランチに含まれれば
  *  拒み(text A8b)、未決着か着地待ち(hold を含む)の task のブランチの commit を持つ tip を拒み(祖先だけ —— cancel した task のブランチと
  *  cherry-pick は通る、text A8c)、書き込む tree が隠せない形を持てば拒む。purely-local であることは答えるときに確かめ直す(text A8d)。
- *  人間しか書けない path は通す。作業台は取り込みの後も消さず(ADR 0382 決定5)、その branch を読んだ tip からの CAS で包む commit へ進めて
- *  `board/*` を引き直す —— 間に push が着いていれば進めずにそう言う。返すのは text C6。拒否は ref も記録も書かない。 */
-export function takeInIntakeWorkbench(db: Db, workspace: WorkspaceConfig, intake: Omit<IntakeContext, "entry">): string {
+ *  人間しか書けない path は通す。作業台は取り込みの後も消さず(ADR 0382 決定5)、その branch を包む commit へ進める(`advanceKeptWorkbench`)。
+ *  返すのは text C6。拒否は ref も記録も書かない。 */
+export function takeInHumanContentWorkbench(db: Db, workspace: WorkspaceConfig, intake: Omit<IntakeContext, "entry">): string {
   const branch = protectedBranch(workspace);
   const at = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, workspace, branch);
   const shown = existsSync(at) ? realpathSync(at) : at;
@@ -1113,76 +1173,66 @@ export function takeInIntakeWorkbench(db: Db, workspace: WorkspaceConfig, intake
     throw new Error(`the workbench at ${at} is gone; commits that were not taken in are lost. Open it again with \`open_workbench\` for ${workspace.name}, then answer again.`);
   }
   const place = workbenchPlace(workspace, realpathSync(at));
-  // ADR 0382 決定4: 数えるのは未決着か着地待ちの task のブランチ —— cancel した task のブランチは人間の内容として入ってよい。着地の済んだ task の
-  // commit は保護ブランチにあるので数えても拒まない
-  const taskBranches = new Map(
-    [...refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/"))].filter(([name]) => {
-      const task = getTask(db, name.slice("task/".length));
-      return task !== undefined && task.status !== "cancelled";
-    }),
-  );
-  const refusal = (foreign: string[], tipAt: string) =>
-    foreign.map((name) => `the tip of the workbench at ${tipAt} contains commits of ${name}, and that task's work enters ${branch} only through its landing — ${landingExit(db, name)}.`).join(" ") +
+  // spec #3273 text A8c(作業台の在り処を言う —— 文の規則)
+  const refusalFor = (branches: string[], tipAt: string) =>
+    branches.map((name) => `the tip of the workbench at ${tipAt} contains commits of ${name}, and that task's work enters ${branch} only through its landing — ${landingExit(db, name)}.`).join(" ") +
     ` To take in only your own commits, start ${branch} in the workbench over with \`git reset --hard ${boardBranch(branch)}\`, commit them again and answer again.`;
-  let taken: { tip: string; commit: string } | undefined;
-  try {
-    taken = takeInWorkbench(db, workspace, place, branch, undefined, { ...intake, entry: "intake_question" }, { approved, foreign: { taskBranches, refusal }, ownContent: true });
-    if (!taken) throw new Error(`nothing to take in: ${branch} in the workbench at ${place.path} is the value the board already has.`);
-  } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に包まず底へ —— 引き直しもしない
-    try {
-      repointBoardRefs(workspace, place.path);
-    } catch {
-      // 引き直せなくても拒否の理由を人間に返す —— 次の拒否か開く手が引き直す
-    }
-    throw err;
-  }
-  // spec #3273 の入口の表の後: 包む commit は人間の tip の tree を持つので作業ツリーは clean のまま。読んだ tip からの CAS —— 間に push が
-  // 着いていれば進めない。ref も event も書いた後なので、作業台の失敗では拒まない
-  let advanced = false;
-  try {
-    workerRepoGit(place.path, "update-ref", `refs/heads/${branch}`, taken.commit, taken.tip);
-    advanced = true;
-  } catch {}
-  try {
-    repointBoardRefs(workspace, place.path);
-  } catch {}
-  // spec #3273 text C6
-  return (
-    `took ${taken.tip} in as ${taken.commit} on ${branch}. In a clone, fetch the workbench and fast-forward to \`${boardBranch(branch)}\` before you write on.` +
-    (advanced ? "" : ` Merge \`${boardBranch(branch)}\` into your branch before the next take-in.`)
-  );
+  const taken = repointingOnRefusal(workspace, place.path, () => {
+    const intaken = takeInWorkbench(db, workspace, place, branch, undefined, { ...intake, entry: "intake_question" }, {
+      approved,
+      otherTasks: { range: "unsettled or landing-waiting", refusalFor },
+      humanContent: true,
+    });
+    if (!intaken) throw new Error(`nothing to take in: ${branch} in the workbench at ${place.path} is the value the board already has.`);
+    return intaken;
+  });
+  return advanceKeptWorkbench(workspace, place.path, branch, taken);
 }
 
+/** 削除の扉が人間自身の内容の作業台に見つけたもの: 作業台の在り処、書く先の branch、読めなければ読めなかった場所(作業台か名前の場所)と理由。 */
+export type HumanContentWorkbenchLeft = { workbench: string; branch: string; unreadable?: { place: string; error: string } };
+
 /** ADR 0382 決定5: workspace の削除の扉 —— 人間自身の内容の作業台に取り込まれていない人間の作業(書く先に無い commit、作業ツリーの変更、
- *  別の branch や stash)があれば拒む文を、無ければ undefined を返す。読めない作業台も拒む。 */
-export function humanWorkbenchLeft(named: WorkspaceConfig, base: string): string | undefined {
+ *  別の branch や stash)があればそれを、無ければ undefined を返す。名前の場所が読めなければ判定できないので、名前の場所を名指す ——
+ *  作業台を消せとは言わない。読めない作業台も拒む。 */
+export function humanContentWorkbenchLeft(named: WorkspaceConfig, base: string): HumanContentWorkbenchLeft | undefined {
   const branch = protectedBranch(named);
   const at = CHECKOUT_LAYOUT.workbench.at(base, named, branch);
   if (!placeHasRepository(at)) return undefined;
+  const workbench = realpathSync(at);
+  const unreadable = (place: string, err: unknown): HumanContentWorkbenchLeft => {
+    if (isBoardDbRefusal(err)) throw err;
+    return { workbench, branch, unreadable: { place, error: err instanceof Error ? err.message : String(err) } };
+  };
+  try {
+    git(named.path, "rev-parse", "--verify", `refs/heads/${branch}`);
+  } catch (err) {
+    return unreadable(named.path, err);
+  }
   let owner: WorkbenchOwner;
   try {
     // 消すのは盤面の手 —— 作りかけは取り込むものが無い(ADR 0382 決定6)
-    owner = judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), branch, undefined, true, (judged) => judged);
+    owner = judgeWorkbench(named, workbenchPlace(named, workbench), branch, { boardMove: true }, (judged) => judged);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
-    return `the board cannot read the workbench at ${at} (${err instanceof Error ? err.message : String(err)}); remove it by hand first`;
+    return unreadable(workbench, err);
   }
-  if (owner.kind === "nothing") return undefined;
-  return `the workbench at ${realpathSync(at)} holds work that ${branch} does not have — take it in (\`open_workbench\`, then \`take in\`) or remove the workbench by hand first`;
+  return owner.kind === "nothing" ? undefined : { workbench, branch };
 }
 
-/** ADR 0382 決定5: 削除が成立した workspace の、人間自身の内容の作業台を消す(取り込まれていない作業が無いことは `humanWorkbenchLeft` が確かめた)。 */
-export function removeHumanWorkbench(named: WorkspaceConfig, base: string): void {
+/** ADR 0382 決定5: 削除が成立した workspace の、人間自身の内容の作業台を消す(取り込まれていない作業が無いことは `humanContentWorkbenchLeft` が確かめた)。 */
+export function removeHumanContentWorkbench(named: WorkspaceConfig, base: string): void {
   const at = CHECKOUT_LAYOUT.workbench.at(base, named, protectedBranch(named));
   if (existsSync(at)) removeBoardCheckout(at, CHECKOUT_LAYOUT.workbench.parents);
 }
 
-/** text A8c の出口: その task の開いた着地 question があれば `merge` を、無ければまだ着地していないことを言う。 */
+/** text A8c の出口(ADR 0371 決定6 / ADR 0382 決定4: task の内容は着地でだけ保護ブランチに入る): そのブランチの内容が着地する根 —— 祖先の
+ *  一番上 —— の開いた着地 question があれば `merge` を、無ければまだ着地していないことを言う。 */
 function landingExit(db: Db, branch: string): string {
+  const id = branch.slice("task/".length);
+  const root = (db.prepare(`${ancestorsSql("?")} SELECT id FROM tasks WHERE id IN (SELECT id FROM ancestors) AND parent_id IS NULL`).get(id) as { id: string } | undefined)?.id ?? id;
   const row = db
     .prepare("SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND question_pending_local_merge_task_id = ? ORDER BY rowid LIMIT 1")
-    .get(branch.slice("task/".length)) as { id: string } | undefined;
+    .get(root) as { id: string } | undefined;
   return row ? `answer \`merge\` on question ${row.id}` : "it has not landed yet";
 }
 
@@ -2735,9 +2785,9 @@ export async function redoMergeBacks(
   intake: IntakeContext,
   /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)。 */
   retry?: { root: string; firstHalf: () => Promise<void> },
-): Promise<void> {
+): Promise<string[]> {
   const root = retry?.root;
-  if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return;
+  if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return [];
   await retry?.firstHalf();
   const running = db
     .prepare(
@@ -2750,13 +2800,20 @@ export async function redoMergeBacks(
   await refreshProtectedBranch(db, workspace, auth);
   // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
   let failure: { error: unknown } | undefined;
+  // 作業台を残した取り込みの text C6
+  const kept: string[] = [];
   try {
     // 1つ運ぶたびに読み直す —— 子孫を運んだ子は、親へ運ぶ内容を新しく持つ。ADR 0382 決定2: 人間の tip を持つ作業台を盤面の手の merge より
     // 先に取り込む —— 盤面が先に書く先を進めると、その tip は書く先の今の値を欠いて拒まれる
-    for (;;) {
+    next: for (;;) {
       const pending = undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root);
       if (pending.length === 0) break;
-      if (pending.some((next) => takeInMergeBack(db, workspace, next, intake))) continue;
+      for (const candidate of pending) {
+        const taken = takeInMergeBack(db, workspace, candidate, intake);
+        if (taken === undefined) continue;
+        if (taken.kept !== undefined) kept.push(taken.kept);
+        continue next;
+      }
       mergeBackInto(db, workspace, intake.workbenchBase, pending[0]!.target, pending[0]!.taskId, "acceptance");
     }
   } catch (error) {
@@ -2768,6 +2825,7 @@ export async function redoMergeBacks(
     if (!failure || isBoardDbRefusal(parkError)) throw parkError; // ADR 0342 決定4: 盤面 DB の拒否は先の理由の陰に隠さない
   }
   if (failure) throw failure.error;
+  return kept;
 }
 
 /** ADR 0103 決定1: 着地の時点で保護ブランチが**盤面自身の記録から外れて**動いていた
@@ -2830,8 +2888,8 @@ function protectedValueAsRecorded(db: Db, workspace: WorkspaceConfig): string {
  *  盤面が Tidepool 名義の真の merge commit で追いつかせる。タスクブランチは**決して
  *  書き換えない** —— 差分の恒久記録であり系譜判定の土台である(ADR 0053 根拠1)。
  *
- *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。 */
-export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string, intake: Omit<IntakeContext, "entry">): string {
+ *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。作業台を残した取り込みなら、その text C6 も返す。 */
+export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string, intake: Omit<IntakeContext, "entry">): { landed: string; kept: string | undefined } {
   if (isRemoteBacked(withRememberedRepoCheck(db, workspace))) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
@@ -2841,15 +2899,16 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
 
   const task = taskBranch(taskId);
   // ADR 0382 決定4: 決着済み・cancel 済みを含むすべての task のブランチの commit を作業台の tip に許さない —— 答えている task の tip にある
-  // commit は数えない(`foreignTaskBranches` の除外)
-  const taskBranches = refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/"));
-  // ADR 0371 決定2・4: 作業台に人間の merge があれば、この回答がそれを取り込み、包む commit が着地
-  const refusal = (foreign: string[], at: string) =>
-    `the tip of the workbench at ${at} contains commits of ${foreign.join(", ")}, and a task's work enters ${branch} only through its own landing. ` +
+  // commit は数えない。ADR 0371 決定2・4: 作業台に人間の merge があれば、この回答がそれを取り込み、包む commit が着地
+  const refusalFor = (branches: string[], at: string) =>
+    `the tip of the workbench at ${at} contains commits of ${branches.join(", ")}, and a task's work enters ${branch} only through its own landing. ` +
     `Start ${branch} in the workbench over with \`git reset --hard ${boardBranch(branch)}\` — this drops your merge there too — then merge only ` +
     `\`${boardBranch(task)}\`, resolve its conflict again and answer again.`;
-  const taken = takeInExistingWorkbench(db, workspace, branch, `refs/heads/${task}`, { ...intake, entry: "landing_merge" }, { approved: protectedSha, foreign: { taskBranches, refusal } });
-  if (taken !== undefined) return taken;
+  const taken = takeInExistingWorkbench(db, workspace, branch, `refs/heads/${task}`, { ...intake, entry: "landing_merge" }, {
+    approved: protectedSha,
+    otherTasks: { range: "every task", refusalFor },
+  });
+  if (taken !== undefined) return { landed: taken.commit, kept: taken.kept };
   const landed = isAncestor(workspace, ref, task)
     ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
     : mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
@@ -2860,7 +2919,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   }
   // ADR 0064 決定4 / ADR 0356 決定5: a human landing may race with a session, so follow only if HEAD is on this ref.
   advanceBranch(db, workspace, ref, protectedSha, landed);
-  return landed;
+  return { landed, kept: undefined };
 }
 
 /** boot 時の一斉検査(ADR 0040)。登録済みの全 workspace に pickup と同じ検査を

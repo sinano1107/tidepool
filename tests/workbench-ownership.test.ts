@@ -135,7 +135,7 @@ it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<ty
     tip = undefined;
   }
 
-  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip, verified: b.at }, carried, true);
+  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip, verified: b.at }, carried, { boardMove: true });
 
   expect(outcome(owner)).toBe(kind);
   for (const element of says) expect(owner.kind === "refuse" && owner.reason).toContain(element);
@@ -148,7 +148,7 @@ it("書く先の branch の無い作りかけは、盤面の手の無い入口�
   rmSync(b.at, { recursive: true, force: true });
   git(".", "init", "--quiet", "--initial-branch=main", b.at);
 
-  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip: undefined, verified: b.named }, undefined, false);
+  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip: undefined, verified: b.named }, undefined, { boardMove: false });
 
   expect(owner).toEqual({
     kind: "refuse",
