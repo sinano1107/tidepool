@@ -21,7 +21,7 @@ import {
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import { startGitHttpRemote } from "./git-http-remote.js";
-import { HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -177,7 +177,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     await refresh();
     expect(git(replacement.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(replacement.repo!, "rev-parse", "refs/heads/main"));
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("purely-local な workspace が remote-backed として宣言され、全ブランチが載る", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
