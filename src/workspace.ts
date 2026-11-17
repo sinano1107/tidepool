@@ -800,11 +800,19 @@ export function workbenchPath(base: string, target: string): string {
 function openWorkbench(db: Db, named: WorkspaceConfig, base: string, target: string): string {
   const at = workbenchPath(base, target);
   if (!(workspaceNeedsHuman(db, named.name) && placeHasRepository(at))) rmSync(at, { recursive: true, force: true, maxRetries: 3 });
-  const path = existsSync(at)
-    ? realpathSync(at)
-    : makeCheckout({ at, named, source: `refs/heads/${target}`, branch: target, borrow: true, description: `the workbench for ${target}`, config: { "receive.denyCurrentBranch": "updateInstead" } });
+  const path = existsSync(at) ? realpathSync(at) : makeWorkbench(named, at, target);
   repointBoardRefs(named, path);
   return path;
+}
+
+function makeWorkbench(named: WorkspaceConfig, at: string, target: string): string {
+  try {
+    return makeCheckout({ at, named, source: `refs/heads/${target}`, branch: target, borrow: true, description: `the workbench for ${target}`, config: { "receive.denyCurrentBranch": "updateInstead" } });
+  } catch (err) {
+    // 作りかけの `.git` を残すと、Quarantine が開いている間は指されたものとして使い続けてしまう
+    rmSync(at, { recursive: true, force: true, maxRetries: 3 });
+    throw err;
+  }
 }
 
 /** ADR 0371 決定7: 作業台の `refs/heads/board/*` を名前の場所の branch の今の値に引き直す —— 人間がそこへ書いたものは上書きされて
@@ -2287,6 +2295,7 @@ function mergeBackConflict(db: Db, workspace: WorkspaceConfig, base: string, sou
   try {
     path = openWorkbench(db, workspace, base, target);
   } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
     return new Error(`${conflict} The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); answer again and it opens it again${stop}`);
   }
   const merge = `board/${source}`;

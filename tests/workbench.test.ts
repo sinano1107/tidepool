@@ -325,6 +325,24 @@ it("祖先のほかに履歴は制限しない —— 兄弟の task/<S> の mer
   expect(takenIn(b.db)).toHaveLength(1);
 });
 
+it("拒否は作業台の `board/*` を名前の場所の値に引き直し、人間が書いた `board/*` は消え、人間の branch と作業ツリーは動かない", async () => {
+  const c = await conflicted();
+  const workbench = c.workbench();
+  commitWork(workbench, "notes.txt", "no merge yet\n");
+  git(workbench, "update-ref", `refs/heads/board/${c.source}`, "HEAD");
+  git(workbench, "branch", "board/stray", "HEAD");
+  writeFileSync(join(workbench, "untracked.txt"), "mine\n");
+  const head = git(workbench, "rev-parse", "HEAD");
+
+  await expect(answer(c)).rejects.toThrow(DomainError);
+
+  expect(git(workbench, "rev-parse", `board/${c.source}`)).toBe(git(c.ws.path, "rev-parse", c.source));
+  expect(() => git(workbench, "rev-parse", "--verify", "--quiet", "refs/heads/board/stray")).toThrow();
+  expect(git(workbench, "symbolic-ref", "HEAD")).toBe(`refs/heads/${c.target}`);
+  expect(git(workbench, "rev-parse", "HEAD")).toBe(head);
+  expect(git(workbench, "status", "--porcelain")).toBe("?? untracked.txt");
+});
+
 it("自前の clone から force push して書く先の今の値を失った tip は、祖先の検査が拒む(pin A16)", async () => {
   const c = await conflicted();
   const clone = join(await tempDir("tidepool-own-clone-"), "clone");
