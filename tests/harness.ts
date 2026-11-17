@@ -980,15 +980,18 @@ export interface GitCall {
 
 /** PATH の本物の git の前に置く shim。呼び出しごとに argv と env を記録し、`route` の URL を書き換え(盤面の網に出る git は
  *  checkout の insteadOf を読まない、ADR 0339 決定5 —— 盤面が組んだ URL の往復を local の bare へ回す)、`fake` の verb は本物へ
- *  渡さず exit 0 で答える(`ls-remote` には `lsRemote` の行を返す)。それ以外は本物へ渡す。
+ *  渡さず exit 0 で答える(`ls-remote` には `lsRemote` の行を返す)。`lsRemoteFailsFrom` 回目以降の `ls-remote` は本物へ渡さず
+ *  exit 128 で落ちる(origin が途中で届かなくなる)。それ以外は本物へ渡す。
  *  テスト自身の git の呼び出しも通るので、URL を引数に渡すテストの git の**後に**入れる。テストの終わりに PATH を戻す。 */
 export async function shimGit(
-  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string } = {},
+  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; lsRemoteFailsFrom?: number } = {},
 ): Promise<() => GitCall[]> {
   const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
   const dir = await tempDir("tidepool-git-shim-");
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
+  const lsRemotes = join(dir, "ls-remote.count");
+  writeFileSync(lsRemotes, "0");
   const [from, to] = options.route ?? [];
   const fake = (options.fake ?? []).map((verb) => `*" ${verb} "*`).join("|");
   writeFileSync(
@@ -999,6 +1002,10 @@ export async function shimGit(
       `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; ` +
       `echo "env.GH_TOKEN=\${GH_TOKEN-}"; echo "env.GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}"; ` +
       `echo "env.GIT_OBJECT_DIRECTORY=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
+      (options.lsRemoteFailsFrom
+        ? `case " $* " in *" ls-remote "*) n=$(($(cat "${lsRemotes}") + 1)); echo "$n" > "${lsRemotes}"; ` +
+          `[ "$n" -ge ${options.lsRemoteFailsFrom} ] && { echo "fatal: the shim made origin unreachable" >&2; exit 128; };; esac\n`
+        : "") +
       (fake ? `case " $* " in ${fake}) case " $* " in *" ls-remote "*) printf '%s' '${options.lsRemote ?? ""}';; esac; exit 0;; esac\n` : "") +
       `exec "${real}" "$@"\n`,
     { mode: 0o755 },

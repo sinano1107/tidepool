@@ -51,6 +51,8 @@ import {
   workerRepoGitUntil,
 } from "./git.js";
 import {
+  authedLsRemote,
+  GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   isRelativeLocalPath,
   networkDestination,
@@ -79,7 +81,7 @@ import {
   taskBranchExists,
   taskRoomPickupPredicates,
 } from "./pickup-predicates.js";
-import { openQuarantineQuestion, registerResourceStop } from "./quarantine.js";
+import { GIVE_UP_THE_LOST_REFS, openQuarantineQuestion, RESTORE_THE_BASELINE, registerResourceStop } from "./quarantine.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import {
   fetchBranchCopy,
@@ -1797,28 +1799,104 @@ export function takeWorkspaceInFlightKey(db: Db, name: string): (() => void) | n
   return () => held.delete(name);
 }
 
-/** ADR 0373 決定3・4: 基準と違う ref を全部基準の値へ書き戻し(基準に無い ref は消す)、外す値を `refs/keep-around/<sha>` に持ち続ける。
- *  受理の 7b(spec #3273)の1つの同期区間で、比べ直すところから書くまでに await を挟まない。予告中の行は ref がどの値とも違うときだけ予告の前の値へ戻す。
- *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた sha だけ —— symref の行(HEAD を含む)は名前なので
- *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
- *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。 */
-export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date): KeptValue[] {
+/** 戻す先: 基準と違う ref ごとに基準の値(予告中の行は予告の前の値)、空文字は消す。基準の行が無い名前は比べずに空 —— 戻す先が無い(ADR 0373 決定7)。 */
+function restoreTargets(db: Db, workspace: WorkspaceConfig): { current: Map<string, string>; targets: Map<string, string> } {
   const stored = storedRefs(db, workspace.name);
-  // ADR 0373 決定7: 基準の行が無い名前は比べずに通す —— 戻す先が無い
-  if (stored === "") return [];
   const baseline = refValues(stored);
-  const current = refValues(currentRefs(workspace));
+  const current = stored === "" ? new Map<string, string>() : refValues(currentRefs(workspace));
   const targets = new Map<string, string>();
   for (const ref of new Set([...baseline.keys(), ...current.keys()])) {
     if (!baselineAllows(baseline.get(ref), current.get(ref))) targets.set(ref, baselineValues(baseline.get(ref))[0]!);
   }
-  if (targets.size === 0) return [];
-  const isSha = (value: string) => value !== "" && symrefTarget(value) === undefined;
-  const lost = [...targets].filter(([, value]) => isSha(value) && !objectExists(workspace, value));
-  if (lost.length > 0) {
-    throw new Error(`${lost.map(([ref, sha]) => `cannot restore ${ref} to ${sha}: that commit no longer exists in ${workspace.path}`).join("\n")} Nothing was written.`);
+  return { current, targets };
+}
+
+function isSha(value: string): boolean {
+  return value !== "" && symrefTarget(value) === undefined;
+}
+
+/** 戻す先の object が無い ref(ADR 0373 決定5)。 */
+function lostTargets(workspace: WorkspaceConfig, targets: ReadonlyMap<string, string>): [ref: string, sha: string][] {
+  return [...targets].filter(([, value]) => isSha(value) && !objectExists(workspace, value));
+}
+
+/** spec #3273 の受理の 7a(ADR 0380 決定4): remote-backed の workspace で、object の無い戻す先の sha を origin から取る —— ref は書かない。
+ *  失われたかは取った後の 7b(`restoreBaseline`)が object の有無だけで決める。origin に届かなければ拒む: 先に有界の `ls-remote` で probe し、
+ *  取れなかった sha ごとにもう1度 probe する —— 2度の probe が通った間に落ちた fetch だけが「origin に無い」。git のメッセージは読まない(ADR 0376 決定1)。 */
+export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
+  if (!isRemoteBacked(place)) return;
+  const missing = [...new Set(lostTargets(place, restoreTargets(db, place).targets).map(([, sha]) => sha))];
+  if (missing.length === 0) return;
+  // 盤面 DB の拒否(ADR 0342 決定4)と記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさに包まない
+  const passThrough = (err: unknown) => isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof OriginRepositoryMismatchError;
+  const unreachable = (shas: string[], err: unknown) => {
+    if (passThrough(err)) return err;
+    return new Error(`could not reach origin to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once origin is reachable.`);
+  };
+  // ADR 0380 決定4: 認証の失敗も通信の失敗と同じく「origin に届かない」
+  await ensureWorkspaceToken(place, auth, { fresh: true }).catch((err: unknown) => {
+    throw unreachable(missing, err);
+  });
+  const probe = (shas: string[]) => {
+    try {
+      authedLsRemote(auth, place, GIT_NETWORK_TIMEOUT_MS, "HEAD");
+    } catch (err) {
+      throw unreachable(shas, err);
+    }
+  };
+  probe(missing);
+  for (const sha of missing) {
+    // 先に届いた根の head が運んできた子の tip は取り直さない
+    if (objectExists(place, sha)) continue;
+    try {
+      fetchCommit(place, auth, sha);
+    } catch (err) {
+      if (passThrough(err)) throw err;
+      probe([sha]);
+    }
   }
-  verifyWorkspaceClean(workspace);
+}
+
+/** ADR 0373 決定3・4: 基準と違う ref を全部基準の値へ書き戻し(基準に無い ref は消す)、外す値を `refs/keep-around/<sha>` に持ち続ける。
+ *  受理の 7b(spec #3273)の1つの同期区間で、比べ直すところから書くまでに await を挟まない。予告中の行は ref がどの値とも違うときだけ予告の前の値へ戻す。
+ *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた sha だけ —— symref の行(HEAD を含む)は名前なので
+ *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
+ *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
+ *  `giveUp`(ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ行を消す)、`lost_refs_accepted` を書き戻しより先に
+ *  残す。失われた ref が無ければ、今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
+export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUp = false): KeptValue[] {
+  const { current, targets } = restoreTargets(db, workspace);
+  const lost = lostTargets(workspace, targets);
+  if (giveUp) {
+    if (lost.length === 0) throw new Error(`no ref of workspace ${workspace.name} is lost — answer \`${RESTORE_THE_BASELINE}\`.`);
+    for (const [ref] of lost) targets.delete(ref);
+    // ADR 0373 決定5: 書き戻しの前に保護ブランチの ref が在ることを明示で確かめる —— purely-local では後半の休止がそれを読まず、空の `git init` が通ってしまう(#3242)
+    const branch = protectedBranch(workspace);
+    if (!current.has(`refs/heads/${branch}`)) {
+      throw new Error(
+        `${workspace.path} has no '${branch}' branch. Nothing was written. Put a commit on ${branch} there (re-clone the repository, or commit on ${branch}), then answer again.`,
+      );
+    }
+  } else if (lost.length > 0) {
+    throw new Error(
+      `${lost.map(([ref, sha]) => `cannot restore ${ref} to ${sha}: that commit no longer exists in ${workspace.path}`).join("\n")} Nothing was written. ` +
+        `If these are lost for good, answer \`${GIVE_UP_THE_LOST_REFS}\`.`,
+    );
+  }
+  if (targets.size > 0) verifyWorkspaceClean(workspace);
+  if (giveUp) {
+    db.transaction(() => {
+      updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, current.get(ref) ?? "")));
+      appendEvent(db, {
+        taskId: null,
+        actorId: BOARD_ACTOR_ID,
+        origin: "board",
+        payload: { kind: "lost_refs_accepted", workspace: workspace.name, lost: lost.map(([ref, sha]) => ({ ref, sha })) },
+        at: now,
+      });
+    })();
+  }
+  if (targets.size === 0) return [];
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => {
     const value = current.get(ref) ?? "";
     if (!isSha(value)) return [];
