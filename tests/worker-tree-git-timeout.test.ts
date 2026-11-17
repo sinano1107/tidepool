@@ -216,11 +216,17 @@ it("空の loose object の名の file を数で積んでも、写しは段の1�
   const dir = join(place.path, ".git", "objects", "ff");
   mkdirSync(dir, { recursive: true });
   for (let i = 0; i < 30_000; i++) closeSync(openSync(join(dir, i.toString(16).padStart(38, "0")), "w"));
-
-  const expiry = thrown(() => recordTaskCheckoutTip(db, place, task.id));
-  expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
-  // 止めたのは写しそのもの —— 写しが上限を越えた後の git ではない
-  expect(expiry).toMatchObject({ message: "reading the git files of the worker's tree did not finish within 1 s" });
+  // 1 file ごとに 1 ms 待たせる —— 上限を越えるかがディスクの速さに依らず、約 1,000 個目で止まる(#3173)
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  fsHook.beforeClose = () => void Atomics.wait(pause, 0, 0, 1);
+  try {
+    const expiry = thrown(() => recordTaskCheckoutTip(db, place, task.id));
+    expect(expiry).toBeInstanceOf(WorkerTreeGitTimeoutError);
+    // 止めたのは写しそのもの —— 写しが上限を越えた後の git ではない
+    expect(expiry).toMatchObject({ message: "reading the git files of the worker's tree did not finish within 1 s" });
+  } finally {
+    fsHook.beforeClose = undefined;
+  }
 });
 
 // 旧: task の checkout でない場所(#3031 の前の受験者の checkout)でも完了経路の検査は上限超過を `[]` に飲まなかった。ADR 0356 決定1 の
