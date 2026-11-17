@@ -156,6 +156,10 @@ export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 /** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
 export const HUMAN_WEBUI = [HUMAN_ACTOR_ID, "webui"] as const;
 
+/** conflict しない local 着地(`mergeTaskToProtected` を直に呼ぶ試験)の取り込みの束。作業台の基点は作れない path なので、試験の間で
+ *  共有される dir も、実 HOME の既定の基点も読まない。 */
+export const CLEAN_LANDING_INTAKE = { workbenchBase: "/dev/null/workbenches", answerer: { actorId: HUMAN_ACTOR_ID, origin: "webui" }, now: new Date(0) } as const;
+
 /** domain 層の出題が記録する root の分岐元の仮の sha。checkout で引く受験者の pickup が要るテストは実の sha を渡す。 */
 export const POSED_HEAD = "0000000000000000000000000000000000000000";
 

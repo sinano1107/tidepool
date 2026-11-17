@@ -629,6 +629,8 @@ export interface ApiRouterDeps {
    *  で並び、除外は当たっていない)。queue の skipped 表示と Pickable head の判定が
    *  scheduler のゲートと同じ式を共有するための口。 */
   taskExecutionCandidates: TaskExecutionCandidates;
+  /** 作業台の基点 —— 回答の口(`submitAnswer`)へそのまま渡す。 */
+  workspacesDir?: string;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -742,6 +744,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     quarantineResolvers,
     taskExecutionCandidates,
     isProtectedWorkspace,
+    workspacesDir,
   } = deps;
   // registry で名前を引く人間の扉(task の編集・記憶の書き込みと一覧)が共有する束
   const memoryRefDeps = { db, agentRegistered, workspace, resolveWorkspace };
@@ -1515,6 +1518,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           auditorName,
           interviewerName,
           taskExecutionCandidates,
+          workspacesDir,
         },
         task,
         parsed.data.answers,

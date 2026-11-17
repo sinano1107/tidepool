@@ -219,7 +219,7 @@ it("追いつき merge の conflict は盤面の workspacesDir の下に作業�
     (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === repair.id,
   );
 
-  const workbench = realpathSync(workbenchPath(join(t.dir, "workspaces"), `task/${repair.id}`, "origin/main"));
+  const workbench = realpathSync(workbenchPath(join(t.dir, "workspaces"), { task: repair.id }, "origin/main"));
   expect(() => git(workbench, "merge", "board/origin/main")).toThrow();
   writeFileSync(join(workbench, "repair.txt"), "protected version\n");
   git(workbench, "commit", "-am", "resolve against the protected branch");

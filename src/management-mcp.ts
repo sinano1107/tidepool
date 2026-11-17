@@ -180,6 +180,8 @@ export interface ManagementMcpDeps {
   /** ADR 0110 決定1/3 / issue #544: queue の skipped 表示が scheduler のゲートと
    *  同じ式を通るための口(api.ts と同じもの)。 */
   taskExecutionCandidates: TaskExecutionCandidates;
+  /** 作業台の基点 —— 回答の口(`submitAnswer`)へそのまま渡す。 */
+  workspacesDir?: string;
   workspaceAdmin?: Partial<WorkspaceAdmin>;
   agentAdmin?: Partial<AgentAdmin>;
   profileAdmin?: Partial<ProfileAdmin>;
