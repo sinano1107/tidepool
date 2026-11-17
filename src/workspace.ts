@@ -798,29 +798,37 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
 }
 
 /** 作業台を開く(ADR 0371 決定7・9 / ADR 0382 決定5): 鍵の作業台に人間の作業が残っていなければ(作りかけを含む)消して
- *  書く先の ref から作り直し、残っていればそのまま使う —— 開いた question は数えない。読めない作業台は消さずに投げる(開けなかった
- *  理由になる)。task の checkout と同じ作り手で作るので hook は無く、`updateInstead` だけを足して人間の clone からの push を受ける。
+ *  書く先の ref から作り直し、残っていればそのまま使う —— 開いた question は数えない。読めない作業台は消さずに `WorkbenchUnreadableError`
+ *  を投げる。task の checkout と同じ作り手で作るので hook は無く、`updateInstead` だけを足して人間の clone からの push を受ける。
  *  人間の branch は書く先と同じ名前で checkout され、全部を展開する(sparse にしない)。開くたびに `board/*` を引き直す。返すのは
  *  実体の綴りの在り処と、使い続ける作業台の tip が書く先に無く運ばれる側も含まないときに拒否文へ足す句(spec #3273 への上書きの文 A1)。 */
-function openWorkbench(named: WorkspaceConfig, base: string, target: string, carried: string): { path: string; note: string } {
+function openWorkbench(named: WorkspaceConfig, base: string, target: string, carried: string): { path: string; refusalClause: string } {
   const at = CHECKOUT_LAYOUT.workbench.at(base, target, shortRef(carried));
-  let note = "";
-  const keep =
-    placeHasRepository(at) &&
-    judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, carried, (owner, read) => {
-      if (owner.kind === "mine" && read && !isAncestor({ path: read.verified }, read.carriedSha, read.tip, workerRepoGit)) note = `; its tip does not contain ${shortRef(carried)}`;
-      return owner.kind !== "nothing";
-    });
-  if (!keep) rmSync(at, { recursive: true, force: true, maxRetries: 3 });
+  let owner: WorkbenchOwner = { kind: "nothing" };
+  if (placeHasRepository(at)) {
+    try {
+      owner = judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, carried, (judged) => judged);
+    } catch (cause) {
+      throw new WorkbenchUnreadableError(at, cause);
+    }
+  }
+  if (owner.kind === "nothing") rmSync(at, { recursive: true, force: true, maxRetries: 3 });
   const path = existsSync(at) ? realpathSync(at) : makeWorkbench(named, at, target);
   repointBoardRefs(named, path);
-  return { path, note };
+  return { path, refusalClause: owner.kind === "mine" && owner.lacksCarried ? `; its tip does not contain ${shortRef(carried)}` : "" };
+}
+
+/** 開く手が既にある作業台を読めない —— 盤面は消さないので、人間が消すまで開き直しても同じ(作り直しの失敗とは直し方が違う)。 */
+class WorkbenchUnreadableError extends Error {
+  constructor(readonly at: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
 }
 
 const workbenchPlace = (named: WorkspaceConfig, path: string): UntrustedCheckout => ({ path, namedPlace: named, borrowsNamedObjects: true, noun: "the workbench" });
 
-/** 作業台の書く先の branch の tip を検証済みの写しに読んだもの: tip、写し、写しの ref、入口の運ばれる側の今の値。 */
-type WorkbenchTip = { tip: string; verified: string; tipRef: string; carriedSha: string };
+/** 作業台の書く先の branch の tip を検証済みの写しに読んだもの: tip、写し、写しの ref。 */
+type WorkbenchTip = { tip: string; verified: string; tipRef: string };
 
 /** ADR 0382 決定2・6: 入口の鍵の作業台を読み、持ち主を判定する(`workbenchOwner`)。tip は ADR 0364 と同じ手で検証済みの写しに読み、
  *  `use` は判定と写しを受ける。書く先の branch が無い作業台(作りかけ)は写しを作らずに判定する —— 盤面の手がある入口だけが呼ぶので、
@@ -828,9 +836,9 @@ type WorkbenchTip = { tip: string; verified: string; tipRef: string; carriedSha:
 function judgeWorkbench<T>(named: WorkspaceConfig, place: UntrustedCheckout, target: string, carried: string, use: (owner: WorkbenchOwner, read?: WorkbenchTip) => T): T {
   const targetSha = git(named.path, "rev-parse", "--verify", `refs/heads/${target}`);
   const carriedSha = git(named.path, "rev-parse", "--verify", carried);
-  const judge = (tip: string | undefined, objects: string) => workbenchOwner({ at: place.path, target, targetSha, tip, objects }, { sha: carriedSha, inKey: true });
+  const judge = (tip: string | undefined, verified: string) => workbenchOwner({ at: place.path, target, targetSha, tip, verified }, { sha: carriedSha, inKey: true });
   try {
-    return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef) => use(judge(tip, verified), { tip, verified, tipRef, carriedSha }));
+    return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef) => use(judge(tip, verified), { tip, verified, tipRef }));
   } catch (err) {
     if (!(err instanceof BranchMissingError)) throw err;
     return use(judge(undefined, named.path));
@@ -841,7 +849,7 @@ function makeWorkbench(named: WorkspaceConfig, at: string, target: string): stri
   try {
     return makeCheckout({ at, named, source: `refs/heads/${target}`, branch: target, borrow: true, description: `the workbench for ${target}`, config: { "receive.denyCurrentBranch": "updateInstead" } });
   } catch (err) {
-    // 作りかけを残さない —— 作業ツリーが tip と違えば、人間の作業と見分けられずに使い続けてしまう
+    // ADR 0382 決定5: 作りかけを残さない —— 書く先の branch まで着いた作りかけは作業ツリーが tip と違い、人間の作業と見分けられずに残り続ける
     rmSync(at, { recursive: true, force: true, maxRetries: 3 });
     throw err;
   }
@@ -2378,16 +2386,17 @@ function workbenchConflict(
   stop: string,
 ): string {
   const conflict = `${subject} does not merge cleanly into '${target}'.`;
-  let opened: { path: string; note: string };
+  let opened: { path: string; refusalClause: string };
   try {
     opened = openWorkbench(workspace, base, target, carried);
   } catch (err) {
+    if (err instanceof WorkbenchUnreadableError) return `${conflict} The board cannot read the workbench at ${err.at} (${err.message}); remove it by hand, then answer again${stop}`;
     return `${conflict} The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); answer again and it opens it again${stop}`;
   }
   const source = shortRef(carried);
   const merge = boardBranch(source);
   return (
-    `${conflict} The board opened the workbench at ${opened.path} for it${opened.note}. There, on ${target}, run \`git merge ${merge}\` and resolve the conflict ` +
+    `${conflict} The board opened the workbench at ${opened.path} for it${opened.refusalClause}. There, on ${target}, run \`git merge ${merge}\` and resolve the conflict ` +
     `${fromOwnClone(target, merge)}. Your tip must contain both ${target} as the board has it now (\`${boardBranch(target)}\`) and ${source}, ` +
     `with nothing uncommitted. ${exit(merge)}`
   );

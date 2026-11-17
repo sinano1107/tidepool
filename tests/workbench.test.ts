@@ -1,15 +1,15 @@
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { permissionConfig } from "../src/codex-worker.js";
 import type { Db } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listEventsOfKinds } from "../src/events.js";
+import { latestEventId, listEventsOfKinds } from "../src/events.js";
 import { whyInvalidRegistryName } from "../src/registry-name.js";
 import { buildSandboxSettings } from "../src/sandbox.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
-import { WORKBENCH_SEGMENT, workbenchPath } from "../src/workbench.js";
+import { workbenchPath } from "../src/workbench.js";
 import { refValues, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig } from "../src/workspace.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -33,7 +33,6 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 const refsOf = (ws: WorkspaceConfig) => `${git(ws.path, "symbolic-ref", "HEAD")}\n${git(ws.path, "for-each-ref", "--format=%(objectname) %(refname)")}`;
 
-const lastEventId = (db: Db) => db.prepare("SELECT COALESCE(MAX(id), 0) FROM events").pluck().get() as number;
 
 const baseline = (db: Db, name: string) => refValues(db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(name) as string);
 
@@ -79,11 +78,11 @@ it("作業台の番地はどの worker の sandbox の読み書きの root に�
   const covering = roots.filter((root) => !relative(root, workbench).startsWith("..") && !isAbsolute(relative(root, workbench)));
   expect(covering).toEqual([]);
   const [segment, key] = relative(realpathSync(c.base), workbench).split("/");
-  expect(segment).toBe(WORKBENCH_SEGMENT);
+
   // 鍵は (書く先, 運ばれる側) —— 運ばれる側の `/` は葉の中に符号化され、段を増やさない(ADR 0382 決定1)
   expect(key).toBe(`${c.parent.id}@task+s${c.child.id}`);
   // workspace の名前・面接室(root id)・task の checkout の鍵(`<id>`・`<id>.checkout`・`<id>.reads`)はどれも名前の規則に収まる
-  expect(whyInvalidRegistryName(WORKBENCH_SEGMENT)).toBeDefined();
+  expect(whyInvalidRegistryName(segment!)).toBeDefined();
 });
 
 it("作業台への push は名前の場所の ref を1つも動かさず、作業ツリーをその tip に揃える(pin A3)", async () => {
@@ -155,7 +154,7 @@ it.each<[string, (c: Conflicted, workbench: string) => void, (c: Conflicted, wor
   const workbench = c.workbench();
   write(c, workbench);
   const refs = refsOf(c.ws);
-  const events = lastEventId(c.db);
+  const events = latestEventId(c.db);
 
   const refused = answer(c);
 
@@ -163,7 +162,7 @@ it.each<[string, (c: Conflicted, workbench: string) => void, (c: Conflicted, wor
   const message = await refused.catch((err: Error) => err.message);
   for (const element of says(c, workbench)) expect(message).toContain(element);
   expect(refsOf(c.ws)).toBe(refs);
-  expect(lastEventId(c.db)).toBe(events);
+  expect(latestEventId(c.db)).toBe(events);
   expect(quarantineQuestion(c.db, "workspace", c.ws.name)).toBeDefined();
 });
 
@@ -297,25 +296,26 @@ it("自前の clone から force push して書く先の今の値を失った ti
 it("作業台を開けなくても conflict の拒否は立ち、その理由を言い、答え直しが作業台を開く(pin A17)", async () => {
   const b = await boardWithParent();
   // 段の場所にファイルがあって作業台の dir を作れない
-  writeFileSync(join(b.base, WORKBENCH_SEGMENT), "in the way\n");
+  const segment = dirname(workbenchPath(b.base, `task/${b.parent.id}`, "any"));
+  writeFileSync(segment, "in the way\n");
   const child = await completedChild(b);
   const source = `task/${child.id}`;
   const purpose = quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose;
   expect(purpose).toContain(`${source} does not merge cleanly into 'task/${b.parent.id}'. The board could not open the workbench (`);
   expect(purpose).toContain("answer again and it opens it again. ");
   expect(purpose).not.toContain("opened the workbench");
-  rmSync(join(b.base, WORKBENCH_SEGMENT));
+  rmSync(segment);
 
   const workbench = workbenchPath(b.base, `task/${b.parent.id}`, source);
-  await expect(answer(b)).rejects.toThrow(`The board opened the workbench at ${realpathSync(b.base)}/${WORKBENCH_SEGMENT}/${b.parent.id}@task+s${child.id} for it.`);
+  const refused = await answer(b).catch((err: Error) => err.message);
 
-  expect(existsSync(workbench)).toBe(true);
+  expect(refused).toContain(`The board opened the workbench at ${realpathSync(workbench)} for it.`);
 });
 
-// ADR 0382 決定5: 開く手は指し手を数えず中身で決める —— 人間の作業が残っていない作業台と作りかけは作り直し、人間の commit は消さない
-type Kept = { note: boolean; still: (leftover: string, target: string) => void };
+// ADR 0382 決定5: 開く手は指し手を数えず中身で決める —— 人間の作業が残っていない作業台と作りかけは作り直し、人間の commit は消さない。
+// 何が「残っている」かは workbench-ownership.test.ts の表が言う
 const cloneTarget = (leftover: string, b: Board) => git(b.ws.path, "clone", "--quiet", "--branch", `task/${b.parent.id}`, b.ws.path, leftover);
-it.each<[string, (leftover: string, b: Board) => void, "remade" | Kept]>([
+it.each<[string, (leftover: string, b: Board) => void, "remade" | "kept" | "unreadable"]>([
   [
     "tip が書く先の祖先で作業ツリーが clean な残骸は作り直される",
     (leftover, b) => {
@@ -324,33 +324,23 @@ it.each<[string, (leftover: string, b: Board) => void, "remade" | Kept]>([
     },
     "remade",
   ],
-  ["書く先の branch が無い作りかけは作り直される", (leftover, b) => git(b.base, "init", "--quiet", "--initial-branch", `task/${b.parent.id}`, leftover), "remade"],
+  // makeCheckout は init で HEAD を `main` に置き、書く先の branch を引く前に落ちうる
+  ["書く先の branch が無い作りかけは作り直される", (leftover, b) => git(b.base, "init", "--quiet", "--initial-branch=main", leftover), "remade"],
   [
     "書く先に無い人間の commit を持つ作業台は作り直されず、拒否文が tip は運ばれる側を含まないと言う",
     (leftover, b) => {
       cloneTarget(leftover, b);
       commitWork(leftover, "stale.txt", "left behind\n");
     },
-    { note: true, still: (leftover, target) => expect(git(leftover, "show", `${target}:stale.txt`)).toBe("left behind") },
+    "kept",
   ],
   [
-    "tip が書く先のままでも、書く先に無い commit を別の branch に持つ作業台は作り直されない",
-    (leftover, b) => {
-      cloneTarget(leftover, b);
-      git(leftover, "checkout", "--quiet", "-b", "side");
-      commitWork(leftover, "side.txt", "on the side\n");
-      git(leftover, "checkout", "--quiet", `task/${b.parent.id}`);
+    "読めない作業台は消されず、拒否文は人間が消してから答え直すよう言う",
+    (leftover) => {
+      mkdirSync(leftover);
+      writeFileSync(join(leftover, ".git"), "gitdir: elsewhere\n");
     },
-    { note: false, still: (leftover) => expect(git(leftover, "show", "side:side.txt")).toBe("on the side") },
-  ],
-  [
-    "tip が書く先のままでも、stash を持つ作業台は作り直されない",
-    (leftover, b) => {
-      cloneTarget(leftover, b);
-      writeFileSync(join(leftover, "work.txt"), "stashed\n");
-      git(leftover, "stash", "--quiet");
-    },
-    { note: false, still: (leftover) => expect(git(leftover, "show", "stash@{0}:work.txt")).toBe("stashed") },
+    "unreadable",
   ],
 ])("同じ鍵の作業台が既にあるとき、開く手は中身で決める —— %s", async (_case, leave, outcome) => {
   const b = await boardWithParent();
@@ -367,13 +357,19 @@ it.each<[string, (leftover: string, b: Board) => void, "remade" | Kept]>([
   });
 
   const purpose = quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose;
+  if (outcome === "unreadable") {
+    expect(purpose).toContain(`${source} does not merge cleanly into '${target}'. The board cannot read the workbench at ${realpathSync(leftover)} (`);
+    expect(purpose).toContain("); remove it by hand, then answer again. ");
+    expect(readFileSync(join(leftover, ".git"), "utf8")).toBe("gitdir: elsewhere\n");
+    return;
+  }
   expect(git(leftover, "config", "--default", "", "receive.denyCurrentBranch")).toBe(outcome === "remade" ? "updateInstead" : "");
   if (outcome === "remade") {
     expect(git(leftover, "rev-parse", target)).toBe(git(b.ws.path, "rev-parse", target));
     expect(purpose).toContain(`The board opened the workbench at ${realpathSync(leftover)} for it. There`);
   } else {
-    outcome.still(leftover, target);
-    expect(purpose).toContain(`The board opened the workbench at ${realpathSync(leftover)} for it${outcome.note ? `; its tip does not contain ${source}` : ""}. There`);
+    expect(git(leftover, "show", `${target}:stale.txt`)).toBe("left behind");
+    expect(purpose).toContain(`The board opened the workbench at ${realpathSync(leftover)} for it; its tip does not contain ${source}. There`);
   }
 });
 
@@ -410,22 +406,22 @@ it("作業台の HEAD が `board/*` に居れば、回答は HEAD を名指し�
   expect(git(workbench, "status", "--porcelain")).toBe("");
 });
 
-// ADR 0382 決定2・5: 書く先に新しい commit が無くても、作業ツリーに書きかけが残れば拒み、作業台は作り直さない
-it("途中の merge と untracked のファイルが残る作業台への回答は拒まれ、何も書かず、作業台の書きかけは消えない", async () => {
+// ADR 0382 決定2・5: 作業ツリーが tip と同じでも merge の途中なら人間の作業が残っている —— 回答は拒まれ、作業台は作り直されない
+it("作業ツリーが tip と同じ途中の merge(`-s ours --no-commit`)が残る作業台への回答は拒まれ、何も書かず、途中の merge は消えない", async () => {
   const c = await conflicted();
   const workbench = c.workbench();
-  expect(() => git(workbench, "merge", `board/${c.source}`)).toThrow();
-  writeFileSync(join(workbench, "draft.txt"), "half done\n");
+  git(workbench, "merge", "--quiet", "-s", "ours", "--no-commit", `board/${c.source}`);
   const mergeHead = git(workbench, "rev-parse", "MERGE_HEAD");
   const refs = refsOf(c.ws);
-  const events = lastEventId(c.db);
+  const events = latestEventId(c.db);
 
-  await expect(answer(c)).rejects.toThrow(`the workbench at ${workbench} has nothing new on ${c.target}, but it has uncommitted changes`);
+  await expect(answer(c)).rejects.toThrow(
+    `the workbench at ${workbench} has nothing new on ${c.target}, but a merge is in progress — commit it on ${c.target} or run \`git merge --abort\`. Then answer again.`,
+  );
 
   expect(refsOf(c.ws)).toBe(refs);
-  expect(lastEventId(c.db)).toBe(events);
+  expect(latestEventId(c.db)).toBe(events);
   expect(git(workbench, "rev-parse", "MERGE_HEAD")).toBe(mergeHead);
-  expect(existsSync(join(workbench, "draft.txt"))).toBe(true);
 });
 
 /** merge back を後始末で撃たずに Quarantine を立てる解放(token の失敗)—— 子の merge back は受理がやり直す。 */
@@ -450,7 +446,7 @@ it.each<[string, (b: Board, clean: string) => string]>([
     (b, clean) => {
       const leftover = workbenchPath(b.base, `task/${b.parent.id}`, clean);
       mkdirSync(dirname(leftover), { recursive: true });
-      git(b.base, "init", "--quiet", "--initial-branch", `task/${b.parent.id}`, leftover);
+      git(b.base, "init", "--quiet", "--initial-branch=main", leftover);
       return leftover;
     },
   ],

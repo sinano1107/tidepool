@@ -1,10 +1,10 @@
 import { join } from "node:path";
-import { boardViewStatus, isAncestor, workerRepoGit } from "./git.js";
+import { boardViewStatus, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
 
 // 作業台(Workbench)の鍵・持ち主・寿命の判定を1か所に置く(ADR 0382、#3352 の追記 1〜3)。入口は判定を自分で書かず、これを呼ぶ。
 
 /** 作業台の番地の段(`CHECKOUT_LAYOUT.workbench`)。 */
-export const WORKBENCH_SEGMENT = "@workbench";
+const WORKBENCH_SEGMENT = "@workbench";
 
 /** 作業台で盤面が名前の場所の branch を引き直す名前空間 `refs/heads/board/*`(ADR 0371 決定7)—— 保護ブランチはここと重ならない。 */
 export const BOARD_BRANCHES = "board";
@@ -24,63 +24,59 @@ export const workbenchPath = (base: string, target: string, carried: string): st
   join(base, WORKBENCH_SEGMENT, `${target.slice("task/".length)}@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`);
 
 /** 盤面が読んだ作業台: 在り処、書く先の branch とその名前の場所での今の値、作業台の書く先の branch の tip(無ければ undefined —— 作りかけ)、
- *  tip の閉包と名前の場所の objects を引ける repo(盤面所有の写し)。 */
-export type WorkbenchRead = { at: string; target: string; targetSha: string; tip: string | undefined; objects: string };
+ *  tip の閉包と名前の場所の objects を引ける repo(盤面所有の検証済みの写し。tip が無ければ名前の場所)。 */
+export type WorkbenchRead = { at: string; target: string; targetSha: string; tip: string | undefined; verified: string };
 
 /** 入口の運ばれる側の今の値と、それが作業台の鍵に入っているか(ADR 0382 決定1・3)。 */
 export type WorkbenchCarried = { sha: string; inKey: boolean };
 
-/** 持ち主の判定: 取り込むものが無い / この入口のもの / この入口のものでない(盤面の手へ)/ 拒む。 */
-export type WorkbenchOwner = { kind: "nothing" } | { kind: "mine" } | { kind: "board" } | { kind: "refuse"; reason: string };
+/** 持ち主の判定: 取り込むものが無い / この入口のもの(tip が入口の運ばれる側を欠くか)/ この入口のものでない(盤面の手へ)/ 拒む。 */
+export type WorkbenchOwner = { kind: "nothing" } | { kind: "mine"; lacksCarried: boolean } | { kind: "board" } | { kind: "refuse"; reason: string };
 
 /** ADR 0382 決定2・3: 作業台の tip の持ち主。tip が書く先に含まれれば取り込むものは無い —— ただし人間の作業が残っていれば拒む。
  *  含まれなければ、鍵に運ばれる側が入っているか運ばれる側の無い入口ならその入口のもの、鍵に運ばれる側の無い作業台では tip が入口の
  *  運ばれる側を含むときだけその入口のもの。`carried` が undefined なのは運ばれる側の無い入口。 */
 export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | undefined): WorkbenchOwner {
-  const { tip, objects } = read;
+  const { tip, verified } = read;
   if (tip === undefined || inTarget(read, tip)) {
     const left = humanWorkLeft(read);
     return left.length === 0 ? { kind: "nothing" } : { kind: "refuse", reason: `the workbench at ${read.at} has nothing new on ${read.target}, but ${left.join("; ")}. Then answer again.` };
   }
-  if (!carried || carried.inKey || isAncestor({ path: objects }, carried.sha, tip, workerRepoGit)) return { kind: "mine" };
-  return { kind: "board" };
+  if (!carried) return { kind: "mine", lacksCarried: false };
+  const lacksCarried = !isAncestor({ path: verified }, carried.sha, tip, workerRepoGit);
+  return carried.inKey || !lacksCarried ? { kind: "mine", lacksCarried } : { kind: "board" };
 }
 
-/** ADR 0382 決定2・5: 「人間の作業が残っていない」の述語 —— 作業ツリーが tip と同じ、HEAD が書く先の branch、`board/*` 以外の branch と
- *  stash に書く先に無い commit が無い。残っているものを、直し方を添えて並べる(空なら残っていない)。tip が書く先に含まれることは呼び手が
- *  先に確かめる。書く先の branch が無ければ作業ツリーは比べる tip が無いので見ない。
- *  shortcut: stash は `refs/stash`(一番上)だけを見る —— 一番上が書く先に入った stash の下の段は数えない。 */
+/** ADR 0382 決定2・5: 「人間の作業が残っていない」の述語 —— 作業ツリーが tip と同じで merge の途中でない、HEAD が書く先の branch、
+ *  `board/*` 以外の branch と stash のどの段にも書く先に無い commit が無い。残っているものを、直し方を添えて並べる(空なら残っていない)。
+ *  tip が書く先に含まれることは呼び手が先に確かめる。書く先の branch が無い作りかけ(init の後の HEAD は `main`)は、比べる tip も
+ *  居るべき branch も無いので作業ツリーと HEAD を見ない —— 人間の commit は branch と stash が数える。 */
 function humanWorkLeft(read: WorkbenchRead): string[] {
-  const { at, target, tip, objects } = read;
+  const { at, target, tip } = read;
   const left: string[] = [];
-  if (tip !== undefined && boardViewStatus(at, tip, objects).length > 0) left.push(`it has uncommitted changes — commit them on ${target} or discard them`);
-  if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
+  if (gitAnswers(() => workerRepoGit(at, "rev-parse", "--quiet", "--verify", "MERGE_HEAD"))) left.push(`a merge is in progress — commit it on ${target} or run \`git merge --abort\``);
+  if (tip !== undefined) {
+    if (boardViewStatus(at, tip, read.verified).length > 0) left.push(`it has uncommitted changes — commit them on ${target} or discard them`);
+    if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
+  }
   const strays = workerRepoGit(at, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/stash")
     .split("\n")
     .filter(Boolean)
     .map((line) => line.split(" ") as [string, string])
-    .filter(([sha, ref]) => ref !== `refs/heads/${target}` && !ref.startsWith(`refs/heads/${BOARD_BRANCHES}/`) && !inTarget(read, sha))
+    .filter(([, ref]) => ref !== `refs/heads/${target}` && !ref.startsWith(`refs/heads/${BOARD_BRANCHES}/`))
+    // stash は reflog の段ごとに1つ —— `refs/stash` は一番上の段しか指さない
+    .filter(([sha, ref]) => (ref === "refs/stash" ? workerRepoGit(at, "reflog", "show", "--format=%H", "refs/stash").split("\n") : [sha]).some((commit) => !inTarget(read, commit)))
     .map(([, ref]) => (ref === "refs/stash" ? "the stash" : ref.slice("refs/heads/".length)));
   if (strays.length > 0) left.push(`${strays.join(", ")} ${strays.length > 1 ? "hold" : "holds"} commits that ${target} does not have — merge them into ${target}, or delete them`);
   return left;
 }
 
 /** `sha` が書く先の今の値に含まれる —— 写しに無い object は名前の場所にも無いので含まれない。 */
-function inTarget({ objects, targetSha }: WorkbenchRead, sha: string): boolean {
-  try {
-    workerRepoGit(objects, "cat-file", "-e", sha);
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-    return false;
-  }
-  return isAncestor({ path: objects }, sha, targetSha, workerRepoGit);
-}
+const inTarget = ({ verified, targetSha }: WorkbenchRead, sha: string): boolean =>
+  gitAnswers(() => workerRepoGit(verified, "cat-file", "-e", sha)) && isAncestor({ path: verified }, sha, targetSha, workerRepoGit);
 
+/** HEAD が書く先の branch を指す symref か —— `symbolic-ref -q` の 1 は detached。 */
 function headOn(at: string, target: string): boolean {
-  try {
-    return workerRepoGit(at, "symbolic-ref", "-q", "HEAD") === `refs/heads/${target}`;
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status !== 1) throw err; // 1 は detached
-    return false;
-  }
+  let head = "";
+  return gitAnswers(() => (head = workerRepoGit(at, "symbolic-ref", "-q", "HEAD"))) && head === `refs/heads/${target}`;
 }

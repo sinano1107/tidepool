@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { resolveExecutionAgent } from "../src/agent.js";
@@ -41,7 +41,7 @@ import {
 } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
-import { WORKBENCH_SEGMENT, workbenchPath } from "../src/workbench.js";
+import { workbenchPath } from "../src/workbench.js";
 import {
   boardRefWriter,
   mergeTaskToProtected,
@@ -2412,7 +2412,8 @@ it("追いつきの conflict は作業台を開いて本文が名指し、作業
 it("追いつきの conflict で作業台を開けなくても本文はその理由を言い、retry の答え直しが作業台を開く(text A7d)", async () => {
   const c = await catchUpConflictRoot("catch-up-conflict-no-workbench");
   // 段の場所にファイルがあって作業台の dir を作れない
-  writeFileSync(join(c.workbenchBase, WORKBENCH_SEGMENT), "in the way\n");
+  const segment = dirname(workbenchPath(c.workbenchBase, c.target, "origin/main"));
+  writeFileSync(segment, "in the way\n");
 
   await convergeOn(c.landing, c.repair.id);
 
@@ -2421,7 +2422,7 @@ it("追いつきの conflict で作業台を開けなくても本文はその理
   expect(failure!.purpose).toContain("The board could not open the workbench (");
   expect(failure!.purpose).toContain("answer again");
   expect(failure!.purpose).not.toContain("opened the workbench");
-  rmSync(join(c.workbenchBase, WORKBENCH_SEGMENT));
+  rmSync(segment);
 
   const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
 

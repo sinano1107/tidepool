@@ -1,7 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { type WorkbenchCarried, workbenchOwner } from "../src/workbench.js";
+import { type WorkbenchCarried, type WorkbenchOwner, workbenchOwner } from "../src/workbench.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -36,12 +36,15 @@ const mergeCarried = ({ at }: Board) => git(at, "merge", "--quiet", "--no-edit",
 const keyed = { inKey: true } as const;
 const keyless = { inKey: false } as const;
 
-it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<typeof workbenchOwner>["kind"], string[]]>([
+/** 判定の種類。この入口のもので tip が入口の運ばれる側を欠けば、そう言う。 */
+const outcome = (owner: WorkbenchOwner) => (owner.kind === "mine" && owner.lacksCarried ? "mine, lacking carried" : owner.kind);
+
+it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<typeof outcome>, string[]]>([
   ["tip が書く先の今の値で何も残っていない", () => {}, "keyed", "nothing", []],
   ["tip が書く先の祖先(古い値)", ({ at }) => git(at, "reset", "--quiet", "--hard", "HEAD~1"), "keyed", "nothing", []],
   ["書く先に含まれる commit を指す人間の branch は数えない", ({ at }) => git(at, "branch", "kept", "HEAD~1"), "keyed", "nothing", []],
   ["鍵に運ばれる側があり、tip が書く先に含まれない", mergeCarried, "keyed", "mine", []],
-  ["鍵に運ばれる側があり、tip が運ばれる側を含まなくてもその入口のもの", ({ at }) => commitWork(at, "notes.txt", "mine\n"), "keyed", "mine", []],
+  ["鍵に運ばれる側があり、tip が運ばれる側を含まなくてもその入口のもの", ({ at }) => commitWork(at, "notes.txt", "mine\n"), "keyed", "mine, lacking carried", []],
   ["鍵に運ばれる側が無く、tip が入口の運ばれる側を含む", mergeCarried, "keyless", "mine", []],
   ["鍵に運ばれる側が無く、tip が入口の運ばれる側を含まない", ({ at }) => commitWork(at, "notes.txt", "the human's own\n"), "keyless", "board", []],
   ["運ばれる側の無い入口はいつも自分のもの", ({ at }) => commitWork(at, "notes.txt", "the human's own\n"), "none", "mine", []],
@@ -82,7 +85,34 @@ it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<ty
     "refuse",
     ["the stash holds commits that task/parent does not have"],
   ],
-  ["書く先の branch が無い(作りかけ)", ({ at }) => git(at, "update-ref", "-d", `refs/heads/${TARGET}`), "keyed", "nothing", []],
+  [
+    "書く先の branch の無い作りかけ(init の直後で HEAD は `main`)",
+    ({ at }) => {
+      rmSync(at, { recursive: true, force: true });
+      git(".", "init", "--quiet", "--initial-branch=main", at);
+    },
+    "keyed",
+    "nothing",
+    [],
+  ],
+  [
+    "merge の途中で作業ツリーは tip と同じ(`-s ours --no-commit`)",
+    ({ at }) => git(at, "merge", "--quiet", "-s", "ours", "--no-commit", `board/${CARRIED}`),
+    "keyed",
+    "refuse",
+    ["a merge is in progress — commit it on task/parent or run `git merge --abort`"],
+  ],
+  [
+    "stash の一番上が書く先に入っていても、下の段に書く先に無い commit がある",
+    ({ at }) => {
+      writeFileSync(join(at, "parent.txt"), "stashed\n");
+      git(at, "stash", "--quiet");
+      git(at, "update-ref", "--create-reflog", "-m", "on top", "refs/stash", TARGET);
+    },
+    "keyed",
+    "refuse",
+    ["the stash holds commits that task/parent does not have"],
+  ],
   [
     "書く先の branch が無く、別の名前の branch に人間の commit がある",
     ({ at }) => {
@@ -91,7 +121,7 @@ it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<ty
     },
     "keyed",
     "refuse",
-    ["its HEAD is not on task/parent", "renamed holds commits that task/parent does not have"],
+    ["renamed holds commits that task/parent does not have"],
   ],
 ])("%s", async (_case, write, key, kind, says) => {
   const b = await board();
@@ -105,9 +135,9 @@ it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<ty
     tip = undefined;
   }
 
-  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip, objects: b.at }, carried);
+  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip, verified: b.at }, carried);
 
-  expect(owner.kind).toBe(kind);
+  expect(outcome(owner)).toBe(kind);
   for (const element of says) expect(owner.kind === "refuse" && owner.reason).toContain(element);
   if (owner.kind === "refuse") expect(owner.reason).toMatch(new RegExp(`^the workbench at ${b.at} has nothing new on task/parent, but .*\\. Then answer again\\.$`));
 });
