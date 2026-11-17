@@ -2385,6 +2385,8 @@ it("追いつきの conflict は作業台を開いて本文が名指し、作業
   const [failure] = promotionFailures(c.db, c.repair.id);
   expect(failure).toMatchObject({ title: "PR promotion failed: repair", purpose: c.a2() });
   expect(git(c.workbench(), "rev-parse", "board/origin/main")).toBe(git(c.workspace.path, "rev-parse", "refs/remotes/origin/main"));
+  // origin から引くのは保護ブランチだけ —— `board/origin/task/<root>` は `pr_merge` の拒否の印(spec #3273 の "Refused once")
+  expect(git(c.workbench(), "for-each-ref", "--format=%(refname)", "refs/heads/board/origin/")).toBe("refs/heads/board/origin/main");
   expect(c.github.requests).toEqual([]);
 
   c.resolve();

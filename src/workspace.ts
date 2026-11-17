@@ -841,8 +841,10 @@ function repointBoardRefs(named: WorkspaceConfig, workbench: string): void {
   if (headValue({ name: named.name, path: workbench }).startsWith(symrefValue(boardRefs))) {
     git(workbench, "update-ref", "--no-deref", "HEAD", git(workbench, "rev-parse", "HEAD"));
   }
-  // `board/origin/*` は盤面が origin から読んだばかりの値(spec #3273 text の規則)—— 追いつきの conflict が merge させる相手(text A2)
-  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`, `+refs/remotes/origin/*:${boardRefs}origin/*`);
+  // `board/origin/<protected>` は盤面が origin から読んだばかりの保護ブランチ —— 追いつきの conflict が merge させる相手(text A2)。
+  // origin の他の ref は引かない: `board/origin/task/<root>` は `pr_merge` の拒否が付ける印(spec #3273 の "Refused once")
+  const origin = isRemoteBacked(named) ? [`+${remoteTrackingRef(protectedBranch(named))}:${boardRefs}origin/${protectedBranch(named)}`] : [];
+  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`, ...origin);
 }
 
 /** 取り込みの手が受け取る束: 作業台の基点、答えている question と入口、`workbench_taken_in` に残す回答者と時刻。 */
