@@ -6,7 +6,7 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
-import { type GitHubAuth, remoteTrackingRef } from "./github-auth.js";
+import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { isRemoteBacked } from "./pickup-predicates.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
@@ -57,7 +57,9 @@ import {
   taskBranchTip,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  WorkspaceRepoMismatchError,
   type WorkspaceResolver,
+  withRememberedRepoCheck,
   workspaceNeedsHuman,
 } from "./workspace.js";
 
@@ -221,7 +223,7 @@ export async function contentLeftBehind(
 ): Promise<string[]> {
   const targets = leftBehindTargets(db, workspace, taskId);
   if (fetchMissing && candidate !== undefined && targets.length > 0) {
-    await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
+    await fetchCommitIfMissing(db, workspace, candidate, fetchMissing.auth);
   }
   return targetsLeftBehind(workspace, taskId, targets, candidate);
 }
@@ -869,6 +871,11 @@ function recordLandingDeferred(
 }
 
 export function createLanding(deps: LandingDeps): Landing {
+  const checked = (workspace: WorkspaceConfig) => withRememberedRepoCheck(deps.db, workspace, () => deps.clock.now(), deps.resolveWorkspace);
+  const readPrState = async (github: GitHubClient, workspace: WorkspaceConfig, number: number): Promise<PrStateRead> => {
+    workspaceNetworkDestination(workspace);
+    return github.getPullRequestState({ workspace, number });
+  };
   /** ADR 0217 決定3: 解決できない profile はダイヤルを推測せず、agent 名の quarantine に落として
    *  その名前を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
   const readAuthority = (
@@ -1098,6 +1105,8 @@ export function createLanding(deps: LandingDeps): Landing {
         return quarantined("workspace", err.workspaceName);
       }
       resolvedWorkspace = workspace.name;
+      workspace = checked(workspace);
+      const remoteBacked = isRemoteBacked(workspace);
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
       const afterPush = async (landed: LandingVerdict, pushed: string): Promise<LandingVerdict> => {
         const left = await contentLeftBehind(deps.db, workspace, task.id, pushed);
@@ -1142,7 +1151,7 @@ export function createLanding(deps: LandingDeps): Landing {
       // 門は quarantine より先に読む(ADR 0241 決定3)
       if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
       if (mergedPr !== undefined) return alreadyMerged(task, mergedPr, ctx);
-      if (!isRemoteBacked(workspace)) {
+      if (!remoteBacked) {
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
         const purpose = held
@@ -1348,8 +1357,9 @@ export function createLanding(deps: LandingDeps): Landing {
       // 決着の書き込みの失敗も呼び手(回答)へ投げる
       let read: PrStateRead;
       try {
-        read = await deps.github.getPullRequestState({ workspace: resolve(question.workspace), number: prNumber });
+        read = await readPrState(deps.github, checked(resolve(question.workspace)), prNumber);
       } catch (error) {
+        if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
         const reason = error instanceof Error ? error.message : String(error);
         throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
@@ -1370,8 +1380,9 @@ export function createLanding(deps: LandingDeps): Landing {
         if (task?.type !== "work" || (task.assignee ?? deps.defaultAgentName) !== agentName) continue;
         let read: PrStateRead;
         try {
-          read = await github.getPullRequestState({ workspace: resolve(task.workspace), number: pr_number });
-        } catch {
+          read = await readPrState(github, checked(resolve(task.workspace)), pr_number);
+        } catch (error) {
+          if (isBoardDbRefusal(error)) throw error;
           continue;
         }
         // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
@@ -1392,9 +1403,10 @@ export function createLanding(deps: LandingDeps): Landing {
             const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
             if (!workspace) continue;
             // 状態が読めない(網・認証)回は黙って次の tick へ回す —— 瞬断のたびにログを出さない
-            const read = await github
-              .getPullRequestState({ workspace, number: pr_number })
-              .catch(() => null);
+            const read = await readPrState(github, checked(workspace), pr_number).catch((error) => {
+              if (isBoardDbRefusal(error)) throw error;
+              return null;
+            });
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
             if (read && read.state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
               settleObserved({ id, workspace: taskWorkspace }, pr_number, prOutcomeKind(read.state, read.mergedBy), now);
@@ -1418,8 +1430,10 @@ export function createLanding(deps: LandingDeps): Landing {
           // キューにあるかを確かめる
           release = landing.takeInFlightMark(task.workspace, pr_number);
           if (!release || !isQueuedForAutoMerge(deps.db, task_id)) continue;
-          const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
-          if (!workspace) continue;
+          const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
+          if (!resolved) continue;
+          const workspace = checked(resolved);
+          workspaceNetworkDestination(workspace);
           // 盤面の名義の行為(merge / merge question)の直前に profile → 門 → 着地の面の順で読み直す(ADR 0217 決定1・
           // ADR 0232)。CI を読む前は profile と門だけを読み、面は PR の状態の後で読む —— 閉じた PR は面に依らず観測になり、
           // CI 赤の PR に立つのは CI 赤の question になる(ADR 0238 決定1)。門に当たった PR はキューに残り、面が変わった
@@ -1429,6 +1443,7 @@ export function createLanding(deps: LandingDeps): Landing {
             return "profile" in resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
           const stop = (askQuestion?: (changed: string) => void) => {
+            workspaceNetworkDestination(workspace);
             const resolved = authorityIfGateOpen();
             return !resolved || withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion);
           };
@@ -1461,7 +1476,10 @@ export function createLanding(deps: LandingDeps): Landing {
           // (ADR 0242 決定1)。比べられなければ null(積み残し)。fetch を待つので面の読み直しより前に読む
           const left =
             ci === "success"
-              ? await contentLeftBehind(deps.db, workspace, task_id, head, { auth: deps.githubAuth }).catch(() => null)
+              ? await contentLeftBehind(deps.db, workspace, task_id, head, { auth: deps.githubAuth }).catch((error) => {
+                if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
+                return null;
+              })
               : [];
           // 盤面の外の push が落とした内容は、キューを外して推奨 hold の question に倒す(ADR 0242 決定4)
           const dropped = left && (await outsidePushDropNotice(deps.db, workspace, task_id, left, { number: pr_number, head }));
@@ -1484,7 +1502,10 @@ export function createLanding(deps: LandingDeps): Landing {
               // merge は CI を読んだ head に固定する(ADR 0231 決定1)
               const failure = await github.mergePullRequest(ref, head).then(
                 () => null,
-                (error: unknown) => (error instanceof Error ? error.message : String(error)),
+                (error: unknown) => {
+                  if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
+                  return error instanceof Error ? error.message : String(error);
+                },
               );
               if (failure === null) {
                 retire(task_id, { kind: "pr_merged", pr_number }, now);
@@ -1517,6 +1538,7 @@ export function createLanding(deps: LandingDeps): Landing {
           });
         } catch (error) {
           if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: その PR の失敗として log に流さない
+          if (error instanceof WorkspaceRepoMismatchError) continue;
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         } finally {
           release?.();

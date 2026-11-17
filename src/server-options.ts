@@ -104,6 +104,7 @@ import {
   resolveExecutionWorkspace,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,
+  withRememberedRepoCheck,
   workspaceProtectionReader,
 } from "./workspace.js";
 import {
@@ -519,18 +520,6 @@ function registryRefWriter(board: BoardComposition, db: Db): RefWriter {
   };
 }
 
-/** The board's own view of the workspace (branch discipline + tree rule):
- *  the same registry entry the worker runs in, resolved to its path. */
-function workspaceConfig(board: BoardComposition): WorkspaceConfig | undefined {
-  if (!board.registryDir) return undefined;
-  return resolveExecutionWorkspace(
-    loadBoardRegistry(board),
-    board.workspaceName,
-    null,
-    board.workspacesDir,
-  );
-}
-
 /** Resolves any task's execution workspace against the registry (issue #26 /
  *  ADR 0009): read fresh every call, never pinned to a path at pickup (pickup
  *  writes only the default's name, ADR 0233). Absent
@@ -538,11 +527,13 @@ function workspaceConfig(board: BoardComposition): WorkspaceConfig | undefined {
  *  registry configured at all). */
 function workspaceResolver(
   board: BoardComposition,
+  db: Db,
 ): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
   const { registryDir, workspaceName, workspacesDir } = board;
   if (!registryDir) return undefined;
-  return (taskWorkspace) =>
+  const resolve = (taskWorkspace: string | null) =>
     resolveExecutionWorkspace(loadBoardRegistry(board), workspaceName, taskWorkspace, workspacesDir);
+  return (taskWorkspace) => withRememberedRepoCheck(db, resolve(taskWorkspace), () => board.clock.now(), resolve);
 }
 
 /** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
@@ -839,7 +830,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
-  const workspace = workspaceConfig(board);
+  const resolveWorkspace = workspaceResolver(board, db);
+  const workspace = resolveWorkspace?.(null);
   return {
     db,
     credential: board.credential,
@@ -848,7 +840,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     clock: board.clock,
     worker: buildWorkerFactory(board),
     workspace,
-    resolveWorkspace: workspaceResolver(board),
+    resolveWorkspace,
     workspacesDir: board.workspacesDir,
     github,
     workspaceAdmin: workspaceAdmin(board, github, db, writableRegistry),

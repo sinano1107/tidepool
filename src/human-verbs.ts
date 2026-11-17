@@ -133,6 +133,8 @@ import {
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
+  WorkspaceRepoMismatchError,
+  withRememberedRepoCheck,
 } from "./workspace.js";
 
 export interface RegisterThroughHumanDoorDeps {
@@ -665,7 +667,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     }
     // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 書き戻し(ADR 0373 決定3) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) →
     // merge-back → 運んだ checkout の削除(ADR 0369 決定7) → 基準の撮り直し(ADR 0351 決定4)。
-    const { own, openers } = namePickupPredicates(deps.db, value, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+    const checked = withRememberedRepoCheck(deps.db, target, () => now);
+    const { own, openers } = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
     const all = [...own, ...openers];
     const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
       try {
@@ -673,10 +676,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       } catch (err) {
         if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
         let message = err instanceof Error ? err.message : String(err);
-        const ref = workspaceNetworkDestination(err instanceof PickupGateError ? err.place : target)?.github;
-        if (phase === "after-open" && deps.github && ref) {
-          const { guidance } = await repairRepoAccess(deps.github, ref);
-          if (guidance) message += `\n\n${guidance}`;
+        if (phase === "after-open" && deps.github && !(err instanceof PickupGateError && err.cause instanceof WorkspaceRepoMismatchError)) {
+          const ref = workspaceNetworkDestination(err instanceof PickupGateError ? err.place : checked)?.github;
+          if (ref) {
+            const { guidance } = await repairRepoAccess(deps.github, ref);
+            if (guidance) message += `\n\n${guidance}`;
+          }
         }
         throw new DomainError(message);
       }
@@ -1314,6 +1319,7 @@ export async function submitAnswer(
             "GitHub/workspace",
           );
           // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
+          workspaceNetworkDestination(withRememberedRepoCheck(deps.db, mergeWorkspace, now));
           const pr = await deps.github.readPullRequest({ workspace: mergeWorkspace, number: mergePr });
           // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
           if (pr.state === "unreadable") {
@@ -1326,6 +1332,7 @@ export async function submitAnswer(
           try {
             left = await contentLeftBehind(deps.db, mergeWorkspace, landingTaskId, pr.head, { auth: deps.githubAuth });
           } catch (err) {
+            if (isBoardDbRefusal(err)) throw err;
             throw new DomainError(
               `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
                 (err instanceof Error ? err.message : String(err)),
@@ -1362,6 +1369,7 @@ export async function submitAnswer(
             try {
               await deps.github!.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head);
             } catch (err) {
+              if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError) throw err;
               throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
             }
           });

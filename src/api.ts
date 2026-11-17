@@ -178,6 +178,7 @@ import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  WorkspaceRepoMismatchError,
 } from "./workspace.js";
 import {
   BoardStateOverlapError,
@@ -831,11 +832,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // The issue-number picker's data source (issue #67): the workspace's own
-  // open issues, so a human confirms a number by reading "#N — title"
-  // instead of typing a bare integer. GET, so it never quarantines the
-  // workspace (display's own posture) — an unresolvable name is instead a
-  // fail-fast 400 (ADR 0009, same as /issue-comments above), and a GitHub
-  // failure a 502.
+  // open issues, so a human confirms a number by reading "#N — title".
+  // ADR 0378 決定8: the network destination check can quarantine the workspace even during an issue read.
   router.get("/github-issues", async (req, res) => {
     const parsed = githubIssuesQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -858,8 +856,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     try {
       const issues = await github.listIssues({ workspace: target });
       sendJson(res, { issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
-    } catch {
-      sendJson(res.status(502), { error: "could not fetch open issues" });
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err;
+      if (err instanceof WorkspaceRepoMismatchError) sendJson(res.status(400), { error: err.message });
+      else sendJson(res.status(502), { error: "could not fetch open issues" });
     }
   });
 
@@ -996,6 +996,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // 出し直せば通り得る呼び出し側の入力・状態の問題(create の扉と同じ読み):
         // 別の宛先を選び直す / 帯域外の origin を手で直す / 案内の一行を実行する
         err instanceof WorkspaceAlreadyPublishedError ||
+        err instanceof WorkspaceRepoMismatchError ||
         err instanceof CheckoutHasOriginError ||
         err instanceof RepoAccessMissingError
       ) {

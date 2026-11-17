@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
@@ -243,6 +244,7 @@ export class GhCliClient implements GitHubClient {
     const repo = workspaceNetworkDestination(workspace)?.key;
     if (repo === undefined) throw new Error(`\`gh ${args[0]} ${args[1]}\` cannot run: workspace ${workspace.name} has no declared GitHub repo`);
     await this.auth.ensureToken(repo);
+    if (workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
     try {
       return (await execFileAsync("gh", [...args, "-R", repo], { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
@@ -290,7 +292,8 @@ export class GhCliClient implements GitHubClient {
       parsed = JSON.parse(
         await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"]),
       );
-    } catch {
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err;
       return { ci: "pending", state: "unreadable" };
     }
     return {

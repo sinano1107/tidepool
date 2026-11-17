@@ -106,6 +106,7 @@ import {
   TaskCheckoutHostError,
   taskNamedPlace,
   type WorkspaceConfig,
+  WorkspaceRepoMismatchError,
 } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
@@ -493,6 +494,7 @@ export function startScheduler(deps: {
     try {
       result = { value: await read };
     } catch (error) {
+      if (isBoardDbRefusal(error)) throw error;
       result = { error };
     }
     if ("value" in result || result.error instanceof IssueGoneError) issueExpansionAnswered();
@@ -545,7 +547,7 @@ export function startScheduler(deps: {
   ): Promise<ResourceStop | undefined> {
     if (!live()) return undefined;
     // ADR 0378 決定3: a different origin is a local repair. A token probe cannot change the result.
-    if (err instanceof PickupGateError && err.cause instanceof OriginRepositoryMismatchError) {
+    if (err instanceof WorkspaceRepoMismatchError || (err instanceof PickupGateError && (err.cause instanceof OriginRepositoryMismatchError || err.cause instanceof WorkspaceRepoMismatchError))) {
       return quarantineWorkspace(db, workspace.name, err, clock.now());
     }
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
@@ -738,6 +740,7 @@ export function startScheduler(deps: {
     const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand());
     if ("value" in read) return { pass: read.value };
     const err = read.error;
+    if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
     if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
     // 確定的失敗 (ADR 0016): the reference is dead for good, not this
     // cycle's weather — the same watchdog-shaped retry/abandon question
@@ -818,6 +821,7 @@ export function startScheduler(deps: {
     const read = await readGitHub(github.getIssueWithState(ref));
     if ("error" in read) {
       const err = read.error;
+      if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
       if (err instanceof IssueGoneError && err.reason === "not_found") return { pass: { ...briefing, issue: { number: ref.number, state: "not_found" } } };
       return { skip: "gitHub", ref, error: err };
     }

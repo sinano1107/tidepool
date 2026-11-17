@@ -10,7 +10,7 @@ import { cancelTaskDirectly, completeAudit, getTask, listExaminees, poseProbe, r
 import { queueReturnHandler } from "../src/watchdog.js";
 import { commitRoomCopy, openInterviewRoom, PickupGateError, pickupGate, recordedInterviewRoom, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -119,13 +119,14 @@ it("root 配下の監査 review が読む面接室の変更も、面接室の名
 });
 
 it("読む実環境の ref 違反は repo アクセスを問い合わせず実環境を quarantine し、root を todo へ戻す(ADR 0067 決定2 / ADR 0274)", async () => {
-  const workspace = await makeWorkspace("read-ref-drift-guidance");
+  const { workspace } = await makeRemoteBackedWorkspace("read-ref-drift-guidance");
+  const declared = { ...workspace, repo: "https://github.com/acme/widget.git" };
+  git(workspace.path, "remote", "set-url", "origin", declared.repo);
+  await shimGit({ route: [declared.repo, workspace.repo!] });
   db = openDb(":memory:");
   const earlier = work("leaves a baseline");
-  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
+  releaseWorkspace(db, await prepareAtPickup(db, declared, earlier), earlier, NOW);
   cancelTaskDirectly(db, earlier, null, NOW, {}, "webui");
-  git(workspace.path, "remote", "add", "origin", "https://github.com/acme/widget.git");
-  const declared = { ...workspace, repo: "https://github.com/acme/widget" };
   commitWork(workspace.path, "by-hand.txt", "unknown commit while resting\n");
   const moved = git(workspace.path, "rev-parse", "main");
   const { root, room, base } = await reader(declared);

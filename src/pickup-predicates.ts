@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { git, readCheckoutOrigin } from "./git.js";
-import { remoteTrackingRef } from "./github-auth.js";
+import { remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import type { RegistrySource } from "./registry.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
@@ -48,12 +48,12 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
  *  slot 解放後の休止位置の追従先、完了時の未着地 commit 比較)。 */
 export function protectedBranchRef(workspace: WorkspaceConfig): string {
   const branch = protectedBranch(workspace);
-  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
+  return workspace.repo !== undefined ? remoteTrackingRef(branch) : branch;
 }
 
 /** ADR 0360 決定3・5: 記録の tree を読むときは、同名のタグを解決しない完全な ref を使う。 */
 export function exactProtectedBranchRef(workspace: WorkspaceConfig): string {
-  return isRemoteBacked(workspace) ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
+  return workspace.repo !== undefined ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
 }
 
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
@@ -67,6 +67,11 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: Regi
     },
     {
       phase: "before-open",
+      describe: `${scope}the declared \`repo:\` agrees with the repository remembered in the baseline, if it has one.`,
+      check: () => place.checkRememberedRepo?.(place),
+    },
+    {
+      phase: "before-open",
       describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`), and both point to the same repository.`,
       check: () => assertRemoteDeclarationMatchesClone(place),
     },
@@ -77,7 +82,7 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: Regi
 function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: boolean): PickupPredicate[] {
   // 予告の実環境は設定を持たないので、既定名や remote の有無を答えにしない(ADR 0329 決定10)。
   const branch = place.path ? `protected branch \`${protectedBranch(place)}\`` : "configured protected branch";
-  const remoteRef = place.path && isRemoteBacked(place) ? `\`${protectedBranchRef(place)}\`` : "its remote-tracking ref";
+  const remoteRef = place.path && place.repo !== undefined ? `\`${protectedBranchRef(place)}\`` : "its remote-tracking ref";
   const prefix = `${scope}${IF_REPOSITORY_PRESENT}`;
   return [
     {
@@ -271,10 +276,9 @@ function recordedRoomPredicates(
   ];
 }
 
-/** ADR 0052 決定3: この workspace が remote の正本を持つと**宣言している**か。
- *  clone を覗く関数ではない —— `repo` の有無だけを読む。 */
+/** ADR 0378 決定6〜8: an edited declaration cannot silently switch between local and remote. */
 export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
-  return workspace.repo !== undefined;
+  return workspaceNetworkDestination(workspace) !== undefined;
 }
 
 export class GitDirNotADirectoryError extends Error {

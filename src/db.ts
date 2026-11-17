@@ -246,8 +246,9 @@ export function openDb(path: string): Db {
     -- 場所であることが要件なので git の ref ではなくここに置く。name は名前の場所の
     -- 名前(面接室は root id —— 基準は名前の場所だけが持つ、ADR 0356 決定4)。
     CREATE TABLE IF NOT EXISTS workspace_state (
-      name         TEXT PRIMARY KEY,
-      ref_snapshot TEXT
+      name            TEXT PRIMARY KEY,
+      ref_snapshot    TEXT,
+      remembered_repo TEXT
     );
 
     -- ADR 0356 決定3: the board's read policy is pinned before workers can edit it.
@@ -651,6 +652,12 @@ export function openDb(path: string): Db {
     CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
   `);
+  // ADR 0378 決定6: existing baselines learn their declaration the first time it is checked.
+  db.transaction(() => {
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_state') WHERE name = 'remembered_repo'").get()) {
+      db.exec("ALTER TABLE workspace_state ADD COLUMN remembered_repo TEXT");
+    }
+  }).immediate();
   // 種の表からの初期化は**一度だけ**(ADR 0110 決定3: 以後は DB が正本)。
   // 行ごとの INSERT OR IGNORE にしないのは、運用者が消した行が再オープンの
   // たびに生え直すのが「正本は DB」と矛盾するためである。

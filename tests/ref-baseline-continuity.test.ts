@@ -19,7 +19,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 基準は切れない(ADR 0351 決定2): 行のある pickup は全撮りの代わりに比べ、release はタスクブランチの行を畳み、2値行は ref が持つ側に畳む(#2953)。
@@ -42,8 +42,7 @@ async function releaseAfter(db: Db, ws: WorkspaceConfig, move: () => void): Prom
 }
 
 /** 1件を拾って commit し、完了の後始末で休止位置へ戻した workspace。 */
-async function restedAfterCompletion(name: string) {
-  const ws = await makeWorkspace(name);
+async function restedAfterCompletion(ws: WorkspaceConfig) {
   const db = openDb(":memory:");
   const done = work(db, "completes");
   const place = await prepareAtPickup(db, ws, done);
@@ -56,11 +55,13 @@ async function restedAfterCompletion(name: string) {
 }
 
 it("通常の完走の後に休止中の main へ載った帯域外の commit は、次の pickup の比較が refs/heads/main を名指す workspace quarantine で止め、repo アクセスの案内を付けず、task を位置を変えずに todo へ戻す(ADR 0351 決定2 / ADR 0274 / ADR 0067 決定2)", async () => {
-  const { ws, db, done } = await restedAfterCompletion("rest-out-of-band-main");
-  cancelTaskDirectly(db, done, null, NOW, {}, "webui");
   // GitHub を正本に宣言した場所: 準備の失敗なら修復の問い合わせが撃たれ、仲介の断りが案内として本文に載る
-  git(ws.path, "remote", "add", "origin", "https://github.com/acme/widget.git");
-  const declared = { ...ws, repo: "https://github.com/acme/widget" };
+  const { workspace } = await makeRemoteBackedWorkspace("rest-out-of-band-main");
+  const declared = { ...workspace, repo: "https://github.com/acme/widget.git" };
+  git(workspace.path, "remote", "set-url", "origin", declared.repo);
+  await shimGit({ route: [declared.repo, workspace.repo!] });
+  const { ws, db, done } = await restedAfterCompletion(declared);
+  cancelTaskDirectly(db, done, null, NOW, {}, "webui");
   const github = new FakeGitHubClient();
   const refusal = "the GitHub token broker refused a token for acme/widget (HTTP 404: repo_unreachable)";
   github.scriptUnreachable("acme/widget", refusal);
@@ -147,7 +148,7 @@ it.each([
 
 // 旧: 次の pickup は名前の場所の HEAD をタスクブランチへ乗せた
 it("休止中に何も動かなければ、次の pickup は通り、task の checkout がタスクブランチに乗って名前の場所は保護ブランチに居る(ADR 0351 決定2 / ADR 0356 決定1)", async () => {
-  const { ws, db } = await restedAfterCompletion("rest-nothing-moved");
+  const { ws, db } = await restedAfterCompletion(await makeWorkspace("rest-nothing-moved"));
   const next = work(db, "next");
 
   const place = await prepareAtPickup(db, ws, next);
@@ -180,7 +181,7 @@ it.each([
   ["書く前に落ちた(ref は予告の前の値)", false],
   ["書いた後に落ちた(ref は予告した値)", true],
 ])("予告と畳みの間で%s2値行が残った pickup は通り、行は ref が持つ側の1値になる —— 予告のもう一方の値へ動かすと解放が名指す(ADR 0351 決定4 / ADR 0243 決定5)", async (_, written) => {
-  const { ws, db } = await restedAfterCompletion("rest-announced-row");
+  const { ws, db } = await restedAfterCompletion(await makeWorkspace("rest-announced-row"));
   const ref = "refs/heads/keep";
   const sha = git(ws.path, "rev-parse", "main");
   const reopen = dropBoardBeforeFold(db);

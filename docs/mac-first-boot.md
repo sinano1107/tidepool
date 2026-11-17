@@ -318,6 +318,10 @@ it removes under `refs/keep-around/<sha>`.
   under the missing name. Moving the same checkout (its `.git` included) to another directory and
   updating `path` to match is fine — its refs are unchanged. The delete is refused while the
   workspace has an open quarantine question — answer it first.
+- **Moving a workspace to another repository.** Delete the workspace in Settings, then register
+  it again with a checkout of the new repository. If you edited `repo:` in `workspaces.yaml`, put
+  it back and answer the workspace quarantine before deleting. The same delete and register steps
+  apply after a GitHub repository rename or transfer, which changes its `owner/name`.
 - **Linked worktrees.** Do not run `git worktree add` in a workspace's checkout. Without
   arguments it creates a branch; `git stash` there writes the shared `refs/stash`; a commit on a
   branch the board advanced stacks a commit that reverts the advance; and a commit there after a

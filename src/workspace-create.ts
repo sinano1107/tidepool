@@ -44,10 +44,12 @@ import { recordedSettingsDisposition } from "./sandbox.js";
 import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import {
+  assertRememberedRepo,
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,
   refValues,
+  rememberPublishedRepo,
   resolvesToRegistryClone,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -133,6 +135,7 @@ export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
  *  ADR 0066 決定4)。 */
 export interface PublishWorkspaceDeps extends WorkspaceGitHubDeps {
   db: Db;
+  clock?: Clock;
 }
 
 /** 返すのは着地した checkout のパス(ADR 0082 決定1)。MCP の `create_workspace`
@@ -514,13 +517,16 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
+  const { name } = input;
+  const now = () => (deps.clock ?? new SystemClock()).now();
+  const path = entryCheckoutPath(entry, name, deps.workspacesBaseDir);
+  assertRememberedRepo(deps.db, { name, path, repo: entry.repo }, now());
   if (entry.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, entry.repo);
   if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
     throw new RegistrySelfPublishError(input.name);
   }
   if (!deps.githubAuth) throw new GitHubIdentityMissingError();
-  const dir = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
-  const existing = originUrl(dir);
+  const existing = originUrl(path);
   if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing);
   // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが App を
   // install し忘れた」を、push が落ちる**前に**名指しする。位置は `remote add` の手前で
@@ -530,7 +536,6 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // `authedPush` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
   await deps.githubAuth.ensureToken(repoKey(input.repo));
-  const declaration = { name: input.name, path: dir, repo: input.repo };
   // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedPush` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
@@ -541,8 +546,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // registry が知らない孤児だけ」という根拠はここでは引き継げない(ADR 0066 決定5)。
   const fresh = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).workspaces, input.name);
   if (!fresh) throw new UnknownWorkspaceError(input.name);
+  const dir = entryCheckoutPath(fresh, name, deps.workspacesBaseDir);
+  assertRememberedRepo(deps.db, { name, path: dir, repo: fresh.repo }, now());
   if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
-  git(dir, "remote", "add", "origin", input.repo);
+  if (dir !== path) throw new Error(`workspace ${name}'s checkout path changed during publish; try again`);
+  const declaration = { name, path: dir, repo: input.repo };
   // 送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**読み、読んだ値を `<sha>:<ref>` でそのまま押し、
   // その写しになる N 本をまとめて口に予告する(ADR 0243 / ADR 0066 決定4): tip を読み直す push(`--all`)だと、走っている
   // session のタスクブランチが進んだぶん押した写しが予告と食い違い、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
@@ -554,6 +562,8 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   const { githubAuth } = deps;
   // 巻き戻しも口の内側に置く —— 畳みは `remote remove` が写しを消した後の ref を読み、予告の前の値へ戻す
   const publish = () => {
+    git(dir, "remote", "add", "origin", input.repo);
+    let restoreRememberedRepo: (() => void) | undefined;
     try {
       // 2本以上なら `--atomic` は必須(ADR 0066 決定6、`authedPush` が付ける): 宛先が「Add a README」つきの非空 repo
       // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
@@ -563,6 +573,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // (ADR 0066 決定6)。
       // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しの `remote remove` がこれも消す
       authedPush(githubAuth, declaration, GIT_NETWORK_TIMEOUT_MS, branches);
+      restoreRememberedRepo = rememberPublishedRepo(deps.db, declaration);
       commitWorkspaceEntry(
         deps,
         input.name,
@@ -576,7 +587,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // registry コミットが落ちた場合もここへ来る: 宣言の無い workspace に origin が
       // 残るほうが ADR 0052 のずれそのものであり、再送は同一 ref の push なので
       // up-to-date で通る。
-      git(dir, "remote", "remove", "origin");
+      try {
+        git(dir, "remote", "remove", "origin");
+      } finally {
+        restoreRememberedRepo?.();
+      }
       throw err;
     }
   };

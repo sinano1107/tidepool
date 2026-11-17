@@ -4,21 +4,24 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { loadRegistry } from "../src/registry.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
-import { releaseWorkspace } from "../src/workspace.js";
+import { refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
+  createWorkspace,
+  deleteWorkspace,
   GitHubIdentityMissingError,
   publishWorkspace,
   RegistrySelfPublishError,
   WorkspaceAlreadyPublishedError,
 } from "../src/workspace-create.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeClock, FakeGitHubClient } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import { startGitHttpRemote } from "./git-http-remote.js";
-import { HUMAN_WEBUI, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -138,6 +141,44 @@ function remoteBranches(dest: string): string[] {
 }
 
 describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
+  it("remembers a published destination and accepts a new one after repair, delete and register", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    const clock = new FakeClock();
+    const now = () => clock.now();
+    const resolve = () => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
+    const refresh = () => refreshProtectedBranch(deps.db, resolve(), deps.githubAuth);
+    const declare = async (repo?: string) => {
+      await writeFile(join(registryDir, "workspaces.yaml"), `sandbox:\n  path: ${checkout}\n${repo ? `  repo: ${repo}\n` : ""}`);
+      git(registryDir, "add", "workspaces.yaml");
+      git(registryDir, "commit", "-m", "edit the workspace repo");
+    };
+    await leaveBaseline(deps.db, resolve());
+    const dest = await makeDestination();
+
+    await publishWorkspace({ name: "sandbox", repo: dest }, deps);
+    await refresh();
+    expect(git(checkout, "rev-parse", "refs/remotes/origin/main")).toBe(git(dest, "rev-parse", "refs/heads/main"));
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+
+    const { workspace: replacement, publish } = await makeRemoteBackedWorkspace("replacement");
+    const repair = `workspace sandbox was registered for repo ${dest}, but its registry entry now says ${replacement.repo}. Put \`repo:\` back and answer. To move the workspace to another repository, delete it afterwards and register it again.`;
+    await declare(replacement.repo);
+    await expect(refresh()).rejects.toThrow(repair);
+    const question = quarantineQuestion(deps.db, "workspace", "sandbox")!;
+    const answer = () => submitAnswer({ db: deps.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db: deps.db, resolveWorkspace: resolve }) }, question, ["repaired by hand"], undefined, now, "webui");
+    await expect(answer()).rejects.toThrow(repair);
+    await declare(dest);
+    await answer();
+    await deleteWorkspace({ name: "sandbox", confirm: true }, { ...deps, unsettledTaskCount: 0, awaitingLandingTaskIds: [] });
+    await createWorkspace({ name: "sandbox", mode: "register", path: replacement.path, confirm: true }, deps);
+
+    await leaveBaseline(deps.db, resolve());
+    publish("replacement.txt", "from the replacement repository\n", "advance replacement");
+    await refresh();
+    expect(git(replacement.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(replacement.repo!, "rev-parse", "refs/heads/main"));
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+  });
+
   it("purely-local な workspace が remote-backed として宣言され、全ブランチが載る", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     // publish 以前のタスクブランチ(決着後も削除されない差分の恒久記録)も連れて行く
@@ -201,7 +242,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
   // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、`remote remove` が写しを消した後に畳むので、
   // 基準は予告の前(行が無い)へ戻る
   it("push が通った後に registry のコミットが落ちて巻き戻っても、走っているセッションの解放は違反にならない", async () => {
-    const { deps, checkout } = await makeBoard();
+    const { deps, checkout, registryDir } = await makeBoard();
     const session = await runningSession(deps.db, checkout);
     const dest = await makeDestination();
     const registry = {
@@ -217,6 +258,8 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(remoteBranches(dest)).toContain("main");
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     session.release();
+    const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
 
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
