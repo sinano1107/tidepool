@@ -799,7 +799,7 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
 
 /** 作業台を開く(ADR 0371 決定7・9 / ADR 0382 決定5): 鍵の作業台に人間の作業が残っていなければ(作りかけを含む)消して
  *  書く先の ref から作り直し、残っていればそのまま使う —— 開いた question は数えない。読めない作業台は消さずに `WorkbenchUnreadableError`
- *  を投げる。task の checkout と同じ作り手で作るので hook は無く、`updateInstead` だけを足して人間の clone からの push を受ける。
+ *  を、ほかの失敗(上限超過を含む)は消さずにそのまま投げる。task の checkout と同じ作り手で作るので hook は無く、`updateInstead` だけを足して人間の clone からの push を受ける。
  *  人間の branch は書く先と同じ名前で checkout され、全部を展開する(sparse にしない)。開くたびに `board/*` を引き直す。返すのは
  *  実体の綴りの在り処と、使い続ける作業台の tip が書く先に無く運ばれる側も含まないときに拒否文へ足す句(spec #3273 への上書きの文 A1)。 */
 function openWorkbench(named: WorkspaceConfig, base: string, target: string, carried: string): { path: string; refusalClause: string } {
@@ -809,7 +809,9 @@ function openWorkbench(named: WorkspaceConfig, base: string, target: string, car
     try {
       owner = judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, carried, (judged) => judged);
     } catch (cause) {
-      throw new WorkbenchUnreadableError(at, cause);
+      // 作業台そのものの読みの失敗だけ —— 上限超過・host・名前の場所の側の失敗は、開き直しで直りうるので素のまま
+      if (cause instanceof CheckoutUnreadableError || cause instanceof WorktreeStatusError) throw new WorkbenchUnreadableError(at, cause);
+      throw cause;
     }
   }
   if (owner.kind === "nothing") rmSync(at, { recursive: true, force: true, maxRetries: 3 });
