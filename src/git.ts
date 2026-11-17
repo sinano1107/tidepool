@@ -32,6 +32,22 @@ export function git(cwd: string, ...args: string[]): string {
   return run(cwd, args).toString().trim();
 }
 
+/** git の述語系コマンド `ask` の答え。git は「答えが no」も非零で返すので、答え(1)と**道具の失敗**(128 等)を終了コードで分ける ——
+ *  後者を no と読み替えると、壊れた checkout が「コンフリクト」という嘘の理由で人間に届く。 */
+export function gitAnswers(ask: () => unknown): boolean {
+  try {
+    ask();
+    return true;
+  } catch (err) {
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
+    return false;
+  }
+}
+
+/** `ancestor` が `descendant` に含まれているか = ff で運べるか。 */
+export const isAncestor = (repo: { path: string }, ancestor: string, descendant: string, readGit = git): boolean =>
+  gitAnswers(() => readGit(repo.path, "merge-base", "--is-ancestor", ancestor, descendant));
+
 /** ADR 0378 決定4: read the configured origin before applying insteadOf. */
 export function readOriginConfig(readGit: (args: string[]) => Buffer): string | undefined {
   return readConfig(readGit, ["remote.origin.url"]);

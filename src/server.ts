@@ -28,6 +28,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
+import { latestEventId } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -411,7 +412,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // ADR 0315 決定1・3: 前の盤面が閉じ切らなかった session を閉じる復旧。対象の線(watermark)はこの起動の時点の最大 event id ——
   // 受理の門から走るとき、この盤面が後から spawn した session に偽の exit を書かない。もう1つの仕事は一時領域の削除の門(ADR 0344 決定5)——
   // この線より後の spawn がある task の領域は消さない
-  const watermark = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get() as { id: number }).id;
+  const watermark = latestEventId(db);
   const recordCloseOptions = () => ({ logDir: options.transcripts.dir, tmpDir: tmpdir(), watermark, now: options.clock.now() });
   const closeLeftOpenSessions = () => closeUnclosedSessions(db, recordCloseOptions());
   const interrupted = db

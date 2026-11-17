@@ -7,7 +7,8 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
-import { recordTaskCheckoutTip, type WorkspaceConfig, workbenchPath } from "../src/workspace.js";
+import { workbenchPath } from "../src/workbench.js";
+import { recordTaskCheckoutTip, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -31,17 +32,24 @@ export async function boardWithParent(): Promise<Board> {
   return { db, clock, ws, base, parent };
 }
 
-/** 親の子を main から切り(親の `work.txt` を持たない)、task の checkout で `work.txt` を書いて完了させる。`release` が後始末を撃つ ——
- *  既定は完了の後始末の runner で、merge back が conflict して workspace の Quarantine が立つ。 */
-export async function completedChild(b: Board, { body = "from the child\n", work, release }: { body?: string; work?: (checkout: string) => void; release?: (place: Awaited<ReturnType<typeof prepareAtPickup>>, task: Task) => void } = {}) {
-  const { db, clock, ws, base, parent } = b;
+/** 親の子を登録し、そのタスクブランチを main から切る —— 2つ目の子のブランチは最初の pickup の前に切る(後から名前の場所に書くと、
+ *  休止の間に ref が動いたと読まれる)。 */
+export function childOf({ db, clock, ws, parent }: Board): Task {
   const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, clock.now(), ...HUMAN_WEBUI);
   git(ws.path, "branch", `task/${registered.id}`, "main");
+  return registered;
+}
+
+/** 親の子(`child`、既定は新しく `childOf`)を main から切り(親の `work.txt` を持たない)、task の checkout で `file`(既定は `work.txt`)を書いて完了させる。`release` が後始末を撃つ ——
+ *  既定は完了の後始末の runner で、merge back が conflict して workspace の Quarantine が立つ。 */
+export async function completedChild(b: Board, { child, file = "work.txt", body = "from the child\n", work, release }: { child?: Task; file?: string; body?: string; work?: (checkout: string, task: Task) => void; release?: (place: Awaited<ReturnType<typeof prepareAtPickup>>, task: Task) => void } = {}) {
+  const { db, clock, ws, base } = b;
+  const registered = child ?? childOf(b);
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   const place = await prepareAtPickup(db, ws, task, { now: clock.now(), workspacesBaseDir: base });
   appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
-  commitWork(place.path, "work.txt", body);
-  work?.(place.path);
+  commitWork(place.path, file, body);
+  work?.(place.path, task);
   recordTaskCheckoutTip(db, place, task.id);
   completeTask(db, task, FULL_HANDOFF, "worker", clock.now(), "worker");
   if (release) {
@@ -61,7 +69,8 @@ export async function conflicted(options?: Parameters<typeof completedChild>[1])
   const b = await boardWithParent();
   const child = await completedChild(b, options);
   const target = `task/${b.parent.id}`;
-  return { ...b, child, target, source: `task/${child.id}`, workbench: () => realpathSync(workbenchPath(b.base, target)) };
+  const source = `task/${child.id}`;
+  return { ...b, child, target, source, workbench: () => realpathSync(workbenchPath(b.base, target, source)) };
 }
 
 export type Conflicted = Awaited<ReturnType<typeof conflicted>>;

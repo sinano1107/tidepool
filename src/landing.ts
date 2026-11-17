@@ -1061,7 +1061,7 @@ export function createLanding(deps: LandingDeps): Landing {
     const question = open.find((id) => answering.has(id));
     const ctx: RootContext = {
       answering,
-      intake: question === undefined ? undefined : { workbenchBase, question, entry: "promotion_retry", answerer: answering.get(question)!, now: deps.clock.now() },
+      intake: question === undefined ? undefined : { workbenchBase, entry: "promotion_retry", answerer: answering.get(question)!, now: deps.clock.now() },
     };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
     if (open.length > 0 && !ctx.intake) return undefined;

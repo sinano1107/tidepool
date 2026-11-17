@@ -1001,6 +1001,11 @@ export function parseEventRow<Extra = unknown>(row: unknown): EventRow & Extra {
   return { ...raw, payload: JSON.parse(raw.payload) as EventPayload } as EventRow & Extra;
 }
 
+/** 盤面全体の最新の event id(無ければ 0)—— この時点より後に書かれる event を分ける線。 */
+export function latestEventId(db: Db): number {
+  return db.prepare("SELECT COALESCE(MAX(id), 0) FROM events").pluck().get() as number;
+}
+
 export function getEvent(db: Db, id: number): EventRow | undefined {
   const row = db.prepare("SELECT * FROM events WHERE id = ?").get(id);
   return row === undefined ? undefined : parseEventRow(row);
