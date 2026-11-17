@@ -25,11 +25,13 @@ import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
+import { appendEvent, type EventOrigin, type IntakeEntry, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
 import {
   boardReadTree,
   boardViewStatus,
   boardWriteTree,
+  CheckoutHostError,
+  CheckoutUnreadableError,
   diffTreeEntries,
   displayWorktreePath,
   git,
@@ -41,8 +43,6 @@ import {
   readCheckoutOrigin,
   type SparsePolicy,
   stagingHostStep,
-  TaskCheckoutHostError,
-  TaskCheckoutUnreadableError,
   type WorktreeChange,
   WorktreeStatusError,
   withBoardGit,
@@ -89,7 +89,7 @@ import {
   type WorkspaceEntry,
 } from "./registry.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
-import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
+import { humanOnlyPathChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
@@ -430,13 +430,28 @@ export function runPlaceReadPaths(place: RunPlace): string[] {
 
 /** 盤面が pickup ごとに作る checkout の番地(ADR 0356 決定2 / ADR 0361 決定1): 番地と、解放が消す空になった親の段数を1か所で持つ。 */
 const CHECKOUT_LAYOUT = {
-  /** 基点 / 鍵(task id、root は `<id>.checkout`)/ pickup の event id */
-  task: { at: (base: string, key: string, pickup: number) => join(conventionCheckoutPath(key, base), String(pickup)), parents: 1 },
+  /** 基点 / 鍵(task id、root は `<id>.checkout`)/ pickup の event id。`base` は在り処から基点へ戻る逆 */
+  task: { at: (base: string, key: string, pickup: number) => join(conventionCheckoutPath(key, base), String(pickup)), parents: 1, base: (checkout: string) => dirname(dirname(checkout)) },
   /** 基点 / `<task id>.reads` / pickup の event id / 読む面接室の名前(root id) */
   read: { at: (base: string, taskId: string, pickup: number, rootId: string) => join(conventionCheckoutPath(`${taskId}.reads`, base), String(pickup), rootId), parents: 2 },
+  /** 基点 / `@workbench` / 書く先の鍵(ADR 0371 決定8 / spec #3273 の番地)。書く先 `task/<id>` は task id が鍵(id は盤面全体で一意なので
+   *  workspace は要らない)。`@` は名前の規則にも task id(UUID)にも無いので、workspace の名前・面接室(root id)・task の checkout
+   *  (`<id>`・`<id>.checkout`・`<id>.reads`)のどれの番地にもならない。worker の sandbox が開くのは自分の task の checkout・task temp・
+   *  読み専用の checkout だけで、基点もこの段も root にならない。
+   *  shortcut: 書く先は `task/<id>` だけ —— 保護ブランチの書く先(workspace 名が鍵)はその入口を足す slice が足す。 */
+  workbench: { at: (base: string, target: string) => join(base, WORKBENCH_SEGMENT, target.slice("task/".length)), parents: 1 },
 } as const;
 
-export { TaskCheckoutHostError } from "./git.js";
+/** 作業台の番地の段(`CHECKOUT_LAYOUT.workbench`)。 */
+export const WORKBENCH_SEGMENT = "@workbench";
+
+/** (workspace, 書く先の branch) の作業台の番地。 */
+export const workbenchPath = CHECKOUT_LAYOUT.workbench.at;
+
+/** 作業台で盤面が名前の場所の branch を引き直す名前空間 `refs/heads/board/*`(ADR 0371 決定7)—— 保護ブランチはここと重ならない。 */
+export const BOARD_BRANCHES = "board";
+
+export { CheckoutHostError } from "./git.js";
 
 /** ADR 0356 決定2: 番地 `at` に自分の git directory を空の template から作り、名前の場所の `source`(ref の名前か sha)だけを
  *  ローカルの `branch` へ fetch して checkout する。`borrow` なら objects は名前の場所から alternates で借り、借りなければ複製 ——
@@ -465,7 +480,7 @@ function makeCheckout({ at, named, source, branch, borrow, description, config =
     }
     for (const [key, value] of Object.entries(config)) git(path, "config", key, value);
   } catch (cause) {
-    throw new TaskCheckoutHostError(`${description} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new CheckoutHostError(`${description} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   // reflog にも名前の場所の在り処を残さない —— 受験者に面接室の在り処(root id)を運ばない(ADR 0276 決定1)。
   // `branch` が未生の main(init の current branch)でも fetch できるよう --update-head-ok
@@ -512,7 +527,7 @@ function openReadCheckout(at: string, room: WorkspaceConfig, head: string | unde
     path = realpathSync(at);
     git(path, "init", "--quiet", "--template=", "--initial-branch=main");
   } catch (cause) {
-    throw new TaskCheckoutHostError(`the read checkout of the interview room ${room.name} for ${taskId} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new CheckoutHostError(`the read checkout of the interview room ${room.name} for ${taskId} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (head !== undefined) {
     try {
@@ -536,22 +551,25 @@ export class RoomCopyGitlinkError extends Error {
 /** ADR 0364 決定2: 盤面所有の写しから名前の場所へ tip を fetch する段の失敗 —— 名前の場所の側(解放なら quarantine、verb なら拒むだけ)。 */
 export class NamedPlaceFetchError extends Error {}
 
-const unreadable = (checkout: string, why: string, cause?: unknown) =>
-  new TaskCheckoutUnreadableError(`the task checkout at ${checkout} cannot be read: ${why}`, cause === undefined ? undefined : { cause });
+/** 盤面が信じない checkout(task の checkout と作業台)を文の主語で名指す —— 主語は呼び手が決める。 */
+type UntrustedSubject = { checkout: string; noun: string };
 
-/** 盤面が worker の `.git` を読む1つの有界の段: 読む checkout と、段全体の上限の時刻(ADR 0364 決定3 / ADR 0357 決定1)。 */
-type WorkerRead = { checkout: string; deadline: number };
+const unreadable = ({ checkout, noun }: UntrustedSubject, why: string, cause?: unknown) =>
+  new CheckoutUnreadableError(`${noun} at ${checkout} cannot be read: ${why}`, cause === undefined ? undefined : { cause });
 
-const workerRead = (checkout: string): WorkerRead => ({ checkout, deadline: Date.now() + WORKER_TREE_GIT_TIMEOUT_MS });
+/** 盤面が信じない `.git` を読む1つの有界の段: 読む checkout とその主語、段全体の上限の時刻(ADR 0364 決定3 / ADR 0357 決定1)。 */
+type UntrustedRead = UntrustedSubject & { deadline: number };
 
-function assertBeforeDeadline({ deadline }: WorkerRead): void {
+const untrustedRead = ({ path, noun }: Pick<UntrustedCheckout, "path" | "noun">): UntrustedRead => ({ checkout: path, noun, deadline: Date.now() + WORKER_TREE_GIT_TIMEOUT_MS });
+
+function assertBeforeDeadline({ deadline }: UntrustedRead): void {
   if (Date.now() > deadline) throw new WorkerGitCopyTimeoutError(WORKER_TREE_GIT_TIMEOUT_MS);
 }
 
 /** ADR 0364 決定1: worker の `.git` の `rel` を lstat し、あれば `kind` であることを確かめる(symlink を辿らない)。 */
-function workerEntry({ checkout }: WorkerRead, rel: string, kind: "directory" | "regular file"): boolean {
-  const stat = lstatSync(join(checkout, rel), { throwIfNoEntry: false });
-  if (stat && !(kind === "directory" ? stat.isDirectory() : stat.isFile())) throw unreadable(checkout, `${rel} is not a ${kind}`);
+function untrustedEntry(read: UntrustedRead, rel: string, kind: "directory" | "regular file"): boolean {
+  const stat = lstatSync(join(read.checkout, rel), { throwIfNoEntry: false });
+  if (stat && !(kind === "directory" ? stat.isDirectory() : stat.isFile())) throw unreadable(read, `${rel} is not a ${kind}`);
   return stat !== undefined;
 }
 
@@ -561,14 +579,14 @@ const WORKER_FILE_CHUNK = 1 << 16;
  *  読む —— sparse file はサイズでなく時間で縛り、空の file の数でも上限を越えない。Linux では開いた実体が checkout の下にあることも
  *  確かめる: 途中の dir の lstat と open の間に symlink へ差し替えられても辿った先を読まない(盤面が worker を拾う host は Linux だけ、
  *  ADR 0100 決定6)。`use` が false で読み止める。 */
-function readWorkerFile(read: WorkerRead, rel: string, use: (chunk: Buffer) => boolean | void): void {
+function readUntrustedFile(read: UntrustedRead, rel: string, use: (chunk: Buffer) => boolean | void): void {
   const { checkout } = read;
   assertBeforeDeadline(read);
-  if (!workerEntry(read, rel, "regular file")) throw unreadable(checkout, `${rel} is missing`);
+  if (!untrustedEntry(read, rel, "regular file")) throw unreadable(read, `${rel} is missing`);
   const fd = openSync(join(checkout, rel), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    if (!fstatSync(fd).isFile()) throw unreadable(checkout, `${rel} is not a regular file`);
-    if (process.platform === "linux" && !readlinkSync(`/proc/self/fd/${fd}`).startsWith(`${checkout}/`)) throw unreadable(checkout, `${rel} resolves outside the task checkout`);
+    if (!fstatSync(fd).isFile()) throw unreadable(read, `${rel} is not a regular file`);
+    if (process.platform === "linux" && !readlinkSync(`/proc/self/fd/${fd}`).startsWith(`${checkout}/`)) throw unreadable(read, `${rel} resolves outside ${read.noun}`);
     const buffer = Buffer.allocUnsafe(WORKER_FILE_CHUNK);
     for (let n = readSync(fd, buffer); n > 0; n = readSync(fd, buffer)) {
       if (use(buffer.subarray(0, n)) === false) return;
@@ -580,23 +598,23 @@ function readWorkerFile(read: WorkerRead, rel: string, use: (chunk: Buffer) => b
 }
 
 /** worker の text file の行のうち `pick` が値を返す最初のもの。行の長さは縛る —— 改行の無い sparse file でメモリを埋めない。 */
-function findWorkerLine(read: WorkerRead, rel: string, pick: (line: string) => string | undefined): string | undefined {
+function findUntrustedLine(read: UntrustedRead, rel: string, pick: (line: string) => string | undefined): string | undefined {
   let rest = "";
   let found: string | undefined;
-  readWorkerFile(read, rel, (chunk) => {
+  readUntrustedFile(read, rel, (chunk) => {
     const lines = (rest + chunk.toString("latin1")).split("\n");
     rest = lines.pop()!;
     found = lines.map(pick).find((hit) => hit !== undefined);
-    if (rest.length > WORKER_FILE_CHUNK) throw unreadable(read.checkout, `${rel} has a line longer than ${WORKER_FILE_CHUNK} bytes`);
+    if (rest.length > WORKER_FILE_CHUNK) throw unreadable(read, `${rel} has a line longer than ${WORKER_FILE_CHUNK} bytes`);
     return found === undefined;
   });
   return found ?? pick(rest);
 }
 
-/** 写す段の失敗は worker の repo の故障に包む。上限超過と host の失敗は型のまま(ADR 0357 決定2 / ADR 0364 決定2)。 */
-function asWorkerRepoFailure(checkout: string, cause: unknown): Error {
-  if (cause instanceof TaskCheckoutUnreadableError || cause instanceof WorkerTreeGitTimeoutError || cause instanceof TaskCheckoutHostError) return cause;
-  return unreadable(checkout, cause instanceof Error ? cause.message : String(cause), cause);
+/** 写す段の失敗は信じない checkout(task の checkout か作業台)の故障に包む。上限超過と host の失敗は型のまま(ADR 0357 決定2 / ADR 0364 決定2)。 */
+function asUntrustedFailure(subject: UntrustedSubject, cause: unknown): Error {
+  if (cause instanceof CheckoutUnreadableError || cause instanceof WorkerTreeGitTimeoutError || cause instanceof CheckoutHostError) return cause;
+  return unreadable(subject, cause instanceof Error ? cause.message : String(cause), cause);
 }
 
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -604,42 +622,42 @@ const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 /** ADR 0243 決定1: 書く前に値を知る。ADR 0364 決定1: tip は `refs/heads/task/<id>`(作業台なら書く先と同じ名前の branch、ADR 0371 決定1・4)の
  *  file、無ければ `packed-refs` の行(worker の `gc` は正当に pack する)—— git に worker の `.git` を開かせない。symref は worker の
  *  repo の故障。読んだ ref も返す —— 呼び手が同じ綴りを作り直さない。 */
-function readWorkerTip(read: WorkerRead, branch: string): { sha: string; ref: string } {
+function readUntrustedTip(read: UntrustedRead, branch: string): { sha: string; ref: string } {
   const { checkout } = read;
   const ref = `refs/heads/${branch}`;
   let sha: string | undefined;
   try {
     const dotGit = lstatSync(join(checkout, ".git"), { throwIfNoEntry: false });
-    if (!dotGit) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no git repository`);
-    if (!dotGit.isDirectory()) throw unreadable(checkout, ".git is not a directory");
+    if (!dotGit) throw new CheckoutUnreadableError(`${read.noun} at ${checkout} has no git repository`);
+    if (!dotGit.isDirectory()) throw unreadable(read, ".git is not a directory");
     // ADR 0364 決定1: packed-refs もリポジトリ定義の一部 —— loose の ref があっても種類を確かめる
-    const packed = workerEntry(read, ".git/packed-refs", "regular file");
+    const packed = untrustedEntry(read, ".git/packed-refs", "regular file");
     const parents = ref.split("/").slice(0, -1).map((_, i, parts) => `.git/${parts.slice(0, i + 1).join("/")}`);
-    if (parents.every((dir) => workerEntry(read, dir, "directory")) && workerEntry(read, `.git/${ref}`, "regular file")) {
-      sha = findWorkerLine(read, `.git/${ref}`, (line) => line);
-      if (!OID.test(sha ?? "")) throw unreadable(checkout, `${ref} is not a direct ref`);
+    if (parents.every((dir) => untrustedEntry(read, dir, "directory")) && untrustedEntry(read, `.git/${ref}`, "regular file")) {
+      sha = findUntrustedLine(read, `.git/${ref}`, (line) => line);
+      if (!OID.test(sha ?? "")) throw unreadable(read, `${ref} is not a direct ref`);
     } else if (packed) {
-      sha = findWorkerLine(read, ".git/packed-refs", (line) => {
+      sha = findUntrustedLine(read, ".git/packed-refs", (line) => {
         const [oid, name] = line.split(" ");
         return name === ref && OID.test(oid ?? "") ? oid : undefined;
       });
     }
   } catch (cause) {
-    throw asWorkerRepoFailure(checkout, cause);
+    throw asUntrustedFailure(read, cause);
   }
-  if (!sha) throw new TaskCheckoutUnreadableError(`the task checkout at ${checkout} has no branch ${branch}`);
+  if (!sha) throw new CheckoutUnreadableError(`${read.noun} at ${checkout} has no branch ${branch}`);
   return { sha, ref };
 }
 
 /** 写しの tmp に書けない —— worker でも名前の場所でもない host の失敗(ADR 0364 決定2、pickup と同じ線)。 */
-const copyHostError = (cause: unknown) =>
-  new TaskCheckoutHostError(`the board cannot make its copy of the task checkout's git files: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+const copyHostError = (noun: string, cause: unknown) =>
+  new CheckoutHostError(`the board cannot make its copy of ${noun}'s git files: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
 
-function hostStep<T>(step: () => T): T {
+function hostStep<T>(noun: string, step: () => T): T {
   try {
     return step();
   } catch (cause) {
-    throw copyHostError(cause);
+    throw copyHostError(noun, cause);
   }
 }
 
@@ -647,15 +665,15 @@ const ZERO_CHUNK = Buffer.alloc(WORKER_FILE_CHUNK);
 
 /** checkout の `rel` の byte を写しの `to` へ。hardlink は inode を worker と共有するので使わない(ADR 0364 決定1)。0 だけの chunk は
  *  書かずに穴にする —— byte は同じで、sparse file が tmp を実体で埋めない(`core.compression=0` の pack は正当に 0 の連なりを持つ)。 */
-function copyWorkerFile(read: WorkerRead, rel: string, to: string): void {
-  const out = hostStep(() => openSync(to, "wx"));
+function copyUntrustedFile(read: UntrustedRead, rel: string, to: string): void {
+  const out = hostStep(read.noun, () => openSync(to, "wx"));
   try {
     let position = 0;
-    readWorkerFile(read, rel, (chunk) => {
-      if (!chunk.equals(ZERO_CHUNK.subarray(0, chunk.length))) hostStep(() => writeSync(out, chunk, 0, chunk.length, position));
+    readUntrustedFile(read, rel, (chunk) => {
+      if (!chunk.equals(ZERO_CHUNK.subarray(0, chunk.length))) hostStep(read.noun, () => writeSync(out, chunk, 0, chunk.length, position));
       position += chunk.length;
     });
-    hostStep(() => ftruncateSync(out, position));
+    hostStep(read.noun, () => ftruncateSync(out, position));
   } finally {
     closeSync(out);
   }
@@ -665,21 +683,21 @@ function copyWorkerFile(read: WorkerRead, rel: string, to: string): void {
  *  tip の閉包を1つの pack にして `verified` で `index-pack --strict` する —— 欠けは rev-list / pack-objects が、zlib の破損は
  *  pack-objects が、中身と名前の不一致は worker の byte を持たない `verified` の検査が落とす。名前の場所の objects を借りる役は
  *  名前の場所の ref から届く閉包を pack に入れない。ref は `verified` にだけ書く。git も file の写しも段の1つの上限の中(決定3)。 */
-function copyAndVerifyWorkerTip(place: UntrustedCheckout, read: WorkerRead, raw: string, verified: string, sha: string, ref: string, format: string): void {
+function copyAndVerifyUntrustedTip(place: UntrustedCheckout, read: UntrustedRead, raw: string, verified: string, sha: string, ref: string, format: string): void {
   const { checkout, deadline } = read;
   const looseName = new RegExp(`^[0-9a-f]{${format === "sha256" ? 62 : 38}}$`);
   try {
-    if (workerEntry(read, ".git/objects", "directory")) {
+    if (untrustedEntry(read, ".git/objects", "directory")) {
       for (const dir of readdirSync(join(checkout, ".git", "objects")).filter((name) => /^[0-9a-f]{2}$/.test(name))) {
-        workerEntry(read, `.git/objects/${dir}`, "directory");
-        hostStep(() => mkdirSync(join(raw, "objects", dir)));
+        untrustedEntry(read, `.git/objects/${dir}`, "directory");
+        hostStep(read.noun, () => mkdirSync(join(raw, "objects", dir)));
         for (const file of readdirSync(join(checkout, ".git", "objects", dir)).filter((name) => looseName.test(name))) {
-          copyWorkerFile(read, `.git/objects/${dir}/${file}`, join(raw, "objects", dir, file));
+          copyUntrustedFile(read, `.git/objects/${dir}/${file}`, join(raw, "objects", dir, file));
         }
       }
-      if (workerEntry(read, ".git/objects/pack", "directory")) {
+      if (untrustedEntry(read, ".git/objects/pack", "directory")) {
         for (const file of readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack"))) {
-          copyWorkerFile(read, `.git/objects/pack/${file}`, join(raw, "objects", "pack", file));
+          copyUntrustedFile(read, `.git/objects/pack/${file}`, join(raw, "objects", "pack", file));
           workerRepoGitUntil(deadline, raw, ["index-pack", join(raw, "objects", "pack", file)]);
         }
       }
@@ -693,44 +711,49 @@ function copyAndVerifyWorkerTip(place: UntrustedCheckout, read: WorkerRead, raw:
     workerRepoGitUntil(deadline, verified, ["index-pack", "--strict", `${pack}.pack`]);
     workerRepoGitUntil(deadline, verified, ["update-ref", ref, sha]);
   } catch (cause) {
-    const failure = asWorkerRepoFailure(checkout, cause);
-    throw failure !== cause && outOfSpace(raw, cause) ? copyHostError(cause) : failure;
+    const failure = asUntrustedFailure(read, cause);
+    throw failure !== cause && outOfSpace(raw, cause) ? copyHostError(read.noun, cause) : failure;
   }
 }
 
 /** 盤面が git を撃たずに tip を読む checkout —— task の checkout(ADR 0364 決定1)と作業台(ADR 0371 決定4)。在り処、作った元の
- *  名前の場所、その objects を借りるか。 */
-type UntrustedCheckout = { path: string; namedPlace: WorkspaceConfig; borrowsNamedObjects: boolean };
+ *  名前の場所、その objects を借りるか、文の主語。 */
+type UntrustedCheckout = { path: string; namedPlace: WorkspaceConfig; borrowsNamedObjects: boolean; noun: string };
+
+const TASK_CHECKOUT = "the task checkout";
+
+/** task の checkout を、主語を添えて信じない checkout として。 */
+const untrustedTaskCheckout = (place: TaskCheckoutPlace): UntrustedCheckout => ({ ...place, noun: TASK_CHECKOUT });
 
 /** ADR 0364 決定1・2: checkout の `branch` の tip を検証済みの盤面所有の repo として開く。 */
-function withVerifiedWorkerTip<T>(place: UntrustedCheckout, branch: string, use: (sha: string, repo: string, ref: string) => T): T {
-  const { namedPlace, path: checkout } = place;
+function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, use: (sha: string, repo: string, ref: string) => T): T {
+  const { namedPlace } = place;
   // 名前の場所の側の故障を worker の repo のせいにしない —— ここで落ちれば素の失敗(呼び手の quarantine)
   const format = git(namedPlace.path, "rev-parse", "--show-object-format");
   const alternates = place.borrowsNamedObjects ? `${namedObjects(namedPlace)}\n` : undefined;
   // ADR 0364 決定3: tip の読みから閉包の検証までが1つの有界の段
-  const read = workerRead(checkout);
-  const { sha, ref } = readWorkerTip(read, branch);
+  const read = untrustedRead(place);
+  const { sha, ref } = readUntrustedTip(read, branch);
   // ADR 0364 決定1: 写しは盤面 process の tmp —— worker は書けない(task temp でも checkout の中でもない)
-  const dir = hostStep(() => mkdtempSync(join(tmpdir(), "tidepool-worker-tip-")));
+  const dir = hostStep(place.noun, () => mkdtempSync(join(tmpdir(), "tidepool-untrusted-tip-")));
   try {
     const [raw, verified] = [join(dir, "raw"), join(dir, "verified")];
     for (const repo of [raw, verified]) {
-      hostStep(() => {
+      hostStep(place.noun, () => {
         git(dir, "init", "--bare", "--quiet", "--template=", `--object-format=${format}`, repo);
         if (alternates) writeFileSync(join(repo, "objects", "info", "alternates"), alternates);
       });
     }
-    copyAndVerifyWorkerTip(place, read, raw, verified, sha, ref, format);
+    copyAndVerifyUntrustedTip(place, read, raw, verified, sha, ref, format);
     return use(sha, verified, ref);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-/** checkout の `branch` の tip を、ref を書かずに名前の場所の objects へ引く。 */
-function fetchWorkerTip(place: UntrustedCheckout, branch: string): string {
-  return withVerifiedWorkerTip(place, branch, (sha, repo, ref) => {
+/** task の checkout の `branch` の tip を、ref を書かずに名前の場所の objects へ引く。 */
+function fetchUntrustedTip(place: UntrustedCheckout, branch: string): string {
+  return withVerifiedUntrustedTip(place, branch, (sha, repo, ref) => {
     fetchFromBoardCopy(place.namedPlace, repo, ref, sha, "the task branch tip");
     return sha;
   });
@@ -762,7 +785,7 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const branch = taskBranch(taskId);
-  const tip = fetchWorkerTip(place, branch);
+  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch);
   const ref = `refs/heads/${branch}`;
   const old = readRefSnapshotValue(namedPlace, ref);
   // ADR 0243 決定2 / ADR 0359 決定4: この書き込みの旧値だけを確かめ、帯域外の値を基準に取り込まない
@@ -772,6 +795,124 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   }
   if (old !== tip) boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
   return tip;
+}
+
+/** 作業台を開く(ADR 0371 決定1・7・9 / ADR 0373 決定9): 鍵ごとに冪等 —— 開いた workspace の Quarantine が指す作業台はそのまま
+ *  使い、何も指さない残骸は消して書く先の ref から作り直す(作業台を開いた event は無いので、指すものから導く)。task の checkout と同じ
+ *  作り手で作るので hook は無く、`updateInstead` だけを足して人間の clone からの push を受ける。人間の branch は書く先と同じ名前で
+ *  checkout され、全部を展開する(sparse にしない)。開くたびに `board/*` を引き直す。返すのは実体の綴りの在り処。 */
+function openWorkbench(db: Db, named: WorkspaceConfig, base: string, target: string): string {
+  const at = CHECKOUT_LAYOUT.workbench.at(base, target);
+  if (!(workspaceNeedsHuman(db, named.name) && placeHasRepository(at))) rmSync(at, { recursive: true, force: true, maxRetries: 3 });
+  const path = existsSync(at) ? realpathSync(at) : makeWorkbench(named, at, target);
+  repointBoardRefs(named, path);
+  return path;
+}
+
+function makeWorkbench(named: WorkspaceConfig, at: string, target: string): string {
+  try {
+    return makeCheckout({ at, named, source: `refs/heads/${target}`, branch: target, borrow: true, description: `the workbench for ${target}`, config: { "receive.denyCurrentBranch": "updateInstead" } });
+  } catch (err) {
+    // 作りかけの `.git` を残すと、Quarantine が開いている間は指されたものとして使い続けてしまう
+    rmSync(at, { recursive: true, force: true, maxRetries: 3 });
+    throw err;
+  }
+}
+
+/** ADR 0371 決定7: 作業台の `refs/heads/board/*` を名前の場所の branch の今の値に引き直す —— 人間がそこへ書いたものは上書きされて
+ *  消え、人間の branch と作業ツリーは動かさない。盤面が読むのは書く先の branch の tip だけ。 */
+function repointBoardRefs(named: WorkspaceConfig, workbench: string): void {
+  const boardRefs = `refs/heads/${BOARD_BRANCHES}/`;
+  // git は checkout 中の branch へ fetch しないので、HEAD が `board/*` に居れば同じ commit で切り離す(tree も index も動かさない)
+  if (headValue({ name: named.name, path: workbench }).startsWith(symrefValue(boardRefs))) {
+    git(workbench, "update-ref", "--no-deref", "HEAD", git(workbench, "rev-parse", "HEAD"));
+  }
+  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`);
+}
+
+/** 取り込みの手が受け取る束: 作業台の基点と、`workbench_taken_in` に残す回答者と時刻。 */
+export type IntakeContext = { workbenchBase: string; answerer: Answerer; now: Date };
+
+/** 取り込みの event の actor —— 回答者か呼び手(spec #3273 の識別子の表 / pin A5)。 */
+export type Answerer = { actorId: string; origin: EventOrigin };
+
+/** 人間の clone から同じことをする手(spec #3273 text の `{clone}`)。 */
+const fromOwnClone = (target: string, ref: string) =>
+  `(or, in your own clone with the workbench as a remote: fetch it, \`git merge <remote>/${ref}\`, and push ${target} to it)`;
+
+/** ADR 0371 決定2〜5: 取り込み —— 作業台の書く先の branch の tip を1度だけ読み、盤面所有の写しの中で検査し、全部通ってから
+ *  包む commit(第1親が書く先の値、第2親が人間の tip、tree は人間の tip)を作り、書く先の ref を旧値の CAS で口から書いて
+ *  `workbench_taken_in` を残し、取り込んだ tip を返す。拒否は ref も記録も書かない。tip が書く先の今の値なら取り込むものが無く undefined。`carried` は
+ *  tip が祖先に持つべき、merge で運ばれる側の branch。祖先のほかに履歴は制限しない(`-s ours` も cherry-pick も別の ref の merge も通る)。 */
+function takeInWorkbench(db: Db, named: WorkspaceConfig, place: UntrustedCheckout, target: string, carried: string[], entry: IntakeEntry, { answerer, now }: IntakeContext): string | undefined {
+  const ref = `refs/heads/${target}`;
+  const inputs = [target, ...carried].map((branch) => ({ branch, sha: git(named.path, "rev-parse", "--verify", `refs/heads/${branch}`) }));
+  const old = inputs[0]!.sha;
+  const at = place.path;
+  try {
+    return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef) => {
+      if (tip === old) return undefined;
+      const copy = { ...named, path: verified };
+      const missing = inputs.find(({ sha }) => !isAncestor(copy, sha, tip, workerRepoGit));
+      if (missing) {
+        const merge = `${BOARD_BRANCHES}/${missing.branch}`;
+        throw new Error(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then answer again.`);
+      }
+      if (boardViewStatus(at, tip, verified).length > 0) {
+        throw new Error(`the workbench at ${at} has uncommitted changes — commit or discard them, then answer again.`);
+      }
+      // ADR 0371 決定5 / ADR 0362 決定2 / ADR 0365 決定2: 完了の門と同じ検査を、入力の tip のどれとも違う entry にだけ —— 比べる相手は fork 元
+      // との merge-base でなく入力の tip。運ばれてきただけの変更は人間の書いたものではない
+      const [first, ...rest] = inputs.map(({ sha }) => diffTreeEntries(verified, sha, tip, { workerTree: true }));
+      const differing = first!.filter(({ path }) => rest.every((delta) => delta.some((other) => other.path === path)));
+      const refuse = (paths: string[], what: string) => {
+        if (paths.length > 0) throw new Error(`the tip of the workbench at ${at} changes ${paths.map(displayWorktreePath).join(", ")}, which ${what}; take that change out and commit, then answer again.`);
+      };
+      const { unhideable } = recordedSettingsDisposition(verified, tip, workerRepoGit);
+      refuse(unhideable && differing.some(({ path }) => path === unhideable.path) ? [unhideable.path] : [], "is a shape the board cannot hide");
+      refuse(humanOnlyPathChanges(differing), "is written only by a human");
+      refuse(gitlinkChanges(differing), "is a gitlink");
+      fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
+      const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
+      advanceBranch(db, named, ref, old, commit);
+      appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
+      return tip;
+    });
+  } catch (err) {
+    // 上限超過の文は worker の tree を名指す —— 人間には作業台の在り処で言う
+    if (err instanceof WorkerTreeGitTimeoutError) throw new Error(err.about(`the workbench at ${at}`), { cause: err });
+    throw err;
+  }
+}
+
+/** spec #3273 の受理の 11: merge back の前に、同じ鍵の作業台が取り込める tip を持てば先に取り込んで true。取り込んだ tip のままの作業台は
+ *  消す(今この鍵を指すのは答えている Quarantine だけ —— 鍵を共有する入口を足す slice が残す条件を足す)。拒否は `board/*` を引き直してから投げる。 */
+function takeInMergeBack(db: Db, named: WorkspaceConfig, { taskId, target }: { taskId: string; target: string }, intake: IntakeContext): boolean {
+  const workbench = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, target);
+  if (!placeHasRepository(workbench)) return false;
+  const place: UntrustedCheckout = { path: realpathSync(workbench), namedPlace: named, borrowsNamedObjects: true, noun: "the workbench" };
+  let taken: string | undefined;
+  try {
+    taken = takeInWorkbench(db, named, place, target, [taskBranch(taskId)], "workspace_quarantine", intake);
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に包まず底へ —— 引き直しもしない
+    try {
+      repointBoardRefs(named, workbench);
+    } catch {
+      // 引き直せなくても拒否の理由を人間に返す —— 次の拒否か開く手が引き直す
+    }
+    throw err;
+  }
+  if (taken === undefined) return false;
+  // 回答の間に commit や push が着いていれば、読まずに消さない
+  let current: string | undefined;
+  try {
+    current = readUntrustedTip(untrustedRead(place), target).sha;
+  } catch {
+    // 読めなければ残す
+  }
+  if (current === taken) removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
+  return true;
 }
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
@@ -901,7 +1042,7 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
 export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string {
   assertTaskCheckout(place, taskId);
   const room = place.namedPlace;
-  return withVerifiedWorkerTip(place, taskBranch(taskId), (tip, verified) => {
+  return withVerifiedUntrustedTip(untrustedTaskCheckout(place), taskBranch(taskId), (tip, verified) => {
     const parent = git(room.path, "rev-parse", protectedBranchRef(room));
     if (!place.borrowsNamedObjects) {
       // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。検証後は写しの親を読むために面接室の objects を借りる。
@@ -1677,7 +1818,7 @@ function taskCheckoutRemnants(checkout: string, isTracked: (path: string) => boo
       // 祖先がディレクトリでない path(worker が `.claude` をファイルにした形)に 0 byte の stub は置けない(ADR 0069 の既知パス)
       if ((err as NodeJS.ErrnoException).code === "ENOTDIR") return false;
       // ADR 0367 決定1: 既知の残骸を探すために worker の worktree を読む手も stage と同じ帰責。
-      throw asWorkerRepoFailure(checkout, err);
+      throw asUntrustedFailure({ checkout, noun: TASK_CHECKOUT }, err);
     }
     return stat?.isFile() && stat.size === 0 && !isTracked(path);
   });
@@ -1718,14 +1859,14 @@ export function completionTreeGateApplies(task: Task): boolean {
 /** ADR 0359 決定3: worker の checkout は観測だけに使う。着地は名前の場所の記録から進める。 */
 function observeCheckoutAfterCompletion(db: Db, place: TaskCheckoutPlace, taskId: string, recorded: string | undefined): TaskCheckoutWriteObservation | undefined {
   try {
-    const workerTip = readWorkerTip(workerRead(place.path), taskBranch(taskId)).sha;
+    const workerTip = readUntrustedTip(untrustedRead(untrustedTaskCheckout(place)), taskBranch(taskId)).sha;
     if (!recorded) return;
     if (workerTip !== recorded) return { observation: "committed", worker_tip: workerTip };
     const paths = taskCheckoutChanges(db, place, taskId, recorded).map(({ path }) => path);
     if (paths.length > 0) return { observation: "uncommitted", paths };
   } catch (err) {
     // ADR 0359 決定5: view の上限超過も、完了済みの解放では「読めない」観測
-    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorktreeStatusError || err instanceof WorkerTreeGitTimeoutError)) throw err;
+    if (!(err instanceof CheckoutUnreadableError || err instanceof WorktreeStatusError || err instanceof WorkerTreeGitTimeoutError)) throw err;
     return { observation: "unreadable", reason: err.message };
   }
 }
@@ -1891,7 +2032,7 @@ export function releaseWorkspace(
 }
 
 /** 完了なら帰り先へ merge back し、名前の場所を休止位置へ戻す。 */
-function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBack: boolean, githubAuth: GitHubAuth | undefined, tokenFailure: unknown, recordedTip?: string): void {
+function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBack: boolean, githubAuth: GitHubAuth | undefined, tokenFailure: unknown, workbenchBase: string, recordedTip?: string): void {
   workspace = withRememberedRepoCheck(db, workspace);
   // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
   // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
@@ -1903,7 +2044,7 @@ function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBac
     if (isRemoteBacked(workspace)) fetchBranchCopy(workspace, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
   }
   const target = mergeBack && lineageTaskBranch(db, workspace, task);
-  if (target) mergeBackInto(db, workspace, target, task.id, "then answer", recordedTip);
+  if (target) mergeBackInto(db, workspace, workbenchBase, target, task.id, "release", recordedTip);
   parkOnProtectedBranch(db, workspace);
 }
 
@@ -1945,7 +2086,8 @@ function releaseTaskCheckout(
     // ADR 0359 決定2・4: 基準比較が済んだ ref を読み直して、帯域外の値を merge back に運ばない。
     const verifiedTip = gated ? verifiedRefs.get(taskRef) : undefined;
     if (gated && !verifiedTip) throw new Error(`workspace ${namedPlace.name}: the recorded task ref ${taskRef} is missing`);
-    settleBranches(db, namedPlace, task, mergeBack, githubAuth, tokenFailure, verifiedTip);
+    // 作業台は task の checkout と同じ基点の下(spec #3273 の番地)
+    settleBranches(db, namedPlace, task, mergeBack, githubAuth, tokenFailure, CHECKOUT_LAYOUT.task.base(checkout), verifiedTip);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, namedPlace.name, err, now);
@@ -2051,7 +2193,7 @@ function bringTaskCheckout(
         );
       }
     } else {
-      const tip = fetchWorkerTip(place, taskBranch(task.id));
+      const tip = fetchUntrustedTip(untrustedTaskCheckout(place), taskBranch(task.id));
       evacuationBaseRef = readRefSnapshotValue(namedPlace, taskRef);
       if (evacuationBaseRef.startsWith("symref=")) {
         throw new RefsMovedError(`workspace ${namedPlace.name}: expected a direct task ref, found ${evacuationBaseRef} ${taskRef}`);
@@ -2065,7 +2207,7 @@ function bringTaskCheckout(
   } catch (err) {
     // ADR 0357 決定2: 上限超過は worker の repo の故障 —— 名前の場所を quarantine しない。ADR 0364 決定2: 写しの host の失敗は
     // 決着していない task の失敗、完了済みなら唯一の写しを消さずに名前の場所の失敗として投げる(#3053)
-    if (!(err instanceof TaskCheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError || (err instanceof TaskCheckoutHostError && !completed))) throw err;
+    if (!(err instanceof CheckoutUnreadableError || err instanceof WorkerTreeGitTimeoutError || (err instanceof CheckoutHostError && !completed))) throw err;
     if (!completed) {
       failTaskOnRelease(db, task, checkout, err, now);
       return false;
@@ -2146,14 +2288,15 @@ function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: 
   })();
 }
 
-/** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict reports the same repair options
- *  to teardown and quarantine acceptance (ADR 0239 帰結 / ADR 0240 決定4). */
+/** ADR 0356 決定5: merge back advances the target ref without switching branches. A conflict opens the workbench under `workbenchBase`
+ *  for both teardown and quarantine acceptance (ADR 0373 決定9). */
 function mergeBackInto(
   db: Db,
   workspace: WorkspaceConfig,
+  workbenchBase: string,
   target: string,
   taskId: string,
-  thenAnswer: "then answer" | "then answer again",
+  raisedBy: "release" | "acceptance",
   recordedTip?: string,
 ): void {
   const source = taskBranch(taskId);
@@ -2164,14 +2307,30 @@ function mergeBackInto(
   const sha = isAncestor(workspace, oldTip, sourceTip)
     ? sourceTip
     : mergeCommit(workspace, oldTip, sourceTip, `Merge ${source} into ${target}`);
-  if (sha === undefined) {
-    throw new Error(
-      `${source} does not merge cleanly into '${target}' — either merge it there by hand in workspace ` +
-        `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
-        thenAnswer,
-    );
-  }
+  if (sha === undefined) throw mergeBackConflict(db, workspace, workbenchBase, source, target, raisedBy);
   advanceBranch(db, workspace, ref, oldTip, sha);
+}
+
+/** ADR 0371 決定7・11 / ADR 0373 決定9: merge back の conflict は作業台を開き、その在り処・そこで打つ merge・tip の条件・答え直しを言う
+ *  (spec #3273 text A1)。開けなければその理由を言い、答え直しが開き直す(text A7d)。解放の理由は句点で閉じない —— Quarantine の本文が
+ *  理由の後に句点を打つ。受理の拒否は文のまま人間に届く。 */
+function mergeBackConflict(db: Db, workspace: WorkspaceConfig, base: string, source: string, target: string, raisedBy: "release" | "acceptance"): Error {
+  const stop = raisedBy === "release" ? "" : ".";
+  const conflict = `${source} does not merge cleanly into '${target}'.`;
+  let path: string;
+  try {
+    path = openWorkbench(db, workspace, base, target);
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は「開けなかった」の文に包まず底へ
+    return new Error(`${conflict} The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); answer again and it opens it again${stop}`);
+  }
+  const merge = `${BOARD_BRANCHES}/${source}`;
+  return new Error(
+    `${conflict} The board opened the workbench at ${path} for it. There, on ${target}, run \`git merge ${merge}\` and resolve the conflict ` +
+      `${fromOwnClone(target, merge)}. Your tip must contain both ${target} as the board has it now (\`${BOARD_BRANCHES}/${target}\`) and ${source}, ` +
+      `with nothing uncommitted. To discard ${source}'s work instead, record that with \`git merge -s ours ${merge}\`. ` +
+      (raisedBy === "release" ? "Then answer" : "Then answer again."),
+  );
 }
 
 /** ADR 0240 決定4: 内容が帰り先(lineage が指す祖先のタスクブランチ)に届いていない done の work と、その帰り先。
@@ -2206,6 +2365,8 @@ export async function redoMergeBacks(
   workspace: WorkspaceConfig,
   defaultWorkspaceName: string | undefined,
   auth: GitHubAuth | undefined,
+  /** 作業台の基点(ADR 0373 決定9)と、取り込みの event に残す回答者と時刻(spec #3273 の識別子の表 / pin A5)。 */
+  intake: IntakeContext,
 ): Promise<void> {
   if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName).length === 0) return;
   const running = db
@@ -2224,7 +2385,8 @@ export async function redoMergeBacks(
     for (;;) {
       const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
       if (!next) break;
-      mergeBackInto(db, workspace, next.target, next.taskId, "then answer again");
+      if (takeInMergeBack(db, workspace, next, intake)) continue;
+      mergeBackInto(db, workspace, intake.workbenchBase, next.target, next.taskId, "acceptance");
     }
   } catch (error) {
     failure = { error };

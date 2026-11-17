@@ -9,6 +9,7 @@ import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import {
+  BoardNamedProtectedBranchError,
   BoardStateOverlapError,
   createWorkspace,
   LiveCheckoutSignalsError,
@@ -720,6 +721,19 @@ describe("createWorkspace: clone モード(issue #57)", () => {
       repo: upstream,
       branch: "trunk",
     });
+  });
+
+  // spec #3273 pin A18: 作業台で盤面が引き直す `refs/heads/board/*` と重なる保護ブランチは登録しない
+  it.each(["board", "board/main"])("default branch が %s なら拒否し、registry に何も書かず clone も残さない", async (defaultBranch) => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const upstream = await makeUpstream(defaultBranch);
+
+    await expect(createWorkspace({ mode: "clone", name: "lagoon", repo: upstream }, deps)).rejects.toThrow(BoardNamedProtectedBranchError);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toBeUndefined();
+    // 自分が作った clone は残さない —— 残すと同じ名前の登録が孤児を流用して拒まれ続ける
+    expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
   });
 
   it("仲介が token を出せない repo は clone を撃たずに拒否し、install の案内を message に載せる(ADR 0093 決定8)", async () => {

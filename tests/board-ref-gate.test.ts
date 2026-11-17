@@ -476,7 +476,7 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout 
   releaseWorkspace(db, resumedRepair, getTask(db, repair.id)!, NOW, true);
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   expect(question.purpose).toContain(`task/${repair.id} does not merge cleanly`);
-  // 人間の手は名前の場所で(ADR 0239 帰結の文が名指す場所)
+  // 人間の手は名前の場所で —— 文は作業台を名指すが、受理が基準を撮り直す間(#3290 まで)は名前の場所の commit も受理される
   git(ws.path, "checkout", `task/${landing.id}`);
   git(ws.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
   const merged = git(ws.path, "rev-parse", `task/${landing.id}`);
@@ -507,7 +507,7 @@ it("面接室の名前への受理は面接室の行だけを撮り直し、受�
   git(room.path, "branch", "room-repair");
   git(checkout.path, "branch", "examinee-repair");
 
-  await quarantineChecks({ db }).workspace!(root.id);
+  await quarantineChecks({ db }).workspace!(root.id, undefined, "webui");
 
   expect(baseline(db, root.id)).toEqual(currentRefSet(room.path));
   expect(baseline(db, root.id).has("refs/heads/room-repair")).toBe(true);

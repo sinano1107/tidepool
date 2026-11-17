@@ -286,7 +286,7 @@ it("盤面が一度も開いていない受験者の checkout の在り処に re
   git(base, "init", "--quiet", "--initial-branch=main", leftover);
   git(leftover, "commit", "--quiet", "--allow-empty", "-m", "left here before the board opened it");
   quarantineWorkspace(db, root.id, new Error("repaired by hand"), NOW);
-  await quarantineChecks({ db, workspacesDir: base }).workspace!(root.id);
+  await quarantineChecks({ db, workspacesDir: base }).workspace!(root.id, undefined, "webui");
 
   const checkout = await prepareAtPickup(db, room, examinee!, { workspacesBaseDir: base });
 

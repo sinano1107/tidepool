@@ -429,6 +429,9 @@ export type EventPayload =
   // ADR 0373 決定3・4: `restore the baseline` が書き戻した ref と、外して `refs/keep-around/<sha>` に持ち続ける値。盤面スコープで、
   // 名前は workspace(面接室は root の id)—— 書き戻しと一緒に書くので、回答が後の段で拒まれても残る
   | { kind: "baseline_restored"; workspace: string; restored: string[]; kept: KeptValue[] }
+  // ADR 0371 決定2・4: 取り込みが書く先の ref(`target`)を包む commit(`commit`)へ書いた —— 人間の tip と入口も残す。盤面スコープで、名前は
+  // workspace。拒否は何も残さない。actor は回答者か呼び手(spec #3273 の識別子の表 / pin A5)
+  | { kind: "workbench_taken_in"; workspace: string; target: string; tip: string; commit: string; entry: IntakeEntry }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill), or when its report cannot be
@@ -811,6 +814,9 @@ export interface AuditVerdict {
   findings: string;
 }
 
+/** 取り込みの入口(ADR 0371 決定2 / spec #3273 の識別子)。入口ごとに自分の値を書く。 */
+export type IntakeEntry = "workspace_quarantine" | "containment_quarantine" | "promotion_retry" | "landing_merge" | "intake_question" | "take_in_work" | "complete_task";
+
 /** `restore the baseline` が外した値1つ —— keep-around の ref の名前は `refs/keep-around/<sha>`(ADR 0373 決定4)。 */
 export type KeptValue = { ref: string; sha: string };
 
@@ -827,6 +833,7 @@ const BOARD_SCOPED_KINDS = [
   "agent_tier_changed",
   "response_truncated",
   "baseline_restored",
+  "workbench_taken_in",
 ] as const satisfies readonly EventKind[];
 type BoardScopedKind = (typeof BOARD_SCOPED_KINDS)[number];
 /** task に帰属させて書く payload(`BOARD_SCOPED_KINDS` 以外)。 */

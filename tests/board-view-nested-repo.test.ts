@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { boardViewStatus, boardWriteTree, TaskCheckoutUnreadableError } from "../src/git.js";
+import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src/git.js";
 import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, makeWorkspace, STAGING_FAILURES, submoduleSource } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -30,7 +30,7 @@ it.each([
   const before = gitObjectFileCount(path);
 
   expect(() => boardWriteTree(path, head, path, () => undefined, failure.exclude)).toThrow(expect.objectContaining({
-    constructor: TaskCheckoutUnreadableError,
+    constructor: CheckoutUnreadableError,
     cause: expect.objectContaining({ message: expect.stringContaining(failure.reason) }),
   }));
   expect(gitObjectFileCount(path)).toBe(before);
@@ -184,7 +184,7 @@ it("列挙と add -A の間に worker が入れ子の .git を作れば、WIP �
   const original = process.env.PATH;
   process.env.PATH = `${bin}:${original}`;
   try {
-    expect(() => boardWriteTree(path, head, path, () => undefined)).toThrow(TaskCheckoutUnreadableError);
+    expect(() => boardWriteTree(path, head, path, () => undefined)).toThrow(CheckoutUnreadableError);
   } finally {
     process.env.PATH = original;
   }
@@ -237,7 +237,7 @@ it("head の regular file を clone した repo に置き換えれば、WIP は�
   const before = gitObjectFileCount(path);
 
   expect(() => boardWriteTree(path, head, path, () => undefined)).toThrow(
-    new TaskCheckoutUnreadableError(`the task checkout at ${path} cannot be read: the worktree has a nested repository the board does not carry: mod`),
+    new CheckoutUnreadableError(`the task checkout at ${path} cannot be read: the worktree has a nested repository the board does not carry: mod`),
   );
   expect(gitObjectFileCount(path)).toBe(before);
 });

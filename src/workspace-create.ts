@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -45,6 +45,7 @@ import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import {
   assertRememberedRepo,
+  BOARD_BRANCHES,
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,
@@ -205,7 +206,13 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
     const overlap = boardStateOverlap(path, deps.boardState);
     if (overlap) throw new BoardStateOverlapError(overlap.reason);
   }
+  const cloned = input.mode === "clone" && !existsSync(path);
   const entry = await buildEntry(input, deps);
+  if (entry.branch !== undefined && (entry.branch === BOARD_BRANCHES || entry.branch.startsWith(`${BOARD_BRANCHES}/`))) {
+    // この呼び出しが作った clone は消す —— 残すと次の登録が孤児として流用し、同じ理由で拒まれ続けて名前が塞がる
+    if (cloned) rmSync(path, { recursive: true, force: true });
+    throw new BoardNamedProtectedBranchError(input.name, entry.branch);
+  }
   // issue #383: 「人間の生きた dev checkout」の信号は `rev-parse` の**後**(git
   // リポジトリでないパスは NotAGitRepositoryError が勝つ)、registry コミットの
   // **前**。`entry.repo` は registerExistingCheckout が既に済ませた origin の観測
@@ -231,6 +238,14 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
   if (input.protected) entry.protected = true;
   commitWorkspaceEntry(deps, input.name, entry, `add workspace ${input.name} via WebUI`);
   return path;
+}
+
+/** spec #3273(ADR 0371 決定7): 作業台で盤面が引き直す `refs/heads/board/*` と重なる保護ブランチ —— `board` か `board/` の下。 */
+export class BoardNamedProtectedBranchError extends Error {
+  constructor(name: string, branch: string) {
+    super(`workspace "${name}" would have the protected branch '${branch}', but a protected branch cannot be named board or start with board/: the board keeps its own refs there in a workbench`);
+    this.name = "BoardNamedProtectedBranchError";
+  }
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only

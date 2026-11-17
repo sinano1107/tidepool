@@ -93,6 +93,7 @@ import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { SpawnFailure, WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
+  CheckoutHostError,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   openInterviewRoom,
@@ -103,7 +104,6 @@ import {
   RefsMovedError,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
-  TaskCheckoutHostError,
   taskNamedPlace,
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
@@ -669,7 +669,7 @@ export function startScheduler(deps: {
           // ADR 0373 決定13: 最初の撮りの確認に落ちた —— 落ちた workspace の Quarantine はもう立っている
           if (err instanceof FirstCaptureRefusedError) return stopped(err.stop);
           // ADR 0356 決定2: task の checkout の番地に repo を作れないのは host 側の失敗 —— 名前の場所を quarantine せず spawn の失敗へ
-          if (err instanceof TaskCheckoutHostError) throw err;
+          if (err instanceof CheckoutHostError) throw err;
           // ADR 0373 決定13: 確認が registry を読めないのは、task 自身の名前の解決が registry を読めないのと同じ spawn の失敗
           if (err instanceof FirstCaptureRegistryReadError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;

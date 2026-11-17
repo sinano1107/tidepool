@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { TaskCheckoutUnreadableError } from "../src/git.js";
+import { CheckoutUnreadableError } from "../src/git.js";
 import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
 import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
@@ -95,7 +95,7 @@ it.each(STAGING_FAILURES)("出題の写しで $shape を拒んだら面接室に
   writeFileSync(join(place.path, "notes.txt"), "only in the working tree\n");
   const before = gitObjectFileCount(room.path);
 
-  expect(() => commitRoomCopy(db, place, root.id)).toThrow(TaskCheckoutUnreadableError);
+  expect(() => commitRoomCopy(db, place, root.id)).toThrow(CheckoutUnreadableError);
   expect(gitObjectFileCount(room.path)).toBe(before);
 });
 

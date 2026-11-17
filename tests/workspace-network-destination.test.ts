@@ -134,7 +134,7 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
 
   await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(reason);
   const accept = quarantineChecks({ db, workspace }).workspace!;
-  await expect(accept(workspace.name, "repaired by hand")).rejects.toThrow(reason);
+  await expect(accept(workspace.name, "repaired by hand", "webui")).rejects.toThrow(reason);
   expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
   expect(protectedAndCopy()).toBe(before);
 
@@ -143,7 +143,7 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   git(workspace.path, "update-ref", copyRef, announced);
   const reads = await pickupGate(db, workspace, task, base);
   await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).resolves.toBeDefined();
-  await expect(accept(workspace.name, "repaired by hand")).resolves.toBeUndefined();
+  await expect(accept(workspace.name, "repaired by hand", "webui")).resolves.toBeUndefined();
 });
 
 it("compares raw origin URLs and accepts equivalent spellings of the same GitHub repository", async ({ onTestFinished }) => {
@@ -299,7 +299,7 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   await expect(gate()).rejects.toThrow(`declares repo ${workspace.repo}, but its checkout's origin is ${origin}`);
   git(path, "remote", "set-url", "origin", workspace.repo!);
   await expect(gate()).resolves.toBeDefined();
-  await expect(quarantineChecks({ db, workspace: registered }).workspace!(registered.name)).resolves.toBeUndefined();
+  await expect(quarantineChecks({ db, workspace: registered }).workspace!(registered.name, undefined, "webui")).resolves.toBeUndefined();
 
   const locallyDeclared = { ...registered, repo: undefined };
   await expect(pickupGate(db, locallyDeclared, task, base)).rejects.toThrow(

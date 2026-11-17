@@ -181,6 +181,7 @@ import {
   WorkspaceRepoMismatchError,
 } from "./workspace.js";
 import {
+  BoardNamedProtectedBranchError,
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
@@ -898,7 +899,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
         // register モードで拾えば通る、呼び出し側の状態の問題である
         err instanceof OrphanCheckoutMismatchError ||
-        err instanceof RelativeClonePathError
+        err instanceof RelativeClonePathError ||
+        err instanceof BoardNamedProtectedBranchError
       ) {
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof LiveCheckoutSignalsError) {
