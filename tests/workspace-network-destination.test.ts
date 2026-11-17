@@ -1,10 +1,10 @@
-import { rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { delimiter, join, relative } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GhCliClient } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import { quarantineChecks } from "../src/human-verbs.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
@@ -13,10 +13,10 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { boardRefWriter, pickupGate, recordTaskCheckoutTip, resolveExecutionWorkspace } from "../src/workspace.js";
+import { boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, withRememberedRepoCheck } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, settleReviews, shimGit } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -24,6 +24,93 @@ import { tempDir } from "./temp-dir.js";
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 const NOW = new Date("2026-11-16T00:00:00.000Z");
+
+it.each(["no baseline", "unlearned baseline", "purely-local baseline"] as const)("checks a repo declaration with %s", async (history) => {
+  const workspace = await makeWorkspace("remembered-repository");
+  const { workspace: remote } = await makeRemoteBackedWorkspace("remembered-repository-origin");
+  const database = join(await tempDir("tidepool-destination-state-"), "board.sqlite");
+  let db = openDb(database);
+  onTestFinished(() => { db.close(); });
+  if (history !== "no baseline") await leaveBaseline(db, workspace);
+  if (history === "unlearned baseline") {
+    db.exec("ALTER TABLE workspace_state DROP COLUMN remembered_repo");
+    db.close();
+    db = openDb(database);
+  }
+  const base = await tempDir("tidepool-destination-checkouts-");
+  const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  let declared = { ...workspace, repo: remote.repo };
+  git(workspace.path, "remote", "add", "origin", remote.repo!);
+  const gate = () => pickupGate(db, declared, task, base);
+
+  if (history !== "purely-local baseline") {
+    await expect(gate()).resolves.toBeDefined();
+    expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+    if (history === "unlearned baseline") {
+      git(workspace.path, "config", "--remove-section", "remote.origin");
+      declared = { ...workspace, repo: undefined };
+      await expect(gate()).rejects.toThrow(`was registered for repo ${remote.repo}, but its registry entry no longer declares one.`);
+    }
+    return;
+  }
+
+  const reason = `workspace ${workspace.name} was registered as purely-local, but its registry entry now declares repo ${remote.repo}. Remove \`repo:\`; to give the workspace a remote, publish it.`;
+  await expect(gate()).rejects.toThrow(reason);
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  expect(question.purpose).toContain(reason);
+  const answer = () => submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace, resolveWorkspace: () => declared }) }, question, ["repaired by hand"], undefined, () => NOW, "webui");
+  const dirtyFile = join(workspace.path, "uncommitted");
+  writeFileSync(dirtyFile, "dirty\n");
+  await expect(answer()).rejects.toThrow(reason);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.id).toBe(question.id);
+
+  rmSync(dirtyFile);
+  git(workspace.path, "config", "--remove-section", "remote.origin");
+  declared = { ...workspace, repo: undefined };
+  await answer();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+it("remembers where a relative repo declaration resolved when the baseline was captured", async ({ onTestFinished }) => {
+  const { workspace } = await makeRemoteBackedWorkspace("relative-repo");
+  const repo = relative(workspace.path, workspace.repo!);
+  git(workspace.path, "remote", "set-url", "origin", repo);
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  await leaveBaseline(db, { ...workspace, repo });
+
+  const moved = await tempDir("tidepool-moved-checkout-");
+  const path = join(moved, "checkout");
+  renameSync(workspace.path, path);
+
+  await expect(refreshProtectedBranch(db, { ...workspace, path, repo }, undefined)).rejects.toThrow(
+    `was registered for repo ${workspace.repo}, but its registry entry now says ${repo}.`,
+  );
+});
+
+it("rechecks origin before a first pickup can capture a repo edited after the pickup gate", async ({ onTestFinished }) => {
+  const original = await makeRemoteBackedWorkspace("first-pickup-repo");
+  const changed = await makeRemoteBackedWorkspace("first-pickup-other-repo");
+  changed.publish("unexpected.txt", "other repository\n", "advance the other repo");
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  let current = original.workspace;
+  const workspace = withRememberedRepoCheck(db, current, () => NOW, () => current);
+  const task = registerTask(db, { type: "work", title: "first pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-destination-checkouts-");
+  const reads = await pickupGate(db, workspace, task, base);
+  const calls = await shimGit();
+  current = { ...original.workspace, repo: changed.workspace.repo };
+
+  await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).rejects.toThrow(
+    `declares repo ${changed.workspace.repo}, but its checkout's origin is ${original.workspace.repo}`,
+  );
+  expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
+  expect(git(workspace.path, "branch", "--list", `task/${task.id}`)).toBe("");
+
+  current = original.workspace;
+  await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).resolves.toBeDefined();
+});
 
 it("refuses pickup and Quarantine acceptance before contacting a re-pointed origin", async ({ onTestFinished }) => {
   const { workspace } = await makeRemoteBackedWorkspace("declared");

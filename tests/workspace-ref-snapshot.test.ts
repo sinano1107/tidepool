@@ -2,7 +2,8 @@ import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
-import { refreshProtectedBranch, type WorkspaceConfig } from "../src/workspace.js";
+import { loadRegistry } from "../src/registry.js";
+import { refreshProtectedBranch, resolveExecutionWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
 import {
   api,
@@ -404,6 +405,7 @@ async function publishableBoard(name: string): Promise<{
     dest,
     boot: {
       workspace: ws,
+      resolveWorkspace: (taskWorkspace) => resolveExecutionWorkspace(loadRegistry(registryDir, deps.registry.mode), name, taskWorkspace, workspacesBaseDir),
       workspaceAdmin: { publish: (input) => publishWorkspace(input, { ...deps, db: t.db }) },
       boardState: { paths: [], listWorkspaces: () => [ws] },
     },
@@ -421,9 +423,7 @@ it("セッション中に publish しても、そのセッションは quarantin
     (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
   ).toBe(200);
   expect(git(ws.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(ws.path, "rev-parse", "main"));
-  // 後始末の完走は pickup の契機である(ADR 0119 決定3)。この盤面の workspace 設定は boot 時の
-  // 静的な値(repo 宣言なし)なので、次の pickup(統合点レビュー)が publish 後の origin との
-  // 食い違いを別の quarantine として立てる —— 見たいのは解放時の判定だけなので pickup を止めておく
+  // ADR 0119 決定3: pause the next pickup to observe the release of this session on its own.
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   await complete(t, task.id);

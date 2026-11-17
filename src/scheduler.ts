@@ -1,6 +1,6 @@
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { boardHalts } from "./board-halt.js";
-import type { BoardStatePath } from "./board-state.js";
+import { BoardStateOverlapError, type BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider, recordProbeBoardCall } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type CodexAppServerProbe, type CodexAppServerProbeResult, codexProbeStop, whyRowUnlisted } from "./codex-app-server.js";
@@ -23,7 +23,7 @@ import {
   selectable,
   windowMatchesSetting,
 } from "./execution-setting.js";
-import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
+import { type GitHubClient, IssueGoneError, type IssueRef, type RepoSlug } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
@@ -106,6 +106,7 @@ import {
   TaskCheckoutHostError,
   taskNamedPlace,
   type WorkspaceConfig,
+  WorkspaceRepoMismatchError,
 } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
@@ -491,6 +492,7 @@ export function startScheduler(deps: {
     try {
       result = { value: await read };
     } catch (error) {
+      if (isBoardDbRefusal(error)) throw error;
       result = { error };
     }
     if ("value" in result || result.error instanceof IssueGoneError) issueExpansionAnswered();
@@ -542,13 +544,22 @@ export function startScheduler(deps: {
     live: () => boolean,
   ): Promise<ResourceStop | undefined> {
     if (!live()) return undefined;
-    // ADR 0378 決定3: a different origin is a local repair. A token probe cannot change the result.
-    if (err instanceof PickupGateError && err.cause instanceof OriginRepositoryMismatchError) {
+    const pickupCause = err instanceof PickupGateError ? err.cause : err;
+    // ADR 0377 決定4: keep the fixed-point refusal when a workspace also has repo drift.
+    if (pickupCause instanceof BoardStateOverlapError) return quarantineWorkspace(db, workspace.name, err, clock.now());
+    // ADR 0378 決定3・6〜8: a different origin or declared repo is a local repair. A token probe cannot change the result.
+    if (pickupCause instanceof OriginRepositoryMismatchError || pickupCause instanceof WorkspaceRepoMismatchError) {
       return quarantineWorkspace(db, workspace.name, err, clock.now());
     }
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
-    const ref = workspaceNetworkDestination(workspace)?.github;
+    let ref: RepoSlug | undefined;
+    try {
+      ref = workspaceNetworkDestination(workspace)?.github;
+    } catch (cause) {
+      if (!(cause instanceof WorkspaceRepoMismatchError || cause instanceof OriginRepositoryMismatchError)) throw cause;
+      return quarantineWorkspace(db, workspace.name, cause, clock.now());
+    }
     let guidance: string | null = null;
     // 仲介の断りも到達失敗も `tokenRefusal` が理由の文字列に畳むので、ここは投げない
     if (github && ref) guidance = (await repairRepoAccess(github, ref)).guidance;
@@ -736,6 +747,7 @@ export function startScheduler(deps: {
     const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand());
     if ("value" in read) return { pass: read.value };
     const err = read.error;
+    if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
     if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
     // 確定的失敗 (ADR 0016): the reference is dead for good, not this
     // cycle's weather — the same watchdog-shaped retry/abandon question
@@ -816,6 +828,7 @@ export function startScheduler(deps: {
     const read = await readGitHub(github.getIssueWithState(ref));
     if ("error" in read) {
       const err = read.error;
+      if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
       if (err instanceof IssueGoneError && err.reason === "not_found") return { pass: { ...briefing, issue: { number: ref.number, state: "not_found" } } };
       return { skip: "gitHub", ref, error: err };
     }

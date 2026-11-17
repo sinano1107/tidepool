@@ -230,7 +230,8 @@ export function networkDestination(source: string, base: string) {
 
 /** ADR 0378 決定1: use the declaration even when Git runs from a task checkout, which has no origin of its own. */
 export function workspaceNetworkDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }) {
-  const { path, repo } = workspace.namedPlace ?? workspace;
+  const place = workspace.namedPlace ?? workspace;
+  const { path, repo } = place.checkRememberedRepo?.(place) ?? place;
   return repo === undefined ? undefined : networkDestination(repo, path);
 }
 

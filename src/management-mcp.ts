@@ -131,7 +131,7 @@ import { listLog } from "./triage.js";
 import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
-import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
 import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
@@ -243,6 +243,7 @@ function registryToolError(err: unknown) {
     err instanceof UnknownWorkspaceError ||
     err instanceof WorkspaceRegistryUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||
+    err instanceof WorkspaceRepoMismatchError ||
     err instanceof CheckoutHasOriginError ||
     err instanceof InvalidAgentNameError ||
     err instanceof UnknownAgentError ||

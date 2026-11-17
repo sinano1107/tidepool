@@ -1,10 +1,10 @@
 /** Two-phase place checks shared by pickup, release and prose (ADR 0329 決定10〜14). */
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { git, readCheckoutOrigin } from "./git.js";
-import { remoteTrackingRef } from "./github-auth.js";
+import { remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
@@ -53,7 +53,18 @@ export function protectedBranchRef(workspace: WorkspaceConfig): string {
 
 /** ADR 0360 決定3・5: 記録の tree を読むときは、同名のタグを解決しない完全な ref を使う。 */
 export function exactProtectedBranchRef(workspace: WorkspaceConfig): string {
-  return isRemoteBacked(workspace) ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
+  const branch = protectedBranch(workspace);
+  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : `refs/heads/${branch}`;
+}
+
+/** The registry's declared ref for read-only projections, which do not raise Quarantine. */
+export function declaredProtectedBranchRef(workspace: WorkspaceConfig): string {
+  const branch = protectedBranch(workspace);
+  return declaresWorkspaceRepo(workspace) ? remoteTrackingRef(branch) : branch;
+}
+
+function declaresWorkspaceRepo(workspace: WorkspaceConfig): boolean {
+  return workspace.repo !== undefined;
 }
 
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
@@ -66,10 +77,15 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: B
       describe: `${scope}it overlaps none of the board's fixed points — the board's own state paths and checkout, and the registry clone.`,
       check: () => {
         const overlap = fixedPoints && boardStateOverlap(place.path, fixedPoints);
-        if (overlap) throw new Error(overlap.reason);
+        if (overlap) throw new BoardStateOverlapError(overlap.reason);
       },
     },
     { phase: "before-open", describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
+    {
+      phase: "before-open",
+      describe: `${scope}the declared \`repo:\` agrees with the repository remembered in the baseline, if it has one.`,
+      check: () => place.checkRememberedRepo?.(place),
+    },
     {
       phase: "before-open",
       describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`), and both point to the same repository.`,
@@ -82,7 +98,7 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: B
 function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: boolean): PickupPredicate[] {
   // 予告の実環境は設定を持たないので、既定名や remote の有無を答えにしない(ADR 0329 決定10)。
   const branch = place.path ? `protected branch \`${protectedBranch(place)}\`` : "configured protected branch";
-  const remoteRef = place.path && isRemoteBacked(place) ? `\`${protectedBranchRef(place)}\`` : "its remote-tracking ref";
+  const remoteRef = place.path && declaresWorkspaceRepo(place) ? `\`${declaredProtectedBranchRef(place)}\`` : "its remote-tracking ref";
   const prefix = `${scope}${IF_REPOSITORY_PRESENT}`;
   return [
     {
@@ -276,10 +292,9 @@ function recordedRoomPredicates(
   ];
 }
 
-/** ADR 0052 決定3: この workspace が remote の正本を持つと**宣言している**か。
- *  clone を覗く関数ではない —— `repo` の有無だけを読む。 */
+/** ADR 0378 決定6〜8: an edited declaration cannot silently switch between local and remote. */
 export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
-  return workspace.repo !== undefined;
+  return workspaceNetworkDestination(workspace) !== undefined;
 }
 
 export class GitDirNotADirectoryError extends Error {
@@ -387,17 +402,17 @@ function originRepairInstruction(verb: "add" | "set-url", repo: string, displaye
 }
 
 /** ADR 0378 決定3・4: compare the raw origin at both pickup and Quarantine acceptance. */
-function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
+export function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
   const { name, path, repo } = workspace;
   const origin = readCheckoutOrigin(path, "first");
-  if (origin === null) throw new Error(`workspace ${name}: could not read its checkout's origin in ${path}`);
+  if (origin === null) throw new OriginRepositoryMismatchError(`workspace ${name}: could not read its checkout's origin in ${path}`);
   if (sameRepository(repo, origin)) return;
   if (repo === undefined) {
-    throw new Error(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
+    throw new OriginRepositoryMismatchError(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
   }
   const declared = repositoryLabel(repo, { preserveSshUser: true });
   if (origin === undefined) {
-    throw new Error(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
+    throw new OriginRepositoryMismatchError(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
   }
   const configured = repositoryLabel(origin, { preserveSshUser: true });
   throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${originRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);

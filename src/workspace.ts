@@ -24,6 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { appendEvent, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
 import {
   boardReadTree,
@@ -50,16 +51,20 @@ import {
 } from "./git.js";
 import {
   type GitHubAuth,
+  isRelativeLocalPath,
   networkDestination,
+  remoteTrackingRef,
   workspaceNetworkDestination,
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
+  assertRemoteDeclarationMatchesClone,
   checkoutPickupPredicates,
   conventionCheckoutPath,
   exactProtectedBranchRef,
   gonePlaceReason,
   isRemoteBacked,
+  OriginRepositoryMismatchError,
   type PickupPredicate,
   type PlaceFire,
   protectedBranch,
@@ -83,7 +88,7 @@ import {
   type Registry,
   type WorkspaceEntry,
 } from "./registry.js";
-import { sameRepository } from "./repo-access.js";
+import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
@@ -120,6 +125,8 @@ export interface WorkspaceConfig {
   branch?: string;
   /** ADR 0378 決定1: the registry declares the network destination in `repo`. An absent value declares a purely-local workspace. */
   repo?: string;
+  /** ADR 0378 決定7・8: board operations recheck the live declaration before using its destination. */
+  checkRememberedRepo?: (place: WorkspaceConfig) => Pick<WorkspaceConfig, "path" | "repo">;
   /** Command prefixes a review session may run despite the `manual` write
    *  floor (issue #144 / ADR 0035), passed through from the registry entry the
    *  same way `branch` is. Absent → none: a `WorkspaceConfig` built outside the
@@ -277,6 +284,7 @@ export class PickupGateError extends Error {
  *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
  *  最初に落ちた場所で `PickupGateError` を投げる。 */
 export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, fixedPoints?: BoardStatePath[], live?: () => boolean) {
+  workspace = withRememberedRepoCheck(db, workspace);
   // (task, 面接室) の項は場所の項の後 —— 受験者だけは先(下)
   const room = (rootId: string, fetchedFirst = false) => ({
     ...roomPlace(db, rootId, workspacesBaseDir),
@@ -323,11 +331,12 @@ export async function firePickupPredicates(
 ): Promise<void> {
   const fire: PlaceFire = {
     fetch: async (target) => {
+      target = withRememberedRepoCheck(db, target);
       await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
       if (board.live?.() === false) return;
       if (isRemoteBacked(target)) fetchBranchCopy(target, board.githubAuth, protectedBranch(target), boardRefWriter(db, target));
     },
-    park: (target) => parkOnProtectedBranch(db, target),
+    park: (target) => parkOnProtectedBranch(db, withRememberedRepoCheck(db, target)),
   };
   for (const predicate of predicates) {
     if (board.live?.() === false) return;
@@ -919,6 +928,7 @@ export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
+  protectedRef?: string,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   // 修理子の type は review と同じく lineage に透明(ADR 0272 決定6 / ADR 0279 決定4)
   // interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)
@@ -943,11 +953,11 @@ export function resolveTaskBranchLineage(
   for (const ancestor of ancestors) {
     if (ancestor.type !== "work") continue;
     const branch = taskBranch(ancestor.id);
-    const base = candidate ?? protectedBranchRef(workspace);
     if (!isSettled(ancestor.status)) {
       candidate = branch;
       continue;
     }
+    const base = candidate ?? (protectedRef ??= protectedBranchRef(withRememberedRepoCheck(db, workspace)));
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
     else if (!effect.historyConverged) outlivedForkSource = true;
@@ -961,8 +971,9 @@ export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
+  protectedRef?: string,
 ): string | undefined {
-  return resolveTaskBranchLineage(db, workspace, task).branch;
+  return resolveTaskBranchLineage(db, workspace, task, protectedRef).branch;
 }
 
 /** 名前の場所の HEAD を保護ブランチへ戻す1手。ADR 0345 決定2: HEAD の行に予告して畳む。ADR 0356 決定5: 人間の checkout で
@@ -977,7 +988,7 @@ function checkoutThroughGate(db: Db, workspace: WorkspaceConfig, branch: string)
   } catch (err) {
     if ((err as { status?: number }).status !== 1 || !isRemoteBacked(workspace) || branch !== protectedBranch(workspace)) throw err;
     // ADR 0356 決定5: preserve checkout's creation of a missing local protected branch from origin.
-    tip = git(workspace.path, "rev-parse", "--verify", protectedBranchRef(workspace));
+    tip = git(workspace.path, "rev-parse", "--verify", remoteTrackingRef(branch));
     writes.push([ref, tip]);
   }
   writeBoardRefs(db, workspace, writes, () => {
@@ -1021,9 +1032,10 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
 /** タスクブランチを切る sha(ADR 0053)。受験者は系譜を持たず、面接室の出題の head から切る(ADR 0276 決定1)。
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  return interviewRole(db, task) === "examinee"
-    ? resolvablePosedHead(db, workspace, task)
-    : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? exactProtectedBranchRef(workspace)}^{commit}`);
+  if (interviewRole(db, task) === "examinee") return resolvablePosedHead(db, workspace, task);
+  const base = exactProtectedBranchRef(withRememberedRepoCheck(db, workspace));
+  const source = lineageTaskBranch(db, workspace, task, base) ?? base;
+  return git(workspace.path, "rev-parse", `${source}^{commit}`);
 }
 
 /** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。 */
@@ -1099,13 +1111,15 @@ export async function ensureWorkspaceToken(
   auth: GitHubAuth | undefined,
   options: { fresh?: boolean } = {},
 ): Promise<void> {
-  await auth?.ensureToken(workspaceNetworkDestination(workspace)?.key, options);
+  const key = workspaceNetworkDestination(workspace)?.key;
+  await auth?.ensureToken(key, options);
 }
 
 /** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを進める —— 写しは pickup と
  *  後始末の fetch でしか動かず、merge の直後はまだ merge された内容を持たない。走っている session の基準の下で写しを
  *  動かすので、原本の sha を先に知ってから口を通して書く(ADR 0243 決定3)。失敗は投げる(呼び手の根の失敗になる)。 */
 export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
+  workspace = withRememberedRepoCheck(db, workspace);
   if (!isRemoteBacked(workspace)) return;
   await ensureWorkspaceToken(workspace, auth);
   fetchBranchCopy(workspace, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
@@ -1113,11 +1127,12 @@ export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig,
 
 /** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、origin から sha で取る。sha の fetch は `refs/` に
  *  何も書かない(FETCH_HEAD だけ)ので口は要らない。失敗は投げる。 */
-export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> {
+export async function fetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> {
   try {
     git(workspace.path, "cat-file", "-e", `${sha}^{commit}`);
     return;
   } catch {}
+  workspace = withRememberedRepoCheck(db, workspace);
   await ensureWorkspaceToken(workspace, auth);
   fetchCommit(workspace, auth, sha);
 }
@@ -1220,13 +1235,6 @@ function headValue(workspace: WorkspaceConfig): string {
   }
 }
 
-/** ADR 0351 決定2: 全撮りは盤面がまだ持ったことのない checkout の pickup(行が無いか NULL)と quarantine の受理
- *  (`retakeRefBaselines`、決定4)だけが撮り、それ以外は盤面自身が書いた ref の行だけが書く前の予告と書いた後の畳みで更新される
- *  (`writeBoardRefs`)、比較が2値行を畳む(`compareAndFoldBaseline`)。 */
-function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
-  writeSnapshot(db, workspace.name, currentRefs(workspace));
-}
-
 /** ADR 0373 決定13: 最初の撮りの確認に落ちた —— 落ちた workspace の Quarantine はもう立っていて、`stop` がそれを名指す。
  *  撮りに来た task(や着地)はこの停止で待つ(spec #3273)。 */
 export class FirstCaptureRefusedError extends Error {
@@ -1246,6 +1254,7 @@ export class FirstCaptureRegistryReadError extends Error {
 function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
   const key = workspace.name;
   const first = !holdsBaseline(db, key);
+  const declaration = withRememberedRepoCheck(db, workspace, () => board.now).checkRememberedRepo(workspace);
   if (!first) compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
   else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now);
   const pin = storedSparsePolicy(db, key);
@@ -1253,7 +1262,10 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
   // ADR 0356 決定3: an existing checkout without a pin may already carry worker-written rules.
   const policy = first && pin === undefined ? readSparsePolicy(workspace) : undefined;
   db.transaction(() => {
-    if (first) snapshotRefs(db, workspace);
+    if (first) {
+      writeSnapshot(db, key, currentRefs(workspace));
+      writeRememberedRepo(db, key, encodeWorkspaceRepo(declaration));
+    }
     if (pin === undefined) db.prepare("INSERT INTO workspace_sparse_policies (name, policy) VALUES (?, ?)").run(key, JSON.stringify(policy ?? null));
   })();
 }
@@ -1286,11 +1298,81 @@ function confirmBaselinesBeforeFirstCapture(db: Db, resolveRegistered: Workspace
   }
 }
 
+/** ADR 0378 決定6・10: writing refs preserves the remembered repository on an existing row. */
 function writeSnapshot(db: Db, key: string, refs: string): void {
   db.prepare(
     `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
      ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot`,
   ).run(key, refs);
+}
+
+// ADR 0378 決定6: SQL NULL means unlearned; JSON null is a learned purely-local declaration.
+function encodeWorkspaceRepo({ path, repo }: Pick<WorkspaceConfig, "path" | "repo">): string {
+  return JSON.stringify(repo !== undefined && isRelativeLocalPath(repo) ? networkDestination(repo, path).url : repo ?? null);
+}
+
+function readRememberedRepo(db: Db, name: string): string | null | undefined {
+  return db.prepare("SELECT remembered_repo FROM workspace_state WHERE name = ? AND ref_snapshot <> ''").pluck().get(name) as string | null | undefined;
+}
+
+function writeRememberedRepo(db: Db, name: string, value: string | null): void {
+  db.prepare("UPDATE workspace_state SET remembered_repo = ? WHERE name = ?").run(value, name);
+}
+
+/** ADR 0378 決定10: publish changes a held baseline's repo alongside its registry entry, and can roll back the exact prior value. */
+export function rememberPublishedRepo(db: Db, workspace: WorkspaceConfig): () => void {
+  const { name } = workspace;
+  const before = readRememberedRepo(db, name);
+  if (before === undefined) return () => {};
+  writeRememberedRepo(db, name, encodeWorkspaceRepo(workspace));
+  return () => writeRememberedRepo(db, name, before);
+}
+
+export class WorkspaceRepoMismatchError extends DomainError {}
+
+/** ADR 0378 決定6〜8: a disagreement is a workspace stop even when the caller ignores a failed network read. */
+export function assertRememberedRepo(db: Db, workspace: WorkspaceConfig, now: Date): void {
+  const { name, path, repo } = workspace;
+  const saved = readRememberedRepo(db, name);
+  if (saved === undefined) return;
+  if (saved === null) {
+    writeRememberedRepo(db, name, encodeWorkspaceRepo(workspace));
+    return;
+  }
+  const remembered = (JSON.parse(saved) as string | null) ?? undefined;
+  const destination = (value: string | undefined) => value === undefined ? undefined : networkDestination(value, path).url;
+  if (sameRepository(destination(remembered), destination(repo))) return;
+  const reason = remembered === undefined
+    ? `workspace ${name} was registered as purely-local, but its registry entry now declares repo ${repositoryLabel(repo!)}. Remove \`repo:\`; to give the workspace a remote, publish it.`
+    : repo === undefined
+      ? `workspace ${name} was registered for repo ${repositoryLabel(remembered)}, but its registry entry no longer declares one. Put \`repo:\` back and answer.`
+      : `workspace ${name} was registered for repo ${repositoryLabel(remembered)}, but its registry entry now says ${repositoryLabel(repo)}. Put \`repo:\` back and answer. To move the workspace to another repository, delete it afterwards and register it again.`;
+  const mismatch = new WorkspaceRepoMismatchError(reason);
+  // Workspace Quarantine adds its own punctuation after the reason.
+  quarantineWorkspace(db, name, reason.slice(0, -1), now);
+  throw mismatch;
+}
+
+export function withRememberedRepoCheck<T extends WorkspaceConfig>(
+  db: Db,
+  workspace: T,
+  now = () => new Date(),
+  resolveCurrent?: (name: string) => WorkspaceConfig,
+): T & Required<Pick<WorkspaceConfig, "checkRememberedRepo">> {
+  return {
+    ...workspace,
+    checkRememberedRepo: workspace.checkRememberedRepo ?? ((place: WorkspaceConfig) => {
+      // ADR 0066 決定5 / ADR 0378 決定7: a token lookup can span publish's synchronous update, so check the current declaration.
+      const current = resolveCurrent?.(place.name) ?? place;
+      assertRememberedRepo(db, current, now());
+      if (current.path !== place.path) {
+        throw new OriginRepositoryMismatchError(`workspace ${place.name}: the registered checkout path changed during the operation. Retry with the current entry.`);
+      }
+      // ADR 0378 決定3: an earlier pickup predicate only checked the declaration it was given.
+      if (current.repo !== place.repo) assertRemoteDeclarationMatchesClone(current);
+      return current;
+    }),
+  };
 }
 
 /** ADR 0351 決定4: quarantine の受理は検査がすべて成立した後に、名前に掛かる場所それぞれの基準を自分の checkout から撮り直す ——
@@ -1652,6 +1734,7 @@ function observeCheckoutAfterCompletion(db: Db, place: TaskCheckoutPlace, taskId
  *  A remote-backed place follows origin only by fast-forward, preserving ahead or diverged commits for repair. */
 function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
+  const remoteBacked = isRemoteBacked(workspace);
   try {
     // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、人間の修理(ADR 0239 帰結の `merge -s ours`、ADR 0351 決定1・4)や origin にしか無い
     // 保護ブランチは HEAD を保護ブランチの外に置く
@@ -1660,8 +1743,8 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  if (!isRemoteBacked(workspace)) return;
-  const ref = protectedBranchRef(workspace);
+  if (!remoteBacked) return;
+  const ref = remoteTrackingRef(branch);
   const remoteSha = git(workspace.path, "rev-parse", ref);
   const localRef = `refs/heads/${branch}`;
   const localSha = git(workspace.path, "rev-parse", localRef);
@@ -1809,6 +1892,7 @@ export function releaseWorkspace(
 
 /** 完了なら帰り先へ merge back し、名前の場所を休止位置へ戻す。 */
 function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBack: boolean, githubAuth: GitHubAuth | undefined, tokenFailure: unknown, recordedTip?: string): void {
+  workspace = withRememberedRepoCheck(db, workspace);
   // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
   // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
   // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
@@ -2221,7 +2305,7 @@ function landingConflict(workspace: WorkspaceConfig, branch: string, task: strin
  *
  *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。 */
 export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string): string {
-  if (isRemoteBacked(workspace)) {
+  if (isRemoteBacked(withRememberedRepoCheck(db, workspace))) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
   const branch = protectedBranch(workspace);

@@ -106,6 +106,14 @@ export interface BoardStateOverlap {
   reason: string;
 }
 
+/** ADR 0040 / ADR 0377 決定4: a fixed-point overlap is a local refusal in registration, pickup and Quarantine acceptance. */
+export class BoardStateOverlapError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "BoardStateOverlapError";
+  }
+}
+
 /** パス区切りを尊重した包含判定(ADR 0040)。文字列の前置比較は
  *  `/opt/tidepool` と `/opt/tidepool-workspaces` の境界で誤検知する。
  *  同一パス(`relative` が空)も包含に含める。 */
