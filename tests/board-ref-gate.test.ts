@@ -79,7 +79,7 @@ it.each([false, true])("catch-up advances the task branch ref in the named place
     releaseWorkspace(db, place, task, NOW);
     const head = git(ws.path, "rev-parse", "HEAD");
 
-    catchUpTaskBranch(db, ws, task.id);
+    catchUpTaskBranch(db, ws, task.id, await tempDir("tidepool-task-checkouts-"));
 
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");

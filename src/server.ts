@@ -541,6 +541,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     interviewerName,
     isProtectedWorkspace: options.isProtectedWorkspace,
     githubAuth: options.githubAuth,
+    workspacesDir: options.workspacesDir,
     // scheduler は後で組まれ、起動完了で解決される(pollNow と同じ遅延束縛)
     pickupIdle: () => startedScheduler?.idle() ?? Promise.resolve(),
   });

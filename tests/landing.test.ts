@@ -6,7 +6,7 @@ import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { resolveExecutionAgent } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
+import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { GhCliClient } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
@@ -52,6 +52,7 @@ import {
   releaseWorkspace,
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
+  WORKBENCH_SEGMENT,
   type WorkspaceConfig,
   workbenchPath,
   workspaceProtectionReader,
@@ -160,7 +161,7 @@ function announceThenCrash(board: Db, workspace: WorkspaceConfig, ref: string, n
 
 /** 収束を1回走らせ、`taskId` の根の verdict を返す。その回で扱わなかった(根でない・候補から外れた)なら undefined。 */
 async function convergeOn(landing: Landing, taskId: string, answering?: string) {
-  const verdicts = await landing.converge(answering === undefined ? undefined : { answering });
+  const verdicts = await landing.converge(answering === undefined ? undefined : { answering: { question: answering, answerer: HUMAN_ANSWERER } });
   return verdicts.find((root) => root.taskId === taskId)?.verdict;
 }
 
@@ -1656,7 +1657,7 @@ it("retry の回が答えている question を読めずに reject しても、�
     return prepare(sql);
   });
 
-  const retry = landing.converge({ answering: "question-1" });
+  const retry = landing.converge({ answering: { question: "question-1", answerer: HUMAN_ANSWERER } });
   const bundled = landing.converge();
   await expect(retry).rejects.toThrow("database is locked");
   await expect(bundled).rejects.toThrow("database is locked");
@@ -2322,6 +2323,118 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
   ).split(" ");
   expect(firstParent).toBe(before);
   expect(secondParent).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
+});
+
+/** 追いつきの conflict(H6): fork 元が squash 着地した後、origin の保護ブランチが修理と同じ行を変えた根。`openFailure` なら収束の前に
+ *  別の失敗で昇格失敗 question が開いている(回答が先に conflict に当たる)。 */
+async function catchUpConflictRoot(name: string, { openFailure = false } = {}) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const workbenchBase = await tempDir("tidepool-task-checkouts-");
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, workspacesDir: workbenchBase });
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "ship the parent change", completion_criteria: "the parent PR exists" }, clock.now(), ...HUMAN_WEBUI);
+  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  commitWork(workspace.path, "feature.txt", "parent result\n");
+  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
+  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
+  const repair = registerTask(
+    db,
+    { type: "work", parent_id: parent.id, title: "repair", purpose: "repair the landed result", completion_criteria: "a repair PR exists" },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  await squashTaskIntoOrigin(workspace, parent.id);
+  const publisher = await tempDir("tidepool-protected-change-");
+  git(publisher, "clone", workspace.repo!, ".");
+  commitWork(publisher, "repair.txt", "protected version\n");
+  git(publisher, "push", "origin", "main");
+  git(workspace.path, "fetch", "origin", "main");
+  commitWork(workspace.path, "repair.txt", "task version\n");
+  git(workspace.path, "checkout", "main");
+  finish(db, clock, repair);
+  if (openFailure) registerPrPromotionFailureQuestion(db, getTask(db, repair.id)!, "push failed", clock.now());
+  const target = `task/${repair.id}`;
+  const workbench = () => realpathSync(workbenchPath(workbenchBase, target));
+  // spec #3273 text A2
+  const a2 = () =>
+    `main does not merge cleanly into '${target}'. The board opened the workbench at ${workbench()} for it. There, on ${target}, ` +
+    "run `git merge board/origin/main` and resolve the conflict (or, in your own clone with the workbench as a remote: fetch it, " +
+    `\`git merge <remote>/board/origin/main\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now ` +
+    `(\`board/${target}\`) and origin/main, with nothing uncommitted. Then answer \`retry\`.`;
+  /** 人間が作業台で origin の保護ブランチを merge し、conflict を保護ブランチの側で解いて commit する。 */
+  const resolve = () => {
+    expect(() => git(workbench(), "merge", "board/origin/main")).toThrow();
+    writeFileSync(join(workbench(), "repair.txt"), "protected version\n");
+    writeFileSync(join(workbench(), "repair-only.txt"), "resolved repair\n");
+    git(workbench(), "add", "repair.txt", "repair-only.txt");
+    git(workbench(), "commit", "--no-edit");
+  };
+  return { workspace, db, clock, github, landing, repair: getTask(db, repair.id)!, target, workbenchBase, workbench, a2, resolve };
+}
+
+// ADR 0371 決定7・11 / spec #3273 pin A9: 追いつきの conflict は昇格の失敗の中で作業台を開き、question の本文がそれを言う(text A2)。
+// retry は人間の merge を取り込み、追いついてから push する(ADR 0376 決定8)
+it("追いつきの conflict は作業台を開いて本文が名指し、作業台で merge して retry すると取り込んで PR を開く", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-workbench");
+
+  const verdict = await convergeOn(c.landing, c.repair.id);
+
+  expect(verdict).toEqual({ kind: "failed", reason: "promotion_failed", error: c.a2() });
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  expect(failure).toMatchObject({ title: "PR promotion failed: repair", purpose: c.a2() });
+  expect(git(c.workbench(), "rev-parse", "board/origin/main")).toBe(git(c.workspace.path, "rev-parse", "refs/remotes/origin/main"));
+  expect(c.github.requests).toEqual([]);
+
+  c.resolve();
+  const tip = git(c.workbench(), "rev-parse", "HEAD");
+  await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry");
+
+  expect(getTask(c.db, failure!.id)?.status).toBe("done");
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"]).map(({ payload }) => payload)).toEqual([
+    expect.objectContaining({ target: `refs/heads/${c.target}`, tip, entry: "promotion_retry" }),
+  ]);
+  expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
+  expect(git(c.workspace.path, "ls-remote", "origin", `refs/heads/${c.target}`).split("\t")[0]).toBe(git(c.workspace.path, "rev-parse", c.target));
+  expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("repair-only.txt");
+});
+
+it("追いつきの conflict で作業台を開けなくても本文はその理由を言い、retry の答え直しが作業台を開く(text A7d)", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-no-workbench");
+  // 段の場所にファイルがあって作業台の dir を作れない
+  writeFileSync(join(c.workbenchBase, WORKBENCH_SEGMENT), "in the way\n");
+
+  await convergeOn(c.landing, c.repair.id);
+
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  expect(failure!.purpose).toMatch(new RegExp(`^main does not merge cleanly into '${c.target}'\\. The board could not open the workbench \\(.+\\); answer again and it opens it again\\.$`, "s"));
+  rmSync(join(c.workbenchBase, WORKBENCH_SEGMENT));
+
+  const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
+
+  expect(refusal).toEqual(new DomainError(c.a2()));
+});
+
+it("別の失敗で開いていた昇格失敗 question への retry は追いつきの conflict に当たって拒まれ、作業台を開き、作業台で merge した次の retry が通る", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-on-retry", { openFailure: true });
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  const before = git(c.workspace.path, "rev-parse", c.target);
+
+  const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
+
+  expect(refusal).toEqual(new DomainError(c.a2()));
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+  expect(git(c.workspace.path, "rev-parse", c.target)).toBe(before);
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
+  expect(c.github.requests).toEqual([]);
+
+  c.resolve();
+  await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry");
+
+  expect(getTask(c.db, failure!.id)?.status).toBe("done");
+  expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
+  expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("repair-only.txt");
 });
 
 it("追いつき merge をまたいで走るセッションは、盤面が動かした task branch で quarantine されない", async () => {
@@ -4168,7 +4281,7 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
   // やり直しそのものを撃つ —— 受理は検査の後に基準を撮り直し、動いた ref を回答で受け入れる(ADR 0351 決定4)
-  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), answerer: HUMAN_ANSWERER, now: clock.now() });
+  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), question: "", entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: clock.now() });
 
   expect(head(workspace)).toBe("main");
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
@@ -4178,7 +4291,7 @@ it("内容が帰り先に届いていない done の work が無ければ、merg
   const pr = await openPushedPr("redo-merge-back-nothing", "escalate");
   const { workspace, db, work, clock } = pr;
 
-  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), answerer: HUMAN_ANSWERER, now: clock.now() });
+  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), question: "", entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: clock.now() });
 
   expect(head(workspace)).toBe(`task/${work.id}`);
 });
@@ -4492,11 +4605,12 @@ it("タスクブランチの有無を読む rev-parse が exit 1 以外で落ち
 });
 
 // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない。push はする
-it("PR を開いた後に積み残しが残れば landed を返さず、内容の届いていない子孫を名指す失敗 question を1枚立て、merge back の後の retry で着地する", async () => {
+// ADR 0371 決定10: 積み残しの retry は、その根の分解ツリーの merge back を撃ち直してから収束する —— 人間は名前の場所で merge しない
+it("PR を開いた後に積み残しが残れば landed を返さず、内容の届いていない子孫を名指す失敗 question を1枚立て、retry が merge back を撃ち直して着地する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("left-behind-after-open");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, workspacesDir: await tempDir("tidepool-task-checkouts-") });
   const work = landingWork(db, clock);
   git(workspace.path, "checkout", "-b", `task/${work.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -4513,12 +4627,12 @@ it("PR を開いた後に積み残しが残れば landed を返さず、内容�
   const failures = promotionFailures(db, work.id);
   expect(failures.map((q) => q.purpose)).toEqual([expect.stringContaining(`task/${repair.id}`)]);
 
-  git(workspace.path, "checkout", `task/${work.id}`);
-  git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
-  await expect(convergeOn(landing, work.id, failures[0]!.id)).resolves.toMatchObject({
-    kind: "landed",
-    form: "open_pull_request_updated",
-  });
+  await answerPromotion(db, clock, landing, workspace, failures[0]!, "retry");
+
+  expect(getTask(db, failures[0]!.id)?.status).toBe("done");
+  expect(git(workspace.path, "show", `refs/remotes/origin/task/${work.id}:repair.txt`)).toBe("fixed");
+  expect(git(workspace.path, "ls-remote", "origin", `refs/heads/task/${work.id}`).split("\t")[0]).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(git(workspace.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
 it("開いている PR へ push した後に積み残しが残れば landed を返さず、失敗 question を1枚立てる", async () => {
@@ -4533,9 +4647,78 @@ it("開いている PR へ push した後に積み残しが残れば landed を�
       title: "PR promotion left content behind: ship",
       purpose:
         `Pushing task/${work.id} for completed task "ship" left content behind: the content of task/${repair.id} ` +
-        `has not reached task/${work.id}. Merge it back into task/${work.id}, then retry.`,
+        `has not reached task/${work.id}. Answer \`retry\` and the board re-fires those merge backs. If one conflicts, the answer is ` +
+        "refused and the refusal says where to resolve it.",
     },
   ]);
+});
+
+// ADR 0371 決定10 / spec #3273 pin A12: 積み残しの retry は merge back を撃ち直し、conflict は作業台を開いて拒む(text A1)。同じ帰り先へ
+// conflict する子が2つなら、1回の回答で1つの conflict
+it("積み残しの retry が撃ち直す merge back が同じ帰り先へ2つ conflict すれば、回答ごとに1つずつ作業台で拒み、解いた分を取り込んで最後の回答で push する", async () => {
+  const { workspace, db, clock, github, work } = await openPushedPr("left-behind-two-conflicts", "escalate");
+  const workbenchBase = await tempDir("tidepool-task-checkouts-");
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, resolveAuthority: () => profile("escalate"), workspacesDir: workbenchBase });
+  const children: Task[] = [];
+  for (const body of ["from the first child\n", "from the second child\n"]) {
+    const child = attachUnsettledChild(db, clock, work.id);
+    const place = await prepareAtPickup(db, workspace, child);
+    commitWork(place.path, "repair.txt", body);
+    recordTaskCheckoutTip(db, place, child.id);
+    completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
+    children.push(child);
+  }
+  git(workspace.path, "checkout", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "from the root\n");
+  git(workspace.path, "checkout", "main");
+  finish(db, clock, work);
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "content_left_behind" });
+  const [leftover] = promotionFailures(db, work.id);
+  const target = `task/${work.id}`;
+  const workbench = () => realpathSync(workbenchPath(workbenchBase, target));
+  const refused = (source: string) =>
+    `${source} does not merge cleanly into '${target}'. The board opened the workbench at ${workbench()} for it. There, on ${target}, ` +
+    `run \`git merge board/${source}\` and resolve the conflict (or, in your own clone with the workbench as a remote: fetch it, ` +
+    `\`git merge <remote>/board/${source}\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now ` +
+    `(\`board/${target}\`) and ${source}, with nothing uncommitted. To discard ${source}'s work instead, record that with ` +
+    `\`git merge -s ours board/${source}\`. Then answer again.`;
+  const resolve = (source: string) => {
+    expect(() => git(workbench(), "merge", `board/${source}`)).toThrow();
+    writeFileSync(join(workbench(), "repair.txt"), `${readFileSync(join(workbench(), "repair.txt"), "utf8").replace(/^[<=>|].*\n/gm, "")}`);
+    git(workbench(), "commit", "-am", `resolve ${source}`);
+  };
+  const retryRefusal = () => answerPromotion(db, clock, landing, workspace, leftover!, "retry").then(() => undefined, (err: unknown) => err);
+  const [first, second] = children.map((child) => `task/${child.id}`) as [string, string];
+  const rootBefore = git(workspace.path, "rev-parse", target);
+
+  // 新しい子から運ぶ(子孫を先に運ぶ順)—— 1回目は2つ目の子の conflict だけを言い、何も書かない
+  expect(await retryRefusal()).toEqual(new DomainError(refused(second)));
+  expect(git(workspace.path, "rev-parse", target)).toBe(rootBefore);
+  expect(listEventsOfKinds(db, ["workbench_taken_in"])).toEqual([]);
+  expect(getTask(db, leftover!.id)?.status).toBe("todo");
+
+  // 開いた昇格失敗 question が鍵を指す間、答え直しは作業台を作り直さない —— 書きかけは残る(spec #3273 の Lifetime)
+  writeFileSync(join(workbench(), "draft.txt"), "half-made\n");
+  expect(await retryRefusal()).toEqual(new DomainError(refused(second)));
+  expect(readFileSync(join(workbench(), "draft.txt"), "utf8")).toBe("half-made\n");
+  rmSync(join(workbench(), "draft.txt"));
+
+  resolve(second);
+  expect(await retryRefusal()).toEqual(new DomainError(refused(first)));
+  expect(listEventsOfKinds(db, ["workbench_taken_in"]).map(({ payload }) => payload)).toEqual([expect.objectContaining({ target: `refs/heads/${target}`, entry: "promotion_retry" })]);
+  expect(getTask(db, leftover!.id)?.status).toBe("todo");
+  expect(github.pushes).toHaveLength(1);
+
+  resolve(first);
+  await answerPromotion(db, clock, landing, workspace, leftover!, "retry");
+
+  expect(getTask(db, leftover!.id)?.status).toBe("done");
+  expect(listEventsOfKinds(db, ["workbench_taken_in"])).toHaveLength(2);
+  expect(github.pushes).toHaveLength(2);
+  for (const source of [first, second]) {
+    expect(git(workspace.path, "merge-base", "--is-ancestor", source, `refs/remotes/origin/${target}`)).toBe("");
+  }
+  expect(git(workspace.path, "ls-remote", "origin", `refs/heads/${target}`).split("\t")[0]).toBe(git(workspace.path, "rev-parse", target));
 });
 
 it("push の後に積み残しが残っても、workspace の quarantine が抱えていれば失敗 question を立てず、その quarantine を名乗る", async () => {

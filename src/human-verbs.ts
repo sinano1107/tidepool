@@ -116,6 +116,7 @@ import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   firePickupPredicates,
+  type IntakeContext,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   PickupGateError,
@@ -700,7 +701,13 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
     await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));
     // ADR 0373 決定9 / spec #3273 の受理の 11: conflict は作業台を開いて拒み、作業台が取り込める tip を持てば先に取り込む
-    const intake = { workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir), answerer: { actorId: HUMAN_ACTOR_ID, origin }, now };
+    const intake: IntakeContext = {
+      workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
+      question: openQuarantineQuestion(deps.db, "workspace", value)?.id ?? "",
+      entry: "workspace_quarantine",
+      answerer: { actorId: HUMAN_ACTOR_ID, origin },
+      now,
+    };
     if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake));
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name));
@@ -1250,7 +1257,7 @@ export async function submitAnswer(
     switch (kind.kind) {
       case "pr_promotion_retry":
         if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
-          const verdicts = await deps.landing.converge({ answering: task.id });
+          const verdicts = await deps.landing.converge({ answering: { question: task.id, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
           const error = promotionRetryError(verdicts.find((root) => root.taskId === kind.task_id)?.verdict);
           if (error) throw new DomainError(error);
         }

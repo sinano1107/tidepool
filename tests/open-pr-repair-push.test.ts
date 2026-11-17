@@ -1,7 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { type WorkspaceConfig, workbenchPath } from "../src/workspace.js";
 import {
   api,
   attachChild,
@@ -199,7 +199,7 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
 });
 
-it("追いつき merge が合わなければ PR 昇格失敗 question を立て、手動解決後の retry で PR を開く", async () => {
+it("追いつき merge が合わなければ PR 昇格失敗 question を立てて作業台を開き、作業台で解いた後の retry で PR を開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up-conflict");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair conflicting after squash");
@@ -223,22 +223,16 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
   });
   expect(await servedQuarantineQuestion(t, "workspace", "squash-catch-up-conflict")).toBeUndefined();
 
-  // 人間が衝突する行を保護ブランチと同じ内容に直す。履歴はまだ未収束なので、retry は
-  // 走行中の別タスクの checkout を触らず plumbing の追いつき merge を再走する。
-  git(workspace.path, "checkout", `task/${repair.id}`);
-  writeFileSync(join(workspace.path, "repair.txt"), "protected version\n");
-  writeFileSync(join(workspace.path, "repair-only.txt"), "resolved repair\n");
-  git(workspace.path, "add", "repair.txt", "repair-only.txt");
-  git(workspace.path, "commit", "-m", "make protected catch-up merge cleanly");
-  git(workspace.path, "checkout", "main");
+  // ADR 0371 決定1・2・7: 人間は名前の場所でなく、昇格の失敗が開いた作業台で origin の保護ブランチを merge し、衝突する行を
+  // 保護ブランチと同じ内容に直す。retry はその tip を取り込み、走行中の別タスクの checkout を触らずに追いついて push する
+  const workbench = realpathSync(workbenchPath(join(t.dir, "workspaces"), `task/${repair.id}`));
+  expect(() => git(workbench, "merge", "board/origin/main")).toThrow();
+  writeFileSync(join(workbench, "repair.txt"), "protected version\n");
+  writeFileSync(join(workbench, "repair-only.txt"), "resolved repair\n");
+  git(workbench, "add", "repair.txt", "repair-only.txt");
+  git(workbench, "commit", "--no-edit");
 
   const occupant = await registerWork(t, "keep another checkout occupied");
-  await t.clock.advance(HOUR);
-  // ADR 0351 決定2・4: 休止中の手の修理は次の pickup の比較がそのブランチを名指して止め、workspace quarantine の受理が基準に入れる
-  const quarantine = await servedQuarantineQuestion(t, "workspace", "squash-catch-up-conflict");
-  expect(quarantine?.purpose).toContain(`refs/heads/task/${repair.id}`);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired"] })).status).toBe(200);
   await t.clock.advance(HOUR);
   // 旧: 走行中の別タスクは名前の場所の HEAD を自分のブランチに置いていた。今は task の checkout で走り、名前の場所の HEAD は main(ADR 0356 決定1)
   await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(occupant.id));
