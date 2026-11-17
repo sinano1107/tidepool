@@ -700,7 +700,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0373 決定9 / spec #3273 の受理の 11: conflict は作業台を開いて拒み、作業台が取り込める tip を持てば先に取り込む
     const intake: IntakeContext = {
       workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
-      question: openQuarantineQuestion(deps.db, "workspace", value)?.id,
       entry: "workspace_quarantine",
       answerer: { actorId: HUMAN_ACTOR_ID, origin },
       now,

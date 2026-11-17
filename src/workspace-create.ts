@@ -43,9 +43,9 @@ import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, repositoryLa
 import { recordedSettingsDisposition } from "./sandbox.js";
 import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
+import { BOARD_BRANCHES } from "./workbench.js";
 import {
   assertRememberedRepo,
-  BOARD_BRANCHES,
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,

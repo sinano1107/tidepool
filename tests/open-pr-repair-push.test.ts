@@ -1,7 +1,8 @@
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { type WorkspaceConfig, workbenchPath } from "../src/workspace.js";
+import { workbenchPath } from "../src/workbench.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   attachChild,
@@ -218,7 +219,7 @@ it("追いつき merge の conflict は盤面の workspacesDir の下に作業�
     (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === repair.id,
   );
 
-  const workbench = realpathSync(workbenchPath(join(t.dir, "workspaces"), `task/${repair.id}`));
+  const workbench = realpathSync(workbenchPath(join(t.dir, "workspaces"), `task/${repair.id}`, "origin/main"));
   expect(() => git(workbench, "merge", "board/origin/main")).toThrow();
   writeFileSync(join(workbench, "repair.txt"), "protected version\n");
   git(workbench, "commit", "-am", "resolve against the protected branch");

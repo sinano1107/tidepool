@@ -41,6 +41,7 @@ import {
 } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
+import { WORKBENCH_SEGMENT, workbenchPath } from "../src/workbench.js";
 import {
   boardRefWriter,
   mergeTaskToProtected,
@@ -52,9 +53,7 @@ import {
   releaseWorkspace,
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
-  WORKBENCH_SEGMENT,
   type WorkspaceConfig,
-  workbenchPath,
   workspaceProtectionReader,
   writeBoardRefs,
 } from "../src/workspace.js";
@@ -2327,7 +2326,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
 
 /** 追いつきの conflict(H6): fork 元が squash 着地した後、origin の保護ブランチが修理と同じ行を変えた根。`openFailure` なら収束の前に
  *  別の失敗で昇格失敗 question が開いている(回答が先に conflict に当たる)。 */
-async function catchUpConflictRoot(name: string, { openFailure = false } = {}) {
+async function catchUpConflictRoot(name: string, { openFailure = false, undeliveredChild = false } = {}) {
   const { workspace } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -2353,10 +2352,12 @@ async function catchUpConflictRoot(name: string, { openFailure = false } = {}) {
   git(workspace.path, "fetch", "origin", "main");
   commitWork(workspace.path, "repair.txt", "task version\n");
   git(workspace.path, "checkout", "main");
+  // 根の分解ツリーに、merge back が根へ届いていない done の子(#3347 の形)
+  if (undeliveredChild) await settleRepairNotMergedBack(db, clock, workspace, repair.id, "child.txt");
   finish(db, clock, repair);
   if (openFailure) registerPrPromotionFailureQuestion(db, getTask(db, repair.id)!, "push failed", clock.now());
   const target = `task/${repair.id}`;
-  const workbench = () => realpathSync(workbenchPath(workbenchBase, target));
+  const workbench = () => realpathSync(workbenchPath(workbenchBase, target, "origin/main"));
   /** spec #3273 text A2 の要素: 作業台の在り処、そこで打つ merge、答え直す回答。 */
   const expectA2 = (text: unknown) => {
     expect(text).toEqual(expect.stringMatching(/^main does not merge cleanly into /));
@@ -2467,6 +2468,36 @@ it("作業台で merge した後に origin の保護ブランチが進めば、r
   expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
   expect(getTask(c.db, failure!.id)?.status).toBe("todo");
   expect(c.github.requests).toEqual([]);
+});
+
+// ADR 0382 決定1・2(#3347): 追いつきの作業台と子の merge back の作業台は別の鍵 —— 子は盤面が運び、人間の追いつきの tip はその後の
+// 書く先を欠いて A7a で1回増える
+it("追いつきの作業台に人間の `board/origin/main` の merge があり子の merge back が根に届いていなければ、retry は子を盤面が運び、追いつきの取り込みを `board/task/<root>` を名指して拒み、それを merge した次の retry が通る", async () => {
+  const c = await catchUpConflictRoot("catch-up-with-undelivered-child", { undeliveredChild: true });
+  await convergeOn(c.landing, c.repair.id);
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  c.expectA2(failure!.purpose);
+  c.resolve();
+  const before = git(c.workspace.path, "rev-parse", c.target);
+
+  const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain(
+    `the workbench at ${c.workbench()} is not ready: ${c.target} there does not contain ${c.target} (\`board/${c.target}\`). Run \`git merge board/${c.target}\` there`,
+  );
+  expect(git(c.workspace.path, "rev-parse", `${c.target}^1`)).toBe(before);
+  expect(git(c.workspace.path, "show", `${c.target}:child.txt`)).toBe("fixed");
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+
+  git(c.workbench(), "merge", "--quiet", "--no-edit", `board/${c.target}`);
+  await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry");
+
+  expect(getTask(c.db, failure!.id)?.status).toBe("done");
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"]).map(({ payload }) => payload)).toEqual([expect.objectContaining({ target: `refs/heads/${c.target}`, entry: "promotion_retry" })]);
+  expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
+  expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("child.txt\nrepair-only.txt");
 });
 
 it("追いつき merge をまたいで走るセッションは、盤面が動かした task branch で quarantine されない", async () => {
@@ -4075,10 +4106,10 @@ async function openPushedPr(name: string, merge: MergeDial) {
 /** 修理(`parentId` の付帯子)を盤面の経路で done にする: 拾い(lineage の帰り先から fork し、名前の場所は保護ブランチに休む)、
  *  task の checkout で `repair.txt` を commit し、完了の門が tip を名前の場所へ引く(ADR 0356 決定3)。後始末(解放の merge back)は
  *  まだ走っていない —— 走らせるのは `tearDownRepair`。門は開いている。 */
-async function settleRepairNotMergedBack(db: Db, clock: FakeClock, workspace: WorkspaceConfig, parentId: string) {
+async function settleRepairNotMergedBack(db: Db, clock: FakeClock, workspace: WorkspaceConfig, parentId: string, file = "repair.txt") {
   const repair = attachUnsettledChild(db, clock, parentId);
   const place = await prepareAtPickup(db, workspace, repair);
-  commitWork(place.path, "repair.txt", "fixed\n");
+  commitWork(place.path, file, "fixed\n");
   recordTaskCheckoutTip(db, place, repair.id);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
   return getTask(db, repair.id)!;
@@ -4161,7 +4192,7 @@ it("merge back の conflict に手を付けないままの受理は、merge back
 
   const refused = answerWorkspaceQuarantine(pr, question);
 
-  const workbench = realpathSync(workbenchPath(pr.workbenchBase, `task/${work.id}`));
+  const workbench = realpathSync(workbenchPath(pr.workbenchBase, `task/${work.id}`, `task/${repair.id}`));
   await expect(refused).rejects.toThrow(
     new DomainError(
       `task/${repair.id} does not merge cleanly into 'task/${work.id}'. The board opened the workbench at ${workbench} for it. ` +
@@ -4727,17 +4758,17 @@ it("積み残しの retry が撃ち直す merge back が同じ帰り先へ2つ c
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "content_left_behind" });
   const [leftover] = promotionFailures(db, work.id);
   const target = `task/${work.id}`;
-  const workbench = () => realpathSync(workbenchPath(workbenchBase, target));
+  const workbench = (source: string) => realpathSync(workbenchPath(workbenchBase, target, source));
   const refused = (source: string) =>
-    `${source} does not merge cleanly into '${target}'. The board opened the workbench at ${workbench()} for it. There, on ${target}, ` +
+    `${source} does not merge cleanly into '${target}'. The board opened the workbench at ${workbench(source)} for it. There, on ${target}, ` +
     `run \`git merge board/${source}\` and resolve the conflict (or, in your own clone with the workbench as a remote: fetch it, ` +
     `\`git merge <remote>/board/${source}\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now ` +
     `(\`board/${target}\`) and ${source}, with nothing uncommitted. To discard ${source}'s work instead, record that with ` +
     `\`git merge -s ours board/${source}\`. Then answer again.`;
   const resolve = (source: string) => {
-    expect(() => git(workbench(), "merge", `board/${source}`)).toThrow();
-    writeFileSync(join(workbench(), "repair.txt"), `${readFileSync(join(workbench(), "repair.txt"), "utf8").replace(/^[<=>|].*\n/gm, "")}`);
-    git(workbench(), "commit", "-am", `resolve ${source}`);
+    expect(() => git(workbench(source), "merge", `board/${source}`)).toThrow();
+    writeFileSync(join(workbench(source), "repair.txt"), `${readFileSync(join(workbench(source), "repair.txt"), "utf8").replace(/^[<=>|].*\n/gm, "")}`);
+    git(workbench(source), "commit", "-am", `resolve ${source}`);
   };
   const retryRefusal = () => answerPromotion(db, clock, landing, workspace, leftover!, "retry").then(() => undefined, (err: unknown) => err);
   const [first, second] = children.map((child) => `task/${child.id}`) as [string, string];
@@ -4749,11 +4780,13 @@ it("積み残しの retry が撃ち直す merge back が同じ帰り先へ2つ c
   expect(listEventsOfKinds(db, ["workbench_taken_in"])).toEqual([]);
   expect(getTask(db, leftover!.id)?.status).toBe("todo");
 
-  // 開いた昇格失敗 question が鍵を指す間、答え直しは作業台を作り直さない —— 書きかけは残る(spec #3273 の Lifetime)
-  writeFileSync(join(workbench(), "draft.txt"), "half-made\n");
-  expect(await retryRefusal()).toEqual(new DomainError(refused(second)));
-  expect(readFileSync(join(workbench(), "draft.txt"), "utf8")).toBe("half-made\n");
-  rmSync(join(workbench(), "draft.txt"));
+  // 作業台に書きかけがあれば、tip が書く先のままでも答え直しは拒まれ、作業台は作り直されない —— 書きかけは残る(ADR 0382 決定2・5)
+  writeFileSync(join(workbench(second), "draft.txt"), "half-made\n");
+  expect(((await retryRefusal()) as Error).message).toBe(
+    `the workbench at ${workbench(second)} has nothing new on ${target}, but it has uncommitted changes — commit them on ${target} or discard them. Then answer again.`,
+  );
+  expect(readFileSync(join(workbench(second), "draft.txt"), "utf8")).toBe("half-made\n");
+  rmSync(join(workbench(second), "draft.txt"));
 
   resolve(second);
   expect(await retryRefusal()).toEqual(new DomainError(refused(first)));

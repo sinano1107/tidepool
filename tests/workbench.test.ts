@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { permissionConfig } from "../src/codex-worker.js";
@@ -8,11 +8,12 @@ import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { whyInvalidRegistryName } from "../src/registry-name.js";
 import { buildSandboxSettings } from "../src/sandbox.js";
-import { getTask, registerTask } from "../src/tasks.js";
-import { refValues, releaseWorkspace, runPlaceReadPaths, WORKBENCH_SEGMENT, type WorkspaceConfig, workbenchPath } from "../src/workspace.js";
+import { getTask, registerTask, type Task } from "../src/tasks.js";
+import { WORKBENCH_SEGMENT, workbenchPath } from "../src/workbench.js";
+import { refValues, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig } from "../src/workspace.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
-import { answer, boardWithParent, type Conflicted, completedChild, conflicted, resolveInWorkbench } from "./workbench-fixture.js";
+import { answer, type Board, boardWithParent, type Conflicted, childOf, completedChild, conflicted, resolveInWorkbench } from "./workbench-fixture.js";
 
 // 作業台と取り込み(ADR 0371、spec #3273 group A): merge back の conflict は作業台を開き、人間がそこで merge を commit して答えると
 // 盤面がその tip を取り込む。入口は workspace の Quarantine の回答(受理の 11)。
@@ -79,7 +80,8 @@ it("作業台の番地はどの worker の sandbox の読み書きの root に�
   expect(covering).toEqual([]);
   const [segment, key] = relative(realpathSync(c.base), workbench).split("/");
   expect(segment).toBe(WORKBENCH_SEGMENT);
-  expect(key).toBe(c.parent.id);
+  // 鍵は (書く先, 運ばれる側) —— 運ばれる側の `/` は葉の中に符号化され、段を増やさない(ADR 0382 決定1)
+  expect(key).toBe(`${c.parent.id}@task+s${c.child.id}`);
   // workspace の名前・面接室(root id)・task の checkout の鍵(`<id>`・`<id>.checkout`・`<id>.reads`)はどれも名前の規則に収まる
   expect(whyInvalidRegistryName(WORKBENCH_SEGMENT)).toBeDefined();
 });
@@ -87,7 +89,8 @@ it("作業台の番地はどの worker の sandbox の読み書きの root に�
 it("作業台への push は名前の場所の ref を1つも動かさず、作業ツリーをその tip に揃える(pin A3)", async () => {
   const c = await conflicted();
   const clone = join(await tempDir("tidepool-own-clone-"), "clone");
-  git(c.base, "clone", "--quiet", "--branch", c.target, c.workbench(), clone);
+  // URL の形(`ssh://` と同じく git が `%` を解く)で remote にしても在り処は変わらない(ADR 0382 決定1)
+  git(c.base, "clone", "--quiet", "--branch", c.target, `file://${c.workbench()}`, clone);
   commitWork(clone, "notes.txt", "from my own clone\n");
   const before = refsOf(c.ws);
 
@@ -202,7 +205,7 @@ it("別の理由で先に開いていた Quarantine では、最初の回答が 
 
   const first = await answer(b).catch((err: unknown) => err);
 
-  const workbench = realpathSync(workbenchPath(b.base, target));
+  const workbench = realpathSync(workbenchPath(b.base, target, source));
   expect(first).toBeInstanceOf(DomainError);
   expect((first as Error).message).toContain(`The board opened the workbench at ${workbench} for it.`);
   expect((first as Error).message).toContain(`record that with \`git merge -s ours board/${source}\`. Then answer again.`);
@@ -247,7 +250,7 @@ it("祖先のほかに履歴は制限しない —— 兄弟の task/<S> の mer
   commitWork(b.ws.path, "picked.txt", "cherry-picked\n");
   git(b.ws.path, "checkout", "main");
   const child = await completedChild(b);
-  const workbench = realpathSync(workbenchPath(b.base, `task/${b.parent.id}`));
+  const workbench = realpathSync(workbenchPath(b.base, `task/${b.parent.id}`, `task/${child.id}`));
   resolveInWorkbench(workbench, `task/${child.id}`);
   git(workbench, "cherry-pick", `board/${sibling}`);
   git(workbench, "merge", "--no-edit", `board/${sibling}~1`);
@@ -303,25 +306,75 @@ it("作業台を開けなくても conflict の拒否は立ち、その理由を
   expect(purpose).not.toContain("opened the workbench");
   rmSync(join(b.base, WORKBENCH_SEGMENT));
 
-  const workbench = workbenchPath(b.base, `task/${b.parent.id}`);
-  await expect(answer(b)).rejects.toThrow(`The board opened the workbench at ${realpathSync(b.base)}/${WORKBENCH_SEGMENT}/${b.parent.id} for it.`);
+  const workbench = workbenchPath(b.base, `task/${b.parent.id}`, source);
+  await expect(answer(b)).rejects.toThrow(`The board opened the workbench at ${realpathSync(b.base)}/${WORKBENCH_SEGMENT}/${b.parent.id}@task+s${child.id} for it.`);
 
   expect(existsSync(workbench)).toBe(true);
 });
 
-it("何も指さない残骸の作業台は、同じ鍵が開くとき消されて書く先の ref から作り直される", async () => {
+// ADR 0382 決定5: 開く手は指し手を数えず中身で決める —— 人間の作業が残っていない作業台と作りかけは作り直し、人間の commit は消さない
+type Kept = { note: boolean; still: (leftover: string, target: string) => void };
+const cloneTarget = (leftover: string, b: Board) => git(b.ws.path, "clone", "--quiet", "--branch", `task/${b.parent.id}`, b.ws.path, leftover);
+it.each<[string, (leftover: string, b: Board) => void, "remade" | Kept]>([
+  [
+    "tip が書く先の祖先で作業ツリーが clean な残骸は作り直される",
+    (leftover, b) => {
+      cloneTarget(leftover, b);
+      git(leftover, "reset", "--quiet", "--hard", "HEAD~1");
+    },
+    "remade",
+  ],
+  ["書く先の branch が無い作りかけは作り直される", (leftover, b) => git(b.base, "init", "--quiet", "--initial-branch", `task/${b.parent.id}`, leftover), "remade"],
+  [
+    "書く先に無い人間の commit を持つ作業台は作り直されず、拒否文が tip は運ばれる側を含まないと言う",
+    (leftover, b) => {
+      cloneTarget(leftover, b);
+      commitWork(leftover, "stale.txt", "left behind\n");
+    },
+    { note: true, still: (leftover, target) => expect(git(leftover, "show", `${target}:stale.txt`)).toBe("left behind") },
+  ],
+  [
+    "tip が書く先のままでも、書く先に無い commit を別の branch に持つ作業台は作り直されない",
+    (leftover, b) => {
+      cloneTarget(leftover, b);
+      git(leftover, "checkout", "--quiet", "-b", "side");
+      commitWork(leftover, "side.txt", "on the side\n");
+      git(leftover, "checkout", "--quiet", `task/${b.parent.id}`);
+    },
+    { note: false, still: (leftover) => expect(git(leftover, "show", "side:side.txt")).toBe("on the side") },
+  ],
+  [
+    "tip が書く先のままでも、stash を持つ作業台は作り直されない",
+    (leftover, b) => {
+      cloneTarget(leftover, b);
+      writeFileSync(join(leftover, "work.txt"), "stashed\n");
+      git(leftover, "stash", "--quiet");
+    },
+    { note: false, still: (leftover) => expect(git(leftover, "show", "stash@{0}:work.txt")).toBe("stashed") },
+  ],
+])("同じ鍵の作業台が既にあるとき、開く手は中身で決める —— %s", async (_case, leave, outcome) => {
   const b = await boardWithParent();
   const target = `task/${b.parent.id}`;
-  const leftover = workbenchPath(b.base, target);
-  mkdirSync(leftover, { recursive: true });
-  git(leftover, "init", "--quiet", "--initial-branch", target);
-  commitWork(leftover, "stale.txt", "left behind\n");
+  let leftover = "";
+  let source = "";
+  await completedChild(b, {
+    work: (_checkout, task) => {
+      source = `task/${task.id}`;
+      leftover = workbenchPath(b.base, target, source);
+      mkdirSync(dirname(leftover), { recursive: true });
+      leave(leftover, b);
+    },
+  });
 
-  await completedChild(b);
-
-  expect(git(leftover, "rev-parse", target)).toBe(git(b.ws.path, "rev-parse", target));
-  expect(git(leftover, "config", "receive.denyCurrentBranch")).toBe("updateInstead");
-  expect(existsSync(join(leftover, "stale.txt"))).toBe(false);
+  const purpose = quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose;
+  expect(git(leftover, "config", "--default", "", "receive.denyCurrentBranch")).toBe(outcome === "remade" ? "updateInstead" : "");
+  if (outcome === "remade") {
+    expect(git(leftover, "rev-parse", target)).toBe(git(b.ws.path, "rev-parse", target));
+    expect(purpose).toContain(`The board opened the workbench at ${realpathSync(leftover)} for it. There`);
+  } else {
+    outcome.still(leftover, target);
+    expect(purpose).toContain(`The board opened the workbench at ${realpathSync(leftover)} for it${outcome.note ? `; its tip does not contain ${source}` : ""}. There`);
+  }
 });
 
 it("取り込みの間に作業台へ着いた commit があれば、作業台は読まずに消されず残る", async () => {
@@ -340,29 +393,103 @@ it("取り込みの間に作業台へ着いた commit があれば、作業台�
   expect(git(c.ws.path, "ls-tree", "--name-only", c.target, "--", "late.txt")).toBe("");
 });
 
-it("作業台の HEAD が `board/*` に居ても、引き直しはその commit で HEAD を切り離して作業台を開く", async () => {
+// ADR 0382 決定2: tip が書く先のままでも HEAD が書く先の branch に居なければ、取り込むものが無いとは判定しない
+it("作業台の HEAD が `board/*` に居れば、回答は HEAD を名指して拒まれ、引き直しはその commit で HEAD を切り離す", async () => {
   const c = await conflicted();
   const workbench = c.workbench();
   git(workbench, "checkout", "--quiet", `board/${c.source}`);
   const head = git(workbench, "rev-parse", "HEAD");
+  const refs = refsOf(c.ws);
 
-  await expect(answer(c)).rejects.toThrow(`The board opened the workbench at ${workbench} for it.`);
+  await expect(answer(c)).rejects.toThrow(`its HEAD is not on ${c.target} — check out ${c.target} there`);
 
+  expect(refsOf(c.ws)).toBe(refs);
   expect(() => git(workbench, "symbolic-ref", "-q", "HEAD")).toThrow();
   expect(git(workbench, "rev-parse", "HEAD")).toBe(head);
   expect(git(workbench, "rev-parse", c.target)).toBe(git(c.ws.path, "rev-parse", c.target));
   expect(git(workbench, "status", "--porcelain")).toBe("");
 });
 
-it("Quarantine が開いている間に開き直す作業台は、途中の merge も untracked のファイルも消さない", async () => {
+// ADR 0382 決定2・5: 書く先に新しい commit が無くても、作業ツリーに書きかけが残れば拒み、作業台は作り直さない
+it("途中の merge と untracked のファイルが残る作業台への回答は拒まれ、何も書かず、作業台の書きかけは消えない", async () => {
   const c = await conflicted();
   const workbench = c.workbench();
   expect(() => git(workbench, "merge", `board/${c.source}`)).toThrow();
   writeFileSync(join(workbench, "draft.txt"), "half done\n");
   const mergeHead = git(workbench, "rev-parse", "MERGE_HEAD");
+  const refs = refsOf(c.ws);
+  const events = lastEventId(c.db);
 
-  await expect(answer(c)).rejects.toThrow(`The board opened the workbench at ${workbench} for it.`);
+  await expect(answer(c)).rejects.toThrow(`the workbench at ${workbench} has nothing new on ${c.target}, but it has uncommitted changes`);
 
+  expect(refsOf(c.ws)).toBe(refs);
+  expect(lastEventId(c.db)).toBe(events);
   expect(git(workbench, "rev-parse", "MERGE_HEAD")).toBe(mergeHead);
   expect(existsSync(join(workbench, "draft.txt"))).toBe(true);
+});
+
+/** merge back を後始末で撃たずに Quarantine を立てる解放(token の失敗)—— 子の merge back は受理がやり直す。 */
+const deferMergeBack = (b: Board) => (place: Parameters<typeof releaseWorkspace>[1], task: Parameters<typeof releaseWorkspace>[2]) =>
+  releaseWorkspace(b.db, place, task, b.clock.now(), true, undefined, new Error("GitHub token acquisition failed"), true);
+
+// ADR 0382 決定1・6: 入口は自分の鍵の作業台しか読まない。別の子の作業台の古い tip も、自分の鍵の作りかけも、clean な merge back を止めない
+it.each<[string, (b: Board, clean: string) => string]>([
+  [
+    "別の子 X の作業台に書く先の祖先の古い tip がある",
+    (b) => {
+      const other = registerTask(b.db, { type: "work", title: "x", purpose: "why", completion_criteria: "done", parent_id: b.parent.id }, b.clock.now(), ...HUMAN_WEBUI);
+      const leftover = workbenchPath(b.base, `task/${b.parent.id}`, `task/${other.id}`);
+      mkdirSync(dirname(leftover), { recursive: true });
+      git(b.ws.path, "clone", "--quiet", "--branch", `task/${b.parent.id}`, b.ws.path, leftover);
+      git(leftover, "reset", "--quiet", "--hard", "HEAD~1");
+      return leftover;
+    },
+  ],
+  [
+    "子 Y 自身の鍵に書く先の branch の無い作りかけがある",
+    (b, clean) => {
+      const leftover = workbenchPath(b.base, `task/${b.parent.id}`, clean);
+      mkdirSync(dirname(leftover), { recursive: true });
+      git(b.base, "init", "--quiet", "--initial-branch", `task/${b.parent.id}`, leftover);
+      return leftover;
+    },
+  ],
+])("%sとき、受理の回答は clean な子 Y を盤面が運んで受理される", async (_case, leave) => {
+  const b = await boardWithParent();
+  let leftover = "";
+  const y = await completedChild(b, {
+    file: "y.txt",
+    work: (_checkout, task) => {
+      leftover = leave(b, `task/${task.id}`);
+    },
+    release: deferMergeBack(b),
+  });
+
+  await answer(b);
+
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)).toBeUndefined();
+  expect(git(b.ws.path, "merge-base", "--is-ancestor", `task/${y.id}`, `task/${b.parent.id}`)).toBe("");
+  expect(takenIn(b.db)).toEqual([]);
+  expect(existsSync(leftover)).toBe(true);
+});
+
+// ADR 0382 決定1・2: 人間の tip を持つ作業台の取り込みは、盤面の手の merge より先に —— 運ぶ順(新しい子から)に依らず1回で受理される
+it.each([
+  ["X の登録が先", true],
+  ["Y の登録が先", false],
+])("子 X の作業台で人間が X を merge し、子 Y が clean なら、回答は X を取り込み Y を盤面が運んで1回で受理される —— %s", async (_case, xFirst) => {
+  const b = await boardWithParent();
+  // 登録の新しいほうから運ぶ —— X が古ければ盤面は Y を先に運ぼうとする
+  const [x, y] = xFirst ? [childOf(b), childOf(b)] : [childOf(b), childOf(b)].reverse() as [Task, Task];
+  await completedChild(b, { child: x });
+  await completedChild(b, { child: y, file: "y.txt", release: deferMergeBack(b) });
+  const target = `task/${b.parent.id}`;
+  resolveInWorkbench(realpathSync(workbenchPath(b.base, target, `task/${x.id}`)), `task/${x.id}`);
+
+  await answer(b);
+
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)).toBeUndefined();
+  expect(git(b.ws.path, "show", `${target}:work.txt`)).toBe("from the parent\nfrom the child");
+  expect(git(b.ws.path, "ls-tree", "--name-only", target)).toBe("README.md\nwork.txt\ny.txt");
+  expect(takenIn(b.db)).toHaveLength(1);
 });
