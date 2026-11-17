@@ -637,7 +637,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   };
   // verify both the named place's Git tree and its separation from the board's own state.
   // ADR 0373 決定2: 回答の文が選択肢を選ぶ —— 完全一致だけで、ほかの文(面接室でない名前への `run with an empty room` も)は `repaired by hand`
-  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig): Promise<{ notice: string } | undefined> => {
+  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
     const room = getTask(deps.db, value)?.type === "interview";
     const restore = answer === RESTORE_THE_BASELINE;
     const emptyRoom = room && answer === RUN_WITH_AN_EMPTY_ROOM;
@@ -699,7 +699,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     await fire(all, "after-open");
     // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
     await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));
-    if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
+    // ADR 0373 決定9 / spec #3273 の受理の 11: conflict は作業台を開いて拒み、作業台が取り込める tip を持てば先に取り込む
+    const intake = { workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir), answerer: { actorId: HUMAN_ACTOR_ID, origin }, now };
+    if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake));
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name));
     // 場所は後半の項が撃った場所そのもの —— 基準は名前の場所だけが持つ(ADR 0356 決定4)
@@ -709,14 +711,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     return kept.length > 0 ? { notice: kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`).join("\n") } : undefined;
   };
   return {
-    workspace: async (value, answer) => {
+    // 試験の直接の domain 呼び出しは入口を持たない
+    workspace: async (value, answer, origin = "webui") => {
       // resolve the named workspace fresh
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
       // ADR 0373 決定8: 同じ名前の場所の ref を書く回答と操作は鍵を1つ共有し、検査中の2つ目を拒む
       const release = takeWorkspaceInFlightKey(deps.db, value!);
       if (!release) throw new DomainError(`another answer or operation for workspace ${value} is being checked — try again once it has finished.`);
       try {
-        return await acceptWorkspaceRepair(value!, answer, target);
+        return await acceptWorkspaceRepair(value!, answer, target, origin);
       } finally {
         release();
       }
@@ -1383,7 +1386,7 @@ export async function submitAnswer(
         if (dropsRefusedTarget(kind, answers[0])) break;
         const check = deps.quarantineChecks?.[kind.quarantine as QuarantineKind];
         if (!check) throw new DomainError(`this board cannot verify a ${kind.quarantine} repair`);
-        const confirm = await check(kind.value, answers[0]);
+        const confirm = await check(kind.value, answers[0], origin);
         // ADR 0343 決定1: 確認から回答の transaction まで await が無いので、検査の再開までに立った条件を見落とさない
         if (typeof confirm === "function") confirm();
         else if (confirm) notice = confirm.notice;

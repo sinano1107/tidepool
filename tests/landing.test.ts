@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -53,6 +53,7 @@ import {
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  workbenchPath,
   workspaceProtectionReader,
   writeBoardRefs,
 } from "../src/workspace.js";
@@ -3944,7 +3945,8 @@ function tearDownRepair(db: Db, clock: FakeClock, workspace: WorkspaceConfig, re
 }
 
 /** #1777 の形: 修理の merge back が後始末で conflict し、workspace が quarantine に落ちる。名前の場所は保護ブランチに、
- *  中断状態なしで残る(ADR 0356 決定5 —— 旧: 着地するタスクのブランチの tip に残った)。 */
+ *  中断状態なしで残る(ADR 0356 決定5 —— 旧: 着地するタスクのブランチの tip に残った)。解放は修理の task の checkout の基点の下に
+ *  作業台を開き(ADR 0373 決定9)、受理も同じ基点を読む(`workbenchBase`)。 */
 async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
   const pr = await openPushedPr(name, merge);
   const { workspace, db, clock, work } = pr;
@@ -3955,11 +3957,12 @@ async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
   commitWork(workspace.path, "repair.txt", "conflicting\n");
   git(workspace.path, "push", "origin", `task/${work.id}`);
   git(workspace.path, "checkout", "main");
-  const place = await prepareAtPickup(db, workspace, repair);
+  const workbenchBase = await tempDir("tidepool-task-checkouts-");
+  const place = await prepareAtPickup(db, workspace, repair, { workspacesBaseDir: workbenchBase });
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
   releaseWorkspace(db, place, getTask(db, repair.id)!, clock.now(), true);
   const question = quarantineQuestion(db, "workspace", workspace.name)!;
-  return { ...pr, repair: getTask(db, repair.id)!, question };
+  return { ...pr, repair: getTask(db, repair.id)!, question, workbenchBase };
 }
 
 it("merge back が conflict して後始末が閉じても、修理の内容が merge される head に無ければ積み残しで、CI 緑でも無人 merge されない", async () => {
@@ -3975,10 +3978,10 @@ it("merge back が conflict して後始末が閉じても、修理の内容が 
 });
 
 it("後始末の merge back が conflict しても、MERGE_HEAD を残さず quarantine に落ちる(ADR 0356 決定5)", async () => {
-  const { workspace, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
+  const { workspace, repair, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
 
-  // まだ答えていない question なので、出口の文は「答え直す」と結ばない
-  expect(question.purpose).toContain("`; then answer. ");
+  // まだ答えていない question なので、出口の文は「答え直す」と結ばない(spec #3273 text A1)
+  expect(question.purpose).toContain(`record that with \`git merge -s ours board/task/${repair.id}\`. Then answer. `);
   expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
@@ -3986,12 +3989,12 @@ it("後始末の merge back が conflict しても、MERGE_HEAD を残さず qua
 // ADR 0240 決定4: workspace の quarantine の受理の検査は、内容が帰り先に届いていない done の work の merge back を
 // やり直す。以下がこの検査を述べる唯一の場所(ADR 0107)。
 function answerWorkspaceQuarantine(
-  { db, clock, workspace, landing }: { db: Db; clock: FakeClock; workspace: WorkspaceConfig; landing: Landing },
+  { db, clock, workspace, landing, workbenchBase }: { db: Db; clock: FakeClock; workspace: WorkspaceConfig; landing: Landing; workbenchBase?: string },
   question: Task,
   pollNow: () => void = () => {},
 ) {
   return submitAnswer(
-    { db, pollNow, landing, quarantineChecks: quarantineChecks({ db, workspace }) },
+    { db, pollNow, landing, quarantineChecks: quarantineChecks({ db, workspace, workspacesDir: workbenchBase }) },
     getTask(db, question.id)!,
     ["repaired by hand"],
     undefined,
@@ -4001,19 +4004,26 @@ function answerWorkspaceQuarantine(
 }
 
 const head = (workspace: WorkspaceConfig) => git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
+const HUMAN_ANSWERER = { actorId: HUMAN_ACTOR_ID, origin: "webui" } as const;
 /** origin のタスクブランチの先端 —— GitHub が報告する PR の head。 */
 const originHead = (workspace: WorkspaceConfig, taskId: string) =>
   git(workspace.path, "ls-remote", "origin", `refs/heads/task/${taskId}`).split("\t")[0]!;
 
-it("merge back の conflict に手を付けないままの受理は、merge back をやり直して conflict し、休止位置へ戻し、2つの出口を示して拒む", async () => {
+// ADR 0371 決定11: 旧文は名前の場所で merge して答えさせた —— 作業台の在り処と、そこで打つ merge を言う(spec #3273 text A1)
+it("merge back の conflict に手を付けないままの受理は、merge back をやり直して conflict し、休止位置へ戻し、作業台と2つの出口を示して拒む", async () => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-conflict", "escalate");
   const { workspace, db, work, repair, question } = pr;
 
-  await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
+  const refused = answerWorkspaceQuarantine(pr, question);
+
+  const workbench = realpathSync(workbenchPath(pr.workbenchBase, `task/${work.id}`));
+  await expect(refused).rejects.toThrow(
     new DomainError(
-      `task/${repair.id} does not merge cleanly into 'task/${work.id}' — either merge it there by hand in workspace ` +
-        `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours task/${repair.id}\`; ` +
-        "then answer again",
+      `task/${repair.id} does not merge cleanly into 'task/${work.id}'. The board opened the workbench at ${workbench} for it. ` +
+        `There, on task/${work.id}, run \`git merge board/task/${repair.id}\` and resolve the conflict (or, in your own clone with the ` +
+        `workbench as a remote: fetch it, \`git merge <remote>/board/task/${repair.id}\`, and push task/${work.id} to it). Your tip must ` +
+        `contain both task/${work.id} as the board has it now (\`board/task/${work.id}\`) and task/${repair.id}, with nothing uncommitted. ` +
+        `To discard task/${repair.id}'s work instead, record that with \`git merge -s ours board/task/${repair.id}\`. Then answer again.`,
     ),
   );
 
@@ -4158,7 +4168,7 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
   // やり直しそのものを撃つ —— 受理は検査の後に基準を撮り直し、動いた ref を回答で受け入れる(ADR 0351 決定4)
-  await redoMergeBacks(db, workspace, workspace.name, undefined);
+  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), answerer: HUMAN_ANSWERER, now: clock.now() });
 
   expect(head(workspace)).toBe("main");
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
@@ -4166,9 +4176,9 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
 
 it("内容が帰り先に届いていない done の work が無ければ、merge back のやり直しは checkout を動かさない(ADR 0240 決定4)", async () => {
   const pr = await openPushedPr("redo-merge-back-nothing", "escalate");
-  const { workspace, db, work } = pr;
+  const { workspace, db, work, clock } = pr;
 
-  await redoMergeBacks(db, workspace, workspace.name, undefined);
+  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), answerer: HUMAN_ANSWERER, now: clock.now() });
 
   expect(head(workspace)).toBe(`task/${work.id}`);
 });

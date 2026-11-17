@@ -133,6 +133,7 @@ import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
 import {
+  BoardNamedProtectedBranchError,
   BoardStateOverlapError,
   CheckoutHasOriginError,
   type CreateWorkspaceInput,
@@ -238,6 +239,7 @@ function registryToolError(err: unknown) {
     err instanceof RepoAccessMissingError ||
     err instanceof NotAGitRepositoryError ||
     err instanceof RelativeClonePathError ||
+    err instanceof BoardNamedProtectedBranchError ||
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||
