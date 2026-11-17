@@ -1823,20 +1823,25 @@ function lostTargets(workspace: WorkspaceConfig, targets: ReadonlyMap<string, st
 /** spec #3273 の受理の 7a(ADR 0380 決定4): remote-backed の workspace で、object の無い戻す先の sha を origin から取る —— ref は書かない。
  *  失われたかは取った後の 7b(`restoreBaseline`)が object の有無だけで決める。origin に届かなければ拒む: 先に有界の `ls-remote` で probe し、
  *  取れなかった sha ごとにもう1度 probe する —— 2度の probe が通った間に落ちた fetch だけが「origin に無い」。git のメッセージは読まない(ADR 0376 決定1)。 */
-export async function fetchLostTargets(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
-  if (!isRemoteBacked(workspace)) return;
-  const missing = [...new Set(lostTargets(workspace, restoreTargets(db, workspace).targets).map(([, sha]) => sha))];
+export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
+  if (!isRemoteBacked(place)) return;
+  const missing = [...new Set(lostTargets(place, restoreTargets(db, place).targets).map(([, sha]) => sha))];
   if (missing.length === 0) return;
-  const place = withRememberedRepoCheck(db, workspace);
-  await ensureWorkspaceToken(place, auth, { fresh: true });
-  // 盤面 DB の拒否(ADR 0342 決定4)と記憶した repo の食い違い(ADR 0378)は届かなさに包まない
+  // 盤面 DB の拒否(ADR 0342 決定4)と記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさに包まない
   const passThrough = (err: unknown) => isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof OriginRepositoryMismatchError;
+  const unreachable = (shas: string[], err: unknown) => {
+    if (passThrough(err)) return err;
+    return new Error(`could not reach origin to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once origin is reachable.`);
+  };
+  // ADR 0380 決定4: 認証の失敗も通信の失敗と同じく「origin に届かない」
+  await ensureWorkspaceToken(place, auth, { fresh: true }).catch((err: unknown) => {
+    throw unreachable(missing, err);
+  });
   const probe = (shas: string[]) => {
     try {
       authedLsRemote(auth, place, GIT_NETWORK_TIMEOUT_MS, "HEAD");
     } catch (err) {
-      if (passThrough(err)) throw err;
-      throw new Error(`could not reach origin to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once origin is reachable.`);
+      throw unreachable(shas, err);
     }
   };
   probe(missing);
@@ -1858,16 +1863,16 @@ export async function fetchLostTargets(db: Db, workspace: WorkspaceConfig, auth:
  *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
  *  `giveUp`(ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ行を消す)、`lost_refs_accepted` を書き戻しより先に
- *  残す。失われた ref が無ければ、書き戻しの後に保護ブランチが無ければ、何も書かずに拒む。 */
+ *  残す。失われた ref が無ければ、今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUp = false): KeptValue[] {
   const { current, targets } = restoreTargets(db, workspace);
   const lost = lostTargets(workspace, targets);
   if (giveUp) {
     if (lost.length === 0) throw new Error(`no ref of workspace ${workspace.name} is lost — answer \`${RESTORE_THE_BASELINE}\`.`);
     for (const [ref] of lost) targets.delete(ref);
-    // purely-local では後半の休止が保護ブランチを読まず、空の `git init` が通ってしまう(#3242)—— 書き戻した後の値で確かめる
+    // ADR 0373 決定5: 書き戻しの前に保護ブランチの ref が在ることを明示で確かめる —— purely-local では後半の休止がそれを読まず、空の `git init` が通ってしまう(#3242)
     const branch = protectedBranch(workspace);
-    if ((targets.get(`refs/heads/${branch}`) ?? current.get(`refs/heads/${branch}`) ?? "") === "") {
+    if (!current.has(`refs/heads/${branch}`)) {
       throw new Error(
         `${workspace.path} has no '${branch}' branch. Nothing was written. Put a commit on ${branch} there (re-clone the repository, or commit on ${branch}), then answer again.`,
       );

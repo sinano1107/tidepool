@@ -674,7 +674,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       assertNoSessionRunning();
       await refuseOnError(() => recreateEmptyRoom(deps.db, { name: value, path: target.path }));
     }
-    // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 書き戻し(ADR 0373 決定3) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) →
+    // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 失われた sha を origin から取る(ADR 0380 決定4) →
+    // 書き戻し(ADR 0373 決定3、失われた ref を諦めるなら ADR 0373 決定5) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) →
     // merge-back → 運んだ checkout の削除(ADR 0369 決定7) → 基準の撮り直し(ADR 0351 決定4)。
     const checked = withRememberedRepoCheck(deps.db, target, () => now);
     const { own, openers } = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
@@ -699,7 +700,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     await refuseOnError(() => checkAcceptanceFirstHalf(deps.db, target, all, !room || placeHasRepository(target.path)));
     assertNoSessionRunning();
     // ADR 0380 決定4: 失われたと数える前に origin から取る(spec #3273 の受理の 7a)
-    if (restore) await refuseOnError(() => fetchLostTargets(deps.db, target, deps.githubAuth));
+    if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
     const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now, giveUp)) : [];
     await fire(all, "after-open");
