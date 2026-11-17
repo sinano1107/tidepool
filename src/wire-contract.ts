@@ -356,7 +356,6 @@ export interface WireContract {
   "GET /api/workspaces": {
     workspaces: Array<{
       name: string;
-      registrySelf: boolean;
       path?: string;
       repo?: string;
       branch?: string;

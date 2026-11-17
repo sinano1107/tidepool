@@ -18,7 +18,7 @@ import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, settleReviews, shimGit } from "./harness.js";
-import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -287,7 +287,7 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   const origin = "mirror:/repository";
   git(path, "remote", "set-url", "origin", origin);
   git(path, "config", `url.${workspace.repo}.insteadOf`, origin);
-  const registry = { dir: await makeRegistry(), mode: "purely-local", writeRef: writeUnannounced } as const;
+  const registry = { dir: await makeRegistry(), mode: "purely-local" } as const;
   const base = await tempDir("tidepool-destination-checkouts-");
   await createWorkspace({ name: "rewritten", mode: "register", path, confirm: true }, { registry, workspacesBaseDir: base });
   const registered = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), "rewritten", "rewritten", base);
@@ -295,7 +295,7 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
   const task = registerTask(db, { type: "work", title: "first pickup", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const gate = () => pickupGate(db, registered, task, base, registry);
+  const gate = () => pickupGate(db, registered, task, base);
   await expect(gate()).rejects.toThrow(`declares repo ${workspace.repo}, but its checkout's origin is ${origin}`);
   git(path, "remote", "set-url", "origin", workspace.repo!);
   await expect(gate()).resolves.toBeDefined();

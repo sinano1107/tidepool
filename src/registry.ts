@@ -398,7 +398,8 @@ const workspaceEntrySchema = z.object({
    *  the board writes itself (clone / new-repo creation modes) stay host-
    *  independent this way — a push from one host's clone can't commit the
    *  other host's absolute path. Explicit `path` stays for hand-placed
-   *  checkouts (the registry itself, existing-path registration mode). */
+   *  checkouts (existing-path registration mode). The registry clone itself is
+   *  never a workspace (ADR 0377 決定1). */
   path: z.string().optional(),
   /** **この workspace のリモート正本の宣言**(ADR 0052 決定3 / issue #211)。以前は
    *  「手でセットアップするための clone URL」という散文だったが、機械が読む
@@ -410,14 +411,15 @@ const workspaceEntrySchema = z.object({
    *  推測はリモートが失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻る
    *  道であり、宣言と実態のずれ(どちら向きでも)は quarantine に落ちる。
    *
-   *  盤面が読むのは有無だけで、値(clone URL)は人間向けの provenance のまま ——
-   *  URL の綴り(ssh / https)で実態と突き合わせることはしない。 */
+   *  値は盤面が網に出る行き先でもあり(ADR 0378 決定1)、checkout の origin はこの値と同じ repo かで照合され(ADR 0378 決定3・4)、
+   *  registry の床もこの値で判定される(ADR 0381 決定1)。 */
   repo: z.string().optional(),
   notes: z.string().optional(),
   /** Protected workspace (issue #15 layer 2 / ADR 0013): a decompose child
    *  targeting this workspace converts to an approval question unconditionally,
-   *  regardless of the registering worker's authority profile. v1's only use is
-   *  the registry itself — "changes to it always need human approval" is a
+   *  regardless of the registering worker's authority profile. A workspace whose
+   *  declared `repo` is the registry's repository is protected without this flag
+   *  (ADR 0377 決定1・5 / ADR 0381 決定1) — "changes to it always need human approval" is a
    *  resource-side invariant, independent of any profile's allowed_workspaces. */
   protected: z.boolean().optional(),
   /** The protected branch this workspace's tasks fork from and PR onto
@@ -668,9 +670,9 @@ const agentFrontmatterSchema = z.looseObject({
  *  not registry data. "Which branch do we trust to read from" is part of the
  *  protected-workspace floor (same shape as ADR 0013's reviewer floor); putting
  *  it in the data it guards (workspaces.yaml's branch field, issue #27) would be
- *  self-referential and break bootstrap. The working tree is never read — branch
- *  discipline moves the checkout's HEAD onto a registry-edit task branch, so a
- *  working-tree read would let unmerged content take effect on spawn. */
+ *  self-referential and break bootstrap. The working tree is never read — a
+ *  human may leave the clone's checkout on another branch or with uncommitted
+ *  edits, and a working-tree read would let unmerged content take effect on spawn. */
 export const REGISTRY_BRANCH = "main";
 
 /** ADR 0052 決定3: この盤面の registry が remote 正本を持つか。**宣言であって
@@ -687,12 +689,6 @@ export type RegistryMode = "remote-backed" | "purely-local";
 export interface RegistrySource {
   dir: string;
   mode: RegistryMode;
-}
-
-/** registry を書く側が運ぶ組。書き込みは registry clone の ref を動かすので、その ref を書く口(ADR 0243 決定4)を
- *  必ず連れる —— 合成 root が registry clone の workspace の基準に束ねて渡す。 */
-export interface WritableRegistry extends RegistrySource {
-  writeRef: RefWriter;
 }
 
 /** 盤面の ref の書き込みを、書く先の workspace の基準への予告と畳みで包む口(ADR 0243 決定4)。新しい値を引数に
@@ -765,11 +761,11 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 export async function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
-  writeRef: RefWriter,
 ): Promise<RegistryReachability> {
   try {
     await auth?.ensureToken(originRepo(dir));
-    fetchBranchCopy(dir, auth, REGISTRY_BRANCH, writeRef);
+    // ADR 0377 決定8: registry clone は基準を持たないので予告せずに書く —— 値を先に知る形は残す(spec #3273 group E: the registry fetch keeps its current shape)
+    fetchBranchCopy(dir, auth, REGISTRY_BRANCH, (_ref, _sha, write) => write());
     return { available: true };
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 到達できない registry の data にせず底へ
@@ -804,9 +800,8 @@ function registryDefaultBranchCheck(dir: string): RegistryReachability {
 export async function checkRegistryReachability(
   dir: string,
   auth: GitHubAuth | undefined,
-  writeRef: RefWriter,
 ): Promise<RegistryReachability> {
-  const refreshed = await refreshRegistry(dir, auth, writeRef);
+  const refreshed = await refreshRegistry(dir, auth);
   return refreshed.available ? registryDefaultBranchCheck(dir) : refreshed;
 }
 

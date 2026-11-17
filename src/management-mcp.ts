@@ -139,7 +139,6 @@ import {
   GitHubIdentityMissingError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
-  RegistrySelfPublishError,
   RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
@@ -246,7 +245,6 @@ function registryToolError(err: unknown) {
     err instanceof WorkspaceAlreadyPublishedError ||
     err instanceof WorkspaceRepoMismatchError ||
     err instanceof CheckoutHasOriginError ||
-    err instanceof RegistrySelfPublishError ||
     err instanceof InvalidAgentNameError ||
     err instanceof UnknownAgentError ||
     // ADR 0117 決定2 の「組み込みは編集できない」—— 入口の拒否であって上流の失敗

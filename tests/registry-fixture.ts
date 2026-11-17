@@ -3,14 +3,30 @@ import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "n
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRegistry, ownEntry, type RefWriter } from "../src/registry.js";
+import { type BoardStatePath, boardStatePaths } from "../src/board-state.js";
+import { loadRegistry, ownEntry } from "../src/registry.js";
 import { SKILL_WILDCARD } from "../src/skill-allowlist.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 import { tempDir } from "./temp-dir.js";
 
-/** 予告する基準の無い registry の口 —— registry clone を workspace として登録していない盤面の書き込み(合成 root の束ねが
- *  workspace を見つけなかったときと同じ)。 */
-export const writeUnannounced: RefWriter = (_ref, _newSha, write) => write();
+/** 状態パスはどれも存在しない場所に置き、registry clone だけを本物の固定点にした盤面の固定点(ADR 0377 決定3)。
+ *  `registryDir` を省けば registry の無い盤面。 */
+export function registryFixedPoints(registryDir?: string): BoardStatePath[] {
+  return boardStatePaths({
+    dbPath: "/nonexistent/board.sqlite",
+    workerLogDir: "/nonexistent/worker-logs",
+    apiTokenFile: "/nonexistent/api-token",
+    moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
+    codexHome: "/nonexistent/codex",
+    cwd: "/nonexistent/tidepool",
+    servedRoot: "/nonexistent/tidepool",
+    registryDir,
+  });
+}
+
+/** spec #3273 text E1: `path` が registry clone に重なる拒否(登録・boot の一斉検査・pickup の述語で同じ文)。 */
+export const registryCloneOverlap = (path: string, registryDir: string) =>
+  `${path} overlaps the registry clone (${registryDir}), which is not a workspace. To let agents edit the registry, clone the registry's repository to another path and register that.`;
 
 /** registry clone の原本に受け取りを拒ませる(push を落とす)。盤面の push は clone の pushurl を読まない(ADR 0339 決定5)ので、
  *  落とすのは原本の側である。 */

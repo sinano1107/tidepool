@@ -1516,7 +1516,7 @@ const workspaceProtectionCaptions = {
 };
 function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
-  const publishable = !ws.repo && !ws.registrySelf;
+  const publishable = !ws.repo;
   const sharesRegistryRepo = ws.protectionReason === "registry_repository";
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
@@ -1546,7 +1546,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", ws.name);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), (sharesRegistryRepo || ws.registrySelf) && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.protectionReason && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, workspaceProtectionCaptions[ws.protectionReason]), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), sharesRegistryRepo && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.protectionReason && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, workspaceProtectionCaptions[ws.protectionReason]), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: ws.repo ? "repository" : "path",

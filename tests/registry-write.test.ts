@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { git } from "../src/git.js";
 import { commitToRegistry } from "../src/registry-write.js";
-import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 describe("commitToRegistry", () => {
   it("returns the base SHA without a commit when nothing changes", async () => {
@@ -13,7 +13,7 @@ describe("commitToRegistry", () => {
     const base = git(dir, "rev-parse", "main");
 
     const landed = commitToRegistry(
-      { dir, mode: "purely-local", writeRef: writeUnannounced },
+      { dir, mode: "purely-local" },
       undefined,
       () => {},
       "no change",
@@ -30,7 +30,7 @@ describe("commitToRegistry", () => {
     const base = git(dir, "rev-parse", "main");
 
     const landed = commitToRegistry(
-      { dir, mode: "purely-local", writeRef: writeUnannounced },
+      { dir, mode: "purely-local" },
       undefined,
       (worktree) => writeFileSync(join(worktree, "new-file.txt"), "new content\n"),
       "add new file",

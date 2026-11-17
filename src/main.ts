@@ -86,6 +86,7 @@ const boardState = boardStatePaths({
   // 両者は一致しないので、cwd だけ守ると配信元が無防備になる。
   cwd: process.cwd(),
   servedRoot: repoRoot,
+  registryDir,
 });
 
 // ADR 0043 / issue #33: worker options の口の一覧も server-options.ts が持つ。

@@ -5,7 +5,6 @@ import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
   type PublishWorkspaceInput,
-  RegistrySelfPublishError,
   WorkspaceAlreadyPublishedError,
 } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
@@ -94,21 +93,6 @@ it.each([
 
   expect(res.status).toBe(400);
   expect(res.json.error).toBe(err.message);
-});
-
-// ADR 0013 と同じ形の、確認でも出し直しでも買えない拒否 —— unprotect の 403 に揃える
-it("registry clone 自身の publish は 403", async () => {
-  t = await bootTidepool({
-    workspaceAdmin: {
-      publish: async () => {
-        throw new RegistrySelfPublishError("registry");
-      },
-    },
-  });
-
-  const res = await api(t.baseUrl, "POST", "/api/workspaces/registry/publish", { repo: "x" });
-
-  expect(res.status).toBe(403);
 });
 
 it("GitHub 身元を持たない盤面は 503(未設定と同じ族)", async () => {

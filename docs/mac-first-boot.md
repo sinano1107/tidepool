@@ -296,6 +296,13 @@ Use a dedicated clone: the board treats a workspace's checkout as its own from i
 between tasks too, and a checkout you also edit by hand will end up quarantined. Nothing else
 changes — task branches, pull requests, and a merge question you answer.
 
+## Let workers edit the registry
+
+The registry clone at `$TIDEPOOL_REGISTRY` is not a workspace, and registering it is refused. To let
+workers edit the registry, add a workspace with **clone a repository** and the registry repository's
+clone URL: the board clones it to another path. Its changes always wait for your merge; you do not
+need to turn on protection for it.
+
 ## When a workspace is quarantined
 
 The board records every ref of a workspace's checkout and stops the workspace when one moves

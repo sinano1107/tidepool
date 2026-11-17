@@ -59,7 +59,6 @@ import type { DraftClient } from "./draft.js";
 import { executionSettingsFor } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { pathIsRegistryClone } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import {
   createProfile,
@@ -79,13 +78,11 @@ import {
   InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
-  type RefWriter,
   type RegistryCandidates,
   type RegistryMode,
   type RegistryReachability,
   type RegistrySource,
   type RosterAgent,
-  type WritableRegistry,
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
@@ -98,7 +95,6 @@ import { terminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
-  boardRefWriter,
   entryCheckoutPath,
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -198,7 +194,7 @@ export interface BoardComposition {
   auditorName: string;
   /** ADR 0269 決定2 / GLOSSARY.md の Interviewer。 */
   interviewerName: string;
-  /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)。 */
+  /** ADR 0040 / issue #149: 盤面の固定点(状態パスの5点と、ADR 0377 決定3 の registry clone)。 */
   boardState: BoardStatePath[];
   /** ADR 0097 決定4 / issue #445: Moonshot Platform キーの置き場(mode 600 の
    *  状態ファイル、平文は盤面の env に載せない)。アダプタが spawn 時にだけ読む。 */
@@ -472,10 +468,10 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
  *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
  *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
  *  出ることである。registry clone の default branch の食い違い(ADR 0377 決定7)も同じ検査なので、ここでは騒ぐだけ。 */
-async function bootRegistryCheck(board: BoardComposition, writeRef: RefWriter): Promise<void> {
+async function bootRegistryCheck(board: BoardComposition): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return;
-  const reachability = await checkRegistryReachability(registryDir, board.githubAuth, writeRef);
+  const reachability = await checkRegistryReachability(registryDir, board.githubAuth);
   if (reachability.available) return;
   console.error(
     "[registry] startup registry check failed; the board is starting anyway and the next pickup " +
@@ -492,32 +488,10 @@ function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
 
 /** ADR 0052 決定2 の pickup / 回答時の refresh 点(ADR 0377 決定7 の default branch の検査も載る)。remote 正本を宣言していない
  *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
-function registryReachabilityCheck(
-  board: BoardComposition,
-  writeRef: RefWriter,
-): (() => Promise<RegistryReachability>) | undefined {
+function registryReachabilityCheck(board: BoardComposition): (() => Promise<RegistryReachability>) | undefined {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return undefined;
-  return () => checkRegistryReachability(registryDir, board.githubAuth, writeRef);
-}
-
-/** ADR 0243 決定4: registry clone の ref を書く口。registry clone が workspace として登録されていればその基準に束ねる ——
- *  起動時・人間面の書き込み・到達性の検査(pickup のゲートと quarantine の受理)がすべてこの1つの束ねを通る。登録が
- *  読めなければ予告せずに書く(説明の欠けは次の比較 —— 休止中の書き込みなら次の pickup、session 中なら解放 —— が誤検知の
- *  quarantine として大きな音で出す、ADR 0351 決定2)。 */
-function registryRefWriter(board: BoardComposition, db: Db): RefWriter {
-  return (ref, newSha, write) => {
-    let workspace: WorkspaceConfig | undefined;
-    try {
-      workspace = registeredWorkspaces(board).find(
-        (candidate) => board.registryDir !== undefined && pathIsRegistryClone(candidate.path, board.registryDir),
-      );
-    } catch (err) {
-      console.warn("[workspace] the registry clone's workspace could not be resolved; writing without announcing", err);
-    }
-    if (workspace) boardRefWriter(db, workspace)(ref, newSha, write);
-    else write();
-  };
+  return () => checkRegistryReachability(registryDir, board.githubAuth);
 }
 
 /** Resolves any task's execution workspace against the registry (issue #26 /
@@ -694,7 +668,7 @@ function workspaceAdmin(
   board: BoardComposition,
   github: ServerOptions["github"],
   db: Db,
-  registry: WritableRegistry | undefined,
+  registry: RegistrySource | undefined,
 ): WorkspaceAdmin | undefined {
   if (!registry) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
@@ -723,7 +697,7 @@ function workspaceAdmin(
  *  bound to this board's registry clone — the API layer only ever sees the
  *  finished callbacks. Without a registry there is nowhere to administer
  *  agents at all. */
-function agentAdmin(board: BoardComposition, db: Db, registry: WritableRegistry | undefined): AgentAdmin | undefined {
+function agentAdmin(board: BoardComposition, db: Db, registry: RegistrySource | undefined): AgentAdmin | undefined {
   if (!registry) return undefined;
   const deps = { registry, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
   return {
@@ -743,7 +717,7 @@ function agentAdmin(board: BoardComposition, db: Db, registry: WritableRegistry 
  *  to this board's registry clone. The API layer runs the confirmation gate;
  *  these verbs only persist. Without a registry there is nowhere to administer
  *  profiles at all. */
-function profileAdmin(board: BoardComposition, registry: WritableRegistry | undefined): ProfileAdmin | undefined {
+function profileAdmin(board: BoardComposition, registry: RegistrySource | undefined): ProfileAdmin | undefined {
   if (!registry) return undefined;
   const deps = { registry, githubAuth: board.githubAuth };
   return {
@@ -823,10 +797,8 @@ function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCa
 export async function buildServerOptions(board: BoardComposition, db: Db): Promise<ServerOptions> {
   // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
   // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
-  const writeRegistryRef = registryRefWriter(board, db);
-  const source = registrySource(board);
-  const writableRegistry = source && { ...source, writeRef: writeRegistryRef };
-  await bootRegistryCheck(board, writeRegistryRef);
+  const registry = registrySource(board);
+  await bootRegistryCheck(board);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
@@ -843,9 +815,9 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     resolveWorkspace,
     workspacesDir: board.workspacesDir,
     github,
-    workspaceAdmin: workspaceAdmin(board, github, db, writableRegistry),
-    agentAdmin: agentAdmin(board, db, writableRegistry),
-    profileAdmin: profileAdmin(board, writableRegistry),
+    workspaceAdmin: workspaceAdmin(board, github, db, registry),
+    agentAdmin: agentAdmin(board, db, registry),
+    profileAdmin: profileAdmin(board, registry),
     resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board),
     agentDefinitionFailure: agentDefinitionFailureChecker(board, db),
@@ -886,7 +858,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
     // ADR 0331 決定8: Worker MCP の probe の帰属の扉が引く、開いている probe の id
     probeIds: new Set(),
-    registryReachability: registryReachabilityCheck(board, writeRegistryRef),
+    registryReachability: registryReachabilityCheck(board),
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
     // `tidepool-board[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って
@@ -894,9 +866,6 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     githubAuth: board.githubAuth,
     // ADR 0093 決定5: settings が「ログイン済みか」を毎回読み直す先。
     githubTokenFile: board.githubTokenFile,
-    // ADR 0052 決定3 / issue #211: registry clone が workspace としても登録されている
-    // ときの「2つの宣言」の突き合わせ先。registry が無い盤面には食い違う相手が無い。
-    registry: registrySource(board),
     // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。

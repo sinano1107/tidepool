@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
-import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
@@ -29,8 +29,8 @@ import {
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
+  type RegistrySource,
   type WorkspaceEntry,
-  type WritableRegistry,
 } from "./registry.js";
 import {
   commitToRegistry,
@@ -50,7 +50,6 @@ import {
   holdsBaseline,
   refValues,
   rememberPublishedRepo,
-  resolvesToRegistryClone,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   type WorkspaceRegistryProtection,
@@ -104,13 +103,13 @@ export interface WorkspaceAdminDeps {
    *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
    *  (issue #210 レビュー — AgentAdminDeps / ProfileAdminDeps と共有する
    *  Data Clumps だった)。 */
-  registry: WritableRegistry;
+  registry: RegistrySource;
   workspacesBaseDir: string;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
    *  process), threaded in by the composition root. The creation gate refuses
    *  a workspace that would intersect one of them. Absent → nothing to protect
    *  (a caller outside main.ts, e.g. a test); the pickup-side floor
-   *  (claude-worker.ts) still catches whatever gets registered anyway —
+   *  (the named-place pickup predicate, ADR 0377 決定4) still catches whatever gets registered anyway —
    *  including the registry-edit PR path, which never passes this gate. */
   boardState?: BoardStatePath[];
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
@@ -166,7 +165,7 @@ export interface WorkspaceAdmin {
   delete: DeleteWorkspaceFn;
 }
 
-/** publish の3つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元
+/** publish の2つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元
  *  (ADR 0024)を持たないので push できない。要求するのは `github` クライアントでは
  *  なく `githubAuth` である —— publish が GitHub に出るのは git の push 1本だけで、
  *  API は ADR 0067 の probe(あれば撃つ)にしか使わない。
@@ -179,19 +178,7 @@ export class GitHubIdentityMissingError extends Error {
   }
 }
 
-/** The registration gate's refusal (ADR 0040 / issue #149): the checkout this
- *  entry would point at intersects one of the board's own state paths. issue
- *  #121 refused a registration-time check for *injectivity* because that is a
- *  human convention and the check would be inaccurate — this one is path
- *  containment, which is exact, and it guards a floor, so the gate may refuse
- *  it outright. The floor itself still lives at pickup (claude-worker.ts): a
- *  registry-edit PR never passes through here. */
-export class BoardStateOverlapError extends Error {
-  constructor(reason: string) {
-    super(reason);
-    this.name = "BoardStateOverlapError";
-  }
-}
+export { BoardStateOverlapError } from "./board-state.js";
 
 /** Where this creation's checkout will actually live — the one path the gate
  *  judges. `register` records an explicit host path; `clone` and `create` both
@@ -397,14 +384,6 @@ export interface WorkspaceDeletionReferences {
   defaultWorkspaceName?: string;
 }
 
-/** 盤面自身の registry clone の削除は確認しても通らない(ADR 0087 決定3)。 */
-export class RegistrySelfDeleteError extends Error {
-  constructor(name: string) {
-    super(`workspace "${name}" is the board's own registry clone — it cannot be deleted here`);
-    this.name = "RegistrySelfDeleteError";
-  }
-}
-
 export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
   deps: WorkspaceAdminDeps & WorkspaceDeletionReferences & { db: Db; clock?: Clock },
@@ -413,10 +392,6 @@ export async function deleteWorkspace(
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
-  // 永久に通らない拒否が先(updateWorkspace の自己拒否と同じ順序)
-  if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
-    throw new RegistrySelfDeleteError(input.name);
-  }
   const reasons: DeletionBlockedReason[] = [];
   if (deps.unsettledTaskCount > 0) {
     reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
@@ -482,20 +457,7 @@ export class WorkspaceAlreadyPublishedError extends Error {
   }
 }
 
-/** publish の2つ目の拒否(ADR 0066 決定5): エントリが盤面自身の registry clone を
- *  指している。通すと workspace エントリは remote-backed を宣言し、合成 root
- *  (`RegistryMode`)は purely-local を宣言する —— ADR 0052 が quarantine と定めた
- *  「2つの宣言の食い違い」を人間の扉が製造することになる。 */
-export class RegistrySelfPublishError extends Error {
-  constructor(name: string) {
-    super(
-      `workspace "${name}" is the board's own registry clone — its remote source of truth is the board's own composition, not this door`,
-    );
-    this.name = "RegistrySelfPublishError";
-  }
-}
-
-/** publish の4つ目の拒否(ADR 0066 決定5): エントリは `repo` を持たないのに
+/** publish の3つ目の拒否(ADR 0066 決定5): エントリは `repo` を持たないのに
  *  checkout には `origin` が在る。それは帯域外の手作業が作った ADR 0052 のずれ状態で
  *  あり、pickup でどのみち quarantine に落ちる —— publish が上書きして辻褄を合わせる
  *  形は採らない。**巻き戻しの線もここで引かれる**: 自分が `remote add` した場合しか
@@ -522,9 +484,6 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   const path = entryCheckoutPath(entry, name, deps.workspacesBaseDir);
   assertRememberedRepo(deps.db, { name, path, repo: entry.repo }, now());
   if (entry.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, entry.repo);
-  if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
-    throw new RegistrySelfPublishError(input.name);
-  }
   if (!deps.githubAuth) throw new GitHubIdentityMissingError();
   const existing = originUrl(path);
   if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing);
@@ -878,7 +837,6 @@ function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps)
 /** A workspace entry as the settings surface shows it, with computed protection. */
 export interface WorkspaceView extends WorkspaceEntry {
   name: string;
-  registrySelf: boolean;
   protected: boolean;
   protectionReason?: WorkspaceRegistryProtection["reason"];
 }
@@ -908,7 +866,6 @@ export function listWorkspaceViews(
       return {
         ...entry,
         name,
-        registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
         protected: protection !== undefined,
         ...(protection && protection.reason !== "flag" && { protectionReason: protection.reason }),
       };

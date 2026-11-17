@@ -16,8 +16,8 @@ afterEach(() => t?.stop());
 it("GET /api/workspaces は設定面向けの一覧ビューを基点ディレクトリごと返す(issue #57 フェーズ3 / ADR 0082)", async () => {
   const list = {
     workspaces: [
-      { name: "registry-edit", path: "/srv/registry-edit", protected: true, protectionReason: "registry_repository" as const, registrySelf: false },
-      { name: "lagoon", repo: "https://github.com/example/lagoon.git", protected: false, registrySelf: false },
+      { name: "registry-edit", path: "/srv/registry-edit", protected: true, protectionReason: "registry_repository" as const },
+      { name: "lagoon", repo: "https://github.com/example/lagoon.git", protected: false },
     ],
     workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" as const },
   };

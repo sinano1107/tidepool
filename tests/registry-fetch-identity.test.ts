@@ -6,7 +6,7 @@ import { GitHubAuth } from "../src/github-auth.js";
 import { refreshRegistry } from "../src/registry.js";
 import { type BrokerAnswer, type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { type GitCall, shimGit } from "./harness.js";
-import { makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 本物の `git` の前に shim を置いて、盤面が実際に渡した argv と env を捕まえる。
@@ -76,7 +76,7 @@ it("盤面の registry fetch は仲介の installation token で、盤面が組�
   const { cwd, calls } = await shimmedCheckout();
   const broker = await openBroker(() => issuedToken("installation-token"));
 
-  await refreshRegistry(cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url), writeUnannounced);
+  await refreshRegistry(cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url));
 
   // 網に出る2つ(原本の sha を読む ls-remote と、その sha の fetch)がどちらも同じ名義で撃たれる
   for (const [verb, command] of [
@@ -104,7 +104,7 @@ it("盤面の registry fetch は仲介の installation token で、盤面が組�
 it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さない(ADR 0024)", async () => {
   const { cwd, calls } = await shimmedCheckout();
 
-  await refreshRegistry(cwd, undefined, writeUnannounced);
+  await refreshRegistry(cwd, undefined);
 
   expect(
     (["ls-remote", "fetch"] as const).map((verb) => {
@@ -125,7 +125,7 @@ it("fetch が実際に origin/main を更新し、token は process.env に残�
   const before = gitOut(registryDir, "rev-parse", "refs/remotes/origin/main");
   const merged = publish("agents/deckhand.md", "---\nname: deckhand\n---\nstub\n", "merged on remote");
 
-  const result = await refreshRegistry(registryDir, new GitHubAuth(await tokenFile("tok")), writeUnannounced);
+  const result = await refreshRegistry(registryDir, new GitHubAuth(await tokenFile("tok")));
 
   // 「落ちなかった」ではなく「**ref が動いた**」を見る: refspec を間違えても
   // exit 0 は返るので、available だけでは題目を検証したことにならない
@@ -144,7 +144,7 @@ it("仲介が token を出せなければ registry は到達不能として返�
   const { cwd, calls } = await shimmedCheckout();
   const broker = await openBroker(() => ({ status: 401, body: { error: "invalid_user_token" } }));
 
-  const result = await refreshRegistry(cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url), writeUnannounced);
+  const result = await refreshRegistry(cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url));
 
   expect({
     available: result.available,

@@ -9,9 +9,9 @@ import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { completionTreePaths, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
-import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
+import { deleteWorkspace } from "../src/workspace-create.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
-import { FIXTURE_WORKSPACE, makeRegistry, writeUnannounced } from "./registry-fixture.js";
+import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -49,7 +49,7 @@ function expectState(s: Session, kept: boolean): void {
 }
 
 const registryDeps = (dir: string) => ({
-  registry: { dir, mode: "purely-local" as const, writeRef: writeUnannounced },
+  registry: { dir, mode: "purely-local" as const },
   workspacesBaseDir: "/workspaces",
 });
 
@@ -104,20 +104,6 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
         { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, ...references, db: s.db },
       ),
     ).rejects.toMatchObject({ name: "DeletionBlockedError" });
-
-    expectState(s, true);
-  });
-
-  it("盤面自身の registry clone の拒否のとき、行はそのまま", async () => {
-    const s = await sessionWithState("registry");
-    const registryDir = await makeMainRegistry();
-    writeFileSync(join(registryDir, "workspaces.yaml"), `registry:\n  path: ${registryDir}\n`);
-    git(registryDir, "add", "-A");
-    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "register self");
-
-    await expect(
-      deleteWorkspace({ name: "registry", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: s.db }),
-    ).rejects.toThrow(RegistrySelfDeleteError);
 
     expectState(s, true);
   });
@@ -189,7 +175,7 @@ describe("deleteWorkspace: 正常系(issue #205 / ADR 0087 決定1・決定4)", 
     const checkout = await deleteWorkspace(
       { name: "tidepool", confirm: true },
       {
-        registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+        registry: { dir: registryDir, mode: "purely-local" },
         workspacesBaseDir: "/workspaces",
         ...NO_REFERENCES,
         db: openDb(":memory:"),
@@ -212,7 +198,7 @@ describe("deleteWorkspace: 確認の門(issue #205 / ADR 0087)", () => {
       deleteWorkspace(
         { name: "tidepool" },
         {
-          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          registry: { dir: registryDir, mode: "purely-local" },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           db: openDb(":memory:"),
@@ -233,7 +219,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          registry: { dir: registryDir, mode: "purely-local" },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           db: openDb(":memory:"),
@@ -255,7 +241,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          registry: { dir: registryDir, mode: "purely-local" },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           db: openDb(":memory:"),
@@ -278,7 +264,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          registry: { dir: registryDir, mode: "purely-local" },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           db: openDb(":memory:"),
@@ -298,7 +284,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     await deleteWorkspace(
       { name: "tidepool", confirm: true },
       {
-        registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+        registry: { dir: registryDir, mode: "purely-local" },
         workspacesBaseDir: "/workspaces",
         ...NO_REFERENCES,
         db: openDb(":memory:"),
@@ -312,23 +298,24 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     ).toEqual(["tidepool"]);
   });
 
-  it("盤面自身の registry clone は永久に消せない(RegistrySelfDeleteError)", async () => {
+  // ADR 0377 決定8: registry clone を拒む削除の項は消えた —— 手で足した registry clone の entry は削除の扉で外せる(spec #3273 text E1 の出口)
+  it("registry clone を名指す手書きの entry は消せて、registry clone はそのまま残る", async () => {
     const registryDir = await makeMainRegistry();
-    // registry clone 自身を workspace として登録した状態(ADR 0052 決定3)
     writeFileSync(join(registryDir, "workspaces.yaml"), `registry:\n  path: ${registryDir}\n`);
     git(registryDir, "add", "-A");
-    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "register self");
+    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "name the registry clone by hand");
 
     await expect(
       deleteWorkspace(
         { name: "registry", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          registry: { dir: registryDir, mode: "purely-local" },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           db: openDb(":memory:"),
         },
       ),
-    ).rejects.toThrow(RegistrySelfDeleteError);
+    ).resolves.toBe(registryDir);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.registry).toBeUndefined();
   });
 });

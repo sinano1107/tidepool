@@ -64,7 +64,7 @@ import {
   specRecordingCall,
 } from "./fakes.js";
 import { failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
-import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -3643,7 +3643,7 @@ describe("ClaudeCodeWorker", () => {
       `---\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
       "merged registry change",
     );
-    expect(await refreshRegistry(registryDir, undefined, writeUnannounced)).toEqual({ available: true });
+    expect(await refreshRegistry(registryDir, undefined)).toEqual({ available: true });
     expect(git("rev-parse", "main")).toBe(staleLocal);
 
     const db = openDb(":memory:");

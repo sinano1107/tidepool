@@ -221,8 +221,8 @@ export interface McpDeps {
    *  protected workspace / ADR 0013), read fresh against the registry — a
    *  decompose child naming a protected workspace converts to an approval
    *  question unconditionally, regardless of the registering worker's
-   *  authority profile (v1's only protected workspace is the registry
-   *  itself). Absent → no workspace is protected. */
+   *  authority profile (v1's use is a clone of the registry's repository —
+   *  ADR 0377 決定5). Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
   /** The pull half of the roster (issue #43 / ADR 0014): every registry
    *  agent's name + description, read fresh against the registry every call

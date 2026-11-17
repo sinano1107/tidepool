@@ -1,7 +1,5 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { Db } from "./db.js";
-import { quarantineWorkspace, type WorkspaceConfig } from "./workspace.js";
 
 /** 盤面プロセスに固定の保護対象1つ(ADR 0040)。`label` は quarantine / 拒否の
  *  文面にそのまま出るので、人間が「どれを動かせばよいか」を読める綴りにする
@@ -9,9 +7,11 @@ import { quarantineWorkspace, type WorkspaceConfig } from "./workspace.js";
 export interface BoardStatePath {
   label: string;
   path: string;
+  /** registry clone の固定点(ADR 0377 決定3)—— 重なりの文は spec #3273 text E1 になる。ほかの固定点は持たない。 */
+  kind?: "registry-clone";
 }
 
-/** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040 の5点)。**workspace 毎に
+/** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040 の5点と、ADR 0377 決定3 の registry clone)。**workspace 毎に
  *  変わる保護対象は存在しない** — 検査は「盤面側の固定リスト × workspace パス」の
  *  総当たりである。並ぶ*パス*の数は5とは限らない: GitHub token は env 未設定なら
  *  落ち、5点目の「実行 checkout」は cwd と配信元が一致しなければ2つになる。
@@ -56,6 +56,8 @@ export interface BoardStatePathsInput {
    *  checkout」そのものである。 */
   cwd: string;
   servedRoot: string;
+  /** `TIDEPOOL_REGISTRY` — 盤面が Registry を読むだけの clone(ADR 0377 決定1・3)。registry の無い盤面では落ちる。 */
+  registryDir?: string;
 }
 
 export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
@@ -88,6 +90,7 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
     },
     { label: "Codex worker home (TIDEPOOL_CODEX_HOME)", path: input.codexHome },
     ...checkouts,
+    ...(input.registryDir === undefined ? [] : [{ label: "registry clone", path: input.registryDir, kind: "registry-clone" as const }]),
   ];
 }
 
@@ -101,6 +104,14 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
 export interface BoardStateOverlap {
   /** quarantine の cause / 登録拒否の文面にそのまま載る英文。 */
   reason: string;
+}
+
+/** ADR 0040 / ADR 0377 決定4: a fixed-point overlap is a local refusal in registration, pickup and Quarantine acceptance. */
+export class BoardStateOverlapError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "BoardStateOverlapError";
+  }
 }
 
 /** パス区切りを尊重した包含判定(ADR 0040)。文字列の前置比較は
@@ -180,6 +191,13 @@ export function boardStateOverlap(
     const a = forComparison(workspace.resolved, platform);
     const b = forComparison(candidate.resolved, platform);
     if (contains(a, b) || contains(b, a)) {
+      if (target.kind === "registry-clone") {
+        return {
+          reason:
+            `${workspacePath} overlaps the registry clone (${target.path}), which is not a workspace. ` +
+            "To let agents edit the registry, clone the registry's repository to another path and register that.",
+        };
+      }
       return {
         reason:
           `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
@@ -190,36 +208,4 @@ export function boardStateOverlap(
     }
   }
   return undefined;
-}
-
-/** boot 時の一斉検査(ADR 0040)。登録済みの全 workspace に pickup と同じ検査を
- *  掛け、該当を最初から needs-human にする — 「WebUI から実行時に登録できる」以上
- *  boot 一点では取りこぼすので、これは**床ではなく早く騒ぐ側**であり、床は
- *  pickup 側(claude-worker.ts)にある。
- *
- *  **起動そのものは拒まない**: 起動拒否は「人間面は開いたままが復旧経路」
- *  (ADR 0036 の fail-open)と衝突する。列挙自体の失敗(registry の yaml が壊れて
- *  いる、clone が読めない)も同じ線で握り潰してログに落とす — 検査ができなかった
- *  ことで盤面が起動しなくなるほうが、直す手段を人間から奪う。 */
-export function sweepBoardStateOverlap(
-  db: Db,
-  paths: BoardStatePath[],
-  listWorkspaces: () => WorkspaceConfig[],
-  now: Date,
-): void {
-  let workspaces: WorkspaceConfig[];
-  try {
-    workspaces = listWorkspaces();
-  } catch (err) {
-    // overlap sweep は ADR 0040 の一斉検査
-    console.error(
-      "[board-state] could not enumerate registered workspaces for the board-state overlap sweep; " +
-        `pickup still checks where each task runs (its workspace, or an Interview's room) as it is picked up (${String(err)})`,
-    );
-    return;
-  }
-  for (const workspace of workspaces) {
-    const overlap = boardStateOverlap(workspace.path, paths);
-    if (overlap) quarantineWorkspace(db, workspace.name, new Error(overlap.reason), now);
-  }
 }
