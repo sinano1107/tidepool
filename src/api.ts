@@ -186,8 +186,6 @@ import {
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
-  RegistrySelfDeleteError,
-  RegistrySelfPublishError,
   RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
@@ -1000,9 +998,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof RepoAccessMissingError
       ) {
         sendJson(res.status(400), { error: err.message });
-      } else if (err instanceof RegistrySelfPublishError) {
-        // 403: unprotect の自己拒否と同じく、出し直しでは決して通らない(ADR 0013)
-        sendJson(res.status(403), { error: err.message });
       } else if (err instanceof GitHubIdentityMissingError) {
         // 上の未設定ゲートと同じ族 — 盤面が GitHub 身元を持たない(ADR 0024)
         sendJson(res.status(503), { error: err.message });
@@ -1190,9 +1185,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         sendJson(res.status(404), { error: err.message });
-      } else if (err instanceof RegistrySelfDeleteError) {
-        // ADR 0087 決定3: 盤面自身の registry clone は削除できない
-        sendJson(res.status(403), { error: err.message });
       } else {
         respondToDeletionFailure(res, err);
       }

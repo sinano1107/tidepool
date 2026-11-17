@@ -273,7 +273,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
       create: created,
       list: () => ({
         workspaces: [
-          { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false, protected: true, protectionReason: "registry_repository" },
+          { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", protected: true, protectionReason: "registry_repository" },
         ],
         workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" as const },
       }),
@@ -304,7 +304,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
     const list: any = await client.callTool({ name: "list_workspaces", arguments: {} });
     expect(readToolPayload(list)).toEqual({
       workspaces: [
-        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false, protected: true, protectionReason: "registry_repository" },
+        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", protected: true, protectionReason: "registry_repository" },
       ],
       workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" },
     });

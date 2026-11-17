@@ -3,14 +3,10 @@ import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "n
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRegistry, ownEntry, type RefWriter } from "../src/registry.js";
+import { loadRegistry, ownEntry } from "../src/registry.js";
 import { SKILL_WILDCARD } from "../src/skill-allowlist.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 import { tempDir } from "./temp-dir.js";
-
-/** 予告する基準の無い registry の口 —— registry clone を workspace として登録していない盤面の書き込み(合成 root の束ねが
- *  workspace を見つけなかったときと同じ)。 */
-export const writeUnannounced: RefWriter = (_ref, _newSha, write) => write();
 
 /** registry clone の原本に受け取りを拒ませる(push を落とす)。盤面の push は clone の pushurl を読まない(ADR 0339 決定5)ので、
  *  落とすのは原本の側である。 */

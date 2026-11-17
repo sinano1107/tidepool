@@ -8,7 +8,7 @@ import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardCall, createBoardCalls } from "./board-call.js";
-import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
+import type { BoardStatePath } from "./board-state.js";
 import {
   CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
   type CliAuthCheck,
@@ -50,7 +50,6 @@ import {
   type AuthorityProfile,canonicalHarness, type Harness, 
   type RegistryCandidates,
   type RegistryReachabilityCheck,
-  type RegistrySource,
   type RosterAgent,} from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
@@ -76,7 +75,7 @@ import {
 } from "./watchdog.js";
 import type { SpawnFailure, WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
 import { probeWorkerMcpReachability, type WorkerMcpReachabilityProbe } from "./worker-mcp-reachability.js";
-import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, sweepBoardStateOverlap, type WorkspaceConfig } from "./workspace.js";
 import type { WorkspaceAdmin } from "./workspace-create.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
@@ -259,12 +258,6 @@ export interface ServerOptions {
    *  `npm run github-login` writes the file while the board runs, and the
    *  screen has to show that without a restart. */
   githubTokenFile?: string;
-  /** ADR 0052 決定3 / issue #211: which registry clone the board reads, plus its
-   *  remote-source-of-truth declaration. Needed at pickup because the registry
-   *  clone can also be a registered workspace, and then it carries **two**
-   *  declarations whose disagreement quarantines it. Absent → no registry at
-   *  all, so there is no second declaration to disagree with. */
-  registry?: RegistrySource;
   /** The pull half of the roster (issue #43 / ADR 0014), read fresh against
    *  the registry by the caller — same pattern as `agentRegistered`. Absent
    *  → no registry configured, so `list_agents` reports only `human`. */
@@ -302,13 +295,13 @@ export interface ServerOptions {
   /** The Behavior candidate drafting Board call seam (ADR 0120 / issue #617).
    *  Absent → no candidate is drafted from an attributed objection. */
   behaviorDraftClient?: BehaviorDraftClient;
-  /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)と、boot
+  /** ADR 0040 / issue #149: 盤面の固定点(状態パスの5点と ADR 0377 決定3 の registry clone)と、boot
    *  時に一斉検査する登録済み workspace の列挙。Absent → 守る状態パスを持たない
    *  盤面(実プロセスの env を持たないテスト盤面の既定形)。main.ts は常に渡す。
    *
-   *  ここが持つのは**早く騒ぐ側**だけで、床は pickup(claude-worker.ts)にある —
-   *  workspace は WebUI から実行時に登録できるので、boot 一点では取りこぼす。
-   *  `paths` は quarantine 解除の検証(api.ts)にも同じものが渡る。 */
+   *  ここが持つのは**早く騒ぐ側**だけで、床は pickup にある —— 名前の場所は pickup の述語(ADR 0377 決定4)、
+   *  task の checkout は spawn の検査(ADR 0356)が見る。workspace は WebUI から実行時に登録できるので、boot 一点では
+   *  取りこぼす。`paths` は pickup の述語と quarantine 解除の検証にも同じものが渡る。 */
   boardState?: {
     paths: BoardStatePath[];
     /** 登録済み workspace を registry から fresh に解決したもの。列挙が投げても
@@ -648,7 +641,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     registryReachability,
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
-    registry: options.registry,
+    boardState: options.boardState?.paths,
     agents: agentAdmin?.list,
     retrospectiveCalls,
     translationClient: options.translationClient,
@@ -706,9 +699,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     codexWorkspaceContainment: options.codexWorkspaceContainment,
     recordDir: options.transcripts.dir,
     workspacesDir: options.workspacesDir,
-    registry: options.registry,
     // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
-    // 床と同じ1つの配列(3箇所で別々に組み立てない)
+    // 述語と同じ1つの配列(3箇所で別々に組み立てない)
     boardState: options.boardState?.paths,
   });
   // the auto_if_ci_green poll (issue #11): independent of the scheduler's

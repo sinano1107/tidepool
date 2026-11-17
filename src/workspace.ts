@@ -22,6 +22,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
+import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { appendEvent, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
 import {
@@ -61,7 +62,6 @@ import {
   isRemoteBacked,
   type PickupPredicate,
   type PlaceFire,
-  pathIsRegistryClone,
   protectedBranch,
   protectedBranchRef,
   readHeadOf,
@@ -81,7 +81,6 @@ import {
   ownEntry,
   type RefWriter,
   type Registry,
-  type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
 import { sameRepository } from "./repo-access.js";
@@ -277,17 +276,17 @@ export class PickupGateError extends Error {
  *  読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
  *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
  *  最初に落ちた場所で `PickupGateError` を投げる。 */
-export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, registry?: RegistrySource, live?: () => boolean) {
+export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, fixedPoints?: BoardStatePath[], live?: () => boolean) {
   // (task, 面接室) の項は場所の項の後 —— 受験者だけは先(下)
   const room = (rootId: string, fetchedFirst = false) => ({
     ...roomPlace(db, rootId, workspacesBaseDir),
     predicates: () => {
-      const own = roomPickupPredicates(db, rootId, workspacesBaseDir, registry);
+      const own = roomPickupPredicates(db, rootId, workspacesBaseDir, fixedPoints);
       const fetched = taskRoomPickupPredicates(db, [task], rootId, workspacesBaseDir);
       return fetchedFirst ? [...fetched, ...own] : [...own, ...fetched];
     },
   });
-  const real = { ...workspace, predicates: () => checkoutPickupPredicates(workspace, registry) };
+  const real = { ...workspace, predicates: () => checkoutPickupPredicates(workspace, fixedPoints) };
   const reads = roomsReadBy(db, task).map((read) => room(read.name));
   const rootId = interviewRootIdOf(db, task);
   const places =
@@ -1734,19 +1733,6 @@ export function quarantineWorkspace(
   return registerResourceStop(db, "workspace", workspaceName, `${reason}${baselineHeldSentence}`, now);
 }
 
-/** Whether a workspace entry's checkout is the board's own registry clone,
- *  compared by realpath so a symlinked temp dir or mount point can't split the
- *  two spellings of the same directory. A path-omitting entry compares by its
- *  convention-derived location (ADR 0018). */
-export function resolvesToRegistryClone(
-  entry: WorkspaceEntry,
-  name: string,
-  registryDir: string,
-  workspacesBaseDir: string,
-): boolean {
-  return pathIsRegistryClone(entryCheckoutPath(entry, name, workspacesBaseDir), registryDir);
-}
-
 /** The one fallback shape shared by every board-driven workspace consumer
  *  (scheduler pickup, mcp release, watchdog/restart teardown): prefer the
  *  registry-backed resolver when configured, else fall back to a fixed
@@ -2254,4 +2240,36 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // ADR 0064 決定4 / ADR 0356 決定5: a human landing may race with a session, so follow only if HEAD is on this ref.
   advanceBranch(db, workspace, ref, protectedSha, landed);
   return landed;
+}
+
+/** boot 時の一斉検査(ADR 0040)。登録済みの全 workspace に pickup と同じ検査を
+ *  掛け、該当を最初から needs-human にする — 「WebUI から実行時に登録できる」以上
+ *  boot 一点では取りこぼすので、これは**床ではなく早く騒ぐ側**であり、床は
+ *  pickup 側にある(名前の場所は pickup の述語 —— ADR 0377 決定4、task の checkout は spawn の検査)。
+ *
+ *  **起動そのものは拒まない**: 起動拒否は「人間面は開いたままが復旧経路」
+ *  (ADR 0036 の fail-open)と衝突する。列挙自体の失敗(registry の yaml が壊れて
+ *  いる、clone が読めない)も同じ線で握り潰してログに落とす — 検査ができなかった
+ *  ことで盤面が起動しなくなるほうが、直す手段を人間から奪う。 */
+export function sweepBoardStateOverlap(
+  db: Db,
+  paths: BoardStatePath[],
+  listWorkspaces: () => WorkspaceConfig[],
+  now: Date,
+): void {
+  let workspaces: WorkspaceConfig[];
+  try {
+    workspaces = listWorkspaces();
+  } catch (err) {
+    // overlap sweep は ADR 0040 の一斉検査
+    console.error(
+      "[board-state] could not enumerate registered workspaces for the board-state overlap sweep; " +
+        `pickup still checks where each task runs (its workspace, or an Interview's room) as it is picked up (${String(err)})`,
+    );
+    return;
+  }
+  for (const workspace of workspaces) {
+    const overlap = boardStateOverlap(workspace.path, paths);
+    if (overlap) quarantineWorkspace(db, workspace.name, new Error(overlap.reason), now);
+  }
 }

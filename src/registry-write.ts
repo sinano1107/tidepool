@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, gitStatus } from "./git.js";
-import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, remoteTrackingRef } from "./github-auth.js";
-import { REGISTRY_BRANCH, refreshRegistry, registryRef, type WritableRegistry } from "./registry.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
+import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
@@ -26,11 +26,11 @@ export class RegistryFetchFailedError extends Error {
  *  すれば ref は動きうる —— その場合は worktree がより新しい内容から fork する
  *  だけで、着地時の fast-forward 検査(`commitToRegistry`)が壊れた状態を防ぐ。 */
 export async function refreshRegistryForWrite(
-  registry: WritableRegistry,
+  registry: RegistrySource,
   auth: GitHubAuth | undefined,
 ): Promise<void> {
   if (registry.mode !== "remote-backed") return;
-  const reachability = await refreshRegistry(registry.dir, auth, registry.writeRef);
+  const reachability = await refreshRegistry(registry.dir, auth);
   if (!reachability.available) {
     throw new RegistryFetchFailedError(reachability.reason ?? "registry remote is unreachable");
   }
@@ -55,9 +55,7 @@ export class DeletionConfirmationRequiredError extends Error {
 
 /** 確認では買えない削除の拒否(ADR 0087 決定2/3): 参照中・盤面の既定。理由は
  *  件数や agent 名という**明細つき**で返る必要があるので、危険な値の裸の文字列
- *  ではなく判別可能なオブジェクトの列にする。盤面自身の registry clone だけは
- *  別クラス(`RegistrySelfDeleteError` — 出し直しでも状況が変わっても決して通ら
- *  ないので 403)。 */
+ *  ではなく判別可能なオブジェクトの列にする。 */
 export type DeletionBlockedReason =
   | { code: "unsettled_tasks"; count: number }
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }
@@ -128,7 +126,7 @@ export class RegistryPushFailedError extends Error {
  *  (別の書き込みが先に着地した)双方とも拒否するので、並行書き込みは黙って
  *  上書きされず、致命の再試行可能な失敗になる(issue #57 の冪等性)。 */
 export function commitToRegistry(
-  registry: WritableRegistry,
+  registry: RegistrySource,
   auth: GitHubAuth | undefined,
   write: (worktreeDir: string) => void,
   message: string,
@@ -158,7 +156,7 @@ export function commitToRegistry(
   }
 }
 
-function land(registry: WritableRegistry, worktreeDir: string, baseSha: string, auth: GitHubAuth | undefined): void {
+function land(registry: RegistrySource, worktreeDir: string, baseSha: string, auth: GitHubAuth | undefined): void {
   try {
     const newSha = git(worktreeDir, "rev-parse", "HEAD");
     if (registry.mode === "remote-backed") {
@@ -166,13 +164,10 @@ function land(registry: WritableRegistry, worktreeDir: string, baseSha: string, 
       // 既にこの repo の installation token を温めているからである(ADR 0066
       // 決定5 が要求する「publish の同期区間に await を入れない」の帰結)。
       // worktree は元の clone の config と ref を共有するので、origin も写しも同じ1つ
-      registry.writeRef(remoteTrackingRef(REGISTRY_BRANCH), newSha, () =>
-        authedPush(auth, worktreeDir, GIT_NETWORK_TIMEOUT_MS, [[REGISTRY_BRANCH, newSha]]),
-      );
+      // ADR 0377 決定8: registry clone は基準を持たないので、push も update-ref も予告しない
+      authedPush(auth, worktreeDir, GIT_NETWORK_TIMEOUT_MS, [[REGISTRY_BRANCH, newSha]]);
     } else {
-      registry.writeRef(`refs/heads/${REGISTRY_BRANCH}`, newSha, () =>
-        git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha),
-      );
+      git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha);
       syncCheckoutIfOnBranch(registry.dir, REGISTRY_BRANCH, baseSha, newSha);
     }
   } catch (err) {

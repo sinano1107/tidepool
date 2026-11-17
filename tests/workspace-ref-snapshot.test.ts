@@ -1,11 +1,9 @@
 import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createAgent } from "../src/agent-create.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import { boardRefWriter, type WorkspaceConfig } from "../src/workspace.js";
+import { refreshProtectedBranch, type WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
-import { seedTierNames } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -24,7 +22,7 @@ import {
   servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -274,46 +272,6 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
   expect(git(ws.path, "show", `task/${running.id}:in-flight.txt`)).toBe("still working");
 });
 
-// 盤面が予告して畳む書き込みのうち、registry の fetch・push・update-ref は registry clone を触る。ADR 0064 が「**最も起きやすい**
-// のが registry clone であり、唯一の保護 workspace で不変条件が最も弱くなる」と名指しした
-// 経路であり、盤面の書き込みは人間面の settings から実行中のセッションと並行して入る。
-it("セッション中の registry 書き込みで、registry clone の workspace は quarantine されない", async () => {
-  const registryDir = await makeRegistry();
-  const workspace = { name: "registry", path: registryDir };
-  const registry = { dir: registryDir, mode: "purely-local" as const };
-  // 合成 root の束ねと同じく、registry clone の workspace の基準に束ねる(t は boot の後に決まる)
-  const writable = () => ({ ...registry, writeRef: boardRefWriter(t.db, workspace) });
-  t = await bootTidepool({
-    workspace,
-    registry,
-    boardState: { paths: [], listWorkspaces: () => [workspace] },
-    agentAdmin: {
-      create: (input) => createAgent(input, { registry: writable(), tiers: () => seedTierNames }),
-    },
-  });
-  const task = await registerWork(t, "runs in the registry clone");
-  await t.clock.advance(HOUR);
-  const before = git(registryDir, "rev-parse", "refs/heads/main");
-
-  expect(
-    (
-      await api(t.baseUrl, "POST", "/api/agents", {
-        name: "tako",
-        authority: "standard",
-        provider: "anthropic",
-        skills: ["*"],
-        description: "General agent",
-        systemPrompt: "You are Tako.",
-      })
-    ).status,
-  ).toBe(201);
-  expect(git(registryDir, "rev-parse", "refs/heads/main")).not.toBe(before);
-
-  await complete(t, task.id);
-
-  expect(await servedQuarantineQuestion(t, "workspace", "registry")).toBeUndefined();
-});
-
 // ADR 0064 決定2: 違反メッセージは**動いた ref を名指しする**。quarantine の確認
 // question の本文がそのまま人間の修理手順になるためで、ハッシュだけを比べて「どれかが
 // 動いた」としか言えない実装は選ばない。
@@ -342,45 +300,22 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
 // ので、連動した `origin/HEAD` の行が古いまま取り残され、無実の quarantine になる。
 // 指し先で数えれば symref の行は指し先が動いても不変で、取り残しが生じない。
 it("盤面が origin/main を書いても、連動する origin/HEAD で quarantine されない", async () => {
-  const { registryDir } = await makeRemoteBackedRegistry();
-  // clone が持つ既定ブランチの symref(本番の registry clone と同じ姿)。push -u は
-  // これを張らないので明示する
-  git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-  const workspace = {
-    name: "registry",
-    path: registryDir,
-    repo: git(registryDir, "remote", "get-url", "origin"),
-  };
-  const registry = { dir: registryDir, mode: "remote-backed" as const };
-  // 合成 root の束ねと同じく、registry clone の workspace の基準に束ねる(t は boot の後に決まる)
-  const writable = () => ({ ...registry, writeRef: boardRefWriter(t.db, workspace) });
-  t = await bootTidepool({
-    workspace,
-    registry,
-    boardState: { paths: [], listWorkspaces: () => [workspace] },
-    agentAdmin: { create: (input) => createAgent(input, { registry: writable(), tiers: () => seedTierNames }) },
-  });
-  const task = await registerWork(t, "runs in the registry clone");
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
+  // clone が持つ既定ブランチの symref。テンプレートの clone はこれを張らないので明示する
+  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "runs while the board refreshes the protected branch copy");
   await t.clock.advance(HOUR);
-  const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+  const before = git(workspace.path, "rev-parse", "refs/remotes/origin/main");
+  publish("merged.txt", "merged on GitHub\n", "merged while the session runs");
 
-  expect(
-    (
-      await api(t.baseUrl, "POST", "/api/agents", {
-        name: "tako",
-        authority: "standard",
-        provider: "anthropic",
-        skills: ["*"],
-        description: "General agent",
-        systemPrompt: "You are Tako.",
-      })
-    ).status,
-  ).toBe(201);
-  expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).not.toBe(before);
+  // 収束が保護ブランチの写しを進める書き込み(ADR 0241 決定1)—— 口は origin/main の1行だけを予告して畳む
+  await refreshProtectedBranch(t.db, workspace, undefined);
+  expect(git(workspace.path, "rev-parse", "refs/remotes/origin/main")).not.toBe(before);
 
   await complete(t, task.id);
 
-  expect(await servedQuarantineQuestion(t, "workspace", "registry")).toBeUndefined();
+  expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
 });
 
 // ADR 0081: symref 自身の可動部は不変条件に残る —— 状態は解決値ではなく**指し先**で
@@ -460,7 +395,7 @@ async function publishableBoard(name: string): Promise<{
   git(dest, "init", "--bare", "-b", "main");
   writeFileSync(join(tokenDir, "token"), "ghp_test\n");
   const deps = {
-    registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
+    registry: { dir: registryDir, mode: "purely-local" as const },
     workspacesBaseDir,
     githubAuth: new GitHubAuth(join(tokenDir, "token")),
   };

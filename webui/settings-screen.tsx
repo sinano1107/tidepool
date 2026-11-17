@@ -198,9 +198,8 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
 }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   // ADR 0066 決定2: publish は編集ではなく状態遷移なので、Edit の下書きには入らない
-  // — purely-local な workspace だけがこの扉を持ち、registry clone 自身は持たない
-  // (サーバ側も RegistrySelfPublishError で拒む)
-  const publishable = !ws.repo && !ws.registrySelf;
+  // — purely-local な workspace だけがこの扉を持つ
+  const publishable = !ws.repo;
   const sharesRegistryRepo = ws.protectionReason === 'registry_repository';
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
@@ -235,7 +234,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <RecordCardHead editing={open} onEdit={startEdit}>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{ws.name}</span>
-        {(sharesRegistryRepo || ws.registrySelf) && <Tag color="tide" mono>registry</Tag>}
+        {sharesRegistryRepo && <Tag color="tide" mono>registry</Tag>}
         {ws.protected && <Tag color="sun">protected</Tag>}
       </RecordCardHead>
       {ws.protectionReason && (
@@ -783,8 +782,8 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
 // dangerous action — the first request omits `confirm`, the server's 409
 // `confirm_required` opens the dialog, and accepting resends the same request
 // with the flag. A 409 that carries `blocked` instead is a refusal no
-// confirmation can buy (referenced by unsettled tasks, the board's default, the
-// registry clone itself); it lands on the ordinary failure toast, whose message
+// confirmation can buy (referenced by unsettled tasks, the board's default);
+// it lands on the ordinary failure toast, whose message
 // already spells out the count / agent names the server counted.
 /** registry 由来の3節(issue #204)。一覧・節・record の3段が同じ形で読む。 */
 type SettingsSectionKey = 'workspaces' | 'agents' | 'profiles';

@@ -11,7 +11,6 @@ import type {
   DeleteWorkspaceInput,
   WorkspaceDeletionReferences,
 } from "../src/workspace-create.js";
-import { RegistrySelfDeleteError } from "../src/workspace-create.js";
 import {
   AUTH_HEADERS,
   api,
@@ -173,20 +172,6 @@ it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タ
   await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
 
   expect(refs[0]?.awaitingLandingTaskIds).toEqual([work.id]);
-});
-
-it("DELETE /api/workspaces/:name は盤面自身の registry clone を 403 で拒む", async () => {
-  t = await bootTidepool({
-    workspaceAdmin: {
-      delete: async () => {
-        throw new RegistrySelfDeleteError("registry");
-      },
-    },
-  });
-
-  const res = await api(t.baseUrl, "DELETE", "/api/workspaces/registry", { confirm: true });
-
-  expect(res.status).toBe(403);
 });
 
 it("DELETE /api/workspaces/:name は開いた Quarantine と基準の拒否を他の理由と同じ 409 で返す(ADR 0373 決定14)", async () => {

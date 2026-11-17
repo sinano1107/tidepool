@@ -5,7 +5,7 @@ import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import { recordedAnswer } from "./board-call-usage.js";
-import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import type { BoardStatePath } from "./board-state.js";
 import {
   type CliAuthCheck,
   type ModelProbe,
@@ -61,7 +61,7 @@ import {
 } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
 import { placeHasRepository } from "./recorded-place.js";
-import type { Harness, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
+import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -598,8 +598,6 @@ export interface QuarantineCheckDeps {
   recordDir?: string;
   /** 面接室の在り処を導く規約の基点(ADR 0018)。Absent → `resolveWorkspacesBaseDir` 自身の既定(scheduler と同じ)。 */
   workspacesDir?: string;
-  /** registry clone の2つの宣言の照合(pickup の述語)が読む盤面の registry。Absent → registry の無い盤面で、照合する相手が無い。 */
-  registry?: RegistrySource;
 }
 
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
@@ -665,7 +663,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     }
     // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 書き戻し(ADR 0373 決定3) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) →
     // merge-back → 運んだ checkout の削除(ADR 0369 決定7) → 基準の撮り直し(ADR 0351 決定4)。
-    const { own, openers } = namePickupPredicates(deps.db, value, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+    const { own, openers } = namePickupPredicates(deps.db, value, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
     const all = [...own, ...openers];
     const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
       try {
@@ -685,10 +683,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
     if (!room || placeHasRepository(target.path)) {
       await refuseOnError(() => verifyWorkspaceClean(target));
-      if (deps.boardState) {
-        const overlap = boardStateOverlap(target.path, deps.boardState);
-        if (overlap) throw new DomainError(overlap.reason);
-      }
     }
     assertNoSessionRunning();
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)

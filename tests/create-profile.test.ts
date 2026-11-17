@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createProfile, listProfileViews, ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAuthorityProfileNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
-import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -35,7 +35,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         // テストの主題はラウンドトリップで、門そのものは別 describe が見る
         confirmDangerous: true,
       },
-      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const profile = loadRegistry(registryDir, "purely-local").authority.risky;
@@ -65,7 +65,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         merge: "external",
         confirmDangerous: true,
       },
-      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     // ADR 0052 決定6: 書き込みは使い捨て worktree の中で起こる — registryDir 自身
@@ -98,7 +98,7 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
       const registryDir = await makeMainRegistry();
       const before = git(registryDir, "rev-parse", "HEAD");
 
-      await expect(createProfile({ ...base, name }, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } })).rejects.toThrow(
+      await expect(createProfile({ ...base, name }, { registry: { dir: registryDir, mode: "purely-local" } })).rejects.toThrow(
         InvalidAuthorityProfileNameError,
       );
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -110,7 +110,7 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      createProfile({ ...base, name: "standard" }, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } }),
+      createProfile({ ...base, name: "standard" }, { registry: { dir: registryDir, mode: "purely-local" } }),
     ).rejects.toThrow(InvalidAuthorityProfileNameError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     // fixture の standard はそのまま(assignable_to は "*" のみ)
@@ -132,7 +132,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
 
-    await createProfile(input, { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } });
+    await createProfile(input, { registry: { dir: registryDir, mode: "remote-backed" } });
 
     expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeDefined();
     expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
@@ -146,7 +146,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
     rejectRegistryPushes(registryDir);
 
     await expect(
-      createProfile(input, { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } }),
+      createProfile(input, { registry: { dir: registryDir, mode: "remote-backed" } }),
     ).rejects.toThrow(RegistryPushFailedError);
 
     expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeUndefined();
@@ -157,7 +157,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
     git(registryDir, "remote", "set-url", "origin", "/no/such/remote");
 
     await expect(
-      createProfile(input, { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } }),
+      createProfile(input, { registry: { dir: registryDir, mode: "remote-backed" } }),
     ).rejects.toThrow(RegistryFetchFailedError);
 
     expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeUndefined();
@@ -167,7 +167,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
     const registryDir = await makeMainRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
 
-    await createProfile(input, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } });
+    await createProfile(input, { registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(loadRegistry(registryDir, "purely-local").authority.risky).toBeDefined();
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
@@ -179,10 +179,10 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
     const registryDir = await makeMainRegistry();
     await createProfile(
       { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "external", confirmDangerous: true },
-      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
-    const views = listProfileViews({ registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } });
+    const views = listProfileViews({ registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(views.map((v) => v.name).sort()).toEqual(["risky", "standard"]);
     expect(views.find((v) => v.name === "risky")).toEqual({
@@ -209,7 +209,7 @@ describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      createProfile(DANGEROUS, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } }),
+      createProfile(DANGEROUS, { registry: { dir: registryDir, mode: "purely-local" } }),
     ).rejects.toThrow(ProfileConfirmationRequiredError);
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -222,7 +222,7 @@ describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
     await expect(
       createProfile(
         { ...DANGEROUS, merge: "auto_if_ci_green" },
-        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
+        { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toMatchObject({
       name: "ProfileConfirmationRequiredError",
@@ -236,7 +236,7 @@ describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
 
     await createProfile(
       { ...DANGEROUS, confirmDangerous: true },
-      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").authority.risky).toEqual({
@@ -252,7 +252,7 @@ describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
     const registryDir = await makeMainRegistry();
 
     await expect(
-      createProfile({ ...DANGEROUS, name: "../escape" }, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } }),
+      createProfile({ ...DANGEROUS, name: "../escape" }, { registry: { dir: registryDir, mode: "purely-local" } }),
     ).rejects.toThrow(InvalidAuthorityProfileNameError);
   });
 });

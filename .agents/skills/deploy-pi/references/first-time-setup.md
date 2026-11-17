@@ -22,7 +22,7 @@ ssh $PI "cd /mnt/ssd/tidepool-workspaces/sandbox && git init -q -b main && git c
 
 ## 3. Point `tidepool-registry`'s `workspaces.yaml` at Pi paths
 
-`workspaces.yaml` says explicitly "paths are host-specific — adjust them in each clone (Mac for development, the Pi in production)". Edit `sandbox.path` and `registry.path` to `/mnt/ssd/tidepool-workspaces/sandbox` and `/mnt/ssd/tidepool-registry` respectively, then commit and push from wherever it's easiest to edit (doesn't have to be on the Pi).
+`workspaces.yaml` says explicitly "paths are host-specific — adjust them in each clone (Mac for development, the Pi in production)". Edit `sandbox.path` to `/mnt/ssd/tidepool-workspaces/sandbox`, then commit and push from wherever it's easiest to edit (doesn't have to be on the Pi). The registry clone (`/mnt/ssd/tidepool-registry`) is not a workspace: remove any entry whose path is the registry clone, because the board quarantines it. To let workers edit the registry, clone the registry's repository to another path and register that clone.
 
 Also check `authority/*.yaml` conforms to the current `authorityProfileSchema` in `src/registry.ts` — see troubleshooting.md's first entry if this is unfamiliar; the schema has changed shape at least once (issue #41) and an out-of-date registry clone will crash the board at boot.
 

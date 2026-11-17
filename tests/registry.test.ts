@@ -19,7 +19,7 @@ import {
   refreshRegistry,
 } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
-import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeMinimalRegistry(workspaceNames: string[]): Registry {
   return {
@@ -93,7 +93,7 @@ describe("loadRegistry", () => {
       `---\ndescription: Merged registry definition\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are the merged Deckhand.\n`,
       "merged registry change",
     );
-    await refreshRegistry(registryDir, undefined, writeUnannounced);
+    await refreshRegistry(registryDir, undefined);
 
     expect({
       remote: loadRegistry(registryDir, "remote-backed").agents.deckhand!.version,

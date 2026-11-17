@@ -689,12 +689,6 @@ export interface RegistrySource {
   mode: RegistryMode;
 }
 
-/** registry を書く側が運ぶ組。書き込みは registry clone の ref を動かすので、その ref を書く口(ADR 0243 決定4)を
- *  必ず連れる —— 合成 root が registry clone の workspace の基準に束ねて渡す。 */
-export interface WritableRegistry extends RegistrySource {
-  writeRef: RefWriter;
-}
-
 /** 盤面の ref の書き込みを、書く先の workspace の基準への予告と畳みで包む口(ADR 0243 決定4)。新しい値を引数に
  *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
 export type RefWriter = (ref: string, newValue: string, write: () => void) => void;
@@ -765,11 +759,11 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 export async function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
-  writeRef: RefWriter,
 ): Promise<RegistryReachability> {
   try {
     await auth?.ensureToken(originRepo(dir));
-    fetchBranchCopy(dir, auth, REGISTRY_BRANCH, writeRef);
+    // ADR 0377 決定8: registry clone は基準を持たないので予告せずに書く —— 値を先に知る形(ADR 0243 決定3)は残す
+    fetchBranchCopy(dir, auth, REGISTRY_BRANCH, (_ref, _sha, write) => write());
     return { available: true };
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 到達できない registry の data にせず底へ
@@ -804,9 +798,8 @@ function registryDefaultBranchCheck(dir: string): RegistryReachability {
 export async function checkRegistryReachability(
   dir: string,
   auth: GitHubAuth | undefined,
-  writeRef: RefWriter,
 ): Promise<RegistryReachability> {
-  const refreshed = await refreshRegistry(dir, auth, writeRef);
+  const refreshed = await refreshRegistry(dir, auth);
   return refreshed.available ? registryDefaultBranchCheck(dir) : refreshed;
 }
 
