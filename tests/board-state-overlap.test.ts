@@ -2,6 +2,7 @@ import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { boardStateOverlap, boardStatePaths } from "../src/board-state.js";
+import { registryCloneOverlap, registryFixedPoints } from "./registry-fixture.js";
 import { tempDir as harnessTempDir } from "./temp-dir.js";
 
 /** 実 realpath を通す判定なので、テストも実ディレクトリを使う(macOS の
@@ -170,32 +171,18 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
   });
 });
 
-// ADR 0377 決定1・3: registry clone は workspace にならない6つ目の固定点。ほかの固定点と同じ包含の規則で、拒否の文は text E1
+// ADR 0377 決定1・3: registry clone は workspace にならない6つ目の固定点。ほかの固定点と同じ包含の規則で、拒否の文は spec #3273 text E1
 describe("boardStatePaths: registry clone は固定点(ADR 0377 決定3)", () => {
-  const e1 = (path: string, registry: string) =>
-    `${path} overlaps the registry clone (${registry}), which is not a workspace. To let agents edit the registry, clone the registry's repository to another path and register that.`;
-
   it.each([
     ["equal to", (registry: string) => registry],
     ["inside", (registry: string) => join(registry, "agents")],
     ["enclosing", (registry: string) => join(registry, "..")],
-  ])("a path %s the registry clone overlaps it with text E1", async (_, at) => {
+  ])("a path %s the registry clone overlaps it with spec #3273 text E1", async (_, at) => {
     const registryDir = await tempDir("registry");
-    const paths = boardStatePaths({ ...INPUT_FOR_REGISTRY, registryDir });
-    expect(boardStateOverlap(at(registryDir), paths)?.reason).toBe(e1(at(registryDir), registryDir));
+    expect(boardStateOverlap(at(registryDir), registryFixedPoints(registryDir))?.reason).toBe(registryCloneOverlap(at(registryDir), registryDir));
   });
 
   it("a board without a registry has no registry clone to protect", () => {
-    expect(boardStatePaths(INPUT_FOR_REGISTRY).some((p) => p.label === "registry clone")).toBe(false);
+    expect(registryFixedPoints().some((p) => p.kind === "registry-clone")).toBe(false);
   });
 });
-
-const INPUT_FOR_REGISTRY = {
-  dbPath: "/nonexistent/board.sqlite",
-  workerLogDir: "/nonexistent/worker-logs",
-  apiTokenFile: "/nonexistent/api-token",
-  moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
-  codexHome: "/nonexistent/codex",
-  cwd: "/nonexistent/tidepool",
-  servedRoot: "/nonexistent/tidepool",
-};

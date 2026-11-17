@@ -24,6 +24,7 @@ import {
 import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
+import { restoreBaseline } from "../src/workspace.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -726,10 +727,10 @@ it("既定 agent が組み込みに解決される盤面は起動しない —�
   );
 });
 
-// ADR 0377 決定8 (pin E3): registry の fetch・push・`update-ref` は、どの workspace の基準にも予告しない —— registry clone を
-// 名指す entry が手で足されて基準の行を持っていても、合成 root の registry の書き込みはその行を動かさない
+// ADR 0377 決定8 (spec #3273 pin E3): registry の fetch・push・`update-ref` は、どの workspace の基準にも予告しない —— registry
+// clone を名指す entry が手で足されて基準の行を持っていても、合成 root の registry の書き込みはその行に畳まれない。観測は受理の
+// 「基準へ戻す」の読み手(`restoreBaseline`)で、基準に残った書く前の値へ戻し、書かれた値を外した値として返す
 const AGENT_INPUT: CreateAgentInput = { name: "tako", authority: "standard", provider: "anthropic", skills: ["*"], description: "General agent", systemPrompt: "You are Tako." };
-const baselineOf = (db: ReturnType<typeof openDb>, name: string) => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(name);
 
 it("registry の fetch と push は、registry clone を名指す entry の基準に予告しない", async () => {
   const { registryDir, publish } = await makeRemoteBackedRegistry();
@@ -738,8 +739,8 @@ it("registry の fetch と push は、registry clone を名指す entry の基�
   git(registryDir, "fetch", "--quiet", "origin");
   git(registryDir, "merge", "--quiet", "--ff-only", "origin/main");
   const db = openDb(":memory:");
-  await leaveBaseline(db, { name: "registry", path: registryDir, repo });
-  const before = baselineOf(db, "registry");
+  const entry = { name: "registry", path: registryDir, repo };
+  await leaveBaseline(db, entry);
   publish("notes.md", "merged on GitHub\n", "merged while the board was down");
 
   const options = await buildServerOptions({ ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "registry", defaultAgentName: "deckhand" }, db);
@@ -748,7 +749,8 @@ it("registry の fetch と push は、registry clone を名指す entry の基�
   await options.agentAdmin!.create!(AGENT_INPUT);
 
   expect(git(registryDir, "show", "origin/main:agents/tako.md")).toContain("You are Tako.");
-  expect(baselineOf(db, "registry")).toBe(before);
+  const written = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+  expect(restoreBaseline(db, entry, new Date())).toEqual([{ ref: "refs/remotes/origin/main", sha: written }]);
   db.close();
 });
 
@@ -757,13 +759,14 @@ it("purely-local な registry の update-ref は、registry clone を名指す e
   writeFileSync(join(registryDir, "workspaces.yaml"), `registry:\n  path: ${registryDir}\n`);
   git(registryDir, "commit", "--quiet", "-am", "name the registry clone by hand");
   const db = openDb(":memory:");
-  await leaveBaseline(db, { name: "registry", path: registryDir });
-  const before = baselineOf(db, "registry");
+  const entry = { name: "registry", path: registryDir };
+  await leaveBaseline(db, entry);
 
   const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "registry", defaultAgentName: "deckhand" }, db);
   await options.agentAdmin!.create!(AGENT_INPUT);
 
   expect(git(registryDir, "show", "main:agents/tako.md")).toContain("You are Tako.");
-  expect(baselineOf(db, "registry")).toBe(before);
+  const written = git(registryDir, "rev-parse", "refs/heads/main");
+  expect(restoreBaseline(db, entry, new Date())).toEqual([{ ref: "refs/heads/main", sha: written }]);
   db.close();
 });

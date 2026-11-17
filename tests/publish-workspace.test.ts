@@ -317,7 +317,7 @@ describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
   });
 });
 
-describe("publishWorkspace: 4つの拒否(ADR 0066 決定5 / issue #285)", () => {
+describe("publishWorkspace: 3つの拒否(ADR 0066 決定5 / issue #285)", () => {
   it("既に remote-backed な workspace は拒否され、痕跡を残さない", async () => {
     const { registryDir, deps, checkout } = await makeBoard(
       `sandbox:

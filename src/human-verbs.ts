@@ -557,6 +557,8 @@ export interface QuarantineCheckDeps {
   /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
    *  盤面の外での merge を観測する。Absent → 観測せず、キューの PR は着地待ちに数えられる。 */
   landing?: Pick<Landing, "observeAutoMergeOutcomes">;
+  /** 盤面の固定点(ADR 0040 の状態パスと ADR 0377 決定3 の registry clone)。workspace の受理が撃つ pickup の述語が名前の場所との
+   *  交差を拒む。Absent → 守る固定点を持たない盤面で、項は並ぶが何も拒まない。 */
   boardState?: BoardStatePath[];
   /** Whether an agent name is currently registered — one half of the agent
    *  check; absent → only "no unsettled tasks remain" can clear it. */

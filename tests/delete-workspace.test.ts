@@ -298,7 +298,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     ).toEqual(["tidepool"]);
   });
 
-  // ADR 0377 決定8: registry clone を拒む削除の項は消えた —— 手で足した registry clone の entry は削除の扉で外せる(text E1 の出口)
+  // ADR 0377 決定8: registry clone を拒む削除の項は消えた —— 手で足した registry clone の entry は削除の扉で外せる(spec #3273 text E1 の出口)
   it("registry clone を名指す手書きの entry は消せて、registry clone はそのまま残る", async () => {
     const registryDir = await makeMainRegistry();
     writeFileSync(join(registryDir, "workspaces.yaml"), `registry:\n  path: ${registryDir}\n`);

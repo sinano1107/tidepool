@@ -685,7 +685,7 @@ export interface ApiRouterDeps {
   isProtectedWorkspace?: (name: string) => boolean;
 }
 
-/** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 / 403 は
+/** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 は
  *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」3つだけ:
  *  確認不足、確認では買えない拒否、そして外部の一手(fetch / push)の失敗。 */
 function respondToDeletionFailure(res: Response, err: unknown): void {
@@ -1111,7 +1111,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // ADR 0087 の削除の扉。WebUI 専用(ADR 0088)で、管理MCP には置かない。
   // 3つの扉に共通する写し: 確認不足は 409 `confirm_required`(危険な値の 409 と
   // 同じ器なので、WebUI の確認ダイアログをそのまま使える)、確認では買えない拒否は
-  // 409 `blocked` + 明細つき理由、永久に通らない自己拒否だけが 403。
+  // 409 `blocked` + 明細つき理由。
   router.delete("/agents/:name", async (req, res) => {
     // 本文なしの DELETE は「確認なしの要求」であって不正な本文ではない ——
     // express の json() は本文が無ければ req.body を undefined のまま残す

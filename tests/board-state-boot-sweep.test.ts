@@ -1,10 +1,9 @@
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { boardStatePaths } from "../src/board-state.js";
 import { openDb } from "../src/db.js";
 import { sweepBoardStateOverlap, type WorkspaceConfig } from "../src/workspace.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, quarantineQuestion, type Tidepool } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, registryCloneOverlap, registryFixedPoints } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -80,27 +79,16 @@ it("workspace の列挙自体が失敗しても起動は続く(registry が壊�
   expect(await questions(t)).toEqual([]);
 });
 
-// ADR 0377 決定3: 手で足した registry clone の entry は boot の一斉検査が text E1 で Quarantine する
-it("registry clone に重なる entry は boot の一斉検査で text E1 の Quarantine になる", async () => {
+// ADR 0377 決定3: 手で足した registry clone の entry は boot の一斉検査が spec #3273 text E1 で Quarantine する
+it("registry clone に重なる entry は boot の一斉検査で spec #3273 text E1 の Quarantine になる", async () => {
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
   const clean = await makeWorkspace("sandbox");
   const registryDir = await makeRegistry();
-  const paths = boardStatePaths({
-    dbPath: "/nonexistent/board.sqlite",
-    workerLogDir: "/nonexistent/worker-logs",
-    apiTokenFile: "/nonexistent/api-token",
-    moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
-    codexHome: "/nonexistent/codex",
-    cwd: "/nonexistent/tidepool",
-    servedRoot: "/nonexistent/tidepool",
-    registryDir,
-  });
+  const paths = registryFixedPoints(registryDir);
 
   sweepBoardStateOverlap(db, paths, () => [clean, { name: "registry", path: registryDir }], new Date());
 
-  expect(quarantineQuestion(db, "workspace", "registry")?.purpose).toContain(
-    `${registryDir} overlaps the registry clone (${registryDir}), which is not a workspace. To let agents edit the registry, clone the registry's repository to another path and register that.`,
-  );
+  expect(quarantineQuestion(db, "workspace", "registry")?.purpose).toContain(registryCloneOverlap(registryDir, registryDir));
   expect(quarantineQuestion(db, "workspace", "sandbox")).toBeUndefined();
 });

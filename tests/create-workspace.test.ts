@@ -4,7 +4,6 @@ import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { boardStatePaths } from "../src/board-state.js";
 import { NoOwnGitDirError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
@@ -19,7 +18,7 @@ import {
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { startGitHttpRemote, startRecordingHttpRemote } from "./git-http-remote.js";
-import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, registryCloneOverlap, registryFixedPoints, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.mock("../src/github-auth.js", async (importOriginal) => ({
@@ -884,17 +883,6 @@ describe("createWorkspace: 名前検証(#68 の assertValidWorkspaceName が入�
   });
 });
 
-/** 状態パスの無い盤面の入力 —— registry clone の固定点だけを見る。 */
-const NO_BOARD_STATE = {
-  dbPath: "/nonexistent/board.sqlite",
-  workerLogDir: "/nonexistent/worker-logs",
-  apiTokenFile: "/nonexistent/api-token",
-  moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
-  codexHome: "/nonexistent/codex",
-  cwd: "/nonexistent/tidepool",
-  servedRoot: "/nonexistent/tidepool",
-};
-
 describe("createWorkspace: 盤面の状態パスとの重なりは登録の門で即拒否(ADR 0040 / issue #149)", () => {
   it("register モード: 明示 path が盤面の状態パスと重なれば拒否され、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
@@ -943,13 +931,13 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
   });
 
   // ADR 0377 決定1・3: registry clone は固定点 —— 中や外側を包む path も同じ比較が拒む(包含の規則は boardStateOverlap の側で釘)
-  it("register モード: registry clone を指す path は text E1 で拒否され、コミットを積まない", async () => {
+  it("register モード: registry clone を指す path は spec #3273 text E1 で拒否され、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
     const before = git(registryDir, "rev-parse", "HEAD");
-    const deps = { ...(await makeDeps(registryDir)), boardState: boardStatePaths({ ...NO_BOARD_STATE, registryDir }) };
+    const deps = { ...(await makeDeps(registryDir)), boardState: registryFixedPoints(registryDir) };
 
     await expect(createWorkspace({ mode: "register", name: "registry", path: registryDir }, deps)).rejects.toThrow(
-      `${registryDir} overlaps the registry clone (${registryDir}), which is not a workspace. To let agents edit the registry, clone the registry's repository to another path and register that.`,
+      registryCloneOverlap(registryDir, registryDir),
     );
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").workspaces.registry).toBeUndefined();

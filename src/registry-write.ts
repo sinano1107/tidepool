@@ -192,7 +192,7 @@ function land(registry: RegistrySource, worktreeDir: string, baseSha: string, au
  *  catch して警告するだけ — 呼び出し元の `land` まで投げない。投げてしまうと
  *  「ref の更新は成功したのに致命エラーとして報告される」という、決定1が
  *  一致させたいはずの「着地成功 = 効いた」を自ら壊す)。clone が detached
- *  HEAD、または registry-edit タスクのブランチなど別ブランチを指している
+ *  HEAD、または人間が切り替えた別ブランチを指している
  *  場合は symbolic-ref か branch 比較で弾かれ、何もしない —— このモジュール
  *  自身が切る使い捨て worktree は clone とは別ディレクトリなので、clone 側の
  *  HEAD をこの関数が detached にすることはない。 */

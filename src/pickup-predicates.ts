@@ -59,7 +59,7 @@ export function exactProtectedBranchRef(workspace: WorkspaceConfig): string {
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
 export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: BoardStatePath[], scope = "", unbornRoom = false): PickupPredicate[] {
   return [
-    // ADR 0377 決定4: 名前の場所と固定点の交差は最初に見る —— 後の項(`.git` の検査)の文が registry clone の拒否を隠さない。
+    // 名前の場所と固定点の交差は最初に見る —— 後の項(`.git` の検査)の文が registry clone の拒否を隠さない。
     // 固定点を持たない呼び手(予告の一覧)にも項は並ぶ
     {
       phase: "before-open",

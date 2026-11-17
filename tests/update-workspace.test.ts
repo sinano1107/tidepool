@@ -39,10 +39,10 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
 
-    await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
+    await updateWorkspace({ name: "tidepool", notes: "a checkout of the tidepool repository" }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.notes).toBe(
-      "the registry clone itself",
+      "a checkout of the tidepool repository",
     );
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
       "tidepool update workspace tidepool via WebUI",
@@ -258,10 +258,10 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
 
-    await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
+    await updateWorkspace({ name: "tidepool", notes: "a checkout of the tidepool repository" }, deps);
 
     expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).toBe(
-      "the registry clone itself",
+      "a checkout of the tidepool repository",
     );
     expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
       "update workspace tidepool via WebUI",
@@ -275,11 +275,11 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
 
     await expect(
-      updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps),
+      updateWorkspace({ name: "tidepool", notes: "a checkout of the tidepool repository" }, deps),
     ).rejects.toThrow(RegistryPushFailedError);
 
     expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).not.toBe(
-      "the registry clone itself",
+      "a checkout of the tidepool repository",
     );
   });
 });

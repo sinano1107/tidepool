@@ -7,6 +7,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 export interface BoardStatePath {
   label: string;
   path: string;
+  /** registry clone の固定点(ADR 0377 決定3)—— 重なりの文は spec #3273 text E1 になる。ほかの固定点は持たない。 */
+  kind?: "registry-clone";
 }
 
 /** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040 の5点と、ADR 0377 決定3 の registry clone)。**workspace 毎に
@@ -58,9 +60,6 @@ export interface BoardStatePathsInput {
   registryDir?: string;
 }
 
-/** registry clone の固定点のラベル —— 重なりの文は text E1 になる(ADR 0377 決定3)。 */
-const REGISTRY_CLONE = "registry clone";
-
 export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
   const checkouts: BoardStatePath[] = [
     { label: "the board's own working directory (process cwd)", path: input.cwd },
@@ -91,7 +90,7 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
     },
     { label: "Codex worker home (TIDEPOOL_CODEX_HOME)", path: input.codexHome },
     ...checkouts,
-    ...(input.registryDir === undefined ? [] : [{ label: REGISTRY_CLONE, path: input.registryDir }]),
+    ...(input.registryDir === undefined ? [] : [{ label: "registry clone", path: input.registryDir, kind: "registry-clone" as const }]),
   ];
 }
 
@@ -184,7 +183,7 @@ export function boardStateOverlap(
     const a = forComparison(workspace.resolved, platform);
     const b = forComparison(candidate.resolved, platform);
     if (contains(a, b) || contains(b, a)) {
-      if (target.label === REGISTRY_CLONE) {
+      if (target.kind === "registry-clone") {
         return {
           reason:
             `${workspacePath} overlaps the registry clone (${target.path}), which is not a workspace. ` +
