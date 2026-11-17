@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
+import type { CreateAgentInput } from "../src/agent-create.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -23,8 +24,9 @@ import {
 import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
+import { restoreBaseline } from "../src/workspace.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
+import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -185,9 +187,6 @@ it("remote-backed registry を宣言した盤面は到達性検査を持ち、re
     available: false,
     reason: `the registry clone's origin/HEAD does not point at origin/main. In ${registryDir}, run \`git remote set-head origin main\`.`,
   });
-  // 上の purely-local な1本との対(ADR 0041 §5 の「解決子ごとに別々の答え」): pickup が
-  // 読む `registry` の mode は**宣言から**来ていて、clone を覗いた結果ではない
-  expect(options.registry).toEqual({ dir: registryDir, mode: "remote-backed" });
   error.mockRestore();
 });
 
@@ -622,12 +621,6 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.profileAdmin).toBeDefined();
   const swept = options.boardState?.listWorkspaces().map((ws) => ws.name);
   expect(swept?.sort()).toEqual(["derived", "guarded", "tidepool"]);
-  // ADR 0052 決定3 / issue #211: pickup が registry clone の2宣言を突き合わせるのに
-  // 使う口。`registryDir` ゲートで初めて立つので、上の網羅(registry 未設定)では
-  // `undefined` のままキーだけが揃い、何が刺さっているかは分からない。dir と宣言
-  // された mode の**組**を名指しで要求する(下の remote-backed の1本と対で、mode が
-  // 宣言から来ていることまで見る)
-  expect(options.registry).toEqual({ dir: registryDir, mode: "purely-local" });
   // ADR 0024: workspace の pickup 時 fetch がこの名義で撃つ。落とすと private remote の
   // workspace が「認証が無い」理由で黙って quarantine に落ち続ける
   expect(options.githubAuth).toBe(githubAuth);
@@ -734,35 +727,46 @@ it("既定 agent が組み込みに解決される盤面は起動しない —�
   );
 });
 
-// ADR 0243 決定3・4 / spec #1870: 起動時の registry fetch と到達性 quarantine の受理検査の fetch は、合成 root が registry
-// clone の workspace に束ねた同じ口を通る。落ちた時点で registry clone にセッションが走っていた盤面が、起動時の fetch で
-// 写しを動かしても、再起動の後始末はそれを違反と読まない
-it("落ちた時点で registry clone で走っていたセッションは、起動時の registry fetch が写しを動かしても再起動の後始末で quarantine されない", async () => {
+// ADR 0377 決定8 (spec #3273 pin E3): registry の fetch・push・`update-ref` は、どの workspace の基準にも予告しない —— registry
+// clone を名指す entry が手で足されて基準の行を持っていても、合成 root の registry の書き込みはその行に畳まれない。観測は受理の
+// 「基準へ戻す」の読み手(`restoreBaseline`)で、基準に残った書く前の値へ戻し、書かれた値を外した値として返す
+const AGENT_INPUT: CreateAgentInput = { name: "tako", authority: "standard", provider: "anthropic", skills: ["*"], description: "General agent", systemPrompt: "You are Tako." };
+
+it("registry の fetch と push は、registry clone を名指す entry の基準に予告しない", async () => {
   const { registryDir, publish } = await makeRemoteBackedRegistry();
-  const repo = execFileSync("git", ["remote", "get-url", "origin"], { cwd: registryDir }).toString().trim();
-  const workspace = { name: "registry", path: registryDir, repo };
-  // 合成 root が registry から読む「registry clone も workspace である」宣言
-  publish("workspaces.yaml", `registry:\n  path: ${registryDir}\n  repo: ${repo}\n`, "register the registry clone");
-  execFileSync("git", ["fetch", "--quiet", "origin"], { cwd: registryDir });
-  const boot = {
-    workspace,
-    registry: { dir: registryDir, mode: "remote-backed" as const },
-    boardState: { paths: [], listWorkspaces: () => [workspace] },
-  };
-  let t = await bootTidepool(boot);
-  try {
-    await registerWork(t, "runs in the registry clone when the board dies");
-    await t.clock.advance(HOUR);
-    await t.stopServer();
-    publish("notes.md", "merged on GitHub\n", "merged while the board was down");
+  const repo = git(registryDir, "remote", "get-url", "origin");
+  publish("workspaces.yaml", `registry:\n  path: ${registryDir}\n  repo: ${repo}\n`, "name the registry clone by hand");
+  git(registryDir, "fetch", "--quiet", "origin");
+  git(registryDir, "merge", "--quiet", "--ff-only", "origin/main");
+  const db = openDb(":memory:");
+  const entry = { name: "registry", path: registryDir, repo };
+  await leaveBaseline(db, entry);
+  publish("notes.md", "merged on GitHub\n", "merged while the board was down");
 
-    const db = openDb(join(t.dir, "board.sqlite"));
-    await buildServerOptions({ ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "registry" }, db);
-    db.close();
-    t = await bootTidepool({ ...boot, dir: t.dir });
+  const options = await buildServerOptions({ ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "registry", defaultAgentName: "deckhand" }, db);
+  publish("more.md", "merged again\n", "merged before the reachability check");
+  expect(await options.registryReachability!()).toEqual({ available: true });
+  await options.agentAdmin!.create!(AGENT_INPUT);
 
-    expect(await servedQuarantineQuestion(t, "workspace", "registry")).toBeUndefined();
-  } finally {
-    await t.stop();
-  }
+  expect(git(registryDir, "show", "origin/main:agents/tako.md")).toContain("You are Tako.");
+  const written = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+  expect(restoreBaseline(db, entry, new Date())).toEqual([{ ref: "refs/remotes/origin/main", sha: written }]);
+  db.close();
+});
+
+it("purely-local な registry の update-ref は、registry clone を名指す entry の基準に予告しない", async () => {
+  const registryDir = await makeRegistry();
+  writeFileSync(join(registryDir, "workspaces.yaml"), `registry:\n  path: ${registryDir}\n`);
+  git(registryDir, "commit", "--quiet", "-am", "name the registry clone by hand");
+  const db = openDb(":memory:");
+  const entry = { name: "registry", path: registryDir };
+  await leaveBaseline(db, entry);
+
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "registry", defaultAgentName: "deckhand" }, db);
+  await options.agentAdmin!.create!(AGENT_INPUT);
+
+  expect(git(registryDir, "show", "main:agents/tako.md")).toContain("You are Tako.");
+  const written = git(registryDir, "rev-parse", "refs/heads/main");
+  expect(restoreBaseline(db, entry, new Date())).toEqual([{ ref: "refs/heads/main", sha: written }]);
+  db.close();
 });

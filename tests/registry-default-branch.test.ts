@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { checkRegistryReachability } from "../src/registry.js";
 import { git } from "./harness.js";
-import { makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
-const check = (registryDir: string) => checkRegistryReachability(registryDir, undefined, writeUnannounced);
+const check = (registryDir: string) => checkRegistryReachability(registryDir, undefined);
 
 describe("registry clone の default branch はレジストリ到達性の検査に載る(ADR 0377 決定7)", () => {
   it("origin/HEAD が origin/main 以外を指すなら registry は使えず、理由は直す手を名指す", async () => {

@@ -46,7 +46,6 @@ import {
   type RegistryCandidates,
   type RegistryMode,
   type RegistryReachabilityCheck,
-  type RegistrySource,
   type RosterAgent,
 } from "../src/registry.js";
 import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
@@ -233,10 +232,6 @@ export interface BootOptions {
   /** ADR 0093: 盤面の GitHub 身元。pickup / 完了時の fetch が仲介から
    *  installation token を取る経路を持つ盤面だけが渡す。 */
   githubAuth?: GitHubAuth;
-  /** ADR 0052 / issue #211: どの registry clone を読み書きするか + remote 正本の宣言。
-   *  registry clone が workspace としても登録されているときの「2つの宣言」の
-   *  突き合わせだけがこれを要る。Absent → registry を持たない盤面 = 突き合わせ無し。 */
-  registry?: RegistrySource;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009). Absent → every task runs against the single `workspace`
    *  above. */
@@ -458,7 +453,6 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     registryReachability: options.registryReachability,
     cliAuth: options.cliAuth,
     cliAuthExpiresAt: options.cliAuthExpiresAt,
-    registry: options.registry,
     githubAuth: options.githubAuth,
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,

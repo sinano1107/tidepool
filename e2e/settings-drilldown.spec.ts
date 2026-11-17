@@ -8,11 +8,11 @@ const WORKSPACES = [
     name: "tidepool",
     repo: "github.com/masaki/tidepool",
     branch: "main",
-    notes: "the board's own registry clone",
+    notes: "a clone of the registry's repository",
     protected: true,
-    registrySelf: true,
+    protectionReason: "registry_repository",
   },
-  { name: "sandbox", path: "/home/masaki/sandbox", notes: "", registrySelf: false },
+  { name: "sandbox", path: "/home/masaki/sandbox", notes: "" },
 ];
 
 const AGENTS = [

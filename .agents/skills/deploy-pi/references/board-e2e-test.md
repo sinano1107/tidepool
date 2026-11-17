@@ -14,10 +14,13 @@ Ground rules that keep this safe and cheap:
   specified, no ambiguity, nothing for the worker to explore.
 - **Bounded polling only.** Every wait below is a `for`-loop with a max
   iteration count, never `while true`.
-- **`registry` is the only repo-backed workspace** (workspaces.yaml), so it's
-  the only place a PR flow can be exercised. It's `protected: true`, which is
-  what makes the flow deterministic: the PR always escalates to a merge
-  question instead of auto-merging.
+- **The task runs in `registry-edits`, a separate clone of the `tidepool-registry`
+  repository** registered in the settings tab with "clone a repository". The
+  registry clone itself (`/mnt/ssd/tidepool-registry`) is not a workspace — a
+  task naming it is quarantined. Because `registry-edits` declares the
+  registry's repository, it is protected without a flag, which is what makes
+  the flow deterministic: the PR always escalates to a merge question instead
+  of auto-merging.
 
 ## 0. Preconditions
 
@@ -33,6 +36,7 @@ PI=masaki@100.78.52.97
 BOARD=https://raspberrypi.tailc0084f.ts.net:8443
 export TIDEPOOL_TOKEN=<the board's token>
 board() { printf 'header = "Authorization: Bearer %s"\n' "$TIDEPOOL_TOKEN" | curl -sk --config - "$@"; }
+WS_PATH=<the registry-edits checkout path the settings tab shows>
 ```
 
 A 401 from any call below means the token is stale, not that the board is down. A **200 from an
@@ -43,10 +47,10 @@ already halted board-wide with a standing question, and this E2E cannot run unti
 ```bash
 ssh $PI 'systemctl is-active tidepool'
 board "$BOARD/api/pause"; echo; board "$BOARD/api/settings/quiet-hours"
-ssh $PI 'cd /mnt/ssd/tidepool-registry && git status --short | wc -l && git branch --show-current'
+ssh $PI "cd $WS_PATH && git status --short | wc -l && git branch --show-current"
 ```
 
-Expect: `active`, `paused:false`, `throttled:false`, registry checkout clean on
+Expect: `active`, `paused:false`, `throttled:false`, `registry-edits` checkout clean on
 `main`. If the code under test isn't deployed yet, deploy first (SKILL.md
 routine path).
 
@@ -68,7 +72,7 @@ criteria (a) and (b)):
   leave it **uncommitted** in the working tree at completion.
 
 ```bash
-board -X POST "$BOARD/api/tasks" -H "Content-Type: application/json" -d '{"type":"work","title":"E2E: minimal README append","purpose":"E2E probe of the board GitHub flow.","completion_criteria":"1) Append the line <!-- e2e: board flow check YYYY-MM-DD --> to README.md and commit it yourself with git commit (do not push). 2) Append a second line <!-- e2e: wip stash check YYYY-MM-DD --> to README.md and leave it uncommitted in the working tree. No other file is touched.","workspace":"registry"}'
+board -X POST "$BOARD/api/tasks" -H "Content-Type: application/json" -d '{"type":"work","title":"E2E: minimal README append","purpose":"E2E probe of the board GitHub flow.","completion_criteria":"1) Append the line <!-- e2e: board flow check YYYY-MM-DD --> to README.md and commit it yourself with git commit (do not push). 2) Append a second line <!-- e2e: wip stash check YYYY-MM-DD --> to README.md and leave it uncommitted in the working tree. No other file is touched.","workspace":"registry-edits"}'
 ```
 
 Save the returned `id`. Adjust the marker lines' dates so reruns don't
@@ -149,7 +153,7 @@ The board leaves the workspace checkout on the task branch (pickup handles
 switching, so this is normal, not damage) and the merged branch behind:
 
 ```bash
-ssh $PI "cd /mnt/ssd/tidepool-registry && git checkout main -q && git pull --ff-only -q && git branch -D task/$ID && git push -q origin --delete task/$ID"
+ssh $PI "cd $WS_PATH && git checkout main -q && git pull --ff-only -q && git branch -D task/$ID && git push -q origin --delete task/$ID"
 ```
 
 The README marker lines stay merged in — harmless, but if a pristine README

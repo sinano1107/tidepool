@@ -11,7 +11,7 @@ import {
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { makeWorkspace } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, writeUnannounced } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -29,7 +29,7 @@ async function makeMainRegistry(files?: Record<string, string>): Promise<string>
 
 async function makeDeps(registryDir: string) {
   return {
-    registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
+    registry: { dir: registryDir, mode: "purely-local" as const },
     workspacesBaseDir: await tempDir("tidepool-ws-base-"),
   };
 }
@@ -39,10 +39,10 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
 
-    await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
+    await updateWorkspace({ name: "tidepool", notes: "a checkout of the tidepool repository" }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.notes).toBe(
-      "the registry clone itself",
+      "a checkout of the tidepool repository",
     );
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
       "tidepool update workspace tidepool via WebUI",
@@ -256,12 +256,12 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
 
-    await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
+    await updateWorkspace({ name: "tidepool", notes: "a checkout of the tidepool repository" }, deps);
 
     expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).toBe(
-      "the registry clone itself",
+      "a checkout of the tidepool repository",
     );
     expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
       "update workspace tidepool via WebUI",
@@ -272,14 +272,14 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     rejectRegistryPushes(registryDir);
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
 
     await expect(
-      updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps),
+      updateWorkspace({ name: "tidepool", notes: "a checkout of the tidepool repository" }, deps),
     ).rejects.toThrow(RegistryPushFailedError);
 
     expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).not.toBe(
-      "the registry clone itself",
+      "a checkout of the tidepool repository",
     );
   });
 });
@@ -350,7 +350,8 @@ describe("workspaceProtectionReader: 宣言 repo による registry の床", () 
 });
 
 describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () => {
-  it("保護の計算結果を返し、盤面自身の clone の識別とは区別する", async () => {
+  // ADR 0377 決定1: registry clone は workspace にならないので、一覧に盤面自身の clone の印は無い
+  it("保護の計算結果と、それが registry の repo から来たときの理由を返す", async () => {
     const registryDir = await makeMainRegistry();
     const registryEdits = await makeWorkspace("registry-edits");
     const lagoon = await makeWorkspace("lagoon");
@@ -360,7 +361,7 @@ describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () =
     await writeFile(join(broken.path, ".git", "config"), "[broken\n");
     await writeFile(
       join(registryDir, "workspaces.yaml"),
-      `registry:\n  path: ${registryDir}\n  repo: ${origin}\nregistry-edits:\n  path: ${registryEdits.path}\n  repo: ${origin}\nlagoon:\n  path: ${lagoon.path}\n  branch: trunk\n  notes: run npm install\nbroken:\n  path: ${broken.path}\n`,
+      `registry-edits:\n  path: ${registryEdits.path}\n  repo: ${origin}\nlagoon:\n  path: ${lagoon.path}\n  branch: trunk\n  notes: run npm install\nbroken:\n  path: ${broken.path}\n`,
     );
     execFileSync(
       "git",
@@ -371,17 +372,15 @@ describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () =
     const deps = await makeDeps(registryDir);
 
     expect(listWorkspaceViews(deps, "configured").workspaces).toEqual([
-      { name: "registry", path: registryDir, repo: origin, protected: true, protectionReason: "registry_repository", registrySelf: true },
-      { name: "registry-edits", path: registryEdits.path, repo: origin, protected: true, protectionReason: "registry_repository", registrySelf: false },
+      { name: "registry-edits", path: registryEdits.path, repo: origin, protected: true, protectionReason: "registry_repository" },
       {
         name: "lagoon",
         path: lagoon.path,
         branch: "trunk",
         notes: "run npm install",
         protected: false,
-        registrySelf: false,
       },
-      { name: "broken", path: broken.path, protected: false, registrySelf: false },
+      { name: "broken", path: broken.path, protected: false },
     ]);
   });
 

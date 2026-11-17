@@ -18,7 +18,6 @@ import {
   shimGit,
   type Tidepool,
 } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -105,59 +104,6 @@ it("repo を宣言していないのに clone に remote がある workspace は
 
   expect(t.worker.started).toEqual([]);
   expect(await quarantineReason(t, "sandbox")).toContain("declares no remote source of truth");
-});
-
-// issue #211 やること6: registry clone は「registry の正本」(合成 root の宣言)と
-// 「workspace」(`workspaces.yaml` の repo)の**両方**の役を持つので、宣言も2つ持つ。
-// 1本化はできない —— workspace エントリを読むには先に registry を読む必要があり循環
-// する —— ので、pickup 時に突き合わせる。
-//
-// この2件は上の「宣言と実態」の検査では捕まらない。どちらも workspace の宣言と clone の
-// 実態は一致しており、食い違っているのは registry 側の宣言だけである。
-it("registry clone の2つの宣言が食い違えば quarantine に落ちる — registry は remote-backed、workspace は purely-local", async () => {
-  // remote を持たない clone を registry として remote-backed と宣言した盤面。workspace
-  // としての宣言(repo 無し)は実態と一致しているので、捕まえられるのはこの突き合わせだけ
-  const registryDir = await makeRegistry();
-
-  t = await bootTidepool({
-    workspace: { name: "tidepool", path: registryDir },
-    registry: { dir: registryDir, mode: "remote-backed" },
-  });
-  await registerWork(t, "registry edit");
-  await t.clock.advance(HOUR);
-
-  expect(t.worker.started).toEqual([]);
-  expect(await quarantineReason(t, "tidepool")).toContain("two declarations disagree");
-});
-
-it("registry clone の2つの宣言が食い違えば quarantine に落ちる — registry は purely-local、workspace は remote-backed", async () => {
-  const { registryDir } = await makeRemoteBackedRegistry();
-  const repo = git(registryDir, "remote", "get-url", "origin");
-
-  t = await bootTidepool({
-    workspace: { name: "tidepool", path: registryDir, repo },
-    registry: { dir: registryDir, mode: "purely-local" },
-  });
-  await registerWork(t, "registry edit");
-  await t.clock.advance(HOUR);
-
-  expect(t.worker.started).toEqual([]);
-  expect(await quarantineReason(t, "tidepool")).toContain("two declarations disagree");
-});
-
-// 突き合わせるのは registry clone だけ。別の checkout の workspace は registry の役を
-// 持たないので、盤面の registryMode と一致する義理が無い(registry が purely-local な
-// 盤面に remote-backed な workspace が並ぶのは正当な構成である)。
-it("registry clone でない workspace は盤面の registryMode と突き合わせない", async () => {
-  const registryDir = await makeRegistry();
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-
-  t = await bootTidepool({ workspace, registry: { dir: registryDir, mode: "purely-local" } });
-  const task = await registerWork(t, "unrelated workspace");
-  await t.clock.advance(HOUR);
-
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-  expect(await questionTitles(t)).toEqual([]);
 });
 
 // ADR 0093 決定7: 仲介が token を出せない(不達 / user token 失効 / 5xx)ことは

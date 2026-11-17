@@ -1,11 +1,11 @@
 /** Two-phase place checks shared by pickup, release and prose (ADR 0329 決定10〜14). */
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { git, readCheckoutOrigin } from "./git.js";
 import { remoteTrackingRef } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
-import type { RegistrySource } from "./registry.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -57,14 +57,19 @@ export function exactProtectedBranchRef(workspace: WorkspaceConfig): string {
 }
 
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
-export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: RegistrySource, scope = "", unbornRoom = false): PickupPredicate[] {
+export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: BoardStatePath[], scope = "", unbornRoom = false): PickupPredicate[] {
   return [
-    { phase: "before-open", describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
+    // 名前の場所と固定点の交差は最初に見る —— 後の項(`.git` の検査)の文が registry clone の拒否を隠さない。
+    // 固定点を持たない呼び手(予告の一覧)にも項は並ぶ
     {
       phase: "before-open",
-      describe: `${scope}its declarations as the registry and as a workspace agree, when it is the board's own registry clone.`,
-      check: () => assertRegistryRoleAgrees(place, registry),
+      describe: `${scope}it overlaps none of the board's fixed points — the board's own state paths and checkout, and the registry clone.`,
+      check: () => {
+        const overlap = fixedPoints && boardStateOverlap(place.path, fixedPoints);
+        if (overlap) throw new Error(overlap.reason);
+      },
     },
+    { phase: "before-open", describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
     {
       phase: "before-open",
       describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`), and both point to the same repository.`,
@@ -106,9 +111,9 @@ function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: 
 
 /** 面接室の述語(ADR 0329 決定4)。出題済みなら、読み手は出題の head を面接室から fetch する(ADR 0361 決定1)ので、記録された面接室で
  *  その head が引けることも項に並び、空の面接室で走らせる出口は予告しない(ADR 0329 決定5)。 */
-export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: string, registry?: RegistrySource): PickupPredicate[] {
+export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: string, fixedPoints?: BoardStatePath[]): PickupPredicate[] {
   const head = latestPosedProbe(db, rootId)?.head;
-  const predicates = recordedRoomPredicates(db, rootId, workspacesBaseDir, registry, {
+  const predicates = recordedRoomPredicates(db, rootId, workspacesBaseDir, fixedPoints, {
     recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${head ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`,
     create: "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there).",
   });
@@ -225,11 +230,11 @@ export function namePickupPredicates(
   name: string,
   place: WorkspaceConfig,
   workspacesBaseDir: string,
-  registry?: RegistrySource,
+  fixedPoints?: BoardStatePath[],
 ): { own: PickupPredicate[]; openers: PickupPredicate[] } {
-  if (getTask(db, name)?.type !== "interview") return { own: checkoutPickupPredicates(place, registry), openers: [] };
+  if (getTask(db, name)?.type !== "interview") return { own: checkoutPickupPredicates(place, fixedPoints), openers: [] };
   return {
-    own: roomPickupPredicates(db, name, workspacesBaseDir, registry),
+    own: roomPickupPredicates(db, name, workspacesBaseDir, fixedPoints),
     openers: taskRoomPickupPredicates(db, unsettledOpenersOf(db, name), name, workspacesBaseDir),
   };
 }
@@ -240,7 +245,7 @@ function recordedRoomPredicates(
   db: Db,
   rootId: string,
   workspacesBaseDir: string,
-  registry: RegistrySource | undefined,
+  fixedPoints: BoardStatePath[] | undefined,
   text: { recorded: (path: string) => string; create: string },
 ): PickupPredicate[] {
   const recorded = recordedPlace(db, rootId);
@@ -254,14 +259,14 @@ function recordedRoomPredicates(
           if (!placeHasRepository(place.path)) throw new Error(gonePlaceReason(rootId, place.path));
         },
       },
-      ...checkoutPickupPredicates(place, registry),
+      ...checkoutPickupPredicates(place, fixedPoints),
     ];
   }
   return [
     { phase: "before-open", describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
     // 未生の HEAD を通すのは開いた event の無い場所だけ —— 最初の開きが `main` に空コミットを補う。記録された面接室の未生の HEAD は
     // 補わない(手の `git init` の出口は `run with an empty room` に替わった、ADR 0373 決定11)
-    ...checkoutPickupPredicates(place, registry, "", true).map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
+    ...checkoutPickupPredicates(place, fixedPoints, "", true).map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
       ...predicate,
       describe: `${IF_REPOSITORY_PRESENT}${predicate.describe}`,
       check: () => {
@@ -398,40 +403,10 @@ function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
   throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${originRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
 }
 
-/** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する
- *  `RegistryMode`)と「workspace」(`workspaces.yaml` の `repo`)の**両方**の役を持つので
- *  宣言を2つ持つ。1本化はできない —— workspace エントリを読むには先に registry を読む
- *  必要があり循環する —— ので、pickup の瞬間に突き合わせる。
- *
- *  上の `assertRemoteDeclarationMatchesClone` では捕まらない食い違いがある: 双方の
- *  宣言が clone の実態とは一致していて、互いにだけ食い違っている場合(remote を持たない
- *  clone を registry として remote-backed と宣言した、など)である。 */
-function assertRegistryRoleAgrees(
-  workspace: WorkspaceConfig,
-  registry: RegistrySource | undefined,
-): void {
-  if (!registry || !pathIsRegistryClone(workspace.path, registry.dir)) return;
-  const asRegistry = registry.mode === "remote-backed";
-  if (asRegistry === isRemoteBacked(workspace)) return;
-  throw new Error(
-    `workspace ${workspace.name} is the board's own registry clone and its two declarations ` +
-      `disagree: as the registry it declares '${registry.mode}', as a workspace it declares ` +
-      (isRemoteBacked(workspace) ? `a remote source of truth (repo: ${workspace.repo})` : "none"),
-  );
-}
-
 export function safeRealpath(path: string): string {
   try {
     return realpathSync(path);
   } catch {
     return path;
   }
-}
-
-/** The same comparison for a checkout path that is **already resolved** — what a
- *  `WorkspaceConfig` carries (issue #211's pickup-time crosscheck). The entry-shaped
- *  face (`resolvesToRegistryClone` in workspace.ts) stands in front of it for the callers that still hold an entry and a
- *  base dir (ADR 0018's derivation). */
-export function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
-  return safeRealpath(checkoutPath) === safeRealpath(registryDir);
 }

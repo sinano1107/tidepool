@@ -1,5 +1,6 @@
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { boardHalts } from "./board-halt.js";
+import type { BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider, recordProbeBoardCall } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type CodexAppServerProbe, type CodexAppServerProbeResult, codexProbeStop, whyRowUnlisted } from "./codex-app-server.js";
@@ -50,7 +51,6 @@ import {
   canonicalHarness,
   isUnresolvableAgentError,
   type RegistryReachabilityCheck,
-  type RegistrySource,
 } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { repairRepoAccess } from "./repo-access.js";
@@ -368,11 +368,9 @@ export function startScheduler(deps: {
    *  身元を持たない宣言なので fetch は匿名で撃つ(ADR 0339 決定2)—— private な remote なら
    *  そこで失敗し、その workspace の quarantine が人間を呼ぶ。 */
   githubAuth?: GitHubAuth;
-  /** ADR 0052 決定3 / issue #211: どの registry clone を読むか + その remote 正本の
-   *  宣言。pickup で要るのは、registry clone が workspace としても登録されていると
-   *  **2つの宣言**を持ち、その食い違いが quarantine になるからである。Absent →
-   *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
-  registry?: RegistrySource;
+  /** ADR 0377 決定4: 盤面の固定点(ADR 0040 の状態パスと registry clone)。pickup の述語が名前の場所との交差を拒む。
+   *  Absent → 守る固定点を持たない盤面(テスト盤面の既定形)。 */
+  boardState?: BoardStatePath[];
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
@@ -408,7 +406,7 @@ export function startScheduler(deps: {
     registryReachability,
     cliAuth,
     githubAuth,
-    registry,
+    boardState,
     agents,
     retrospectiveCalls,
     translationClient,
@@ -636,7 +634,7 @@ export function startScheduler(deps: {
         const base = resolveWorkspacesBaseDir(workspacesDir);
         let checks: Awaited<ReturnType<typeof pickupGate>>;
         try {
-          checks = await pickupGate(db, resolved, picked, base, registry, live);
+          checks = await pickupGate(db, resolved, picked, base, boardState, live);
         } catch (err) {
           if (!(err instanceof PickupGateError)) throw err;
           return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
