@@ -5,7 +5,13 @@ export const WORKER_TREE_GIT_TIMEOUT_MS = 30_000;
 /** ADR 0357 決定2・3: 上限で止まった手。git が即座に落ちた「観測の失敗」とは型で分け、worker の repo の故障として扱う。 */
 export class WorkerTreeGitTimeoutError extends Error {
   constructor(readonly subcommand: string, readonly timeoutMs: number, readonly stderrLine: string, options?: ErrorOptions) {
-    super(`\`git ${subcommand}\` on the worker's tree did not finish within ${timeoutMs / 1000} s${stderrLine ? `: ${stderrLine}` : ""}`, options);
+    super("", options);
+    this.message = this.about("the worker's tree");
+  }
+
+  /** 同じ上限超過を、読んだ checkout の主語で言い直す —— 作業台の取り込みの拒否は worker でなく人間に届く。 */
+  about(subject: string): string {
+    return `\`git ${this.subcommand}\` on ${subject} did not finish within ${this.timeoutMs / 1000} s${this.stderrLine ? `: ${this.stderrLine}` : ""}`;
   }
 }
 
@@ -13,6 +19,9 @@ export class WorkerTreeGitTimeoutError extends Error {
 export class WorkerGitCopyTimeoutError extends WorkerTreeGitTimeoutError {
   constructor(timeoutMs: number) {
     super("", timeoutMs, "");
-    this.message = `reading the git files of the worker's tree did not finish within ${timeoutMs / 1000} s`;
+  }
+
+  override about(subject: string): string {
+    return `reading the git files of ${subject} did not finish within ${this.timeoutMs / 1000} s`;
   }
 }

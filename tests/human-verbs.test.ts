@@ -967,10 +967,10 @@ it("組み込みに解決される名前は agent quarantine の解除で regist
   db = openDb(":memory:");
   registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, ...HUMAN_WEBUI);
 
-  await expect(quarantineChecks({ db, ...BUILT_IN_FUGU }).agent!("fugu")).rejects.toThrow(
+  await expect(quarantineChecks({ db, ...BUILT_IN_FUGU }).agent!("fugu", undefined, "webui")).rejects.toThrow(
     "agent fugu is not back in the registry and still has unsettled tasks assigned",
   );
-  await expect(quarantineChecks({ db, ...SHADOWED_FUGU }).agent!("fugu")).resolves.toBeUndefined();
+  await expect(quarantineChecks({ db, ...SHADOWED_FUGU }).agent!("fugu", undefined, "webui")).resolves.toBeUndefined();
 });
 
 // issue #1745: 組み込みを work として解決すると定義の不成立になるので、組み込みの判定を先に置く
@@ -979,7 +979,7 @@ it("組み込みに解決される名前は、定義の解決が通らないと�
   registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, ...HUMAN_WEBUI);
 
   await expect(
-    quarantineChecks({ db, ...BUILT_IN_FUGU, agentDefinitionFailure: () => "the built-in agent runs only reviews, Interviews, memory repairs and routing repairs" }).agent!("fugu"),
+    quarantineChecks({ db, ...BUILT_IN_FUGU, agentDefinitionFailure: () => "the built-in agent runs only reviews, Interviews, memory repairs and routing repairs" }).agent!("fugu", undefined, "webui"),
   ).resolves.toBeUndefined();
 });
 
@@ -1332,7 +1332,7 @@ it("GitHub の無い盤面の agent quarantine の解除検査は、無人 merge
       db,
       agentRegistered: () => false,
       landing: createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github: null }),
-    }).agent!("specialist"),
+    }).agent!("specialist", undefined, "webui"),
   ).rejects.toThrow(DomainError);
   expect(listEvents(db, queued.id).filter((event) => event.kind === "pr_merge_observed")).toEqual([]);
 });
@@ -1347,7 +1347,7 @@ it("agent quarantine の解除検査は、盤面の外で merge 済みのキュ�
     db,
     agentRegistered: () => false,
     landing: createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github }),
-  }).agent!("specialist");
+  }).agent!("specialist", undefined, "webui");
 
   expect({
     awaiting: taskIdsAwaitingLanding(db, undefined, "specialist"),

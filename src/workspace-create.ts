@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -45,6 +45,7 @@ import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import {
   assertRememberedRepo,
+  BOARD_BRANCHES,
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,
@@ -205,8 +206,11 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
     const overlap = boardStateOverlap(path, deps.boardState);
     if (overlap) throw new BoardStateOverlapError(overlap.reason);
   }
+  const cloned = input.mode === "clone" && !existsSync(path);
   const entry = await buildEntry(input, deps);
-  if (entry.branch !== undefined && (entry.branch === "board" || entry.branch.startsWith("board/"))) {
+  if (entry.branch !== undefined && (entry.branch === BOARD_BRANCHES || entry.branch.startsWith(`${BOARD_BRANCHES}/`))) {
+    // この呼び出しが作った clone は消す —— 残すと次の登録が孤児として流用し、同じ理由で拒まれ続けて名前が塞がる
+    if (cloned) rmSync(path, { recursive: true, force: true });
     throw new BoardNamedProtectedBranchError(input.name, entry.branch);
   }
   // issue #383: 「人間の生きた dev checkout」の信号は `rev-parse` の**後**(git

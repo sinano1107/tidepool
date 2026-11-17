@@ -711,8 +711,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     return kept.length > 0 ? { notice: kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`).join("\n") } : undefined;
   };
   return {
-    // 試験の直接の domain 呼び出しは入口を持たない
-    workspace: async (value, answer, origin = "webui") => {
+    workspace: async (value, answer, origin) => {
       // resolve the named workspace fresh
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
       // ADR 0373 決定8: 同じ名前の場所の ref を書く回答と操作は鍵を1つ共有し、検査中の2つ目を拒む

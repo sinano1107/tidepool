@@ -3,99 +3,33 @@ import { isAbsolute, join, relative } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { permissionConfig } from "../src/codex-worker.js";
-import { type Db, openDb } from "../src/db.js";
+import type { Db } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, listEventsOfKinds } from "../src/events.js";
-import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { listEventsOfKinds } from "../src/events.js";
 import { whyInvalidRegistryName } from "../src/registry-name.js";
 import { buildSandboxSettings } from "../src/sandbox.js";
-import { Slot } from "../src/slot.js";
-import { completeTask, getTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
-import { recordTaskCheckoutTip, refValues, releaseWorkspace, runPlaceReadPaths, WORKBENCH_SEGMENT, type WorkspaceConfig, workbenchPath } from "../src/workspace.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { getTask, registerTask } from "../src/tasks.js";
+import { refValues, releaseWorkspace, runPlaceReadPaths, WORKBENCH_SEGMENT, type WorkspaceConfig, workbenchPath } from "../src/workspace.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
+import { answer, boardWithParent, type Conflicted, completedChild, conflicted, resolveInWorkbench } from "./workbench-fixture.js";
 
 // 作業台と取り込み(ADR 0371、spec #3273 group A): merge back の conflict は作業台を開き、人間がそこで merge を commit して答えると
 // 盤面がその tip を取り込む。入口は workspace の Quarantine の回答(受理の 11)。
 
+// 取り込みが event を書く瞬間に人間の手を差し込む口 —— 既定は素通し
+const eventHook = vi.hoisted(() => ({ onTakenIn: undefined as (() => void) | undefined }));
+vi.mock("../src/events.js", async (importOriginal) => {
+  const events = await importOriginal<typeof import("../src/events.js")>();
+  const appendEvent: typeof events.appendEvent = (db, event) => {
+    if (event.payload.kind === "workbench_taken_in") eventHook.onTakenIn?.();
+    return events.appendEvent(db, event);
+  };
+  return { ...events, appendEvent };
+});
+
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-type Board = { db: Db; clock: FakeClock; ws: WorkspaceConfig; base: string; parent: Task };
-
-/** 未決着の親の work と、その `task/<親>` に `work.txt` の内容を持つ purely-local の workspace。task の checkout の基点 `base` は
- *  解放と受理が同じものを読む —— 作業台はその下に開く。 */
-async function boardWithParent(): Promise<Board> {
-  const db = openDb(":memory:");
-  const clock = new FakeClock();
-  const ws = await makeWorkspace("workbench");
-  const base = await tempDir("tidepool-task-checkouts-");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
-  git(ws.path, "branch", `task/${parent.id}`, "main");
-  git(ws.path, "checkout", `task/${parent.id}`);
-  commitWork(ws.path, "work.txt", "from the parent\n");
-  git(ws.path, "checkout", "main");
-  return { db, clock, ws, base, parent };
-}
-
-/** 親の子を main から切り(親の `work.txt` を持たない)、task の checkout で `work.txt` を書いて完了させる。`release` が後始末を撃つ ——
- *  既定は完了の後始末の runner で、merge back が conflict して workspace の Quarantine が立つ。 */
-async function completedChild(b: Board, { body = "from the child\n", work, release }: { body?: string; work?: (checkout: string) => void; release?: (place: Awaited<ReturnType<typeof prepareAtPickup>>, task: Task) => void } = {}) {
-  const { db, clock, ws, base, parent } = b;
-  const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, clock.now(), ...HUMAN_WEBUI);
-  git(ws.path, "branch", `task/${registered.id}`, "main");
-  const task = pickupTask(db, registered, "deckhand", clock.now())!;
-  const place = await prepareAtPickup(db, ws, task, { now: clock.now(), workspacesBaseDir: base });
-  appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
-  commitWork(place.path, "work.txt", body);
-  work?.(place.path);
-  recordTaskCheckoutTip(db, place, task.id);
-  completeTask(db, task, FULL_HANDOFF, "worker", clock.now(), "worker");
-  if (release) {
-    release(place, getTask(db, task.id)!);
-  } else {
-    markTeardown(db, task.id, clock.now());
-    const slot = new Slot();
-    slot.occupy(task.id, sessionId(db, task.id));
-    slot.enterTeardown();
-    await runTeardown({ db, clock, slot, resolve: () => ws, pollNow: () => {} }, task.id, teardownStep(db, task.id));
-  }
-  return getTask(db, task.id)!;
-}
-
-/** 子の merge back を解放が conflict させ、Quarantine を立てた盤面。 */
-async function conflicted(options?: Parameters<typeof completedChild>[1]) {
-  const b = await boardWithParent();
-  const child = await completedChild(b, options);
-  const target = `task/${b.parent.id}`;
-  return { ...b, child, target, source: `task/${child.id}`, workbench: () => realpathSync(workbenchPath(b.base, target)) };
-}
-
-type Conflicted = Awaited<ReturnType<typeof conflicted>>;
-
-/** 開いた workspace の Quarantine に人間が答える(回答の経路、作業台の基点は解放と同じ)。 */
-function answer({ db, clock, ws, base }: Board) {
-  const question = quarantineQuestion(db, "workspace", ws.name)!;
-  return submitAnswer(
-    { db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws, workspacesDir: base }) },
-    question,
-    ["repaired by hand"],
-    undefined,
-    () => clock.now(),
-    "webui",
-  );
-}
-
-/** 作業台の書く先の branch の上で子を merge し、conflict を両方の行で解いて commit する(人間の手)。 */
-function resolveInWorkbench(workbench: string, source: string): void {
-  expect(() => git(workbench, "merge", `board/${source}`)).toThrow();
-  writeFileSync(join(workbench, "work.txt"), "from the parent\nfrom the child\n");
-  git(workbench, "add", "work.txt");
-  git(workbench, "commit", "--no-edit");
-}
-
-/** 名前の場所の全 ref(HEAD を含む)。 */
 const refsOf = (ws: WorkspaceConfig) => `${git(ws.path, "symbolic-ref", "HEAD")}\n${git(ws.path, "for-each-ref", "--format=%(objectname) %(refname)")}`;
 
 const lastEventId = (db: Db) => db.prepare("SELECT COALESCE(MAX(id), 0) FROM events").pluck().get() as number;
@@ -236,7 +170,6 @@ it("解放が立てた Quarantine の理由は作業台を名指し、そこで 
   const old = git(c.ws.path, "rev-parse", c.target);
   const question = quarantineQuestion(c.db, "workspace", c.ws.name)!;
   expect(question.purpose).toContain(`The board opened the workbench at ${workbench} for it. There, on ${c.target}, run \`git merge board/${c.source}\``);
-  expect(question.purpose).toContain(`record that with \`git merge -s ours board/${c.source}\`. Then answer. `);
   resolveInWorkbench(workbench, c.source);
   const tip = git(workbench, "rev-parse", "HEAD");
 
@@ -391,12 +324,45 @@ it("何も指さない残骸の作業台は、同じ鍵が開くとき消され�
   expect(existsSync(join(leftover, "stale.txt"))).toBe(false);
 });
 
-it("作業台に何も commit していない回答は何も取り込まず、merge back の conflict の文で拒み直す", async () => {
+it("取り込みの間に作業台へ着いた commit があれば、作業台は読まずに消されず残る", async () => {
   const c = await conflicted();
-  const refs = refsOf(c.ws);
+  const workbench = c.workbench();
+  resolveInWorkbench(workbench, c.source);
+  eventHook.onTakenIn = () => commitWork(workbench, "late.txt", "committed while the answer ran\n");
+  try {
+    await answer(c);
+  } finally {
+    eventHook.onTakenIn = undefined;
+  }
 
-  await expect(answer(c)).rejects.toThrow(`The board opened the workbench at ${c.workbench()} for it.`);
+  expect(quarantineQuestion(c.db, "workspace", c.ws.name)).toBeUndefined();
+  expect(git(workbench, "show", `${c.target}:late.txt`)).toBe("committed while the answer ran");
+  expect(git(c.ws.path, "ls-tree", "--name-only", c.target, "--", "late.txt")).toBe("");
+});
 
-  expect(refsOf(c.ws)).toBe(refs);
-  expect(takenIn(c.db)).toEqual([]);
+it("作業台の HEAD が `board/*` に居ても、引き直しはその commit で HEAD を切り離して作業台を開く", async () => {
+  const c = await conflicted();
+  const workbench = c.workbench();
+  git(workbench, "checkout", "--quiet", `board/${c.source}`);
+  const head = git(workbench, "rev-parse", "HEAD");
+
+  await expect(answer(c)).rejects.toThrow(`The board opened the workbench at ${workbench} for it.`);
+
+  expect(() => git(workbench, "symbolic-ref", "-q", "HEAD")).toThrow();
+  expect(git(workbench, "rev-parse", "HEAD")).toBe(head);
+  expect(git(workbench, "rev-parse", c.target)).toBe(git(c.ws.path, "rev-parse", c.target));
+  expect(git(workbench, "status", "--porcelain")).toBe("");
+});
+
+it("Quarantine が開いている間に開き直す作業台は、途中の merge も untracked のファイルも消さない", async () => {
+  const c = await conflicted();
+  const workbench = c.workbench();
+  expect(() => git(workbench, "merge", `board/${c.source}`)).toThrow();
+  writeFileSync(join(workbench, "draft.txt"), "half done\n");
+  const mergeHead = git(workbench, "rev-parse", "MERGE_HEAD");
+
+  await expect(answer(c)).rejects.toThrow(`The board opened the workbench at ${workbench} for it.`);
+
+  expect(git(workbench, "rev-parse", "MERGE_HEAD")).toBe(mergeHead);
+  expect(existsSync(join(workbench, "draft.txt"))).toBe(true);
 });

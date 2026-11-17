@@ -873,10 +873,10 @@ it("RCA が読む却下した監査の出題の head が面接室から消える
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(rejected);
-  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(rejected);
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).rejects.toThrow(rejected);
 
   restore();
-  await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
   const place = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base, reads: await pickupGate(db, workspace, rca, base) });
   expect(git(place.reads[0]!.path, "for-each-ref", "--format=%(objectname)")).toBe(rejected);
   db.close();
@@ -890,7 +890,7 @@ it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室�
   for (const rca of rcas) answerQuestionViaWebui(db, failureQuestion(db, rca.id, NOW), ["abandon"], NOW);
 
   expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["cancelled", "cancelled"]);
-  await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
   db.close();
 });
 
@@ -908,7 +908,7 @@ it.each([
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(oid);
-  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(oid);
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).rejects.toThrow(oid);
   db.close();
 });
 
@@ -923,7 +923,7 @@ it("出題の head の commit が残り blob が欠けた面接室では、未�
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(blob);
-  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(blob);
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).rejects.toThrow(blob);
   db.close();
 });
 
@@ -983,7 +983,7 @@ it.each([
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(`task/${task.id}`);
-  await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(`task/${task.id}`);
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).rejects.toThrow(`task/${task.id}`);
   db.close();
 });
 
@@ -1005,7 +1005,7 @@ it.each([
   const reader = await reading(db, evidence);
   dropObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
 
-  const refused = quarantineChecks({ db }).workspace!(root.id);
+  const refused = quarantineChecks({ db }).workspace!(root.id, undefined, "webui");
 
   await expect(refused).rejects.toThrow(`the posed head ${head} that ${reader.id} reads`);
   const failed = await pickupGate(db, workspace, getTask(db, reader.id)!, base).catch((err: unknown) => err);

@@ -377,7 +377,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     });
     // 引けない head は面接室の項(ADR 0361 決定1)と受験者の項の両方で落ち、先に撃つ面接室の項が理由になる
     expect(failed.map((predicate) => predicate.describe)).toEqual([expect.stringContaining("posed head"), expect.stringContaining("posed head")]);
-    await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(failed[0]!.describe);
+    await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).rejects.toThrow(failed[0]!.describe);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("受験者の (task, 面接室) の項は、面接室の repo が無ければ git の生のエラーでなく面接室が消えた理由で止まる", () => {
@@ -401,7 +401,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const checkout = openTestInterviewCheckout(db, examinee!);
     writeFileSync(join(checkout, "wip.txt"), "uncommitted answer\n");
 
-    await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();
+    await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
 });
@@ -419,7 +419,7 @@ it("GitHub workspace の解除は cached token を fresh に取り直して fetc
   const github = new FakeGitHubClient();
   try {
     await auth.ensureToken("acme/reef");
-    await quarantineChecks({ db, workspace, github, githubAuth: auth }).workspace!(workspace.name);
+    await quarantineChecks({ db, workspace, github, githubAuth: auth }).workspace!(workspace.name, undefined, "webui");
 
     expect(broker.requests.map((r) => r.repo)).toEqual(["acme/reef", "acme/reef"]);
     expect(github.repoAccessCalls).toBe(0);

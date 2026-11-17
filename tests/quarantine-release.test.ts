@@ -77,7 +77,7 @@ it("起動時の照合の契機(anthropic / moonshot の行)の effort の Quara
   const checks = quarantineChecks({ db: openDb(":memory:"), modelProbes: { anthropic: probe, moonshot: probe }, clock: new FakeClock() });
 
   for (const value of ["anthropic/claude-haiku-4-5-20251001/high", "moonshot/kimi-k3/"]) {
-    await expect(checks.tableRowEffort!(value)).rejects.toThrow("only a table edit settles this question");
+    await expect(checks.tableRowEffort!(value, undefined, "webui")).rejects.toThrow("only a table edit settles this question");
   }
   expect(probe).not.toHaveBeenCalled();
 });
@@ -102,10 +102,10 @@ it("Provider 認証の再検査は cli_auth_probe、行と Interview の対象�
     },
   });
 
-  await checks.providerAuth!("anthropic");
-  await expect(checks.providerAuth!("moonshot")).rejects.toThrow("moonshot authentication is still unavailable");
-  await checks.tableRow!("anthropic/claude-fable-5-1");
-  await expect(checks.interviewTarget!("moonshot/kimi-k2-5")).rejects.toThrow("still cannot run");
+  await checks.providerAuth!("anthropic", undefined, "webui");
+  await expect(checks.providerAuth!("moonshot", undefined, "webui")).rejects.toThrow("moonshot authentication is still unavailable");
+  await checks.tableRow!("anthropic/claude-fable-5-1", undefined, "webui");
+  await expect(checks.interviewTarget!("moonshot/kimi-k2-5", undefined, "webui")).rejects.toThrow("still cannot run");
 
   const createdAt = clock.now().toISOString();
   expect(listBoardCalls(db)).toEqual([
@@ -153,8 +153,8 @@ it("usage の無い再検査の結果は行を残さない", async () => {
     modelProbes: { anthropic: async () => ({ status: "refused", reason: "API returned 404 for this model id" }) },
   });
 
-  await expect(checks.providerAuth!("anthropic")).rejects.toThrow(DomainError);
-  await expect(checks.tableRow!("anthropic/claude-fable-5-1")).rejects.toThrow(DomainError);
+  await expect(checks.providerAuth!("anthropic", undefined, "webui")).rejects.toThrow(DomainError);
+  await expect(checks.tableRow!("anthropic/claude-fable-5-1", undefined, "webui")).rejects.toThrow(DomainError);
 
   expect(listBoardCalls(db)).toEqual([]);
 });

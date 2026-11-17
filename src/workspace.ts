@@ -434,7 +434,22 @@ const CHECKOUT_LAYOUT = {
   task: { at: (base: string, key: string, pickup: number) => join(conventionCheckoutPath(key, base), String(pickup)), parents: 1, base: (checkout: string) => dirname(dirname(checkout)) },
   /** 基点 / `<task id>.reads` / pickup の event id / 読む面接室の名前(root id) */
   read: { at: (base: string, taskId: string, pickup: number, rootId: string) => join(conventionCheckoutPath(`${taskId}.reads`, base), String(pickup), rootId), parents: 2 },
+  /** 基点 / `@workbench` / 書く先の鍵(ADR 0371 決定8 / spec #3273 の番地)。書く先 `task/<id>` は task id が鍵(id は盤面全体で一意なので
+   *  workspace は要らない)。`@` は名前の規則にも task id(UUID)にも無いので、workspace の名前・面接室(root id)・task の checkout
+   *  (`<id>`・`<id>.checkout`・`<id>.reads`)のどれの番地にもならない。worker の sandbox が開くのは自分の task の checkout・task temp・
+   *  読み専用の checkout だけで、基点もこの段も root にならない。
+   *  shortcut: 書く先は `task/<id>` だけ —— 保護ブランチの書く先(workspace 名が鍵)はその入口を足す slice が足す。 */
+  workbench: { at: (base: string, target: string) => join(base, WORKBENCH_SEGMENT, target.slice("task/".length)), parents: 1 },
 } as const;
+
+/** 作業台の番地の段(`CHECKOUT_LAYOUT.workbench`)。 */
+export const WORKBENCH_SEGMENT = "@workbench";
+
+/** (workspace, 書く先の branch) の作業台の番地。 */
+export const workbenchPath = CHECKOUT_LAYOUT.workbench.at;
+
+/** 作業台で盤面が名前の場所の branch を引き直す名前空間 `refs/heads/board/*`(ADR 0371 決定7)—— 保護ブランチはここと重ならない。 */
+export const BOARD_BRANCHES = "board";
 
 export { CheckoutHostError } from "./git.js";
 
@@ -552,7 +567,7 @@ function assertBeforeDeadline({ deadline }: UntrustedRead): void {
 }
 
 /** ADR 0364 決定1: worker の `.git` の `rel` を lstat し、あれば `kind` であることを確かめる(symlink を辿らない)。 */
-function workerEntry(read: UntrustedRead, rel: string, kind: "directory" | "regular file"): boolean {
+function untrustedEntry(read: UntrustedRead, rel: string, kind: "directory" | "regular file"): boolean {
   const stat = lstatSync(join(read.checkout, rel), { throwIfNoEntry: false });
   if (stat && !(kind === "directory" ? stat.isDirectory() : stat.isFile())) throw unreadable(read, `${rel} is not a ${kind}`);
   return stat !== undefined;
@@ -564,10 +579,10 @@ const WORKER_FILE_CHUNK = 1 << 16;
  *  読む —— sparse file はサイズでなく時間で縛り、空の file の数でも上限を越えない。Linux では開いた実体が checkout の下にあることも
  *  確かめる: 途中の dir の lstat と open の間に symlink へ差し替えられても辿った先を読まない(盤面が worker を拾う host は Linux だけ、
  *  ADR 0100 決定6)。`use` が false で読み止める。 */
-function readWorkerFile(read: UntrustedRead, rel: string, use: (chunk: Buffer) => boolean | void): void {
+function readUntrustedFile(read: UntrustedRead, rel: string, use: (chunk: Buffer) => boolean | void): void {
   const { checkout } = read;
   assertBeforeDeadline(read);
-  if (!workerEntry(read, rel, "regular file")) throw unreadable(read, `${rel} is missing`);
+  if (!untrustedEntry(read, rel, "regular file")) throw unreadable(read, `${rel} is missing`);
   const fd = openSync(join(checkout, rel), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!fstatSync(fd).isFile()) throw unreadable(read, `${rel} is not a regular file`);
@@ -583,10 +598,10 @@ function readWorkerFile(read: UntrustedRead, rel: string, use: (chunk: Buffer) =
 }
 
 /** worker の text file の行のうち `pick` が値を返す最初のもの。行の長さは縛る —— 改行の無い sparse file でメモリを埋めない。 */
-function findWorkerLine(read: UntrustedRead, rel: string, pick: (line: string) => string | undefined): string | undefined {
+function findUntrustedLine(read: UntrustedRead, rel: string, pick: (line: string) => string | undefined): string | undefined {
   let rest = "";
   let found: string | undefined;
-  readWorkerFile(read, rel, (chunk) => {
+  readUntrustedFile(read, rel, (chunk) => {
     const lines = (rest + chunk.toString("latin1")).split("\n");
     rest = lines.pop()!;
     found = lines.map(pick).find((hit) => hit !== undefined);
@@ -596,7 +611,7 @@ function findWorkerLine(read: UntrustedRead, rel: string, pick: (line: string) =
   return found ?? pick(rest);
 }
 
-/** 写す段の失敗は worker の repo の故障に包む。上限超過と host の失敗は型のまま(ADR 0357 決定2 / ADR 0364 決定2)。 */
+/** 写す段の失敗は信じない checkout(task の checkout か作業台)の故障に包む。上限超過と host の失敗は型のまま(ADR 0357 決定2 / ADR 0364 決定2)。 */
 function asUntrustedFailure(subject: UntrustedSubject, cause: unknown): Error {
   if (cause instanceof CheckoutUnreadableError || cause instanceof WorkerTreeGitTimeoutError || cause instanceof CheckoutHostError) return cause;
   return unreadable(subject, cause instanceof Error ? cause.message : String(cause), cause);
@@ -616,13 +631,13 @@ function readUntrustedTip(read: UntrustedRead, branch: string): { sha: string; r
     if (!dotGit) throw new CheckoutUnreadableError(`${read.noun} at ${checkout} has no git repository`);
     if (!dotGit.isDirectory()) throw unreadable(read, ".git is not a directory");
     // ADR 0364 決定1: packed-refs もリポジトリ定義の一部 —— loose の ref があっても種類を確かめる
-    const packed = workerEntry(read, ".git/packed-refs", "regular file");
+    const packed = untrustedEntry(read, ".git/packed-refs", "regular file");
     const parents = ref.split("/").slice(0, -1).map((_, i, parts) => `.git/${parts.slice(0, i + 1).join("/")}`);
-    if (parents.every((dir) => workerEntry(read, dir, "directory")) && workerEntry(read, `.git/${ref}`, "regular file")) {
-      sha = findWorkerLine(read, `.git/${ref}`, (line) => line);
+    if (parents.every((dir) => untrustedEntry(read, dir, "directory")) && untrustedEntry(read, `.git/${ref}`, "regular file")) {
+      sha = findUntrustedLine(read, `.git/${ref}`, (line) => line);
       if (!OID.test(sha ?? "")) throw unreadable(read, `${ref} is not a direct ref`);
     } else if (packed) {
-      sha = findWorkerLine(read, ".git/packed-refs", (line) => {
+      sha = findUntrustedLine(read, ".git/packed-refs", (line) => {
         const [oid, name] = line.split(" ");
         return name === ref && OID.test(oid ?? "") ? oid : undefined;
       });
@@ -650,11 +665,11 @@ const ZERO_CHUNK = Buffer.alloc(WORKER_FILE_CHUNK);
 
 /** checkout の `rel` の byte を写しの `to` へ。hardlink は inode を worker と共有するので使わない(ADR 0364 決定1)。0 だけの chunk は
  *  書かずに穴にする —— byte は同じで、sparse file が tmp を実体で埋めない(`core.compression=0` の pack は正当に 0 の連なりを持つ)。 */
-function copyWorkerFile(read: UntrustedRead, rel: string, to: string): void {
+function copyUntrustedFile(read: UntrustedRead, rel: string, to: string): void {
   const out = hostStep(read.noun, () => openSync(to, "wx"));
   try {
     let position = 0;
-    readWorkerFile(read, rel, (chunk) => {
+    readUntrustedFile(read, rel, (chunk) => {
       if (!chunk.equals(ZERO_CHUNK.subarray(0, chunk.length))) hostStep(read.noun, () => writeSync(out, chunk, 0, chunk.length, position));
       position += chunk.length;
     });
@@ -672,17 +687,17 @@ function copyAndVerifyUntrustedTip(place: UntrustedCheckout, read: UntrustedRead
   const { checkout, deadline } = read;
   const looseName = new RegExp(`^[0-9a-f]{${format === "sha256" ? 62 : 38}}$`);
   try {
-    if (workerEntry(read, ".git/objects", "directory")) {
+    if (untrustedEntry(read, ".git/objects", "directory")) {
       for (const dir of readdirSync(join(checkout, ".git", "objects")).filter((name) => /^[0-9a-f]{2}$/.test(name))) {
-        workerEntry(read, `.git/objects/${dir}`, "directory");
+        untrustedEntry(read, `.git/objects/${dir}`, "directory");
         hostStep(read.noun, () => mkdirSync(join(raw, "objects", dir)));
         for (const file of readdirSync(join(checkout, ".git", "objects", dir)).filter((name) => looseName.test(name))) {
-          copyWorkerFile(read, `.git/objects/${dir}/${file}`, join(raw, "objects", dir, file));
+          copyUntrustedFile(read, `.git/objects/${dir}/${file}`, join(raw, "objects", dir, file));
         }
       }
-      if (workerEntry(read, ".git/objects/pack", "directory")) {
+      if (untrustedEntry(read, ".git/objects/pack", "directory")) {
         for (const file of readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack"))) {
-          copyWorkerFile(read, `.git/objects/pack/${file}`, join(raw, "objects", "pack", file));
+          copyUntrustedFile(read, `.git/objects/pack/${file}`, join(raw, "objects", "pack", file));
           workerRepoGitUntil(deadline, raw, ["index-pack", join(raw, "objects", "pack", file)]);
         }
       }
@@ -720,7 +735,7 @@ function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, u
   const read = untrustedRead(place);
   const { sha, ref } = readUntrustedTip(read, branch);
   // ADR 0364 決定1: 写しは盤面 process の tmp —— worker は書けない(task temp でも checkout の中でもない)
-  const dir = hostStep(place.noun, () => mkdtempSync(join(tmpdir(), "tidepool-worker-tip-")));
+  const dir = hostStep(place.noun, () => mkdtempSync(join(tmpdir(), "tidepool-untrusted-tip-")));
   try {
     const [raw, verified] = [join(dir, "raw"), join(dir, "verified")];
     for (const repo of [raw, verified]) {
@@ -736,10 +751,10 @@ function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, u
   }
 }
 
-/** checkout の `branch` の tip を、ref を書かずに名前の場所の objects へ引く。`description` は fetch の失敗の文の主語。 */
-function fetchUntrustedTip(place: UntrustedCheckout, branch: string, description: string): string {
+/** task の checkout の `branch` の tip を、ref を書かずに名前の場所の objects へ引く。 */
+function fetchUntrustedTip(place: UntrustedCheckout, branch: string): string {
   return withVerifiedUntrustedTip(place, branch, (sha, repo, ref) => {
-    fetchFromBoardCopy(place.namedPlace, repo, ref, sha, description);
+    fetchFromBoardCopy(place.namedPlace, repo, ref, sha, "the task branch tip");
     return sha;
   });
 }
@@ -770,7 +785,7 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const branch = taskBranch(taskId);
-  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch, "the task branch tip");
+  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch);
   const ref = `refs/heads/${branch}`;
   const old = readRefSnapshotValue(namedPlace, ref);
   // ADR 0243 決定2 / ADR 0359 決定4: この書き込みの旧値だけを確かめ、帯域外の値を基準に取り込まない
@@ -782,23 +797,12 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   return tip;
 }
 
-/** 作業台の番地の段(ADR 0371 決定8 / spec #3273 の番地): task の checkout と同じ基点の下の、workspace の名前・面接室(root id)・
- *  task の checkout(`<id>`・`<id>.checkout`・`<id>.reads`)のどれにもならない1段 —— `@` は名前の規則にも task id(UUID)にも無い。
- *  worker の sandbox が開くのは自分の task の checkout・task temp・読み専用の checkout だけで、基点もこの段も root にならない。 */
-export const WORKBENCH_SEGMENT = "@workbench";
-
-/** (workspace, 書く先の branch) の作業台の番地。書く先 `task/<id>` は task id が鍵(id は盤面全体で一意なので workspace は要らない)。
- *  shortcut: 書く先は `task/<id>` だけ —— 保護ブランチの書く先(workspace 名が鍵)はその入口を足す slice が足す。 */
-export function workbenchPath(base: string, target: string): string {
-  return join(base, WORKBENCH_SEGMENT, target.slice("task/".length));
-}
-
 /** 作業台を開く(ADR 0371 決定1・7・9 / ADR 0373 決定9): 鍵ごとに冪等 —— 開いた workspace の Quarantine が指す作業台はそのまま
  *  使い、何も指さない残骸は消して書く先の ref から作り直す(作業台を開いた event は無いので、指すものから導く)。task の checkout と同じ
  *  作り手で作るので hook は無く、`updateInstead` だけを足して人間の clone からの push を受ける。人間の branch は書く先と同じ名前で
  *  checkout され、全部を展開する(sparse にしない)。開くたびに `board/*` を引き直す。返すのは実体の綴りの在り処。 */
 function openWorkbench(db: Db, named: WorkspaceConfig, base: string, target: string): string {
-  const at = workbenchPath(base, target);
+  const at = CHECKOUT_LAYOUT.workbench.at(base, target);
   if (!(workspaceNeedsHuman(db, named.name) && placeHasRepository(at))) rmSync(at, { recursive: true, force: true, maxRetries: 3 });
   const path = existsSync(at) ? realpathSync(at) : makeWorkbench(named, at, target);
   repointBoardRefs(named, path);
@@ -818,10 +822,18 @@ function makeWorkbench(named: WorkspaceConfig, at: string, target: string): stri
 /** ADR 0371 決定7: 作業台の `refs/heads/board/*` を名前の場所の branch の今の値に引き直す —— 人間がそこへ書いたものは上書きされて
  *  消え、人間の branch と作業ツリーは動かさない。盤面が読むのは書く先の branch の tip だけ。 */
 function repointBoardRefs(named: WorkspaceConfig, workbench: string): void {
-  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, "+refs/heads/*:refs/heads/board/*");
+  const boardRefs = `refs/heads/${BOARD_BRANCHES}/`;
+  // git は checkout 中の branch へ fetch しないので、HEAD が `board/*` に居れば同じ commit で切り離す(tree も index も動かさない)
+  if (headValue({ name: named.name, path: workbench }).startsWith(symrefValue(boardRefs))) {
+    git(workbench, "update-ref", "--no-deref", "HEAD", git(workbench, "rev-parse", "HEAD"));
+  }
+  git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`);
 }
 
-/** 取り込みの event の actor —— 回答者か呼び手(ADR 0371 決定2)。 */
+/** 取り込みの手が受け取る束: 作業台の基点と、`workbench_taken_in` に残す回答者と時刻。 */
+export type IntakeContext = { workbenchBase: string; answerer: Answerer; now: Date };
+
+/** 取り込みの event の actor —— 回答者か呼び手(spec #3273 の識別子の表 / pin A5)。 */
 export type Answerer = { actorId: string; origin: EventOrigin };
 
 /** 人間の clone から同じことをする手(spec #3273 text の `{clone}`)。 */
@@ -830,53 +842,60 @@ const fromOwnClone = (target: string, ref: string) =>
 
 /** ADR 0371 決定2〜5: 取り込み —— 作業台の書く先の branch の tip を1度だけ読み、盤面所有の写しの中で検査し、全部通ってから
  *  包む commit(第1親が書く先の値、第2親が人間の tip、tree は人間の tip)を作り、書く先の ref を旧値の CAS で口から書いて
- *  `workbench_taken_in` を残す。拒否は ref も記録も書かない。tip が書く先の今の値なら取り込むものが無く undefined。`carried` は
+ *  `workbench_taken_in` を残し、取り込んだ tip を返す。拒否は ref も記録も書かない。tip が書く先の今の値なら取り込むものが無く undefined。`carried` は
  *  tip が祖先に持つべき、merge で運ばれる側の branch。祖先のほかに履歴は制限しない(`-s ours` も cherry-pick も別の ref の merge も通る)。 */
-function takeInWorkbench(db: Db, named: WorkspaceConfig, workbench: string, target: string, carried: string[], entry: IntakeEntry, answerer: Answerer, now: Date): string | undefined {
+function takeInWorkbench(db: Db, named: WorkspaceConfig, place: UntrustedCheckout, target: string, carried: string[], entry: IntakeEntry, { answerer, now }: IntakeContext): string | undefined {
   const ref = `refs/heads/${target}`;
   const inputs = [target, ...carried].map((branch) => ({ branch, sha: git(named.path, "rev-parse", "--verify", `refs/heads/${branch}`) }));
   const old = inputs[0]!.sha;
-  const at = realpathSync(workbench);
-  return withVerifiedUntrustedTip({ path: at, namedPlace: named, borrowsNamedObjects: true, noun: "the workbench" }, target, (tip, verified, tipRef) => {
-    if (tip === old) return undefined;
-    const copy = { ...named, path: verified };
-    const missing = inputs.find(({ sha }) => !isAncestor(copy, sha, tip, workerRepoGit));
-    if (missing) {
-      const merge = `board/${missing.branch}`;
-      throw new Error(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then answer again.`);
-    }
-    if (boardViewStatus(at, tip, verified).length > 0) {
-      throw new Error(`the workbench at ${at} has uncommitted changes — commit or discard them, then answer again.`);
-    }
-    // ADR 0371 決定5 / ADR 0362 決定2 / ADR 0365 決定2: 完了の門と同じ検査を、入力の tip のどれとも違う entry にだけ —— 比べる相手は fork 元
-    // との merge-base でなく入力の tip。運ばれてきただけの変更は人間の書いたものではない
-    const [first, ...rest] = inputs.map(({ sha }) => diffTreeEntries(verified, sha, tip, { workerTree: true }));
-    const differing = first!.filter(({ path }) => rest.every((delta) => delta.some((other) => other.path === path)));
-    const refuse = (paths: string[], what: string) => {
-      if (paths.length > 0) throw new Error(`the tip of the workbench at ${at} changes ${paths.map(displayWorktreePath).join(", ")}, which ${what}; take that change out and commit, then answer again.`);
-    };
-    const { unhideable } = recordedSettingsDisposition(verified, tip, workerRepoGit);
-    refuse(unhideable && differing.some(({ path }) => path === unhideable.path) ? [unhideable.path] : [], "is a shape the board cannot hide");
-    refuse(humanOnlyPathChanges(differing), "is written only by a human");
-    refuse(gitlinkChanges(differing), "is a gitlink");
-    fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
-    const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
-    advanceBranch(db, named, ref, old, commit);
-    appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
-    return commit;
-  });
+  const at = place.path;
+  try {
+    return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef) => {
+      if (tip === old) return undefined;
+      const copy = { ...named, path: verified };
+      const missing = inputs.find(({ sha }) => !isAncestor(copy, sha, tip, workerRepoGit));
+      if (missing) {
+        const merge = `${BOARD_BRANCHES}/${missing.branch}`;
+        throw new Error(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then answer again.`);
+      }
+      if (boardViewStatus(at, tip, verified).length > 0) {
+        throw new Error(`the workbench at ${at} has uncommitted changes — commit or discard them, then answer again.`);
+      }
+      // ADR 0371 決定5 / ADR 0362 決定2 / ADR 0365 決定2: 完了の門と同じ検査を、入力の tip のどれとも違う entry にだけ —— 比べる相手は fork 元
+      // との merge-base でなく入力の tip。運ばれてきただけの変更は人間の書いたものではない
+      const [first, ...rest] = inputs.map(({ sha }) => diffTreeEntries(verified, sha, tip, { workerTree: true }));
+      const differing = first!.filter(({ path }) => rest.every((delta) => delta.some((other) => other.path === path)));
+      const refuse = (paths: string[], what: string) => {
+        if (paths.length > 0) throw new Error(`the tip of the workbench at ${at} changes ${paths.map(displayWorktreePath).join(", ")}, which ${what}; take that change out and commit, then answer again.`);
+      };
+      const { unhideable } = recordedSettingsDisposition(verified, tip, workerRepoGit);
+      refuse(unhideable && differing.some(({ path }) => path === unhideable.path) ? [unhideable.path] : [], "is a shape the board cannot hide");
+      refuse(humanOnlyPathChanges(differing), "is written only by a human");
+      refuse(gitlinkChanges(differing), "is a gitlink");
+      fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
+      const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
+      advanceBranch(db, named, ref, old, commit);
+      appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
+      return tip;
+    });
+  } catch (err) {
+    // 上限超過の文は worker の tree を名指す —— 人間には作業台の在り処で言う
+    if (err instanceof WorkerTreeGitTimeoutError) throw new Error(err.about(`the workbench at ${at}`), { cause: err });
+    throw err;
+  }
 }
 
-/** spec #3273 の受理の 11: merge back の前に、同じ鍵の作業台が取り込める tip を持てば先に取り込む。取り込めば作業台を消して true
- *  (今この鍵を指すのは答えている Quarantine だけ —— 鍵を共有する入口を足す slice が残す条件を足す)。拒否は `board/*` を引き直してから投げる。 */
-function takeInMergeBack(db: Db, named: WorkspaceConfig, base: string, { taskId, target }: { taskId: string; target: string }, answerer: Answerer, now: Date): boolean {
-  const workbench = workbenchPath(base, target);
+/** spec #3273 の受理の 11: merge back の前に、同じ鍵の作業台が取り込める tip を持てば先に取り込んで true。取り込んだ tip のままの作業台は
+ *  消す(今この鍵を指すのは答えている Quarantine だけ —— 鍵を共有する入口を足す slice が残す条件を足す)。拒否は `board/*` を引き直してから投げる。 */
+function takeInMergeBack(db: Db, named: WorkspaceConfig, { taskId, target }: { taskId: string; target: string }, intake: IntakeContext): boolean {
+  const workbench = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, target);
   if (!placeHasRepository(workbench)) return false;
+  const place: UntrustedCheckout = { path: realpathSync(workbench), namedPlace: named, borrowsNamedObjects: true, noun: "the workbench" };
   let taken: string | undefined;
   try {
-    taken = takeInWorkbench(db, named, workbench, target, [taskBranch(taskId)], "workspace_quarantine", answerer, now);
+    taken = takeInWorkbench(db, named, place, target, [taskBranch(taskId)], "workspace_quarantine", intake);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に包まず底へ —— 引き直しもしない
     try {
       repointBoardRefs(named, workbench);
     } catch {
@@ -885,7 +904,14 @@ function takeInMergeBack(db: Db, named: WorkspaceConfig, base: string, { taskId,
     throw err;
   }
   if (taken === undefined) return false;
-  removeBoardCheckout(workbench, 1);
+  // 回答の間に commit や push が着いていれば、読まずに消さない
+  let current: string | undefined;
+  try {
+    current = readUntrustedTip(untrustedRead(place), target).sha;
+  } catch {
+    // 読めなければ残す
+  }
+  if (current === taken) removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
   return true;
 }
 
@@ -2167,7 +2193,7 @@ function bringTaskCheckout(
         );
       }
     } else {
-      const tip = fetchUntrustedTip(untrustedTaskCheckout(place), taskBranch(task.id), "the task branch tip");
+      const tip = fetchUntrustedTip(untrustedTaskCheckout(place), taskBranch(task.id));
       evacuationBaseRef = readRefSnapshotValue(namedPlace, taskRef);
       if (evacuationBaseRef.startsWith("symref=")) {
         throw new RefsMovedError(`workspace ${namedPlace.name}: expected a direct task ref, found ${evacuationBaseRef} ${taskRef}`);
@@ -2295,13 +2321,13 @@ function mergeBackConflict(db: Db, workspace: WorkspaceConfig, base: string, sou
   try {
     path = openWorkbench(db, workspace, base, target);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は「開けなかった」の文に包まず底へ
     return new Error(`${conflict} The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); answer again and it opens it again${stop}`);
   }
-  const merge = `board/${source}`;
+  const merge = `${BOARD_BRANCHES}/${source}`;
   return new Error(
     `${conflict} The board opened the workbench at ${path} for it. There, on ${target}, run \`git merge ${merge}\` and resolve the conflict ` +
-      `${fromOwnClone(target, merge)}. Your tip must contain both ${target} as the board has it now (\`board/${target}\`) and ${source}, ` +
+      `${fromOwnClone(target, merge)}. Your tip must contain both ${target} as the board has it now (\`${BOARD_BRANCHES}/${target}\`) and ${source}, ` +
       `with nothing uncommitted. To discard ${source}'s work instead, record that with \`git merge -s ours ${merge}\`. ` +
       (raisedBy === "release" ? "Then answer" : "Then answer again."),
   );
@@ -2339,8 +2365,8 @@ export async function redoMergeBacks(
   workspace: WorkspaceConfig,
   defaultWorkspaceName: string | undefined,
   auth: GitHubAuth | undefined,
-  /** 作業台の基点と、取り込みの event に残す回答者と時刻(ADR 0371 決定2 / ADR 0373 決定9)。 */
-  intake: { workbenchBase: string; answerer: Answerer; now: Date },
+  /** 作業台の基点(ADR 0373 決定9)と、取り込みの event に残す回答者と時刻(spec #3273 の識別子の表 / pin A5)。 */
+  intake: IntakeContext,
 ): Promise<void> {
   if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName).length === 0) return;
   const running = db
@@ -2359,7 +2385,7 @@ export async function redoMergeBacks(
     for (;;) {
       const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
       if (!next) break;
-      if (takeInMergeBack(db, workspace, intake.workbenchBase, next, intake.answerer, intake.now)) continue;
+      if (takeInMergeBack(db, workspace, next, intake)) continue;
       mergeBackInto(db, workspace, intake.workbenchBase, next.target, next.taskId, "acceptance");
     }
   } catch (error) {

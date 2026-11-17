@@ -430,7 +430,7 @@ export type EventPayload =
   // 名前は workspace(面接室は root の id)—— 書き戻しと一緒に書くので、回答が後の段で拒まれても残る
   | { kind: "baseline_restored"; workspace: string; restored: string[]; kept: KeptValue[] }
   // ADR 0371 決定2・4: 取り込みが書く先の ref(`target`)を包む commit(`commit`)へ書いた —— 人間の tip と入口も残す。盤面スコープで、名前は
-  // workspace。actor は回答者か呼び手。拒否は何も残さない
+  // workspace。拒否は何も残さない。actor は回答者か呼び手(spec #3273 の識別子の表 / pin A5)
   | { kind: "workbench_taken_in"; workspace: string; target: string; tip: string; commit: string; entry: IntakeEntry }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
