@@ -26,6 +26,8 @@ export type QuestionKind<T extends TierRef = TierId> =
   | { kind: "proposal"; proposal: QuestionProposal<T> }
   /** quarantine.ts の Confirmation question(ADR 0137 決定2)。quarantine の語彙は quarantine.ts にあり、この向きには依存しないので開いた文字列。 */
   | { kind: "quarantine"; quarantine: string; value: string | null }
+  /** `open_workbench`(ADR 0371 決定6): workspace はその保護ブランチへ人間の commit を取り込む workspace。Quarantine ではない —— pickup を止めない。 */
+  | { kind: "intake"; workspace: string }
   /** cli-auth.ts(ADR 0075): expiry は警告した設定上の期限(epoch)。 */
   | { kind: "cli_auth_expiry_warning"; expiry: number };
 
@@ -41,6 +43,7 @@ const COLUMNS = [
   "question_pending_pr_promotion_task_id",
   "question_quarantine_kind",
   "question_quarantine_value",
+  "question_intake_workspace",
   "question_cli_auth_expiry",
 ] as const;
 
@@ -74,6 +77,8 @@ export function questionColumns<T extends TierRef>(kind: QuestionKind<T>): Quest
       return { ...none, question_proposal: kind.proposal };
     case "quarantine":
       return { ...none, question_quarantine_kind: kind.quarantine, question_quarantine_value: kind.value };
+    case "intake":
+      return { ...none, question_intake_workspace: kind.workspace };
     case "cli_auth_expiry_warning":
       return { ...none, question_cli_auth_expiry: kind.expiry };
   }
@@ -107,6 +112,8 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
     case "question_quarantine_kind":
     case "question_quarantine_kind + question_quarantine_value":
       return { kind: "quarantine", quarantine: q.question_quarantine_kind!, value: q.question_quarantine_value };
+    case "question_intake_workspace":
+      return { kind: "intake", workspace: q.question_intake_workspace! };
     case "question_cli_auth_expiry":
       return { kind: "cli_auth_expiry_warning", expiry: q.question_cli_auth_expiry! };
   }

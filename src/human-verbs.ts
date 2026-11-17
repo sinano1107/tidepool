@@ -119,6 +119,7 @@ import {
   checkAcceptanceFirstHalf,
   fetchLostTargets,
   firePickupPredicates,
+  INTAKE_OPTIONS,
   type IntakeContext,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
@@ -132,6 +133,7 @@ import {
   resolveWorkspacesBaseDir,
   restoreBaseline,
   retakeRefBaselines,
+  takeInIntakeWorkbench,
   takeWorkspaceInFlightKey,
   taskBranch,
   UnknownWorkspaceError,
@@ -726,14 +728,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     workspace: async (value, answer, origin) => {
       // resolve the named workspace fresh
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
-      // ADR 0373 決定8: 同じ名前の場所の ref を書く回答と操作は鍵を1つ共有し、検査中の2つ目を拒む
-      const release = takeWorkspaceInFlightKey(deps.db, value!);
-      if (!release) throw new DomainError(`another answer or operation for workspace ${value} is being checked — try again once it has finished.`);
-      try {
-        return await acceptWorkspaceRepair(value!, answer, target, origin);
-      } finally {
-        release();
-      }
+      return withWorkspaceInFlightKey(deps.db, value!, () => acceptWorkspaceRepair(value!, answer, target, origin));
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
@@ -892,6 +887,17 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       },
     }),
   };
+}
+
+/** ADR 0373 決定8: 同じ名前の場所の ref を書く回答と操作は in-flight の鍵を1つ共有し、検査中の2つ目を拒む(spec #3273 text B5)。 */
+async function withWorkspaceInFlightKey<T>(db: Db, name: string, check: () => Promise<T> | T): Promise<T> {
+  const release = takeWorkspaceInFlightKey(db, name);
+  if (!release) throw new DomainError(`another answer or operation for workspace ${name} is being checked — try again once it has finished.`);
+  try {
+    return await check();
+  } finally {
+    release();
+  }
 }
 
 function resolveWorkspaceForAnswer(
@@ -1422,6 +1428,26 @@ export async function submitAnswer(
             origin,
             payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to, question_id: task.id, registry_commit: registryCommit },
             at: now(),
+          });
+        }
+        break;
+      case "intake":
+        // ADR 0371 決定6: `close` は question を閉じるだけで、何も取り込まず作業台は disk に残す
+        if (answers[0] === INTAKE_OPTIONS[0]) {
+          const intakeWorkspace = resolveWorkspaceForAnswer(deps, kind.workspace, "cannot take in");
+          notice = await withWorkspaceInFlightKey(deps.db, kind.workspace, () => {
+            try {
+              return takeInIntakeWorkbench(deps.db, intakeWorkspace, {
+                workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
+                answerer: { actorId: HUMAN_ACTOR_ID, origin },
+                now: now(),
+              });
+            } catch (err) {
+              if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
+              // local 着地の `merge` と同じ条件(spec #3273 の入口の表): 帯域外の書き込みの証拠だけが隔離する(ADR 0103 決定4)
+              if (err instanceof OutOfBandProtectedBranchError) quarantineWorkspace(deps.db, kind.workspace, err, now());
+              throw new DomainError(err instanceof Error ? err.message : String(err));
+            }
           });
         }
         break;

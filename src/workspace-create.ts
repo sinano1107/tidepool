@@ -1,9 +1,11 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
+import type { EventOrigin } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import {
@@ -49,8 +51,12 @@ import {
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,
+  humanWorkbenchLeft,
+  openIntakeQuestionId,
+  openIntakeWorkbench,
   refValues,
   rememberPublishedRepo,
+  removeHumanWorkbench,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   type WorkspaceRegistryProtection,
@@ -164,6 +170,19 @@ export interface WorkspaceAdmin {
   publish: PublishWorkspaceFn;
   /** ADR 0087 / issue #205 の削除の扉(WebUI 専用 — ADR 0088)。 */
   delete: DeleteWorkspaceFn;
+  /** ADR 0371 決定6: purely-local の保護ブランチへ人間の commit を取り込む作業台を開く(`open_workbench`)。返すのは text A14。 */
+  openWorkbench: OpenWorkbenchFn;
+}
+
+export type OpenWorkbenchFn = (input: { name: string }, origin: EventOrigin) => string;
+
+/** `open_workbench` の扉(ADR 0371 決定6 / ADR 0373 決定9): registry に登録された workspace の名前だけを受ける —— 面接室も登録されて
+ *  いないので通らない(#3184)。判定と執行は `openIntakeWorkbench` が持ち、呼んだ人間が question の登録者になる。 */
+export function openWorkspaceWorkbench(input: { name: string }, origin: EventOrigin, deps: WorkspaceAdminDeps & { db: Db; clock?: Clock }): string {
+  const entry = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).workspaces, input.name);
+  if (!entry) throw new UnknownWorkspaceError(input.name);
+  const workspace: WorkspaceConfig = { name: input.name, path: entryCheckoutPath(entry, input.name, deps.workspacesBaseDir), branch: entry.branch, repo: entry.repo };
+  return openIntakeWorkbench(deps.db, workspace, deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, (deps.clock ?? new SystemClock()).now());
 }
 
 /** publish の2つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元
@@ -409,7 +428,8 @@ export async function deleteWorkspace(
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const reasons: DeletionBlockedReason[] = [];
   if (deps.unsettledTaskCount > 0) {
-    reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
+    const intake = openIntakeQuestionId(deps.db, input.name);
+    reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount, ...(intake !== undefined && { intake_question: intake }) });
   }
   const awaiting = deps.awaitingLandingTaskIds;
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
@@ -417,11 +437,14 @@ export async function deleteWorkspace(
   // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む
   const [openQuarantine] = openQuarantinesNaming(deps.db, input.name);
   if (openQuarantine && holdsBaseline(deps.db, input.name)) reasons.push({ code: "open_quarantine", question_id: openQuarantine.id });
-  if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
-  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
   // checkout の場所はエントリを消す前に読む —— 消した後の registry からは
   // `path` も規約パスの根拠も引けない
   const checkout = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
+  const named: WorkspaceConfig = { name: input.name, path: checkout, branch: entry.branch, repo: entry.repo };
+  const workbenchLeft = humanWorkbenchLeft(named, deps.workspacesBaseDir);
+  if (workbenchLeft !== undefined) reasons.push({ code: "human_workbench", reason: workbenchLeft });
+  if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
+  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
   commitToRegistry(
     deps.registry,
     deps.githubAuth,
@@ -442,6 +465,7 @@ export async function deleteWorkspace(
       settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
     }
   })();
+  removeHumanWorkbench(named, deps.workspacesBaseDir);
   return checkout;
 }
 

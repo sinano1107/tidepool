@@ -1014,6 +1014,23 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
+  // ADR 0371 決定6・8: `open_workbench` —— 人間面だけの workspace の操作(worker MCP には置かない)。拒否は回答の拒否と同じ 409、
+  // 登録されていない名前(面接室を含む)は 404
+  router.post("/workspaces/:name/workbench", (req, res) => {
+    if (!workspaceAdmin?.openWorkbench) {
+      sendJson(res.status(503), { error: "workspace settings not configured" });
+      return;
+    }
+    try {
+      const message = workspaceAdmin.openWorkbench({ name: req.params.name }, "webui");
+      sendJson(res, { message } satisfies WireContract["POST /api/workspaces/:name/workbench"]);
+    } catch (err) {
+      if (err instanceof UnknownWorkspaceError) sendJson(res.status(404), { error: err.message });
+      else if (err instanceof DomainError) sendJson(res.status(409), { error: err.message });
+      else throw err;
+    }
+  });
+
   router.post("/agents", async (req, res) => {
     const parsed = createAgentSchema.safeParse(req.body);
     if (!parsed.success) {

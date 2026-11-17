@@ -57,10 +57,11 @@ export class DeletionConfirmationRequiredError extends Error {
  *  件数や agent 名という**明細つき**で返る必要があるので、危険な値の裸の文字列
  *  ではなく判別可能なオブジェクトの列にする。 */
 export type DeletionBlockedReason =
-  | { code: "unsettled_tasks"; count: number }
+  | { code: "unsettled_tasks"; count: number; intake_question?: string }
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }
   | { code: "board_default" }
   | { code: "open_quarantine"; question_id: string }
+  | { code: "human_workbench"; reason: string }
   | { code: "board_auditor" }
   | { code: "board_interviewer" }
   | { code: "built_in" }
@@ -79,7 +80,9 @@ export class DeletionBlockedError extends Error {
 
 function describeReason(reason: DeletionBlockedReason, resourceName: string): string {
   if (reason.code === "unsettled_tasks") {
-    return `${reason.count} unsettled task(s) still reference it`;
+    // spec #3273 text A15: 開いた `intake` question も未決着に数え、閉じ方を言う
+    const intake = reason.intake_question === undefined ? "" : `. Answer \`close\` on question ${reason.intake_question} first.`;
+    return `${reason.count} unsettled task(s) still reference it${intake}`;
   }
   if (reason.code === "tasks_awaiting_landing") {
     return `${reason.count} completed task(s) still await landing through it: ${reason.task_ids.join(", ")}`;
@@ -88,6 +91,8 @@ function describeReason(reason: DeletionBlockedReason, resourceName: string): st
   // spec #3273 text B10。ADR 0373 決定14: 名前を名指す Quarantine が開いていて基準の行がある間は拒む —— 削除 → 再登録 → `repaired by hand` で
   // 比較を迂回させない
   if (reason.code === "open_quarantine") return `workspace "${resourceName}" has an open Quarantine (question ${reason.question_id}) and a baseline — answer it first.`;
+  // ADR 0382 決定5: 人間自身の内容の作業台に取り込まれていない作業があれば拒み、無ければ削除が作業台を消す
+  if (reason.code === "human_workbench") return reason.reason;
   if (reason.code === "board_auditor") return "it is the board's Auditor";
   if (reason.code === "board_interviewer") return "it is the board's Interviewer";
   // ADR 0117 決定2: 組み込みは registry のファイルではないので削除の対象にならない。

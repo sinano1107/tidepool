@@ -321,6 +321,7 @@ export function landingAnnotation(
     case "proposal":
     case "quarantine":
     case "stop_reason":
+    case "intake":
     case "cli_auth_expiry_warning":
       return null;
   }

@@ -126,6 +126,10 @@ export function openDb(path: string): Db {
       -- JSON API.
       question_quarantine_kind TEXT,
       question_quarantine_value TEXT,
+      -- system-internal only (ADR 0371 決定6): the workspace whose protected
+      -- branch an \`intake\` question takes a human's commits into. Set only by
+      -- open_workbench; never via MCP or the JSON API.
+      question_intake_workspace TEXT,
       -- system-internal only (ADR 0075): the configured expiry epoch in ms for
       -- which this advance warning was created. It never halts pickup.
       question_cli_auth_expiry INTEGER,

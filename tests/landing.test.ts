@@ -46,6 +46,8 @@ import {
   boardRefWriter,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
+  openIntakeQuestionId,
+  openIntakeWorkbench,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   redoMergeBacks,
@@ -2471,6 +2473,27 @@ it("作業台で merge した後に origin の保護ブランチが進めば、r
   expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
   expect(getTask(c.db, failure!.id)?.status).toBe("todo");
   expect(c.github.requests).toEqual([]);
+});
+
+// spec #3273 text A7c / D6(ADR 0376 決定12): remote-backed の入口の人間しか書けない path の拒否は origin への道を言う
+it("追いつきの作業台の tip が人間しか書けない path を変えていれば、retry は text D6 の道を言って拒み何も書かない", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-human-only");
+  await convergeOn(c.landing, c.repair.id);
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  c.resolve();
+  commitWork(c.workbench(), ".mcp.json", "{}\n");
+  const before = git(c.workspace.path, "rev-parse", c.target);
+
+  const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain(
+    "which is written only by a human; take that change out and commit, then answer again. Put the change into origin's main — a fast-forward push from your own " +
+      `clone, or a merge of your own PR. Never push from ${c.workspace.path}. Tasks that have already forked do not get it; it takes effect from the next fork.`,
+  );
+  expect(git(c.workspace.path, "rev-parse", c.target)).toBe(before);
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
 });
 
 // ADR 0382 決定1・2(#3347): 追いつきの作業台と子の merge back の作業台は別の鍵 —— 子は盤面が運び、人間の追いつきの tip はその後の
@@ -5834,7 +5857,10 @@ it.each([
       c.resolve();
       commitWork(c.workbench(), ".mcp.json", "{}\n");
     },
-    (c: LocalLandingConflict) => `the tip of the workbench at ${c.workbench()} changes .mcp.json, which is written only by a human`,
+    // spec #3273 text A7c: purely-local の出口は、intake question が開いていなければ open_workbench
+    (c: LocalLandingConflict) =>
+      `the tip of the workbench at ${c.workbench()} changes .mcp.json, which is written only by a human; take that change out and commit, then answer again. ` +
+      `To change a human-only path, open a workbench for ${c.workspace.name} (\`open_workbench\`).`,
   ],
 ])("local 着地の merge は作業台の tip を拒めば何も書かない —— %s", async (_case, write, says) => {
   const c = await localLandingConflict("local-landing-refused");
@@ -5846,6 +5872,22 @@ it.each([
 
   await expect(refused).rejects.toThrow(DomainError);
   await expect(refused).rejects.toThrow(says(c));
+  nothingWritten();
+});
+
+// spec #3273 text A7c: intake question が開いていれば、人間しか書けない path の拒否はその question を名指す
+it("intake question が開いていれば、local 着地の merge の人間しか書けない path の拒否はその question を名指す", async () => {
+  const c = await localLandingConflict("local-landing-human-only-intake");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  c.resolve();
+  commitWork(c.workbench(), ".mcp.json", "{}\n");
+  openIntakeWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now());
+  const intake = openIntakeQuestionId(c.db, c.workspace.name)!;
+  const nothingWritten = c.unchanged();
+
+  await expect(c.answer()).rejects.toThrow(
+    `which is written only by a human; take that change out and commit, then answer again. To change a human-only path, use the intake question ${intake} of workspace ${c.workspace.name}.`,
+  );
   nothingWritten();
 });
 

@@ -24,6 +24,7 @@ const examples: { [K in QuestionKind["kind"]]: Extract<QuestionKind, { kind: K }
     { kind: "quarantine", quarantine: "agent", value: "navigator" },
     { kind: "quarantine", quarantine: "registryReachability", value: null },
   ],
+  intake: [{ kind: "intake", workspace: "sandbox" }],
   cli_auth_expiry_warning: [{ kind: "cli_auth_expiry_warning", expiry: 1_800_000_000_000 }],
 };
 const kinds: QuestionKind[] = Object.values(examples).flat();

@@ -18,15 +18,19 @@ export type WorkbenchTarget = { task: string } | { workspace: string };
 
 /** ADR 0382 決定1: (書く先, 運ばれる側) の作業台の番地 —— 基点 / `@workbench` / 葉。書く先 `task/<id>` の葉は `<id>@<運ばれる側>`
  *  (task id は盤面全体で一意なので workspace は要らない)、workspace の保護ブランチを書く先にする葉は `@<workspace>@<運ばれる側>`
- *  (ADR 0382 決定4 の local 着地)—— `@<workspace>` だけの葉は人間自身の内容の作業台に残す。運ばれる側の名前
+ *  (ADR 0382 決定4 の local 着地)。運ばれる側の無い鍵(`carried` が undefined)は `@<workspace>` だけの葉 —— 人間自身の内容の作業台
+ *  (ADR 0382 決定4、`take in` と purely-local の封じ込めの回答が共有する)。運ばれる側の名前
  *  (`task/<id>`・`origin/<protected>` など)は `LEAF_ESCAPES` で `/` も `@` も `%` も持たない1対1の綴りにし、workspace の名前も task id
  *  (UUID)も `@` を持たないので、どの葉も1つの段で互いに入れ子にならず、人間の clone が `ssh://` の形で remote にしても同じ在り処を指す
  *  (ADR 0371 決定9)。`@` は名前の規則にも task id にも無いので、workspace の名前・面接室(root id)・task の checkout
  *  (`<id>`・`<id>.checkout`・`<id>.reads`)のどれの番地にもならない。worker の sandbox が開くのは自分の task の checkout・task temp・
- *  読み専用の checkout だけで、基点もこの段も root にならない。
- *  shortcut: 運ばれる側の無い鍵(人間自身の内容の作業台)はその入口を足す slice(#3287・#3288)が足す。 */
-export const workbenchPath = (base: string, target: WorkbenchTarget, carried: string): string =>
-  join(base, WORKBENCH_SEGMENT, `${"task" in target ? target.task : `@${target.workspace}`}@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`);
+ *  読み専用の checkout だけで、基点もこの段も root にならない。 */
+export const workbenchPath = (base: string, target: WorkbenchTarget, carried?: string): string =>
+  join(
+    base,
+    WORKBENCH_SEGMENT,
+    `${"task" in target ? target.task : `@${target.workspace}`}${carried === undefined ? "" : `@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`}`,
+  );
 
 /** 盤面が読んだ作業台: 在り処、書く先の branch とその名前の場所での今の値、作業台の書く先の branch の tip(無ければ undefined —— 作りかけ)、
  *  tip の閉包と名前の場所の objects を引ける repo(盤面所有の検証済みの写し。tip が無ければ名前の場所)。 */
@@ -40,9 +44,14 @@ export type WorkbenchOwner = { kind: "nothing" } | { kind: "mine"; lacksCarried:
 
 /** ADR 0382 決定2・3: 作業台の tip の持ち主。tip が書く先に含まれれば取り込むものは無い —— ただし人間の作業が残っていれば拒む。
  *  含まれなければ、鍵に運ばれる側が入っているか運ばれる側の無い入口ならその入口のもの、鍵に運ばれる側の無い作業台では tip が入口の
- *  運ばれる側を含むときだけその入口のもの。`carried` が undefined なのは運ばれる側の無い入口。 */
-export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | undefined): WorkbenchOwner {
+ *  運ばれる側を含むときだけその入口のもの。`carried` が undefined なのは運ばれる側の無い入口。`boardMove` は入口が盤面の手を持つか ——
+ *  ADR 0382 決定6: 書く先の branch の無い作業台(作りかけ)は、盤面の手のある入口では取り込むものが無く、無い入口では拒む(人間が入れたと
+ *  思う commit を「無い」として落とさない)。 */
+export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | undefined, boardMove: boolean): WorkbenchOwner {
   const { tip, verified } = read;
+  if (tip === undefined && !boardMove) {
+    return { kind: "refuse", reason: `the workbench at ${read.at} has no ${read.target} branch, so the board cannot tell what to take in. Open it again, then answer again.` };
+  }
   if (tip === undefined || inTarget(read, tip)) {
     const left = humanWorkLeft(read);
     return left.length === 0 ? { kind: "nothing" } : { kind: "refuse", reason: `the workbench at ${read.at} has nothing new on ${read.target}, but ${left.join("; ")}. Then answer again.` };
