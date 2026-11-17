@@ -414,6 +414,26 @@ it.each(["named place", "host"] as const)("complete_task は %s の側で tip �
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
+it("complete_task は人間が動かした task/<id> を retry では直らないと言って拒むだけで Quarantine を立てず、escalate した session の終わりの解放がその ref を名指す Quarantine を立てる(ADR 0373 決定12 / ADR 0359 決定4)", async () => {
+  const ws = await makeWorkspace("tip-copy-moved");
+  const board = (t = await bootTidepool({ workspace: ws }));
+  const task = await registerWork(board, "record the tip");
+  await board.clock.advance(HOUR);
+  commitWork(checkoutOf(board.db, task.id), "work.txt", "work\n");
+  const ref = `refs/heads/task/${task.id}`;
+  git(ws.path, "update-ref", ref, git(ws.path, "commit-tree", `${ref}^{tree}`, "-p", ref, "-m", "by hand"));
+
+  const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
+
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toBe(`task/${task.id} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
+  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+
+  await callAsTask(board, task.id, "escalate", { context: "the task branch moved", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] });
+
+  expect((await servedQuarantineQuestion(board, "workspace", ws.name))?.purpose).toContain(ref);
+});
+
 it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の写しを面接室に記録できなければ拒むだけで、資源を止めない(ADR 0367 決定1 / ADR 0359 決定4)", async (side) => {
   const ws = await makeWorkspace("tip-copy-pose");
   const board = (t = await bootTidepool({ workspace: ws }));

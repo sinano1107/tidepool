@@ -46,7 +46,7 @@ import {
   searchMemoryEntries,
 } from "./memory.js";
 import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
-import { safeRealpath } from "./pickup-predicates.js";
+import { safeRealpath, taskBranch } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -116,6 +116,7 @@ import {
   completionTreeGateApplies,
   completionTreePaths,
   KEPT_TASK_CHECKOUT,
+  RefsMovedError,
   RoomCopyGitlinkError,
   type RunPlace,
   recordTaskCheckoutTip,
@@ -356,6 +357,8 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
     if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
+    // ADR 0373 決定12: 動いた ref は retry では直らない —— 人間へは session の終わりの解放の比較が知らせる
+    if (err instanceof RefsMovedError) throw new DomainError(`${taskBranch(task.id)} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
     throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
   }
   let paths: string[];
