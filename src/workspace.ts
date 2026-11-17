@@ -57,11 +57,13 @@ import {
 } from "./github-auth.js";
 import {
   assertOwnGitDirectory,
+  assertRemoteDeclarationMatchesClone,
   checkoutPickupPredicates,
   conventionCheckoutPath,
   exactProtectedBranchRef,
   gonePlaceReason,
   isRemoteBacked,
+  OriginRepositoryMismatchError,
   type PickupPredicate,
   type PlaceFire,
   pathIsRegistryClone,
@@ -927,6 +929,7 @@ export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
+  protectedRef?: string,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   // 修理子の type は review と同じく lineage に透明(ADR 0272 決定6 / ADR 0279 決定4)
   // interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)
@@ -951,11 +954,11 @@ export function resolveTaskBranchLineage(
   for (const ancestor of ancestors) {
     if (ancestor.type !== "work") continue;
     const branch = taskBranch(ancestor.id);
-    const base = candidate ?? protectedBranchRef(workspace);
     if (!isSettled(ancestor.status)) {
       candidate = branch;
       continue;
     }
+    const base = candidate ?? (protectedRef ??= protectedBranchRef(withRememberedRepoCheck(db, workspace)));
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
     else if (!effect.historyConverged) outlivedForkSource = true;
@@ -969,8 +972,9 @@ export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
+  protectedRef?: string,
 ): string | undefined {
-  return resolveTaskBranchLineage(db, workspace, task).branch;
+  return resolveTaskBranchLineage(db, workspace, task, protectedRef).branch;
 }
 
 /** 名前の場所の HEAD を保護ブランチへ戻す1手。ADR 0345 決定2: HEAD の行に予告して畳む。ADR 0356 決定5: 人間の checkout で
@@ -985,7 +989,7 @@ function checkoutThroughGate(db: Db, workspace: WorkspaceConfig, branch: string)
   } catch (err) {
     if ((err as { status?: number }).status !== 1 || !isRemoteBacked(workspace) || branch !== protectedBranch(workspace)) throw err;
     // ADR 0356 決定5: preserve checkout's creation of a missing local protected branch from origin.
-    tip = git(workspace.path, "rev-parse", "--verify", protectedBranchRef(workspace));
+    tip = git(workspace.path, "rev-parse", "--verify", remoteTrackingRef(branch));
     writes.push([ref, tip]);
   }
   writeBoardRefs(db, workspace, writes, () => {
@@ -1029,9 +1033,10 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
 /** タスクブランチを切る sha(ADR 0053)。受験者は系譜を持たず、面接室の出題の head から切る(ADR 0276 決定1)。
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  return interviewRole(db, task) === "examinee"
-    ? resolvablePosedHead(db, workspace, task)
-    : git(workspace.path, "rev-parse", `${lineageTaskBranch(db, workspace, task) ?? exactProtectedBranchRef(workspace)}^{commit}`);
+  if (interviewRole(db, task) === "examinee") return resolvablePosedHead(db, workspace, task);
+  const base = exactProtectedBranchRef(withRememberedRepoCheck(db, workspace));
+  const source = lineageTaskBranch(db, workspace, task, base) ?? base;
+  return git(workspace.path, "rev-parse", `${source}^{commit}`);
 }
 
 /** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。 */
@@ -1294,7 +1299,7 @@ function confirmBaselinesBeforeFirstCapture(db: Db, resolveRegistered: Workspace
   }
 }
 
-/** ADR 0351 決定2・4: pickup and Quarantine acceptance can write a full ref snapshot. Ref announcements fold one ref at a time. */
+/** ADR 0378 決定6・10: writing refs preserves the remembered repository on an existing row. */
 function writeSnapshot(db: Db, key: string, refs: string): void {
   db.prepare(
     `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
@@ -1358,9 +1363,14 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
   return {
     ...workspace,
     checkRememberedRepo: workspace.checkRememberedRepo ?? ((place: WorkspaceConfig) => {
-      // A token lookup can overlap publish. Compare with the current declaration before using it.
+      // ADR 0066 決定5 / ADR 0378 決定7: a token lookup can span publish's synchronous update, so check the current declaration.
       const current = resolveCurrent?.(place.name) ?? place;
       assertRememberedRepo(db, current, now());
+      if (current.path !== place.path) {
+        throw new OriginRepositoryMismatchError(`workspace ${place.name}: the registered checkout path changed during the operation. Retry with the current entry.`);
+      }
+      // ADR 0378 決定3: an earlier pickup predicate only checked the declaration it was given.
+      if (current.repo !== place.repo) assertRemoteDeclarationMatchesClone(current);
       return current;
     }),
   };

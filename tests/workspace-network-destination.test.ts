@@ -13,7 +13,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace } from "../src/workspace.js";
+import { boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, withRememberedRepoCheck } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
@@ -86,6 +86,30 @@ it("remembers where a relative repo declaration resolved when the baseline was c
   await expect(refreshProtectedBranch(db, { ...workspace, path, repo }, undefined)).rejects.toThrow(
     `was registered for repo ${workspace.repo}, but its registry entry now says ${repo}.`,
   );
+});
+
+it("rechecks origin before a first pickup can capture a repo edited after the pickup gate", async ({ onTestFinished }) => {
+  const original = await makeRemoteBackedWorkspace("first-pickup-repo");
+  const changed = await makeRemoteBackedWorkspace("first-pickup-other-repo");
+  changed.publish("unexpected.txt", "other repository\n", "advance the other repo");
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  let current = original.workspace;
+  const workspace = withRememberedRepoCheck(db, current, () => NOW, () => current);
+  const task = registerTask(db, { type: "work", title: "first pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-destination-checkouts-");
+  const reads = await pickupGate(db, workspace, task, base);
+  const calls = await shimGit();
+  current = { ...original.workspace, repo: changed.workspace.repo };
+
+  await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).rejects.toThrow(
+    `declares repo ${changed.workspace.repo}, but its checkout's origin is ${original.workspace.repo}`,
+  );
+  expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
+  expect(git(workspace.path, "branch", "--list", `task/${task.id}`)).toBe("");
+
+  current = original.workspace;
+  await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).resolves.toBeDefined();
 });
 
 it("refuses pickup and Quarantine acceptance before contacting a re-pointed origin", async ({ onTestFinished }) => {

@@ -64,6 +64,7 @@ import {
   taskBranch,
   taskRunPlace,
   type WorkspaceConfig,
+  withRememberedRepoCheck,
 } from "./workspace.js";
 
 // review の書き込み系 Bash パターン。**この配列の役割は ADR 0035(issue #144)
@@ -1612,9 +1613,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       recorded = recordedSettingsDisposition(place.namedPlace.path, `refs/heads/${branch}`);
       // ADR 0360 決定3: 面接室には人間の書き手がいないので、root と受験者は保護ブランチを読まない。
       if (recorded.unhideable && task.type !== "interview" && task.interview_target_id === null) {
-        protectedContainment = claudeWorkspaceContainment(place.namedPlace);
+        protectedContainment = claudeWorkspaceContainment(withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now()));
       }
     } catch (err) {
+      if (isBoardDbRefusal(err)) throw err;
       // 判定の入力が読めない名前の場所は、pickup の準備の失敗と同じく workspace の quarantine(ADR 0360 決定1)
       stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
       return;

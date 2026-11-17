@@ -270,7 +270,8 @@ export async function addIssueCommentThroughHumanDoor(
       input.body,
     );
     return { ok: true };
-  } catch {
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: GitHub's destination check may write Quarantine.
     return {
       ok: false,
       failure: { kind: "github_failed", error: "could not post the comment to the issue" },
@@ -467,6 +468,7 @@ export async function registerThroughHumanDoor(
             number: input.github_issue_number,
           });
         } catch (err) {
+          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: the destination check may write Quarantine.
           if (err instanceof IssueGoneError) throw new DomainError(err.message);
           return {
             ok: false,

@@ -22,7 +22,7 @@ import {
   selectable,
   windowMatchesSetting,
 } from "./execution-setting.js";
-import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
+import { type GitHubClient, IssueGoneError, type IssueRef, type RepoSlug } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
@@ -546,13 +546,20 @@ export function startScheduler(deps: {
     live: () => boolean,
   ): Promise<ResourceStop | undefined> {
     if (!live()) return undefined;
-    // ADR 0378 決定3: a different origin is a local repair. A token probe cannot change the result.
-    if (err instanceof WorkspaceRepoMismatchError || (err instanceof PickupGateError && (err.cause instanceof OriginRepositoryMismatchError || err.cause instanceof WorkspaceRepoMismatchError))) {
+    const pickupCause = err instanceof PickupGateError ? err.cause : err;
+    // ADR 0378 決定3・6〜8: a different origin or declared repo is a local repair. A token probe cannot change the result.
+    if (pickupCause instanceof OriginRepositoryMismatchError || pickupCause instanceof WorkspaceRepoMismatchError) {
       return quarantineWorkspace(db, workspace.name, err, clock.now());
     }
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
-    const ref = workspaceNetworkDestination(workspace)?.github;
+    let ref: RepoSlug | undefined;
+    try {
+      ref = workspaceNetworkDestination(workspace)?.github;
+    } catch (cause) {
+      if (!(cause instanceof WorkspaceRepoMismatchError || cause instanceof OriginRepositoryMismatchError)) throw cause;
+      return quarantineWorkspace(db, workspace.name, cause, clock.now());
+    }
     let guidance: string | null = null;
     // 仲介の断りも到達失敗も `tokenRefusal` が理由の文字列に畳むので、ここは投げない
     if (github && ref) guidance = (await repairRepoAccess(github, ref)).guidance;

@@ -48,12 +48,23 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
  *  slot 解放後の休止位置の追従先、完了時の未着地 commit 比較)。 */
 export function protectedBranchRef(workspace: WorkspaceConfig): string {
   const branch = protectedBranch(workspace);
-  return workspace.repo !== undefined ? remoteTrackingRef(branch) : branch;
+  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
 }
 
 /** ADR 0360 決定3・5: 記録の tree を読むときは、同名のタグを解決しない完全な ref を使う。 */
 export function exactProtectedBranchRef(workspace: WorkspaceConfig): string {
-  return workspace.repo !== undefined ? protectedBranchRef(workspace) : `refs/heads/${protectedBranch(workspace)}`;
+  const branch = protectedBranch(workspace);
+  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : `refs/heads/${branch}`;
+}
+
+/** The registry's declared ref for read-only projections, which do not raise Quarantine. */
+export function declaredProtectedBranchRef(workspace: WorkspaceConfig): string {
+  const branch = protectedBranch(workspace);
+  return declaresWorkspaceRepo(workspace) ? remoteTrackingRef(branch) : branch;
+}
+
+function declaresWorkspaceRepo(workspace: WorkspaceConfig): boolean {
+  return workspace.repo !== undefined;
 }
 
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
@@ -82,7 +93,7 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: Regi
 function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: boolean): PickupPredicate[] {
   // 予告の実環境は設定を持たないので、既定名や remote の有無を答えにしない(ADR 0329 決定10)。
   const branch = place.path ? `protected branch \`${protectedBranch(place)}\`` : "configured protected branch";
-  const remoteRef = place.path && place.repo !== undefined ? `\`${protectedBranchRef(place)}\`` : "its remote-tracking ref";
+  const remoteRef = place.path && declaresWorkspaceRepo(place) ? `\`${declaredProtectedBranchRef(place)}\`` : "its remote-tracking ref";
   const prefix = `${scope}${IF_REPOSITORY_PRESENT}`;
   return [
     {
@@ -386,17 +397,17 @@ function originRepairInstruction(verb: "add" | "set-url", repo: string, displaye
 }
 
 /** ADR 0378 決定3・4: compare the raw origin at both pickup and Quarantine acceptance. */
-function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
+export function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
   const { name, path, repo } = workspace;
   const origin = readCheckoutOrigin(path, "first");
-  if (origin === null) throw new Error(`workspace ${name}: could not read its checkout's origin in ${path}`);
+  if (origin === null) throw new OriginRepositoryMismatchError(`workspace ${name}: could not read its checkout's origin in ${path}`);
   if (sameRepository(repo, origin)) return;
   if (repo === undefined) {
-    throw new Error(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
+    throw new OriginRepositoryMismatchError(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
   }
   const declared = repositoryLabel(repo, { preserveSshUser: true });
   if (origin === undefined) {
-    throw new Error(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
+    throw new OriginRepositoryMismatchError(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
   }
   const configured = repositoryLabel(origin, { preserveSshUser: true });
   throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${originRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
@@ -416,11 +427,11 @@ function assertRegistryRoleAgrees(
 ): void {
   if (!registry || !pathIsRegistryClone(workspace.path, registry.dir)) return;
   const asRegistry = registry.mode === "remote-backed";
-  if (asRegistry === isRemoteBacked(workspace)) return;
+  if (asRegistry === declaresWorkspaceRepo(workspace)) return;
   throw new Error(
     `workspace ${workspace.name} is the board's own registry clone and its two declarations ` +
       `disagree: as the registry it declares '${registry.mode}', as a workspace it declares ` +
-      (isRemoteBacked(workspace) ? `a remote source of truth (repo: ${workspace.repo})` : "none"),
+      (declaresWorkspaceRepo(workspace) ? `a remote source of truth (repo: ${workspace.repo})` : "none"),
   );
 }
 

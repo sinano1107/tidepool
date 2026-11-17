@@ -8,7 +8,7 @@ import { git } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
 import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
-import { isRemoteBacked } from "./pickup-predicates.js";
+import { declaredProtectedBranchRef, isRemoteBacked } from "./pickup-predicates.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
@@ -366,13 +366,14 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
     if (task.type === "question" || !resolve || !ancestors.some((a) => rootPrOutcome(db, a.id)?.state === "CLOSED")) return null;
     try {
       const workspace = resolve(derivedWorkspace(db, task));
+      const base = declaredProtectedBranchRef(workspace);
       for (let current: Pick<Task, "type" | "parent_id"> = task; ; ) {
-        const branch = lineageTaskBranch(db, workspace, current);
+        const branch = lineageTaskBranch(db, workspace, current, base);
         const target = ancestors.find((a) => taskBranch(a.id) === branch);
         if (!target) return null;
         const outcome = rootPrOutcome(db, target.id);
         if (outcome?.state === "CLOSED") {
-          return taskHasContentToLand(workspace, target.id) ? { task_id: target.id, pr_number: outcome.prNumber } : null;
+          return taskHasContentToLand(workspace, target.id, base) ? { task_id: target.id, pr_number: outcome.prNumber } : null;
         }
         current = target;
       }
@@ -446,8 +447,8 @@ function landingCandidateIds(db: Db): string[] {
     .all() as string[];
 }
 
-/** ADR 0241 決定1 / ADR 0240 決定2: 候補が収束の根ならその根を返す —— 記録と内容から導き、読むだけで書かない
- *  (quarantine にも落とさない)。収束の回と着地を待つ完了タスクの数えはどちらもこれを通る。盤面の外で閉じた PR の根は
+/** ADR 0241 決定1 / ADR 0240 決定2: 候補が収束の根ならその根を返す。収束の回と着地を待つ完了タスクの数えはどちらもこれを通る。
+ *  ADR 0378 決定7・8: convergence は repo を検査してから lineage を読み、件数の読み口は宣言の ref を使うだけ。盤面の外で閉じた PR の根は
  *  lineage の前に根の PR の決着の読み(`rootPrOutcome`)で外す。PR が開いている根の子孫も lineage の前に記録で外す
  *  (`openPrRootAbove`、ADR 0265 帰結 —— ADR 0250 決定3 を置き換えた): 根の内容が別の経路で保護ブランチに届けば根は
  *  内容で終わり(ADR 0265 決定3)、子孫は次に導くとき自分で根になる。今の記録を読むので、同じ回で先に終わった根の子孫は
@@ -455,7 +456,7 @@ function landingCandidateIds(db: Db): string[] {
  *  push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。lineage が祖先のブランチへ帰る done の work は根では
  *  ない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側がその根の
  *  失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
-function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: string): LandingRoot | undefined {
+function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: string, readBase = declaredProtectedBranchRef): LandingRoot | undefined {
   if (rootPrOutcome(db, id)?.state === "CLOSED" || openPrRootAbove(db, id)) return undefined;
   const task = getTask(db, id)!;
   let workspace: WorkspaceConfig | undefined;
@@ -464,9 +465,10 @@ function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: strin
   } catch {}
   if (!workspace) return { task, outlivedForkSource: false };
   try {
-    const lineage = resolveTaskBranchLineage(db, workspace, task);
+    const lineage = resolveTaskBranchLineage(db, workspace, task, readBase(workspace));
     return lineage.branch ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
   } catch (lineageError) {
+    if (isBoardDbRefusal(lineageError)) throw lineageError;
     return { task, outlivedForkSource: false, lineageError };
   }
 }
@@ -574,10 +576,10 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
 
 /** ADR 0073 / ADR 0105: the landing module owns the completed-root decision;
  *  workspace only supplies the generic content comparison shared with pickup. */
-function taskHasContentToLand(workspace: WorkspaceConfig, taskId: string): boolean {
+function taskHasContentToLand(workspace: WorkspaceConfig, taskId: string, base = protectedBranchRef(workspace)): boolean {
   return branchMergeEffect(
     workspace,
-    protectedBranchRef(workspace),
+    base,
     taskBranch(taskId),
   ).changesCandidate;
 }
@@ -1304,7 +1306,7 @@ export function createLanding(deps: LandingDeps): Landing {
     // 候補ごとに、撃つ直前に根かを導く —— 同じ回で先に終わった根の子孫が、取り残されずにこの回で自分で根になる(ADR 0265 決定3・帰結)
     for (const id of ids) {
       try {
-        const root = landingRootOf(deps.db, resolve, id);
+        const root = landingRootOf(deps.db, resolve, id, (workspace) => protectedBranchRef(checked(workspace)));
         const verdict = root && (await landRoot(root, answering));
         if (verdict) verdicts.push({ taskId: id, verdict });
       } catch (error) {

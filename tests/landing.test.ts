@@ -670,6 +670,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
   expect(github.pushes).toEqual([{ path: workspace.path, branch: `task/${task.id}` }]);
 });
 
+// ADR 0378 決定8: the destination check raises Quarantine even when a tick ignores a failed PR read.
 it.each(["rewritten", "removed"] as const)("quarantines a workspace when its open PR's repo declaration is %s", async (drift) => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-repo-drift");
   const { db, clock } = await openBoard();
@@ -706,6 +707,32 @@ it.each(["rewritten", "removed"] as const)("quarantines a workspace when its ope
   expect(github.requests).toHaveLength(1);
   expect(listBoard(db).filter((row) => row.question_quarantine_kind === "workspace")).toHaveLength(1);
   expect(listBoard(db).some((row) => row.question_pending_local_merge_task_id === task.id)).toBe(false);
+});
+
+it("checks the repo before convergence can mistake a descendant's open PR for work that still returns to its ancestor", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-repo-drift-descendant");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  let current = workspace;
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: () => current, github });
+  const parent = landingWork(db, clock);
+  await completeThroughTaskCheckout(db, clock, workspace, parent, "parent.txt", "parent result\n");
+  await expect(convergeOn(landing, parent.id)).resolves.toMatchObject({ form: "pull_request_opened" });
+  const child = attachUnsettledChild(db, clock, parent.id);
+  await commitThroughTaskCheckout(db, clock, workspace, child, "child.txt", "child result\n");
+  finish(db, clock, child);
+  // Refresh sees the published parent result while the checkout's local main is still behind.
+  await squashTaskIntoOrigin(workspace, parent.id);
+  await refreshProtectedBranch(db, workspace, undefined);
+  await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ form: "pull_request_opened" });
+  expect(github.stateChecks).toEqual([]);
+
+  current = { ...workspace, repo: undefined };
+
+  await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "quarantined" });
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("its registry entry no longer declares one");
+  expect(github.stateChecks).toEqual([]);
+  expect(github.requests).toHaveLength(2);
 });
 
 it("open PR 更新は盤面が動かした remote ref だけを予告して畳み、worker の task の checkout の ref は読まない(ADR 0356 決定4)", async () => {
