@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { boardViewStatus, boardWriteTree, TaskCheckoutUnreadableError } from "../src/git.js";
+import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
 import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
@@ -152,7 +152,7 @@ it.each(["ls-remote", "fetch"] as const)("旧い %s の upload-pack を止めた
   const fifo = stall[stage](place.path);
 
   const failure = thrown(() => recordTaskCheckoutTip(db, place, task.id));
-  expect(failure).toBeInstanceOf(TaskCheckoutUnreadableError);
+  expect(failure).toBeInstanceOf(CheckoutUnreadableError);
   expect(failure).toMatchObject({ message: expect.stringContaining("is not a regular file") });
   await expectNoReader(fifo);
 });
@@ -362,6 +362,6 @@ it("特別でない tracked な path の FIFO では git は即座に落ち、wo
 
   const failure = thrown(() => boardWriteTree(ws.path, head, ws.path, () => undefined));
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
-  expect(failure).toBeInstanceOf(TaskCheckoutUnreadableError);
+  expect(failure).toBeInstanceOf(CheckoutUnreadableError);
   expect(failure).toMatchObject({ cause: { status: expect.any(Number) } });
 });

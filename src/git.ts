@@ -181,11 +181,11 @@ function isDirectoryBeneath(cwd: string, rel: string): boolean {
   });
 }
 
-/** ADR 0356 決定2: worker の repo(task の checkout)が読めない。 */
-export class TaskCheckoutUnreadableError extends Error {}
+/** ADR 0356 決定2 / ADR 0371 決定4: 盤面が信じない checkout(task の checkout と作業台)が読めない。文の主語は投げる側が決める。 */
+export class CheckoutUnreadableError extends Error {}
 
 /** ADR 0356 決定2 / ADR 0364 決定2 / ADR 0367 決定1: checkout や盤面の一時 repo を用意する host 側の失敗。 */
-export class TaskCheckoutHostError extends Error {}
+export class CheckoutHostError extends Error {}
 
 export function stagingHostStep<T>(step: () => T): T {
   try {
@@ -197,7 +197,7 @@ export function stagingHostStep<T>(step: () => T): T {
 }
 
 const stagingHostError = (cause: unknown) =>
-  new TaskCheckoutHostError(`the board cannot stage the task checkout's working tree: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  new CheckoutHostError(`the board cannot stage the task checkout's working tree: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
 
 /** ADR 0364 決定2 / ADR 0367 決定1: writing the board's temporary repo can fail because the host is out of space. */
 export function outOfSpace(dir: string, cause: unknown): boolean {
@@ -232,12 +232,12 @@ export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string
       // ADR 0365 決定3: 列挙が外さなかった入れ子の repo が足した・進めた gitlink は worker の repo の故障
       const added = gitlinkChanges(diffTreeEntries(gitDir, `${head}^{tree}`, tree, { workerTree: true }));
       if (added.length > 0) {
-        throw new TaskCheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: the worktree has a nested repository the board does not carry: ${added.join(", ")}`);
+        throw new CheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: the worktree has a nested repository the board does not carry: ${added.join(", ")}`);
       }
     } catch (cause) {
-      if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof TaskCheckoutUnreadableError || cause instanceof TaskCheckoutHostError) throw cause;
+      if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof CheckoutUnreadableError || cause instanceof CheckoutHostError) throw cause;
       if (outOfSpace(gitDir, cause)) throw stagingHostError(cause);
-      throw new TaskCheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      throw new CheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     }
     return use(tree, gitDir);
   }, objectsFrom, "stage");

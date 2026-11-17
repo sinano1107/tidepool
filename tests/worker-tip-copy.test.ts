@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { TaskCheckoutUnreadableError } from "../src/git.js";
+import { CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitRoomCopy, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -114,7 +114,7 @@ it.each(Object.keys(pointers) as (keyof typeof pointers)[])("%s の checkout の
   commitWork(place.path, "work.txt", "work\n");
   const blob = await pointers[form](place.path, `task/${task.id}`);
 
-  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(TaskCheckoutUnreadableError);
+  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(CheckoutUnreadableError);
   expect(inNamed(named, blob)).toBe(false);
 });
 
@@ -223,7 +223,7 @@ it.each([
   renameSync(dir, moved);
   symlinkSync(moved, dir);
 
-  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(TaskCheckoutUnreadableError);
+  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(CheckoutUnreadableError);
   expect(inNamed(named, tip)).toBe(false);
 });
 

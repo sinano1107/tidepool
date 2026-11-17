@@ -11,7 +11,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
-import { displayWorktreePath, gitlinkChanges, TaskCheckoutUnreadableError } from "./git.js";
+import { CheckoutUnreadableError, displayWorktreePath, gitlinkChanges } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -355,7 +355,7 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
-    if (err instanceof TaskCheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
+    if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
     throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
   }
   let paths: string[];
@@ -870,7 +870,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
               if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
               // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
-              if (err instanceof TaskCheckoutUnreadableError) {
+              if (err instanceof CheckoutUnreadableError) {
                 throw new DomainError(`${err.message} — the board cannot copy your working tree for the targets, so the probe is not posed. Restore your task branch and call pose_probe again, or escalate.`);
               }
               // ADR 0365 決定2: 受験者は populate できない gitlink を環境として受け取る —— root が直して呼び直す
