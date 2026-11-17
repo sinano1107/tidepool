@@ -13,15 +13,17 @@ export const BOARD_BRANCHES = "board";
  *  `+` は逃がしの頭なので自分も逃がす(1対1)。 */
 const LEAF_ESCAPES: Record<string, string> = { "+": "++", "/": "+s", "@": "+a", "%": "+p" };
 
-/** ADR 0382 決定1: (書く先 `task/<id>`, 運ばれる側) の作業台の番地 —— 基点 / `@workbench` / `<id>@<運ばれる側>`。運ばれる側の名前
- *  (`task/<id>`・`origin/<protected>` など)は `LEAF_ESCAPES` で `/` も `@` も `%` も持たない1対1の綴りにするので、どの葉も1つの段で
- *  互いに入れ子にならず、人間の clone が `ssh://` の形で remote にしても同じ在り処を指す(ADR 0371 決定9)。task id は盤面全体で一意
- *  なので workspace は要らない。`@` は名前の規則にも task id(UUID)にも無いので、workspace の名前・面接室(root id)・task の checkout
+/** ADR 0382 決定1: (書く先, 運ばれる側) の作業台の番地 —— 基点 / `@workbench` / 葉。書く先 `task/<id>` の葉は `<id>@<運ばれる側>`
+ *  (task id は盤面全体で一意なので workspace は要らない)、workspace `protectedOf` の保護ブランチを書く先にする葉は
+ *  `@<workspace>@<運ばれる側>`(ADR 0382 決定4 の local 着地)—— `@<workspace>` だけの葉は人間自身の内容の作業台に残す。運ばれる側の名前
+ *  (`task/<id>`・`origin/<protected>` など)は `LEAF_ESCAPES` で `/` も `@` も `%` も持たない1対1の綴りにし、workspace の名前も task id
+ *  (UUID)も `@` を持たないので、どの葉も1つの段で互いに入れ子にならず、人間の clone が `ssh://` の形で remote にしても同じ在り処を指す
+ *  (ADR 0371 決定9)。`@` は名前の規則にも task id にも無いので、workspace の名前・面接室(root id)・task の checkout
  *  (`<id>`・`<id>.checkout`・`<id>.reads`)のどれの番地にもならない。worker の sandbox が開くのは自分の task の checkout・task temp・
  *  読み専用の checkout だけで、基点もこの段も root にならない。
- *  shortcut: 書く先は `task/<id>` で運ばれる側を持つ鍵だけ —— 保護ブランチの書く先と運ばれる側の無い鍵はその入口を足す slice が足す。 */
-export const workbenchPath = (base: string, target: string, carried: string): string =>
-  join(base, WORKBENCH_SEGMENT, `${target.slice("task/".length)}@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`);
+ *  shortcut: 運ばれる側の無い鍵(人間自身の内容の作業台)はその入口を足す slice(#3287・#3288)が足す。 */
+export const workbenchPath = (base: string, target: string, carried: string, protectedOf?: string): string =>
+  join(base, WORKBENCH_SEGMENT, `${protectedOf === undefined ? target.slice("task/".length) : `@${protectedOf}`}@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`);
 
 /** 盤面が読んだ作業台: 在り処、書く先の branch とその名前の場所での今の値、作業台の書く先の branch の tip(無ければ undefined —— 作りかけ)、
  *  tip の閉包と名前の場所の objects を引ける repo(盤面所有の検証済みの写し。tip が無ければ名前の場所)。 */
@@ -69,6 +71,17 @@ function humanWorkLeft(read: WorkbenchRead): string[] {
     .map(([, ref]) => (ref === "refs/stash" ? "the stash" : ref.slice("refs/heads/".length)));
   if (strays.length > 0) left.push(`${strays.join(", ")} ${strays.length > 1 ? "hold" : "holds"} commits that ${target} does not have — merge them into ${target}, or delete them`);
   return left;
+}
+
+/** ADR 0382 決定4: 作業台の tip が持つ、`excluded`(書く先の今の値と答えている task の tip)のどれにも無い commit を含む task のブランチ ——
+ *  数えるブランチは呼び手が渡す。数えるのは盤面所有の検証済みの写し `verified` の中(人間の commit は名前の場所にまだ無い)。
+ *  shortcut: 数えるブランチの sha を argv で渡す —— 1つの workspace の task が数千を超えて argv の上限に近づけば `--stdin` で渡す。 */
+export function foreignTaskBranches(verified: string, tip: string, excluded: string[], branches: Array<{ branch: string; sha: string }>): string[] {
+  if (branches.length === 0) return [];
+  const beyond = (...more: string[]) => workerRepoGit(verified, "rev-list", tip, ...[...excluded, ...more].map((sha) => `^${sha}`)).split("\n").filter(Boolean);
+  const kept = new Set(beyond(...branches.map(({ sha }) => sha)));
+  const foreign = beyond().filter((commit) => !kept.has(commit));
+  return branches.filter(({ sha }) => foreign.some((commit) => isAncestor({ path: verified }, commit, sha, workerRepoGit))).map(({ branch }) => branch);
 }
 
 /** `sha` が書く先の今の値に含まれる —— 写しに無い object は名前の場所にも無いので含まれない。 */

@@ -531,7 +531,8 @@ export interface SubmitAnswerDeps {
   /** merge 回答が手元に無い PR の head を取る fetch の、盤面の GitHub 身元(ADR 0093 / ADR 0242 決定1)。 */
   githubAuth?: GitHubAuth;
   landing: Landing;
-  /** 作業台の基点(ADR 0371 決定1): local 着地の `merge` が conflict で開き、取り込む。Absent → `resolveWorkspacesBaseDir` 自身の既定。 */
+  /** 作業台の基点: local 着地の `merge` が conflict でその task の作業台をここに開き(ADR 0371 決定7 / ADR 0382 決定1)、次の `merge` が
+   *  取り込む。Absent → `resolveWorkspacesBaseDir` 自身の既定。 */
   workspacesDir?: string;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
@@ -1282,7 +1283,7 @@ export async function submitAnswer(
           }
           if (left.length > 0) throw leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `the task branch ${branch}`);
           try {
-            // ADR 0371 決定4: 同時の回答は旧値の CAS で守る —— `merge` は受理の in-flight の鍵を取らない(spec #3273 group A)
+            // ADR 0371 決定4 / ADR 0373 決定8: 同時の回答は旧値の CAS で守る —— `merge` は in-flight の守りの対象ではない
             const sha = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id, {
               workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
               answerer: { actorId: HUMAN_ACTOR_ID, origin },

@@ -100,6 +100,19 @@ it("作業台への push は名前の場所の ref を1つも動かさず、作�
   expect(git(c.workbench(), "status", "--porcelain")).toBe("");
 });
 
+// ADR 0382 決定1・4: local 着地の作業台は (workspace, 保護ブランチ, `task/<id>`) ごと。保護ブランチの葉は `@<workspace>` で始まり、
+// `@<workspace>` だけの葉は人間自身の内容の作業台に残す —— どの葉も同じ段に並び、互いに入れ子にならない
+it("保護ブランチを書く先にする作業台の葉は workspace と運ばれる側で分かれ、task を書く先にする葉と重ならない", () => {
+  const leaves = [
+    workbenchPath("/base", "main", "task/abc", "ws"),
+    workbenchPath("/base", "main", "task/def", "ws"),
+    workbenchPath("/base", "main", "task/abc", "ws2"),
+    workbenchPath("/base", "task/abc", "origin/main"),
+  ];
+
+  expect(leaves.map((leaf) => relative("/base", leaf))).toEqual(["@workbench/@ws@task+sabc", "@workbench/@ws@task+sdef", "@workbench/@ws2@task+sabc", "@workbench/abc@origin+smain"]);
+});
+
 it.each<[string, (c: Conflicted, workbench: string) => void, (c: Conflicted, workbench: string) => string[]]>([
   [
     "tip が書く先の今の値を持たない",

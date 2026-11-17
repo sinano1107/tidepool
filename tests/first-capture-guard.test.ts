@@ -12,7 +12,7 @@ import { cancelTaskDirectly, getTask, registerTask } from "../src/tasks.js";
 import { queueReturnHandler } from "../src/watchdog.js";
 import { holdsBaseline, mergeTaskToProtected, openInterviewRoom, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeWorkspace, NO_WORKBENCH, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { CLEAN_LANDING_INTAKE, commitWork, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // registry の名前の最初の撮りの前に、基準の行を持つ workspace を全部確かめる(ADR 0373 決定13、spec #3273 pin B16・B22)
@@ -116,7 +116,7 @@ it("止まった最初の撮りは新しい名前の sparse の pin を書かず
   recordTaskCheckoutTip(db, place, task.id);
 
   // pin は名前の場所の checkout 済みの branch を盤面が進めるときに効く(ADR 0356 決定5)—— 規則の外の path は作業ツリーに出ない
-  mergeTaskToProtected(db, renamed, task.id, NO_WORKBENCH);
+  mergeTaskToProtected(db, renamed, task.id, CLEAN_LANDING_INTAKE);
 
   expect(git(renamed.path, "show", "main:README.md")).toBe("changed on the task branch");
   expect(existsSync(join(renamed.path, "README.md"))).toBe(false);
