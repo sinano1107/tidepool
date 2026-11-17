@@ -70,7 +70,7 @@ export async function conflicted(options?: Parameters<typeof completedChild>[1])
   const child = await completedChild(b, options);
   const target = `task/${b.parent.id}`;
   const source = `task/${child.id}`;
-  return { ...b, child, target, source, workbench: () => realpathSync(workbenchPath(b.base, target, source)) };
+  return { ...b, child, target, source, workbench: () => realpathSync(workbenchPath(b.base, { task: b.parent.id }, source)) };
 }
 
 export type Conflicted = Awaited<ReturnType<typeof conflicted>>;

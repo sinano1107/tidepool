@@ -39,7 +39,7 @@ it("開く手が既にある作業台を読む git が上限で止まれば、�
   try {
     await completedChild(b, {
       work: (_checkout, task) => {
-        const leftover = workbenchPath(b.base, target, `task/${task.id}`);
+        const leftover = workbenchPath(b.base, { task: b.parent.id }, `task/${task.id}`);
         mkdirSync(dirname(leftover), { recursive: true });
         git(b.ws.path, "clone", "--quiet", "--branch", target, b.ws.path, leftover);
         // 読み手の無い FIFO の .gitignore —— 未追跡の列挙がそこで止まる

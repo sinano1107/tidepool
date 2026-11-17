@@ -104,10 +104,10 @@ it("作業台への push は名前の場所の ref を1つも動かさず、作�
 // `@<workspace>` だけの葉は人間自身の内容の作業台に残す —— どの葉も同じ段に並び、互いに入れ子にならない
 it("保護ブランチを書く先にする作業台の葉は workspace と運ばれる側で分かれ、task を書く先にする葉と重ならない", () => {
   const leaves = [
-    workbenchPath("/base", "main", "task/abc", "ws"),
-    workbenchPath("/base", "main", "task/def", "ws"),
-    workbenchPath("/base", "main", "task/abc", "ws2"),
-    workbenchPath("/base", "task/abc", "origin/main"),
+    workbenchPath("/base", { workspace: "ws" }, "task/abc"),
+    workbenchPath("/base", { workspace: "ws" }, "task/def"),
+    workbenchPath("/base", { workspace: "ws2" }, "task/abc"),
+    workbenchPath("/base", { task: "abc" }, "origin/main"),
   ];
 
   expect(leaves.map((leaf) => relative("/base", leaf))).toEqual(["@workbench/@ws@task+sabc", "@workbench/@ws@task+sdef", "@workbench/@ws2@task+sabc", "@workbench/abc@origin+smain"]);
@@ -217,7 +217,7 @@ it("別の理由で先に開いていた Quarantine では、最初の回答が 
 
   const first = await answer(b).catch((err: unknown) => err);
 
-  const workbench = realpathSync(workbenchPath(b.base, target, source));
+  const workbench = realpathSync(workbenchPath(b.base, { task: b.parent.id }, source));
   expect(first).toBeInstanceOf(DomainError);
   expect((first as Error).message).toContain(`The board opened the workbench at ${workbench} for it.`);
   expect((first as Error).message).toContain(`record that with \`git merge -s ours board/${source}\`. Then answer again.`);
@@ -262,7 +262,7 @@ it("祖先のほかに履歴は制限しない —— 兄弟の task/<S> の mer
   commitWork(b.ws.path, "picked.txt", "cherry-picked\n");
   git(b.ws.path, "checkout", "main");
   const child = await completedChild(b);
-  const workbench = realpathSync(workbenchPath(b.base, `task/${b.parent.id}`, `task/${child.id}`));
+  const workbench = realpathSync(workbenchPath(b.base, { task: b.parent.id }, `task/${child.id}`));
   resolveInWorkbench(workbench, `task/${child.id}`);
   git(workbench, "cherry-pick", `board/${sibling}`);
   git(workbench, "merge", "--no-edit", `board/${sibling}~1`);
@@ -309,7 +309,7 @@ it("自前の clone から force push して書く先の今の値を失った ti
 it("作業台を開けなくても conflict の拒否は立ち、その理由を言い、答え直しが作業台を開く(pin A17)", async () => {
   const b = await boardWithParent();
   // 段の場所にファイルがあって作業台の dir を作れない
-  const segment = dirname(workbenchPath(b.base, `task/${b.parent.id}`, "any"));
+  const segment = dirname(workbenchPath(b.base, { task: b.parent.id }, "any"));
   writeFileSync(segment, "in the way\n");
   const child = await completedChild(b);
   const source = `task/${child.id}`;
@@ -319,7 +319,7 @@ it("作業台を開けなくても conflict の拒否は立ち、その理由を
   expect(purpose).not.toContain("opened the workbench");
   rmSync(segment);
 
-  const workbench = workbenchPath(b.base, `task/${b.parent.id}`, source);
+  const workbench = workbenchPath(b.base, { task: b.parent.id }, source);
   const refused = await answer(b).catch((err: Error) => err.message);
 
   expect(refused).toContain(`The board opened the workbench at ${realpathSync(workbench)} for it.`);
@@ -363,7 +363,7 @@ it.each<[string, (leftover: string, b: Board) => void, "remade" | "kept" | "unre
   await completedChild(b, {
     work: (_checkout, task) => {
       source = `task/${task.id}`;
-      leftover = workbenchPath(b.base, target, source);
+      leftover = workbenchPath(b.base, { task: b.parent.id }, source);
       mkdirSync(dirname(leftover), { recursive: true });
       leave(leftover, b);
     },
@@ -447,7 +447,7 @@ it.each<[string, (b: Board, clean: string) => string]>([
     "別の子 X の作業台に書く先の祖先の古い tip がある",
     (b) => {
       const other = registerTask(b.db, { type: "work", title: "x", purpose: "why", completion_criteria: "done", parent_id: b.parent.id }, b.clock.now(), ...HUMAN_WEBUI);
-      const leftover = workbenchPath(b.base, `task/${b.parent.id}`, `task/${other.id}`);
+      const leftover = workbenchPath(b.base, { task: b.parent.id }, `task/${other.id}`);
       mkdirSync(dirname(leftover), { recursive: true });
       git(b.ws.path, "clone", "--quiet", "--branch", `task/${b.parent.id}`, b.ws.path, leftover);
       git(leftover, "reset", "--quiet", "--hard", "HEAD~1");
@@ -457,7 +457,7 @@ it.each<[string, (b: Board, clean: string) => string]>([
   [
     "子 Y 自身の鍵に書く先の branch の無い作りかけがある",
     (b, clean) => {
-      const leftover = workbenchPath(b.base, `task/${b.parent.id}`, clean);
+      const leftover = workbenchPath(b.base, { task: b.parent.id }, clean);
       mkdirSync(dirname(leftover), { recursive: true });
       git(b.base, "init", "--quiet", "--initial-branch=main", leftover);
       return leftover;
@@ -493,7 +493,7 @@ it.each([
   await completedChild(b, { child: x });
   await completedChild(b, { child: y, file: "y.txt", release: deferMergeBack(b) });
   const target = `task/${b.parent.id}`;
-  resolveInWorkbench(realpathSync(workbenchPath(b.base, target, `task/${x.id}`)), `task/${x.id}`);
+  resolveInWorkbench(realpathSync(workbenchPath(b.base, { task: b.parent.id }, `task/${x.id}`)), `task/${x.id}`);
 
   await answer(b);
 

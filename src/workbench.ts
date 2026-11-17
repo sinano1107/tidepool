@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { boardViewStatus, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
+import { boardViewStatus, git, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
 
 // 作業台(Workbench)の鍵・持ち主・寿命の判定を1か所に置く(ADR 0382、#3352 の追記 1〜3)。入口は判定を自分で書かず、これを呼ぶ。
 
@@ -13,17 +13,20 @@ export const BOARD_BRANCHES = "board";
  *  `+` は逃がしの頭なので自分も逃がす(1対1)。 */
 const LEAF_ESCAPES: Record<string, string> = { "+": "++", "/": "+s", "@": "+a", "%": "+p" };
 
+/** 作業台の書く先: task のブランチ `task/<id>`(id で)か、workspace の保護ブランチ(workspace の名前で)。 */
+export type WorkbenchTarget = { task: string } | { workspace: string };
+
 /** ADR 0382 決定1: (書く先, 運ばれる側) の作業台の番地 —— 基点 / `@workbench` / 葉。書く先 `task/<id>` の葉は `<id>@<運ばれる側>`
- *  (task id は盤面全体で一意なので workspace は要らない)、workspace `protectedOf` の保護ブランチを書く先にする葉は
- *  `@<workspace>@<運ばれる側>`(ADR 0382 決定4 の local 着地)—— `@<workspace>` だけの葉は人間自身の内容の作業台に残す。運ばれる側の名前
+ *  (task id は盤面全体で一意なので workspace は要らない)、workspace の保護ブランチを書く先にする葉は `@<workspace>@<運ばれる側>`
+ *  (ADR 0382 決定4 の local 着地)—— `@<workspace>` だけの葉は人間自身の内容の作業台に残す。運ばれる側の名前
  *  (`task/<id>`・`origin/<protected>` など)は `LEAF_ESCAPES` で `/` も `@` も `%` も持たない1対1の綴りにし、workspace の名前も task id
  *  (UUID)も `@` を持たないので、どの葉も1つの段で互いに入れ子にならず、人間の clone が `ssh://` の形で remote にしても同じ在り処を指す
  *  (ADR 0371 決定9)。`@` は名前の規則にも task id にも無いので、workspace の名前・面接室(root id)・task の checkout
  *  (`<id>`・`<id>.checkout`・`<id>.reads`)のどれの番地にもならない。worker の sandbox が開くのは自分の task の checkout・task temp・
  *  読み専用の checkout だけで、基点もこの段も root にならない。
  *  shortcut: 運ばれる側の無い鍵(人間自身の内容の作業台)はその入口を足す slice(#3287・#3288)が足す。 */
-export const workbenchPath = (base: string, target: string, carried: string, protectedOf?: string): string =>
-  join(base, WORKBENCH_SEGMENT, `${protectedOf === undefined ? target.slice("task/".length) : `@${protectedOf}`}@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`);
+export const workbenchPath = (base: string, target: WorkbenchTarget, carried: string): string =>
+  join(base, WORKBENCH_SEGMENT, `${"task" in target ? target.task : `@${target.workspace}`}@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`);
 
 /** 盤面が読んだ作業台: 在り処、書く先の branch とその名前の場所での今の値、作業台の書く先の branch の tip(無ければ undefined —— 作りかけ)、
  *  tip の閉包と名前の場所の objects を引ける repo(盤面所有の検証済みの写し。tip が無ければ名前の場所)。 */
@@ -74,14 +77,18 @@ function humanWorkLeft(read: WorkbenchRead): string[] {
 }
 
 /** ADR 0382 決定4: 作業台の tip が持つ、`excluded`(書く先の今の値と答えている task の tip)のどれにも無い commit を含む task のブランチ ——
- *  数えるブランチは呼び手が渡す。数えるのは盤面所有の検証済みの写し `verified` の中(人間の commit は名前の場所にまだ無い)。
+ *  数えるブランチ(名前 → sha)は呼び手が渡す。tip の commit は盤面所有の検証済みの写し `verified` の中で数え(ADR 0371 決定4 —— 人間の
+ *  commit は名前の場所にまだ無い)、task のブランチに載るものだけを名前の場所 `named` に1度問う(そこにはある)。
  *  shortcut: 数えるブランチの sha を argv で渡す —— 1つの workspace の task が数千を超えて argv の上限に近づけば `--stdin` で渡す。 */
-export function foreignTaskBranches(verified: string, tip: string, excluded: string[], branches: Array<{ branch: string; sha: string }>): string[] {
-  if (branches.length === 0) return [];
+export function foreignTaskBranches(verified: string, named: string, tip: string, excluded: string[], branches: Map<string, string>): string[] {
+  if (branches.size === 0) return [];
   const beyond = (...more: string[]) => workerRepoGit(verified, "rev-list", tip, ...[...excluded, ...more].map((sha) => `^${sha}`)).split("\n").filter(Boolean);
-  const kept = new Set(beyond(...branches.map(({ sha }) => sha)));
-  const foreign = beyond().filter((commit) => !kept.has(commit));
-  return branches.filter(({ sha }) => foreign.some((commit) => isAncestor({ path: verified }, commit, sha, workerRepoGit))).map(({ branch }) => branch);
+  const onNoTaskBranch = new Set(beyond(...branches.values()));
+  const foreign = beyond().filter((commit) => !onNoTaskBranch.has(commit));
+  if (foreign.length === 0) return [];
+  // 複数の `--contains` はどれかを含む ref を並べる
+  const containing = git(named, "for-each-ref", "--format=%(refname:strip=2)", ...foreign.map((commit) => `--contains=${commit}`), "refs/heads/task/");
+  return containing.split("\n").filter((branch) => branches.has(branch));
 }
 
 /** `sha` が書く先の今の値に含まれる —— 写しに無い object は名前の場所にも無いので含まれない。 */

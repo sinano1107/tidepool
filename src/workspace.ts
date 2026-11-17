@@ -447,7 +447,7 @@ const CHECKOUT_LAYOUT = {
   /** 基点 / `@workbench` / (書く先, 運ばれる側) の葉(ADR 0382 決定1、番地の不変条件は `workbenchPath`)。保護ブランチの葉は workspace を持つ */
   workbench: {
     at: (base: string, named: WorkspaceConfig, target: string, carried: string) =>
-      workbenchPath(base, target, carried, target === protectedBranch(named) ? named.name : undefined),
+      workbenchPath(base, target === protectedBranch(named) ? { workspace: named.name } : { task: target.slice("task/".length) }, carried),
     parents: 1,
   },
 } as const;
@@ -895,7 +895,8 @@ const fromOwnClone = (target: string, ref: string) =>
  *  包む commit(第1親が書く先の値、第2親が人間の tip、tree は人間の tip)を作り、書く先の ref を旧値の CAS で口から書いて
  *  `workbench_taken_in` を残し、取り込んだ tip と包む commit を返す。拒否は ref も記録も書かない。tip がこの入口のものでなければ(ADR 0382 決定2)
  *  取り込むものが無く undefined。`carried` は tip が祖先に持つべき、merge で運ばれる側の ref(`refs/heads/*` か `refs/remotes/*`)。祖先のほかに
- *  履歴は制限しない(`-s ours` も cherry-pick も別の ref の merge も通る)—— ただし `otherTasks` のブランチの commit を持つ tip は拒む(ADR 0382 決定4)。 */
+ *  履歴は制限しない(`-s ours` も cherry-pick も別の ref の merge も通る)。`landing` は local 着地の入口だけが渡す: 書く先の値は ADR 0103 の
+ *  突き合わせが認めた値を使い(その後に動いた値は CAS が拒む)、`taskBranches` のブランチの commit を持つ tip は拒む(ADR 0382 決定4)。 */
 function takeInWorkbench(
   db: Db,
   named: WorkspaceConfig,
@@ -903,10 +904,10 @@ function takeInWorkbench(
   target: string,
   carried: string,
   { entry, answerer, now }: IntakeContext,
-  otherTasks: Array<{ branch: string; sha: string }>,
+  landing: LandingIntake | undefined,
 ): { tip: string; commit: string } | undefined {
   const ref = `refs/heads/${target}`;
-  const inputs = [ref, carried].map((full) => ({ branch: shortRef(full), sha: git(named.path, "rev-parse", "--verify", full) }));
+  const inputs = [ref, carried].map((full) => ({ branch: shortRef(full), sha: full === ref && landing ? landing.approved : git(named.path, "rev-parse", "--verify", full) }));
   const old = inputs[0]!.sha;
   const at = place.path;
   try {
@@ -920,12 +921,13 @@ function takeInWorkbench(
         const merge = boardBranch(missing.branch);
         throw new Error(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then answer again.`);
       }
-      const foreign = foreignTaskBranches(verified, tip, inputs.map(({ sha }) => sha), otherTasks);
+      const foreign = landing ? foreignTaskBranches(verified, named.path, tip, inputs.map(({ sha }) => sha), landing.taskBranches) : [];
       if (foreign.length > 0) {
         const restart = boardBranch(target);
         throw new Error(
-          `the workbench tip contains commits of ${foreign.join(", ")}, and a task's work enters ${target} only through its own landing — ` +
-            `start ${target} there again from \`${restart}\` (\`git reset --hard ${restart}\`) and merge only \`${boardBranch(inputs[1]!.branch)}\`, then answer again.`,
+          `the tip of the workbench at ${at} contains commits of ${foreign.join(", ")}, and a task's work enters ${target} only through its own landing. ` +
+            `Start ${target} in the workbench over with \`git reset --hard ${restart}\` — this drops your merge there too — then merge only ` +
+            `\`${boardBranch(inputs[1]!.branch)}\`, resolve its conflict again and answer again.`,
         );
       }
       if (boardViewStatus(at, tip, verified).length > 0) {
@@ -955,14 +957,17 @@ function takeInWorkbench(
   }
 }
 
-/** spec #3273 の受理の 11: merge back の前に、その子を運ぶ鍵の作業台が取り込める tip を持てば先に取り込んで包む commit を返す(ADR 0382 決定1)。 */
+/** spec #3273 の受理の 11: merge back の前に、その子を運ぶ鍵の作業台が取り込める tip を持てば先に取り込んで true(ADR 0382 決定1)。 */
 const takeInMergeBack = (db: Db, named: WorkspaceConfig, { taskId, target }: { taskId: string; target: string }, intake: IntakeContext) =>
-  takeInExistingWorkbench(db, named, target, `refs/heads/${taskBranch(taskId)}`, intake);
+  takeInExistingWorkbench(db, named, target, `refs/heads/${taskBranch(taskId)}`, intake) !== undefined;
 
 /** ADR 0376 決定8: 昇格の retry は追いつきの前に、(`task/<root>`, origin の保護ブランチ) の作業台が取り込める tip を持てば先に取り込んで
- *  包む commit を返す。運ばれる側は origin の保護ブランチ(text A2)。 */
+ *  true。運ばれる側は origin の保護ブランチ(text A2)。 */
 export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string, intake: IntakeContext) =>
-  takeInExistingWorkbench(db, workspace, taskBranch(taskId), exactProtectedBranchRef(workspace), intake);
+  takeInExistingWorkbench(db, workspace, taskBranch(taskId), exactProtectedBranchRef(workspace), intake) !== undefined;
+
+/** local 着地の取り込みだけが持つもの: ADR 0103 の突き合わせが認めた保護ブランチの値と、数える task のブランチ(名前 → sha)。 */
+type LandingIntake = { approved: string; taskBranches: Map<string, string> };
 
 /** 鍵の作業台があれば取り込み、包む commit を返す(取り込むものが無ければ undefined)。拒否は `board/*` を引き直してから投げる。ADR 0382 決定5:
  *  取り込んだ後、tip が取り込んだままで人間の作業が残っていなければ作業台を消す —— 回答の間に commit や push が着いていれば残す。 */
@@ -972,14 +977,14 @@ function takeInExistingWorkbench(
   target: string,
   carried: string,
   intake: IntakeContext,
-  otherTasks: Array<{ branch: string; sha: string }> = [],
+  landing?: LandingIntake,
 ): string | undefined {
   const workbench = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, named, target, shortRef(carried));
   if (!placeHasRepository(workbench)) return undefined;
   const place = workbenchPlace(named, realpathSync(workbench));
   let taken: { tip: string; commit: string } | undefined;
   try {
-    taken = takeInWorkbench(db, named, place, target, carried, intake, otherTasks);
+    taken = takeInWorkbench(db, named, place, target, carried, intake, landing);
   } catch (err) {
     if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に包まず底へ —— 引き直しもしない
     try {
@@ -2568,15 +2573,11 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   }
 
   const task = taskBranch(taskId);
-  // ADR 0382 決定4: 決着済み・cancel 済みを含む、答えている task 以外のすべての task のブランチの commit を作業台の tip に許さない
-  const otherTasks = git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => line.split(" ") as [string, string])
-    .filter(([, other]) => other !== task)
-    .map(([sha, other]) => ({ branch: other, sha }));
-  // ADR 0371 決定4: 作業台に人間の merge があれば、それを取り込んだ包む commit が着地
-  const taken = takeInExistingWorkbench(db, workspace, branch, `refs/heads/${task}`, { ...intake, entry: "landing_merge" }, otherTasks);
+  // ADR 0382 決定4: 決着済み・cancel 済みを含むすべての task のブランチの commit を作業台の tip に許さない —— 答えている task の tip にある
+  // commit は数えない(`foreignTaskBranches` の除外)
+  const taskBranches = refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/"));
+  // ADR 0371 決定2・4: 作業台に人間の merge があれば、この回答がそれを取り込み、包む commit が着地
+  const taken = takeInExistingWorkbench(db, workspace, branch, `refs/heads/${task}`, { ...intake, entry: "landing_merge" }, { approved: protectedSha, taskBranches });
   if (taken !== undefined) return taken;
   const landed = isAncestor(workspace, ref, task)
     ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
