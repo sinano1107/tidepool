@@ -12,6 +12,7 @@ import {
   bootTidepool,
   callAsTask,
   checkoutOf,
+  commitOnRefByHand,
   commitWork,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -411,6 +412,21 @@ it.each(["named place", "host"] as const)("complete_task は %s の側で tip �
   expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
   expect(board.containers.forceReclaims).toEqual([]);
   expect((await questions(board)).filter((question) => question.parent_id === task.id)).toEqual([]);
+  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+});
+
+it("complete_task は人間が動かした task/<id> を retry では直らないと言って拒むだけで、workspace の Quarantine を立てない(ADR 0373 決定12 / ADR 0359 決定4)", async () => {
+  const ws = await makeWorkspace("tip-copy-moved");
+  const board = (t = await bootTidepool({ workspace: ws }));
+  const task = await registerWork(board, "record the tip");
+  await board.clock.advance(HOUR);
+  commitWork(checkoutOf(board.db, task.id), "work.txt", "work\n");
+  commitOnRefByHand(ws.path, `refs/heads/task/${task.id}`);
+
+  const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
+
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toBe(`task/${task.id} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 

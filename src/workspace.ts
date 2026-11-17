@@ -791,14 +791,11 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const branch = taskBranch(taskId);
-  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch);
   const ref = `refs/heads/${branch}`;
-  const old = readRefSnapshotValue(namedPlace, ref);
   // ADR 0243 決定2 / ADR 0359 決定4: この書き込みの旧値だけを確かめ、帯域外の値を基準に取り込まない
-  const expected = recordedRef(db, namedPlace.name, ref);
-  if (old.startsWith("symref=") || !baselineAllows(expected, old)) {
-    throw new RefsMovedError(`workspace ${namedPlace.name}: ${ref} is not the recorded direct ref (expected ${expected ?? "absent"}, found ${old || "absent"})`);
-  }
+  const old = taskRefAsRecorded(db, namedPlace, ref, "during the session");
+  // 比べてから worker の repo を読む —— 動いた ref を worker の repo の故障の陰に隠さない
+  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch);
   if (old !== tip) boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
   return tip;
 }
@@ -1488,7 +1485,7 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
   const key = workspace.name;
   const first = !holdsBaseline(db, key);
   const declaration = withRememberedRepoCheck(db, workspace, () => board.now).checkRememberedRepo(workspace);
-  if (!first) compareAndFoldBaseline(db, workspace, [], "while the checkout rested since the last session");
+  if (!first) compareAndFoldBaseline(db, workspace, "while the checkout rested since the last session");
   else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now);
   const pin = storedSparsePolicy(db, key);
   if (pin !== undefined && !first) return;
@@ -1522,7 +1519,7 @@ function confirmBaselinesBeforeFirstCapture(db: Db, resolveRegistered: Workspace
       throw new FirstCaptureRefusedError(quarantineWorkspace(db, name, err, now));
     }
     try {
-      compareAndFoldBaseline(db, place, [], "while the checkout rested since the last session");
+      compareAndFoldBaseline(db, place, "while the checkout rested since the last session");
     } catch (err) {
       // 読めない checkout も基準どおりとは言えない —— 違いと同じくその名前で止める
       if (isBoardDbRefusal(err)) throw err;
@@ -1673,32 +1670,31 @@ function recordedRef(db: Db, workspaceName: string, ref: string): string | undef
   return refValues(storedRefs(db, workspaceName)).get(ref);
 }
 
-/** 基準の比較で動いた ref が見つかった —— 呼び手はどれも workspace quarantine に落とし、pickup は repo アクセスの案内を付けない
- *  (fetch の失敗ではない —— 案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)。 */
+/** 基準の比較で動いた ref が見つかった —— pickup と解放は workspace quarantine に落とし(pickup は repo アクセスの案内を付けない ——
+ *  fetch の失敗ではなく、案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)、完了の門は worker を拒むだけで(ADR 0359 決定4 /
+ *  ADR 0373 決定12)、受理のやり直しは回答の拒否として投げる。 */
 export class RefsMovedError extends Error {}
 
-/** ADR 0064 の不変条件の1つの比較器で、通れば2値行を畳む(ADR 0351 決定2・4): `except` 以外の ref がすべて基準の値のままであることを要求する ——
+/** ADR 0064 の不変条件の1つの比較器で、通れば2値行を畳む(ADR 0351 決定2・4): ref がすべて基準の値のままであることを要求する ——
  *  移動・削除・新規作成のいずれも違反で、削除が最も静かな破壊であるからこそ「動いたものだけを見る」綴りは選ばない(ADR 0064 決定2)。
- *  release は自分で書く ref を除き、pickup と門の掛かる完了の解放は何も除かない(ADR 0359 決定2・4)。通れば、落ちて残った2値行を ref が持つ側に畳む(ADR 0351 決定4)。
+ *  どの呼び手も何も除かない —— 解放も自分で書いた ref を書いた値で畳んでから比べる(ADR 0359 決定2・4 / ADR 0373 決定12)。通れば、落ちて残った2値行を ref が持つ側に畳む(ADR 0351 決定4)。
  *
  *  メッセージは**動いた ref を名指しする**。quarantine の確認 question の本文に載り、
  *  人間の修理手順がそのまま読める形になる。予告中の行は2値のまま載る。 */
-function compareAndFoldBaseline(db: Db, workspace: WorkspaceConfig, except: readonly string[], when: string): ReadonlyMap<string, string> {
+function compareAndFoldBaseline(db: Db, workspace: WorkspaceConfig, when: string): ReadonlyMap<string, string> {
   const before = refValues(storedRefs(db, workspace.name));
   const after = refValues(currentRefs(workspace));
-  const moved = [...new Set([...before.keys(), ...after.keys()])].filter(
-    (ref) => !except.includes(ref) && !baselineAllows(before.get(ref), after.get(ref)),
-  );
+  const moved = [...new Set([...before.keys(), ...after.keys()])].filter((ref) => !baselineAllows(before.get(ref), after.get(ref)));
   if (moved.length > 0) {
     throw new RefsMovedError(
-      `workspace ${workspace.name}: refs${except.length > 0 ? ` other than ${except.join(" and ")}` : ""} changed ${when} — ` +
+      `workspace ${workspace.name}: refs changed ${when} — ` +
         [
           ...moved.filter((ref) => before.has(ref)).map((ref) => `was: ${before.get(ref)} ${ref}`),
           ...moved.filter((ref) => after.has(ref)).map((ref) => `now: ${after.get(ref)} ${ref}`),
         ].join(", "),
     );
   }
-  const announced = [...before].filter(([ref, value]) => baselineValues(value).length > 1 && !except.includes(ref));
+  const announced = [...before].filter(([, value]) => baselineValues(value).length > 1);
   if (announced.length > 0) updateBaseline(db, workspace, (values) => announced.forEach(([ref]) => values.set(ref, after.get(ref) ?? "")));
   return after;
 }
@@ -2246,11 +2242,8 @@ function releaseTaskCheckout(
   try {
     // ADR 0064 決定5 / ADR 0356 決定4: 基準は名前の場所だけが持ち、task の checkout の ref の移動は読まない。HEAD も比べる ——
     // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)ので、session の間の HEAD の移動は人間の書き込み(ADR 0351)
-    const verifiedRefs = compareAndFoldBaseline(db, namedPlace, gated || released ? [] : [taskRef], "during the session");
-    if (!gated && !released) {
-      // ADR 0351 決定2: 退避したタスクブランチの行を現在値へ畳む
-      updateBaseline(db, namedPlace, (values) => values.set(taskRef, readRef(namedPlace, taskRef)));
-    }
+    // ADR 0373 決定12: 退避の行は書いた値で畳まれている(`writeBoardRefs`)—— タスクブランチも除かずに比べる
+    const verifiedRefs = compareAndFoldBaseline(db, namedPlace, "during the session");
     // ADR 0359 決定2・4: 基準比較が済んだ ref を読み直して、帯域外の値を merge back に運ばない。
     const verifiedTip = gated ? verifiedRefs.get(taskRef) : undefined;
     if (gated && !verifiedTip) throw new Error(`workspace ${namedPlace.name}: the recorded task ref ${taskRef} is missing`);
@@ -2361,11 +2354,10 @@ function bringTaskCheckout(
         );
       }
     } else {
+      // ADR 0373 決定12: 書く前に基準の行と突き合わせる(門と同じ手)
+      evacuationBaseRef = taskRefAsRecorded(db, namedPlace, taskRef, when);
+      // 比べてから worker の repo を読む —— 動いた ref を worker の repo の故障の陰に隠さない
       const tip = fetchUntrustedTip(untrustedTaskCheckout(place), taskBranch(task.id));
-      evacuationBaseRef = readRefSnapshotValue(namedPlace, taskRef);
-      if (evacuationBaseRef.startsWith("symref=")) {
-        throw new RefsMovedError(`workspace ${namedPlace.name}: expected a direct task ref, found ${evacuationBaseRef} ${taskRef}`);
-      }
       const base = evacuationBaseRef !== "" && isAncestor(namedPlace, tip, evacuationBaseRef) ? evacuationBaseRef : tip;
       const exclude = boardViewExcludes(db, place, task.id, base);
       const baseTree = git(namedPlace.path, "rev-parse", `${base}^{tree}`);
@@ -2417,6 +2409,14 @@ function bringTaskCheckout(
     appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
   }
   return true;
+}
+
+/** 盤面が `task/<id>` を書く前に、今の値が基準の行の値の直の ref であることを確かめて返す。違えば比較器と同じ `was: … / now: …` の形で名指す。 */
+function taskRefAsRecorded(db: Db, namedPlace: WorkspaceConfig, ref: string, when: string): string {
+  const current = readRefSnapshotValue(namedPlace, ref);
+  const expected = recordedRef(db, namedPlace.name, ref);
+  if (current.startsWith("symref=") || !baselineAllows(expected, current)) throw releaseRefMoved(namedPlace, ref, when, expected, current);
+  return current;
 }
 
 function releaseRefMoved(workspace: WorkspaceConfig, ref: string, when: string, expected: string | undefined, current: string): RefsMovedError {

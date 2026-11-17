@@ -12,7 +12,7 @@ import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pic
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 // ADR 0369 決定1〜3・6: 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理の検査がやり直す。
 
@@ -56,10 +56,10 @@ async function tearDown(s: Pick<Session, "db" | "clock" | "slot" | "deps" | "tas
 }
 
 /** 開いている workspace の Quarantine に人間が答える(回答の verb と、その検査)。 */
-function answerQuarantine(s: Pick<Session, "db" | "clock" | "resolve" | "ws"> & { workspacesDir?: string }, name = s.ws.name) {
+function answerQuarantine(s: Pick<Session, "db" | "clock" | "resolve" | "ws"> & { workspacesDir?: string }, name = s.ws.name, answer = "repaired by hand") {
   const question = quarantineQuestion(s.db, "workspace", name)!;
   const checks = quarantineChecks({ db: s.db, resolveWorkspace: s.resolve, clock: s.clock, workspacesDir: s.workspacesDir });
-  return submitAnswer({ db: s.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: checks }, question, ["repaired by hand"], undefined, () => s.clock.now(), "webui");
+  return submitAnswer({ db: s.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: checks }, question, [answer], undefined, () => s.clock.now(), "webui");
 }
 
 const released = (db: Db, taskId: string) => listEvents(db, taskId).filter(({ kind }) => kind === "task_checkout_released").map(({ payload }) => payload);
@@ -117,6 +117,47 @@ it.each(["auto_merge", "outside_merge"] as const)("%s の poll が先に drift �
   expect(existsSync(s.checkout)).toBe(false);
   expect(git(s.ws.path, "show", `${s.branch}:work.txt`)).toBe("work");
   expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
+});
+
+/** 人間が名前の場所のタスクブランチに1 commit 積む(tree は動かさない —— `restore the baseline` は clean な tree を求める)。 */
+const commitOnTaskBranchByHand = (s: Session) => commitOnRefByHand(s.ws.path, `refs/heads/${s.branch}`);
+
+it("門の掛からない解放は、人間が session 中に動かした task/<id> に何も書かず、その ref を名指す workspace の Quarantine に落ちて checkout を残し、`restore the baseline` の後のやり直しが成果を運ぶ(ADR 0373 決定12 / ADR 0369 決定1)", async () => {
+  const s = await sessionWithWork("ungated-moved");
+  escalateTask(s.db, s.task, ESCALATION, "deckhand", s.clock.now(), "worker");
+  const byHand = commitOnTaskBranchByHand(s);
+
+  await tearDown(s);
+
+  expect(git(s.ws.path, "rev-parse", s.branch)).toBe(byHand);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`now: ${byHand} refs/heads/${s.branch}`);
+  expect(released(s.db, s.task.id)).toEqual([]);
+  expect(readFileSync(join(s.checkout, "wip.txt"), "utf8")).toBe("wip\n");
+
+  await answerQuarantine(s, s.ws.name, "restore the baseline");
+
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
+  expect(released(s.db, s.task.id)).toEqual([{ kind: "task_checkout_released", path: s.checkout }]);
+  expect(git(s.ws.path, "show", `${s.branch}:work.txt`)).toBe("work");
+  expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
+});
+
+it("門の掛からない解放の基準の行は、読み返した値でなく書いた値を持つ —— 書いた直後に人間が task/<id> を動かせば、同じ解放の比較が名指す(ADR 0373 決定12)", async () => {
+  const s = await sessionWithWork("ungated-written");
+  escalateTask(s.db, s.task, ESCALATION, "deckhand", s.clock.now(), "worker");
+  // 盤面が書いて解放を刻んだ直後(比較の前)に人間が動かす
+  let byHand = "";
+  s.db.function("move_task_branch_by_hand", () => {
+    byHand = commitOnTaskBranchByHand(s);
+    return 0;
+  });
+  s.db.exec("CREATE TEMP TRIGGER moved_after_write AFTER INSERT ON events WHEN NEW.kind = 'task_checkout_released' BEGIN SELECT move_task_branch_by_hand(); END");
+
+  await tearDown(s);
+
+  const written = git(s.ws.path, "rev-parse", `${byHand}^`);
+  expect(git(s.ws.path, "show", `${written}:wip.txt`)).toBe("wip");
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)?.purpose).toContain(`was: ${written} refs/heads/${s.branch}, now: ${byHand} refs/heads/${s.branch}`);
 });
 
 /** 名前の場所の基準と ref を比べる次の task の pickup(ADR 0351 決定2): 基準に無い ref の移動を名指して止まる。 */

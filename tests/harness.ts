@@ -90,7 +90,9 @@ import { startWatchdog, type WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import {
+  boardRefWriter,
   commitRoomCopy,
+  holdsBaseline,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   type RunPlace,
@@ -98,6 +100,7 @@ import {
   releaseWorkspace,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
+  retakeRefBaselines,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -758,6 +761,13 @@ export function commitWork(path: string, file: string, body: string): void {
   git(path, "commit", "-m", `add ${file}`);
 }
 
+/** 人間が `path` の `ref` に1 commit 積む(tree は動かさない)。積んだ sha を返す。 */
+export function commitOnRefByHand(path: string, ref: string): string {
+  const byHand = git(path, "commit-tree", `${ref}^{tree}`, "-p", ref, "-m", "by hand");
+  git(path, "update-ref", ref, byHand);
+  return byHand;
+}
+
 export const STAGING_FAILURES = [
   { shape: "unborn nested repo", reason: "does not have a commit checked out", symlink: undefined },
   { shape: "symlink over hidden settings", reason: "beyond a symbolic link", symlink: "missing" },
@@ -909,13 +919,14 @@ export function recordCheckoutAtWorkspace(
     if (interviewRoomPath(db, rootId) !== undefined) openTestInterviewCheckout(db, task);
     return;
   }
-  let path: string;
+  let place: WorkspaceConfig;
   try {
-    path = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), defaultWorkspace, task.workspace, resolveWorkspacesBaseDir(workspacesDir)).path;
+    place = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), defaultWorkspace, task.workspace, resolveWorkspacesBaseDir(workspacesDir));
   } catch {
     return;
   }
-  if (existsSync(path)) standInTaskBranch(path, task.id);
+  const { path } = place;
+  if (existsSync(path)) standInTaskBranch(db, place, task.id);
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
 }
 
@@ -931,15 +942,26 @@ function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
   return reads.length > 0 ? { reads } : {};
 }
 
-/** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。 */
-function standInTaskBranch(path: string, taskId: string): void {
+/** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。撮りは受理の撮り直しの口を借りるので、仮の行を置いてから撮り直す。 */
+function standInFirstCapture(db: Db, place: WorkspaceConfig): void {
+  if (holdsBaseline(db, place.name)) return;
+  db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, 'stand-in') ON CONFLICT(name) DO UPDATE SET ref_snapshot = 'stand-in'").run(place.name);
+  retakeRefBaselines(db, [place]);
+}
+
+/** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。
+ *  準備と同じく盤面の口を通して書く —— 基準の行があればそこに載る。 */
+function standInTaskBranch(db: Db, place: WorkspaceConfig, taskId: string): void {
+  const { path } = place;
   if (!existsSync(join(path, ".git"))) git(path, "init", "--quiet", "--initial-branch=main");
   try {
     git(path, "rev-parse", "--verify", "--quiet", "HEAD");
   } catch {
     git(path, "commit", "--quiet", "--allow-empty", "-m", "stand-in for the record");
   }
-  git(path, "update-ref", `refs/heads/task/${taskId}`, "HEAD");
+  const ref = `refs/heads/task/${taskId}`;
+  const head = git(path, "rev-parse", "HEAD");
+  boardRefWriter(db, place)(ref, head, () => git(path, "update-ref", ref, head));
 }
 
 /** adapter の `start` を包み、まだ task の checkout が開いていない task には先に `recordCheckoutAtWorkspace` を撃つ —— workspace を
@@ -1276,8 +1298,11 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
   // Interview の名前の場所は面接室 —— 記録の task branch もそこに置く(ADR 0360 決定1)
   const rootId = interviewRootIdOf(db, task);
-  const room = rootId === undefined ? undefined : interviewRoomPath(db, rootId);
-  if (room !== undefined && existsSync(room)) standInTaskBranch(room, task.id);
+  const room = rootId === undefined ? undefined : recordedInterviewRoom(db, rootId);
+  if (room !== undefined && existsSync(room.path)) {
+    standInFirstCapture(db, room);
+    standInTaskBranch(db, room, task.id);
+  }
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
   return path;
 }

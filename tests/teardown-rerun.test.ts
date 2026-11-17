@@ -657,7 +657,7 @@ it("remote-backed の完了の再実行は済んだ merge back を保ち、休�
   expect(git(s.ws.path, "show", "main:merged.txt")).toBe("merged on GitHub");
 });
 
-// ADR 0351 決定2: 基準は切れない —— 再実行の後始末の後も次の pickup は比べ、release はタスクブランチの行を無条件に畳む(#2953)。
+// ADR 0351 決定2: 基準は切れない —— 再実行の後始末の後も次の pickup は比べ、release はタスクブランチの行を書いた値で畳む(#2953 / ADR 0373 決定12)。
 it("再実行の後始末の後に休止中の main へ載った帯域外の commit は、次の pickup が refs/heads/main を名指して止める(#2911 の形)", async () => {
   const s = await settledSession("completed");
   await teardownThrewAfterTreeRule(s);
