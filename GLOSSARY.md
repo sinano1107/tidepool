@@ -571,7 +571,7 @@ _Avoid_: 使い捨て checkout、per-task checkout、store(名前の場所の別
 
 ## 作業台(Workbench)
 
-盤面が人間のために (workspace, 書く先の ref) ごとに開く checkout。書く先は人間の commit が入る ref で、3種ある —— 帰り先の `task/<id>`、保護ブランチ、人間担当の work 自身の `task/<id>`。人間はここで commit し、盤面は書く先と同じ名前の branch の tip だけを読む。名前の場所とも task の checkout とも別の git ディレクトリで、人間は盤面の host の上で書いても、作業台を自前の clone の git remote にして fetch / push してもよい。用途(conflict の修理、purely-local の保護ブランチへの内容、人間担当の work)では語を分けない。鍵ごとに消えるので、記録された場所には入らない(2026-11-13〜15 の wayfinder、issue #3178 / ADR 0371)。
+盤面が人間のために開く checkout。書く先は人間の commit が入る ref で、3種ある —— 帰り先の `task/<id>`、保護ブランチ、人間担当の work 自身の `task/<id>`。conflict を受ける作業台は (workspace, 書く先の ref, 運ばれる側) ごとに1つで、運ばれる側は merge で書く先へ運ばれる ref(子や task のブランチ、origin の保護ブランチ、GitHub の head)である。その tip は、書く先に含まれていなければ、その作業台の入口のものである。人間担当の work 自身の作業台は (workspace, `task/<id>`) ごとに1つで、書き始めてから `done` までは子の merge back の conflict も同じ場所で受ける —— ここでは子の入口は tip がその子を含むときだけ取り込む。purely-local の保護ブランチへ人間自身の内容(`take in` と封じ込めの修理)を入れる作業台は (workspace, 保護ブランチ) ごとに1つで、task の着地の conflict はそこで受けない(issue #3352 / ADR 0382)。人間はここで commit し、盤面は書く先と同じ名前の branch の tip だけを読む。名前の場所とも task の checkout とも別の git ディレクトリで、人間は盤面の host の上で書いても、作業台を自前の clone の git remote にして fetch / push してもよい。用途(conflict の修理、purely-local の保護ブランチへの内容、人間担当の work)では語を分けない。鍵ごとに消えるので、記録された場所には入らない(2026-11-13〜15 の wayfinder、issue #3178 / ADR 0371)。
 _Avoid_: 作業用ディレクトリ、盤面が開く checkout、conflict の checkout、共有 checkout、人間のために開く checkout、人間の checkout・人間用の checkout(人間が自分で持つ checkout を指す)、worker の作業台(task の checkout を指す)
 
 ## 取り込み(Intake)
