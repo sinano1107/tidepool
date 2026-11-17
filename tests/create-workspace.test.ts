@@ -634,7 +634,6 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
       [
         "--import", "tsx", "--input-type=module", "-e",
         `const { createWorkspace } = await import(${module("../src/workspace-create.ts")});
-         const { } = await import(${module("./registry-fixture.ts")});
          await createWorkspace({ mode: "register", name: "sandbox", path: ${JSON.stringify(path)} },
            { registry: { dir: ${JSON.stringify(registryDir)}, mode: "purely-local" }, workspacesBaseDir: ${JSON.stringify(workspacesBaseDir)} });`,
       ],
