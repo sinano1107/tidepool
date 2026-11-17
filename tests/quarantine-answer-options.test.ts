@@ -8,7 +8,7 @@ import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // workspace の Quarantine の回答が盤面の行為を選ぶ(ADR 0373 決定2〜4・8・11、#3277)。
@@ -22,8 +22,8 @@ function work(db: Db, title: string) {
 }
 
 /** 1件を拾って解放し(基準の行と `task/<id>` が残る)、workspace の Quarantine が開いた盤面。 */
-async function quarantinedWorkspace(name: string) {
-  const ws = await makeWorkspace(name);
+async function quarantinedWorkspace(name: string, remoteBacked = false) {
+  const ws = remoteBacked ? (await makeRemoteBackedWorkspace(name)).workspace : await makeWorkspace(name);
   const db = openDb(":memory:");
   const task = work(db, "leaves a task branch");
   releaseWorkspace(db, await prepareAtPickup(db, ws, task), task, NOW);
@@ -49,6 +49,7 @@ async function expectRoomRowKept(db: Db, root: Task, room: WorkspaceConfig, ws: 
   await expect(pickUpInterviewRoot(db, root, ws)).rejects.toThrow("refs/heads/probe-row");
 }
 
+const GIVE_UP = "give up the lost refs and restore the baseline";
 const restoredEvents = (db: Db) => listEventsOfKinds(db, ["baseline_restored"]).map(({ payload }) => payload);
 
 it("`restore the baseline` は動いた・作られた・消された ref を基準へ書き戻し、外した値を refs/keep-around/<sha> と event と応答に残し、clean だった tree を HEAD に揃え、次の比較は通る(ADR 0373 決定3・4)", async () => {
@@ -130,7 +131,7 @@ it("戻す先の object が1つでも無ければ、`restore the baseline` は�
   const comparisonBefore = await nextComparison(db, ws);
 
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
-    `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path} Nothing was written.`,
+    `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path} Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
   );
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
@@ -318,14 +319,15 @@ const B1 = (place: string) =>
   `Answering checks that every ref of ${place} equals the board's baseline; nothing that moved is accepted. ` +
   "`repaired by hand`: you repaired something other than refs — the board checks and refuses if a ref differs. " +
   "`restore the baseline`: the board writes every differing ref back to the baseline and keeps each value it removes under `refs/keep-around/<sha>`. " +
+  "`give up the lost refs and restore the baseline`: the same, and refs whose commits no longer exist are accepted as they are now. " +
   "If a merge back conflicts, the refusal says where to resolve it.";
 
-it("workspace の Quarantine の本文は選択肢がそれぞれ何をするかを言い、選択肢は `repaired by hand` と `restore the baseline` の常設の2つ(ADR 0373 決定2・16、#3273 text B1)", async () => {
+it("workspace の Quarantine の本文は選択肢がそれぞれ何をするかを言い、選択肢は `repaired by hand`・`restore the baseline`・`give up the lost refs and restore the baseline` の常設の3つ(ADR 0373 決定2・16、#3273 text B1)", async () => {
   const { ws, question } = await quarantinedWorkspace("body-workspace");
 
   expect(question.purpose).toContain(`\n${B1(`workspace ${ws.name}`)}\n`);
   expect(question.purpose).not.toContain("run with an empty room");
-  expect(question.question_items).toEqual([expect.objectContaining({ options: ["repaired by hand", "restore the baseline"], recommendation: "repaired by hand" })]);
+  expect(question.question_items).toEqual([expect.objectContaining({ options: ["repaired by hand", "restore the baseline", GIVE_UP], recommendation: "repaired by hand" })]);
 });
 
 it("面接室の名前の Quarantine は `run with an empty room` の説明と選択肢を加える —— 出題済みでも出し分けない(ADR 0373 決定2・11、#3273 text B1)", async () => {
@@ -334,7 +336,7 @@ it("面接室の名前の Quarantine は `run with an empty room` の説明と�
   const question = quarantineQuestion(db, "workspace", root.id)!;
 
   expect(question.purpose).toContain(`\n${B1(`the interview room ${root.id}`)} \`run with an empty room\`: the board re-creates the room empty.\n`);
-  expect(question.question_items).toEqual([expect.objectContaining({ options: ["repaired by hand", "restore the baseline", "run with an empty room"], recommendation: "repaired by hand" })]);
+  expect(question.question_items).toEqual([expect.objectContaining({ options: ["repaired by hand", "restore the baseline", GIVE_UP, "run with an empty room"], recommendation: "repaired by hand" })]);
   db.close();
 });
 
@@ -438,5 +440,177 @@ it("`.git` が消えても在り処にファイルが残る面接室への `run 
   renameSync(aside, join(room.path, ".git"));
   rmSync(join(room.path, "left-behind.txt"));
   await expectRoomRowKept(db, root, room, ws);
+  db.close();
+});
+
+const lostEvents = (db: Db) => listEventsOfKinds(db, ["lost_refs_accepted"]).map(({ payload }) => payload);
+
+/** 盤面が口で `ref` を `sha` に書く —— 基準に入る。 */
+const boardWrites = (db: Db, ws: WorkspaceConfig, ref: string, sha: string) => boardRefWriter(db, ws)(ref, sha, () => git(ws.path, "update-ref", ref, sha));
+
+/** 人間が `refs` を消し、どこからも届かなくなった commit を gc で手元から失わせる。 */
+function dropAndPrune(ws: WorkspaceConfig, ...refs: string[]) {
+  for (const ref of refs) git(ws.path, "update-ref", "-d", ref);
+  git(ws.path, "reflog", "expire", "--expire=now", "--all");
+  git(ws.path, "gc", "--quiet", "--prune=now");
+}
+
+/** 盤面が口で `ref` を main の上の新しい commit に書き(基準に入る)、人間がその ref を消すか `movedTo` へ動かし、commit を gc で失わせる。失われた sha を返す。 */
+function loseRef(db: Db, ws: WorkspaceConfig, ref: string, movedTo?: string): string {
+  const lost = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", `only on ${ref}`);
+  boardWrites(db, ws, ref, lost);
+  if (movedTo !== undefined) git(ws.path, "update-ref", ref, movedTo);
+  dropAndPrune(ws, ...(movedTo === undefined ? [ref] : []));
+  return lost;
+}
+
+/** 根 `refs/heads/root` とその merge back が届いている子 `refs/heads/child` を盤面が書き、根の head だけを origin へ push してから手元で失わせる。 */
+function loseRootAndChildKeptOnOrigin(db: Db, ws: WorkspaceConfig) {
+  const child = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "the child's tip");
+  const root = git(ws.path, "commit-tree", "main^{tree}", "-p", child, "-m", "the root's head, merged back from the child");
+  boardWrites(db, ws, "refs/heads/child", child);
+  boardWrites(db, ws, "refs/heads/root", root);
+  // remote 名でなく path へ push する —— 写しの ref が残ると gc が commit を消さない
+  git(ws.path, "push", "--quiet", ws.repo!, `${root}:refs/heads/root`);
+  dropAndPrune(ws, "refs/heads/child", "refs/heads/root");
+  return { child, root };
+}
+
+it("`give up the lost refs and restore the baseline` は戻す先の object が無い ref だけを今の値で基準に入れ(ref が無ければ行を消す)、ほかは基準へ戻し、`lost_refs_accepted` に ref と失われた sha を残す(ADR 0373 決定5、pin B8)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("give-up-core");
+  const main = git(ws.path, "rev-parse", "main");
+  const gone = loseRef(db, ws, "refs/heads/gone");
+  const movedTo = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "a human moved the lost ref here");
+  const moved = loseRef(db, ws, "refs/heads/moved", movedTo);
+  commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
+  const byHand = git(ws.path, "rev-parse", "main");
+
+  await answer(db, ws, GIVE_UP);
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(ws.path, "rev-parse", "main")).toBe(main);
+  expect(git(ws.path, "rev-parse", `refs/keep-around/${byHand}`)).toBe(byHand);
+  expect(git(ws.path, "for-each-ref", "refs/heads/gone")).toBe("");
+  expect(git(ws.path, "rev-parse", "refs/heads/moved")).toBe(movedTo);
+  expect(git(ws.path, "for-each-ref", "refs/keep-around/")).not.toContain(movedTo);
+  expect(lostEvents(db)).toEqual([{ kind: "lost_refs_accepted", workspace: ws.name, lost: expect.arrayContaining([{ ref: "refs/heads/gone", sha: gone }, { ref: "refs/heads/moved", sha: moved }]) }]);
+  expect(lostEvents(db)[0]!.lost).toHaveLength(2);
+  expect(restoredEvents(db)[0]!.restored).toEqual(["refs/heads/main"]);
+  expect(await nextComparison(db, ws)).toBe("passes");
+  db.close();
+});
+
+it("失われた ref が無ければ `give up the lost refs and restore the baseline` は `restore the baseline` を名指して拒み、何も書かない(ADR 0373 決定5、pin B8、text B4a)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("give-up-nothing-lost");
+  commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
+  const refsBefore = git(ws.path, "for-each-ref");
+
+  await expect(answer(db, ws, GIVE_UP)).rejects.toThrow(`no ref of workspace ${ws.name} is lost — answer \`restore the baseline\`.`);
+
+  expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
+  expect(lostEvents(db)).toEqual([]);
+  expect(restoredEvents(db)).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  db.close();
+});
+
+it("保護ブランチの無い repo(空の `git init`)への `give up the lost refs and restore the baseline` は、ref も event も書く前に拒む(ADR 0373 決定5、pin B8、text B4b)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("give-up-no-protected-branch");
+  for (const entry of readdirSync(ws.path)) rmSync(join(ws.path, entry), { recursive: true, force: true });
+  git(ws.path, "init", "--quiet", "--initial-branch=main");
+  const comparisonBefore = await nextComparison(db, ws);
+
+  await expect(answer(db, ws, GIVE_UP)).rejects.toThrow(
+    `${ws.path} has no 'main' branch. Nothing was written. Put a commit on main there (re-clone the repository, or commit on main), then answer again.`,
+  );
+
+  expect(git(ws.path, "for-each-ref")).toBe("");
+  expect(lostEvents(db)).toEqual([]);
+  expect(restoredEvents(db)).toEqual([]);
+  expect(await nextComparison(db, ws)).toBe(comparisonBefore);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  db.close();
+});
+
+it("remote-backed: `restore the baseline` は object の無い戻す先を origin から取ってから戻す —— 根の head が届けば、そこから届く子の tip も戻り、失われたとは数えない(ADR 0380 決定4、pin B24)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("restore-fetches-lost", true);
+  const { child, root } = loseRootAndChildKeptOnOrigin(db, ws);
+  expect(() => git(ws.path, "cat-file", "-e", child)).toThrow();
+
+  await answer(db, ws, "restore the baseline");
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(ws.path, "rev-parse", "refs/heads/root")).toBe(root);
+  expect(git(ws.path, "rev-parse", "refs/heads/child")).toBe(child);
+  expect(lostEvents(db)).toEqual([]);
+  db.close();
+});
+
+it("remote-backed: `give up the lost refs and restore the baseline` も取ってから数える —— 届いた根と子は戻って失われたと数えず、origin が別の sha で持つ branch はその sha へ戻さず今の値で入れる(ADR 0380 決定4、pin B24)", async () => {
+  const { ws, db } = await quarantinedWorkspace("give-up-fetches-lost", true);
+  const { child, root } = loseRootAndChildKeptOnOrigin(db, ws);
+  const elsewhere = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "origin's own other head");
+  git(ws.path, "push", "--quiet", ws.repo!, `${elsewhere}:refs/heads/other`);
+  const lost = loseRef(db, ws, "refs/heads/other");
+
+  await answer(db, ws, GIVE_UP);
+
+  expect(git(ws.path, "rev-parse", "refs/heads/root")).toBe(root);
+  expect(git(ws.path, "rev-parse", "refs/heads/child")).toBe(child);
+  expect(git(ws.path, "for-each-ref", "refs/heads/other")).toBe("");
+  expect(lostEvents(db)).toEqual([{ kind: "lost_refs_accepted", workspace: ws.name, lost: [{ ref: "refs/heads/other", sha: lost }] }]);
+  db.close();
+});
+
+/** B4c の文: 取りに行けなかった sha と git の失敗をそのまま挟む。 */
+const unreachable = (sha: string) => new RegExp(`^could not reach origin to look for ${sha} \\(.+\\)\\. Nothing was written; answer again once origin is reachable\\.$`, "s");
+
+it.each(["restore the baseline", GIVE_UP])("remote-backed: `%s` は probe で origin に届かなければ拒み、何も書かず、失われたとも数えない(ADR 0380 決定4、pin B24、text B4c)", async (text) => {
+  const { ws, db, question } = await quarantinedWorkspace("lost-origin-unreachable", true);
+  const lost = loseRef(db, ws, "refs/heads/gone");
+  const refsBefore = git(ws.path, "for-each-ref");
+  renameSync(ws.repo!, `${ws.repo}.aside`);
+
+  await expect(answer(db, ws, text)).rejects.toThrow(unreachable(lost));
+
+  expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
+  expect(lostEvents(db)).toEqual([]);
+  expect(restoredEvents(db)).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  // 数えていない —— origin が戻れば、失われた ref は次の give-up で初めて数えられる
+  renameSync(`${ws.repo}.aside`, ws.repo!);
+  await answer(db, ws, GIVE_UP);
+  expect(lostEvents(db)).toEqual([expect.objectContaining({ lost: [{ ref: "refs/heads/gone", sha: lost }] })]);
+  db.close();
+});
+
+it.each(["restore the baseline", GIVE_UP])("remote-backed: `%s` で取れなかった sha のもう1度の probe が origin に届かなければ拒み、失われたと数えない —— 2度の probe の間で落ちた fetch だけが「origin に無い」(ADR 0380 決定4、pin B24、text B4c)", async (text) => {
+  const { ws, db, question } = await quarantinedWorkspace("lost-second-probe-fails", true);
+  const lost = loseRef(db, ws, "refs/heads/gone");
+  const refsBefore = git(ws.path, "for-each-ref");
+  const calls = await shimGit({ lsRemoteFailsFrom: 2 });
+
+  await expect(answer(db, ws, text)).rejects.toThrow(unreachable(lost));
+
+  expect(calls().flatMap(({ args }) => args.filter((arg) => arg === "ls-remote" || arg === "fetch"))).toEqual(["ls-remote", "fetch", "ls-remote"]);
+  expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
+  expect(lostEvents(db)).toEqual([]);
+  expect(restoredEvents(db)).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  db.close();
+});
+
+it("後の段で拒まれた give-up の後は何も失われておらず、次の give-up は `restore the baseline` を名指す B4a で拒まれる(ADR 0373 決定5、spec #3273 の受理の順の帰結)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("give-up-refused-later", true);
+  const lost = loseRef(db, ws, "refs/heads/gone");
+  // 後半の fetch(受理の 8)が原本の保護ブランチを引けずに拒む
+  git(ws.repo!, "update-ref", "-d", "refs/heads/main");
+
+  await expect(answer(db, ws, GIVE_UP)).rejects.toThrow("origin has no branch main");
+  expect(lostEvents(db)).toEqual([{ kind: "lost_refs_accepted", workspace: ws.name, lost: [{ ref: "refs/heads/gone", sha: lost }] }]);
+
+  await expect(answer(db, ws, GIVE_UP)).rejects.toThrow(`no ref of workspace ${ws.name} is lost — answer \`restore the baseline\`.`);
+  expect(lostEvents(db)).toHaveLength(1);
+  expect(getTask(db, question.id)!.status).toBe("todo");
   db.close();
 });

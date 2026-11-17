@@ -22,6 +22,8 @@ export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
 /** workspace の Quarantine の選択肢(ADR 0373 決定2)。回答の文と完全に一致したときだけ盤面の行為を選ぶ。 */
 const REPAIRED_BY_HAND = "repaired by hand";
 export const RESTORE_THE_BASELINE = "restore the baseline";
+/** ADR 0373 決定5: 戻す先の object が無い ref だけを今の値で基準に入れ、ほかは `restore the baseline` と同じ。 */
+export const GIVE_UP_THE_LOST_REFS = "give up the lost refs and restore the baseline";
 /** 面接室の名前にだけ加わる(ADR 0373 決定11)。 */
 export const RUN_WITH_AN_EMPTY_ROOM = "run with an empty room";
 interface QuarantineProse {
@@ -306,12 +308,13 @@ export const QUARANTINES = [
           `\nAnswering checks that every ref of ${room ? `the interview room ${name}` : `workspace ${name}`} equals the board's baseline; nothing that moved is accepted. ` +
           `\`${REPAIRED_BY_HAND}\`: you repaired something other than refs — the board checks and refuses if a ref differs. ` +
           `\`${RESTORE_THE_BASELINE}\`: the board writes every differing ref back to the baseline and keeps each value it removes under \`refs/keep-around/<sha>\`. ` +
+          `\`${GIVE_UP_THE_LOST_REFS}\`: the same, and refs whose commits no longer exist are accepted as they are now. ` +
           "If a merge back conflicts, the refusal says where to resolve it." +
           (room ? ` \`${RUN_WITH_AN_EMPTY_ROOM}\`: the board re-creates the room empty.` : "") +
           "\n\nAny answer text is kept as a repair note.",
         completion_criteria: "the workspace is repaired by hand",
         // 選択肢は常設で、場面ごとに出し分けない(ADR 0373 決定2)—— 回答は自由記述のままで、選択肢と一致しない文は `repaired by hand`
-        question: [{ title: `workspace ${name} needs human attention`, options: [REPAIRED_BY_HAND, RESTORE_THE_BASELINE, ...(room ? [RUN_WITH_AN_EMPTY_ROOM] : [])], recommendation: REPAIRED_BY_HAND }],
+        question: [{ title: `workspace ${name} needs human attention`, options: [REPAIRED_BY_HAND, RESTORE_THE_BASELINE, GIVE_UP_THE_LOST_REFS, ...(room ? [RUN_WITH_AN_EMPTY_ROOM] : [])], recommendation: REPAIRED_BY_HAND }],
       };
     },
   },

@@ -47,6 +47,7 @@ import { conventionCheckoutPath, namePickupPredicates, type PickupPredicate } fr
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
+  GIVE_UP_THE_LOST_REFS,
   openQuarantineQuestion,
   parseTableRowEffortValue,
   parseTableRowValue,
@@ -116,6 +117,7 @@ import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   checkAcceptanceFirstHalf,
+  fetchLostTargets,
   firePickupPredicates,
   type IntakeContext,
   mergeTaskToProtected,
@@ -643,7 +645,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   // ADR 0373 決定2: 回答の文が選択肢を選ぶ —— 完全一致だけで、ほかの文(面接室でない名前への `run with an empty room` も)は `repaired by hand`
   const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
     const room = getTask(deps.db, value)?.type === "interview";
-    const restore = answer === RESTORE_THE_BASELINE;
+    const giveUp = answer === GIVE_UP_THE_LOST_REFS;
+    const restore = answer === RESTORE_THE_BASELINE || giveUp;
     const emptyRoom = room && answer === RUN_WITH_AN_EMPTY_ROOM;
     const now = (deps.clock ?? new SystemClock()).now();
     // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。ADR 0373 帰結: 解放の中で立った Quarantine はどの選択肢でも
@@ -695,8 +698,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
     await refuseOnError(() => checkAcceptanceFirstHalf(deps.db, target, all, !room || placeHasRepository(target.path)));
     assertNoSessionRunning();
-    // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
-    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now)) : [];
+    // ADR 0380 決定4: 失われたと数える前に origin から取る(spec #3273 の受理の 7a)
+    if (restore) await refuseOnError(() => fetchLostTargets(deps.db, target, deps.githubAuth));
+    // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
+    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now, giveUp)) : [];
     await fire(all, "after-open");
     // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
     await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));
