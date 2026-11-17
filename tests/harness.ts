@@ -758,6 +758,13 @@ export function commitWork(path: string, file: string, body: string): void {
   git(path, "commit", "-m", `add ${file}`);
 }
 
+/** 人間が `path` の `ref` に1 commit 積む(tree は動かさない)。積んだ sha を返す。 */
+export function commitOnRefByHand(path: string, ref: string): string {
+  const byHand = git(path, "commit-tree", `${ref}^{tree}`, "-p", ref, "-m", "by hand");
+  git(path, "update-ref", ref, byHand);
+  return byHand;
+}
+
 export const STAGING_FAILURES = [
   { shape: "unborn nested repo", reason: "does not have a commit checked out", symlink: undefined },
   { shape: "symlink over hidden settings", reason: "beyond a symbolic link", symlink: "missing" },

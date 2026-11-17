@@ -791,14 +791,11 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): 
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const branch = taskBranch(taskId);
-  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch);
   const ref = `refs/heads/${branch}`;
-  const old = readRefSnapshotValue(namedPlace, ref);
   // ADR 0243 決定2 / ADR 0359 決定4: この書き込みの旧値だけを確かめ、帯域外の値を基準に取り込まない
-  const expected = recordedRef(db, namedPlace.name, ref);
-  if (old.startsWith("symref=") || !baselineAllows(expected, old)) {
-    throw new RefsMovedError(`workspace ${namedPlace.name}: ${ref} is not the recorded direct ref (expected ${expected ?? "absent"}, found ${old || "absent"})`);
-  }
+  const old = taskRefAsRecorded(db, namedPlace, ref, "during the session");
+  // 比べてから worker の repo を読む —— 動いた ref を worker の repo の故障の陰に隠さない
+  const tip = fetchUntrustedTip(untrustedTaskCheckout(place), branch);
   if (old !== tip) boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
   return tip;
 }
@@ -1673,8 +1670,9 @@ function recordedRef(db: Db, workspaceName: string, ref: string): string | undef
   return refValues(storedRefs(db, workspaceName)).get(ref);
 }
 
-/** 基準の比較で動いた ref が見つかった —— 呼び手はどれも workspace quarantine に落とし、pickup は repo アクセスの案内を付けない
- *  (fetch の失敗ではない —— 案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)。 */
+/** 基準の比較で動いた ref が見つかった —— pickup と解放は workspace quarantine に落とし(pickup は repo アクセスの案内を付けない ——
+ *  fetch の失敗ではなく、案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)、完了の門は worker を拒むだけで(ADR 0359 決定4 /
+ *  ADR 0373 決定12)、受理のやり直しは回答の拒否として投げる。 */
 export class RefsMovedError extends Error {}
 
 /** ADR 0064 の不変条件の1つの比較器で、通れば2値行を畳む(ADR 0351 決定2・4): ref がすべて基準の値のままであることを要求する ——
@@ -2356,12 +2354,9 @@ function bringTaskCheckout(
         );
       }
     } else {
-      // ADR 0373 決定12: 書く前に基準の行と突き合わせる(門と同じ手)—— worker の repo を読む前に比べ、動いた ref を worker の repo の故障の陰に隠さない
-      evacuationBaseRef = readRefSnapshotValue(namedPlace, taskRef);
-      const expected = recordedRef(db, namedPlace.name, taskRef);
-      if (evacuationBaseRef.startsWith("symref=") || !baselineAllows(expected, evacuationBaseRef)) {
-        throw releaseRefMoved(namedPlace, taskRef, when, expected, evacuationBaseRef);
-      }
+      // ADR 0373 決定12: 書く前に基準の行と突き合わせる(門と同じ手)
+      evacuationBaseRef = taskRefAsRecorded(db, namedPlace, taskRef, when);
+      // 比べてから worker の repo を読む —— 動いた ref を worker の repo の故障の陰に隠さない
       const tip = fetchUntrustedTip(untrustedTaskCheckout(place), taskBranch(task.id));
       const base = evacuationBaseRef !== "" && isAncestor(namedPlace, tip, evacuationBaseRef) ? evacuationBaseRef : tip;
       const exclude = boardViewExcludes(db, place, task.id, base);
@@ -2414,6 +2409,14 @@ function bringTaskCheckout(
     appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_released", path: checkout }, at: now });
   }
   return true;
+}
+
+/** 盤面が `task/<id>` を書く前に、今の値が基準の行の値の直の ref であることを確かめて返す。違えば比較器と同じ `was: … / now: …` の形で名指す。 */
+function taskRefAsRecorded(db: Db, namedPlace: WorkspaceConfig, ref: string, when: string): string {
+  const current = readRefSnapshotValue(namedPlace, ref);
+  const expected = recordedRef(db, namedPlace.name, ref);
+  if (current.startsWith("symref=") || !baselineAllows(expected, current)) throw releaseRefMoved(namedPlace, ref, when, expected, current);
+  return current;
 }
 
 function releaseRefMoved(workspace: WorkspaceConfig, ref: string, when: string, expected: string | undefined, current: string): RefsMovedError {

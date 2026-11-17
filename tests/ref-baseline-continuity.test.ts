@@ -19,7 +19,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
+import { commitOnRefByHand, commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 基準は切れない(ADR 0351 決定2): 行のある pickup は全撮りの代わりに比べ、release はタスクブランチの行を書いた値で畳み(ADR 0373 決定12)、2値行は ref が持つ側に畳む(#2953)。
@@ -110,7 +110,7 @@ it.each([
     "祖先のタスクブランチが動く",
     (ws: WorkspaceConfig, parent: Task) => {
       const ref = `refs/heads/task/${parent.id}`;
-      git(ws.path, "update-ref", ref, git(ws.path, "commit-tree", `${ref}^{tree}`, "-p", ref, "-m", "by hand"));
+      commitOnRefByHand(ws.path, ref);
       return ref;
     },
   ],

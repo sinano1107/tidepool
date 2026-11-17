@@ -12,7 +12,7 @@ import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pic
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 // ADR 0369 決定1〜3・6: 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理の検査がやり直す。
 
@@ -120,12 +120,7 @@ it.each(["auto_merge", "outside_merge"] as const)("%s の poll が先に drift �
 });
 
 /** 人間が名前の場所のタスクブランチに1 commit 積む(tree は動かさない —— `restore the baseline` は clean な tree を求める)。 */
-function commitOnTaskBranchByHand(s: Session): string {
-  const ref = `refs/heads/${s.branch}`;
-  const byHand = git(s.ws.path, "commit-tree", `${ref}^{tree}`, "-p", ref, "-m", "by hand");
-  git(s.ws.path, "update-ref", ref, byHand);
-  return byHand;
-}
+const commitOnTaskBranchByHand = (s: Session) => commitOnRefByHand(s.ws.path, `refs/heads/${s.branch}`);
 
 it("門の掛からない解放は、人間が session 中に動かした task/<id> に何も書かず、その ref を名指す workspace の Quarantine に落ちて checkout を残し、`restore the baseline` の後のやり直しが成果を運ぶ(ADR 0373 決定12 / ADR 0369 決定1)", async () => {
   const s = await sessionWithWork("ungated-moved");
