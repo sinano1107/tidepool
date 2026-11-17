@@ -2516,15 +2516,6 @@ export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: st
   advanceBranch(db, workspace, ref, taskSha, merged);
 }
 
-/** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
- *  ブランチも無傷なので、これは回答の拒否であって隔離ではない。 */
-function landingConflict(workspace: WorkspaceConfig, branch: string, task: string): Error {
-  return new Error(
-    `workspace ${workspace.name}: ${task} does not merge cleanly into '${branch}' — ` +
-      "resolve it by hand, then answer the landing question again",
-  );
-}
-
 /** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
  *
  *  帯域外の判定は ff の成否ではなく**盤面自身の記録との突き合わせ**で下す(決定1)。
@@ -2537,7 +2528,7 @@ function landingConflict(workspace: WorkspaceConfig, branch: string, task: strin
  *  書き換えない** —— 差分の恒久記録であり系譜判定の土台である(ADR 0053 根拠1)。
  *
  *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。 */
-export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string): string {
+export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string, intake: Omit<IntakeContext, "entry">): string {
   if (isRemoteBacked(withRememberedRepoCheck(db, workspace))) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
@@ -2550,10 +2541,16 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   }
 
   const task = taskBranch(taskId);
+  // ADR 0371 決定2・7: 作業台に人間の merge があれば、それを取り込んだ包む commit が着地
+  if (takeInExistingWorkbench(db, workspace, branch, `refs/heads/${task}`, { ...intake, entry: "landing_merge" })) return git(workspace.path, "rev-parse", ref);
   const landed = isAncestor(workspace, ref, task)
     ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
     : mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
-  if (landed === undefined) throw landingConflict(workspace, branch, task);
+  if (landed === undefined) {
+    // ADR 0103 決定4: 合わないと分かっただけ —— 回答の拒否であって隔離ではない。捨てる文は無い、もう1つの出口は `hold`(text A3)
+    const exit = () => "Then answer `merge` again.";
+    throw new Error(workbenchConflict(workspace, intake.workbenchBase, { subject: task, carried: `refs/heads/${task}`, target: branch, exit }, "."));
+  }
   // ADR 0064 決定4 / ADR 0356 決定5: a human landing may race with a session, so follow only if HEAD is on this ref.
   advanceBranch(db, workspace, ref, protectedSha, landed);
   return landed;

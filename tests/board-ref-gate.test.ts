@@ -12,7 +12,7 @@ import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
 import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, NO_WORKBENCH, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
@@ -142,7 +142,7 @@ it("local landing follows HEAD without executing a repo-local smudge command (AD
     commitWork(otherPlace.path, "other.txt", "other content\n");
     recordTaskCheckoutTip(db, otherPlace, other.id);
     releaseWorkspace(db, otherPlace, other, NOW, false, undefined, undefined, true);
-    mergeTaskToProtected(db, ws, other.id);
+    mergeTaskToProtected(db, ws, other.id, NO_WORKBENCH);
 
     const hooks = installHookAndSigningProbes(ws);
     const script = join(ws.path, ".git", "smudge-probe");
@@ -151,7 +151,7 @@ it("local landing follows HEAD without executing a repo-local smudge command (AD
     git(ws.path, "config", "core.splitIndex", "true");
     git(ws.path, "update-index", "--split-index");
 
-    const landed = mergeTaskToProtected(db, ws, task.id);
+    const landed = mergeTaskToProtected(db, ws, task.id, NO_WORKBENCH);
 
     expect(existsSync(`${script}.ran`)).toBe(false);
     expectHooksAndSigningInactive(hooks);
@@ -177,13 +177,13 @@ it("local landing restores the old worktree when Git cannot lock the protected r
     const lock = join(ws.path, ".git", "refs", "heads", "main.lock");
     writeFileSync(lock, "");
 
-    expect(() => mergeTaskToProtected(db, ws, task.id)).toThrow("cannot lock ref");
+    expect(() => mergeTaskToProtected(db, ws, task.id, NO_WORKBENCH)).toThrow("cannot lock ref");
 
     expect(git(ws.path, "rev-parse", "HEAD")).toBe(before);
     expect(git(ws.path, "status", "--porcelain")).toBe("");
     expect(existsSync(join(ws.path, "landed.txt"))).toBe(false);
     rmSync(lock);
-    expect(mergeTaskToProtected(db, ws, task.id)).toBe(git(ws.path, "rev-parse", "HEAD"));
+    expect(mergeTaskToProtected(db, ws, task.id, NO_WORKBENCH)).toBe(git(ws.path, "rev-parse", "HEAD"));
   } finally {
     db.close();
   }
@@ -528,6 +528,6 @@ it("purely-local で quarantine 中に帯域外に動いた保護ブランチは
 
   await answerQuarantine(db, ws);
 
-  expect(() => mergeTaskToProtected(db, ws, task.id)).not.toThrow();
+  expect(() => mergeTaskToProtected(db, ws, task.id, NO_WORKBENCH)).not.toThrow();
   db.close();
 });

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { resolveExecutionAgent } from "../src/agent.js";
@@ -51,6 +51,7 @@ import {
   redoMergeBacks,
   refreshProtectedBranch,
   releaseWorkspace,
+  takeWorkspaceInFlightKey,
   taskRunPlaceForBoard,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -70,6 +71,7 @@ import {
   HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
+  NO_WORKBENCH,
   prepareAtPickup,
   quarantineQuestion,
   queuedForAutoMerge,
@@ -4348,7 +4350,7 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: clock.now() });
 
   expect(head(workspace)).toBe("main");
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow(OutOfBandProtectedBranchError);
 });
 
 it("内容が帰り先に届いていない done の work が無ければ、merge back のやり直しは checkout を動かさない(ADR 0240 決定4)", async () => {
@@ -4912,7 +4914,9 @@ async function landLocally(name: string) {
   releaseWorkspace(db, place, done, clock.now(), true, undefined, undefined, true);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "local_merge_question" });
   const question = openLocalMergeQuestions(db, work.id)[0]!;
-  return { workspace, db, clock, landing, work, question };
+  // 作業台の基点 —— 解放と回答が同じものを読む
+  const base = await tempDir("tidepool-task-checkouts-");
+  return { workspace, db, clock, landing, work, question, base };
 }
 
 /** `workId` の開いている local merge question。 */
@@ -4921,12 +4925,12 @@ function openLocalMergeQuestions(db: Db, workId: string) {
 }
 
 function answerLocalMerge(
-  { db, clock, workspace, question }: Awaited<ReturnType<typeof landLocally>>,
+  { db, clock, workspace, question, base }: Awaited<ReturnType<typeof landLocally>>,
   answer: "merge" | "hold" = "merge",
   answering: { id: string } = question,
 ) {
   return submitAnswer(
-    { db, pollNow: () => {}, landing: unusedLanding, workspace },
+    { db, pollNow: () => {}, landing: unusedLanding, workspace, workspacesDir: base },
     getTask(db, answering.id)!,
     [answer],
     undefined,
@@ -4960,9 +4964,10 @@ it("修理が done で後始末が merge back する前のローカル着地の 
   expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed");
 });
 
-it("修理の merge back が conflict して quarantine に落ちた間のローカル着地の merge 回答は、その quarantine question を名指して拒まれ、conflict を解いた受理の後の回答で修理ごと載る", async () => {
+// ADR 0371 決定1・2: 旧形は人間が名前の場所で merge を解いてから Quarantine に答えた —— 解く場所は Quarantine が名指す作業台
+it("修理の merge back が conflict して quarantine に落ちた間のローカル着地の merge 回答は、その quarantine question を名指して拒まれ、作業台で conflict を解いた受理の後の回答で修理ごと載る", async () => {
   const local = await landLocally("local-left-behind-conflict");
-  const { workspace, db, clock, work, question } = local;
+  const { workspace, db, clock, work, question, base } = local;
   // 実経路の順: 修理が W から分かれて commit し中断した後、兄弟の修理が同じファイルを W へ merge back し、修理が再開して完了する
   const repair = attachUnsettledChild(db, clock, work.id);
   const repairPlace = await prepareAtPickup(db, workspace, repair);
@@ -4973,10 +4978,12 @@ it("修理の merge back が conflict して quarantine に落ちた間のロー
   commitWork(siblingPlace.path, "repair.txt", "conflicting\n");
   finish(db, clock, sibling);
   releaseWorkspace(db, siblingPlace, getTask(db, sibling.id)!, clock.now(), true);
-  const resumed = await prepareAtPickup(db, workspace, repair);
+  const resumed = await prepareAtPickup(db, workspace, repair, { workspacesBaseDir: base });
   finish(db, clock, repair);
   releaseWorkspace(db, resumed, getTask(db, repair.id)!, clock.now(), true);
   const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
+  const workbench = realpathSync(workbenchPath(base, `task/${work.id}`, `task/${repair.id}`));
+  expect(quarantine.purpose).toContain(`The board opened the workbench at ${workbench} for it.`);
   const protectedHead = git(workspace.path, "rev-parse", "main");
 
   await expect(answerLocalMerge(local)).rejects.toThrow(
@@ -4985,11 +4992,9 @@ it("修理の merge back が conflict して quarantine に落ちた間のロー
   expect(git(workspace.path, "rev-parse", "main")).toBe(protectedHead);
   expect(getTask(db, question.id)!.status).toBe("todo");
 
-  // ADR 0356 決定5: checkout the target before repairing the merge by hand.
-  git(workspace.path, "checkout", `task/${work.id}`);
-  expect(() => git(workspace.path, "merge", `task/${repair.id}`)).toThrow();
-  commitWork(workspace.path, "repair.txt", "fixed and conflicting\n");
-  await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantine);
+  expect(() => git(workbench, "merge", `board/task/${repair.id}`)).toThrow();
+  commitWork(workbench, "repair.txt", "fixed and conflicting\n");
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding, workbenchBase: base }, quarantine);
   await answerLocalMerge(local);
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed and conflicting");
@@ -5400,9 +5405,9 @@ async function moveRefBeforeTheLandingWrite(repo: string, ref: string, sha: stri
 }
 
 /** 着地 question に人間が WebUI から merge と答える。 */
-function answerMerge(board: Db, clock: FakeClock, workspace: WorkspaceConfig, question: Task) {
+function answerMerge(board: Db, clock: FakeClock, workspace: WorkspaceConfig, question: Task, workspacesDir?: string) {
   return submitAnswer(
-    { db: board, pollNow: () => {}, landing: unusedLanding, workspace },
+    { db: board, pollNow: () => {}, landing: unusedLanding, workspace, workspacesDir },
     question,
     ["merge"],
     undefined,
@@ -5427,8 +5432,8 @@ it("保護ブランチが記録から進んでいれば着地を拒み、保護�
   commitWork(workspace.path, "out-of-band.txt", "moved by hand\n");
   const moved = git(workspace.path, "rev-parse", "refs/heads/main");
 
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow("the board recorded it at");
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow(OutOfBandProtectedBranchError);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow("the board recorded it at");
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
 });
 
@@ -5441,7 +5446,7 @@ it("保護ブランチがタスクブランチの祖先へ巻き戻されてい�
   const work = await recordedWork(db, clock, workspace);
   git(workspace.path, "reset", "--hard", rolledBackTo);
 
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow(OutOfBandProtectedBranchError);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
 });
 
@@ -5464,7 +5469,7 @@ it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf
   git(workspace.path, "config", "fetch.recurseSubmodules", "true");
   const askpass = await humanAskpass();
 
-  const landed = mergeTaskToProtected(db, workspace, work.id);
+  const landed = mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH);
 
   expect({ landed, protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
     landed: tip,
@@ -5473,7 +5478,7 @@ it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf
     requests: [],
   });
   git(workspace.path, "update-ref", "refs/heads/main", before);
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`the board recorded it at ${tip} and it now sits at ${before}`);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow(`the board recorded it at ${tip} and it now sits at ${before}`);
 });
 
 // `update-ref` の旧 sha が CAS。動いた先がタスクブランチの途中でまだ ff できる位置でも、動いたというだけで落ちる
@@ -5488,10 +5493,10 @@ it("記録との突き合わせから書き込みまでに保護ブランチが�
   await moveRefBeforeTheLandingWrite(workspace.path, "refs/heads/main", moved);
   vi.stubEnv("LC_ALL", "C");
 
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`but expected ${before}`);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow(`but expected ${before}`);
 
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(`the board recorded it at ${before} and it now sits at ${moved}`);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow(`the board recorded it at ${before} and it now sits at ${moved}`);
 });
 
 it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒む", async () => {
@@ -5500,7 +5505,7 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
   const work = await unrecordedWork(db, clock, workspace);
   const before = git(workspace.path, "rev-parse", "refs/heads/main");
 
-  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow("no recorded position");
+  expect(() => mergeTaskToProtected(db, workspace, work.id, NO_WORKBENCH)).toThrow("no recorded position");
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(before);
 });
 
@@ -5608,6 +5613,7 @@ it.each([
 ])("%s形で着地がコンフリクトしても、回答を拒むだけで quarantine せず、ブランチも HEAD も作業ツリーも動かさない", async (_shape, occupied) => {
   const workspace = await makeWorkspace("landing-conflict-answer");
   const { db, clock } = await openBoard();
+  const base = await tempDir("tidepool-task-checkouts-");
   const first = await recordedWork(db, clock, workspace, "from the first task\n");
   const second = await recordedWork(db, clock, workspace, "from the second task\n");
   const firstQuestion = mergeQuestion(db, clock, { pending_local_merge_task_id: first.id });
@@ -5622,10 +5628,13 @@ it.each([
   // ADR 0356 決定1: 走行中も名前の場所は保護ブランチに居る(旧: 走行中のタスクブランチに居た)
   expect(branch).toBe("main");
 
-  const rejected = answerMerge(db, clock, workspace, secondQuestion);
+  const rejected = answerMerge(db, clock, workspace, secondQuestion, base);
 
   await expect(rejected).rejects.toThrow(DomainError);
-  await expect(rejected).rejects.toThrow("does not merge cleanly");
+  // spec #3273 text A3(全文は「local 着地の merge が conflict すれば…」が持つ)
+  const workbench = realpathSync(workbenchPath(base, "main", `task/${second.id}`));
+  await expect(rejected).rejects.toThrow(`task/${second.id} does not merge cleanly into 'main'. The board opened the workbench at ${workbench} for it.`);
+  await expect(rejected).rejects.toThrow("Then answer `merge` again.");
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   expect(getTask(db, secondQuestion.id)?.status).toBe("todo");
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
@@ -5705,16 +5714,156 @@ it("休止中の merge 回答は checkout ごと merge commit へ進め、作業
 it("休止中の着地がコンフリクトしても、中断した merge を残さない", async () => {
   const workspace = await makeWorkspace("landing-dormant-conflict");
   const { db, clock } = await openBoard();
+  const base = await tempDir("tidepool-task-checkouts-");
   const first = await recordedWork(db, clock, workspace, "from the first task\n");
   const second = await recordedWork(db, clock, workspace, "from the second task\n");
   await answerMerge(db, clock, workspace, mergeQuestion(db, clock, { pending_local_merge_task_id: first.id }));
 
   await expect(
-    answerMerge(db, clock, workspace, mergeQuestion(db, clock, { pending_local_merge_task_id: second.id })),
-  ).rejects.toThrow("does not merge cleanly");
+    answerMerge(db, clock, workspace, mergeQuestion(db, clock, { pending_local_merge_task_id: second.id }), base),
+  ).rejects.toThrow(`task/${second.id} does not merge cleanly into 'main'. The board opened the workbench at`);
 
   expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
+});
+
+/** local 着地の conflict(H7): 先の task が着地した保護ブランチへ、同じファイルを変えた task の `merge` が conflict する盤面。作業台の基点は
+ *  回答が渡す `workspacesDir`。 */
+async function localLandingConflict(name: string) {
+  const workspace = await makeWorkspace(name);
+  const { db, clock } = await openBoard();
+  const base = await tempDir("tidepool-task-checkouts-");
+  const answer = (question: Task) => answerMerge(db, clock, workspace, question, base);
+  const first = await recordedWork(db, clock, workspace, "from the first task\n");
+  const work = await recordedWork(db, clock, workspace, "from the second task\n");
+  await answer(mergeQuestion(db, clock, { pending_local_merge_task_id: first.id }));
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  const source = `task/${work.id}`;
+  const workbench = () => realpathSync(workbenchPath(base, "main", source));
+  /** spec #3273 text A3。 */
+  const refused = () =>
+    new DomainError(
+      `${source} does not merge cleanly into 'main'. The board opened the workbench at ${workbench()} for it. There, on main, ` +
+        `run \`git merge board/${source}\` and resolve the conflict (or, in your own clone with the workbench as a remote: fetch it, ` +
+        `\`git merge <remote>/board/${source}\`, and push main to it). Your tip must contain both main as the board has it now ` +
+        `(\`board/main\`) and ${source}, with nothing uncommitted. Then answer \`merge\` again.`,
+    );
+  /** 人間が作業台の main で task のブランチを merge し、conflict を解いて commit する。 */
+  const resolve = (body = "from both tasks\n") => {
+    expect(() => git(workbench(), "merge", `board/${source}`)).toThrow();
+    writeFileSync(join(workbench(), "feature.txt"), body);
+    git(workbench(), "add", "feature.txt");
+    git(workbench(), "commit", "--no-edit");
+    return git(workbench(), "rev-parse", "HEAD");
+  };
+  /** 今の保護ブランチを控え、拒否が何も書いていないこと(ref・event・question)を確かめる手を返す。 */
+  const unchanged = () => {
+    const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
+    return () => {
+      expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
+      expect(listEventsOfKinds(db, ["workbench_taken_in"])).toEqual([]);
+      expect(boardEvents(db, work.id, "local_merge_executed")).toEqual([]);
+      expect(getTask(db, question.id)?.status).toBe("todo");
+    };
+  };
+  return { workspace, db, clock, base, work, question, source, workbench, refused, resolve, unchanged, answer: () => answer(question), answerMerge: answer };
+}
+
+type LocalLandingConflict = Awaited<ReturnType<typeof localLandingConflict>>;
+
+// ADR 0371 決定2・7・11 / spec #3273 pin A9: local 着地の conflict は (workspace, 保護ブランチ) の作業台を開いて拒み(text A3)、作業台で
+// merge した次の `merge` がその tip を取り込む —— 包む commit が着地で、根に刻む執行の記録もそれを指す
+it("local 着地の merge が conflict すれば作業台を名指して拒み何も書かず、作業台で merge した次の merge が取り込んで着地する", async () => {
+  const c = await localLandingConflict("local-landing-workbench");
+  const { workspace, db } = c;
+  const nothingWritten = c.unchanged();
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
+
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  nothingWritten();
+  // 保護ブランチの作業台は workspace の名前が鍵 —— task id の鍵と同じ段で重ならない(spec #3273 の Address)
+  expect(relative(realpathSync(c.base), c.workbench())).toBe(join("@workbench", `@${workspace.name}`));
+  // 開いた local 着地の question が鍵を指す間、答え直しは作業台を作り直さない —— 書きかけは残る(spec #3273 の Lifetime)
+  writeFileSync(join(c.workbench(), "draft.txt"), "half-made\n");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  expect(readFileSync(join(c.workbench(), "draft.txt"), "utf8")).toBe("half-made\n");
+  rmSync(join(c.workbench(), "draft.txt"));
+  nothingWritten();
+
+  const tip = c.resolve();
+  await c.answer();
+
+  const landed = git(workspace.path, "rev-parse", "refs/heads/main");
+  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", landed).split(" ").slice(1)).toEqual([before, tip]);
+  expect(git(workspace.path, "rev-parse", `${landed}^{tree}`)).toBe(git(workspace.path, "rev-parse", `${tip}^{tree}`));
+  expect(git(workspace.path, "merge-base", "--is-ancestor", c.source, "main")).toBe("");
+  expect(git(workspace.path, "show", "main:feature.txt")).toBe("from both tasks");
+  // 名前の場所は保護ブランチに居て作業ツリーも追従する(ADR 0356 決定5)
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(landed);
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(boardEvents(db, c.work.id, "local_merge_executed")).toEqual([{ actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { kind: "local_merge_executed", sha: landed } }]);
+  expect(listEventsOfKinds(db, ["workbench_taken_in"]).map(({ actor_id, payload }) => ({ actor_id, payload }))).toEqual([
+    { actor_id: HUMAN_ACTOR_ID, payload: { kind: "workbench_taken_in", workspace: workspace.name, target: "refs/heads/main", tip, commit: landed, entry: "landing_merge" } },
+  ]);
+  expect(getTask(db, c.question.id)?.status).toBe("done");
+  // 鍵を指す question はもう無い(spec #3273 の Lifetime)
+  expect(existsSync(workbenchPath(c.base, "main", c.source))).toBe(false);
+});
+
+// ADR 0371 決定3・5 / spec #3273 pin A4: 受け取る条件は保護ブランチの今の値と task の tip を祖先に持つことで、人間しか書けない path は
+// この入口では拒む。拒否は何も書かない
+it.each([
+  [
+    "人間の merge の後に兄弟が着地し、tip が保護ブランチの今の値を持たない",
+    async (c: LocalLandingConflict) => {
+      const sibling = await recordedWork(c.db, c.clock, c.workspace, "from a sibling\n", "sibling.txt");
+      await c.answerMerge(mergeQuestion(c.db, c.clock, { pending_local_merge_task_id: sibling.id }));
+      c.resolve();
+    },
+    (c: LocalLandingConflict) => `${c.workbench()} is not ready: main there does not contain main (\`board/main\`)`,
+  ],
+  [
+    "task を merge せずに保護ブランチへ commit した",
+    async (c: LocalLandingConflict) => {
+      commitWork(c.workbench(), "feature.txt", "only the human's\n");
+    },
+    (c: LocalLandingConflict) => `${c.workbench()} is not ready: main there does not contain ${c.source} (\`board/${c.source}\`)`,
+  ],
+  [
+    "merge で人間しか書けない path を変えた",
+    async (c: LocalLandingConflict) => {
+      c.resolve();
+      commitWork(c.workbench(), ".mcp.json", "{}\n");
+    },
+    (c: LocalLandingConflict) => `the tip of the workbench at ${c.workbench()} changes .mcp.json, which is written only by a human`,
+  ],
+])("local 着地の merge は作業台の tip を拒めば何も書かない —— %s", async (_case, write, says) => {
+  const c = await localLandingConflict("local-landing-refused");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  await write(c);
+  const nothingWritten = c.unchanged();
+
+  const refused = c.answer();
+
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow(says(c));
+  nothingWritten();
+});
+
+// spec #3273 group A: `merge` は compare-and-swap だけで守り、受理の in-flight の鍵を取らない(#3182 決定10)
+it("workspace の in-flight の鍵が取られている間も、local 着地の merge は作業台の merge を取り込んで着地する", async () => {
+  const c = await localLandingConflict("local-landing-in-flight");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  const tip = c.resolve();
+  const release = takeWorkspaceInFlightKey(c.db, c.workspace.name)!;
+  try {
+    await c.answer();
+  } finally {
+    release();
+  }
+
+  expect(getTask(c.db, c.question.id)?.status).toBe("done");
+  expect(git(c.workspace.path, "rev-parse", "main^2")).toBe(tip);
 });
 
 // 旧(#1872): 走っている session の worker が名前の場所で保護ブランチを checkout していれば、merge 回答は checkout ごと ff した。

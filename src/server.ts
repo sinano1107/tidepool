@@ -781,6 +781,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
+      workspacesDir: options.workspacesDir,
     }),
   );
   app.use(
@@ -808,6 +809,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       quarantineChecks: checks,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
+      workspacesDir: options.workspacesDir,
       workspaceAdmin,
       agentAdmin,
       profileAdmin,
