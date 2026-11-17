@@ -465,6 +465,11 @@ function loseRef(db: Db, ws: WorkspaceConfig, ref: string, movedTo?: string): st
   return lost;
 }
 
+/** origin だけが `refs/heads/other` を別の commit で持つ —— commit は origin の中で作り、checkout には入れない。 */
+function originHoldsOther(ws: WorkspaceConfig) {
+  git(ws.repo!, "update-ref", "refs/heads/other", git(ws.repo!, "commit-tree", "main^{tree}", "-p", "main", "-m", "origin's own other head"));
+}
+
 // 根が refname 順で先 —— 根の head が先に届き、そこから届く子の tip は sha で取り直さない
 const ROOT = "refs/heads/a-root";
 const CHILD = "refs/heads/b-child";
@@ -475,8 +480,8 @@ function loseRootAndChildKeptOnOrigin(db: Db, ws: WorkspaceConfig) {
   const root = git(ws.path, "commit-tree", "main^{tree}", "-p", child, "-m", "the root's head, merged back from the child");
   boardWrites(db, ws, CHILD, child);
   boardWrites(db, ws, ROOT, root);
-  // remote 名でなく path へ push する —— 写しの ref が残ると gc が commit を消さない
-  git(ws.path, "push", "--quiet", ws.repo!, `${root}:${ROOT}`);
+  // origin の側から取る —— git 2.56 から、remote と同じ URL への push は写しの ref(refs/remotes/origin/*)も書き、残った写しが gc から commit を守る
+  git(ws.repo!, "fetch", "--quiet", ws.path, `${ROOT}:${ROOT}`);
   dropAndPrune(ws, CHILD, ROOT);
   return { child, root };
 }
@@ -558,8 +563,7 @@ it("remote-backed: `restore the baseline` は object の無い戻す先を origi
 it("remote-backed: `give up the lost refs and restore the baseline` も取ってから数える —— 届いた根と子は戻って失われたと数えず、origin が別の sha で持つ branch はその sha へ戻さず今の値で入れる(ADR 0380 決定4、pin B24)", async () => {
   const { ws, db } = await quarantinedWorkspace("give-up-fetches-lost", true);
   const { child, root } = loseRootAndChildKeptOnOrigin(db, ws);
-  const elsewhere = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "origin's own other head");
-  git(ws.path, "push", "--quiet", ws.repo!, `${elsewhere}:refs/heads/other`);
+  originHoldsOther(ws);
   const lost = loseRef(db, ws, "refs/heads/other");
 
   await answer(db, ws, GIVE_UP);
@@ -646,8 +650,7 @@ it("今の checkout に保護ブランチの ref が無ければ、その object
 
 it("remote-backed: origin に無い sha(2度の probe の間で fetch が落ちた)へ戻す `restore the baseline` は B3 でその ref を名指して拒み、origin が別の sha で持つ branch をその sha へ戻さず、何も書かない(ADR 0380 決定4、pin B24)", async () => {
   const { ws, db, question } = await quarantinedWorkspace("restore-not-on-origin", true);
-  const elsewhere = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "origin's own other head");
-  git(ws.path, "push", "--quiet", ws.repo!, `${elsewhere}:refs/heads/other`);
+  originHoldsOther(ws);
   const lost = loseRef(db, ws, "refs/heads/other");
   const refsBefore = git(ws.path, "for-each-ref");
 
