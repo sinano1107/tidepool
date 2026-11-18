@@ -1102,6 +1102,26 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       nothingWritten();
     });
 
+    it("検査の間に workspace が公開されたら、保護ブランチへ書かず origin の道と text A8e で拒む(ADR 0371 決定6)", async () => {
+      const held = heldCodexCheck();
+      const b = await stoppedCodexPair("codex-race-published", held.check);
+      removeSkill(b.workbench());
+      const nothingWritten = b.unchanged("codex");
+
+      const answering = b.answer("codex");
+      await vi.waitFor(() => expect(held.check).toHaveBeenCalled());
+      await becomeRemoteBacked(b);
+      held.release();
+
+      await expect(answering).rejects.toThrow(
+        new DomainError(
+          `workspace ${b.ws.name} became remote-backed while the board was checking the workbench tip. Push the fix to origin's main from your own clone, then answer. ` +
+            `Commits you made in the workbench at ${b.workbench()} are not taken in: fetch them from the workbench into your own clone and carry them from there.`,
+        ),
+      );
+      nothingWritten();
+    });
+
     it("検査が投げても、書き込む tree の checkout は消え、何も書かない", async () => {
       const paths: string[] = [];
       const b = await stoppedCodexPair("codex-check-throws", async (place) => {

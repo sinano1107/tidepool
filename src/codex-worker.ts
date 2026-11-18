@@ -1588,7 +1588,7 @@ export class CodexWorker implements WorkerAdapter {
           payload: { kind: "spawn_failed", ...failure },
           at: this.options.clock.now(),
         });
-      // kind は一撃にだけ運ぶ —— `spawn_failed` の event の型には無い(ADR 0379 決定4)
+      // kind は一撃にだけ運ぶ —— `spawn_failed` の event の型には無い
       if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, sessionId, kind ? { ...failure, kind } : failure, record);
       else record();
       // ADR 0342 決定5: 印は一撃が返った後 —— 盤面 DB の拒否で投げた書き込みを記録済みと読まない

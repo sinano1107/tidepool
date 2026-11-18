@@ -738,10 +738,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   // 違うのは保護ブランチの tip に当てる検査と、それを取り込みの前後どちらで当てるかだけ
   const acceptContainmentRepair = async (harness: Harness, workspace: string, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
     const now = (deps.clock ?? new SystemClock()).now();
-    const assertEstablished = (capability: ContainmentCapability, route = "") => {
+    const assertEstablished = (capability: ContainmentCapability, route?: () => string) => {
       if (capability.available) return;
       const refusal = `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`;
-      throw new DomainError(route ? `${endSentence(refusal)}${route}` : refusal);
+      throw new DomainError(route ? `${endSentence(refusal)}${route()}` : refusal);
     };
     const checked = withRememberedRepoCheck(deps.db, target, () => now);
     const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
@@ -760,13 +760,13 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         return harness === "codex" ? { prepared: prepareContainmentIntake(deps.db, target, intake) } : { notice: takeInContainmentRepair(deps.db, target, intake) };
       });
       if (local && "notice" in local) {
-        assertEstablished(await recheck(), repairRoute());
+        assertEstablished(await recheck(), repairRoute);
         return local.notice === undefined ? undefined : { notice: local.notice };
       }
       if (local) {
         const { prepared } = local;
         if (!prepared) {
-          assertEstablished(await recheck(), repairRoute());
+          assertEstablished(await recheck(), repairRoute);
           return undefined;
         }
         // ADR 0371 決定6: 書き込む tree を検査してから、検査した tip だけを書く
@@ -777,18 +777,26 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
             prepared.checkout.remove();
           }
         });
-        assertEstablished(capability, repairRoute());
-        const notice = await refuseOnError(() => takeInContainmentRepair(deps.db, target, intake, prepared.tip));
+        const notice = await refuseOnError(() => {
+          // 公開は in-flight の鍵を取らない —— 検査を待つ間に remote-backed になった workspace の保護ブランチへは書かない(ADR 0371 決定6)
+          const current = resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair");
+          if (isRemoteBacked(current)) {
+            throw new DomainError(`workspace ${workspace} became remote-backed while the board was checking the workbench tip.${containmentWorkbenchNotTakenIn(current, workbenchBase)}`);
+          }
+          assertEstablished(capability, repairRoute);
+          return takeInContainmentRepair(deps.db, target, intake, prepared.tip);
+        });
         return notice === undefined ? undefined : { notice };
       }
       // remote-backed なら人間の push を origin から引いてから読み、fetch の間に動いた ref も比べる
       await refuseOnError(() => refreshProtectedBranch(deps.db, target, deps.githubAuth));
       await refuseOnError(() => compareContainmentRefs(deps.db, target, now));
-      assertEstablished(await recheck(), harness === "codex" ? repairRoute() : "");
+      assertEstablished(await recheck(), harness === "codex" ? repairRoute : undefined);
       return undefined;
     } catch (err) {
       if (!(err instanceof DomainError)) throw err;
-      const notTakenIn = await refuseOnError(() => containmentWorkbenchNotTakenIn(checked, workbenchBase));
+      // 検査を待つ間の公開で `checked` は古くなりうるので、今の registry で読む
+      const notTakenIn = await refuseOnError(() => containmentWorkbenchNotTakenIn(resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair"), workbenchBase));
       // text G1 の拒否はすでに text A8e まで言っている
       if (!notTakenIn || err.message.endsWith(notTakenIn)) throw err;
       throw new DomainError(`${endSentence(err.message)}${notTakenIn}`);
