@@ -402,7 +402,8 @@ export const QUARANTINES = [
       return {
         title: `${harness} workers cannot be contained in workspace ${workspace}`,
         purpose:
-          `${reason}. ${firstCapturesWait(db, workspace)}Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
+          // spec #3273 text B8: 作業台の文で終わる理由は自分の句点を持つ
+          `${reason.endsWith(".") ? reason : `${reason}.`} ${firstCapturesWait(db, workspace)}Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
           `other Harnesses in this workspace and ${harness} in other workspaces keep running. ` +
           "Repair the checkout as described above, then answer — the board re-runs the " +
           `${harness} check on workspace ${workspace} before it accepts the answer, and refuses it while ` +

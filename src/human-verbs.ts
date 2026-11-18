@@ -14,7 +14,7 @@ import {
   recordProbeBoardCall,
 } from "./cli-auth.js";
 import { type Clock, SystemClock } from "./clock.js";
-import type { ContainmentCheck } from "./containment.js";
+import type { ContainmentCapability, ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
@@ -43,7 +43,7 @@ import {
 } from "./harness-containment.js";
 import { actIfGateOpen, closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
-import { conventionCheckoutPath, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
+import { conventionCheckoutPath, isRemoteBacked, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
@@ -117,6 +117,8 @@ import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   checkAcceptanceFirstHalf,
+  compareContainmentRefs,
+  containmentWorkbenchNotTakenIn,
   fetchLostTargets,
   firePickupPredicates,
   INTAKE_OPTIONS,
@@ -133,6 +135,7 @@ import {
   resolveWorkspacesBaseDir,
   restoreBaseline,
   retakeRefBaselines,
+  takeInContainmentRepair,
   takeInHumanContentWorkbench,
   takeWorkspaceInFlightKey,
   taskBranch,
@@ -726,6 +729,47 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     const notices = [...kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`), ...keptWorkbenches];
     return notices.length > 0 ? { notice: notices.join("\n") } : undefined;
   };
+  // ADR 0373 決定7・10: 比較はほかのどの検査よりも前で、purely-local は先頭の1回
+  const acceptContainmentRepair = async (harness: Harness, workspace: string, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
+    const now = (deps.clock ?? new SystemClock()).now();
+    const assertEstablished = (capability: ContainmentCapability) => {
+      if (!capability.available) throw new DomainError(`${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`);
+    };
+    if (harness === "codex") {
+      await refuseOnError(() => compareContainmentRefs(deps.db, target, now));
+      // Codex の検査はまだ名前の場所を読むので、取り込みと fetch は #3289 が足す
+      const codex: CodexWorkspaceCheck = deps.codexWorkspaceContainment ?? (async () => {
+        throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
+      });
+      assertEstablished(await codex(target));
+      return undefined;
+    }
+    const checked = withRememberedRepoCheck(deps.db, target, () => now);
+    const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
+    // Claude は名前の場所の保護ブランチの tree を読み直す —— 人間が直せるのは保護ブランチで、作業ツリーではない(ADR 0360 決定3)
+    const recheck = async () => assertEstablished(await refuseOnError(() => claudeWorkspaceContainment(checked)));
+    // 比較から取り込みまでは1つの同期区間 —— 比べた値の上に書く
+    const local = await refuseOnError(() => {
+      compareContainmentRefs(deps.db, target, now);
+      if (isRemoteBacked(checked)) return undefined;
+      return { notice: takeInContainmentRepair(deps.db, target, { workbenchBase, answerer: { actorId: HUMAN_ACTOR_ID, origin }, now }) };
+    });
+    if (local) {
+      await recheck();
+      return local.notice === undefined ? undefined : { notice: local.notice };
+    }
+    // remote-backed なら人間の push を origin から引いてから読み、fetch の間に動いた ref も比べる
+    try {
+      await refuseOnError(() => refreshProtectedBranch(deps.db, target, deps.githubAuth));
+      await refuseOnError(() => compareContainmentRefs(deps.db, target, now));
+      await recheck();
+      return undefined;
+    } catch (err) {
+      const notTakenIn = containmentWorkbenchNotTakenIn(target, workbenchBase);
+      if (!notTakenIn || !(err instanceof DomainError)) throw err;
+      throw new DomainError(`${err.message.endsWith(".") ? err.message : `${err.message}.`}${notTakenIn}`);
+    }
+  };
   return {
     workspace: async (value, answer, origin) => {
       // resolve the named workspace fresh
@@ -754,26 +798,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         throw new DomainError(err instanceof Error ? err.message : String(err));
       }
     },
-    // ADR 0259 決定5: worker の起動と同じ組の検査を撃ち直す。workspace は今の registry で引き直す
-    workspaceContainment: async (value) => {
+    // ADR 0259 決定5: worker の起動と同じ組の検査を撃ち直す。workspace は今の registry で引き直す。ADR 0373 決定8: 検査の間は in-flight の鍵を持つ
+    workspaceContainment: async (value, _answer, origin) => {
       const { harness, workspace } = parseWorkspaceContainmentValue(value!);
       const target = resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair");
-      const codex: CodexWorkspaceCheck = deps.codexWorkspaceContainment ?? (async () => {
-        throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
-      });
-      // Claude は名前の場所の保護ブランチの tree を読み直す —— 人間が直せるのは保護ブランチで、作業ツリーではない(ADR 0360 決定3)。
-      // remote-backed なら人間の push を origin から引いてから読む
-      const capability = harness === "codex"
-        ? await codex(target)
-        : await refuseOnError(async () => {
-          await refreshProtectedBranch(deps.db, target, deps.githubAuth);
-          return claudeWorkspaceContainment(target);
-        });
-      if (!capability.available) {
-        throw new DomainError(
-          `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`,
-        );
-      }
+      if (getTask(deps.db, workspace)?.type === "interview") target.path = interviewRoomPath(deps.db, workspace) ?? target.path;
+      return withWorkspaceInFlightKey(deps.db, workspace, () => acceptContainmentRepair(harness, workspace, target, origin));
     },
     ...(containment && {
       containment: async () => {

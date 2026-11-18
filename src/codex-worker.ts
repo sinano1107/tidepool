@@ -46,7 +46,7 @@ import {
 import { META_REVIEW_SUBJECTS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
-import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
+import { registerResourceStop } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
 import { closeSessionActions, taskTempPrefix } from "./session-close.js";
@@ -68,6 +68,7 @@ import {
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   runPlaceReadPaths,
+  stopContainmentPair,
   taskRunPlace,
 } from "./workspace.js";
 
@@ -1622,9 +1623,7 @@ export class CodexWorker implements WorkerAdapter {
       if (!checked.capability.available) {
         removeTaskTemp();
         // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
-        const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("codex", place.name), reason: checked.capability.reason } as const;
-        registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
-        stopped(stop);
+        stopped(stopContainmentPair(this.options.db, "codex", place.namedPlace, checked.capability.reason, this.workspacesDir, this.options.clock.now()));
         return;
       }
       // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)

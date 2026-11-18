@@ -22,7 +22,7 @@ import { claudeWorkspaceContainment, UnhideableTaskSettingsError } from "./harne
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
-import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
+import { registerQuarantine, registerResourceStop } from "./quarantine.js";
 import {
   loadRegistry,
   type Registry,
@@ -61,6 +61,7 @@ import {
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   runPlaceReadPaths,
+  stopContainmentPair,
   taskBranch,
   taskRunPlace,
   type WorkspaceConfig,
@@ -1623,9 +1624,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
     if (protectedContainment && !protectedContainment.available) {
-      const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: protectedContainment.reason } as const;
-      registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
-      stopped(stop);
+      stopped(stopContainmentPair(this.options.db, "claude-code", place.namedPlace, protectedContainment.reason, this.workspacesDir, this.options.clock.now()));
       return;
     }
     if (recorded.unhideable) {
