@@ -83,17 +83,20 @@ import {
   taskRoomPickupPredicates,
 } from "./pickup-predicates.js";
 import {
+  endSentence,
   GIVE_UP_THE_LOST_REFS,
   openQuarantineQuestion,
   openQuarantineQuestions,
   parseWorkspaceContainmentValue,
   RESTORE_THE_BASELINE,
   registerResourceStop,
+  workspaceContainmentValue,
 } from "./quarantine.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import {
   fetchBranchCopy,
   fetchCommit,
+  type Harness,
   ownEntry,
   type RefWriter,
   type Registry,
@@ -957,7 +960,7 @@ function takeInWorkbench(
   target: string,
   carried: string | undefined,
   { entry, answerer, now }: IntakeContext,
-  { approved, otherTasks, humanContent = false }: EntryChecks = {},
+  { approved, otherTasks, humanContent = false, admit }: EntryChecks = {},
 ): { tip: string; commit: string } | undefined {
   const ref = `refs/heads/${target}`;
   const inputs = [ref, ...(carried ? [carried] : [])].map((full) => ({
@@ -970,6 +973,7 @@ function takeInWorkbench(
     return judgeWorkbench(named, place, target, { carried, boardMove: !humanContent }, (owner, read) => {
       if (owner.kind === "refuse") throw new Error(owner.reason);
       if (owner.kind !== "mine" || !read) return undefined;
+      admit?.();
       const { tip, verified, tipRef } = read;
       const copy = { ...named, path: verified };
       const missing = inputs.find(({ sha }) => !isAncestor(copy, sha, tip, workerRepoGit));
@@ -1044,11 +1048,13 @@ export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string
 
 /** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`otherTasks` は
  *  ADR 0382 決定4: 数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)。`humanContent` は
- *  人間自身の内容の入口(`take in`)—— 盤面の手が無く、人間しか書けない path を通し、書き込む tree が隠せない形を持てば拒む。 */
+ *  人間自身の内容の入口(`take in`)—— 盤面の手が無く、人間しか書けない path を通し、書き込む tree が隠せない形を持てば拒む。
+ *  `admit` は tip がこの入口のものと判ったときだけ掛ける入口の条件(拒むなら投げる)。 */
 type EntryChecks = {
   approved?: string;
   otherTasks?: { range: TaskRange; refusalFor: (branches: string[], at: string) => string };
   humanContent?: boolean;
+  admit?: () => void;
 };
 
 /** 鍵の作業台があれば取り込み、包む commit と、作業台を残したときの text C6 を返す(取り込むものが無ければ undefined)。拒否は `board/*` を
@@ -1110,6 +1116,49 @@ const heldCommitsClause = (owner: WorkbenchOwner, branch: string) =>
     ? ` The workbench already holds commits that ${branch} does not have; to start over from the board's value, run \`git reset --hard ${boardBranch(branch)}\` there.`
     : "";
 
+/** spec #3273 text B8 の remote-backed の文。 */
+const pushFixToOrigin = (branch: string) => ` Push the fix to origin's ${branch} from your own clone, then answer.`;
+
+/** spec #3273 text B8 の purely-local の文。 */
+const commitFixInWorkbench = (path: string, branch: string) => ` The board opened the workbench at ${path}: commit the fix there on ${branch}, then answer.`;
+
+/** 作業台が無いときの出口 —— 封じ込めの回答は作業台を開かない(無ければ検査だけ)ので、開き直す手は `open_workbench`。 */
+const openWorkbenchExit = (branch: string) => `open it with \`open_workbench\`, commit the fix there on ${branch}, then answer.`;
+
+/** 人間自身の内容の作業台が書く先の branch とともに disk にある。 */
+const holdsTargetBranch = (at: string, branch: string) =>
+  placeHasRepository(at) && gitAnswers(() => workerRepoGit(at, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`));
+
+/** ADR 0373 決定9: 組の停止が開く作業台 —— 開くのは鍵ごとに冪等で、書く先の branch のある作業台は作り直さない(無視された file も人間のもの)。
+ *  作りかけは開く手の規則で作り直す。返すのは修理の道の文(text B8、ADR 0382 決定4 の句)。開けなければそう言う(fail-closed)—— 盤面 DB の
+ *  拒否だけは底へ(ADR 0342 決定4)。 */
+function containmentStopRoute(db: Db, named: WorkspaceConfig, base: string, now: Date): string {
+  const branch = protectedBranch(named);
+  try {
+    if (isRemoteBacked(withRememberedRepoCheck(db, named, () => now))) return pushFixToOrigin(branch);
+    const at = CHECKOUT_LAYOUT.workbench.at(base, named, branch);
+    let opened: { path: string; owner: WorkbenchOwner };
+    if (holdsTargetBranch(at, branch)) {
+      opened = { path: realpathSync(at), owner: judgeOnDisk(named, at, branch) };
+      repointBoardRefs(named, opened.path);
+    } else opened = openWorkbench(named, base, branch);
+    return `${commitFixInWorkbench(opened.path, branch)}${heldCommitsClause(opened.owner, branch)}`;
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err;
+    return ` The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); ${openWorkbenchExit(branch)}`;
+  }
+}
+
+/** ADR 0373 決定9: (Harness, workspace) の組を止める唯一の口 —— purely-local の workspace なら人間自身の内容の作業台を開いて、組の Quarantine を
+ *  登録し、止めた資源を返す。remote-backed の workspace と面接室の名前には作業台を開かない。理由に修理の道を足すのは Claude の組だけ ——
+ *  Codex の検査はまだ名前の場所を読むので、その文は #3289 が足す。 */
+export function stopContainmentPair(db: Db, harness: Harness, named: WorkspaceConfig, reason: string, base: string, now: Date): ResourceStop {
+  const stop = (text: string) => registerResourceStop(db, "workspaceContainment", workspaceContainmentValue(harness, named.name), text, now);
+  if (isInterviewRoomName(db, named.name)) return stop(reason);
+  const route = containmentStopRoute(db, named, base, now);
+  return stop(harness === "claude-code" ? `${endSentence(reason)}${route}` : reason);
+}
+
 /** ADR 0371 決定6 / ADR 0382 決定5: `open_workbench` —— purely-local の workspace の人間自身の内容の作業台 (workspace, 保護ブランチ) を開き、
  *  workspace に `intake` question を1つ立てる。question が開いていて作業台が書く先の branch とともに disk にあれば何も変えず(pin A13)、
  *  同じ question を名指す。そうでなければ開く手の規則で開く —— question が開いていて作業台が disk に無いか作りかけなら作り直す。
@@ -1130,7 +1179,7 @@ export async function openHumanContentWorkbench(
   if (!holdsBaseline(db, workspace.name)) await captureFirstBaseline(db, workspace, { ...board, now });
   const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
   let question = openIntakeQuestionId(db, workspace.name);
-  const leaveAlone = question !== undefined && placeHasRepository(at) && gitAnswers(() => workerRepoGit(at, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`));
+  const leaveAlone = question !== undefined && holdsTargetBranch(at, branch);
   let opened: { path: string; owner: WorkbenchOwner };
   try {
     opened = leaveAlone ? { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) } : openWorkbench(workspace, base, branch);
@@ -1217,31 +1266,101 @@ export function takeInHumanContentWorkbench(db: Db, workspace: WorkspaceConfig, 
         "are not taken in: fetch them from the workbench into your own clone and carry them from there. Answer `close`.",
     );
   }
-  const quarantine = openQuarantineQuestion(db, "workspace", workspace.name);
-  if (quarantine) throw new Error(`workspace ${workspace.name} is quarantined — answer question ${quarantine.id} first.`);
-  // ADR 0383 決定2: `open_workbench` が撮るので答える時点では行がある —— 無いのは盤面 DB の直接の書き換えだけで、帯域外の移動とは読まない
-  if (!holdsBaseline(db, workspace.name)) {
-    throw new Error(`the board holds no baseline for workspace ${workspace.name}, so it cannot check ${branch} — open the workbench again (\`open_workbench\`), then answer again.`);
-  }
-  const approved = protectedValueAsRecorded(db, workspace);
+  assertWorkspaceNotQuarantined(db, workspace);
+  const approved = humanContentTargetValue(db, workspace);
   if (!placeHasRepository(at)) {
     throw new Error(`the workbench at ${at} is gone; commits that were not taken in are lost. Open it again with \`open_workbench\` for ${workspace.name}, then answer again.`);
   }
+  return takeInHumanContent(db, workspace, at, { ...intake, entry: "intake_question" }, {
+    approved,
+    nothingNew: (path) => `nothing to take in: ${branch} in the workbench at ${path} is the value the board already has.`,
+  })!;
+}
+
+/** spec #3273 text A8a: workspace の Quarantine が開いている間、人間自身の内容は取り込まない。 */
+function assertWorkspaceNotQuarantined(db: Db, workspace: WorkspaceConfig): void {
+  const quarantine = openQuarantineQuestion(db, "workspace", workspace.name);
+  if (quarantine) throw new Error(`workspace ${workspace.name} is quarantined — answer question ${quarantine.id} first.`);
+}
+
+/** 人間自身の内容の入口が書く先の値として使う、基準と一致する保護ブランチの値。 */
+function humanContentTargetValue(db: Db, workspace: WorkspaceConfig): string {
+  // ADR 0383 決定2: `open_workbench` が撮るので答える時点では行がある —— 無いのは盤面 DB の直接の書き換えだけで、帯域外の移動とは読まない
+  if (!holdsBaseline(db, workspace.name)) {
+    throw new Error(`the board holds no baseline for workspace ${workspace.name}, so it cannot check ${protectedBranch(workspace)} — open the workbench again (\`open_workbench\`), then answer again.`);
+  }
+  return protectedValueAsRecorded(db, workspace);
+}
+
+/** ADR 0382 決定4: `take in` と封じ込めの回答が共有する取り込み —— 人間自身の内容の作業台の tip を保護ブランチへ入れ、作業台を残して text C6 を返す。
+ *  取り込むものが無ければ、`nothingNew` があればその文で拒み、無ければ undefined。 */
+function takeInHumanContent(
+  db: Db,
+  workspace: WorkspaceConfig,
+  at: string,
+  intake: IntakeContext,
+  { approved, admit, nothingNew }: Pick<EntryChecks, "approved" | "admit"> & { nothingNew?: (path: string) => string },
+): string | undefined {
+  const branch = protectedBranch(workspace);
   const place = workbenchPlace(workspace, realpathSync(at));
   // spec #3273 text A8c(作業台の在り処を言う —— 文の規則)
   const refusalFor = (branches: string[], tipAt: string) =>
     branches.map((name) => `the tip of the workbench at ${tipAt} contains commits of ${name}, and that task's work enters ${branch} only through its landing — ${landingExit(db, name)}.`).join(" ") +
     ` To take in only your own commits, start ${branch} in the workbench over with \`git reset --hard ${boardBranch(branch)}\`, commit them again and answer again.`;
   const taken = repointingOnRefusal(workspace, place.path, () => {
-    const intaken = takeInWorkbench(db, workspace, place, branch, undefined, { ...intake, entry: "intake_question" }, {
+    const intaken = takeInWorkbench(db, workspace, place, branch, undefined, intake, {
       approved,
+      admit,
       otherTasks: { range: "unsettled or landing-waiting", refusalFor },
       humanContent: true,
     });
-    if (!intaken) throw new Error(`nothing to take in: ${branch} in the workbench at ${place.path} is the value the board already has.`);
+    if (!intaken && nothingNew) throw new Error(nothingNew(place.path));
     return intaken;
   });
-  return advanceKeptWorkbench(workspace, place.path, branch, taken);
+  return taken && advanceKeptWorkbench(workspace, place.path, branch, taken);
+}
+
+/** ADR 0371 決定6 / ADR 0382 決定4: purely-local の (claude-code, workspace) の組の回答の取り込み。`take in` と同じ手順で、取り込む tip があるときだけ
+ *  workspace の Quarantine(text A8a)と基準の行の無い名前を拒み、書き込む tree が隠せない形を持てば書く前に拒み、人間しか書けない path は通す。
+ *  作業台が disk に無いか取り込むものが無ければ undefined —— 回答は検査だけをする(text A8b の拒否ではない、ADR 0373 決定7)。
+ *  書く先の branch が無い作業台は開き直して答え直すよう拒む(ADR 0382 決定6)。返すのは text C6。 */
+export function takeInContainmentRepair(db: Db, workspace: WorkspaceConfig, intake: Omit<IntakeContext, "entry">): string | undefined {
+  const at = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, workspace, protectedBranch(workspace));
+  if (!placeHasRepository(at)) return undefined;
+  return takeInHumanContent(db, workspace, at, { ...intake, entry: "containment_quarantine" }, {
+    admit: () => {
+      assertWorkspaceNotQuarantined(db, workspace);
+      humanContentTargetValue(db, workspace);
+    },
+  });
+}
+
+/** spec #3273 text B8: purely-local の組の検査の拒否に足す、直す先の文 —— 名前の場所で commit すると workspace の Quarantine が立つ。 */
+export function containmentRepairRoute(workspace: WorkspaceConfig, base: string): string {
+  const branch = protectedBranch(workspace);
+  const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
+  return placeHasRepository(at) ? commitFixInWorkbench(realpathSync(at), branch) : ` No workbench is open: ${openWorkbenchExit(branch)}`;
+}
+
+/** spec #3273 text A8e: purely-local の間に開いた作業台が残る workspace が remote-backed になっていれば、その回答のどの拒否にも足す文。無ければ空。 */
+export function containmentWorkbenchNotTakenIn(workspace: WorkspaceConfig, base: string): string {
+  const branch = protectedBranch(workspace);
+  const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
+  if (!isRemoteBacked(workspace) || !placeHasRepository(at)) return "";
+  return `${pushFixToOrigin(branch)} Commits you made in the workbench at ${realpathSync(at)} are not taken in: fetch them from the workbench into your own clone and carry them from there.`;
+}
+
+/** ADR 0373 決定7・10: 封じ込めの Quarantine の受理の比較 —— pickup と同じ比較器で全 ref を基準と比べ、違えば workspace の Quarantine を立てて拒む
+ *  (text B6)。基準は撮り直さない。基準の行が無い名前は比べず行も作らない(repo でない場所も読まない)。 */
+export function compareContainmentRefs(db: Db, workspace: WorkspaceConfig, now: Date): void {
+  if (!holdsBaseline(db, workspace.name)) return;
+  try {
+    compareAndFoldBaseline(db, workspace, "while the containment Quarantine was open");
+  } catch (err) {
+    if (!(err instanceof RefsMovedError)) throw err;
+    quarantineWorkspace(db, workspace.name, err, now);
+    throw new Error(`${err.message}. Answer the workspace Quarantine (question ${openQuarantineQuestion(db, "workspace", workspace.name)!.id}) first.`);
+  }
 }
 
 /** 削除の扉が人間自身の内容の作業台に見つけたもの: 作業台の在り処、書く先の branch、読めなければ読めなかった場所(作業台か名前の場所)と理由。 */

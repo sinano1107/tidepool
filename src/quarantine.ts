@@ -63,6 +63,9 @@ export function parseTableRowValue(value: string): { provider: Provider; model: 
 
 /** workspace の封じ込めの Quarantine の値(ADR 0259 決定1): `harness/workspace`。Harness は閉じた列挙で `/` を含まないので、
  *  最初の `/` で割れば組は一意に戻る。 */
+/** 文を句点で閉じる —— 次の文を足す理由や拒否の文に。すでに句点で終わる文(spec #3273 text B8)には足さない。 */
+export const endSentence = (text: string): string => (text.endsWith(".") ? text : `${text}.`);
+
 export function workspaceContainmentValue(harness: Harness, workspace: string): string {
   return `${harness}/${workspace}`;
 }
@@ -402,7 +405,7 @@ export const QUARANTINES = [
       return {
         title: `${harness} workers cannot be contained in workspace ${workspace}`,
         purpose:
-          `${reason}. ${firstCapturesWait(db, workspace)}Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
+          `${endSentence(reason)} ${firstCapturesWait(db, workspace)}Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
           `other Harnesses in this workspace and ${harness} in other workspaces keep running. ` +
           "Repair the checkout as described above, then answer — the board re-runs the " +
           `${harness} check on workspace ${workspace} before it accepts the answer, and refuses it while ` +
