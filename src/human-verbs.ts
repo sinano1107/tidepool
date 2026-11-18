@@ -802,7 +802,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     workspaceContainment: async (value, _answer, origin) => {
       const { harness, workspace } = parseWorkspaceContainmentValue(value!);
       const target = resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair");
-      if (getTask(deps.db, workspace)?.type === "interview") target.path = interviewRoomPath(deps.db, workspace) ?? target.path;
       return withWorkspaceInFlightKey(deps.db, workspace, () => acceptContainmentRepair(harness, workspace, target, origin));
     },
     ...(containment && {

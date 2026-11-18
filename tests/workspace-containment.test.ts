@@ -235,7 +235,7 @@ it("組を止める理由は記録の ref・名前の場所・隠せない形の
       "the board cannot hide .claude/settings.json or .claude/settings.local.json behind it from the worker's CLI, " +
       `so commit .claude as a directory on trunk. The board opened the workbench at ${realpathSync(workbenchPath(base, { workspace: workspace.name }))}: commit the fix there on trunk, then answer.`,
   );
-});
+}, GIT_FIXTURE_TEST_TIMEOUT);
 
 it("(claude-code, B) の question への回答は、名前の場所の作業ツリーに何があっても保護ブランチの tree にまだ隠せない形があれば拒まれて開いたまま残り、作業台で直して commit すれば受理される(ADR 0360 決定3・ADR 0259 決定5・ADR 0371 決定6)", async () => {
   const workspace = await workspaceWithSymlinkedClaude("pair-answer");
