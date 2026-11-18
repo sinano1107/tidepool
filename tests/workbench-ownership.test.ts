@@ -135,9 +135,23 @@ it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<ty
     tip = undefined;
   }
 
-  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip, verified: b.at }, carried);
+  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip, verified: b.at }, carried, { boardMove: true });
 
   expect(outcome(owner)).toBe(kind);
   for (const element of says) expect(owner.kind === "refuse" && owner.reason).toContain(element);
   if (owner.kind === "refuse") expect(owner.reason).toMatch(new RegExp(`^the workbench at ${b.at} has nothing new on task/parent, but .*\\. Then answer again\\.$`));
+});
+
+// ADR 0382 決定6: 書く先の branch の無い作りかけは、盤面の手の無い入口(`take in` など)では「無い」にせず拒む —— 開き直して答え直す
+it("書く先の branch の無い作りかけは、盤面の手の無い入口では拒む", async () => {
+  const b = await board();
+  rmSync(b.at, { recursive: true, force: true });
+  git(".", "init", "--quiet", "--initial-branch=main", b.at);
+
+  const owner = workbenchOwner({ at: b.at, target: TARGET, targetSha: git(b.named, "rev-parse", TARGET), tip: undefined, verified: b.named }, undefined, { boardMove: false });
+
+  expect(owner).toEqual({
+    kind: "refuse",
+    reason: `the workbench at ${b.at} has no task/parent branch, so the board cannot tell what to take in. Open it again, then answer again.`,
+  });
 });

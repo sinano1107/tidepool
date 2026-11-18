@@ -107,6 +107,7 @@ import {
   createWorkspace,
   deleteWorkspace,
   listWorkspaceViews,
+  openWorkspaceWorkbench,
   publishWorkspace,
   updateWorkspace,
   type WorkspaceAdmin,
@@ -690,6 +691,7 @@ function workspaceAdmin(
     // ADR 0087: 参照検査の事実(件数・既定名)は API 層が足す —— registry 側の
     // deps だけをここで束ねる
     delete: (input, refs) => deleteWorkspace(input, { ...deps, ...refs }),
+    openWorkbench: (input, origin) => openWorkspaceWorkbench(input, origin, deps),
   };
 }
 

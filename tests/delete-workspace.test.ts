@@ -1,17 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { submitAnswer } from "../src/human-verbs.js";
 import { registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
-import { getTask, pickupTask, registerTask } from "../src/tasks.js";
-import { completionTreePaths, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
+import { countUnsettledTasksReferencing, getTask, pickupTask, registerTask } from "../src/tasks.js";
+import { workbenchPath } from "../src/workbench.js";
+import { completionTreePaths, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
+import { unusedLanding } from "./fakes.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -317,5 +322,80 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       ),
     ).resolves.toBe(registryDir);
     expect(loadRegistry(registryDir, "purely-local").workspaces.registry).toBeUndefined();
+  });
+});
+
+describe("deleteWorkspace: 人間自身の内容の作業台と intake question(ADR 0382 決定5 / spec #3273 text A15)", () => {
+  vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+  /** registry に登録した purely-local の workspace に `open_workbench` を撃った盤面。 */
+  async function openedWorkbench() {
+    const db = openDb(":memory:");
+    const ws = await makeWorkspace("intake");
+    const base = await tempDir("tidepool-workbenches-");
+    const registryDir = await makeRegistry({ "workspaces.yaml": `${ws.name}:\n  path: ${ws.path}\n` });
+    git(registryDir, "branch", "-M", "main");
+    await openHumanContentWorkbench(db, ws, base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, new Date(), { resolveRegistered: undefined });
+    const question = getTask(db, openIntakeQuestionId(db, ws.name)!)!;
+    const workbench = realpathSync(workbenchPath(base, { workspace: ws.name }));
+    const deps = () => ({
+      registry: { dir: registryDir, mode: "purely-local" as const },
+      workspacesBaseDir: base,
+      unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", ws.name),
+      awaitingLandingTaskIds: [],
+      db,
+    });
+    const close = () =>
+      submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, workspace: ws, workspacesDir: base }, question, ["close"], undefined, () => new Date(), "webui");
+    return { db, ws, registryDir, question, workbench, deps, close };
+  }
+
+  it("intake question が開いている間は、未決着の理由に `close` の手を足して拒む", async () => {
+    const o = await openedWorkbench();
+
+    await expect(deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps())).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      message: `workspace "${o.ws.name}" cannot be deleted: 1 unsettled task(s) still reference it. Answer \`close\` on question ${o.question.id} first.`,
+      reasons: [{ code: "unsettled_tasks", count: 1, intake_question: o.question.id }],
+    });
+    expect(loadRegistry(o.registryDir, "purely-local").workspaces[o.ws.name]).toBeDefined();
+  });
+
+  it("作業台に取り込まれていない commit があれば拒み、無くなれば削除が作業台を消す", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    commitWork(o.workbench, "notes.txt", "the human's\n");
+
+    await expect(deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps())).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      message:
+        `workspace "${o.ws.name}" cannot be deleted: the workbench at ${o.workbench} holds work that main does not have — ` +
+        "take it in (`open_workbench`, then `take in`) or remove the workbench by hand first",
+      reasons: [{ code: "human_content_workbench", workbench: o.workbench, branch: "main" }],
+    });
+    expect(existsSync(o.workbench)).toBe(true);
+
+    git(o.workbench, "reset", "--quiet", "--hard", "board/main");
+    await deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+    expect(loadRegistry(o.registryDir, "purely-local").workspaces[o.ws.name]).toBeUndefined();
+    expect(existsSync(o.workbench)).toBe(false);
+  });
+  it("名前の場所の checkout が読めなければ、作業台を消せとは言わず checkout を名指して拒み、作業台を残す", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    rmSync(o.ws.path, { recursive: true, force: true });
+
+    const refused = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+    await expect(refused).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "human_content_workbench", workbench: o.workbench, branch: "main", unreadable: { place: o.ws.path } }],
+    });
+    await expect(refused).rejects.toThrow(
+      `the board cannot read the workspace's checkout at ${o.ws.path} (`,
+    );
+    await expect(refused).rejects.toThrow(`so it cannot tell whether the workbench at ${o.workbench} holds work that main does not have — repair the checkout first`);
+    expect(existsSync(o.workbench)).toBe(true);
   });
 });

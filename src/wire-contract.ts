@@ -379,6 +379,8 @@ export interface WireContract {
   "PATCH /api/workspaces/:name 409": DangerousValuesConflict;
   /** 残る checkout の場所(ADR 0087 決定4)。 */
   "DELETE /api/workspaces/:name": { checkout: string };
+  /** `open_workbench` の応答(spec #3273 text A14)。 */
+  "POST /api/workspaces/:name/workbench": { message: string };
   "DELETE /api/workspaces/:name 409": DeletionConflict;
   "GET /api/agents": {
     agents: Array<{

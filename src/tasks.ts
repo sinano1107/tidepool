@@ -174,6 +174,8 @@ export interface Task {
    *  this one and never the reverse. Never set via MCP or the JSON API. */
   question_quarantine_kind: string | null;
   question_quarantine_value: string | null;
+  /** System-internal only (ADR 0371 決定6): the workspace an `intake` question takes a human's commits into. */
+  question_intake_workspace: string | null;
   /** System-internal only (ADR 0075): warned configured-expiry epoch. */
   question_cli_auth_expiry: number | null;
   question_stop_reason_task_id: string | null;
@@ -1283,12 +1285,12 @@ export function registerTask(
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision, question_broken_probe_reason,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
-         question_quarantine_value, question_cli_auth_expiry, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
+         question_quarantine_value, question_intake_workspace, question_cli_auth_expiry, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision, @question_broken_probe_reason,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
-         @question_quarantine_value, @question_cli_auth_expiry, @question_stop_reason_task_id, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
+         @question_quarantine_value, @question_intake_workspace, @question_cli_auth_expiry, @question_stop_reason_task_id, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -2063,6 +2065,7 @@ export function isLandingQuestion(task: QuestionColumns<TierRef>): boolean {
     case "proposal":
     case "quarantine":
     case "stop_reason":
+    case "intake":
     case "cli_auth_expiry_warning":
       return false;
   }
@@ -2090,6 +2093,7 @@ export function isFixedChoiceQuestion(question: QuestionColumns<TierRef>): boole
     case "local_merge":
     case "pr_promotion_retry":
     case "proposal":
+    case "intake":
       return true;
     case "escalation":
     case "quarantine":
@@ -2116,6 +2120,7 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
     case "pr_promotion_retry":
     case "quarantine":
     case "stop_reason":
+    case "intake":
     case "cli_auth_expiry_warning":
       return [];
   }
@@ -2304,6 +2309,7 @@ export function answerQuestion(
       case "pr_promotion_retry":
       case "proposal":
       case "stop_reason":
+      case "intake":
       case "cli_auth_expiry_warning":
         unblockTarget = blockedParent();
         break;
@@ -4199,6 +4205,7 @@ export function approvalAnnotation(
     case "proposal":
     case "quarantine":
     case "stop_reason":
+    case "intake":
     case "cli_auth_expiry_warning":
       return null;
   }

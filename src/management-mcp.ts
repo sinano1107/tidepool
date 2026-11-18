@@ -572,6 +572,24 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
   );
   server.registerTool(
+    "open_workbench",
+    {
+      // spec #3273 group A: 名前だけでは task に効くように読めるので、何のためかを言う
+      description:
+        "For the protected branch of a purely-local workspace: open a workbench (a checkout the board makes for you) where you commit on the protected branch yourself — human-only paths included — and raise an intake question whose `take in` answer writes your tip to the protected branch. A second call opens nothing new. Refused for a remote-backed workspace, whose protected branch is changed on origin.",
+      inputSchema: z.object({ name: requiredTextSchema }),
+    },
+    async (input) => {
+      if (!deps.workspaceAdmin?.openWorkbench) return toolError("workspace administration is not configured");
+      try {
+        return toolResult({ message: await deps.workspaceAdmin.openWorkbench(input, "mcp") });
+      } catch (err) {
+        if (err instanceof DomainError) return toolError(err.message);
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
     "create_agent",
     {
       description: "Create an agent in the human-managed registry.",

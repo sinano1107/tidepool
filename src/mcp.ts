@@ -378,10 +378,12 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
     const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
     const humanOnly = humanOnlyPathChanges(delta);
     if (humanOnly.length > 0) {
+      // spec #3273 text A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない —— worker の出口は今の文のまま
       throw refusalNamingPaths(
         "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
           "take the change out of the task branch and commit",
         humanOnly,
+        { after: " That change is put in by a human." },
       );
     }
     // ADR 0365 決定2: 同じ delta で、記録が持てない entry(gitlink の参照先は別 repo の commit)を足した・進めた tip を拒む
@@ -409,9 +411,9 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
   );
 }
 
-/** 「直して呼び直せ」の拒否: 直し方の文の後に path を1行ずつ名指す。既定の verb は完了の門の complete_task。 */
-const refusalNamingPaths = (fix: string, paths: string[], verb = "complete_task") =>
-  new DomainError(`${fix}, then call ${verb} again\n${paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`);
+/** 「直して呼び直せ」の拒否: 直し方の文の後に path を1行ずつ名指す。既定の verb は完了の門の complete_task。`after` は呼び直しの文の後に足す文。 */
+const refusalNamingPaths = (fix: string, paths: string[], { verb = "complete_task", after = "" }: { verb?: string; after?: string } = {}) =>
+  new DomainError(`${fix}, then call ${verb} again${after && `.${after}`}\n${paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`);
 
 /** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を強制回収で決着させる —— 拒めば worker
  *  は verb を繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に
@@ -882,7 +884,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                   "the probe's environment adds or advances a submodule (gitlink); the interview room carries only this repository and the targets " +
                     "cannot populate it — remove the submodule from your working tree",
                   err.paths,
-                  "pose_probe",
+                  { verb: "pose_probe" },
                 );
               }
               // ADR 0367 決定1 / ADR 0359 決定4: 写しの host と面接室の側の失敗は資源を止めずに拒むだけ。

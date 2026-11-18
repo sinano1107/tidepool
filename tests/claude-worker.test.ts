@@ -109,6 +109,7 @@ function makeTask(
     question_pending_pr_promotion_task_id: null,
     question_quarantine_kind: null,
     question_quarantine_value: null,
+    question_intake_workspace: null,
     question_cli_auth_expiry: null,
     question_stop_reason_task_id: null,
     github_issue_number: null,

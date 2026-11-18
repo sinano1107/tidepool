@@ -321,13 +321,15 @@ export function landingAnnotation(
     case "proposal":
     case "quarantine":
     case "stop_reason":
+    case "intake":
     case "cli_auth_expiry_warning":
       return null;
   }
   return { blocked_by: landingBlock(db, landingTaskId)?.kind ?? null };
 }
 
-export type RootVerdict = { taskId: string; verdict: LandingVerdict };
+/** `notice` は retry の回答の取り込みが作業台を残したときの text C6(1つの作業台に1行)。 */
+export type RootVerdict = { taskId: string; verdict: LandingVerdict; notice?: string };
 
 /** 盤面がまだ着地を運ぶ根(GLOSSARY.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
  *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。 */
@@ -953,8 +955,8 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   /** 収束の1回の、根ごとの文脈。`answered` は、その根の PR 昇格失敗 question に retry が答えている途中であること
    *  (ADR 0106 決定5) —— 失敗 question を立て直さず、答えている question を引退の対象から除く。`intake` はその回答の取り込みの束で、
-   *  retry が答えている途中であることを表す。 */
-  type RootContext = { answering: ReadonlyMap<string, Answerer>; intake?: IntakeContext };
+   *  retry が答えている途中であることを表す。`kept` は、その取り込みが作業台を残したときの text C6 を貯める。 */
+  type RootContext = { answering: ReadonlyMap<string, Answerer>; intake?: IntakeContext; kept: string[] };
   const retireFailures = (taskId: string, ctx: RootContext) =>
     settlePrPromotionQuestionsAsObserved(deps.db, taskId, deps.clock.now(), ctx.answering);
   const failed = (
@@ -1056,12 +1058,14 @@ export function createLanding(deps: LandingDeps): Landing {
   const landRoot = async (
     { task, outlivedForkSource, lineageError }: LandingRoot,
     answering: ReadonlyMap<string, Answerer>,
+    kept: string[],
   ): Promise<LandingVerdict | undefined> => {
     const open = openPrPromotionQuestionIds(deps.db, task.id);
     const question = open.find((id) => answering.has(id));
     const ctx: RootContext = {
       answering,
       intake: question === undefined ? undefined : { workbenchBase, entry: "promotion_retry", answerer: answering.get(question)!, now: deps.clock.now() },
+      kept,
     };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
     if (open.length > 0 && !ctx.intake) return undefined;
@@ -1153,7 +1157,7 @@ export function createLanding(deps: LandingDeps): Landing {
       if (ctx.intake && !workspaceNeedsHuman(deps.db, workspace.name)) {
         const { own } = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
         const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, own, true);
-        await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf });
+        ctx.kept.push(...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf })));
       }
       const outcome = rootPrOutcome(deps.db, task.id);
       const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
@@ -1203,7 +1207,8 @@ export function createLanding(deps: LandingDeps): Landing {
       // ADR 0376 決定8: retry は人間の tip の取り込み → 追いつき → push の順。conflict は作業台を開く(text A2)
       const catchUp = () => {
         if (!outlivedForkSource) return;
-        if (ctx.intake) takeInCatchUp(deps.db, workspace, task.id, ctx.intake);
+        const caughtUp = ctx.intake && takeInCatchUp(deps.db, workspace, task.id, ctx.intake);
+        if (caughtUp) ctx.kept.push(caughtUp);
         catchUpTaskBranch(deps.db, workspace, task.id, workbenchBase);
       };
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
@@ -1333,8 +1338,9 @@ export function createLanding(deps: LandingDeps): Landing {
     for (const id of ids) {
       try {
         const root = landingRootOf(deps.db, resolve, id, (workspace) => protectedBranchRef(checked(workspace)));
-        const verdict = root && (await landRoot(root, answering));
-        if (verdict) verdicts.push({ taskId: id, verdict });
+        const kept: string[] = [];
+        const verdict = root && (await landRoot(root, answering, kept));
+        if (verdict) verdicts.push({ taskId: id, verdict, ...(kept.length > 0 && { notice: kept.join("\n") }) });
       } catch (error) {
         if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: 根ごとの失敗として log に流さない
         console.error(`[landing] landing root ${id} failed; the pass goes on with the rest:`, error);

@@ -292,9 +292,30 @@ do not administer needs its admin to install the App from the link above), then 
 a workspace with **clone a repository** and its clone URL. The board refuses the registration with
 the install link when the App is missing or you cannot push to the repository.
 
-Use a dedicated clone: the board treats a workspace's checkout as its own from its first task on,
-between tasks too, and a checkout you also edit by hand will end up quarantined. Nothing else
+Register a checkout you do not write in yourself: the board treats a workspace's checkout as its
+own from the first time it touches it, between tasks too, and a checkout you also edit by hand will
+end up quarantined. Your own changes go where [Where you write](#where-you-write) says. Nothing else
 changes — task branches, pull requests, and a merge question you answer.
+
+## Where you write
+
+Until the board first touches a workspace — no task has run there and no workbench was opened —
+you may commit in its checkout directly; the board's first look takes what is there as it is.
+After that, never commit, check out or stash in the checkout (its `path` in `workspaces.yaml`), and
+commits from a linked worktree you made of it stop the workspace too. Where your changes go then
+depends on the workspace:
+
+- **Purely-local** (no `repo:`). Open a workbench for the workspace with the management MCP tool
+  `open_workbench`, or `POST /api/workspaces/<name>/workbench`. The board opens a checkout of its
+  own on the protected branch, answers with its path and raises an `intake` question. Commit on the
+  protected branch there, then answer `take in`: the board checks your tip and writes it to the
+  protected branch. Answer `close` to take nothing in; the workbench stays where it is. On a Mac
+  the path is inside the VM — work there through `limactl shell tidepool`. This is also how a path
+  only a human may write, such as `.claude/settings.json` or `.mcp.json`, enters the protected
+  branch: a worker that changes one is refused.
+- **Remote-backed** (with `repo:`). Put the change into origin's protected branch — a fast-forward
+  push from your own clone, or a merge of your own PR. Never push from the workspace's checkout.
+  Tasks that have already forked do not get it; it takes effect from the next fork.
 
 ## Let workers edit the registry
 

@@ -158,7 +158,11 @@ function commitBlob(checkout: string, path: string, blob: string): string {
 /** 人間しか書けない path の拒否であることを確かめ、名指された path の行を返す。 */
 function humanOnlyRefusal(result: any): string[] {
   expect(result.isError).toBe(true);
-  expect(result.content[0].text).toContain("this path is written only by a human; take the change out of the task branch and commit, then call complete_task again");
+  // spec #3273 text A11 / pin A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない
+  expect(result.content[0].text).toContain(
+    "this path is written only by a human; take the change out of the task branch and commit, then call complete_task again. That change is put in by a human.\n",
+  );
+  expect(result.content[0].text).not.toContain("workbench");
   return result.content[0].text.split("\n").slice(1);
 }
 

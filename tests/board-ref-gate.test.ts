@@ -151,7 +151,7 @@ it("local landing follows HEAD without executing a repo-local smudge command (AD
     git(ws.path, "config", "core.splitIndex", "true");
     git(ws.path, "update-index", "--split-index");
 
-    const landed = mergeTaskToProtected(db, ws, task.id, CLEAN_LANDING_INTAKE);
+    const { landed } = mergeTaskToProtected(db, ws, task.id, CLEAN_LANDING_INTAKE);
 
     expect(existsSync(`${script}.ran`)).toBe(false);
     expectHooksAndSigningInactive(hooks);
@@ -183,7 +183,7 @@ it("local landing restores the old worktree when Git cannot lock the protected r
     expect(git(ws.path, "status", "--porcelain")).toBe("");
     expect(existsSync(join(ws.path, "landed.txt"))).toBe(false);
     rmSync(lock);
-    expect(mergeTaskToProtected(db, ws, task.id, CLEAN_LANDING_INTAKE)).toBe(git(ws.path, "rev-parse", "HEAD"));
+    expect(mergeTaskToProtected(db, ws, task.id, CLEAN_LANDING_INTAKE).landed).toBe(git(ws.path, "rev-parse", "HEAD"));
   } finally {
     db.close();
   }

@@ -46,6 +46,8 @@ import {
   boardRefWriter,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
+  openHumanContentWorkbench,
+  openIntakeQuestionId,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   redoMergeBacks,
@@ -2411,6 +2413,25 @@ it("追いつきの conflict は作業台を開いて本文が名指し、作業
   expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("repair-only.txt");
 });
 
+// spec #3273 text C6: 作業台を残す追いつきの取り込みは、retry の回答の応答が C6 を言う
+it("追いつきの取り込みの後に作業台に人間の作業が残れば、作業台の branch を包む commit へ進め、retry の応答が text C6 を言う", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-kept-workbench");
+  await convergeOn(c.landing, c.repair.id);
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  c.resolve();
+  const tip = git(c.workbench(), "rev-parse", "HEAD");
+  git(c.workbench(), "checkout", "--quiet", "-b", "side");
+  commitWork(c.workbench(), "side.txt", "the human's other work\n");
+  git(c.workbench(), "checkout", "--quiet", c.target);
+
+  const answered = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry");
+
+  const commit = listEventsOfKinds(c.db, ["workbench_taken_in"]).map(({ payload }) => (payload as { commit: string }).commit)[0]!;
+  expect(answered.notice).toBe(`took ${tip} in as ${commit} on ${c.target}. In a clone, fetch the workbench and fast-forward to \`board/${c.target}\` before you write on.`);
+  expect(git(c.workbench(), "rev-parse", c.target)).toBe(commit);
+  expect(getTask(c.db, failure!.id)?.status).toBe("done");
+});
+
 it("追いつきの conflict で作業台を開けなくても本文はその理由を言い、retry の答え直しが作業台を開く(text A7d)", async () => {
   const c = await catchUpConflictRoot("catch-up-conflict-no-workbench");
   // 段の場所にファイルがあって作業台の dir を作れない
@@ -2471,6 +2492,27 @@ it("作業台で merge した後に origin の保護ブランチが進めば、r
   expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
   expect(getTask(c.db, failure!.id)?.status).toBe("todo");
   expect(c.github.requests).toEqual([]);
+});
+
+// spec #3273 text A7c / D6(ADR 0376 決定12): remote-backed の入口の人間しか書けない path の拒否は origin への道を言う
+it("追いつきの作業台の tip が人間しか書けない path を変えていれば、retry は text D6 の道を言って拒み何も書かない", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-human-only");
+  await convergeOn(c.landing, c.repair.id);
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  c.resolve();
+  commitWork(c.workbench(), ".mcp.json", "{}\n");
+  const before = git(c.workspace.path, "rev-parse", c.target);
+
+  const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain(
+    "which is written only by a human; take that change out and commit, then answer again. Put the change into origin's main — a fast-forward push from your own " +
+      `clone, or a merge of your own PR. Never push from ${c.workspace.path}. Tasks that have already forked do not get it; it takes effect from the next fork.`,
+  );
+  expect(git(c.workspace.path, "rev-parse", c.target)).toBe(before);
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
 });
 
 // ADR 0382 決定1・2(#3347): 追いつきの作業台と子の merge back の作業台は別の鍵 —— 子は盤面が運び、人間の追いつきの tip はその後の
@@ -5469,7 +5511,7 @@ it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf
   git(workspace.path, "config", "fetch.recurseSubmodules", "true");
   const askpass = await humanAskpass();
 
-  const landed = mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
+  const { landed } = mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
 
   expect({ landed, protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
     landed: tip,
@@ -5809,6 +5851,24 @@ it("local 着地の merge が conflict すれば作業台を名指して拒み�
   expect(existsSync(workbenchPath(c.base, { workspace: workspace.name }, c.source))).toBe(false);
 });
 
+// ADR 0382 決定5 / spec #3273 text C6: 取り込みの後も人間の作業が残る作業台は残し、その branch を包む commit へ進め、応答が C6 を言う
+it("local 着地の取り込みの後に作業台に人間の作業が残れば、作業台を残してその branch を包む commit へ進め、応答が text C6 を言う", async () => {
+  const c = await localLandingConflict("local-landing-kept-workbench");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  const tip = c.resolve();
+  git(c.workbench(), "checkout", "--quiet", "-b", "side");
+  commitWork(c.workbench(), "side.txt", "the human's other work\n");
+  git(c.workbench(), "checkout", "--quiet", "main");
+
+  const answered = await c.answer();
+
+  const landed = git(c.workspace.path, "rev-parse", "refs/heads/main");
+  expect(answered.notice).toBe(`took ${tip} in as ${landed} on main. In a clone, fetch the workbench and fast-forward to \`board/main\` before you write on.`);
+  expect(git(c.workbench(), "rev-parse", "main")).toBe(landed);
+  expect(git(c.workbench(), "rev-parse", "board/main")).toBe(landed);
+  expect(git(c.workbench(), "status", "--porcelain")).toBe("");
+});
+
 // ADR 0371 決定3・5 / spec #3273 pin A4: 受け取る条件は保護ブランチの今の値と task の tip を祖先に持つことで、人間しか書けない path は
 // この入口では拒む。拒否は何も書かない
 it.each([
@@ -5834,7 +5894,10 @@ it.each([
       c.resolve();
       commitWork(c.workbench(), ".mcp.json", "{}\n");
     },
-    (c: LocalLandingConflict) => `the tip of the workbench at ${c.workbench()} changes .mcp.json, which is written only by a human`,
+    // spec #3273 text A7c: purely-local の出口は、intake question が開いていなければ open_workbench
+    (c: LocalLandingConflict) =>
+      `the tip of the workbench at ${c.workbench()} changes .mcp.json, which is written only by a human; take that change out and commit, then answer again. ` +
+      `To change a human-only path, open a workbench for ${c.workspace.name} (\`open_workbench\`).`,
   ],
 ])("local 着地の merge は作業台の tip を拒めば何も書かない —— %s", async (_case, write, says) => {
   const c = await localLandingConflict("local-landing-refused");
@@ -5846,6 +5909,22 @@ it.each([
 
   await expect(refused).rejects.toThrow(DomainError);
   await expect(refused).rejects.toThrow(says(c));
+  nothingWritten();
+});
+
+// spec #3273 text A7c: intake question が開いていれば、人間しか書けない path の拒否はその question を名指す
+it("intake question が開いていれば、local 着地の merge の人間しか書けない path の拒否はその question を名指す", async () => {
+  const c = await localLandingConflict("local-landing-human-only-intake");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  c.resolve();
+  commitWork(c.workbench(), ".mcp.json", "{}\n");
+  await openHumanContentWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now(), { resolveRegistered: undefined });
+  const intake = openIntakeQuestionId(c.db, c.workspace.name)!;
+  const nothingWritten = c.unchanged();
+
+  await expect(c.answer()).rejects.toThrow(
+    `which is written only by a human; take that change out and commit, then answer again. To change a human-only path, use the intake question ${intake} of workspace ${c.workspace.name}.`,
+  );
   nothingWritten();
 });
 
