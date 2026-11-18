@@ -1,6 +1,7 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -237,31 +238,14 @@ it("組を止める理由は記録の ref・名前の場所・隠せない形の
   );
 }, GIT_FIXTURE_TEST_TIMEOUT);
 
-it("(claude-code, B) の question への回答は、名前の場所の作業ツリーに何があっても保護ブランチの tree にまだ隠せない形があれば拒まれて開いたまま残り、作業台で直して commit すれば受理される(ADR 0360 決定3・ADR 0259 決定5・ADR 0371 決定6)", async () => {
+it("(claude-code, B) の question への回答は、名前の場所の作業ツリーに何があっても保護ブランチの tree にまだ隠せない形があれば拒まれて開いたまま残る(ADR 0360 決定3・ADR 0259 決定5)", async () => {
   const workspace = await workspaceWithSymlinkedClaude("pair-answer");
-  const db = openDb(":memory:");
-  const clock = new FakeClock();
-  const base = await tempDir("tidepool-pair-answer-workbenches-");
-  await prepareAtPickup(db, workspace, registerTask(db, { type: "work", title: "the pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, clock.now(), ...HUMAN_WEBUI));
-  stopContainmentPair(db, "claude-code", workspace, "unhideable .claude", base, clock.now());
-  const question = quarantineQuestion(db, "workspaceContainment", `claude-code/${workspace.name}`)!;
-  const deps = { db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, resolveWorkspace: () => workspace, workspacesDir: base }) };
-  const answer = () => submitAnswer(deps, question, ["repaired by hand"], undefined, () => clock.now(), "webui");
+  const { answer, status } = claudePairQuestion(workspace);
 
   await makeClaudeADirectory(workspace.path);
   await expect(answer()).rejects.toThrow("has .claude as a symlink");
-  expect(getTask(db, question.id)?.status).toBe("todo");
-  await rm(join(workspace.path, ".claude"), { recursive: true });
-  git(workspace.path, "checkout", "--", ".claude");
-
-  const workbench = realpathSync(workbenchPath(base, { workspace: workspace.name }));
-  await makeClaudeADirectory(workbench);
-  git(workbench, "add", "-A");
-  git(workbench, "commit", "-m", "make .claude a directory");
-  await answer();
-  expect(getTask(db, question.id)?.status).toBe("done");
-  expect(git(workspace.path, "ls-tree", "main", ".claude")).toMatch(/^040000 tree /);
-}, GIT_FIXTURE_TEST_TIMEOUT);
+  expect(status()).toBe("todo");
+});
 
 it("remote-backed な workspace の (claude-code, B) の question への回答は、人間が origin へ push した直しを引いてから保護ブランチを読み直す(ADR 0360 決定3)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("pair-answer-remote");
@@ -485,16 +469,16 @@ it("隠せない .claude を継いだ同じ分解判断の兄弟は failure ques
 }, GIT_FIXTURE_TEST_TIMEOUT);
 
 describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決定4〜6、spec #3273 の pin A7・A19・B12・B15・B23)", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, () => {
-  const B5 = (name: string) => `another answer or operation for workspace ${name} is being checked — try again once it has finished.`;
+  const anotherAnswerInFlight = (name: string) => `another answer or operation for workspace ${name} is being checked — try again once it has finished.`;
 
-  /** pickup を1度済ませて基準の行がある workspace の盤面(既定は保護ブランチに隠せない `.claude` を持つ)。 */
-  async function board(name: string, options: { workspace?: WorkspaceConfig; codex?: CodexWorkspaceCheck; githubAuth?: GitHubAuth } = {}) {
+  /** pickup を1度済ませて基準の行がある workspace の盤面(既定は保護ブランチに隠せない `.claude` を持つ)。`pickup: false` は基準の行が無い盤面。 */
+  async function board(name: string, options: { workspace?: WorkspaceConfig; codex?: CodexWorkspaceCheck; githubAuth?: GitHubAuth; pickup?: boolean } = {}) {
     const db = openDb(":memory:");
     const clock = new FakeClock();
     const ws = options.workspace ?? (await workspaceWithSymlinkedClaude(name));
     const base = await tempDir("tidepool-containment-workbenches-");
     const picked = registerTask(db, { type: "work", title: "the pickup", purpose: "p", completion_criteria: "c", workspace: ws.name }, clock.now(), ...HUMAN_WEBUI);
-    await prepareAtPickup(db, ws, picked);
+    if (options.pickup !== false) await prepareAtPickup(db, ws, picked);
     let current = ws;
     const checks = quarantineChecks({
       db,
@@ -519,20 +503,28 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       return git(workbench(), "rev-parse", "HEAD");
     };
     const takenIn = () => listEventsOfKinds(db, ["workbench_taken_in"]);
-    /** 今の保護ブランチと基準の行を控え、拒否が何も書いていないことを確かめる手を返す。 */
+    /** 今の保護ブランチを控え、拒否が何も書いていないことを確かめる手を返す。 */
     const unchanged = (harness: Harness = "claude-code") => {
       const main = git(ws.path, "rev-parse", "refs/heads/main");
-      const baselineOfMain = () => (db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(ws.name) as string).split("\n").find((line) => line.endsWith(" refs/heads/main"));
-      const baseline = baselineOfMain();
       const id = question(harness).id;
       return () => {
         expect(git(ws.path, "rev-parse", "refs/heads/main")).toBe(main);
-        expect(baselineOfMain()).toBe(baseline);
         expect(takenIn()).toEqual([]);
         expect(getTask(db, id)?.status).toBe("todo");
       };
     };
     return { db, clock, ws, base, stop, question, answer, answerWorkspace, workbench, repairInWorkbench, takenIn, unchanged, publish: (published: WorkspaceConfig) => { current = published; } };
+  }
+
+  /** 盤面の workspace を bare の origin へ公開して remote-backed にし、origin の在り処を返す。 */
+  async function becomeRemoteBacked(b: Awaited<ReturnType<typeof board>>) {
+    const origin = await tempDir("tidepool-became-remote-origin-");
+    git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
+    git(b.ws.path, "push", "--quiet", origin, "main");
+    const published = { ...b.ws, repo: origin };
+    rememberPublishedRepo(b.db, published);
+    b.publish(published);
+    return origin;
   }
 
   /** 検査を止めておける (codex, workspace) の検査 —— `release` まで答えない。 */
@@ -543,15 +535,14 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
   }
 
   describe("組の登録", () => {
-    it("purely-local の (claude-code, B) の登録は保護ブランチの作業台を開き、理由は text B8 でその在り処を言う", async () => {
+    it("purely-local の (claude-code, B) の登録は保護ブランチの作業台を開き、止めた資源と question の本文は同じ理由を運ぶ", async () => {
       const b = await board("pair-register");
 
       const stop = b.stop();
 
-      const reason = `the pair's reason. The board opened the workbench at ${b.workbench()}: commit the fix there on main, then answer.`;
-      expect(stop).toEqual({ quarantine: "workspaceContainment", value: "claude-code/pair-register", reason });
+      expect(stop).toMatchObject({ quarantine: "workspaceContainment", value: "claude-code/pair-register" });
       expect(git(b.workbench(), "rev-parse", "HEAD")).toBe(git(b.ws.path, "rev-parse", "main"));
-      expect(b.question().purpose).toContain(`${reason} Workspaces that have not captured a baseline yet`);
+      expect(b.question().purpose).toContain(`${stop.reason} Workspaces that have not captured a baseline yet`);
     });
 
     it("purely-local の (codex, B) の登録も作業台を開くが、理由は今の文のまま(文は #3289 が足す)", async () => {
@@ -610,6 +601,41 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       );
       expect(git(b.workbench(), "rev-parse", "HEAD")).toBe(held);
     });
+
+    it("disk にある作業台は次の組の停止が作り直さず、無視された file が残り、board/* だけを引き直す(ADR 0373 決定9)", async () => {
+      const workspace = await workspaceWithSymlinkedClaude("pair-register-idempotent");
+      commitWork(workspace.path, ".gitignore", ".env\n");
+      const b = await board("pair-register-idempotent", { workspace });
+      b.stop("codex");
+      await writeFile(join(b.workbench(), ".env"), "SECRET=1\n");
+      git(b.ws.path, "commit", "--quiet", "--allow-empty", "-m", "the protected branch moves on");
+
+      b.stop();
+
+      expect(readFileSync(join(b.workbench(), ".env"), "utf8")).toBe("SECRET=1\n");
+      expect(git(b.workbench(), "rev-parse", "board/main")).toBe(git(b.ws.path, "rev-parse", "main"));
+    });
+
+    it("書く先の branch が無い作りかけは次の組の停止が作り直す(ADR 0382 決定5・6)", async () => {
+      const b = await board("pair-register-half-made");
+      b.stop("codex");
+      git(b.workbench(), "symbolic-ref", "HEAD", "refs/heads/elsewhere");
+      git(b.workbench(), "update-ref", "-d", "refs/heads/main");
+
+      b.stop();
+
+      expect(git(b.workbench(), "rev-parse", "refs/heads/main")).toBe(git(b.ws.path, "rev-parse", "main"));
+    });
+
+    it("盤面 DB の拒否は組の停止の外へ届く(ADR 0342 決定4)", async () => {
+      const b = await board("pair-register-db-refusal");
+      const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
+      const refusing = { ...b.ws, checkRememberedRepo: () => { throw refusal; } };
+
+      expect(() => stopContainmentPair(b.db, "claude-code", refusing, "the pair's reason", b.base, b.clock.now())).toThrow(refusal);
+
+      expect(quarantineQuestion(b.db, "workspaceContainment", "claude-code/pair-register-db-refusal")).toBeUndefined();
+    });
   });
 
   describe("purely-local の (claude-code, B) の回答", () => {
@@ -655,6 +681,47 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       await expect(b.answer()).rejects.toThrow(`claude-code containment in workspace ${b.ws.name} is still not established: the recorded tree of refs/heads/main`);
 
       nothingWritten();
+    });
+
+    it("組の検査の拒否は直す先に作業台を言う(text B8)", async () => {
+      const b = await board("repair-refusal-names-workbench");
+      b.stop();
+
+      await expect(b.answer()).rejects.toThrow(/ on main\. The board opened the workbench at .+: commit the fix there on main, then answer\.$/);
+      await expect(b.answer()).rejects.toThrow(` The board opened the workbench at ${b.workbench()}: `);
+    });
+
+    it("作業台が disk に無ければ、組の検査の拒否は `open_workbench` の出口で終わる", async () => {
+      const b = await board("repair-refusal-no-workbench");
+      b.stop();
+      await rm(b.workbench(), { recursive: true });
+
+      await expect(b.answer()).rejects.toThrow(/ on main\. No workbench is open: open it with `open_workbench`, commit the fix there on main, then answer\.$/);
+    });
+
+    it("workspace の Quarantine が開いている間、取り込むものがある回答は text A8a で拒み何も書かない(ADR 0371 決定6)", async () => {
+      const b = await board("repair-workspace-quarantined");
+      b.stop();
+      await b.repairInWorkbench();
+      quarantineWorkspace(b.db, b.ws.name, new Error("a stop of the workspace"), b.clock.now());
+      const nothingWritten = b.unchanged();
+
+      await expect(b.answer()).rejects.toThrow(
+        new DomainError(`workspace ${b.ws.name} is quarantined — answer question ${quarantineQuestion(b.db, "workspace", b.ws.name)!.id} first.`),
+      );
+
+      nothingWritten();
+    });
+
+    it("workspace の Quarantine が開いていても、取り込むものが無ければ検査だけをして受理する", async () => {
+      const b = await board("repair-quarantined-nothing", { workspace: await makeWorkspace("repair-quarantined-nothing") });
+      b.stop();
+      quarantineWorkspace(b.db, b.ws.name, new Error("a stop of the workspace"), b.clock.now());
+      const id = b.question().id;
+
+      await b.answer();
+
+      expect(getTask(b.db, id)?.status).toBe("done");
     });
 
     it("取り込むものが無く保護ブランチに形が無ければ、何も取り込まずに受理する(pin A19)", async () => {
@@ -715,12 +782,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const b = await board("repair-became-remote");
       b.stop();
       await b.repairInWorkbench();
-      const origin = await tempDir("tidepool-repair-became-remote-origin-");
-      git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
-      git(b.ws.path, "push", "--quiet", origin, "main");
-      const published = { ...b.ws, repo: origin };
-      rememberPublishedRepo(b.db, published);
-      b.publish(published);
+      const origin = await becomeRemoteBacked(b);
       const nothingWritten = b.unchanged();
 
       await expect(b.answer()).rejects.toThrow(
@@ -761,8 +823,20 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
         `workspace ${b.ws.name}: refs changed while the containment Quarantine was open — now: ${stray} refs/heads/stray. Answer the workspace Quarantine (question ${workspaceQuestion.id}) first.`,
       );
       expect(check).not.toHaveBeenCalled();
-      expect(b.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(b.ws.name)).not.toContain("refs/heads/stray");
       nothingWritten();
+      // 基準を撮り直していれば、次の回答は通る
+      await expect(b.answer(harness)).rejects.toThrow(`now: ${stray} refs/heads/stray.`);
+    });
+
+    it("remote-backed になった workspace の先頭の比較の拒否も text A8e を言う", async () => {
+      const b = await board("compare-became-remote");
+      b.stop();
+      await becomeRemoteBacked(b);
+      git(b.ws.path, "branch", "stray");
+
+      await expect(b.answer()).rejects.toThrow(
+        new RegExp(`refs/heads/stray\\. Answer the workspace Quarantine \\(question [^)]+\\) first\\. Push the fix to origin's main from your own clone, then answer\\. Commits you made in the workbench at .+ are not taken in: `),
+      );
     });
 
     it("remote-backed の回答は fetch の間に動いた ref を fetch の後の比較で捕まえる(pin B15)", async () => {
@@ -825,16 +899,26 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
     });
 
     it("基準の行が無い名前の作業台に取り込むものがあれば、比べずに書かず開き直しを言う(ADR 0383 決定2)", async () => {
-      const b = await board("repair-no-baseline");
+      const b = await board("repair-no-baseline", { pickup: false });
       b.stop();
       await b.repairInWorkbench();
-      b.db.prepare("UPDATE workspace_state SET ref_snapshot = NULL WHERE name = ?").run(b.ws.name);
       const main = git(b.ws.path, "rev-parse", "main");
 
       await expect(b.answer()).rejects.toThrow(`the board holds no baseline for workspace ${b.ws.name}, so it cannot check main — open the workbench again (\`open_workbench\`), then answer again.`);
 
       expect(git(b.ws.path, "rev-parse", "main")).toBe(main);
       expect(b.takenIn()).toEqual([]);
+    });
+
+    it("基準の行が無い名前の作業台に取り込むものが無ければ、検査だけをして受理する(ADR 0373 決定7)", async () => {
+      const b = await board("repair-no-baseline-nothing", { workspace: await makeWorkspace("repair-no-baseline-nothing"), pickup: false });
+      b.stop();
+      const id = b.question().id;
+
+      await b.answer();
+
+      expect(getTask(b.db, id)?.status).toBe("done");
+      expect(holdsBaseline(b.db, b.ws.name)).toBe(false);
     });
   });
 
@@ -849,8 +933,8 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const answering = b.answer("codex");
       await vi.waitFor(() => expect(held.check).toHaveBeenCalled());
 
-      await expect(b.answer("claude-code")).rejects.toThrow(new DomainError(B5(b.ws.name)));
-      await expect(b.answerWorkspace()).rejects.toThrow(new DomainError(B5(b.ws.name)));
+      await expect(b.answer("claude-code")).rejects.toThrow(new DomainError(anotherAnswerInFlight(b.ws.name)));
+      await expect(b.answerWorkspace()).rejects.toThrow(new DomainError(anotherAnswerInFlight(b.ws.name)));
       held.release();
       await answering;
     });
@@ -859,12 +943,14 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const b = await board("in-flight-workspace");
       b.stop();
       quarantineWorkspace(b.db, b.ws.name, new Error("a stop of the workspace"), b.clock.now());
+      const workspaceQuestion = quarantineQuestion(b.db, "workspace", b.ws.name)!;
       const nothingWritten = b.unchanged();
 
       const first = b.answerWorkspace();
-      await expect(b.answer()).rejects.toThrow(new DomainError(B5(b.ws.name)));
+      await expect(b.answer()).rejects.toThrow(new DomainError(anotherAnswerInFlight(b.ws.name)));
       nothingWritten();
-      await first.catch(() => {});
+      await first;
+      expect(getTask(b.db, workspaceQuestion.id)?.status).toBe("done");
     });
   });
 });

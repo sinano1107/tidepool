@@ -48,6 +48,7 @@ import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js"
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
+import { workbenchPath } from "../src/workbench.js";
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import { type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import {
@@ -2128,6 +2129,28 @@ describe("ClaudeCodeWorker", () => {
     expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(body);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
+
+  it("保護ブランチの .claude が隠せない形なら、起動の経路で組を止めて作業台を開き、理由は text B8 でその在り処を言う(ADR 0373 決定9)", async () => {
+    const ws = await makeWorkspace("pair-stop-workbench");
+    await mkdir(join(ws.path, "shared"));
+    await writeFile(join(ws.path, "shared", "settings.json"), "{}");
+    await symlink("shared", join(ws.path, ".claude"));
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "share settings through a symlink");
+    const workspacesDir = await tempDir("tidepool-claude-workbenches-");
+    const { startInCheckout, stops } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n` }, { workspacesDir });
+
+    await startInCheckout("task-pair-stop-workbench", ws.path);
+
+    const workbench = realpathSync(workbenchPath(workspacesDir, { workspace: "tidepool" }));
+    expect(git(workbench, "rev-parse", "HEAD")).toBe(git(ws.path, "rev-parse", "main"));
+    expect(stops).toEqual([
+      ["task-pair-stop-workbench", expect.objectContaining({
+        quarantine: "workspaceContainment",
+        reason: expect.stringContaining(` The board opened the workbench at ${workbench}: commit the fix there on main, then answer.`),
+      })],
+    ]);
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("列挙 ping は tracked settings.json を隠した後に撃つ —— ping の瞬間に tree に無い(ADR 0346 決定1)", async () => {
     const ws = await makeWorkspace("tracked-settings-hide-before-ping");

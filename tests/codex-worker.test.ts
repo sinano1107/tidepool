@@ -24,6 +24,7 @@ import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
+import { workbenchPath } from "../src/workbench.js";
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import {
   answerSkillsList,
@@ -370,6 +371,8 @@ You are the Codex worker.`,
   const logDir = await tempDir("tidepool-codex-logs-");
   const appServerCall = fakeAppServerCall(appServer);
   const clock = new FakeClock();
+  // 組の停止は作業台をこの基点に開く(ADR 0373 決定9)—— 共有の tmpdir に残さない
+  const workspacesDir = await tempDir("tidepool-codex-workbenches-");
   const workerContainers = containers ?? passthroughContainers(spawn ?? process.spawn);
   const worker = new CodexWorker({
     db,
@@ -377,8 +380,7 @@ You are the Codex worker.`,
     registry: { dir: registry, mode: "purely-local" },
     agent: "codex-agent",
     workspace: "work",
-    // 組の停止は作業台をこの基点に開く(ADR 0373 決定9)—— 共有の tmpdir に残さない
-    workspacesDir: await tempDir("tidepool-codex-workbenches-"),
+    workspacesDir,
     mcpUrl: "http://127.0.0.1:4590/mcp",
     transcripts: new TranscriptStore(logDir),
     codexHome,
@@ -419,7 +421,7 @@ You are the Codex worker.`,
       }
     });
   };
-  return { db, worker, start, process, clock, codexHome, workspace, registeredWorkspace, logDir, registry, containers: workerContainers, appServer: appServerCall.calls };
+  return { db, worker, start, process, clock, codexHome, workspace, workspacesDir, registeredWorkspace, logDir, registry, containers: workerContainers, appServer: appServerCall.calls };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -889,6 +891,16 @@ describe("CodexWorker (ADR 0098)", () => {
       [value.id, sessionId(f.db, value.id), { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "codex/work", reason: expect.stringContaining("Codex still reports these skills enabled: flat") }],
     ]);
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
+  });
+
+  it("purely-local の workspace の組を止めると、起動の経路からも保護ブランチの作業台が開く(ADR 0373 決定9)", async () => {
+    const f = await fixture(vi.fn(), undefined, undefined, undefined, { appServer: answerSkillsList("one-enabled") });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", "commit", "--quiet", "--allow-empty", "-m", "first"], { cwd: f.workspace });
+
+    await f.start(task(f.db));
+
+    expect(quarantineQuestion(f.db, "workspaceContainment", "codex/work")).toBeDefined();
+    expect(existsSync(join(workbenchPath(f.workspacesDir, { workspace: "work" }), ".git"))).toBe(true);
   });
 
   it.each([

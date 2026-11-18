@@ -47,6 +47,7 @@ import { conventionCheckoutPath, isRemoteBacked, namePickupPredicates, type Pick
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
+  endSentence,
   GIVE_UP_THE_LOST_REFS,
   openQuarantineQuestion,
   parseTableRowEffortValue,
@@ -118,6 +119,7 @@ import {
   buildWorkspaceResolver,
   checkAcceptanceFirstHalf,
   compareContainmentRefs,
+  containmentRepairRoute,
   containmentWorkbenchNotTakenIn,
   fetchLostTargets,
   firePickupPredicates,
@@ -732,8 +734,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   // ADR 0373 決定7・10: 比較はほかのどの検査よりも前で、purely-local は先頭の1回
   const acceptContainmentRepair = async (harness: Harness, workspace: string, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
     const now = (deps.clock ?? new SystemClock()).now();
-    const assertEstablished = (capability: ContainmentCapability) => {
-      if (!capability.available) throw new DomainError(`${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`);
+    const assertEstablished = (capability: ContainmentCapability, route = "") => {
+      if (capability.available) return;
+      const refusal = `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`;
+      throw new DomainError(route ? `${endSentence(refusal)}${route}` : refusal);
     };
     if (harness === "codex") {
       await refuseOnError(() => compareContainmentRefs(deps.db, target, now));
@@ -747,27 +751,27 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     const checked = withRememberedRepoCheck(deps.db, target, () => now);
     const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
     // Claude は名前の場所の保護ブランチの tree を読み直す —— 人間が直せるのは保護ブランチで、作業ツリーではない(ADR 0360 決定3)
-    const recheck = async () => assertEstablished(await refuseOnError(() => claudeWorkspaceContainment(checked)));
-    // 比較から取り込みまでは1つの同期区間 —— 比べた値の上に書く
-    const local = await refuseOnError(() => {
-      compareContainmentRefs(deps.db, target, now);
-      if (isRemoteBacked(checked)) return undefined;
-      return { notice: takeInContainmentRepair(deps.db, target, { workbenchBase, answerer: { actorId: HUMAN_ACTOR_ID, origin }, now }) };
-    });
-    if (local) {
-      await recheck();
-      return local.notice === undefined ? undefined : { notice: local.notice };
-    }
-    // remote-backed なら人間の push を origin から引いてから読み、fetch の間に動いた ref も比べる
+    const recheck = () => refuseOnError(() => claudeWorkspaceContainment(checked));
     try {
+      const local = await refuseOnError(() => {
+        compareContainmentRefs(deps.db, target, now);
+        if (isRemoteBacked(checked)) return undefined;
+        return { notice: takeInContainmentRepair(deps.db, target, { workbenchBase, answerer: { actorId: HUMAN_ACTOR_ID, origin }, now }) };
+      });
+      if (local) {
+        assertEstablished(await recheck(), containmentRepairRoute(target, workbenchBase));
+        return local.notice === undefined ? undefined : { notice: local.notice };
+      }
+      // remote-backed なら人間の push を origin から引いてから読み、fetch の間に動いた ref も比べる
       await refuseOnError(() => refreshProtectedBranch(deps.db, target, deps.githubAuth));
       await refuseOnError(() => compareContainmentRefs(deps.db, target, now));
-      await recheck();
+      assertEstablished(await recheck());
       return undefined;
     } catch (err) {
-      const notTakenIn = containmentWorkbenchNotTakenIn(target, workbenchBase);
-      if (!notTakenIn || !(err instanceof DomainError)) throw err;
-      throw new DomainError(`${err.message.endsWith(".") ? err.message : `${err.message}.`}${notTakenIn}`);
+      if (!(err instanceof DomainError)) throw err;
+      const notTakenIn = await refuseOnError(() => containmentWorkbenchNotTakenIn(checked, workbenchBase));
+      if (!notTakenIn) throw err;
+      throw new DomainError(`${endSentence(err.message)}${notTakenIn}`);
     }
   };
   return {
