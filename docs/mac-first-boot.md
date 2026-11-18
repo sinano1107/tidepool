@@ -293,14 +293,17 @@ a workspace with **clone a repository** and its clone URL. The board refuses the
 the install link when the App is missing or you cannot push to the repository.
 
 Register a checkout you do not write in yourself: the board treats a workspace's checkout as its
-own from its first task on, between tasks too, and a checkout you also edit by hand will end up
-quarantined. Your own changes go where [Where you write](#where-you-write) says. Nothing else
+own from the first time it touches it, between tasks too, and a checkout you also edit by hand will
+end up quarantined. Your own changes go where [Where you write](#where-you-write) says. Nothing else
 changes — task branches, pull requests, and a merge question you answer.
 
 ## Where you write
 
-Never commit, check out or stash in a workspace's own checkout (its `path` in `workspaces.yaml`).
-Where your changes go depends on the workspace:
+Until the board first touches a workspace — no task has run there and no workbench was opened —
+you may commit in its checkout directly; the board's first look takes what is there as it is.
+After that, never commit, check out or stash in the checkout (its `path` in `workspaces.yaml`), and
+commits from a linked worktree you made of it stop the workspace too. Where your changes go then
+depends on the workspace:
 
 - **Purely-local** (no `repo:`). Open a workbench for the workspace with the management MCP tool
   `open_workbench`, or `POST /api/workspaces/<name>/workbench`. The board opens a checkout of its

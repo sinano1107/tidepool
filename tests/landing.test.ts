@@ -2413,6 +2413,25 @@ it("追いつきの conflict は作業台を開いて本文が名指し、作業
   expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("repair-only.txt");
 });
 
+// spec #3273 text C6: 作業台を残す追いつきの取り込みは、retry の回答の応答が C6 を言う
+it("追いつきの取り込みの後に作業台に人間の作業が残れば、作業台の branch を包む commit へ進め、retry の応答が text C6 を言う", async () => {
+  const c = await catchUpConflictRoot("catch-up-conflict-kept-workbench");
+  await convergeOn(c.landing, c.repair.id);
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  c.resolve();
+  const tip = git(c.workbench(), "rev-parse", "HEAD");
+  git(c.workbench(), "checkout", "--quiet", "-b", "side");
+  commitWork(c.workbench(), "side.txt", "the human's other work\n");
+  git(c.workbench(), "checkout", "--quiet", c.target);
+
+  const answered = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry");
+
+  const commit = listEventsOfKinds(c.db, ["workbench_taken_in"]).map(({ payload }) => (payload as { commit: string }).commit)[0]!;
+  expect(answered.notice).toBe(`took ${tip} in as ${commit} on ${c.target}. In a clone, fetch the workbench and fast-forward to \`board/${c.target}\` before you write on.`);
+  expect(git(c.workbench(), "rev-parse", c.target)).toBe(commit);
+  expect(getTask(c.db, failure!.id)?.status).toBe("done");
+});
+
 it("追いつきの conflict で作業台を開けなくても本文はその理由を言い、retry の答え直しが作業台を開く(text A7d)", async () => {
   const c = await catchUpConflictRoot("catch-up-conflict-no-workbench");
   // 段の場所にファイルがあって作業台の dir を作れない
@@ -5899,7 +5918,7 @@ it("intake question が開いていれば、local 着地の merge の人間し�
   await expect(c.answer()).rejects.toThrow(c.refused());
   c.resolve();
   commitWork(c.workbench(), ".mcp.json", "{}\n");
-  openHumanContentWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now());
+  await openHumanContentWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now(), { resolveRegistered: undefined });
   const intake = openIntakeQuestionId(c.db, c.workspace.name)!;
   const nothingWritten = c.unchanged();
 

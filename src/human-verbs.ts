@@ -1280,8 +1280,11 @@ export async function submitAnswer(
       case "pr_promotion_retry":
         if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
           const verdicts = await deps.landing.converge({ answering: { question: task.id, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
-          const error = promotionRetryError(verdicts.find((root) => root.taskId === kind.task_id)?.verdict);
-          if (error) throw new DomainError(error);
+          const root = verdicts.find((verdict) => verdict.taskId === kind.task_id);
+          const error = promotionRetryError(root?.verdict);
+          // spec #3273 text C6: 作業台を残した取り込みは、回答が後で拒まれても書いた後なので言う
+          if (error) throw new DomainError(root?.notice === undefined ? error : `${error}\n${root.notice}`);
+          notice = root?.notice;
         }
         break;
       case "local_merge":

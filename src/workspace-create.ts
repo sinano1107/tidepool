@@ -175,13 +175,18 @@ export interface WorkspaceAdmin {
   openWorkbench: OpenWorkbenchFn;
 }
 
-type OpenWorkbenchFn = (input: { name: string }, origin: EventOrigin) => string;
+type OpenWorkbenchFn = (input: { name: string }, origin: EventOrigin) => Promise<string>;
 
 /** `open_workbench` の扉(ADR 0371 決定6): registry に登録された workspace の名前だけを受ける —— 面接室も登録されていないので通らない
  *  (spec #3273 group A、#3184)。判定と執行は `openHumanContentWorkbench` が持ち、呼んだ人間が question の登録者になる。 */
-export function openWorkspaceWorkbench(input: { name: string }, origin: EventOrigin, deps: WorkspaceAdminDeps & { db: Db; clock?: Clock }): string {
-  const workspace = resolveExecutionWorkspace(loadRegistry(deps.registry.dir, deps.registry.mode), input.name, input.name, deps.workspacesBaseDir);
-  return openHumanContentWorkbench(deps.db, workspace, deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, (deps.clock ?? new SystemClock()).now());
+export async function openWorkspaceWorkbench(input: { name: string }, origin: EventOrigin, deps: WorkspaceAdminDeps & { db: Db; clock?: Clock }): Promise<string> {
+  // ADR 0373 決定13 の確認は名前を引くたびに registry を読み直す —— pickup の口と同じ
+  const resolveRegistered = (name: string | null) =>
+    resolveExecutionWorkspace(loadRegistry(deps.registry.dir, deps.registry.mode), input.name, name, deps.workspacesBaseDir);
+  return openHumanContentWorkbench(deps.db, resolveRegistered(input.name), deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, (deps.clock ?? new SystemClock()).now(), {
+    resolveRegistered,
+    fixedPoints: deps.boardState,
+  });
 }
 
 /** publish の2つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元

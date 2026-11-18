@@ -13,7 +13,7 @@ afterEach(() => t?.stop());
 /** 名前ごとに応答か拒否を返す偽の `open_workbench`。呼ばれた (名前, origin) を控える。 */
 function fakeOpenWorkbench() {
   const calls: Array<[string, EventOrigin]> = [];
-  const openWorkbench = ({ name }: { name: string }, origin: EventOrigin) => {
+  const openWorkbench = async ({ name }: { name: string }, origin: EventOrigin) => {
     calls.push([name, origin]);
     if (name === "nowhere") throw new UnknownWorkspaceError(name);
     if (name === "remote") throw new DomainError("workspace remote is remote-backed, so main is changed on origin.");

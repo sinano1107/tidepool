@@ -335,7 +335,7 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     const base = await tempDir("tidepool-workbenches-");
     const registryDir = await makeRegistry({ "workspaces.yaml": `${ws.name}:\n  path: ${ws.path}\n` });
     git(registryDir, "branch", "-M", "main");
-    openHumanContentWorkbench(db, ws, base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, new Date());
+    await openHumanContentWorkbench(db, ws, base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, new Date(), { resolveRegistered: undefined });
     const question = getTask(db, openIntakeQuestionId(db, ws.name)!)!;
     const workbench = realpathSync(workbenchPath(base, { workspace: ws.name }));
     const deps = () => ({

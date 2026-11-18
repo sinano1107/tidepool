@@ -582,7 +582,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => {
       if (!deps.workspaceAdmin?.openWorkbench) return toolError("workspace administration is not configured");
       try {
-        return toolResult({ message: deps.workspaceAdmin.openWorkbench(input, "mcp") });
+        return toolResult({ message: await deps.workspaceAdmin.openWorkbench(input, "mcp") });
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
         return registryToolError(err);
