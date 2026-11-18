@@ -419,7 +419,7 @@ it("決着した受験者の解放は最後の checkout を残し、その HEAD 
   const answer = git(place.path, "rev-parse", "HEAD");
   const done = complete(db, place, examinee);
   const roomRefs = () => git(room.path, "for-each-ref", "--format=%(refname) %(objectname)").split("\n");
-  const roomObjects = () => git(room.path, "rev-list", "--all", "--objects").split("\n");
+  const roomObjects = () => git(room.path, "rev-list", "--all", "--objects", "--no-object-names").split("\n");
   const roomReflog = () => git(room.path, "reflog", "show", "--no-abbrev", "HEAD");
 
   releaseWorkspace(db, place, done, NOW, true, undefined, undefined, true);
