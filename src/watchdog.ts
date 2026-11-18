@@ -237,7 +237,7 @@ export function spawnFailureHandler(
 }
 
 function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure, now: Date): void {
-  const unhideableTaskSettings = failure.kind === "unhideable-task-settings";
+  const unhideableInTask = failure.kind !== undefined;
   registerFailureQuestion(
     db,
     task,
@@ -246,10 +246,10 @@ function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure,
       `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
       failure.message,
     now,
-    unhideableTaskSettings
+    unhideableInTask
       ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
       : undefined,
-    unhideableTaskSettings ? "abandon" : undefined,
+    unhideableInTask ? "abandon" : undefined,
   );
 }
 

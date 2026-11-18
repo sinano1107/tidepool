@@ -34,7 +34,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { appendEvent, type ResourceStop } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { git } from "./git.js";
-import type { CodexWorkspaceCheck } from "./harness-containment.js";
+import { type CodexWorkspaceCheck, pairStopReason, rereadsProtectedTip } from "./harness-containment.js";
 import {
   buildMemoryInjection,
   buildMetaReviewMaterial,
@@ -61,15 +61,19 @@ import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import { type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
+import { type SpawnFailure, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
+  protectedBranch,
   quarantineWorkspace,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   runPlaceReadPaths,
   stopContainmentPair,
+  taskBranch,
   taskRunPlace,
+  withProtectedTipCheckout,
+  withRememberedRepoCheck,
 } from "./workspace.js";
 
 const BOARD_VERBS = [
@@ -377,7 +381,7 @@ export interface CodexWorkerOptions {
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。`record` は観測点の spawn_failed の
    *  書き込みで、一撃が失敗の記録と同じ tx で撃つ(ADR 0342 決定6)。不在 → 観測点が自分で書く。 */
-  onSpawnFailed?: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record: () => void) => void;
+  onSpawnFailed?: (taskId: string, sessionId: number, failure: SpawnFailure, record: () => void) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed?: (taskId: string, sessionId: number, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が `todo` へ戻す。 */
@@ -465,10 +469,11 @@ export function listedSkillPaths(result: unknown, cwds: readonly string[]): stri
  *  まだ有効と報告された skill を `name (path)` で拾う。許した path が有効なことは封じ込めの性質ではないので問わない。許さなかった path は
  *  列挙に無かったもの(列挙と観測の間に現れた skill)も閉じたものとして問う —— 許可が空なら観測の全部が無効であること。 */
 export function enabledSkills(result: unknown, cwds: readonly string[], permitted: ReadonlySet<string>): string[] {
-  return skillsAt(result, cwds)
-    .filter((skill) => skill.enabled && !permitted.has(skill.path))
-    .map((skill) => `${skill.name} (${skill.path})`);
+  return unclosedSkills(result, cwds, permitted).map((skill) => `${skill.name} (${skill.path})`);
 }
+
+const unclosedSkills = (result: unknown, cwds: readonly string[], permitted: ReadonlySet<string>) =>
+  skillsAt(result, cwds).filter((skill) => skill.enabled && !permitted.has(skill.path));
 
 /** Codex の skill allowlist の翻訳(ADR 0337 決定2)。`deny` は閉じる path、`paths` は許した名前 → SKILL.md の path で、どちらも
  *  Codex が列挙した綴り(worker が prompt で見て `cat` する綴り)。3列と `paths` は `worker_spawned.skills` に載る。 */
@@ -962,7 +967,7 @@ export async function codexWorkspaceContainment(options: {
   config: (translation: CodexSkillTranslation) => string[];
   /** spawn の前の検査だけが渡す継続の門(#1973): 列挙の間に session が終わっていれば観測の Board call を撃たずに投げる。 */
   live?: () => boolean;
-}): Promise<{ translation: CodexSkillTranslation; capability: ContainmentCapability; observed: unknown }> {
+}): Promise<{ translation: CodexSkillTranslation; capability: ContainmentCapability; observed: unknown; unclosedPaths: string[] }> {
   const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
   const [listed] = await callAppServer(through("Codex skill enumeration"), options.executable, options.env, [], [skillsListRequest(options.workspace)]);
   const resolved = translateCodexSkills({ allowlist: options.allowlist, listed, workspace: options.workspace });
@@ -975,11 +980,13 @@ export async function codexWorkspaceContainment(options: {
     ["--strict-config", ...configArgs(config)],
     [skillsListRequest(options.workspace)],
   );
-  const enabled = enabledSkills(observed, [options.workspace], new Set(Object.values(resolved.paths)));
+  const permitted = new Set(Object.values(resolved.paths));
+  const enabled = enabledSkills(observed, [options.workspace], permitted);
   const translation = translateCodexSkills({ allowlist: options.allowlist, listed, workspace: options.workspace, observed });
   return {
     translation,
     observed,
+    unclosedPaths: unclosedSkills(observed, [options.workspace], permitted).map((skill) => skill.path),
     capability: enabled.length === 0
       ? { available: true }
       : {
@@ -1568,7 +1575,7 @@ export class CodexWorker implements WorkerAdapter {
     };
     // ADR 0118: worker が1度も走らなかった pickup の観測点(skill の列挙・観測、spawn までの同期 throw、spawn の error)は同じ形で記録する
     let recorded = false;
-    const spawnFailed = (failure: { error_code: string | null; message: string }) => {
+    const spawnFailed = (failure: { error_code: string | null; message: string }, kind?: SpawnFailure["kind"]) => {
       // 配線の途中で投げたあとに spawn の error が来ても、記録は1度だけ
       if (recorded) return;
       removeTaskTemp();
@@ -1581,7 +1588,8 @@ export class CodexWorker implements WorkerAdapter {
           payload: { kind: "spawn_failed", ...failure },
           at: this.options.clock.now(),
         });
-      if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, sessionId, failure, record);
+      // kind は一撃にだけ運ぶ —— `spawn_failed` の event の型には無い(ADR 0379 決定4)
+      if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, sessionId, kind ? { ...failure, kind } : failure, record);
       else record();
       // ADR 0342 決定5: 印は一撃が返った後 —— 盤面 DB の拒否で投げた書き込みを記録済みと読まない
       recorded = true;
@@ -1592,13 +1600,15 @@ export class CodexWorker implements WorkerAdapter {
     // 列挙・観測の間に session が終わったら(停止・解放・再 pickup)、task temp だけ片付けて何も書かずに終わる(#1973)
     const live = liveSession(this.options.db, task.id);
     // 観測と spawn は同じこの設定(ADR 0259 決定3)。同梱 skill を許した設定だけ `.system` を読める(ADR 0337 決定5)
-    const workerConfig = (translation: CodexSkillTranslation) =>
+    const workerConfigAt = (at: string) => (translation: CodexSkillTranslation) =>
       spawnConfig({
         ...input,
+        workspace: at,
         readPaths: [...input.readPaths, ...bundledSkillReads(this.options.codexHome, translation)],
         taskTemp,
         skills: closedSkillsConfig(translation.deny),
       });
+    const workerConfig = workerConfigAt(workspacePath);
     return (async () => {
       let checked: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
       try {
@@ -1621,9 +1631,47 @@ export class CodexWorker implements WorkerAdapter {
       }
       if (!live()) return removeTaskTemp();
       if (!checked.capability.available) {
+        // ADR 0379 決定3: 同じ検査を保護ブランチの tip に当て直す。閉じる集合は spawn と同じ agent のもの。ここの失敗は組の不成立でない(ADR 0259 決定6)
+        let protectedTip: ContainmentCapability | undefined;
+        if (rereadsProtectedTip(task)) {
+          try {
+            const named = withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now());
+            protectedTip = await withProtectedTipCheckout(named, this.workspacesDir, async (path) => {
+              const { capability } = await codexWorkspaceContainment({
+                call: this.options.boardCall,
+                executable: this.options.executable,
+                env,
+                workspace: path,
+                allowlist: agent.definition.skills,
+                config: workerConfigAt(path),
+                live,
+              });
+              return capability;
+            });
+          } catch (error) {
+            if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4
+            if (!live()) return removeTaskTemp();
+            spawnFailed({ error_code: null, message: `${SKILL_CHECK_FAILED}; the worker was not spawned (no fail-open): ${String(error)}` });
+            return;
+          }
+          if (!live()) return removeTaskTemp();
+        }
         removeTaskTemp();
-        // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
-        stopped(stopContainmentPair(this.options.db, "codex", place.namedPlace, checked.capability.reason, this.workspacesDir, this.options.clock.now()));
+        const pairStop = pairStopReason(protectedTip);
+        if (pairStop !== undefined) {
+          // 閉じきれないのはこの workspace の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
+          stopped(stopContainmentPair(this.options.db, "codex", place.namedPlace, pairStop, this.workspacesDir, this.options.clock.now()));
+          return;
+        }
+        const paths = checked.unclosedPaths.join(", ");
+        spawnFailed({
+          error_code: null,
+          // spec #3273 text G2 / G2b
+          message: rereadsProtectedTip(task)
+            ? `${taskBranch(task.id)} carries skills the board cannot hide from Codex (${paths}), while ${protectedBranch(place.namedPlace)} does not. ` +
+              "The branch forked before the workspace was repaired, was cut from one that did, or the task added them. Recommended: abandon."
+            : `the checkout of this Interview task carries skills the board cannot hide from Codex (${paths}). An Interview never stops the pair. Recommended: abandon.`,
+        }, "unhideable-task-skills");
         return;
       }
       // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
