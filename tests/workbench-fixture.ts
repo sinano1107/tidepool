@@ -10,7 +10,7 @@ import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
 import { recordTaskCheckoutTip, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch, sessionId, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 作業台の試験の場(spec #3273 group A): merge back が conflict する子と、その workspace の Quarantine への回答。
@@ -24,12 +24,12 @@ export async function boardWithParent(): Promise<Board> {
   const clock = new FakeClock();
   const ws = await makeWorkspace("workbench");
   const base = await tempDir("tidepool-task-checkouts-");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
-  git(ws.path, "branch", `task/${parent.id}`, "main");
-  git(ws.path, "checkout", `task/${parent.id}`);
+  const registered = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
+  seedTaskBranch(db, ws, registered.id);
+  git(ws.path, "checkout", `task/${registered.id}`);
   commitWork(ws.path, "work.txt", "from the parent\n");
   git(ws.path, "checkout", "main");
-  return { db, clock, ws, base, parent };
+  return { db, clock, ws, base, parent: getTask(db, registered.id)! };
 }
 
 /** 親の子を登録し、そのタスクブランチを main から切る —— 2つ目の子のブランチは最初の pickup の前に切る(後から名前の場所に書くと、

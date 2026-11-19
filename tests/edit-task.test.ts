@@ -1,7 +1,8 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listEvents } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { editTask, getTask, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { api, bootTidepool, defaultingTo, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, queueChild, queueWork, type Tidepool } from "./harness.js";
 
@@ -193,6 +194,30 @@ it.each([
 
   expect(() => editTask(db, task, input, at, "webui")).toThrow(DomainError);
   expect(getTask(db, task.id)).toMatchObject({ assignee: "deckhand", workspace: "home" });
+});
+
+/** 子の pickup が固定しただけの根(ADR 0372 決定3): `task_branch_created` を持ち、pickup の event は持たない。 */
+function fixedByChildPickup() {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand", workspace: "home" }, at, ...HUMAN_WEBUI);
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha: "0".repeat(40), workspace: "home" }, at });
+  return { db, task: getTask(db, task.id)! };
+}
+
+it.each([
+  ["別名に", "other"],
+  ["空に", ""],
+])("task_branch_created を持つ task の workspace を%s変える Edit は拒まれ、列は動かない(ADR 0372 決定5)", (_, workspace) => {
+  const { db, task } = fixedByChildPickup();
+
+  expect(() => editTask(db, task, { workspace }, at, "webui")).toThrow(DomainError);
+  expect(getTask(db, task.id)!.workspace).toBe("home");
+});
+
+it("子の pickup が固定しただけの根の assignee は Edit で変えられる —— assignee の鍵に task_branch_created は足さない(ADR 0372 決定5)", () => {
+  const { db, task } = fixedByChildPickup();
+
+  expect(editTask(db, task, { assignee: "navigator" }, at, "webui").assignee).toBe("navigator");
 });
 
 it("pickup 済みの task でも、assignee / workspace の値が変わらない送信と他の欄の Edit は従来どおり通る", () => {

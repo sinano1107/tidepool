@@ -664,7 +664,7 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, interviewRootIdOf(db, picked)!, err, clock.now()));
         }
         try {
-          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now(), resolveRegistered: resolveWorkspace });
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live, reads: checks, workspacesBaseDir: base, now: clock.now(), resolveRegistered: resolveWorkspace, defaultWorkspaceName: workspace?.name });
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
           // ADR 0373 決定13: 最初の撮りの確認に落ちた —— 落ちた workspace の Quarantine はもう立っている

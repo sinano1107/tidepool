@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { BOARD_ACTOR_ID } from "./actor-id.js";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
@@ -124,6 +124,7 @@ import {
   sessionReadCheckouts,
   subtreeSql,
   type Task,
+  type TaskType,
   taskCheckoutPath,
   taskCheckoutWasReleased,
   tasksOwingReleaseOn,
@@ -1696,6 +1697,35 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   });
 }
 
+/** 修理子の type は review と同じく lineage に透明(ADR 0272 決定6 / ADR 0279 決定4)。
+ *  interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)。 */
+const transparentToLineage = (type: TaskType): boolean => carriesReadOnly(type) || type === "interview";
+
+function ancestorsFromTop(db: Db, task: Pick<Task, "parent_id">): Task[] {
+  const ancestors: Task[] = [];
+  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; ) {
+    ancestors.unshift(parent);
+    parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined;
+  }
+  return ancestors;
+}
+
+/** ADR 0372 決定3: 自分のタスクブランチを切る task の pickup は、同じ workspace に導出される未決着の work の祖先のうち
+ *  `task_branch_created` を持たないものを上から固定する —— 空の列に workspace を書き、祖先自身の系譜から ref を作り、event を残す。
+ *  導出は「列 → 列が埋まった最も近い祖先 → 既定」。人間担当の祖先は固定しない(#3293)。review の pickup は lineage に透明なので固定しない。 */
+function fixUnstartedAncestors(db: Db, workspace: WorkspaceConfig, task: Task, defaultWorkspaceName: string | undefined, now: Date): void {
+  if (transparentToLineage(task.type)) return;
+  let inherited: { name: string; from: string } | undefined;
+  for (const ancestor of ancestorsFromTop(db, task)) {
+    const name = ancestor.workspace ?? inherited?.name ?? defaultWorkspaceName;
+    const fixes =
+      name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) && ancestor.assignee !== HUMAN_ACTOR_ID &&
+      !latestEventOfTask(db, ancestor.id, "task_branch_created");
+    if (fixes) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, ancestor.workspace === null ? (inherited?.from ?? "default") : undefined);
+    if (ancestor.workspace !== null || fixes) inherited = { name: name!, from: ancestor.id };
+  }
+}
+
 /** ADR 0053 / ADR 0105: the live integration branch plus the lineage fact a
  *  root needs when a squash/rebase-landed fork source left history divergent. */
 export function resolveTaskBranchLineage(
@@ -1710,9 +1740,7 @@ export function resolveTaskBranchLineage(
     beforeRefRead?.();
     beforeRefRead = undefined;
   };
-  // 修理子の type は review と同じく lineage に透明(ADR 0272 決定6 / ADR 0279 決定4)
-  // interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)
-  if (carriesReadOnly(task.type) || task.type === "interview") {
+  if (transparentToLineage(task.type)) {
     if (task.parent_id) readingRefs();
     return {
       branch:
@@ -1723,16 +1751,11 @@ export function resolveTaskBranchLineage(
     };
   }
 
-  const ancestors: Task[] = [];
-  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; ) {
-    ancestors.unshift(parent);
-    parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined;
-  }
-
   let candidate: string | undefined;
   let outlivedForkSource = false;
-  for (const ancestor of ancestors) {
-    if (ancestor.type !== "work") continue;
+  for (const ancestor of ancestorsFromTop(db, task)) {
+    // ADR 0372 決定4: タスクブランチを持ち、書かれた列がこの checkout の workspace と同じ work の祖先だけを数える —— 決着の有無を問わず
+    if (ancestor.type !== "work" || ancestor.workspace !== workspace.name || !latestEventOfTask(db, ancestor.id, "task_branch_created")) continue;
     const branch = taskBranch(ancestor.id);
     if (!isSettled(ancestor.status)) {
       candidate = branch;
@@ -1820,12 +1843,25 @@ export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): 
   return git(workspace.path, "rev-parse", `${source}^{commit}`);
 }
 
-/** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。 */
-function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
-  if (taskBranchExists(workspace, task.id)) return;
+/** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。
+ *  ADR 0372 決定2: ref を書いた後に `task_branch_created` を残す。`filledFrom` は同じ固定が空の列に `task.workspace` を書くときの出所で、
+ *  列と event は1つの transaction で書く。ADR 0329 決定2 と同じく、ref を書いて event の前に落ちた作成は次の作成が event だけ足して通す。 */
+function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, filledFrom?: string): void {
   const ref = `refs/heads/${taskBranch(task.id)}`;
-  const sha = taskForkSource(db, workspace, task);
-  boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "update-ref", ref, sha, ""));
+  if (!taskBranchExists(workspace, task.id)) {
+    const sha = taskForkSource(db, workspace, task);
+    boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "update-ref", ref, sha, ""));
+  } else if (latestEventOfTask(db, task.id, "task_branch_created")) return;
+  const sha = git(workspace.path, "rev-parse", ref);
+  // ADR 0372 決定2: 面接室で切る task も列の実環境の名前を残す
+  const name = task.workspace ?? workspace.name;
+  db.transaction(() => {
+    if (filledFrom !== undefined) db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(name, task.id);
+    appendEvent(db, {
+      taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: now,
+      payload: { kind: "task_branch_created", sha, workspace: name, ...(filledFrom !== undefined && { column_filled_from: filledFrom }) },
+    });
+  })();
 }
 
 function sparsePatternPath(workspace: WorkspaceConfig): string {
@@ -1947,6 +1983,8 @@ export async function prepareWorkspaceAtPickup(
     /** registry の名前を引く口(ADR 0373 決定13 の最初の撮りの確認が引く)。省けない —— 撮る呼び手が渡し忘れれば確認が黙って消える。
      *  undefined は registry の無い盤面で、確認は掛からない。 */
     resolveRegistered: WorkspaceResolver | undefined;
+    /** 未着手の祖先の導出が最後に当てる既定(ADR 0372 決定1・3)。undefined は既定の無い盤面。 */
+    defaultWorkspaceName: string | undefined;
   },
 ): Promise<void> {
   prepareRefBaseline(db, workspace, board);
@@ -1976,7 +2014,8 @@ export async function prepareWorkspaceAtPickup(
   await firePickupPredicates(db, workspace, predicates, "after-open", board);
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
-  createTaskBranch(db, workspace, task);
+  fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
+  createTaskBranch(db, workspace, task, board.now);
   openTaskCheckout(db, workspace, task, board.workspacesBaseDir, board.now);
 }
 

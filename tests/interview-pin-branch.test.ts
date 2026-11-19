@@ -292,6 +292,21 @@ it("受験者の fork 元は出題の head で、pickup が受験者のタスク
   db.close();
 });
 
+it("Interview の root は面接室の main から、受験者は出題の head から面接室にタスクブランチを切り、task_branch_created はどちらも面接室でなく実環境の名前を残す(ADR 0372 決定2 / ADR 0273 決定2・8)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, head, examinees, base } = await posedInRoom(db);
+  const [first] = examinees as [Task];
+
+  await pickUp(db, first, room, base);
+
+  const created = (taskId: string) => listEvents(db, taskId).filter((e) => e.kind === "task_branch_created").map((e) => e.payload);
+  expect(created(root.id)).toEqual([{ kind: "task_branch_created", sha: git(room.path, "rev-parse", "main"), workspace: workspace.name }]);
+  expect(created(first.id)).toEqual([{ kind: "task_branch_created", sha: head, workspace: workspace.name }]);
+  expect(git(room.path, "rev-parse", `task/${first.id}`)).toBe(head);
+  expect(git(workspace.path, "for-each-ref", "--format=%(refname)", "refs/heads/task/")).toBe("");
+  db.close();
+});
+
 it("出題の写しと root の解放の間で盤面が落ちても、後始末の再実行は普通の解放で、head は面接室で引けたまま受験者の pickup が引ける(ADR 0356 決定6)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, place } = await pickedRoot(db, "pose-crash-real");

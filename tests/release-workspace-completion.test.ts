@@ -28,6 +28,7 @@ import {
   prepareAtPickup,
   quarantineQuestion,
   STAGING_FAILURES,
+  seedTaskBranch,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -71,7 +72,7 @@ async function completedChild(legacy?: "stale" | "recorded") {
   const ws = await makeWorkspace("completed-child");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
   const parentBranch = `task/${parent.id}`;
-  git(ws.path, "branch", parentBranch, "main");
+  seedTaskBranch(db, ws, parent.id, "main");
   const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", NOW)!;
   const place = await prepareAtPickup(db, ws, task);
@@ -454,7 +455,7 @@ it("完了の merge back は ignored の生成物と入れ子 repo を名前の�
   const ws = await makeWorkspace("ignored-completion");
   commitWork(ws.path, ".gitignore", "node_modules/\n");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
-  git(ws.path, "branch", `task/${parent.id}`, "main");
+  seedTaskBranch(db, ws, parent.id, "main");
   const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", NOW)!;
   const place = await prepareAtPickup(db, ws, task);

@@ -11,7 +11,7 @@ import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { completionTreePaths, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // task の checkout(ADR 0356): work / review の worker は名前の場所でなく、pickup ごとに作って解放で消す自分の repo で走る。
@@ -170,7 +170,7 @@ it("名前の場所の ref を書けなければ完了の門は拒み、lock を
   const named = await makeWorkspace("task-checkout-gate-observation");
   db = openDb(":memory:");
   const parent = register();
-  git(named.path, "branch", `task/${parent.id}`, "main");
+  seedTaskBranch(db, named, parent.id, "main");
   const child = pickupTask(db, register("work", parent.id), "deckhand", NOW)!;
   const place = await prepareAtPickup(db, named, child);
   commitWork(place.path, "child.txt", "child\n");
@@ -195,7 +195,8 @@ it("fork 元は根なら保護ブランチ、子なら親の work branch の sha
   const named = await makeWorkspace("task-checkout-fork-source");
   db = openDb(":memory:");
   const parent = register();
-  git(named.path, "switch", "-c", `task/${parent.id}`);
+  seedTaskBranch(db, named, parent.id);
+  git(named.path, "switch", `task/${parent.id}`);
   commitWork(named.path, "parent.txt", "parent\n");
   git(named.path, "switch", "main");
   const child = pickupTask(db, register("work", parent.id), "deckhand", NOW)!;

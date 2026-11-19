@@ -3698,6 +3698,13 @@ export function editTask(
           "to change it, cancel the task and register a new one",
       );
     }
+    // ADR 0372 決定5: workspace はタスクブランチを持つ task でも凍る(子の pickup が固定した根を含む)—— assignee の鍵には足さない
+    if (field === "workspace" && latestEventOfTask(db, task.id, "task_branch_created")) {
+      throw new DomainError(
+        "a task that has a task branch keeps its workspace — the branch and its children's work live there; " +
+          "to change it, cancel the task and register a new one",
+      );
+    }
     changes.push({ field, from: task[field], to: next, value: next });
   }
   for (const field of ["risk_flag", "review_flag"] as const) {

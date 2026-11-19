@@ -83,6 +83,7 @@ import {
   prepareAtPickup,
   quarantineQuestion,
   queuedForAutoMerge,
+  seedTaskBranch,
   settleReview,
   settleReviews,
   squashTaskIntoOrigin,
@@ -92,6 +93,12 @@ import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+/** setup のみ: 盤面が作ったタスクブランチ(`seedTaskBranch`、ADR 0372 決定2)を `from` から置いて checkout する。 */
+function checkoutTaskBranch(db: Db, ws: WorkspaceConfig, taskId: string, from = "HEAD"): void {
+  seedTaskBranch(db, ws, taskId, from);
+  git(ws.path, "checkout", `task/${taskId}`);
+}
 
 let db: Db | undefined;
 
@@ -227,7 +234,7 @@ it("収束は、保護ブランチへ帰る done の work を根に導いて PR 
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
 
@@ -244,7 +251,7 @@ async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAutho
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   if (path !== "new PR") {
@@ -379,7 +386,7 @@ it("祖先の task branch へ帰る done の work には、何も刻まれず何
     ...HUMAN_WEBUI,
   );
 
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "integrated\n");
   git(workspace.path, "branch", `task/${child.id}`);
   finish(db, clock, child);
@@ -448,7 +455,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "already on main\n");
   await squashTaskIntoOrigin(workspace, task.id);
   git(workspace.path, "fetch", "origin", "main");
@@ -479,7 +486,7 @@ it("失敗 question が開いている根は収束が撃たず、retry の回が
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
@@ -533,7 +540,7 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
 
@@ -555,7 +562,7 @@ it("またいだセッションが偽造した remote ref は、purely-local の
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
@@ -586,7 +593,7 @@ it("GitHub の無い remote-backed work は閉じた理由で失敗し failure q
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
 
@@ -619,7 +626,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
 
@@ -650,7 +657,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
@@ -746,7 +753,7 @@ it("open PR への push をまたぐ session は盤面の push を違反に数�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
@@ -791,7 +798,7 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
@@ -833,7 +840,7 @@ it("盤面の外で閉じた PR を持つ根の収束は push せず、閉じた
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
@@ -862,7 +869,7 @@ it("無人 merge キューにいる閉じた PR は、収束が閉じた観測�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
   const landing = autoMerging(db, clock, workspace, github);
@@ -881,7 +888,7 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
   const landing = autoMerging(db, clock, workspace, github);
@@ -915,7 +922,7 @@ async function openPrWhosePushFailsAfterTransfer(name: string) {
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "repair.txt", "fixed\n");
@@ -1079,7 +1086,7 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
 
@@ -1104,7 +1111,7 @@ it("GitHub に同じ head の開いた PR がある根の着地は PR を作ら�
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   // 盤面が push して PR を作り、番号を記録する前に落ちた
   git(workspace.path, "push", "origin", `task/${work.id}`);
@@ -1128,7 +1135,7 @@ it("PR の作成の後・記録の前に盤面が落ちた根(GitHub にだけ P
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "push", "origin", `task/${work.id}`);
   github.scriptPullRequestOnBranch(`task/${work.id}`);
@@ -1146,7 +1153,7 @@ it("GitHub に同じ head の merge 済み PR がある根の着地は、番号�
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   const merged = github.scriptPullRequestOnBranch(`task/${work.id}`);
   github.scriptMergedOutside(merged);
@@ -1167,7 +1174,7 @@ it("GitHub に同じ head の閉じた PR がある根の着地は、番号と�
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   const closed = github.scriptPullRequestOnBranch(`task/${work.id}`);
   github.scriptClosedOutside(closed);
@@ -1187,7 +1194,7 @@ it("同じ head の PR を探す読み取りが失敗した根の着地は、PR 
   github.scriptFindFailure(new Error("gh pr list failed"));
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
 
@@ -1249,7 +1256,7 @@ it("retry 時の registry drift は workspace の quarantine を名乗る verdic
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   github.scriptFailure(new Error("first promotion failed"));
   finish(db, clock, task);
@@ -1277,7 +1284,7 @@ it("workspace が quarantine で門が開いている根の収束は、失敗 qu
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
   finish(db, clock, task);
@@ -1295,7 +1302,7 @@ it("workspace が quarantine で門が閉じている根の収束は、門で待
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   finish(db, clock, task);
@@ -1313,6 +1320,7 @@ it("根でない分解の親は、付帯子が未決着でも門で待った記�
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const root = landingWork(db, clock);
+  seedTaskBranch(db, workspace, root.id);
   const parent = finish(db, clock, attachUnsettledChild(db, clock, root.id));
   attachUnsettledChild(db, clock, parent.id);
 
@@ -1335,7 +1343,7 @@ it("着地判定の Git failure も throw せず閉じた失敗 verdict と ques
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "update-ref", "-d", "refs/heads/main");
   finish(db, clock, task);
@@ -1367,7 +1375,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
@@ -1395,7 +1403,7 @@ it("retry の時点で運ぶ内容が無ければ回答を受理し、着地対�
   github.scriptFailure(new Error("token expired"));
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   await landing.converge();
@@ -1432,7 +1440,7 @@ it("未束ねの異議がある work は同じ門で理由と数を返す", asyn
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   raiseUnbundledObjection(db, clock, task.id);
@@ -1480,7 +1488,7 @@ it("収束は open PR を持つ根を更新し、ローカル着地の question 
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`, "main");
+  checkoutTaskBranch(db, workspace, parent.id, "main");
   commitWork(workspace.path, "feature.txt", "ready\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
   recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now(), { head: pushPrHead(github, workspace, parent.id, 1) });
@@ -1522,12 +1530,12 @@ it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の�
   };
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const first = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${first.id}`);
+  checkoutTaskBranch(db, workspace, first.id);
   commitWork(workspace.path, "feature.txt", "first\n");
   finish(db, clock, first);
   // もう1つの根の内容は最初の回より前に置く —— 回の途中に名前の場所へ手で書くと、基準の後の帯域外の移動になる(ADR 0370 決定1)
   const second = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${second.id}`, "main");
+  checkoutTaskBranch(db, workspace, second.id, "main");
   commitWork(workspace.path, "second.txt", "second\n");
 
   const running = landing.converge();
@@ -1591,7 +1599,7 @@ it("stop の時点で走っている回と列に入った回は走り切り、st
   };
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const root = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  checkoutTaskBranch(db, workspace, root.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, root);
 
@@ -1691,7 +1699,7 @@ it("後始末が未了の行を木に持つ根は、収束が撃たない", asyn
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const root = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  checkoutTaskBranch(db, workspace, root.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, root);
   const repair = finish(db, clock, attachUnsettledChild(db, clock, root.id));
@@ -1709,7 +1717,7 @@ async function rootWithOpenedPr(name: string) {
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const root = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  checkoutTaskBranch(db, workspace, root.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, root);
   await landing.converge();
@@ -1777,7 +1785,7 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-descendant", "external");
   finish(db, clock, work);
   const child = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${child.id}`);
+  checkoutTaskBranch(db, workspace, child.id);
   commitWork(workspace.path, "child.txt", "merged back\n");
   git(workspace.path, "checkout", `task/${work.id}`);
   git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
@@ -1821,7 +1829,7 @@ it("PR が開いている external の根が未回答の失敗 question で止�
   await squashTaskIntoOrigin(workspace, work.id);
   git(workspace.path, "fetch", "origin", "main");
   const repair = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
+  checkoutTaskBranch(db, workspace, repair.id, "refs/remotes/origin/main");
   commitWork(workspace.path, "repair.txt", "after the merge\n");
   finish(db, clock, repair);
 
@@ -1960,7 +1968,7 @@ it("運ぶ内容の無い根の nothing_to_land と、門で待った根の land
   git(workspace.path, "branch", `task/${empty.id}`);
   finish(db, clock, empty);
   const waiting = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${waiting.id}`);
+  checkoutTaskBranch(db, workspace, waiting.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, waiting);
   attachUnsettledChild(db, clock, waiting.id);
@@ -2035,12 +2043,12 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge をせず�
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const parent = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   finish(db, clock, parent);
   recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
   git(workspace.path, "fetch", "origin", "main");
   boardMerged(db, clock, parent.id, 1);
@@ -2116,14 +2124,16 @@ it("lineage が読めない完了 work は、その根の失敗として失敗 q
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
-  // 完了した親のタスクブランチが無いので、子の lineage を解く git が失敗する
+  // 完了した親は task_branch_created を持つのにタスクブランチが無いので、子の lineage を解く git が失敗する
   const parent = landingWork(db, clock);
+  seedTaskBranch(db, workspace, parent.id);
+  git(workspace.path, "branch", "-D", `task/${parent.id}`);
   const child = attachUnsettledChild(db, clock, parent.id);
   git(workspace.path, "branch", `task/${child.id}`);
   finish(db, clock, child);
   finish(db, clock, parent);
   const healthy = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${healthy.id}`);
+  checkoutTaskBranch(db, workspace, healthy.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, healthy);
 
@@ -2146,11 +2156,11 @@ it("回の途中で後始末に入った木の根は、その回でも撃たれ�
   };
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const first = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${first.id}`);
+  checkoutTaskBranch(db, workspace, first.id);
   commitWork(workspace.path, "first.txt", "first\n");
   finish(db, clock, first);
   const second = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${second.id}`, "main");
+  checkoutTaskBranch(db, workspace, second.id, "main");
   commitWork(workspace.path, "second.txt", "second\n");
   finish(db, clock, second);
 
@@ -2199,7 +2209,7 @@ it("1つの根の失敗はその根に閉じ込められ、回は残りの根を
   // タスクブランチを持たない根は、内容を比べる git が失敗する
   const broken = finish(db, clock, landingWork(db, clock));
   const healthy = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${healthy.id}`);
+  checkoutTaskBranch(db, workspace, healthy.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, healthy);
 
@@ -2215,7 +2225,7 @@ it("候補の読み取りそのものが失敗した回は、ログに出して�
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -2243,13 +2253,13 @@ it("走っている回の途中で届いた retry は、その後に始まる回
   };
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const failed = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${failed.id}`);
+  checkoutTaskBranch(db, workspace, failed.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, failed);
   registerPrPromotionFailureQuestion(db, failed, "token expired", clock.now());
   const [failure] = promotionFailures(db, failed.id);
   const busy = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${busy.id}`, "main");
+  checkoutTaskBranch(db, workspace, busy.id, "main");
   commitWork(workspace.path, "busy.txt", "busy\n");
   finish(db, clock, busy);
 
@@ -2280,7 +2290,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
   recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
@@ -2296,7 +2306,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
   git(workspace.path, "fetch", "origin", "main");
   commitWork(workspace.path, "repair.txt", "fixed\n");
@@ -2336,7 +2346,7 @@ async function catchUpConflictRoot(name: string, { openFailure = false, undelive
   const workbenchBase = await tempDir("tidepool-task-checkouts-");
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, workspacesDir: workbenchBase });
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "ship the parent change", completion_criteria: "the parent PR exists" }, clock.now(), ...HUMAN_WEBUI);
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
   recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
@@ -2346,7 +2356,7 @@ async function catchUpConflictRoot(name: string, { openFailure = false, undelive
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
   const publisher = await tempDir("tidepool-protected-change-");
   git(publisher, "clone", workspace.repo!, ".");
@@ -3318,12 +3328,12 @@ it("追いつき merge をまたいで走るセッションは、盤面が動か
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const parent = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
   recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const before = git(workspace.path, "rev-parse", `task/${repair.id}`);
@@ -3549,7 +3559,7 @@ it("宣言 repo が registry と同じ repo の PR は flag が無くても人�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = landingWork(db, clock, workspace.name);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   const landing = createLanding({
@@ -3576,7 +3586,7 @@ it("宣言が registry の repo の workspace は、pickup の後に origin を�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = landingWork(db, clock, workspace.name);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   git(workspace.path, "remote", "set-url", "origin", other.workspace.repo!);
@@ -4387,7 +4397,7 @@ async function escalatedRootWithOpenedPr(name: string) {
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
   const root = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  checkoutTaskBranch(db, workspace, root.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, root);
   await landing.converge();
@@ -4652,7 +4662,7 @@ it("開いている PR への修理の push は盤面の名義の event に残�
     resolveAuthority: () => profile("auto_if_ci_green"),
   });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await landing.converge();
@@ -4700,7 +4710,7 @@ it("PR を開いてから6分後に読んだ盤面の外の head が check 未�
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github);
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await landing.converge();
@@ -4729,7 +4739,7 @@ it("check が報告中(pending)の盤面の外の head も、読んだ時点で�
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github);
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await landing.converge();
@@ -4750,7 +4760,7 @@ it("PR を開いたときの event は、作成前に push したタスクブラ
   const { db, clock } = await openBoard();
   const landing = autoMerging(db, clock, workspace, new FakeGitHubClient());
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
 
@@ -4909,8 +4919,9 @@ async function openPushedPr(name: string, merge: MergeDial) {
   const { workspace, publish } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  const { id } = landingWork(db, clock);
+  checkoutTaskBranch(db, workspace, id);
+  const work = getTask(db, id)!;
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "push", "-u", "origin", `task/${work.id}`);
   github.scriptPullRequestOnBranch(`task/${work.id}`);
@@ -4950,7 +4961,7 @@ async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
   const pr = await openPushedPr(name, merge);
   const { workspace, db, clock, work } = pr;
   const repair = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${work.id}`);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   git(workspace.path, "checkout", `task/${work.id}`);
   commitWork(workspace.path, "repair.txt", "conflicting\n");
@@ -5138,7 +5149,7 @@ it("受理は名前の場所を自分の git で読み、見える変更を拒�
   const pr = await openPushedPr("redo-merge-back-refused-to-start", "escalate");
   const { workspace, db, clock, work } = pr;
   const repair = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${work.id}`);
   commitWork(workspace.path, "README.md", "repaired\n");
   git(workspace.path, "checkout", `task/${work.id}`);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
@@ -5503,7 +5514,7 @@ async function openPrByConvergence(name: string, merge: MergeDial, { narrowRefsp
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github, () => profile(merge));
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
@@ -5634,7 +5645,7 @@ it("PR を開いた後に積み残しが残れば landed を返さず、内容�
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, workspacesDir: await tempDir("tidepool-task-checkouts-") });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   finish(db, clock, work);
@@ -6179,7 +6190,7 @@ it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できな�
     resolveAuthority: () => resolveAuthority(),
   });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
 
@@ -6215,7 +6226,7 @@ it("開いている PR へ修理を push する着地は profile を読まない
     resolveAuthority: unresolvable,
   });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
@@ -6418,7 +6429,7 @@ function answerMerge(board: Db, clock: FakeClock, workspace: WorkspaceConfig, qu
 /** 記録の欠落の形: 一度も拾われていないので ref snapshot に保護ブランチの行が無い。 */
 async function unrecordedWork(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
   const work = landingWork(board, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(board, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "finished\n");
   git(workspace.path, "checkout", "main");
   return work;
@@ -7180,10 +7191,11 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
   // 未完了の親と、その枝へ帰る完了した子(収束は何も記録しない)
   const parent = registerTask(
     db,
-    { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako" },
+    { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako", workspace: "reef" },
     now,
     ...HUMAN_WEBUI,
   );
+  appendEvent(db, { taskId: parent.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha: "0".repeat(40), workspace: "reef" }, at: now });
   completedWork(db, now, "tako", parent.id);
 
   // 根かどうかを lineage で読ませる —— 祖先が未決着なら git を呼ばずにその枝へ帰るので、checkout の実体は要らない
@@ -7368,7 +7380,7 @@ async function abandonedPromotion(name: string, { stampHead = true } = {}) {
     resolveAuthority: () => authority.resolve(),
   });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
@@ -7599,7 +7611,7 @@ async function abandonedPushToOpenPr(name: string) {
     resolveAuthority: () => authority.resolve(),
   });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
   settleReviews(db, clock.now());
@@ -7715,7 +7727,7 @@ it("既定 workspace a で pickup した workspace 未指定のタスクの PR �
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const done = pickedUpAndCompleted(db, clock, "tako", a);
-  git(a.path, "checkout", "-b", `task/${done.id}`);
+  checkoutTaskBranch(db, a, done.id);
   commitWork(a.path, "feature.txt", "ready\n");
   git(a.path, "checkout", "main");
   const landing = createLanding({
@@ -7947,7 +7959,7 @@ async function mergedOutsideFoundPr(name: string, quarantine = false) {
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   github.scriptMergedOutside(github.scriptPullRequestOnBranch(`task/${work.id}`));
   finish(db, clock, work);
@@ -8077,7 +8089,7 @@ it.each<[string, StopBeforePr]>([
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient() });
   const task = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   stop(db, clock, workspace, finish(db, clock, task));
 
@@ -8404,7 +8416,7 @@ async function rowlessRootBesideHeldWorkspace(name: string, resolveHeld?: () => 
   };
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace, github });
   const work = landingWork(db, clock, rowless.name);
-  git(rowless.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, rowless, work.id);
   commitWork(rowless.path, "feature.txt", "ready\n");
   git(rowless.path, "checkout", "main");
   finish(db, clock, work);
@@ -8498,7 +8510,7 @@ it("着地の比較: 積み残しの retry は、保護ブランチの fetch を
   } as unknown as GitHubAuth;
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient(), githubAuth, workspacesDir: await tempDir("tidepool-task-checkouts-") });
   const work = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
@@ -8535,12 +8547,12 @@ async function outlivedRootWithBaseline(name: string, prNumber?: number) {
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const parent = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
   recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   const head = prNumber === undefined ? undefined : pushPrHead(github, workspace, repair.id, prNumber);
   await squashTaskIntoOrigin(workspace, parent.id);
   commitWork(workspace.path, "repair.txt", "fixed\n");
