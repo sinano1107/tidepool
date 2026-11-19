@@ -10,7 +10,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
-import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { boardRefWriter, catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { CLEAN_LANDING_INTAKE, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -352,9 +352,11 @@ it("pickup の fetch の後に休止位置が落ちても、基準の refs/remot
   const earlier = work(db, "leaves a baseline");
   releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
-  // ADR 0356 決定5: checkout hook は走らないので、履歴の分岐で ff を塞ぐ。
+  // ADR 0356 決定5: checkout hook は走らないので、履歴の分岐で ff を塞ぐ —— 分岐させる local の commit は盤面が口で書く(基準に入る)
   commitWork(workspace.path, "local.txt", "local commit\n");
-  retakeRefBaselines(db, [workspace]);
+  const local = git(workspace.path, "rev-parse", "main");
+  git(workspace.path, "reset", "--quiet", "--hard", "main~1");
+  boardRefWriter(db, workspace)("refs/heads/main", local, () => git(workspace.path, "reset", "--quiet", "--hard", local));
 
   await expect(prepareAtPickup(db, workspace, work(db, "never runs"))).rejects.toThrow("cannot fast-forward");
 
@@ -405,17 +407,13 @@ it("受験者の解放と再開の pickup は受験者 id の行を作らず、�
   db.close();
 });
 
-// ADR 0351 決定4: workspace quarantine の受理は、検査がすべて成立した後に基準を撮り直す(#2951)。
-
-/** checkout の今の全 ref を基準の行と同じ形で(HEAD は指し先)。 */
-function currentRefSet(path: string): Map<string, string> {
-  return refValues(`symref=${git(path, "symbolic-ref", "HEAD")} HEAD\n${git(path, "for-each-ref", "--format=%(objectname) %(refname)")}`);
-}
+// 旧: workspace quarantine の受理は、検査がすべて成立した後に基準を撮り直した(ADR 0351 決定4、#2951)。ADR 0373 決定1 の後、受理は全 ref が
+// 基準と同じことを確かめるだけで撮り直さない —— 動いた ref は `repaired by hand` が拒み、`restore the baseline` が戻す。
 
 /** 開いている workspace quarantine の question に人間が答える(human-verbs の回答の経路)。 */
-function answerQuarantine(db: Db, ws: WorkspaceConfig) {
+function answerQuarantine(db: Db, ws: WorkspaceConfig, text = "repaired by hand") {
   const question = quarantineQuestion(db, "workspace", ws.name)!;
-  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, question, ["repaired by hand"], undefined, () => NOW, "webui");
+  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, question, [text], undefined, () => NOW, "webui");
 }
 
 /** session の間に名前の場所に兄弟のブランチが作られ、解放が `refs/heads/sibling` を名指して quarantine に落ちた workspace。
@@ -430,23 +428,24 @@ async function quarantinedBySibling(name: string) {
   releaseWorkspace(db, place, task, NOW);
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   expect(question.purpose).toContain("refs/heads/sibling");
-  return { ws, db, question, answer: () => answerQuarantine(db, ws) };
+  return { ws, db, question, answer: (text?: string) => answerQuarantine(db, ws, text) };
 }
 
-it("受理の後、基準の行は違反で名指された ref を含む今の全 ref の1値と一致する(ADR 0351 決定4)", async () => {
+it("違反で名指された ref が残る間、`repaired by hand` はそれを名指して拒み、基準の行は変わらない(ADR 0373 決定1)", async () => {
   const { ws, db, question, answer } = await quarantinedBySibling("retake-on-accept");
+  const before = baseline(db, ws.name);
 
-  await answer();
+  await expect(answer()).rejects.toThrow("refs/heads/sibling. The board does not accept moved refs.");
 
-  expect(getTask(db, question.id)!.status).toBe("done");
-  expect(baseline(db, ws.name)).toEqual(currentRefSet(ws.path));
-  expect(baseline(db, ws.name).get("refs/heads/sibling")).toBe(git(ws.path, "rev-parse", "sibling"));
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  expect(baseline(db, ws.name)).toEqual(before);
+  expect(baseline(db, ws.name).has("refs/heads/sibling")).toBe(false);
   db.close();
 });
 
-it("受理の後の pickup は、違反で名指された ref を比較で名指さずに通る(ADR 0351 決定2・4)", async () => {
+it("`restore the baseline` の後の pickup は、違反で名指された ref を比較で名指さずに通る(ADR 0373 決定3)", async () => {
   const { ws, db, answer } = await quarantinedBySibling("retake-then-pickup");
-  await answer();
+  await answer("restore the baseline");
   const next = work(db, "after the answer");
 
   const place = await prepareAtPickup(db, ws, next);
@@ -456,7 +455,9 @@ it("受理の後の pickup は、違反で名指された ref を比較で名指
   db.close();
 });
 
-it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout で行ってから受理すると、基準にその merge 後の位置が入る(ADR 0351 決定4)", async () => {
+// 旧: 名前の場所での手の merge が受理され、基準にその位置が入った(ADR 0351 決定4)。ADR 0371 決定1・2 の後は作業台で merge して答え(pin A6)、
+// 名前の場所での手の merge は動いた ref として拒まれる(ADR 0373 決定1)
+it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の名前の場所で行ってから答えると、`repaired by hand` はその branch を名指して拒み、基準は変わらない(ADR 0373 決定1)", async () => {
   const ws = await makeWorkspace("retake-merge-ours");
   const db = openDb(":memory:");
   const landing = work(db, "lands");
@@ -476,16 +477,15 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の checkout 
   releaseWorkspace(db, resumedRepair, getTask(db, repair.id)!, NOW, true);
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   expect(question.purpose).toContain(`task/${repair.id} does not merge cleanly`);
-  // 人間の手は名前の場所で —— 文は作業台を名指すが、受理が基準を撮り直す間(#3290 まで)は名前の場所の commit も受理される
+  const before = baseline(db, ws.name);
   git(ws.path, "checkout", `task/${landing.id}`);
   git(ws.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
   const merged = git(ws.path, "rev-parse", `task/${landing.id}`);
 
-  await answerQuarantine(db, ws);
+  await expect(answerQuarantine(db, ws)).rejects.toThrow(`now: ${merged} refs/heads/task/${landing.id}`);
 
-  expect(getTask(db, question.id)!.status).toBe("done");
-  expect(baseline(db, ws.name).get(`refs/heads/task/${landing.id}`)).toBe(merged);
-  expect(baseline(db, ws.name)).toEqual(currentRefSet(ws.path));
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  expect(baseline(db, ws.name)).toEqual(before);
   db.close();
 });
 
@@ -501,22 +501,30 @@ it("検査が落ちて回答が拒否されたとき、基準の行は変わら�
   db.close();
 });
 
-// 旧: 未決着の受験者の行もその checkout から撮り直した(ADR 0276 決定3)。ADR 0356 決定4 の後は受験者の task の checkout に基準は無い
-it("面接室の名前への受理は面接室の行だけを撮り直し、受験者の task の checkout の ref はどの行にも入らない(ADR 0351 決定4 / ADR 0356 決定4)", async () => {
+// 旧: 未決着の受験者の行もその checkout から撮り直した(ADR 0276 決定3)。ADR 0356 決定4 の後は受験者の task の checkout に基準は無い。
+// 旧: 面接室の行は撮り直した(ADR 0351 決定4)—— ADR 0373 決定1 の後は比べるだけ
+it("面接室の名前への受理は面接室だけを比べる —— 面接室で動いた ref は名指して拒み、受験者の task の checkout の ref は名指さず、どの行にも入らない(ADR 0373 決定1・7 / ADR 0356 決定4)", async () => {
   const { db, root, room, checkout, examineeRow } = await roomWithPickedExaminee();
-  git(room.path, "branch", "room-repair");
+  const before = baseline(db, root.id);
   git(checkout.path, "branch", "examinee-repair");
+  git(room.path, "branch", "room-repair");
 
+  const refused = quarantineChecks({ db }).workspace!(root.id, undefined, "webui").then(() => "accepted", (err: Error) => err.message);
+  const message = await refused;
+  git(room.path, "branch", "-D", "room-repair");
   await quarantineChecks({ db }).workspace!(root.id, undefined, "webui");
 
-  expect(baseline(db, root.id)).toEqual(currentRefSet(room.path));
-  expect(baseline(db, root.id).has("refs/heads/room-repair")).toBe(true);
+  expect(message).toContain("refs/heads/room-repair");
+  expect(message).not.toContain("examinee-repair");
+  expect(baseline(db, root.id)).toEqual(before);
   expect(baseline(db, root.id).has("refs/heads/examinee-repair")).toBe(false);
   expect(examineeRow()).toBeUndefined();
   db.close();
 });
 
-it("purely-local で quarantine 中に帯域外に動いた保護ブランチは、受理の後の着地で帯域外と読まれない(ADR 0351 決定4)", async () => {
+// 旧: 受理が帯域外の保護ブランチを基準に入れ、着地はそれを帯域外と読まなかった(ADR 0351 決定4)。ADR 0373 決定1 の後は `repaired by hand` が拒み、
+// `restore the baseline` が保護ブランチを戻してから着地する
+it("purely-local で quarantine 中に帯域外に動いた保護ブランチは `repaired by hand` が名指して拒み、`restore the baseline` の後の着地は帯域外と読まない(ADR 0373 決定1・3)", async () => {
   const ws = await makeWorkspace("retake-out-of-band-main");
   const db = openDb(":memory:");
   const task = work(db, "lands after the answer");
@@ -526,7 +534,8 @@ it("purely-local で quarantine 中に帯域外に動いた保護ブランチは
   quarantineWorkspace(db, ws.name, new Error("GitHub token acquisition failed"), NOW);
   git(ws.path, "update-ref", "refs/heads/main", git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
-  await answerQuarantine(db, ws);
+  await expect(answerQuarantine(db, ws)).rejects.toThrow("refs/heads/main. The board does not accept moved refs.");
+  await answerQuarantine(db, ws, "restore the baseline");
 
   expect(() => mergeTaskToProtected(db, ws, task.id, CLEAN_LANDING_INTAKE)).not.toThrow();
   db.close();

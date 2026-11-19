@@ -52,9 +52,12 @@ function commitOn(path: string, file: string, body: string, message: string): vo
 /** 名前の場所に HEAD の上の commit を1つ作る(ref は書かない)—— 盤面の口の外で ref を動かす先。 */
 const outOfBandCommit = (path: string) => git(path, "commit-tree", git(path, "rev-parse", "HEAD^{tree}"), "-p", "HEAD", "-m", "out of band");
 
-it("保護ブランチが無い停止は落ちた項を名指し、修復回答を拒み、main を戻した回答の後に pickup できる(ADR 0329 決定10・14、#2775)", async () => {
+// 旧: 人間が名前の場所に main を作り直してから答えた。ADR 0373 決定1 の後は作った branch も動いた ref で、出口は registry の `branch` を直すこと(text A12 の H10)
+it("保護ブランチが無い停止は落ちた項を名指して registry の `branch` を直す道を言い、修復回答を拒み、`branch` を直した回答の後に pickup できる(ADR 0329 決定10・14、#2775、ADR 0373 決定16)", async () => {
   const workspace = await makeWorkspace("sandbox");
-  t = await bootTidepool({ workspace });
+  // registry のエントリの `branch` —— 人間が直す値
+  let branch: string | undefined;
+  t = await bootTidepool({ workspace, resolveWorkspace: () => ({ ...workspace, branch }) });
   git(workspace.path, "checkout", "-b", "rescue");
   git(workspace.path, "branch", "-D", "main");
   const task = await registerWork(t, "needs main");
@@ -65,23 +68,25 @@ it("保護ブランチが無い停止は落ちた項を名指し、修復回答�
   expect(reason).toContain("workspace sandbox");
   expect(reason).toContain("protected branch 'main'");
   expect(reason).toMatch(/The check that failed: .*protected branch `main`/);
+  expect(reason).toContain("cannot be checked out: ");
+  expect(reason).toContain(". Fix `branch` in the registry entry.");
   const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
   const refused = await answer();
   expect(refused.status).toBe(409);
   expect(refused.json.error).toContain(reason);
 
-  git(workspace.path, "branch", "main");
+  branch = "rescue";
   expect((await answer()).status).toBe(200);
   await runNow(t, task.id);
   await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(task.id));
   expect(await stops()).toHaveLength(1);
 });
 
-it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と回答で同じ項が拒み、復元後の回答だけが次の pickup を通す(ADR 0329 決定10・14)", async (fault) => {
+// 旧: 名前の場所の main を手で戻してから答えた。ADR 0373 決定1 の後は手の reset も動いた ref で、出口は自分の clone から origin へ push すること(text A12 の H9)
+it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と回答で同じ項が拒み、復元後の回答だけが次の pickup を通す(ADR 0329 決定10・14、ADR 0373 決定16)", async (fault) => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
-  const original = git(workspace.path, "rev-parse", "main");
   if (fault === "unreachable") renameSync(workspace.repo!, `${workspace.repo}-saved`);
   else {
     commitOn(workspace.path, "local.txt", "local only\n", "unpublished local commit");
@@ -94,6 +99,7 @@ it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と�
   const reason = (await stops())[0].payload.reason;
   const check = reason.split("The check that failed: ")[1];
   expect(check).toContain(fault === "unreachable" ? "can be fetched" : "can be checked out");
+  if (fault !== "unreachable") expect(reason.split("The check that failed: ")[0]).toContain("Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.");
   const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
   const refused = await answer();
@@ -102,7 +108,14 @@ it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と�
   expect(t.worker.started.map((s) => s.id)).not.toContain(task.id);
 
   if (fault === "unreachable") renameSync(`${workspace.repo}-saved`, workspace.repo!);
-  else git(workspace.path, "reset", "--hard", original);
+  else {
+    // 名前の場所の ref は動かさず、自分の clone で名前の場所の commit を origin の main に入れて push する
+    const clone = await tempDir("tidepool-own-clone-");
+    git(clone, "clone", "--quiet", workspace.repo!, ".");
+    git(clone, "fetch", "--quiet", workspace.path, "main:named-main");
+    git(clone, "merge", "--quiet", "--no-edit", "named-main");
+    git(clone, "push", "--quiet", "origin", "main");
+  }
   expect((await answer()).status).toBe(200);
   await runNow(t, task.id);
   await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(task.id));

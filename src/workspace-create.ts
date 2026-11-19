@@ -509,9 +509,10 @@ export class WorkspaceAlreadyPublishedError extends Error {
  *  節の中身が `remote add` の書いたキーだけなのもこの拒否による —— 前からあったキーは
  *  `remote get-url` を通してここで拒まれる(#3197)。 */
 export class CheckoutHasOriginError extends Error {
-  constructor(name: string, origin: string) {
+  constructor(name: string, origin: string, path: string) {
+    // ADR 0373 決定16 / spec #3273 text A12(H12 → F4): ref を動かさない直し方を言う
     super(
-      `workspace "${name}" declares no remote source of truth but its checkout already has an 'origin' (${origin}) — repair the mismatch by hand`,
+      `workspace "${name}" declares no remote source of truth but its checkout already has an 'origin' (${origin}). In ${path}, run \`git config --remove-section remote.origin\`.`,
     );
     this.name = "CheckoutHasOriginError";
   }
@@ -532,7 +533,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   if (entry.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, entry.repo);
   if (!deps.githubAuth) throw new GitHubIdentityMissingError();
   const existing = originUrl(path);
-  if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing);
+  if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing, path);
   // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが App を
   // install し忘れた」を、push が落ちる**前に**名指しする。位置は `remote add` の手前で
   // なければならない —— 拒んだとき、巻き戻す痕跡がそもそも作られない側に立つ。

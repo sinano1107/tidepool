@@ -5036,8 +5036,7 @@ it("merge back が走らなかった修理は、受理の検査が帰り先へ m
   const pr = await openPushedPr("redo-merge-back-clean", "escalate");
   const { workspace, db, clock, work } = pr;
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
-  // 名前の場所が休止位置の外に居る(受理の検査が戻す)
-  git(workspace.path, "checkout", `task/${work.id}`);
+  // 旧: 名前の場所を手で休止位置の外へ出してから答えた —— HEAD の移動も ref の違いなので、ADR 0373 決定1 の後は受理が拒む
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
   const question = quarantineQuestion(db, "workspace", workspace.name)!;
   const pollNow = vi.fn();
@@ -5063,9 +5062,9 @@ it.each([
   commitWork(earlierPlace.path, "earlier.txt", "work\n");
   releaseWorkspace(db, earlierPlace, earlier, clock.now());
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
-  // 修理が分かれた後に帰り先が進む —— merge back は ff にならず merge commit を作る
-  git(workspace.path, "checkout", `task/${work.id}`);
-  commitWork(workspace.path, "landing.txt", "moved on\n");
+  // 修理が分かれた後に帰り先が進む —— merge back は ff にならず merge commit を作る。進めるのは盤面の口(手で進めると受理が拒む、ADR 0373 決定1)
+  const movedOn = git(workspace.path, "commit-tree", `task/${work.id}^{tree}`, "-p", `task/${work.id}`, "-m", "moved on");
+  boardRefWriter(db, workspace)(`refs/heads/task/${work.id}`, movedOn, () => git(workspace.path, "update-ref", `refs/heads/task/${work.id}`, movedOn));
   const targetBefore = git(workspace.path, "rev-parse", `task/${work.id}`);
   // 原本の保護ブランチも進む —— やり直しの休止位置の ff がローカルの保護ブランチを動かす
   pr.publish("merged.txt", "merged on GitHub\n", "merged outside");
@@ -5084,26 +5083,27 @@ it.each([
   else expect(failure?.message ?? "").not.toMatch(new RegExp(`refs/heads/(task/${work.id}|main)\\b`));
 });
 
-it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
+// 旧: 名前の場所で merge を解いて(捨てて)から答えた。ADR 0371 決定1・2 の後は作業台で解き、名前の場所での手の merge は受理が拒む(ADR 0373 決定1)
+it.each<[string, (workbench: string, repairId: string) => void]>([
   [
-    "手で merge を解いた",
-    (workspace, repairId) => {
-      expect(() => git(workspace.path, "merge", `task/${repairId}`)).toThrow();
-      commitWork(workspace.path, "repair.txt", "fixed and conflicting\n");
+    "作業台で merge を解いた",
+    (workbench, repairId) => {
+      expect(() => git(workbench, "merge", `board/task/${repairId}`)).toThrow();
+      commitWork(workbench, "repair.txt", "fixed and conflicting\n");
     },
   ],
   [
-    "`merge -s ours` で修理を捨てると記録した",
-    (workspace, repairId) => {
-      git(workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repairId}`);
+    "作業台で `merge -s ours` により修理を捨てると記録した",
+    (workbench, repairId) => {
+      git(workbench, "merge", "-s", "ours", "--no-edit", `board/task/${repairId}`);
     },
   ],
-])("merge back の conflict を%s後の受理は通り、収束を突き、続く収束が根へ push して積み残しが消える", async (_, repairByHand) => {
+])("merge back の conflict を%s後の受理は通り、収束を突き、続く収束が根へ push して積み残しが消える", async (_, repairInWorkbench) => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-repaired", "escalate");
-  const { workspace, db, clock, work, repair, question, landing } = pr;
-  // ADR 0356 決定5: the board has not switched to the merge target.
-  git(workspace.path, "checkout", `task/${work.id}`);
-  repairByHand(workspace, repair.id);
+  const { db, clock, work, repair, question, landing } = pr;
+  // 1回目の回答が conflict に当たって作業台を開く(text A1)
+  await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow("The board opened the workbench at");
+  repairInWorkbench(realpathSync(workbenchPath(pr.workbenchBase, { task: work.id }, `task/${repair.id}`)), repair.id);
   const pollNow = vi.fn();
 
   await answerWorkspaceQuarantine(pr, question, pollNow);
@@ -5112,7 +5112,20 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
   expect(pollNow).toHaveBeenCalledOnce();
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
-  expect(contentLeftBehindLocally(db, workspace, work.id, originHead(workspace, work.id))).toEqual([]);
+  expect(contentLeftBehindLocally(db, pr.workspace, work.id, originHead(pr.workspace, work.id))).toEqual([]);
+});
+
+it("merge back の conflict を名前の場所で手で解いてから答えると、`repaired by hand` は動いた帰り先を名指して拒む(ADR 0373 決定1)", async () => {
+  const pr = await quarantinedByMergeBackConflict("redo-merge-back-by-hand", "escalate");
+  const { workspace, work, repair, question, db } = pr;
+  git(workspace.path, "checkout", `task/${work.id}`);
+  git(workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
+
+  const refused = answerWorkspaceQuarantine(pr, question);
+  await expect(refused).rejects.toThrow(`now: ${git(workspace.path, "rev-parse", `task/${work.id}`)} refs/heads/task/${work.id}`);
+  await expect(refused).rejects.toThrow("The board does not accept moved refs.");
+
+  expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
 it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む(ADR 0356 決定1)", async () => {
@@ -5166,7 +5179,7 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   git(workspace.path, "checkout", `task/${work.id}`);
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
-  // やり直しそのものを撃つ —— 受理は検査の後に基準を撮り直し、動いた ref を回答で受け入れる(ADR 0351 決定4)
+  // やり直しそのものを撃つ —— 受理は動いた ref を拒む(ADR 0373 決定1)ので、帯域外の main を残したまま merge back のやり直しだけを測る
   await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: clock.now() });
 
   expect(head(workspace)).toBe("main");
@@ -5669,7 +5682,10 @@ it("積み残しの retry は、名前の場所に未 commit の変更があれ�
   const root = git(workspace.path, "rev-parse", `task/${work.id}`);
 
   await expect(answerPromotion(db, clock, landing, workspace, leftover!, "retry")).rejects.toThrow(
-    new DomainError(`workspace ${workspace.name} still has uncommitted changes`),
+    new DomainError(
+      `workspace ${workspace.name} still has uncommitted changes. Discard them with \`git restore --staged --worktree .\` then \`git clean -fd\` until ` +
+        "`git status --porcelain` is empty (`git clean -ffd` for a nested repository, `git worktree remove --force <path>` for a linked worktree inside the tree).",
+    ),
   );
 
   expect(git(workspace.path, "rev-parse", `task/${work.id}`)).toBe(root);

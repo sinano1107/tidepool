@@ -100,7 +100,6 @@ import {
   releaseWorkspace,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
-  retakeRefBaselines,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -942,11 +941,17 @@ function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
   return reads.length > 0 ? { reads } : {};
 }
 
-/** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。撮りは受理の撮り直しの口を借りるので、仮の行を置いてから撮り直す。 */
+/** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。行は基準と同じ綴り(HEAD は指し先、refname 順)で書く。 */
 function standInFirstCapture(db: Db, place: WorkspaceConfig): void {
   if (holdsBaseline(db, place.name)) return;
-  db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, 'stand-in') ON CONFLICT(name) DO UPDATE SET ref_snapshot = 'stand-in'").run(place.name);
-  retakeRefBaselines(db, [place]);
+  let head: string;
+  try {
+    head = `symref=${git(place.path, "symbolic-ref", "-q", "HEAD")}`;
+  } catch {
+    head = git(place.path, "rev-parse", "HEAD");
+  }
+  const refs = git(place.path, "for-each-ref", "--format=%(if)%(symref)%(then)symref=%(symref)%(else)%(objectname)%(end) %(refname)");
+  db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot").run(place.name, `${head} HEAD${refs && `\n${refs}`}`);
 }
 
 /** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。

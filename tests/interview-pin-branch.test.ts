@@ -882,7 +882,8 @@ it("RCA が読む却下した監査の出題の head が面接室から消える
   db.close();
 });
 
-it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室の名前への回答は RCA が読んでいた head を検査せずに受理する —— 決着した task は名前を開かない(issue #3136 / ADR 0329 決定4)", async () => {
+// 旧: どの回答でも受理された。ADR 0373 決定1 の後は消した keep-around の ref も違いなので、その object を諦める選択肢で答える
+it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室の名前への回答は RCA が読んでいた head を検査せずに受理する —— 決着した task は名前を開かない(issue #3136 / ADR 0329 決定4 / ADR 0373 決定5)", async () => {
   const db = openDb(":memory:");
   const { room, root, rejected, audit } = await rcaOnRejectedAudit(db);
   dropFromRoom(room, rejected);
@@ -890,7 +891,7 @@ it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室�
   for (const rca of rcas) answerQuestionViaWebui(db, failureQuestion(db, rca.id, NOW), ["abandon"], NOW);
 
   expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["cancelled", "cancelled"]);
-  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
+  await expect(quarantineChecks({ db }).workspace!(root.id, "give up the lost refs and restore the baseline", "webui")).resolves.toBeUndefined();
   db.close();
 });
 

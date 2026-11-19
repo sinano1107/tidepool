@@ -67,12 +67,15 @@ import {
   assertRemoteDeclarationMatchesClone,
   checkoutPickupPredicates,
   conventionCheckoutPath,
+  discardUncommitted,
   exactProtectedBranchRef,
+  FIX_BRANCH_IN_REGISTRY,
   gonePlaceReason,
   isRemoteBacked,
   OriginRepositoryMismatchError,
   type PickupPredicate,
   type PlaceFire,
+  PUSH_LOCAL_COMMITS,
   protectedBranch,
   protectedBranchRef,
   readHeadOf,
@@ -1501,6 +1504,22 @@ export function compareContainmentRefs(db: Db, workspace: WorkspaceConfig, now: 
   }
 }
 
+/** ADR 0373 決定1・7: workspace の Quarantine の受理の比較 —— pickup と同じ比較器で名前の場所(面接室の名前なら面接室)の全 ref を基準と比べ、
+ *  通れば2値行を畳み、違えば text B2 で拒む。基準は撮り直さない。基準の行が無い名前は比べず行も作らない。repo の無い場所は読まない ——
+ *  外側の repo を読まず、前半の項がその場所を拒む(spec #3273 の受理の 3)。 */
+export function compareAcceptanceRefs(db: Db, workspace: WorkspaceConfig, when: string): void {
+  if (!holdsBaseline(db, workspace.name) || !placeHasRepository(workspace.path)) return;
+  try {
+    compareAndFoldBaseline(db, workspace, when);
+  } catch (err) {
+    if (!(err instanceof RefsMovedError)) throw err;
+    throw new RefsMovedError(
+      `${err.message}. The board does not accept moved refs. Answer \`${RESTORE_THE_BASELINE}\` to put them back; the values it removes stay under ` +
+        "`refs/keep-around/<sha>`, and to keep that content you merge or cherry-pick it in a workbench afterwards.",
+    );
+  }
+}
+
 /** 削除の扉が人間自身の内容の作業台に見つけたもの: 作業台の在り処、書く先の branch、読めなければ読めなかった場所(作業台か名前の場所)と理由。 */
 export type HumanContentWorkbenchLeft = { workbench: string; branch: string; unreadable?: { place: string; error: string } };
 
@@ -1957,7 +1976,7 @@ export async function prepareWorkspaceAtPickup(
   const changes = ownWorktreeStatus(workspace.path);
   if (changes.length > 0) {
     throw new PickupGateError(workspace, new Error(
-      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout`,
+      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout.${discardUncommitted()}`,
     ));
   }
   for (const read of board.reads ?? []) {
@@ -2177,18 +2196,6 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
       return current;
     }),
   };
-}
-
-/** ADR 0351 決定4: quarantine の受理は検査がすべて成立した後に、名前に掛かる場所それぞれの基準を自分の checkout から撮り直す ——
- *  基準は名前の場所だけが持つ(ADR 0356 決定4)。撮り直すのは盤面が既に基準を持つ場所だけ —— まだ持ったことのない場所
- *  (開いていない面接室の在り処に repo がある)は最初の開きの build が口を通らずに書くので、その後の最初の
- *  pickup が最初の撮りをする(決定2)。repo の無い場所も撮らない。全部読んでから書くので、読みが落ちれば行は変わらない。 */
-export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
-  const held = places.filter((place) => placeHasRepository(place.path) && holdsBaseline(db, place.name));
-  const rows = new Map(held.map((place) => [place.name, currentRefs(place)]));
-  db.transaction(() => {
-    for (const [key, refs] of rows) writeSnapshot(db, key, refs);
-  })();
 }
 
 /** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の pin の行ごと消す。残すと同名を別 path で登録し直したとき
@@ -2620,7 +2627,10 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
-    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    // ADR 0373 決定16 / spec #3273 text A12(H10): 無い保護ブランチを手で作らせない —— registry の `branch` を直す。面接室の保護ブランチは registry に無い
+    const missing = !isInterviewRoomName(db, workspace.name) && readRef(workspace, `refs/heads/${branch}`) === "" &&
+      (!remoteBacked || readRef(workspace, remoteTrackingRef(branch)) === "");
+    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}${missing ? `.${FIX_BRANCH_IN_REGISTRY}` : ""}`, { cause });
   }
   if (!remoteBacked) return;
   const ref = remoteTrackingRef(branch);
@@ -2633,14 +2643,14 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
       advanceBranch(db, workspace, localRef, localSha, remoteSha);
       return;
     }
-    if (!isAncestor(workspace, remoteSha, localSha)) throw new Error("the local and remote histories diverged");
+    if (!isAncestor(workspace, remoteSha, localSha)) throw new Error(`the local and remote histories diverged.${PUSH_LOCAL_COMMITS}`);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   throw new Error(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
-      "commits were never pushed, so parking here would show a state the remote does not have",
+      `commits were never pushed, so parking here would show a state the remote does not have.${PUSH_LOCAL_COMMITS}`,
   );
 }
 
@@ -2663,7 +2673,7 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
     );
   }
   if (status.length > 0) {
-    throw new Error(`workspace ${workspace.name} still has uncommitted changes`);
+    throw new Error(`workspace ${workspace.name} still has uncommitted changes.${discardUncommitted()}`);
   }
 }
 
