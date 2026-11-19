@@ -124,9 +124,19 @@ function recordPrOpenedViaWorker(
 
 /** PR #`prNumber` の実在する head を作る: 今のタスクブランチの先端を origin へ push し、GitHub にその PR を置いて sha を返す。この後に
  *  ブランチへ載る commit が、盤面のまだ push していない内容になる。写しは書かない —— 記録済みの PR の最後に push した値は記録から読む
- *  (ADR 0376 決定3)。 */
+ *  (ADR 0376 決定3)。git の版によっては URL への push でも写しが動くので、push の前の写しへ戻す(CI の git 2.56 で、
+ *  写しの無い前提のテストが落ちた)。 */
 function pushPrHead(github: FakeGitHubClient, workspace: WorkspaceConfig, taskId: string, prNumber: number): string {
+  const copy = `refs/remotes/origin/task/${taskId}`;
+  let before: string | null = null;
+  try {
+    before = git(workspace.path, "rev-parse", "--verify", "--quiet", copy);
+  } catch {
+    // 写しが無い
+  }
   git(workspace.path, "push", workspace.repo!, `task/${taskId}`);
+  if (before === null) git(workspace.path, "update-ref", "-d", copy);
+  else git(workspace.path, "update-ref", copy, before);
   github.scriptPullRequestOnBranch(`task/${taskId}`, prNumber);
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
