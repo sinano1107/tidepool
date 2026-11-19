@@ -239,8 +239,8 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(refs("refs/remotes/origin")).toBe(rejected ? "" : git(checkout, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads"));
   });
 
-  // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、`remote remove` が写しを消した後に畳むので、
-  // 基準は予告の前(行が無い)へ戻る
+  // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、写しを書く前の値(ここでは無い)へ戻した後に
+  // 畳むので、基準は予告の前(行が無い)へ戻る
   it("push が通った後に registry のコミットが落ちて巻き戻っても、走っているセッションの解放は違反にならない", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const session = await runningSession(deps.db, checkout);
@@ -256,6 +256,90 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
 
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+  });
+
+  // ADR 0066 決定5(#3197): 巻き戻しは publish が足した `remote.origin` の節と押した N 本の写しの逆だけ —— 節の無いまま
+  // 残っていた写し・origin/HEAD・上流の設定(#3183 決定12 の修理文 `git config --remove-section remote.origin` が作る状態)は消さない
+  it.each([
+    ["push が宛先に拒まれた", "rejected"],
+    ["push が通った後に registry のコミットが落ちた", "registry"],
+  ] as const)("%sとき、remote の節が無いまま残っていた写しと上流の設定は publish の前のまま残り、比較は違反にならない", async (_, failure) => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    const prior = git(checkout, "rev-parse", "main");
+    git(checkout, "commit", "--allow-empty", "-m", "after the copies");
+    git(checkout, "remote", "add", "origin", "https://github.com/sinano1107/old.git");
+    git(checkout, "update-ref", "refs/remotes/origin/main", prior);
+    git(checkout, "update-ref", "refs/remotes/origin/gone", prior);
+    git(checkout, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    git(checkout, "config", "branch.main.remote", "origin");
+    git(checkout, "config", "--remove-section", "remote.origin");
+    const session = await runningSession(deps.db, checkout);
+    const dest = await makeDestination();
+    if (failure === "rejected") await seedDestination(dest);
+    else await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
+    const state = () => [git(checkout, "for-each-ref", "--format=%(objectname) %(symref) %(refname)"), git(checkout, "config", "--local", "--list")];
+    const before = state();
+
+    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toThrow(failure === "registry" ? RegistryPushFailedError : Error);
+    expect(git(dest, "rev-parse", "main") === git(checkout, "rev-parse", "main")).toBe(failure === "registry");
+    expect(state()).toEqual(before);
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+    session.release();
+    const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+  });
+
+  // ADR 0243 決定5: 前に落ちた publish の2値の行は再送でも予告に残る —— 戻す先は行ではなく、publish が書く前に checkout にあった値
+  it("基準の写しの行が前に落ちた publish の2値のままでも、registry のコミットが落ちた巻き戻しは写しを publish の前の値へ戻す", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    const old = git(checkout, "rev-parse", "main");
+    git(checkout, "commit", "--allow-empty", "-m", "pushed by the earlier publish");
+    const main = git(checkout, "rev-parse", "main");
+    const copy = "refs/remotes/origin/main";
+    // 前に落ちた publish が書いた写しの側(節は人間が修理文どおりに外した)
+    git(checkout, "update-ref", copy, main);
+    const session = await runningSession(deps.db, checkout);
+    deps.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?").run(`${main} ${copy}`, `${old}|${main} ${copy}`, "sandbox");
+    expect(deps.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get("sandbox")).toContain(`${old}|${main} ${copy}`);
+    const dest = await makeDestination();
+    await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
+
+    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toThrow(RegistryPushFailedError);
+    expect(git(checkout, "rev-parse", copy)).toBe(main);
+    session.release();
+    const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+  });
+
+  // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの手順は1つが落ちても残り(ADR 0378 決定10 の覚えた repo の戻しを含む)を撃ち、
+  // 投げるのは巻き戻しの失敗で、元の失敗はその原因に残る
+  it("巻き戻しで写しの削除が落ちても、後の写しと覚えた repo は戻り、元の失敗を原因に持つ巻き戻しの失敗を投げる", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    const prior = git(checkout, "rev-parse", "main");
+    git(checkout, "commit", "--allow-empty", "-m", "after the copy");
+    git(checkout, "update-ref", "refs/remotes/origin/main", prior);
+    // refname 順で main より前 —— 写しが無かった名前の削除が、前に値があった名前の書き戻しより先に落ちる
+    git(checkout, "branch", "a");
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+    await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
+    // ref の削除だけが packed-refs の lock を取る —— push の後の写しの書き込みは通り、巻き戻しの削除だけが落ちる
+    await writeFile(join(checkout, ".git", "packed-refs.lock"), "");
+
+    const err = await publishWorkspace({ name: "sandbox", repo: dest }, deps).then(
+      () => new Error("publish resolved — expected a failure"),
+      (e) => e as Error,
+    );
+
+    expect(err.message).toContain("rolling it back failed");
+    expect(err.cause).toBeInstanceOf(RegistryPushFailedError);
+    expect(git(checkout, "rev-parse", "refs/remotes/origin/main")).toBe(prior);
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+    expect(deps.db.prepare("SELECT remembered_repo FROM workspace_state WHERE name = ?").pluck().get("sandbox")).toBe("null");
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち

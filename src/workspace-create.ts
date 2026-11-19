@@ -44,6 +44,7 @@ import {
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, repositoryLabel, sameRepository } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
 import { settleQuestionAsObserved } from "./tasks.js";
+import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import { BOARD_BRANCHES } from "./workbench.js";
 import {
@@ -504,7 +505,9 @@ export class WorkspaceAlreadyPublishedError extends Error {
  *  checkout には `origin` が在る。それは帯域外の手作業が作った ADR 0052 のずれ状態で
  *  あり、pickup でどのみち quarantine に落ちる —— publish が上書きして辻褄を合わせる
  *  形は採らない。**巻き戻しの線もここで引かれる**: 自分が `remote add` した場合しか
- *  `remote remove` しないので、publish が足していない remote は決して消えない。 */
+ *  `remote.origin` の節を外さないので、publish が足していない remote は決して消えない。
+ *  節の中身が `remote add` の書いたキーだけなのもこの拒否による —— 前からあったキーは
+ *  `remote get-url` を通してここで拒まれる(#3197)。 */
 export class CheckoutHasOriginError extends Error {
   constructor(name: string, origin: string) {
     super(
@@ -561,8 +564,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
     ([ref, sha]) => [ref.slice("refs/heads/".length), sha] as const,
   );
   const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch), sha] as const);
+  // 巻き戻しの戻す先(#3197): 書く前に checkout にあった写しの値。基準の行は使わない —— 前に落ちた publish の2値の行は再送でも
+  // 予告に残る(ADR 0243 決定5)ので、行からは戻す先が1つに決まらない
+  const priorCopies = refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin/"));
   const { githubAuth } = deps;
-  // 巻き戻しも口の内側に置く —— 畳みは `remote remove` が写しを消した後の ref を読み、予告の前の値へ戻す
+  // 巻き戻しも口の内側に置く —— 畳みは写しを戻した後の ref を読み、予告の前の値へ畳む
   const publish = () => {
     git(dir, "remote", "add", "origin", input.repo);
     let restoreRememberedRepo: (() => void) | undefined;
@@ -573,7 +579,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
       // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
       // (ADR 0066 決定6)。
-      // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しの `remote remove` がこれも消す
+      // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しはこれを書く前の値へ戻す
       authedPush(githubAuth, declaration, GIT_NETWORK_TIMEOUT_MS, branches);
       restoreRememberedRepo = rememberPublishedRepo(deps.db, declaration);
       commitWorkspaceEntry(
@@ -583,16 +589,33 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
         `publish workspace ${input.name} via WebUI`,
       );
     } catch (err) {
-      // 巻き戻すのは**自分が足した origin だけ**(上の CheckoutHasOriginError が
+      // 巻き戻すのは**自分が足したものだけ**(上の CheckoutHasOriginError が
       // その線を引いている)。最も起きる人為ミスは「repo は作ったが App を install し
       // 忘れた」で、経路は remote add(成功)→ push(失敗)→ registry コミット未実行。
       // registry コミットが落ちた場合もここへ来る: 宣言の無い workspace に origin が
       // 残るほうが ADR 0052 のずれそのものであり、再送は同一 ref の push なので
       // up-to-date で通る。
-      try {
-        git(dir, "remote", "remove", "origin");
-      } finally {
-        restoreRememberedRepo?.();
+      // ADR 0066 決定5 の Status 追記(#3197): `remote remove` は publish の前からあった写し・origin/HEAD・`branch.*.remote` も
+      // 消すので、`remote add` が書いた節を外し、写しを書く前の値へ戻す。手順は1つが落ちても残りを撃つ
+      const failures: unknown[] = [];
+      const attempt = (step: () => unknown) => {
+        try {
+          step();
+        } catch (failure) {
+          failures.push(failure);
+        }
+      };
+      attempt(() => git(dir, "config", "--remove-section", "remote.origin"));
+      for (const [ref] of writes) {
+        const prior = priorCopies.get(ref);
+        attempt(() => (prior === undefined ? git(dir, "update-ref", "-d", ref) : git(dir, "update-ref", ref, prior)));
+      }
+      attempt(() => restoreRememberedRepo?.());
+      const refusal = [err, ...failures].find(isBoardDbRefusal);
+      if (refusal !== undefined) throw refusal; // ADR 0342 決定4: 盤面 DB の拒否は包まず、巻き戻しの失敗の陰にも隠さない
+      if (failures.length > 0) {
+        const reasons = failures.map((failure) => (failure instanceof Error ? failure.message : String(failure))).join("; ");
+        throw new Error(`publish of workspace ${input.name} failed and rolling it back failed: ${reasons}`, { cause: err });
       }
       throw err;
     }
