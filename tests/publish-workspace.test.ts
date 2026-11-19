@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -240,7 +241,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
   });
 
   // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、写しを書く前の値(ここでは無い)へ戻した後に
-  // 畳むので、基準は予告の前(行が無い)へ戻る
+  // 読み返して畳むので(ADR 0243 決定2)、基準は予告の前(行が無い)へ戻る
   it("push が通った後に registry のコミットが落ちて巻き戻っても、走っているセッションの解放は違反にならない", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const session = await runningSession(deps.db, checkout);
@@ -280,7 +281,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     const state = () => [git(checkout, "for-each-ref", "--format=%(objectname) %(symref) %(refname)"), git(checkout, "config", "--local", "--list")];
     const before = state();
 
-    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toThrow(failure === "registry" ? RegistryPushFailedError : Error);
+    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toThrow(failure === "registry" ? RegistryPushFailedError : "`git push` failed");
     expect(git(dest, "rev-parse", "main") === git(checkout, "rev-parse", "main")).toBe(failure === "registry");
     expect(state()).toEqual(before);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
@@ -291,23 +292,26 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
 
-  // ADR 0243 決定5: 前に落ちた publish の2値の行は再送でも予告に残る —— 戻す先は行ではなく、publish が書く前に checkout にあった値
+  // 落ちて残った行は次の比較まで残り(ADR 0351 決定4)、次の予告はその上に重なる(ADR 0373 決定3・5)—— 戻す先は行ではなく、
+  // publish が書く前に checkout にあった値(ADR 0066 決定5 の Status 追記、#3197)
   it("基準の写しの行が前に落ちた publish の2値のままでも、registry のコミットが落ちた巻き戻しは写しを publish の前の値へ戻す", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const old = git(checkout, "rev-parse", "main");
     git(checkout, "commit", "--allow-empty", "-m", "pushed by the earlier publish");
-    const main = git(checkout, "rev-parse", "main");
+    const earlier = git(checkout, "rev-parse", "main");
     const copy = "refs/remotes/origin/main";
-    // 前に落ちた publish が書いた写しの側(節は人間が修理文どおりに外した)
-    git(checkout, "update-ref", copy, main);
+    // 前に落ちた publish が書いた写しの側(節は人間が修理文どおりに外した)。その後の commit で、今回押す値は行のどちらとも違う
+    git(checkout, "update-ref", copy, earlier);
+    git(checkout, "commit", "--allow-empty", "-m", "after the earlier publish");
     const session = await runningSession(deps.db, checkout);
-    deps.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?").run(`${main} ${copy}`, `${old}|${main} ${copy}`, "sandbox");
-    expect(deps.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get("sandbox")).toContain(`${old}|${main} ${copy}`);
+    deps.db.prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, ?) WHERE name = ?").run(`${earlier} ${copy}`, `${old}|${earlier} ${copy}`, "sandbox");
+    expect(deps.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get("sandbox")).toContain(`${old}|${earlier} ${copy}`);
     const dest = await makeDestination();
     await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
 
     await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toThrow(RegistryPushFailedError);
-    expect(git(checkout, "rev-parse", copy)).toBe(main);
+    expect(git(dest, "rev-parse", "main")).toBe(git(checkout, "rev-parse", "main"));
+    expect(git(checkout, "rev-parse", copy)).toBe(earlier);
     session.release();
     const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
     await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
@@ -335,11 +339,51 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
       (e) => e as Error,
     );
 
-    expect(err.message).toContain("rolling it back failed");
     expect(err.cause).toBeInstanceOf(RegistryPushFailedError);
+    expect(err.message).toContain(`failed: ${(err.cause as Error).message}; rolling it back failed: `);
     expect(git(checkout, "rev-parse", "refs/remotes/origin/main")).toBe(prior);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     expect(deps.db.prepare("SELECT remembered_repo FROM workspace_state WHERE name = ?").pluck().get("sandbox")).toBe("null");
+  });
+
+  // 前の値のままの写しは巻き戻しで撃たない —— 残った `origin/feature` と D/F で衝突する `origin/feature/x` は、書けずに落ちた後の
+  // `update-ref -d` も落ちる。何も残っていない巻き戻しを失敗と言わない
+  it("残った写しと名前が衝突して写しを書けずに落ちた publish は、巻き戻しの失敗でなく元の失敗を投げ、publish の前のままに戻る", async () => {
+    const { deps, checkout } = await makeBoard();
+    git(checkout, "update-ref", "refs/remotes/origin/feature", git(checkout, "rev-parse", "main"));
+    git(checkout, "branch", "feature/x");
+    const state = () => [git(checkout, "for-each-ref", "--format=%(objectname) %(symref) %(refname)"), git(checkout, "config", "--local", "--list")];
+    const before = state();
+    const dest = await makeDestination();
+
+    const err = await publishWorkspace({ name: "sandbox", repo: dest }, deps).then(
+      () => new Error("publish resolved — expected a failure"),
+      (e) => e as Error,
+    );
+
+    expect(err.message).toContain("refs/remotes/origin/feature/x");
+    expect(err.message).not.toContain("rolling it back failed");
+    expect(state()).toEqual(before);
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+  });
+
+  // ADR 0342 決定4: 巻き戻しの手順が受けた盤面 DB の拒否は、巻き戻しの失敗に包まずそのまま投げる
+  it("覚えた repo の戻しで盤面 DB が書きを拒むと、publish はその拒否をそのまま投げる", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+    await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
+    const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
+    deps.db.function("refuse_restore", () => {
+      throw refusal;
+    });
+    // 宛先を覚えた後の書き(= 戻し)だけを拒む
+    deps.db.exec(
+      "CREATE TEMP TRIGGER restore_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
+        "WHEN OLD.remembered_repo IS NOT NULL AND OLD.remembered_repo <> 'null' BEGIN SELECT refuse_restore(); END",
+    );
+
+    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toBe(refusal);
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち

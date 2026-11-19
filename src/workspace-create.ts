@@ -564,11 +564,12 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
     ([ref, sha]) => [ref.slice("refs/heads/".length), sha] as const,
   );
   const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch), sha] as const);
-  // 巻き戻しの戻す先(#3197): 書く前に checkout にあった写しの値。基準の行は使わない —— 前に落ちた publish の2値の行は再送でも
-  // 予告に残る(ADR 0243 決定5)ので、行からは戻す先が1つに決まらない
-  const priorCopies = refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin/"));
+  // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの戻す先は、書く前に checkout にあった写しの値。基準の行は使わない —— 落ちて
+  // 残った行は次の比較まで残り(ADR 0351 決定4)、次の予告はその上に重なる(ADR 0373 決定3・5)ので、行からは戻す先が1つに決まらない
+  const readCopies = () => refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin/"));
+  const priorCopies = readCopies();
   const { githubAuth } = deps;
-  // 巻き戻しも口の内側に置く —— 畳みは写しを戻した後の ref を読み、予告の前の値へ畳む
+  // 巻き戻しも口の内側に置く —— 畳みは写しを戻した後の ref を読み返して2択で畳む(ADR 0243 決定2)
   const publish = () => {
     git(dir, "remote", "add", "origin", input.repo);
     let restoreRememberedRepo: (() => void) | undefined;
@@ -579,7 +580,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
       // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
       // (ADR 0066 決定6)。
-      // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しはこれを書く前の値へ戻す
+      // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しはこれを書く前の値へ戻す(ADR 0066 決定5 の Status 追記、#3197)
       authedPush(githubAuth, declaration, GIT_NETWORK_TIMEOUT_MS, branches);
       restoreRememberedRepo = rememberPublishedRepo(deps.db, declaration);
       commitWorkspaceEntry(
@@ -606,16 +607,22 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
         }
       };
       attempt(() => git(dir, "config", "--remove-section", "remote.origin"));
+      let copies: ReadonlyMap<string, string> | undefined;
+      attempt(() => {
+        copies = readCopies();
+      });
       for (const [ref] of writes) {
         const prior = priorCopies.get(ref);
+        // 前の値のままの写しには撃たない —— 無い名前の `update-ref -d` も、残った写しとの D/F の衝突では落ちる
+        if (copies !== undefined && copies.get(ref) === prior) continue;
         attempt(() => (prior === undefined ? git(dir, "update-ref", "-d", ref) : git(dir, "update-ref", ref, prior)));
       }
       attempt(() => restoreRememberedRepo?.());
       const refusal = [err, ...failures].find(isBoardDbRefusal);
       if (refusal !== undefined) throw refusal; // ADR 0342 決定4: 盤面 DB の拒否は包まず、巻き戻しの失敗の陰にも隠さない
       if (failures.length > 0) {
-        const reasons = failures.map((failure) => (failure instanceof Error ? failure.message : String(failure))).join("; ");
-        throw new Error(`publish of workspace ${input.name} failed and rolling it back failed: ${reasons}`, { cause: err });
+        const text = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
+        throw new Error(`publish of workspace ${input.name} failed: ${text(err)}; rolling it back failed: ${failures.map(text).join("; ")}`, { cause: err });
       }
       throw err;
     }
