@@ -1,6 +1,6 @@
 # Interview の root は対象を待ち、受験者は root の子ではない
 
-**Status 追記: 決定2 の「独立した blocking エッジは無い」に、分解元(別の workspace に置かれた根から、それを分解した task への委譲の親の辺)が足される。受験者は分解元を持たず、この ADR の線は変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定4、2026-11-19、issue #1796)。**
+**Status 追記: 決定2 の「独立した blocking エッジは無い」に、分解元が計画の work のとき、その辺(別の workspace に置かれた根から、それを分解した work への委譲の親の辺)が足される。付帯子とその子孫が分解元のときは文脈だけで、待ちの辺は足されない。受験者は分解元を持たず、この ADR の線は変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定4、2026-11-19、issue #1796)。**
 
 2026-10-16 の grilling(issue #2099)で決定。Interview は本番の task の木を乗り物にしていた —— root review が出題で work の
 子を立て、子に pin を付けて受験者にする。木の前提(子は1つの仕事の部品で互いの成果を読む・親が指揮する・親は子が揃うと起きて

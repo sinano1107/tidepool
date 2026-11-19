@@ -1,6 +1,6 @@
 # 軌道修正は checkpoint 機構ではなく文脈の可視化で賄う
 
-**Status 追記: 統合に戻った work の親が読む「決着した子」に、その work が別の workspace へ分解した分解元つきの根も同じ形で並ぶ(状態・handoff・着地したか)。親は子と同じにそれを待ち、親の統合点のレビュアーには中身を見せない —— 根の中身は親に入っていない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定4、2026-11-19、issue #1796)。**
+**Status 追記: 統合に戻った計画の work の親が読む「決着した子」に、その work が別の workspace へ分解した分解元つきの根も同じ形で並ぶ(状態・handoff・着地したか)。親は子と同じにそれを待ち、親の統合点のレビュアーには中身を見せない —— 根の中身は親に入っていない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定4、2026-11-19、issue #1796)。**
 
 issue #171 で決定。懸念は「decompose された子タスクが順に処理される間、親の想定どおりに
 進まなくても、親には統合復帰まで軌道修正の機会が無い」だった。調査で判明したのは、

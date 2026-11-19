@@ -1,6 +1,6 @@
 # 親の文脈は1本の年表として届く
 
-**Status 追記: 年表の「判断から生まれた子」には、その判断から別の workspace に置かれた分解元つきの根も子と同じに並び、その根の worker にも分解元の年表が親の年表として届く([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定4、2026-11-19、issue #1796)。**
+**Status 追記: 年表の「判断から生まれた子」には、その判断から別の workspace に置かれた分解元つきの根も子と同じに並び、その根の worker にも分解元の年表が親の年表として届く([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定4、2026-11-19、issue #1796)。**
 
 **Status 追記: `EventRow.worker_id` は `actor_id` に改名済み**(2026-10-26、issue #2581)。生の形を worker の面へ出さない決定は変わらない。
 
