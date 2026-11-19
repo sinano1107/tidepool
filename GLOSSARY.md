@@ -670,7 +670,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 ## Team(チーム)
 
-オーケストレーター — decompose を専門性とする普通の agent(ADR 0017 の線: 専門性が定義の差として現れる正当なケース) — を根とする、assignable_to グラフの部分木の**導出ビュー**。独立したエンティティではなく、新しい正本を持たない — 「誰が誰に振れるか」の正本は assignable_to のみであり、下階層のオーケストレーターは配下のうち自身も decompose 専門で自分の assignable_to を持つ agent として自然に表現される(2026-07-22 の grilling、issue #84)。チーム(委譲の木)は場所(workspace)と直交し、複数 workspace を跨いでよい — agent がどこで走れるかは別軸の制約が担う。ただし `parent_id` の木そのものは同じ workspace に閉じ、workspace を跨ぐ委譲は、計画の work を分解元に持つ根で表す(付帯子の下からの越境は委譲でなく文脈だけ)(Decompose 参照、2026-11-19 の grilling、issue #1796 / ADR 0384)。委譲はすべて盤面経由なので、チームの実際の稼働(呼び出しグラフ)は追加機構なしで監査可能。
+オーケストレーター — decompose を専門性とする普通の agent(ADR 0017 の線: 専門性が定義の差として現れる正当なケース) — を根とする、assignable_to グラフの部分木の**導出ビュー**。独立したエンティティではなく、新しい正本を持たない — 「誰が誰に振れるか」の正本は assignable_to のみであり、下階層のオーケストレーターは配下のうち自身も decompose 専門で自分の assignable_to を持つ agent として自然に表現される(2026-07-22 の grilling、issue #84)。チーム(委譲の木)は場所(workspace)と直交し、複数 workspace を跨いでよい — agent がどこで走れるかを絞っていた別軸の制約 `allowed_workspaces` は削除され、別の workspace への分解は承認を経る(ADR 0384)。ただし `parent_id` の木そのものは同じ workspace に閉じ、workspace を跨ぐ委譲は、計画の work を分解元に持つ根で表す(付帯子の下からの越境は委譲でなく文脈だけ)(Decompose 参照、2026-11-19 の grilling、issue #1796 / ADR 0384)。委譲はすべて盤面経由なので、チームの実際の稼働(呼び出しグラフ)は追加機構なしで監査可能。
 
 ## Handoff doc(ハンドオフドキュメント)
 
