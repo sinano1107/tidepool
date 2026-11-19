@@ -111,7 +111,9 @@ import { isSettled } from "./task-status.js";
 import {
   ancestorsSql,
   carriesReadOnly,
+  fillEmptyWorkspace,
   getTask,
+  hasTaskBranch,
   holdsFirstCaptures,
   interviewRole,
   interviewRoomPath,
@@ -1712,17 +1714,20 @@ function ancestorsFromTop(db: Db, task: Pick<Task, "parent_id">): Task[] {
 
 /** ADR 0372 決定3: 自分のタスクブランチを切る task の pickup は、同じ workspace に導出される未決着の work の祖先のうち
  *  `task_branch_created` を持たないものを上から固定する —— 空の列に workspace を書き、祖先自身の系譜から ref を作り、event を残す。
- *  導出は「列 → 列が埋まった最も近い祖先 → 既定」。人間担当の祖先は固定しない(#3293)。review の pickup は lineage に透明なので固定しない。 */
+ *  導出は「列 → 列が埋まった最も近い祖先 → 既定」。review の pickup は lineage に透明なので固定しない。
+ *  人間担当の祖先は固定しない(ADR 0374 帰結「実装の順」)。 */
 function fixUnstartedAncestors(db: Db, workspace: WorkspaceConfig, task: Task, defaultWorkspaceName: string | undefined, now: Date): void {
   if (transparentToLineage(task.type)) return;
   let inherited: { name: string; from: string } | undefined;
   for (const ancestor of ancestorsFromTop(db, task)) {
     const name = ancestor.workspace ?? inherited?.name ?? defaultWorkspaceName;
-    const fixes =
-      name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) && ancestor.assignee !== HUMAN_ACTOR_ID &&
-      !latestEventOfTask(db, ancestor.id, "task_branch_created");
-    if (fixes) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, ancestor.workspace === null ? (inherited?.from ?? "default") : undefined);
-    if (ancestor.workspace !== null || fixes) inherited = { name: name!, from: ancestor.id };
+    const unfixed =
+      name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) &&
+      // ADR 0374 帰結「実装の順」: 人間担当の祖先を今固定すると子の成果が task/<H> に集まり、今の完了の扉は何も撃たないので #3293 まで取り残される
+      ancestor.assignee !== HUMAN_ACTOR_ID &&
+      !hasTaskBranch(db, ancestor.id);
+    if (unfixed) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, ancestor.workspace === null ? (inherited?.from ?? "default") : undefined);
+    if (ancestor.workspace !== null || unfixed) inherited = { name: name!, from: ancestor.id };
   }
 }
 
@@ -1755,7 +1760,7 @@ export function resolveTaskBranchLineage(
   let outlivedForkSource = false;
   for (const ancestor of ancestorsFromTop(db, task)) {
     // ADR 0372 決定4: タスクブランチを持ち、書かれた列がこの checkout の workspace と同じ work の祖先だけを数える —— 決着の有無を問わず
-    if (ancestor.type !== "work" || ancestor.workspace !== workspace.name || !latestEventOfTask(db, ancestor.id, "task_branch_created")) continue;
+    if (ancestor.type !== "work" || ancestor.workspace !== workspace.name || !hasTaskBranch(db, ancestor.id)) continue;
     const branch = taskBranch(ancestor.id);
     if (!isSettled(ancestor.status)) {
       candidate = branch;
@@ -1849,14 +1854,14 @@ export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): 
 function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, filledFrom?: string): void {
   const ref = `refs/heads/${taskBranch(task.id)}`;
   if (!taskBranchExists(workspace, task.id)) {
-    const sha = taskForkSource(db, workspace, task);
-    boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "update-ref", ref, sha, ""));
-  } else if (latestEventOfTask(db, task.id, "task_branch_created")) return;
+    const source = taskForkSource(db, workspace, task);
+    boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
+  } else if (hasTaskBranch(db, task.id)) return;
   const sha = git(workspace.path, "rev-parse", ref);
-  // ADR 0372 決定2: 面接室で切る task も列の実環境の名前を残す
+  // ADR 0273 決定8: 面接室で切る task も列の実環境の名前を残す
   const name = task.workspace ?? workspace.name;
   db.transaction(() => {
-    if (filledFrom !== undefined) db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(name, task.id);
+    if (filledFrom !== undefined) fillEmptyWorkspace(db, task.id, name);
     appendEvent(db, {
       taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: now,
       payload: { kind: "task_branch_created", sha, workspace: name, ...(filledFrom !== undefined && { column_filled_from: filledFrom }) },

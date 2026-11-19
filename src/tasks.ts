@@ -1049,6 +1049,16 @@ export function derivedWorkspace(db: Db, task: Pick<Task, "workspace" | "type" |
     .get(task.workspace, task.type, task.parent_id) as string | null;
 }
 
+/** ADR 0372 決定2: 「タスクブランチを持つ」は `task_branch_created` で読む —— branch の有無でも pickup の event でもない。 */
+export function hasTaskBranch(db: Db, taskId: string): boolean {
+  return latestEventOfTask(db, taskId, "task_branch_created") !== undefined;
+}
+
+/** 空の列だけに workspace を書く —— 固定は埋まった列を書き換えない(ADR 0233 決定2 / ADR 0372 決定1)。 */
+export function fillEmptyWorkspace(db: Db, taskId: string, name: string): void {
+  db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(name, taskId);
+}
+
 /** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(収束 —— ADR 0241)
  *  完了した work の祖先の workspace も参照する。着地しない受験者(pin を持つ work)は祖先に数えない(ADR 0199)。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
 function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
@@ -3699,7 +3709,7 @@ export function editTask(
       );
     }
     // ADR 0372 決定5: workspace はタスクブランチを持つ task でも凍る(子の pickup が固定した根を含む)—— assignee の鍵には足さない
-    if (field === "workspace" && latestEventOfTask(db, task.id, "task_branch_created")) {
+    if (field === "workspace" && hasTaskBranch(db, task.id)) {
       throw new DomainError(
         "a task that has a task branch keeps its workspace — the branch and its children's work live there; " +
           "to change it, cancel the task and register a new one",

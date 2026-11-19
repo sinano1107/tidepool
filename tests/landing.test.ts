@@ -69,6 +69,7 @@ import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, 
 import { humanAskpass, startDenyingHttpRemote, startGitHttpRemote } from "./git-http-remote.js";
 import {
   CLEAN_LANDING_INTAKE,
+  checkoutTaskBranch,
   commitWork,
   completedWork,
   defaultingTo,
@@ -93,12 +94,6 @@ import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
-
-/** setup のみ: 盤面が作ったタスクブランチ(`seedTaskBranch`、ADR 0372 決定2)を `from` から置いて checkout する。 */
-function checkoutTaskBranch(db: Db, ws: WorkspaceConfig, taskId: string, from = "HEAD"): void {
-  seedTaskBranch(db, ws, taskId, from);
-  git(ws.path, "checkout", `task/${taskId}`);
-}
 
 let db: Db | undefined;
 
@@ -1473,8 +1468,8 @@ it("収束は open PR を持つ根を更新し、ローカル着地の question 
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  git(workspace.path, "branch", `task/${root.id}`);
-  completeTask(db, root, FULL_HANDOFF, "worker", clock.now(), "worker");
+  seedTaskBranch(db, workspace, root.id);
+  completeTask(db, getTask(db, root.id)!, FULL_HANDOFF, "worker", clock.now(), "worker");
   registerLocalMergeQuestion(db, root, "keep this settled surface", clock.now());
   const parent = registerTask(
     db,
@@ -2068,8 +2063,9 @@ it("nothing_to_land を刻んだ根の子の修理は根のブランチへ帰ら
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
-  const root = landingWork(db, clock);
-  git(workspace.path, "branch", `task/${root.id}`, "refs/remotes/origin/main");
+  const { id } = landingWork(db, clock);
+  seedTaskBranch(db, workspace, id, "refs/remotes/origin/main");
+  const root = getTask(db, id)!;
   finish(db, clock, root);
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ kind: "nothing_to_land" });
   // 修理を後始末と同じ形で拾い、commit し、完了して merge back する

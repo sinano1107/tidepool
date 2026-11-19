@@ -12,7 +12,7 @@ import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, registerTask, type Task } from "../src/tasks.js";
 import { catchUpTaskBranch, commitRoomCopy, firePickupPredicates, mergeTaskToProtected, quarantineWorkspace, recordTaskCheckoutTip, refValues, releaseWorkspace, retakeRefBaselines, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { CLEAN_LANDING_INTAKE, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, seedTaskBranch } from "./harness.js";
+import { CLEAN_LANDING_INTAKE, checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面自身の ref の書き込みは口(ADR 0243 決定4)を通り、基準の行は書いた値の1値に畳まれる(ADR 0351 決定3、#2950)。
@@ -103,8 +103,7 @@ it("merge back and parking ignore repo-local hooks, signing and merge drivers (A
     const parent = work(db, "parent");
     const child = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
     git(ws.path, "branch", `task/${child.id}`);
-    seedTaskBranch(db, ws, parent.id);
-    git(ws.path, "checkout", `task/${parent.id}`);
+    checkoutTaskBranch(db, ws, parent.id);
     commitWork(ws.path, "shared.txt", shared("parent", "base"));
     git(ws.path, "checkout", "main");
     const place = await prepareAtPickup(db, ws, child);

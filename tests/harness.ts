@@ -61,6 +61,7 @@ import {
   completeIntegrationReview,
   completeTask,
   decomposeTask,
+  fillEmptyWorkspace,
   getTask,
   humanDecomposeTask,
   interviewRoomPath,
@@ -868,13 +869,18 @@ export async function initWorkspaceCheckout(path: string, name: string): Promise
 }
 
 /** setup のみ: 盤面がタスクブランチを作った姿(ADR 0372 決定2)—— `task/<id>` を `from`(既定は HEAD)から切り、空の列に workspace の名前を書き、
- *  `task_branch_created` を残す。系譜は event と列で祖先を数える(決定4)ので、手で `git branch` しただけの祖先は数えない。作った sha を返す。 */
-export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string, from = "HEAD"): string {
+ *  `task_branch_created` を残す。系譜は event と列で祖先を数える(決定4)ので、手で `git branch` しただけの祖先は数えない。 */
+export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string, from = "HEAD"): void {
   git(workspace.path, "branch", `task/${taskId}`, from);
   const sha = git(workspace.path, "rev-parse", `task/${taskId}`);
-  db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(workspace.name, taskId);
+  fillEmptyWorkspace(db, taskId, workspace.name);
   appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha, workspace: workspace.name }, at: new Date(0) });
-  return sha;
+}
+
+/** setup のみ: `seedTaskBranch` で置いたタスクブランチを checkout する。 */
+export function checkoutTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string, from = "HEAD"): void {
+  seedTaskBranch(db, workspace, taskId, from);
+  git(workspace.path, "checkout", `task/${taskId}`);
 }
 
 /** pickup の準備(ADR 0356 決定2): 名前の場所(Interview の root と受験者は面接室)を準備し、task の checkout を開いて走る場所を返す ——
@@ -892,7 +898,7 @@ export async function prepareAtPickup(
     appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: { kind: "task_picked_up" }, at: now });
   }
   // pickup の埋め(ADR 0233 決定2)と同じく、空の列は走る場所の名前になる —— 系譜は書かれた列で祖先を数える(ADR 0372 決定4)
-  db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(workspace.name, task.id);
+  fillEmptyWorkspace(db, task.id, workspace.name);
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   // 既定は registry の無い盤面(最初の撮りの確認は掛からない、ADR 0373 決定13)
   await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
@@ -1167,13 +1173,11 @@ export async function closedRootTree(
   const workspace = await makeWorkspace(name);
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
-  seedTaskBranch(db, workspace, root.id);
-  git(workspace.path, "checkout", `task/${root.id}`);
+  checkoutTaskBranch(db, workspace, root.id);
   let objected = root;
   if (decomposed) {
     [objected] = decomposeTaskViaWorker(db, root, { reason: "split", children: [{ title: "part", purpose: "p", completion_criteria: "c" }] }, "deckhand", now) as [Task];
-    seedTaskBranch(db, workspace, objected.id, `task/${root.id}`);
-    git(workspace.path, "checkout", `task/${objected.id}`);
+    checkoutTaskBranch(db, workspace, objected.id, `task/${root.id}`);
     commitWork(workspace.path, "part.txt", "part\n");
     git(workspace.path, "checkout", `task/${root.id}`);
     git(workspace.path, "merge", "--no-edit", `task/${objected.id}`);

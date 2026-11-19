@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents, listEventsOfKinds } from "../src/events.js";
 import { completeTask, getTask, humanDecomposeTask, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { recordTaskCheckoutTip, releaseWorkspace, resolveTaskBranchLineage, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, seedTaskBranch } from "./harness.js";
 
 // ADR 0372 決定2〜4 / ADR 0375 決定2: タスクブランチを作ったら `task_branch_created` を残し、系譜はこの event と列で読む(#3418)
 
@@ -101,7 +101,7 @@ it("祖先のブランチを作れなければ pickup の準備が投げ、そ�
   db.close();
 });
 
-it("pickup が ref を作る前に止まった task は task_branch_created を持たず、後で分解したその子は保護ブランチの tip から切られる(ADR 0372 決定2 / ADR 0274)", async () => {
+it("pickup が ref を作る前に止まった task は task_branch_created を持たず、後で分解したその子の pickup が保護ブランチの tip から固定する —— pickup の event をブランチと読まない(ADR 0372 決定2 / ADR 0274)", async () => {
   const ws = await makeWorkspace("branch-created-stopped");
   const db = openDb(":memory:");
   const parent = pickupTask(db, work(db, "parent"), "deckhand", NOW, { workspace: ws.name })!;
@@ -114,14 +114,14 @@ it("pickup が ref を作る前に止まった task は task_branch_created を�
   const [child] = humanDecomposeTask(db, getTask(db, parent.id)!, { reason: "split", children: [{ title: "child", purpose: "why", completion_criteria: "done" }] }, NOW, undefined, "webui");
   await prepareAtPickup(db, ws, pickupTask(db, child!, "deckhand", NOW, { workspace: ws.name })!, { defaultWorkspaceName: ws.name });
 
-  expect(git(ws.path, "rev-parse", `task/${child!.id}`)).toBe(git(ws.path, "rev-parse", "main"));
+  expect(branchEvents(db, parent.id)).toEqual([{ kind: "task_branch_created", sha: git(ws.path, "rev-parse", "main"), workspace: ws.name }]);
   db.close();
 });
 
 it.each([
-  ["決着した人間の task", "done"],
-  ["未決着で未固定の人間の祖先", "todo"],
-] as const)("%sの下の work は系譜に飛ばされて保護ブランチから切られ、人間の祖先の列・ref・event は動かない(ADR 0372 決定3・4、#1827)", async (_, status) => {
+  ["決着した人間の task", "done", "ADR 0372 決定4、#1827"],
+  ["未決着で未固定の人間の祖先", "todo", "ADR 0374 帰結「実装の順」"],
+] as const)("%sの下の work は系譜に飛ばされて保護ブランチから切られ、人間の祖先の列・ref・event は動かない(%s)", async (_, status, _cited) => {
   const ws = await makeWorkspace("branch-created-human");
   const db = openDb(":memory:");
   const human = work(db, "human", { assignee: HUMAN_ACTOR_ID });
@@ -151,6 +151,21 @@ it("ref を書いて event の前に落ちた作成は、次の pickup が ref �
 
   expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(sha);
   expect(branchEvents(db, task.id)).toEqual([{ kind: "task_branch_created", sha, workspace: ws.name }]);
+  db.close();
+});
+
+it("別の workspace の列を持つ祖先は、task_branch_created を持っていても系譜に数えず、子は自分の workspace の保護ブランチから切られる(ADR 0372 決定4)", async () => {
+  const a = await makeWorkspace("branch-created-ws-a");
+  const b = await makeWorkspace("branch-created-ws-b");
+  const db = openDb(":memory:");
+  const parent = work(db, "parent", { workspace: a.name });
+  seedTaskBranch(db, a, parent.id);
+  const child = pickupTask(db, work(db, "child", { parent_id: parent.id, workspace: b.name }), "deckhand", NOW)!;
+
+  await prepareAtPickup(db, b, child, { defaultWorkspaceName: b.name });
+
+  expect(git(b.path, "rev-parse", `task/${child.id}`)).toBe(git(b.path, "rev-parse", "main"));
+  expect(resolveTaskBranchLineage(db, b, child)).toEqual({ branch: undefined, outlivedForkSource: false });
   db.close();
 });
 
