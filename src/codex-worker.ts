@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
@@ -469,8 +469,10 @@ export function listedSkillPaths(result: unknown, cwds: readonly string[]): stri
  *  まだ有効と報告された skill を `name (path)` で拾う。許した path が有効なことは封じ込めの性質ではないので問わない。許さなかった path は
  *  列挙に無かったもの(列挙と観測の間に現れた skill)も閉じたものとして問う —— 許可が空なら観測の全部が無効であること。 */
 export function enabledSkills(result: unknown, cwds: readonly string[], permitted: ReadonlySet<string>): string[] {
-  return unclosedSkills(result, cwds, permitted).map((skill) => `${skill.name} (${skill.path})`);
+  return unclosedSkills(result, cwds, permitted).map(skillLabel);
 }
+
+const skillLabel = ({ name, path }: { name: string; path: string }) => `${name} (${path})`;
 
 const unclosedSkills = (result: unknown, cwds: readonly string[], permitted: ReadonlySet<string>) =>
   skillsAt(result, cwds).filter((skill) => skill.enabled && !permitted.has(skill.path));
@@ -967,6 +969,8 @@ export async function codexWorkspaceContainment(options: {
   config: (translation: CodexSkillTranslation) => string[];
   /** spawn の前の検査だけが渡す継続の門(#1973): 列挙の間に session が終わっていれば観測の Board call を撃たずに投げる。 */
   live?: () => boolean;
+  /** `workspace` が使い捨ての checkout —— 検査の後で消える番地を理由に残さず、中の skill は repository の root からの path で言う(ADR 0379 決定2)。 */
+  throwaway?: boolean;
 }): Promise<{ translation: CodexSkillTranslation; capability: ContainmentCapability; observed: unknown; unclosedPaths: string[] }> {
   const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
   const [listed] = await callAppServer(through("Codex skill enumeration"), options.executable, options.env, [], [skillsListRequest(options.workspace)]);
@@ -980,13 +984,14 @@ export async function codexWorkspaceContainment(options: {
     ["--strict-config", ...configArgs(config)],
     [skillsListRequest(options.workspace)],
   );
-  const permitted = new Set(Object.values(resolved.paths));
-  const enabled = enabledSkills(observed, [options.workspace], permitted);
+  const unclosed = unclosedSkills(observed, [options.workspace], new Set(Object.values(resolved.paths)));
+  const shown = (path: string) => (options.throwaway && path.startsWith(`${options.workspace}${sep}`) ? relative(options.workspace, path) : path);
+  const enabled = unclosed.map((skill) => skillLabel({ name: skill.name, path: shown(skill.path) }));
   const translation = translateCodexSkills({ allowlist: options.allowlist, listed, workspace: options.workspace, observed });
   return {
     translation,
     observed,
-    unclosedPaths: unclosedSkills(observed, [options.workspace], permitted).map((skill) => skill.path),
+    unclosedPaths: unclosed.map((skill) => skill.path),
     capability: enabled.length === 0
       ? { available: true }
       : {
@@ -1413,6 +1418,8 @@ export function createCodexWorkspaceCheck(options: {
         workspace,
         // ADR 0337 決定3: agent に依らない検査は列挙の全部を閉じる placeholder のまま
         allowlist: [],
+        // ADR 0379 決定1: 回答が渡す在り処はいつも使い捨ての checkout
+        throwaway: true,
         config: (translation) =>
           placeholderSpawnConfig("work", {
             workspace,
@@ -1609,18 +1616,21 @@ export class CodexWorker implements WorkerAdapter {
         skills: closedSkillsConfig(translation.deny),
       });
     const workerConfig = workerConfigAt(workspacePath);
+    const containmentAt = (at: string, throwaway = false) =>
+      codexWorkspaceContainment({
+        call: this.options.boardCall,
+        executable: this.options.executable,
+        env,
+        workspace: at,
+        allowlist: agent.definition.skills,
+        config: workerConfigAt(at),
+        live,
+        throwaway,
+      });
     return (async () => {
       let checked: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
       try {
-        checked = await codexWorkspaceContainment({
-          call: this.options.boardCall,
-          executable: this.options.executable,
-          env,
-          workspace: workspacePath,
-          allowlist: agent.definition.skills,
-          config: workerConfig,
-          live,
-        });
+        checked = await containmentAt(workspacePath);
       } catch (error) {
         if (!live()) return removeTaskTemp();
         spawnFailed({
@@ -1633,25 +1643,21 @@ export class CodexWorker implements WorkerAdapter {
       if (!checked.capability.available) {
         // ADR 0379 決定3: 同じ検査を保護ブランチの tip に当て直す。閉じる集合は spawn と同じ agent のもの。ここの失敗は組の不成立でない(ADR 0259 決定6)
         let protectedTip: ContainmentCapability | undefined;
+        // ADR 0378 決定7: 1段目を待つ間の公開を宣言の食い違いと読まない —— 宣言は今の registry で確かめる
+        const named = withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now(), (name) =>
+          resolveExecutionWorkspace(loadRegistry(this.options.registry.dir, this.options.registry.mode), this.options.workspace, name, this.workspacesDir));
         if (rereadsProtectedTip(task)) {
+          let opened = false;
           try {
-            const named = withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now());
             protectedTip = await withProtectedTipCheckout(named, this.workspacesDir, async (path) => {
-              const { capability } = await codexWorkspaceContainment({
-                call: this.options.boardCall,
-                executable: this.options.executable,
-                env,
-                workspace: path,
-                allowlist: agent.definition.skills,
-                config: workerConfigAt(path),
-                live,
-              });
-              return capability;
+              opened = true;
+              return (await containmentAt(path, true)).capability;
             });
           } catch (error) {
             if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4
             if (!live()) return removeTaskTemp();
-            spawnFailed({ error_code: null, message: `${SKILL_CHECK_FAILED}; the worker was not spawned (no fail-open): ${String(error)}` });
+            const failed = opened ? SKILL_CHECK_FAILED : `the board could not prepare the throwaway checkout of ${protectedBranch(named)} for the Codex skill check`;
+            spawnFailed({ error_code: null, message: `${failed}; the worker was not spawned (no fail-open): ${String(error)}` });
             return;
           }
           if (!live()) return removeTaskTemp();
@@ -1660,7 +1666,7 @@ export class CodexWorker implements WorkerAdapter {
         const pairStop = pairStopReason(protectedTip);
         if (pairStop !== undefined) {
           // 閉じきれないのはこの workspace の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
-          stopped(stopContainmentPair(this.options.db, "codex", place.namedPlace, pairStop, this.workspacesDir, this.options.clock.now()));
+          stopped(stopContainmentPair(this.options.db, "codex", named, pairStop, this.workspacesDir, this.options.clock.now()));
           return;
         }
         const paths = checked.unclosedPaths.join(", ");

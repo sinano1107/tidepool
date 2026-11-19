@@ -32,8 +32,12 @@ import {
   type TaskCheckoutPlace,
   takeInHumanContentWorkbench,
   type WorkspaceConfig,
+  withRememberedRepoCheck,
+  writeBoardRefs,
 } from "../src/workspace.js";
 import {
+  answerSkillsFromDisk,
+  CODEX_DISK_SKILL,
   codexSkillsListAt,
   FakeClock,
   fakeAppServerCall,
@@ -489,7 +493,8 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
     const checks = quarantineChecks({
       db,
       clock,
-      resolveWorkspace: () => current,
+      // 本番の resolver と同じく、宣言の確かめは今の registry を読む
+      resolveWorkspace: () => withRememberedRepoCheck(db, current, () => clock.now(), () => current),
       workspacesDir: base,
       codexWorkspaceContainment: options.codex,
       githubAuth: options.githubAuth,
@@ -526,7 +531,11 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
   async function becomeRemoteBacked(b: Awaited<ReturnType<typeof board>>) {
     const origin = await tempDir("tidepool-became-remote-origin-");
     git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
-    git(b.ws.path, "push", "--quiet", origin, "main");
+    // 本番の publish と同じく origin を足し、remote-tracking ref は盤面の口を通して書く
+    writeBoardRefs(b.db, b.ws, [["refs/remotes/origin/main", git(b.ws.path, "rev-parse", "main")]], () => {
+      git(b.ws.path, "remote", "add", "origin", origin);
+      git(b.ws.path, "push", "--quiet", "origin", "main");
+    });
     const published = { ...b.ws, repo: origin };
     rememberPublishedRepo(b.db, published);
     b.publish(published);
@@ -821,6 +830,19 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
     });
   });
 
+  it("remote-backed の (claude-code, B) の回答の拒否も origin の道を言う(ADR 0379 決定7)", async () => {
+    const { workspace } = await makeRemoteBackedWorkspace("claude-remote-refusal-route");
+    const human = await tempDir("tidepool-claude-remote-route-human-");
+    git(human, "clone", "--quiet", workspace.repo!, ".");
+    await commitSymlinkedClaude(human);
+    git(human, "push", "--quiet", "origin", "main");
+    git(workspace.path, "fetch", "--quiet", "origin");
+    const b = await board("claude-remote-refusal-route", { workspace });
+    b.stop();
+
+    await expect(b.answer()).rejects.toThrow(/ Push the fix to origin's main from your own clone, then answer\.$/);
+  });
+
   describe("基準との比較", () => {
     it.each(["claude-code", "codex"] as const)("先頭で ref が基準と違えば (%s, B) の回答を拒み、workspace の Quarantine を立ててその id を言い、基準は撮り直さない(pin B15)", async (harness) => {
       const check = vi.fn<CodexWorkspaceCheck>(async () => ({ available: true }));
@@ -948,15 +970,12 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
   });
 
   describe("(codex, B) の回答は記録を読む(ADR 0379 決定1・2・7、pin G1・G2・G5)", () => {
-    const SKILL = join(".agents", "skills", "flat", "SKILL.md");
-
     /** 本物の検査を、cwd の disk に skill があるときだけ閉じきれないと答える app-server へ繋ぐ。`seen` は列挙された cwd と、そのとき git repo だったか。 */
     async function codexReadingTheDisk() {
       const seen: Array<{ cwd: string; repository: boolean }> = [];
       const appServer = fakeAppServerCall((args, cwds) => {
         seen.push(...cwds.map((cwd) => ({ cwd, repository: existsSync(join(cwd, ".git")) })));
-        const observed = cwds.some((cwd) => existsSync(join(cwd, SKILL))) ? "one-enabled" : "closed";
-        return codexSkillsListAt(cwds, args.includes("--strict-config") ? observed : undefined);
+        return answerSkillsFromDisk(args, cwds);
       });
       const check = createCodexWorkspaceCheck({ executable: "/opt/tidepool/bin/codex", codexHome: await tempDir("tidepool-codex-home-"), call: appServer.call });
       return { check, seen };
@@ -967,7 +986,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const b = await board("codex-record", { workspace: await makeWorkspace("codex-record"), codex: codex.check });
       b.stop("codex");
       await mkdir(join(b.ws.path, ".agents", "skills", "flat"), { recursive: true });
-      await writeFile(join(b.ws.path, SKILL), "only in the named place\n");
+      await writeFile(join(b.ws.path, CODEX_DISK_SKILL), "only in the named place\n");
       const named = () => [git(b.ws.path, "for-each-ref"), git(b.ws.path, "status", "--porcelain"), git(b.ws.path, "count-objects", "-v")];
       const before = named();
       const id = b.question("codex").id;
@@ -987,7 +1006,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
     /** `.agents/skills/flat/SKILL.md` を `dir` の今の branch に commit する。 */
     async function commitSkill(dir: string) {
       await mkdir(join(dir, ".agents", "skills", "flat"), { recursive: true });
-      await writeFile(join(dir, SKILL), "a tracked skill\n");
+      await writeFile(join(dir, CODEX_DISK_SKILL), "a tracked skill\n");
       git(dir, "add", "-A");
       git(dir, "commit", "-m", "track a skill");
     }
@@ -1017,6 +1036,8 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
 
       expect(refusal).toBeInstanceOf(DomainError);
       expect((refusal as Error).message).toMatch(/^codex containment in workspace codex-tracked is still not established: Under the board's closed skills\.config, /);
+      expect((refusal as Error).message).toContain(`Codex still reports these skills enabled: flat (${CODEX_DISK_SKILL}).`);
+      expect((refusal as Error).message).not.toContain("@containment-check");
       expect((refusal as Error).message).toMatch(new RegExp(`remove or disable them there\\. If the skill is tracked in the repository: The board opened the workbench at ${b.workbench()}: commit the fix there on main, then answer\\.$`));
       expect(codex.seen.every(({ cwd }) => !existsSync(cwd))).toBe(true);
       nothingWritten();
@@ -1039,6 +1060,59 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       ]);
       expect(answered.notice).toBe(`took ${tip} in as ${main} on main. In a clone, fetch the workbench and fast-forward to \`board/main\` before you write on.`);
       expect(codex.seen.every(({ cwd, repository }) => repository && !existsSync(cwd))).toBe(true);
+    });
+
+    it("取り込む tip の検査も git repo の使い捨ての checkout で走り、検査の間に名前の場所は何も変わらず、検査の後に checkout は消える(pin G2)", async () => {
+      const held = heldCodexCheck();
+      const b = await stoppedCodexPair("codex-tip-record", held.check);
+      removeSkill(b.workbench());
+      const named = () => [git(b.ws.path, "for-each-ref"), git(b.ws.path, "status", "--porcelain"), git(b.ws.path, "count-objects", "-v")];
+      const before = named();
+
+      const answering = b.answer("codex");
+      await vi.waitFor(() => expect(held.check).toHaveBeenCalled());
+      const { path } = vi.mocked(held.check).mock.calls[0]![0];
+      expect(existsSync(join(path, ".git"))).toBe(true);
+      expect(existsSync(join(path, CODEX_DISK_SKILL))).toBe(false);
+      expect(named()).toEqual(before);
+      held.release();
+      await answering;
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    it("取り込みの記録の時刻は検査を待った後の時刻(ADR 0371 決定6)", async () => {
+      const held = heldCodexCheck();
+      const b = await stoppedCodexPair("codex-intake-time", held.check);
+      removeSkill(b.workbench());
+
+      const answering = b.answer("codex");
+      await vi.waitFor(() => expect(held.check).toHaveBeenCalled());
+      await b.clock.advance(60_000);
+      const afterTheCheck = b.clock.now().toISOString();
+      held.release();
+      await answering;
+
+      expect(b.takenIn().map((event) => event.created_at)).toEqual([afterTheCheck]);
+    });
+
+    it("取り込むものが無い検査の間に workspace が公開されても、偽の workspace の Quarantine を立てず、拒否は origin の道を言う(ADR 0378 決定7)", async () => {
+      let release = () => {};
+      const b = await stoppedCodexPair("codex-race-published-nothing", () =>
+        new Promise((resolve) => {
+          release = () => resolve({ available: false, reason: "the skill stays enabled" });
+        }));
+      const id = b.question("codex").id;
+
+      const answering = b.answer("codex").catch((err: unknown) => err as Error);
+      await vi.waitFor(() => expect(existsSync(join(b.base, "@containment-check"))).toBe(true));
+      await becomeRemoteBacked(b);
+      release();
+      const refusal = await answering;
+
+      expect((refusal as Error).message).toMatch(/^codex containment in workspace codex-race-published-nothing is still not established: the skill stays enabled\. If the skill is tracked in the repository: Push the fix to origin's main from your own clone, then answer\./);
+      expect(quarantineQuestion(b.db, "workspace", b.ws.name)).toBeUndefined();
+      expect(getTask(b.db, id)?.status).toBe("todo");
     });
 
     it("作業台の tip にまだ skill があれば、何も書かずに text G1 で拒む(ADR 0371 決定6)", async () => {

@@ -238,6 +238,10 @@ export function spawnFailureHandler(
 
 function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure, now: Date): void {
   const unhideableInTask = failure.kind !== undefined;
+  // ADR 0379 帰結: Interview の task は host の設定の skill でもこの kind になるので、原因を task branch に限って言わない
+  const retry = failure.kind === "unhideable-task-skills"
+    ? `"retry" runs the same check and fails for the same reason until the skill is no longer where Codex loads it from. `
+    : `"retry" reads the same tree and fails for the same reason until the task branch changes. `;
   registerFailureQuestion(
     db,
     task,
@@ -246,9 +250,7 @@ function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure,
       `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
       failure.message,
     now,
-    unhideableInTask
-      ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
-      : undefined,
+    unhideableInTask ? retry : undefined,
     unhideableInTask ? "abandon" : undefined,
   );
 }

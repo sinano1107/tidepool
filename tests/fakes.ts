@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
@@ -1171,6 +1171,18 @@ export function codexSkillsListAt(cwds: readonly string[], variant?: "closed" | 
 export const answerSkillsList =
   (observed: "closed" | "one-enabled") => (args: readonly string[], cwds: readonly string[]) =>
     codexSkillsListAt(cwds, args.includes("--strict-config") ? observed : undefined);
+
+/** `answerSkillsFromDisk` が読む skill の、checkout の root からの path。 */
+export const CODEX_DISK_SKILL = ".agents/skills/flat/SKILL.md";
+
+/** disk を読む Codex の代役の answer —— cwd に `CODEX_DISK_SKILL` があればその cwd の下の path で列挙し、閉じた設定の下でも開いたままと答える。 */
+export const answerSkillsFromDisk = (args: readonly string[], cwds: readonly string[]) => ({
+  data: cwds.map((cwd) => ({
+    cwd,
+    skills: existsSync(join(cwd, CODEX_DISK_SKILL)) ? [{ name: "flat", path: join(cwd, CODEX_DISK_SKILL), scope: "repo", enabled: args.includes("--strict-config") }] : [],
+    errors: [],
+  })),
+});
 
 /** Codex app-server に答える fake の Board call(ADR 0259 の skill の列挙と観測)。要求ごとの `result` は
  *  `answer(args, cwds)` が返す —— args に `--strict-config` があれば観測、無ければ列挙。cwds は要求の `params.cwds`。

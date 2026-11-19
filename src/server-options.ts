@@ -93,7 +93,7 @@ import { type RecordContainerError, TranscriptStore } from "./transcript-store.j
 import type { TranslationClient } from "./translate.js";
 import { terminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
+import { CanonicalWorkerRouter, type SpawnFailure, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
   entryCheckoutPath,
   listRegisteredWorkspaces,
@@ -267,7 +267,7 @@ export function buildWorkerOptions(
     reclaimTimeout: number;
     containers: ProcessContainers;
     boardCall: BoardCall;
-    onSpawnFailed: (taskId: string, sessionId: number, failure: { error_code: string | null; message: string }, record?: () => void) => void;
+    onSpawnFailed: (taskId: string, sessionId: number, failure: SpawnFailure, record?: () => void) => void;
     onRecordContainerFailed: (taskId: string, sessionId: number, err: RecordContainerError) => void;
     onPickupStopped: (taskId: string, sessionId: number, payload: PickupStopped) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit, facts: WorkerExitClassification) => void;
