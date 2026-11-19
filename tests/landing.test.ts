@@ -12,7 +12,7 @@ import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   closedRootOf,
-  contentLeftBehind,
+  contentLeftBehindLocally,
   createLanding,
   type Landing,
   landingAnnotation,
@@ -4227,7 +4227,7 @@ it("merge back の conflict に手を付けないままの受理は、merge back
 
   expect(head(workspace)).toBe("main");
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([repair.id]);
+  expect(contentLeftBehindLocally(db, workspace, work.id, originHead(workspace, work.id))).toEqual([repair.id]);
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
@@ -4311,7 +4311,7 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
   expect(pollNow).toHaveBeenCalledOnce();
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
-  expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([]);
+  expect(contentLeftBehindLocally(db, workspace, work.id, originHead(workspace, work.id))).toEqual([]);
 });
 
 it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む(ADR 0356 決定1)", async () => {
@@ -4541,7 +4541,7 @@ it("PR の head の fetch を待つ間に修理が巻き戻されたら、merge 
   const ref = `refs/heads/task/${repair.id}`;
   const recorded = git(pr.workspace.path, "rev-parse", ref);
   const rewound = originHead(pr.workspace, pr.work.id);
-  await pushOutsideBoard(pr.workspace, pr.work.id);
+  const prHead = await pushOutsideBoard(pr.workspace, pr.work.id);
   const { window, githubAuth } = fetchHeldAtToken();
 
   const answering = answerMergeQuestion({ ...pr, githubAuth });
@@ -4550,9 +4550,41 @@ it("PR の head の fetch を待つ間に修理が巻き戻されたら、merge 
   window.open();
 
   await expect(answering).rejects.toThrow(new RegExp(`^workspace ${pr.workspace.name}: refs changed before landing read them.*now: ${rewound} ${ref}`));
+  expect(() => git(pr.workspace.path, "cat-file", "-e", `${prHead}^{commit}`)).toThrow();
   expect(quarantineQuestion(pr.db, "workspace", pr.workspace.name)?.purpose).toContain(`was: ${recorded} ${ref}`);
   expect(mergeQuestions(pr.db)).toHaveLength(1);
   expect(pr.github.merged).toEqual([]);
+});
+
+it.each(["CI", "fetch token"] as const)("%s を待つ間に merge question が観測で閉じられたら、ref が動いていても観測の結果を返す", async (waitingFor) => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("merge-answer-closed-while-waiting", "escalate");
+  await leaveBaseline(db, workspace);
+  const { window, githubAuth } = fetchHeldAtToken();
+  if (waitingFor === "CI") afterCiRead(github, window.hold);
+  else await pushOutsideBoard(workspace, work.id);
+  const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+
+  const answering = submitAnswer(
+    { db, pollNow: () => {}, landing, workspace, github, githubAuth },
+    question,
+    ["merge"],
+    undefined,
+    () => clock.now(),
+    "webui",
+  );
+  await window.entered;
+  git(workspace.path, "tag", "intruder");
+  github.scriptClosedOutside(1);
+  await landing.tick("outside_merge", clock.now());
+  window.open();
+
+  await expect(answering).resolves.toMatchObject({
+    status: "done",
+    question_answer: null,
+    settled_by_observation: "pr_close_observed",
+  });
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(github.merged).toEqual([]);
 });
 
 it("基準どおりの ref を持つ workspace の Quarantine は PR への merge 回答を拒まない", async () => {
@@ -5055,6 +5087,21 @@ function answerLocalMerge(
 
 const localLeftBehind = (workId: string, carrier: string) =>
   new DomainError(`cannot merge yet: the task branch task/${workId} does not carry all of the task's content yet — ${carrier}`);
+
+it("別の ref が動いたら、ローカル着地の merge 回答を拒み workspace の Quarantine を立てる", async () => {
+  const local = await landLocally("local-merge-raises-quarantine");
+  const { workspace, db, question } = local;
+  const before = git(workspace.path, "rev-parse", "main");
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  git(workspace.path, "tag", "intruder");
+  const movedRef = `now: ${before} refs/tags/intruder`;
+
+  await expect(answerLocalMerge(local)).rejects.toThrow(movedRef);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(movedRef);
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(git(workspace.path, "rev-parse", "main")).toBe(before);
+});
 
 it("別の ref が動いた workspace のローカル着地は、Quarantine を重ねず、動いた ref を名指して拒む", async () => {
   const local = await landLocally("local-merge-with-moved-tag");

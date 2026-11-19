@@ -50,9 +50,9 @@ import {
   checkAcceptanceFirstHalf,
   compareRefsBeforeLanding,
   FirstCaptureRefusedError,
-  fetchCommitIfMissing,
   type IntakeContext,
   lineageTaskBranch,
+  prepareFetchCommitIfMissing,
   protectedBranch,
   protectedBranchRef,
   quarantineWorkspace,
@@ -213,6 +213,10 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
 export class LandingRefCheckError extends DomainError {}
 class LandingRefsRefusedError extends LandingRefCheckError {}
 
+function workspaceQuarantinedMessage(name: string): string {
+  return `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`;
+}
+
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
  *  Quarantine の question を名指す(ADR 0373 決定13 追記)。 */
 export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveRegistered: WorkspaceResolver | undefined, now: Date): void {
@@ -227,7 +231,7 @@ export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveReg
             `waits until it is closed; answer question ${openQuarantineQuestion(db, quarantine, value)?.id}`,
         );
       }
-      throw new LandingRefsRefusedError(`workspace "${value}" is quarantined and needs human attention before landing; answer its quarantine question`);
+      throw new LandingRefsRefusedError(workspaceQuarantinedMessage(value!));
     }
     if (!(error instanceof RefsMovedError)) {
       if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
@@ -245,30 +249,21 @@ export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveReg
  *  必要なら fetch し、収束は盤面が最後に push した head を渡す。head を candidate に置くので、盤面の外の push で先へ
  *  進んでいても積み残しと読まない。ブランチが無ければ運ぶ内容も無い。比べられなければ積み残しとする(fail-closed)。
  *  門(`landingBlock`)とは別の述語である(ADR 0231 決定3)。 */
-async function hasContentLeftBehind(
+function hasContentLeftBehind(
   db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
   candidate: string | undefined,
-): Promise<boolean> {
+): boolean {
   try {
-    return (await contentLeftBehind(db, workspace, taskId, candidate)).length > 0;
+    return contentLeftBehindLocally(db, workspace, taskId, candidate).length > 0;
   } catch {
     return true;
   }
 }
 
-/** 手元の candidate に積み残しを運ぶタスクの id —— 比べられなければ throw する。 */
-export async function contentLeftBehind(
-  db: Db,
-  workspace: WorkspaceConfig,
-  taskId: string,
-  candidate: string | undefined,
-): Promise<string[]> {
-  return contentLeftBehindLocally(db, workspace, taskId, candidate);
-}
-
-/** ローカル着地の merge 回答は、積み残しを同期で読み、merge の実行まで await を挟まない(ADR 0289 決定2 / ADR 0288 決定2)。 */
+/** 手元の candidate に積み残しを運ぶタスクの id —— 比べられなければ throw する。ローカル着地の merge 回答は同期で読み、
+ *  merge の実行まで await を挟まない(ADR 0289 決定2 / ADR 0288 決定2)。 */
 export function contentLeftBehindLocally(
   db: Db,
   workspace: WorkspaceConfig,
@@ -330,22 +325,22 @@ function outsidePushDropNotice(
   return `PR #${pr.number}'s head ${pr.head} was pushed outside the board and lacks the content of ${branches}`;
 }
 
-/** ADR 0370 決定1 / ADR 0242 決定1: GitHub の head と、必要なら最後に push した head を、同じ検査済みのブランチと比べる。
- *  GitHub の head を取りに行った場合は、戻ってから比較し直し、ブランチを読み直す。 */
+/** ADR 0370 決定1 / ADR 0242 決定1: token を待ったら、fetch が交渉用の ref を読む前に比べ直す。
+ *  その同期区間で GitHub の head と、必要なら最後に push した head を、検査済みのブランチと比べる。 */
 export async function checkPrMergeContent(
   db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
   pr: { number: number; head: string },
-  board: { auth: GitHubAuth | undefined; resolveRegistered: WorkspaceResolver | undefined; now: () => Date },
+  { auth, compareRefs }: { auth: GitHubAuth | undefined; compareRefs: () => void },
 ): Promise<{ left: string[]; dropped: string | undefined }> {
-  const compare = () => assertLandingRefs(db, workspace, board.resolveRegistered, board.now());
-  compare();
+  compareRefs();
   let targets = leftBehindTargets(db, workspace, taskId);
-  const fetch = targets.length > 0 ? fetchCommitIfMissing(db, workspace, pr.head, board.auth) : undefined;
-  if (fetch) {
-    await fetch;
-    compare();
+  const fetching = targets.length > 0 ? prepareFetchCommitIfMissing(db, workspace, pr.head, auth) : undefined;
+  if (fetching) {
+    const fetch = await fetching;
+    compareRefs();
+    fetch();
     targets = leftBehindTargets(db, workspace, taskId);
   }
   const left = targetsLeftBehind(workspace, taskId, targets, pr.head);
@@ -1038,7 +1033,7 @@ export function createLanding(deps: LandingDeps): Landing {
     kind: "quarantined",
     error:
       quarantine === "workspace"
-        ? `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`
+        ? workspaceQuarantinedMessage(name)
         : `agent "${name}" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question`,
   });
   // ADR 0241 決定6: Quarantine が抱える根に着地の失敗 question を重ねない。
@@ -1222,9 +1217,9 @@ export function createLanding(deps: LandingDeps): Landing {
       workspace = checked(workspace);
       const remoteBacked = isRemoteBacked(workspace);
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
-      const afterPush = async (landed: LandingVerdict, pushed: string): Promise<LandingVerdict> => {
+      const afterPush = (landed: LandingVerdict, pushed: string): LandingVerdict => {
         stopRootIfRefsMoved(workspace);
-        const left = await contentLeftBehind(deps.db, workspace, task.id, pushed);
+        const left = contentLeftBehindLocally(deps.db, workspace, task.id, pushed);
         if (left.length === 0) {
           retireFailures(task.id, ctx);
           return landed;
@@ -1298,7 +1293,7 @@ export function createLanding(deps: LandingDeps): Landing {
         return { kind: "landed", form: "local_merge_question" };
       }
       // ADR 0241: 開いている PR の根は、積み残しがあるときだけ push する —— 無ければ GitHub を呼ばない
-      if (task.pr_number !== null && !(await hasContentLeftBehind(deps.db, workspace, task.id, lastPushedHead(deps.db, task.id)))) {
+      if (task.pr_number !== null && !hasContentLeftBehind(deps.db, workspace, task.id, lastPushedHead(deps.db, task.id))) {
         retireFailures(task.id, ctx);
         return { kind: "up_to_date", prNumber: task.pr_number };
       }
@@ -1364,7 +1359,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (refusal) return refusal;
         // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
         recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
-        return await afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
+        return afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
       }
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
       const found = await deps.github.findPullRequestByHead({ workspace, branch: taskBranch(task.id) });
@@ -1419,7 +1414,7 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.isProtectedWorkspace?.(workspace.name),
         "worker",
       );
-      return await afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
+      return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
       if (error instanceof RootStopped) throw error;
       if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: 昇格の失敗 question も同じ器に書くので、書かずに底へ
@@ -1624,7 +1619,8 @@ export function createLanding(deps: LandingDeps): Landing {
           const content =
             ci === "success"
               ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head }, {
-                auth: deps.githubAuth, resolveRegistered: deps.resolveWorkspace, now: () => now,
+                auth: deps.githubAuth,
+                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now),
               }).catch((error) => {
                 if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 return null;

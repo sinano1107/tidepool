@@ -1393,6 +1393,9 @@ export async function submitAnswer(
         // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
         if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
         if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
+          const assertQuestionOpen = () => {
+            if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
+          };
           const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
           assertLandingAllowed(deps.db, landingTaskId);
           if (!deps.github) {
@@ -1416,9 +1419,16 @@ export async function submitAnswer(
           // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
           const { left, dropped } = await checkPrMergeContent(
             deps.db, mergeWorkspace, landingTaskId, { number: mergePr, head: pr.head },
-            { auth: deps.githubAuth, resolveRegistered: deps.resolveWorkspace, now },
+            {
+              auth: deps.githubAuth,
+              compareRefs: () => {
+                // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
+                assertQuestionOpen();
+                assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, now());
+              },
+            },
           ).catch((err) => {
-            if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError) throw err;
+            if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
             throw new DomainError(
               `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
                 (err instanceof Error ? err.message : String(err)),
@@ -1444,7 +1454,7 @@ export async function submitAnswer(
             mark.release = deps.landing.takeInFlightMark(task.workspace, mergePr);
             if (!mark.release) throw new DomainError(beingMerged);
             // ADR 0288 決定2: 上の await の間に閉じた question と門を、印と同じ同期の区間で読み直す。印は finally が放す
-            if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
+            assertQuestionOpen();
             assertLandingAllowed(deps.db, landingTaskId);
             return null;
           }, async () => {

@@ -1887,15 +1887,15 @@ export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig,
   fetchBranchCopy(workspace, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
 }
 
-/** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、origin から sha で取る。sha の fetch は `refs/` に
- *  何も書かない(FETCH_HEAD だけ)ので口は要らない。手元にあれば同じ同期区間で ref を読み続けられる(ADR 0370 決定1)。 */
-export function fetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> | undefined {
+/** ADR 0242 決定1: GitHub の head が手元に無ければ sha で取る。token の取得と、交渉用に ref を読む同期の fetch を分ける
+ *  (ADR 0370 決定1)。sha の fetch は `refs/` に何も書かない(FETCH_HEAD だけ)。 */
+export function prepareFetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<() => void> | undefined {
   try {
     git(workspace.path, "cat-file", "-e", `${sha}^{commit}`);
     return;
   } catch {}
-  workspace = withRememberedRepoCheck(db, workspace);
-  return ensureWorkspaceToken(workspace, auth).then(() => fetchCommit(workspace, auth, sha));
+  const checked = withRememberedRepoCheck(db, workspace);
+  return ensureWorkspaceToken(checked, auth).then(() => () => fetchCommit(checked, auth, sha));
 }
 
 /** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば
@@ -2180,9 +2180,8 @@ function storedRefs(db: Db, workspaceName: string): string {
   const row = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
     .get(workspaceName) as { ref_snapshot: string | null } | undefined;
-  // 行無しと NULL は空文字: 解放と local 着地の回答は分岐を書かずに違反へ落ち(ADR 0064 決定6 —— pickup を経ない解放経路が足されても
-  // 検査は黙って消えない)、盤面が最初に触れる時点(pickup・作業台を開く・着地の収束)と受理だけがこれを「まだ持ったことがない」と読む
-  // (ADR 0351 決定2 / ADR 0383 決定2)
+  // 行無しと NULL は空文字: 解放では比較が違反として止まる(ADR 0064 決定6)。pickup・作業台を開く操作・着地で最初に触れるときと
+  // Quarantine の受理は「まだ基準を持ったことがない」と読む(ADR 0351 決定2 / ADR 0370 決定1 / ADR 0383 決定2)。
   return row?.ref_snapshot ?? "";
 }
 
