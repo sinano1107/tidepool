@@ -1293,7 +1293,8 @@ export function createLanding(deps: LandingDeps): Landing {
        *  origin のブランチを読む)を確かめる。retry は人間の tip を先に取り込む。head が push する sha の祖先でなければ、盤面は merge も
        *  push もせず作業台を開いて止まる(text D1)。PR の記録が無く、head が最後に push した値(写し —— 盤面自身が書いた値で、fetch しない)
        *  の真の祖先なら巻き戻しで、作業台を開かずに止まる(text D2)—— 分かれた head は人間の merge を取り込んだ後なら押す。origin に
-       *  ブランチが無ければ今どおり押す。PR が記録済みで head が最後に push した値を欠く場面は決定7 が持ち、ここでは止めない。 */
+       *  ブランチが無ければ今どおり押す。PR が記録済みの巻き戻し(head は push する sha の祖先だが、最後に push した値を欠く)は決定7 が
+       *  持ち、ここでは今どおり押す。記録済みで分かれた head は push する sha の祖先でないので、決定7 が入るまで text D1 で止まる。 */
       const checkHeadBeforePush = async (known: string | undefined, foundPr?: number) => {
         const branch = taskBranch(task.id);
         let head: string | undefined;

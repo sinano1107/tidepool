@@ -2384,7 +2384,7 @@ it("追いつきの conflict は作業台を開いて本文が名指し、作業
   expect(failure!.title).toBe("PR promotion failed: repair");
   c.expectA2(failure!.purpose);
   expect(git(c.workbench(), "rev-parse", "board/origin/main")).toBe(git(c.workspace.path, "rev-parse", "refs/remotes/origin/main"));
-  // origin から引くのは保護ブランチだけ —— `board/origin/task/<root>` は `pr_merge` の拒否の印(spec #3273 の "Refused once")
+  // origin から引くのは保護ブランチだけ —— `board/origin/task/<root>` を持つのは GitHub の head を運ぶ作業台(ADR 0376 決定4)
   expect(git(c.workbench(), "for-each-ref", "--format=%(refname)", "refs/heads/board/origin/")).toBe("refs/heads/board/origin/main");
   expect(c.github.requests).toEqual([]);
 

@@ -937,8 +937,8 @@ function repointBoardRefs(named: WorkspaceConfig, workbench: string, carried?: C
     git(workbench, "update-ref", "--no-deref", "HEAD", git(workbench, "rev-parse", "HEAD"));
   }
   // `board/origin/<protected>` は盤面が origin から読んだばかりの保護ブランチ —— 追いつきの conflict が merge させる相手(text A2)。
-  // origin の他の ref は引かない —— 開いただけの作業台が `pr_merge` の拒否の印 `board/origin/task/<root>` を付けない(spec #3273 の
-  // "Refused once")。その印も次の引き直しの `--prune` が消す(消えた印は拒否をもう1度起こすだけ)
+  // 名前の場所の origin の他の写しは引かない —— 写し `refs/remotes/origin/task/<root>` は盤面が最後に push した値で、GitHub の head ではない
+  // (ADR 0376 決定3)。`board/origin/task/<root>` を持つのは、鍵が GitHub の head を運ぶ作業台だけ(下)
   const tracking = remoteTrackingRef(protectedBranch(named));
   const protectedFromOrigin = isRemoteBacked(named) ? [`+${tracking}:refs/heads/${boardBranch(shortRef(tracking))}`] : [];
   git(workbench, "fetch", ...FETCH_FLAGS, "--prune", named.path, `+refs/heads/*:${boardRefs}*`, ...protectedFromOrigin);
