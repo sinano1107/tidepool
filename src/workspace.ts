@@ -1215,6 +1215,17 @@ export async function openHumanContentWorkbench(
   return `opened the workbench at ${path} for ${branch} of workspace ${workspace.name}; answer question ${question} when your commits are there.${held}`;
 }
 
+/** ADR 0373 決定13 追記: 基準の行の無い名前 `name` の最初の撮りを止めている Quarantine の (名前, question) —— その名前自身の Quarantine と、
+ *  基準の行を持つ面接室でない名前の Quarantine(workspace・組の封じ込め)。無ければ undefined。 */
+function firstCaptureHold(db: Db, name: string): readonly [name: string, question: string] | undefined {
+  const own = openQuarantineQuestion(db, "workspace", name);
+  if (own) return [name, own.id];
+  return [
+    ...[...openQuarantineQuestions(db, "workspace")].map(([value, id]) => [value!, id] as const),
+    ...[...openQuarantineQuestions(db, "workspaceContainment")].map(([value, id]) => [parseWorkspaceContainmentValue(value!).workspace, id] as const),
+  ].find(([held]) => holdsFirstCaptures(db, held));
+}
+
 /** ADR 0383 決定1・2: 基準の行の無い名前の `open_workbench` は、pickup の最初の撮りと同じ準備を通ってから撮る —— 基準の行を持つ名前の
  *  Quarantine が開いている間の待ち(ADR 0373 決定13 追記。この名前自身の Quarantine の間も pickup と同じく進まない)、pickup が開く前に
  *  掛ける項、決定13 の確認と全撮り(`prepareRefBaseline`)。判定は pickup と同じ関数が持つ。落ちれば止めた Quarantine を名指して拒み
@@ -1226,12 +1237,7 @@ async function captureFirstBaseline(
 ): Promise<void> {
   const quarantined = (name: string, question: string) => new DomainError(`cannot open a workbench: workspace ${name} is quarantined — answer question ${question} first.`);
   const stopped = (stop: ResourceStop) => quarantined(stop.value!, openQuarantineQuestion(db, "workspace", stop.value)!.id);
-  const own = openQuarantineQuestion(db, "workspace", workspace.name);
-  if (own) throw quarantined(workspace.name, own.id);
-  const held = [
-    ...[...openQuarantineQuestions(db, "workspace")].map(([value, id]) => [value!, id] as const),
-    ...[...openQuarantineQuestions(db, "workspaceContainment")].map(([value, id]) => [parseWorkspaceContainmentValue(value!).workspace, id] as const),
-  ].find(([name]) => holdsFirstCaptures(db, name));
+  const held = firstCaptureHold(db, workspace.name);
   if (held) throw quarantined(...held);
   const named = withRememberedRepoCheck(db, workspace, () => board.now);
   try {
@@ -1601,6 +1607,14 @@ export function resolveTaskBranchLineage(
   return { branch: candidate, outlivedForkSource };
 }
 
+/** `resolveTaskBranchLineage` が work の task について ref を読むか —— 読むのは決着した work の祖先を比べるときだけ。 */
+export function lineageReadsRefs(db: Db, task: Pick<Task, "parent_id">): boolean {
+  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined) {
+    if (parent.type === "work" && isSettled(parent.status)) return true;
+  }
+  return false;
+}
+
 /** ADR 0053: the nearest work branch in the task's live lineage, or undefined
  *  when the protected branch is the bottom of that lineage. */
 export function lineageTaskBranch(
@@ -1904,6 +1918,19 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
     }
     if (pin === undefined) db.prepare("INSERT INTO workspace_sparse_policies (name, policy) VALUES (?, ?)").run(key, JSON.stringify(policy ?? null));
   })();
+}
+
+/** ADR 0370 決定1: 着地が名前の場所の ref を読む前の比較 —— pickup と同じ比較器で全 ref を基準と比べ、動いていれば `RefsMovedError`。
+ *  基準の行が無い名前は pickup と同じ手続きで最初の撮りをする(ADR 0373 決定13 の確認は `prepareRefBaseline` が掛ける)。撮れない間は
+ *  止めている名前を持つ `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
+export function compareRefsBeforeLanding(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
+  if (holdsBaseline(db, workspace.name)) {
+    compareAndFoldBaseline(db, workspace, "before landing read them");
+    return;
+  }
+  const held = firstCaptureHold(db, workspace.name);
+  if (held) throw new FirstCaptureRefusedError({ quarantine: "workspace", value: held[0], reason: `workspace ${held[0]} is quarantined` });
+  prepareRefBaseline(db, workspace, board);
 }
 
 /** 面接室の名前(鍵は root id)。 */
@@ -2957,8 +2984,9 @@ export async function redoMergeBacks(
   auth: GitHubAuth | undefined,
   /** 作業台の基点(ADR 0373 決定9)と、取り込みの event に残す回答者と時刻(spec #3273 の識別子の表 / pin A5)。 */
   intake: IntakeContext,
-  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)。 */
-  retry?: { root: string; firstHalf: () => Promise<void> },
+  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)、
+   *  fetch の await の後に ref を読む前の比較(ADR 0370 決定1)。 */
+  retry?: { root: string; firstHalf: () => Promise<void>; compareRefs: () => void },
 ): Promise<string[]> {
   const root = retry?.root;
   if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return [];
@@ -2972,6 +3000,7 @@ export async function redoMergeBacks(
     throw new Error(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`);
   }
   await refreshProtectedBranch(db, workspace, auth);
+  retry?.compareRefs();
   // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
   let failure: { error: unknown } | undefined;
   // 作業台を残した取り込みの text C6
