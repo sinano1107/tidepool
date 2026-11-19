@@ -1,5 +1,7 @@
 # 軌道修正は checkpoint 機構ではなく文脈の可視化で賄う
 
+**Status 追記: 統合に戻った親が読む「決着した子」に、別の workspace へ分解した分解元つきの根も同じ形で並ぶ(状態・handoff・着地したか)。親はそれを待たず、親の統合点のレビュアーには見せない —— 根の中身は親に入っていない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定4、2026-11-19、issue #1796)。**
+
 issue #171 で決定。懸念は「decompose された子タスクが順に処理される間、親の想定どおりに
 進まなくても、親には統合復帰まで軌道修正の機会が無い」だった。調査で判明したのは、
 問題の核が判断機会の不足そのものではなく、**記録は在るのに届いていない**ことである:
