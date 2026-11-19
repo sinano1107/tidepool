@@ -10,14 +10,14 @@ import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { registerRcaReview } from "../src/triage.js";
 import { workbenchPath } from "../src/workbench.js";
-import { recordTaskCheckoutTip, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { recordTaskCheckoutTip, releaseWorkspace, type WorkspaceConfig, type WorkspaceResolver } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { answerQuestionViaWebui, checkoutOf, commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeWorkspace, prepareAtPickup, quarantineQuestion, tempDirSync } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 // ADR 0369 決定4: 解放も Quarantine の登録も済まなかった状態を、checkout を開いた session を todo に戻して作る。
-async function board(end: "return" | "decompose" = "return") {
+async function boardWithOwedRelease(end: "return" | "decompose" = "return") {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const now = clock.now();
@@ -39,9 +39,9 @@ async function board(end: "return" | "decompose" = "return") {
 
   const slot = new Slot();
   const worker = new ScriptedWorker(clock);
-  function start(resolveWorkspace: (name: string | null) => WorkspaceConfig = () => ws) {
+  function start(places: { workspace?: WorkspaceConfig; resolveWorkspace?: WorkspaceResolver } = { workspace: ws }) {
     const scheduler = startScheduler({
-      db, clock, slot, worker, workspace: ws, resolveWorkspace, workspacesDir,
+      db, clock, slot, worker, ...places, workspacesDir,
       containers: fakeContainers(),
       retrospectiveCalls: noRetrospectiveCalls,
       converge: async () => [],
@@ -57,7 +57,7 @@ async function board(end: "return" | "decompose" = "return") {
 }
 
 it("別の session が slot を握っている poll でも、済んでいない解放の Quarantine を立てる", async () => {
-  const b = await board();
+  const b = await boardWithOwedRelease();
   b.slot.occupy("other-task", 1);
 
   await b.start().rerunPoll();
@@ -66,7 +66,7 @@ it("別の session が slot を握っている poll でも、済んでいない�
 });
 
 it("poll は解放を負う task を拾わず、回答がその枝に運んで checkout を消した後に拾う", async () => {
-  const b = await board();
+  const b = await boardWithOwedRelease();
   const history = () => listEvents(b.db, b.parent.id).map((e) => e.kind);
   const scheduler = b.start();
 
@@ -92,7 +92,7 @@ it("poll は解放を負う task を拾わず、回答がその枝に運んで c
 });
 
 it.each(["todo", "cancelled"] as const)("解放を負う親(%s)の子は、回答の後で親の commit 済み・未 commit の成果を持って走る", async (status) => {
-  const b = await board(status === "todo" ? "decompose" : "return");
+  const b = await boardWithOwedRelease(status === "todo" ? "decompose" : "return");
   // ADR 0271 決定3: RCA は親の cancel を生き延びる付帯子。
   if (status === "cancelled") {
     const stop = appendEvent(b.db, { taskId: b.parent.id, actorId: "human", origin: "webui", payload: { kind: "session_stopped_by_human", reason: "wrong approach" }, at: b.now });
@@ -117,19 +117,30 @@ it.each(["todo", "cancelled"] as const)("解放を負う親(%s)の子は、回�
 });
 
 it("Quarantine が開いたままでも別の workspace の task は走る", async () => {
-  const b = await board();
+  const b = await boardWithOwedRelease();
   const other = await makeWorkspace("elsewhere");
   await leaveBaseline(b.db, other);
   const task = registerTask(b.db, { type: "work", title: "other", purpose: "p", completion_criteria: "c", workspace: other.name }, b.now, ...HUMAN_WEBUI);
 
-  await b.start((name) => (name === other.name ? other : b.ws)).rerunPoll();
+  await b.start({ workspace: b.ws, resolveWorkspace: (name) => (name === other.name ? other : b.ws) }).rerunPoll();
 
   expect(b.question()).toBeDefined();
   expect(b.worker.started.map((task) => task.id)).toEqual([task.id]);
 });
 
+it("registry の無い再起動でも記録された名前の Quarantine は pickup を止め、名前の無い task は走る", async () => {
+  const b = await boardWithOwedRelease();
+  const unnamed = registerTask(b.db, { type: "work", title: "unnamed", purpose: "p", completion_criteria: "c" }, b.now, ...HUMAN_WEBUI);
+
+  await b.start({}).rerunPoll();
+
+  expect(b.question()).toBeDefined();
+  expect(listEvents(b.db, b.parent.id).filter(({ kind }) => kind === "task_picked_up")).toHaveLength(1);
+  expect(b.worker.started.map((task) => task.id)).toEqual([unnamed.id]);
+});
+
 it("worker の repo の解放が失敗した後の retry は、新しい checkout を開く", async () => {
-  const b = await board();
+  const b = await boardWithOwedRelease();
   rmSync(join(b.checkout.path, ".git"), { recursive: true });
   releaseWorkspace(b.db, b.checkout, b.parent, b.now);
   const failure = listChildren(b.db, b.parent.id).find((child) => child.type === "question")!;
@@ -144,7 +155,7 @@ it("worker の repo の解放が失敗した後の retry は、新しい checkou
 
 /** 解放を負う親の枝へ子の成果が先に merge back された状態(ADR 0369 決定1)。 */
 async function mergedChild(file: string) {
-  const b = await board("decompose");
+  const b = await boardWithOwedRelease("decompose");
   const child = pickupTask(b.db, listChildren(b.db, b.parent.id)[0]!, "deckhand", b.now)!;
   const checkout = await prepareAtPickup(b.db, b.ws, child, { now: b.now, workspacesBaseDir: b.workspacesDir });
   commitWork(checkout.path, file, "child\n");
