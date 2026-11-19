@@ -844,7 +844,9 @@ export function assertTargetsRunnable(db: Db, rootId: string, candidates: TaskEx
  *  by accident, which would otherwise let an ordinary agent question sneak
  *  past the 2-4 floor. A question kind is never reachable from MCP or the JSON
  *  API (unlike an assignee/worker id), so this floor can't be gamed the same
- *  way — an agent's question is always a real 2-4-way choice. */
+ *  way — an agent's question is always a real 2-4-way choice. A `failure` question
+ *  may also carry its cancel option alone: a retry that only repeats the same
+ *  failure is not offered (issue #3289). */
 function assertQuestionSpec(input: RegisterTaskInput): void {
   const kind = input.question_kind;
   const cancelOption = kind?.kind === "failure" || kind?.kind === "premise_breach" ? kind.cancel_option : undefined;
@@ -859,8 +861,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   if (!takesNoAnswer && (!items || items.length < 1 || items.length > 4)) {
     throw new DomainError("a question carries 1 to 4 items");
   }
-  const minOptions = kind?.kind === "quarantine" ? 1 : 2;
   for (const item of items) {
+    const minOptions = kind?.kind === "quarantine" || (kind?.kind === "failure" && item.options.length === 1 && item.options[0] === kind.cancel_option) ? 1 : 2;
     if (whyBlank(item.title)) throw new DomainError("a question item carries a title");
     if (item.detail !== undefined && whyBlank(item.detail)) throw new DomainError("a supplied question detail cannot be blank");
     // 理由 question は自由記述だけ(ADR 0310 決定7)—— quarantine の「項目 0 個」(ADR 0218 決定6)とは別の例外
@@ -1684,8 +1686,8 @@ export function registerFailureQuestion(
   title: string,
   reason: string,
   now: Date,
-  /** What "retry" does, when the failure changes it (a kept task checkout, ADR 0356 決定2). */
-  retry = `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. `,
+  /** What "retry" does, when the failure changes it (a kept task checkout, ADR 0356 決定2). `null`: a retry could only fail the same way, so `abandon` is the one option. */
+  retry: string | null = `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. `,
   recommendation: "retry" | "abandon" = "retry",
 ): void {
   escalateTask(
@@ -1695,8 +1697,8 @@ export function registerFailureQuestion(
       // abandon's consequence is spelled out via abandonConsequence; it's
       // declared via the system-internal failure kind below, never exposed
       // to agents.
-      context: `${reason}\n\n${retry}${abandonConsequence(db, task)}`,
-      questions: [{ title, options: ["retry", "abandon"], recommendation }],
+      context: `${reason}\n\n${retry ?? ""}${abandonConsequence(db, task)}`,
+      questions: [retry === null ? { title, options: ["abandon"], recommendation: "abandon" } : { title, options: ["retry", "abandon"], recommendation }],
       question_kind: { kind: "failure", cancel_option: "abandon" },
     },
     BOARD_ACTOR_ID,

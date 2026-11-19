@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdir, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -7,10 +7,11 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardDoctrine, fenced } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
-import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
+import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, createCodexWorkspaceCheck, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents, listEventsOfKinds } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, listEpisodes, projectionPending } from "../src/precedent.js";
@@ -26,8 +27,11 @@ import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
+import { rememberPublishedRepo, withRememberedRepoCheck } from "../src/workspace.js";
 import {
+  answerSkillsFromDisk,
   answerSkillsList,
+  CODEX_DISK_SKILL,
   closedCodexSkillsCall,
   codexSkillsListAt,
   definitionPart,
@@ -39,6 +43,7 @@ import {
   passthroughContainers,
   recordingSpawn,
   recordPrompt,
+  unusedLanding,
   withHealthyUsage,
 } from "./fakes.js";
 import {
@@ -55,7 +60,9 @@ import {
   git,
   HOUR,
   HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
   judgmentRepairTask,
+  leaveBaseline,
   makeWorkspace,
   markPickedUp,
   mcpClient,
@@ -149,6 +156,25 @@ function task(db: ReturnType<typeof openDb>, title = "codex-task") {
     purpose: "keep the board correct",
     completion_criteria: "the focused tests pass",
   }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+}
+
+/** 空の commit を1つ足し、main を生まれた状態にする。 */
+const commitIn = (dir: string) => git(dir, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "--quiet", "--allow-empty", "-m", "a commit");
+
+/** 名前の場所と別の task の checkout —— disk に skill を持つ。 */
+async function taskCheckoutWithSkill() {
+  const dir = await realpath(await tempDir("tidepool-codex-task-checkout-"));
+  git(dir, "init", "--quiet", "-b", "main");
+  await commitSkill(dir);
+  return dir;
+}
+
+/** `dir` の今の branch に skill を commit する。 */
+async function commitSkill(dir: string) {
+  await mkdir(join(dir, dirname(CODEX_DISK_SKILL)), { recursive: true });
+  await writeFile(join(dir, CODEX_DISK_SKILL), "a tracked skill\n");
+  git(dir, "add", "-A");
+  commitIn(dir);
 }
 
 /** meta-review task —— enabled_tools と盤面の tool 一覧は meta-review の主題でだけ形が変わる(ADR 0122 決定2)。 */
@@ -328,7 +354,10 @@ async function fixture(
     boardState,
     board,
     exitBoard,
+    taskCheckout,
   }: {
+    /** 名前の場所と別の task の checkout。無ければ task の checkout は名前の場所に重なる。 */
+    taskCheckout?: string;
     /** 盤面の本物の一撃をそのまま繋ぐ(spawn_failed の書き込みを一撃に渡す形)。無ければ `onSpawnFailed` は書き込みの後に呼ぶ観測。 */
     board?: CodexWorkerOptions["onSpawnFailed"];
     /** 本物の watchdog の exit の一撃をそのまま繋ぐ(束の書く step は watchdog が撃つ)。無ければ `onWorkerExited` は step を撃ってから呼ぶ観測。 */
@@ -410,7 +439,8 @@ You are the Codex worker.`,
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task, query?: InjectionQuery) => {
-    recordCheckoutAtWorkspace(db, value, { dir: registry, mode: "purely-local" }, "work", tmpdir());
+    if (taskCheckout) appendEvent(db, { taskId: value.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path: taskCheckout }, at: new Date(0) });
+    else recordCheckoutAtWorkspace(db, value, { dir: registry, mode: "purely-local" }, "work", tmpdir());
     const started = worker.start(value, sessionId(db, value.id), executionSettingsFor(db, agent, value)[0]!, query);
     return started?.then(() => {
       const spawned = listEvents(db, value.id).filter((e) => e.kind === "worker_spawned").at(-1);
@@ -421,7 +451,7 @@ You are the Codex worker.`,
       }
     });
   };
-  return { db, worker, start, process, clock, codexHome, workspace, workspacesDir, registeredWorkspace, logDir, registry, containers: workerContainers, appServer: appServerCall.calls };
+  return { db, worker, start, process, clock, codexHome, workspace, workspacesDir, registeredWorkspace, logDir, registry, containers: workerContainers, appServer: appServerCall.calls, boardCall: appServerCall.call };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -869,13 +899,14 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(boardText(f.process.calls[0]!.args)).toContain("## Roster\n\ncodex-agent — Codex agent");
   });
 
-  it("閉じた設定の下で有効と報告される skill が残れば、その名前と path を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3)", async () => {
+  it("task の checkout と保護ブランチの tip の両方で有効と報告される skill が残れば、その名前と path を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3 / ADR 0379 決定3)", async () => {
     const onSpawnFailed = vi.fn();
     const onPickupStopped = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
       appServer: answerSkillsList("one-enabled"),
       onPickupStopped,
     });
+    commitIn(f.workspace);
     const value = task(f.db);
     await f.start(value);
 
@@ -893,14 +924,307 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
   });
 
-  it("purely-local の workspace の組を止めると、起動の経路からも保護ブランチの作業台が開く(ADR 0373 決定9)", async () => {
-    const f = await fixture(vi.fn(), undefined, undefined, undefined, { appServer: answerSkillsList("one-enabled") });
-    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", "commit", "--quiet", "--allow-empty", "-m", "first"], { cwd: f.workspace });
+  it("purely-local の workspace の組を止めると、起動の経路からも名前の場所の保護ブランチの作業台が開く —— task の checkout の branch からは開かない(ADR 0373 決定9)", async () => {
+    const taskCheckout = await taskCheckoutWithSkill();
+    const f = await fixture(vi.fn(), undefined, undefined, undefined, { appServer: answerSkillsList("one-enabled"), taskCheckout });
+    commitIn(f.workspace);
 
     await f.start(task(f.db));
 
     expect(quarantineQuestion(f.db, "workspaceContainment", "codex/work")).toBeDefined();
-    expect(existsSync(join(workbenchPath(f.workspacesDir, { workspace: "work" }), ".git"))).toBe(true);
+    const workbench = workbenchPath(f.workspacesDir, { workspace: "work" });
+    expect(git(workbench, "rev-parse", "HEAD")).toBe(git(f.workspace, "rev-parse", "main"));
+    expect(git(workbench, "rev-parse", "HEAD")).not.toBe(git(taskCheckout, "rev-parse", "main"));
+  });
+
+  describe("spawn の検査の2段(ADR 0379 決定3〜5)", () => {
+    const G2_PATHS = "/board/fixture/ws/B/.agents/skills/flat/SKILL.md";
+    const thrownAway = (cwd: string) => cwd.includes("@containment-check");
+
+    /** 盤面の本物の一撃を繋いだ pickup。`failures` は一撃が受けた失敗。 */
+    async function onBoard(options: NonNullable<Parameters<typeof fixture>[4]>, pick: (db: ReturnType<typeof openDb>) => Task = task) {
+      const slot = new Slot();
+      const failures: unknown[] = [];
+      let handler: NonNullable<CodexWorkerOptions["onSpawnFailed"]> = () => {};
+      const f = await fixture(undefined, undefined, undefined, undefined, {
+        ...options,
+        board: (taskId, id, failure, record) => {
+          failures.push(failure);
+          handler(taskId, id, failure, record);
+        },
+      });
+      handler = spawnFailureHandler({ db: f.db, clock: f.clock, slot, resolve: undefined, pollNow: () => {} }, f.containers);
+      commitIn(f.workspace);
+      const value = pickupTask(f.db, pick(f.db), "codex-agent", f.clock.now())!;
+      slot.occupy(value.id, sessionId(f.db, value.id));
+      return { ...f, value, failures };
+    }
+
+    const failureQuestion = (db: ReturnType<typeof openDb>, id: string) => listBoard(db).find((row) => row.type === "question" && row.parent_id === id)!;
+
+    /** 人間の回答の口で failure question に答える。 */
+    const answerFailure = (f: { db: ReturnType<typeof openDb>; clock: FakeClock }, question: ReturnType<typeof failureQuestion>, answer: string) =>
+      submitAnswer({ db: f.db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db: f.db, clock: f.clock }) }, getTask(f.db, question.id)!, [answer], undefined, () => f.clock.now(), "webui");
+
+    it("task の checkout が落ちて保護ブランチの tip が通れば task の失敗で、組は止めず、kind は一撃にだけ運び event には載せず、質問は abandon を推奨する(pin G3)", async () => {
+      const seen: Array<{ cwd: string; repository: boolean }> = [];
+      const taskCheckout = await taskCheckoutWithSkill();
+      const f = await onBoard({
+        taskCheckout,
+        appServer: (args, cwds) => {
+          seen.push(...cwds.map((cwd) => ({ cwd, repository: existsSync(join(cwd, ".git")) })));
+          return answerSkillsFromDisk(args, cwds);
+        },
+      });
+
+      await f.start(f.value);
+
+      const message =
+        `task/${f.value.id} carries skills the board cannot hide from Codex (${join(taskCheckout, CODEX_DISK_SKILL)}), while main does not. ` +
+        "The branch forked before the workspace was repaired, was cut from one that did, or the task added them. Recommended: abandon.";
+      expect(f.failures).toEqual([{ error_code: null, message, kind: "unhideable-task-skills" }]);
+      expect(listEvents(f.db, f.value.id).find((event) => event.kind === "spawn_failed")?.payload).toEqual({ kind: "spawn_failed", error_code: null, message });
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+      expect(f.process.calls).toEqual([]);
+      const question = failureQuestion(f.db, f.value.id);
+      // retry は同じ tree を読み直すだけなので選択肢に無い(issue #3289)
+      expect(question.question_items![0]).toMatchObject({ options: ["abandon"], recommendation: "abandon" });
+      expect(question.purpose).toContain(message);
+      expect(question.purpose).not.toContain('"retry"');
+      await expect(answerFailure(f, question, "retry")).rejects.toThrow(`answer "retry" is not one of item 0's options: abandon`);
+      await answerFailure(f, question, "abandon");
+      expect(getTask(f.db, question.id)?.status).toBe("done");
+      expect(getTask(f.db, f.value.id)?.status).toBe("cancelled");
+      // 2段目は git repo の使い捨ての checkout に撃ち、どの出口でも残さない
+      expect(seen.map(({ cwd }) => thrownAway(cwd))).toEqual([false, false, true, true]);
+      expect(seen.slice(2).every(({ repository }) => repository)).toBe(true);
+      expect(existsSync(seen[2]!.cwd)).toBe(false);
+    });
+
+    it("task の checkout の検査が通れば追加の Board call は撃たない(ADR 0379 決定3)", async () => {
+      const f = await onBoard({ appServer: answerSkillsFromDisk });
+
+      await f.start(f.value);
+
+      expect(f.appServer).toHaveLength(2);
+      expect(f.process.calls).toHaveLength(1);
+    });
+
+    it("2段目は agent の allowlist の閉じる集合を、使い捨ての checkout の path で当てる(ADR 0337 決定3 / ADR 0379 決定3)", async () => {
+      const f = await fixture(vi.fn(), undefined, undefined, undefined, {
+        taskCheckout: await taskCheckoutWithSkill(),
+        // 1段目の観測だけ、閉じたはずの other を有効と答える
+        appServer: (args, cwds) => {
+          const listed = allowlistSkillsList()(args, cwds);
+          if (args.includes("--strict-config") && !cwds.some(thrownAway)) listed.data[0]!.skills.find((skill) => skill.name === "other")!.enabled = true;
+          return listed;
+        },
+        registryFiles: {
+          "agents/codex-agent.md": "---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\nprovider: openai\nskills: [\"ws-skill\"]\n---\nYou are the Codex worker.",
+        },
+      });
+      await mkdir(join(f.workspace, ".agents/skills/ws-skill"), { recursive: true });
+      await writeFile(join(f.workspace, ".agents/skills/ws-skill/SKILL.md"), "---\nname: ws-skill\n---\n");
+      git(f.workspace, "add", "-A");
+      commitIn(f.workspace);
+
+      await f.start(task(f.db));
+
+      const observation = f.appServer[3]!;
+      const cwd = observation.requests[0]!.params.cwds[0] as string;
+      expect(thrownAway(cwd)).toBe(true);
+      expect([...closedPaths(observation.spec.args)]).toEqual([join(cwd, ".agents/skills/other/SKILL.md"), SKILL_CREATOR, HOME_SKILL]);
+      expect(filesystem([...observation.spec.args], "tidepool-work")).toContain(`${JSON.stringify(cwd)}="write"`);
+    });
+
+    it("2段目の列挙の失敗は素の spawn_failed で、組の停止でも kind でもない(ADR 0259 決定6 / pin G3)", async () => {
+      const f = await onBoard({
+        taskCheckout: await taskCheckoutWithSkill(),
+        appServer: (args, cwds) => (cwds.some(thrownAway) ? null : answerSkillsFromDisk(args, cwds)),
+      });
+
+      await f.start(f.value);
+
+      expect(f.failures).toEqual([{ error_code: null, message: expect.stringContaining("the worker was not spawned (no fail-open)") }]);
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+      expect(failureQuestion(f.db, f.value.id).question_items![0]!.recommendation).toBe("retry");
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+    });
+
+    it("2段目の checkout が作れなければ素の spawn_failed で、作りかけを残さない(fail-closed)", async () => {
+      const f = await onBoard({ taskCheckout: await taskCheckoutWithSkill(), appServer: answerSkillsFromDisk });
+      git(f.workspace, "update-ref", "-d", "refs/heads/main");
+
+      await f.start(f.value);
+
+      expect(f.failures).toEqual([{ error_code: null, message: expect.stringMatching(/^the board could not prepare the throwaway checkout of main for the Codex skill check; the worker was not spawned \(no fail-open\): /) }]);
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+      expect(f.appServer).toHaveLength(2);
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+    });
+
+    it("2段目の間に session が終われば何も書かず、使い捨ての checkout も task temp も残さない(#1973)", async () => {
+      const onSpawnFailed = vi.fn();
+      const onPickupStopped = vi.fn();
+      let during = () => {};
+      const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
+        taskCheckout: await taskCheckoutWithSkill(),
+        onPickupStopped,
+        appServer: (args, cwds) => {
+          if (cwds.some(thrownAway)) during();
+          return answerSkillsFromDisk(args, cwds);
+        },
+      });
+      commitIn(f.workspace);
+      const value = task(f.db);
+      during = () => cancelTaskDirectly(f.db, getTask(f.db, value.id)!, null, new Date(0), {}, "webui");
+
+      await f.start(value);
+
+      expect(f.appServer).toHaveLength(3);
+      expect(onSpawnFailed).not.toHaveBeenCalled();
+      expect(onPickupStopped).not.toHaveBeenCalled();
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+      expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
+    });
+
+    it("組を止める理由は、使い捨ての checkout の番地でなく repository の root からの path で skill を名指す(ADR 0379 決定3)", async () => {
+      const f = await fixture(vi.fn(), undefined, undefined, undefined, { appServer: answerSkillsFromDisk });
+      await commitSkill(f.workspace);
+
+      await f.start(task(f.db));
+
+      const { purpose } = quarantineQuestion(f.db, "workspaceContainment", "codex/work")!;
+      expect(purpose).toContain(`Codex still reports these skills enabled: flat (${CODEX_DISK_SKILL}).`);
+      expect(purpose).not.toContain("@containment-check");
+    });
+
+    it("1段目の間に workspace が公開されても、偽の workspace の Quarantine を立てず、組の理由は origin の道を言う(ADR 0378 決定7)", async () => {
+      let publish = () => {};
+      const f = await fixture(vi.fn(), undefined, undefined, undefined, {
+        appServer: (args, cwds) => {
+          if (args.includes("--strict-config") && !cwds.some(thrownAway)) publish();
+          return answerSkillsFromDisk(args, cwds);
+        },
+      });
+      await commitSkill(f.workspace);
+      f.db.prepare("INSERT INTO workspace_state (name, ref_snapshot, remembered_repo) VALUES ('work', 'stand-in', 'null')").run();
+      const origin = await tempDir("tidepool-codex-published-origin-");
+      git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
+      publish = () => {
+        publish = () => {};
+        git(f.workspace, "remote", "add", "origin", origin);
+        git(f.workspace, "push", "--quiet", "origin", "main");
+        writeFileSync(join(f.registry, "workspaces.yaml"), `work:\n  path: ${f.workspace}\n  repo: ${origin}\n`);
+        git(f.registry, "add", "-A");
+        commitIn(f.registry);
+        rememberPublishedRepo(f.db, { name: "work", path: f.workspace, repo: origin });
+      };
+
+      await f.start(task(f.db));
+
+      expect(openQuarantineValues(f.db, "workspace")).toEqual([]);
+      expect(quarantineQuestion(f.db, "workspaceContainment", "codex/work")?.purpose).toContain("If the skill is tracked in the repository: Push the fix to origin's main from your own clone, then answer.");
+    });
+
+    it("2段目の盤面 DB の拒否は spawn_failed にせず底へ届く(ADR 0342 決定4)", async () => {
+      // 一撃は記録を書かない —— 書けば読み取り専用の DB が別の経路で同じ拒否を投げ、この床を試さない
+      const board = vi.fn();
+      let during = () => {};
+      const f = await fixture(undefined, undefined, undefined, undefined, {
+        board,
+        taskCheckout: await taskCheckoutWithSkill(),
+        appServer: (args, cwds) => {
+          if (args.includes("--strict-config")) during();
+          return answerSkillsFromDisk(args, cwds);
+        },
+      });
+      commitIn(f.workspace);
+      // 覚えた repo が未学習の行 —— 2段目の宣言の確かめが書く
+      f.db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES ('work', 'stand-in')").run();
+      const value = task(f.db);
+      during = () => f.db.pragma("query_only = 1");
+
+      await expect(f.start(value)).rejects.toMatchObject({ code: "SQLITE_READONLY" });
+
+      f.db.pragma("query_only = 0");
+      expect(board).not.toHaveBeenCalled();
+      expect(listEvents(f.db, value.id).map((event) => event.kind)).not.toContain("spawn_failed");
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+    });
+
+    it("spawn の経路が登録した組は、作業台の直しを commit して答えると受理され、保護ブランチへ取り込まれる(ADR 0379 決定6、pin G5)", async () => {
+      const f = await fixture(vi.fn(), undefined, undefined, undefined, { appServer: answerSkillsFromDisk });
+      await commitSkill(f.workspace);
+      const named = { name: "work", path: f.workspace };
+      await leaveBaseline(f.db, named);
+      await f.start(task(f.db));
+      const question = quarantineQuestion(f.db, "workspaceContainment", "codex/work")!;
+      const workbench = realpathSync(workbenchPath(f.workspacesDir, { workspace: "work" }));
+      git(workbench, "rm", "--quiet", "-r", ".agents");
+      commitIn(workbench);
+      const tip = git(workbench, "rev-parse", "HEAD");
+
+      await submitAnswer(
+        {
+          db: f.db,
+          pollNow() {},
+          landing: unusedLanding,
+          quarantineChecks: quarantineChecks({
+            db: f.db,
+            clock: f.clock,
+            resolveWorkspace: () => withRememberedRepoCheck(f.db, named, () => f.clock.now(), () => named),
+            workspacesDir: f.workspacesDir,
+            codexWorkspaceContainment: createCodexWorkspaceCheck({ executable: "/opt/tidepool/bin/codex", codexHome: f.codexHome, call: f.boardCall }),
+          }),
+        },
+        question,
+        ["repaired by hand"],
+        undefined,
+        () => f.clock.now(),
+        "webui",
+      );
+
+      expect(getTask(f.db, question.id)?.status).toBe("done");
+      expect(git(f.workspace, "rev-parse", "main^2")).toBe(tip);
+    });
+
+    it("修理の後に修理前の branch から切った子も task の失敗になり、直した組を止め直さない(ADR 0379 決定4、pin G4)", async () => {
+      const f = await onBoard({ taskCheckout: await taskCheckoutWithSkill(), appServer: answerSkillsFromDisk }, (db) => {
+        const [child] = humanDecomposeTaskViaWebui(db, task(db), {
+          reason: "split the work",
+          children: [{ title: "cut after the repair", purpose: "p", completion_criteria: "c" }],
+        }, new Date(0));
+        return child!;
+      });
+
+      await f.start(f.value);
+
+      expect(f.failures).toEqual([expect.objectContaining({ kind: "unhideable-task-skills" })]);
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+    });
+
+    it.each([
+      ["Interview の root", interviewRoot],
+      ["受験者", pinnedChild],
+    ])("%s は保護ブランチに当て直さず、組を登録せず、host の skill が原因でも同じ kind の task の失敗になる(ADR 0379 決定5・帰結、pin G4)", async (_who, pick) => {
+      const f = await onBoard({ appServer: answerSkillsList("one-enabled") }, pick);
+
+      await f.start(f.value);
+
+      const message = `the checkout of this Interview task carries skills the board cannot hide from Codex (${G2_PATHS}). An Interview never stops the pair. Recommended: abandon.`;
+      expect(f.failures).toEqual([{ error_code: null, message, kind: "unhideable-task-skills" }]);
+      expect(f.appServer).toHaveLength(2);
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+      // host の skill が原因でありうるので、Interview だけ retry が残る(ADR 0379 帰結)
+      const question = failureQuestion(f.db, f.value.id);
+      expect(question.question_items![0]).toMatchObject({ options: ["retry", "abandon"], recommendation: "abandon" });
+      expect(question.purpose).toContain(`If the skill is configured on the host, remove it there and answer "retry"; a skill carried by this checkout fails the same way again. `);
+      await answerFailure(f, question, "abandon");
+      expect(getTask(f.db, question.id)?.status).toBe("done");
+      expect(getTask(f.db, f.value.id)?.status).toBe("cancelled");
+    });
   });
 
   it.each([

@@ -6,7 +6,8 @@ import type { SessionStoppedByResource, Task } from "./tasks.js";
 import type { TeardownAction } from "./teardown.js";
 
 export type SpawnFailure = Pick<Extract<EventPayload, { kind: "spawn_failed" }>, "error_code" | "message"> & {
-  kind?: "unhideable-task-settings";
+  /** 同じ tree を読む限り retry が同じ失敗になる task の失敗(ADR 0360 決定3 / ADR 0379 決定4)。event には載せない。 */
+  kind?: "unhideable-task-settings" | "unhideable-task-skills";
 };
 
 /** 盤面の env から名指しで写す(ADR 0358 決定2)—— 盤面に無い名前は鍵ごと載せない。 */

@@ -18,7 +18,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { appendEvent, type ResourceStop } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
-import { claudeWorkspaceContainment, UnhideableTaskSettingsError } from "./harness-containment.js";
+import { claudeWorkspaceContainment, pairStopReason, rereadsProtectedTip, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
@@ -1613,7 +1613,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     try {
       recorded = recordedSettingsDisposition(place.namedPlace.path, `refs/heads/${branch}`);
       // ADR 0360 決定3: 面接室には人間の書き手がいないので、root と受験者は保護ブランチを読まない。
-      if (recorded.unhideable && task.type !== "interview" && task.interview_target_id === null) {
+      if (recorded.unhideable && rereadsProtectedTip(task)) {
         protectedContainment = claudeWorkspaceContainment(withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now()));
       }
     } catch (err) {
@@ -1623,8 +1623,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       return;
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
-    if (protectedContainment && !protectedContainment.available) {
-      stopped(stopContainmentPair(this.options.db, "claude-code", place.namedPlace, protectedContainment.reason, this.workspacesDir, this.options.clock.now()));
+    const pairStop = pairStopReason(protectedContainment);
+    if (pairStop !== undefined) {
+      stopped(stopContainmentPair(this.options.db, "claude-code", place.namedPlace, pairStop, this.workspacesDir, this.options.clock.now()));
       return;
     }
     if (recorded.unhideable) {

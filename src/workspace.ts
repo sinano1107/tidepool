@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -23,6 +24,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type IntakeEntry, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
@@ -467,18 +469,22 @@ const CHECKOUT_LAYOUT = {
       workbenchPath(base, target === protectedBranch(named) ? { workspace: named.name } : { task: target.slice("task/".length) }, carried),
     parents: 1,
   },
+  /** 基点 / `@containment-check` / 検査ごとの id(ADR 0379 決定2)。`@` は workspace の名前にも task id にも無いので、workspace・面接室・task の
+   *  checkout・読み専用の checkout・作業台のどの番地にもならず、どの worker の sandbox も開かない。spawn の2段目は in-flight の鍵の外で走るので検査ごとに別の番地 */
+  containmentCheck: { at: (base: string) => join(base, "@containment-check", randomUUID()), parents: 1 },
 } as const;
 
 export { CheckoutHostError } from "./git.js";
 
-/** ADR 0356 決定2: 番地 `at` に自分の git directory を空の template から作り、名前の場所の `source`(ref の名前か sha)だけを
+/** ADR 0356 決定2: 番地 `at` に自分の git directory を空の template から作り、`from`(既定は名前の場所)の `source`(ref の名前か sha)だけを
  *  ローカルの `branch` へ fetch して checkout する。`borrow` なら objects は名前の場所から alternates で借り、借りなければ複製 ——
  *  引いたものの閉包しか持たない。`config` は init の直後に置く git config(作業台の `receive.denyCurrentBranch=updateInstead`、
  *  ADR 0371 決定9)。番地を作れないのは host 側の失敗(`description` が文の主語)、fetch と tree の展開の失敗は素のまま。
  *  返すのは実体の綴りの在り処。 */
-function makeCheckout({ at, named, source, branch, borrow, description, config = {} }: {
+function makeCheckout({ at, named, from = named.path, source, branch, borrow, description, config = {} }: {
   at: string;
   named: WorkspaceConfig;
+  from?: string;
   source: string;
   branch: string;
   borrow: boolean;
@@ -502,12 +508,48 @@ function makeCheckout({ at, named, source, branch, borrow, description, config =
   }
   // reflog にも名前の場所の在り処を残さない —— 受験者に面接室の在り処(root id)を運ばない(ADR 0276 決定1)。
   // `branch` が未生の main(init の current branch)でも fetch できるよう --update-head-ok
-  git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", named.path, `${source}:refs/heads/${branch}`);
+  // ADR 0364 決定2・3: 盤面所有の写しから読む人間の byte は `fetchFromBoardCopy` と同じく有界
+  const boundedOnBoardCopy = from === named.path ? git : workerRepoGit;
+  boundedOnBoardCopy(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", from, `${source}:refs/heads/${branch}`);
   // alternates 越しの fetch は objects の欠けを見ないので、欠けた blob で落ちる plumbing で tree を出す(porcelain の checkout は黙って欠く)
   git(path, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
-  git(path, "read-tree", "-u", "--reset", "HEAD");
+  boundedOnBoardCopy(path, "read-tree", "-u", "--reset", "HEAD");
   return path;
 }
+
+/** 検査の間だけ disk にある checkout。`remove` は検査のどの出口でも呼ぶ。 */
+type ThrowawayCheckout = { path: string; remove: () => void };
+
+/** ADR 0379 決定2: 封じ込めの検査が列挙させる使い捨ての checkout —— task の checkout と同じ作り手で、同じ基点の下に、名前の場所の objects を
+ *  借りて作る。名前の場所には何も書かない。`from` は `source` を引く repo(既定は名前の場所)。作れなければ作りかけを残さず投げる。 */
+function openThrowawayCheckout(named: WorkspaceConfig, base: string, source: string, from?: string): ThrowawayCheckout {
+  const at = CHECKOUT_LAYOUT.containmentCheck.at(base);
+  const remove = () => removeBoardCheckout(at, CHECKOUT_LAYOUT.containmentCheck.parents);
+  const branch = protectedBranch(named);
+  try {
+    return { path: makeCheckout({ at, named, from, source, branch, borrow: true, description: `the throwaway checkout of ${branch}` }), remove };
+  } catch (err) {
+    try {
+      remove();
+    } catch {
+      // 作れなかった理由を消さない
+    }
+    throw err;
+  }
+}
+
+/** 開いた使い捨ての checkout を `use` に渡し、どの出口でも消す。 */
+async function inThrowawayCheckout<T>({ path, remove }: ThrowawayCheckout, use: (path: string) => Promise<T>): Promise<T> {
+  try {
+    return await use(path);
+  } finally {
+    remove();
+  }
+}
+
+/** ADR 0379 決定1〜3: 保護ブランチの tip の使い捨ての checkout で `use` を走らせる。 */
+export const withProtectedTipCheckout = <T>(named: WorkspaceConfig, base: string, use: (path: string) => Promise<T>): Promise<T> =>
+  inThrowawayCheckout(openThrowawayCheckout(named, base, exactProtectedBranchRef(named)), use);
 
 /** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
  *  前の session が残した checkout は動かさず再利用もしない。タスクブランチだけを checkout し、objects は名前の場所から借りる。
@@ -948,20 +990,19 @@ const boardBranch = (short: string) => `${BOARD_BRANCHES}/${short}`;
 const fromOwnClone = (target: string, ref: string) =>
   `(or, in your own clone with the workbench as a remote: fetch it, \`git merge <remote>/${ref}\`, and push ${target} to it)`;
 
-/** ADR 0371 決定2〜5: 取り込み —— 作業台の書く先の branch の tip を1度だけ読み、盤面所有の写しの中で検査し、全部通ってから
- *  包む commit(第1親が書く先の値、第2親が人間の tip、tree は人間の tip)を作り、書く先の ref を旧値の CAS で口から書いて
- *  `workbench_taken_in` を残し、取り込んだ tip と包む commit を返す。拒否は ref も記録も書かない。tip がこの入口のものでなければ(ADR 0382 決定2)
+/** ADR 0371 決定2〜5: 作業台の書く先の branch の tip を1度だけ読み、盤面所有の写しの中で取り込みの検査をすべて通してから、`use` に
+ *  検証済みの写しと書く先の値を渡す —— 写しは `use` が返ると消える。拒否は ref も記録も書かない。tip がこの入口のものでなければ(ADR 0382 決定2)
  *  取り込むものが無く undefined。`carried` は tip が祖先に持つべき、merge で運ばれる側の ref(`refs/heads/*` か `refs/remotes/*`)で、人間自身の
  *  内容の作業台には無い。祖先のほかに履歴は制限しない(`-s ours` も cherry-pick も別の ref の merge も通る)。`checks` は入口に固有の検査。 */
-function takeInWorkbench(
+function inspectWorkbenchTip<T>(
   db: Db,
   named: WorkspaceConfig,
   place: UntrustedCheckout,
   target: string,
   carried: string | undefined,
-  { entry, answerer, now }: IntakeContext,
-  { approved, otherTasks, humanContent = false, admit }: EntryChecks = {},
-): { tip: string; commit: string } | undefined {
+  { approved, otherTasks, humanContent = false, admit, checkedTip }: EntryChecks,
+  use: (read: WorkbenchTip, old: string) => T,
+): T | undefined {
   const ref = `refs/heads/${target}`;
   const inputs = [ref, ...(carried ? [carried] : [])].map((full) => ({
     branch: shortRef(full),
@@ -972,9 +1013,11 @@ function takeInWorkbench(
   try {
     return judgeWorkbench(named, place, target, { carried, boardMove: !humanContent }, (owner, read) => {
       if (owner.kind === "refuse") throw new Error(owner.reason);
+      // ADR 0371 決定6: 検査した tree だけを書く —— 検査の間に動いた tip も、取り込むものが無くなった作業台も、検査していない
+      if (checkedTip !== undefined && (owner.kind !== "mine" || read?.tip !== checkedTip)) throw new Error(checkedTipMoved(at, target, checkedTip));
       if (owner.kind !== "mine" || !read) return undefined;
       admit?.();
-      const { tip, verified, tipRef } = read;
+      const { tip, verified } = read;
       const copy = { ...named, path: verified };
       const missing = inputs.find(({ sha }) => !isAncestor(copy, sha, tip, workerRepoGit));
       if (missing) {
@@ -1001,17 +1044,38 @@ function takeInWorkbench(
       // ADR 0371 決定5: 人間しか書けない path は purely-local の保護ブランチへ人間自身の内容を入れる入口だけが通す
       if (!humanContent) refuse(humanOnlyPathChanges(differing), "is written only by a human", humanOnlyPathRoute(db, named));
       refuse(gitlinkChanges(differing), "is a gitlink");
-      fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
-      const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
-      advanceBranch(db, named, ref, old, commit);
-      appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
-      return { tip, commit };
+      return use(read, old);
     });
   } catch (err) {
     // 上限超過の文は worker の tree を名指す —— 人間には作業台の在り処で言う
     if (err instanceof WorkerTreeGitTimeoutError) throw new Error(err.about(`the workbench at ${at}`), { cause: err });
     throw err;
   }
+}
+
+/** 検査した tip が取り込む時点の作業台の tip でない —— 検査していない tree は書かない。 */
+const checkedTipMoved = (at: string, target: string, tip: string) =>
+  `${target} in the workbench at ${at} is no longer ${tip}, the tip the board checked, so nothing was taken in. Answer again to check the tip it has now.`;
+
+/** ADR 0371 決定4: 検査を通った tip を包む commit(第1親が書く先の値、第2親が人間の tip、tree は人間の tip)を作り、書く先の ref を旧値の CAS で
+ *  口から書いて `workbench_taken_in` を残し、取り込んだ tip と包む commit を返す。 */
+function takeInWorkbench(
+  db: Db,
+  named: WorkspaceConfig,
+  place: UntrustedCheckout,
+  target: string,
+  carried: string | undefined,
+  { entry, answerer, now }: IntakeContext,
+  checks: EntryChecks = {},
+): { tip: string; commit: string } | undefined {
+  const ref = `refs/heads/${target}`;
+  return inspectWorkbenchTip(db, named, place, target, carried, checks, ({ tip, verified, tipRef }, old) => {
+    fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
+    const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
+    advanceBranch(db, named, ref, old, commit);
+    appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
+    return { tip, commit };
+  });
 }
 
 /** ADR 0382 決定4 の数える task の範囲: local 着地はすべての task(決着済み・cancel 済みを含む)、`take in` と封じ込めの回答は未決着か
@@ -1049,12 +1113,14 @@ export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string
 /** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`otherTasks` は
  *  ADR 0382 決定4: 数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)。`humanContent` は
  *  人間自身の内容の入口(`take in`)—— 盤面の手が無く、人間しか書けない path を通し、書き込む tree が隠せない形を持てば拒む。
- *  `admit` は tip がこの入口のものと判ったときだけ掛ける入口の条件(拒むなら投げる)。 */
+ *  `admit` は tip がこの入口のものと判ったときだけ掛ける入口の条件(拒むなら投げる)。`checkedTip` は書く前に組の検査を通した tip で、
+ *  読んだ tip がこれでなければ拒む(ADR 0371 決定6)。 */
 type EntryChecks = {
   approved?: string;
   otherTasks?: { range: TaskRange; refusalFor: (branches: string[], at: string) => string };
   humanContent?: boolean;
   admit?: () => void;
+  checkedTip?: string;
 };
 
 /** 鍵の作業台があれば取り込み、包む commit と、作業台を残したときの text C6 を返す(取り込むものが無ければ undefined)。拒否は `board/*` を
@@ -1150,13 +1216,12 @@ function containmentStopRoute(db: Db, named: WorkspaceConfig, base: string, now:
 }
 
 /** ADR 0373 決定9: (Harness, workspace) の組を止める唯一の口 —— purely-local の workspace なら人間自身の内容の作業台を開いて、組の Quarantine を
- *  登録し、止めた資源を返す。remote-backed の workspace と面接室の名前には作業台を開かない。理由に修理の道を足すのは Claude の組だけ ——
- *  Codex の検査はまだ名前の場所を読むので、その文は #3289 が足す。 */
+ *  登録し、止めた資源を返す。remote-backed の workspace と面接室の名前には作業台を開かない。理由には修理の道を足す(text B8、Codex は text G1)。 */
 export function stopContainmentPair(db: Db, harness: Harness, named: WorkspaceConfig, reason: string, base: string, now: Date): ResourceStop {
   const stop = (text: string) => registerResourceStop(db, "workspaceContainment", workspaceContainmentValue(harness, named.name), text, now);
   if (isInterviewRoomName(db, named.name)) return stop(reason);
   const route = containmentStopRoute(db, named, base, now);
-  return stop(harness === "claude-code" ? `${endSentence(reason)}${route}` : reason);
+  return stop(`${endSentence(reason)}${harness === "codex" ? ifTheSkillIsTracked(route) : route}`);
 }
 
 /** ADR 0371 決定6 / ADR 0382 決定5: `open_workbench` —— purely-local の workspace の人間自身の内容の作業台 (workspace, 保護ブランチ) を開き、
@@ -1292,6 +1357,15 @@ function humanContentTargetValue(db: Db, workspace: WorkspaceConfig): string {
   return protectedValueAsRecorded(db, workspace);
 }
 
+/** ADR 0382 決定4: 人間自身の内容の入口(`take in` と封じ込めの回答)に共通の検査。 */
+function humanContentChecks(db: Db, branch: string, checks: Pick<EntryChecks, "approved" | "admit" | "checkedTip">): EntryChecks {
+  // spec #3273 text A8c(作業台の在り処を言う —— 文の規則)
+  const refusalFor = (branches: string[], tipAt: string) =>
+    branches.map((name) => `the tip of the workbench at ${tipAt} contains commits of ${name}, and that task's work enters ${branch} only through its landing — ${landingExit(db, name)}.`).join(" ") +
+    ` To take in only your own commits, start ${branch} in the workbench over with \`git reset --hard ${boardBranch(branch)}\`, commit them again and answer again.`;
+  return { ...checks, otherTasks: { range: "unsettled or landing-waiting", refusalFor }, humanContent: true };
+}
+
 /** ADR 0382 決定4: `take in` と封じ込めの回答が共有する取り込み —— 人間自身の内容の作業台の tip を保護ブランチへ入れ、作業台を残して text C6 を返す。
  *  取り込むものが無ければ、`nothingNew` があればその文で拒み、無ければ undefined。 */
 function takeInHumanContent(
@@ -1299,48 +1373,77 @@ function takeInHumanContent(
   workspace: WorkspaceConfig,
   at: string,
   intake: IntakeContext,
-  { approved, admit, nothingNew }: Pick<EntryChecks, "approved" | "admit"> & { nothingNew?: (path: string) => string },
+  { nothingNew, ...checks }: Pick<EntryChecks, "approved" | "admit" | "checkedTip"> & { nothingNew?: (path: string) => string },
 ): string | undefined {
   const branch = protectedBranch(workspace);
   const place = workbenchPlace(workspace, realpathSync(at));
-  // spec #3273 text A8c(作業台の在り処を言う —— 文の規則)
-  const refusalFor = (branches: string[], tipAt: string) =>
-    branches.map((name) => `the tip of the workbench at ${tipAt} contains commits of ${name}, and that task's work enters ${branch} only through its landing — ${landingExit(db, name)}.`).join(" ") +
-    ` To take in only your own commits, start ${branch} in the workbench over with \`git reset --hard ${boardBranch(branch)}\`, commit them again and answer again.`;
   const taken = repointingOnRefusal(workspace, place.path, () => {
-    const intaken = takeInWorkbench(db, workspace, place, branch, undefined, intake, {
-      approved,
-      admit,
-      otherTasks: { range: "unsettled or landing-waiting", refusalFor },
-      humanContent: true,
-    });
+    const intaken = takeInWorkbench(db, workspace, place, branch, undefined, intake, humanContentChecks(db, branch, checks));
     if (!intaken && nothingNew) throw new Error(nothingNew(place.path));
     return intaken;
   });
   return taken && advanceKeptWorkbench(workspace, place.path, branch, taken);
 }
 
-/** ADR 0371 決定6 / ADR 0382 決定4: purely-local の (claude-code, workspace) の組の回答の取り込み。`take in` と同じ手順で、取り込む tip があるときだけ
+/** 封じ込めの回答が取り込む作業台の在り処と、取り込む tip に掛ける入口の条件: workspace の Quarantine(text A8a)と基準の行の無い名前を拒む。 */
+const containmentIntake = (db: Db, workspace: WorkspaceConfig, base: string) => {
+  const branch = protectedBranch(workspace);
+  const admit = () => {
+    assertWorkspaceNotQuarantined(db, workspace);
+    humanContentTargetValue(db, workspace);
+  };
+  return { branch, at: CHECKOUT_LAYOUT.workbench.at(base, workspace, branch), admit };
+};
+
+/** ADR 0371 決定6 / ADR 0382 決定4: purely-local の組の回答の取り込み。`take in` と同じ手順で、取り込む tip があるときだけ
  *  workspace の Quarantine(text A8a)と基準の行の無い名前を拒み、書き込む tree が隠せない形を持てば書く前に拒み、人間しか書けない path は通す。
  *  作業台が disk に無いか取り込むものが無ければ undefined —— 回答は検査だけをする(text A8b の拒否ではない、ADR 0373 決定7)。
- *  書く先の branch が無い作業台は開き直して答え直すよう拒む(ADR 0382 決定6)。返すのは text C6。 */
-export function takeInContainmentRepair(db: Db, workspace: WorkspaceConfig, intake: Omit<IntakeContext, "entry">): string | undefined {
-  const at = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, workspace, protectedBranch(workspace));
-  if (!placeHasRepository(at)) return undefined;
-  return takeInHumanContent(db, workspace, at, { ...intake, entry: "containment_quarantine" }, {
-    admit: () => {
-      assertWorkspaceNotQuarantined(db, workspace);
-      humanContentTargetValue(db, workspace);
-    },
-  });
+ *  書く先の branch が無い作業台は開き直して答え直すよう拒む(ADR 0382 決定6)。`checkedTip` は `checkContainmentIntake` が検査した tip で、
+ *  作業台がそれを持たなくなっていれば拒む。返すのは text C6。 */
+export function takeInContainmentRepair(db: Db, workspace: WorkspaceConfig, intake: Omit<IntakeContext, "entry">, checkedTip?: string): string | undefined {
+  const { branch, at, admit } = containmentIntake(db, workspace, intake.workbenchBase);
+  if (!placeHasRepository(at)) {
+    if (checkedTip !== undefined) throw new Error(checkedTipMoved(at, branch, checkedTip));
+    return undefined;
+  }
+  return takeInHumanContent(db, workspace, at, { ...intake, entry: "containment_quarantine" }, { admit, checkedTip });
 }
 
-/** spec #3273 text B8: purely-local の組の検査の拒否に足す、直す先の文 —— 名前の場所で commit すると workspace の Quarantine が立つ。 */
+/** ADR 0371 決定6 / ADR 0379 決定1: Codex の検査は Board call を待つので、取り込みを検査の前後に割る —— 取り込みと同じ検査を通した tip の tree を、
+ *  検証済みの写しから使い捨ての checkout に展開して `check` に渡す(包む commit は人間の tip の tree を持つので、名前の場所に候補の commit を作らない)。
+ *  取り込むものが無ければ undefined。検査の後は `takeInContainmentRepair` に tip を渡して書く。 */
+export async function checkContainmentIntake(
+  db: Db,
+  workspace: WorkspaceConfig,
+  workbenchBase: string,
+  check: (path: string) => Promise<ContainmentCapability>,
+): Promise<{ tip: string; capability: ContainmentCapability } | undefined> {
+  const { branch, at, admit } = containmentIntake(db, workspace, workbenchBase);
+  if (!placeHasRepository(at)) return undefined;
+  const place = workbenchPlace(workspace, realpathSync(at));
+  const checks = humanContentChecks(db, branch, { admit });
+  const prepared = repointingOnRefusal(workspace, place.path, () =>
+    inspectWorkbenchTip(db, workspace, place, branch, undefined, checks, ({ tip, verified, tipRef }) => ({
+      tip,
+      checkout: openThrowawayCheckout(workspace, workbenchBase, tipRef, verified),
+    })));
+  return prepared && { tip: prepared.tip, capability: await inThrowawayCheckout(prepared.checkout, check) };
+}
+
+/** spec #3273 text B8: 組の検査の拒否に足す、直す先の文 —— 名前の場所で commit すると workspace の Quarantine が立つ。remote-backed は origin の道で、
+ *  作業台が残っていれば text A8e まで言う。 */
 export function containmentRepairRoute(workspace: WorkspaceConfig, base: string): string {
   const branch = protectedBranch(workspace);
+  if (isRemoteBacked(workspace)) return containmentWorkbenchNotTakenIn(workspace, base) || pushFixToOrigin(branch);
   const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
   return placeHasRepository(at) ? commitFixInWorkbench(realpathSync(at), branch) : ` No workbench is open: ${openWorkbenchExit(branch)}`;
 }
+
+/** spec #3273 text G1: (codex, workspace) の理由と拒否に足す道 —— 盤面は skill の出所を判別しないので条件つきで言う(ADR 0379 決定6)。 */
+const ifTheSkillIsTracked = (route: string) => ` If the skill is tracked in the repository:${route}`;
+
+/** text G1 の回答の拒否に足す文。 */
+export const codexContainmentRepairRoute = (workspace: WorkspaceConfig, base: string): string => ifTheSkillIsTracked(containmentRepairRoute(workspace, base));
 
 /** spec #3273 text A8e: purely-local の間に開いた作業台が残る workspace が remote-backed になっていれば、その回答のどの拒否にも足す文。無ければ空。 */
 export function containmentWorkbenchNotTakenIn(workspace: WorkspaceConfig, base: string): string {

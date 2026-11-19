@@ -6,6 +6,7 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, getEvent, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
+import { rereadsProtectedTip } from "./harness-containment.js";
 import type { ProcessContainers } from "./process-container.js";
 import { parseWorkspaceContainmentValue, quarantineStop, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
@@ -237,7 +238,9 @@ export function spawnFailureHandler(
 }
 
 function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure, now: Date): void {
-  const unhideableTaskSettings = failure.kind === "unhideable-task-settings";
+  // 同じ tree を読み直すだけの retry は選択肢に出さない。ADR 0379 帰結: Codex の Interview の task だけは host の設定の skill が原因でありうる
+  const hostMayBeTheCause = failure.kind === "unhideable-task-skills" && !rereadsProtectedTip(task);
+  const retry = hostMayBeTheCause ? `If the skill is configured on the host, remove it there and answer "retry"; a skill carried by this checkout fails the same way again. ` : null;
   registerFailureQuestion(
     db,
     task,
@@ -246,10 +249,8 @@ function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure,
       `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
       failure.message,
     now,
-    unhideableTaskSettings
-      ? `"retry" reads the same tree and fails for the same reason until the task branch changes. `
-      : undefined,
-    unhideableTaskSettings ? "abandon" : undefined,
+    failure.kind === undefined ? undefined : retry,
+    failure.kind === undefined ? undefined : "abandon",
   );
 }
 

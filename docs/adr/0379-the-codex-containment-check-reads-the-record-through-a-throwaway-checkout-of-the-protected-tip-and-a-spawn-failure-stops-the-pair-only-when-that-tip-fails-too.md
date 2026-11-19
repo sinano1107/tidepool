@@ -1,5 +1,7 @@
 # Codex の封じ込めの検査は記録を読む —— 保護ブランチの tip を使い捨ての checkout に展開して列挙させ、spawn の検査は2段で組の停止と task の失敗を分ける
 
+**Status 追記: purely-local の封じ込めの回答は、取り込む tree を保護ブランチへ書く前に検査し、通った tip だけを取り込む。「取り込んでから検査する」は、ref を書いた後に検査するという意味ではない。Claude の組は取り込みの手順の中で隠せない形を読み、書く前に拒む。Codex の組は作業台の tip の使い捨ての checkout を検査し、検査の間に tip が動けば拒んで何も書かない(issue #3289)。**
+
 2026-11-13 の wayfinder(map #3178、ticket #3206)で決定。(codex, workspace) の組の検査は、spawn では task の checkout を、組の question への
 回答時には名前の場所の作業ツリーを読んでいた。回答時の読み場所を決めた ADR は無い —— ADR 0360 が「記録を読む」に替えたのは Claude の組
 だけで、Codex の側は実装の形だった。この形には穴が3つあった。remote-backed で origin の保護ブランチを直しても回答が通らない(受理は origin
