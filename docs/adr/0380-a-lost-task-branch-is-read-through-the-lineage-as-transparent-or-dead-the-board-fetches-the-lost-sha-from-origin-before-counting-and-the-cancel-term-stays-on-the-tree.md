@@ -1,6 +1,6 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
-**Status 追記: 退けた形の最後の項が送った場面(別の workspace の完了済みの子がレビューを倒されたまま着地する、#3270)と、決定5 の「子が親と違う workspace の列を明示したとき」は起きなくなる —— 別の workspace への分解は子でなく出所つきの根になる。決定6 の cancel の項は木のまま変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定1・2、2026-11-19、issue #1796)。**
+**Status 追記: 退けた形の最後の項が送った場面(別の workspace の完了済みの子がレビューを倒されたまま着地する、#3270)と、決定5 の「子が親と違う workspace の列を明示したとき」は起きなくなる —— 別の workspace への分解は子でなく分解元つきの根になる。決定6 の cancel の項は木のまま変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定1・2、2026-11-19、issue #1796)。**
 
 2026-11-15 の wayfinder(map #3178、ticket #3269)で決定。ADR 0375 決定3 は、タスクブランチが失われた task の「成果が捨てられた」を、cancelled の
 祖先と同じ線(`parent_id` の祖先)で読むと決め、同 決定5 は、失われた祖先を帰り先にする task を系譜の読みが飛ばすと決めた。2つの線は集合が
