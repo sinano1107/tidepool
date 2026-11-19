@@ -21,6 +21,7 @@ import {
   mcpClient,
   queueWork,
   registerWork,
+  seedTaskBranch,
   servedQuarantineQuestion,
   squashTaskIntoOrigin,
   type Tidepool,
@@ -77,7 +78,8 @@ it("memory_repair は review と同じ lineage —— ブランチを持たず�
     resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), BOARD_ACTOR_ID, "board")).branch;
   expect(lineage("memory_repair")).toBeUndefined();
 
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`, "main");
+  seedTaskBranch(db, workspace, parent.id, "main");
+  git(workspace.path, "checkout", `task/${parent.id}`);
   commitWork(workspace.path, "parent.txt", "parent work\n");
   git(workspace.path, "checkout", "main");
   git(workspace.path, "merge", "--no-ff", `task/${parent.id}`, "-m", "merge parent");

@@ -138,6 +138,22 @@ it.each([
   db.close();
 });
 
+it("ref を書いて event の前に落ちた作成は、次の pickup が ref を書き直さずに今の sha で event を1つだけ足す(ADR 0372 決定2 / ADR 0329 決定2 と同じ形)", async () => {
+  const ws = await makeWorkspace("branch-created-resume");
+  const db = openDb(":memory:");
+  const task = pickupTask(db, work(db, "root"), "deckhand", NOW, { workspace: ws.name })!;
+  commitWork(ws.path, "side.txt", "side\n");
+  git(ws.path, "branch", `task/${task.id}`, "HEAD~1");
+  const sha = git(ws.path, "rev-parse", `task/${task.id}`);
+
+  await prepareAtPickup(db, ws, task);
+  await prepareAtPickup(db, ws, task);
+
+  expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(sha);
+  expect(branchEvents(db, task.id)).toEqual([{ kind: "task_branch_created", sha, workspace: ws.name }]);
+  db.close();
+});
+
 it("review の pickup は未着手の祖先を固定しない(ADR 0372 決定3)", async () => {
   const ws = await makeWorkspace("branch-created-review");
   const db = openDb(":memory:");

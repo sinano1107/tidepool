@@ -12,7 +12,7 @@ import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pic
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
-import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, seedTaskBranch, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 // ADR 0369 決定1〜3・6: 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理の検査がやり直す。
 
@@ -28,7 +28,7 @@ async function sessionWithWork(name: string, { parent = false, wip = true, type 
   const ws = await makeWorkspace(name);
   const spec = { purpose: "why", completion_criteria: "done", workspace: ws.name } as const;
   const parentId = parent ? registerTask(db, { ...spec, type: "work", title: "parent" }, clock.now(), ...HUMAN_WEBUI).id : undefined;
-  if (parentId) git(ws.path, "branch", `task/${parentId}`, "main");
+  if (parentId) seedTaskBranch(db, ws, parentId, "main");
   const registered = registerTask(db, { ...spec, type, title: "owed", parent_id: parentId }, clock.now(), ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   const place = await prepareAtPickup(db, ws, task, { now: clock.now() });

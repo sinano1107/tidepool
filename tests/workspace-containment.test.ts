@@ -64,6 +64,7 @@ import {
   quarantineQuestion,
   questions,
   queueWork,
+  seedTaskBranch,
   servedQuarantineQuestion,
   sessionId,
   type Tidepool,
@@ -460,7 +461,8 @@ it("隠せない .claude を継いだ同じ分解判断の兄弟は failure ques
   const workspace = await makeWorkspace("decomposition-symlink");
   ({ t } = await bootClaudeOn(workspace));
   const parent = queueWork(t, "Parent with a symlink", workspace.name);
-  git(workspace.path, "switch", "-c", `task/${parent.id}`);
+  seedTaskBranch(t.db, workspace, parent.id);
+  git(workspace.path, "switch", `task/${parent.id}`);
   await commitSymlinkedClaude(workspace.path);
   git(workspace.path, "switch", "main");
   const [first, second] = humanDecomposeTaskViaWebui(t.db, parent, {
