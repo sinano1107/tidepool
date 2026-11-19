@@ -1,5 +1,7 @@
 # 空の盤面への registry の種まきは boot 前の人間の一発コマンド — 初回起動時の自動作成はしない
 
+**Status 追記: 決定5 の既定 agent の `allowed_workspaces: ["*"]` とその理由は欄ごと消え、既定 agent の profile は `assignable_to: ["*"]` / `merge: escalate` になる ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 帰結、2026-11-20、issue #1796)。**
+
 issue #365 のグリリング(2026-08-19)で決定。友人テスト(#364)では、空の registry から既定 agent / authority
 profile / auditor / workspace を作らないと何も動かないが、それらを作る人間面の動詞は WebUI にしかなく、WebUI は
 boot した盤面を要る。一方で盤面は boot 時に既定 workspace を registry から eager に解決するので、空のリモートを

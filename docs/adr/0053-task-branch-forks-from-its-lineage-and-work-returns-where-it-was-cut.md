@@ -1,5 +1,7 @@
 # タスクブランチの fork 元は系譜が決め、成果は切られた場所へ帰る
 
+**Status 追記: 下の ADR 0372 の追記の「別の workspace の子は自分の保護ブランチへ自分で着地する」の子は居なくなる —— 子は親と同じ workspace に居て、別の workspace の仕事は分解元つきの根として、系譜の外で自分の保護ブランチへ着地する ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定1・3、2026-11-20、issue #1796)。**
+
 **Status 追記: 決定1 の「未決着の祖先は無条件に候補」は置き換わる —— 系譜が数えるのは、タスクブランチを持ち(`task_branch_created`)、`workspace` の列が自分と同じ work の祖先だけで、それ以外は決着・未決着を問わず飛ばす。根拠4 の前提(親のブランチは decompose の前に在る)は、未着手の親では子の pickup が親のブランチを作ることで成り立つ。決定3 と下の Status の「人間の手は分解ツリー1本につき1回」は、木1本でなく同じ workspace でつながる系譜につき1回になる(別の workspace の子は自分の保護ブランチへ自分で着地する)。review の透明と内容の判定(ADR 0105)はそのまま([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定3・4、2026-11-15、issue #1796 / #3178。実装は #1796)。**
 
 **Status: 決定3 の hold(恒久の「着地しない」)は ADR 0289 で改められた —— hold が断るのはその時点の内容で、内容が変われば question を立て直す。merge の執行は根に記録する**

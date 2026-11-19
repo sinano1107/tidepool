@@ -1,5 +1,7 @@
 # profile 編集は部分パッチ —— 触っていない値の確認は出さない
 
+**Status 追記: 決定1 の「常に4キー揃う」は3キー(guidance・assignable_to・merge)になり、`allowed_workspaces` の `[]` の扱いは欄ごと消える ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 帰結、2026-11-20、issue #1796)。**
+
 issue #266 のグリリング(2026-08-17)で決定。ADR 0061 決定2 の議論中に見つかった摩擦 —— authority profile の
 編集扉が**全フィールドを再送し**(`updateProfileSchema = createProfileSchema.omit({ name: true })`)、危険判定が
 **ペイロードの純関数**であるため、`merge: auto_if_ci_green` を持つ profile は `guidance` の1文字修正でも毎回

@@ -1,5 +1,7 @@
 # review の権限はエージェントではなくタスク型に由来する: 強制床はコードに置く
 
+**Status 追記: reviewer profile の `allowed_workspaces: []` は欄ごと消える —— 子は workspace を持たず、別の workspace への分解は権限の内外を問わず承認 question を経て根になるので、レビューの出力を人間の承認に通す経路は変わらない ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定1・3 と帰結、2026-11-20、issue #1796)。**
+
 **Status 追記: 次の追記の「registry clone の origin と同じ repo を origin に持つ workspace」は「宣言 `repo` が同じ repo の workspace」に替わる。子登録の承認は登録時点の同意で、後から保護が付いても遡らない —— registry の中身を守る不変条件は、着地の時点で保護を読み直す merge の門が持つ([ADR 0381](0381-the-registry-floor-is-judged-from-the-declared-repo-the-same-value-the-network-destination-comes-from-never-the-checkouts-origin.md) 決定1・6、2026-11-16、issue #3279)。**
 
 **Status 追記: 「registry 自身は保護 workspace」は置き換わる —— registry clone は workspace にならず、「registry の変更は常に人間 merge」の床は、registry clone の origin と同じ repo を origin に持つ workspace の全部に掛かる。保護は entry の flag と、この origin の比較の和で判定する([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・5・6、2026-11-15、issue #3178)。**

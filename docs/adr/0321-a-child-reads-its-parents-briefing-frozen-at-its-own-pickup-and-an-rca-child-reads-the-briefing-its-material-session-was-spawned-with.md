@@ -1,5 +1,7 @@
 # 子の `parent` の文面は子自身の pickup で凍結し、RCA 子は材料の session が spawn で受け取った文面を記録から読む
 
+**Status 追記: 決定5 の「親の計画が死んだなら cancel の cascade が倒し」は、付帯子とその子孫や work でない type を分解元に持つ根には当たらない —— 根は分解元の文面を凍結して読むが、分解元の cancel は届かず、根は自分の木として決着する ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定5、2026-11-20、issue #1796)。**
+
 **Status 追記: 決定5 の「一時的失敗はその cycle の pickup を skip」は poll 全体ではなく、pickup で GitHub を読む task の集合の除外として読む(ADR 0328 決定2、2026-10-30、issue #2704)。**
 
 **Status 追記: 決定1・2 の記録の `user` は ADR 0326 決定4 の task 固有の部分として読む** —— Codex の user turn 全体に含まれる盤面の文を親の文面に混ぜず、材料の session が受け取った task 本文を逐語で読む線を保つ(2026-10-29、issue #2692)。

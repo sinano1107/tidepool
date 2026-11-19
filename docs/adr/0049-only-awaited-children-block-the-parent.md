@@ -1,5 +1,7 @@
 # 親を塞ぐのは親が待っている子だけであり、付帯子は塞がない
 
+**Status 追記: 親を塞ぐのは決定の2種に加えて、計画の work が別の workspace に置いた分解元つきの根である —— 子ではないが、委譲の読み手には子として読まれる。付帯子とその子孫が分解元の根は待たれない ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定4・5、2026-11-20、issue #1796)。**
+
 issue #181 で決定。`completeTask` のガード(`src/tasks.ts:691`)と blocked の導出は、同じ
 `unfinishedChildSql`(`src/tasks.ts:1830`)— 「未決着の子が1つでもあるか」という**平坦な1本**を
 共有している。この平坦さが、異議由来の子が走行中の元タスクに生えたときにその完了を塞ぐ
