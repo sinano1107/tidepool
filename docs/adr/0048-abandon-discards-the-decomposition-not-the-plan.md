@@ -1,6 +1,6 @@
 # abandon が破棄するのは計画ではなく、失敗タスクが乗っている分解判断
 
-**Status 追記: 「失敗タスクが乗っている分解判断から生まれた兄弟」には、同じ判断から別の workspace に置かれた分解元つきの根も入り、子と同じに待たれ、子と同じに倒れる。根が失敗して abandon されれば、その判断が破棄され分解元が再計画する([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定4、2026-11-19、issue #1796)。**
+**Status 追記: 「失敗タスクが乗っている分解判断から生まれた兄弟」には、同じ判断から別の workspace に置かれた分解元つきの根も入り、子と同じに待たれ、子と同じに倒れる。根が失敗して abandon されれば、その判断が破棄され分解元が再計画する([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定4、2026-11-19、issue #1796)。**
 
 issue #180 で決定。ADR 0006 の abandon カスケードは失敗タスクの親の**未決着の子を全部** cancel する
 (`src/tasks.ts:1141-1153`)— 「全部」に条件は無い。しかし 0006 の根拠2 はこう綴られている:

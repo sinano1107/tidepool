@@ -1,6 +1,6 @@
 # 既定への参照は pickup で終わり、解決した名前をタスクに書く
 
-**Status 追記: 子は workspace を入力に持たない —— 決定2 の「子タスクへの写し」と決定5 の「空に戻す」は子には当たらず、子は親に従い、workspace を選べるのは根だけになる([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定1、2026-11-19、issue #1796)。**
+**Status 追記: 子は workspace を入力に持たない —— 決定2 の「子タスクへの写し」と決定5 の「空に戻す」は子には当たらず、子は親に従い、workspace を選べるのは根だけになる([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定1、2026-11-19、issue #1796)。**
 
 **Status 追記: 決定2 の列の書き込み点に、人間の「書き始める」が加わる —— pickup と同じ固定の瞬間として自分の空の `tasks.workspace` を書き、未着手の祖先も固定する(祖先が人間担当でも同じ規則)。`tasks.assignee` を書くのは pickup のまま。決定5 の「空に戻すことは許す」は、assignee では `task_work_started` を持つ task にも当たらない([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定2〜4、2026-11-15、issue #3178)。**
 
