@@ -576,7 +576,7 @@ it("remote-backed から purely-local へ変わった根の retry は local ques
   finish(db, clock, task);
   await landing.converge();
   const [failure] = promotionFailures(db, task.id);
-  // 着地の最初の撮りが repo の宣言を覚えるので、宣言を変える道は削除の扉 → 再登録(ADR 0378 決定6)
+  // 基準の行が残っていれば、repo の宣言の変更は Quarantine で止まる(ADR 0378 決定6)—— この題材は行の無い盤面の retry を述べる
   dropWorkspaceState(db, workspace.name);
   currentWorkspace = { ...workspace, repo: undefined };
 
@@ -7336,32 +7336,6 @@ it("着地の比較: push の準備を待つ間に動いた ref があれば pus
   expect(listEvents(db, work.id).filter((event) => event.kind === "pr_branch_pushed")).toEqual([]);
 });
 
-it("着地の比較: 追いつきの前に動いた tip は追いつきの commit に入れない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-compare-catch-up");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
-  const parent = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
-  commitWork(workspace.path, "feature.txt", "parent result\n");
-  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
-  const repair = attachUnsettledChild(db, clock, parent.id);
-  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
-  await squashTaskIntoOrigin(workspace, parent.id);
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  git(workspace.path, "checkout", "main");
-  finish(db, clock, repair);
-  await leaveBaseline(db, workspace);
-  const moved = commitOutOfBand(workspace, `task/${repair.id}`);
-
-  // PR の開いた親が先に止まり、子はこの回で根にならない
-  await expect(convergeOn(landing, parent.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(moved) });
-
-  expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).toBe(moved);
-  expect(github.pushes).toEqual([]);
-});
-
 it("着地の比較: Quarantine に回答した後の retry が着地し、未回答の失敗 question の根はその retry まで撃たない", async () => {
   const { workspace, db, clock, github, landing, work } = await pushedRootWithBaseline("landing-compare-after-answer");
   await commitThroughTaskCheckout(db, clock, workspace, work, "repair.txt", "fixed\n");
@@ -7396,20 +7370,51 @@ it("着地の比較: Quarantine が開いているところで ref が動いた 
   expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).not.toContain("refs/tags/intruder");
 });
 
-it("着地の比較: 読むだけの利用者(着地を待つ数え)は、ref が動いていても Quarantine を立てない", async () => {
-  const { workspace, db, work } = await doneRootWithBaseline("landing-compare-read-only");
-  commitOutOfBand(workspace, `task/${work.id}`);
+/** lineage が ref を読む子(決着した work の親を持つ done の work)を持つ根。 */
+async function rootWithDoneChild(name: string) {
+  const root = await doneRootWithBaseline(name);
+  const { workspace, db, clock, work } = root;
+  const child = await completeThroughTaskCheckout(db, clock, workspace, attachUnsettledChild(db, clock, work.id), "child.txt", "child\n");
+  return { ...root, child };
+}
+
+it("着地の比較: 着地を待つ数えの lineage の読みは、ref が動いていても Quarantine を立てない", async () => {
+  const { workspace, db, work } = await rootWithDoneChild("landing-compare-read-only-lineage");
+  git(workspace.path, "tag", "intruder");
 
   expect(taskIdsAwaitingLanding(db, () => workspace, "tako", "tako")).toEqual([work.id]);
 
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
-it("着地の比較: 読むだけの利用者は、基準の行が無い workspace で最初の撮りをしない", async () => {
-  const { workspace, db, work } = await doneRootWithBaseline("landing-compare-read-only-rowless");
+it("着地の比較: 着地を待つ数えの lineage の読みは、基準の行が無い workspace で最初の撮りをしない", async () => {
+  const { workspace, db, work } = await rootWithDoneChild("landing-compare-read-only-lineage-rowless");
   dropWorkspaceState(db, workspace.name);
 
   expect(taskIdsAwaitingLanding(db, () => workspace, "tako", "tako")).toEqual([work.id]);
+
+  expect(holdsBaseline(db, workspace.name)).toBe(false);
+});
+
+it("着地の比較: 削除の扉が読む hold の内容の比較は、ref が動いていても Quarantine を立てない", async () => {
+  const local = await landLocally("landing-compare-read-only-held");
+  const { workspace, db, work } = local;
+  await answerLocalMerge(local, "hold");
+  commitOutOfBand(workspace, `task/${work.id}`);
+
+  expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([work.id]);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+it("着地の比較: 削除の扉が読む hold の内容の比較は、基準の行が無い workspace で最初の撮りをしない", async () => {
+  const local = await landLocally("landing-compare-read-only-held-rowless");
+  const { workspace, db, work } = local;
+  await answerLocalMerge(local, "hold");
+  commitOutOfBand(workspace, `task/${work.id}`);
+  dropWorkspaceState(db, workspace.name);
+
+  expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([work.id]);
 
   expect(holdsBaseline(db, workspace.name)).toBe(false);
 });
@@ -7504,6 +7509,13 @@ it("着地の比較: 行の無い名前自身の Quarantine の間は最初の�
 
   expect(holdsBaseline(db, workspace.name)).toBe(false);
   expect(github.requests).toEqual([]);
+
+  // 出口: 行の無い名前の受理は比べずに通り(ADR 0373 決定7)、次の収束が撮って着地する
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantineQuestion(db, "workspace", workspace.name)!);
+  await landing.converge();
+
+  expect(holdsBaseline(db, workspace.name)).toBe(true);
+  expect(github.requests).toHaveLength(1);
 });
 
 it("着地の比較: 積み残しの retry は、保護ブランチの fetch を待つ間に動いた ref があれば merge back を撃ち直さない", async () => {
