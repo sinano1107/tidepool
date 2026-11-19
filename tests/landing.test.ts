@@ -2982,6 +2982,11 @@ it("巻き戻された記録済みの PR への最初の「merge」は text A4a 
   expect(git(c.workspace.path, "rev-parse", c.target)).toBe(local);
   expect(originHead(c.workspace, c.work.id)).toBe(local);
   expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
+
+  // push の後に同じ head へまた巻き戻されれば、それは新しい外の push —— もう一度拒む
+  await moveRecordedHead(c, "rewound");
+  expect(await c.answerMerge()).toBe(textA4a(c, head, c.target));
+  expect(originHead(c.workspace, c.work.id)).toBe(head);
 });
 
 /** spec #3273 text D3b の全文。 */
@@ -3018,6 +3023,62 @@ it("別の失敗で昇格失敗 question が開いている根の記録済みの
   expect(landed).toBe(git(c.workspace.path, "rev-parse", c.target));
   expect(c.github.mergedHeads).toEqual([landed]);
   expect(getTask(c.db, failure!.id)?.status).toBe("done");
+});
+
+// ADR 0376 決定4・7: 印が head と同じでも、書き換えた head を人間が作業台で merge していなければ盤面は押せない —— retry を言う text D1 でなく、
+// 同じ text A4b で拒む
+it("書き換えられた記録済みの PR への2回目の「merge」は、作業台で何も commit していなければもう一度 text A4b で拒まれ、何も取り込まず push もしない", async () => {
+  const c = await pushedRoot("outside-rewrite-nothing-merged", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  const head = await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+  await c.answerMerge();
+
+  expect(await c.answerMerge()).toBe(textA4b(c, head, c.target));
+
+  c.expectNothingCarried();
+  expect(originHead(c.workspace, c.work.id)).toBe(head);
+});
+
+// ADR 0376 決定2: 最後に push した値が読めなければ(記録の sha が手元に無い)止めない —— 今どおり push する
+it("記録済みの PR の最後に push した値が手元に無ければ、収束は書き換えと読まずに今どおり push する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("outside-push-unreadable-last-pushed");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  const target = `task/${work.id}`;
+  git(workspace.path, "checkout", "-b", target);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "push", "origin", target);
+  github.scriptPullRequestOnBranch(target);
+  recordPrOpened(db, work, 1, "1111111111111111111111111111111111111111", "worker", clock.now(), undefined, undefined, "worker");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  git(workspace.path, "checkout", "main");
+  finish(db, clock, work);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "open_pull_request_updated", prNumber: 1 });
+
+  expect(originHead(workspace, work.id)).toBe(git(workspace.path, "rev-parse", target));
+  expect(mergeQuestions(db)).toEqual([]);
+});
+
+// spec #3273 pin A10: 作業台があるだけでは印でない —— 巻き戻しは commit するものが無いので、印が無ければ最初の `merge` が黙って push してしまう
+it("別の入口が開いた同じ鍵の作業台がある根の記録済みの PR が巻き戻されても、retry は text D3b(moved back)で拒まれ、最初の「merge」は text A4a で拒まれて push しない", async () => {
+  const c = await pushedRoot("outside-rewind-existing-workbench", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  await pushOutsideBoard(c.workspace, c.work.id);
+  await convergeOn(c.landing, c.work.id);
+  const [failure] = promotionFailures(c.db, c.work.id);
+  expect(existsSync(c.workbenchAt)).toBe(true);
+  const head = await moveRecordedHead(c, "rewound");
+
+  const refusal = await c.retry(failure!);
+
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(refusal).toBe(textD3b("moved back", question!.id));
+
+  expect(await c.answerMerge()).toBe(textA4a(c, head, c.target));
+  c.expectNothingCarried();
+  expect(originHead(c.workspace, c.work.id)).toBe(head);
 });
 
 // spec #3273 pin A10: 印は拒否が伝えた head —— 拒否の後に head がまた動けば、もう一度拒む

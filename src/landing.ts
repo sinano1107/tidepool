@@ -5,7 +5,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
-import { git, isAncestor } from "./git.js";
+import { git, gitAnswers, isAncestor } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
 import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
@@ -315,10 +315,11 @@ function lastPushedHead(db: Db, taskId: string): string | undefined {
  *  いない修理(text A4d —— 未 push のものを落とされたとは言わない)。根のブランチは子孫の内容も持つので、子孫があれば子孫を名指す。 */
 export type OutsidePush = { head: string; rewound: boolean; dropped: string[]; unpushed: string[] };
 
-/** head は手元にある前提。ADR 0376 決定2: 最後に push した値が読めなければ止めない。 */
+/** head は手元にある前提。ADR 0376 決定2: 最後に push した値が読めなければ(記録が無い・その commit が手元に無い)止めない。 */
 function outsidePushOf(db: Db, workspace: WorkspaceConfig, taskId: string, head: string, targets: string[]): OutsidePush | undefined {
   const lastPushed = lastPushedHead(db, taskId);
-  if (lastPushed === undefined || isAncestor(workspace, lastPushed, head)) return undefined;
+  if (lastPushed === undefined || !gitAnswers(() => git(workspace.path, "rev-parse", "-q", "--verify", `${lastPushed}^{commit}`))) return undefined;
+  if (isAncestor(workspace, lastPushed, head)) return undefined;
   const unpushed = targetsLeftBehind(workspace, taskId, targets, lastPushed);
   const dropped = targetsLeftBehind(workspace, taskId, targets, head).filter((id) => id !== taskId && !unpushed.includes(id));
   return {
@@ -616,8 +617,9 @@ function teardownUnfinishedUnder(db: Db, taskId: string): boolean {
 
 export interface Landing {
   /** ADR 0241 決定1・2・5: 収束を突き、その回で扱った根ごとの verdict を返す。走っている回があれば、その後に
-   *  ちょうど1回走る回の結果を返す。retry だけが `answering`(答えている PR 昇格失敗 question の id と、取り込みの event に残す
-   *  回答者)を渡す —— その回はその question を開いていないと読み、引退の対象からも除く(ADR 0106 決定5)。 */
+   *  ちょうど1回走る回の結果を返す。retry と、外の push が落とした内容の merge question への `merge`(ADR 0376 決定7)だけが
+   *  `answering`(答えている question の id と、取り込みの event に残す回答者)を渡す —— その回はその question を開いていないと読み、
+   *  引退の対象からも除く(ADR 0106 決定5)。 */
   converge(options?: { answering?: { question: string; answerer: Answerer } }): Promise<RootVerdict[]>;
   /** 回答受理直前のバックストップ(ADR 0079 決定3)。merge 済み・閉じた PR を観測で決着させたら true、該当しない
    *  (PR 番号・GitHub・workspace が無い)か PR が開いている・印が付いていれば false。PR を読めなければ DomainError を
