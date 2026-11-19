@@ -1,5 +1,7 @@
 # チームとロールは保存されるエンティティではなく導出ビュー — レビュアーのルーティングはタスク単位の指名のみ
 
+**Status 追記: 「チーム(委譲の木)は複数 workspace を跨いでよい」の委譲の木は、`parent_id` の上では同じ workspace に限られる。registry へ越境する改善提案(registry-edit の decompose)は、分解した task を出所に持つ根として届き、出所が文脈を運ぶ。チームが導出ビューであること、workspace がチームでないことは変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定1〜3、2026-11-19、issue #1796)。**
+
 issue #84(workspace 配下のチーム/ロール設計)の grilling(2026-07-22)で決定。出発点は「自動生成される完了時レビュー子が常に盤面全体で1つの Auditor ポインタに解決される硬さ」で、最小案は workspace エントリへの役割ポインタ(`auditor:` 等)の追加だった。grilling の結論は、最小案を含む**すべての新しい保存構造を作らない**こと。
 
 **チームの正体は assignable_to グラフの導出ビュー。** 「オーケストレーター(decompose を専門性とする普通の agent — ADR 0017 の線: 専門性が定義の差として現れる正当なケース)を根とする委譲部分木」がチームであり、下階層のオーケストレーターも配下の agent がそれぞれの assignable_to を持つことで自然に表現される。「誰が誰に振れるか」の正本は assignable_to のみで、team エンティティ・ロール語彙・割り振り型のいずれも registry のデータとして持たない — 持てば `assignable_to` / `allowed_workspaces` と意味が重複し、「誰がどこで何をできるか」を語る場所が2つになる(issue #84 論点4 の失敗モード)。割り振りの賢さ(専門性マッチ・負荷分散など)はオーケストレーターの判断(instructions の散文 + roster)が担い、構造が保証するのは運搬(指名フィールド)と関所(権限検査)だけ。委譲はすべて盤面経由なので、チームの実際の稼働は呼び出しグラフとして追加機構なしで監査できる。
