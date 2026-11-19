@@ -68,6 +68,7 @@ import {
   isWorkSide,
   nextSlotTask,
   openedPlaceNames,
+  owedReleases,
   type PickupStopped,
   pickupTask,
   resolveTaskAgent,
@@ -949,6 +950,10 @@ export function startScheduler(deps: {
       registerDueMetaReviews(db, clock.now(), agents);
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
       refireRetrospectiveCalls(db, retrospectiveCalls, clock.now());
+      // ADR 0369 決定4 / ADR 0119 決定5: 次の pickup で済んでいない解放が受理から見えなくなる。slot 占有・halt で返る前に同期で Quarantine を戻す。
+      for (const { task, place } of owedReleases(db, workspace?.name)) {
+        quarantineWorkspace(db, place, `The release of task ${task.id} is unfinished and answering this question retries it`, clock.now());
+      }
       const blocked = await pickupBlocked();
       if (blocked) return { outcome: "blocked", reason: blocked };
       succeeded = true;
