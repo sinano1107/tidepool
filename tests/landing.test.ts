@@ -2563,7 +2563,16 @@ async function pushedRoot(
     commits = 1,
     merge,
     resolveAuthority = merge && (() => profile(merge)),
-  }: { pr?: "found" | "recorded"; openFailure?: boolean; commits?: number; merge?: MergeDial; resolveAuthority?: () => AuthorityProfile } = {},
+    recordedSha,
+  }: {
+    pr?: "found" | "recorded";
+    openFailure?: boolean;
+    commits?: number;
+    merge?: MergeDial;
+    resolveAuthority?: () => AuthorityProfile;
+    /** 記録する最後に push した値 —— 既定は実際に push した sha。 */
+    recordedSha?: string;
+  } = {},
 ) {
   const { workspace } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
@@ -2580,7 +2589,7 @@ async function pushedRoot(
   const pushed = git(workspace.path, "rev-parse", target);
   if (pr) github.scriptPullRequestOnBranch(target);
   if (pr === "recorded") {
-    recordPrOpened(db, getTask(db, work.id)!, 1, pushed, "worker", clock.now(), merge && { merge }, undefined, "worker");
+    recordPrOpened(db, getTask(db, work.id)!, 1, recordedSha ?? pushed, "worker", clock.now(), merge && { merge }, undefined, "worker");
     await commitThroughTaskCheckout(db, clock, workspace, getTask(db, work.id)!, "repair.txt", "fixed\n");
   }
   if (openFailure) registerPrPromotionFailureQuestion(db, getTask(db, work.id)!, "push failed", clock.now());
@@ -2618,14 +2627,7 @@ async function pushedRoot(
   };
   /** PR #1 の merge question への「merge」。拒否なら DomainError の文を、通れば undefined を返す。 */
   const answerMerge = () =>
-    submitAnswer(
-      { db, pollNow: () => {}, landing, workspace, github },
-      getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!,
-      ["merge"],
-      undefined,
-      () => clock.now(),
-      "webui",
-    ).then(
+    answerMergeQuestion({ db, clock, github, workspace, landing }).then(
       () => undefined,
       (err: unknown) => {
         expect(err).toBeInstanceOf(DomainError);
@@ -2910,12 +2912,12 @@ const textA4c = (lacks: string) =>
 
 // ADR 0376 決定7 / spec #3273 pin D5: 記録済みの PR の head が最後に push した値を欠けば、収束は push せず昇格の失敗にもせず、キューの行を外して
 // 推奨 hold の merge question を立てる —— 開いていれば足さない
-it.each(["rewound", "rewritten"] as const)("記録済みの PR の head が盤面の外で %s なら、収束は push せず昇格の失敗も立てず、キューの行を外して推奨 hold の merge question を1枚立て、次の収束は足さない", async (form) => {
+it.each(["rewound", "rewritten"] as const)("記録済みの PR の head が盤面の外で %s なら、収束は push せず昇格の失敗も立てず、キューの行を外して推奨 hold の merge question を1枚立て、次の収束はその question を待って足さない", async (form) => {
   const c = await pushedRoot(`outside-push-question-${form}`, { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
   await moveRecordedHead(c, form);
 
   expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
-  expect(await convergeOn(c.landing, c.work.id)).toBeUndefined();
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
 
   expect(mergeQuestions(c.db)).toEqual([{ pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(c.target) }]);
   expect(promotionFailures(c.db, c.work.id)).toEqual([]);
@@ -3041,25 +3043,113 @@ it("書き換えられた記録済みの PR への2回目の「merge」は、作
 
 // ADR 0376 決定2: 最後に push した値が読めなければ(記録の sha が手元に無い)止めない —— 今どおり push する
 it("記録済みの PR の最後に push した値が手元に無ければ、収束は書き換えと読まずに今どおり push する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("outside-push-unreadable-last-pushed");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
-  const work = landingWork(db, clock);
-  const target = `task/${work.id}`;
-  git(workspace.path, "checkout", "-b", target);
-  commitWork(workspace.path, "feature.txt", "ready\n");
-  git(workspace.path, "push", "origin", target);
-  github.scriptPullRequestOnBranch(target);
-  recordPrOpened(db, work, 1, "1111111111111111111111111111111111111111", "worker", clock.now(), undefined, undefined, "worker");
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  git(workspace.path, "checkout", "main");
-  finish(db, clock, work);
+  const c = await pushedRoot("outside-push-unreadable-last-pushed", { pr: "recorded", recordedSha: "1111111111111111111111111111111111111111" });
 
-  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "open_pull_request_updated", prNumber: 1 });
+  await expect(convergeOn(c.landing, c.work.id)).resolves.toEqual({ kind: "landed", form: "open_pull_request_updated", prNumber: 1 });
 
-  expect(originHead(workspace, work.id)).toBe(git(workspace.path, "rev-parse", target));
-  expect(mergeQuestions(db)).toEqual([]);
+  expect(originHead(c.workspace, c.work.id)).toBe(git(c.workspace.path, "rev-parse", c.target));
+  expect(mergeQuestions(c.db)).toEqual([]);
+});
+
+// spec #3273 text A4d / group D「事実だけを言う」: 同じ内容のまま書き換えた head は何も落としていない —— 未 push の内容だけを名指し、落とされたとは言わない
+it("同じ内容のまま書き換えられた記録済みの PR の head に未 push の内容が重なれば、merge question の本文は未 push の内容だけを名指す", async () => {
+  const c = await pushedRoot("outside-rebase-same-content", { pr: "recorded", merge: "auto_if_ci_green" });
+  const outside = await outsideClone(c.workspace);
+  git(outside.clone, "checkout", "-q", c.target);
+  git(outside.clone, "commit", "--quiet", "--amend", "-m", "Reworded outside the board");
+  outside.push(c.target);
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+
+  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([textA4c(`${c.target} (not pushed by the board yet)`)]);
+});
+
+// ADR 0371 決定11 / ADR 0382 の上書き(取り込み → 追いつき → push): `merge` の中の追いつきの conflict は、答え直す回答として `merge` を言う
+it("書き換えられた記録済みの PR への2回目の「merge」の追いつきが conflict すれば、text A2 の拒否は retry でなく「merge」を答え直させる", async () => {
+  const c = await catchUpConflictRoot("outside-rewrite-catch-up-conflict");
+  git(c.workspace.path, "push", "origin", c.target);
+  const pushed = git(c.workspace.path, "rev-parse", c.target);
+  c.github.scriptPullRequestOnBranch(c.target, 2);
+  recordPrOpened(c.db, c.repair, 2, pushed, "worker", c.clock.now(), { merge: "escalate" }, undefined, "worker");
+  await pushOutsideBoard(c.workspace, c.repair.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
+  const answerMerge = () =>
+    submitAnswer(
+      { db: c.db, pollNow: () => {}, landing: c.landing, workspace: c.workspace, github: c.github },
+      getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 2)!.id)!,
+      ["merge"],
+      undefined,
+      () => c.clock.now(),
+      "webui",
+    ).then(
+      () => undefined,
+      (err: Error) => err.message,
+    );
+  await answerMerge();
+  const outsideWorkbench = realpathSync(workbenchPath(c.workbenchBase, { task: c.repair.id }, `origin/${c.target}`));
+  git(outsideWorkbench, "merge", "--quiet", "--no-edit", `board/origin/${c.target}`);
+
+  const refusal = await answerMerge();
+
+  expect(refusal).toEqual(expect.stringMatching(/^main does not merge cleanly into /));
+  expect(refusal).toContain("Then answer `merge` again.");
+  expect(refusal).not.toContain("`retry`");
+});
+
+// spec #3273 text C6: 作業台を残した取り込みは、後の拒否(CI 待ちの text A10)にも添える
+it("2回目の「merge」の取り込みが作業台を残せば、CI 待ちの拒否は text C6 を添える", async () => {
+  const c = await pushedRoot("outside-rewrite-kept-workbench", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+  await c.answerMerge();
+  const tip = c.mergeInWorkbench();
+  git(c.workbench(), "checkout", "-q", "-b", "stray");
+  commitWork(c.workbench(), "stray.txt", "kept\n");
+  git(c.workbench(), "checkout", "-q", c.target);
+  c.github.scriptCiStatus("pending");
+
+  const refusal = await c.answerMerge();
+
+  const wrapped = git(c.workspace.path, "rev-parse", c.target);
+  expect(refusal).toBe(
+    `took your merge in and pushed ${c.target}; CI is not green yet (status: pending) — cannot merge\n` +
+      `took ${tip} in as ${wrapped} on ${c.target}. In a clone, fetch the workbench and fast-forward to \`board/${c.target}\` before you write on.`,
+  );
+});
+
+// 1つの PR に merge question は1つ —— tick が PR を読む間に収束が同じ PR に question を立てても、tick は2つ目を足さない(書き手の中で確かめる)
+it("無人 merge の tick が PR を読む間に収束が書き換えの merge question を立てても、tick は2つ目の merge question を立てない", async () => {
+  const c = await pushedRoot("outside-rewrite-tick-race", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  await moveRecordedHead(c, "rewritten");
+  const read = c.github.readPullRequest.bind(c.github);
+  let raced = false;
+  c.github.readPullRequest = async (ref) => {
+    const state = await read(ref);
+    if (!raced) {
+      raced = true;
+      expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+    }
+    return state;
+  };
+
+  await c.landing.tick("auto_merge", c.clock.now());
+
+  expect(mergeQuestions(c.db)).toHaveLength(1);
+});
+
+// spec #3273 "Refused once" / ADR 0227 決定2: 印は盤面のどの push でも消える —— 拒否の後に人間が origin を戻し、収束が push した後に同じ head へ
+// また巻き戻されれば、最初の `merge` はもう一度拒まれる
+it("拒否の後に origin が戻され収束が push した後、同じ head へまた巻き戻されれば、最初の「merge」はもう一度 text A4a で拒まれる", async () => {
+  const c = await pushedRoot("outside-rewind-stale-mark", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  const head = await moveRecordedHead(c, "rewound");
+  await convergeOn(c.landing, c.work.id);
+  await c.answerMerge();
+  const outside = await outsideClone(c.workspace);
+  outside.push(`${c.pushed}:refs/heads/${c.target}`);
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+  outside.push(`${head}:refs/heads/${c.target}`);
+
+  expect(await c.answerMerge()).toBe(textA4a(c, head, c.target));
+  expect(originHead(c.workspace, c.work.id)).toBe(head);
 });
 
 // spec #3273 pin A10: 作業台があるだけでは印でない —— 巻き戻しは commit するものが無いので、印が無ければ最初の `merge` が黙って push してしまう
@@ -5194,10 +5284,11 @@ function answerMergeQuestion({
   github,
   workspace,
   githubAuth,
-}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig; githubAuth?: GitHubAuth }) {
+  landing = unusedLanding,
+}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig; githubAuth?: GitHubAuth; landing?: Landing }) {
   const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
   return submitAnswer(
-    { db, pollNow: () => {}, landing: unusedLanding, workspace, github, githubAuth },
+    { db, pollNow: () => {}, landing, workspace, github, githubAuth },
     question,
     ["merge"],
     undefined,

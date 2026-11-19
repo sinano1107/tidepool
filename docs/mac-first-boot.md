@@ -319,8 +319,10 @@ depends on the workspace:
   Resolve a conflicted PR with a merge; a rebased or force-pushed head is treated as rewritten
   outside the board. Merge the protected branch into the PR's head in your own clone and push it.
   When the board finds a PR head that no longer holds what it pushed, it asks a merge question
-  with `hold` recommended: the first `merge` is refused and opens a workbench where you keep that
-  content (`git merge`) or discard it, and the next `merge` takes your merge in and pushes it.
+  with `hold` recommended, and the first `merge` is refused and opens a workbench. For a head
+  moved back, answer `merge` again to have the board push that content back. For a rewritten
+  head, keep that content with `git merge` there. To discard it in either case, run the three
+  commands the refusal gives. The next `merge` takes your commit in and pushes it.
 
 ## Let workers edit the registry
 

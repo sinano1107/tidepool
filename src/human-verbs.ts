@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, type RootVerdict, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { conventionCheckoutPath, isRemoteBacked, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -1020,22 +1020,23 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 
 /** 積み残しの拒否(ADR 0240 決定5): 運ぶ面を名指しする —— workspace の quarantine question、PR 昇格失敗 question、
  *  どちらも無ければ盤面が運んでいる途中。PR とローカル着地の merge 回答が共有する(ADR 0289 決定2)。 */
-function leftBehindRefusal(db: Db, workspaceName: string, landingTaskId: string, subject: string): DomainError {
+function leftBehindRefusal(db: Db, workspaceName: string, landingTaskId: string, subject: string): string {
   const quarantineQuestionId = openQuarantineQuestion(db, "workspace", workspaceName)?.id;
   const promotionQuestionId = openPrPromotionQuestionIds(db, landingTaskId)[0];
   const carrier = quarantineQuestionId
     ? `the open workspace quarantine question (${quarantineQuestionId})`
     : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
-  return new DomainError(
+  return (
     `cannot merge yet: ${subject} does not carry all of the task's content yet — ` +
       (carrier
         ? `${carrier} carries it; answer that question first, then answer again`
-        : "the board is still carrying it; answer again later"),
+        : "the board is still carrying it; answer again later")
   );
 }
 
-/** retry の受理・拒否(ADR 0241 決定5)。verdict が無いのは、候補の読み取りそのものが失敗した回だけである。 */
-function promotionRetryError(verdict: LandingVerdict | undefined): string | undefined {
+/** 収束を通す回答(retry と、外の push が落とした内容への `merge`)の受理・拒否(ADR 0241 決定5)。verdict が無いのは、候補の読み取り
+ *  そのものが失敗した回だけである。 */
+function convergenceRefusal(verdict: LandingVerdict | undefined): string | undefined {
   if (!verdict) return "the board could not read its landing roots; answer again";
   switch (verdict.kind) {
     case "landed":
@@ -1053,6 +1054,18 @@ function promotionRetryError(verdict: LandingVerdict | undefined): string | unde
         : `cannot land yet: ${verdict.count} objection(s) raised in this triage await commit`;
   }
 }
+
+/** 回答を収束に通し、その根の verdict を返す —— 拒否なら投げる。spec #3273 text C6: 作業台を残した取り込みは、回答が後で拒まれても
+ *  書いた後なので、拒否にも添える。 */
+async function answerThroughConvergence(landing: Landing, question: string, origin: EventOrigin, taskId: string): Promise<RootVerdict | undefined> {
+  const verdicts = await landing.converge({ answering: { question, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
+  const root = verdicts.find((verdict) => verdict.taskId === taskId);
+  const error = convergenceRefusal(root?.verdict);
+  if (error) throw new DomainError(withNotice(error, root?.notice));
+  return root;
+}
+
+const withNotice = (message: string, notice: string | undefined) => (notice === undefined ? message : `${message}\n${notice}`);
 
 export interface CancelThroughHumanDoorDeps {
   db: Db;
@@ -1334,12 +1347,7 @@ export async function submitAnswer(
     switch (kind.kind) {
       case "pr_promotion_retry":
         if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
-          const verdicts = await deps.landing.converge({ answering: { question: task.id, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
-          const root = verdicts.find((verdict) => verdict.taskId === kind.task_id);
-          const error = promotionRetryError(root?.verdict);
-          // spec #3273 text C6: 作業台を残した取り込みは、回答が後で拒まれても書いた後なので言う
-          if (error) throw new DomainError(root?.notice === undefined ? error : `${error}\n${root.notice}`);
-          notice = root?.notice;
+          notice = (await answerThroughConvergence(deps.landing, task.id, origin, kind.task_id))?.notice;
         }
         break;
       case "local_merge":
@@ -1363,7 +1371,7 @@ export async function submitAnswer(
                 (err instanceof Error ? err.message : String(err)),
             );
           }
-          if (left.length > 0) throw leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `the task branch ${branch}`);
+          if (left.length > 0) throw new DomainError(leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `the task branch ${branch}`));
           try {
             // ADR 0371 決定4 / ADR 0373 決定8: 同時の回答は旧値の CAS で守る —— `merge` は in-flight の守りの対象ではない
             const { landed, kept } = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id, {
@@ -1445,16 +1453,13 @@ export async function submitAnswer(
           if (outside) {
             // ADR 0376 決定7・8 / ADR 0371 決定10: 外の push が head から落とした内容は、最初の `merge` が作業台を開いて拒まれ、次の `merge` が
             // 取り込み → 追いつき → push を収束で通す —— 昇格失敗 question を名指して返さない(#3250 の loop)
-            const verdicts = await deps.landing.converge({ answering: { question: task.id, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
-            const root = verdicts.find((verdict) => verdict.taskId === landingTaskId);
-            const error = promotionRetryError(root?.verdict);
-            if (error) throw new DomainError(root?.notice === undefined ? error : `${error}\n${root.notice}`);
+            const root = await answerThroughConvergence(deps.landing, task.id, origin, landingTaskId);
             notice = root?.notice;
             pushed = `${root?.takenIn ? "took your merge in and pushed" : "pushed"} ${taskBranch(landingTaskId)}; `;
             ({ pr, left, outside } = await readAndCompare());
           }
-          const refuse = (message: string) => new DomainError(`${pushed}${message}`);
-          if (left.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`).message);
+          const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
+          if (left.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`));
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
           if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
             throw refuse(
