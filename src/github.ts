@@ -80,11 +80,12 @@ export type CiStatus = "pending" | "success" | "failure" | "unreported";
 /** GitHub's own PR state (ADR 0229 決定2). */
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
-/** The PR's state and who merged it, read in one call (ADR 0265 決定5): `mergedBy` is `gh`'s `mergedBy.login`, null
- *  unless merged. */
+/** The PR's state, who merged it and its head, read in one call (ADR 0265 決定5 / ADR 0376 決定1): `mergedBy` is `gh`'s
+ *  `mergedBy.login`, null unless merged. */
 export interface PrStateRead {
   state: PrState;
   mergedBy: string | null;
+  head: string;
 }
 
 /** The PR found on a task branch, whatever its state (ADR 0241 決定4). */
@@ -99,7 +100,7 @@ export interface FoundPr {
  *  read that failed is CI "pending" and state "unreadable" with no head —
  *  never a state the caller would act on. */
 export type PrStatus =
-  | (PrStateRead & { ci: CiStatus; head: string })
+  | (PrStateRead & { ci: CiStatus })
   | { ci: "pending"; state: "unreadable" };
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
@@ -149,7 +150,8 @@ export interface GitHubClient {
    *  outside the board". Only asked on the two surfaces the board holds a
    *  decision on (an open merge question, the auto-merge queue) and before
    *  pushing a repair onto a still-open PR (issue #400), never as a standing
-   *  watch over every open PR. Throws when it cannot be read. */
+   *  watch over every open PR. The same read gives the head convergence checks before that push (ADR 0376 決定1).
+   *  Throws when it cannot be read. */
   getPullRequestState(ref: PrRef): Promise<PrStateRead>;
   /** The PR whose head is `branch`, in any state, or null (ADR 0241 決定4) — read
    *  before opening one, so a PR the board opened but never recorded is not
@@ -309,9 +311,9 @@ export class GhCliClient implements GitHubClient {
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
-    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy"]);
-    const { state, mergedBy } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null };
-    return { state, mergedBy: mergedBy?.login ?? null };
+    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy,headRefOid"]);
+    const { state, mergedBy, headRefOid } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null; headRefOid: string };
+    return { state, mergedBy: mergedBy?.login ?? null, head: headRefOid };
   }
 
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
