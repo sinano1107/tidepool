@@ -1,7 +1,5 @@
 # 付帯子の review の workspace は最も近い固定済みの祖先に従い、列は pickup でだけ書かれ、食い違う明示は拒む
 
-**Status 追記: 決定1・2 の「同じ名前の明示は受けて保存しない」は全 type の子に広がる。食い違う明示を拒むのは付帯子の review のままで、ほかの子の違う名前は保存され、別の workspace の子になる([ADR 0384](0384-the-parent-id-tree-is-the-delegation-tree-the-lineage-is-where-content-goes-and-a-predicate-about-content-reads-the-lineage.md) 決定4、2026-11-19、issue #1796)。**
-
 **Status 追記: 決定6 が範囲外に置いた3問は決まった —— 分解の子は登録時に親の列を写さない、固定値を持つ子と親の Edit の食い違いは、系譜が列の同じ祖先だけを数え、タスクブランチを持つ task の列を Edit で動かさないことで受ける、pickup は未着手の祖先にも列を書く。決定1・5 の導出は付帯子の review だけのものでなく全 type に広がる(付帯子の review についての文はそのまま)。退けた案の「#1796 が問う前提の上に積む」も古くなる([ADR 0372](0372-the-workspace-column-holds-only-the-fact-that-a-place-was-fixed-a-pickup-also-fixes-its-unstarted-ancestors-and-lineage-counts-only-ancestors-that-have-a-task-branch-in-the-same-workspace.md) 決定1・3・5、2026-11-15、issue #1796 / #3178。実装は #1796)。**
 
 2026-10-21 の grilling(issue #1737、出どころは #1729 / ADR 0234 の退けた案)で決定。人間の門から親を名指して登録した

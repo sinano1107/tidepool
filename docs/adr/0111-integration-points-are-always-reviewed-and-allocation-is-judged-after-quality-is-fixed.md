@@ -1,6 +1,6 @@
 # 統合点のレビューは必須、配分の評価は品質判定を固定した後に別の呼び出しで行う
 
-**Status 追記: 決定1 の「子のレビューは親の統合点に委譲」の「子」は、親の中身に入る子に限る。列の述語は、`parent_id` を持ち自分の workspace の列が親の導出と違う work を根と同じに扱い(`review_flag` は不発の値)、完了の扉は起票を系譜で決めて、数える祖先が残らない work に完了時レビューを立てる([ADR 0384](0384-the-parent-id-tree-is-the-delegation-tree-the-lineage-is-where-content-goes-and-a-predicate-about-content-reads-the-lineage.md) 決定2、2026-11-19、issue #1796 / #3225)。**
+**Status 追記: 決定1 の「子のレビューは親の統合点に委譲」の「子」は、親の中身に入る子に限る。列の述語は、`parent_id` を持ち自分の workspace の列が親の導出と違う work を根と同じに扱い(`review_flag` は不発の値)、完了の扉はその時点の系譜で運ぶ先を計算し、保護ブランチなら完了時レビューを立てる。親の Edit や既定の差し替えで述語の答えが変わっても子の値は検査し直さない(追記8 の例外)([ADR 0384](0384-the-parent-id-tree-is-the-delegation-tree-the-lineage-is-where-content-goes-and-a-predicate-about-content-reads-the-lineage.md) 決定3、2026-11-19、issue #1796 / #3225)。**
 
 **Status 追記: 決定1 の「human task は対象外」、追記7 の「assignee が human の work task も今は完了時レビューを立てない」、追記8 の「flag を外す・human に渡す操作が『レビューしない』意思そのもの」は、タスクブランチを持たない(`task_branch_created` の無い)人間担当の task に限られる —— タスクブランチを持つ人間担当の work は、agent と同じ統合点で完了時レビューが立つ。追記8 の「サーバーの拒否・完了時の起票・WebUI の欄の出し分けは、同じ述語を使う」は、人間担当の task では起票だけが分かれる —— 起票は完了の扉がタスクブランチの有無で決め、reviewer の指名も扉だけで受けて列に保存しない。追記8 の拒否の2項と、WebUI が値を消して送る動作はそのまま。決定2 の「誰を付けるかの学習は登録者…の Behavior」の登録者は、人間担当の task には当たらない —— 付けるのは完了する人間である([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定14・15、2026-11-15、issue #3178)。**
 
