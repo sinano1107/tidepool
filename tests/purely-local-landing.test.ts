@@ -235,7 +235,7 @@ it("帯域外で進んだ保護ブランチへの merge は 409 で、理由を�
   });
 
   expect(answered.status).toBe(409);
-  expect(answered.json.error).toContain("moved out of band");
+  expect(answered.json.error).toMatch(/refs changed before landing read them.*refs\/heads\/main/);
   expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeDefined();
 });
 
