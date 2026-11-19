@@ -45,24 +45,28 @@ import {
   boardRefWriter,
   branchMergeEffect,
   buildWorkspaceResolver,
-  CatchUpConflictError,
   catchUpTaskBranch,
   checkAcceptanceFirstHalf,
   compareRefsBeforeLanding,
   FirstCaptureRefusedError,
   type IntakeContext,
   lineageTaskBranch,
+  outsideCommitsStop,
+  PromotionStopError,
   prepareFetchCommitIfMissing,
   protectedBranch,
   protectedBranchRef,
   quarantineWorkspace,
   RefsMovedError,
+  readOriginBranchHead,
   redoMergeBacks,
   refreshProtectedBranch,
   resolveOrQuarantine,
   resolveTaskBranchLineage,
   resolveWorkspacesBaseDir,
+  rewindStop,
   takeInCatchUp,
+  takeInOutsideHead,
   taskBranch,
   taskBranchExists,
   taskBranchTip,
@@ -1024,8 +1028,9 @@ export function createLanding(deps: LandingDeps): Landing {
   ): Extract<LandingVerdict, { kind: "failed" }> => {
     const message = error instanceof Error ? error.message : String(error);
     if (!ctx.intake) {
-      // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict の文そのもの(text A2)
-      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof CatchUpConflictError ? message : undefined);
+      // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と origin の盤面の
+      // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined);
     }
     return { kind: "failed", reason, error: message };
   };
@@ -1308,6 +1313,43 @@ export function createLanding(deps: LandingDeps): Landing {
         if (caughtUp) ctx.kept.push(caughtUp);
         catchUpTaskBranch(deps.db, workspace, task.id, workbenchBase);
       };
+      /** ADR 0376 決定1〜6・8: push すると決めた後・追いつきと push の前に GitHub の head(`prHead` は PR の読みが返した head、PR が無ければ
+       *  origin のブランチを読む)を確かめる。origin にブランチが無ければ今どおり押す。PR の記録が無い巻き戻しは、作業台を開かずに止まる
+       *  (text D2)—— retry の取り込みより前に決めるので、前の text D1 の作業台に tip が残っていても印も event も足さない(決定6)。
+       *  それ以外は retry が人間の tip を先に取り込み、head が push する sha の祖先でなければ、盤面は merge も push もせず作業台を開いて
+       *  止まる(text D1)。PR が記録済みの巻き戻し(head は push する sha の祖先だが、最後に push した値を欠く)は決定7 が持ち、ここでは
+       *  今どおり押す。記録済みで分かれた head は push する sha の祖先でないので、決定7 が入るまで text D1 で止まる。 */
+      const checkHeadBeforePush = async (prHead: string | undefined, foundPr?: number) => {
+        const branch = taskBranch(task.id);
+        // ADR 0376 決定2: 読めなかった head には push を撃たない(text D4)
+        const unread = (error: unknown) => {
+          if (isBoardDbRefusal(error)) return error;
+          return new Error(`could not read origin's ${branch} (${error instanceof Error ? error.message : String(error)}), so the board did not push.`);
+        };
+        let head: string | undefined;
+        let fetch: (() => void) | undefined;
+        try {
+          head = prHead ?? (await readOriginBranchHead(deps.db, workspace, deps.githubAuth, branch));
+          const fetching = head === undefined ? undefined : prepareFetchCommitIfMissing(deps.db, workspace, head, deps.githubAuth);
+          fetch = fetching && (await fetching);
+        } catch (error) {
+          throw unread(error);
+        }
+        // head の読みと token の await の後、fetch が交渉用の ref を読む前・取り込み・追いつき・tip の読みの前(ADR 0370 決定1)
+        stopRootIfRefsMoved(workspace);
+        try {
+          fetch?.();
+        } catch (error) {
+          throw unread(error);
+        }
+        if (head === undefined) return;
+        const rewound = task.pr_number === null ? rewindStop(workspace, task.id, head, foundPr) : undefined;
+        if (rewound) throw rewound;
+        const taken = ctx.intake && takeInOutsideHead(deps.db, workspace, task.id, head, ctx.intake);
+        if (taken) ctx.kept.push(taken);
+        const outside = outsideCommitsStop(workspace, workbenchBase, task.id, head);
+        if (outside) throw outside;
+      };
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
@@ -1334,7 +1376,7 @@ export function createLanding(deps: LandingDeps): Landing {
         });
       };
       if (task.pr_number !== null) {
-        const { state, mergedBy } = await deps.github.getPullRequestState({ workspace, number: task.pr_number });
+        const { state, mergedBy, head } = await deps.github.getPullRequestState({ workspace, number: task.pr_number });
         // 決着した PR は1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。盤面の外の決着は観測、落ちた盤面
         // 自身の merge は執行(ADR 0265 決定5)。
         // 印の付いた PR の決着は執行側が書く。印と根の決着は await の後に見る —— 読んでいる間に遅い走査が
@@ -1351,8 +1393,7 @@ export function createLanding(deps: LandingDeps): Landing {
             error: `PR #${task.pr_number} was closed outside the board, so ${taskBranch(task.id)} is not pushed to it`,
           };
         }
-        // PR の状態の await の後、追いつきと tip の読みの前(ADR 0370 決定1)
-        stopRootIfRefsMoved(workspace);
+        await checkHeadBeforePush(head);
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
         const refusal = await push(sha);
@@ -1377,7 +1418,7 @@ export function createLanding(deps: LandingDeps): Landing {
           error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
         };
       }
-      stopRootIfRefsMoved(workspace);
+      await checkHeadBeforePush(found?.head, found?.number);
       catchUp();
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());

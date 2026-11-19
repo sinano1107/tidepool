@@ -701,15 +701,21 @@ export function fetchCommit(source: GitSource, auth: GitHubAuth | undefined, sha
   authedFetch(auth, source, GIT_NETWORK_TIMEOUT_MS, sha);
 }
 
+/** origin のブランチの今の sha を上限つきの `ls-remote` 1回で読む。ブランチが無ければ undefined(exit 0 で行が無い)、読めなければ投げる。
+ *  token は呼び手が温めておく。 */
+export function originBranchSha(source: GitSource, auth: GitHubAuth | undefined, branch: string): string | undefined {
+  const head = `refs/heads/${branch}`;
+  return authedLsRemote(auth, source, GIT_NETWORK_TIMEOUT_MS, head)
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .find(([, name]) => name === head)?.[0];
+}
+
 /** ADR 0243 決定3: 写し `refs/remotes/origin/<branch>` を原本へ進める。`ls-remote` で原本の sha を知ってから口に予告し、
  *  その sha を取り、`update-ref` で写しを書く。原本にブランチが無ければ fetch の失敗と同じく投げる(fail-closed)。
  *  token は呼び手が温めておく。 */
 export function fetchBranchCopy(source: GitSource, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
-  const head = `refs/heads/${branch}`;
-  const sha = authedLsRemote(auth, source, GIT_NETWORK_TIMEOUT_MS, head)
-    .split("\n")
-    .map((line) => line.split("\t"))
-    .find(([, name]) => name === head)?.[0];
+  const sha = originBranchSha(source, auth, branch);
   if (!sha) throw new Error(`origin has no branch ${branch}`);
   const copy = remoteTrackingRef(branch);
   writeRef(copy, sha, () => {

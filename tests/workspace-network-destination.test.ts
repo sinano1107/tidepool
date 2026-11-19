@@ -359,11 +359,12 @@ esac
   const verdicts = await landing.converge();
 
   const network = gitCalls().slice(beforeTeardown).filter(({ args }) => args.some((arg) => arg.startsWith("--git-dir=")) && args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg)));
+  // ADR 0376 決定1: push の前に origin のタスクブランチの head を読む2つ目の `ls-remote` も、宣言の repo へ出る
   expect(network.map(({ args, env }) => ({
     verb: args.find((arg) => ["fetch", "ls-remote", "push"].includes(arg)),
     destination: args.find((arg) => [declared.workspace.repo, other.workspace.repo].includes(arg)),
     token: env.GH_TOKEN,
-  }))).toEqual(["ls-remote", "fetch", "push"].map((verb) => ({ verb, destination: declared.workspace.repo, token: "installation-token" })));
+  }))).toEqual(["ls-remote", "fetch", "ls-remote", "push"].map((verb) => ({ verb, destination: declared.workspace.repo, token: "installation-token" })));
   expect(broker.requests.map(({ repo }) => repo)).toEqual(["acme/declared"]);
   expect(verdicts).toEqual([expect.objectContaining({ taskId: task.id, verdict: expect.objectContaining({ kind: "landed", prNumber: 7 }) })]);
   expect(git(declared.workspace.repo!, "rev-parse", `refs/heads/task/${task.id}`)).toBe(git(workspace.path, "rev-parse", `refs/heads/task/${task.id}`));

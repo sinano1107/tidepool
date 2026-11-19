@@ -415,25 +415,26 @@ it("mergePullRequest は CI を読んだ head を --match-head-commit に渡し�
   expect(invocations.trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
 });
 
-// ADR 0265 決定5: merge した名義は状態と同じ1回の読み取りで読む。7 の綴りは App が merge した PR の実測(#2079)
-it("getPullRequestState は gh pr view --json state,mergedBy を1回読み、状態と merge した名義の login を返す(ADR 0079 / ADR 0229)", async () => {
+// ADR 0265 決定5: merge した名義は状態と同じ1回の読み取りで読む。7 の綴りは App が merge した PR の実測(#2079)。
+// ADR 0376 決定1: 収束が push の前に確かめる head も同じ読み取りで読む
+it("getPullRequestState は gh pr view --json state,mergedBy,headRefOid を1回読み、状態と merge した名義の login と head を返す(ADR 0079 / ADR 0229 / ADR 0376)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"mergedBy":null,"state":"CLOSED"}';; *) printf '{"mergedBy":null,"state":"OPEN"}';; esac\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","mergedBy":null,"state":"OPEN"}';; esac\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   const client = new GhCliClient(await makeAuth());
-  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board" });
-  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 8 })).toEqual({ state: "CLOSED", mergedBy: null });
-  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null });
+  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board", head: "abc7" });
+  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 8 })).toEqual({ state: "CLOSED", mergedBy: null, head: "abc8" });
+  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9" });
 
   const invocations = await readFile(logPath, "utf8");
-  expect(invocations.trim().split("\n")).toEqual(["pr view 7 --json state,mergedBy -R acme/widget", "pr view 8 --json state,mergedBy -R acme/widget", "pr view 9 --json state,mergedBy -R acme/widget"]);
+  expect(invocations.trim().split("\n")).toEqual(["pr view 7 --json state,mergedBy,headRefOid -R acme/widget", "pr view 8 --json state,mergedBy,headRefOid -R acme/widget", "pr view 9 --json state,mergedBy,headRefOid -R acme/widget"]);
 });
 
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {

@@ -552,7 +552,7 @@ export class FakeGitHubClient implements GitHubClient {
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
     this.ciChecks.push({ path: ref.workspace.path, number: ref.number });
     if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
-    return { ci: this.ciStatus, head: this.headOf(ref.workspace, ref.number), ...this.stateRead(ref.number) };
+    return { ci: this.ciStatus, ...this.stateRead(ref) };
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
@@ -587,9 +587,10 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   /** GitHub にだけ、そのブランチの PR がある形 —— 作成の後・記録の前に盤面が落ちた跡。状態は
-   *  scriptMergedOutside / scriptClosedOutside で動かす。 */
-  scriptPullRequestOnBranch(branch: string): number {
-    const number = this.nextNumber++;
+   *  scriptMergedOutside / scriptClosedOutside で動かす。`number` を渡せば、fixture が記録する番号の PR をそのブランチに置く ——
+   *  head が origin のブランチの先端を映す(ADR 0376 決定1)。 */
+  scriptPullRequestOnBranch(branch: string, number = this.nextNumber): number {
+    this.nextNumber = Math.max(this.nextNumber, number + 1);
     this.prBranches.set(number, branch);
     return number;
   }
@@ -609,11 +610,11 @@ export class FakeGitHubClient implements GitHubClient {
     this.stateChecks.push({ path: ref.workspace.path, number: ref.number });
     const failure = this.stateReadFailures.get(ref.number);
     if (failure) throw failure;
-    return this.stateRead(ref.number);
+    return this.stateRead(ref);
   }
 
-  private stateRead(number: number): PrStateRead {
-    return { state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null };
+  private stateRead({ workspace, number }: PrRef): PrStateRead {
+    return { state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null, head: this.headOf(workspace, number) };
   }
 
   /** Makes the state read on one PR throw — an offline Pi, a repo the token
