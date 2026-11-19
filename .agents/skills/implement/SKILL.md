@@ -13,7 +13,7 @@ argument-hint: "<issue> [decision already taken]"
 
 `/implementation-delegation` is what picks the implementation model, the effort, and the review strength.
 
-**Anything after the issue number is a decision already taken — do not run the delegation skill again.** Read it as prose rather than by position: model names carry spaces (`Opus 5 / high`, `Sol / xhigh`), so there is nothing to split on. When it names one model, that is the implementation's and the review takes the same setting. With nothing after the issue number, run `/implementation-delegation <issue>` yourself and state what it decided.
+**Anything after the issue number is a decision already taken — do not run the delegation skill again.** Read it as prose rather than by position: model names carry spaces (`Opus 5.5 / high`, `GPT-6.2 Sol / xhigh`), so there is nothing to split on. When it names one model, that is the implementation's and the review takes the same setting. With nothing after the issue number, run `/implementation-delegation <issue> <codex|claude>` with the current provider and state what it decided. If the decision is on hold, resolve the missing specification before creating a branch or dispatching an agent.
 
 Either way, before touching the branch, say which models the run will use. They land like this:
 
