@@ -610,7 +610,7 @@ export function keepsCheckoutAsRecord(db: Db, task: Task): boolean {
 
 /** ADR 0369 決定2・4: task が解放を負う —— 最後の pickup が開いた task の checkout を名指す `task_checkout_released` も
  *  `task_checkout_release_failed` も無く、session が走っておらず後始末の印も無い。決着した受験者の最後の checkout は負わない。
- *  受理のやり直し・pickup の門・workspace の編集の扉がこの1本を読む。 */
+ *  受理のやり直しと poll の立て直しがこの1本を読む。 */
 function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined || task.status === "in_progress" || keepsCheckoutAsRecord(db, task)) return false;
@@ -620,10 +620,28 @@ function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
 
 /** task の checkout を開いたことがあり、解放の着け先が `name` の task(ADR 0369 決定2): Interview の root と受験者は面接室(root の id)、
  *  ほかは registry を読まない名前(導出した workspace、無ければ既定)。停止の門の名前の集合(`openedPlaceNames`)は使わない —— 読むだけの
- *  場所まで含む。shortcut: checkout を開いたことのある task を全部読む。回答のたびなので、遅くなれば解放済みを SQL で外す。 */
+ *  場所まで含む。 */
 function tasksReleasingOn(db: Db, name: string, defaultWorkspaceName: string | undefined): Task[] {
+  return tasksThatOpenedACheckout(db).filter((task) => releasePlaceName(db, task, defaultWorkspaceName) === name);
+}
+
+/** shortcut: checkout を開いたことのある task を全部読む。poll のたびに読むので events の index に依る(#3228)。遅くなれば解放済みを SQL で外す。 */
+function tasksThatOpenedACheckout(db: Db): Task[] {
   const ids = db.prepare("SELECT DISTINCT task_id FROM events WHERE kind = 'task_checkout_opened' ORDER BY task_id").pluck().all() as string[];
-  return ids.map((id) => getTask(db, id)!).filter((task) => (interviewRootIdOf(db, task) ?? derivedWorkspace(db, task) ?? defaultWorkspaceName) === name);
+  return ids.map((id) => getTask(db, id)!);
+}
+
+function releasePlaceName(db: Db, task: Task, defaultWorkspaceName: string | undefined): string | undefined {
+  return interviewRootIdOf(db, task) ?? derivedWorkspace(db, task) ?? defaultWorkspaceName;
+}
+
+/** ADR 0369 決定4: 盤面全体の済んでいない解放と、その着け先の名前。poll がこの場所の Quarantine を開いた状態へ戻す。 */
+export function owedReleases(db: Db, defaultWorkspaceName: string | undefined): Array<{ task: Task; place: string }> {
+  return tasksThatOpenedACheckout(db).flatMap((task) => {
+    if (!owesTaskCheckoutRelease(db, task)) return [];
+    const place = releasePlaceName(db, task, defaultWorkspaceName);
+    return place === undefined ? [] : [{ task, place }];
+  });
 }
 
 /** 解放の着け先が `name` で、解放を負う task。 */
