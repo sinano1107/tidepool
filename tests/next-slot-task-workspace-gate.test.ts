@@ -56,7 +56,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
     expect(nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db))).toBeUndefined();
   });
 
-  it("defaultWorkspaceName を渡さない(workspaceless board)ときはゲートが働かない", () => {
+  it("workspace の指定も盤面の既定名も無い task は、別の名前の Quarantine があっても拾える", () => {
     const db = openDb(":memory:");
     quarantine(db, "sandbox");
     const task = registerTask(

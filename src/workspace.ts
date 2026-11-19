@@ -2832,7 +2832,8 @@ function removeBoardCheckout(path: string, parents: number): void {
 /** ADR 0369 決定1〜3: workspace の Quarantine の受理の検査が、着け先が `place` の済まなかった解放の「運ぶ」だけをやり直す。後の段は
  *  撃たない —— session の間の ref の比較はやり直さず、merge back は受理がこの後にやり直し、checkout はその後で消す。名前の場所の
  *  事情の失敗は呼び手へ投げる —— Quarantine は既に開いていて、登録し直すと理由が消える。worker の repo の故障は後始末と同じく
- *  task の失敗にして続ける。決着が完了かは `completed` が後始末と同じく記録から導く。 */
+ *  task の失敗にして続ける。決着が完了かは `completed` が後始末と同じく記録から導く。
+ *  運ぶと `task/<id>` は子の merge back より前へ戻りうる —— 受理はこの後で merge back をやり直して戻すので、この順を崩さない。 */
 export function redoOwedReleases(
   db: Db,
   place: WorkspaceConfig,

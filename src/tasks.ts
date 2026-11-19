@@ -610,7 +610,7 @@ export function keepsCheckoutAsRecord(db: Db, task: Task): boolean {
 
 /** ADR 0369 決定2・4: task が解放を負う —— 最後の pickup が開いた task の checkout を名指す `task_checkout_released` も
  *  `task_checkout_release_failed` も無く、session が走っておらず後始末の印も無い。決着した受験者の最後の checkout は負わない。
- *  受理のやり直し・pickup の門・workspace の編集の扉がこの1本を読む。 */
+ *  受理のやり直しと poll の立て直しがこの1本を読む。 */
 function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined || task.status === "in_progress" || keepsCheckoutAsRecord(db, task)) return false;
@@ -620,10 +620,28 @@ function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
 
 /** task の checkout を開いたことがあり、解放の着け先が `name` の task(ADR 0369 決定2): Interview の root と受験者は面接室(root の id)、
  *  ほかは registry を読まない名前(導出した workspace、無ければ既定)。停止の門の名前の集合(`openedPlaceNames`)は使わない —— 読むだけの
- *  場所まで含む。shortcut: checkout を開いたことのある task を全部読む。回答のたびなので、遅くなれば解放済みを SQL で外す。 */
+ *  場所まで含む。 */
 function tasksReleasingOn(db: Db, name: string, defaultWorkspaceName: string | undefined): Task[] {
+  return tasksThatOpenedACheckout(db).filter((task) => releasePlaceName(db, task, defaultWorkspaceName) === name);
+}
+
+/** shortcut: checkout を開いたことのある task を全部読む。poll のたびに読むので events の index に依る(#3228)。遅くなれば解放済みを SQL で外す。 */
+function tasksThatOpenedACheckout(db: Db): Task[] {
   const ids = db.prepare("SELECT DISTINCT task_id FROM events WHERE kind = 'task_checkout_opened' ORDER BY task_id").pluck().all() as string[];
-  return ids.map((id) => getTask(db, id)!).filter((task) => (interviewRootIdOf(db, task) ?? derivedWorkspace(db, task) ?? defaultWorkspaceName) === name);
+  return ids.map((id) => getTask(db, id)!);
+}
+
+function releasePlaceName(db: Db, task: Task, defaultWorkspaceName: string | undefined): string | undefined {
+  return interviewRootIdOf(db, task) ?? derivedWorkspace(db, task) ?? defaultWorkspaceName;
+}
+
+/** ADR 0369 決定4: 盤面全体の済んでいない解放と、その着け先の名前。poll がこの場所の Quarantine を開いた状態へ戻す。 */
+export function owedReleases(db: Db, defaultWorkspaceName: string | undefined): Array<{ task: Task; place: string }> {
+  return tasksThatOpenedACheckout(db).flatMap((task) => {
+    if (!owesTaskCheckoutRelease(db, task)) return [];
+    const place = releasePlaceName(db, task, defaultWorkspaceName);
+    return place === undefined ? [] : [{ task, place }];
+  });
 }
 
 /** 解放の着け先が `name` で、解放を負う task。 */
@@ -3963,15 +3981,15 @@ export function typeAwareDefaultAgentSql(table: string): string {
 
 /** 「このタスクは資源単位の停止で止まっている」の唯一の SQL(ADR 0137 決定6)。
  *  `nextSlotTask` の pickup 述語、`listQueue` の skipped 表示、停止からの復帰(ADR 0368 決定1)が共有する。
- *  workspace の側は task が依存する場所の名前(`openedPlaceNamesSql`。既定が無い盤面では門ごと効かない、ADR 0009)、
+ *  workspace の側は task が依存する場所の名前(`openedPlaceNamesSql`。既定が無い盤面でも記録された名前は比べる、ADR 0369 決定4)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
  *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。 */
 function stoppedSql(taskRef: string): string {
-  return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces) stopped
+  return `(EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces) stopped
              WHERE stopped.value IN (${openedPlaceNamesSql(taskRef, "stop")})
-               OR ${firstCaptureWaitSql(taskRef, "stopped.value")})
+               OR (@defaultWorkspaceName IS NOT NULL AND ${firstCaptureWaitSql(taskRef, "stopped.value")}))
            -- ADR 0373 決定13 追記: 組の封じ込めの停止も、最初の撮りを待つ task は Harness を問わず外す(ADR 0368 決定4 の組の線と違う)
-           OR EXISTS (SELECT 1 FROM json_each(@stoppedContainmentWorkspaces) contained WHERE ${firstCaptureWaitSql(taskRef, "contained.value")}))
+           OR EXISTS (SELECT 1 FROM json_each(@stoppedContainmentWorkspaces) contained WHERE ${firstCaptureWaitSql(taskRef, "contained.value")})
            OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
              WHERE value = COALESCE(${taskRef}.assignee, ${typeAwareDefaultAgentSql(taskRef)})))`;
 }
@@ -4362,8 +4380,7 @@ export function listBoard(
  *  reaches `listBoard`/`presentTask`, so the board keeps showing plain `todo`
  *  while the condition holds. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
  *  gate (`openedPlaceNamesSql`: the derived workspace or board default, plus
- *  Interview rooms — ADR 0009 / ADR 0290 / ADR 0368 decision 3) —
- *  absent, no workspace tracking exists and the gate is skipped entirely.
+ *  Interview rooms — ADR 0009 / ADR 0290 / ADR 0368 decision 3).
  *  `defaultAgentName`/`auditorName` resolve an unset assignee the same
  *  type-aware way (`typeAwareDefaultAgentSql`, issue #42 / GLOSSARY.md's
  *  Auditor) before it is matched against `stopped.assignees`; an absent
@@ -4747,8 +4764,7 @@ export function listExaminees(db: Db, rootId: string): Task[] {
  *  (`openedPlaceNamesSql`, ADR 0368 decision 3) — a
  *  quarantined todo is skipped in favor of the next runnable one, so
  *  quarantine halts only the workspace it's on, never the whole board.
- *  Absent `defaultWorkspaceName` (a workspaceless board) skips the workspace
- *  gate entirely, same as no workspace tracking existing.
+ *  An absent `defaultWorkspaceName` leaves recorded workspace and room names in the gate.
  *
  *  `stopped.assignees` is matched against `task.assignee ??` the type-aware
  *  fallback (ADR 0012 / issue #36 / issue #42 / GLOSSARY.md's Auditor): an
