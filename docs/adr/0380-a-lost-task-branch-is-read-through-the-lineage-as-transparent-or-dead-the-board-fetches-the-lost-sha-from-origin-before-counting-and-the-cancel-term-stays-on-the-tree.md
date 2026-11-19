@@ -1,6 +1,6 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
-**Status 追記: 決定6 の「cancelled の祖先の項は今どおり `parent_id` で読む」は、登録の床(新しく立ってよいか)の側だけに残る。完了済みの work の成果が捨てられたか(cancel の面と完了時レビューを倒す範囲)は、merge back の記録で中身が cancelled の祖先のブランチに入ったかで読む。退けた形の最後の項が送った #3270 はこれで決まった([ADR 0384](0384-the-parent-id-tree-is-the-delegation-tree-the-lineage-is-where-content-goes-and-a-predicate-about-content-reads-the-lineage.md) 決定2・4、2026-11-19、issue #1796)。**
+**Status 追記: 決定6 の「cancelled の祖先の項は今どおり `parent_id` で読む」は、登録の床(新しく立ってよいか)の側だけに残り、親をたどって cancelled の祖先に着く前に「中身を自分の保護ブランチへ運んだ」と記録された done の work に当たれば、その祖先は数えない。決定6 が守った形(ブランチを持たずに cancel された祖先の下の RCA が分解する work)は今どおり立たない。完了済みの work の成果が捨てられたか(cancel の面と完了時レビューを倒す範囲)は、merge back の記録で中身が cancelled の祖先のブランチに入ったかで読む。退けた形の最後の項が送った #3270 はこれで決まった([ADR 0384](0384-the-parent-id-tree-is-the-delegation-tree-the-lineage-is-where-content-goes-and-a-predicate-about-content-reads-the-lineage.md) 決定2・4、2026-11-19、issue #1796)。**
 
 2026-11-15 の wayfinder(map #3178、ticket #3269)で決定。ADR 0375 決定3 は、タスクブランチが失われた task の「成果が捨てられた」を、cancelled の
 祖先と同じ線(`parent_id` の祖先)で読むと決め、同 決定5 は、失われた祖先を帰り先にする task を系譜の読みが飛ばすと決めた。2つの線は集合が
