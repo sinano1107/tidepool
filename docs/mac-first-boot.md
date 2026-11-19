@@ -316,6 +316,13 @@ depends on the workspace:
 - **Remote-backed** (with `repo:`). Put the change into origin's protected branch — a fast-forward
   push from your own clone, or a merge of your own PR. Never push from the workspace's checkout.
   Tasks that have already forked do not get it; it takes effect from the next fork.
+  Resolve a conflicted PR with a merge; a rebased or force-pushed head is treated as rewritten
+  outside the board. Merge the protected branch into the PR's head in your own clone and push it.
+  When the board finds a PR head that no longer holds what it pushed, it asks a merge question
+  with `hold` recommended, and the first `merge` is refused and opens a workbench. For a head
+  moved back, answer `merge` again to have the board push that content back. For a rewritten
+  head, keep that content with `git merge` there. To discard it in either case, run the three
+  commands the refusal gives. The next `merge` takes your commit in and pushes it.
 
 ## Let workers edit the registry
 
