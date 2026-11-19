@@ -1,6 +1,6 @@
 # チームとロールは保存されるエンティティではなく導出ビュー — レビュアーのルーティングはタスク単位の指名のみ
 
-**Status 追記: 「チーム(委譲の木)は複数 workspace を跨いでよい」の委譲の木は、`parent_id` の上では同じ workspace に限られる。registry へ越境する改善提案(registry-edit の decompose)は、分解した task を分解元に持つ根として届き、分解元が委譲(文脈・待ち・abandon・cancel)を運ぶ。帰り先の無い系譜の RCA の下では、その根を立てる承認 question が今どおり床で拒まれ、#2510 が決める。チームが導出ビューであること、workspace がチームでないことは変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定1〜3、2026-11-19、issue #1796)。**
+**Status 追記: 「チーム(委譲の木)は複数 workspace を跨いでよい」の委譲の木は、`parent_id` の上では同じ workspace に限られる。registry へ越境する改善提案(registry-edit の decompose)は、分解した task を分解元に持つ根として届き、分解元が委譲の読み手(ADR 0384 決定4)に子と同じに読まれる。帰り先の無い系譜の RCA の下では、その根を立てる承認 question が今どおり床で拒まれ、#2510 が決める。チームが導出ビューであること、workspace がチームでないことは変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定1〜3、2026-11-19、issue #1796)。**
 
 issue #84(workspace 配下のチーム/ロール設計)の grilling(2026-07-22)で決定。出発点は「自動生成される完了時レビュー子が常に盤面全体で1つの Auditor ポインタに解決される硬さ」で、最小案は workspace エントリへの役割ポインタ(`auditor:` 等)の追加だった。grilling の結論は、最小案を含む**すべての新しい保存構造を作らない**こと。
 
