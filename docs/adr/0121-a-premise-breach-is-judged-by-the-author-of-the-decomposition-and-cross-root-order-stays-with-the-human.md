@@ -1,6 +1,6 @@
 # 前提の破綻は分解判断の書き手が判断し、root 間の順序は人間に残る
 
-**Status 追記: 別の workspace に置かれた分解元つきの根は、分解元を委譲の側の親に持つ —— 決定1 の「root には兄弟が無いので従来の escalation」は当たらず、同じ判断の兄弟と同じに前提の破綻を申告し、分解元の書き手が判断する。分解元は決定2 が退けた root どうしの依存の辺ではなく、分解から生まれた委譲の親で、独立した root どうしの順序は今どおり人間が持つ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定4、2026-11-19、issue #1796)。**
+**Status 追記: work が別の workspace に置いた分解元つきの根は、分解元を委譲の側の親に持つ —— 決定1 の「root には兄弟が無いので従来の escalation」は当たらず(付帯子のレビュー・RCA の分解から生まれた根は独立した根で、従来の escalation のまま、ADR 0384 決定5)、同じ判断の兄弟と同じに前提の破綻を申告し、分解元の書き手が判断する。分解元は決定2 が退けた root どうしの依存の辺ではなく、分解から生まれた委譲の親で、独立した root どうしの順序は今どおり人間が持つ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-is-its-delegation-parent.md) 決定4、2026-11-19、issue #1796)。**
 
 2026-09-15 の grilling(issue #629)で決定。worker があるタスクの途中で、後続のタスクにも効く不具合を見つけたとき、
 今の盤面に打つ手が無いのではないか、が発端。答えは場合で割れた。同じ分解判断に乗る兄弟に効く発見は、Decompose の
