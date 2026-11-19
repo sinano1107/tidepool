@@ -199,7 +199,7 @@ export type EventPayload =
   // Interview の監査(ADR 0273 決定3・4): 監査 review が出題を受理したか却下したかと findings。task_id は監査 review
   | ({ kind: "interview_audited" } & AuditVerdict)
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent.
-  // workspace_from_ancestor: a review child's workspace filled from its nearest fixed ancestor instead (ADR 0290 決定4)
+  // workspace_from_ancestor: an empty workspace filled from the nearest fixed ancestor instead (ADR 0290 決定4 / ADR 0372 決定1)
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault; workspace_from_ancestor?: string }
   | { kind: "task_moved"; after: string | null }
   // result carries the one-line outcome against the completion criteria so the

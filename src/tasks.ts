@@ -92,9 +92,9 @@ export interface Task {
   assignee: string | null;
   /** Where this task runs (issue #11): a registry workspace name, written at
    *  registration (explicit, or copied by the registering path) or at pickup
-   *  (ADR 0233). Null until pickup means the board default — except a review
-   *  child, which follows its nearest ancestor with a non-null column
-   *  (`derivedWorkspace`, ADR 0290). */
+   *  (ADR 0233). Null until pickup follows the nearest ancestor with a
+   *  non-null column, else the board default (`derivedWorkspace`, ADR 0372
+   *  決定1). */
   workspace: string | null;
   /** For an issue-backed task (issue #49, ADR 0016), these are never the
    *  task's real content — real content is never snapshotted, only resolved
@@ -445,7 +445,8 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   /** Pre-assigns the task to a specific worker at registration (issue #11). */
   assignee?: string;
   /** Registers the task against a specific workspace (issue #11). Absent →
-   *  null: the board default at pickup (ADR 0233). A review child stores null
+   *  null: at pickup the nearest fixed ancestor's, else the board default
+   *  (ADR 0233 / ADR 0372 決定1). A review child stores null
    *  either way and follows its nearest fixed ancestor; naming another
    *  workspace for it is refused (ADR 0290). */
   workspace?: string;
@@ -1031,22 +1032,22 @@ function taskHasLandedSql(taskRef: string): string {
            OR ${localLandingOpenOrExecutedSql(taskRef)})`;
 }
 
-/** 導出した workspace の唯一の SQL(ADR 0290 決定1・5): 列、列が NULL の付帯子の review は列が非 NULL の最も近い祖先
- *  (途中の type を問わず辿る)。どちらも無ければ NULL —— 既定への参照で、呼び手が既定を当てる。 */
+/** 導出した workspace の唯一の SQL(ADR 0372 決定1 / ADR 0290 決定5): 列、列が NULL なら type を問わず列が非 NULL の
+ *  最も近い祖先。どちらも無ければ NULL —— 既定への参照で、呼び手が既定を当てる。 */
 export function derivedWorkspaceSql(taskRef: string): string {
-  return `COALESCE(${taskRef}.workspace, CASE WHEN ${taskRef}.type = 'review' THEN (
+  return `COALESCE(${taskRef}.workspace, (
             WITH RECURSIVE up(parent_id, workspace) AS (
               SELECT a.parent_id, a.workspace FROM tasks a WHERE a.id = ${taskRef}.parent_id
               UNION ALL SELECT a.parent_id, a.workspace FROM tasks a JOIN up ON a.id = up.parent_id WHERE up.workspace IS NULL)
-            SELECT workspace FROM up WHERE workspace IS NOT NULL) END)`;
+            SELECT workspace FROM up WHERE workspace IS NOT NULL))`;
 }
 
 /** `derivedWorkspaceSql` の TS の対 —— 行の値で引くので、まだ登録していない task にも当てられる。null は既定への参照。 */
-export function derivedWorkspace(db: Db, task: Pick<Task, "workspace" | "type" | "parent_id">): string | null {
+export function derivedWorkspace(db: Db, task: Pick<Task, "workspace" | "parent_id">): string | null {
   return db
-    .prepare(`SELECT ${derivedWorkspaceSql("t")} FROM (SELECT ? AS workspace, ? AS type, ? AS parent_id) t`)
+    .prepare(`SELECT ${derivedWorkspaceSql("t")} FROM (SELECT ? AS workspace, ? AS parent_id) t`)
     .pluck()
-    .get(task.workspace, task.type, task.parent_id) as string | null;
+    .get(task.workspace, task.parent_id) as string | null;
 }
 
 /** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(収束 —— ADR 0241)
@@ -1242,7 +1243,7 @@ export function registerTask(
   assertReviewChildHasExecutor(db, input, actorId);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
   if (followsAncestorWorkspace(input) && input.workspace !== undefined) {
-    const ancestorWorkspace = derivedWorkspace(db, { workspace: null, type: input.type, parent_id: input.parent_id! });
+    const ancestorWorkspace = derivedWorkspace(db, { workspace: null, parent_id: input.parent_id! });
     if (input.workspace !== ancestorWorkspace) {
       throw new DomainError(
         `a review child runs in its nearest ancestor's workspace (${ancestorWorkspace ?? "none fixed yet"}) — omit workspace; ` +
@@ -1439,7 +1440,7 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
       )
       .run({ id: task.id, human: HUMAN_ACTOR_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
-    // ADR 0290 決定4: 付帯子の review の空の workspace は、最も近い固定済みの祖先 → 既定の順で埋める
+    // ADR 0290 決定4 / ADR 0372 決定1: 空の workspace は、最も近い固定済みの祖先 → 既定の順で埋める
     const ancestorWorkspace = derivedWorkspace(db, { ...task, workspace: null });
     const filled: ResolvedFromDefault = {};
     for (const column of ["assignee", "workspace"] as const) {

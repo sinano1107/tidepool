@@ -61,6 +61,7 @@ import {
   abandonConsequence,
   carriesHumanWords,
   contentSourceFor,
+  derivedWorkspace,
   deriveTaskContentFromIssue,
   escalateTask,
   getTask,
@@ -997,8 +998,8 @@ export function startScheduler(deps: {
       const branch = (task: Task, pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
         seeds ??= loadSeeds(db);
-        // 完了タスクは pickup で既定の名前に焼き込まれる(ADR 0233)ので、未着手の空のタスクも同じ名前で照合する
-        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, seeds, pool[0]!.tier_id, task.workspace ?? workspace?.name ?? null) });
+        // 完了タスクは pickup で祖先か既定の名前に焼き込まれる(ADR 0233 / ADR 0372 決定1)ので、未着手の空のタスクも同じ導出で照合する
+        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, seeds, pool[0]!.tier_id, derivedWorkspace(db, task) ?? workspace?.name ?? null) });
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work 側の task(`isWorkSide`)は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 →
