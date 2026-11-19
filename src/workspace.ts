@@ -3092,11 +3092,13 @@ function openWorkbenchOrSayWhy(workspace: WorkspaceConfig, base: string, target:
   }
 }
 
-/** ADR 0376 決定4: origin の `task/<root>`(PR が在ればその head)に盤面の知らない commit がある —— 盤面は merge も push もせず、
- *  (`task/<root>`, GitHub の head) の作業台を開いて `board/origin/task/<root>` をその head に置き、中身を見るコマンド・そこで打つ merge・tip の
- *  条件・答え直す回答を言う(spec #3273 text D1。開けなければ A7d)。clean に merge できるかは問わない。 */
-export function outsideCommitsStop(workspace: WorkspaceConfig, workbenchBase: string, taskId: string, head: string): PromotionStopError {
+/** ADR 0376 決定4: origin の `task/<root>`(PR が在ればその head)に盤面の知らない commit がある —— head が local の `task/<root>` の祖先で
+ *  ない。そのとき盤面は merge も push もせず、(`task/<root>`, GitHub の head) の作業台を開いて `board/origin/task/<root>` をその head に置き、
+ *  中身を見るコマンド・そこで打つ merge・tip の条件・答え直す回答を言う(spec #3273 text D1。開けなければ A7d)。clean に merge できるかは
+ *  問わない。head が祖先なら undefined。 */
+export function outsideCommitsStop(workspace: WorkspaceConfig, workbenchBase: string, taskId: string, head: string): PromotionStopError | undefined {
   const target = taskBranch(taskId);
+  if (isAncestor(workspace, head, `refs/heads/${target}`)) return undefined;
   const carried = outsideHead(taskId, head);
   const found = `origin's ${target} holds commits the board did not push (${head}).`;
   const opened = openWorkbenchOrSayWhy(workspace, workbenchBase, target, carried, found, ".");
@@ -3106,6 +3108,23 @@ export function outsideCommitsStop(workspace: WorkspaceConfig, workbenchBase: st
   return new PromotionStopError(
     `${found} See them with \`git log --stat ${target}..${merge}\` in the workbench at ${opened.path}. The board does not merge outside commits itself: ` +
       `there, on ${target}, run \`git merge ${merge}\` ${fromOwnClone(target, merge)}. ${tipCondition(target, source)} Then answer \`retry\`.`,
+  );
+}
+
+/** ADR 0376 決定6: PR の記録が無い根の巻き戻し —— origin の head が、盤面が最後に push した値の真の祖先。値は写し
+ *  `refs/remotes/origin/task/<root>` から、盤面自身が push の成功を見て書いた値として読む(決定3 —— fetch しない。event を残さない publish の
+ *  push も書く)。そのとき盤面は push せず、作業台も開かず、origin への操作2つ(落とされた commit を push し直す / ブランチを消す)を言う
+ *  (spec #3273 text D2。`foundPr` は記録の無い見つけた PR)。ADR 0376 決定2: 写しが読めなければ止めない。写しと分かれた head は巻き戻しでは
+ *  なく、盤面の知らない commit として `outsideCommitsStop` が受ける。巻き戻しでなければ undefined。 */
+export function rewindStop(workspace: WorkspaceConfig, taskId: string, head: string, foundPr?: number): PromotionStopError | undefined {
+  const branch = taskBranch(taskId);
+  const lastPushed = readRef(workspace, remoteTrackingRef(branch));
+  if (lastPushed === "" || lastPushed === head || !isAncestor(workspace, head, lastPushed)) return undefined;
+  return new PromotionStopError(
+    `origin's ${branch} was rewound outside the board: it is at ${head} and no longer contains ${lastPushed}, which the board pushed. ` +
+      `The board does not push over a rewind. Either push the dropped commits back to origin's ${branch} (a fast-forward from ${head} to ${lastPushed}; ` +
+      `those commits are in the board's checkout at ${workspace.path} — fetch them from there into your clone, and never push from there), ` +
+      `or delete origin's ${branch} and the board re-creates it${foundPr === undefined ? "" : ` — deleting it closes PR #${foundPr}`}. Then answer \`retry\`.`,
   );
 }
 

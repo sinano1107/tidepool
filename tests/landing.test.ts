@@ -64,6 +64,7 @@ import {
   workspaceProtectionReader,
   writeBoardRefs,
 } from "../src/workspace.js";
+import { publishWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, fakeHead, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote, startGitHttpRemote } from "./git-http-remote.js";
 import {
@@ -2533,8 +2534,15 @@ it("追いつきの作業台に人間の `board/origin/main` の merge があり
   expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("child.txt\nrepair-only.txt");
 });
 
-/** ADR 0376: origin に `task/<root>` が載っている根 —— 盤面の push だけが載り、写しはその値。`pr` が無ければ PR も event も無い(publish の
- *  push と、push の後に PR の作成が落ちた根の形)。`found` は GitHub にだけ PR #1 がある(作成の後・記録の前に落ちた盤面)。`recorded` は
+/** spec #3273 text D2 の全文 —— origin の `target` が `head` へ巻き戻され、盤面が最後に push した値 `pushed` を持たない。 */
+const textD2 = (workspace: WorkspaceConfig, target: string, pushed: string, head: string, foundPr?: number) =>
+  `origin's ${target} was rewound outside the board: it is at ${head} and no longer contains ${pushed}, which the board pushed. The board does not push over a rewind. ` +
+  `Either push the dropped commits back to origin's ${target} (a fast-forward from ${head} to ${pushed}; those commits are in the board's checkout at ${workspace.path} — ` +
+  `fetch them from there into your clone, and never push from there), or delete origin's ${target} and the board re-creates it` +
+  `${foundPr === undefined ? "" : ` — deleting it closes PR #${foundPr}`}. Then answer \`retry\`.`;
+
+/** ADR 0376: origin に `task/<root>` が載っている根 —— 盤面の push だけが載り、写しはその値。`pr` が無ければ PR も event も無い(push の後に
+ *  PR の作成が落ちた根の形。publish の push が残す形は、下でその扉を実際に通す)。`found` は GitHub にだけ PR #1 がある(作成の後・記録の前に落ちた盤面)。`recorded` は
  *  PR #1 を記録した後に、盤面の経路で根のブランチへ届いた未 push の修理を持つ。名前の場所は保護ブランチに休む。`openFailure` なら別の失敗で
  *  昇格失敗 question が開いている。 */
 async function pushedRoot(name: string, { pr, openFailure = false, commits = 1 }: { pr?: "found" | "recorded"; openFailure?: boolean; commits?: number } = {}) {
@@ -2566,12 +2574,7 @@ async function pushedRoot(name: string, { pr, openFailure = false, commits = 1 }
     `The board does not merge outside commits itself: there, on ${target}, run \`git merge board/origin/${target}\` (or, in your own clone with the workbench as a remote: fetch it, ` +
     `\`git merge <remote>/board/origin/${target}\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now (\`board/${target}\`) and origin/${target}, ` +
     "with nothing uncommitted. Then answer `retry`.";
-  /** spec #3273 text D2 の全文 —— origin が `head` へ巻き戻され、盤面が最後に push した値を持たない。 */
-  const d2 = (head: string, foundPr?: number) =>
-    `origin's ${target} was rewound outside the board: it is at ${head} and no longer contains ${pushed}, which the board pushed. The board does not push over a rewind. ` +
-    `Either push the dropped commits back to origin's ${target} (a fast-forward from ${head} to ${pushed}; those commits are in the board's checkout at ${workspace.path} — ` +
-    `fetch them from there into your clone, and never push from there), or delete origin's ${target} and the board re-creates it` +
-    `${foundPr === undefined ? "" : ` — deleting it closes PR #${foundPr}`}. Then answer \`retry\`.`;
+  const d2 = (head: string, foundPr?: number) => textD2(workspace, target, pushed, head, foundPr);
   /** 何も運ばれていない: local のタスクブランチも、最後に push した値の写しも動かず、取り込みも push も PR の作成も無い。 */
   const expectNothingCarried = () => {
     expect(git(workspace.path, "rev-parse", target)).toBe(local);
@@ -2677,6 +2680,41 @@ it("別の失敗で昇格失敗 question が開いている間に origin のタ�
   expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
 });
 
+// ADR 0376 決定1・2 / spec #3273 pin D2: PR が見つからず origin のブランチも「読めて、無い」根は、今どおり push して PR を作る。head の読みは
+// 写しを書かない —— 写しを書くのは push だけ(決定3)
+it("PR も origin のタスクブランチも無い根を収束は「読めて、無い」と読んで push し PR を開き、head の読みは写しを書かない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("outside-head-absent");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  const target = `task/${work.id}`;
+  git(workspace.path, "checkout", "-b", target);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "checkout", "main");
+  finish(db, clock, work);
+  const tip = git(workspace.path, "rev-parse", target);
+  const copy = () => git(workspace.path, "for-each-ref", "--format=%(objectname)", `refs/remotes/origin/${target}`);
+  // push が撃たれる時点 = head の読みの後 —— そこで写しを読む
+  const copyWhenPushing: string[] = [];
+  const prepare = github.preparePush.bind(github);
+  github.preparePush = async (input) => {
+    const push = await prepare(input);
+    return (sha) => {
+      copyWhenPushing.push(copy());
+      push(sha);
+    };
+  };
+  expect(originHead(workspace, work.id)).toBe("");
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+
+  expect(copyWhenPushing).toEqual([""]);
+  expect(originHead(workspace, work.id)).toBe(tip);
+  expect(copy()).toBe(tip);
+  expect(github.requests).toEqual([expect.objectContaining({ branch: target, base: "main" })]);
+});
+
 // ADR 0376 決定2 / spec #3273 pin D3: 「読めなかった」は「読めて、無い」と違い、push を撃たない(text D4)
 it("origin のタスクブランチを読めなければ、収束は push も PR の作成もせず、昇格の失敗が text D4 を言う", async () => {
   const c = await pushedRoot("outside-head-unreadable");
@@ -2720,6 +2758,66 @@ it("PR を記録していない根の origin のタスクブランチが最後�
   expect(getTask(c.db, failure!.id)?.status).toBe("done");
   expect(getTask(c.db, c.work.id)?.pr_number).toBe(1);
   expect(originHead(c.workspace, c.work.id)).toBe(c.pushed);
+});
+
+// ADR 0376 決定3・6 / spec #3273 pin D4: publish の push は event を残さない —— その巻き戻しは、publish が push の成功を見て書いた写しで見分ける
+it("publish だけが push したタスクブランチが origin で巻き戻されていれば、収束は publish の書いた写しから巻き戻しと読み、push せず text D2 を言う", async () => {
+  const checkout = await tempDir("tidepool-published-");
+  git(checkout, "init", "-b", "main");
+  commitWork(checkout, "README.md", "sandbox\n");
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  const target = `task/${work.id}`;
+  git(checkout, "checkout", "-b", target);
+  commitWork(checkout, "feature-1.txt", "ready\n");
+  commitWork(checkout, "feature-2.txt", "ready\n");
+  git(checkout, "checkout", "main");
+  finish(db, clock, work);
+  const origin = await tempDir("tidepool-published-origin-");
+  git(origin, "init", "--bare", "-b", "main");
+  const tokenFile = join(await tempDir("tidepool-token-"), "token");
+  writeFileSync(tokenFile, "gho_test\n", { mode: 0o600 });
+  await publishWorkspace(
+    { name: "published", repo: origin },
+    {
+      registry: { dir: await makeRegistry({ "workspaces.yaml": `published:\n  path: ${checkout}\n` }), mode: "purely-local" },
+      workspacesBaseDir: await tempDir("tidepool-ws-base-"),
+      githubAuth: new GitHubAuth(tokenFile),
+      db,
+    },
+  );
+  const workspace = { name: "published", path: checkout, repo: origin };
+  const pushed = git(checkout, "rev-parse", target);
+  expect(originHead(workspace, work.id)).toBe(pushed);
+  expect(listEventsOfKinds(db, ["pr_opened", "pr_branch_pushed"])).toEqual([]);
+  const head = git(checkout, "rev-parse", `${pushed}~1`);
+  (await outsideClone(workspace)).push(`${head}:refs/heads/${target}`);
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+
+  const verdict = await convergeOn(landing, work.id);
+
+  expect(verdict).toEqual({ kind: "failed", reason: "promotion_failed", error: textD2(workspace, target, pushed, head) });
+  expect(originHead(workspace, work.id)).toBe(head);
+  expect(git(checkout, "rev-parse", `refs/remotes/origin/${target}`)).toBe(pushed);
+  expect(github.pushes).toEqual([]);
+  expect(github.requests).toEqual([]);
+});
+
+// ADR 0376 決定6: 巻き戻しは取り込みより前に決まる —— 前の text D1 の作業台に取り込める tip が残っていても、印も event も足さない
+it("作業台で merge した後に origin のタスクブランチが最後に push した値より前へ巻き戻されれば、retry は text D2 で拒まれ、作業台の tip を取り込まない", async () => {
+  const c = await pushedRoot("outside-rewind-after-merge", { commits: 2 });
+  await pushOutsideBoard(c.workspace, c.work.id);
+  await convergeOn(c.landing, c.work.id);
+  const [failure] = promotionFailures(c.db, c.work.id);
+  c.mergeInWorkbench();
+  const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
+  (await outsideClone(c.workspace)).push(`${head}:refs/heads/${c.target}`);
+
+  expect(await c.retry(failure!)).toBe(c.d2(head));
+
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+  c.expectNothingCarried();
 });
 
 it("別の失敗で昇格失敗 question が開いている PR の無い根の origin のタスクブランチが巻き戻されていれば、retry は text D2 で拒まれ、origin のブランチを消した後の retry が push し直して PR を開く", async () => {
