@@ -2622,8 +2622,8 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   const remoteBacked = isRemoteBacked(workspace);
   try {
-    // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、人間の修理(ADR 0239 帰結の `merge -s ours`、ADR 0351 決定1・4)や origin にしか無い
-    // 保護ブランチは HEAD を保護ブランチの外に置く
+    // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、origin にしか無い保護ブランチは HEAD を保護ブランチの外に置く —— 人間が動かした
+    // HEAD は受理の比較が拒む(ADR 0373 決定1)
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない

@@ -64,11 +64,13 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
 
   const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
-  // 何も直さず「直した」と答える — untracked はまだ残ったまま
+  // 何も直さず答える — untracked はまだ残ったまま。動いた main は `restore the baseline` が運ぶので、拒むのは clean の検査
+  // (旧: `repaired by hand` で答えた —— ADR 0373 決定1 の後は動いた main で比較が先に拒む)
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["repaired by hand"],
+    answers: ["restore the baseline"],
   });
   expect(res.status).toBe(409);
+  expect(res.json.error).toContain("still has uncommitted changes");
 
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(after.status).toBe("todo");

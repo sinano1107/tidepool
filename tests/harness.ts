@@ -943,7 +943,8 @@ function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
 
 /** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。行は基準と同じ綴り(HEAD は指し先、refname 順)で書く。 */
 function standInFirstCapture(db: Db, place: WorkspaceConfig): void {
-  if (holdsBaseline(db, place.name)) return;
+  // repo の無い場所は撮らない(準備の最初の撮りと同じ)
+  if (holdsBaseline(db, place.name) || !existsSync(join(place.path, ".git"))) return;
   let head: string;
   try {
     head = `symref=${git(place.path, "symbolic-ref", "-q", "HEAD")}`;

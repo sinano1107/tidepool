@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { DomainError } from "../src/domain-error.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { namePickupPredicates } from "../src/pickup-predicates.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
@@ -384,7 +383,7 @@ async function roomWithPickedExaminee() {
 // 旧: 受理の後半が受験者の checkout を休止させ、受験者 id の行が変わった(#2948 / ADR 0276 決定3)。ADR 0356 決定4 の後は基準は面接室だけが持つ
 it("面接室の名前への受理の後半は面接室だけを撃ち、受験者 id の行は無く、面接室(root id)の行は変わらない(#2948 / ADR 0356 決定4)", async () => {
   const { db, root, room, roomRow, examineeRow, roomBefore } = await roomWithPickedExaminee();
-  // 受理と同じ名前の項の後半だけを撃つ —— 受理は最後に面接室の行を撮り直す(ADR 0351 決定4)ので、そこまで撃つと誤った鍵の書き込みが消える
+  // 受理と同じ名前の項の後半だけを撃つ —— 誤った鍵の書き込みを、受理のほかの段の書き込みと混ぜずに読む(旧: 受理が最後に面接室の行を撮り直した、ADR 0351 決定4)
   const { own, openers } = namePickupPredicates(db, root.id, room, dirname(room.path));
 
   await firePickupPredicates(db, room, [...own, ...openers], "after-open");
@@ -489,13 +488,14 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の名前の�
   db.close();
 });
 
-it("検査が落ちて回答が拒否されたとき、基準の行は変わらない(ADR 0351 決定4)", async () => {
+// 旧: `repaired by hand` で答えた —— ADR 0373 決定1 の後は残った兄弟の branch で比較が先に拒むので、違いを運ぶ `restore the baseline` で clean の検査まで届かせる
+it("検査が落ちて回答が拒否されたとき、基準の行は変わらない(ADR 0351 決定4 / ADR 0373 決定3)", async () => {
   const { ws, db, answer } = await quarantinedBySibling("retake-refused");
   const row = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(ws.name);
   const before = row();
   writeFileSync(join(ws.path, "stray.txt"), "written while quarantined\n");
 
-  await expect(answer()).rejects.toThrow(DomainError);
+  await expect(answer("restore the baseline")).rejects.toThrow("still has uncommitted changes");
 
   expect(row()).toBe(before);
   db.close();

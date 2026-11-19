@@ -851,15 +851,11 @@ const looseObject = (room: WorkspaceConfig, oid: string) => join(room.path, ".gi
 /** 面接室から loose object を1つ消す。 */
 const dropObject = (room: WorkspaceConfig, oid: string) => rmSync(looseObject(room, oid));
 
-/** 面接室から commit の keep-around と loose object を消す。戻す関数を返す。 */
+/** 面接室から commit の loose object を消す(keep-around の ref は残す —— ref を消せば受理の比較が先にそれを名指す、ADR 0373 決定7)。戻す関数を返す。 */
 function dropFromRoom(room: WorkspaceConfig, sha: string): () => void {
   const saved = readFileSync(looseObject(room, sha));
-  git(room.path, "update-ref", "-d", `refs/keep-around/${sha}`);
   dropObject(room, sha);
-  return () => {
-    writeFileSync(looseObject(room, sha), saved);
-    git(room.path, "update-ref", `refs/keep-around/${sha}`, sha);
-  };
+  return () => writeFileSync(looseObject(room, sha), saved);
 }
 
 it("RCA が読む却下した監査の出題の head が面接室から消えると、RCA の pickup の門と面接室の名前への回答の両方がその head を名指して面接室の名前(root id)で止まり、戻すと回答が受理されて RCA の準備が通る(issue #3136 / ADR 0329 決定4 / ADR 0361 決定1)", async () => {
@@ -882,8 +878,7 @@ it("RCA が読む却下した監査の出題の head が面接室から消える
   db.close();
 });
 
-// 旧: どの回答でも受理された。ADR 0373 決定1 の後は消した keep-around の ref も違いなので、その object を諦める選択肢で答える
-it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室の名前への回答は RCA が読んでいた head を検査せずに受理する —— 決着した task は名前を開かない(issue #3136 / ADR 0329 決定4 / ADR 0373 決定5)", async () => {
+it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室の名前への回答は RCA が読んでいた head を検査せずに受理する —— 決着した task は名前を開かない(issue #3136 / ADR 0329 決定4)", async () => {
   const db = openDb(":memory:");
   const { room, root, rejected, audit } = await rcaOnRejectedAudit(db);
   dropFromRoom(room, rejected);
@@ -891,7 +886,7 @@ it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室�
   for (const rca of rcas) answerQuestionViaWebui(db, failureQuestion(db, rca.id, NOW), ["abandon"], NOW);
 
   expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["cancelled", "cancelled"]);
-  await expect(quarantineChecks({ db }).workspace!(root.id, "give up the lost refs and restore the baseline", "webui")).resolves.toBeUndefined();
+  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
   db.close();
 });
 
