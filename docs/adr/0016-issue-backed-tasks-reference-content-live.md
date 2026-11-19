@@ -1,6 +1,6 @@
 # Issue-backed task は内容を live 参照で持つ — 登録時 snapshot ではなく
 
-**Status 追記: issue つきの task を子にできるのは、親の場所が固定されていて(pickup の event か `task_branch_created` を持つ)issue の workspace と一致するときだけで、それ以外は分解元つきの根になる —— 子の workspace は親から変わらないので、issue の身元の workspace と食い違わない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定2、2026-11-19、issue #1796)。**
+**Status 追記: issue つきの task を子にできるのは、木の根の場所が固定されていて(根が pickup の event か `task_branch_created` を持つ)issue の workspace と一致するときだけで、それ以外は分解元つきの根になる —— 子の workspace は親から変わらないので、issue の身元の workspace と食い違わない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-a-cross-workspace-decomposition-becomes-a-root-that-carries-its-origin-for-context.md) 決定2、2026-11-19、issue #1796)。**
 
 **Status 追記: 「一時的失敗は Throttle と同じ fail-closed」は ADR 0110 以降の entry 除外の形で読む** —— その cycle の poll 全体ではなく、pickup で GitHub を読む task の集合をその poll から外して次の head へ進み、成功を挟まず10分続けば確認 question が立つ(ADR 0328、2026-10-30、issue #2704)。
 
