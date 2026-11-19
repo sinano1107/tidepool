@@ -948,7 +948,9 @@ function standInFirstCapture(db: Db, place: WorkspaceConfig): void {
   let head: string;
   try {
     head = `symref=${git(place.path, "symbolic-ref", "-q", "HEAD")}`;
-  } catch {
+  } catch (err) {
+    // `symbolic-ref -q` の 1 は detached —— ほかは道具の失敗(盤面の headValue と同じ)
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
     head = git(place.path, "rev-parse", "HEAD");
   }
   const refs = git(place.path, "for-each-ref", "--format=%(if)%(symref)%(then)symref=%(symref)%(else)%(objectname)%(end) %(refname)");

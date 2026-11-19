@@ -689,9 +689,11 @@ it("再開する受験者の pickup は前の checkout を読まず作り直し�
   const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done")!;
   const room = roomOf(root.id);
   const head = (await posedRecord(root.id)).events[0].payload.head;
-  const savedRoom = join(t.dir, "saved-room-git");
-  renameSync(join(room, ".git"), savedRoom);
-  git(room, "init", "--quiet", "--initial-branch=main");
+  // 出題の head の object だけを消す —— ref は基準どおりなので、回答の比較を通って出題の head の項に届く(旧: 面接室を `git init` し直した ——
+  // ADR 0373 決定1 の後は消えた ref を比較が先に名指す)
+  const headObject = join(room, ".git", "objects", head.slice(0, 2), head.slice(2));
+  const saved = readFileSync(headObject);
+  rmSync(headObject);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] })).status).toBe(200);
   await runNow(t, child);
 
@@ -701,10 +703,9 @@ it("再開する受験者の pickup は前の checkout を読まず作り直し�
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
   const missingHead = await answer();
   expect(missingHead.status).toBe(409);
-  // 旧: 出題の head が引けないと拒んだ。ADR 0373 決定1 の後は、それより前の比較が置き換えた repo の消えた ref を名指して拒む
-  expect(missingHead.json.error).toContain("The board does not accept moved refs.");
-  rmSync(join(room, ".git"), { recursive: true });
-  renameSync(savedRoom, join(room, ".git"));
+  expect(missingHead.json.error).toContain(head);
+  expect(missingHead.json.error).toContain("cannot be resolved");
+  writeFileSync(headObject, saved);
 
   expect((await answer()).status).toBe(200);
   await runNow(t, child);

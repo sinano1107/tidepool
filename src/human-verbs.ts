@@ -689,7 +689,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0373 決定7 / ADR 0329 決定14: 比較 → 前半(全場所) → 読みだけの上乗せ(自分) → 失われた sha を origin から取る(ADR 0380 決定4) →
     // 書き戻し(ADR 0373 決定3、失われた ref を諦めるなら ADR 0373 決定5) → 後半(全場所) → 済まなかった解放の「運ぶ」(ADR 0369 決定1) →
     // 比較 → merge-back → 運んだ checkout の削除(ADR 0369 決定7)。ADR 0373 決定1: 基準は撮り直さない —— 比較の後の盤面の書き込みは全部口を通る
-    const compare = () => compareAcceptanceRefs(deps.db, target, "while the Quarantine was open");
+    const compare = () => compareAcceptanceRefs(deps.db, target);
     // ADR 0373 決定3・7 / spec #3273 の受理の 3: 戻す2つの選択肢は違いを書き戻しへ運ぶ —— 書き戻しの同期区間が比べ直す
     await refuseOnError(() => {
       try {
@@ -727,7 +727,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     await fire(all, "after-open");
     // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
     await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));
-    // ADR 0373 決定7: 2回目の比較は merge back のやり直しの直前 —— どの選択肢も、後半の await の間に動いた ref を運ばない
+    // ADR 0373 決定7: 2回目の比較は merge back のやり直しの直前 —— どの選択肢も、後半の await の間に動いた ref を運ばない。やり直しが
+    // fetch を待つなら、その await の後にもう一度比べてから `task/<id>` を読む(ADR 0370 決定1)
     await refuseOnError(compare);
     // ADR 0373 決定9 / spec #3273 の受理の 11: conflict は作業台を開いて拒み、作業台が取り込める tip を持てば先に取り込む
     const intake: IntakeContext = {
@@ -737,7 +738,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       now,
     };
     // spec #3273 text C6: 作業台を残した取り込みごとに1行
-    const keptWorkbenches = placeHasRepository(target.path) ? await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake)) : [];
+    const keptWorkbenches = placeHasRepository(target.path) ? await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake, undefined, compare)) : [];
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name));
     // spec #3273 text B11: 外した値ごとに1行

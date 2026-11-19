@@ -489,7 +489,7 @@ it("ADR 0239 帰結の手の `git merge -s ours` を quarantine 中の名前の�
 });
 
 // 旧: `repaired by hand` で答えた —— ADR 0373 決定1 の後は残った兄弟の branch で比較が先に拒むので、違いを運ぶ `restore the baseline` で clean の検査まで届かせる
-it("検査が落ちて回答が拒否されたとき、基準の行は変わらない(ADR 0351 決定4 / ADR 0373 決定3)", async () => {
+it("検査が落ちて回答が拒否されたとき、基準の行は変わらない(ADR 0373 決定1・3)", async () => {
   const { ws, db, answer } = await quarantinedBySibling("retake-refused");
   const row = () => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(ws.name);
   const before = row();

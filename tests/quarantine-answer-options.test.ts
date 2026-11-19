@@ -57,9 +57,6 @@ async function expectRoomRowKept(db: Db, root: Task, room: WorkspaceConfig, ws: 
 const GIVE_UP = "give up the lost refs and restore the baseline";
 const restoredEvents = (db: Db) => listEventsOfKinds(db, ["baseline_restored"]).map(({ payload }) => payload);
 
-/** 基準の行そのもの —— 2値の行はどちらの値でも比較を通るので、畳まれたかは行を読んで確かめる。 */
-const baselineRow = (db: Db, name: string) => db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(name) as string;
-
 /** text B2 の比較器の文の後ろ。 */
 const B2_EXIT =
   ". The board does not accept moved refs. Answer `restore the baseline` to put them back; the values it removes stay under `refs/keep-around/<sha>`, " +
@@ -78,15 +75,15 @@ it("`repaired by hand` は動いた・作られた・消された ref をそれ�
   git(ws.path, "branch", "extra");
   git(ws.path, "branch", "-D", `task/${task.id}`);
   const refsBefore = git(ws.path, "for-each-ref");
-  const rowBefore = baselineRow(db, ws.name);
+  const comparisonBefore = await nextComparison(db, ws);
 
   const message = await refusal(answer(db, ws, "repaired by hand"));
 
-  expect(message).toMatch(new RegExp(`^workspace ${ws.name}: refs changed while the Quarantine was open — `));
+  expect(message).toMatch(new RegExp(`^workspace ${ws.name}: refs changed since the board's baseline — `));
   for (const line of [`was: ${main} refs/heads/main`, `was: ${taskTip} ${taskRef}`, `now: ${moved} refs/heads/main`, `now: ${moved} refs/heads/extra`]) expect(message).toContain(line);
   expect(message.endsWith(B2_EXIT)).toBe(true);
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
-  expect(baselineRow(db, ws.name)).toBe(rowBefore);
+  expect(await nextComparison(db, ws)).toBe(comparisonBefore);
   expect(getTask(db, question.id)!.status).toBe("todo");
   db.close();
 });
@@ -97,26 +94,26 @@ it("1回目の比較を通って後の検査で拒まれた回答は ref を書�
   const reopen = dropBoardBeforeFold(db);
   expect(() => boardRefWriter(db, ws)("refs/heads/written", tip, () => git(ws.path, "update-ref", "refs/heads/written", tip))).toThrow("the board dropped");
   reopen();
-  expect(baselineRow(db, ws.name)).toContain(`|${tip} refs/heads/written`);
   writeFileSync(join(ws.path, "README.md"), "uncommitted\n");
   const refsBefore = git(ws.path, "for-each-ref");
 
   await expect(answer(db, ws, "repaired by hand")).rejects.toThrow("still has uncommitted changes");
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
-  expect(baselineRow(db, ws.name)).toContain(`\n${tip} refs/heads/written`);
-  expect(baselineRow(db, ws.name)).not.toContain("|");
+  // 2値の行(作成の予告)のままなら、ref を消しても比較は通る —— 畳んだ行は書いた値の1値なので、消した ref を名指す
+  git(ws.path, "checkout", "--", "README.md");
+  git(ws.path, "update-ref", "-d", "refs/heads/written");
+  expect(await nextComparison(db, ws)).toContain(`was: ${tip} refs/heads/written`);
   db.close();
 });
 
 it("どの ref も基準と同じなら `repaired by hand` は受理され、基準の行は撮り直されない(ADR 0373 決定1、pin B2)", async () => {
   const { ws, db, question } = await quarantinedWorkspace("by-hand-accepted");
-  const rowBefore = baselineRow(db, ws.name);
 
   await answer(db, ws, "repaired by hand");
 
   expect(getTask(db, question.id)!.status).toBe("done");
-  expect(baselineRow(db, ws.name)).toBe(rowBefore);
+  expect(await nextComparison(db, ws)).toBe("passes");
   db.close();
 });
 
@@ -243,12 +240,11 @@ it("registry の `path` を別の checkout へ差し替えると、`repaired by 
   const other = await makeWorkspace("swapped-path-other");
   const swapped = { ...ws, path: other.path };
   const refsBefore = git(other.path, "for-each-ref");
-  const rowBefore = baselineRow(db, ws.name);
 
   const byHand = await refusal(answer(db, swapped, "repaired by hand"));
   const restored = await refusal(answer(db, swapped, "restore the baseline"));
 
-  expect(byHand).toMatch(new RegExp(`^workspace ${ws.name}: refs changed while the Quarantine was open — `));
+  expect(byHand).toMatch(new RegExp(`^workspace ${ws.name}: refs changed since the board's baseline — `));
   expect(byHand).toContain(`was: ${git(ws.path, "rev-parse", `task/${task.id}`)} refs/heads/task/${task.id}`);
   expect(byHand).toContain(`was: ${onlyHere} refs/heads/only-here`);
   expect(byHand.endsWith(B2_EXIT)).toBe(true);
@@ -256,7 +252,8 @@ it("registry の `path` を別の checkout へ差し替えると、`repaired by 
   expect(restored).toContain("Nothing was written. If these are lost for good, answer `give up the lost refs and restore the baseline`.");
   expect(git(other.path, "for-each-ref")).toBe(refsBefore);
   expect(git(other.path, "for-each-ref", "refs/keep-around/")).toBe("");
-  expect(baselineRow(db, ws.name)).toBe(rowBefore);
+  // 差し替え先の ref を基準に入れていれば、登録した checkout の次の比較が名指す
+  expect(await nextComparison(db, ws)).toBe("passes");
   expect(restoredEvents(db)).toEqual([]);
   expect(getTask(db, question.id)!.status).toBe("todo");
   db.close();
@@ -332,7 +329,7 @@ it("ref を動かさない直し方(text A12): dirty な tree の拒否は捨て
   await expect(answer(db, ws, "repaired by hand")).rejects.toThrow(`workspace ${ws.name} still has uncommitted changes. ${DISCARD}`);
   git(ws.path, "checkout", "--", "README.md");
   await expect(answer(db, { ...ws, branch: "missing" }, "repaired by hand")).rejects.toThrow(`protected branch 'missing' cannot be checked out`);
-  await expect(answer(db, { ...ws, branch: "missing" }, "repaired by hand")).rejects.toThrow(FIX_BRANCH);
+  await expect(answer(db, { ...ws, branch: "missing" }, "repaired by hand")).rejects.toThrow(`If the branch is missing: ${FIX_BRANCH}`);
 
   expect(question.purpose).toContain(`Discard uncommitted changes with \`git restore --staged --worktree .\``);
   expect(question.purpose).toContain(`If the branch is missing: ${FIX_BRANCH}`);
@@ -347,8 +344,9 @@ it("remote-backed で盤面が書いた local の保護ブランチが origin �
   const message = await refusal(answer(db, ws, "repaired by hand"));
 
   expect(message).toContain("is ahead of refs/remotes/origin/main");
-  expect(message.split("The check that failed: ")[0]).toContain(PUSH_COMMITS);
-  expect(message).not.toContain("cannot be checked out");
+  expect(message).toContain(`If local commits are ahead of or diverged from origin: ${PUSH_COMMITS}`);
+  // 直し方は落ちた項の説明に1度だけ載る
+  expect(message.split(PUSH_COMMITS)).toHaveLength(2);
   db.close();
 });
 
@@ -398,15 +396,19 @@ it.each(["I deleted the stray branch's twin by hand — restore the baseline", "
 it("同じ workspace への2つ目の回答は、1つ目の検査中は拒まれ、何も書かない(ADR 0373 決定8)", async () => {
   const { ws, db, question } = await quarantinedWorkspace("in-flight-key");
 
+  // 1つ目は1回目の比較を通ってから待つ —— その間に作った branch を、拒まれなかった2つ目の `restore the baseline` なら書き戻す
   const first = answer(db, ws, "repaired by hand");
+  git(ws.path, "branch", "extra");
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
     `another answer or operation for workspace ${ws.name} is being checked — try again once it has finished.`,
   );
-  await first;
+  // 1つ目は2回目の比較がその branch を名指して拒む
+  await expect(first).rejects.toThrow("refs/heads/extra");
 
-  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(ws.path, "for-each-ref", "refs/heads/extra")).not.toBe("");
   expect(git(ws.path, "for-each-ref", "refs/keep-around/")).toBe("");
   expect(restoredEvents(db)).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
   db.close();
 });
 
@@ -414,7 +416,7 @@ it.each(["repaired by hand", "restore the baseline", "a free-text note"])(
   "その workspace で session か後始末が走っている間は、どの選択肢(%s)も拒まれ、何も書かない(ADR 0373 帰結)",
   async (text) => {
     const { ws, db, question } = await quarantinedWorkspace("session-running");
-    // 違う ref があれば `repaired by hand` は走行中の検査より前の比較で拒まれる —— 違いを運ぶのは戻す選択肢だけ
+    // ADR 0373 決定7: 違う ref があれば `repaired by hand` は走行中の検査より前の比較で拒まれる —— 違いを運ぶのは戻す選択肢だけ
     const restoring = text === "restore the baseline";
     if (restoring) git(ws.path, "branch", "extra");
     const refsBefore = git(ws.path, "for-each-ref");

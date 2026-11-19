@@ -19,12 +19,12 @@ const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens i
 export const IF_REPOSITORY_PRESENT = "if a repository is already present, ";
 
 /** spec #3273 text A12: ref を動かさない直し方(ADR 0373 決定16)—— 条件を言う文(受理の拒否・pickup の理由・Quarantine の検査の一覧)の後に足す。
- *  どの文も人間に branch を作らせない。 */
+ *  どの文も人間に branch を作らせない。休止の2つ(H9・H10)は項の説明に載る —— 説明は検査の一覧と、落ちた項として拒否と理由に1度ずつ出る。 */
 export const discardUncommitted = (them = "them") =>
   ` Discard ${them} with \`git restore --staged --worktree .\` then \`git clean -fd\` until \`git status --porcelain\` is empty ` +
   "(`git clean -ffd` for a nested repository, `git worktree remove --force <path>` for a linked worktree inside the tree).";
-export const PUSH_LOCAL_COMMITS = " Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.";
-export const FIX_BRANCH_IN_REGISTRY = " Fix `branch` in the registry entry.";
+const PUSH_LOCAL_COMMITS = " Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.";
+const FIX_BRANCH_IN_REGISTRY = " Fix `branch` in the registry entry.";
 
 /** workspace 側が渡す記録を書かない操作 —— 一覧は workspace の実装へ依存しない。 */
 export type PlaceFire = {
@@ -75,8 +75,11 @@ function declaresWorkspaceRepo(workspace: WorkspaceConfig): boolean {
   return workspace.repo !== undefined;
 }
 
+/** 述語を撃つ checkout の種類: registry の workspace(読む場所を含む)、面接室、開いた event の無い面接室(未生の HEAD を通す)。 */
+export type CheckoutKind = "workspace" | "room" | "unborn room";
+
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室。`scope` は説明の頭に付く場所の名指し。 */
-export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: BoardStatePath[], scope = "", unbornRoom = false, room = unbornRoom): PickupPredicate[] {
+export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: BoardStatePath[], kind: CheckoutKind = "workspace", scope = ""): PickupPredicate[] {
   return [
     // 名前の場所と固定点の交差は最初に見る —— 後の項(`.git` の検査)の文が registry clone の拒否を隠さない。
     // 固定点を持たない呼び手(予告の一覧)にも項は並ぶ
@@ -99,11 +102,12 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, fixedPoints?: B
       describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`), and both point to the same repository.`,
       check: () => assertRemoteDeclarationMatchesClone(place),
     },
-    ...afterOpenPredicates(place, scope, unbornRoom, room),
+    ...afterOpenPredicates(place, scope, kind),
   ];
 }
 
-function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: boolean, room: boolean): PickupPredicate[] {
+function afterOpenPredicates(place: WorkspaceConfig, scope: string, kind: CheckoutKind): PickupPredicate[] {
+  const unbornRoom = kind === "unborn room";
   // 予告の実環境は設定を持たないので、既定名や remote の有無を答えにしない(ADR 0329 決定10)。
   const branch = place.path ? `protected branch \`${protectedBranch(place)}\`` : "configured protected branch";
   const remoteRef = place.path && declaresWorkspaceRepo(place) ? `\`${declaredProtectedBranchRef(place)}\`` : "its remote-tracking ref";
@@ -119,7 +123,7 @@ function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: 
       describe: `${prefix}the ${branch} can be checked out; when remote-backed, the local branch can fast-forward to ${remoteRef} without ahead or diverged commits.` +
         (unbornRoom ? " An unborn HEAD passes: the opening step supplies `main` with an empty commit." : "") +
         // ADR 0373 決定16 / spec #3273 text A12(H10・H9): 面接室の保護ブランチは registry に無く、remote も持たない
-        (room ? "" : ` If the branch is missing:${FIX_BRANCH_IN_REGISTRY} If local commits are ahead of or diverged from origin:${PUSH_LOCAL_COMMITS}`),
+        (kind !== "workspace" ? "" : ` If the branch is missing:${FIX_BRANCH_IN_REGISTRY} If local commits are ahead of or diverged from origin:${PUSH_LOCAL_COMMITS}`),
       check: (fire) => {
         if (!placeHasRepository(place.path)) return;
         if (unbornRoom) {
@@ -285,14 +289,14 @@ function recordedRoomPredicates(
           if (!placeHasRepository(place.path)) throw new Error(gonePlaceReason(rootId, place.path));
         },
       },
-      ...checkoutPickupPredicates(place, fixedPoints, "", false, true),
+      ...checkoutPickupPredicates(place, fixedPoints, "room"),
     ];
   }
   return [
     { phase: "before-open", describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
     // 未生の HEAD を通すのは開いた event の無い場所だけ —— 最初の開きが `main` に空コミットを補う。記録された面接室の未生の HEAD は
     // 補わない(手の `git init` の出口は `run with an empty room` に替わった、ADR 0373 決定11)
-    ...checkoutPickupPredicates(place, fixedPoints, "", true).map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
+    ...checkoutPickupPredicates(place, fixedPoints, "unborn room").map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
       ...predicate,
       describe: `${IF_REPOSITORY_PRESENT}${predicate.describe}`,
       check: () => {

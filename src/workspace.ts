@@ -69,13 +69,11 @@ import {
   conventionCheckoutPath,
   discardUncommitted,
   exactProtectedBranchRef,
-  FIX_BRANCH_IN_REGISTRY,
   gonePlaceReason,
   isRemoteBacked,
   OriginRepositoryMismatchError,
   type PickupPredicate,
   type PlaceFire,
-  PUSH_LOCAL_COMMITS,
   protectedBranch,
   protectedBranchRef,
   readHeadOf,
@@ -1494,29 +1492,32 @@ export function containmentWorkbenchNotTakenIn(workspace: WorkspaceConfig, base:
 /** ADR 0373 決定7・10: 封じ込めの Quarantine の受理の比較 —— pickup と同じ比較器で全 ref を基準と比べ、違えば workspace の Quarantine を立てて拒む
  *  (text B6)。基準は撮り直さない。基準の行が無い名前は比べず行も作らない(repo でない場所も読まない)。 */
 export function compareContainmentRefs(db: Db, workspace: WorkspaceConfig, now: Date): void {
-  if (!holdsBaseline(db, workspace.name)) return;
-  try {
-    compareAndFoldBaseline(db, workspace, "while the containment Quarantine was open");
-  } catch (err) {
-    if (!(err instanceof RefsMovedError)) throw err;
+  compareOrRefuse(db, workspace, "while the containment Quarantine was open", (err) => {
     quarantineWorkspace(db, workspace.name, err, now);
-    throw new Error(`${err.message}. Answer the workspace Quarantine (question ${openQuarantineQuestion(db, "workspace", workspace.name)!.id}) first.`);
-  }
+    return new Error(`${err.message}. Answer the workspace Quarantine (question ${openQuarantineQuestion(db, "workspace", workspace.name)!.id}) first.`);
+  });
 }
 
 /** ADR 0373 決定1・7: workspace の Quarantine の受理の比較 —— pickup と同じ比較器で名前の場所(面接室の名前なら面接室)の全 ref を基準と比べ、
  *  通れば2値行を畳み、違えば text B2 で拒む。基準は撮り直さない。基準の行が無い名前は比べず行も作らない。repo の無い場所は読まない ——
  *  外側の repo を読まず、前半の項がその場所を拒む(spec #3273 の受理の 3)。 */
-export function compareAcceptanceRefs(db: Db, workspace: WorkspaceConfig, when: string): void {
-  if (!holdsBaseline(db, workspace.name) || !placeHasRepository(workspace.path)) return;
+export function compareAcceptanceRefs(db: Db, workspace: WorkspaceConfig): void {
+  if (!placeHasRepository(workspace.path)) return;
+  // Quarantine が開く前に動いた ref(その移動が Quarantine を立てた)にも当たる時の言い方
+  compareOrRefuse(db, workspace, "since the board's baseline", (err) => new RefsMovedError(
+    `${err.message}. The board does not accept moved refs. Answer \`${RESTORE_THE_BASELINE}\` to put them back; the values it removes stay under ` +
+      "`refs/keep-around/<sha>`, and to keep that content you merge or cherry-pick it in a workbench afterwards.",
+  ));
+}
+
+/** Quarantine の受理の比較の形(ADR 0373 決定7・10): 基準の行が無い名前は比べず、pickup と同じ比較器で比べ、違えば `refuse` の返す拒否を投げる。 */
+function compareOrRefuse(db: Db, workspace: WorkspaceConfig, when: string, refuse: (moved: RefsMovedError) => Error): void {
+  if (!holdsBaseline(db, workspace.name)) return;
   try {
     compareAndFoldBaseline(db, workspace, when);
   } catch (err) {
     if (!(err instanceof RefsMovedError)) throw err;
-    throw new RefsMovedError(
-      `${err.message}. The board does not accept moved refs. Answer \`${RESTORE_THE_BASELINE}\` to put them back; the values it removes stay under ` +
-        "`refs/keep-around/<sha>`, and to keep that content you merge or cherry-pick it in a workbench afterwards.",
-    );
+    throw refuse(err);
   }
 }
 
@@ -2627,10 +2628,7 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
-    // ADR 0373 決定16 / spec #3273 text A12(H10): 無い保護ブランチを手で作らせない —— registry の `branch` を直す。面接室の保護ブランチは registry に無い
-    const missing = !isInterviewRoomName(db, workspace.name) && readRef(workspace, `refs/heads/${branch}`) === "" &&
-      (!remoteBacked || readRef(workspace, remoteTrackingRef(branch)) === "");
-    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}${missing ? `.${FIX_BRANCH_IN_REGISTRY}` : ""}`, { cause });
+    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (!remoteBacked) return;
   const ref = remoteTrackingRef(branch);
@@ -2643,14 +2641,14 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
       advanceBranch(db, workspace, localRef, localSha, remoteSha);
       return;
     }
-    if (!isAncestor(workspace, remoteSha, localSha)) throw new Error(`the local and remote histories diverged.${PUSH_LOCAL_COMMITS}`);
+    if (!isAncestor(workspace, remoteSha, localSha)) throw new Error("the local and remote histories diverged");
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   throw new Error(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
-      `commits were never pushed, so parking here would show a state the remote does not have.${PUSH_LOCAL_COMMITS}`,
+      "commits were never pushed, so parking here would show a state the remote does not have",
   );
 }
 
@@ -3226,9 +3224,10 @@ export async function redoMergeBacks(
   auth: GitHubAuth | undefined,
   /** 作業台の基点(ADR 0373 決定9)と、取り込みの event に残す回答者と時刻(spec #3273 の識別子の表 / pin A5)。 */
   intake: IntakeContext,
-  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)、
-   *  fetch の await の後に ref を読む前の比較(ADR 0370 決定1)。 */
-  retry?: { root: string; firstHalf: () => Promise<void>; compareRefs: () => void },
+  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)。 */
+  retry?: { root: string; firstHalf: () => Promise<void> },
+  /** fetch の await の後、ref を読む前の比較(ADR 0370 決定1 / ADR 0373 決定7)。 */
+  compareRefs?: () => void,
 ): Promise<string[]> {
   const root = retry?.root;
   if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return [];
@@ -3242,7 +3241,7 @@ export async function redoMergeBacks(
     throw new Error(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`);
   }
   await refreshProtectedBranch(db, workspace, auth);
-  retry?.compareRefs();
+  compareRefs?.();
   // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
   let failure: { error: unknown } | undefined;
   // 作業台を残した取り込みの text C6

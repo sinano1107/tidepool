@@ -298,7 +298,8 @@ export const QUARANTINES = [
       return {
         title: `workspace ${name} needs human attention`,
         purpose:
-          `${reason}. ${firstCapturesWait(db, name!)}` +
+          // 理由が自分で文を閉じていれば句点を重ねない(spec #3273 text A12 の文は句点で終わる)
+          `${endSentence(reason)} ${firstCapturesWait(db, name!)}` +
           "Tasks in this workspace stay out of the slot until it is repaired. " +
           "Answering confirms the repair — the board re-checks all of the following before " +
           "it accepts the answer, and refuses it if any fails:\n\n" +

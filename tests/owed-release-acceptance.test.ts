@@ -246,40 +246,39 @@ it.each(["repaired by hand", "restore the baseline"])("書き戻しの後(後半
   const githubAuth = { ensureToken: async () => void git(s.ws.path, "branch", "moved-after-the-write-back"), env: () => process.env } as unknown as GitHubAuth;
 
   await expect(answerQuarantine({ ...s, githubAuth }, s.ws.name, text)).rejects.toThrow(
-    new RegExp(`refs changed while the Quarantine was open — now: \\S+ refs/heads/moved-after-the-write-back\\. The board does not accept moved refs\\.`),
+    new RegExp(`refs changed since the board's baseline — now: \\S+ refs/heads/moved-after-the-write-back\\. The board does not accept moved refs\\.`),
   );
 
   expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(parentTip);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
 });
 
-it("門を通った完了の後始末が drift で飛び、Quarantine の間にタスクブランチが門の tip を含まない所へ動けば、回答は両方の sha を示して拒まれ、checkout も基準も残る(ADR 0369 決定3)", async () => {
+// 旧: Quarantine の間に動かした —— ADR 0373 決定7 の後は1回目の比較が先に拒むので、やり直しの検査に届くのは1回目の比較の後に動いた ref だけ
+it("門を通った完了の後始末が drift で飛び、回答の検査の間(後半の fetch)にタスクブランチが門の tip を含まない所へ動けば、やり直しが両方の sha を示して拒み、checkout も残る(ADR 0369 決定3)", async () => {
   const s = await sessionWithWork("owed-completed-unreachable", { parent: true, wip: false });
   const gateTip = completeThroughGate(s);
   const repair = breakNamedPlace(s, "drift");
   await tearDown(s);
   repair();
-  moveTaskBranch(s, "unreachable");
-  git(s.ws.path, "branch", "moved-by-hand", "main");
+  const githubAuth = { ensureToken: async () => moveTaskBranch(s, "unreachable"), env: () => process.env } as unknown as GitHubAuth;
 
-  const answer = answerQuarantine(s);
+  const answer = answerQuarantine({ ...s, githubAuth });
 
   await expect(answer).rejects.toThrow(DomainError);
-  await expect(answer).rejects.toThrow(`refs changed while the Quarantine was open — was: ${gateTip} refs/heads/${s.branch}, now: ${git(s.ws.path, "rev-parse", "main")} refs/heads/${s.branch}`);
+  await expect(answer).rejects.toThrow(`refs changed out of band — was: ${gateTip} refs/heads/${s.branch}, now: ${git(s.ws.path, "rev-parse", "main")} refs/heads/${s.branch}`);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
   expect(existsSync(s.checkout)).toBe(true);
   expect(released(s.db, s.task.id)).toEqual([]);
-  await expect(nextPickup(s)).rejects.toThrow("refs/heads/moved-by-hand");
 });
 
-it("session の間にタスクブランチが門の tip を含まない所へ動いた完了は、ref が tip を含み直すまで回答が拒まれ、含み直せば checkout が消える(ADR 0369 決定3・7)", async () => {
+it("session の間にタスクブランチが門の tip を含まない所へ動いた完了は、ref が tip を含み直すまで回答の1回目の比較が拒み、含み直せば checkout が消える(ADR 0373 決定7 / ADR 0369 決定7)", async () => {
   const s = await sessionWithWork("owed-completed-moved-in-session", { wip: false });
   const gateTip = completeThroughGate(s);
   moveTaskBranch(s, "unreachable");
   await tearDown(s);
   expect(existsSync(s.checkout)).toBe(true);
 
-  await expect(answerQuarantine(s)).rejects.toThrow(`refs changed while the Quarantine was open — was: ${gateTip} refs/heads/${s.branch}`);
+  await expect(answerQuarantine(s)).rejects.toThrow(`refs changed since the board's baseline — was: ${gateTip} refs/heads/${s.branch}`);
   git(s.ws.path, "update-ref", `refs/heads/${s.branch}`, gateTip);
   await answerQuarantine(s);
 

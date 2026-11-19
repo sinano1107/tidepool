@@ -5032,11 +5032,43 @@ it("merge back の conflict に手を付けないままの受理は、merge back
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
+// ADR 0373 決定7 / ADR 0370 決定1: 2回目の比較は merge back のやり直しの fetch の await の後、`task/<id>` を読む直前に掛かる
+it("merge back のやり直しの fetch の await の間に人間が動かした子のタスクブランチは、`repaired by hand` の比較が名指して拒み、帰り先へ運ばない(pin B10)", async () => {
+  const pr = await openPushedPr("redo-merge-back-moved-in-fetch", "escalate");
+  const { workspace, db, clock, work } = pr;
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  const parentBefore = git(workspace.path, "rev-parse", `task/${work.id}`);
+  let byHand = "";
+  // fresh でない token の取得は merge back のやり直しの fetch(後半の fetch は fresh)
+  const githubAuth = {
+    ensureToken: async (_key: unknown, options?: { fresh?: boolean }) => {
+      if (options?.fresh || byHand !== "") return;
+      byHand = git(workspace.path, "commit-tree", `task/${repair.id}^{tree}`, "-p", `task/${repair.id}`, "-m", "by hand during the merge-back fetch");
+      git(workspace.path, "update-ref", `refs/heads/task/${repair.id}`, byHand);
+    },
+    env: () => process.env,
+  } as unknown as GitHubAuth;
+
+  const refused = submitAnswer(
+    { db, pollNow: () => {}, landing: pr.landing, quarantineChecks: quarantineChecks({ db, workspace, githubAuth }) },
+    getTask(db, question.id)!, ["repaired by hand"], undefined, () => clock.now(), "webui",
+  );
+
+  await expect(refused).rejects.toThrow(`refs/heads/task/${repair.id}. The board does not accept moved refs.`);
+  expect(byHand).not.toBe("");
+  expect(git(workspace.path, "rev-parse", `task/${work.id}`)).toBe(parentBefore);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
 it("merge back が走らなかった修理は、受理の検査が帰り先へ merge して休止位置へ戻し、受理する", async () => {
   const pr = await openPushedPr("redo-merge-back-clean", "escalate");
   const { workspace, db, clock, work } = pr;
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
-  // 旧: 名前の場所を手で休止位置の外へ出してから答えた —— HEAD の移動も ref の違いなので、ADR 0373 決定1 の後は受理が拒む
+  // 名前の場所が休止位置の外に居る(受理の検査が戻す)。旧: 手で出した —— HEAD の移動も ref の違いなので、ADR 0373 決定1 の後は
+  // 受理が拒む。盤面の口で出す(基準の HEAD の行も付いてくる)
+  writeBoardRefs(db, workspace, [["HEAD", `symref=refs/heads/task/${work.id}`]], () => git(workspace.path, "checkout", "-q", `task/${work.id}`));
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
   const question = quarantineQuestion(db, "workspace", workspace.name)!;
   const pollNow = vi.fn();
