@@ -1888,15 +1888,14 @@ export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig,
 }
 
 /** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、origin から sha で取る。sha の fetch は `refs/` に
- *  何も書かない(FETCH_HEAD だけ)ので口は要らない。失敗は投げる。 */
-export async function fetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> {
+ *  何も書かない(FETCH_HEAD だけ)ので口は要らない。手元にあれば同じ同期区間で ref を読み続けられる(ADR 0370 決定1)。 */
+export function fetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> | undefined {
   try {
     git(workspace.path, "cat-file", "-e", `${sha}^{commit}`);
     return;
   } catch {}
   workspace = withRememberedRepoCheck(db, workspace);
-  await ensureWorkspaceToken(workspace, auth);
-  fetchCommit(workspace, auth, sha);
+  return ensureWorkspaceToken(workspace, auth).then(() => fetchCommit(workspace, auth, sha));
 }
 
 /** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば

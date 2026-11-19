@@ -3644,15 +3644,25 @@ it("遅い走査が外で閉じたと観測した根の下に走らない子が�
   for (const part of ["PR #1", child.id, "reopen", "merge", "cancel"]) expect(lines[0]!.payload).toMatchObject({ line: expect.stringContaining(part) });
 });
 
-it("回答直前のバックストップが外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行流れる", async () => {
-  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-backstop-closed-announce");
+it("ref が動いていても、回答時に閉じた PR を観測すれば、取り残された子を名指す盤面名義の判断行が1行流れる", async () => {
+  const { db, clock, github, landing, root, workspace } = await escalatedRootWithOpenedPr("landing-backstop-closed-announce");
   const child = attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
+  git(workspace.path, "tag", "intruder");
   const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
 
-  await expect(landing.observePullRequestOutcome(getTask(db, question.id)!)).resolves.toBe(true);
+  await expect(submitAnswer(
+    { db, pollNow: () => {}, landing, workspace, github },
+    getTask(db, question.id)!,
+    ["merge"],
+    undefined,
+    () => clock.now(),
+    "webui",
+  )).resolves.toMatchObject({ status: "done", question_answer: null });
   await landing.tick("outside_merge", clock.now());
 
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   const lines = boardEvents(db, root.id, "decision_logged");
   expect(lines).toEqual([{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
 });
@@ -4418,12 +4428,20 @@ it("修理の内容がローカルの着地するタスクのブランチに無�
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
-it("着地するタスクのブランチに修理を `merge -s ours` で記録して push すれば、捨てた修理は積み残しではない", async () => {
+/** GitHub に修理を捨てた merge が載った形。別の clone で作り、名前の場所の ref は動かさない。 */
+async function pushDiscardedRepair(workspace: WorkspaceConfig, taskId: string, repairId: string) {
+  const branch = `task/${taskId}`;
+  const clone = await tempDir("tidepool-discarded-repair-");
+  git(clone, "clone", "--branch", branch, workspace.repo!, ".");
+  git(clone, "fetch", workspace.path, `task/${repairId}`);
+  git(clone, "merge", "-s", "ours", "--no-edit", "FETCH_HEAD");
+  git(clone, "push", "origin", branch);
+}
+
+it("PR の head に修理を `merge -s ours` で捨てた記録があれば、修理は積み残しではない", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-discarded", "auto_if_ci_green");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
-  git(workspace.path, "checkout", `task/${work.id}`);
-  git(workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
-  git(workspace.path, "push", "origin", `task/${work.id}`);
+  await pushDiscardedRepair(workspace, work.id, repair.id);
 
   await landing.tick("auto_merge", clock.now());
 
@@ -4464,10 +4482,11 @@ function answerMergeQuestion({
   clock,
   github,
   workspace,
-}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig }) {
+  githubAuth,
+}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig; githubAuth?: GitHubAuth }) {
   const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
   return submitAnswer(
-    { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
+    { db, pollNow: () => {}, landing: unusedLanding, workspace, github, githubAuth },
     question,
     ["merge"],
     undefined,
@@ -4475,6 +4494,93 @@ function answerMergeQuestion({
     "webui",
   );
 }
+
+it("修理のブランチが PR に届いた位置へ帯域外で巻き戻されたら、merge の回答を拒み Quarantine を立てる", async () => {
+  const pr = await openPushedPr("merge-answer-rewound-repair", "escalate");
+  const repair = await settleRepairNotMergedBack(pr.db, pr.clock, pr.workspace, pr.work.id);
+  const ref = `refs/heads/task/${repair.id}`;
+  const recorded = git(pr.workspace.path, "rev-parse", ref);
+  const rewound = originHead(pr.workspace, pr.work.id);
+  git(pr.workspace.path, "update-ref", ref, rewound);
+  const question = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+
+  await expect(answerMergeQuestion(pr)).rejects.toThrow(`now: ${rewound} ${ref}`);
+
+  expect(quarantineQuestion(pr.db, "workspace", pr.workspace.name)?.purpose).toContain(`was: ${recorded} ${ref}`);
+  expect(getTask(pr.db, question.id)?.status).toBe("todo");
+  expect(pr.github.merged).toEqual([]);
+});
+
+it("CI を待つ間に修理のブランチが巻き戻されたら、無人 merge は PR をキューに残して Quarantine を立てる", async () => {
+  const { workspace, db, clock, github, work } = await openPushedPr("auto-merge-rewound-repair", "auto_if_ci_green");
+  let dial: MergeDial = "auto_if_ci_green";
+  const landing = autoMerging(db, clock, workspace, github, () => profile(dial));
+  const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const ref = `refs/heads/task/${repair.id}`;
+  const recorded = git(workspace.path, "rev-parse", ref);
+  const rewound = originHead(workspace, work.id);
+  const read = github.readPullRequest.bind(github);
+  vi.spyOn(github, "readPullRequest").mockImplementationOnce(async (pr) => {
+    const result = await read(pr);
+    git(workspace.path, "update-ref", ref, rewound);
+    dial = "escalate";
+    return result;
+  });
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${recorded} ${ref}`);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+});
+
+it("PR の head の fetch を待つ間に修理が巻き戻されたら、merge 回答は積み残しの比較をせず Quarantine で止まる", async () => {
+  const pr = await openPushedPr("merge-answer-rewound-during-fetch", "escalate");
+  const repair = await settleRepairNotMergedBack(pr.db, pr.clock, pr.workspace, pr.work.id);
+  const ref = `refs/heads/task/${repair.id}`;
+  const recorded = git(pr.workspace.path, "rev-parse", ref);
+  const rewound = originHead(pr.workspace, pr.work.id);
+  await pushOutsideBoard(pr.workspace, pr.work.id);
+  const { window, githubAuth } = fetchHeldAtToken();
+
+  const answering = answerMergeQuestion({ ...pr, githubAuth });
+  await window.entered;
+  git(pr.workspace.path, "update-ref", ref, rewound);
+  window.open();
+
+  await expect(answering).rejects.toThrow(new RegExp(`^workspace ${pr.workspace.name}: refs changed before landing read them.*now: ${rewound} ${ref}`));
+  expect(quarantineQuestion(pr.db, "workspace", pr.workspace.name)?.purpose).toContain(`was: ${recorded} ${ref}`);
+  expect(mergeQuestions(pr.db)).toHaveLength(1);
+  expect(pr.github.merged).toEqual([]);
+});
+
+it("基準どおりの ref を持つ workspace の Quarantine は PR への merge 回答を拒まない", async () => {
+  const pr = await openPushedPr("merge-answer-open-quarantine", "escalate");
+  await leaveBaseline(pr.db, pr.workspace);
+  quarantineWorkspace(pr.db, pr.workspace.name, new Error("repair the checkout"), pr.clock.now());
+
+  await expect(answerMergeQuestion(pr)).resolves.toMatchObject({ status: "done" });
+
+  expect(pr.github.merged.map((merged) => merged.number)).toEqual([1]);
+  expect(quarantineQuestion(pr.db, "workspace", pr.workspace.name)).toBeDefined();
+});
+
+it.each(["pr_close_observed", "pr_merge_observed"] as const)("ref が動いていても、無人 merge の tick は GitHub の決着を %s として記録する", async (kind) => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("auto-merge-observed-with-moved-ref", "auto_if_ci_green");
+  await leaveBaseline(db, workspace);
+  git(workspace.path, "tag", "intruder");
+  if (kind === "pr_close_observed") github.scriptClosedOutside(1);
+  else github.scriptMergedOutside(1);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(boardEvents(db, work.id, kind)).toEqual([
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind, pr_number: 1 } },
+  ]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+});
 
 /** #1831 の形: 修理を merge back して収束が push した後、別の clone が PR のブランチを修理より前の commit の上へ
  *  force-push する。 */
@@ -4518,8 +4624,8 @@ it("別の clone からの force-push で修理が消えた PR への人間の m
   const error = await answerMergeQuestion(pr).catch((err: unknown) => err);
 
   expect(error).toBeInstanceOf(DomainError);
-  expect((error as Error).message).toMatch(
-    new RegExp(`^cannot merge: PR #1's head ${head} was pushed outside the board and lacks the content of task/${repair.id} — .*merge -s ours`),
+  expect((error as Error).message).toBe(
+    `cannot merge: PR #1's head ${head} was pushed outside the board and lacks the content of task/${repair.id}`,
   );
   expect(pr.github.merged).toEqual([]);
   expect(listBoard(pr.db).find((q) => q.id === question.id)?.status).toBe("todo");
@@ -4536,15 +4642,11 @@ it("外の push が落とした内容をブランチに戻して push すれば�
   expect(pr.github.merged.map((merged) => merged.number)).toEqual([1]);
 });
 
-it("外の push が落とした内容を、workspace でタスクブランチを GitHub の head に合わせてから `merge -s ours` で記録して push すれば、修理の内容を戻さずに「merge」の回答が通る", async () => {
+it("外の push が落とした修理を捨てた記録が PR の head に届けば、修理の内容を戻さずに「merge」の回答が通る", async () => {
   const pr = await openPushedPr("left-behind-dropped-outside-discarded", "auto_if_ci_green");
   const repair = await dropRepairOutsideBoard(pr);
   await pr.landing.tick("auto_merge", pr.clock.now());
-  git(pr.workspace.path, "checkout", `task/${pr.work.id}`);
-  git(pr.workspace.path, "fetch", "origin");
-  git(pr.workspace.path, "reset", "--hard", `origin/task/${pr.work.id}`);
-  git(pr.workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
-  git(pr.workspace.path, "push", "origin", `task/${pr.work.id}`);
+  await pushDiscardedRepair(pr.workspace, pr.work.id, repair.id);
 
   await expect(answerMergeQuestion(pr)).resolves.toMatchObject({ status: "done" });
 
@@ -4659,23 +4761,27 @@ it("読めない PR への人間の merge 回答は、head を比べられなか
 const breakPackedRefs = (workspace: WorkspaceConfig) =>
   appendFileSync(join(workspace.path, ".git", "packed-refs"), "not a packed ref\n");
 
-it("タスクブランチの有無を読む rev-parse が exit 1 以外で落ちれば積み残しとなり、無人 merge されない", async () => {
-  const { workspace, github, landing, clock } = await openPushedPr("left-behind-rev-parse-fails", "auto_if_ci_green");
+it("壊れた packed-refs で基準との比較ができなければ、無人 merge をせず PR をキューに残す", async () => {
+  const { workspace, db, github, landing, clock } = await openPushedPr("auto-merge-unreadable-refs", "auto_if_ci_green");
+  await leaveBaseline(db, workspace);
   breakPackedRefs(workspace);
 
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
 });
 
-it("タスクブランチの有無を読む rev-parse が exit 1 以外で落ちた PR への人間の merge 回答は、比べられなかったと言って拒まれ、運んでいる途中とは言わない", async () => {
-  const pr = await openPushedPr("left-behind-rev-parse-fails-answer", "escalate");
+it("基準と ref が比べられない workspace では、PR の内容を比べる前に merge の回答を拒む", async () => {
+  const pr = await openPushedPr("merge-answer-unreadable-refs", "escalate");
+  await leaveBaseline(pr.db, pr.workspace);
   breakPackedRefs(pr.workspace);
 
   const error = await answerMergeQuestion(pr).catch((err: unknown) => err);
 
   expect(error).toBeInstanceOf(DomainError);
-  expect((error as Error).message).toMatch(/^cannot merge: could not compare PR #1's head [0-9a-f]{40} with the task's content — /);
+  expect((error as Error).message).toMatch(/^could not verify refs .* before landing: .*git for-each-ref/);
   expect((error as Error).message).not.toContain(STILL_CARRYING);
   expect(pr.github.merged).toEqual([]);
 });
@@ -4950,6 +5056,33 @@ function answerLocalMerge(
 const localLeftBehind = (workId: string, carrier: string) =>
   new DomainError(`cannot merge yet: the task branch task/${workId} does not carry all of the task's content yet — ${carrier}`);
 
+it("別の ref が動いた workspace のローカル着地は、Quarantine を重ねず、動いた ref を名指して拒む", async () => {
+  const local = await landLocally("local-merge-with-moved-tag");
+  const { workspace, db, clock, question } = local;
+  const before = git(workspace.path, "rev-parse", "main");
+  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
+  git(workspace.path, "tag", "intruder");
+
+  await expect(answerLocalMerge(local)).rejects.toThrow(`now: ${before} refs/tags/intruder`);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.id).toBe(quarantine.id);
+  expect(listBoard(db).filter((row) => row.question_quarantine_kind === "workspace")).toHaveLength(1);
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(git(workspace.path, "rev-parse", "main")).toBe(before);
+});
+
+it("基準どおりの ref を持つ workspace の Quarantine はローカル着地の merge 回答を拒まない", async () => {
+  const local = await landLocally("local-merge-open-quarantine");
+  const { workspace, db, clock, work } = local;
+  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+
+  await expect(answerLocalMerge(local)).resolves.toMatchObject({ status: "done" });
+
+  expect(git(workspace.path, "rev-parse", "main")).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
+});
+
 it("修理が done で後始末が merge back する前のローカル着地の merge 回答は、盤面がまだ運んでいるとして拒まれ、merge back の後の回答で修理ごと載る", async () => {
   const local = await landLocally("local-left-behind-teardown");
   const { workspace, db, clock, work, question } = local;
@@ -5027,17 +5160,19 @@ it("ローカル着地の merge 回答が受理されると、保護ブランチ
 });
 
 // ADR 0289 決定3: hold が断るのはその時点の内容 —— 回答の時点のタスクブランチの tip を根に刻む
-it("ローカル着地の hold 回答が受理されると、その時点のタスクブランチの tip を local_merge_held として根に刻む", async () => {
+it("ローカル着地の hold 回答は task ブランチが動いていても受理され、その時点の tip を根に刻む", async () => {
   const local = await landLocally("local-merge-held");
   const { workspace, db, work } = local;
+  const moved = commitOutOfBand(workspace, `task/${work.id}`);
 
   await answerLocalMerge(local, "hold");
 
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   expect(boardEvents(db, work.id, "local_merge_held")).toEqual([
     {
       actor_id: BOARD_ACTOR_ID,
       origin: "board",
-      payload: { kind: "local_merge_held", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
+      payload: { kind: "local_merge_held", head: moved },
     },
   ]);
 });
@@ -5541,26 +5676,35 @@ it.each([
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
-it.each([
-  [
-    "記録から進んだ",
-    async (board: Db, clock: FakeClock, workspace: WorkspaceConfig) => {
-      const work = await recordedWork(board, clock, workspace);
-      commitWork(workspace.path, "out-of-band.txt", "moved by hand\n");
-      return work;
-    },
-  ],
-  ["記録に行の無い", unrecordedWork],
-])("%s保護ブランチへ merge と答えると、回答を拒み workspace を quarantine し、着地 question は開いたまま残る", async (_shape, setup) => {
-  const workspace = await makeWorkspace("landing-out-of-band-answer");
+it("基準の行が無い workspace のローカル着地の merge 回答は、最初の撮りをして着地する", async () => {
+  const workspace = await makeWorkspace("landing-answer-first-capture");
   const { db, clock } = await openBoard();
-  const work = await setup(db, clock, workspace);
+  const work = await unrecordedWork(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  expect(holdsBaseline(db, workspace.name)).toBe(false);
+
+  await expect(answerMerge(db, clock, workspace, question)).resolves.toMatchObject({ status: "done" });
+
+  expect(holdsBaseline(db, workspace.name)).toBe(true);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(git(workspace.path, "rev-parse", "main")).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+});
 
-  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow(DomainError);
+it("最初の撮りが別の workspace の封じ込めを待つ間、merge の回答はその question を名指して拒む", async () => {
+  const workspace = await makeWorkspace("landing-answer-capture-waits");
+  const held = await makeWorkspace("landing-answer-containment");
+  const { db, clock } = await openBoard();
+  await leaveBaseline(db, held);
+  const work = await unrecordedWork(db, clock, workspace);
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  const value = workspaceContainmentValue("claude-code", held.name);
+  registerResourceStop(db, "workspaceContainment", value, "repair the containment", clock.now());
+  const containment = openQuarantineQuestion(db, "workspaceContainment", value)!;
 
-  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
+  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow(`answer question ${containment.id}`);
+
+  expect(holdsBaseline(db, workspace.name)).toBe(false);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   expect(getTask(db, question.id)?.status).toBe("todo");
 });
 
@@ -6401,6 +6545,18 @@ function answerPromotion(
     "webui",
   );
 }
+
+it("PR 昇格の abandon promotion は task ブランチが動いていても受理され、その時点の tip を根に刻む", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-abandon-moved-ref");
+  registerPrPromotionFailureQuestion(db, work, "push failed", clock.now());
+  const [failure] = openPromotionQuestions(db, work.id);
+  const moved = commitOutOfBand(workspace, `task/${work.id}`);
+
+  await expect(answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion")).resolves.toMatchObject({ status: "done" });
+
+  expect(latestEventOfTask(db, work.id, "pr_promotion_abandoned")?.payload.head).toBe(moved);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
 
 /** 付帯子を登録して決着させる。`repair` があれば盤面の経路で親のブランチの内容を変える: 拾い(親のブランチから fork)、task の
  *  checkout で commit し、完了の門が tip を名前の場所へ引き(ADR 0356 決定3)、決着の後の後始末が親のブランチへ merge back する

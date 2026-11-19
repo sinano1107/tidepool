@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { conventionCheckoutPath, isRemoteBacked, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -1349,6 +1349,7 @@ export async function submitAnswer(
             task.workspace,
             "cannot land the task branch",
           );
+          assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, now());
           // ADR 0289 決定2: 積み残しは PR の回答と同じ述語で、比べる相手はローカルのタスクブランチ。同期で読み、
           // merge の実行まで await を挟まない(ADR 0288 決定2)。比べられなければ積み残し
           const branch = taskBranch(kind.task_id);
@@ -1413,20 +1414,18 @@ export async function submitAnswer(
           // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
           observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
           // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
-          let left: string[];
-          try {
-            left = await contentLeftBehind(deps.db, mergeWorkspace, landingTaskId, pr.head, { auth: deps.githubAuth });
-          } catch (err) {
-            if (isBoardDbRefusal(err)) throw err;
+          const { left, dropped } = await checkPrMergeContent(
+            deps.db, mergeWorkspace, landingTaskId, { number: mergePr, head: pr.head },
+            { auth: deps.githubAuth, resolveRegistered: deps.resolveWorkspace, now },
+          ).catch((err) => {
+            if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError) throw err;
             throw new DomainError(
               `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
                 (err instanceof Error ? err.message : String(err)),
             );
-          }
+          });
           if (left.length > 0) {
-            // ADR 0242 決定4: 盤面の外の push が落とした内容は盤面が運べない —— その事実と直す手段を言う
-            const dropped = await outsidePushDropNotice(deps.db, mergeWorkspace, landingTaskId, left, { number: mergePr, head: pr.head });
-            if (dropped) throw new DomainError(`cannot merge: ${dropped}; then answer again`);
+            if (dropped) throw new DomainError(`cannot merge: ${dropped}`);
             throw leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`);
           }
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
