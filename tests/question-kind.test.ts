@@ -62,6 +62,18 @@ it.each([
   expect(registerQuestion(kind, [])).toThrow("a question item carries 2 to 4 options");
 });
 
+it("failure の項目は、ただ1つの肢が cancel option のときだけ肢1個で登録できる(issue #3289)", () => {
+  expect(registerQuestion({ kind: "failure", cancel_option: "abandon" }, ["abandon"])).not.toThrow();
+  expect(registerQuestion({ kind: "failure", cancel_option: "abandon" }, ["retry"])).toThrow("a question item carries 2 to 4 options");
+});
+
+it.each([
+  ["escalation", undefined],
+  ["premise_breach", { kind: "premise_breach", cancel_option: "abandon", breached_decision: 7 }],
+] as const)("%s の項目は肢1個では登録できない", (_, kind) => {
+  expect(registerQuestion(kind, ["abandon"])).toThrow("a question item carries 2 to 4 options");
+});
+
 it("stop_reason の項目は肢を持つと登録できない", () => {
   expect(registerQuestion({ kind: "stop_reason", task_id: "t" }, ["a", "b"])).toThrow("a stop reason question item carries no options and no recommendation");
 });

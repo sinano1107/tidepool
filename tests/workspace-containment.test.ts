@@ -414,12 +414,19 @@ it("task branch だけに隠せない .claude があれば abandon 推奨の fai
   expect(events.filter((event: any) => event.kind === "spawn_failed")).toHaveLength(1);
   const question = (await questions(t)).find((candidate) => candidate.parent_id === failed.id);
   expect(question.title).toBe(`worker never started for task: ${failed.title}`);
-  expect(question.question_items[0]).toMatchObject({ options: ["retry", "abandon"], recommendation: "abandon" });
+  // retry は同じ tree を読み直すだけなので選択肢に無い(issue #3289)
+  expect(question.question_items[0]).toMatchObject({ options: ["abandon"], recommendation: "abandon" });
   expect(question.purpose).toContain(".claude as a symlink");
-  expect(question.purpose).toMatch(/retry.*same tree.*branch changes/i);
+  expect(question.purpose).not.toContain('"retry"');
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(`answer "retry" is not one of item 0's options: abandon`);
   expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${workspace.name}`)).toBeUndefined();
   expect(claudeSpawnOf(booted.proc, failed.id)).toBeUndefined();
   await vi.waitFor(() => expect(claudeSpawnOf(booted.proc, clean.id)).toBeDefined());
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] })).status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("done");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failed.id}`)).json.status).toBe("cancelled");
 });
 
 it("面接室の tree に隠せない .claude があっても Interview root の失敗になり、面接室の名前で組は止まらない(ADR 0360 決定3)", async () => {
@@ -444,7 +451,7 @@ it("面接室の tree に隠せない .claude があっても Interview root の
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json;
   expect(events.filter((event: any) => event.kind === "spawn_failed")).toHaveLength(1);
   const question = (await questions(t)).find((candidate) => candidate.parent_id === root.id);
-  expect(question.question_items[0].recommendation).toBe("abandon");
+  expect(question.question_items[0]).toMatchObject({ options: ["abandon"], recommendation: "abandon" });
   expect(await servedQuarantineQuestion(t, "workspaceContainment", `claude-code/${root.id}`)).toBeUndefined();
   expect(claudeSpawnOf(booted.proc, root.id)).toBeUndefined();
 });

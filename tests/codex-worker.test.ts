@@ -962,6 +962,10 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const failureQuestion = (db: ReturnType<typeof openDb>, id: string) => listBoard(db).find((row) => row.type === "question" && row.parent_id === id)!;
 
+    /** 人間の回答の口で failure question に答える。 */
+    const answerFailure = (f: { db: ReturnType<typeof openDb>; clock: FakeClock }, question: ReturnType<typeof failureQuestion>, answer: string) =>
+      submitAnswer({ db: f.db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db: f.db, clock: f.clock }) }, getTask(f.db, question.id)!, [answer], undefined, () => f.clock.now(), "webui");
+
     it("task の checkout が落ちて保護ブランチの tip が通れば task の失敗で、組は止めず、kind は一撃にだけ運び event には載せず、質問は abandon を推奨する(pin G3)", async () => {
       const seen: Array<{ cwd: string; repository: boolean }> = [];
       const taskCheckout = await taskCheckoutWithSkill();
@@ -983,10 +987,14 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
       expect(f.process.calls).toEqual([]);
       const question = failureQuestion(f.db, f.value.id);
-      expect(question.question_items![0]).toMatchObject({ options: ["retry", "abandon"], recommendation: "abandon" });
+      // retry は同じ tree を読み直すだけなので選択肢に無い(issue #3289)
+      expect(question.question_items![0]).toMatchObject({ options: ["abandon"], recommendation: "abandon" });
       expect(question.purpose).toContain(message);
-      expect(question.purpose).toContain('"retry" runs the same check and fails for the same reason until the skill is no longer where Codex loads it from.');
-      expect(question.purpose).not.toContain("until the task branch changes");
+      expect(question.purpose).not.toContain('"retry"');
+      await expect(answerFailure(f, question, "retry")).rejects.toThrow(`answer "retry" is not one of item 0's options: abandon`);
+      await answerFailure(f, question, "abandon");
+      expect(getTask(f.db, question.id)?.status).toBe("done");
+      expect(getTask(f.db, f.value.id)?.status).toBe("cancelled");
       // 2段目は git repo の使い捨ての checkout に撃ち、どの出口でも残さない
       expect(seen.map(({ cwd }) => thrownAway(cwd))).toEqual([false, false, true, true]);
       expect(seen.slice(2).every(({ repository }) => repository)).toBe(true);
@@ -1209,7 +1217,13 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(f.failures).toEqual([{ error_code: null, message, kind: "unhideable-task-skills" }]);
       expect(f.appServer).toHaveLength(2);
       expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
-      expect(failureQuestion(f.db, f.value.id).question_items![0]!.recommendation).toBe("abandon");
+      // host の skill が原因でありうるので、Interview だけ retry が残る(ADR 0379 帰結)
+      const question = failureQuestion(f.db, f.value.id);
+      expect(question.question_items![0]).toMatchObject({ options: ["retry", "abandon"], recommendation: "abandon" });
+      expect(question.purpose).toContain(`If the skill is configured on the host, remove it there and answer "retry"; a skill carried by this checkout fails the same way again. `);
+      await answerFailure(f, question, "abandon");
+      expect(getTask(f.db, question.id)?.status).toBe("done");
+      expect(getTask(f.db, f.value.id)?.status).toBe("cancelled");
     });
   });
 

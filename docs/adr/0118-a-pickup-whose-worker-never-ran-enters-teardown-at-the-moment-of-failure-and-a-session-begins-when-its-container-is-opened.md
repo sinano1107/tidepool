@@ -1,5 +1,7 @@
 # worker が1度も走らなかった pickup は失敗の瞬間に後始末へ入り、session は容器を開いた瞬間に始まる
 
+**Status 追記: 決定4 の retry / abandon の2択は、retry が同じ読みを繰り返すだけの failure question には当たらない —— task branch の tree に盤面が隠せない形や閉じきれない skill があって止まる task の選択肢は abandon だけである。Codex の Interview の root・受験者だけは host の skill が原因でありうるので retry を残す(issue #3289)。**
+
 **Status 追記: 決定4 の「推奨 retry」は一過性の fs / git の失敗の線 —— task branch の tree に盤面が隠せない形(symlink の `.claude` など)があって pickup が止まる failure question は同じ tree を読み直すだけなので推奨は abandon([ADR 0360](0360-the-board-judges-what-reaches-the-worker-from-the-recorded-tree-reads-the-checkout-only-to-verify-its-own-hide-and-stops-unhideable-shapes-on-the-writers-axis.md) 決定3、2026-11-08、issue #3074)。**
 
 **Status 追記: 決定4 の「決定的な失敗はどれも pickup の gate が先に弾く二重防御であり、そこまで届いたら盤面のバグ」は ADR 0331 決定1 で置き換え(2026-10-30、issue #2700)** —— gate の述語と spawn の読みの同一性を担保する構造が無く、gate を抜けた資源の故障は観測点によらず資源に帰属する。残る「盤面のバグ」は資源の署名を持たない throw だけ。
