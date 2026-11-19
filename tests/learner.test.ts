@@ -12,7 +12,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { recordTaskCheckoutTip, releaseWorkspace, taskRunPlace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, settleReview, tempDirSync, WORKER_SPAWNED } from "./harness.js";
 
@@ -307,7 +307,7 @@ function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspa
     scheduler.stop();
     db.close();
   });
-  return { db, clock, worker, slot };
+  return { db, clock, worker, slot, workspace: options.workspace };
 }
 type ScheduledBoard = ReturnType<typeof scheduledBoard>;
 
@@ -357,7 +357,12 @@ function queueMemoryRepair(b: Board, type: "memory_repair" | "routing_repair") {
 /** scheduler が pickup した work を受理させ、slot を空ける。poll が登録した meta-review は slot を取るので、後続の pickup を
  *  待たせないようドメインで完了させる。 */
 function finish(b: ScheduledBoard, taskId: string) {
+  // workspace 付きの pickup は task の checkout を開く。完了の tip と解放も記録してから slot を空ける(ADR 0359 決定1・2、ADR 0369 決定7)。
+  const task = getTask(b.db, taskId)!;
+  const place = b.workspace && taskRunPlace(b.db, task, b.workspace);
+  if (place) recordTaskCheckoutTip(b.db, place, taskId);
   accept(b, taskId);
+  if (place) releaseWorkspace(b.db, place, task, b.clock.now(), true, undefined, undefined, true);
   for (const review of listBoard(b.db).filter((r) => r.meta_review_subject && r.status === "todo")) completeReview(b, review.id);
   b.slot.release();
 }
