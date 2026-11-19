@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { conventionCheckoutPath, isRemoteBacked, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -130,6 +130,7 @@ import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   PickupGateError,
+  protectedBranch,
   quarantineWorkspace,
   recreateEmptyRoom,
   redoMergeBacks,
@@ -1409,44 +1410,60 @@ export async function submitAnswer(
           );
           // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
           workspaceNetworkDestination(withRememberedRepoCheck(deps.db, mergeWorkspace, now));
-          const pr = await deps.github.readPullRequest({ workspace: mergeWorkspace, number: mergePr });
-          // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
-          if (pr.state === "unreadable") {
-            throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
-          }
-          // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
-          observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
-          // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
-          const { left, dropped } = await checkPrMergeContent(
-            deps.db, mergeWorkspace, landingTaskId, { number: mergePr, head: pr.head },
-            {
-              auth: deps.githubAuth,
-              compareRefs: () => {
-                // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
-                assertQuestionOpen();
-                assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, now());
+          const github = deps.github;
+          const readAndCompare = async () => {
+            const pr = await github.readPullRequest({ workspace: mergeWorkspace, number: mergePr });
+            // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
+            if (pr.state === "unreadable") {
+              throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
+            }
+            // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
+            observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
+            // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
+            const content = await checkPrMergeContent(
+              deps.db, mergeWorkspace, landingTaskId, { number: mergePr, head: pr.head },
+              {
+                auth: deps.githubAuth,
+                compareRefs: () => {
+                  // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
+                  assertQuestionOpen();
+                  assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, now());
+                },
               },
-            },
-          ).catch((err) => {
-            if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
-            throw new DomainError(
-              `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
-                (err instanceof Error ? err.message : String(err)),
-            );
-          });
-          if (left.length > 0) {
-            if (dropped) throw new DomainError(`cannot merge: ${dropped}`);
-            throw leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`);
+            ).catch((err) => {
+              if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
+              throw new DomainError(
+                `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
+                  (err instanceof Error ? err.message : String(err)),
+              );
+            });
+            return { pr, ...content };
+          };
+          let { pr, left, outside } = await readAndCompare();
+          // spec #3273 text A10: push の後の拒否は、取り込みと push が済んだことを言う
+          let pushed = "";
+          if (outside) {
+            // ADR 0376 決定7・8 / ADR 0371 決定10: 外の push が head から落とした内容は、最初の `merge` が作業台を開いて拒まれ、次の `merge` が
+            // 取り込み → 追いつき → push を収束で通す —— 昇格失敗 question を名指して返さない(#3250 の loop)
+            const verdicts = await deps.landing.converge({ answering: { question: task.id, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
+            const root = verdicts.find((verdict) => verdict.taskId === landingTaskId);
+            const error = promotionRetryError(root?.verdict);
+            if (error) throw new DomainError(root?.notice === undefined ? error : `${error}\n${root.notice}`);
+            notice = root?.notice;
+            pushed = `${root?.takenIn ? "took your merge in and pushed" : "pushed"} ${taskBranch(landingTaskId)}; `;
+            ({ pr, left, outside } = await readAndCompare());
           }
+          const refuse = (message: string) => new DomainError(`${pushed}${message}`);
+          if (left.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`).message);
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
           if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
-            throw new DomainError(
+            throw refuse(
               `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
                 `${UNREPORTED_CI_GRACE_TEXT} after ${UNREPORTED_CI_GRACE_ORIGIN_TEXT}`,
             );
           }
           if (pr.ci !== "success" && pr.ci !== "unreported") {
-            throw new DomainError(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
+            throw refuse(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
           }
           // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
           // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
@@ -1461,10 +1478,11 @@ export async function submitAnswer(
             // External merge precedes the persisted answer. Failure leaves the question open.
             // CI を読んだ head に固定する(ADR 0231 決定1)。失敗は文面で分けず DomainError に包む
             try {
-              await deps.github!.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head);
+              await github.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head);
             } catch (err) {
               if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError) throw err;
-              throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
+              const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
+              throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, protectedBranch(mergeWorkspace))}`);
             }
           });
           rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };

@@ -1317,7 +1317,10 @@ it("merge 回答の merge が失敗したら印は放され、次の merge 回�
     throw new Error("Pull request is not mergeable: merge conflict");
   };
 
-  await expect(answer()).rejects.toThrow("merging PR #42 failed");
+  // spec #3273 text A6
+  await expect(answer()).rejects.toThrow(
+    "merging PR #42 failed: Pull request is not mergeable: merge conflict. If PR #42 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer again.",
+  );
   await expect(answer()).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
   expect(prOutcomes()).toEqual([{ task_id: work.id, payload: { kind: "pr_merged", pr_number: 42 } }]);

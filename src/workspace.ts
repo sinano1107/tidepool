@@ -1120,9 +1120,9 @@ export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string
 const outsideHead = (taskId: string, head: string): Carried => ({ ref: remoteTrackingRef(taskBranch(taskId)), sha: head });
 
 /** ADR 0376 決定4・8: 昇格の retry は追いつきより前に、(`task/<root>`, GitHub の head) の作業台が取り込める tip を持てば先に取り込み、
- *  作業台を残したならその text C6 を返す。tip が今読んだ head を欠けば、`board/origin/task/<root>` をその head へ引き直して拒む。 */
-export const takeInOutsideHead = (db: Db, workspace: WorkspaceConfig, taskId: string, head: string, intake: IntakeContext): string | undefined =>
-  takeInExistingWorkbench(db, workspace, taskBranch(taskId), outsideHead(taskId, head), intake)?.kept;
+ *  取り込んだなら、作業台を残したときの text C6 を返す。tip が今読んだ head を欠けば、`board/origin/task/<root>` をその head へ引き直して拒む。 */
+export const takeInOutsideHead = (db: Db, workspace: WorkspaceConfig, taskId: string, head: string, intake: IntakeContext): { kept: string | undefined } | undefined =>
+  takeInExistingWorkbench(db, workspace, taskBranch(taskId), outsideHead(taskId, head), intake);
 
 /** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`otherTasks` は
  *  ADR 0382 決定4: 数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)。`humanContent` は
@@ -3108,6 +3108,53 @@ export function outsideCommitsStop(workspace: WorkspaceConfig, workbenchBase: st
     `${found} See them with \`git log --stat ${target}..${merge}\` in the workbench at ${opened.path}. The board does not merge outside commits itself: ` +
       `there, on ${target}, run \`git merge ${merge}\` ${fromOwnClone(target, merge)}. ${tipCondition(target, source)} Then answer \`retry\`.`,
   );
+}
+
+/** spec #3273 の入口の表 "Refused once"(ADR 0382 の上書き): `pr_merge` の拒否が、人間に伝えた GitHub の head を (`task/<root>`, GitHub の head)
+ *  の作業台に残す印。`refs/heads/` の外に置くので、引き直しの `--prune` で消えず、人間が merge する `board/origin/task/<root>` とも、取り込みが
+ *  人間の作業として数える branch とも分かれる。書くのはその拒否だけ。 */
+const REFUSED_ONCE = "refs/board/refused-once";
+
+const outsideHeadWorkbench = (workspace: WorkspaceConfig, base: string, taskId: string) =>
+  CHECKOUT_LAYOUT.workbench.at(base, workspace, taskBranch(taskId), shortRef(remoteTrackingRef(taskBranch(taskId))));
+
+/** 印の値(無ければ undefined)。作業台を開く前に読む —— 開き直しは人間の作業の無い作業台を作り直し、印ごと消す。 */
+export function refusedOnceHead(workspace: WorkspaceConfig, base: string, taskId: string): string | undefined {
+  const at = outsideHeadWorkbench(workspace, base, taskId);
+  if (!placeHasRepository(at)) return undefined;
+  return workerRepoGit(realpathSync(at), "for-each-ref", "--format=%(objectname)", REFUSED_ONCE) || undefined;
+}
+
+/** push が済んだ印を消す —— 同じ head へもう一度動かされれば、もう一度拒む。 */
+export function clearRefusedOnce(workspace: WorkspaceConfig, base: string, taskId: string): void {
+  const at = outsideHeadWorkbench(workspace, base, taskId);
+  if (placeHasRepository(at)) workerRepoGit(realpathSync(at), "update-ref", "-d", REFUSED_ONCE);
+}
+
+/** ADR 0376 決定7 / ADR 0371 決定10: 記録済みの PR の head が盤面の外で巻き戻された・書き換えられた —— `merge` を拒み、(`task/<root>`, GitHub の
+ *  head) の作業台を開いて `board/origin/task/<root>` をその head に置き、印をその head にして、戻す・捨てる手順を言う(spec #3273 text A4a・A4b。
+ *  開けなければ A7d)。`lacks` は text A4 / A4d の `<branches>` の句。 */
+export function outsidePushRefusal(
+  workspace: WorkspaceConfig,
+  base: string,
+  taskId: string,
+  { prNumber, head, rewound, lacks }: { prNumber: number; head: string; rewound: boolean; lacks: string },
+): string {
+  const target = taskBranch(taskId);
+  const carried = outsideHead(taskId, head);
+  const lead = `PR #${prNumber}'s head was ${rewound ? "moved" : "rewritten"} outside the board to ${head}, which ${lacks}.`;
+  const opened = openWorkbenchOrSayWhy(workspace, base, target, carried, lead, ".");
+  if (typeof opened === "string") return opened;
+  workerRepoGit(opened.path, "update-ref", REFUSED_ONCE, head);
+  const source = shortRef(carriedRef(carried));
+  const merge = boardBranch(source);
+  const discard = `\`git merge -s ours --no-commit ${merge}\`, \`git read-tree -u --reset ${merge}\`, \`git commit\``;
+  const place = `${lead} The board opened the workbench at ${opened.path}.`;
+  return rewound
+    ? `${place} Answer \`merge\` again and the board pushes that content back. To discard it instead, first run there, on ${target}: ${discard} ` +
+        `(or the same in your own clone, then push ${target} to the workbench); then answer \`merge\` again.`
+    : `${place} There, on ${target}, either keep that content with \`git merge ${merge}\` ${fromOwnClone(target, merge)}, or discard it with ${discard}. ` +
+        `${tipCondition(target, source)} Then answer \`merge\` again: the board takes your merge in and pushes it, and CI runs on the result.`;
 }
 
 /** ADR 0376 決定6: PR の記録が無い根の巻き戻し —— origin の head が、盤面が最後に push した値の真の祖先。値は写し
