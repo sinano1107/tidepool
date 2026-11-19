@@ -192,6 +192,7 @@ export function openDb(path: string): Db {
       payload    TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS events_task_kind_id ON events (task_id, kind, id);
 
     -- the human's read position in the decision log (the log itself is the
     -- events table, never its own entity): one row, the last-read event id
