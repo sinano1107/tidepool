@@ -10,7 +10,7 @@ import type { GitHubClient, PrStateRead } from "./github.js";
 import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates } from "./pickup-predicates.js";
-import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
+import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
 import {
@@ -50,10 +50,8 @@ import {
   checkAcceptanceFirstHalf,
   compareRefsBeforeLanding,
   FirstCaptureRefusedError,
-  FirstCaptureRegistryReadError,
   fetchCommitIfMissing,
   type IntakeContext,
-  lineageReadsRefs,
   lineageTaskBranch,
   protectedBranch,
   protectedBranchRef,
@@ -493,9 +491,9 @@ function landingRootOf(
   } catch {}
   if (!workspace) return { task, outlivedForkSource: false };
   try {
-    // ADR 0370 決定1: 収束だけが、lineage が ref を読む候補を読む前に比べる —— 表示と扉の読みは比べない
-    if (lineageReadsRefs(db, task)) compareBeforeLineage?.(workspace);
-    const lineage = resolveTaskBranchLineage(db, workspace, task, readBase(workspace));
+    // ADR 0370 決定1: 収束だけが、lineage が ref を読む直前に比べる —— 表示と扉の読みは比べない
+    const resolved = workspace;
+    const lineage = resolveTaskBranchLineage(db, resolved, task, readBase(resolved), compareBeforeLineage && (() => compareBeforeLineage(resolved)));
     return lineage.branch ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
   } catch (lineageError) {
     if (isBoardDbRefusal(lineageError) || lineageError instanceof RootStopped) throw lineageError;
@@ -999,14 +997,26 @@ export function createLanding(deps: LandingDeps): Landing {
         ? `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`
         : `agent "${name}" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question`,
   });
-  /** ADR 0370 決定1: 運ぶか書き込みを決めて ref を読む同期区間の頭の比較。動いていれば workspace の Quarantine を立て(開いていれば増えない)、
-   *  拒否文が動いた ref を名指す。最初の撮りを待つ根は止めている名前で止まり(ADR 0373 決定13 追記)、どちらも event も question も書かない
-   *  (ADR 0241 決定6)。registry が読めない失敗はどの名前の Quarantine でもないので、そのまま投げて根の失敗にする。 */
-  const compareRefs = (workspace: WorkspaceConfig) => {
+  /** ADR 0370 決定1: 運ぶか書き込みを決めて ref を読む同期区間の頭の比較(基準の行が無ければ最初の撮り)。動いていれば workspace の
+   *  Quarantine を立て(開いていれば増えない)、拒否文が動いた ref を名指して根を止める。最初の撮りを待つ根は、止めている Quarantine の
+   *  question を名指して止まる(ADR 0373 決定13 追記)。どちらも根の event を刻まず、question の登録も引退もしない(ADR 0370 決定1 ——
+   *  Quarantine が抱える根に失敗 question を重ねないのは ADR 0241 決定6)。registry が読めない失敗と checkout が読めない失敗はどの名前の
+   *  Quarantine でもないので、そのまま投げて根の失敗にする。 */
+  const stopRootIfRefsMoved = (workspace: WorkspaceConfig) => {
     try {
       compareRefsBeforeLanding(deps.db, workspace, { resolveRegistered: deps.resolveWorkspace, now: deps.clock.now() });
     } catch (error) {
-      if (error instanceof FirstCaptureRefusedError) throw new RootStopped(quarantined("workspace", error.stop.value!));
+      if (error instanceof FirstCaptureRefusedError) {
+        const { quarantine, value } = error.stop;
+        if (quarantine !== "workspaceContainment") throw new RootStopped(quarantined("workspace", value!));
+        // 組の封じ込めの question は workspace の Quarantine の question とは別 —— 開いている方を名指す
+        throw new RootStopped({
+          kind: "quarantined",
+          error:
+            `the containment of workspace "${parseWorkspaceContainmentValue(value!).workspace}" is quarantined, and a workspace the board holds no baseline for ` +
+            `waits until it is closed; answer question ${openQuarantineQuestion(deps.db, quarantine, value)?.id}`,
+        });
+      }
       if (!(error instanceof RefsMovedError)) throw error;
       quarantineWorkspace(deps.db, workspace.name, error, deps.clock.now());
       throw new RootStopped({ kind: "quarantined", error: `${error.message}; answer the quarantine question of workspace "${workspace.name}" before landing` });
@@ -1077,7 +1087,7 @@ export function createLanding(deps: LandingDeps): Landing {
    *  読まない —— merge の後に完了した子孫は、自分で根になる。 */
   const settleMerged = async (task: Task, workspace: WorkspaceConfig, prNumber: number, ctx: RootContext) => {
     await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
-    compareRefs(workspace);
+    stopRootIfRefsMoved(workspace);
     return taskHasContentToLand(workspace, task.id)
       ? alreadyMerged(task, prNumber, ctx)
       : finishLanding(task, workspace, prNumber, "merge", ctx);
@@ -1101,8 +1111,9 @@ export function createLanding(deps: LandingDeps): Landing {
       intake: question === undefined ? undefined : { workbenchBase, entry: "promotion_retry", answerer: answering.get(question)!, now: deps.clock.now() },
       kept,
     };
-    /** ADR 0370 決定1: 断念・hold の刻んだ head を今のブランチと比べる前の比較。head が無いか workspace を解決できなければ ref を読まず、
-     *  読めない checkout は `contentChangedSince` が「変わった」と読むので(ADR 0225 決定1)、ここでは止めない。 */
+    /** ADR 0370 決定1: 断念・hold の刻んだ head を今のブランチと比べる前の比較。head が無いか workspace を解決できなければ ref を読まない
+     *  (`contentChangedSince` は読まずに「変わった」と読む、ADR 0225 決定1 / ADR 0234 決定3)。比較そのものが落ちれば、比べていない
+     *  ref で問い直さず根の失敗にする。 */
     const compareBeforeChangedSince = (head: string | null): LandingVerdict | undefined => {
       if (head === null) return undefined;
       let workspace: WorkspaceConfig | undefined;
@@ -1111,10 +1122,10 @@ export function createLanding(deps: LandingDeps): Landing {
       } catch {}
       if (!workspace) return undefined;
       try {
-        compareRefs(workspace);
+        stopRootIfRefsMoved(workspace);
       } catch (error) {
-        if (error instanceof FirstCaptureRegistryReadError) return failed(task, "promotion_failed", error, ctx);
         if (error instanceof RootStopped || isBoardDbRefusal(error)) throw error;
+        return failed(task, "promotion_failed", error, ctx);
       }
       return undefined;
     };
@@ -1184,7 +1195,7 @@ export function createLanding(deps: LandingDeps): Landing {
       const remoteBacked = isRemoteBacked(workspace);
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
       const afterPush = async (landed: LandingVerdict, pushed: string): Promise<LandingVerdict> => {
-        compareRefs(workspace);
+        stopRootIfRefsMoved(workspace);
         const left = await contentLeftBehind(deps.db, workspace, task.id, pushed);
         if (left.length === 0) {
           retireFailures(task.id, ctx);
@@ -1207,7 +1218,7 @@ export function createLanding(deps: LandingDeps): Landing {
       };
       // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
       if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
-      compareRefs(workspace);
+      stopRootIfRefsMoved(workspace);
       // ADR 0371 決定10: retry は根の分解ツリーの届いていない merge back を受理と同じ条件(前半の項と clean を含む)で撃ち直してから収束する
       // (積み残しの question、text A5)。
       // conflict は作業台を開いて回答を拒む(text A1)
@@ -1215,16 +1226,16 @@ export function createLanding(deps: LandingDeps): Landing {
         const { own } = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
         const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, own, true);
         ctx.kept.push(
-          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf, compareRefs: () => compareRefs(workspace) })),
+          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf, compareRefs: () => stopRootIfRefsMoved(workspace) })),
         );
-        compareRefs(workspace);
+        stopRootIfRefsMoved(workspace);
       }
       const outcome = rootPrOutcome(deps.db, task.id);
       const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
       // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
       if (mergedPr !== undefined) {
         await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
-        compareRefs(workspace);
+        stopRootIfRefsMoved(workspace);
       }
       if (!taskHasContentToLand(workspace, task.id)) {
         if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, "merge", ctx);
@@ -1281,7 +1292,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
           // ADR 0370 決定1: 準備の await の間に動いた ref があれば、確かめた sha も運ばない —— 比較と push を同じ同期区間に置く
-          compareRefs(workspace);
+          stopRootIfRefsMoved(workspace);
           const block = landingBlock(deps.db, task.id);
           if (block) {
             recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
@@ -1318,7 +1329,7 @@ export function createLanding(deps: LandingDeps): Landing {
           };
         }
         // PR の状態の await の後、追いつきと tip の読みの前(ADR 0370 決定1)
-        compareRefs(workspace);
+        stopRootIfRefsMoved(workspace);
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
         const refusal = await push(sha);
@@ -1343,7 +1354,7 @@ export function createLanding(deps: LandingDeps): Landing {
           error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
         };
       }
-      compareRefs(workspace);
+      stopRootIfRefsMoved(workspace);
       catchUp();
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());
@@ -1408,7 +1419,7 @@ export function createLanding(deps: LandingDeps): Landing {
       const kept: string[] = [];
       const record = (verdict: LandingVerdict) => verdicts.push({ taskId: id, verdict, ...(kept.length > 0 && { notice: kept.join("\n") }) });
       try {
-        const root = landingRootOf(deps.db, resolve, id, (workspace) => protectedBranchRef(checked(workspace)), compareRefs);
+        const root = landingRootOf(deps.db, resolve, id, (workspace) => protectedBranchRef(checked(workspace)), stopRootIfRefsMoved);
         const verdict = root && (await landRoot(root, answering, kept));
         if (verdict) record(verdict);
       } catch (error) {

@@ -1215,15 +1215,24 @@ export async function openHumanContentWorkbench(
   return `opened the workbench at ${path} for ${branch} of workspace ${workspace.name}; answer question ${question} when your commits are there.${held}`;
 }
 
-/** ADR 0373 決定13 追記: 基準の行の無い名前 `name` の最初の撮りを止めている Quarantine の (名前, question) —— その名前自身の Quarantine と、
+/** 基準の行の無い名前の最初の撮りを止めている Quarantine —— その種類と値、止めている workspace の名前、開いている question。 */
+type FirstCaptureHold = { quarantine: "workspace" | "workspaceContainment"; value: string; workspace: string; question: string };
+
+/** ADR 0373 決定13 追記: 基準の行の無い名前 `name` の最初の撮りを止めている Quarantine —— その名前自身の Quarantine と、
  *  基準の行を持つ面接室でない名前の Quarantine(workspace・組の封じ込め)。無ければ undefined。 */
-function firstCaptureHold(db: Db, name: string): readonly [name: string, question: string] | undefined {
+function firstCaptureHold(db: Db, name: string): FirstCaptureHold | undefined {
   const own = openQuarantineQuestion(db, "workspace", name);
-  if (own) return [name, own.id];
-  return [
-    ...[...openQuarantineQuestions(db, "workspace")].map(([value, id]) => [value!, id] as const),
-    ...[...openQuarantineQuestions(db, "workspaceContainment")].map(([value, id]) => [parseWorkspaceContainmentValue(value!).workspace, id] as const),
-  ].find(([held]) => holdsFirstCaptures(db, held));
+  if (own) return { quarantine: "workspace", value: name, workspace: name, question: own.id };
+  const open = [
+    ...[...openQuarantineQuestions(db, "workspace")].map(([value, question]): FirstCaptureHold => ({ quarantine: "workspace", value: value!, workspace: value!, question })),
+    ...[...openQuarantineQuestions(db, "workspaceContainment")].map(([value, question]): FirstCaptureHold => ({
+      quarantine: "workspaceContainment",
+      value: value!,
+      workspace: parseWorkspaceContainmentValue(value!).workspace,
+      question,
+    })),
+  ];
+  return open.find((held) => holdsFirstCaptures(db, held.workspace));
 }
 
 /** ADR 0383 決定1・2: 基準の行の無い名前の `open_workbench` は、pickup の最初の撮りと同じ準備を通ってから撮る —— 基準の行を持つ名前の
@@ -1238,7 +1247,7 @@ async function captureFirstBaseline(
   const quarantined = (name: string, question: string) => new DomainError(`cannot open a workbench: workspace ${name} is quarantined — answer question ${question} first.`);
   const stopped = (stop: ResourceStop) => quarantined(stop.value!, openQuarantineQuestion(db, "workspace", stop.value)!.id);
   const held = firstCaptureHold(db, workspace.name);
-  if (held) throw quarantined(...held);
+  if (held) throw quarantined(held.workspace, held.question);
   const named = withRememberedRepoCheck(db, workspace, () => board.now);
   try {
     await firePickupPredicates(db, named, checkoutPickupPredicates(named, board.fixedPoints), "before-open");
@@ -1571,10 +1580,17 @@ export function resolveTaskBranchLineage(
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
   protectedRef?: string,
+  /** 最初の ref の読みの直前に1度だけ呼ぶ(着地の比較、ADR 0370 決定1)。ref を読まない lineage では呼ばない。 */
+  beforeRefRead?: () => void,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
+  const readingRefs = () => {
+    beforeRefRead?.();
+    beforeRefRead = undefined;
+  };
   // 修理子の type は review と同じく lineage に透明(ADR 0272 決定6 / ADR 0279 決定4)
   // interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)
   if (carriesReadOnly(task.type) || task.type === "interview") {
+    if (task.parent_id) readingRefs();
     return {
       branch:
         task.parent_id && taskBranchExists(workspace, task.parent_id)
@@ -1600,19 +1616,12 @@ export function resolveTaskBranchLineage(
       continue;
     }
     const base = candidate ?? (protectedRef ??= protectedBranchRef(withRememberedRepoCheck(db, workspace)));
+    readingRefs();
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
     else if (!effect.historyConverged) outlivedForkSource = true;
   }
   return { branch: candidate, outlivedForkSource };
-}
-
-/** `resolveTaskBranchLineage` が work の task について ref を読むか —— 読むのは決着した work の祖先を比べるときだけ。 */
-export function lineageReadsRefs(db: Db, task: Pick<Task, "parent_id">): boolean {
-  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined) {
-    if (parent.type === "work" && isSettled(parent.status)) return true;
-  }
-  return false;
 }
 
 /** ADR 0053: the nearest work branch in the task's live lineage, or undefined
@@ -1921,15 +1930,16 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
 }
 
 /** ADR 0370 決定1: 着地が名前の場所の ref を読む前の比較 —— pickup と同じ比較器で全 ref を基準と比べ、動いていれば `RefsMovedError`。
- *  基準の行が無い名前は pickup と同じ手続きで最初の撮りをする(ADR 0373 決定13 の確認は `prepareRefBaseline` が掛ける)。撮れない間は
- *  止めている名前を持つ `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
+ *  基準の行が無い名前は `prepareRefBaseline` で最初の撮りをする(ADR 0373 決定13 の確認はそこが掛ける)。pickup が開く前に掛ける項は
+ *  掛けない —— 撮る前にそれを求めるのは作業台を開く道だけである(ADR 0383 決定2)。撮れない間は、止めている Quarantine を持つ
+ *  `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
 export function compareRefsBeforeLanding(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
   if (holdsBaseline(db, workspace.name)) {
     compareAndFoldBaseline(db, workspace, "before landing read them");
     return;
   }
   const held = firstCaptureHold(db, workspace.name);
-  if (held) throw new FirstCaptureRefusedError({ quarantine: "workspace", value: held[0], reason: `workspace ${held[0]} is quarantined` });
+  if (held) throw new FirstCaptureRefusedError({ quarantine: held.quarantine, value: held.value, reason: `workspace ${held.workspace} is quarantined` });
   prepareRefBaseline(db, workspace, board);
 }
 
@@ -2068,8 +2078,9 @@ function storedRefs(db: Db, workspaceName: string): string {
   const row = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
     .get(workspaceName) as { ref_snapshot: string | null } | undefined;
-  // 行無しと NULL は空文字: 解放と着地は分岐を書かずに違反へ落ち(ADR 0064 決定6 —— pickup を経ない解放経路が足されても
-  // 検査は黙って消えない)、pickup と受理だけがこれを「まだ持ったことがない」と読む(ADR 0351 決定2)
+  // 行無しと NULL は空文字: 解放と local 着地の回答は分岐を書かずに違反へ落ち(ADR 0064 決定6 —— pickup を経ない解放経路が足されても
+  // 検査は黙って消えない)、盤面が最初に触れる時点(pickup・作業台を開く・着地の収束)と受理だけがこれを「まだ持ったことがない」と読む
+  // (ADR 0351 決定2 / ADR 0383 決定2)
   return row?.ref_snapshot ?? "";
 }
 
@@ -2132,8 +2143,8 @@ function compareAndFoldBaseline(db: Db, workspace: WorkspaceConfig, when: string
   return after;
 }
 
-/** 基準を書き換える。基準を持たない checkout(盤面がまだ持ったことがない)には何もしない —— 行を作らず、最初の pickup が
- *  全体を撮る(ADR 0351 決定2)。保存値の綴りは常に「`currentRefs` の出力」= **refname 順**である(ADR 0064 決定6)。 */
+/** 基準を書き換える。基準を持たない checkout(盤面がまだ持ったことがない)には何もしない —— 行を作らず、盤面がその名前に最初に
+ *  触れる時点(pickup・作業台を開く・着地の収束)が全体を撮る(ADR 0351 決定2 / ADR 0373 決定7 の Status 追記 / ADR 0383 決定2)。保存値の綴りは常に「`currentRefs` の出力」= **refname 順**である(ADR 0064 決定6)。 */
 function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<string, string>) => void): boolean {
   const stored = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
