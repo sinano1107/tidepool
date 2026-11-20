@@ -1905,14 +1905,21 @@ export function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelD
     );
   }
   const fallback = typeAwareDefaultAgentSql("x");
+  // 当たった資源を名指す: 資源の名で鍵を持つ workspace / agent の確認ならその question、ほか(resolver が写す種類)は資源の名
   const quarantine = db
     .prepare(
-      `SELECT 1 FROM tasks x
-       WHERE x.id IN (SELECT value FROM json_each(@felled)) AND ${unsettledSql("x.status")}
-         AND (COALESCE(${derivedWorkspaceSql("x")}, @defaultWorkspaceName) IN (SELECT value FROM json_each(@workspaces))
-           OR COALESCE(x.assignee, ${fallback}) IN (SELECT value FROM json_each(@assignees)))
+      `SELECT COALESCE(
+           (SELECT q.id FROM tasks q WHERE q.type = 'question' AND q.status = 'todo'
+              AND ((q.question_quarantine_kind = 'workspace' AND q.question_quarantine_value = m.workspace AND m.workspace IN (SELECT value FROM json_each(@workspaces)))
+                OR (q.question_quarantine_kind = 'agent' AND q.question_quarantine_value = m.agent AND m.agent IN (SELECT value FROM json_each(@assignees))))
+            LIMIT 1),
+           CASE WHEN m.workspace IN (SELECT value FROM json_each(@workspaces)) THEN 'workspace ' || m.workspace ELSE 'agent ' || m.agent END)
+       FROM (SELECT COALESCE(${derivedWorkspaceSql("x")}, @defaultWorkspaceName) AS workspace, COALESCE(x.assignee, ${fallback}) AS agent FROM tasks x
+             WHERE x.id IN (SELECT value FROM json_each(@felled)) AND ${unsettledSql("x.status")}) m
+       WHERE m.workspace IN (SELECT value FROM json_each(@workspaces)) OR m.agent IN (SELECT value FROM json_each(@assignees))
        LIMIT 1`,
     )
+    .pluck()
     .get({
       felled,
       defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
@@ -1921,11 +1928,11 @@ export function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelD
       interviewerName: defaults.interviewerName ?? null,
       workspaces: JSON.stringify(defaults.quarantined?.workspaces ?? []),
       assignees: JSON.stringify(defaults.quarantined?.assignees ?? []),
-    });
+    }) as string | undefined;
   if (quarantine) {
     throw new DomainError(
       `cannot ${doing} while an open quarantine confirmation stands over this subtree's ` +
-        "resource — answer it first; that answer is the only gate",
+        `resource (${quarantine}) — answer it first; that answer is the only gate`,
     );
   }
 }

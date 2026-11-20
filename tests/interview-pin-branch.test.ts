@@ -1186,6 +1186,21 @@ it("倒す RCA の配下に開いた失敗 question があれば、新しい回�
   db.close();
 });
 
+it("倒す RCA の資源に開いた別の Quarantine があれば、新しい回答はその question を名指して何も書かずに拒む —— いま答えている面接室の Quarantine は門に数えない(issue #3159 / ADR 0385 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { room, root, rejected, rcas, written } = await rcasBeforeAnswer(db);
+  dropFromRoom(room, rejected);
+  const self = rcas.find((rca) => rca.assignee !== null)!;
+  registerQuarantine(db, "agent", self.assignee!, "the agent broke", NOW);
+  const agentQuestion = openQuarantineQuestion(db, "agent", self.assignee!)!;
+  const before = written();
+
+  await expect(answerCancelTheRcas(db, root.id)).rejects.toThrow(`resource (${agentQuestion.id})`);
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+  expect(written()).toBe(before);
+  db.close();
+});
+
 it("面接室ごと消え root を cancel した後も RCA が残れば、選択肢が保存されていなくても新しい回答で RCA が cancelled になり、面接室そのものの項も repo を読む検査も撃たずに受理する(issue #3159 / ADR 0385 決定2・5・6)", async () => {
   const db = openDb(":memory:");
   const { room, root, rcas, question } = await rcasBeforeAnswer(db);

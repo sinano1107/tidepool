@@ -635,7 +635,7 @@ export function roomRcaChoice(db: Db, question: Pick<Task, "id" | "purpose" | "q
   const [item, ...rest] = question.question_items!;
   return {
     question_items: [{ ...item!, options: [...item!.options, CANCEL_THE_RCAS] }, ...rest],
-    purpose: `${question.purpose}\n\n\`${CANCEL_THE_RCAS}\`: the board cancels, with their unsettled tasks, those of the RCAs ${rcas.join(", ")} whose check above fails, and accepts the answer only if every other check passes.`,
+    purpose: `${question.purpose}\n\n\`${CANCEL_THE_RCAS}\`: the board cancels, with their unsettled tasks, those of the RCAs ${rcas.join(", ")} whose objects are missing from this room when you answer, and accepts the answer only if every other check passes.`,
     // 捨てられる done の work は cancel option の脇に出る(ADR 0271 決定4)
     question_cancel_option: CANCEL_THE_RCAS,
     discards: cancelDiscards(db, rcas),
