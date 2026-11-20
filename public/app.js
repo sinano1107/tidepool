@@ -649,7 +649,10 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
   }
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(draft.originalTitle) || !!TidepoolRules.whyBlank(draft.originalText), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), addressee, onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(draft.title) || !!TidepoolRules.whyBlank(draft.text), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
-function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOpenSettings }) {
+function TpRefusal({ text }) {
+  return /* @__PURE__ */ React.createElement("div", { role: "alert", style: { fontSize: "var(--text-sm)", color: "var(--coral-4)", background: "var(--coral-1)", border: "1px solid var(--coral-2)", borderRadius: "var(--radius-md)", padding: "8px 10px", marginBottom: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, text);
+}
+function TpQuestionCard({ q, answer, onAnswer, locked = false, refusal, onTranslate, onOpenSettings }) {
   const { Card, AgentChip, Switch, Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
@@ -680,61 +683,64 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
     runTranslate(onTranslate, { type: "question", task_id: q.id }, setTranslation);
   }, [translateOn]);
   const translatedItems = translation && translation.status === "translated" ? translation.items : null;
-  return /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, q.id), /* @__PURE__ */ React.createElement(AgentChip, { name: q.agent, icon: q.agentIcon, board: q.board, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)" } }, q.agent), q.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, "blocks ", q.blocking)), q.kind === "approval" && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", background: "var(--sun-1)", borderRadius: "var(--radius-full)", padding: "2px 10px", marginBottom: 6 } }, "out-of-authority \u2192 approval"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 6 } }, /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: translateOn, onChange: setTranslateOn })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, q.context), translateOn && translation && (translation.status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, translation.purpose) : /* @__PURE__ */ React.createElement("div", { style: { marginBottom: q.note ? 6 : 14 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: translation }))), q.note && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 14 } }, "\u26A0 ", q.note), q.opensSettings && onOpenSettings && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: onOpenSettings }, "Open settings")), q.amendable === "agent_tier" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    TpTierAmendment,
-    {
-      label: "Amend target tier (optional)",
-      below: q.amendBelow,
-      value: amendment.to ?? "",
-      onChange: (to) => setAmendment({ ...amendment, to })
-    }
-  )), q.amendable === "tier_description" && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    Input,
-    {
-      label: "Amend description (optional)",
-      value: amendment.description ?? "",
-      placeholder: "as proposed",
-      onChange: (e) => setAmendment({ description: e.target.value })
-    }
-  )), q.amendable === "add_tier" && !locked && /* @__PURE__ */ React.createElement(TpAddTierAmendment, { proposed: q.proposedTier, onChange: setAmendment }), q.amendable === "interview" && !locked && /* @__PURE__ */ React.createElement(TpInterviewAmendment, { proposed: q.proposedInterview, onChange: setAmendment }), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    TpTierAmendment,
-    {
-      label: "Amend tier (optional)",
-      value: amendment.tier ?? "",
-      onChange: (tier) => setAmendment({ ...amendment, tier })
-    }
-  ), /* @__PURE__ */ React.createElement(
-    Input,
-    {
-      label: "Amend effort (optional)",
-      value: amendment.effort ?? "",
-      placeholder: "as proposed",
-      mono: true,
-      onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
-    }
-  )), answerable && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    Input,
-    {
-      label: pickedNeedingComment.length ? `Comment (required to ${pickedNeedingComment.join(" / ")})` : "Comment (optional)",
-      multiline: true,
-      rows: 2,
-      value: comment,
-      onChange: (e) => setComment(e.target.value),
-      placeholder: "why"
-    }
-  )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 sent together on Submit"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
-    TpQuestionItemPicker,
-    {
-      key: i,
-      item,
-      value: draft[i],
-      locked,
-      freeText: q.freeText,
-      onChange: (v) => setItemAnswer(i, v),
-      translated: translatedItems ? translatedItems[i] : null,
-      disabled: disabledOptions
-    }
-  ))), answerable && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } }, /* @__PURE__ */ React.createElement(Button, { variant: "primary", disabled: !canSubmit || submitting, onClick: submit }, "Submit")));
+  return (
+    // DS の Card は data-* を渡さないので、e2e が1枚を引く口は外側に持つ
+    /* @__PURE__ */ React.createElement("div", { "data-testid": `question-card-${q.id}` }, /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, q.id), /* @__PURE__ */ React.createElement(AgentChip, { name: q.agent, icon: q.agentIcon, board: q.board, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)" } }, q.agent), q.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, "blocks ", q.blocking)), q.kind === "approval" && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", background: "var(--sun-1)", borderRadius: "var(--radius-full)", padding: "2px 10px", marginBottom: 6 } }, "out-of-authority \u2192 approval"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 6 } }, /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: translateOn, onChange: setTranslateOn })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, q.context), translateOn && translation && (translation.status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, translation.purpose) : /* @__PURE__ */ React.createElement("div", { style: { marginBottom: q.note ? 6 : 14 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: translation }))), q.note && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 14 } }, "\u26A0 ", q.note), q.opensSettings && onOpenSettings && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: onOpenSettings }, "Open settings")), q.amendable === "agent_tier" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+      TpTierAmendment,
+      {
+        label: "Amend target tier (optional)",
+        below: q.amendBelow,
+        value: amendment.to ?? "",
+        onChange: (to) => setAmendment({ ...amendment, to })
+      }
+    )), q.amendable === "tier_description" && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label: "Amend description (optional)",
+        value: amendment.description ?? "",
+        placeholder: "as proposed",
+        onChange: (e) => setAmendment({ description: e.target.value })
+      }
+    )), q.amendable === "add_tier" && !locked && /* @__PURE__ */ React.createElement(TpAddTierAmendment, { proposed: q.proposedTier, onChange: setAmendment }), q.amendable === "interview" && !locked && /* @__PURE__ */ React.createElement(TpInterviewAmendment, { proposed: q.proposedInterview, onChange: setAmendment }), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+      TpTierAmendment,
+      {
+        label: "Amend tier (optional)",
+        value: amendment.tier ?? "",
+        onChange: (tier) => setAmendment({ ...amendment, tier })
+      }
+    ), /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label: "Amend effort (optional)",
+        value: amendment.effort ?? "",
+        placeholder: "as proposed",
+        mono: true,
+        onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
+      }
+    )), answerable && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label: pickedNeedingComment.length ? `Comment (required to ${pickedNeedingComment.join(" / ")})` : "Comment (optional)",
+        multiline: true,
+        rows: 2,
+        value: comment,
+        onChange: (e) => setComment(e.target.value),
+        placeholder: "why"
+      }
+    )), refusal && /* @__PURE__ */ React.createElement(TpRefusal, { text: refusal }), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 sent together on Submit"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
+      TpQuestionItemPicker,
+      {
+        key: i,
+        item,
+        value: draft[i],
+        locked,
+        freeText: q.freeText,
+        onChange: (v) => setItemAnswer(i, v),
+        translated: translatedItems ? translatedItems[i] : null,
+        disabled: disabledOptions
+      }
+    ))), answerable && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } }, /* @__PURE__ */ React.createElement(Button, { variant: "primary", disabled: !canSubmit || submitting, onClick: submit }, "Submit"))))
+  );
 }
 function TpScratchpad({ lines, onAdd, onRemove }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -855,6 +861,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const nQuestions = generalQuestions.length;
   const [section, setSection] = React.useState(nQuestions ? S_QUESTIONS : S_LOG);
   const [answers, setAnswers] = React.useState({});
+  const [refusals, setRefusals] = React.useState({});
   const [objections, setObjections] = React.useState({});
   const [objecting, setObjecting] = React.useState(null);
   const [draft, setDraft] = React.useState("");
@@ -865,9 +872,11 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const [landingNow, setLandingNow] = React.useState(null);
   const answerQ = async (q, a, amendment, comment) => {
     if (!a || answers[q.id]) return;
+    setRefusals(({ [q.id]: _, ...rest }) => rest);
     try {
       await onAnswer(q, a, amendment, comment);
-    } catch {
+    } catch (err) {
+      setRefusals((prev) => ({ ...prev, [q.id]: String(err.message || err) }));
       return;
     }
     setAnswers((prev) => ({ ...prev, [q.id]: a }));
@@ -1040,7 +1049,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || "task" })),
     ...dropped.map((s) => ({ id: s.id, text: s.text, kind: "discard" }))
   ];
-  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], onTranslate, onOpenSettings })))), section === S_LOG && (() => {
+  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], refusal: refusals[q.id], onTranslate, onOpenSettings })))), section === S_LOG && (() => {
     const renderLogRow = (l) => {
       const k = l.id;
       const hasHandoff = l.kind === "completion" && l.handoffPresent;
@@ -1096,10 +1105,10 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         " \u2014 show"
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
-  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], refusal: refusals[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
     const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
     if (blocked.length === 0) return null;
-    return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]);
+    return /* @__PURE__ */ React.createElement(React.Fragment, { key: kind }, /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]), blocked.filter((q) => refusals[q.id]).map((q) => /* @__PURE__ */ React.createElement("div", { key: q.id, "data-testid": `landing-refusal-${q.id}` }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginBottom: 4, overflowWrap: "anywhere" } }, q.id), /* @__PURE__ */ React.createElement(TpRefusal, { text: refusals[q.id] }))));
   })), section === S_QUEUE && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: preview ?? [] })), section === S_COMMIT && (() => {
     return /* @__PURE__ */ React.createElement("div", null, nObjections > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: 0 } }, nObjections, " objection", nObjections > 1 ? "s" : "", " bundle at commit \u2014 one repair task per objected task at the queue tail for its decision entries (none where a repair could not land) and one memory repair for its memory writes, whatever its state"), scratch.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 } }, "scratchpad \u2014 triage before commit"), scratch.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%", fontSize: "var(--text-sm)", color: (scratchKinds[l.id] || "task") === "discard" ? "var(--text-muted)" : "var(--text-body)", textDecoration: (scratchKinds[l.id] || "task") === "discard" ? "line-through" : "none" } }, l.text), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, TP_SCRATCH_KINDS.map((k) => {
       const picked = (scratchKinds[l.id] || "task") === k.key;
@@ -1126,9 +1135,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
 }
 
 // webui/single-question-view.tsx
-function TpSingleQuestion({ q, onAnswer, onClose, onTranslate, onOpenSettings }) {
+function TpSingleQuestion({ q, onAnswer, refusal, onClose, onTranslate, onOpenSettings }) {
   const heading = q.items.length === 0 ? "Nothing to answer \u2014 this closes on its own." : q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : "One answer, then back to your day.";
-  return /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { position: "absolute", inset: 0, zIndex: 56, background: "var(--surface-page)", display: "flex", flexDirection: "column", padding: "20px 16px", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase" } }, "push \u2192 ", q.items.length === 0 ? "no answer" : q.items.length > 1 ? `${q.items.length} questions` : "one question"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-lg)", cursor: "pointer", padding: 0 } }, "\xD7")), /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 16px", lineHeight: 1.15 } }, heading), /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: null, onAnswer, onTranslate, onOpenSettings }), q.items.length > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, q.blocking ? `answering sends ${q.blocking} to the front \xB7 ` : "", "applies immediately \xB7 immediate poll if slot free \xB7 no transaction needed"));
+  return /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { position: "absolute", inset: 0, zIndex: 56, background: "var(--surface-page)", display: "flex", flexDirection: "column", padding: "20px 16px", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase" } }, "push \u2192 ", q.items.length === 0 ? "no answer" : q.items.length > 1 ? `${q.items.length} questions` : "one question"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-lg)", cursor: "pointer", padding: 0 } }, "\xD7")), /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 16px", lineHeight: 1.15 } }, heading), /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: null, onAnswer, refusal, onTranslate, onOpenSettings }), q.items.length > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, q.blocking ? `answering sends ${q.blocking} to the front \xB7 ` : "", "applies immediately \xB7 immediate poll if slot free \xB7 no transaction needed"));
 }
 
 // webui/board-screen.tsx
@@ -4430,7 +4439,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     // TpSingleQuestion is `position: absolute; inset: 0` (same as the design
     // kit's own shell) — needs this positioned, width-capped ancestor so it
     // covers the 440px column instead of the full viewport.
-    /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", position: "relative", overflow: "hidden", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(TpSingleQuestion, { q, onAnswer: answer, onClose: () => onDone(null), onTranslate, onOpenSettings }), err && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 60, fontSize: "var(--text-sm)", color: "#fff", background: "var(--danger-fg, #c0392b)", borderRadius: "var(--radius-md)", padding: "10px 16px" } }, err))
+    /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", position: "relative", overflow: "hidden", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(TpSingleQuestion, { q, onAnswer: answer, refusal: err, onClose: () => onDone(null), onTranslate, onOpenSettings }))
   );
 }
 function completionReviewLine(task) {
@@ -4611,6 +4620,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
   const [missing, setMissing] = React.useState([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [refusal, setRefusal] = React.useState(null);
   const [reviewFlag, setReviewFlag] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState([]);
   const [reviewTier, setReviewTier] = React.useState("");
@@ -4642,6 +4652,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
   };
   const submit = async () => {
     setBusy(true);
+    setRefusal(null);
     try {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? "").trim()]).filter(([, v]) => v)
@@ -4658,7 +4669,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
       await onCompleted();
       onClose();
     } catch (err) {
-      say("danger", "complete failed", String(err.message || err));
+      setRefusal(String(err.message || err));
     }
     setBusy(false);
   };
@@ -4684,7 +4695,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         value: fields[field] ?? "",
         onChange: (e) => setFields((f) => ({ ...f, [field]: e.target.value }))
       }
-    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this", task.has_task_branch ? "" : " \u2014 optional"))), review.flag && /* @__PURE__ */ React.createElement(Checkbox, { label: "Send to review individually", checked: reviewFlag, onChange: () => setReviewFlag(!reviewFlag) }), review.designation && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: reviewBy, onChange: setReviewBy }), /* @__PURE__ */ React.createElement(Select, { label: "Review tier", options: tierOptions(tiers, "(reviewer's tier, then board default)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? "")), onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
+    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this", task.has_task_branch ? "" : " \u2014 optional"))), review.flag && /* @__PURE__ */ React.createElement(Checkbox, { label: "Send to review individually", checked: reviewFlag, onChange: () => setReviewFlag(!reviewFlag) }), review.designation && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: reviewBy, onChange: setReviewBy }), /* @__PURE__ */ React.createElement(Select, { label: "Review tier", options: tierOptions(tiers, "(reviewer's tier, then board default)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) })), refusal && /* @__PURE__ */ React.createElement(TpRefusal, { text: refusal }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? "")), onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
   );
 }
 function App() {
@@ -4812,13 +4823,8 @@ function App() {
     return fresh;
   };
   const answerNow = async (q, a, amendment, comment) => {
-    try {
-      const answered = await api("POST /api/tasks/:id/answer", { params: { id: q.id }, body: { answers: a, triage: true, amendment, comment } });
-      if (answered.settled_by_observation) say("warn", "settled by the board, not by your answer", SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
-    } catch (err) {
-      say("danger", "answer failed", String(err.message || err));
-      throw err;
-    }
+    const answered = await api("POST /api/tasks/:id/answer", { params: { id: q.id }, body: { answers: a, triage: true, amendment, comment } });
+    if (answered.settled_by_observation) say("warn", "settled by the board, not by your answer", SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
   };
   const objectNow = async (entry, direction) => {
     try {

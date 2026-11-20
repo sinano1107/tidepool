@@ -13,13 +13,15 @@
 interface TpSingleQuestionProps {
   q: ReturnType<typeof toQuestionCardShape>;
   onAnswer: (answers: string[], amendment?: TpAmendment, comment?: string) => Promise<void>;
+  /** 拒まれた直前の回答の拒否文 —— カードの中に次の送信まで出す(#3204)。 */
+  refusal: string | null;
   onClose: () => void;
   onTranslate?: typeof translateTarget;
   onOpenSettings?: () => void;
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function TpSingleQuestion({ q, onAnswer, onClose, onTranslate, onOpenSettings }: TpSingleQuestionProps) {
+function TpSingleQuestion({ q, onAnswer, refusal, onClose, onTranslate, onOpenSettings }: TpSingleQuestionProps) {
   // a question with no items takes no answer (ADR 0218 決定6)
   const heading = q.items.length === 0 ? 'Nothing to answer — this closes on its own.' : q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : 'One answer, then back to your day.';
   return (
@@ -29,7 +31,7 @@ function TpSingleQuestion({ q, onAnswer, onClose, onTranslate, onOpenSettings }:
         <button onClick={onClose} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-lg)', cursor: 'pointer', padding: 0 }}>×</button>
       </div>
       <h1 style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', fontWeight: 400, color: 'var(--tide-5)', margin: '0 0 16px', lineHeight: 1.15 }}>{heading}</h1>
-      <TpQuestionCard q={q} answer={null} onAnswer={onAnswer} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
+      <TpQuestionCard q={q} answer={null} onAnswer={onAnswer} refusal={refusal} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
       {q.items.length > 0 && <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
         {q.blocking ? `answering sends ${q.blocking} to the front · ` : ''}applies immediately · immediate poll if slot free · no transaction needed
       </p>}
