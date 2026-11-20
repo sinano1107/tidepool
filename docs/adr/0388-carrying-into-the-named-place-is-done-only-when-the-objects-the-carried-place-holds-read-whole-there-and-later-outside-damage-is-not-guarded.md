@@ -6,10 +6,10 @@ checkout —— その blob の最後の写し —— が消えた。門の前�
 (`--not --alternate-refs`)で pack に入れず、fetch も commit 単位のやり取りで送らないので、そのまま記録に入った。実測と消す箇所の表は
 #3222 に置く。
 
-1. **運ぶ —— 門の取り込み、退避の tip と WIP の取り込み、作業台の取り込み —— は、名前の場所へ入れた直後に、運んだ場所が自前の object
+1. **運ぶ —— 門の取り込み、退避の tip と WIP の取り込み、作業台の取り込み、Interview の出題の写し —— は、名前の場所へ入れた直後に、運んだ場所が自前の object
    store に持つ object が名前の場所で欠けも破損も無く読めて済む。** 集合は「運ぶ tip の閉包のうち、運んだ場所の自前の store にある
-   object」で、借りている object は消しても失われないので入らない。退避の WIP の自前の store は、盤面が作業ツリーから書いた staging repo
-   である。確かめ方は集合を pack に組む形で、欠けは `rev-list` が、破損は `pack-objects` が落とす(`rev-list` だけでは zlib の破損を
+   object」で、借りている object は消しても失われないので入らない。退避の WIP と出題の写しの自前の store は、盤面が作業ツリーから書いた
+   staging repo である。確かめは ref と event を書く前に撃つ。確かめ方は集合を pack に組む形で、欠けは `rev-list` が、破損は `pack-objects` が落とす(`rev-list` だけでは zlib の破損を
    素通しする)。ADR 0369 決定7 の「運ぶ」の完了はこの確かめを含み、消す側(解放の event と checkout の削除、作業台の削除)は変えない。
 2. **欠けていれば、集合を検証済みの写しの pack にして名前の場所で直に `index-pack --strict` し、確かめ直す。** fetch では直らない ——
    名前の場所は commit を既に持つので何も送られない(実測)。揃わなければ運べなかったので、各入口の今の「名前の場所へ運ぶ段が落ちた」
@@ -36,5 +36,5 @@ checkout —— その blob の最後の写し —— が消えた。門の前�
 ## Consequences
 
 - Status 追記: ADR 0369 決定7(「運ぶ」の完了に決定1)、ADR 0364(門の後の確かめと、fetch でなく pack を直に入れる取り込み直し)、
-  ADR 0367(退避の WIP も staging repo の自前の store で確かめる)、ADR 0371(作業台の取り込みも決定1)。
+  ADR 0367(退避の WIP も staging repo の自前の store で確かめる)、ADR 0371(作業台の取り込みも決定1)、ADR 0273 決定3(出題の写しも決定1)。
 - 借りない checkout(Interview の root)では集合が面接室の閉包全体になり、門と同じ大きさの確かめが運ぶたびに走る。
