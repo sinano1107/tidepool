@@ -258,6 +258,9 @@ export type EventPayload =
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
+  // ADR 0375 決定7・8 / spec #3273 group H: give-up がブランチを失った死んだ根(PR を開いていない)の着地を終えた —— 以後この根は収束の候補に
+  // 入らない。question_ids はこの受理が閉じた根の着地の question(local 着地・昇格失敗)。保護ブランチに届いた記録には数えない(ADR 0380 決定1)
+  | { kind: "landing_ended_branch_lost"; question_ids: string[] }
   // ADR 0241 決定1 / ADR 0265 決定3: PR の根に、保護ブランチへ運ぶ内容がもう無いと収束が確かめた —— 着地が終わった
   // 事実で、以後この根は収束の候補に入らない。`basis` は根拠: merge を記録した根は `merge`、記録の無い根(`external` の
   // ダイヤルは盤面の外の merge を観測しない)は `content`。内容で終わっても決裁(キューの行・merge question)は引退しない。

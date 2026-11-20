@@ -2,6 +2,8 @@
 
 **Status 追記: 決定3 の内容で終わる `landing_finished` は、同じ同期区間の頭で名前の場所の全 ref を基準と比べた後の読みから決める —— 動いていれば刻まず、その根はその回 workspace の Quarantine で止まる。決定6 の取り残された子の告知(decision log の判断行)は例外で、比べずに書く —— 1度きりでやり直しが無い([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
+**Status 追記: 決定7 の着地の状態は8つになる —— 7つに、ブランチが失われて着地を終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)の「ブランチが失われて終了」(`branch_lost`)を足す。内容で終わった記録の次に導く。これで終えた根は、足さなければ行に何も出さない。ユーザーには問うていない(2026-11-21、issue #3298、spec #3273 group H)。**
+
 2026-10-16 の grilling(issue #2054、同日の triage sweep が立てた family の根)で決定。PR の決着(merge された・閉じられた)を
 書く経路は2つの id に割れていた —— 人間の `merge` 回答と merge question 面の観測は question の id に、無人 merge の tick と
 収束は根(PR を開いた work)の id に刻む。読み手は task id だけ(収束の閉じた根の除外・観測の重複除け・retry)、両方の join

@@ -73,7 +73,7 @@ export type SettledByObservation =
   | "memory_proposal_stale";
 
 /** done の work の行の着地の状態(ADR 0265 決定7、src/landing.ts の landingState)。WebUI の札の文言表がこれで欠けを落とす。 */
-export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed";
+export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed" | "branch_lost";
 
 /** 回答の応答と question の行が運ぶ印。 */
 export interface SettledMark {
