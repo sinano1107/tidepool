@@ -1949,6 +1949,31 @@ it("workspace を解決できない、親を持つ完了 work は、workspace �
   expect(quarantineQuestion(db, "workspace", "ghost")).toBeDefined();
 });
 
+it("lineage が読めない完了 work は、その根の失敗として失敗 question を1枚立て、他の根は着地する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-lineage-unreadable");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  // 完了した親は task_branch_created を持つのにタスクブランチが無いので、子の lineage を解く git が失敗する
+  const parent = landingWork(db, clock);
+  seedTaskBranch(db, workspace, parent.id);
+  git(workspace.path, "branch", "-D", `task/${parent.id}`);
+  const child = attachUnsettledChild(db, clock, parent.id);
+  git(workspace.path, "branch", `task/${child.id}`);
+  finish(db, clock, child);
+  finish(db, clock, parent);
+  const healthy = landingWork(db, clock);
+  checkoutTaskBranch(db, workspace, healthy.id);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, healthy);
+
+  const verdicts = await landing.converge();
+
+  expect(verdicts.find((root) => root.taskId === child.id)?.verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  expect(verdicts.find((root) => root.taskId === healthy.id)?.verdict).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(promotionFailures(db, child.id)).toHaveLength(1);
+});
+
 it("完了した親のタスクブランチが失われて死んでいれば、子は帰り先なしで着地の根にならず失敗 question も立たず、他の根は着地する(ADR 0380 決定3)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-lineage-lost-parent");
   const { db, clock } = await openBoard();

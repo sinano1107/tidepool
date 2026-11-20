@@ -174,6 +174,29 @@ it("別の workspace に固定された子孫は死んだ祖先を数えない(A
   expect(resolveTaskBranchLineage(b.db, { ...b.ws, name: "elsewhere" }, getTask(b.db, elsewhere.id)!)).toEqual({ branch: undefined, outlivedForkSource: false });
 });
 
+it("merge back の数え直しは、失われた event が効いている task のブランチを、人間の値で残っていても帰り先へ運ばない(ADR 0380 決定3)", async () => {
+  const b = await board("lost-child-moved");
+  const parent = await commitThrough(b, work(b, "parent"), "parent.txt");
+  const child = work(b, "child", { parent_id: parent.id });
+  const place = await prepareAtPickup(b.db, b.ws, child, { now: b.clock.now(), workspacesBaseDir: b.base, defaultWorkspaceName: b.ws.name });
+  commitWork(place.path, "child.txt", "child\n");
+  recordTaskCheckoutTip(b.db, place, child.id);
+  completeTask(b.db, getTask(b.db, child.id)!, FULL_HANDOFF, "worker", b.clock.now(), "worker");
+  // merge back は届いていない
+  releaseWorkspace(b.db, place, getTask(b.db, child.id)!, b.clock.now());
+  const parentTip = git(b.ws.path, "rev-parse", `task/${parent.id}`);
+  // 人間が ref を、同じ内容を持つ別の commit へ動かした —— 運べば帰り先が動く
+  const moved = git(b.ws.path, "commit-tree", `task/${child.id}^{tree}`, "-p", "main", "-m", "a human moved the lost ref here");
+  git(b.ws.path, "update-ref", `refs/heads/task/${child.id}`, moved);
+
+  await giveUp(b);
+
+  expect(accepted(b)).toBe(true);
+  expect(taskBranchLostInForce(b.db, child.id)).toBeDefined();
+  expect(git(b.ws.path, "rev-parse", `task/${child.id}`)).toBe(moved);
+  expect(git(b.ws.path, "rev-parse", `task/${parent.id}`)).toBe(parentTip);
+});
+
 it("死んだ task に残るレビュー(RCA)は保護ブランチを読み、失われた ref が人間の値で残っていても git で読まない(ADR 0380 決定3、pin H16)", async () => {
   const b = await board("dead-task-review");
   const dead = await completeThrough(b, work(b, "dead"), "dead.txt");
@@ -188,7 +211,7 @@ it("死んだ task に残るレビュー(RCA)は保護ブランチを読み、�
 });
 
 /** 根 R の下に、編集のあった done の D と、その子 C(ブランチが残る)。R の記録 `kind` は D の完了の `after` に刻む。D のブランチを失わせて give-up で答える。 */
-async function lostUnderRootRecord(name: string, record: TaskScopedPayload, after: boolean) {
+async function lostUnderRootRecord(name: string, record: TaskScopedPayload, after: boolean, holder: "root" | "self" = "root") {
   const b = await seededBoard(name);
   const root = work(b, "root");
   const dead = work(b, "lost", { parent_id: root.id });
@@ -200,7 +223,7 @@ async function lostUnderRootRecord(name: string, record: TaskScopedPayload, afte
   const edited = git(b.ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "edited");
   boardRefWriter(b.db, b.ws)(ref, edited, () => git(b.ws.path, "update-ref", ref, edited));
   seedThroughBoard(b, child.id, main);
-  const landed = () => appendEvent(b.db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: record, at: b.clock.now() });
+  const landed = () => appendEvent(b.db, { taskId: holder === "root" ? root.id : dead.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: record, at: b.clock.now() });
   completeTask(b.db, child, FULL_HANDOFF, "worker", b.clock.now(), "worker");
   if (!after) landed();
   completeTask(b.db, getTask(b.db, dead.id)!, FULL_HANDOFF, "worker", b.clock.now(), "worker");
@@ -224,6 +247,10 @@ it.each(REACHED)("数える祖先が完了の後に `$kind` を持てば、編�
 
 it.each(NOT_REACHED)("`$kind` は保護ブランチに届いた記録に数えない —— 編集のあった失われた task は死んで、子は帰り先なし(spec #3273 group H)", async (record) => {
   expect(await lostUnderRootRecord(`not-landed-${record.kind}`, record, true)).toEqual(NO_RETURN);
+});
+
+it("失われた task 自身が完了の後に保護ブランチに届いた記録を持てば透明(ADR 0380 決定1、pin H12)", async () => {
+  expect(await lostUnderRootRecord("landed-self", REACHED[0]!, true, "self")).toEqual({ branch: undefined, outlivedForkSource: false });
 });
 
 it("完了の前の着地の記録では透明にならない(ADR 0380 決定1、pin H12)", async () => {
