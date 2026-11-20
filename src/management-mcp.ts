@@ -1104,7 +1104,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         completion_criteria: z.string().optional(),
         assignee: z.string().optional(),
         workspace: z.string().optional()
-          .describe("A review child's workspace cannot be edited — it follows its nearest ancestor's."),
+          .describe("Roots only: a task with a parent takes no workspace (refused) — a child always runs in its parent's workspace."),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(`${REVIEW_FLAG_ONLY_ON_WORK_CHILDREN}\n${JUDGED_AFTER_THE_EDIT}`),
         review_by: z.array(requiredTextSchema).optional()
@@ -1129,14 +1129,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: {
         task_id: z.string(),
         reason: z.string(),
+        // ADR 0384 決定1: 子は workspace を入力に持たない —— 未知の key は黙って落とさず拒む
         children: z.array(
-          z.object({
+          z.strictObject({
             title: z.string(),
             purpose: z.string(),
             completion_criteria: z.string(),
             risk_flag: z.boolean().optional(),
             assignee: z.string().optional(),
-            workspace: z.string().optional(),
             review_flag: z.boolean().optional().describe("Refused on a child assigned to human, whose completion raises no review."),
             tier: z.string().optional().describe(tierDescriptions.tier),
             review_by: z.array(requiredTextSchema).optional().describe(ONLY_WHERE_REVIEW_FIRES),
@@ -1245,7 +1245,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         parent_id: z.string().optional(),
         assignee: z.string().optional(),
         workspace: z.string().optional()
-          .describe("A review child's workspace is its nearest ancestor's — omit it; a different name is refused."),
+          .describe("Roots only: a task with parent_id takes no workspace (refused) — a child always runs in its parent's workspace."),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
         tier: z

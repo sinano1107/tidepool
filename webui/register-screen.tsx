@@ -272,7 +272,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // execution time (GLOSSARY.md) — omit rather than send '' so an
           // unknown-workspace 400 never fires on a field the human left blank
           ...(assignee ? { assignee } : {}),
-          ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
+          // a child takes no workspace (ADR 0384 決定1) — never send it, even when a draft filled the state
+          ...(!childMode && workspace.trim() ? { workspace: workspace.trim() } : {}),
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
           ...reviewTierField,
           ...reviewByField,
@@ -505,10 +506,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
                 if (!canTake(assignee, next)) setAssignee('');
               }} />
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              {assigneeSelect}
-              <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
-            </div>
+            {/* a child runs in its parent's workspace and has no workspace field (ADR 0384 決定1) */}
+            {childMode ? assigneeSelect : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {assigneeSelect}
+                <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+              </div>
+            )}
             {interview && <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>受験者は面接室で解く</span>}
             <Select label={interview ? 'Measured tier' : 'Tier'} options={tierOptions(tiers, interview ? 'choose the tier to measure…' : "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             {interview && <Select label="Root tier" options={tierOptions(tiers, '(the higher of the measured tier and the board judgement tier)')} value={reviewTier} onChange={(e) => setReviewTier(e.target.value)} />}

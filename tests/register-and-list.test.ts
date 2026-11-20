@@ -36,9 +36,9 @@ it("a registered task joins the queue tail and can be listed", async () => {
   expect(got.json.purpose).toBe("know soil moisture without walking out");
 });
 
-it("registration accepts assignee, workspace, risk_flag, and review_flag — the same fields a brain-dump draft fills in", async () => {
+it("registration accepts assignee, risk_flag, and review_flag — the same fields a brain-dump draft fills in", async () => {
   t = await bootTidepool();
-  // review_flag を持てるのは子だけ —— ルートは flag によらずレビューされる(issue #1467)。
+  // review_flag を持てるのは子だけ —— ルートは flag によらずレビューされる(issue #1467)。子は workspace を持たない(ADR 0384 決定1)。
   // risk の子が承認 question に変わらないよう、親にも risk を付ける
   const parent = registerTask(
     t.db,
@@ -55,19 +55,16 @@ it("registration accepts assignee, workspace, risk_flag, and review_flag — the
     purpose: "stop starting tasks when any rate-limit window is rejected",
     completion_criteria: "rejected window blocks new starts; resumes at resets_at",
     assignee: "reef-crab",
-    workspace: "tidepool",
     risk_flag: true,
     review_flag: true,
   });
   expect(registered.status).toBe(201);
   expect(registered.json.assignee).toBe("reef-crab");
-  expect(registered.json.workspace).toBe("tidepool");
   expect(registered.json.risk_flag).toBe(1);
   expect(registered.json.review_flag).toBe(1);
 
   const got = await api(t.baseUrl, "GET", `/api/tasks/${registered.json.id}`);
   expect(got.json.assignee).toBe("reef-crab");
-  expect(got.json.workspace).toBe("tidepool");
   expect(got.json.risk_flag).toBe(1);
   expect(got.json.review_flag).toBe(1);
 });

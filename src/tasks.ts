@@ -20,7 +20,7 @@ import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId, tierNames } from "./tier.js";
 import {
   completionReviewFires,
-  followsAncestorWorkspace,
+  hasWorkspaceField,
   type ReviewSubject,
   whyExecutionRequestIsInert,
   whyNoCompletionReview,
@@ -1273,8 +1273,9 @@ export function registerTask(
   assertReturnDestination(db, input);
   assertRepairHasParent(input);
   assertReviewChildHasExecutor(db, input, actorId);
-  // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
-  if (followsAncestorWorkspace(input) && input.workspace !== undefined) {
+  // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない。
+  // 人間の扉は親を持つ task の workspace を先に拒む(ADR 0384 決定1)—— ここは人間の扉を通らない登録の検査で、#3423 が組み直すまで残る
+  if (input.type === "review" && input.parent_id && input.workspace !== undefined) {
     const ancestorWorkspace = derivedWorkspace(db, { workspace: null, parent_id: input.parent_id! });
     if (input.workspace !== ancestorWorkspace) {
       throw new DomainError(
@@ -2996,6 +2997,10 @@ function brokenProbeReported(db: Db, rootId: string): boolean {
   return db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND question_broken_probe_reason IS NOT NULL LIMIT 1").get(rootId) !== undefined;
 }
 
+/** ADR 0384 決定1: 子は workspace を入力に持たない —— 人間の扉(登録・分解・Edit)が `parent_id` を持つ task の workspace を拒む文。 */
+export const CHILD_TAKES_NO_WORKSPACE =
+  "a task with a parent takes no workspace — it runs in its parent's workspace; to place the work in another workspace, register it as a root (no parent)";
+
 export interface ChildSpec extends TaskContent {
   review_by?: string[];
   review_tier?: string;
@@ -3008,10 +3013,12 @@ export interface ChildSpec extends TaskContent {
    *  worker's authority profile's `assignable_to` (confused-deputy
    *  prevention), this too converts to an approval question (issue #11). */
   assignee?: string;
-  /** Targets the child at a specific workspace. Outside the registering
-   *  worker's authority profile's `allowed_workspaces`, this too converts to
-   *  an approval question (issue #11). Absent → store an empty column and derive
-   *  the execution workspace from the nearest filled ancestor or default (ADR 0372 決定1). */
+  /** Targets the child at a specific workspace. Only agent decomposition still
+   *  carries it until #3423: the human doors refuse it (ADR 0384 決定1). Outside
+   *  the registering worker's authority profile's `allowed_workspaces`, this too
+   *  converts to an approval question (issue #11). Absent → store an empty column
+   *  and derive the execution workspace from the nearest filled ancestor or
+   *  default (ADR 0372 決定1). */
   workspace?: string;
   /** Opts this child into on-completion review (layer 1), same as
    *  RegisterTaskInput's own field — the registrant declares it, human or
@@ -3701,10 +3708,8 @@ export function editTask(
       );
     }
   }
-  // ADR 0290 決定3: 付帯子の review は祖先の workspace に従い、既定への参照も持たない —— 空に戻す先も無い
-  if (followsAncestorWorkspace(task) && input.workspace !== undefined) {
-    throw new DomainError("a review child's workspace is not editable — it runs in its nearest ancestor's workspace");
-  }
+  // ADR 0384 決定1: 子は workspace の欄を持たない —— 同じ名前も `""` も拒む(ADR 0290 決定3 を全 type に)
+  if (!hasWorkspaceField(task) && input.workspace !== undefined) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
   // ADR 0273 決定9: Interview の purpose と完了基準は盤面が登録の欄から組んだ文で、人間は書かない
   if (task.type === "interview" && (input.purpose !== undefined || input.completion_criteria !== undefined)) {
     throw new DomainError("an Interview's purpose and completion_criteria are not editable — the board composes them from its hypothesis, measured_work and evidence_task_ids");

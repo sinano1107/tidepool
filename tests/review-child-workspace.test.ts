@@ -3,7 +3,8 @@ import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
-import { cancelTaskDirectly, completeTask, editTask, logDecision, pickupTask, presentTask, type RegisterTaskInput, registerTask, returnToQueue, type Task } from "../src/tasks.js";
+import { registerThroughHumanDoor } from "../src/human-verbs.js";
+import { cancelTaskDirectly, completeTask, editTask, listBoard, logDecision, pickupTask, presentTask, type RegisterTaskInput, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { listLog } from "../src/triage.js";
 import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
@@ -20,12 +21,27 @@ const ran = (db: Db, task: Task): Task => {
 };
 
 describe("付帯子の review の登録(ADR 0290 決定1・2)", () => {
-  it("workspace を指定しない付帯子の review も、祖先と同じ名前を明示した付帯子の review も、列は NULL で保存される", () => {
+  it("workspace を指定しない付帯子の review は、列が NULL で保存される", () => {
     const db = openDb(":memory:");
     const parent = ran(db, register(db, { type: "work", workspace: "reef" }));
 
     expect(register(db, { type: "review", parent_id: parent.id }).workspace).toBeNull();
-    expect(register(db, { type: "review", parent_id: parent.id, workspace: "reef" }).workspace).toBeNull();
+  });
+
+  // ADR 0384 決定1: 子は workspace を入力に持たない —— ADR 0290 決定1 の「同じ名前は受けて保存しない」は人間の扉から消えた
+  it("人間の登録の扉は、祖先と同じ名前でも付帯子の review の workspace を拒み、文は根として登録するよう案内する", async () => {
+    const db = openDb(":memory:");
+    const parent = ran(db, register(db, { type: "work", workspace: "reef" }));
+
+    const result = await registerThroughHumanDoor(
+      { db, pollNow: () => {} },
+      { type: "review", title: "t", purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace: "reef" },
+      () => at,
+      "webui",
+    );
+
+    expect(result).toEqual({ ok: false, failure: { kind: "invalid", error: expect.stringMatching(/register it as a root/) } });
+    expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
   });
 
   it("祖先と違う名前の明示は拒まれ、文はルート review を案内する", () => {
@@ -140,14 +156,16 @@ describe("pickup 前の読み手は導出した workspace で読む(ADR 0290 決
   });
 });
 
-describe("付帯子の review の Edit(ADR 0290 決定3)", () => {
-  it("付帯子の review の workspace は、祖先と同じ名前でも空でも変えられず、ルート review の workspace は今どおり変えられる", () => {
+describe("子の Edit(ADR 0290 決定3 / ADR 0384 決定1)", () => {
+  it("親を持つ task の workspace は、type を問わず祖先と同じ名前でも空でも別の名前でも変えられず、根の workspace は今どおり変えられる", () => {
     const db = openDb(":memory:");
     const parent = ran(db, register(db, { type: "work", workspace: "reef" }));
-    const child = register(db, { type: "review", parent_id: parent.id });
+    const children = [register(db, { type: "review", parent_id: parent.id }), register(db, { type: "work", parent_id: parent.id })];
     const root = register(db, { type: "review", workspace: "reef" });
 
-    for (const workspace of ["reef", ""]) expect(() => editTask(db, child, { workspace }, at, "webui")).toThrow(DomainError);
+    for (const child of children) {
+      for (const workspace of ["reef", "", "lagoon"]) expect(() => editTask(db, child, { workspace }, at, "webui")).toThrow(/register it as a root/);
+    }
     expect(editTask(db, root, { workspace: "lagoon" }, at, "webui").workspace).toBe("lagoon");
   });
 });
