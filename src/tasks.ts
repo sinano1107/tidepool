@@ -1064,6 +1064,19 @@ export function hasTaskBranch(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_branch_created") !== undefined;
 }
 
+/** ADR 0374 決定2: 「着手済み」は `task_work_started` で読む —— status は `todo` のまま。 */
+export function hasStartedWork(db: Db, taskId: string): boolean {
+  return latestEventOfTask(db, taskId, "task_work_started") !== undefined;
+}
+
+/** 木(`taskId` 自身を含む)の中で後始末が未了の task —— その後始末の merge back がまだ帰っていない(ADR 0240 決定2)。着地の根の木と、
+ *  人間担当の work の完了の扉(ADR 0374 決定9)が同じ述語を読む。無ければ undefined。 */
+export function teardownUnfinishedUnder(db: Db, taskId: string): { id: string; title: string } | undefined {
+  return db.prepare(`${subtreeSql("?")} SELECT id, title FROM tasks WHERE id IN (SELECT id FROM subtree) AND teardown_started_at IS NOT NULL LIMIT 1`).get(taskId) as
+    | { id: string; title: string }
+    | undefined;
+}
+
 /** 空の列だけに workspace を書く —— 固定は埋まった列を書き換えない(ADR 0233 決定2 / ADR 0372 決定1)。 */
 export function fillEmptyWorkspace(db: Db, taskId: string, name: string): void {
   db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(name, taskId);
@@ -1526,6 +1539,29 @@ export function completeTask(
   return finishTask(db, task, handoff, actorId, now, origin);
 }
 
+/** 完了が書く前に掛ける拒否 —— 決着済み、handoff の欠け、未完了の子。返すのは書く handoff。タスクブランチを持つ人間担当の work の完了の扉は
+ *  ref を書く前にも同じものを掛ける(spec #3273: 拒んだ完了は何も書かない)。
+ *  ADR 0374 決定1・10: 全欄の要求は「担当が人間か」でなく「タスクブランチを持つか」で分ける —— タスクブランチを持たない人間担当の work は免除。 */
+export function assertCompletable(db: Db, task: Task, handoff: Partial<HandoffDoc> | undefined): Partial<HandoffDoc> | undefined {
+  assertUnsettled(task, "completed");
+  if (task.type === "work" && (task.assignee !== HUMAN_ACTOR_ID || hasTaskBranch(db, task.id))) {
+    const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
+    if (missing.length > 0) {
+      throw new DomainError(
+        `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
+      );
+    }
+    handoff = Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, normalizeText(handoff![field]!)]));
+  }
+  // completion criteria cover the decomposition tree: a parent completes only
+  // after every child it waits for settles (復帰型 — the resumed session
+  // integrates, then completes)
+  if (hasUnfinishedChildren(db, task.id)) {
+    throw new DomainError("a task with unfinished children cannot complete");
+  }
+  return handoff;
+}
+
 /** 完了の処理の本体: completeTask と種別ごとの完了の verb(採点完了・統合レビュー・memory meta-review)が通る。 */
 export function finishTask(
   db: Db,
@@ -1537,22 +1573,7 @@ export function finishTask(
 ): Task {
   db.transaction(() => {
     task = getTask(db, task.id)!;
-    assertUnsettled(task, "completed");
-    if (task.type === "work" && task.assignee !== HUMAN_ACTOR_ID) {
-      const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
-      if (missing.length > 0) {
-        throw new DomainError(
-          `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
-        );
-      }
-      handoff = Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, normalizeText(handoff![field]!)]));
-    }
-    // completion criteria cover the decomposition tree: a parent completes only
-    // after every child it waits for settles (復帰型 — the resumed session
-    // integrates, then completes)
-    if (hasUnfinishedChildren(db, task.id)) {
-      throw new DomainError("a task with unfinished children cannot complete");
-    }
+    handoff = assertCompletable(db, task, handoff);
     const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
     const handoffDoc = rendered === "" ? null : rendered;
     db.prepare("UPDATE tasks SET status = 'done', handoff_doc = ? WHERE id = ?").run(
@@ -3718,6 +3739,13 @@ export function editTask(
           "to change it, cancel the task and register a new one",
       );
     }
+    // ADR 0374 決定4: assignee は書き始めた task でも凍る —— タスクブランチ(子の pickup が先に作ったもの)は鍵にしない
+    if (field === "assignee" && hasStartedWork(db, task.id)) {
+      throw new DomainError(
+        "a task whose work has been started keeps its assignee — the human writes in its workbench; " +
+          "to change it, cancel the task and register a new one",
+      );
+    }
     // ADR 0372 決定5: workspace はタスクブランチを持つ task でも凍る(子の pickup が固定した根を含む)—— assignee の鍵には足さない
     if (field === "workspace" && hasTaskBranch(db, task.id)) {
       throw new DomainError(
@@ -4283,7 +4311,8 @@ export function presentTask(
     [{ defaultAgentName: defaultAgentName ?? null, auditorName, interviewerName, id: task.id }],
     "tasks.id = @id",
   );
-  return toBoardTask(db, row!);
+  // ADR 0374 決定2 / spec #3273: 完了の dialog はタスクブランチの有無と着手済みで出し分ける
+  return { ...toBoardTask(db, row!), has_task_branch: hasTaskBranch(db, task.id), started: hasStartedWork(db, task.id) };
 }
 
 /** Registration records the generated review set so independent audits and RCA

@@ -912,8 +912,9 @@ const HANDOFF_FIELDS = [
 // completes. The draft is optional in the other direction too: no draft client
 // (or an unreachable one) is always a 503, and like the register gate's own
 // dump → draft → confirm, that just leaves the fields blank to type into.
+// ADR 0374 決定1・10: タスクブランチを持つ人間担当の work は agent と同じく6欄が必須で、作業台があれば完了がそれを消す(text C4)。
 function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
-  task: { id: string; title: string; blocking: string | null };
+  task: { id: string; title: string; blocking: string | null; has_task_branch?: boolean; workbench?: string | null };
   onCompleted: () => Promise<void> | void;
   onClose: () => void;
   say: AppSay;
@@ -941,8 +942,10 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? '').trim()]).filter(([, v]) => v),
       );
-      await api(`/api/tasks/${task.id}/complete`, { handoff });
-      say('success', 'task completed', task.id);
+      const done = await api('POST /api/tasks/:id/complete', { params: { id: task.id }, body: { handoff } });
+      // spec #3273 text C7: 読んだ後に届いた commit があれば、作業台を残したと言う
+      if (done?.notice) say('info', 'task completed — workbench kept', done.notice);
+      else say('success', 'task completed', task.id);
       await onCompleted();
       onClose();
     } catch (err) {
@@ -956,8 +959,15 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
     <div style={{ padding: '20px 16px', maxHeight: '70vh', overflowY: 'auto' }}>
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Complete task</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
-        "{task.title}" blocks {task.blocking} — the handoff is what that parent reads when it resumes
+        {task.has_task_branch
+          ? <>"{task.title}" has a task branch — every handoff field is required</>
+          : <>"{task.title}" blocks {task.blocking} — the handoff is what that parent reads when it resumes</>}
       </p>
+      {task.workbench && (
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+          Completing deletes the workbench at {task.workbench}, including ignored files.
+        </p>
+      )}
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 14 }}>
         <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump(e.target.value)}
           placeholder="dump it — the LLM structures it into the six fields below" />
@@ -974,12 +984,12 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
               onChange={(e) => setFields((f) => ({ ...f, [field]: e.target.value }))} />
             {missing.includes(field) && (
               <span style={{ display: 'block', marginTop: 5, fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>
-                ⚠ the draft found nothing for this — optional
+                ⚠ the draft found nothing for this{task.has_task_branch ? '' : ' — optional'}
               </span>
             )}
           </div>
         ))}
-        <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Done</Button>
+        <Button variant="primary" size="lg" full disabled={busy || (!!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? '')))} onClick={submit}>Done</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Not yet</Button>
       </Card>
     </div>
@@ -1007,7 +1017,7 @@ function App() {
   const [stopTaskCard, setStopTaskCard] = React.useState<BoardScreenTask | null>(null);
   // issue #301: the your-tasks row whose completion dialog is open (a row that
   // blocks a parent), or null when closed
-  const [completeHumanCard, setCompleteHumanCard] = React.useState<AppData['humanTasks'][number] | null>(null);
+  const [completeHumanCard, setCompleteHumanCard] = React.useState<(AppData['humanTasks'][number] & { has_task_branch?: boolean; workbench?: string | null }) | null>(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -1331,10 +1341,15 @@ function App() {
   // in completeTask), one that blocks a parent opens the handoff dialog first —
   // the parent picks that doc up when it resumes. Unblocking the parent and the
   // immediate poll are the server's job; the browser only refetches.
+  // ADR 0374 決定1: タスクブランチを持つ task も dialog を開く —— 有無は task の読みが運ぶ(一覧の行は持たない)
   const doneHuman = async (id: string) => {
     const task = data!.humanTasks.find((t) => t.id === id);
-    if (task?.blocking) { setCompleteHumanCard(task); return; }
     try {
+      const read = await api('GET /api/tasks/:id', { params: { id } });
+      if (task && (task.blocking || read.has_task_branch)) {
+        setCompleteHumanCard({ ...task, has_task_branch: read.has_task_branch, workbench: read.workbench });
+        return;
+      }
       await api(`/api/tasks/${id}/complete`, {});
       say('success', 'task completed', id);
       await refreshFull();

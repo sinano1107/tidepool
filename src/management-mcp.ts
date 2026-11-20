@@ -8,6 +8,7 @@ import {
   InvalidAgentIconError,
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
+import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
@@ -36,6 +37,7 @@ import {
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
+  startWorkThroughHumanDoor,
   stopThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -182,6 +184,8 @@ export interface ManagementMcpDeps {
   taskExecutionCandidates: TaskExecutionCandidates;
   /** 作業台の基点 —— 回答の口(`submitAnswer`)へそのまま渡す。 */
   workspacesDir?: string;
+  /** 盤面の固定点(ADR 0040 / ADR 0377 決定3): 人間担当の work の扉の準備が pickup と同じ門で交差を拒む。 */
+  boardState?: BoardStatePath[];
   workspaceAdmin?: Partial<WorkspaceAdmin>;
   agentAdmin?: Partial<AgentAdmin>;
   profileAdmin?: Partial<ProfileAdmin>;
@@ -1159,9 +1163,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "complete_task",
     {
       description:
-        "Complete a task assigned to the human, optionally with the handoff doc: " +
+        "Complete a task assigned to the human. A task without a task branch takes the handoff doc optionally; one with a task branch " +
+        "requires all of it, takes its workbench in and deletes the workbench. Handoff fields: " +
         describeHandoffFields() +
-        `. ${TASK_ACK_DESCRIPTION}`,
+        `. ${TASK_ACK_DESCRIPTION} A completion that kept the workbench also returns its notice.`,
       inputSchema: {
         task_id: z.string(),
         handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
@@ -1175,7 +1180,22 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
-      return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
+      return result.ok
+        ? toolResult({ ...taskAck(result.value), ...(result.value.notice !== undefined && { notice: result.value.notice }) })
+        : toolError(result.failure.error);
+    },
+  );
+  server.registerTool(
+    "start_work",
+    {
+      description:
+        "Start work on a work task assigned to the human: the board prepares its workspace as a pickup does, creates the task's branch and " +
+        "opens its workbench — a checkout where the human commits. Returns the workbench path; calling it again returns the same path.",
+      inputSchema: { task_id: z.string() },
+    },
+    async ({ task_id }) => {
+      const result = await startWorkThroughHumanDoor(deps, task_id, () => deps.clock.now(), "mcp");
+      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
     },
   );
   server.registerTool(

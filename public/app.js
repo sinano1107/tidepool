@@ -4594,8 +4594,9 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? "").trim()]).filter(([, v]) => v)
       );
-      await api(`/api/tasks/${task.id}/complete`, { handoff });
-      say("success", "task completed", task.id);
+      const done = await api("POST /api/tasks/:id/complete", { params: { id: task.id }, body: { handoff } });
+      if (done?.notice) say("info", "task completed \u2014 workbench kept", done.notice);
+      else say("success", "task completed", task.id);
       await onCompleted();
       onClose();
     } catch (err) {
@@ -4606,7 +4607,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
   return (
     // 6欄 + ダンプ欄はビューポートより高くなる。DS の Dialog は高さを縛らないので
     // この面自身が巻き取る — kit のモック(TpHandoffSheet)が持つ設計そのもの
-    /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", maxHeight: "70vh", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Complete task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, '"', task.title, '" blocks ', task.blocking, " \u2014 the handoff is what that parent reads when it resumes"), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", maxHeight: "70vh", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Complete task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, task.has_task_branch ? /* @__PURE__ */ React.createElement(React.Fragment, null, '"', task.title, '" has a task branch \u2014 every handoff field is required') : /* @__PURE__ */ React.createElement(React.Fragment, null, '"', task.title, '" blocks ', task.blocking, " \u2014 the handoff is what that parent reads when it resumes")), task.workbench && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "Completing deletes the workbench at ", task.workbench, ", including ignored files."), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
       Input,
       {
         label: "How did it go?",
@@ -4625,7 +4626,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         value: fields[field] ?? "",
         onChange: (e) => setFields((f) => ({ ...f, [field]: e.target.value }))
       }
-    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this \u2014 optional"))), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
+    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this", task.has_task_branch ? "" : " \u2014 optional"))), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? "")), onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
   );
 }
 function App() {
@@ -4894,11 +4895,12 @@ function App() {
   };
   const doneHuman = async (id) => {
     const task = data.humanTasks.find((t) => t.id === id);
-    if (task?.blocking) {
-      setCompleteHumanCard(task);
-      return;
-    }
     try {
+      const read = await api("GET /api/tasks/:id", { params: { id } });
+      if (task && (task.blocking || read.has_task_branch)) {
+        setCompleteHumanCard({ ...task, has_task_branch: read.has_task_branch, workbench: read.workbench });
+        return;
+      }
       await api(`/api/tasks/${id}/complete`, {});
       say("success", "task completed", id);
       await refreshFull();

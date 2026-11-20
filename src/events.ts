@@ -205,6 +205,8 @@ export type EventPayload =
   // ADR 0372 決定2 / ADR 0375 決定2: 盤面が task/<id> を作った(ref を書いた後に残す)。sha は作成時の値、workspace は列の名前(面接室でなく実環境)。
   // column_filled_from: 同じ固定が空の列に workspace を書いた —— 名前の出所で、`default` か列を導いた祖先の id
   | { kind: "task_branch_created"; sha: string; workspace: string; column_filled_from?: string }
+  // ADR 0374 決定2: 人間が自分の work を書き始めた(`start_work`)—— 作業台を開いた後に残す。「着手済み」はこれから導く
+  | { kind: "task_work_started" }
   | { kind: "task_moved"; after: string | null }
   // result carries the one-line outcome against the completion criteria so the
   // log view never joins back to the task row; the handoff doc stays reachable

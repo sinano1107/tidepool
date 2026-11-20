@@ -3,8 +3,8 @@ import { openDb } from "../src/db.js";
 import { completeTask, getTask, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
-describe("completeTask は human 宛て work タスクのハンドオフ必須チェックを免除する(issue #13)", () => {
-  it("human 宛てタスクはハンドオフなしで complete でき、他 assignee はこれまで通り必須のまま", () => {
+describe("completeTask はタスクブランチを持たない human 宛て work タスクのハンドオフ必須チェックを免除する(issue #13 / ADR 0374 決定1)", () => {
+  it("タスクブランチを持たない human 宛てタスクはハンドオフなしで complete でき、他 assignee はこれまで通り必須のまま", () => {
     const db = openDb(":memory:");
     const human = registerTask(
       db,

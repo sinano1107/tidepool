@@ -118,15 +118,13 @@ it("pickup が ref を作る前に止まった task は task_branch_created を�
   db.close();
 });
 
-it.each([
-  ["決着した人間の task", "done", "ADR 0372 決定4、#1827"],
-  ["未決着で未固定の人間の祖先", "todo", "ADR 0374 帰結「実装の順」"],
-] as const)("%sの下の work は系譜に飛ばされて保護ブランチから切られ、人間の祖先の列・ref・event は動かない(%s)", async (_, status, _cited) => {
+// 未決着の人間の祖先は固定される(ADR 0374 決定3)—— tests/human-work.test.ts の pin C5
+it("決着した人間の task の下の work は系譜に飛ばされて保護ブランチから切られ、人間の祖先の列・ref・event は動かない(ADR 0372 決定4、#1827)", async () => {
   const ws = await makeWorkspace("branch-created-human");
   const db = openDb(":memory:");
   const human = work(db, "human", { assignee: HUMAN_ACTOR_ID });
   const child = pickupTask(db, work(db, "child", { parent_id: human.id }), "deckhand", NOW, { workspace: ws.name })!;
-  if (status === "done") completeTask(db, human, undefined, HUMAN_ACTOR_ID, NOW, "webui");
+  completeTask(db, human, undefined, HUMAN_ACTOR_ID, NOW, "webui");
 
   await prepareAtPickup(db, ws, child, { defaultWorkspaceName: ws.name });
 

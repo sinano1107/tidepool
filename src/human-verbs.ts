@@ -73,6 +73,7 @@ import type { PollOutcome, TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
   assertAnswerable,
+  assertCompletable,
   assertInterviewFields,
   assertNoUnsettledIssueRef,
   assertTargetsRunnable,
@@ -82,11 +83,13 @@ import {
   type ChildSpec,
   cancelTaskDirectly,
   completeTask,
+  derivedWorkspace,
   dropsRefusedTarget,
   type EditTaskInput,
   editTask,
   getTask,
   type HandoffDoc,
+  hasTaskBranch,
   humanDecomposeTask,
   type InterviewProposal,
   interviewRoomPath,
@@ -122,15 +125,18 @@ import {
   codexContainmentRepairRoute,
   compareAcceptanceRefs,
   compareContainmentRefs,
+  completeHumanWork,
   containmentRepairRoute,
   containmentWorkbenchNotTakenIn,
   fetchLostTargets,
   firePickupPredicates,
+  type HumanWorkPreparation,
   INTAKE_OPTIONS,
   type IntakeContext,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   PickupGateError,
+  prepareHumanWork,
   protectedBranch,
   quarantineWorkspace,
   RefsMovedError,
@@ -139,8 +145,10 @@ import {
   redoOwedReleases,
   refreshProtectedBranch,
   removeReleasedTaskCheckoutsOn,
+  resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   restoreBaseline,
+  startHumanWork,
   takeInContainmentRepair,
   takeInHumanContentWorkbench,
   takeWorkspaceInFlightKey,
@@ -1100,22 +1108,77 @@ export interface EditThroughHumanDoorDeps {
   interviewerName?: string;
 }
 
-export interface CompleteThroughHumanDoorDeps {
+/** 人間担当の work の扉(`start_work` と完了)が名前の場所に届く材料(ADR 0374 決定2・9): workspace の resolver、準備の fetch の GitHub 身元、
+ *  作業台の基点、最初の撮りの確認が引く registry、盤面の固定点。完了は収束を突く(`pollNow`)。 */
+export interface HumanWorkDeps {
   db: Db;
   pollNow: () => void;
+  workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  githubAuth?: GitHubAuth;
+  workspacesDir?: string;
+  boardState?: BoardStatePath[];
   defaultAgentName?: string;
   auditorName?: string;
   interviewerName?: string;
 }
 
-/** Shared human-surface completion for human-assignee tasks. */
+export type CompleteThroughHumanDoorDeps = HumanWorkDeps;
+
+/** 人間担当の work の名前の場所: 導出した名前を引く。導けなければ text C1b(子は根の workspace を案内する、ADR 0384 決定1)、registry に
+ *  無い名前は pickup と同じく名前の Quarantine を立てて text C1a で拒む。 */
+function humanWorkPlace(deps: HumanWorkDeps, task: Task, verb: string, now: Date): WorkspaceConfig {
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!resolve) {
+    throw new DomainError(`cannot ${verb}: no workspace can be derived for this task — set ${task.parent_id ? "its root task's" : "its"} workspace with Edit first.`);
+  }
+  let stopped: string | undefined;
+  const named = resolveOrQuarantine(deps.db, resolve, derivedWorkspace(deps.db, task), now, (stop) => (stopped = stop.value ?? undefined));
+  if (named) return named;
+  throw new DomainError(`cannot ${verb}: workspace ${stopped} is quarantined — answer question ${openQuarantineQuestion(deps.db, "workspace", stopped ?? null)?.id} first.`);
+}
+
+function humanWorkPreparation(deps: HumanWorkDeps, now: Date): HumanWorkPreparation {
+  return {
+    githubAuth: deps.githubAuth,
+    workspacesBaseDir: resolveWorkspacesBaseDir(deps.workspacesDir),
+    now,
+    resolveRegistered: deps.resolveWorkspace,
+    defaultWorkspaceName: deps.workspace?.name,
+    fixedPoints: deps.boardState,
+  };
+}
+
+/** ADR 0374 決定2: 書き始める(`start_work`)—— 人間面だけの、人間担当の work の扉。in-flight の鍵(ADR 0373 決定8)を取り、判定と執行は
+ *  `startHumanWork` が持つ。返すのは作業台の在り処。 */
+export async function startWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: string, now: () => Date, origin: EventOrigin): Promise<HumanVerbResult<{ path: string }>> {
+  const task = getTask(deps.db, taskId);
+  if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    if (task.type !== "work" || task.assignee !== HUMAN_ACTOR_ID) throw new DomainError("only a work task assigned to the human can start work here");
+    assertUnsettledNotInProgress(task, "started");
+    const at = now();
+    const named = humanWorkPlace(deps, task, "start work", at);
+    const path = await withWorkspaceInFlightKey(deps.db, named.name, () =>
+      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, at)),
+    );
+    return { ok: true, value: { path } };
+  } catch (err) {
+    if (err instanceof DomainError) return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    throw err;
+  }
+}
+
+/** Shared human-surface completion for human-assignee tasks. ADR 0374 決定1: 動作は「タスクブランチを持つか」で分ける —— 持たなければ
+ *  今どおり記録だけを閉じ、持てば in-flight の鍵を取って準備を通し、作業台の取り込み・`done`・H の merge back を `completeHumanWork` に
+ *  任せ、収束を突く。作業台を残した完了は text C7 を `notice` に添える。 */
 export async function completeThroughHumanDoor(
   deps: CompleteThroughHumanDoorDeps,
   taskId: string,
   handoff: Partial<HandoffDoc> | undefined,
   now: () => Date,
   origin: EventOrigin,
-): Promise<HumanVerbResult<BoardTask>> {
+): Promise<HumanVerbResult<BoardTask & { notice?: string }>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
@@ -1125,9 +1188,25 @@ export async function completeThroughHumanDoor(
       );
     }
     assertUnsettledNotInProgress(task, "completed");
-    const done = completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
+    let notice: string | undefined;
+    if (!hasTaskBranch(deps.db, task.id)) {
+      completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
+    } else {
+      const at = now();
+      const named = humanWorkPlace(deps, task, "complete", at);
+      const board = humanWorkPreparation(deps, at);
+      notice = await withWorkspaceInFlightKey(deps.db, named.name, async () => {
+        await prepareHumanWork(deps.db, named, task, "complete", board);
+        const fresh = getTask(deps.db, task.id)!;
+        const checked = assertCompletable(deps.db, fresh, handoff);
+        return completeHumanWork(deps.db, named, fresh, board.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
+          completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin);
+        });
+      });
+    }
     deps.pollNow();
-    return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
+    const done = presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName);
+    return { ok: true, value: notice === undefined ? done : { ...done, notice } };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
