@@ -35,6 +35,7 @@ import {
   editThroughHumanDoor,
   type GateFailure,
   gatedHumanEntryInput,
+  humanCompletionInputSchema,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
@@ -429,10 +430,6 @@ const moveTaskSchema = z.object({
   after: z.string().nullable(),
 });
 
-const completeTaskSchema = z.object({
-  handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
-});
-
 const answerSchema = answerInputSchema.extend({ triage: z.boolean().optional() });
 
 const cursorSchema = z.object({
@@ -748,7 +745,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     boardState,
   } = deps;
   // 人間担当の work の扉(`start_work` と完了)が名前の場所に届く束(ADR 0374 決定2・9)
-  const humanWorkDeps = { db, pollNow, workspace, resolveWorkspace, github: github ?? undefined, githubAuth, workspacesDir, boardState, defaultAgentName, auditorName, interviewerName };
+  const humanWorkDeps = { db, pollNow, agentRegistered, workspace, resolveWorkspace, github: github ?? undefined, githubAuth, workspacesDir, boardState, defaultAgentName, auditorName, interviewerName };
   // registry で名前を引く人間の扉(task の編集・記憶の書き込みと一覧)が共有する束
   const memoryRefDeps = { db, agentRegistered, workspace, resolveWorkspace };
   const router = Router();
@@ -1562,12 +1559,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // Human completion: schema and HTTP response mapping around the shared door.
   router.post("/tasks/:id/complete", async (req, res) => {
-    const parsed = completeTaskSchema.safeParse(req.body ?? {});
+    const parsed = humanCompletionInputSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
-    const result = await completeThroughHumanDoor(humanWorkDeps, req.params.id, parsed.data.handoff, () => clock.now(), "webui");
+    const result = await completeThroughHumanDoor(humanWorkDeps, req.params.id, parsed.data, () => clock.now(), "webui");
     if (!result.ok) {
       sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;

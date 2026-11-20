@@ -1,8 +1,35 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
+import { registerTask } from "../src/tasks.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, makeWorkspace, managementMcpClient, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+it.each(["HTTP", "management MCP"])("%s maps the human completion review fields", async (surface) => {
+  t = await bootTidepool({ workspace: await makeWorkspace("complete-review-boundary") });
+  const root = queueWork(t, "plan", undefined, "human");
+  const child = registerTask(t.db, {
+    type: "work", title: "do a slice", purpose: "p", completion_criteria: "c", parent_id: root.id, assignee: "human",
+  }, t.clock.now(), ...HUMAN_WEBUI);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${child.id}/start-work`, {})).status).toBe(200);
+  const body = { handoff: FULL_HANDOFF, review_flag: true, review_by: ["reef-crab"], review_tier: "standard" };
+
+  if (surface === "HTTP") {
+    const response = await api(t.baseUrl, "POST", `/api/tasks/${child.id}/complete`, body);
+    expect(response.status).toBe(200);
+  } else {
+    const client = await managementMcpClient(t.baseUrl);
+    try {
+      const result = await client.callTool({ name: "complete_task", arguments: { task_id: child.id, ...body } });
+      expect(result.isError).not.toBe(true);
+    } finally {
+      await client.close();
+    }
+  }
+
+  const { json: tasks } = await api(t.baseUrl, "GET", "/api/tasks");
+  expect(tasks).toContainEqual(expect.objectContaining({ parent_id: child.id, type: "review", raw_assignee: "reef-crab", review_tier: "standard" }));
+});
 
 it("人間タスクが親のエージェントタスクを block し、完了で親がアンブロックされ即時ポーリングが走る(issue #13)", async () => {
   t = await bootTidepool();

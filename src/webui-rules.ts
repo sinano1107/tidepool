@@ -10,8 +10,8 @@ export { whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 export { isSettled } from "./task-status.js";
 
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
-// 完了時レビューが立つかの規則の正本(ADR 0111 追記8)。サーバーの拒否・完了時の起票・WebUI の欄の出し分けが
-// 同じ関数を呼ぶ。WebUI へは scripts/build-webui-bundle.mjs が bundle して `TidepoolRules` として届ける(ADR 0209)ので、
+// 完了時レビューの統合点と欄の規則の正本(ADR 0111 追記8 / ADR 0374 決定14・15)。
+// WebUI へは scripts/build-webui-bundle.mjs が bundle して `TidepoolRules` として届ける(ADR 0209)ので、
 // ここから届くファイルは DB や fs に触れてはならない。
 import { normalizeText } from "./required-text.js";
 
@@ -42,21 +42,48 @@ export interface ReviewSubject {
   examinee?: boolean;
 }
 
-/** 完了時レビューが立たない理由(拒否の文の後半)。立つなら undefined。 */
-export function whyNoCompletionReview(t: ReviewSubject): string | undefined {
+function whyNotReviewableWork(t: ReviewSubject): string | undefined {
   if (t.type !== "work") return "completion review fires for work tasks only";
   if (t.examinee) return "an Interview examinee's answer is evaluated only by its Interview's scoring";
-  if (t.assignee === HUMAN_ACTOR_ID) return "completion review does not fire for a task assigned to human";
+  return undefined;
+}
+
+function whyNotReviewPoint(t: ReviewSubject): string | undefined {
   if (t.parent_id && !t.review_flag && !t.risk_flag) {
     return "a child task's completion raises a review only with review_flag or risk_flag";
   }
   return undefined;
 }
 
+const HUMAN_REVIEW_FIELDS = "a human-assigned task accepts review fields only at completion with a task branch";
+
+/** 登録・Edit で完了時レビューの指名欄が使えない理由(拒否の文の後半)。 */
+export function whyReviewDesignationIsInert(t: ReviewSubject): string | undefined {
+  return whyNotReviewableWork(t) ??
+    (t.assignee === HUMAN_ACTOR_ID ? HUMAN_REVIEW_FIELDS : whyNotReviewPoint(t));
+}
+
 /** review_flag が意味を持たない理由。持つなら undefined。 */
 export function whyReviewFlagIsInert(t: ReviewSubject): string | undefined {
-  if (t.type === "work" && !t.parent_id && !t.examinee) return "every root is already reviewed on completion";
-  return whyNoCompletionReview({ ...t, review_flag: true });
+  const refusal = whyNotReviewableWork(t);
+  if (refusal) return refusal;
+  if (t.assignee === HUMAN_ACTOR_ID) return HUMAN_REVIEW_FIELDS;
+  return t.parent_id ? undefined : "every root is already reviewed on completion";
+}
+
+/** ADR 0374 決定14 / ADR 0111 Status 追記: 起票は指名欄の出し分けから独立して統合点を読む。 */
+export function raisesCompletionReview(t: ReviewSubject & { has_task_branch: boolean }): boolean {
+  return (t.assignee !== HUMAN_ACTOR_ID || t.has_task_branch) &&
+    whyNotReviewableWork(t) === undefined && whyNotReviewPoint(t) === undefined;
+}
+
+/** ADR 0374 決定14・15: 人間担当の work はタスクブランチがあるときだけ、完了の扉で指名する。 */
+export function humanCompletionReviewFields(t: ReviewSubject & { has_task_branch: boolean }): { flag: boolean; designation: boolean } {
+  const eligible = t.assignee === HUMAN_ACTOR_ID && t.has_task_branch && whyNotReviewableWork(t) === undefined;
+  return {
+    flag: eligible && !!t.parent_id && !t.risk_flag,
+    designation: eligible && whyNotReviewPoint(t) === undefined,
+  };
 }
 
 /** tier / priority が意味を持たない理由。持つなら undefined。review task の要求は review_tier だけである
@@ -81,5 +108,5 @@ export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuil
  *  人間の登録・分解・Edit の門と、WebUI の Edit 画面の Workspace 欄の出し分けが同じ関数を呼ぶ。 */
 export const hasWorkspaceField = (t: Pick<ReviewSubject, "parent_id">): boolean => !t.parent_id;
 
-export const completionReviewFires =(t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
+export const reviewDesignationCarriesMeaning = (t: ReviewSubject): boolean => whyReviewDesignationIsInert(t) === undefined;
 export const reviewFlagCarriesMeaning = (t: ReviewSubject): boolean => whyReviewFlagIsInert(t) === undefined;

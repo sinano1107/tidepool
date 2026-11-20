@@ -615,7 +615,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
 }
 
 function completionReviewLine(task: BoardScreenTask): string | null {
-  if (!TidepoolRules.completionReviewFires({
+  if (!TidepoolRules.reviewDesignationCarriesMeaning({
     type: task.type, parent_id: task.parent_id, assignee: task.rawAssignee,
     review_flag: task.review_flag, risk_flag: task.risk, examinee: task.interview_root_id != null,
   })) return null;
@@ -743,7 +743,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   // 欄はサーバーと同じ規則でフォーム上の値から出す(ADR 0209)
   const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
-  const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
+  const showReviewBy = TidepoolRules.reviewDesignationCarriesMeaning(ruleSubject);
   // 新しく選ぶ候補だけを task の type で絞り、保存済みの現在値は外れても(registry から消えても)残す(ADR 0235 決定4)
   const currentAssignee = full.raw_assignee ?? '';
   const assigneeNames = candidates.assignees.filter((n) => n === currentAssignee || !TidepoolRules.whyAssigneeCannotTake(n, full.type, candidates.builtIns.includes(n)));
@@ -924,26 +924,38 @@ const HANDOFF_FIELDS = [
   ['known_issues', 'known issues (no task)'],
 ] as const;
 
-// issue #13's handoff assist, wired by issue #301: completing a human task that
-// blocks a parent. Free-text dump → the LLM drafts the six fields → the human
-// edits and confirms. `missing` is advisory only — the server exempts human
-// tasks from the handoff requirement, so an untouched, empty form still
-// completes. The draft is optional in the other direction too: no draft client
-// (or an unreachable one) is always a 503, and like the register gate's own
-// dump → draft → confirm, that just leaves the fields blank to type into.
-// ADR 0374 決定1・10: タスクブランチを持つ人間担当の work は agent と同じく6欄が必須で、作業台があれば完了がそれを消す(text C4)。
+type HumanCompletionTask = Pick<WireContract['GET /api/tasks/:id'],
+  'id' | 'title' | 'type' | 'assignee' | 'parent_id' | 'risk_flag' | 'interview_root_id' | 'has_task_branch' | 'workbench'>
+  & { blocking: string | null };
+
+// 手入力か任意の下書きから引き継ぎを書く(#301)。ADR 0374 決定1・10: タスクブランチを持つ人間担当の work は6欄が必須で、
+// 作業台があれば完了がそれを消す(text C4)。タスクブランチの無い人間担当の task は引き継ぎが任意。
 function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
-  task: { id: string; title: string; blocking: string | null; has_task_branch?: boolean; workbench?: string | null };
+  task: HumanCompletionTask;
   onCompleted: () => Promise<void> | void;
   onClose: () => void;
   say: AppSay;
 }) {
-  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [dump, setDump] = React.useState('');
   const [fields, setFields] = React.useState<Record<string, string>>({});
   const [missing, setMissing] = React.useState<string[]>([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [reviewFlag, setReviewFlag] = React.useState(false);
+  const [reviewBy, setReviewBy] = React.useState<string[]>([]);
+  const [reviewTier, setReviewTier] = React.useState('');
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], builtIns: [], workspaces: [], icons: {} });
+  const [tiers, setTiers] = React.useState<SettingsExecution['tiers']>([]);
+  const review = TidepoolRules.humanCompletionReviewFields({
+    ...task, examinee: task.interview_root_id != null, review_flag: reviewFlag,
+  });
+  const showReviewControls = review.flag || review.designation;
+  React.useEffect(() => {
+    if (!showReviewControls) return;
+    api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
+    api('GET /api/settings/execution').then((d) => setTiers(d.tiers)).catch(() => {});
+  }, [showReviewControls]);
   const draft = async () => {
     setDrafting(true);
     try {
@@ -961,7 +973,13 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? '').trim()]).filter(([, v]) => v),
       );
-      const done = await api('POST /api/tasks/:id/complete', { params: { id: task.id }, body: { handoff } });
+      const body = {
+        handoff,
+        ...(review.flag && reviewFlag && { review_flag: true }),
+        ...(review.designation && reviewBy.length > 0 && { review_by: reviewBy }),
+        ...(review.designation && reviewTier && { review_tier: reviewTier }),
+      };
+      const done = await api('POST /api/tasks/:id/complete', { params: { id: task.id }, body });
       // spec #3273 text C7: 読んだ後に届いた commit があれば、作業台を残したと言う
       if (done?.notice) say('info', 'task completed — workbench kept', done.notice);
       else say('success', 'task completed', task.id);
@@ -1008,6 +1026,11 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
             )}
           </div>
         ))}
+        {review.flag && <Checkbox label="Send to review individually" checked={reviewFlag} onChange={() => setReviewFlag(!reviewFlag)} />}
+        {review.designation && <>
+          <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />
+          <Select label="Review tier" options={tierOptions(tiers, "(reviewer's tier, then board default)")} value={reviewTier} onChange={(e) => setReviewTier(e.target.value)} />
+        </>}
         <Button variant="primary" size="lg" full disabled={busy || (!!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? '')))} onClick={submit}>Done</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Not yet</Button>
       </Card>
@@ -1036,7 +1059,7 @@ function App() {
   const [stopTaskCard, setStopTaskCard] = React.useState<BoardScreenTask | null>(null);
   // issue #301: the your-tasks row whose completion dialog is open (a row that
   // blocks a parent), or null when closed
-  const [completeHumanCard, setCompleteHumanCard] = React.useState<(AppData['humanTasks'][number] & { has_task_branch?: boolean; workbench?: string | null }) | null>(null);
+  const [completeHumanCard, setCompleteHumanCard] = React.useState<HumanCompletionTask | null>(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -1354,19 +1377,14 @@ function App() {
     }
   };
 
-  // Your tasks' Done (issue #13's two doors, wired here by issue #301). Which
-  // door opens is the row's own `blocking`, answered server-side: a task that
-  // holds nobody up closes in one tap with no doc at all (the human exemption
-  // in completeTask), one that blocks a parent opens the handoff dialog first —
-  // the parent picks that doc up when it resumes. Unblocking the parent and the
-  // immediate poll are the server's job; the browser only refetches.
-  // ADR 0374 決定1: タスクブランチを持つ task も dialog を開く —— 有無は task の読みが運ぶ(一覧の行は持たない)
+  // 親を塞ぐ task(#301)とタスクブランチを持つ task(ADR 0374 決定1)は完了の dialog を開く。
+  // ブランチの有無は task の読みが運ぶ。ほかは1タップで完了する。
   const doneHuman = async (id: string) => {
     const task = data!.humanTasks.find((t) => t.id === id);
     try {
       const read = await api('GET /api/tasks/:id', { params: { id } });
       if (task && (task.blocking || read.has_task_branch)) {
-        setCompleteHumanCard({ ...task, has_task_branch: read.has_task_branch, workbench: read.workbench });
+        setCompleteHumanCard({ ...read, title: task.title, blocking: task.blocking });
         return;
       }
       await api('POST /api/tasks/:id/complete', { params: { id }, body: {} });

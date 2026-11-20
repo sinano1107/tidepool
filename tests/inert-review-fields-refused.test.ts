@@ -5,8 +5,8 @@ import { listEvents } from "../src/events.js";
 import { decomposeTask, editTask, listBoard, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
-/** 変更後の状態で完了時レビューが立たない review の値は、登録時も Edit も拒否され、何も残らない(ADR 0111 追記8 / #1553)。
- *  判定は完了時の起票と同じ規則を通る —— 規則そのものは完了時レビューの起票のテストが見ている。 */
+/** 登録と Edit で使えない review の欄は拒まれ、何も残らない(ADR 0111 追記8 / #1553)。
+ *  人間担当の work の指名は完了の扉が受け取る(ADR 0374 決定15)。 */
 const NOW = new Date("2026-10-07T00:00:00.000Z");
 const WORK = { type: "work", title: "w", purpose: "p", completion_criteria: "c" } as const;
 
@@ -30,7 +30,7 @@ it.each<[string, Partial<RegisterTaskInput>]>([
   ["human が担当する子への review_tier", { assignee: "human", risk_flag: true, review_tier: "standard" }],
   ["flag の無い子への review_tier", { review_tier: "standard" }],
   ["human が担当するルートへの reviewer の指名", { parent_id: undefined, assignee: "human", review_by: ["fugu"] }],
-])("完了時レビューが立たない登録は拒否され、task は作られない: %s", (_, extra) => {
+])("登録で使えない review の欄は拒まれ、task は作られない: %s", (_, extra) => {
   setup();
   expect(() => registerTask(db, child(extra), NOW, ...HUMAN_WEBUI)).toThrow(DomainError);
   expect(boardIds()).toEqual([root.id]);
@@ -42,7 +42,9 @@ it.each<[string, Partial<RegisterTaskInput>, Parameters<typeof editTask>[2]]>([
   ["指名を残したまま risk flag を下ろす", { risk_flag: true, review_by: ["fugu"] }, { risk_flag: false }],
   ["指名を残したまま human に渡す", { risk_flag: true, review_by: ["fugu"] }, { assignee: "human" }],
   ["flag の無い子へ指名する", {}, { review_by: ["fugu"] }],
-])("変更後に完了時レビューが立たない Edit は拒否され、task_edited は残らない: %s", (_, registered, edit) => {
+  ["human の子に review flag を付ける", { assignee: "human" }, { review_flag: true }],
+  ["risk flag を持つ human の子に指名する", { assignee: "human", risk_flag: true }, { review_by: ["fugu"] }],
+])("変更後に使えない review の欄は拒まれ、task_edited は残らない: %s", (_, registered, edit) => {
   setup();
   const task = registerTask(db, child(registered), NOW, ...HUMAN_WEBUI);
   expect(() => editTask(db, task, edit, NOW, "webui")).toThrow(DomainError);

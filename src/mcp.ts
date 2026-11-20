@@ -568,7 +568,7 @@ export const ONLY_WHERE_REVIEW_FIRES =
 /** 名前ごとに完了時レビューを1本立てる、という review_by の意味。decompose と管理MCP の入口が共有する。 */
 export const REVIEWER_NAMES = "Reviewer agent names; one completion review per name.";
 /** 同じ規則を、root も review type も登録する入口(管理MCP の register_task / edit_task)向けに言い直したもの。
- *  子が前提の ONLY_WHERE_REVIEW_FIRES はそのまま使えない。条件は webui-rules の whyNoCompletionReview /
+ *  子が前提の ONLY_WHERE_REVIEW_FIRES はそのまま使えない。条件は webui-rules の whyReviewDesignationIsInert /
  *  whyReviewFlagIsInert と同じ。 */
 export const ONLY_WHERE_COMPLETION_REVIEW_FIRES =
   "Accepted only on a work task whose completion raises a review: not assigned to human, and either a root " +

@@ -19,11 +19,12 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId, tierNames } from "./tier.js";
 import {
-  completionReviewFires,
   hasWorkspaceField,
+  humanCompletionReviewFields,
   type ReviewSubject,
+  raisesCompletionReview,
   whyExecutionRequestIsInert,
-  whyNoCompletionReview,
+  whyReviewDesignationIsInert,
   whyReviewFlagIsInert,
 } from "./webui-rules.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -1215,7 +1216,7 @@ export function contentSourceFor(
 }
 
 /** A review field that would do nothing in the task's post-change state is refused (ADR 0111 追記8): the
- *  verdict is webui-rules', the same rule completion and the WebUI's fields read. `reviewTier` is checked at
+ *  verdict is webui-rules', the same rule the WebUI's registration and Edit fields read. `reviewTier` is checked at
  *  registration only (Edit cannot change it, #1552); a review task's own review_tier is the tier it runs at
  *  (execution-setting.ts reads it only for type review), not a completion-review request. */
 function assertReviewFieldsTakeEffect(
@@ -1227,8 +1228,8 @@ function assertReviewFieldsTakeEffect(
     if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
   };
   if (state.review_flag) refuse("review_flag", whyReviewFlagIsInert(state));
-  if (reviewBy?.length) refuse("review_by", whyNoCompletionReview(state));
-  if (reviewTier !== undefined && state.type !== "review" && state.type !== "interview") refuse("review_tier", whyNoCompletionReview(state));
+  if (reviewBy?.length) refuse("review_by", whyReviewDesignationIsInert(state));
+  if (reviewTier !== undefined && state.type !== "review" && state.type !== "interview") refuse("review_tier", whyReviewDesignationIsInert(state));
 }
 
 /** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (GLOSSARY.md "Review", #1512). */
@@ -1238,6 +1239,30 @@ function assertReviewByDistinct(reviewBy: string[] | undefined): void {
   if (dup !== undefined) {
     throw new DomainError(`review_by names the same reviewer twice: "${dup}" — each reviewer is named once`);
   }
+}
+
+export type CompletionReviewRequest = Pick<RegisterTaskInput, "review_by" | "review_tier" | "review_flag">;
+
+/** ADR 0374 決定15: 完了時だけ受け取る指名を、作業台を取り込む前に検査する。 */
+export function checkHumanCompletionReview(db: Db, task: Task, request: CompletionReviewRequest): CompletionReviewRequest {
+  if (request.review_flag === undefined && request.review_by === undefined && request.review_tier === undefined) return request;
+  if (!hasTaskBranch(db, task.id)) {
+    throw new DomainError("this task has no task branch, so its completion raises no review — complete it without `review_by`, `review_tier` or `review_flag`.");
+  }
+  const fields = humanCompletionReviewFields({
+    ...task, examinee: task.interview_target_id !== null, has_task_branch: true, review_flag: request.review_flag,
+  });
+  if (request.review_flag && !fields.flag) {
+    throw new DomainError("review_flag would have no effect — this task already raises a review on completion");
+  }
+  if ((request.review_by?.length || request.review_tier !== undefined) && !fields.designation) {
+    throw new DomainError("review_by and review_tier would have no effect — set review_flag to send this child to review individually");
+  }
+  const review_by = request.review_by?.map(normalizeText);
+  const review_tier = request.review_tier === undefined ? undefined : normalizeText(request.review_tier);
+  assertReviewByDistinct(review_by);
+  if (review_tier !== undefined) assertKnownTier(db, "review_tier", review_tier);
+  return { ...request, review_by, review_tier };
 }
 
 /** New tasks always join the queue tail: sort_key = max + 1. */
@@ -1513,17 +1538,8 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
   })();
 }
 
-/** Work tasks may not complete without a full handoff doc; every other agent
- *  task needs its outcome (ADR 0278 決定6), and the rest of a supplied doc is
- *  stored, not dropped (nothing may degrade recording). The doc lands as
- *  markdown on the task row, written once. A `human`-assignee task is exempt
- *  regardless of type (issue #13): actionable follow-up belongs to a *new*
- *  task, not this doc, so a physical/approval task carries no agent session to
- *  hand off from — the doc stays fully optional.
- *
- *  ADR 0111: root work and risk children are mandatory integration points;
- *  ordinary children opt into individual review through review_flag.
- *  Human tasks, questions and reviews are outside the integration-point rule. */
+/** ADR 0278 決定6 / ADR 0374 決定10: agent の work とタスクブランチを持つ人間担当の work は handoff の全欄が要る。
+ *  他の agent の task は outcome が要り、他の人間担当の task は handoff が任意。渡された欄は markdown で保存する。 */
 export function completeTask(
   db: Db,
   task: Task,
@@ -1531,6 +1547,7 @@ export function completeTask(
   actorId: string,
   now: Date,
   origin: EventOrigin,
+  humanReview?: CompletionReviewRequest,
 ): Task {
   // ADR 0253 決定5: Interview の root は扉を問わず採点完了でだけ終わる —— 子0のまま完了する経路もここで閉じる
   if (interviewTargets(db, task.id) !== null) {
@@ -1549,7 +1566,7 @@ export function completeTask(
   if (task.type !== "work" && task.assignee !== HUMAN_ACTOR_ID && whyBlank(handoff?.outcome ?? "")) {
     throw new DomainError(`a ${task.type} task cannot complete without a handoff outcome`);
   }
-  return finishTask(db, task, handoff, actorId, now, origin);
+  return finishTask(db, task, handoff, actorId, now, origin, humanReview);
 }
 
 /** 完了が書く前に掛ける拒否 —— 決着済み、handoff の欠け、未完了の子。返すのは書く handoff。タスクブランチを持つ人間担当の work の完了の扉は
@@ -1583,6 +1600,7 @@ export function finishTask(
   actorId: string,
   now: Date,
   origin: EventOrigin,
+  humanReview: CompletionReviewRequest = {},
 ): Task {
   db.transaction(() => {
     task = getTask(db, task.id)!;
@@ -1604,15 +1622,19 @@ export function finishTask(
       },
       at: now,
     });
-    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null })) {
-      for (const assignee of task.review_by?.length ? task.review_by : [undefined]) {
+    const human = task.assignee === HUMAN_ACTOR_ID;
+    const { review_by, review_tier, review_flag } = human ? humanReview : task;
+    if (raisesCompletionReview({
+      ...task, examinee: task.interview_target_id !== null, has_task_branch: human && hasTaskBranch(db, task.id), review_flag,
+    })) {
+      for (const assignee of review_by?.length ? review_by : [undefined]) {
         registerTask(
           db,
           {
             type: "review",
             integration_review: true,
             assignee,
-            review_tier: task.review_tier ?? undefined,
+            review_tier: review_tier ?? undefined,
             title: `review: ${task.title}`,
             purpose: `read-only review of "${task.title}"'s deliverable against its completion criteria`,
             completion_criteria:
@@ -3407,10 +3429,13 @@ export function decomposeTask(
   }
   // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)
   assertReturnDestination(db, { type: "work", parent_id: parent.id });
+  // ADR 0374 Status 追記(決定16): 人間担当の完了時レビューの修理子は、省略すると元の実行者へ戻す。
+  const defaultToHuman = parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
   input = {
     ...input,
     children: input.children.map((child) => {
       child = { ...child };
+      if (defaultToHuman) child.assignee ??= HUMAN_ACTOR_ID;
       for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
         if (child[field] !== undefined) child[field] = normalizeText(child[field]);
       }
@@ -4045,19 +4070,23 @@ export function subtreeSql(rootRef: string, where?: string): string {
 }
 
 /** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。
- *  付帯子は型で列挙せず `awaitedChildSql` の補集合で取る(ADR 0049)— 完了時レビューも
- *  異議修理も RCA も等しく数え、新しい種類の子が生えても黙って古くならない。範囲が
+ *  ADR 0374 決定14: 人間の根自身の完了時レビューは、修理待ちでなければ除く。所見を待つかは merge question で人間が選ぶ。
+ *  付帯子は `awaitedChildSql` の補集合で取る(ADR 0049)。範囲が
  *  直下でなく子孫全体なのは、決着済み分解子への修理も、その修理に付いたレビューも、
  *  系譜経由で着地する枝へ merge back されるから(ADR 0053)— 着地する枝へ流れ込むもの
  *  すべてが門の対象。 */
 export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
   const { n } = db
     .prepare(
-      `${subtreeSql("?")}
-       SELECT COUNT(*) AS n FROM tasks c JOIN subtree s ON c.parent_id = s.id
-        WHERE ${unsettledSql("c.status")} AND NOT ${awaitedChildSql("c")}`,
+      `${subtreeSql("@root")}
+       SELECT COUNT(*) AS n FROM tasks attached JOIN subtree s ON attached.parent_id = s.id
+        WHERE ${unsettledSql("attached.status")} AND NOT ${awaitedChildSql("attached")}
+          AND NOT (attached.parent_id = @root AND attached.type = 'review'
+                   AND EXISTS (SELECT 1 FROM tasks root WHERE root.id = @root AND root.type = 'work' AND root.assignee = '${HUMAN_ACTOR_ID}')
+                   AND ${integrationReviewSql("attached.id")}
+                   AND NOT ${unfinishedChildSql("attached.id")})`,
     )
-    .get(taskId) as { n: number };
+    .get({ root: taskId }) as { n: number };
   return n;
 }
 
@@ -4408,8 +4437,12 @@ export function acceptedSql(taskId: string): string {
 }
 
 /** 統合レビューか(ADR 0278 決定1): 受理の導出(`acceptedSql`)と同じ印を読む。 */
+function integrationReviewSql(taskId: string): string {
+  return `EXISTS (SELECT 1 FROM ${INTEGRATION_REVIEW_FROM} WHERE review.id = ${taskId} AND ${INTEGRATION_REVIEW_MARK})`;
+}
+
 function isIntegrationReview(db: Db, taskId: string): boolean {
-  return db.prepare(`SELECT EXISTS (SELECT 1 FROM ${INTEGRATION_REVIEW_FROM} WHERE review.id = ? AND ${INTEGRATION_REVIEW_MARK})`).pluck().get(taskId) === 1;
+  return db.prepare(`SELECT ${integrationReviewSql("?")}`).pluck().get(taskId) === 1;
 }
 
 type BoardRow = Omit<TaskRow, "status" | typeof storedRow> & {

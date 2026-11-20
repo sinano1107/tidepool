@@ -1592,7 +1592,7 @@ function completeHumanTask(db: Db, taskId: string, outcome: string, pollNow: () 
   return completeThroughHumanDoor(
     { db, pollNow },
     taskId,
-    { outcome },
+    { handoff: { outcome } },
     () => NOW,
     "webui",
   );
