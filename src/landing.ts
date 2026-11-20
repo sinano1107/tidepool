@@ -20,6 +20,8 @@ import {
   countUnsettledAttachedChildren,
   derivedWorkspace,
   getTask,
+  hasTaskBranchSql,
+  isHumanAssigned,
   landingSurface,
   localLandingOpenOrExecutedSql,
   logDecision,
@@ -525,13 +527,14 @@ const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land')";
  *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
  *  (ADR 0265 決定3) / `nothing_to_land`)と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
  *  候補に残り、撃つ側が hold の head と比べる(`landRoot`)。人間が担当した work は盤面の
- *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
+ *  タスクブランチを持たなければ根にしない(人間の完了は祖先の着地の契機である)—— 持てば根になる(ADR 0374 決定12)。Interview の子(pin を持つ
  *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
 function landingCandidateIds(db: Db): string[] {
   return db
     .prepare(
       `SELECT t.id FROM tasks t
-        WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_ACTOR_ID}'
+        WHERE t.type = 'work' AND t.status = 'done'
+          AND (t.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql("t.id")})
           AND t.interview_target_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})
           AND NOT ${localLandingOpenOrExecutedSql("t.id")}
@@ -975,11 +978,13 @@ export function createLanding(deps: LandingDeps): Landing {
     return github.getPullRequestState({ workspace, number });
   };
   /** ADR 0217 決定3: 解決できない profile はダイヤルを推測せず、agent 名の quarantine に落として
-   *  その名前を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
+   *  その名前を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。
+   *  ADR 0374 決定13: 人間の根は `human` を agent として引かず、profile なしで解決する。 */
   const readAuthority = (
     task: Task,
     now: Date,
   ): { profile: AuthorityProfile | undefined } | { quarantinedAgent: string } => {
+    if (isHumanAssigned(task)) return { profile: undefined };
     try {
       return { profile: deps.resolveAuthority?.(task.assignee, task.type) };
     } catch (err) {
@@ -1010,6 +1015,7 @@ export function createLanding(deps: LandingDeps): Landing {
   ) => {
     const landing = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
+      false,
       authority?.merge,
       task.risk_flag,
     );
@@ -1346,9 +1352,15 @@ export function createLanding(deps: LandingDeps): Landing {
       if (!remoteBacked) {
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
+        // 保護を先に読む(ADR 0374 決定13)—— purely-local の保護された workspace の人間の根は C5 でなく、profile を持たないので
+        // dial の無い根と同じ汎用の本文になる
+        const landing = landingSurface(deps.isProtectedWorkspace?.(workspace.name), isHumanAssigned(task), resolved.profile?.merge, task.risk_flag);
         const purpose = held
           ? reaskedLocalMergePurpose(deps.db, workspace, task, held.payload.head)
-          : resolved.profile?.merge === "auto_if_ci_green"
+          : landing.surface === "merge_question" && landing.reason === "human_root"
+            ? `"${task.title}" was completed by a human. A human-completed root is merged only on your answer. ` +
+              `Merge it into ${protectedBranch(workspace)}, or hold?`
+            : resolved.profile?.merge === "auto_if_ci_green"
             ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
               `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
               `protected branch now?`
@@ -1549,7 +1561,9 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.clock.now(),
         authority,
         deps.isProtectedWorkspace?.(workspace.name),
-        "worker",
+        // spec #3273 group C の [spec] は人間の根の pr_opened だけに origin board を決めた —— actor が人間でも開いたのは盤面だと読めるように。
+        // agent の根の origin はこの決定の外(actor は今どおり assignee)
+        isHumanAssigned(task) ? "board" : "worker",
       );
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {

@@ -194,7 +194,7 @@ interface LandingAnnotation {
   blocked_by: "attached_children" | "objections" | null;
 }
 
-/** cancel で成果が捨てられる done の work(ADR 0271 決定4、src/tasks.ts の Discard)。agent が実行したものだけ、盤面の順。 */
+/** cancel で成果が捨てられる done の work(ADR 0271 決定4、src/tasks.ts の Discard)。タスクブランチに成果を持つもの(`task_branch_created`、ADR 0374 決定17)だけ、盤面の順。 */
 interface Discard {
   id: string;
   title: string;

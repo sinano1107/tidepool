@@ -1065,6 +1065,16 @@ export function hasTaskBranch(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_branch_created") !== undefined;
 }
 
+/** 人間担当の work か —— 着地の根では「人間の根」(ADR 0374 決定13): profile を引かず、常に merge question で着地する。 */
+export function isHumanAssigned(task: Pick<Task, "assignee">): boolean {
+  return task.assignee === HUMAN_ACTOR_ID;
+}
+
+/** `hasTaskBranch` の SQL の対 —— 着地の候補(ADR 0374 決定12)と cancel の捨てる一覧(決定17)が読む。 */
+export function hasTaskBranchSql(taskRef: string): string {
+  return `EXISTS (SELECT 1 FROM events b WHERE b.task_id = ${taskRef} AND b.kind = 'task_branch_created')`;
+}
+
 /** ADR 0374 決定2: 「着手済み」は `task_work_started` で読む —— status は `todo` のまま。 */
 export function hasStartedWork(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_work_started") !== undefined;
@@ -2043,8 +2053,8 @@ export interface Discard {
   title: string;
 }
 
-/** ADR 0271 決定4: cancel が cancelled にする根たちの配下で、成果が捨てられる done の work —— agent が実行したもの(Executor が
- *  人間でない)だけを盤面の順で。範囲は cascade と同じ `cancelScope`(ADR 0301 決定4)で、
+/** ADR 0271 決定4: cancel が cancelled にする根たちの配下で、成果が捨てられる done の work —— ブランチに成果を持つもの
+ *  (`task_branch_created`、ADR 0374 決定17 —— 実行者が人間かでは分けない)だけを盤面の順で。範囲は cascade と同じ `cancelScope`(ADR 0301 決定4)で、
  *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
  *  系譜に入らない。表示時に読み、保存しない。 */
 export function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
@@ -2053,10 +2063,10 @@ export function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
     .prepare(
       `SELECT t.id, t.title, t.github_issue_number FROM tasks t
        WHERE t.id IN (SELECT value FROM json_each(@felled))
-         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_completed' AND e.actor_id = @humanActorId)
+         AND ${hasTaskBranchSql("t.id")}
        ORDER BY t.sort_key`,
     )
-    .all({ felled: JSON.stringify(done.map((task) => task.id)), humanActorId: HUMAN_ACTOR_ID }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
+    .all({ felled: JSON.stringify(done.map((task) => task.id)) }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
   return rows.map((row) => ({ id: row.id, title: row.title ?? issueRefPlaceholder(row.github_issue_number!) }));
 }
 
@@ -3198,7 +3208,8 @@ export function recordPrNumber(db: Db, taskId: string, prNumber: number): void {
  *  (GLOSSARY.md / ADR 0013) always asks, same as `escalate`, overriding
  *  whatever dial (including none) the executing worker's profile carries —
  *  "PR to a protected workspace always needs a human merge" is a
- *  resource-side invariant, independent of the dial. */
+ *  resource-side invariant, independent of the dial. A human root asks too,
+ *  whatever the dial: it has no profile (ADR 0374 決定13). */
 export function recordPrOpened(
   db: Db,
   task: Task,
@@ -3221,7 +3232,7 @@ export function recordPrOpened(
     });
     const ask = (purpose: string) =>
       registerMergeQuestion(db, task, prNumber, purpose, "merge", now);
-    const landing = landingSurface(isProtected, authority?.merge, task.risk_flag);
+    const landing = landingSurface(isProtected, isHumanAssigned(task), authority?.merge, task.risk_flag);
     switch (landing.surface) {
       case "merge_question":
         ask(
@@ -3229,6 +3240,9 @@ export function recordPrOpened(
             protected:
               `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
               `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`,
+            human_root:
+              `"${task.title}" was completed by a human and PR #${prNumber} is open. ` +
+              "A human-completed root is merged only on your answer. Merge, or hold?",
             dial: `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`,
             risk:
               `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
@@ -3248,20 +3262,28 @@ export function recordPrOpened(
 /** 着地の面の判定(ADR 0217 決定1): PR を開く時点の recordPrOpened と、無人 merge の
  *  poll(landing.ts)の両方がこれを呼ぶ。着地の面は人間の merge 判断が住む場所で、3つある
  *  (ADR 0079 決定1): 盤面の merge question / 無人 merge キュー / 盤面の外(`external` の
- *  PR 面)。question 面へ倒れる理由(保護・ダイヤル・risk)は3つあるが面は1つで、違うのは
+ *  PR 面)。question 面へ倒れる理由(保護・人間の根・ダイヤル・risk)は4つあるが面は1つで、違うのは
  *  question 本文に書く理由だけなので `reason` で返す。保護はダイヤルに依らない資源側の
- *  不変条件なので最初に読む。`external` は宣言された不作為(ADR 0079 決定2)で、盤面の外。
+ *  不変条件なので最初に読む。人間の根は profile を持たず、dial に依らず常に問う(ADR 0374 決定13)ので次に読む。
+ *  `external` は宣言された不作為(ADR 0079 決定2)で、盤面の外。
  *  ダイヤル無し(undefined)に届くのは registry の無い盤面(profile を解決しない)だけで、
- *  同じく盤面の外 —— 組み込みの reviewer profile は work を走らせないので届かない(ADR 0228)。 */
+ *  同じく盤面の外 —— 組み込みの reviewer profile は work を走らせないので届かない(ADR 0228)。
+ *  キューの行の読み直しは `humanRoot` に false を渡す —— 人間の根はキューに入らず、完了の後に assignee は替わらない(#3251)。 */
+type LandingSurface<Reason> =
+  | { surface: "merge_question"; reason: Reason }
+  | { surface: "auto_merge_queue" }
+  | { surface: "outside_board" };
+type MergeQuestionReason = "protected" | "human_root" | "dial" | "risk";
+export function landingSurface(isProtected: boolean | undefined, humanRoot: false, merge: MergeDial | undefined, riskFlag: number): LandingSurface<Exclude<MergeQuestionReason, "human_root">>;
+export function landingSurface(isProtected: boolean | undefined, humanRoot: boolean, merge: MergeDial | undefined, riskFlag: number): LandingSurface<MergeQuestionReason>;
 export function landingSurface(
   isProtected: boolean | undefined,
+  humanRoot: boolean,
   merge: MergeDial | undefined,
   riskFlag: number,
-):
-  | { surface: "merge_question"; reason: "protected" | "dial" | "risk" }
-  | { surface: "auto_merge_queue" }
-  | { surface: "outside_board" } {
+): LandingSurface<MergeQuestionReason> {
   if (isProtected) return { surface: "merge_question", reason: "protected" };
+  if (humanRoot) return { surface: "merge_question", reason: "human_root" };
   switch (merge) {
     case "escalate":
       return { surface: "merge_question", reason: "dial" };

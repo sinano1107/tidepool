@@ -5,9 +5,11 @@ import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import type { GitHubAuth } from "../src/github-auth.js";
-import { completeThroughHumanDoor, decomposeThroughHumanDoor, startWorkThroughHumanDoor, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
+import { completeThroughHumanDoor, decomposeThroughHumanDoor, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
+import { createLanding } from "../src/landing.js";
+import { UnknownAgentError } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, editTask, getTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, editTask, getTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { workbenchCommands, workbenchPath } from "../src/workbench.js";
 import {
@@ -21,7 +23,7 @@ import {
   takeWorkspaceInFlightKey,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
@@ -685,7 +687,7 @@ it("親が別の workspace に固定された H は根として完了する —�
   expect(!result.ok && result.failure.error).toMatch(new RegExp(`^task/${h.id} does not merge cleanly into 'main'\\. In the workbench at ${path}, on task/${h.id}, run \`git merge board/main\``));
 });
 
-it("子が走った後に assignee を human に替えた根は、タスクブランチを持つので完了に handoff の6欄が要り、取り込まずに閉じて子の成果は task/<根> に残る(#3418 のレビューの形 1a —— 着地は #3295)", async () => {
+it("子が走った後に assignee を human に替えた根は、タスクブランチを持つので完了に handoff の6欄が要り、取り込まずに閉じて子の成果は task/<根> に残り、registry の盤面でも purely-local の local merge question で着地する(#3418 のレビューの形 1a、pin C8・C16)", async () => {
   const b = await board("root-switched-to-human");
   const root = work(b, "plan");
   await completedAgentChild(b, root, "child.txt", "child\n");
@@ -694,8 +696,21 @@ it("子が走った後に assignee を human に替えた根は、タスクブ�
 
   expect(!(await complete(b, root, {})).ok).toBe(true);
   expect((await complete(b, root)).ok).toBe(true);
-
   expect([git(b.ws.path, "rev-parse", `task/${root.id}`), git(b.ws.path, "show", `task/${root.id}:child.txt`), takenIn(b.db)]).toEqual([branch, "child", []]);
+
+  // registry と同じく、名前 tako だけが解決する —— `human` は agent として引かれない
+  const resolveAuthority = (assignee: string | null) => {
+    if (assignee !== "tako") throw new UnknownAgentError(String(assignee));
+    return { name: "standard", guidance: "", merge: "auto_if_ci_green" as const };
+  };
+  const landing = createLanding({ defaultAgentName: "tako", db: b.db, clock: b.clock, workspace: b.ws, github: null, resolveAuthority });
+  expect((await landing.converge()).find((r) => r.taskId === root.id)?.verdict).toEqual({ kind: "landed", form: "local_merge_question" });
+  const question = listBoard(b.db).find((q) => q.question_pending_local_merge_task_id === root.id)!;
+  expect(question.purpose).toBe('"plan" was completed by a human. A human-completed root is merged only on your answer. Merge it into main, or hold?');
+  expect(listBoard(b.db).filter((q) => q.question_quarantine_kind === "agent")).toEqual([]);
+
+  expect((await submitAnswer({ db: b.db, pollNow: () => {}, landing: unusedLanding, workspace: b.ws, workspacesDir: b.base }, getTask(b.db, question.id)!, ["merge"], undefined, () => b.clock.now(), "webui")).status).toBe("done");
+  expect(git(b.ws.path, "show", "main:child.txt")).toBe("child");
 });
 
 // ADR 0374 決定5 / spec #3273 group C: 完了を伴わない取り込み(`take_in_work`)
