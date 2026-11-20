@@ -894,6 +894,11 @@ export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: strin
   appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha, workspace: workspace.name }, at: new Date(0) });
 }
 
+/** setup のみ: git を持たない盤面の task に `task_branch_created` だけを残す —— 「ブランチに成果を持つ」の読み(ADR 0374 決定17)の題材。 */
+export function recordTaskBranchCreated(db: Db, taskId: string): void {
+  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha: "0".repeat(40), workspace: "home" }, at: new Date(0) });
+}
+
 /** setup のみ: `seedTaskBranch` で置いたタスクブランチを checkout する。 */
 export function checkoutTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string, from = "HEAD"): void {
   seedTaskBranch(db, workspace, taskId, from);

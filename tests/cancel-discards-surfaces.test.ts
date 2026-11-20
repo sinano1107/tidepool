@@ -14,6 +14,7 @@ import {
   managementMcpClient,
   mcpClient,
   nextPoll,
+  recordTaskBranchCreated,
   type Tidepool,
 } from "./harness.js";
 
@@ -31,6 +32,7 @@ it("GET /api/tasks/:id・question の読み・管理MCP の get_task / list_boar
   const root = registerTask(t.db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
   decomposeTaskViaWorker(t.db, root, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }, { title: "b", purpose: "p", completion_criteria: "c" }] }, "deckhand", now);
   const a = listChildren(t.db, root.id).find((c) => c.title === "a")!;
+  recordTaskBranchCreated(t.db, a.id);
   completeTask(t.db, a, FULL_HANDOFF, "deckhand", now, "worker");
   const question = failureQuestion(t.db, root.id, now);
   const discards = [{ id: a.id, title: "a" }];

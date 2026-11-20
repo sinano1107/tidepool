@@ -13,7 +13,7 @@ import {
   registerTask,
   type Task,
 } from "../src/tasks.js";
-import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, interviewExaminee } from "./harness.js";
+import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, interviewExaminee, recordTaskBranchCreated } from "./harness.js";
 
 /** cancel の面が見せる「捨てられる done の work」の読み(ADR 0271 決定4)。範囲は cascade / abandon と同じ述語。 */
 const NOW = new Date("2026-10-17T00:00:00.000Z");
@@ -26,7 +26,11 @@ function split(parent: Task, children: Array<{ title: string; assignee?: string 
   return children.map(({ title }) => listChildren(db, parent.id).find((c) => c.type === "work" && c.title === title)!);
 }
 
-const done = (task: Task, worker = "deckhand") => completeTask(db, getTask(db, task.id)!, FULL_HANDOFF, worker, NOW, "worker");
+/** agent の完了は、拾ったときに作ったタスクブランチを持つ(ADR 0372 決定2)—— 人間の完了は持たない(持つ H は呼び手が足す)。 */
+const done = (task: Task, worker = "deckhand") => {
+  if (worker !== HUMAN_ACTOR_ID) recordTaskBranchCreated(db, task.id);
+  return completeTask(db, getTask(db, task.id)!, FULL_HANDOFF, worker, NOW, "worker");
+};
 
 it("直接 cancel の範囲の done の work のうち agent が実行したものを、盤面の順で id と題で返す —— 人間が実行したものは入らない", () => {
   db = openDb(":memory:");
@@ -42,6 +46,17 @@ it("直接 cancel の範囲の done の work のうち agent が実行したも�
     { id: deep!.id, title: "c1" },
     { id: agentDone!.id, title: "a" },
   ]);
+});
+
+it("タスクブランチを持つ人間担当の done の work は捨てられる成果として入り、持たないものは入らない(pin C15、ADR 0374 決定17)", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [withBranch, without] = split(root, [{ title: "h1", assignee: HUMAN_ACTOR_ID }, { title: "h2", assignee: HUMAN_ACTOR_ID }]);
+  recordTaskBranchCreated(db, withBranch!.id);
+  done(withBranch!, HUMAN_ACTOR_ID);
+  done(without!, HUMAN_ACTOR_ID);
+
+  expect(directCancelDiscards(db, getTask(db, root.id)!, undefined)).toEqual([{ id: withBranch!.id, title: "h1" }]);
 });
 
 it("failure question の abandon は失敗 task の abandon の範囲で読む —— 範囲外の done の兄弟は入らず、cancel option の無い question は空", () => {

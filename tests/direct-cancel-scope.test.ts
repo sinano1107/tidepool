@@ -44,6 +44,7 @@ import {
   humanDecomposeTaskViaWebui,
   judgmentRepairTask,
   markPickedUp,
+  recordTaskBranchCreated,
   settleReview,
 } from "./harness.js";
 
@@ -478,6 +479,7 @@ it("分解の work が祖先の cancel で倒れた RCA は再び pickup され�
 it("直接 cancel の確認と abandon の question は、生き延びる RCA の下の done の work を捨てるものに数える —— cascade と同じ範囲(ADR 0301 決定4 / ADR 0271 決定4)", () => {
   db = openDb(":memory:");
   const { target, split } = rcaWithChildren(db);
+  recordTaskBranchCreated(db, split.id);
   completeTask(db, pickupTask(db, split, "deckhand", NOW)!, FULL_HANDOFF, "deckhand", NOW, "worker");
 
   expect(directCancelDiscards(db, target, undefined).map((discard) => discard.id)).toContain(split.id);
