@@ -750,6 +750,24 @@ export async function submoduleSource(name: string): Promise<string> {
 export const addSubmodule = (checkout: string, source: string) =>
   git(checkout, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", source, "mod");
 
+/** 取り込みが包む commit を作る瞬間(`git commit-tree`)に、人間の clone からの push を模して `workbench` の今の branch に空の commit
+ *  `pushed` を足しながら `run` を走らせる —— 作業台を残す取り込みの CAS(spec #3273 text C6)の観測。 */
+export async function withPushDuringWrap<T>(workbench: string, run: () => Promise<T>): Promise<T> {
+  const shimDir = await tempDir("tidepool-git-shim-");
+  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(
+    join(shimDir, "git"),
+    `#!/bin/sh\ncase " $* " in *" commit-tree "*) "${real}" -C "${workbench}" -c user.name=h -c user.email=h@example.com commit -q --allow-empty -m pushed;; esac\nexec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${shimDir}:${process.env.PATH}`);
+  try {
+    return await run();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
 /** 「ワーカーが成果を書き、本文を付けてコミットした」の fixture(ADR 0084)。完了を
  *  測るテストはこれを使う —— 書きっぱなしのツリーは完了の門に弾かれる。逆に WIP 退避を
  *  測るテストは素の `writeFileSync` のままでよい(escalate / decompose / review)。 */

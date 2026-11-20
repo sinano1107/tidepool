@@ -134,7 +134,7 @@ import { listLog } from "./triage.js";
 import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
-import { buildWorkspaceResolver, humanWorkbenchRead, resolveWorkspacesBaseDir, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
+import { buildWorkspaceResolver, humanWorkbenchDisplay, resolveWorkspacesBaseDir, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
 import {
   BoardNamedProtectedBranchError,
   BoardStateOverlapError,
@@ -455,7 +455,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           ...presented,
           ...(task.type === "question" ? questionAnnotations(deps.db, task) : { discards: discardsOf(task.id) }),
           // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処とコマンド —— HTTP の task の読みと同じ
-          ...(presented.has_task_branch && humanWorkbenchRead(resolveWorkspacesBaseDir(deps.workspacesDir), task.id)),
+          ...(presented.has_task_branch && humanWorkbenchDisplay(resolveWorkspacesBaseDir(deps.workspacesDir), task)),
         };
         return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: getTaskResumesByKey });
       }),
@@ -1254,7 +1254,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Register a human work or review task, optionally backed by a GitHub issue, or an Interview (type interview): a root that measures " +
         "each target without staking production work on it. An Interview takes title, hypothesis, tier (the tier it measures) and " +
         "interview_targets, and optionally measured_work, evidence_task_ids, review_tier, workspace (the real environment its root reads) " +
-        `and assignee (the board's Interviewer when omitted); it takes no purpose or completion_criteria. ${TASK_ACK_DESCRIPTION}`,
+        `and assignee (the board's Interviewer when omitted); it takes no purpose or completion_criteria. ${TASK_ACK_DESCRIPTION} ` +
+        "A child registered with parent_id also returns `warning` when the parent's workbench holds commits not taken in yet (take_in_work).",
       inputSchema: {
         type: z.string(),
         title: z.string().optional(),
@@ -1300,7 +1301,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
-      return result.ok ? toolResult(taskAck(result.task)) : toolError(JSON.stringify(result.failure));
+      return result.ok
+        ? toolResult({ ...taskAck(result.task), ...(result.warning !== undefined && { warning: result.warning }) })
+        : toolError(JSON.stringify(result.failure));
     },
   );
   server.registerTool(

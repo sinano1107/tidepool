@@ -179,7 +179,7 @@ import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
-  humanWorkbenchRead,
+  humanWorkbenchDisplay,
   resolveWorkspacesBaseDir,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -800,8 +800,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     // spec #3273 group C: 取り込まれていない commit を持つ人間担当の親の分解の警告
-    const created = result.warning === undefined ? result.task : { ...result.task, warning: result.warning };
-    sendJson(res.status(201), created satisfies WireContract["POST /api/tasks"]);
+    sendJson(res.status(201), { ...result.task, ...(result.warning !== undefined && { warning: result.warning }) } satisfies WireContract["POST /api/tasks"]);
   });
 
   // Appends a human-approved comment to a GitHub issue (issue #49 設計点4:
@@ -2295,8 +2294,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
       // 受験者の答案の在り処 —— 自分の checkout(ADR 0276 決定4)
       ...(task.interview_target_id !== null && { examinee_checkout: examineeCheckoutPath(db, task.id) ?? null }),
-      // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処 —— 完了の dialog が text C4 で言う
-      ...(presented!.has_task_branch && humanWorkbenchRead(resolveWorkspacesBaseDir(workspacesDir), task.id)),
+      // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処(完了の dialog が text C4 で言う)と、開いている間のコマンド
+      ...(presented!.has_task_branch && humanWorkbenchDisplay(resolveWorkspacesBaseDir(workspacesDir), task)),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

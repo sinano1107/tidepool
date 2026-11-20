@@ -949,12 +949,13 @@ function openHumanWorkWorkbench(named: WorkspaceConfig, base: string, target: st
 }
 
 /** ADR 0374 決定2: task の読みが運ぶ人間担当の work 自身の作業台 —— disk にある間だけ、実体の綴りの在り処(完了の dialog の text C4 も
- *  これを言う)と、そこへ移るコマンドと clone の remote に足すコマンド(`workbenchCommands`)。 */
-export function humanWorkbenchRead(base: string, taskId: string): { workbench: string | null; workbench_commands?: string[] } {
-  const at = workbenchPath(base, { task: taskId });
+ *  これを言う)と、task が未決着の間だけ、そこへ移るコマンドと clone の remote に足すコマンド(`workbenchCommands`)。`done` の後に
+ *  残った作業台(text C7)は何も取り込まないので、push を誘わない。 */
+export function humanWorkbenchDisplay(base: string, task: Task): { workbench: string | null; workbench_commands?: string[] } {
+  const at = workbenchPath(base, { task: task.id });
   if (!placeHasRepository(at)) return { workbench: null };
   const path = realpathSync(at);
-  return { workbench: path, workbench_commands: workbenchCommands(path) };
+  return { workbench: path, ...(!isSettled(task.status) && { workbench_commands: workbenchCommands(path) }) };
 }
 
 /** spec #3273 group C(Surfaces): 人間担当の work の分解の応答に足す1行 —— 作業台の tip が持つ、`task/<H>` に無い commit の数を言う。
@@ -1534,6 +1535,12 @@ export async function startHumanWork(
   return path;
 }
 
+/** spec #3273 text C8: 作業台の無い人間担当の work の取り込み。 */
+export const NO_WORKBENCH = "this task has no workbench — run start_work first.";
+
+/** spec #3273 text A8b / C8: 作業台の tip が書く先に含まれ、取り込むものが無い。 */
+const nothingToTakeIn = (target: string, path: string) => `nothing to take in: ${target} in the workbench at ${path} is the value the board already has.`;
+
 /** spec #3273 text C2e(`verb` は答え直す行為)。 */
 const workbenchGone = (at: string, target: string, verb: string) =>
   `the workbench of this task is gone from ${at}; commits that were not taken in are lost. Run start_work to open it again from ${target}, then ${verb} again.`;
@@ -1553,10 +1560,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   if (unfinished) throw new DomainError(`task ${unfinished.id} "${unfinished.title}" under this task is still being torn down — complete again once it has finished.`);
   const hasWorkbench = placeHasRepository(at);
   if (!hasWorkbench && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
-  const lineage = lineageTaskBranch(db, named, task);
-  const returnRef = lineage ? `refs/heads/${lineage}` : exactProtectedBranchRef(named);
-  const returnName = lineage ?? protectedBranch(named);
-  const returnSha = git(named.path, "rev-parse", "--verify", returnRef);
+  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task);
   const assertMerges = (tip: string, repo: WorkspaceConfig) => {
     if (isAncestor(repo, returnSha, tip) || writeMergeTree(repo, returnSha, tip) !== undefined) return;
     const conflict = `${target} does not merge cleanly into '${returnName}'.`;
@@ -1600,6 +1604,14 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
 }
 
+/** ADR 0374 決定8: H の帰り先 —— `parent_id` でなく系譜で決まり、非根は系譜の `task/<P>`、根は保護ブランチ —— の ref・名前・今の値。
+ *  ADR 0374 決定6: その値は取り込みと完了の内容の検査の入力の tip でもある。 */
+function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task): { lineage: string | undefined; ref: string; name: string; sha: string } {
+  const lineage = lineageTaskBranch(db, named, task);
+  const ref = lineage ? `refs/heads/${lineage}` : exactProtectedBranchRef(named);
+  return { lineage, ref, name: lineage ?? protectedBranch(named), sha: git(named.path, "rev-parse", "--verify", ref) };
+}
+
 /** 人間担当の work の扉の取り込みの失敗のうち、人間が作業台で直せる拒否だけを回答の拒否にする —— 盤面の側の失敗(と盤面 DB の拒否)は素のまま投げる。 */
 function throwHumanWorkRefusal(err: unknown): never {
   const refusal = [IntakeRefusedError, CheckoutUnreadableError, WorktreeStatusError, WorkerTreeGitTimeoutError, CheckoutHostError].some((kind) => err instanceof kind);
@@ -1614,15 +1626,19 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
   const target = taskBranch(task.id);
   const at = workbenchAt(named, base, target);
   const gone = workbenchGone(at, target, "take in");
-  // 作業台の在り処は disk で読む —— 完了の扉の C2b の拒否が開いた作業台は `task_work_started` を持たない
-  if (!placeHasRepository(at)) throw new DomainError(hasStartedWork(db, task.id) ? gone : "this task has no workbench — run start_work first.");
+  // ADR 0374 決定8: 作業台の在り処は disk で読む —— 完了の扉の帰り先との conflict の拒否が開いた作業台は `task_work_started` を持たない
+  if (!placeHasRepository(at)) throw new DomainError(hasStartedWork(db, task.id) ? gone : NO_WORKBENCH);
   const place = workbenchPlace(named, realpathSync(at));
   let taken: { tip: string; commit: string };
   try {
     // ADR 0374 決定7: 取り込むものが無い拒否も、拒否として `board/*` を引き直す
     taken = repointingOnRefusal(named, place.path, () => {
-      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, { humanWork: { again: "take in again", gone } });
-      if (!intaken) throw new DomainError(`nothing to take in: ${target} in the workbench at ${place.path} is the value the board already has.`);
+      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, {
+        humanWork: { again: "take in again", gone },
+        // ADR 0374 決定6: 人間が merge した帰り先の値も入力の tip —— 完了と同じ
+        returnValue: returnBranchOf(db, named, task).sha,
+      });
+      if (!intaken) throw new DomainError(nothingToTakeIn(target, place.path));
       return intaken;
     });
   } catch (err) {
@@ -1675,7 +1691,7 @@ export function takeInHumanContentWorkbench(db: Db, workspace: WorkspaceConfig, 
   }
   return takeInHumanContent(db, workspace, at, { ...intake, entry: "intake_question" }, {
     approved,
-    nothingNew: (path) => `nothing to take in: ${branch} in the workbench at ${path} is the value the board already has.`,
+    nothingNew: (path) => nothingToTakeIn(branch, path),
   })!;
 }
 

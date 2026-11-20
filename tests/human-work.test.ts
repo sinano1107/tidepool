@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -15,6 +14,7 @@ import {
   boardRefWriter,
   completeHumanWork,
   holdsBaseline,
+  humanWorkbenchDisplay,
   prepareHumanWork,
   quarantineWorkspace,
   recordTaskCheckoutTip,
@@ -22,11 +22,12 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
-// ADR 0374 決定1〜4・6〜11 / spec #3273 group C(#3293): 人間担当の work の書き始める(`start_work`)と完了の扉。domain 層の釘(ADR 0107)。
+// ADR 0374 決定1〜11 / spec #3273 group C(#3293・#3294): 人間担当の work の書き始める(`start_work`)・完了を伴わない取り込み
+// (`take_in_work`)・完了の扉と、分解の警告、作業台の表示(`humanWorkbenchDisplay`・`workbenchCommands`)。domain 層の釘(ADR 0107)。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -529,10 +530,11 @@ it("準備の fetch を待つ間に cancel された H には、start_work も�
   expect([getTask(b.db, started.id)!.status, git(b.ws.path, "rev-parse", `task/${started.id}`), takenIn(b.db)]).toEqual(["cancelled", branch, []]);
 });
 
-it("done の後に作業台の tip が読んだものから動いていれば、作業台を残して text C7 を返す(pin C11)", async () => {
+it("done の後に作業台の tip が読んだものから動いていれば、作業台を残して text C7 を返す —— task の表示は在り処だけを言い、書き込みを誘うコマンドを出さない(pin C11)", async () => {
   const b = await board("complete-kept");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   const path = await startedWithCommit(b, h);
+  expect(humanWorkbenchDisplay(b.base, getTask(b.db, h.id)!)).toEqual({ workbench: path, workbench_commands: workbenchCommands(path) });
   await prepareHumanWork(b.db, b.ws, h, "complete", { workspacesBaseDir: b.base, now: b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name });
 
   const notice = completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {
@@ -540,6 +542,7 @@ it("done の後に作業台の tip が読んだものから動いていれば、
     commitWork(path, "late.txt", "arrived after the read\n");
   });
 
+  expect(humanWorkbenchDisplay(b.base, getTask(b.db, h.id)!)).toEqual({ workbench: path });
   expect(notice).toBe(`completed. Commits reached the workbench at ${path} after the board read it and were not taken in; the workbench is kept. The task is done, so they do not enter through it.`);
   expect([getTask(b.db, h.id)!.status, existsSync(join(path, "late.txt"))]).toEqual(["done", true]);
   expect(() => git(b.ws.path, "show", `task/${h.id}:late.txt`)).toThrow();
@@ -788,20 +791,7 @@ it("take_in_work の間に作業台へ push が着けば、作業台の branch �
   const path = await startedWithCommit(b, h);
   const tip = git(path, "rev-parse", "HEAD");
   // 包む commit を作る瞬間に、人間の clone からの push を模して作業台の task/<H> に commit を足す
-  const shimDir = await tempDir("tidepool-git-shim-");
-  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(
-    join(shimDir, "git"),
-    `#!/bin/sh\ncase " $* " in *" commit-tree "*) "${real}" -C "${path}" -c user.name=h -c user.email=h@example.com commit -q --allow-empty -m pushed;; esac\nexec "${real}" "$@"\n`,
-    { mode: 0o755 },
-  );
-  vi.stubEnv("PATH", `${shimDir}:${process.env.PATH}`);
-  let result: Awaited<ReturnType<typeof takeIn>>;
-  try {
-    result = await takeIn(b, h);
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  const result = await withPushDuringWrap(path, () => takeIn(b, h));
 
   const wrapped = git(b.ws.path, "rev-parse", `task/${h.id}`);
   expect(result).toEqual({
@@ -831,13 +821,15 @@ it("作業台の tip が task/<H> に無い commit を持つ H の分解は拒�
   const b = await board("decompose-warning");
   const h = work(b, "lay the groundwork", { assignee: HUMAN_ACTOR_ID });
   const path = await startedWithCommit(b, h, "one.txt", "one\n");
-  commitWork(path, "two.txt", "two\n");
   const decompose = (title: string) =>
     decomposeThroughHumanDoor(deps(b), h.id, { reason: "split", children: [{ title, purpose: "p", completion_criteria: "c", assignee: "deckhand" }] }, () => b.clock.now(), "webui");
   const branch = git(b.ws.path, "rev-parse", `task/${h.id}`);
 
+  const single = decompose("first child");
+  commitWork(path, "two.txt", "two\n");
   const warned = decompose("first child");
 
+  expect(single.ok && single.value.warning).toBe(`the children fork from task/${h.id}, and 1 commit in the workbench at ${path} is not taken in yet.`);
   expect(warned.ok && warned.value.warning).toBe(`the children fork from task/${h.id}, and 2 commits in the workbench at ${path} are not taken in yet.`);
   expect(warned.ok && warned.value.children.map((child) => child.title)).toEqual(["first child"]);
   expect([git(b.ws.path, "rev-parse", `task/${h.id}`), takenIn(b.db)]).toEqual([branch, []]);
@@ -858,4 +850,23 @@ it("子の成果が届いた後、人間の commit が無い作業台の take_in
 
   expect(await takeIn(b, h)).toEqual(refused(`nothing to take in: task/${h.id} in the workbench at ${path} is the value the board already has.`));
   expect(git(path, "rev-parse", `board/task/${h.id}`)).toBe(git(b.ws.path, "rev-parse", `task/${h.id}`));
+});
+
+it("帰り先から入った人間しか書けない path の変更を merge した tip は take_in_work でも取り込まれる —— 帰り先の値も入力の tip(pin C18、ADR 0374 決定6)", async () => {
+  const b = await board("take-in-human-only-path");
+  const root = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  // 帰り先に人間しか書けない path の変更が入る(盤面の口を通して書く —— 基準どおりの値)
+  const scratch = await tempDir("tidepool-scratch-");
+  git(scratch, "clone", "--quiet", "--branch", `task/${root.id}`, b.ws.path, ".");
+  commitWork(scratch, ".mcp.json", "{}\n");
+  git(b.ws.path, "fetch", "--quiet", scratch, `task/${root.id}`);
+  const advanced = git(b.ws.path, "rev-parse", "FETCH_HEAD");
+  boardRefWriter(b.db, b.ws)(`refs/heads/task/${root.id}`, advanced, () => git(b.ws.path, "update-ref", `refs/heads/task/${root.id}`, advanced));
+  await startWork(b, h);
+  git(path, "merge", "--no-edit", `board/task/${root.id}`);
+
+  expect((await takeIn(b, h)).ok).toBe(true);
+  expect(git(b.ws.path, "show", `task/${h.id}:.mcp.json`)).toBe("{}");
 });
