@@ -998,9 +998,9 @@ export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber
 
 /** ADR 0087 決定2 の参照検査が数えるもの: この名前を参照する未決着(done/cancelled でない)
  *  タスクの件数。agent は `assignee` に加えて、将来の review assignee を予約する `review_by` も
- *  同じ参照として数える。workspace は `workspace` に加えて、決着で着地し直す完了した work の祖先の
- *  workspace も数える(ADR 0234 決定1)。削除の扉はこの件数を人間に返す —— 先に cancel か
- *  再割当をするのが筋だからである。 */
+ *  同じ参照として数える。workspace は自身の列や祖先から導出した名前(ADR 0290 決定5)に加えて、
+ *  決着で着地し直す完了した work の祖先の workspace も数える(ADR 0234 決定1)。削除の扉はこの件数を
+ *  人間に返す —— 先に cancel か再割当をするのが筋だからである。 */
 export function countUnsettledTasksReferencing(
   db: Db,
   column: "assignee" | "workspace",
@@ -1460,16 +1460,17 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
       .run({ id: task.id, human: HUMAN_ACTOR_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
     // ADR 0290 決定4 / ADR 0372 決定1: 空の workspace は、列が埋まっている最も近い祖先 → 既定の順で埋める
-    const ancestorWorkspace = derivedWorkspace(db, { ...task, workspace: null });
+    const ancestor = task.workspace === null ? nearestFilledAncestor(db, task.parent_id) : undefined;
     const filled: ResolvedFromDefault = {};
     for (const column of ["assignee", "workspace"] as const) {
-      const name = column === "workspace" ? (ancestorWorkspace ?? fill.workspace) : fill.assignee;
+      const name = column === "workspace" ? (ancestor?.workspace ?? fill.workspace) : fill.assignee;
       if (name && db.prepare(`UPDATE tasks SET ${column} = ? WHERE id = ? AND ${column} IS NULL`).run(name, task.id).changes) {
         filled[column] = name;
       }
     }
-    const fromAncestor = ancestorWorkspace !== null ? filled.workspace : undefined;
-    if (fromAncestor) delete filled.workspace;
+    const filledWorkspaceName = filled.workspace;
+    const ancestorWorkspaceName = ancestor ? filledWorkspaceName : undefined;
+    if (ancestorWorkspaceName) delete filled.workspace;
     appendEvent(db, {
       taskId: task.id,
       actorId,
@@ -1477,7 +1478,8 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
       payload: {
         kind: "task_picked_up",
         ...(Object.keys(filled).length > 0 && { resolved_from_default: filled }),
-        ...(fromAncestor && { workspace_from_ancestor: fromAncestor }),
+        ...(ancestorWorkspaceName && { workspace_from_ancestor: ancestorWorkspaceName }),
+        ...(filledWorkspaceName && { column_filled_from: ancestor?.id ?? "default" }),
       },
       at: now,
     });
@@ -2987,7 +2989,8 @@ export interface ChildSpec extends TaskContent {
   assignee?: string;
   /** Targets the child at a specific workspace. Outside the registering
    *  worker's authority profile's `allowed_workspaces`, this too converts to
-   *  an approval question (issue #11). Absent → inherits the parent's. */
+   *  an approval question (issue #11). Absent → store an empty column and derive
+   *  the execution workspace from the nearest filled ancestor or default (ADR 0372 決定1). */
   workspace?: string;
   /** Opts this child into on-completion review (layer 1), same as
    *  RegisterTaskInput's own field — the registrant declares it, human or
@@ -3378,10 +3381,7 @@ export function decomposeTask(
       if (child.workspace !== undefined && isProtectedWorkspace?.(child.workspace)) {
         reasons.push(`targets protected workspace "${child.workspace}"`);
       }
-      // an unstated workspace inherits the parent's (GLOSSARY.md): it was
-      // already authorized when the parent landed there, so this is a
-      // default fill-in, never itself a reason for a question
-      const workspace = child.workspace ?? parent.workspace ?? undefined;
+      // ADR 0372 決定1: 省略した workspace は空のままにし、pickup 前の親の Edit や既定の差し替えを反映する
       if (reasons.length > 0) {
         const questionTitle = `authorize child registration: ${child.title}`;
         registerTask(
@@ -3403,7 +3403,7 @@ export function decomposeTask(
               completion_criteria: child.completion_criteria,
               risk_flag: child.risk_flag,
               assignee: child.assignee,
-              workspace,
+              workspace: child.workspace,
               review_flag: child.review_flag,
               review_by: child.review_by,
               review_tier: child.review_tier,
@@ -3422,7 +3422,7 @@ export function decomposeTask(
       children.push(
         registerTask(
           db,
-          { type: "work", ...child, workspace, parent_id: parent.id, based_on_decision: decisionId },
+          { type: "work", ...child, parent_id: parent.id, based_on_decision: decisionId },
           now,
           actorId,
           origin,

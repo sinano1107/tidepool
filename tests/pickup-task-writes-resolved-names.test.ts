@@ -25,6 +25,7 @@ describe("pickupTask は呼び手が解決した名前を空の列にだけ書�
     expect(pickedUpPayload(db, task.id)).toEqual({
       kind: "task_picked_up",
       resolved_from_default: { assignee: "tako", workspace: "sandbox" },
+      column_filled_from: "default",
     });
   });
 

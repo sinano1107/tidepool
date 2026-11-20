@@ -200,7 +200,8 @@ export type EventPayload =
   | ({ kind: "interview_audited" } & AuditVerdict)
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent.
   // workspace_from_ancestor: an empty workspace filled from the nearest fixed ancestor instead (ADR 0290 決定4 / ADR 0372 決定1)
-  | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault; workspace_from_ancestor?: string }
+  // column_filled_from: the source of a workspace fill, `default` or the nearest filled ancestor's id (ADR 0290 決定4 / ADR 0372 決定1)
+  | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault; workspace_from_ancestor?: string; column_filled_from?: string }
   // ADR 0372 決定2 / ADR 0375 決定2: 盤面が task/<id> を作った(ref を書いた後に残す)。sha は作成時の値、workspace は列の名前(面接室でなく実環境)。
   // column_filled_from: 同じ固定が空の列に workspace を書いた —— 名前の出所で、`default` か列を導いた祖先の id
   | { kind: "task_branch_created"; sha: string; workspace: string; column_filled_from?: string }

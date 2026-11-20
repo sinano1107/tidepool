@@ -1,5 +1,7 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import type { AgentDeletionReferences, DeleteAgentInput } from "../src/agent-create.js";
+import { appendEvent } from "../src/events.js";
 import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import { UnknownAgentError } from "../src/registry.js";
 import {
@@ -7,9 +9,10 @@ import {
   DeletionConfirmationRequiredError,
 } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
-import type {
-  DeleteWorkspaceInput,
-  WorkspaceDeletionReferences,
+import {
+  type DeleteWorkspaceInput,
+  deleteWorkspace,
+  type WorkspaceDeletionReferences,
 } from "../src/workspace-create.js";
 import {
   AUTH_HEADERS,
@@ -18,8 +21,10 @@ import {
   completedWork,
   HUMAN_WEBUI,
   registerWork,
+  settleReviews,
   type Tidepool,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -172,6 +177,27 @@ it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タ
   await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
 
   expect(refs[0]?.awaitingLandingTaskIds).toEqual([work.id]);
+});
+
+it("DELETE refuses a workspace referenced only through an unsettled task's ancestor", async () => {
+  const dir = await makeRegistry();
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: (input, refs) => deleteWorkspace(input, {
+        ...refs, db: t.db, registry: { dir, mode: "purely-local" }, workspacesBaseDir: t.dir,
+      }),
+    },
+  });
+  const at = t.clock.now();
+  const parent = completedWork(t.db, at, "deckhand", undefined, "tidepool");
+  settleReviews(t.db, at);
+  appendEvent(t.db, { taskId: parent.id, at, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "nothing_to_land", base: "main" } });
+  registerTask(t.db, { type: "memory_repair", title: "repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
+
+  const res = await api(t.baseUrl, "DELETE", "/api/workspaces/tidepool", { confirm: true });
+
+  expect(res.status).toBe(409);
+  expect(res.json).toMatchObject({ blocked: true, reasons: [{ code: "unsettled_tasks", count: 1 }] });
 });
 
 it("DELETE /api/workspaces/:name は開いた Quarantine と基準の拒否を他の理由と同じ 409 で返す(ADR 0373 決定14)", async () => {

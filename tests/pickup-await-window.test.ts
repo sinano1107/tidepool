@@ -2,14 +2,50 @@ import { afterEach, expect, it, vi } from "vitest";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { IssueGoneError } from "../src/github.js";
 import { registerTask } from "../src/tasks.js";
-import { healthyOpenai } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
+import { awaitWindow, healthyOpenai } from "./fakes.js";
+import { api, bootTidepool, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {
   await t?.stop();
+});
+
+it("a root workspace Edit during candidate checks defers its unstarted child's pickup (#3436)", async () => {
+  const a = await makeWorkspace("edit-before-pickup-a");
+  const b = await makeWorkspace("edit-before-pickup-b");
+  const window = awaitWindow();
+  let holdPick = false;
+  t = await bootTidepool({
+    workspace: a,
+    resolveWorkspace: defaultingTo(a, b),
+    registryReachability: async () => {
+      if (holdPick) await window.hold();
+      return { available: true };
+    },
+  });
+  const root = queueWork(t, "unstarted root", a.name);
+  const [child] = humanDecomposeTaskViaWebui(t.db, root, {
+    reason: "split the work",
+    children: [{ title: "child", purpose: "p", completion_criteria: "c" }],
+  }, t.clock.now());
+
+  holdPick = true;
+  const tick = t.clock.advance(HOUR);
+  await window.entered;
+  try {
+    expect((await api(t.baseUrl, "PATCH", `/api/tasks/${root.id}`, { workspace: b.name })).status).toBe(200);
+  } finally {
+    window.open();
+  }
+  await tick;
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${child!.id}/events`)).json;
+  expect(events.some((event: { kind: string }) => event.kind === "task_picked_up")).toBe(false);
+
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(t.worker.started).toEqual([expect.objectContaining({ id: child!.id, workspace: b.name })]));
 });
 
 // scheduler は head を選んでから issue 本文の取得を await する(issue #972)。その窓で人間の

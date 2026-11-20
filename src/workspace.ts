@@ -226,10 +226,9 @@ export class UnknownWorkspaceError extends Error {
 /** An Interview task's place (its room, or an examinee's own checkout) has no opened event: the board never got as far as making it. */
 export class PlaceNotOpenError extends Error {}
 
-/** ADR 0009: `task.workspace` is a reference to a registry name, resolved
- *  fresh against the registry every time it's used, never pinned to a path.
- *  Null — a task never picked up, since pickup writes the default's name
- *  (ADR 0233) — inherits the board's default (GLOSSARY.md's Workspace). `workspacesBaseDir`
+/** ADR 0009: the workspace name is resolved fresh against the registry.
+ *  ADR 0372 決定1: callers pass the column or the name derived from an ancestor.
+ *  Null means both are empty, so the board's default applies. `workspacesBaseDir`
  *  is `resolveWorkspacesBaseDir`'s output, threaded in rather than read from
  *  env here (ADR 0018) — this stays a pure function of its arguments. */
 export function resolveExecutionWorkspace(

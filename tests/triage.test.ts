@@ -513,7 +513,7 @@ it("commit bundles the objections into one repair task per objected task", async
   expect(repairB.purpose).toContain("keep the old key name");
 });
 
-it("異議されたエントリを event id 順の対として修理タスクへ束ね、workspace と親を継承する", async () => {
+it("異議されたエントリを event id 順の対として修理タスクへ束ね、親の workspace を表示する", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "対の修理", "非既定 workspace");
   await t.clock.advance(HOUR);
@@ -1168,6 +1168,7 @@ it.each([
     memory_repair: { ids: objections.memory, intro: `objections raised against memory writes of "${registered.title}"`, own: "drop the note", other: "redo it" },
   };
   for (const child of bundled) {
+    expect(child.workspace).toBeNull();
     if (child.type === "review") {
       expect(registration(db, child).payload).toMatchObject({ opened_on_event_ids: [...objections.decision, ...objections.memory] });
       continue;
@@ -1180,7 +1181,7 @@ it.each([
   }
   const memoryRepair = bundled.find((child) => child.type === "memory_repair");
   if (memoryRepair) {
-    expect(memoryRepair).toMatchObject({ workspace: getTask(db, registered.id)!.workspace, assignee: registered.assignee });
+    expect(memoryRepair.assignee).toBe(registered.assignee);
     expect(registration(db, memoryRepair)).toMatchObject({ actor_id: HUMAN_ACTOR_ID, origin: "webui" });
   }
   expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual(

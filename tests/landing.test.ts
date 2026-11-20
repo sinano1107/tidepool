@@ -7217,6 +7217,25 @@ it("着地を待つ完了タスクは、PR をまだ開いていない未着地�
   expect(taskIdsAwaitingLanding(db, undefined, "tako")).toHaveLength(5);
 });
 
+it("parentless landing questions register in the completed task's workspace", () => {
+  db = openDb(":memory:");
+  const now = new Date(0);
+  const prWork = completedWork(db, now, "tako", undefined, "reef");
+  const failedWork = completedWork(db, now, "tako", undefined, "reef");
+  const localWork = completedWork(db, now, "tako", undefined, "reef");
+
+  recordPrOpenedViaWorker(db, prWork, 7, "tako", now, { authority: { merge: "escalate" } });
+  registerPrPromotionFailureQuestion(db, failedWork, "push failed", now);
+  registerLocalMergeQuestion(db, localWork, "merge it", now);
+
+  const questions = listBoard(db).filter((task) => task.type === "question");
+  expect(questions).toEqual(expect.arrayContaining([
+    expect.objectContaining({ question_pending_merge_pr: 7, parent_id: null, workspace: "reef" }),
+    expect.objectContaining({ question_pending_pr_promotion_task_id: failedWork.id, parent_id: null, workspace: "reef" }),
+    expect.objectContaining({ question_pending_local_merge_task_id: localWork.id, parent_id: null, workspace: "reef" }),
+  ]));
+});
+
 /** 失敗 question に abandon promotion と答えた完了 work —— 断念が効いている。 */
 async function abandonedWork(board: Db, now: Date, workspace?: string): Promise<Task> {
   const work = completedWork(board, now, "tako", undefined, workspace);
