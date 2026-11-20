@@ -1724,7 +1724,7 @@ it("merge に失敗した開いたままの PR は、tick を落とさずキュ�
       registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "hold",
       // spec #3273 text A6: どの失敗でも、conflict した PR を head への merge で解く道を足す
-      purpose: `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold? If PR #1 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer again.`,
+      purpose: `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold? If PR #1 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer \`merge\`: the board refuses it once, listing the commits you pushed, and the next \`merge\` merges.`,
     },
   ]);
 });
@@ -1882,7 +1882,10 @@ it("CI を読んだ後に head が動いた PR は merge されず、question �
   const workspace = await makeWorkspace("landing-head-moved");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const work = queueAutoMerge(db, clock, 1);
+  // どちらの head も盤面が push した head(ADR 0387 決定1)—— PR を開いた head と、CI を読んだ後に盤面が push した head。盤面の push の
+  // 記録は tick が印を放した後に書かれる(ADR 0387 決定4)
+  const work = landingWork(db, clock);
+  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" }, head: "ci-read-head" });
   github.scriptHead(1, "ci-read-head");
   afterCiRead(github, () => github.scriptHead(1, "pushed-after-ci-read"));
 
@@ -1893,6 +1896,7 @@ it("CI を読んだ後に head が動いた PR は merge されず、question �
   expect(mergeQuestions(db)).toEqual([]);
   expect(autoMergeOutcomeEvents(db, work.id)).toEqual([]);
 
+  appendEvent(db, { taskId: work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_branch_pushed", pr_number: 1, sha: "pushed-after-ci-read" }, at: clock.now() });
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
   expect(github.mergedHeads).toEqual(["pushed-after-ci-read"]);
