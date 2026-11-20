@@ -1,6 +1,6 @@
 # 盤面が merge している PR には観測も執行も手を出さない —— 執行の記録は執行した経路が持つ
 
-**Status 追記: 決定2 の印を持つ経路に、収束の記録済み PR への push が加わる —— push の前から `pr_branch_pushed` を書くまで持ち、取れなければ撃たない。印は「執行中」でなく「盤面がその PR の head を動かす・merge する処理中」の印になる。決定3 の読み手(観測の走査・tick・回答)は変わらない([ADR 0387](0387-the-board-merges-unattended-only-the-head-it-last-pushed-and-a-human-merge-on-a-head-the-board-did-not-push-is-refused-once.md) 決定4、2026-11-20、issue #3210)。**
+**Status 追記: 決定2 の印を持つ経路に、収束の記録済み PR への push が加わる —— push の前から `pr_branch_pushed` を書くまで持ち、取れなければ撃たない。印は「執行中」でなく「盤面がその PR の head を動かす・merge する処理中」の印になる。決定3 の読み手(観測の走査・tick・回答)は変わらないが、効き目は広がる —— push の間、回答は `merge` も `hold` も「答え直して」と拒まれる(ADR 0288 決定2)([ADR 0387](0387-the-board-merges-unattended-only-the-head-it-last-pushed-and-a-human-merge-on-a-head-the-board-did-not-push-is-refused-once.md) 決定4、2026-11-20、issue #3210)。**
 
 **Status 追記: 別扱いに残した「落ちた後」(#1820)は、merge した名義を読んで執行と観測を分ける(ADR 0265 決定5)。執行の記録は根の id に刻む(ADR 0265 決定1)**
 

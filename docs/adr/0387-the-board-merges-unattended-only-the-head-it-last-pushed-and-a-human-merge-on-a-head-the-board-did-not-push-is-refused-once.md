@@ -28,6 +28,7 @@ path(ADR 0362)を変えていても、完了の門と人間の目のどちらも
    merge が失敗したときの question で、それは push の前の head について立ったものだから、最初の `merge` は決定2 で拒まれ、
    自分の push した commit が列挙される。次の `merge` で merge する。conflict を解く案内の文は、この1回の拒否を前もって言う。
    この question の上でだけ拒まない形は退けた —— question が開いている間に足された commit を、人間が見ないまま merge する。
+   この手間は、人間が PR の head へ push しなくて済むようにする形(#3478)で置き換える方針である。
 4. **収束が記録済みの PR へ push するときは、push の前から `pr_branch_pushed` を書くまで、tick と人間の merge 回答と同じ PR の
    in-flight 印(ADR 0236)を持つ。取れなければ撃たず、次の突きに回す(人間の回答の中の収束なら、回答を拒んで答え直させる)。人間の `merge` 回答は、head を読んだ後の同期区間で印を見て、
    印があれば判定せずに拒んで答え直させ、無ければ最後に push した値をその場で読む。** push と記録の間に tick や回答が新しい head を
@@ -48,4 +49,6 @@ path(ADR 0362)を変えていても、完了の門と人間の目のどちらも
 - 書き手の側 —— worker が書いた workflow 定義が CI で repo の資格情報で走ること、保護ブランチと `task/*` への push の規則 —— はこの決定の外で、比べていない。workflow の token が保護ブランチへ直接 push できるなら、この決定は門の穴を塞がない(#3482 が持つ)。
 - 外から進んだ head の CI を GitHub の token の workflow が緑にできるか(#3210 の道筋 2・5)は、この決定に依らない。測らない。
 - PR が無いか未記録のときの写しの古さ(#3410)は前提に入らない —— 決定1 は記録済みの PR の event の値だけを読む。
+- 決定4 の印は盤面のプロセスの中にあり、push が通って `pr_branch_pushed` を書く前に盤面が落ちると、再起動後は盤面自身の push を決定1 の一致しない head と読む(ADR 0236 が別に扱う落ちた場合と同じ範囲の外、#1820)。止まる側に倒れ、推奨 hold の question が盤面自身の commit を外の commit として列挙する。
+- 決定1 の question に `hold` と答えた後の道は、他の PR の hold と同じ —— 人間が GitHub で merge するか close する。足された commit を消して head を最後に push した sha に戻しても、盤面は無人 merge に戻さない。新しい道は作らない。
 - 人間が外の commit を作業台で merge し、盤面がそれを push した後は、その sha が最後に push した値になる。決定1 は通常どおり通る。
