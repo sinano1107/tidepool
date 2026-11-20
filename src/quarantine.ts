@@ -312,7 +312,7 @@ export const QUARANTINES = [
           `\nAnswering checks that every ref of ${room ? `the interview room ${name}` : `workspace ${name}`} equals the board's baseline; nothing that moved is accepted. ` +
           `\`${REPAIRED_BY_HAND}\`: you repaired something other than refs — the board checks and refuses if a ref differs. ` +
           `\`${RESTORE_THE_BASELINE}\`: the board writes every differing ref back to the baseline and keeps each value it removes under \`refs/keep-around/<sha>\`. ` +
-          `\`${GIVE_UP_THE_LOST_REFS}\`: the same, and refs whose commits no longer exist are accepted as they are now. ` +
+          `\`${GIVE_UP_THE_LOST_REFS}\`: the same, and refs whose commits no longer exist are accepted as they are now; landing ends for a completed root whose work was lost with its branch, and the reviews and repairs attached to such work, and to work that returns into it, are cancelled. ` +
           "If a merge back conflicts, the refusal says where to resolve it." +
           (room ? ` \`${RUN_WITH_AN_EMPTY_ROOM}\`: the board re-creates the room empty.` : "") +
           "\n\nAny answer text is kept as a repair note.",

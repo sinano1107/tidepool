@@ -1982,13 +1982,14 @@ it("完了した親のタスクブランチが失われて死んでいれば、�
   // 完了した親のタスクブランチは give-up で失われ、作成時と違う sha を失った(死んだ)—— 子の系譜はその ref を git で読まない
   const parent = landingWork(db, clock);
   seedTaskBranch(db, workspace, parent.id);
-  const lostEdit = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "the parent's lost edit");
-  git(workspace.path, "branch", "-D", `task/${parent.id}`);
-  appendEvent(db, { taskId: parent.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: lostEdit }, at: clock.now() });
   const child = attachUnsettledChild(db, clock, parent.id);
   git(workspace.path, "branch", `task/${child.id}`);
   finish(db, clock, child);
+  // 完了の後に失う —— 死んだ task の下には完了時レビューも立たない(ADR 0380 決定2)
   finish(db, clock, parent);
+  const lostEdit = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "the parent's lost edit");
+  git(workspace.path, "branch", "-D", `task/${parent.id}`);
+  appendEvent(db, { taskId: parent.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: lostEdit }, at: clock.now() });
   const healthy = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, healthy.id);
   commitWork(workspace.path, "feature.txt", "ready\n");

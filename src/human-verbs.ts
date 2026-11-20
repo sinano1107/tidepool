@@ -815,7 +815,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0380 決定4: 失われたと数える前に origin から取る(spec #3273 の受理の 7a)
     if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
-    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now, giveUp)) : [];
+    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now, giveUp ? openQuarantineQuestion(deps.db, "workspace", value)!.id : undefined)) : [];
     await fire(all, "after-open");
     // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
     await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));

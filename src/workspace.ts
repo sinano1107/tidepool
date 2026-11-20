@@ -27,7 +27,7 @@ import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, type IntakeEntry, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation } from "./events.js";
+import { appendEvent, type EventOrigin, type IntakeEntry, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation, type TaskScopedPayload } from "./events.js";
 import {
   boardReadTree,
   boardViewStatus,
@@ -114,13 +114,15 @@ import { repairRepoAccess, repositoryLabel, sameRepository } from "./repo-access
 import { humanOnlyPathChanges, PROJECT_SETTINGS_PATHS, recordedSettingsDisposition, SANDBOX_STUB_PATHS } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
+  ancestorsFromTop,
   ancestorsSql,
   carriesReadOnly,
+  countedAncestors,
   derivedWorkspaceSql,
+  fellLostBranchAttachments,
   fillEmptyWorkspace,
   getTask,
   hasStartedWork,
-  hasTaskBranch,
   hasTaskBranchInForce,
   holdsFirstCaptures,
   interviewRole,
@@ -130,10 +132,12 @@ import {
   keepsCheckoutAsRecord,
   lostTaskIsTransparent,
   nearestFilledAncestor,
+  opaqueLostAncestors,
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
   sessionReadCheckouts,
+  settleQuestionAsObserved,
   subtreeSql,
   type Task,
   type TaskType,
@@ -2054,15 +2058,6 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
  *  interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)。 */
 const transparentToLineage = (type: TaskType): boolean => carriesReadOnly(type) || type === "interview";
 
-function ancestorsFromTop(db: Db, task: Pick<Task, "parent_id">): Task[] {
-  const ancestors: Task[] = [];
-  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; ) {
-    ancestors.unshift(parent);
-    parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined;
-  }
-  return ancestors;
-}
-
 /** ADR 0372 決定3: 自分のタスクブランチを切る task の pickup は、同じ workspace に導出される未決着の work の祖先のうち
  *  `task_branch_created` を持たないものを上から固定する —— 空の列に workspace を書き、祖先自身の系譜から ref を作り、event を残す。
  *  導出は「列 → 列が埋まった最も近い祖先 → 既定」(`nearestFilledAncestor`、上で固定した祖先の列もその場で読む)。review の pickup は
@@ -2083,22 +2078,10 @@ function filledFrom(db: Db, task: Pick<Task, "workspace" | "parent_id">): string
   return task.workspace === null ? (nearestFilledAncestor(db, task.parent_id)?.id ?? "default") : undefined;
 }
 
-/** ADR 0372 決定4: 系譜に数える祖先 —— タスクブランチを持ち、書かれた列が `workspace` と同じ work の祖先を上から。決着の有無を問わない。 */
-function countedAncestors(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "parent_id">): Task[] {
-  return ancestorsFromTop(db, task).filter((a) => a.type === "work" && a.workspace === workspace.name && hasTaskBranch(db, a.id));
-}
-
 /** ADR 0380 決定3: 帰り先なし —— 数える祖先に、効いている失われた event を持ち透明でない祖先がいる(死んだ祖先。間に無事な祖先を挟んでも)。
  *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。 */
 export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">): Task | undefined {
-  if (transparentToLineage(task.type)) return undefined;
-  const counted: string[] = [];
-  for (const ancestor of countedAncestors(db, workspace, task)) {
-    const lost = taskBranchLostInForce(db, ancestor.id);
-    if (lost && !(ancestor.status === "done" && lostTaskIsTransparent(db, ancestor.id, lost, counted))) return ancestor;
-    counted.push(ancestor.id);
-  }
-  return undefined;
+  return transparentToLineage(task.type) ? undefined : opaqueLostAncestors(db, workspace.name, task)[0];
 }
 
 /** spec #3273 group H(pin C21): 失われたタスクブランチ `branch` で人間の扉が拒む文。`recreate` は `start_work` の固定が作り直せる
@@ -2138,7 +2121,7 @@ export function resolveTaskBranchLineage(
   if (noReturnAncestor(db, workspace, task)) return { branch: undefined, outlivedForkSource: false, noReturn: true };
   let candidate: string | undefined;
   let outlivedForkSource = false;
-  for (const ancestor of countedAncestors(db, workspace, task)) {
+  for (const ancestor of countedAncestors(db, workspace.name, task)) {
     // ADR 0380 決定3: 残る失われた祖先は透明 —— git を当てずに系譜から外す
     if (taskBranchLostInForce(db, ancestor.id)) continue;
     const branch = taskBranch(ancestor.id);
@@ -2853,7 +2836,8 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
  *  `giveUp`(ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ行を消す)、`lost_refs_accepted` を書き戻しより先に
  *  残す。失われた ref が無ければ、今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
-export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUp = false): KeptValue[] {
+export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUpQuestion?: string): KeptValue[] {
+  const giveUp = giveUpQuestion !== undefined;
   const { current, targets } = restoreTargets(db, workspace);
   const lost = lostTargets(workspace, targets);
   if (giveUp) {
@@ -2884,10 +2868,15 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
         at: now,
       });
       // ADR 0375 決定1・9: 失われた `task/<id>` ごとに task へ event を残す —— 後の段で回答が拒まれても残る
-      for (const [ref, sha] of lost) {
+      const lostTasks = lost.flatMap(([ref, sha]) => {
         const task = ref.startsWith("refs/heads/task/") ? getTask(db, taskIdOfBranch(ref.slice("refs/heads/".length))) : undefined;
-        if (task) appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: now });
-      }
+        if (!task) return [];
+        appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: now });
+        return [task.id];
+      });
+      // 透明か死んだかは同じ回答の兄弟の event も読むので、倒すのは全部を刻んだ後(ADR 0375 決定4・9)
+      fellLostBranchAttachments(db, lostTasks, giveUpQuestion, now);
+      for (const id of lostTasks) endLostRootLanding(db, workspace, getTask(db, id)!, now);
     })();
   }
   if (targets.size === 0) return [];
@@ -2950,6 +2939,34 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
     }
   }
   return kept;
+}
+
+/** ADR 0375 決定7・8 / spec #3273 group H: ブランチを失った done の根(帰り先が保護ブランチ)で PR を開いていないものの着地を終える —— 死んだ根は
+ *  `landing_ended_branch_lost`、handoff だけの根(失われた sha = 作成時の sha)は `nothing_to_land` で、どちらも失われたブランチを git で
+ *  読まない。開いている着地の question(local 着地・昇格失敗)は回答なしで閉じ、`landing_ended_branch_lost` がその id を運ぶ。内容が保護
+ *  ブランチに届いて透明な根と、PR を開いた根(内容は GitHub の head に在る)は終えない。根でない task(帰り先が祖先のブランチ・帰り先なし)は
+ *  記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。 */
+function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date): void {
+  if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return;
+  if (db.prepare("SELECT 1 FROM events WHERE task_id = ? AND kind IN ('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost', 'local_merge_executed')").get(task.id)) return;
+  try {
+    const lineage = resolveTaskBranchLineage(db, workspace, task);
+    if (lineage.branch || lineage.noReturn) return;
+  } catch (err) {
+    // 着地の導出と同じく、lineage が読めない根は根として扱う(`landingRootOf`)—— 失われた内容は着地のどこにも運べない
+    if (isBoardDbRefusal(err)) throw err;
+  }
+  const lost = taskBranchLostInForce(db, task.id)!;
+  const handoffOnly = latestEventOfTask(db, task.id, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha;
+  if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return;
+  const questions = db
+    .prepare("SELECT id FROM tasks WHERE status = 'todo' AND (question_pending_local_merge_task_id = ? OR question_pending_pr_promotion_task_id = ?) ORDER BY rowid")
+    .pluck()
+    .all(task.id, task.id) as string[];
+  const ending: TaskScopedPayload = handoffOnly ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : { kind: "landing_ended_branch_lost", question_ids: questions };
+  // 根の終わりの記録が question を閉じる理由 —— 記録は根に1回だけ刻み、question には刻まない(昇格失敗の引退と同じ手)
+  for (const id of questions) settleQuestionAsObserved(db, id, ending, now, null);
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: ending, at: now });
 }
 
 function objectExists(workspace: WorkspaceConfig, sha: string): boolean {

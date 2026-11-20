@@ -4032,7 +4032,8 @@ const LANDING_STATE_COPY = {
   merge_observed: "landing \xB7 merged outside",
   close_observed: "landing \xB7 PR closed",
   withdrawn: "landing \xB7 withdrawn from auto-merge",
-  landed: "landing \xB7 landed"
+  landed: "landing \xB7 landed",
+  branch_lost: "landing \xB7 ended \u2014 the task branch was lost"
 };
 class ApiError extends Error {
   status;

@@ -1026,11 +1026,12 @@ export function localLandingOpenOrExecutedSql(taskRef: string): string {
            OR EXISTS (SELECT 1 FROM events e WHERE e.task_id = ${taskRef} AND e.kind = 'local_merge_executed'))`;
 }
 
-/** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地する内容が無かった)SQL 述語。
+/** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地する内容が無かった、ブランチを失って着地を
+ *  終えた —— ADR 0375 決定7)SQL 述語。
  *  workspace の削除の扉が数える線はこれを読む。 */
 function taskHasLandedSql(taskRef: string): string {
   return `(EXISTS (SELECT 1 FROM events
-                    WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land'))
+                    WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land', 'landing_ended_branch_lost'))
            OR ${localLandingOpenOrExecutedSql(taskRef)})`;
 }
 
@@ -1062,15 +1063,60 @@ export function derivedWorkspace(db: Db, task: Pick<Task, "workspace" | "parent_
 }
 
 /** ADR 0372 決定2: 「タスクブランチを持つ」は `task_branch_created` で読む —— branch の有無でも pickup の event でもない。 */
-export function hasTaskBranch(db: Db, taskId: string): boolean {
-  return latestEventOfTask(db, taskId, "task_branch_created") !== undefined;
+export function hasTaskBranch(db: Db, taskId: string, asOf?: number): boolean {
+  return latestEventOfTask(db, taskId, "task_branch_created", asOf) !== undefined;
 }
 
-/** ADR 0375 決定2: 失われた event(`task_branch_lost`)は、その後に `task_branch_created` が無い間だけ効く。効いていればその event。 */
-export function taskBranchLostInForce(db: Db, taskId: string) {
-  const lost = latestEventOfTask(db, taskId, "task_branch_lost");
+/** ADR 0375 決定2: 失われた event(`task_branch_lost`)は、その後に `task_branch_created` が無い間だけ効く。効いていればその event。
+ *  `asOf` を渡せばその event より前の記録だけで読む(当時版の Authority、ADR 0380 帰結)。 */
+export function taskBranchLostInForce(db: Db, taskId: string, asOf?: number) {
+  const lost = latestEventOfTask(db, taskId, "task_branch_lost", asOf);
   if (!lost) return undefined;
-  return (latestEventOfTask(db, taskId, "task_branch_created")?.id ?? 0) > lost.id ? undefined : lost;
+  return (latestEventOfTask(db, taskId, "task_branch_created", asOf)?.id ?? 0) > lost.id ? undefined : lost;
+}
+
+/** 祖先(`parent_id` をたどり、自身を除く)を root から順に。 */
+export function ancestorsFromTop(db: Db, task: Pick<Task, "parent_id">): Task[] {
+  const ancestors: Task[] = [];
+  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; ) {
+    ancestors.unshift(parent);
+    parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined;
+  }
+  return ancestors;
+}
+
+/** ADR 0372 決定4: 系譜に数える祖先 —— タスクブランチを持ち、書かれた列が `workspace` と同じ work の祖先を上から。決着の有無を問わない。 */
+export function countedAncestors(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Task[] {
+  return ancestorsFromTop(db, task).filter((a) => a.type === "work" && a.workspace === workspace && hasTaskBranch(db, a.id, asOf));
+}
+
+/** ADR 0380 決定1・3: 数える祖先のうち、効いている失われた event を持ち透明でないものを上から —— done なら死んだ祖先、未決着なら作り直される
+ *  まで帰り先を奪う祖先(spec #3273 group H)。記録だけで読み、git を当てない。 */
+export function opaqueLostAncestors(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Task[] {
+  const counted: string[] = [];
+  const opaque: Task[] = [];
+  for (const ancestor of countedAncestors(db, workspace, task, asOf)) {
+    const lost = taskBranchLostInForce(db, ancestor.id, asOf);
+    if (lost && !(ancestor.status === "done" && lostTaskIsTransparent(db, ancestor.id, lost, counted))) opaque.push(ancestor);
+    else counted.push(ancestor.id);
+  }
+  return opaque;
+}
+
+/** ADR 0380 決定2: task 自身の系譜(列か導出の workspace、ADR 0372 決定1)が数える死んだ祖先、無ければ undefined。 */
+function deadAncestorCountedBy(db: Db, task: Pick<Task, "workspace" | "parent_id">, asOf?: number): Task | undefined {
+  const name = derivedWorkspace(db, task);
+  // 導出が既定を指す(null)なら、列を持つ祖先は無く、数える祖先も無い
+  return name === null ? undefined : opaqueLostAncestors(db, name, task, asOf).find((a) => a.status === "done");
+}
+
+/** ADR 0380 決定5: `parentId` の下に立つ子の系譜が数える死んだ task —— 親の workspace で問い(親自身が死んでいれば親)、子が別の
+ *  workspace を明示すれば(`childWorkspace`)その系譜でも問う。 */
+function deadAncestorOfChild(db: Db, parentId: string, childWorkspace: string | undefined, asOf?: number): Task | undefined {
+  return (
+    deadAncestorCountedBy(db, { workspace: null, parent_id: parentId }, asOf) ??
+    (childWorkspace === undefined ? undefined : deadAncestorCountedBy(db, { workspace: childWorkspace, parent_id: parentId }, asOf))
+  );
 }
 
 /** 作成の箇所(ADR 0372 決定3 の固定、`start_work`)が読む「タスクブランチを持つ」—— 失われた event が効いていれば持たず、作り直す
@@ -2053,6 +2099,24 @@ export function cancelRcasByAnswer(db: Db, rcas: Array<{ id: string; head: strin
   for (const { id, head } of rcas) {
     cancelUnsettledSubtree(db, [id], HUMAN_ACTOR_ID, now, { kind: "task_cancelled", origin_question_id: questionId, missing_head: head }, origin);
   }
+}
+
+/** ADR 0375 決定4 / ADR 0380 決定2: 失われたブランチの倒す走査 —— cancel の cascade と別に、ブランチを失った `lostIds` の木の下で、宛先が
+ *  ブランチに依存し(ADR 0301 決定2 の表 —— RCA と記憶・routing の修理子は残り、その下も歩く)、自分の系譜が死んだ task を数える未決着の
+ *  task を倒す。倒した task の配下は cascade と同じ範囲で倒れる。event は give-up に答えた workspace の Quarantine を名指す。 */
+export function fellLostBranchAttachments(db: Db, lostIds: string[], questionId: string, now: Date): void {
+  const rows = db
+    .prepare(
+      `${subtreeSql("value FROM json_each(@roots)")}
+       SELECT t.*, ${rcaSql("t")} AS rca, ${isAuditSql("t.id")} AS audit FROM tasks t JOIN subtree s ON s.id = t.id WHERE ${unsettledSql("t.status")}`,
+    )
+    .all({ roots: JSON.stringify(lostIds) }) as Array<TaskRow & { rca: number; audit: number }>;
+  const felled = rows.filter(
+    (row) =>
+      dependsOnBranch({ type: row.type, rca: row.rca === 1, audit: row.audit === 1, approval: row.question_pending_child !== null }) &&
+      deadAncestorCountedBy(db, row) !== undefined,
+  );
+  cancelUnsettledSubtree(db, felled.map(({ id }) => id), BOARD_ACTOR_ID, now, { kind: "task_cancelled", origin_question_id: questionId }, "board");
 }
 
 /** cancel が根たちから倒す未決着の task の id —— cascade(`cancelUnsettledSubtree`)が書く範囲そのもの。Interview の root の下は対象を
@@ -4042,10 +4106,12 @@ function discardingAncestor(db: Db, taskId: string, asOf?: number): Task | undef
 /** これから立つ子に帰り先が無い理由(ADR 0301 決定1)、帰り先があれば undefined。親と祖先を `parent_id` だけでたどって読む ——
  *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)か question でない(新しいルートの種類も
  *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
- *  問わない、ADR 0268 決定3)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
+ *  問わない、ADR 0268 決定3)、(c) 子の系譜が死んだ task を数える(ADR 0380 決定2・5 —— 親の workspace で、子が別の workspace
+ *  `childWorkspace` を明示すればその系譜でも問う)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
  *  知りたい読み手もその task を親として問う。`asOfEventId` を渡せば (b) はその event より前に記録された cancel だけを数える
- *  (当時版の Authority —— ADR 0301 決定5。(a) のルートの種類は変わらない)。 */
-export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: number): string | undefined {
+ *  (当時版の Authority —— ADR 0301 決定5。(a) のルートの種類は変わらない)。(c) も失われた event・`task_branch_created` をその event より前で
+ *  読む(ADR 0380 帰結)。 */
+export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: number, childWorkspace?: string): string | undefined {
   const parent = getTask(db, parentId);
   if (!parent) return undefined;
   const rootId = db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(parentId) as string | undefined;
@@ -4062,6 +4128,9 @@ export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: n
   const ancestor = discardingAncestor(db, parentId, asOfEventId);
   if (ancestor) return `the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`;
   if (db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${cancelledSql("t", asOfEventId)}`).get(parentId)) return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
+  // ADR 0380 決定2・6: 失われた側は木でなく子の系譜で読む —— cancel の項は上の `parent_id` のまま
+  const dead = deadAncestorOfChild(db, parentId, childWorkspace, asOfEventId);
+  if (dead) return `the work of "${dead.title}" (${dead.id}) was lost with its task branch when the lost refs were given up, so no repair can land`;
   return undefined;
 }
 
@@ -4081,10 +4150,10 @@ function dependsOnBranch(task: { type: Task["type"]; rca: boolean; audit: boolea
 }
 
 /** ADR 0301 決定2・3: 帰り先の無い親の下に、宛先がブランチに依存する task は生えない(扉を問わず)。 */
-function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "opened_on_event_ids" | "audited_probe" | "question_kind">): void {
+function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "opened_on_event_ids" | "audited_probe" | "question_kind" | "workspace">): void {
   const branch = { type: input.type, rca: !!input.opened_on_event_ids?.length, audit: input.audited_probe !== undefined, approval: input.question_kind?.kind === "approval" };
   if (input.parent_id === undefined || !dependsOnBranch(branch)) return;
-  const reason = whyNoReturnDestination(db, input.parent_id);
+  const reason = whyNoReturnDestination(db, input.parent_id, undefined, input.workspace);
   if (reason) throw new DomainError(`no ${input.type} task grows here: ${reason}`);
 }
 

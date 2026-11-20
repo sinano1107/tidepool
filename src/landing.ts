@@ -511,7 +511,7 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "worksp
 }
 
 /** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 無人 merge キュー → 開いた merge question → 内容で
- *  終わった(`landing_finished`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
+ *  終わった(`landing_finished`)→ ブランチを失って終えた(`landing_ended_branch_lost`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
  *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
  *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
 export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "pr_number"> & { status: string }): LandingState | null {
@@ -521,11 +521,13 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
   if (isQueuedForAutoMerge(db, task.id)) return "auto_merge_queue";
   if (listOpenMergeQuestions(db).some((q) => q.pr_number === task.pr_number && q.workspace === task.workspace)) return "merge_question";
   if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
+  // spec #3273 group H: ブランチを失って終えた根 —— ADR 0265 決定7 の7つの外の8つ目(同 Status 追記)
+  if (latestEventOfTask(db, task.id, "landing_ended_branch_lost")) return "branch_lost";
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
 }
 
-/** 着地が終わった根の記録(ADR 0265 決定3 の内容で終わった根を含む)。これを持つ行は候補にも、子孫を外す根にもならない。 */
-const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land')";
+/** 着地が終わった根の記録(ADR 0265 決定3 の内容で終わった根と、ブランチを失って終えた根(ADR 0375 決定7)を含む)。これを持つ行は候補にも、子孫を外す根にもならない。 */
+const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost')";
 
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
