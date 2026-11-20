@@ -1,6 +1,6 @@
 # 盤面は worker の `.git` をリポジトリとして開かない —— regular file だけを盤面所有の repo に写し、tip はそこから fetch する
 
-**Status 追記: 名前の場所に commit が既にあって object だけが欠けているとき、fetch は何も送らない。消す前の確かめで欠けを見つけた取り込み直しは、検証済みの写しの pack を名前の場所で直に `index-pack --strict` する。門の取り込み(決定1 の `--not --alternate-refs`)は変えない([ADR 0388](0388-a-place-is-removed-only-after-the-objects-only-it-holds-read-whole-in-the-named-place-and-one-check-and-reimport-serves-every-removal.md) 決定3・6、2026-11-21、issue #3222)。**
+**Status 追記: 名前の場所へ fetch した直後に、checkout が自前で持つ tip の閉包の object が名前の場所で欠けも破損も無く読めることを確かめる。名前の場所に commit が既にあって object だけが欠けているとき fetch は何も送らないので、欠けは検証済みの写しの pack を名前の場所で直に `index-pack --strict` して補う。決定1 の除外(`--not --alternate-refs`)は変えない([ADR 0388](0388-carrying-into-the-named-place-is-done-only-when-the-objects-the-carried-place-holds-read-whole-there-and-later-outside-damage-is-not-guarded.md) 決定1・2・3、2026-11-21、issue #3222)。**
 
 **Status 追記: 決定1 の不変条件「記録に入る object は、名前の場所に既にあるか、worker が自分の checkout の `objects/` に regular file として書いたもののみ」に項が足される —— 人間が作業台に書いた object と、取り込みで盤面が作る包む commit も記録に入る。作業台の tip も同じ手(regular file を盤面所有の repo に写し、検証してから fetch)で読む([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定2・4、2026-11-15、issue #3178)。**
 

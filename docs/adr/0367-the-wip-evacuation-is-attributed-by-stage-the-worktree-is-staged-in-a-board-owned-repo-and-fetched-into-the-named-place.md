@@ -1,6 +1,6 @@
 # WIP の退避は段で帰責する —— worktree は盤面所有の repo に stage し、名前の場所へは fetch で運ぶ
 
-**Status 追記: 決定3 の「checkout は解放の最後の step で消す」は、消す根拠の ref の閉包全体が名前の場所で読めるときに限る —— 通らなければ残す。退避の WIP も、staging repo の自前の store を同じ手で確かめてから checkout を消す([ADR 0388](0388-a-place-is-removed-only-after-the-objects-only-it-holds-read-whole-in-the-named-place-and-one-check-and-reimport-serves-every-removal.md) 決定2・5、2026-11-21、issue #3222)。**
+**Status 追記: 決定5 の fetch の後、WIP の commit が staging repo の自前の store に持つ object と、checkout の commit 済みの tip が自前で持つ object を、それぞれ名前の場所で確かめる。揃わなければ決定4 の名前の場所へ運ぶ段の失敗である([ADR 0388](0388-carrying-into-the-named-place-is-done-only-when-the-objects-the-carried-place-holds-read-whole-there-and-later-outside-damage-is-not-guarded.md) 決定1・2、2026-11-21、issue #3222)。**
 
 2026-11-10 の grilling(issue #3141 / #3142、#3117 の実装とレビューの派生)で決定。ADR 0364 決定2 は worker の tip の転送を3段(写す段 /
 写しを作る host / 名前の場所へ fetch する段)に分けて帰責したが、同じ解放の次の手である WIP の退避には分割が入っていなかった。ADR 0356
