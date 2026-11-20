@@ -18,6 +18,7 @@ import {
   rmdirSync,
   rmSync,
   type Stats,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -916,6 +917,15 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
     if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
     reinsertFailure = cause;
   }
+  if (reinsertFailure === undefined) {
+    try {
+      moveAsideDamagedLoose(objects, format, own, ids);
+    } catch (cause) {
+      if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
+      // 名前の場所の loose だけを読む手 —— 上限超過も名前の場所の側
+      reinsertFailure = cause;
+    }
+  }
   const last = reinsertFailure === undefined ? unreadable() : first;
   if (last === undefined) return;
   const why = reinsertFailure === undefined ? "" : `, and reinserting it failed: ${reinsertFailure instanceof Error ? reinsertFailure.message : String(reinsertFailure)}`;
@@ -942,6 +952,36 @@ function verifyOwnObjects(from: UntrustedSubject, own: string, ids: string[], in
   }
   const renamed = ids.filter((id) => !packed.has(id));
   if (renamed.length > 0) throw unreadable(from, `objects ${renamed.join(", ")} hold contents that do not hash to their names`);
+}
+
+const DAMAGED_PREFIX = "tidepool-damaged-";
+
+/** ADR 0388 決定2: 入れ直しの後、集合の id の名前の場所の loose のうち loose として読めないものを、objects の下の残す dir へ移す(消さない ——
+ *  人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
+ *  object の pack の stream を断り、header の読める loose の stream を開くので、body を切り詰めた loose が入れ直した pack を覆う(source の
+ *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ)。名前の場所の loose の dir だけを見せる使い捨ての repo で pack に組み、
+ *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。 */
+function moveAsideDamagedLoose(objects: string, format: string, own: string, ids: string[]): void {
+  const looseOf = (id: string) => join(objects, id.slice(0, 2), id.slice(2));
+  let pending = ids.filter((id) => existsSync(looseOf(id)));
+  if (pending.length === 0) return;
+  const probe = join(own, "loose");
+  initBoardCopy(probe, format);
+  for (const dir of new Set(pending.map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
+  let damaged: string | undefined;
+  while (pending.length > 0) {
+    try {
+      workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, ["pack-objects", "--quiet", join(probe, "read")], `${pending.join("\n")}\n`);
+      return;
+    } catch (cause) {
+      const stderr = String((cause as { stderr?: unknown } | null)?.stderr ?? "");
+      const bad = pending.filter((id) => stderr.includes(id));
+      if (bad.length === 0) throw cause;
+      damaged ??= mkdtempSync(join(objects, DAMAGED_PREFIX));
+      for (const id of bad) renameSync(looseOf(id), join(damaged, id));
+      pending = pending.filter((id) => !bad.includes(id));
+    }
+  }
 }
 
 /** 名前の場所で読めない object: `cat-file --batch-check` が missing と言うもの(欠けと zlib の破損)と、中身を読んで落ちた手の stderr が

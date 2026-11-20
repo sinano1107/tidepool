@@ -707,6 +707,12 @@ it.each(["transfer", "staging"])("review の完了で %s が落ちれば、名�
 
 const looseObject = (repo: string, sha: string) => join(repo, ".git", "objects", sha.slice(0, 2), sha.slice(2));
 
+/** 名前の場所の objects の下の、入れ直しが移した壊れた loose の path。 */
+const damagedLoose = (ws: WorkspaceConfig): string[] => {
+  const objects = join(ws.path, ".git", "objects");
+  return readdirSync(objects).filter((name) => name.startsWith("tidepool-damaged-")).flatMap((dir) => readdirSync(join(objects, dir)).map((file) => join(objects, dir, file)));
+};
+
 /** 名前の場所での blob の損傷: 消す・同じ id の loose を zlib でない byte にする・loose の body を切り詰める(header は読めるので
  *  `cat-file --batch-check` は在ると言い、中身を読む手だけが落ちる)。 */
 const damages = {
@@ -739,6 +745,9 @@ it.each(["missing", "corrupt", "truncated"] as const)("名前の場所で %s の
 
     expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
     expect(git(ws.path, "cat-file", "-p", blob)).toBe("kept by the worker");
+    // loose を pack より先に開く読み手(git 2.56 の cat-file -p の stream)に、壊れた loose が入れ直した pack を覆わない —— 消さずに残す dir へ移す
+    expect(existsSync(looseObject(ws.path, blob))).toBe(false);
+    expect(damagedLoose(ws).map((path) => path.endsWith(`/${blob}`))).toEqual(damage === "missing" ? [] : [true]);
   } finally {
     db.close();
   }
@@ -751,11 +760,17 @@ it("入れ直しは、盤面が途中で落ちて名前の場所の objects に�
     const stale = join(ws.path, ".git", "objects", "tidepool-reinsert-left");
     mkdirSync(join(stale, "objects"), { recursive: true });
     utimesSync(stale, new Date(0), new Date(0));
+    // 移した壊れた loose は人間が調べるために残る —— 掃除は触らない
+    const damaged = join(ws.path, ".git", "objects", "tidepool-damaged-kept");
+    mkdirSync(damaged);
+    writeFileSync(join(damaged, "0".repeat(40)), "kept for a human");
+    utimesSync(damaged, new Date(0), new Date(0));
 
     gateFetch(db, place, task);
 
     expect(git(ws.path, "cat-file", "-p", blob)).toBe("kept by the worker");
     expect(readdirSync(join(ws.path, ".git", "objects")).filter((name) => name.startsWith("tidepool-reinsert-"))).toEqual([]);
+    expect(readFileSync(join(damaged, "0".repeat(40)), "utf8")).toBe("kept for a human");
   } finally {
     db.close();
   }
