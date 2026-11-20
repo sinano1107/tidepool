@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { api, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
+/** toast の自動消去(webui/app.tsx の App の `setTimeout(dismissToast, 3200)`)を過ぎるまで待つ長さ。 */
+const PAST_TOAST_DISMISS_MS = 3500;
+
 // #3204: 人間の work の完了 dialog の拒否文(作業台の path を運ぶ —— #3273)は toast でなく dialog の中に次の送信まで残る
 test("完了 dialog の拒否文は dialog の中に作業台の path ごと折り返して残り、直して送り直せば完了する", async ({ boot, workspace, page }) => {
   const t = await boot({ workspace: await workspace("e2e-human-refusal") });
@@ -28,8 +31,7 @@ test("完了 dialog の拒否文は dialog の中に作業台の path ごと折�
   const alert = dialog.getByRole("alert");
   await expect(alert).toHaveText(error);
   await expect(page.getByText("complete failed")).toHaveCount(0);
-  // toast の自動消去(3.2 秒)を過ぎても残る
-  await page.waitForTimeout(3500);
+  await page.waitForTimeout(PAST_TOAST_DISMISS_MS);
   await expect(alert).toHaveText(error);
   await expect(page.getByLabel("dead ends")).toHaveValue("n/a");
 

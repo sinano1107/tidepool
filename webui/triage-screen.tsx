@@ -453,6 +453,15 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
   );
 }
 
+// 拒まれた回答・完了の送信の拒否文。次の送信まで残す(#3204)。ADR 0371 決定11: 拒否文は作業台の path と打つ `git merge <ref>` を運ぶので、長い path やコマンドも枠の中で折り返して読ませる
+function TpRefusal({ text }: { text: string }) {
+  return (
+    <div role="alert" style={{ fontSize: 'var(--text-sm)', color: 'var(--coral-4)', background: 'var(--coral-1)', border: '1px solid var(--coral-2)', borderRadius: 'var(--radius-md)', padding: '8px 10px', marginBottom: 14, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+      {text}
+    </div>
+  );
+}
+
 // One question task's card: the shared context (its `purpose`) once, then
 // every item's picker (issue #30 — a single-item bundle is the degenerate,
 // most common case). The card owns its own in-progress picks as a draft that
@@ -468,15 +477,6 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
 // render this same card. The question card's own toggle (one of the 3
 // switches ADR 0063's table enumerates): translates `purpose`/items'
 // title+detail, never the options an answer is picked from.
-// 拒まれた回答・完了の送信の拒否文(#3204)。次の送信まで残すので、長い path やコマンドも枠の中で折り返して読ませる
-function TpRefusal({ text }: { text: string }) {
-  return (
-    <div role="alert" style={{ fontSize: 'var(--text-sm)', color: 'var(--coral-4)', background: 'var(--coral-1)', border: '1px solid var(--coral-2)', borderRadius: 'var(--radius-md)', padding: '8px 10px', marginBottom: 14, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-      {text}
-    </div>
-  );
-}
-
 function TpQuestionCard({ q, answer, onAnswer, locked = false, refusal, onTranslate, onOpenSettings }: {
   q: TpQuestion;
   /** `q.opensSettings` の question のボタンが撃つ。 */
@@ -1222,7 +1222,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
                 <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 0 8px' }}>
                   {blocked.length} landing question{blocked.length > 1 ? 's' : ''} not yet answerable — {TP_LANDING_BLOCKED[kind]}
                 </p>
-                {/* 盤面の blocked_by で拒否文を捨てない —— 拒否文は conflict の直し方を運ぶ(#3204) */}
+                {/* 盤面の blocked_by で拒否文を捨てない(#3204)—— ADR 0371 決定11: 拒否文は conflict の直し方を運ぶ */}
                 {blocked.filter((q) => refusals[q.id]).map((q) => (
                   <div key={q.id} data-testid={`landing-refusal-${q.id}`}>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 4, overflowWrap: 'anywhere' }}>{q.id}</div>

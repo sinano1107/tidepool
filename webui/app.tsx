@@ -937,7 +937,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
   const [missing, setMissing] = React.useState<string[]>([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  // 完了の送信の拒否文は toast でなく dialog に次の送信まで残す —— 作業台の path と直し方を運ぶ(#3204)
+  // 完了の送信の拒否文は toast でなく dialog に次の送信まで残す(#3204)—— ADR 0371 決定11: 作業台の path と直し方を運ぶ
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const [reviewFlag, setReviewFlag] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState<string[]>([]);
