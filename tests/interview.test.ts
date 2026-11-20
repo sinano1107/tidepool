@@ -823,16 +823,17 @@ it("completeTask は Interview の root を出題の前も後も拒み、出題�
   expect(getTask(db, root.id)!.status).not.toBe("done");
 });
 
-it("着地しない受験者は、workspace の削除の扉が数える「着地し直す祖先」にならない(ADR 0234 決定1)", () => {
+it("受験者の下の question は導出で reef を参照する1件として数えられ、着地しない受験者を着地し直す祖先として数えるのではない(ADR 0372 決定1 / ADR 0290 決定5 / ADR 0234 決定1)", () => {
   const db = openDb(":memory:");
   const root = registerTask(db, { ...ROOT, workspace: "reef", interview_targets: [opusHigh] }, new Date(0), ...HUMAN_WEBUI);
   const [child] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
   // root も reef を指すので、採点完了させてから数える
   completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child!.id, verdict: "accepted" }], handoff: FINDINGS }, "auditor", new Date(0), "worker");
-  // 受験者の下に生えるのは question だけ(ADR 0268 決定5)
+  // 受験者の下に生えるのは question だけ(ADR 0268 決定5)。列が空の question は受験者の reef に導かれ、その1件として数えられる
+  // (ADR 0372 決定1 / ADR 0290 決定5)。受験者を経由して着地し直す祖先として数えられるのではない
   failureQuestion(db, child!.id, new Date(0));
-  expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(0);
+  expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(1);
 });
 
 it("Interview の root の history で、受験者は id を持ち、走った agent も model も持たない(伏せた handoff は agent / model を伏せ、id は伏せない —— ADR 0322 決定1)", () => {
