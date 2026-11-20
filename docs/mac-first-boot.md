@@ -324,6 +324,44 @@ depends on the workspace:
   head, keep that content with `git merge` there. To discard it in either case, run the three
   commands the refusal gives. The next `merge` takes your commit in and pushes it.
 
+### A task assigned to you
+
+A work task assigned to `human` gets its own task branch `task/<id>` and a workbench for it.
+Start it with the management MCP tool `start_work`, or `POST /api/tasks/<id>/start-work`. The
+board prepares the workspace as it does for a worker and answers with the workbench path; the
+task's dialog in the WebUI shows that path and the commands to copy while the workbench is open.
+Commit on `task/<id>` in the workbench, then either:
+
+- **Take it in** with `take_in_work`, or `POST /api/tasks/<id>/take-in`, without completing. The
+  board writes your tip to `task/<id>`, and children you register after that fork from it — they
+  never see commits that are only in the workbench. Decomposing the task while the workbench holds
+  commits not taken in still works, and the answer says how many are left behind. The workbench
+  stays open.
+- **Complete** the task. The board takes the workbench in, marks the task done and deletes the
+  workbench, including ignored files.
+
+When children's work has reached `task/<id>`, the board refuses a tip that lacks it and tells you
+to run `git merge board/task/<id>` in the workbench first.
+
+On a Mac the workbench path is inside the VM. Go there with `limactl shell tidepool`, then
+`cd <path>`.
+
+To write from a clone of your own instead, add the workbench as a remote of the clone. On a Mac,
+Lima keeps an ssh config for the VM at `~/.lima/tidepool/ssh.config`; add
+`Include ~/.lima/tidepool/ssh.config` to the top of `~/.ssh/config`, and the VM is reachable as
+the ssh host `lima-tidepool`. Then:
+
+1. `git remote add <name> lima-tidepool:<path>` (the dialog shows this command with
+   `<ssh-host>` for you to fill in), and `git fetch <name>`.
+2. Write on top of `task/<id>`: `git switch -c task/<id> <name>/task/<id>`. Do not write on a
+   branch based on origin's protected branch — a human-only path it brings along can be refused.
+3. `git push <name> task/<id>`. The push is refused while the workbench has uncommitted changes.
+4. Take it in or complete the task.
+
+After a take-in, run `git fetch <name>` and `git merge --ff-only <name>/board/task/<id>` before
+you write on; the board's answer says to merge instead when a push of yours arrived meanwhile. The
+remote stays configured after the task is done — remove it with `git remote remove <name>`.
+
 ## Let workers edit the registry
 
 The registry clone at `$TIDEPOOL_REGISTRY` is not a workspace, and registering it is refused. To let

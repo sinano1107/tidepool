@@ -258,6 +258,8 @@ export interface WireContract {
     started: boolean;
     /** タスクブランチを持つ task だけ: 人間担当の work 自身の作業台の在り処(disk に無ければ null)。 */
     workbench?: string | null;
+    /** 作業台が disk にある間だけ: そこへ移るコマンドと clone の remote に足すコマンド(ADR 0374 決定2)。 */
+    workbench_commands?: string[];
     completion_criteria: string;
     review_flag: number;
     review_by: string[] | null;
@@ -333,13 +335,16 @@ export interface WireContract {
         entries?: Array<{ event_id: number; text: string }>;
       }
     | { status: "throttled" };
-  "POST /api/tasks": Pick<BoardTask, "id" | "type">;
+  /** 人間の分解の子は、親の作業台に取り込まれていない commit があれば警告の1行を添える(spec #3273 group C)。 */
+  "POST /api/tasks": Pick<BoardTask, "id" | "type"> & { warning?: string };
   /** 観測決着も 200 で、印が回答は記録されていないことを言う(ADR 0265 決定7)。 */
   "POST /api/tasks/:id/answer": SettledMark;
   /** 人間担当の task の完了。作業台を残した完了は text C7 を `notice` に添える(spec #3273)。 */
   "POST /api/tasks/:id/complete": BoardTask & { notice?: string };
   /** ADR 0374 決定2: 書き始めた作業台の在り処。 */
   "POST /api/tasks/:id/start-work": { path: string };
+  /** `take_in_work` の応答(spec #3273 text C6)。 */
+  "POST /api/tasks/:id/take-in": { message: string };
   /** 登録の門の 422(src/human-verbs.ts の issue_rejected)。`api()` のキーには出ない。 */
   "POST /api/tasks 422": { missing: string; suggested_comment: string };
   "POST /api/tasks/:id/cancel 400":

@@ -29,3 +29,22 @@ test("書き始めた人間担当の work の Done は6欄必須の dialog と t
   await done.click();
   await expect.poll(async () => (await api(t.baseUrl, "GET", `/api/tasks/${started.id}`)).json.status).toBe("done");
 });
+
+// ADR 0374 決定2 / spec #3273 group C(Surfaces): 書き始めた人間担当の work の task の dialog は、作業台の在り処と、そこへ移るコマンドと
+// clone の remote に足すコマンドを、写せる形で出す
+test("書き始めた人間担当の work の task の dialog は作業台の在り処と cd・git remote add のコマンドを出す", async ({ boot, workspace, page }) => {
+  const t = await boot({ workspace: await workspace("e2e-human-workbench") });
+  const started = await registerWork(t, "write it myself", undefined, "human");
+  const path = (await api(t.baseUrl, "POST", `/api/tasks/${started.id}/start-work`, {})).json.path;
+
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Board" }).click();
+  await page.getByText("write it myself").click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(`workbench: ${path}`)).toBeVisible();
+  for (const command of [`cd ${path}`, `git remote add <name> <ssh-host>:${path}`]) {
+    await expect(dialog.getByText(command, { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: `copy ${command}` })).toBeVisible();
+  }
+});

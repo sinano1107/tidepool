@@ -140,7 +140,7 @@ import {
   teardownUnfinishedUnder,
 } from "./tasks.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
-import { BOARD_BRANCHES, foreignTaskBranches, humanWorkLeft, type WorkbenchOwner, type WorkbenchRead, workbenchOwner, workbenchPath } from "./workbench.js";
+import { BOARD_BRANCHES, foreignTaskBranches, humanWorkLeft, type WorkbenchOwner, type WorkbenchRead, workbenchCommands, workbenchOwner, workbenchPath } from "./workbench.js";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerGitCopyTimeoutError, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 
 
@@ -948,10 +948,27 @@ function openHumanWorkWorkbench(named: WorkspaceConfig, base: string, target: st
   return { path, opened };
 }
 
-/** 人間担当の work 自身の作業台が disk にあれば、その実体の綴りの在り処(ADR 0374 決定2 の path を言う面 —— 完了の dialog の text C4)。 */
-export function humanWorkbenchOnDisk(base: string, taskId: string): string | undefined {
+/** ADR 0374 決定2: task の読みが運ぶ人間担当の work 自身の作業台 —— disk にある間だけ、実体の綴りの在り処(完了の dialog の text C4 も
+ *  これを言う)と、そこへ移るコマンドと clone の remote に足すコマンド(`workbenchCommands`)。 */
+export function humanWorkbenchRead(base: string, taskId: string): { workbench: string | null; workbench_commands?: string[] } {
   const at = workbenchPath(base, { task: taskId });
-  return placeHasRepository(at) ? realpathSync(at) : undefined;
+  if (!placeHasRepository(at)) return { workbench: null };
+  const path = realpathSync(at);
+  return { workbench: path, workbench_commands: workbenchCommands(path) };
+}
+
+/** spec #3273 group C(Surfaces): 人間担当の work の分解の応答に足す1行 —— 作業台の tip が持つ、`task/<H>` に無い commit の数を言う。
+ *  無いか、作業台が disk に無いか書く先の branch が無ければ undefined。tip は ADR 0364 の手で検証済みの写しに読む。 */
+export function notTakenInWarning(named: WorkspaceConfig, base: string, taskId: string): string | undefined {
+  const target = taskBranch(taskId);
+  const at = workbenchAt(named, base, target);
+  if (!placeHasRepository(at)) return undefined;
+  const place = workbenchPlace(named, realpathSync(at));
+  const count = judgeWorkbench(named, place, target, { boardMove: true }, (owner, read, judged) =>
+    owner.kind === "mine" && read && judged ? Number(workerRepoGit(read.verified, "rev-list", "--count", read.tip, `^${judged.targetSha}`)) : 0,
+  );
+  if (count === 0) return undefined;
+  return `the children fork from ${target}, and ${count} commit${count === 1 ? "" : "s"} in the workbench at ${place.path} ${count === 1 ? "is" : "are"} not taken in yet.`;
 }
 
 /** ADR 0382 決定3: 子の merge back の conflict を、書く先の人間担当の work 自身の作業台で受けるか —— 書き始め済み(`task_work_started`)で
@@ -1568,10 +1585,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
     // tip が `task/<H>` に含まれる(取り込むものが無い)か作業台が無い —— 書く値は `task/<H>` の今の値
     if (!taken) assertMerges(git(named.path, "rev-parse", "--verify", ref), named);
   } catch (err) {
-    // 人間が作業台で直せる拒否だけを回答の拒否にする —— 盤面の側の失敗(と盤面 DB の拒否)は素のまま投げる
-    const refusal = [IntakeRefusedError, CheckoutUnreadableError, WorktreeStatusError, WorkerTreeGitTimeoutError, CheckoutHostError].some((kind) => err instanceof kind);
-    if (refusal) throw new DomainError((err as Error).message);
-    throw err;
+    throwHumanWorkRefusal(err);
   }
   finish();
   if (lineage) {
@@ -1584,6 +1598,35 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   }
   if (!hasWorkbench) return undefined;
   return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
+}
+
+/** 人間担当の work の扉の取り込みの失敗のうち、人間が作業台で直せる拒否だけを回答の拒否にする —— 盤面の側の失敗(と盤面 DB の拒否)は素のまま投げる。 */
+function throwHumanWorkRefusal(err: unknown): never {
+  const refusal = [IntakeRefusedError, CheckoutUnreadableError, WorktreeStatusError, WorkerTreeGitTimeoutError, CheckoutHostError].some((kind) => err instanceof kind);
+  if (refusal) throw new DomainError((err as Error).message);
+  throw err;
+}
+
+/** ADR 0374 決定5〜7 / spec #3273 group C: 完了を伴わない取り込み(`take_in_work`)の、準備の後の同期区間 —— 作業台の tip を `task/<H>` へ
+ *  取り込み、作業台を残してその branch を包む commit へ進め(`advanceKeptWorkbench`)、text C6 を返す。handoff も `done` も merge back も
+ *  無く、子孫の後始末が済んでいなくても拒まない。拒否(text C8・C2e・C2a・C2d、作りかけは ADR 0382 決定6 で C2e)は task に何も書かない。 */
+export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base: string, caller: Answerer, now: Date): string {
+  const target = taskBranch(task.id);
+  const at = workbenchAt(named, base, target);
+  const gone = workbenchGone(at, target, "take in");
+  // 作業台の在り処は disk で読む —— 完了の扉の C2b の拒否が開いた作業台は `task_work_started` を持たない
+  if (!placeHasRepository(at)) throw new DomainError(hasStartedWork(db, task.id) ? gone : "this task has no workbench — run start_work first.");
+  const place = workbenchPlace(named, realpathSync(at));
+  let taken: { tip: string; commit: string } | undefined;
+  try {
+    taken = repointingOnRefusal(named, place.path, () =>
+      takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, { humanWork: { again: "take in again", gone } }),
+    );
+  } catch (err) {
+    throwHumanWorkRefusal(err);
+  }
+  if (!taken) throw new DomainError(`nothing to take in: ${target} in the workbench at ${place.path} is the value the board already has.`);
+  return advanceKeptWorkbench(named, place.path, target, taken);
 }
 
 /** spec #3273 group C: `done` の後に人間担当の work 自身の作業台を読み直し、取り込んだ tip のまま人間の作業が残っていなければ消す。

@@ -40,6 +40,7 @@ import {
   startWorkThroughHumanDoor,
   stopThroughHumanDoor,
   submitAnswer,
+  takeInWorkThroughHumanDoor,
 } from "./human-verbs.js";
 import { closedRootOf, type Landing } from "./landing.js";
 import {
@@ -133,7 +134,7 @@ import { listLog } from "./triage.js";
 import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
-import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
+import { buildWorkspaceResolver, humanWorkbenchRead, resolveWorkspacesBaseDir, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
 import {
   BoardNamedProtectedBranchError,
   BoardStateOverlapError,
@@ -449,7 +450,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         if (read.args.task_id === undefined) throw new DomainError("pass task_id, or next from a previous get_task");
         const task = getTask(deps.db, read.args.task_id);
         if (!task) throw new DomainError("task not found");
-        const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), ...(task.type === "question" ? questionAnnotations(deps.db, task) : { discards: discardsOf(task.id) }) };
+        const presented = presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName);
+        const envelope = {
+          ...presented,
+          ...(task.type === "question" ? questionAnnotations(deps.db, task) : { discards: discardsOf(task.id) }),
+          // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処とコマンド —— HTTP の task の読みと同じ
+          ...(presented.has_task_branch && humanWorkbenchRead(resolveWorkspacesBaseDir(deps.workspacesDir), task.id)),
+        };
         return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: getTaskResumesByKey });
       }),
   );
@@ -1126,7 +1133,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Split a human task into child tasks in one recorded decision. Children run in the parent's workspace; " +
-        "to place work in another workspace, register_task a root (no parent_id).",
+        "to place work in another workspace, register_task a root (no parent_id). Children fork from the parent's task branch; " +
+        "`warning` says when the parent's workbench holds commits not taken in yet (take_in_work).",
       inputSchema: {
         task_id: z.string(),
         reason: z.string(),
@@ -1156,7 +1164,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "mcp",
       );
       return result.ok
-        ? toolResult({ child_ids: result.value.map((child) => child.id), parent_status: "blocked" })
+        ? toolResult({ child_ids: result.value.children.map((child) => child.id), parent_status: "blocked", ...(result.value.warning !== undefined && { warning: result.value.warning }) })
         : toolError(result.failure.error);
     },
   );
@@ -1196,6 +1204,19 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ task_id }) => {
       const result = await startWorkThroughHumanDoor(deps, task_id, () => deps.clock.now(), "mcp");
+      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
+    },
+  );
+  server.registerTool(
+    "take_in_work",
+    {
+      description:
+        "Take the workbench of a work task assigned to the human in without completing it: the board checks the workbench tip and writes it to " +
+        "the task's branch, so children registered afterwards fork from it. The workbench stays open. Returns what was taken in.",
+      inputSchema: { task_id: z.string() },
+    },
+    async ({ task_id }) => {
+      const result = await takeInWorkThroughHumanDoor(deps, task_id, () => deps.clock.now(), "mcp");
       return result.ok ? toolResult(result.value) : toolError(result.failure.error);
     },
   );
