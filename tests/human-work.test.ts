@@ -174,6 +174,18 @@ it("導ける workspace が無ければ start_work は text C1b で拒み、何�
   expect(kinds(b.db, h.id)).toEqual(["task_registered"]);
 });
 
+// ADR 0384 決定1: 子は workspace の欄を持たないので、text C1b は子には根の workspace を Edit するよう案内する
+it("導ける workspace が無い子の start_work は、根の workspace を Edit するよう案内する text C1b で拒み、何も書かない", async () => {
+  const b = await board("start-work-nowhere-child");
+  const root = work(b, "the whole change", { assignee: HUMAN_ACTOR_ID });
+  const child = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID, parent_id: root.id });
+
+  const result = await startWorkThroughHumanDoor({ db: b.db, pollNow: () => {} }, child.id, () => b.clock.now(), "webui");
+
+  expect(result).toEqual(refused("cannot start work: no workspace can be derived for this task — set its root task's workspace with Edit first."));
+  expect(kinds(b.db, child.id)).toEqual(["task_registered"]);
+});
+
 it("その workspace の Quarantine が開いている間、start_work と完了は text C1a で拒まれ task に何も書かない —— 回答の後は通る(#3155 の追加要件)", async () => {
   const b = await board("start-work-quarantined");
   await leaveBaseline(b.db, b.ws);

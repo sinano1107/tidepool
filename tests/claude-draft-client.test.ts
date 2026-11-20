@@ -488,6 +488,8 @@ describe("ClaudeDraftClient", () => {
     expect(prompt).toContain("build the lexer");
     expect(prompt).toContain("build the printer");
     expect(prompt).toContain("splitting off the edge case first");
+    // ADR 0384 決定1: 子は workspace を入力に持たない —— 子の下書きには workspace を求めない
+    expect(prompt).not.toContain("workspace");
   });
 
   it("draftTask: context が無いプロンプトには子の文脈セクションが含まれない(ルート登録は今までどおり)", async () => {

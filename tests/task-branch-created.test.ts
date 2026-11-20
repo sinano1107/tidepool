@@ -111,7 +111,7 @@ it("pickup が ref を作る前に止まった task は task_branch_created を�
   rmSync(join(ws.path, "resting.txt"));
   expect(branchEvents(db, parent.id)).toEqual([]);
 
-  const [child] = humanDecomposeTask(db, getTask(db, parent.id)!, { reason: "split", children: [{ title: "child", purpose: "why", completion_criteria: "done" }] }, NOW, undefined, "webui");
+  const [child] = humanDecomposeTask(db, getTask(db, parent.id)!, { reason: "split", children: [{ title: "child", purpose: "why", completion_criteria: "done" }] }, NOW, "webui");
   await prepareAtPickup(db, ws, pickupTask(db, child!, "deckhand", NOW, { workspace: ws.name })!, { defaultWorkspaceName: ws.name });
 
   expect(branchEvents(db, parent.id)).toEqual([{ kind: "task_branch_created", sha: git(ws.path, "rev-parse", "main"), workspace: ws.name }]);

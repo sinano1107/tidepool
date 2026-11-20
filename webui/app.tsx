@@ -714,9 +714,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
     return <div style={{ padding: '24px 16px', color: 'var(--text-muted)' }}>loading…</div>;
   }
   const issueBacked = full.github_issue_number != null;
-  // 付帯子の review は最も近い固定済みの祖先の workspace に従い、Edit では変えられない(ADR 0290 決定3)
-  const reviewChild = TidepoolRules.followsAncestorWorkspace(full);
-  const showWorkspace = !issueBacked && !reviewChild;
+  // 子は親の workspace で走り、Edit に workspace の欄が無い(ADR 0384 決定1)
+  const child = !TidepoolRules.hasWorkspaceField(full);
+  const showWorkspace = !issueBacked && !child;
   // Interview の purpose と完了基準は盤面が登録の欄から組んだ文で、人間は書かない(ADR 0273 決定9)
   const composedContent = full.type === 'interview';
   const set = (k: keyof EditTaskFields, v: string | boolean | string[]) => setFields((f) => ({ ...f!, [k]: v }) as EditTaskFields);
@@ -775,8 +775,8 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
         {issueBacked
           ? 'issue-backed — content and workspace stay on GitHub, only board-side fields are editable'
-          : reviewChild
-            ? "unconsumed fields only — type and parent link are not editable; a review child runs in its nearest ancestor's workspace"
+          : child
+            ? "unconsumed fields only — type and parent link are not editable; a child runs in its parent's workspace"
             : 'unconsumed fields only — type and parent link are not editable'}
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -794,7 +794,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
         <div style={{ display: 'grid', gridTemplateColumns: showWorkspace ? '1fr 1fr' : '1fr', gap: 12 }}>
           <Select label="Assignee" options={withPlaceholder('(default agent)', assigneeNames)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
           {showWorkspace && (
-            <Select label="Workspace" options={withPlaceholder(full.parent_id ? "(nearest ancestor's workspace, else default)" : '(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
+            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
@@ -1450,7 +1450,7 @@ function App() {
 
   // human decompose (issue #129): adding a child stays on the current tab
   // (it's a dialog, not a screen switch) — refresh the board so the new
-  // child (or, on a risk/protected-workspace conversion, the approval
+  // child (or, on a risk conversion, the approval
   // question it produced instead — same status code, humanDecomposeTask's
   // own union) shows up at once.
   const addChild = async (fields: RegisterScreenFields) => {

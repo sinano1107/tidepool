@@ -94,7 +94,6 @@ async function decomposeFrom(
     purpose: string;
     completion_criteria: string;
     assignee?: string;
-    workspace?: string;
   },
 ) {
   if (surface === "webui") {
@@ -257,11 +256,7 @@ it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先の�
 });
 
 async function exerciseDecompose(surface: HumanSurface) {
-  const pool = await bootTidepool({
-    agentRegistered: (name) => name === "known-agent",
-    workspace: { name: "known-workspace", path: "/workspaces/known" },
-    resolveWorkspace: defaultingTo({ name: "known-workspace", path: "/workspaces/known" }),
-  });
+  const pool = await bootTidepool({ agentRegistered: (name) => name === "known-agent" });
   pools.push(pool);
   const parent = await registerWork(pool, `${surface} decomposable task`, undefined, "human");
   const child = {
@@ -273,23 +268,14 @@ async function exerciseDecompose(surface: HumanSurface) {
     ...child,
     assignee: "unknown-agent",
   });
-  const unknownWorkspace = await decomposeFrom(surface, pool, parent.id, "split the work", {
-    ...child,
-    workspace: "unknown-workspace",
-  });
   const emptyAssignee = await decomposeFrom(surface, pool, parent.id, "split the work", {
     ...child,
     assignee: "",
-  });
-  const emptyWorkspace = await decomposeFrom(surface, pool, parent.id, "split the work", {
-    ...child,
-    workspace: "",
   });
   const missingReason = await decomposeFrom(surface, pool, parent.id, "", child);
   const registered = await decomposeFrom(surface, pool, parent.id, "split the work", {
     ...child,
     assignee: "known-agent",
-    workspace: "known-workspace",
   });
   const events = registered.ok
     ? (await api(pool.baseUrl, "GET", `/api/tasks/${registered.task.id}/events`)).json
@@ -298,22 +284,19 @@ async function exerciseDecompose(surface: HumanSurface) {
   return {
     child_registered: registered.ok && registered.task.parent_id === parent.id,
     unknown_assignee: unknownAssignee.ok ? null : unknownAssignee.error,
-    unknown_workspace: unknownWorkspace.ok ? null : unknownWorkspace.error,
     empty_assignee: emptyAssignee.ok ? null : emptyAssignee.error,
-    empty_workspace: emptyWorkspace.ok ? null : emptyWorkspace.error,
     domain_error: missingReason.ok ? null : missingReason.error,
     origin: events.find((event: any) => event.kind === "task_registered")?.origin,
   };
 }
 
-it("人間 decompose は WebUI と管理MCPで同じ assignee・workspace・分解制約を通り、経路を記録する", async () => {
+// 子の workspace は ADR 0384 決定1 で入力から消えた —— 拒否は扉(tests/human-verbs.test.ts)と管理MCPの schema(tests/management-mcp.test.ts)が持つ
+it("人間 decompose は WebUI と管理MCPで同じ assignee・分解制約を通り、経路を記録する", async () => {
   for (const surface of ["webui", "mcp"] as const) {
     expect(await exerciseDecompose(surface)).toEqual({
       child_registered: true,
       unknown_assignee: "unknown agent: unknown-agent",
-      unknown_workspace: "unknown workspace: unknown-workspace",
       empty_assignee: "unknown agent: ",
-      empty_workspace: "unknown workspace: ",
       domain_error: "a decomposition requires a reason",
       origin: surface,
     });

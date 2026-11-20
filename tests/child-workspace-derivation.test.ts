@@ -32,7 +32,7 @@ it("an explicit root's Edit moves its unstarted decomposition children", () => {
   const [child] = humanDecomposeTask(db, root, {
     reason: "split the work",
     children: [{ title: "child", purpose: "p", completion_criteria: "c" }],
-  }, at, undefined, "webui");
+  }, at, "webui");
 
   expect(child?.workspace).toBeNull();
   editTask(db, root, { workspace: "lagoon" }, at, "webui");

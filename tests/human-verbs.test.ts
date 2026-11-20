@@ -12,6 +12,7 @@ import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
+  decomposeThroughHumanDoor,
   editThroughHumanDoor,
   quarantineChecks,
   registerThroughHumanDoor,
@@ -572,6 +573,49 @@ it("人間の登録 door は issue-backed decompose child を登録しない", a
     failure: { kind: "invalid", error: "a child task cannot be issue-backed" },
   });
   expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
+});
+
+// ADR 0384 決定1: 子は workspace を入力に持たない —— 親と同じ名前でも拒み、別の workspace に置くなら根として登録する
+it("人間の分解と人間の登録 door は、親と同じ名前でも分解の子の workspace を拒み、子を登録しない", async () => {
+  db = openDb(":memory:");
+  const parent = registerTask(
+    db,
+    { type: "work", title: "parent work", purpose: "deliver the whole change", completion_criteria: "all slices are integrated", workspace: "reef" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  const child = { title: "child work", purpose: "one slice", completion_criteria: "the slice is done", workspace: "reef" };
+
+  const decomposed = decomposeThroughHumanDoor({ db, pollNow: () => {} }, parent.id, { reason: "split", children: [child] }, () => NOW, "webui");
+  const registered = await registerThroughHumanDoor(
+    { db, pollNow: () => {} },
+    { type: "work", ...child, parent_id: parent.id, decompose_reason: "split" },
+    () => NOW,
+    "webui",
+  );
+
+  expect({ decomposed, registered }).toEqual({
+    decomposed: { ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/register it as a root/) } },
+    registered: { ok: false, failure: { kind: "invalid", error: expect.stringMatching(/register it as a root/) } },
+  });
+  expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
+});
+
+// workspace を変えられない task(子・issue-backed)には、registry の検査より先に domain の拒否を返す —— 名前を直しても通らないので
+it("人間の Edit door は、子の workspace を registry に無い名前へ変える Edit にも、unknown workspace でなく子の拒否を返す", () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, NOW, ...HUMAN_WEBUI);
+  const child = registerTask(db, { type: "work", title: "child", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+
+  const result = editThroughHumanDoor(
+    { db, resolveWorkspace: defaultingTo({ name: "reef", path: "/workspaces/reef" }) },
+    child.id,
+    { workspace: "not-a-real-workspace" },
+    () => NOW,
+    "webui",
+  );
+
+  expect(result).toEqual({ ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/register it as a root/) } });
 });
 
 it("PR promotion の retry が失敗したら question を未決着のまま残す", async () => {

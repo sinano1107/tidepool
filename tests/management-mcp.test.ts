@@ -884,6 +884,29 @@ it("decompose_task は空の reason を protocol error ではなく domain tool 
   }
 });
 
+// ADR 0384 決定1 / #3415: 子の入力は workspace を持たず、未知の key は黙って落とさず拒む —— workspace の拒否は扉が持つので、未知の key だけの子で schema を釘にする
+it("decompose_task は子の未知の key を拒み、子を登録しない", async () => {
+  t = await bootTidepool();
+  const parent = queueWork(t, "modernize tide data");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "decompose_task",
+      arguments: {
+        task_id: parent.id,
+        reason: "split",
+        children: [{ title: "import observations", purpose: "import data", completion_criteria: "data is queryable", flavour: "salty" }],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("flavour");
+    expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === parent.id)).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
 it("register_task は空の content を protocol error ではなく domain tool error で拒否する(issue #192)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);

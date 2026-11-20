@@ -937,7 +937,7 @@ it("pickup 前の work の人間 decompose への異議は修理子の宛先を�
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  humanDecomposeTask(db, task, { reason: "split the work", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  humanDecomposeTask(db, task, { reason: "split the work", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, "webui");
   const entry = listEvents(db, task.id).find((event) => event.kind === "decision_logged")!;
   raiseObjection(db, entry.id, "redo it", at);
 
@@ -1325,7 +1325,7 @@ it("人間が直接 cancel した review 子と、cancelled の work の祖先�
   const db = openDb(":memory:");
   const at = new Date("2026-10-22T00:00:00.000Z");
   const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const [child] = humanDecomposeTask(db, root, { reason: "split", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  const [child] = humanDecomposeTask(db, root, { reason: "split", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, "webui");
   markPickedUp(db, child!.id, at);
   const reviewChild = registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: child!.id }, at, ...HUMAN_WEBUI);
   const rca = auditorRcaOn(db, child!, at, "deckhand");
@@ -1464,7 +1464,7 @@ it("cancelled の task の記憶の行への異議の memory_repair は、その
   const db = openDb(":memory:");
   const at = new Date("2026-10-18T00:00:00.000Z");
   const ancestor = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const [child] = humanDecomposeTask(db, ancestor, { reason: "split", children: [{ title: "t", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  const [child] = humanDecomposeTask(db, ancestor, { reason: "split", children: [{ title: "t", purpose: "p", completion_criteria: "c" }] }, at, "webui");
   const row = recordNote(db, at, child!.id).event_id;
   cancelTaskDirectly(db, child!, null, at, {}, "webui");
   raiseObjection(db, row, "drop the note", at);

@@ -200,7 +200,7 @@ export function humanDecomposeTaskViaWebui(
   input: Parameters<typeof humanDecomposeTask>[2],
   now: Date,
 ): Task[] {
-  return humanDecomposeTask(db, parent, input, now, undefined, "webui");
+  return humanDecomposeTask(db, parent, input, now, "webui");
 }
 
 export interface Tidepool {

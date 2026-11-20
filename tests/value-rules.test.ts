@@ -77,3 +77,10 @@ it.each(["memory_repair", "routing_repair"])("%s は組み込みに解決され�
     expect(whyReviewFlagIsInert({ type, parent_id })).toBe("completion review fires for work tasks only");
   }
 });
+
+import { hasWorkspaceField } from "../src/webui-rules.js";
+
+it("workspace の欄を持つのは根だけで、親を持つ task は type を問わず持たない(ADR 0384 決定1)", () => {
+  for (const parent_id of [undefined, null, ""]) expect(hasWorkspaceField({ parent_id })).toBe(true);
+  expect(hasWorkspaceField({ parent_id: "parent" })).toBe(false);
+});

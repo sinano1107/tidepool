@@ -80,6 +80,7 @@ import {
   assertUnsettledNotInProgress,
   type BoardTask,
   type CancelDefaults,
+  CHILD_TAKES_NO_WORKSPACE,
   type ChildSpec,
   cancelTaskDirectly,
   completeTask,
@@ -116,6 +117,7 @@ import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
+import { hasWorkspaceField } from "./webui-rules.js";
 import type { SettledMark } from "./wire-contract.js";
 import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
@@ -169,7 +171,6 @@ export interface RegisterThroughHumanDoorDeps {
   github?: GitHubClient;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
-  isProtectedWorkspace?: (name: string) => boolean;
   /** 登録の成功は pickup の契機である(ADR 0119 決定2)。門で弾かれた登録は撃たない。 */
   pollNow: () => void;
   defaultAgentName?: string;
@@ -213,9 +214,6 @@ export interface DecomposeThroughHumanDoorDeps {
   db: Db;
   agentRegistered?: (name: string) => boolean;
   resolvesToBuiltIn?: (name: string) => boolean;
-  workspace?: WorkspaceConfig;
-  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
-  isProtectedWorkspace?: (name: string) => boolean;
   /** 子の登録は pickup の契機である(ADR 0119 決定2)。拒否された分解は撃たない。 */
   pollNow: () => void;
 }
@@ -230,16 +228,14 @@ export function decomposeThroughHumanDoor(
 ): HumanVerbResult<Task[]> {
   try {
     for (const child of input.children) {
-      if (child.workspace !== undefined) {
-        assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
-      }
+      if (child.workspace !== undefined && !hasWorkspaceField({ parent_id: taskId })) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
       assertAssigneeCanTake(deps, child.assignee, "work");
       assertReviewersKnown(deps.agentRegistered, child.review_by);
     }
     if (whyBlank(input.reason)) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);
     if (!task) return { ok: false, failure: { kind: "not_found", error: "parent task not found" } };
-    const children = humanDecomposeTask(deps.db, task, input, now(), deps.isProtectedWorkspace, origin);
+    const children = humanDecomposeTask(deps.db, task, input, now(), origin);
     deps.pollNow();
     return { ok: true, value: children };
   } catch (err) {
@@ -435,6 +431,7 @@ export async function registerThroughHumanDoor(
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
       throw new DomainError("a child task cannot be issue-backed");
     }
+    if (!hasWorkspaceField(input) && input.workspace !== undefined) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
     // 子の登録は decompose を通り registerTask の検査に届かないので、同じ検査をここで呼ぶ
     if (isHumanDecomposeChild) assertInterviewFields(deps.db, input);
     if (isHumanDecomposeChild) {
@@ -449,7 +446,6 @@ export async function registerThroughHumanDoor(
               purpose: input.purpose ?? "",
               completion_criteria: input.completion_criteria ?? "",
               assignee: input.assignee,
-              workspace: input.workspace,
               risk_flag: input.risk_flag,
               review_flag: input.review_flag,
               review_by: input.review_by,
@@ -1253,7 +1249,8 @@ export function editThroughHumanDoor(
   try {
     if (input.assignee) assertAssigneeCanTake(deps, input.assignee, task.type);
     assertReviewersKnown(deps.agentRegistered, input.review_by);
-    if (input.workspace) {
+    // 変えられない workspace(子 / issue-backed)は editTask の拒否を先に返す —— 名前を直しても通らない
+    if (input.workspace && hasWorkspaceField(task) && task.github_issue_number === null) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
     editTask(deps.db, task, input, now(), origin);
