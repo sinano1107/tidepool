@@ -802,7 +802,7 @@ it("merge back のやり直しの fetch の await の間に人間が動かした
   } as unknown as GitHubAuth;
 
   const refused = submitAnswer(
-    { db, pollNow: () => {}, landing: pr.landing, quarantineChecks: quarantineChecks({ db, workspace, githubAuth }) },
+    { db, pollNow: () => {}, landing: pr.landing, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace, githubAuth }) },
     getTask(db, question.id)!, ["repaired by hand"], undefined, () => clock.now(), "webui",
   );
 

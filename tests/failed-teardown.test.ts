@@ -126,7 +126,7 @@ const answer = (f: Fixture, question: Task, deps: TeardownDeps = f.deps) =>
       db: f.db,
       pollNow() {},
       landing: unusedLanding,
-      quarantineChecks: quarantineChecks({
+      quarantineChecks: quarantineChecks({ quarantineResolvers: {},
         db: f.db,
         teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(deps, taskId),
       }),

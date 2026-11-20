@@ -167,9 +167,10 @@ export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: 
 }
 
 /** (task, 面接室) の項(ADR 0329 決定4 の Status 追記、issue #3136): 準備がその task たちのために面接室から fetch するものが、
- *  fetch の要る閉包(`--depth` を付けないので履歴全体)まで面接室にある。task たちの sha は1回の `rev-list` で歩く —— 共有する履歴を
- *  1度しか歩かない。文は記録だけから組み(予告は git を撃たない)、何を fetch するかは検査の中で引く。fetch するものの無い task は項を持たない。
- *  ADR 0385 決定1・2: 項は出口ごとに分け、異議の RCA は1つずつ項を持つ —— 回答がどの RCA の項が落ちたかを読む(`rca`)。 */
+ *  fetch の要る閉包(`--depth` を付けないので履歴全体)まで面接室にある。項は出口ごとに分け、異議の RCA は1つずつ項を持つ —— 回答が
+ *  どの RCA の項が落ちたかを読む(`rca`、ADR 0385 決定1・2)。`rev-list` は項ごとに1回で、同じ項の task たちの共有する履歴を1度しか
+ *  歩かない(項を跨いだ共有は項の数だけ歩く)。文は記録だけから組み(予告は git を撃たない)、何を fetch するかは検査の中で引く。
+ *  fetch するものの無い task は項を持たない。 */
 export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, workspacesBaseDir: string): RoomOpenerPredicate[] {
   const items = new Map<string, { exit: string; rca?: string; needs: RoomFetch[] }>();
   for (const task of tasks) {
@@ -207,11 +208,13 @@ export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, 
 }
 
 /** (task, 面接室) の項の1つ。`rca` は項の持ち主の異議の RCA —— 回答が落ちた項から倒す RCA を読む(ADR 0385 決定2)。 */
-export type RoomOpenerPredicate = PickupPredicate & { rca?: string };
+type RoomOpenerPredicate = PickupPredicate & { rca?: string };
 
 type RoomFetch = { what: string; rev: (room: WorkspaceConfig) => string | undefined };
 
-/** 項の持ち主を倒せる Interview の root(ADR 0385 決定1): review の鎖を root か受験者まで登り、受験者は対象の root。 */
+/** 項の持ち主を倒せる Interview の root(ADR 0385 決定1): review の鎖を root か受験者まで登り、受験者は対象の root。鎖が RCA を通るのは
+ *  RCA の下の RCA だけで(Interview の系譜は帰り先を持たず、RCA の下に work・完了時レビュー・人間の review 子は立たない —— ADR 0301 決定2)、
+ *  RCA の項は呼び手が先に回答の出口へ分ける。 */
 export function interviewOwnerOf(db: Db, task: Task): string {
   let owner = task;
   while (owner.type === "review") owner = getTask(db, owner.parent_id!)!;

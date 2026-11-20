@@ -166,7 +166,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     await declare(replacement.repo);
     await expect(refresh()).rejects.toThrow(repair);
     const question = quarantineQuestion(deps.db, "workspace", "sandbox")!;
-    const answer = () => submitAnswer({ db: deps.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db: deps.db, resolveWorkspace: resolve }) }, question, ["repaired by hand"], undefined, now, "webui");
+    const answer = () => submitAnswer({ db: deps.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db: deps.db, resolveWorkspace: resolve }) }, question, ["repaired by hand"], undefined, now, "webui");
     await expect(answer()).rejects.toThrow(repair);
     await declare(dest);
     await answer();

@@ -964,7 +964,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     /** 人間の回答の口で failure question に答える。 */
     const answerFailure = (f: { db: ReturnType<typeof openDb>; clock: FakeClock }, question: ReturnType<typeof failureQuestion>, answer: string) =>
-      submitAnswer({ db: f.db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db: f.db, clock: f.clock }) }, getTask(f.db, question.id)!, [answer], undefined, () => f.clock.now(), "webui");
+      submitAnswer({ db: f.db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db: f.db, clock: f.clock }) }, getTask(f.db, question.id)!, [answer], undefined, () => f.clock.now(), "webui");
 
     it("task の checkout が落ちて保護ブランチの tip が通れば task の失敗で、組は止めず、kind は一撃にだけ運び event には載せず、質問は abandon を推奨する(pin G3)", async () => {
       const seen: Array<{ cwd: string; repository: boolean }> = [];
@@ -1171,7 +1171,7 @@ describe("CodexWorker (ADR 0098)", () => {
           db: f.db,
           pollNow() {},
           landing: unusedLanding,
-          quarantineChecks: quarantineChecks({
+          quarantineChecks: quarantineChecks({ quarantineResolvers: {},
             db: f.db,
             clock: f.clock,
             resolveWorkspace: () => withRememberedRepoCheck(f.db, named, () => f.clock.now(), () => named),

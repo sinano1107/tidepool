@@ -253,7 +253,7 @@ it("在り処が消えた出題前の面接室を `run with an empty room` で�
   quarantineWorkspace(db, root.id, new Error("the interview room is gone"), NOW);
   const question = quarantineQuestion(db, "workspace", root.id)!;
 
-  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspacesDir: base }) }, question, ["run with an empty room"], undefined, () => NOW, "webui");
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspacesDir: base }) }, question, ["run with an empty room"], undefined, () => NOW, "webui");
 
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(git(room.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
@@ -286,7 +286,7 @@ it("盤面が一度も開いていない受験者の checkout の在り処に re
   git(base, "init", "--quiet", "--initial-branch=main", leftover);
   git(leftover, "commit", "--quiet", "--allow-empty", "-m", "left here before the board opened it");
   quarantineWorkspace(db, root.id, new Error("repaired by hand"), NOW);
-  await quarantineChecks({ db, workspacesDir: base }).workspace!(root.id, undefined, "webui");
+  await quarantineChecks({ quarantineResolvers: {}, db, workspacesDir: base }).workspace!(root.id, undefined, "webui");
 
   const checkout = await prepareAtPickup(db, room, examinee!, { workspacesBaseDir: base });
 

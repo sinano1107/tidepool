@@ -78,7 +78,7 @@ export type Conflicted = Awaited<ReturnType<typeof conflicted>>;
 export function answer({ db, clock, ws, base }: Omit<Board, "parent">) {
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   return submitAnswer(
-    { db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws, workspacesDir: base }) },
+    { db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace: ws, workspacesDir: base }) },
     question,
     ["repaired by hand"],
     undefined,

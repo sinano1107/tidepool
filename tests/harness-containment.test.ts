@@ -28,7 +28,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     {
       db,
       pollNow() {},
-      quarantineChecks: quarantineChecks({ db, harnessContainment: async () => check() }),
+      quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, harnessContainment: async () => check() }),
       landing: unusedLanding,
     },
     question!,
@@ -44,7 +44,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     {
       db,
       pollNow() {},
-      quarantineChecks: quarantineChecks({ db, harnessContainment: async () => check() }),
+      quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, harnessContainment: async () => check() }),
       landing: unusedLanding,
     },
     question!,

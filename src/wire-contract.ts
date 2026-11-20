@@ -200,6 +200,14 @@ interface Discard {
   title: string;
 }
 
+/** 面接室の Quarantine の question 行だけ: 面接室を開く未決着の RCA が居る間、表示のたびに添える選択肢とその説明と、その回答で捨てられる
+ *  done の work(ADR 0385 決定5、src/quarantine.ts の roomRcaChoice)。保存された選択肢には入らない。 */
+export interface RoomRcaChoice {
+  option: string;
+  description: string;
+  discards: Discard[];
+}
+
 /** memory の提案 question の移動の注釈(ADR 0162 決定6, src/memory.ts の movedPins)。移された pin ごとに旧 id と `path_moved` の
  *  鎖の末尾の id・path・scope。question 行にだけ載り、移された pin が無ければ空。 */
 interface MovedPin {
@@ -233,6 +241,7 @@ export interface WireContract {
       settled_by_observation?: SettledByObservation | null;
       /** question 行だけ: failure / premise-breach question の cancel option が捨てる done の work(ADR 0271 決定4)。それ以外は空。 */
       discards?: Discard[];
+      room_rca_choice?: RoomRcaChoice | null;
       /** question でない行だけ: 着地の状態(question 行の `landing` 注釈とは別物)。 */
       landing_state?: LandingState | null;
     }
@@ -252,6 +261,7 @@ export interface WireContract {
     landing_state?: LandingState | null;
     /** question 行は cancel option の、それ以外はその task の直接 cancel の、捨てられる done の work(ADR 0271 決定4)。 */
     discards: Discard[];
+    room_rca_choice?: RoomRcaChoice | null;
     /** ADR 0374 決定1・2: タスクブランチを持つか(`task_branch_created`)と、書き始めたか(`task_work_started`)—— 完了の dialog が handoff の
      *  6欄と text C4 をタスクブランチを持つ人間担当の work にだけ出す。 */
     has_task_branch: boolean;

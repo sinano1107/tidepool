@@ -74,7 +74,7 @@ describe.each(QUARANTINES.map((row) => [row.kind, row.scope === "board" || row.s
 
 it("起動時の照合の契機(anthropic / moonshot の行)の effort の Quarantine は、probe が通っても回答では解除しない", async () => {
   const probe = vi.fn(async () => ({ status: "runs" as const }));
-  const checks = quarantineChecks({ db: openDb(":memory:"), modelProbes: { anthropic: probe, moonshot: probe }, clock: new FakeClock() });
+  const checks = quarantineChecks({ quarantineResolvers: {}, db: openDb(":memory:"), modelProbes: { anthropic: probe, moonshot: probe }, clock: new FakeClock() });
 
   for (const value of ["anthropic/claude-haiku-4-5-20251001/high", "moonshot/kimi-k3/"]) {
     await expect(checks.tableRowEffort!(value, undefined, "webui")).rejects.toThrow("only a table edit settles this question");
@@ -89,7 +89,7 @@ it("Provider 認証の再検査は cli_auth_probe、行と Interview の対象�
   const turn = (provider: "anthropic" | "moonshot", model: string, effort: string | null) => ({
     boardCall: { setting: { provider, model, effort }, usage: BOARD_CALL_USAGE },
   });
-  const checks = quarantineChecks({
+  const checks = quarantineChecks({ quarantineResolvers: {},
     db,
     clock,
     providerCliAuth: {
@@ -119,7 +119,7 @@ it("Provider 認証の再検査は cli_auth_probe、行と Interview の対象�
 it("OpenAI の Provider 認証の回答は unauthorized なら拒まれ、確認は開いたまま1枚残る", async () => {
   const q = quarantined("providerAuth", "openai");
   const reason = "Codex account/read reports no account";
-  const checks = quarantineChecks({
+  const checks = quarantineChecks({ quarantineResolvers: {},
     db: q.db, clock: new FakeClock(),
     providerCliAuth: { openai: async () => ({ status: "unauthorized", reason }) },
   });
@@ -132,7 +132,7 @@ it("OpenAI の Provider 認証の回答は unauthorized なら拒まれ、確認
 it("OpenAI の行の再検査が unauthorized なら、probe の理由で Provider 認証を登録して回答を拒む(ADR 0348)", async () => {
   const q = quarantined("tableRow", "openai/gpt-5.6-sol");
   const reason = "Codex rejected the rate-limit read with HTTP 401";
-  const checks = quarantineChecks({
+  const checks = quarantineChecks({ quarantineResolvers: {},
     db: q.db, clock: new FakeClock(),
     modelProbes: { openai: async () => ({ status: "unauthorized", reason }) },
   });
@@ -146,7 +146,7 @@ it("OpenAI の行の再検査が unauthorized なら、probe の理由で Provid
 
 it("usage の無い再検査の結果は行を残さない", async () => {
   const db = openDb(":memory:");
-  const checks = quarantineChecks({
+  const checks = quarantineChecks({ quarantineResolvers: {},
     db,
     clock: new FakeClock(),
     providerCliAuth: { anthropic: async () => ({ status: "unauthorized", reason: "API returned 401" }) },

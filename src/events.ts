@@ -316,9 +316,10 @@ export type EventPayload =
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join
   | { kind: "risk_flag_raised"; origin_question_id: string }
-  // ADR 0006 / 0048: a task cancelled by abandon's decision-scoped cascade —
-  // origin_question_id is the answered failure question, shared by every task
-  // touched by the cascade (including the failed task's own subtree)
+  // ADR 0006 / 0048: a task cancelled by an answer's cascade — origin_question_id
+  // is the answered question, shared by every task the cascade touches: the
+  // failure question's abandon (including the failed task's own subtree), and a
+  // refused Interview target's Quarantine question (ADR 0199 決定4)
   | { kind: "task_cancelled"; origin_question_id: string }
   // ADR 0385 決定3: 面接室の Quarantine への回答が倒した、読む head の欠けた RCA とその配下 —— origin_question_id は答えた Quarantine の question、
   // missing_head は RCA が読む欠けた出題の head(盤面が書く)
