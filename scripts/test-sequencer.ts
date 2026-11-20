@@ -6,6 +6,7 @@ import { BaseSequencer, type TestSpecification } from "vitest/node";
 // 重いファイルが1つの shard に寄ると、その shard だけが CI の壁時計を決める。
 // CI で測ったファイルごとの所要秒(scripts/test-durations.json)で、重い順に一番軽い shard へ詰める。
 // 記録に無いファイルは中央値として扱う。記録が古くなっても偏りが戻るだけで、テストの合否には効かない。
+// 記録の更新は `npx tsx scripts/update-test-durations.ts`(main の直近の CI の報告から書き直す)。
 
 const DURATIONS_PATH = path.join(import.meta.dirname, "test-durations.json");
 
