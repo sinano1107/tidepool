@@ -6,7 +6,7 @@ import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { questionAnnotations } from "../src/memory.js";
-import { namePickupPredicates, providedRev, resolvedCommit, roomProvisionOf, taskRoomPickupPredicates } from "../src/pickup-predicates.js";
+import { namePickupPredicates, taskRoomPickupPredicates } from "../src/pickup-predicates.js";
 import { openQuarantineQuestion, type QuarantineChecks, registerQuarantine } from "../src/quarantine.js";
 import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import { Slot } from "../src/slot.js";
@@ -795,7 +795,9 @@ it("読み専用の checkout を消せない解放は決着を撃たずに何も
   db.close();
 });
 
-it("門を通った後に面接室から出題の head を fetch できなければ、準備は面接室の名前(root id)で項の文つきで止まり、開いた event を書かない(ADR 0361 決定1 / ADR 0276 決定3)", async () => {
+// 旧: 読み専用の checkout の失敗は手書きの文(「the posed head … can be fetched … into the read checkout.」)で包んでいた。ADR 0386 決定3 の後は
+// 読み手の (task, 面接室) の項の文で包み、その出口(ADR 0385 決定1)が付く
+it("門を通った後に面接室から出題の head を fetch できなければ、準備は面接室の名前(root id)で読み手の (task, 面接室) の項の文つきで止まり、開いた event を書かない(ADR 0386 決定3 / ADR 0361 決定1 / ADR 0276 決定3)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, head, audit } = await auditStanding(db);
   // 門を通った後に中身の blob が欠けた面接室 —— 準備は門の前半を撃ち直さない(後半だけ)ので、fetch が落ちる
@@ -807,7 +809,8 @@ it("門を通った後に面接室から出題の head を fetch できなけれ
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
-  expect((failed as PickupGateError).message).toContain(`The check that failed: the posed head ${head} can be fetched from the interview room into the read checkout.`);
+  expect((failed as PickupGateError).message).toContain(`The check that failed: ${taskRoomPickupPredicates(db, [audit], root.id, base)[0]!.describe}`);
+  expect((failed as PickupGateError).message).toContain(`the posed head ${head} that ${audit.id} reads is present in the interview room — restore it there or cancel the Interview ${root.id}.`);
   expect(openedReads(db, audit.id)).toEqual([]);
   db.close();
 });
@@ -1381,7 +1384,7 @@ it("人間が読んだ時には選択肢が表示されていなかった ——
   db.close();
 });
 
-// 面接室が task の準備に提供するものと面接室の項の並び(issue #3165 / ADR 0386): 項と準備は1つの答えを読み、門・答え・本文は1つの並びを読む
+// 面接室が task の準備に提供するものと面接室の項の並び(issue #3165 / ADR 0386): 項と準備は1つの答えを読み、pickup の門・解除の門・本文は1つの並びを読む
 
 /** task の `task_branch_created` が残した、ブランチを切った sha。 */
 const forkedAt = (db: Db, taskId: string) => listEvents(db, taskId).flatMap((e) => (e.payload.kind === "task_branch_created" ? [e.payload.sha] : []))[0];
@@ -1404,10 +1407,16 @@ it.each([
   db.close();
 });
 
-/** 面接室を開いた(記録した)が、まだ拾っていない root —— 面接室に root のブランチも基準の行も無い。 */
-async function rootInOpenedRoom(db: Db, name: string) {
+/** 実環境 `name` を読む Interview の root —— 面接室はまだ開かない。 */
+async function interviewRootOn(db: Db, name: string) {
   const workspace = await makeWorkspace(name);
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  return { workspace, root };
+}
+
+/** 面接室を開いた(記録した)が、まだ拾っていない root —— 面接室に root のブランチも基準の行も無い。 */
+async function rootInOpenedRoom(db: Db, name: string) {
+  const { workspace, root } = await interviewRootOn(db, name);
   openTestInterviewRoom(db, root);
   const room = recordedInterviewRoom(db, root.id)!;
   return { workspace, root, room, base: dirname(room.path) };
@@ -1432,8 +1441,7 @@ it("記録された面接室で root のブランチが無く保護ブランチ�
 
 it("面接室が記録に無い root は (task, 面接室) の項を持たず、最初の pickup は門を通って面接室を開き、保護ブランチの head からブランチを切る(ADR 0386 決定2 / ADR 0329 決定1)", async () => {
   const db = openDb(":memory:");
-  const workspace = await makeWorkspace("root-unrecorded-room");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const { workspace, root } = await interviewRootOn(db, "root-unrecorded-room");
   const base = await tempDir("tidepool-rooms-");
 
   expect(taskRoomPickupPredicates(db, [root], root.id, base)).toEqual([]);
@@ -1456,32 +1464,47 @@ async function examineeAnswered(db: Db) {
   return { ...posed, examinee };
 }
 
+/** 項が門の時点で検査する rev の sha —— 面接室から最初の commit(どの task の rev もそこまで辿る)を一時的に消し、その task の項が
+ *  欠けを名指して挙げる sha を読む。 */
+function checkedRev(db: Db, room: WorkspaceConfig, task: Task, rootId: string, base: string): string {
+  const item = taskRoomPickupPredicates(db, [task], rootId, base)[0]!;
+  const restore = dropFromRoom(room, git(room.path, "rev-list", "--max-parents=0", "main"));
+  try {
+    if (item.phase === "before-open") item.check();
+  } catch (err) {
+    return /\(([0-9a-f]{40})\) are missing/.exec((err as Error).message)![1]!;
+  } finally {
+    restore();
+  }
+  throw new Error(`the item of ${task.id} passed without the room's first commit`);
+}
+
 it.each([
   ["ブランチの無い受験者", async (db: Db) => {
     const { root, room, base, examinees } = await posedInRoom(db);
-    return { root, room, task: examinees[0]!, forks: true, prepare: async () => (await pickUp(db, examinees[0]!, room, base)).path };
+    return { root, room, base, task: examinees[0]!, forks: true, prepare: async () => (await pickUp(db, examinees[0]!, room, base)).path };
   }],
   ["ブランチのある受験者", async (db: Db) => {
     const { root, room, base, examinee } = await examineeAnswered(db);
-    return { root, room, task: examinee, forks: false, prepare: async () => (await pickUp(db, examinee, room, base)).path };
+    return { root, room, base, task: examinee, forks: false, prepare: async () => (await pickUp(db, examinee, room, base)).path };
   }],
   ["ブランチの無い root", async (db: Db) => {
-    const { workspace, root, room } = await rootInOpenedRoom(db, "provision-root-unforked");
+    const { workspace, root, room, base } = await rootInOpenedRoom(db, "provision-root-unforked");
     commitWork(room.path, "seed.txt", "seeded by hand\n");
-    return { root, room, task: root, forks: true, prepare: async () => (await pickUpInterviewRoot(db, root, workspace)).place.path };
+    return { root, room, base, task: root, forks: true, prepare: async () => (await pickUpInterviewRoot(db, root, workspace)).place.path };
   }],
   ["ブランチのある root", async (db: Db) => {
-    const { workspace, root, room } = await posedInRoom(db);
-    return { root, room, task: getTask(db, root.id)!, forks: false, prepare: async () => (await pickUpInterviewRoot(db, root, workspace)).place.path };
+    const { workspace, root, room, base } = await posedInRoom(db);
+    return { root, room, base, task: getTask(db, root.id)!, forks: false, prepare: async () => (await pickUpInterviewRoot(db, root, workspace)).place.path };
   }],
   ["読み手(監査)", async (db: Db) => {
     const { workspace, root, room, base, audit } = await auditStanding(db);
-    return { root, room, task: audit, forks: false, prepare: async () => (await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base })).reads[0]!.path };
+    return { root, room, base, task: audit, forks: false, prepare: async () => (await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base })).reads[0]!.path };
   }],
 ])("%s: 項が門の時点で検査する rev と、準備が面接室から fetch し・切る rev は、面接室が提供する1つの答えの同じ sha(ADR 0386 決定1)", async (_, standing) => {
   const db = openDb(":memory:");
-  const { root, room, task, forks, prepare } = await standing(db);
-  const gated = resolvedCommit(room, providedRev(room, roomProvisionOf(db, task, root.id)!)!)!;
+  const { root, room, base, task, forks, prepare } = await standing(db);
+  const gated = checkedRev(db, room, task, root.id, base);
 
   const checkout = await prepare();
 
@@ -1510,8 +1533,7 @@ it("門を通った後に受験者のブランチの閉包の object が面接�
 
 it("面接室が記録に無く未決着の受験者が居る名前の Quarantine への回答は、受験者を含む項で拒み、面接室の番地にディレクトリを作らない(issue #3160 / ADR 0386 決定4 / ADR 0329 追記 決定7)", async () => {
   const db = openDb(":memory:");
-  const workspace = await makeWorkspace("answer-unrecorded-room");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const { root } = await interviewRootOn(db, "answer-unrecorded-room");
   const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567") as [Task];
   const base = await tempDir("tidepool-rooms-");
 
@@ -1522,7 +1544,7 @@ it("面接室が記録に無く未決着の受験者が居る名前の Quarantin
   db.close();
 });
 
-it("面接室の項は 受験者を含む項 → 面接室そのものの項 → 残りの task の項 の順で、pickup の門・答えの門・Quarantine の本文が同じ並びを読み、本文は項の後に作業ツリーの clean を並べる(ADR 0386 決定4)", async () => {
+it("面接室の項は 受験者を含む項 → 面接室そのものの項 → 残りの task の項 の順で、pickup の門・解除の門・Quarantine の本文が同じ並びを読み、本文は項の後に作業ツリーの clean を並べる(ADR 0386 決定4)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, examinees } = await posedInRoom(db);
   const reader = readerOpensRoom(db, workspace, root.id);
@@ -1546,5 +1568,19 @@ it("面接室の項は 受験者を含む項 → 面接室そのものの項 →
   expect(await gated(reader)).toEqual([...own, expect.stringContaining(`that ${reader.id} reads`)]);
   rmSync(room.path, { recursive: true });
   expect(await refusal(answerRoom(db, root.id, "repaired by hand"))).toContain(`The check that failed: ${ordered[0]!.describe}`);
+  db.close();
+});
+
+it("面接室ごと消えて root が生きていれば、最初に落ちる項が未決着の受験者を含む項でも、RCA を倒す回答の拒否文は root の cancel を先に案内し、何も書かない(ADR 0386 決定4 / ADR 0385 決定3)", async () => {
+  const db = openDb(":memory:");
+  const { root, room, examinees } = await posedInRoom(db);
+  const rca = rcaUnderAudit(db, auditOf(db, root.id));
+  rmSync(room.path, { recursive: true });
+
+  const refused = await refusal(answerRoom(db, root.id, CANCEL_THE_RCAS));
+
+  expect(refused).toMatch(new RegExp(`The check that failed: every object reachable from .*of the examinee ${examinees[0]!.id}`));
+  expect(refused).toMatch(new RegExp(`still open the interview room ${root.id} after this answer — cancel the Interview ${root.id} first, then answer \`${CANCEL_THE_RCAS}\` again\\.`));
+  expect(getTask(db, rca.id)!.status).toBe("todo");
   db.close();
 });

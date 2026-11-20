@@ -180,7 +180,7 @@ export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, 
     const exit = rca ? `answer \`${CANCEL_THE_RCAS}\`` : cancelInterview(interviewOwnerOf(db, task));
     const item = items.get(rca ?? exit) ?? { exit, ...(rca && { rca }), needs: [] };
     item.needs.push(need);
-    if (interviewRootIdOf(db, task) === rootId && interviewRole(db, task) === "examinee") item.examinee = true;
+    if (need.examinee) item.examinee = true;
     items.set(rca ?? exit, item);
   }
   const room = roomPlace(db, rootId, workspacesBaseDir);
@@ -197,7 +197,6 @@ export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, 
         const shas = new Set<string>();
         for (const need of needs) {
           const rev = providedRev(room, need);
-          if (rev === undefined) continue;
           const sha = resolvedCommit(room, rev);
           if (sha === undefined) throw new Error(`${need.what} cannot be resolved in the interview room ${rootId} at ${room.path}`);
           shas.add(sha);
@@ -213,13 +212,13 @@ export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, 
  *  その面接室の受験者を含む項 —— 並びの先頭に来る(ADR 0386 決定4)。 */
 type RoomOpenerPredicate = PickupPredicate & { rca?: string; examinee?: true };
 
-/** 名前に掛かる項の1つ。`own` は名前の場所そのものの項 —— 答えの門が面接室そのものの項(ADR 0385 決定6)や倒す RCA の項(`rca`、
+/** 名前に掛かる項の1つ。`own` は名前の場所そのものの項 —— 解除の門が面接室そのものの項(ADR 0385 決定6)や倒す RCA の項(`rca`、
  *  決定2)を外す印。 */
-export type NamePredicate = RoomOpenerPredicate & { own?: true };
+type NamePredicate = RoomOpenerPredicate & { own?: true };
 
 const asOwn = (predicate: PickupPredicate): NamePredicate => ({ ...predicate, own: true });
 
-/** 面接室の項の並び(ADR 0386 決定4): その面接室の受験者を含む項 → 面接室そのものの項 → 残りの task の項。pickup の門・答えの門・
+/** 面接室の項の並び(ADR 0386 決定4): その面接室の受験者を含む項 → 面接室そのものの項 → 残りの task の項。pickup の門・解除の門・
  *  Quarantine の本文がこれを読む。(task, 面接室) の項は面接室の repo が無ければ面接室が消えた理由で止まるので、未記録の面接室に
  *  「作る」項(`mkdir -p`)を撃たない(ADR 0329 追記 決定7)。 */
 export function roomPredicatesInOrder(db: Db, rootId: string, tasks: Task[], workspacesBaseDir: string, fixedPoints?: BoardStatePath[]): NamePredicate[] {
@@ -238,10 +237,11 @@ export function interviewOwnerOf(db: Db, task: Task): string {
 }
 
 /** 面接室がその task の準備に提供するもの(ADR 0386 決定1)。受験者と root は自分のタスクブランチ `branch`(ADR 0356 決定2)と、
- *  無いときに準備がそこから切る元 `source` —— 受験者は出題の head(ADR 0276 決定1)、root は面接室の保護ブランチ(面接室の中では系譜の
- *  ブランチは現れない、ADR 0273 決定8 —— 切る sha と完了の門の fork 元が同じ出所、ADR 0362 決定2)。読み手はブランチを持たず、`source` は
- *  `readHeadOf` の出題の head。文は記録だけから組む。 */
-export type RoomProvision = { what: string; branch?: string; source: (room: WorkspaceConfig) => string | undefined };
+ *  無いときに準備がそこから切る元 `source` —— 受験者は出題の head(ADR 0276 決定1)、root は面接室の保護ブランチ(Interview の root は親を
+ *  持たない root task で(`assertInterviewFields`)、`lineageTaskBranch` が辿る系譜が無い。面接室は新しく作る repo —— ADR 0273 決定1。
+ *  切る sha と完了の門の fork 元が同じ出所、ADR 0362 決定2)。読み手はブランチを持たず、`source` は `readHeadOf` の出題の head。
+ *  `examinee` はこの面接室の受験者 —— 項の並び(ADR 0386 決定4)と切る元の文が読む。文は記録だけから組む。 */
+type RoomProvision = { what: string; branch?: string; source: (room: WorkspaceConfig) => string; examinee?: true };
 
 /** 項と準備が読む1つの答え。他の面接室を読む root・受験者はこの面接室では読み手。未記録の面接室の root は何も提供しない —— 面接室を開く段が
  *  保護ブランチに空の commit を補うので、門の時点で切る元を問えない(ADR 0386 決定2)。出題前の面接室の読み手も何も読まない。 */
@@ -250,7 +250,7 @@ export function roomProvisionOf(db: Db, task: Task, rootId: string): RoomProvisi
   const role = interviewRootIdOf(db, task) === rootId ? interviewRole(db, task) : undefined;
   if (role === "examinee") {
     const posed = posedHeadOf(db, task);
-    return { what: `the task branch \`${branch}\` of the examinee ${task.id}, or the posed head ${posed} it forks from while that branch is absent`, branch, source: () => posed };
+    return { what: `the task branch \`${branch}\` of the examinee ${task.id}, or the posed head ${posed} it forks from while that branch is absent`, branch, source: () => posed, examinee: true };
   }
   if (role === "root") {
     if (interviewRoomPath(db, rootId) === undefined) return undefined;
@@ -262,7 +262,7 @@ export function roomProvisionOf(db: Db, task: Task, rootId: string): RoomProvisi
 
 /** 面接室が今その task に提供する rev: ブランチがあればそれ、無ければ切る元か読む head。項はこれの閉包を門の時点で検査し、準備はブランチを
  *  立てた後にこれを fetch する。 */
-export function providedRev(room: WorkspaceConfig, { branch, source }: RoomProvision): string | undefined {
+export function providedRev(room: WorkspaceConfig, { branch, source }: RoomProvision): string {
   return branch !== undefined && branchExists(room, branch) ? `refs/heads/${branch}` : source(room);
 }
 
@@ -288,12 +288,12 @@ export function taskIdOfBranch(branch: string): string {
   return branch.slice("task/".length);
 }
 
-/** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。ref を剥かない —— tip の commit が
- *  欠けた ref は「ある」と読み、項の `resolvedCommit` が引けないで止める(準備はその ref を fetch する)。 */
 export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
   return branchExists(workspace, taskBranch(taskId));
 }
 
+/** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。ref を剥かない —— tip の commit が
+ *  欠けた ref は「ある」と読み、項の `resolvedCommit` が引けないで止める(準備はその ref を fetch する)。 */
 function branchExists(workspace: WorkspaceConfig, branch: string): boolean {
   try {
     git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
@@ -424,10 +424,11 @@ function posedHeadOf(db: Db, task: Task): string {
 /** 面接室で走る task(受験者・root)のタスクブランチを切る sha —— 面接室が提供する切る元(ADR 0386 決定1)。引けない切る元から黙って
  *  今の head へ逃げない —— 投げて pickup の失敗(面接室の quarantine)に落とす。 */
 export function roomForkSource(db: Db, room: WorkspaceConfig, task: Task): string {
-  const source = roomProvisionOf(db, task, room.name)?.source(room);
+  const provision = roomProvisionOf(db, task, room.name);
+  const source = provision?.source(room);
   const resolved = source === undefined ? undefined : resolvedCommit(room, source);
   if (resolved !== undefined) return resolved;
-  const what = interviewRole(db, task) === "examinee" ? `the protected branch head the probe recorded for ${task.id}` : `the fork source of ${task.id}`;
+  const what = provision?.examinee ? `the protected branch head the probe recorded for ${task.id}` : `the fork source of ${task.id}`;
   throw new Error(`workspace ${room.name}: ${what} (${source}) cannot be resolved in this checkout, so its branch is not forked`);
 }
 
