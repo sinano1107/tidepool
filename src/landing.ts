@@ -37,6 +37,7 @@ import {
   type Task,
   type TaskType,
   type TierRef,
+  taskBranchLostInForce,
   taskIdForPr,
   teardownUnfinishedUnder,
 } from "./tasks.js";
@@ -55,6 +56,7 @@ import {
   FirstCaptureRefusedError,
   type IntakeContext,
   lineageTaskBranch,
+  noReturnAncestor,
   outsideCommitsStop,
   outsidePushRefusal,
   PromotionStopError,
@@ -299,7 +301,10 @@ function leftBehindTargets(db: Db, workspace: WorkspaceConfig, taskId: string): 
       )
       .pluck()
       .all({ root: taskId }) as string[]
-  ).filter((id) => taskBranchExists(workspace, id));
+  ).filter(
+    // ADR 0375 決定6 / ADR 0380 決定3: 生きている根の積み残しに、死んだ task も帰り先なしの task も数えない —— 失われた ref は git で読まない
+    (id) => !taskBranchLostInForce(db, id) && !noReturnAncestor(db, workspace, getTask(db, id)!) && taskBranchExists(workspace, id),
+  );
 }
 
 /** ADR 0242 決定2: 盤面が最後に push した head(`pr_opened` / `pr_branch_pushed` の sha)—— 収束が積み残しを比べる相手 */
@@ -632,7 +637,8 @@ function landingRootOf(
     // ADR 0370 決定1: 収束だけが、lineage が ref を読む直前に比べる —— 表示と扉の読みは比べない
     const resolved = workspace;
     const lineage = resolveTaskBranchLineage(db, resolved, task, readBase(resolved), compareBeforeLineage && (() => compareBeforeLineage(resolved)));
-    return lineage.branch ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
+    // ADR 0380 決定3: 帰り先なしは「自分が根」と別の答え —— 着地の根に数えない
+    return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
   } catch (lineageError) {
     if (isBoardDbRefusal(lineageError) || lineageError instanceof RootStopped) throw lineageError;
     return { task, outlivedForkSource: false, lineageError };

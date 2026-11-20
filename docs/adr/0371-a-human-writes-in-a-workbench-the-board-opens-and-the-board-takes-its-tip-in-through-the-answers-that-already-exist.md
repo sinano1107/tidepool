@@ -1,5 +1,7 @@
 # 人間は名前の場所に書かず、盤面が開く作業台で commit し、盤面がその tip を取り込む —— 入口は今ある回答で、sha も path も運ばない
 
+**Status 追記: 作業台の取り込みは、名前の場所へ入れた直後に作業台が自前で持つ tip の閉包の object が名前の場所で欠けも破損も無く読めて済む —— 欠ければ pack を直に入れ直し、揃わなければ名前の場所へ運ぶ段の失敗である。作業台の削除は変えない([ADR 0388](0388-carrying-into-the-named-place-is-done-only-when-the-objects-the-carried-place-holds-read-whole-there-and-later-outside-damage-is-not-guarded.md) 決定1・2、2026-11-21、issue #3222)。**
+
 **Status 追記: purely-local の封じ込めの回答は、取り込む tree を保護ブランチへ書く前に検査し、通った tip だけを取り込む。「取り込んでから検査する」は、ref を書いた後に検査するという意味ではない。Claude の組は取り込みの手順の中で隠せない形を読み、書く前に拒む。Codex の組は作業台の tip の使い捨ての checkout を検査し、検査の間に tip が動けば拒んで何も書かない(issue #3289)。**
 
 2026-11-13〜15 の wayfinder(map #3178、入口は #3158)で決定。ADR 0370 は「残る穴と根」で、人間が書いた内容を記録に入れる正規の扉が無く、
