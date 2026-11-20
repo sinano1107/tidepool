@@ -1032,14 +1032,23 @@ function taskHasLandedSql(taskRef: string): string {
            OR ${localLandingOpenOrExecutedSql(taskRef)})`;
 }
 
+/** 列が埋まっている最も近い祖先の `columns` を引く副問合せ —— 導出の祖先の項はこの1本だけ(ADR 0372 決定1)。 */
+function nearestFilledAncestorSql(parentRef: string, columns: string): string {
+  return `(WITH RECURSIVE up(id, parent_id, workspace) AS (
+              SELECT a.id, a.parent_id, a.workspace FROM tasks a WHERE a.id = ${parentRef}
+              UNION ALL SELECT a.id, a.parent_id, a.workspace FROM tasks a JOIN up ON a.id = up.parent_id WHERE up.workspace IS NULL)
+            SELECT ${columns} FROM up WHERE workspace IS NOT NULL)`;
+}
+
 /** 導出した workspace の唯一の SQL(ADR 0372 決定1 / ADR 0290 決定5): 列、列が NULL なら type を問わず列が非 NULL の
  *  最も近い祖先。どちらも無ければ NULL —— 既定への参照で、呼び手が既定を当てる。 */
 export function derivedWorkspaceSql(taskRef: string): string {
-  return `COALESCE(${taskRef}.workspace, (
-            WITH RECURSIVE up(parent_id, workspace) AS (
-              SELECT a.parent_id, a.workspace FROM tasks a WHERE a.id = ${taskRef}.parent_id
-              UNION ALL SELECT a.parent_id, a.workspace FROM tasks a JOIN up ON a.id = up.parent_id WHERE up.workspace IS NULL)
-            SELECT workspace FROM up WHERE workspace IS NOT NULL))`;
+  return `COALESCE(${taskRef}.workspace, ${nearestFilledAncestorSql(`${taskRef}.parent_id`, "workspace")})`;
+}
+
+/** 空の列の導出の出所: 列が埋まっている最も近い祖先の id と名前(ADR 0372 決定2 が event に残す出所)。無ければ undefined —— 既定から導かれる。 */
+export function nearestFilledAncestor(db: Db, parentId: string | null): { id: string; workspace: string } | undefined {
+  return db.prepare(`SELECT * FROM ${nearestFilledAncestorSql("?", "id, workspace")}`).get(parentId) as { id: string; workspace: string } | undefined;
 }
 
 /** `derivedWorkspaceSql` の TS の対 —— 行の値で引くので、まだ登録していない task にも当てられる。null は既定への参照。 */

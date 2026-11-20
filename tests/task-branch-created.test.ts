@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents, listEventsOfKinds } from "../src/events.js";
-import { completeTask, getTask, humanDecomposeTask, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
+import { completeTask, derivedWorkspace, getTask, humanDecomposeTask, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { recordTaskCheckoutTip, releaseWorkspace, resolveTaskBranchLineage, workspaceNeedsHuman } from "../src/workspace.js";
 import { api, bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, prepareAtPickup, seedTaskBranch } from "./harness.js";
 
@@ -166,6 +166,40 @@ it("別の workspace の列を持つ祖先は、task_branch_created を持って
 
   expect(git(b.path, "rev-parse", `task/${child.id}`)).toBe(git(b.path, "rev-parse", "main"));
   expect(resolveTaskBranchLineage(db, b, child)).toEqual({ branch: undefined, outlivedForkSource: false });
+  db.close();
+});
+
+it("既定の差し替え: pickup 前の未着手の木は差し替えた既定へ一緒に動く(ADR 0372 決定1)", async () => {
+  const b = await makeWorkspace("branch-created-swap-before");
+  const db = openDb(":memory:");
+  const root = work(db, "root");
+  const first = work(db, "first", { parent_id: root.id });
+  const second = work(db, "second", { parent_id: root.id });
+  expect([root, first, second].map((task) => derivedWorkspace(db, task))).toEqual([null, null, null]);
+
+  await prepareAtPickup(db, b, pickupTask(db, first, "deckhand", NOW, { workspace: b.name })!, { defaultWorkspaceName: b.name });
+
+  expect([getTask(db, root.id)!.workspace, getTask(db, first.id)!.workspace, derivedWorkspace(db, getTask(db, second.id)!)]).toEqual([b.name, b.name, b.name]);
+  db.close();
+});
+
+it("既定の差し替え: 子の pickup で固定された親は差し替え後も動かず、兄弟の木も親の workspace に導かれ、間の未着手の祖先を固定してそこから切られる(ADR 0372 決定1・3・4)", async () => {
+  const a = await makeWorkspace("branch-created-swap-a");
+  const b = await makeWorkspace("branch-created-swap-b");
+  const db = openDb(":memory:");
+  const root = work(db, "root");
+  const first = work(db, "first", { parent_id: root.id });
+  const second = work(db, "second", { parent_id: root.id });
+  const grandchild = work(db, "grandchild", { parent_id: second.id });
+  await prepareAtPickup(db, a, pickupTask(db, first, "deckhand", NOW, { workspace: a.name })!, { defaultWorkspaceName: a.name });
+
+  // 既定を b に差し替えた盤面の pickup
+  const picked = pickupTask(db, grandchild, "deckhand", NOW, { workspace: b.name })!;
+  await prepareAtPickup(db, a, picked, { defaultWorkspaceName: b.name });
+
+  expect([getTask(db, root.id)!.workspace, getTask(db, second.id)!.workspace, picked.workspace]).toEqual([a.name, a.name, a.name]);
+  expect(branchEvents(db, second.id)).toEqual([{ kind: "task_branch_created", sha: git(a.path, "rev-parse", "main"), workspace: a.name, column_filled_from: root.id }]);
+  expect(resolveTaskBranchLineage(db, a, picked).branch).toBe(`task/${second.id}`);
   db.close();
 });
 
