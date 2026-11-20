@@ -319,6 +319,7 @@ export function registerRcaReview(
  *  row naming no object (the completion row, a free-text log_decision row) gets no repair at all. The
  *  subject repairs stand whatever the parent's state. Attribution and the RCAs
  *  below stand by cause either way, never split by group.
+ *  ADR 0372 決定1: 修理子の workspace は空のまま登録し、祖先から導く。
  *
  *  Before anything is registered, every objected entry the Board call judged
  *  gets that judgment written as an `objection_attributed` event (ADR 0115
@@ -333,7 +334,7 @@ export function registerRcaReview(
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
  *  are generated as children of the objected task, same shape as layer 1's
- *  completion review (workspace inheritance included):
+ *  completion review:
  *
  *  - **self**, one per distinct worker who wrote an RCA-needing objected entry
  *    (GLOSSARY.md's Review — 当事者レビュー: "why did I make that call" only
@@ -418,7 +419,6 @@ function bundleObjections(
           parent_id: taskId,
           assignee,
           assignee_not_copied: assigneeNotCopied,
-          workspace: objected.workspace ?? undefined,
           opened_on_event_ids: group.flatMap((p) => p.objection_event_ids),
         },
         now,

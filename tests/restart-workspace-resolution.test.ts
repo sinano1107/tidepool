@@ -11,6 +11,7 @@ import {
   api,
   bootTidepool,
   checkoutOf,
+  completeViaMcp,
   defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -63,6 +64,34 @@ it("既定 workspace a・既定 agent a で pickup したタスクは、再起�
   expect(git(b.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(b.path, "branch", "--list", `task/${task.id}`)).toBe("");
   expect((await questions(t)).filter((q) => q.question_quarantine_kind === "workspace" && q.question_quarantine_value === b.name)).toEqual([]);
+});
+
+it.each(["before the first pickup", "after the child's pickup"])("a default workspace swap %s keeps an unstarted parent's tree together (#1788)", async (swap) => {
+  const a = await makeWorkspace("split-default-a");
+  const b = await makeWorkspace("split-default-b");
+  t = await bootTidepool({ workspace: a, resolveWorkspace: defaultingTo(a, b) });
+  if (swap === "before the first pickup") await api(t.baseUrl, "POST", "/api/pause", { paused: true });
+  const root = queueWork(t, "unstarted parent");
+  const child = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", title: "child", purpose: "p", completion_criteria: "c", parent_id: root.id, decompose_reason: "split the work",
+  });
+  expect(child.status).toBe(201);
+  const childId = child.json.id;
+  const completeChild = async (board: Tidepool, workspace: string, pause = false) => {
+    await vi.waitFor(() => expect(board.worker.started[0]).toMatchObject({ id: childId, workspace }));
+    if (pause) await api(board.baseUrl, "POST", "/api/pause", { paused: true });
+    expect((await completeViaMcp(board, childId)).isError ?? false).toBe(false);
+  };
+
+  if (swap === "after the child's pickup") await completeChild(t, a.name, true);
+  expect(t.worker.started.map(({ id }) => id)).toEqual(swap === "before the first pickup" ? [] : [childId]);
+  await t.stopServer();
+  t = await bootTidepool({ dir: t.dir, workspace: b, resolveWorkspace: defaultingTo(b, a) });
+  await api(t.baseUrl, "POST", "/api/pause", { paused: false });
+  if (swap === "before the first pickup") await completeChild(t, b.name);
+
+  const expected = swap === "before the first pickup" ? b : a;
+  await vi.waitFor(() => expect(t?.worker.started.at(-1)).toMatchObject({ id: root.id, workspace: expected.name }));
 });
 
 describe("再起動中断の後始末が task.workspace を解決する", () => {

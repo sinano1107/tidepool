@@ -96,7 +96,7 @@ describe("付帯子の review の pickup の埋め(ADR 0290 決定4)", () => {
     const nested = register(db, { type: "review", parent_id: child.id });
 
     for (const review of [direct, nested]) {
-      expect(pickedUp(db, review)).toEqual({ workspace: "reef", payload: { kind: "task_picked_up", workspace_from_ancestor: "reef" } });
+      expect(pickedUp(db, review)).toEqual({ workspace: "reef", payload: { kind: "task_picked_up", workspace_from_ancestor: "reef", column_filled_from: root.id } });
     }
   });
 
@@ -105,7 +105,7 @@ describe("付帯子の review の pickup の埋め(ADR 0290 決定4)", () => {
     const parent = ran(db, register(db, { type: "work" }));
     const review = register(db, { type: "review", parent_id: parent.id });
 
-    expect(pickedUp(db, review)).toEqual({ workspace: "default-ws", payload: { kind: "task_picked_up", resolved_from_default: { workspace: "default-ws" } } });
+    expect(pickedUp(db, review)).toEqual({ workspace: "default-ws", payload: { kind: "task_picked_up", resolved_from_default: { workspace: "default-ws" }, column_filled_from: "default" } });
   });
 });
 
