@@ -17,13 +17,13 @@ import { HUMAN_WEBUI } from "./harness.js";
 const at = new Date(0);
 const register = (db: Db, input: Partial<RegisterTaskInput> & Pick<RegisterTaskInput, "type">): Task =>
   registerTask(db, { title: "t", purpose: "p", completion_criteria: "c", ...input }, at, ...HUMAN_WEBUI);
-/** 列を明示した親と、その下で列が空のまま登録される修理子(REST / management MCP の `parent_id` 登録の形)。 */
+/** 列を明示した親と、その下で列が空のまま登録される修理子(異議由来の修理子は異議を受けた task の空の列を写す —— triage の `objected.workspace`)。 */
 const repairUnderReef = (db: Db) => {
   const parent = register(db, { type: "work", workspace: "reef" });
   return { parent, child: register(db, { type: "memory_repair", parent_id: parent.id }) };
 };
 
-describe("review でない子も最も近い固定済みの祖先の workspace に導かれる(ADR 0372 決定1)", () => {
+describe("review でない子も列が埋まっている最も近い祖先の workspace に導かれる(ADR 0372 決定1)", () => {
   it("derivedWorkspace は列が空の修理子に祖先の名前を返す", () => {
     const db = openDb(":memory:");
     const { child } = repairUnderReef(db);

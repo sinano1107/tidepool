@@ -111,6 +111,7 @@ import { isSettled } from "./task-status.js";
 import {
   ancestorsSql,
   carriesReadOnly,
+  derivedWorkspaceSql,
   getTask,
   holdsFirstCaptures,
   interviewRole,
@@ -3191,7 +3192,7 @@ function undeliveredMergeBacks(
   const rows = db
     .prepare(
       `${subtreeSql("?")} SELECT id FROM tasks
-        WHERE type = 'work' AND status = 'done' AND parent_id IS NOT NULL AND COALESCE(workspace, ?) = ?
+        WHERE type = 'work' AND status = 'done' AND parent_id IS NOT NULL AND COALESCE(${derivedWorkspaceSql("tasks")}, ?) = ?
           AND (? IS NULL OR id IN (SELECT id FROM subtree))
         ORDER BY rowid DESC`,
     )
@@ -3225,7 +3226,7 @@ export async function redoMergeBacks(
   await retry?.firstHalf();
   const running = db
     .prepare(
-      `SELECT 1 FROM tasks WHERE COALESCE(workspace, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
+      `SELECT 1 FROM tasks WHERE COALESCE(${derivedWorkspaceSql("tasks")}, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
     )
     .get(defaultWorkspaceName ?? null, workspace.name);
   if (running) {

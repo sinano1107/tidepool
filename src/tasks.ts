@@ -1440,7 +1440,7 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
       )
       .run({ id: task.id, human: HUMAN_ACTOR_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
-    // ADR 0290 決定4 / ADR 0372 決定1: 空の workspace は、最も近い固定済みの祖先 → 既定の順で埋める
+    // ADR 0290 決定4 / ADR 0372 決定1: 空の workspace は、列が埋まっている最も近い祖先 → 既定の順で埋める
     const ancestorWorkspace = derivedWorkspace(db, { ...task, workspace: null });
     const filled: ResolvedFromDefault = {};
     for (const column of ["assignee", "workspace"] as const) {
@@ -4046,7 +4046,7 @@ function gitHubReadingSql(taskRef: string): string {
 }
 
 /** task が依存する場所の名前(ADR 0368 決定3・4 / ADR 0273 追記)。
- *  停止の門はどの task も `workspace` 列(無ければ `@defaultWorkspaceName`)を数え、受験者は対象の面接室(root id)を足す。
+ *  停止の門はどの task も導出した workspace(`derivedWorkspaceSql`、無ければ `@defaultWorkspaceName`)を数え、受験者は対象の面接室(root id)を足す。
  *  interview の root と review の親を review の鎖で辿って着く root には、その root の面接室と他に読める面接室
  *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。
  *  `pickupGate` と修復回答が検査するのは実際に開く場所(ADR 0329 追記 決定7)。受験者の実環境の repo は開かない。
