@@ -1,5 +1,7 @@
 # 人間は盤面が登録した root を直接 cancel できるが、編集はできず、盤面名義の付帯子には直接 cancel も届かない
 
+**Status 追記: 決定3 の範囲は変わらないが、RCA review を人間が倒す経路が1本増えた —— 面接室の Quarantine で、読む出題の head が欠けて走れない RCA は、その Quarantine への回答で倒す(盤面が試して失敗していなくてよい —— Quarantine の間は走らず失敗もしないため)。倒した RCA は abandon と同じく findings の無いまま第2回の帰責へ進む([ADR 0385](0385-a-room-quarantine-names-each-openers-reachable-exit-and-cancels-an-rca-that-cannot-read-its-head-through-an-answer-derived-at-display.md) 決定2、2026-11-20、issue #3159)。**
+
 **Status 追記: 盤面の外で閉じられた PR の根の付帯子には、人間の直接 cancel が届く —— 根が死んだ時点で「規則が要求する入力」ではなくなる(ADR 0265 決定6)**
 
 2026-10-05 の grilling(issue #1348、発端は #1237)で決定。#130 は Edit と直接 cancel の範囲を「人間が登録した task」に

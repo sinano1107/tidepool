@@ -15,6 +15,7 @@ Status 追記)が面接室から欠けると、面接室の名前ごと —— r
 2. **面接室の Quarantine に、項が落ちた RCA を cancel する回答を足す。** cancel するのは回答の時点で項が落ちている RCA だけで、1つも
    無ければ回答を拒み、拒否文は落ちている他の項を名指す。受験者や root には既に人間が辿れる出口があり、範囲を「項が落ちた開く task
    全部」にすると、1つの回答で Interview 全体が倒れうる。
+   倒した RCA は、盤面が試して失敗した RCA の abandon と同じく、findings の無いまま第2回の帰責へ進む(ADR 0198 決定3 / ADR 0115)。
 3. **cancel は回答の受理と同じ transaction で行う。** 項が落ちた RCA の項を外して残りの項を撃ち、すべて通ったときだけ、RCA の cancel と
    解除を一緒に行う。cancel の event の理由には、欠けていた head と答えた Quarantine の question を盤面が書く。
 4. **回答で倒す RCA には、直接 cancel と同じ門を当てる。** 倒す範囲に開いた failure question、または別の資源の Quarantine があれば回答を
