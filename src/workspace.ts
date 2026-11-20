@@ -112,6 +112,7 @@ import { isSettled } from "./task-status.js";
 import {
   ancestorsSql,
   carriesReadOnly,
+  derivedWorkspaceSql,
   fillEmptyWorkspace,
   getTask,
   hasTaskBranch,
@@ -121,6 +122,7 @@ import {
   interviewRootIdOf,
   issueRefPlaceholder,
   keepsCheckoutAsRecord,
+  nearestFilledAncestor,
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
@@ -1734,20 +1736,19 @@ function ancestorsFromTop(db: Db, task: Pick<Task, "parent_id">): Task[] {
 
 /** ADR 0372 決定3: 自分のタスクブランチを切る task の pickup は、同じ workspace に導出される未決着の work の祖先のうち
  *  `task_branch_created` を持たないものを上から固定する —— 空の列に workspace を書き、祖先自身の系譜から ref を作り、event を残す。
- *  導出は「列 → 列が埋まった最も近い祖先 → 既定」。review の pickup は lineage に透明なので固定しない。
- *  人間担当の祖先は固定しない(ADR 0374 帰結「実装の順」)。 */
+ *  導出は「列 → 列が埋まった最も近い祖先 → 既定」(`nearestFilledAncestor`、上で固定した祖先の列もその場で読む)。review の pickup は
+ *  lineage に透明なので固定しない。人間担当の祖先は固定しない(ADR 0374 帰結「実装の順」)。 */
 function fixUnstartedAncestors(db: Db, workspace: WorkspaceConfig, task: Task, defaultWorkspaceName: string | undefined, now: Date): void {
   if (transparentToLineage(task.type)) return;
-  let inherited: { name: string; from: string } | undefined;
   for (const ancestor of ancestorsFromTop(db, task)) {
-    const name = ancestor.workspace ?? inherited?.name ?? defaultWorkspaceName;
+    const source = ancestor.workspace === null ? nearestFilledAncestor(db, ancestor.parent_id) : undefined;
+    const name = ancestor.workspace ?? source?.workspace ?? defaultWorkspaceName;
     const unfixed =
       name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) &&
       // ADR 0374 帰結「実装の順」: 人間担当の祖先を今固定すると子の成果が task/<H> に集まり、今の完了の扉は何も撃たないので #3293 まで取り残される
       ancestor.assignee !== HUMAN_ACTOR_ID &&
       !hasTaskBranch(db, ancestor.id);
-    if (unfixed) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, ancestor.workspace === null ? (inherited?.from ?? "default") : undefined);
-    if (ancestor.workspace !== null || unfixed) inherited = { name: name!, from: ancestor.id };
+    if (unfixed) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, ancestor.workspace === null ? (source?.id ?? "default") : undefined);
   }
 }
 
@@ -3243,7 +3244,7 @@ function undeliveredMergeBacks(
   const rows = db
     .prepare(
       `${subtreeSql("?")} SELECT id FROM tasks
-        WHERE type = 'work' AND status = 'done' AND parent_id IS NOT NULL AND COALESCE(workspace, ?) = ?
+        WHERE type = 'work' AND status = 'done' AND parent_id IS NOT NULL AND COALESCE(${derivedWorkspaceSql("tasks")}, ?) = ?
           AND (? IS NULL OR id IN (SELECT id FROM subtree))
         ORDER BY rowid DESC`,
     )
@@ -3278,7 +3279,7 @@ export async function redoMergeBacks(
   await retry?.firstHalf();
   const running = db
     .prepare(
-      `SELECT 1 FROM tasks WHERE COALESCE(workspace, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
+      `SELECT 1 FROM tasks WHERE COALESCE(${derivedWorkspaceSql("tasks")}, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
     )
     .get(defaultWorkspaceName ?? null, workspace.name);
   if (running) {

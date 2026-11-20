@@ -36,7 +36,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryAgent, routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, type HandoffDoc, humanStopReason, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, derivedWorkspace, getTask, type HandoffDoc, humanStopReason, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, logRow, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 
@@ -1056,7 +1056,7 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   };
 }
 
-/** worker の verb の Memory のスコープ = task の workspace に固定。listLog と同じ解決で、null の workspace は盤面の
+/** worker の verb の Memory のスコープ = task の workspace に固定。走った task の列(pickup が埋める)、null なら盤面の
  *  既定を継ぐ。worker の verb(read verb も同じ helper を通るので込みで)と Board call の起草は null に解決されるなら
  *  拒否する(issue #623)。meta-review の専用 verb はここを通らず引数の scope を使う(ADR 0122 決定1)。 */
 export function memoryScope(board: { workspace?: { name: string } }, task: Pick<Task, "workspace">): string {
@@ -2251,9 +2251,11 @@ function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaRevi
     const spawned = session?.spawned;
     const completed = session?.completed?.payload;
     const episode = episodes.get(id);
+    const task = getTask(db, entry.task_id);
     return [{
       task_id: entry.task_id,
-      workspace: getTask(db, entry.task_id)?.workspace ?? null,
+      // 人間の分解の判断は pickup 前の task にも付き、異議の帰責を受ける —— 空の列は導出で読む(ADR 0372 決定1)
+      workspace: task ? derivedWorkspace(db, task) : null,
       agent: spawned?.actor_id ?? null,
       worker_spawned_event_id: spawned?.id ?? null,
       decision_event_id: id,

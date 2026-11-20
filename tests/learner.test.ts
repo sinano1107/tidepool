@@ -609,6 +609,18 @@ it.each(REPAIR_TYPES)("%s の pickup も work と同じく shadow 行を1件残�
   expect(shadowRows(b)).toEqual([{ task_id: repair.id, recommended: cellOf(opus), actual: cellOf(opus), source: opus.source, basis: "prior", candidates: 2 }]);
 });
 
+it("列が空の修理子の段の中の選択は、最も近い固定済みの祖先の workspace の観測を数える(ADR 0372 決定1)", async () => {
+  const b = scheduledBoard({ candidates: () => [opus, sol] });
+  const parent = pickupTask(b.db, registerTask(b.db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, b.clock.now(), ...HUMAN_WEBUI), WORKER, b.clock.now())!;
+  recordSpawn(b, parent.id, { ...cellOf(opus), tier_id: opus.tier_id });
+  accept(b, parent.id);
+  const repair = registerTask(b.db, { type: "memory_repair", title: "repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, b.clock.now(), ...HUMAN_WEBUI);
+  await b.clock.advance(HOUR);
+
+  const [row] = listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.filter((r) => r.task_id === repair.id);
+  expect(row?.recommended_record.workspace).toEqual({ accepted: 1, rejected: 0 });
+});
+
 it.each(REPAIR_TYPES)("昇格中の %s は work と同じく学習器の選択で走り出所は learner、shadow 行を1件残す(ADR 0272 決定4 の追記 / ADR 0279 決定4)", async (type) => {
   const b = scheduledBoard({ openaiUsage: healthyOpenai, candidates: () => [opus, sol] });
   promote(b);
