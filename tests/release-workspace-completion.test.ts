@@ -815,6 +815,30 @@ it("入れ直しの pack を index-pack --strict が落とせば完了の門は�
   }
 });
 
+/** worker の自前の store の blob を壊す: zlib でない byte にするか、別の object の中身をその名で置く。 */
+const workerCopyDamages = {
+  corrupt: () => Buffer.from("not zlib"),
+  renamed: (checkout: string) => readFileSync(looseObject(checkout, execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: checkout, input: "another object\n" }).toString().trim())),
+} as const;
+
+it.each(["corrupt", "renamed"] as const)("入れ直しに要る blob の worker の写しが %s なら、完了の門は名前の場所でなく worker の repo の故障で拒む(ADR 0388 決定2 / ADR 0364 決定2)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    // 入れ直しに要る object は門の pack が除外した —— ADR 0364 の index-pack を通っていない
+    const blob = damagedHeldByWorker(db, place, task, ws);
+    const bytes = workerCopyDamages[damage](place.path);
+    rmSync(looseObject(place.path, blob));
+    writeFileSync(looseObject(place.path, blob), bytes);
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+
+    expect(() => gateFetch(db, place, task)).toThrow(expect.objectContaining({ constructor: CheckoutUnreadableError, message: expect.stringContaining(place.path) }));
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+  } finally {
+    db.close();
+  }
+});
+
 it("worker が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、完了の門は worker の repo の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const { db, task, ws, place } = await pickedUpSession("work", (named) => {
     mkdirSync(join(named.path, "sub"));

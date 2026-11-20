@@ -907,6 +907,7 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   };
   const first = unreadable();
   if (first === undefined) return;
+  verifyOwnObjects(from, own, ids, input);
   let reinsertFailure: unknown;
   try {
     reinsertOwnObjects(objects, format, own, ids.join("\n"));
@@ -919,6 +920,28 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   if (last === undefined) return;
   const why = reinsertFailure === undefined ? "" : `, and reinserting it failed: ${reinsertFailure instanceof Error ? reinsertFailure.message : String(reinsertFailure)}`;
   throw fail(`${unreadableIds(reader, ids, input, last).join(", ") || "an object it holds"} is missing or corrupt there${why}`, reinsertFailure ?? last);
+}
+
+/** ADR 0388 決定2 / ADR 0364 決定2: 入れ直しに要る object は門の pack が除外したもので、ADR 0364 の `index-pack --strict` を通っていない ——
+ *  入れ直しの手は写しと名前の場所の両方を読むので、どちらの byte で落ちたかを言えない。先に写しの中だけで pack に組み(読めない byte で
+ *  落ちる)、中身から名前を作り直して集合の名前が揃うかを見る(別の中身を置いた名前が落ちる)。どちらも `from` の故障で、この後の入れ直しの
+ *  失敗は名前の場所の側。写しの tmp の容量切れは host の失敗。 */
+function verifyOwnObjects(from: UntrustedSubject, own: string, ids: string[], input: string): void {
+  const deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS;
+  let packed: Set<string>;
+  try {
+    const base = join(own, "own");
+    const pack = `${base}-${workerRepoGitUntil(deadline, own, ["pack-objects", "--quiet", base], input)}`;
+    // pack-objects の idx は写しの loose の名前を信じる —— 捨てて中身から作り直す。写しは借りを外してあるので --strict の繋がりは見ない
+    for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
+    workerRepoGitUntil(deadline, own, ["index-pack", `${pack}.pack`]);
+    packed = new Set(workerRepoGitUntil(deadline, own, ["verify-pack", "-v", `${pack}.idx`]).split("\n").map((line) => line.split(" ")[0]!));
+  } catch (cause) {
+    if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
+    throw asUntrustedFailure(from, cause);
+  }
+  const renamed = ids.filter((id) => !packed.has(id));
+  if (renamed.length > 0) throw unreadable(from, `objects ${renamed.join(", ")} hold contents that do not hash to their names`);
 }
 
 /** 名前の場所で読めない object: `cat-file --batch-check` が missing と言うもの(欠けと zlib の破損)と、中身を読んで落ちた手の stderr が
