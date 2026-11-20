@@ -7,7 +7,6 @@ import {
   api,
   bootTidepool,
   GIT_FIXTURE_TEST_TIMEOUT,
-  git,
   HOUR,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
@@ -15,6 +14,7 @@ import {
   nextPoll,
   questions,
   queueWork,
+  seedTaskBranch,
   servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
@@ -59,7 +59,7 @@ it("issue-backed の親の文面の読みで投げても、同じ poll で後ろ
   const workspace = await makeWorkspace("tidepool");
   t = await bootTidepool({ workspace });
   const parent = issueBacked(49);
-  git(workspace.path, "branch", `task/${parent.id}`);
+  seedTaskBranch(t.db, workspace, parent.id);
   const [child] = humanDecomposeTaskViaWebui(t.db, parent, {
     reason: "split off the implementation",
     children: [{ title: "implement", purpose: "implement the plan", completion_criteria: "implemented" }],

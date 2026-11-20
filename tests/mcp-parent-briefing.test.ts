@@ -5,16 +5,17 @@ import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { appendEvent } from "../src/events.js";
 import { IssueGoneError } from "../src/github.js";
 import { logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { definitionPart, FakeAttributionClient, recordPrompt } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, mcpClient, nextPoll, QUIET_EXIT, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, mcpClient, nextPoll, QUIET_EXIT, seedTaskBranch, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-function issueParentChild(path: string) {
+function issueParentChild(workspace: WorkspaceConfig) {
   const parent = registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 49 }, t.clock.now(), ...HUMAN_WEBUI);
-  git(path, "branch", `task/${parent.id}`);
+  seedTaskBranch(t.db, workspace, parent.id);
   const [child] = humanDecomposeTaskViaWebui(t.db, parent, {
     reason: "split off the implementation",
     children: [{ title: "implement", purpose: "implement the plan", completion_criteria: "implemented" }],
@@ -54,7 +55,7 @@ it("work 子の parent は pickup 時の issue の3欄と open 状態を保持�
   const workspace = await makeWorkspace("tidepool");
   t = await bootTidepool({ workspace });
   t.github.scriptIssue(49, { title: "parent at pickup", body: "original plan", comments: ["pickup comment"] });
-  const { parent, child } = issueParentChild(workspace.path);
+  const { parent, child } = issueParentChild(workspace);
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toContain(child.id);
   t.github.scriptIssue(49, { title: "edited parent", body: "different plan", comments: ["later comment"] });
@@ -73,7 +74,7 @@ it.each(["closed", "not_found"] as const)("pickup 時の親の issue が %s で�
   t = await bootTidepool({ workspace });
   t.github.scriptIssue(49, { title: "closed parent", body: "preserved plan", comments: ["final comment"], state: "closed" });
   if (state === "not_found") t.github.scriptIssueFailure(new IssueGoneError({ number: 49 }, state));
-  const { parent, child } = issueParentChild(workspace.path);
+  const { parent, child } = issueParentChild(workspace);
   await t.clock.advance(HOUR);
 
   const briefing = (await context(child.id)).parent;
@@ -93,7 +94,7 @@ it.each(["closed", "not_found"] as const)("pickup 時の親の issue が %s で�
 it("親の issue の一時失敗は子の pickup を cycle skip し、10分未満なら question 無しで次の poll に再試行する(ADR 0321 / ADR 0328)", async () => {
   const workspace = await makeWorkspace("tidepool");
   t = await bootTidepool({ workspace });
-  const { child } = issueParentChild(workspace.path);
+  const { child } = issueParentChild(workspace);
   t.github.scriptIssueFailure(new Error("GitHub is down"));
   await t.clock.advance(HOUR);
   // 最初の失敗から10分未満の2回目の失敗も question を立てない(ADR 0328 決定3)

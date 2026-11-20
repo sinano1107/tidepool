@@ -23,6 +23,7 @@ import {
   makeWorkspace,
   prepareAtPickup,
   quarantineQuestion,
+  seedTaskBranch,
   sessionId,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -36,7 +37,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 /** 未決着の親の work を登録し、そのタスクブランチを main から立てる —— 子はそこへ merge back する。 */
 function registerParentWithBranch(db: Db, ws: WorkspaceConfig, now: Date): string {
   const { id } = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
-  git(ws.path, "branch", `task/${id}`, "main");
+  seedTaskBranch(db, ws, id, "main");
   return id;
 }
 
