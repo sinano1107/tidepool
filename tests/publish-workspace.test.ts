@@ -532,9 +532,10 @@ describe("publishWorkspace: 3つの拒否(ADR 0066 決定5 / issue #285)", () =>
     git(checkout, "remote", "add", "origin", "https://github.com/sinano1107/out-of-band.git");
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(
-      publishWorkspace({ name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" }, deps),
-    ).rejects.toThrow(CheckoutHasOriginError);
+    const refused = publishWorkspace({ name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" }, deps);
+    await expect(refused).rejects.toThrow(CheckoutHasOriginError);
+    // spec #3273 text A12(H12 → F4): 手で直せとだけ言わず、ref を動かさない直し方を言う
+    await expect(refused).rejects.toThrow(`. In ${checkout}, run \`git config --remove-section remote.origin\`.`);
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(git(checkout, "remote", "get-url", "origin")).toBe(

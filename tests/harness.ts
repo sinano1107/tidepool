@@ -61,6 +61,7 @@ import {
   completeIntegrationReview,
   completeTask,
   decomposeTask,
+  fillEmptyWorkspace,
   getTask,
   humanDecomposeTask,
   interviewRoomPath,
@@ -100,7 +101,6 @@ import {
   releaseWorkspace,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
-  retakeRefBaselines,
   taskRunPlace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -867,6 +867,21 @@ export async function initWorkspaceCheckout(path: string, name: string): Promise
   return { name, path };
 }
 
+/** setup のみ: 盤面がタスクブランチを作った姿(ADR 0372 決定2)—— `task/<id>` を `from`(既定は HEAD)から切り、空の列に workspace の名前を書き、
+ *  `task_branch_created` を残す。系譜は event と列で祖先を数える(決定4)ので、手で `git branch` しただけの祖先は数えない。 */
+export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string, from = "HEAD"): void {
+  git(workspace.path, "branch", `task/${taskId}`, from);
+  const sha = git(workspace.path, "rev-parse", `task/${taskId}`);
+  fillEmptyWorkspace(db, taskId, workspace.name);
+  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha, workspace: workspace.name }, at: new Date(0) });
+}
+
+/** setup のみ: `seedTaskBranch` で置いたタスクブランチを checkout する。 */
+export function checkoutTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string, from = "HEAD"): void {
+  seedTaskBranch(db, workspace, taskId, from);
+  git(workspace.path, "checkout", `task/${taskId}`);
+}
+
 /** pickup の準備(ADR 0356 決定2): 名前の場所(Interview の root と受験者は面接室)を準備し、task の checkout を開いて走る場所を返す ——
  *  worker の書き込みは返った `path` に、解放は返った場所に当てる。この session の pickup の event が無ければ(未 pickup、または前の
  *  session の checkout が既に開いている再開)1つ刻む —— 番地の鍵は pickup の event id。基点は呼び手ごとの使い捨て dir。
@@ -881,9 +896,11 @@ export async function prepareAtPickup(
   if (!latestEventOfTask(db, task.id, "task_picked_up") || taskCheckoutPath(db, task.id) !== undefined) {
     appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: { kind: "task_picked_up" }, at: now });
   }
+  // pickup の埋め(ADR 0233 決定2)と同じく、空の列は走る場所の名前になる —— 系譜は書かれた列で祖先を数える(ADR 0372 決定4)
+  fillEmptyWorkspace(db, task.id, workspace.name);
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   // 既定は registry の無い盤面(最初の撮りの確認は掛からない、ADR 0373 決定13)
-  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now, resolveRegistered: board.resolveRegistered });
+  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
 
@@ -942,11 +959,20 @@ function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
   return reads.length > 0 ? { reads } : {};
 }
 
-/** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。撮りは受理の撮り直しの口を借りるので、仮の行を置いてから撮り直す。 */
+/** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。行は基準と同じ綴り(HEAD は指し先、refname 順)で書く。 */
 function standInFirstCapture(db: Db, place: WorkspaceConfig): void {
-  if (holdsBaseline(db, place.name)) return;
-  db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, 'stand-in') ON CONFLICT(name) DO UPDATE SET ref_snapshot = 'stand-in'").run(place.name);
-  retakeRefBaselines(db, [place]);
+  // repo の無い場所は撮らない(準備の最初の撮りと同じ)
+  if (holdsBaseline(db, place.name) || !existsSync(join(place.path, ".git"))) return;
+  let head: string;
+  try {
+    head = `symref=${git(place.path, "symbolic-ref", "-q", "HEAD")}`;
+  } catch (err) {
+    // `symbolic-ref -q` の 1 は detached —— ほかは道具の失敗(盤面の headValue と同じ)
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
+    head = git(place.path, "rev-parse", "HEAD");
+  }
+  const refs = git(place.path, "for-each-ref", "--format=%(if)%(symref)%(then)symref=%(symref)%(else)%(objectname)%(end) %(refname)");
+  db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot").run(place.name, `${head} HEAD${refs && `\n${refs}`}`);
 }
 
 /** 準備が名前の場所に立てる task branch(記録、ADR 0360 決定1)の代わり —— repo でなければ空の commit 1つの repo にしてから、HEAD に立てる。
@@ -1155,11 +1181,11 @@ export async function closedRootTree(
   const workspace = await makeWorkspace(name);
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
-  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  checkoutTaskBranch(db, workspace, root.id);
   let objected = root;
   if (decomposed) {
     [objected] = decomposeTaskViaWorker(db, root, { reason: "split", children: [{ title: "part", purpose: "p", completion_criteria: "c" }] }, "deckhand", now) as [Task];
-    git(workspace.path, "checkout", "-b", `task/${objected.id}`);
+    checkoutTaskBranch(db, workspace, objected.id, `task/${root.id}`);
     commitWork(workspace.path, "part.txt", "part\n");
     git(workspace.path, "checkout", `task/${root.id}`);
     git(workspace.path, "merge", "--no-edit", `task/${objected.id}`);

@@ -24,7 +24,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -44,7 +44,7 @@ async function board(name = "intake") {
   const ws = await makeWorkspace(name);
   const base = await tempDir("tidepool-workbenches-");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
-  git(ws.path, "branch", `task/${parent.id}`, "main");
+  seedTaskBranch(db, ws, parent.id, "main");
   const pending = await taskWithCommit(db, clock, ws, "pending.txt");
   const open = () => openHumanContentWorkbench(db, ws, base, CALLER, clock.now(), { resolveRegistered: undefined });
   const workbench = () => realpathSync(workbenchPath(base, { workspace: ws.name }));

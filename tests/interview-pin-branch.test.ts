@@ -292,6 +292,19 @@ it("受験者の fork 元は出題の head で、pickup が受験者のタスク
   db.close();
 });
 
+it("Interview の root と受験者の task_branch_created は、面接室で切った作成時の sha と、面接室でなく実環境の名前を残す(ADR 0372 決定2 / ADR 0273 決定8)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, head, examinees, base } = await posedInRoom(db);
+  const [first] = examinees as [Task];
+
+  await pickUp(db, first, room, base);
+
+  const created = (taskId: string) => listEvents(db, taskId).filter((e) => e.kind === "task_branch_created").map((e) => e.payload);
+  expect(created(root.id)).toEqual([{ kind: "task_branch_created", sha: git(room.path, "rev-parse", "main"), workspace: workspace.name }]);
+  expect(created(first.id)).toEqual([{ kind: "task_branch_created", sha: head, workspace: workspace.name }]);
+  db.close();
+});
+
 it("出題の写しと root の解放の間で盤面が落ちても、後始末の再実行は普通の解放で、head は面接室で引けたまま受験者の pickup が引ける(ADR 0356 決定6)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, place } = await pickedRoot(db, "pose-crash-real");
@@ -851,15 +864,11 @@ const looseObject = (room: WorkspaceConfig, oid: string) => join(room.path, ".gi
 /** 面接室から loose object を1つ消す。 */
 const dropObject = (room: WorkspaceConfig, oid: string) => rmSync(looseObject(room, oid));
 
-/** 面接室から commit の keep-around と loose object を消す。戻す関数を返す。 */
+/** 面接室から commit の loose object を消す(keep-around の ref は残す —— ref を消せば受理の比較が先にそれを名指す、ADR 0373 決定7)。戻す関数を返す。 */
 function dropFromRoom(room: WorkspaceConfig, sha: string): () => void {
   const saved = readFileSync(looseObject(room, sha));
-  git(room.path, "update-ref", "-d", `refs/keep-around/${sha}`);
   dropObject(room, sha);
-  return () => {
-    writeFileSync(looseObject(room, sha), saved);
-    git(room.path, "update-ref", `refs/keep-around/${sha}`, sha);
-  };
+  return () => writeFileSync(looseObject(room, sha), saved);
 }
 
 it("RCA が読む却下した監査の出題の head が面接室から消えると、RCA の pickup の門と面接室の名前への回答の両方がその head を名指して面接室の名前(root id)で止まり、戻すと回答が受理されて RCA の準備が通る(issue #3136 / ADR 0329 決定4 / ADR 0361 決定1)", async () => {

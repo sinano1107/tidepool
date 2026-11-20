@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
+import type { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { quarantineStops } from "../src/quarantine.js";
@@ -12,7 +13,7 @@ import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pic
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
-import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, seedTaskBranch, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 // ADR 0369 決定1〜3・6: 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理の検査がやり直す。
 
@@ -28,7 +29,7 @@ async function sessionWithWork(name: string, { parent = false, wip = true, type 
   const ws = await makeWorkspace(name);
   const spec = { purpose: "why", completion_criteria: "done", workspace: ws.name } as const;
   const parentId = parent ? registerTask(db, { ...spec, type: "work", title: "parent" }, clock.now(), ...HUMAN_WEBUI).id : undefined;
-  if (parentId) git(ws.path, "branch", `task/${parentId}`, "main");
+  if (parentId) seedTaskBranch(db, ws, parentId, "main");
   const registered = registerTask(db, { ...spec, type, title: "owed", parent_id: parentId }, clock.now(), ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   const place = await prepareAtPickup(db, ws, task, { now: clock.now() });
@@ -56,9 +57,9 @@ async function tearDown(s: Pick<Session, "db" | "clock" | "slot" | "deps" | "tas
 }
 
 /** 開いている workspace の Quarantine に人間が答える(回答の verb と、その検査)。 */
-function answerQuarantine(s: Pick<Session, "db" | "clock" | "resolve" | "ws"> & { workspacesDir?: string }, name = s.ws.name, answer = "repaired by hand") {
+function answerQuarantine(s: Pick<Session, "db" | "clock" | "resolve" | "ws"> & { workspacesDir?: string; githubAuth?: GitHubAuth }, name = s.ws.name, answer = "repaired by hand") {
   const question = quarantineQuestion(s.db, "workspace", name)!;
-  const checks = quarantineChecks({ db: s.db, resolveWorkspace: s.resolve, clock: s.clock, workspacesDir: s.workspacesDir });
+  const checks = quarantineChecks({ db: s.db, resolveWorkspace: s.resolve, clock: s.clock, workspacesDir: s.workspacesDir, githubAuth: s.githubAuth });
   return submitAnswer({ db: s.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: checks }, question, [answer], undefined, () => s.clock.now(), "webui");
 }
 
@@ -164,12 +165,12 @@ it("門の掛からない解放の基準の行は、読み返した値でなく�
 const nextPickup = (s: Session) =>
   prepareAtPickup(s.db, s.ws, registerTask(s.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done", workspace: s.ws.name }, s.clock.now(), ...HUMAN_WEBUI), { now: s.clock.now() });
 
-it("やり直しがまだ名前の場所の事情で落ちれば、回答は理由つきで拒まれ、question も checkout も残り、基準は撮り直されない(ADR 0369 決定3)", async () => {
+// 旧: 基準が撮り直されないことも、Quarantine の間に作った branch を次の pickup が名指すことで確かめた。ADR 0373 決定1 の後は受理が撮り直すことは無い
+it("やり直しがまだ名前の場所の事情で落ちれば、回答は理由つきで拒まれ、question も checkout も残る(ADR 0369 決定3)", async () => {
   const s = await sessionWithWork("owed-still-broken");
   escalateTask(s.db, s.task, ESCALATION, "deckhand", s.clock.now(), "worker");
   breakNamedPlace(s, "broken");
   await tearDown(s);
-  git(s.ws.path, "branch", "moved-by-hand", "main");
 
   const answer = answerQuarantine(s);
 
@@ -178,7 +179,6 @@ it("やり直しがまだ名前の場所の事情で落ちれば、回答は理�
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
   expect(readFileSync(join(s.checkout, "wip.txt"), "utf8")).toBe("wip\n");
   expect(released(s.db, s.task.id)).toEqual([]);
-  await expect(nextPickup(s)).rejects.toThrow("refs/heads/moved-by-hand");
 });
 
 it("やり直しが worker の repo の故障で落ちれば、task の失敗にして回答は通る(ADR 0369 決定3 / ADR 0356 決定2)", async () => {
@@ -214,15 +214,20 @@ function moveTaskBranch(s: Session, how: "on top" | "unreachable"): void {
   git(s.ws.path, "switch", "--quiet", "main");
 }
 
-it.each(["unmoved", "on top"] as const)("門を通った完了の後始末が drift で飛んでも、回答は checkout を消し、子の merge back が届く(タスクブランチ=%s、ADR 0369 決定1・3)", async (moved) => {
+// 旧: Quarantine の間に人間が門の tip の上へ積んだタスクブランチも、受理がそのまま運んだ。ADR 0373 決定1 の後は `repaired by hand` が拒み、`restore the baseline` が門の tip へ戻してから運ぶ
+it.each(["unmoved", "on top"] as const)("門を通った完了の後始末が drift で飛んでも、回答は checkout を消し、子の merge back が届く(タスクブランチ=%s、ADR 0369 決定1・3 / ADR 0373 決定1)", async (moved) => {
   const s = await sessionWithWork(`owed-completed-${moved.replace(" ", "-")}`, { parent: true, wip: false });
   completeThroughGate(s);
   const repair = breakNamedPlace(s, "drift");
   await tearDown(s);
   repair();
-  if (moved === "on top") moveTaskBranch(s, moved);
+  if (moved === "on top") {
+    moveTaskBranch(s, moved);
+    await expect(answerQuarantine(s)).rejects.toThrow(`refs/heads/${s.branch}. The board does not accept moved refs.`);
+    expect(existsSync(s.checkout)).toBe(true);
+  }
 
-  await answerQuarantine(s);
+  await answerQuarantine(s, s.ws.name, moved === "on top" ? "restore the baseline" : "repaired by hand");
 
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeUndefined();
   expect(released(s.db, s.task.id)).toEqual([{ kind: "task_checkout_released", path: s.checkout }]);
@@ -230,33 +235,50 @@ it.each(["unmoved", "on top"] as const)("門を通った完了の後始末が dr
   expect(git(s.ws.path, "show", `${s.parentBranch}:work.txt`)).toBe("work");
 });
 
-it("門を通った完了の後始末が drift で飛び、Quarantine の間にタスクブランチが門の tip を含まない所へ動けば、回答は両方の sha を示して拒まれ、checkout も基準も残る(ADR 0369 決定3)", async () => {
+it.each(["repaired by hand", "restore the baseline"])("書き戻しの後(後半の fetch の間)に動いた ref は、`%s` でも merge back のやり直しの前の2回目の比較が B2 で拒む —— 子の merge back は届かない(ADR 0373 決定7、pin B10)", async (text) => {
+  const s = await sessionWithWork(`owed-moved-after-write-back-${text.split(" ")[0]}`, { parent: true, wip: false });
+  completeThroughGate(s);
+  const repair = breakNamedPlace(s, "drift");
+  await tearDown(s);
+  repair();
+  const parentTip = git(s.ws.path, "rev-parse", s.parentBranch);
+  // 後半の fetch は token を待つ —— 書き戻しの後、やり直しの前に人間が branch を作る
+  const githubAuth = { ensureToken: async () => void git(s.ws.path, "branch", "moved-after-the-write-back"), env: () => process.env } as unknown as GitHubAuth;
+
+  await expect(answerQuarantine({ ...s, githubAuth }, s.ws.name, text)).rejects.toThrow(
+    new RegExp(`refs changed since the board's baseline — now: \\S+ refs/heads/moved-after-the-write-back\\. The board does not accept moved refs\\.`),
+  );
+
+  expect(git(s.ws.path, "rev-parse", s.parentBranch)).toBe(parentTip);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+});
+
+// 旧: Quarantine の間に動かした —— ADR 0373 決定7 の後は1回目の比較が先に拒むので、やり直しの検査に届くのは1回目の比較の後に動いた ref だけ
+it("門を通った完了の後始末が drift で飛び、回答の検査の間(後半の fetch)にタスクブランチが門の tip を含まない所へ動けば、やり直しが両方の sha を示して拒み、checkout も残る(ADR 0369 決定3)", async () => {
   const s = await sessionWithWork("owed-completed-unreachable", { parent: true, wip: false });
   const gateTip = completeThroughGate(s);
   const repair = breakNamedPlace(s, "drift");
   await tearDown(s);
   repair();
-  moveTaskBranch(s, "unreachable");
-  git(s.ws.path, "branch", "moved-by-hand", "main");
+  const githubAuth = { ensureToken: async () => moveTaskBranch(s, "unreachable"), env: () => process.env } as unknown as GitHubAuth;
 
-  const answer = answerQuarantine(s);
+  const answer = answerQuarantine({ ...s, githubAuth });
 
   await expect(answer).rejects.toThrow(DomainError);
   await expect(answer).rejects.toThrow(`refs changed out of band — was: ${gateTip} refs/heads/${s.branch}, now: ${git(s.ws.path, "rev-parse", "main")} refs/heads/${s.branch}`);
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
   expect(existsSync(s.checkout)).toBe(true);
   expect(released(s.db, s.task.id)).toEqual([]);
-  await expect(nextPickup(s)).rejects.toThrow("refs/heads/moved-by-hand");
 });
 
-it("session の間にタスクブランチが門の tip を含まない所へ動いた完了は、ref が tip を含み直すまで回答が拒まれ、含み直せば checkout が消える(ADR 0369 決定3・7)", async () => {
+it("session の間にタスクブランチが門の tip を含まない所へ動いた完了は、ref が tip を含み直すまで回答の1回目の比較が拒み、含み直せば checkout が消える(ADR 0373 決定7 / ADR 0369 決定7)", async () => {
   const s = await sessionWithWork("owed-completed-moved-in-session", { wip: false });
   const gateTip = completeThroughGate(s);
   moveTaskBranch(s, "unreachable");
   await tearDown(s);
   expect(existsSync(s.checkout)).toBe(true);
 
-  await expect(answerQuarantine(s)).rejects.toThrow(`refs changed out of band — was: ${gateTip} refs/heads/${s.branch}`);
+  await expect(answerQuarantine(s)).rejects.toThrow(`refs changed since the board's baseline — was: ${gateTip} refs/heads/${s.branch}`);
   git(s.ws.path, "update-ref", `refs/heads/${s.branch}`, gateTip);
   await answerQuarantine(s);
 
@@ -288,7 +310,8 @@ it("運んだ checkout を消せなくても回答の merge back はやり直さ
   expect(existsSync(s.checkout)).toBe(false);
 });
 
-it("drift に加えて名前の場所の別の ref も帯域外で動いていれば、回答は成果を運び、基準の撮り直しがその ref を受け入れる(ADR 0369 決定7 / ADR 0351 決定4)", async () => {
+// 旧: 基準の撮り直しがその ref を受け入れた(ADR 0351 決定4)。ADR 0373 決定1 の後は `repaired by hand` が拒み、`restore the baseline` がその ref を外してから運ぶ
+it("drift に加えて名前の場所の別の ref も帯域外で動いていれば、`repaired by hand` はその ref を名指して拒み、`restore the baseline` が外してから成果を運ぶ(ADR 0369 決定7 / ADR 0373 決定1・3)", async () => {
   const s = await sessionWithWork("owed-drift-moved-ref");
   escalateTask(s.db, s.task, ESCALATION, "deckhand", s.clock.now(), "worker");
   const repair = breakNamedPlace(s, "drift");
@@ -296,7 +319,9 @@ it("drift に加えて名前の場所の別の ref も帯域外で動いてい�
   repair();
   git(s.ws.path, "branch", "moved-by-hand", "main");
 
-  await answerQuarantine(s);
+  await expect(answerQuarantine(s)).rejects.toThrow("refs/heads/moved-by-hand. The board does not accept moved refs.");
+  expect(existsSync(s.checkout)).toBe(true);
+  await answerQuarantine(s, s.ws.name, "restore the baseline");
 
   expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
   expect(existsSync(s.checkout)).toBe(false);

@@ -48,11 +48,11 @@ it("非既定 workspace(prod)の quarantine は、ツリーがクリーンな状
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.id)).not.toContain(stuckInProd.id);
 
-  // repair prod for real: the out-of-band commit stays, and acceptance retakes the baseline (ADR 0351 決定4)
+  // 旧: 帯域外の commit は残り、受理が基準を撮り直した(ADR 0351 決定4)。ADR 0373 決定1 の後は `restore the baseline` が main を戻す
   expect(git(prod.path, "status", "--porcelain")).toBe("");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["repaired by hand"],
+    answers: ["restore the baseline"],
   });
   expect(res.status).toBe(200);
   expect(res.json.status).toBe("done");
