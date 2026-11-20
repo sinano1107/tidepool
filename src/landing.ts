@@ -22,10 +22,12 @@ import {
   getTask,
   hasTaskBranchSql,
   isHumanAssigned,
+  LANDING_ENDED_KINDS_SQL,
   landingSurface,
   localLandingOpenOrExecutedSql,
   logDecision,
   MERGE_QUESTION_OPTIONS,
+  openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
   recordPrNumber,
   recordPrOpened,
@@ -526,9 +528,6 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
 }
 
-/** 着地が終わった根の記録(ADR 0265 決定3 の内容で終わった根と、ブランチを失って終えた根(ADR 0375 決定7)を含む)。これを持つ行は候補にも、子孫を外す根にもならない。 */
-const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost')";
-
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
  *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
@@ -543,7 +542,7 @@ function landingCandidateIds(db: Db): string[] {
         WHERE t.type = 'work' AND t.status = 'done'
           AND (t.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql("t.id")})
           AND t.interview_target_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS_SQL})
           AND NOT ${localLandingOpenOrExecutedSql("t.id")}
         ORDER BY t.rowid`,
     )
@@ -595,7 +594,7 @@ function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } |
       `${ancestorsSql("?")}
        SELECT t.id, t.pr_number AS prNumber FROM tasks t
         WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})`,
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS_SQL})`,
     )
     .all(id) as Array<{ id: string; prNumber: number }>;
   return unfinishedPrAncestors.find(
@@ -736,14 +735,6 @@ function registerPrPromotionQuestion(
     BOARD_ACTOR_ID,
     "board",
   );
-}
-
-export function openPrPromotionQuestionIds(db: Db, taskId: string): string[] {
-  return (
-    db.prepare("SELECT id FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'").all(taskId) as Array<{
-      id: string;
-    }>
-  ).map(({ id }) => id);
 }
 
 /** ADR 0225 決定1: abandon promotion が断念した内容として、回答の時点のタスクブランチの head を

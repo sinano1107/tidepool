@@ -1026,13 +1026,30 @@ export function localLandingOpenOrExecutedSql(taskRef: string): string {
            OR EXISTS (SELECT 1 FROM events e WHERE e.task_id = ${taskRef} AND e.kind = 'local_merge_executed'))`;
 }
 
-/** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地する内容が無かった、ブランチを失って着地を
- *  終えた —— ADR 0375 決定7)SQL 述語。
+/** 着地が終わった根の記録の kind —— merge の記録か内容で終わった PR の根(`landing_finished`、ADR 0265 決定3)、運ぶ内容が無かった根
+ *  (`nothing_to_land`)、ブランチを失って終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)。収束の候補・着地を待つ数え・削除の扉・
+ *  give-up の着地の終わりが読む1つの列(landing.ts は import の向きでここから読む)。 */
+export const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost')";
+
+/** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地が終わった)SQL 述語。
  *  workspace の削除の扉が数える線はこれを読む。 */
 function taskHasLandedSql(taskRef: string): string {
   return `(EXISTS (SELECT 1 FROM events
-                    WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land', 'landing_ended_branch_lost'))
+                    WHERE task_id = ${taskRef} AND (kind = 'pr_opened' OR kind IN ${LANDING_ENDED_KINDS_SQL}))
            OR ${localLandingOpenOrExecutedSql(taskRef)})`;
+}
+
+/** 根 `taskId` の開いている昇格失敗の question。 */
+export function openPrPromotionQuestionIds(db: Db, taskId: string): string[] {
+  return db.prepare("SELECT id FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'").pluck().all(taskId) as string[];
+}
+
+/** 根 `taskId` の開いている local 着地の question を登録順に。 */
+export function openLocalMergeQuestionIds(db: Db, taskId: string): string[] {
+  return db
+    .prepare("SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND question_pending_local_merge_task_id = ? ORDER BY rowid")
+    .pluck()
+    .all(taskId) as string[];
 }
 
 /** 列が埋まっている最も近い祖先の `columns` を引く副問合せ —— 導出の祖先の項はこの1本だけ(ADR 0372 決定1)。 */
@@ -1090,10 +1107,10 @@ export function countedAncestors(db: Db, workspace: string, task: Pick<Task, "pa
   return ancestorsFromTop(db, task).filter((a) => a.type === "work" && a.workspace === workspace && hasTaskBranch(db, a.id, asOf));
 }
 
-/** ADR 0380 決定1・3: 数える祖先のうち、効いている失われた event を持ち透明でないものを上から —— `dead` は done の(死んだ)祖先、それ以外は
- *  作り直されるまで帰り先を奪う未決着の祖先(spec #3273 group H)。記録だけで読み、git を当てない。`asOf` では done も `task_completed` で
+/** ADR 0380 決定1・3: 数える祖先のうち、効いている失われた event を持ち透明でないもの(帰り先を奪う祖先)を上から —— `dead` は done の
+ *  (死んだ)祖先、それ以外は作り直されるまで帰り先を奪う未決着の祖先(spec #3273 group H)。記録だけで読み、git を当てない。`asOf` では done も `task_completed` で
  *  その event より前に読む —— 未決着のまま失われ、後で作り直して完了した祖先を、当時死んでいたと読まない。 */
-export function opaqueLostAncestors(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Array<{ ancestor: Task; dead: boolean }> {
+export function lostAncestorsNotTransparent(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Array<{ ancestor: Task; dead: boolean }> {
   const counted: string[] = [];
   const opaque: Array<{ ancestor: Task; dead: boolean }> = [];
   for (const ancestor of countedAncestors(db, workspace, task, asOf)) {
@@ -1109,11 +1126,12 @@ export function opaqueLostAncestors(db: Db, workspace: string, task: Pick<Task, 
 function deadAncestorCountedBy(db: Db, task: Pick<Task, "workspace" | "parent_id">, asOf?: number): Task | undefined {
   const name = derivedWorkspace(db, task);
   // 導出が既定を指す(null)なら、列を持つ祖先は無く、数える祖先も無い
-  return name === null ? undefined : opaqueLostAncestors(db, name, task, asOf).find(({ dead }) => dead)?.ancestor;
+  return name === null ? undefined : lostAncestorsNotTransparent(db, name, task, asOf).find(({ dead }) => dead)?.ancestor;
 }
 
 /** ADR 0380 決定5: `parentId` の下に立つ子の系譜が数える死んだ task —— 親の workspace で問い(親自身が死んでいれば親)、子が別の
- *  workspace を明示すれば(`childWorkspace`)その系譜でも問う。 */
+ *  workspace を明示すれば(`childWorkspace`)その系譜でも問う。子が workspace を明示するのは #3423 までは agent の分解だけ(人間の扉は
+ *  ADR 0384 決定1 で拒む)。 */
 function deadAncestorOfChild(db: Db, parentId: string, childWorkspace: string | undefined, asOf?: number): Task | undefined {
   return (
     deadAncestorCountedBy(db, { workspace: null, parent_id: parentId }, asOf) ??
@@ -1130,13 +1148,20 @@ export function hasTaskBranchInForce(db: Db, taskId: string): boolean {
 /** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。ADR 0380 決定1: 失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。 */
 const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr_merge_observed", "landing_finished"];
 
+/** ADR 0380 決定1 / ADR 0375 決定2: handoff だけ —— 失われた sha が、失われた event の直前の `task_branch_created` の作成時の sha と同じ。
+ *  作成時の sha を持たない `task_branch_created` は編集があった側。 */
+export function lostAsCreated(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }): boolean {
+  return latestEventOfTask(db, taskId, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha;
+}
+
 /** ADR 0380 決定1: 効いている失われた event `lost` を持つ done の work は、失われた sha が作成時の sha と同じ(handoff だけ)か、内容が
  *  保護ブランチに届いた記録を自身か数える祖先(`counted`)が持ち、その記録より前に完了していれば透明、それ以外は死んだ。記録だけで読む。
  *  ADR 0375 決定2: 作成時の sha を持たない `task_branch_created`(この event の前に作られたブランチ)は編集があった側。
  *  ADR 0380 Status 追記(#3297): 数える記録は失われた event より前のもの —— 失われた後の記録は失われた内容を運べない(届いた merge back は
- *  tip の object を残す、ADR 0375 決定1)ので、透明か死んだかは失われた時点で決まり、生きている根が後で着地しても変わらない(同 決定6)。 */
+ *  tip の object を残す、ADR 0375 決定1)ので、透明か死んだかは失われた時点で決まり、生きている根が後で着地しても変わらない(同 決定6)。
+ *  `asOf` を渡せば完了もその event より前で読む(当時版の Authority、ADR 0380 帰結)。 */
 export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[], asOf?: number): boolean {
-  if (latestEventOfTask(db, taskId, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha) return true;
+  if (lostAsCreated(db, taskId, lost)) return true;
   const completed = latestEventOfTask(db, taskId, "task_completed", asOf);
   if (!completed) return false;
   const holders = [taskId, ...counted];
@@ -1903,7 +1928,9 @@ export function registerFailureQuestion(
  *  `withTargetQuestionSweep`, whose sweep reads the events appended here —
  *  except `cancelRcasByAnswer` (ADR 0385 決定3): its roots are RCAs, and nothing
  *  under an RCA carries a refused target's key (an Interview is always a root
- *  and an examinee has no parent), so the sweep would find nothing. */
+ *  and an examinee has no parent), so the sweep would find nothing — and
+ *  `fellLostBranchAttachments` (ADR 0375 決定4), for the same reason: its roots sit under
+ *  a work task that lost its branch, so none is an Interview root or an examinee. */
 function cancelUnsettledSubtree(
   db: Db,
   rootTaskIds: string[],
@@ -2124,7 +2151,8 @@ export function fellLostBranchAttachments(db: Db, lostIds: string[], questionId:
 /** cancel が根たちから倒す未決着の task の id —— cascade(`cancelUnsettledSubtree`)が書く範囲そのもの。Interview の root の下は対象を
  *  経由して受験者とその子孫へ降りる(ADR 0267 決定3)。 */
 export function unsettledCancelScope(db: Db, rootIds: string[]): string[] {
-  return cancelScope(db, rootIds, { throughExaminees: true }).flatMap((task) => (isSettled(task.status) ? [] : [task.id]));
+  // 根が互いの下にあれば同じ task に2度届く —— cancel の event は1件だけ
+  return [...new Set(cancelScope(db, rootIds, { throughExaminees: true }).flatMap((task) => (isSettled(task.status) ? [] : [task.id])))];
 }
 
 /** cancel が倒す範囲の1件。done は範囲に入っても触らない(捨てるものとして数える)。 */
@@ -3276,11 +3304,12 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
  *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻み(ADR 0265 決定1)、根が既に
- *  決着を持っていれば null で刻まない —— question だけを閉じる。観測 event を刻んだら true。 */
+ *  決着を持っていれば null で刻まない —— question だけを閉じる。`payload` が null でも question だけを閉じる(give-up が終えた根の着地の
+ *  question —— 理由は根の記録が持つ、ADR 0375 決定8)。観測 event を刻んだら true。 */
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
-  payload: TaskScopedPayload,
+  payload: TaskScopedPayload | null,
   now: Date,
   recordOn: string | null = questionId,
 ): boolean {
@@ -3288,7 +3317,7 @@ export function settleQuestionAsObserved(
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
       .run(questionId);
-    if (changes === 0 || recordOn === null) return false;
+    if (changes === 0 || recordOn === null || payload === null) return false;
     appendEvent(db, {
       taskId: recordOn,
       actorId: BOARD_ACTOR_ID,
@@ -3529,8 +3558,8 @@ export function decomposeTask(
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
   }
-  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)
-  assertReturnDestination(db, { type: "work", parent_id: parent.id });
+  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)—— 別の workspace を明示した子はその系譜でも(ADR 0380 決定5)
+  for (const child of input.children) assertReturnDestination(db, { type: "work", parent_id: parent.id, workspace: child.workspace });
   // ADR 0374 Status 追記(決定16): 人間担当の完了時レビューの修理子は、省略すると元の実行者へ戻す。
   const defaultToHuman = parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
   input = {

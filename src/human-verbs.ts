@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, type RootVerdict, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, type RootVerdict, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -104,6 +104,7 @@ import {
   logDecision,
   MERGE_QUESTION_OPTIONS,
   openedPlaceNames,
+  openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
   presentTask,

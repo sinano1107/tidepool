@@ -130,9 +130,13 @@ import {
   interviewRootIdOf,
   issueRefPlaceholder,
   keepsCheckoutAsRecord,
+  LANDING_ENDED_KINDS_SQL,
+  lostAncestorsNotTransparent,
+  lostAsCreated,
   lostTaskIsTransparent,
   nearestFilledAncestor,
-  opaqueLostAncestors,
+  openLocalMergeQuestionIds,
+  openPrPromotionQuestionIds,
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
@@ -1900,10 +1904,8 @@ export function removeHumanContentWorkbench(named: WorkspaceConfig, base: string
 function landingExit(db: Db, branch: string): string {
   const id = taskIdOfBranch(branch);
   const root = (db.prepare(`${ancestorsSql("?")} SELECT id FROM tasks WHERE id IN (SELECT id FROM ancestors) AND parent_id IS NULL`).get(id) as { id: string } | undefined)?.id ?? id;
-  const row = db
-    .prepare("SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND question_pending_local_merge_task_id = ? ORDER BY rowid LIMIT 1")
-    .get(root) as { id: string } | undefined;
-  return row ? `answer \`merge\` on question ${row.id}` : "it has not landed yet";
+  const [question] = openLocalMergeQuestionIds(db, root);
+  return question ? `answer \`merge\` on question ${question}` : "it has not landed yet";
 }
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
@@ -2081,7 +2083,7 @@ function filledFrom(db: Db, task: Pick<Task, "workspace" | "parent_id">): string
 /** ADR 0380 決定3: 帰り先なし —— 数える祖先に、効いている失われた event を持ち透明でない祖先がいる(死んだ祖先。間に無事な祖先を挟んでも)。
  *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。 */
 export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">): Task | undefined {
-  return transparentToLineage(task.type) ? undefined : opaqueLostAncestors(db, workspace.name, task)[0]?.ancestor;
+  return transparentToLineage(task.type) ? undefined : lostAncestorsNotTransparent(db, workspace.name, task)[0]?.ancestor;
 }
 
 /** spec #3273 group H(pin C21): 失われたタスクブランチ `branch` で人間の扉が拒む文。`recreate` は `start_work` の固定が作り直せる
@@ -2834,8 +2836,10 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた sha だけ —— symref の行(HEAD を含む)は名前なので
  *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
- *  `giveUp`(ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ行を消す)、`lost_refs_accepted` を書き戻しより先に
- *  残す。失われた ref が無ければ、今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
+ *  `giveUpQuestion`(give-up に答えている workspace の Quarantine、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
+ *  行を消す)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒す
+ *  (ADR 0375 決定1・4・9)。根の着地の終わり(同 決定7・8)は書き戻しの後 —— 根かどうかを基準へ戻った ref で読む。失われた ref が無ければ、
+ *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUpQuestion?: string): KeptValue[] {
   const giveUp = giveUpQuestion !== undefined;
   const { current, targets } = restoreTargets(db, workspace);
@@ -2857,6 +2861,9 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
     );
   }
   if (targets.size > 0) verifyWorkspaceClean(workspace);
+  let lostTasks: string[] = [];
+  // ADR 0375 決定6: 根かどうかは祖先のブランチを読むので、書き戻しの後に読む —— 動かされた祖先の ref で読むと、生きている親の子を根と読む
+  const endLostRootLandings = () => db.transaction(() => lostTasks.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now)))();
   if (giveUp) {
     db.transaction(() => {
       updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, current.get(ref) ?? "")));
@@ -2868,7 +2875,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
         at: now,
       });
       // ADR 0375 決定1・9: 失われた `task/<id>` ごとに task へ event を残す —— 後の段で回答が拒まれても残る
-      const lostTasks = lost.flatMap(([ref, sha]) => {
+      lostTasks = lost.flatMap(([ref, sha]) => {
         const task = ref.startsWith("refs/heads/task/") ? getTask(db, taskIdOfBranch(ref.slice("refs/heads/".length))) : undefined;
         if (!task) return [];
         appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: now });
@@ -2876,10 +2883,12 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
       });
       // 透明か死んだかは同じ回答の兄弟の event も読むので、倒すのは全部を刻んだ後(ADR 0375 決定4・9)
       fellLostBranchAttachments(db, lostTasks, giveUpQuestion, now);
-      for (const id of lostTasks) endLostRootLanding(db, workspace, getTask(db, id)!, now);
     })();
   }
-  if (targets.size === 0) return [];
+  if (targets.size === 0) {
+    endLostRootLandings();
+    return [];
+  }
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => {
     const value = current.get(ref) ?? "";
     if (!isSha(value)) return [];
@@ -2938,6 +2947,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
       });
     }
   }
+  endLostRootLandings();
   return kept;
 }
 
@@ -2948,24 +2958,22 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
  *  記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。 */
 function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date): void {
   if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return;
-  if (db.prepare("SELECT 1 FROM events WHERE task_id = ? AND kind IN ('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost', 'local_merge_executed')").get(task.id)) return;
+  if (db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return;
   try {
     const lineage = resolveTaskBranchLineage(db, workspace, task);
     if (lineage.branch || lineage.noReturn) return;
   } catch (err) {
-    // 着地の導出と同じく、lineage が読めない根は根として扱う(`landingRootOf`)—— 失われた内容は着地のどこにも運べない
+    // 根か分からない task に恒久の終わりの記録は書かない —— 収束が自分の経路で根の失敗として見せる(`landingRootOf`)
     if (isBoardDbRefusal(err)) throw err;
+    return;
   }
   const lost = taskBranchLostInForce(db, task.id)!;
-  const handoffOnly = latestEventOfTask(db, task.id, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha;
+  const handoffOnly = lostAsCreated(db, task.id, lost);
   if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return;
-  const questions = db
-    .prepare("SELECT id FROM tasks WHERE status = 'todo' AND (question_pending_local_merge_task_id = ? OR question_pending_pr_promotion_task_id = ?) ORDER BY rowid")
-    .pluck()
-    .all(task.id, task.id) as string[];
+  const questions = [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)];
+  // ADR 0375 決定8: 受理が回答なしで閉じ、閉じた理由は根の記録に1回だけ残す —— question 自身には観測の event を刻まない
+  for (const id of questions) settleQuestionAsObserved(db, id, null, now);
   const ending: TaskScopedPayload = handoffOnly ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : { kind: "landing_ended_branch_lost", question_ids: questions };
-  // 根の終わりの記録が question を閉じる理由 —— 記録は根に1回だけ刻み、question には刻まない(昇格失敗の引退と同じ手)
-  for (const id of questions) settleQuestionAsObserved(db, id, ending, now, null);
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: ending, at: now });
 }
 
