@@ -233,6 +233,11 @@ export function taskBranch(taskId: string): string {
   return `task/${taskId}`;
 }
 
+/** `taskBranch` の逆: `task/<id>` の id。 */
+export function taskIdOfBranch(branch: string): string {
+  return branch.slice("task/".length);
+}
+
 /** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。ref を剥かない —— tip の commit が
  *  欠けた ref は「ある」と読み、項の `resolvedCommit` が引けないで止める(準備はその ref を fetch する)。 */
 export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {

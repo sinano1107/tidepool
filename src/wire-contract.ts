@@ -252,6 +252,12 @@ export interface WireContract {
     landing_state?: LandingState | null;
     /** question 行は cancel option の、それ以外はその task の直接 cancel の、捨てられる done の work(ADR 0271 決定4)。 */
     discards: Discard[];
+    /** ADR 0374 決定1・2: タスクブランチを持つか(`task_branch_created`)と、書き始めたか(`task_work_started`)—— 完了の dialog が handoff の
+     *  6欄と text C4 をタスクブランチを持つ人間担当の work にだけ出す。 */
+    has_task_branch: boolean;
+    started: boolean;
+    /** タスクブランチを持つ task だけ: 人間担当の work 自身の作業台の在り処(disk に無ければ null)。 */
+    workbench?: string | null;
     completion_criteria: string;
     review_flag: number;
     review_by: string[] | null;
@@ -330,6 +336,10 @@ export interface WireContract {
   "POST /api/tasks": Pick<BoardTask, "id" | "type">;
   /** 観測決着も 200 で、印が回答は記録されていないことを言う(ADR 0265 決定7)。 */
   "POST /api/tasks/:id/answer": SettledMark;
+  /** 人間担当の task の完了。作業台を残した完了は text C7 を `notice` に添える(spec #3273)。 */
+  "POST /api/tasks/:id/complete": BoardTask & { notice?: string };
+  /** ADR 0374 決定2: 書き始めた作業台の在り処。 */
+  "POST /api/tasks/:id/start-work": { path: string };
   /** 登録の門の 422(src/human-verbs.ts の issue_rejected)。`api()` のキーには出ない。 */
   "POST /api/tasks 422": { missing: string; suggested_comment: string };
   "POST /api/tasks/:id/cancel 400":

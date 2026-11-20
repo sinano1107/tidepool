@@ -8,6 +8,7 @@ import {
 } from "./agent-create.js";
 import { listTranslationUsage } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
+import type { BoardStatePath } from "./board-state.js";
 import { ADVISOR_CEILINGS } from "./claude-model-alias.js";
 import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -37,6 +38,7 @@ import {
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
+  startWorkThroughHumanDoor,
   stopThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -176,6 +178,8 @@ import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
+  humanWorkbenchOnDisk,
+  resolveWorkspacesBaseDir,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
@@ -631,6 +635,8 @@ export interface ApiRouterDeps {
   taskExecutionCandidates: TaskExecutionCandidates;
   /** 作業台の基点 —— 回答の口(`submitAnswer`)へそのまま渡す。 */
   workspacesDir?: string;
+  /** 盤面の固定点(ADR 0040 / ADR 0377 決定3): 人間担当の work の扉の準備が pickup と同じ門で交差を拒む。 */
+  boardState?: BoardStatePath[];
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -745,7 +751,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     taskExecutionCandidates,
     isProtectedWorkspace,
     workspacesDir,
+    boardState,
   } = deps;
+  // 人間担当の work の扉(`start_work` と完了)が名前の場所に届く束(ADR 0374 決定2・9)
+  const humanWorkDeps = { db, pollNow, workspace, resolveWorkspace, github: github ?? undefined, githubAuth, workspacesDir, boardState, defaultAgentName, auditorName, interviewerName };
   // registry で名前を引く人間の扉(task の編集・記憶の書き込みと一覧)が共有する束
   const memoryRefDeps = { db, agentRegistered, workspace, resolveWorkspace };
   const router = Router();
@@ -1562,18 +1571,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
-    const result = await completeThroughHumanDoor(
-      { db, pollNow, defaultAgentName, auditorName, interviewerName },
-      req.params.id,
-      parsed.data.handoff,
-      () => clock.now(),
-      "webui",
-    );
+    const result = await completeThroughHumanDoor(humanWorkDeps, req.params.id, parsed.data.handoff, () => clock.now(), "webui");
     if (!result.ok) {
       sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;
     }
-    sendJson(res, result.value);
+    sendJson(res, result.value satisfies WireContract["POST /api/tasks/:id/complete"]);
+  });
+
+  // ADR 0374 決定2: 書き始める(`start_work`)—— 人間面だけの扉。応答は作業台の在り処
+  router.post("/tasks/:id/start-work", async (req, res) => {
+    const result = await startWorkThroughHumanDoor(humanWorkDeps, req.params.id, () => clock.now(), "webui");
+    if (!result.ok) {
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
+      return;
+    }
+    sendJson(res, result.value satisfies WireContract["POST /api/tasks/:id/start-work"]);
   });
 
   // the handoff-draft route (issue #13): same propose-don't-commit shape as
@@ -2275,6 +2288,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
       // 受験者の答案の在り処 —— 自分の checkout(ADR 0276 決定4)
       ...(task.interview_target_id !== null && { examinee_checkout: examineeCheckoutPath(db, task.id) ?? null }),
+      // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処 —— 完了の dialog が text C4 で言う
+      ...(presented!.has_task_branch && { workbench: humanWorkbenchOnDisk(resolveWorkspacesBaseDir(workspacesDir), task.id) ?? null }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

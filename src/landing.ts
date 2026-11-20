@@ -36,6 +36,7 @@ import {
   type TaskType,
   type TierRef,
   taskIdForPr,
+  teardownUnfinishedUnder,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
 import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
@@ -615,13 +616,6 @@ function exclusionOf(db: Db, taskId: string): Extract<LandingVerdict, { kind: "e
   return { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` };
 }
 
-/** 根の木(根自身を含む)に、後始末が未了の行があるか —— その後始末の merge back がまだ根へ帰っていない(ADR 0240 決定2)。 */
-function teardownUnfinishedUnder(db: Db, taskId: string): boolean {
-  return (
-    db.prepare(`${subtreeSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND teardown_started_at IS NOT NULL`).get(taskId) !==
-    undefined
-  );
-}
 
 export interface Landing {
   /** ADR 0241 決定1・2・5: 収束を突き、その回で扱った根ごとの verdict を返す。走っている回があれば、その後に
@@ -1227,7 +1221,7 @@ export function createLanding(deps: LandingDeps): Landing {
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
     if (open.length > 0 && !ctx.intake) return undefined;
     // 後始末が未了の木は、その merge back がまだ帰っていない(ADR 0240 決定2)。回の途中で後始末に入ることがあるので、撃つ直前に読む
-    if (teardownUnfinishedUnder(deps.db, task.id)) {
+    if (teardownUnfinishedUnder(deps.db, task.id) !== undefined) {
       return ctx.intake
         ? {
             kind: "excluded",

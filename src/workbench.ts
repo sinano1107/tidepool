@@ -47,14 +47,18 @@ export type WorkbenchOwner = { kind: "nothing" } | { kind: "mine"; lacksCarried:
  *  運ばれる側を含むときだけその入口のもの。`carried` が undefined なのは運ばれる側の無い入口。`boardMove` は入口が盤面の手を持つか ——
  *  ADR 0382 決定6: 書く先の branch の無い作業台(作りかけ)は、盤面の手のある入口では取り込むものが無く、無い入口では拒む(人間が入れたと
  *  思う commit を「無い」として落とさない)。 */
-export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | undefined, { boardMove }: { boardMove: boolean }): WorkbenchOwner {
+export function workbenchOwner(
+  read: WorkbenchRead,
+  carried: WorkbenchCarried | undefined,
+  { boardMove, again = "answer again" }: { boardMove: boolean; again?: string },
+): WorkbenchOwner {
   const { tip, verified } = read;
   if (tip === undefined && !boardMove) {
-    return { kind: "refuse", reason: `the workbench at ${read.at} has no ${read.target} branch, so the board cannot tell what to take in. Open it again, then answer again.` };
+    return { kind: "refuse", reason: `the workbench at ${read.at} has no ${read.target} branch, so the board cannot tell what to take in. Open it again, then ${again}.` };
   }
   if (tip === undefined || inTarget(read, tip)) {
     const left = humanWorkLeft(read);
-    return left.length === 0 ? { kind: "nothing" } : { kind: "refuse", reason: `the workbench at ${read.at} has nothing new on ${read.target}, but ${left.join("; ")}. Then answer again.` };
+    return left.length === 0 ? { kind: "nothing" } : { kind: "refuse", reason: `the workbench at ${read.at} has nothing new on ${read.target}, but ${left.join("; ")}. Then ${again}.` };
   }
   if (!carried) return { kind: "mine", lacksCarried: false };
   const lacksCarried = !isAncestor({ path: verified }, carried.sha, tip, workerRepoGit);
@@ -65,7 +69,7 @@ export function workbenchOwner(read: WorkbenchRead, carried: WorkbenchCarried | 
  *  `board/*` 以外の branch と stash のどの段にも書く先に無い commit が無い。残っているものを、直し方を添えて並べる(空なら残っていない)。
  *  tip が書く先に含まれることは呼び手が先に確かめる。書く先の branch が無い作りかけ(init の後の HEAD は `main`)は、比べる tip も
  *  居るべき branch も無いので作業ツリーと HEAD を見ない —— 人間の commit は branch と stash が数える。 */
-function humanWorkLeft(read: WorkbenchRead): string[] {
+export function humanWorkLeft(read: WorkbenchRead): string[] {
   const { at, target, tip } = read;
   const left: string[] = [];
   if (gitAnswers(() => workerRepoGit(at, "rev-parse", "--quiet", "--verify", "MERGE_HEAD"))) left.push(`a merge is in progress — commit it on ${target} or run \`git merge --abort\``);

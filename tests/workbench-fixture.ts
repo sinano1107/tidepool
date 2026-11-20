@@ -75,7 +75,7 @@ export async function conflicted(options?: Parameters<typeof completedChild>[1])
 export type Conflicted = Awaited<ReturnType<typeof conflicted>>;
 
 /** 開いた workspace の Quarantine に人間が答える(回答の経路、作業台の基点は解放と同じ)。 */
-export function answer({ db, clock, ws, base }: Board) {
+export function answer({ db, clock, ws, base }: Omit<Board, "parent">) {
   const question = quarantineQuestion(db, "workspace", ws.name)!;
   return submitAnswer(
     { db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws, workspacesDir: base }) },
