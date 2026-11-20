@@ -276,7 +276,7 @@ it("assignee の無い被レビュータスクの Executor は、最後の picku
  *  その spawn(adapter と同じく `worker_spawned` を刻む)の id。 */
 function auditorRcaUnderUnexecutedParent(db: Db, at: Date) {
   const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  humanDecomposeTask(db, parent, { reason: "split the work", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  humanDecomposeTask(db, parent, { reason: "split the work", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, "webui");
   raiseObjection(db, listEvents(db, parent.id).find((event) => event.kind === "decision_logged")!.id, "redo it", at);
   commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
   const rca = listChildren(db, parent.id).find((child) => child.title.startsWith("rca (auditor)"))!;

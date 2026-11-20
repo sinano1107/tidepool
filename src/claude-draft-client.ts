@@ -90,16 +90,18 @@ function buildPrompt(
   candidates?: RegistryCandidates,
   childContext?: ChildDraftContext,
 ): string {
+  // ADR 0384 決定1: 子は workspace を入力に持たない —— 子の下書きには workspace を求めない
+  const named = childContext ? ["assignee"] : ["assignee", "workspace"];
   const instructions =
     "You are drafting a task registration from a free-text brain dump for a work-tracking board. " +
     "Respond with ONLY a single JSON object (no markdown fences, no prose) with these fields: " +
-    "title, purpose, completion_criteria (all required strings), and optionally assignee, workspace " +
+    `title, purpose, completion_criteria (all required strings), and optionally ${named.join(", ")} ` +
     "(strings), risk_flag, review_flag (booleans).";
   const candidateGuidance = candidates
     ? // 下書きは work のフォームを埋める(ADR 0235 決定2)
       `Known assignees: ${candidates.assignees.filter((name) => !whyAssigneeCannotTake(name, "work", candidates.builtIns.includes(name))).join(", ")}. ` +
-      `Known workspaces: ${candidates.workspaces.join(", ")}. ` +
-      "When suggesting assignee/workspace, only propose names from these lists."
+      (childContext ? "" : `Known workspaces: ${candidates.workspaces.join(", ")}. `) +
+      `When suggesting ${named.join("/")}, only propose names from these lists.`
     : "";
   return [
     instructions,

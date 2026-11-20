@@ -794,7 +794,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
         <div style={{ display: 'grid', gridTemplateColumns: showWorkspace ? '1fr 1fr' : '1fr', gap: 12 }}>
           <Select label="Assignee" options={withPlaceholder('(default agent)', assigneeNames)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
           {showWorkspace && (
-            <Select label="Workspace" options={withPlaceholder(full.parent_id ? "(nearest ancestor's workspace, else default)" : '(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
+            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
@@ -1450,7 +1450,7 @@ function App() {
 
   // human decompose (issue #129): adding a child stays on the current tab
   // (it's a dialog, not a screen switch) — refresh the board so the new
-  // child (or, on a risk/protected-workspace conversion, the approval
+  // child (or, on a risk conversion, the approval
   // question it produced instead — same status code, humanDecomposeTask's
   // own union) shows up at once.
   const addChild = async (fields: RegisterScreenFields) => {

@@ -168,7 +168,6 @@ export interface ManagementMcpDeps {
   interviewerName?: string;
   agentRegistered?: (name: string) => boolean;
   resolvesToBuiltIn?: (name: string) => boolean;
-  isProtectedWorkspace?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
    *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。
    *  `pendingReclaim` は `list_queue` の欄も読む(ADR 0347 決定3)。 */
@@ -1125,11 +1124,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "decompose_task",
     {
-      description: "Split a human task into child tasks in one recorded decision.",
+      description:
+        "Split a human task into child tasks in one recorded decision. Children run in the parent's workspace; " +
+        "to place work in another workspace, register_task a root (no parent_id).",
       inputSchema: {
         task_id: z.string(),
         reason: z.string(),
-        // ADR 0384 決定1: 子は workspace を入力に持たない —— 未知の key は黙って落とさず拒む
+        // ADR 0384 決定1: 子は workspace を入力に持たない。未知の key は黙って落とさず拒む(spec #3415)
         children: z.array(
           z.strictObject({
             title: z.string(),

@@ -601,6 +601,23 @@ it("人間の分解と人間の登録 door は、親と同じ名前でも分解�
   expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
 });
 
+// workspace を変えられない task(子・issue-backed)には、registry の検査より先に domain の拒否を返す —— 名前を直しても通らないので
+it("人間の Edit door は、子の workspace を registry に無い名前へ変える Edit にも、unknown workspace でなく子の拒否を返す", () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, NOW, ...HUMAN_WEBUI);
+  const child = registerTask(db, { type: "work", title: "child", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+
+  const result = editThroughHumanDoor(
+    { db, resolveWorkspace: defaultingTo({ name: "reef", path: "/workspaces/reef" }) },
+    child.id,
+    { workspace: "not-a-real-workspace" },
+    () => NOW,
+    "webui",
+  );
+
+  expect(result).toEqual({ ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/register it as a root/) } });
+});
+
 it("PR promotion の retry が失敗したら question を未決着のまま残す", async () => {
   db = openDb(":memory:");
   const completedTask = registerTask(

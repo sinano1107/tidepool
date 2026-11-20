@@ -7346,7 +7346,8 @@ function attachReview(board: Db, now: Date, parentId: string): Task {
   );
 }
 
-/** 人間の門で、`parentId` の下に workspace を明示した未決着の work を足す —— 分解子は workspace を明示できる(ADR 0031)。 */
+/** domain の registerTask で、`parentId` の下に workspace を明示した未決着の work を足す —— 人間の扉は子の workspace を拒む(ADR 0384 決定1)が、
+ *  共有の registerTask は agent の分解のために #3423 まで明示を運ぶ。 */
 function registerWorkChildIn(board: Db, now: Date, parentId: string, workspace: string): Task {
   return registerTask(
     board,

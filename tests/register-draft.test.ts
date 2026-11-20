@@ -59,19 +59,15 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
     purpose: "know soil moisture without walking out",
     completion_criteria: "dashboard shows a live moisture reading",
     assignee: "reef-crab",
+    workspace: "tidepool",
     risk_flag: true,
     review_flag: true,
   });
   t = await bootTidepool({ draftClient });
 
-  const drafted = await api(t.baseUrl, "POST", "/api/tasks/draft", {
-    dump: "set up the greenhouse sensor, sloppy is fine here",
-  });
-  expect(drafted.status).toBe(200);
-
   // 下書きの review_flag をそのまま送れるのは子追加だけ(ルートは flag によらずレビューされる、issue #1467)。
   // 親は human 担当にして slot を取らせず(走行中の親には子を足せない)、risk の子が承認 question に変わらないよう
-  // 親にも risk を付ける。子は workspace を持たない(ADR 0384 決定1)ので、下書きにも workspace を置かない
+  // 親にも risk を付ける
   const existing = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "water the tomatoes",
@@ -80,6 +76,15 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
     assignee: "human",
     risk_flag: true,
   });
+
+  // 子は workspace を持たない(ADR 0384 決定1)—— model が workspace を返しても、子の下書きはそれを外して返す
+  const drafted = await api(t.baseUrl, "POST", "/api/tasks/draft", {
+    dump: "set up the greenhouse sensor, sloppy is fine here",
+    parent_id: existing.json.id,
+    decompose_reason: "split the sensor out",
+  });
+  expect(drafted.status).toBe(200);
+  expect(drafted.json).not.toHaveProperty("workspace");
 
   const registered = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",

@@ -90,11 +90,12 @@ export interface Task {
   type: TaskType;
   status: TaskStatus;
   assignee: string | null;
-  /** Where this task runs (issue #11): a registry workspace name, written at
-   *  registration (explicit, or copied by the registering path) or at pickup
-   *  (ADR 0233). Null until pickup follows the nearest ancestor with a
-   *  non-null column, else the board default (`derivedWorkspace`, ADR 0372
-   *  決定1). */
+  /** Where this task runs (issue #11): a registry workspace name. The column
+   *  holds only the fact that a place was chosen or fixed (ADR 0372 決定1): a
+   *  root's explicit name at registration, or the place written when it is fixed
+   *  (a pickup, or a descendant's task branch). Agent decomposition still carries
+   *  a child's explicit name until #3423. Null → readers follow the nearest
+   *  ancestor with a non-null column, else the board default (`derivedWorkspace`). */
   workspace: string | null;
   /** For an issue-backed task (issue #49, ADR 0016), these are never the
    *  task's real content — real content is never snapshotted, only resolved
@@ -1274,7 +1275,8 @@ export function registerTask(
   assertRepairHasParent(input);
   assertReviewChildHasExecutor(db, input, actorId);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない。
-  // 人間の扉は親を持つ task の workspace を先に拒む(ADR 0384 決定1)—— ここは人間の扉を通らない登録の検査で、#3423 が組み直すまで残る
+  // #3421 から本番の呼び手は付帯子の review に workspace を渡さない(人間の扉は ADR 0384 決定1 で先に拒み、盤面の登録は渡さない)ので、
+  // ここに届くのは test だけ —— 共有の規則を #3423 が組み直すまで残す
   if (input.type === "review" && input.parent_id && input.workspace !== undefined) {
     const ancestorWorkspace = derivedWorkspace(db, { workspace: null, parent_id: input.parent_id! });
     if (input.workspace !== ancestorWorkspace) {
@@ -3587,7 +3589,6 @@ export function humanDecomposeTask(
   parent: Task,
   input: { reason: string; children: ChildSpec[] },
   now: Date,
-  isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
   // ADR 0253 決定5 / ADR 0111 決定6: probe の著者は常に agent
@@ -3600,7 +3601,8 @@ export function humanDecomposeTask(
     HUMAN_ACTOR_ID,
     now,
     undefined,
-    isProtectedWorkspace,
+    // ADR 0384 決定1・3: 人間の子は workspace を持たず、別の workspace の仕事は承認なしの根になる —— 保護 workspace の承認は当たらない
+    undefined,
     origin,
   );
 }

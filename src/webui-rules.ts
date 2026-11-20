@@ -78,7 +78,7 @@ export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuil
 }
 
 /** workspace を選べるのは根だけで、親を持つ task は type を問わず workspace の欄を持たない(ADR 0384 決定1)。
- *  Edit の門と、WebUI の Edit 画面の Workspace 欄の出し分けが同じ関数を呼ぶ。 */
+ *  人間の登録・分解・Edit の門と、WebUI の Edit 画面の Workspace 欄の出し分けが同じ関数を呼ぶ。 */
 export const hasWorkspaceField = (t: Pick<ReviewSubject, "parent_id">): boolean => !t.parent_id;
 
 export const completionReviewFires =(t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;

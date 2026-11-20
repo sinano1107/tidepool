@@ -687,12 +687,6 @@ export interface ApiRouterDeps {
   /** The retrospective Board calls: POST /triage/close awaits attribution (ADR 0168);
    *  drafting and allocation review are fired by the poll sweep (ADR 0169 / ADR 0172). */
   retrospectiveCalls: RetrospectiveCallDeps;
-  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
-   *  protected workspace / ADR 0013), threaded straight to human decompose's
-   *  own call into decomposeTask (issue #129) — same resource-side invariant
-   *  the MCP `decompose` tool's own `isProtectedWorkspace` already enforces
-   *  for an agent's decompose. Absent → no workspace is protected. */
-  isProtectedWorkspace?: (name: string) => boolean;
 }
 
 /** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 は
@@ -749,7 +743,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     retrospectiveCalls,
     quarantineResolvers,
     taskExecutionCandidates,
-    isProtectedWorkspace,
     workspacesDir,
     boardState,
   } = deps;
@@ -787,7 +780,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         draftClient,
         agentRegistered,
         resolvesToBuiltIn,
-        isProtectedWorkspace,
         pollNow,
         defaultAgentName,
         auditorName,
@@ -1347,7 +1339,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         };
       }
       const draft = await draftTask(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), context }, clock.now());
-      sendJson(res, draft satisfies WireContract["POST /api/tasks/draft"]);
+      // ADR 0384 決定1: 子は workspace を持たない —— model が返しても子の下書きから外し、そのまま登録できる形で返す
+      sendJson(res, (context ? { ...draft, workspace: undefined } : draft) satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
       if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 503 で続けず、error middleware の終了へ
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
