@@ -114,6 +114,7 @@ import {
   retryInterviewRoot,
   settleQuestionAsObserved,
   type Task,
+  taskBranchLostInForce,
   taskIdForPr,
   tasksOwingReleaseOn,
   unsettledCancelScope,
@@ -143,6 +144,7 @@ import {
   type HumanWorkPreparation,
   INTAKE_OPTIONS,
   type IntakeContext,
+  lostBranchRefusal,
   mergeTaskToProtected,
   NO_WORKBENCH,
   notTakenInWarning,
@@ -1279,6 +1281,10 @@ function humanWorkGate(db: Db, taskId: string, verb: keyof typeof HUMAN_WORK_GAT
   const gate = HUMAN_WORK_GATES[verb];
   if (!gate.admits(task)) throw new DomainError(gate.refusal);
   assertUnsettledNotInProgress(task, gate.settled);
+  // spec #3273 group H(pin C21): ブランチが失われた H の取り込みと完了は、作り直す `start_work` を案内して拒む
+  if (verb !== "start work" && taskBranchLostInForce(db, taskId)) {
+    throw new DomainError(lostBranchRefusal(verb, taskBranch(taskId), true));
+  }
   if (derived && derivedWorkspace(db, task) !== derived.name) {
     throw new DomainError(`cannot ${verb}: this task's workspace changed while the board prepared ${derived.place} — ${verb} again.`);
   }

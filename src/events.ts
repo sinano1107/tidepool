@@ -205,6 +205,9 @@ export type EventPayload =
   // ADR 0372 決定2 / ADR 0375 決定2: 盤面が task/<id> を作った(ref を書いた後に残す)。sha は作成時の値、workspace は列の名前(面接室でなく実環境)。
   // column_filled_from: 同じ固定が空の列に workspace を書いた —— 名前の出所で、`default` か列を導いた祖先の id
   | { kind: "task_branch_created"; sha: string; workspace: string; column_filled_from?: string }
+  // ADR 0375 決定1・2: give-up の選択肢が失われた task/<id> を今の値で受けた —— sha は失われた tip。status を問わない。
+  // ADR 0375 決定9: 書き戻しと一緒に書き、後の段で回答が拒まれても残る。その後に task_branch_created が無い間だけ効く
+  | { kind: "task_branch_lost"; sha: string }
   // ADR 0374 決定2: 人間が自分の work を書き始めた(`start_work`)—— 作業台を開いた後に残す。「着手済み」はこれから導く
   | { kind: "task_work_started" }
   | { kind: "task_moved"; after: string | null }
