@@ -18,7 +18,7 @@ import type { ContainmentCapability, ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
-import { appendEvent, type EventOrigin, getEvent, type TaskScopedPayload } from "./events.js";
+import { appendEvent, type EventOrigin, getEvent, latestEventId, type TaskScopedPayload } from "./events.js";
 import {
   type AddTierAmendment,
   applyExecutionSettingsChange,
@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, lastPushedHead, observePrHead, openPrPromotionQuestionIds, prInFlightRefusal, type RootVerdict, recordPrPromotionAbandoned, refuseUnconveyedHead, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, conveyUnpushedHeadOnce, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, lastPushedHead, observePrHead, openPrPromotionQuestionIds, prInFlightRefusal, type RootVerdict, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -1666,6 +1666,8 @@ export async function submitAnswer(
         break;
       case "pr_merge": {
         const mergePr = kind.pr;
+        // ADR 0387 決定2: この回答が始まった時点の記録 —— 同時に走る回答が刻んだ「伝えた」を、この回答は伝えたと読まない
+        const answeredFrom = latestEventId(deps.db);
         // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
         // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
@@ -1694,15 +1696,15 @@ export async function submitAnswer(
           workspaceNetworkDestination(withRememberedRepoCheck(deps.db, mergeWorkspace, now));
           const github = deps.github;
           const readAndCompare = async () => {
+            const lastPushed = lastPushedHead(deps.db, landingTaskId);
             const pr = await github.readPullRequest({ workspace: mergeWorkspace, number: mergePr });
             // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
             if (pr.state === "unreadable") {
               throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
             }
-            // ADR 0387 決定4: 読んだ後の同期区間で印を見て、印があれば判定せずに答え直させる —— 収束の push と記録の間の head を
-            // 盤面の push していない head と読まない。印が無ければ、最後に push した値をこの区間で読む
-            if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
-            const lastPushed = lastPushedHead(deps.db, landingTaskId);
+            // ADR 0387 決定4: 読んだ後の同期区間で印を見て、印があるか、読む間に収束が push を記録していれば判定せずに答え直させる ——
+            // 収束の push の前後の head を、盤面の push していない head とも書き換えとも読まない
+            if (deps.landing.isMarked(task.workspace, mergePr) || lastPushedHead(deps.db, landingTaskId) !== lastPushed) throw new DomainError(beingMerged);
             // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
             observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
             // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
@@ -1738,7 +1740,8 @@ export async function submitAnswer(
           }
           const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
           // ADR 0387 決定2: 盤面が push していない head は、外の commit をまだ伝えていなければ他の検査より先に1回拒む
-          const unconveyed = head.kind === "not_pushed" && refuseUnconveyedHead(deps.db, mergeWorkspace, landingTaskId, mergePr, pr.head, head.lastPushed, now());
+          const unconveyed =
+            head.kind === "not_pushed" && conveyUnpushedHeadOnce(deps.db, mergeWorkspace, landingTaskId, mergePr, pr.head, head.lastPushed, answeredFrom, now());
           if (unconveyed) throw refuse(unconveyed);
           if (left.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`));
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す

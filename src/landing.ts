@@ -319,14 +319,14 @@ export function lastPushedHead(db: Db, taskId: string): string | undefined {
  *  同じ内容のまま書き換えた head(rebase)は何も落としていないので `dropped` は空。 */
 export type OutsidePush = { head: string; lastPushed: string; rewound: boolean; dropped: string[]; unpushed: string[] };
 
-/** head は手元にある前提。ADR 0376 決定2: 最後に push した値が読めなければ(記録が無い・その commit が手元に無い)止めない。 */
+/** head は手元にある前提。最後に push した値が無い・その commit が手元に無い・head の祖先なら undefined —— 収束はそれを止めない
+ *  (ADR 0376 決定2)。無人 merge と人間の `merge` 回答は、祖先関係を確かめてから中身を読むためだけに呼ぶ(`prHeadOrigin`)。 */
 function outsidePushOf(
-  db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
   head: string,
   targets: string[],
-  lastPushed = lastPushedHead(db, taskId),
+  lastPushed: string | undefined,
 ): OutsidePush | undefined {
   if (lastPushed === undefined || resolvedCommit(workspace, lastPushed) === undefined || isAncestor(workspace, lastPushed, head)) return undefined;
   const unpushed = targetsLeftBehind(workspace, taskId, targets, lastPushed);
@@ -337,7 +337,8 @@ function outsidePushOf(
   return {
     head,
     lastPushed,
-    rewound: isAncestor(workspace, head, `refs/heads/${taskBranch(taskId)}`),
+    // 手元に根のブランチが無ければ巻き戻しとは確かめられない —— 書き換えと読む
+    rewound: taskBranchExists(workspace, taskId) && isAncestor(workspace, head, `refs/heads/${taskBranch(taskId)}`),
     dropped,
     // 根自身の未 push の内容は、何も落ちていないときにだけ名指す —— 落ちた根の内容と同じブランチを2度言わない
     unpushed: unpushedDescendants.length > 0 || dropped.length > 0 ? unpushedDescendants : unpushed,
@@ -351,16 +352,19 @@ export type PrHeadOrigin = { kind: "pushed" } | { kind: "rewritten"; outside: Ou
 
 /** 無人 merge と人間の `merge` 回答が読む1つの判定。判定は一致だけで、祖先関係は倒し先を選ぶのにだけ使う —— 確かめられなければ
  *  `not_pushed`(fail-closed)。`lastPushed` は呼び手が head を読んだ同期区間で読んだ値(ADR 0387 決定4)。 */
-function prHeadOrigin(db: Db, workspace: WorkspaceConfig, taskId: string, head: string, lastPushed: string | undefined, targets: string[]): PrHeadOrigin {
+function prHeadOrigin(workspace: WorkspaceConfig, taskId: string, head: string, lastPushed: string | undefined, targets: string[]): PrHeadOrigin {
   if (head === lastPushed) return { kind: "pushed" };
-  // 値が無ければ比べる起点が無い —— `outsidePushOf` に渡すと既定値で記録を読み直してしまう
-  if (lastPushed === undefined) return { kind: "not_pushed", lastPushed };
-  let outside: OutsidePush | undefined;
+  let rewritten = false;
   try {
-    outside = outsidePushOf(db, workspace, taskId, head, targets, lastPushed);
+    rewritten =
+      lastPushed !== undefined &&
+      resolvedCommit(workspace, lastPushed) !== undefined &&
+      resolvedCommit(workspace, head) !== undefined &&
+      !isAncestor(workspace, lastPushed, head);
   } catch {
-    // 祖先関係を読めない(head が手元に無いなど)
+    // 祖先関係を読めない
   }
+  const outside = rewritten ? outsidePushOf(workspace, taskId, head, targets, lastPushed) : undefined;
   return outside ? { kind: "rewritten", outside } : { kind: "not_pushed", lastPushed };
 }
 
@@ -387,13 +391,21 @@ export const conflictedPrRoute = (prNumber: number, protectedName: string) =>
   "do not rebase or force-push; the board treats such a head as rewritten outside — " +
   "then answer `merge`: the board refuses it once, listing the commits you pushed, and the next `merge` merges.";
 
+/** ADR 0387 決定1・2: 盤面が push していない head の question の本文と `merge` の拒否文が共有する句。 */
+const notPushedText = {
+  subject: (prNumber: number, head: string) => `PR #${prNumber}'s head ${head} holds commits the board did not push`,
+  noRecord: (prNumber: number) => `, and the board has no record of what it pushed to PR #${prNumber}`,
+  onGitHub: "review the PR's commits on GitHub",
+  log: (lastPushed: string, head: string) => `\`git log ${lastPushed}..${head}\``,
+};
+
 /** ADR 0387 決定1: 盤面が push していない head の、推奨 hold の merge question の本文 —— 盤面の知らない commit があることと、
  *  それを見るコマンド。最後に push した値が無ければ、比べる起点が無いことを言う。 */
 const notPushedQuestionBody = (task: Task, prNumber: number, head: string, lastPushed: string | undefined) =>
-  `"${task.title}": PR #${prNumber}'s head ${head} holds commits the board did not push` +
+  `"${task.title}": ${notPushedText.subject(prNumber, head)}` +
   (lastPushed === undefined
-    ? `, and the board has no record of what it pushed to PR #${prNumber} — review the PR's commits on GitHub. Merge, or hold?`
-    : ` — the board last pushed ${lastPushed}. See them with \`git log ${lastPushed}..${head}\`. Merge, or hold?`);
+    ? `${notPushedText.noRecord(prNumber)} — ${notPushedText.onGitHub}. Merge, or hold?`
+    : ` — the board last pushed ${lastPushed}. See them with ${notPushedText.log(lastPushed, head)}. Merge, or hold?`);
 
 /** spec #3273 text A4c: 外の push が落とした内容の、推奨 hold の merge question の本文。 */
 const outsidePushQuestionBody = (task: Task, prNumber: number, outside: OutsidePush) =>
@@ -429,7 +441,7 @@ export async function checkPrMergeContent(
     targets = leftBehindTargets(db, workspace, taskId);
   }
   const left = targetsLeftBehind(workspace, taskId, targets, pr.head);
-  return { left, head: prHeadOrigin(db, workspace, taskId, pr.head, pr.lastPushed, targets) };
+  return { left, head: prHeadOrigin(workspace, taskId, pr.head, pr.lastPushed, targets) };
 }
 
 export function landingAnnotation(
@@ -1000,27 +1012,29 @@ function recordHeadConveyed(db: Db, taskId: string, prNumber: number, head: stri
 /** 拒否文に列挙する commit の上限 —— 保護ブランチを merge した head は、その commit も全部並ぶ。 */
 const LISTED_COMMITS = 10;
 
-/** ADR 0387 決定2: 盤面が push していない head への `merge` の回答を、その head の外の commit をまだ伝えていなければ1回拒む —— 拒否と同時に
- *  伝えたと刻み、拒否文で commit を列挙する。伝えていれば undefined。拒否は呼び手が投げる(刻んだ記録は残る)。 */
-export function refuseUnconveyedHead(
+/** ADR 0387 決定2: 盤面が push していない head への `merge` の回答で、その head の外の commit をまだ伝えていなければ伝える —— 伝えたと刻み、
+ *  commit を列挙した拒否文を返す。呼び手はそれを投げる(刻んだ記録は残る)。伝えていれば undefined。`answeredFrom` は回答が始まった時点の
+ *  最後の event の id —— 同時に走る回答が刻んだ記録を、まだ伝えていない回答が「伝えた」と読まない。 */
+export function conveyUnpushedHeadOnce(
   db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
   prNumber: number,
   head: string,
   lastPushed: string | undefined,
+  answeredFrom: number,
   now: Date,
 ): string | undefined {
   const conveyed = db
-    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'pr_head_conveyed' AND json_extract(payload, '$.sha') = ?")
-    .get(taskId, head);
+    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'pr_head_conveyed' AND json_extract(payload, '$.sha') = ? AND id <= ?")
+    .get(taskId, head, answeredFrom);
   if (conveyed !== undefined) return undefined;
   recordHeadConveyed(db, taskId, prNumber, head, now);
-  const subject = `PR #${prNumber}'s head ${head} holds commits the board did not push`;
+  const subject = notPushedText.subject(prNumber, head);
   if (lastPushed === undefined) {
-    return `${subject}, and the board has no record of what it pushed to PR #${prNumber}, so it cannot list them — review the PR's commits on GitHub. Answer \`merge\` again to merge it.`;
+    return `${subject}${notPushedText.noRecord(prNumber)}, so it cannot list them — ${notPushedText.onGitHub}. Answer \`merge\` again to merge it.`;
   }
-  const log = `\`git log ${lastPushed}..${head}\``;
+  const log = notPushedText.log(lastPushed, head);
   let commits: string[] = [];
   try {
     commits = git(workspace.path, "log", "--format=%H %s", `${lastPushed}..${head}`).split("\n").filter(Boolean);
@@ -1140,15 +1154,15 @@ export function createLanding(deps: LandingDeps): Landing {
     listOpenMergeQuestions(deps.db).find((question) => question.pr_number === prNumber && question.workspace === task.workspace)?.id;
   /** 推奨 hold の merge question の1つの書き手 —— キューの行を外すことと問うことを1つにし(ADR 0217 決定2)、同じ同期区間で開いている
    *  merge question があれば足さない(1つの PR に question は1つ)。無人 merge の tick と、外の push が落とした内容を見つけた収束
-   *  (ADR 0376 決定7)が呼ぶ。開いている question の id と、立てたかを返す。`conveying` は本文が外の commit を言う head —— ADR 0387 決定2:
+   *  (ADR 0376 決定7)が呼ぶ。開いている question の id と、立てたかを返す。`conveyedHead` は本文が外の commit を言う head の sha —— ADR 0387 決定2:
    *  question を新しく立てたときだけ、同じ transaction でその head を伝えたと刻む(開いていた question はその head を言っていない)。 */
-  const askHold = (task: Task, prNumber: number, purpose: string, now: Date, conveying?: string): { question: string; raised: boolean } =>
+  const askHold = (task: Task, prNumber: number, purpose: string, now: Date, conveyedHead?: string): { question: string; raised: boolean } =>
     deps.db.transaction(() => {
       clearPendingAutoMerge(deps.db, task.id);
       const open = openMergeQuestion(task, prNumber);
       if (open !== undefined) return { question: open, raised: false };
       registerMergeQuestion(deps.db, task, prNumber, purpose, "hold", now);
-      if (conveying !== undefined) recordHeadConveyed(deps.db, task.id, prNumber, conveying, now);
+      if (conveyedHead !== undefined) recordHeadConveyed(deps.db, task.id, prNumber, conveyedHead, now);
       return { question: openMergeQuestion(task, prNumber)!, raised: true };
     })();
   /** ADR 0376 決定7 / spec #3273 group D: 外の push が落とした内容の推奨 hold の merge question を、tick と同じ書き手で立てる —— 開いていれば
@@ -1520,7 +1534,7 @@ export function createLanding(deps: LandingDeps): Landing {
           throw unread(error);
         }
         if (head === undefined) return undefined;
-        const outside = task.pr_number === null ? undefined : outsidePushOf(deps.db, workspace, task.id, head, leftBehindTargets(deps.db, workspace, task.id));
+        const outside = task.pr_number === null ? undefined : outsidePushOf(workspace, task.id, head, leftBehindTargets(deps.db, workspace, task.id), lastPushedHead(deps.db, task.id));
         const answeringMerge = ctx.intake?.entry === "landing_merge";
         if (outside && !answeringMerge) return outsidePushStep(task.pr_number!, outside);
         const refuse = (pushed: OutsidePush) =>
@@ -1612,6 +1626,14 @@ export function createLanding(deps: LandingDeps): Landing {
           if (refusal) return refusal;
           // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
           recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
+        } catch (error) {
+          // 転送の後に失敗と報告された push(ADR 0243 決定2 の形)も、origin に載っていれば盤面の push —— 印を持ったまま1度だけ読んで刻む。
+          // 刻まなければ、次の tick と回答は盤面自身の commit を盤面の push していない head と読む(ADR 0387 決定1)。読めなければ刻まない
+          if (!isBoardDbRefusal(error) && !(error instanceof RootStopped)) {
+            const landed = await readOriginBranchHead(deps.db, workspace, deps.githubAuth, taskBranch(task.id)).catch(() => undefined);
+            if (landed === sha) recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
+          }
+          throw error;
         } finally {
           release();
         }
@@ -1871,7 +1893,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // tick は印を持って読むので、収束の push と記録の間の値を読まない(ADR 0387 決定4)
           const lastPushed = lastPushedHead(deps.db, task_id);
           const red = ci === "failure" || (ci === "unreported" && unreportedCiGraceElapsed(deps.db, task_id, head, now));
-          const hold = (purpose: string, conveying?: string) => () => askHold(task, pr_number, purpose, now, conveying);
+          const hold = (purpose: string, conveyedHead?: string) => () => askHold(task, pr_number, purpose, now, conveyedHead);
           const askCiRed = red
             ? hold(
                 `"${task.title}"'s auto_if_ci_green auto-merge ` +

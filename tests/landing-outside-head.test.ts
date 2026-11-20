@@ -3,7 +3,7 @@ import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { getTask, listBoard } from "../src/tasks.js";
 import { afterCiRead, FakeGitHubClient, fakeHead } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, makeRemoteBackedWorkspace } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace } from "./harness.js";
 import {
   afterEachPush,
   answerMergeQuestion,
@@ -12,6 +12,8 @@ import {
   CI_RED_PURPOSE,
   CONFLICT,
   convergeOn,
+  finish,
+  landingWork,
   mergeQuestion,
   mergeQuestions,
   openBoard,
@@ -23,12 +25,17 @@ import {
   pushOutsideBoard,
   queueAutoMerge,
   readOnNextTick,
+  recordPrOpenedViaWorker,
+  textA4c,
 } from "./landing-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 // ADR 0387 決定1: 無人 merge は head が盤面の最後に push した sha と一致するときだけ merge する。
 // 以下がこの判定を述べる唯一の場所(ADR 0107)。
+
+// ADR 0387 決定4: 収束の記録済みの PR への push は、push の前から最後に push した値を書くまで in-flight 印を持つ
+const IN_FLIGHT = "PR #1 is being merged or pushed to by the board right now — answer again in a moment";
 
 /** 盤面の知らない commit の、推奨 hold の merge question の本文。 */
 const outsideHeadBody = (head: string, lastPushed: string) =>
@@ -64,6 +71,46 @@ it("最後に push した sha が手元に無いまま head が違えば、祖�
   expect(mergeQuestions(db).map(({ recommendation, purpose }) => ({ recommendation, purpose }))).toEqual([
     { recommendation: "hold", purpose: outsideHeadBody("head-the-board-did-not-push", fakeHead(1)) },
   ]);
+});
+
+/** origin にも手元にも無い sha。 */
+const NOWHERE = "0123456789abcdef0123456789abcdef01234567";
+
+it("GitHub の head が手元にも origin にも無ければ、取れない head として merge されずキューを外れ、推奨 hold の question になる", async () => {
+  const pr = await openPushedPr("outside-head-unfetchable", "auto_if_ci_green");
+  const lastPushed = originHead(pr.workspace, pr.work.id);
+  pr.github.scriptHead(1, NOWHERE);
+
+  await pr.landing.tick("auto_merge", pr.clock.now());
+
+  expect(pr.github.merged).toEqual([]);
+  expect(mergeQuestions(pr.db).map(({ recommendation, purpose }) => ({ recommendation, purpose }))).toEqual([
+    { recommendation: "hold", purpose: outsideHeadBody(NOWHERE, lastPushed) },
+  ]);
+  expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
+});
+
+// 書き換え・巻き戻しの head は ADR 0376 決定7 が受ける —— 着地するタスクのブランチが手元に無くても、祖先関係で確かめた書き換えは書き換え
+it("手元に根のタスクブランチが無い PR の head が書き換えられれば、盤面の知らない commit の question でなく、落ちた内容の推奨 hold の question が立つ", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("outside-head-rewritten-no-local-branch");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github);
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", "scratch");
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const lastPushed = git(workspace.path, "rev-parse", "HEAD");
+  git(workspace.path, "push", "origin", `scratch:task/${work.id}`);
+  git(workspace.path, "checkout", "main");
+  git(workspace.path, "branch", "-D", "scratch");
+  github.scriptPullRequestOnBranch(`task/${work.id}`, 1);
+  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
+  await pushOutsideBoard(workspace, work.id, `${lastPushed}~1`);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db).map(({ purpose }) => purpose)).toEqual([textA4c(`task/${work.id}`)]);
 });
 
 /** 人間の「merge」の回答。拒否なら DomainError の文を、通れば undefined を返す。 */
@@ -155,8 +202,54 @@ it("merge 失敗の question が開いた後に人間が conflict を解いて p
   expect(pr.github.mergedHeads).toEqual([resolved]);
 });
 
-// ADR 0387 決定4: 収束の記録済みの PR への push は、push の前から最後に push した値を書くまで in-flight 印を持つ
-const IN_FLIGHT = "PR #1 is being merged or pushed to by the board right now — answer again in a moment";
+
+it("同時に走る2つの「merge」の回答は、どちらも伝える前に始まった回答なので両方とも1回拒まれ、その後の「merge」が merge する", async () => {
+  const pr = await openPushedPr("outside-head-concurrent-answers", "auto_if_ci_green");
+  const lastPushed = originHead(pr.workspace, pr.work.id);
+  pr.github.scriptCiStatus("failure");
+  await pr.landing.tick("auto_merge", pr.clock.now());
+  const head = await pushOutsideBoard(pr.workspace, pr.work.id);
+  pr.github.scriptCiStatus("success");
+  const refusal = listedRefusal(head, lastPushed, [[head, "outside.txt"]]);
+
+  const [first, second] = [answerMerge(pr), answerMerge(pr)];
+
+  expect(await Promise.all([first, second])).toEqual([refusal, refusal]);
+  expect(pr.github.merged).toEqual([]);
+  await expect(answerMerge(pr)).resolves.toBeUndefined();
+  expect(pr.github.mergedHeads).toEqual([head]);
+});
+
+it("回答が PR を読んでいる間に収束が push して最後に push した値を書けば、回答は判定せず答え直させ、伝えた記録も残さず、次の「merge」が盤面の push した head を merge する", async () => {
+  const pr = await openPushedPr("outside-head-pushed-during-answer-read", "escalate");
+  commitWork(pr.workspace.path, "repair.txt", "fixed\n");
+  finish(pr.db, pr.clock, pr.work);
+  const read = pr.github.readPullRequest.bind(pr.github);
+  pr.github.readPullRequest = async (ref) => {
+    const status = await read(ref);
+    pr.github.readPullRequest = read;
+    await expect(convergeOn(pr.landing, pr.work.id)).resolves.toMatchObject({ form: "open_pull_request_updated" });
+    return status;
+  };
+
+  expect(await answerMerge(pr)).toBe(IN_FLIGHT);
+  expect(boardEvents(pr.db, pr.work.id, "pr_head_conveyed")).toEqual([]);
+
+  await expect(answerMerge(pr)).resolves.toBeUndefined();
+  expect(pr.github.mergedHeads).toEqual([originHead(pr.workspace, pr.work.id)]);
+});
+
+it("転送の後に失敗と報告された収束の push も、origin に載っていれば盤面の push として記録され、次の tick が盤面の push した head を merge する", async () => {
+  const c = await pushedRoot("outside-head-push-fails-after-transfer", { pr: "recorded", merge: "auto_if_ci_green" });
+  c.github.scriptPushFailure(new Error("push rejected"));
+  await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", error: "push rejected" });
+  c.github.scriptPushFailure(null);
+
+  await c.landing.tick("auto_merge", c.clock.now());
+
+  expect(mergeQuestions(c.db)).toEqual([]);
+  expect(c.github.mergedHeads).toEqual([originHead(c.workspace, c.work.id)]);
+});
 
 it("回答が head を読んだ時点で同じ PR に in-flight 印が付いていれば、判定せずに答え直させ、伝えた記録も残さない", async () => {
   const pr = await openPushedPr("outside-head-marked-during-read", "auto_if_ci_green");
