@@ -31,6 +31,8 @@ vi.mock("../src/github-auth.js", async (importOriginal) => ({
   GIT_NETWORK_TIMEOUT_MS: 1000,
 }));
 
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
 it("publish の push が無音なら origin を巻き戻し、registry に repo を書かない(ADR 0334 / ADR 0066)", async () => {
   const { registryDir, deps, checkout } = await makeBoard();
   const dest = await makeDestination();
@@ -178,7 +180,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     await refresh();
     expect(git(replacement.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(replacement.repo!, "rev-parse", "refs/heads/main"));
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
-  }, GIT_FIXTURE_TEST_TIMEOUT);
+  });
 
   it("purely-local な workspace が remote-backed として宣言され、全ブランチが載る", async () => {
     const { registryDir, deps, checkout } = await makeBoard();

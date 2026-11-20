@@ -26,9 +26,11 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
 import { restoreBaseline } from "../src/workspace.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, TEST_CREDENTIAL } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
  *  部品だけで、**口の一覧はここには無い** —— 一覧を持つのは `buildServerOptions`
