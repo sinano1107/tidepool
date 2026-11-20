@@ -846,3 +846,16 @@ it("作業台の tip が task/<H> に無い commit を持つ H の分解は拒�
   const quiet = decompose("second child");
   expect(quiet.ok && quiet.value.warning).toBeUndefined();
 });
+
+// ADR 0374 決定7: 拒否のたびに task/<H> の今の値を作業台の ref に引き直す —— 取り込むものが無い拒否も
+it("子の成果が届いた後、人間の commit が無い作業台の take_in_work は取り込むものが無いと拒み、board/task/<H> を今の task/<H> に引き直す", async () => {
+  const b = await board("take-in-nothing-repoints");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  await startWork(b, h);
+  const path = realpathSync(humanWorkbench(b, h));
+  await completedAgentChild(b, h, "child.txt", "child\n");
+  git(path, "update-ref", `refs/heads/board/task/${h.id}`, git(path, "rev-parse", `task/${h.id}`));
+
+  expect(await takeIn(b, h)).toEqual(refused(`nothing to take in: task/${h.id} in the workbench at ${path} is the value the board already has.`));
+  expect(git(path, "rev-parse", `board/task/${h.id}`)).toBe(git(b.ws.path, "rev-parse", `task/${h.id}`));
+});

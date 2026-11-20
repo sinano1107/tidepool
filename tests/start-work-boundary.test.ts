@@ -49,19 +49,24 @@ it("管理MCP の start_work は作業台の在り処を返し、拒否は tool 
 });
 
 // `take_in_work` と作業台の表示の人間面の写像だけ(ADR 0107、spec #3273 group C)。拒否の文と取り込みの判定は tests/human-work.test.ts。
-it("POST /api/tasks/:id/take-in は text C6 を返し、task の読みは作業台が disk にある間その在り処とコマンドを運ぶ —— 無い task は 404、拒否は 409", async () => {
+it("POST /api/tasks/:id/take-in は text C6 を返し、task の読みは作業台が disk にある間その在り処とコマンドを、分解の子の登録は取り込まれていない commit の警告を運ぶ —— 無い task は 404、拒否は 409", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace("take-in-route") });
   const human = await registerWork(t, "write it myself", undefined, "human");
   const path = (await api(t.baseUrl, "POST", `/api/tasks/${human.id}/start-work`, {})).json.path;
   commitWork(path, "mine.txt", "mine\n");
 
   const read = (await api(t.baseUrl, "GET", `/api/tasks/${human.id}`)).json;
+  // 人間担当の子は pickup されない —— 作業台に取り込まれていない commit がある親の分解は警告を添える
+  const child = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", title: "a slice", purpose: "p", completion_criteria: "c", assignee: "human", parent_id: human.id, decompose_reason: "split",
+  });
   const ok = await api(t.baseUrl, "POST", `/api/tasks/${human.id}/take-in`, {});
   const nothingNew = await api(t.baseUrl, "POST", `/api/tasks/${human.id}/take-in`, {});
   const missing = await api(t.baseUrl, "POST", "/api/tasks/nope/take-in", {});
 
   expect(read.workbench).toBe(path);
   expect(read.workbench_commands).toEqual(expect.arrayContaining([`cd ${path}`, `git remote add <name> <ssh-host>:${path}`]));
+  expect([child.status, child.json.warning]).toEqual([201, `the children fork from task/${human.id}, and 1 commit in the workbench at ${path} is not taken in yet.`]);
   expect(ok.status).toBe(200);
   expect(ok.json.message).toMatch(/^took [0-9a-f]+ in as [0-9a-f]+ on task\//);
   expect(nothingNew.status).toBe(409);

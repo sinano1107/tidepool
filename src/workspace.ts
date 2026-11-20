@@ -1617,15 +1617,17 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
   // 作業台の在り処は disk で読む —— 完了の扉の C2b の拒否が開いた作業台は `task_work_started` を持たない
   if (!placeHasRepository(at)) throw new DomainError(hasStartedWork(db, task.id) ? gone : "this task has no workbench — run start_work first.");
   const place = workbenchPlace(named, realpathSync(at));
-  let taken: { tip: string; commit: string } | undefined;
+  let taken: { tip: string; commit: string };
   try {
-    taken = repointingOnRefusal(named, place.path, () =>
-      takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, { humanWork: { again: "take in again", gone } }),
-    );
+    // ADR 0374 決定7: 取り込むものが無い拒否も、拒否として `board/*` を引き直す
+    taken = repointingOnRefusal(named, place.path, () => {
+      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, { humanWork: { again: "take in again", gone } });
+      if (!intaken) throw new DomainError(`nothing to take in: ${target} in the workbench at ${place.path} is the value the board already has.`);
+      return intaken;
+    });
   } catch (err) {
     throwHumanWorkRefusal(err);
   }
-  if (!taken) throw new DomainError(`nothing to take in: ${target} in the workbench at ${place.path} is the value the board already has.`);
   return advanceKeptWorkbench(named, place.path, target, taken);
 }
 

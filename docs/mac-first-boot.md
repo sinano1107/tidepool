@@ -355,7 +355,8 @@ the ssh host `lima-tidepool`. Then:
    `<ssh-host>` for you to fill in), and `git fetch <name>`.
 2. Write on top of `task/<id>`: `git switch -c task/<id> <name>/task/<id>`. Do not write on a
    branch based on origin's protected branch — a human-only path it brings along can be refused.
-3. `git push <name> task/<id>`. The push is refused while the workbench has uncommitted changes.
+3. `git push <name> task/<id>`. The push is refused while the workbench has uncommitted changes
+   to tracked files.
 4. Take it in or complete the task.
 
 After a take-in, run `git fetch <name>` and `git merge --ff-only <name>/board/task/<id>` before
