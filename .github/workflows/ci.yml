@@ -6,17 +6,35 @@ on:
   pull_request:
 
 jobs:
+  # lint と typecheck は OS に依らないので1回だけ走らせる。test の shard ごとに繰り返さない。
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
   # サーバー境界までの実物テスト(ADR 0027)。tidepool のリスクの大半はここが
   # 吸収している。full suite の合否は ubuntu と macOS で確かめる(ADR 0155)。
-  # macOS の runner は遅いので、shard に割って ubuntu と同じくらいの時間に収める。
+  # shard はファイル単位で割られ、1ファイルの中は1 worker で直列に走る。1ファイルが
+  # 重いと shard を増やしても縮まないので、重いファイルは分ける(tests/landing-*.test.ts)。
   test:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, shard: 1/1 }
-          - { os: macos-latest, shard: 1/2 }
-          - { os: macos-latest, shard: 2/2 }
+          - { os: ubuntu-latest, shard: 1/2 }
+          - { os: ubuntu-latest, shard: 2/2 }
+          - { os: macos-latest, shard: 1/4 }
+          - { os: macos-latest, shard: 2/4 }
+          - { os: macos-latest, shard: 3/4 }
+          - { os: macos-latest, shard: 4/4 }
     runs-on: ${{ matrix.os }}
     # 既定の 360 分で回り続けさせない。vitest 自身の上限(scripts/test-lock.ts、20 分)に npm ci 等を足した壁
     timeout-minutes: 30
@@ -27,8 +45,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
       - run: npm run test -- --shard=${{ matrix.shard }}
 
   # 実ブラウザでのみ見える React 配線層の昇格済みスモーク(ADR 0027 / 0055)。
