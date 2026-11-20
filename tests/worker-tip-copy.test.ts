@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
-import { commitRoomCopy, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -20,7 +20,9 @@ import {
   HOUR,
   HUMAN_WEBUI,
   makeWorkspace,
+  openTestInterviewRoom,
   pickedInterviewRoot,
+  pickUpInterviewRoot,
   poseAccepted,
   prepareAtPickup,
   quarantineQuestion,
@@ -288,6 +290,25 @@ it("work の tip は名前の場所にある commit を親にしてよい ——
 
   expect(recordTaskCheckoutTip(db, place, task.id)).toBe(tip);
   expect(git(named.path, "rev-parse", `task/${task.id}^`)).toBe(elsewhere);
+});
+
+it("出題の写しが面接室に欠けた blob を root の tip に持てば、写しの確かめが捕まえて取り込み直し、面接室で読める(ADR 0388 決定1・2 / ADR 0273 決定3)", async () => {
+  const db = openDb(":memory:");
+  onTestFinished(() => void db.close());
+  const workspace = await makeWorkspace("tip-copy-room-hole");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, NOW, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  commitWork(recordedInterviewRoom(db, root.id)!.path, "env.txt", "the probe's environment\n");
+  const { room, place } = await pickUpInterviewRoot(db, root, workspace);
+  // root の checkout は面接室の複製で blob を自前に持つ。面接室から外すと、写しの blob は root の tip の写しにあって staging repo は書かず、
+  // fetch も親(面接室の保護ブランチ)から届く blob を送らない
+  const blob = git(room.path, "rev-parse", "HEAD:env.txt");
+  rmSync(looseObject(room.path, blob));
+
+  const head = commitRoomCopy(db, place, root.id);
+
+  expect(git(room.path, "rev-parse", `refs/keep-around/${head}`)).toBe(head);
+  expect(git(room.path, "cat-file", "-p", blob)).toBe("the probe's environment");
 });
 
 it("写しの tmp が作れない未決着の解放は task の失敗で checkout を残し、名前の場所を quarantine しない(ADR 0364 決定2)", async () => {

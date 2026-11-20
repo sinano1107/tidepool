@@ -9,6 +9,7 @@ import { completeTask, finishTask, getTask, listChildren, pickupTask, registerTa
 import {
   completionTreeGateApplies,
   completionTreePaths,
+  NamedPlaceFetchError,
   quarantineWorkspace,
   type RunPlace,
   recordTaskCheckoutTip,
@@ -697,6 +698,97 @@ it.each(["transfer", "staging"])("review の完了で %s が落ちれば、名�
     expect(readFileSync(join(place.path, "reviewer-leavings.txt"), "utf8")).toBe("only worker copy\n");
   } finally {
     vi.unstubAllEnvs();
+    db.close();
+  }
+});
+
+const looseObject = (repo: string, sha: string) => join(repo, ".git", "objects", sha.slice(0, 2), sha.slice(2));
+
+/** 門で一度運んだ `sub/kept.txt` の blob を名前の場所で外し(消すか、同じ id の loose を zlib で壊す)、worker は自前の store に持ったまま
+ *  root に1 commit 積む —— 次の門の pack は除外(`--not --alternate-refs`)で blob も `sub` の tree も入れず、fetch も送らない。blob の id を返す。 */
+function damagedHeldByWorker(db: Db, place: RunPlace, task: Task, ws: WorkspaceConfig, damage: "missing" | "corrupt" = "missing"): string {
+  mkdirSync(join(place.path, "sub"));
+  commitWork(place.path, "sub/kept.txt", "kept by the worker\n");
+  gateFetch(db, place, task);
+  const blob = git(place.path, "rev-parse", "HEAD:sub/kept.txt");
+  rmSync(looseObject(ws.path, blob));
+  if (damage === "corrupt") writeFileSync(looseObject(ws.path, blob), "not zlib");
+  commitWork(place.path, "more.txt", "more\n");
+  return blob;
+}
+
+const thrownBy = (step: () => unknown): unknown => {
+  try {
+    step();
+  } catch (err) {
+    return err;
+  }
+  return undefined;
+};
+
+it.each(["missing", "corrupt"] as const)("名前の場所で %s の blob を worker が自前の store に持てば、完了の門の確かめが捕まえて取り込み直し、名前の場所で読める(ADR 0388 決定1・2)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const blob = damagedHeldByWorker(db, place, task, ws, damage);
+
+    const tip = gateFetch(db, place, task);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("kept by the worker");
+  } finally {
+    db.close();
+  }
+});
+
+it("取り込み直しが落ちれば完了の門は拒み、task/<id> を書かず、理由が欠けた object を名指す(ADR 0388 決定2 / ADR 0359 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  const pack = join(ws.path, ".git", "objects", "pack");
+  try {
+    const blob = damagedHeldByWorker(db, place, task, ws);
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+    chmodSync(pack, 0o555);
+
+    const err = thrownBy(() => gateFetch(db, place, task));
+
+    expect(err).toBeInstanceOf(NamedPlaceFetchError);
+    expect((err as Error).message).toContain(blob);
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+  } finally {
+    chmodSync(pack, 0o755);
+    db.close();
+  }
+});
+
+it("退避の WIP が名前の場所に欠けた blob を持てば、staging repo の確かめが捕まえて取り込み直し、名前の場所で読める(ADR 0388 決定1・2 / ADR 0367 決定5)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const blob = git(ws.path, "rev-parse", "HEAD:README.md");
+    rmSync(looseObject(ws.path, blob));
+    // 同じ中身の untracked file —— staging repo は名前の場所に無い blob を自前の store に書き、fetch は名前の場所の ref から届く blob を送らない
+    writeFileSync(join(place.path, "copy.txt"), "workspace\n");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "show", `task/${task.id}:copy.txt`)).toBe("workspace");
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("workspace");
+  } finally {
+    db.close();
+  }
+});
+
+// 受け入れた限界(ADR 0388 決定4): 運び終えた後に名前の場所に起きる外からの損傷は守らない —— 消す側は確かめず、blob の最後の写しごと checkout が消える
+it("運び終えた後の外からの損傷は守らない: 門の後に名前の場所から持ち込んだ blob を消しても、完了の解放は今どおり checkout を消す(ADR 0388 決定4)", async () => {
+  const { db, task, ws, place } = await completedChild();
+  try {
+    rmSync(looseObject(ws.path, git(ws.path, "rev-parse", `task/${task.id}:child.txt`)));
+
+    releaseAfterCompletion(db, place, task);
+
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(true);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
     db.close();
   }
 });

@@ -14,6 +14,7 @@ import {
   readlinkSync,
   readSync,
   realpathSync,
+  renameSync,
   rmdirSync,
   rmSync,
   type Stats,
@@ -21,7 +22,7 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { ContainmentCapability } from "./containment.js";
@@ -766,6 +767,16 @@ function copyUntrustedFile(read: UntrustedRead, rel: string, to: string): void {
   }
 }
 
+/** `from` の `objects`(行ごとの object)を1つの pack にして `to` で `index-pack --strict` し、pack の path(拡張子なし)を返す。 */
+function packAndIndex(deadline: number, from: string, to: string, objects: string): string {
+  const packBase = join(to, "objects", "pack", "pack");
+  const pack = `${packBase}-${workerRepoGitUntil(deadline, from, ["pack-objects", "--quiet", packBase], objects && `${objects}\n`)}`;
+  // pack-objects の idx は `from` の loose の名前(worker が付けたもの)を信じる —— 捨てて中身から作り直す
+  for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
+  workerRepoGitUntil(deadline, to, ["index-pack", "--strict", `${pack}.pack`]);
+  return pack;
+}
+
 /** 写して検証する段(ADR 0364 決定1): checkout の loose と `.pack` だけを `raw` へ写し(`.idx` は作り直す、`info/alternates` は辿らない)、
  *  tip の閉包を1つの pack にして `verified` で `index-pack --strict` する —— 欠けは rev-list / pack-objects が、zlib の破損は
  *  pack-objects が、中身と名前の不一致は worker の byte を持たない `verified` の検査が落とす。名前の場所の objects を借りる役は
@@ -791,11 +802,7 @@ function copyAndVerifyUntrustedTip(place: UntrustedCheckout, read: UntrustedRead
     }
     // ADR 0364 決定1: Interview の2役は閉包が全部写しの中で解けること —— 受験者が sha を言い当てても兄弟の答案は記録に入らない
     const objects = workerRepoGitUntil(deadline, raw, ["rev-list", "--objects", sha, ...(place.borrowsNamedObjects ? ["--not", "--alternate-refs"] : [])]);
-    const packBase = join(verified, "objects", "pack", "pack");
-    const pack = `${packBase}-${workerRepoGitUntil(deadline, raw, ["pack-objects", "--quiet", packBase], objects && `${objects}\n`)}`;
-    // pack-objects の idx は worker が付けた loose の名前を信じる —— 捨てて中身から作り直す
-    for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
-    workerRepoGitUntil(deadline, verified, ["index-pack", "--strict", `${pack}.pack`]);
+    packAndIndex(deadline, raw, verified, objects);
     workerRepoGitUntil(deadline, verified, ["update-ref", ref, sha]);
   } catch (cause) {
     const failure = asUntrustedFailure(read, cause);
@@ -812,8 +819,9 @@ const TASK_CHECKOUT = "the task checkout";
 /** task の checkout を、主語を添えて信じない checkout として。 */
 const untrustedTaskCheckout = (place: TaskCheckoutPlace): UntrustedCheckout => ({ ...place, noun: TASK_CHECKOUT });
 
-/** ADR 0364 決定1・2: checkout の `branch` の tip を検証済みの盤面所有の repo として開く。 */
-function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, use: (sha: string, repo: string, ref: string) => T): T {
+/** ADR 0364 決定1・2: checkout の `branch` の tip を検証済みの盤面所有の repo として開く。`use` には checkout の自前の object の写し(`raw`)も
+ *  渡す —— 運んだ後の確かめ(ADR 0388 決定1)がそこで数え、取り込み直しがそこから組む。 */
+function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, use: (sha: string, repo: string, ref: string, own: string) => T): T {
   const { namedPlace } = place;
   // 名前の場所の側の故障を worker の repo のせいにしない —— ここで落ちれば素の失敗(呼び手の quarantine)
   const format = git(namedPlace.path, "rev-parse", "--show-object-format");
@@ -832,7 +840,7 @@ function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, u
       });
     }
     copyAndVerifyUntrustedTip(place, read, raw, verified, sha, ref, format);
-    return use(sha, verified, ref);
+    return use(sha, verified, ref, raw);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -840,10 +848,82 @@ function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, u
 
 /** task の checkout の `branch` の tip を、ref を書かずに名前の場所の objects へ引く。 */
 function fetchUntrustedTip(place: UntrustedCheckout, branch: string): string {
-  return withVerifiedUntrustedTip(place, branch, (sha, repo, ref) => {
+  return withVerifiedUntrustedTip(place, branch, (sha, repo, ref, own) => {
     fetchFromBoardCopy(place.namedPlace, repo, ref, sha, "the task branch tip");
+    assertCarriedWhole(place.namedPlace, own, sha, "the task branch tip");
     return sha;
   });
+}
+
+/** ADR 0388 決定1・2: 名前の場所へ運んだ直後に、`tip` の閉包のうち運んだ場所が自前の store に持つ object —— 盤面所有の写し `own` を名前の
+ *  場所の objects を借りずに辿り、`?` の付かないもの —— が名前の場所で欠けも破損も無く読めることを、pack に組んで確かめる(`rev-list` は
+ *  zlib の破損を素通しする)。読めなければ `own` から pack を組んで名前の場所へ入れ、確かめ直す —— fetch は commit を既に持つ場所へ何も
+ *  送らない。揃わなければ運ぶ段の失敗で、読めない object を名指す。`borrowing` は名前の場所の objects を借りる写し(`own` か、その借りる先)で、
+ *  借りはここで外す —— 写しは使い捨てで、`own` の dir には書いてよい。 */
+function assertCarriedWhole(named: WorkspaceConfig, own: string, tip: string, description: string, borrowing = own): void {
+  const deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS;
+  const fail = (why: string, cause?: unknown) =>
+    new NamedPlaceFetchError(`workspace ${named.name}: ${description} ${tip} does not read whole in the named workspace: ${why}`, cause === undefined ? undefined : { cause });
+  try {
+    rmSync(join(borrowing, "objects", "info", "alternates"), { force: true });
+    const objects = workerRepoGitUntil(deadline, own, ["rev-list", "--objects", "--missing=print", tip])
+      .split("\n")
+      .filter((line) => line && !line.startsWith("?"))
+      .map((line) => line.split(" ")[0])
+      .join("\n");
+    if (!objects) return;
+    const store = namedObjects(named);
+    const format = git(named.path, "rev-parse", "--show-object-format");
+    // pack-objects は一時 file を自分の repo の objects/pack に書く —— 名前の場所には書かず、その objects だけを借りる使い捨ての repo で読む
+    const reader = join(own, "carried");
+    git(own, "init", "--bare", "--quiet", "--template=", `--object-format=${format}`, reader);
+    writeFileSync(join(reader, "objects", "info", "alternates"), `${store}\n`);
+    const readsWhole = () => {
+      try {
+        workerRepoGitUntil(deadline, reader, ["pack-objects", "--quiet", join(reader, "read")], `${objects}\n`);
+        return true;
+      } catch (cause) {
+        if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
+        return false;
+      }
+    };
+    if (readsWhole()) return;
+    let retakeFailure: unknown;
+    try {
+      takeInAgain(deadline, store, format, own, objects);
+    } catch (cause) {
+      if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
+      retakeFailure = cause;
+    }
+    if (retakeFailure === undefined && readsWhole()) return;
+    // cat-file は zlib の破損も missing と言う
+    const unread = workerRepoGitUntil(deadline, reader, ["cat-file", "--batch-check"], `${objects}\n`)
+      .split("\n")
+      .filter((line) => line.endsWith(" missing"))
+      .map((line) => line.split(" ")[0]);
+    const why = retakeFailure === undefined ? "" : `, and taking it in again failed: ${retakeFailure instanceof Error ? retakeFailure.message : String(retakeFailure)}`;
+    throw fail(`${unread.join(", ") || "an object it holds"} is missing or corrupt there${why}`, retakeFailure);
+  } catch (cause) {
+    if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof NamedPlaceFetchError) throw cause; // ADR 0357 決定2
+    throw fail(cause instanceof Error ? cause.message : String(cause), cause);
+  }
+}
+
+/** ADR 0388 決定2: `own` の `objects` を pack にして名前の場所の objects に置く。`index-pack --strict` は名前の場所でなく、その objects の下の
+ *  使い捨ての repo(借りる先は `own`、次に名前の場所)で撃つ —— 名前の場所で撃つと、同じ id の壊れた loose との照合が読めずに落ちる
+ *  (実測、git 2.47)。同じ fs の下なので rename で移し、`.idx` を最後に置く(git は `.idx` のある pack だけを読む)。 */
+function takeInAgain(deadline: number, store: string, format: string, own: string, objects: string): void {
+  const incoming = mkdtempSync(join(store, "tidepool-incoming-"));
+  try {
+    git(incoming, "init", "--bare", "--quiet", "--template=", `--object-format=${format}`);
+    writeFileSync(join(incoming, "objects", "info", "alternates"), `${join(own, "objects")}\n${store}\n`);
+    const pack = packAndIndex(deadline, own, incoming, objects);
+    for (const ext of [".pack", ".rev", ".idx"]) {
+      if (existsSync(`${pack}${ext}`)) renameSync(`${pack}${ext}`, join(store, "pack", `${basename(pack)}${ext}`));
+    }
+  } finally {
+    rmSync(incoming, { recursive: true, force: true });
+  }
 }
 
 /** ADR 0364 決定2・3 / ADR 0367 決定5: worker の byte を読む fetch は、盤面所有の repo からでも有界。 */
@@ -857,13 +937,16 @@ function fetchFromBoardCopy(namedPlace: WorkspaceConfig, repo: string, ref: stri
   }
 }
 
-function fetchStagedTree(namedPlace: WorkspaceConfig, repo: string, tree: string, parent: string, subject: string, description: string): string {
+/** 盤面所有の staging repo で tree を commit にして名前の場所へ運ぶ。ADR 0388 決定1 / ADR 0367 Status 追記: 確かめは staging repo の自前の
+ *  store で数える —— `borrowing` は名前の場所の objects を借りる写し(既定は staging repo 自身)。 */
+function fetchStagedTree(namedPlace: WorkspaceConfig, repo: string, tree: string, parent: string, subject: string, description: string, borrowing = repo): string {
   const sha = stagingHostStep(() => {
     const commit = workerRepoGit(repo, "commit-tree", tree, "-p", parent, "-m", subject);
     workerRepoGit(repo, "update-ref", "--no-deref", "HEAD", commit);
     return commit;
   });
   fetchFromBoardCopy(namedPlace, repo, "HEAD", sha, description);
+  assertCarriedWhole(namedPlace, repo, sha, description, borrowing);
   return sha;
 }
 
@@ -916,8 +999,8 @@ class WorkbenchUnreadableError extends Error {
 
 const workbenchPlace = (named: WorkspaceConfig, path: string): UntrustedCheckout => ({ path, namedPlace: named, borrowsNamedObjects: true, noun: "the workbench" });
 
-/** 作業台の書く先の branch の tip を検証済みの写しに読んだもの: tip、写し、写しの ref。 */
-type WorkbenchTip = { tip: string; verified: string; tipRef: string };
+/** 作業台の書く先の branch の tip を検証済みの写しに読んだもの: tip、写し、写しの ref、作業台の自前の object の写し。 */
+type WorkbenchTip = { tip: string; verified: string; tipRef: string; own: string };
 
 /** ADR 0382 決定2・6: 入口の鍵の作業台を読み、持ち主を判定する(`workbenchOwner`)。tip は ADR 0364 と同じ手で検証済みの写しに読み、
  *  `use` は判定と写しを受ける。書く先の branch が無い作業台(作りかけ)は写しを作らずに判定する —— 盤面の手のある入口(`boardMove`)では
@@ -934,7 +1017,7 @@ function judgeWorkbench<T>(
   const readOf = (tip: string | undefined, verified: string): WorkbenchRead => ({ at: place.path, target, targetSha, tip, verified });
   const judge = (tip: string | undefined, verified: string) => workbenchOwner(readOf(tip, verified), sha ? { sha, inKey } : undefined, { boardMove, again });
   try {
-    return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef) => use(judge(tip, verified), { tip, verified, tipRef }, readOf(tip, verified)));
+    return withVerifiedUntrustedTip(place, target, (tip, verified, tipRef, own) => use(judge(tip, verified), { tip, verified, tipRef, own }, readOf(tip, verified)));
   } catch (err) {
     if (!(err instanceof BranchMissingError)) throw err;
     return use(judge(undefined, named.path), undefined, readOf(undefined, named.path));
@@ -1156,8 +1239,9 @@ function takeInWorkbench(
   checks: EntryChecks = {},
 ): { tip: string; commit: string } | undefined {
   const ref = `refs/heads/${target}`;
-  return inspectWorkbenchTip(db, named, place, target, carried, checks, ({ tip, verified, tipRef }, old) => {
+  return inspectWorkbenchTip(db, named, place, target, carried, checks, ({ tip, verified, tipRef, own }, old) => {
     fetchFromBoardCopy(named, verified, tipRef, tip, "the workbench tip");
+    assertCarriedWhole(named, own, tip, "the workbench tip");
     const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
     advanceBranch(db, named, ref, old, commit);
     appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
@@ -2041,8 +2125,9 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
       // ADR 0365 決定2: 受験者が populate できない gitlink を足す・進める tree は、面接室へ運ぶ前に拒む。
       const gitlinks = gitlinkChanges(diffTreeEntries(repo, `${parent}^{tree}`, tree, { workerTree: true }));
       if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
-      // ADR 0273 決定1: 受験者の git の履歴に載るので、盤面の語を持たない件名。
-      const head = fetchStagedTree(room, repo, tree, parent, "Add the project files", "the probe's environment");
+      // ADR 0273 決定1: 受験者の git の履歴に載るので、盤面の語を持たない件名。ADR 0388 決定1: staging repo は root の tip の写しを借りる ——
+      // 面接室を借りるのはその写しなので、写しの借りを外して両方の自前の store で数える
+      const head = fetchStagedTree(room, repo, tree, parent, "Add the project files", "the probe's environment", verified);
       const ref = `refs/keep-around/${head}`;
       boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
       return head;
