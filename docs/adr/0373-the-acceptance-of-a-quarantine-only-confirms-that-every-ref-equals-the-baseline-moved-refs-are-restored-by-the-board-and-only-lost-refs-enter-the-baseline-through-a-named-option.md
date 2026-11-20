@@ -1,5 +1,7 @@
 # Quarantine の受理は全 ref が基準と同じであることだけを確かめる —— 動いた ref は盤面が「基準へ戻す」で戻し、失われた ref だけが名指しの選択肢で基準に入る
 
+**Status 追記: 決定2 の「選択肢は常設で、場面ごとに出し分けない」は、面接室の名前の選択肢「項が落ちた RCA を cancel する」には当たらない —— この選択肢は question に保存せず、面接室を開く未決着の RCA が居るときだけ表示のたびに記録から導いて添える。決定2 の理由(本文と選択肢は最初の登録で固定される)は、保存しない選択肢には効かない([ADR 0385](0385-a-room-quarantine-names-each-openers-reachable-exit-and-cancels-an-rca-that-cannot-read-its-head-through-an-answer-derived-at-display.md) 決定5、2026-11-20、issue #3159)。**
+
 **Status 追記: 決定7 の「行が無い名前の最初の撮りは最初の pickup がする」は「盤面がその名前に最初に触れた時点の撮りがする」になる。決定13 の最初の撮りの場面(pickup・着地・書き始める)に作業台を開く操作が加わり、行の無い名前では pickup と同じ準備(開く前の述語、上の追記の待ち、確認)を通ってから撮る。括弧書きの「登録の扉も盤面に記録を残さない」は残る([ADR 0383](0383-the-named-place-becomes-the-boards-territory-at-the-boards-first-touch-and-opening-a-workbench-is-one-of-them.md) 決定2・3、2026-11-18、issue #3367)。**
 
 **Status 追記: 決定5 が別の ADR に送った「失われた `task/<id>` を持つ task の後始末」は ADR 0375 が決めた —— task ごとの event、「成果が捨てられた」の数え、着地が終わる根。決定3 と決定5 の選択肢の側は1点だけ変わる —— remote-backed の workspace では、どちらの選択肢も、戻す先の「object が無い」を確かめる前に、盤面が origin からその sha を取りに行き、届いた ref は基準へ書き戻す。origin に届かなければ回答を拒む。決定3 が object の無い ref を名指しして拒むのも、決定5 が失われた ref が無ければ拒むのも、取った後の判定である([ADR 0380](0380-a-lost-task-branch-is-read-through-the-lineage-as-transparent-or-dead-the-board-fetches-the-lost-sha-from-origin-before-counting-and-the-cancel-term-stays-on-the-tree.md) 決定4)([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定1・3・7、2026-11-15、issue #3178)。**
