@@ -9,10 +9,15 @@ checkout —— その blob の最後の写し —— が消えた。門の前�
 1. **運ぶ —— 門の取り込み、退避の tip と WIP の取り込み、作業台の取り込み、Interview の出題の写し —— は、名前の場所へ入れた直後に、運んだ場所が自前の object
    store に持つ object が名前の場所で欠けも破損も無く読めて済む。** 集合は「運ぶ tip の閉包のうち、運んだ場所の自前の store にある
    object」で、借りている object は消しても失われないので入らない。退避の WIP と出題の写しの自前の store は、盤面が作業ツリーから書いた
-   staging repo である。確かめは ref と event を書く前に撃つ。確かめ方は集合を pack に組む形で、欠けは `rev-list` が、破損は `pack-objects` が落とす(`rev-list` だけでは zlib の破損を
+   staging repo である。出題の写しでは、root の検証済みの tip の写し(面接室への alternates を外した形)も自前の store に数える
+   —— root が commit 済みの object はそこにしか無い。確かめは ref と event を書く前に撃つ。確かめ方は集合を pack に組む形で、欠けは `rev-list` が、破損は `pack-objects` が落とす(`rev-list` だけでは zlib の破損を
    素通しする)。ADR 0369 決定7 の「運ぶ」の完了はこの確かめを含み、消す側(解放の event と checkout の削除、作業台の削除)は変えない。
-2. **欠けていれば、集合を検証済みの写しの pack にして名前の場所で直に `index-pack --strict` し、確かめ直す。** fetch では直らない ——
-   名前の場所は commit を既に持つので何も送られない(実測)。揃わなければ運べなかったので、各入口の今の「名前の場所へ運ぶ段が落ちた」
+2. **欠けていれば、集合を運んだ場所の自前の object の写しから pack にし、名前の場所の objects の内に置いた使い捨ての repo で
+   `index-pack --strict` してから、その pack を名前の場所の `objects/pack` へ置いて確かめ直す。** fetch では直らない ——
+   名前の場所は commit を既に持つので何も送られない(実測)。名前の場所そのもので `index-pack` を撃つと、同じ id の壊れた loose が
+   在るとき `cannot read existing object info` で落ちる(実測、git 2.47)。pack を組む段も index する段も名前の場所の filesystem の上で
+   走らせ、最後の置き換えを同じ filesystem の rename にする。確かめの `pack-objects` も名前の場所を借りる使い捨ての repo で撃ち、
+   名前の場所に一時 file を書かない。揃わなければ運べなかったので、各入口の今の「名前の場所へ運ぶ段が落ちた」
    扱いに従う。
 3. **完了の門の除外(ADR 0364 決定1)は変えない。** 除外で取りこぼした object は決定1 の確かめが捕まえ、決定2 が補う。門の pack を
    決定1 の集合に変えると、worker が `-l` 無しに repack しただけで集合が閉包全体に膨らみ、門が上限超過で task を落としうる。
@@ -37,4 +42,6 @@ checkout —— その blob の最後の写し —— が消えた。門の前�
 
 - Status 追記: ADR 0369 決定7(「運ぶ」の完了に決定1)、ADR 0364(門の後の確かめと、fetch でなく pack を直に入れる取り込み直し)、
   ADR 0367(退避の WIP も staging repo の自前の store で確かめる)、ADR 0371(作業台の取り込みも決定1)、ADR 0273 決定3(出題の写しも決定1)。
-- 借りない checkout(Interview の root)では集合が面接室の閉包全体になり、門と同じ大きさの確かめが運ぶたびに走る。
+- 決定1 の「借りている object は消しても失われない」は、名前の場所で借りている側の object が先に欠けているか壊れていると
+  成り立たない(walk が借りている tree で止まる・`git add` が壊れた同じ id の loose を使う、実装時の実測)。扱いは #3494 で決める。
+- 借りない checkout(Interview の root と受験者)では集合が面接室の閉包全体になり、門と同じ大きさの確かめが運ぶたびに走る。
