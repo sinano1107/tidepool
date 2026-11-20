@@ -265,11 +265,11 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
   it("設定を持たない予告は main やローカル ref を決めつけず、実際の一覧は custom な保護ブランチと remote ref を名指す", () => {
     const db = openDb(":memory:");
     const purpose = purposeFor(db, "sandbox");
-    const { own } = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "/unused", branch: "trunk", repo: "https://github.com/acme/sandbox.git" }, "");
+    const own = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "/unused", branch: "trunk", repo: "https://github.com/acme/sandbox.git" }, "");
     expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
       expect.stringContaining("`trunk` can be fetched"), expect.stringContaining("`refs/remotes/origin/trunk`"),
     ]);
-    const unknown = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "" }, "").own;
+    const unknown = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "" }, "");
     for (const predicate of unknown) expect(purpose).toContain(predicate.describe);
     expect(purpose).toContain("configured protected branch");
     expect(purpose).toContain("its remote-tracking ref");
@@ -356,8 +356,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     // (ブランチが無ければ出題の head、ADR 0329 決定4 の Status 追記)だけなので、引けない head で落とす
     poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567");
 
-    const { own, openers } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
-    const predicates = [...own, ...openers];
+    const predicates = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
+    const [own, openers] = [predicates.filter((p) => p.own), predicates.filter((p) => !p.own)];
     const describes = predicates.map((predicate) => predicate.describe);
     expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
       expect.stringContaining("can be fetched"), expect.not.stringContaining("An unborn HEAD passes"),
@@ -375,7 +375,8 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
         return true;
       }
     });
-    // 引けない head は面接室の項(ADR 0361 決定1)と受験者の項の両方で落ち、先に撃つ面接室の項が理由になる
+    // 引けない head は受験者の項と面接室の項(ADR 0361 決定1)の両方で落ち、先に撃つ受験者の項が理由になる
+    // (旧: 面接室の項が先だった。ADR 0386 決定4 の後は受験者を含む項が面接室の項より先)
     expect(failed.map((predicate) => predicate.describe)).toEqual([expect.stringContaining("posed head"), expect.stringContaining("posed head")]);
     await expect(quarantineChecks({ quarantineResolvers: {}, db }).workspace!(root.id, undefined, "webui")).rejects.toThrow(failed[0]!.describe);
   }, GIT_FIXTURE_TEST_TIMEOUT);

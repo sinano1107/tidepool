@@ -748,9 +748,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       }
     });
     const checked = withRememberedRepoCheck(deps.db, target, () => now);
-    const { own, openers } = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
+    // ADR 0386 決定4: 項は pickup の門・本文と同じ並び
+    const predicates = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
     // ADR 0385 決定2: 倒すのは回答の時点で項が落ちている RCA だけ。項は記録だけから組まれ、ここで初めて git を撃つ
-    const rcasToCancel = cancelRcas ? openers.flatMap(({ rca, ...predicate }) => (rca !== undefined && fails(predicate) ? [{ id: rca, head: readHeadOf(deps.db, getTask(deps.db, rca)!, value)! }] : [])) : [];
+    const rcasToCancel = cancelRcas ? predicates.flatMap(({ rca, ...predicate }) => (rca !== undefined && fails(predicate) ? [{ id: rca, head: readHeadOf(deps.db, getTask(deps.db, rca)!, value)! }] : [])) : [];
     const cancelledByAnswer = new Set(unsettledCancelScope(deps.db, rcasToCancel.map(({ id }) => id)));
     // ADR 0385 決定6: 回答の後に面接室を開く未決着の task が残らず、済まなかった解放も無ければ、面接室そのものの項を撃たない。済まなかった解放
     // (最後の session の作業がまだ面接室のタスクブランチに着いていない task —— 決着した受験者の checkout は記録として残り、数えない)が残る間は
@@ -758,7 +759,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     const stillOpening = () => unsettledOpenersOf(deps.db, value).filter((task) => !cancelledByAnswer.has(task.id));
     const leftOpen = () => stillOpening().length > 0 || tasksOwingReleaseOn(deps.db, value, deps.workspace?.name).length > 0;
     const unopened = room && !leftOpen();
-    const all = [...(unopened ? [] : own), ...openers.filter(({ rca }) => rca === undefined || !cancelledByAnswer.has(rca))];
+    const all = predicates.filter(({ own, rca }) => (own ? !unopened : rca === undefined || !cancelledByAnswer.has(rca)));
     const repoPresent = !room || placeHasRepository(target.path);
     const nothingToCancel = cancelRcas && rcasToCancel.length === 0 ? `no RCA that opens the interview room ${value} needs missing objects, so \`${CANCEL_THE_RCAS}\` cancels nothing` : undefined;
     // ADR 0385 決定4: 倒す RCA には直接 cancel と同じ門

@@ -1318,8 +1318,8 @@ export function createLanding(deps: LandingDeps): Landing {
       // (積み残しの question、text A5)。
       // conflict は作業台を開いて回答を拒む(text A1)
       if (ctx.intake?.entry === "promotion_retry" && !workspaceNeedsHuman(deps.db, workspace.name)) {
-        const { own } = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
-        const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, own, true);
+        const predicates = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
+        const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, predicates, true);
         ctx.outcome.kept.push(
           ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, () => stopRootIfRefsMoved(workspace))),
         );

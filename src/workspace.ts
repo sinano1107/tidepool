@@ -77,10 +77,12 @@ import {
   type PlaceFire,
   protectedBranch,
   protectedBranchRef,
-  readHeadOf,
-  resolvablePosedHead,
+  providedRev,
+  roomForkSource,
   roomPickupPredicates,
   roomPlace,
+  roomPredicatesInOrder,
+  roomProvisionOf,
   safeRealpath,
   taskBranch,
   taskBranchExists,
@@ -316,14 +318,10 @@ export class PickupGateError extends Error {
  *  最初に落ちた場所で `PickupGateError` を投げる。 */
 export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, fixedPoints?: BoardStatePath[], live?: () => boolean) {
   workspace = withRememberedRepoCheck(db, workspace);
-  // (task, 面接室) の項は場所の項の後 —— 受験者だけは先(下)
-  const room = (rootId: string, fetchedFirst = false) => ({
+  // ADR 0386 決定4: 面接室の項は解除の門・本文と同じ並び —— 受験者の (task, 面接室) の項だけは場所の項より先
+  const room = (rootId: string) => ({
     ...roomPlace(db, rootId, workspacesBaseDir),
-    predicates: () => {
-      const own = roomPickupPredicates(db, rootId, workspacesBaseDir, fixedPoints);
-      const fetched = taskRoomPickupPredicates(db, [task], rootId, workspacesBaseDir);
-      return fetchedFirst ? [...fetched, ...own] : [...own, ...fetched];
-    },
+    predicates: () => roomPredicatesInOrder(db, rootId, [task], workspacesBaseDir, fixedPoints),
   });
   const real = { ...workspace, predicates: () => checkoutPickupPredicates(workspace, fixedPoints) };
   const reads = roomsReadBy(db, task).map((read) => room(read.name));
@@ -333,8 +331,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       ? [real, ...reads]
       : task.type === "interview"
         ? [real, ...reads, room(rootId)]
-        // 受験者の (task, 面接室) の項が先 —— 面接室が記録に無い受験者に面接室の作る分岐(`mkdir -p`)を撃たない
-        : [room(rootId, true)];
+        : [room(rootId)];
   const checks = [];
   for (const { predicates, ...place } of places) {
     if (live?.() === false) return checks;
@@ -571,12 +568,26 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
   const role = interviewRole(db, task);
   const at = CHECKOUT_LAYOUT.task.at(workspacesBaseDir, role === "root" ? `${task.id}.checkout` : task.id, pickup.id);
   const branch = taskBranch(task.id);
-  const path = makeCheckout({ at, named, source: `refs/heads/${branch}`, branch, borrow: role === undefined, description: `the task checkout of ${task.id}` });
-  // 読み手の出題の head と、門の時点のタスクブランチ(受験者は無ければ fork 元の出題の head)の閉包が面接室にあることは、pickup の門の
-  // (task, 面接室) の項(taskRoomPickupPredicates)が先に確かめている。門の後に欠けたものは上のタスクブランチの fetch か下の読み専用の
-  // checkout の fetch で落ち、後者は fetch 元の面接室の性質として面接室の名前で止まる(ADR 0276 決定3)
-  const reads = roomsReadBy(db, task).map((room) =>
-    openReadCheckout(CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name), room, readHeadOf(db, task, room.name), task.id));
+  // ADR 0386 決定1: 面接室で走る task は、面接室が提供するもの(ブランチを立てた後なのでそのブランチ)を fetch する
+  const provision = role === undefined ? undefined : roomProvisionOf(db, task, named.name);
+  // 面接室が提供するものの閉包は pickup の門の (task, 面接室) の項が先に確かめている。門の後に面接室で rev を読む・fetch する・tree を
+  // 展開するのに落ちたら、この checkout でも下の読み専用の checkout でも、fetch 元の面接室の性質としてその task の項の文で面接室の名前で
+  // 止まる(ADR 0386 決定3 / ADR 0276 決定3)
+  const itemOf = (room: WorkspaceConfig) => taskRoomPickupPredicates(db, [task], room.name, workspacesBaseDir)[0]?.describe;
+  let path: string;
+  try {
+    const source = provision ? providedRev(named, provision) : `refs/heads/${branch}`;
+    path = makeCheckout({ at, named, source, branch, borrow: role === undefined, description: `the task checkout of ${task.id}` });
+  } catch (err) {
+    // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
+    if (role === undefined || err instanceof CheckoutHostError) throw err;
+    throw new PickupGateError(named, err, itemOf(named));
+  }
+  // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
+  const reads = roomsReadBy(db, task).map((room) => {
+    const read = roomProvisionOf(db, task, room.name);
+    return openReadCheckout(CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name), room, read && providedRev(room, read), task.id, itemOf(room));
+  });
   appendEvent(db, {
     taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: now,
     payload: {
@@ -589,8 +600,8 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
 
 /** ADR 0361 決定1: 読み専用の checkout —— `git init` に面接室から出題の head だけを fetch した複製(alternates なし、ADR 0356 決定2 の
  *  Interview の線)。読み手に届くのは出題の head の tree だけで、root と受験者のブランチは引けない。番地を作れないのは host 側の失敗、
- *  fetch の失敗は fetch 元の面接室の性質。 */
-function openReadCheckout(at: string, room: WorkspaceConfig, head: string | undefined, taskId: string): ReadCheckout {
+ *  fetch の失敗は fetch 元の面接室の性質で、読み手の (task, 面接室) の項の文 `describe` で包む(ADR 0386 決定3)。 */
+function openReadCheckout(at: string, room: WorkspaceConfig, head: string | undefined, taskId: string, describe: string | undefined): ReadCheckout {
   let path: string;
   try {
     mkdirSync(at, { recursive: true });
@@ -605,7 +616,7 @@ function openReadCheckout(at: string, room: WorkspaceConfig, head: string | unde
       git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", room.path, `${head}:refs/heads/main`);
       git(path, "read-tree", "-u", "--reset", "HEAD");
     } catch (err) {
-      throw new PickupGateError(room, err, `the posed head ${head} can be fetched from the interview room into the read checkout.`);
+      throw new PickupGateError(room, err, describe);
     }
   }
   return { name: room.name, path };
@@ -2174,10 +2185,10 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
   }
 }
 
-/** タスクブランチを切る sha(ADR 0053)。受験者は系譜を持たず、面接室の出題の head から切る(ADR 0276 決定1)。
+/** タスクブランチを切る sha(ADR 0053)。面接室で走る受験者と root は、面接室が提供する切る元から切る(ADR 0386 決定1 / ADR 0276 決定1)。
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  if (interviewRole(db, task) === "examinee") return resolvablePosedHead(db, workspace, task);
+  if (interviewRole(db, task) !== undefined) return roomForkSource(db, workspace, task);
   const base = exactProtectedBranchRef(withRememberedRepoCheck(db, workspace));
   const source = lineageTaskBranch(db, workspace, task, base) ?? base;
   return git(workspace.path, "rev-parse", `${source}^{commit}`);

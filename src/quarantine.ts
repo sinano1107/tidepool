@@ -289,13 +289,12 @@ export const QUARANTINES = [
       const room = getTask(db, name!)?.type === "interview";
       const recorded = room ? recordedPlace(db, name!) : undefined;
       // 予告は説明だけを読む —— 検査は撃たないので、実環境の在り処と規約の基点は要らない
-      const { own, openers } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
-      const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...own.map((p) => p.describe)];
-      // 固定点との交差は pickup の述語として上の一覧に並ぶ(ADR 0377 決定4)
+      const predicates = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
+      const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...predicates.map((p) => p.describe)];
+      // 固定点との交差は pickup の述語として上の一覧に並ぶ(ADR 0377 決定4)。clean は解除の門が撃つ順どおり項の後(ADR 0386 決定4)
       if (!room || recorded?.hasRepository !== false) checks.push(...[
         `it is a usable git repository whose working tree is clean (\`git status --porcelain\` runs and is empty).${discardUncommitted("uncommitted changes")}`,
       ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
-      checks.push(...openers.map((p) => p.describe));
       return {
         title: `workspace ${name} needs human attention`,
         purpose:
