@@ -1090,14 +1090,16 @@ export function countedAncestors(db: Db, workspace: string, task: Pick<Task, "pa
   return ancestorsFromTop(db, task).filter((a) => a.type === "work" && a.workspace === workspace && hasTaskBranch(db, a.id, asOf));
 }
 
-/** ADR 0380 決定1・3: 数える祖先のうち、効いている失われた event を持ち透明でないものを上から —— done なら死んだ祖先、未決着なら作り直される
- *  まで帰り先を奪う祖先(spec #3273 group H)。記録だけで読み、git を当てない。 */
-export function opaqueLostAncestors(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Task[] {
+/** ADR 0380 決定1・3: 数える祖先のうち、効いている失われた event を持ち透明でないものを上から —— `dead` は done の(死んだ)祖先、それ以外は
+ *  作り直されるまで帰り先を奪う未決着の祖先(spec #3273 group H)。記録だけで読み、git を当てない。`asOf` では done も `task_completed` で
+ *  その event より前に読む —— 未決着のまま失われ、後で作り直して完了した祖先を、当時死んでいたと読まない。 */
+export function opaqueLostAncestors(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Array<{ ancestor: Task; dead: boolean }> {
   const counted: string[] = [];
-  const opaque: Task[] = [];
+  const opaque: Array<{ ancestor: Task; dead: boolean }> = [];
   for (const ancestor of countedAncestors(db, workspace, task, asOf)) {
     const lost = taskBranchLostInForce(db, ancestor.id, asOf);
-    if (lost && !(ancestor.status === "done" && lostTaskIsTransparent(db, ancestor.id, lost, counted))) opaque.push(ancestor);
+    const done = asOf === undefined ? ancestor.status === "done" : latestEventOfTask(db, ancestor.id, "task_completed", asOf) !== undefined;
+    if (lost && !(done && lostTaskIsTransparent(db, ancestor.id, lost, counted, asOf))) opaque.push({ ancestor, dead: done });
     else counted.push(ancestor.id);
   }
   return opaque;
@@ -1107,7 +1109,7 @@ export function opaqueLostAncestors(db: Db, workspace: string, task: Pick<Task, 
 function deadAncestorCountedBy(db: Db, task: Pick<Task, "workspace" | "parent_id">, asOf?: number): Task | undefined {
   const name = derivedWorkspace(db, task);
   // 導出が既定を指す(null)なら、列を持つ祖先は無く、数える祖先も無い
-  return name === null ? undefined : opaqueLostAncestors(db, name, task, asOf).find((a) => a.status === "done");
+  return name === null ? undefined : opaqueLostAncestors(db, name, task, asOf).find(({ dead }) => dead)?.ancestor;
 }
 
 /** ADR 0380 決定5: `parentId` の下に立つ子の系譜が数える死んだ task —— 親の workspace で問い(親自身が死んでいれば親)、子が別の
@@ -1133,9 +1135,9 @@ const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr
  *  ADR 0375 決定2: 作成時の sha を持たない `task_branch_created`(この event の前に作られたブランチ)は編集があった側。
  *  ADR 0380 Status 追記(#3297): 数える記録は失われた event より前のもの —— 失われた後の記録は失われた内容を運べない(届いた merge back は
  *  tip の object を残す、ADR 0375 決定1)ので、透明か死んだかは失われた時点で決まり、生きている根が後で着地しても変わらない(同 決定6)。 */
-export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[]): boolean {
+export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[], asOf?: number): boolean {
   if (latestEventOfTask(db, taskId, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha) return true;
-  const completed = latestEventOfTask(db, taskId, "task_completed");
+  const completed = latestEventOfTask(db, taskId, "task_completed", asOf);
   if (!completed) return false;
   const holders = [taskId, ...counted];
   return (

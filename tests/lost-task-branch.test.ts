@@ -5,7 +5,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { completeThroughHumanDoor, quarantineChecks, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
 import { closedRootOf, contentLeftBehindLocally, createLanding, landingState, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
-import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listChildren, type RegisterTaskInput, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
+import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listChildren, type RegisterTaskInput, recordPrNumber, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import { boardRefWriter, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
@@ -665,4 +665,29 @@ it("review の権限の文の当時版は spawn の時点の失われた event�
   expect(whyNoReturnDestination(b.db, rca.id, beforeLost)).toBeUndefined();
   expect(whyNoReturnDestination(b.db, rca.id, afterLost)).toMatch(new RegExp(`^the work of "dead" \\(${dead.id}\\) was lost with its task branch`));
   expect(whyNoReturnDestination(b.db, rca.id, afterRecreated)).toBeUndefined();
+});
+
+it("PR を開いた死んだ根の着地は give-up で終えない —— 内容は GitHub の head に在る(ADR 0375 決定7、pin H1)", async () => {
+  const b = await board("dead-root-with-pr");
+  const root = await completeThrough(b, work(b, "root"), "root.txt");
+  recordPrNumber(b.db, root.id, 7);
+
+  await giveUp(b, root.id);
+
+  expect(accepted(b)).toBe(true);
+  expect(ended(b, root)).toEqual([]);
+  expect(landingState(b.db, getTask(b.db, root.id)!)).not.toBe("branch_lost");
+});
+
+it("spawn の時点で未決着のまま失われていた祖先は、後で作り直して完了しても、その spawn の当時版では死んだと読まない(ADR 0380 帰結、pin H16)", async () => {
+  const b = await board("as-of-unsettled-then-done");
+  const parent = work(b, "parent");
+  const child = await completeThrough(b, work(b, "child", { parent_id: parent.id }), "child.txt");
+  await commitThrough(b, parent, "parent.txt");
+  const review = humanTask(b, { type: "review", title: "human review", parent_id: child.id });
+  await giveUp(b, parent.id);
+  const spawn = appendEvent(b.db, { taskId: review.id, actorId: "fugu", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
+  await completeThrough(b, parent, "again.txt");
+
+  expect(whyNoReturnDestination(b.db, review.id, spawn)).toBeUndefined();
 });

@@ -2081,7 +2081,7 @@ function filledFrom(db: Db, task: Pick<Task, "workspace" | "parent_id">): string
 /** ADR 0380 決定3: 帰り先なし —— 数える祖先に、効いている失われた event を持ち透明でない祖先がいる(死んだ祖先。間に無事な祖先を挟んでも)。
  *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。 */
 export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">): Task | undefined {
-  return transparentToLineage(task.type) ? undefined : opaqueLostAncestors(db, workspace.name, task)[0];
+  return transparentToLineage(task.type) ? undefined : opaqueLostAncestors(db, workspace.name, task)[0]?.ancestor;
 }
 
 /** spec #3273 group H(pin C21): 失われたタスクブランチ `branch` で人間の扉が拒む文。`recreate` は `start_work` の固定が作り直せる
