@@ -126,20 +126,6 @@ export interface WorkerSessionSettings {
   };
 }
 
-/** ADR 0033: the containment target is "the AI's tool-execution sight and
- *  writes", not the toolchain's operating base. `git` will not run at all
- *  without its global config (confirmed: `fatal: unable to access
- *  '~/.gitconfig': Operation not permitted` under a bare `denyRead: ["~/"]`),
- *  so these two paths are re-allowed for reading. Deliberately read-only and
- *  deliberately two entries: config, never credentials — the board's GitHub
- *  identity is injected per call and never rides the worker (ADR 0024).
- *
- *  Deliberately *not* here: `~/.npm`. The CLI binds it into the masked home on
- *  its own (verified on the Pi — `ls -a $HOME` inside a sandboxed session shows
- *  `.claude`, `.gitconfig`, `.npm`), so naming it would add exposure and buy
- *  nothing. */
-const TOOLCHAIN_READ = ["~/.gitconfig", "~/.config/git"];
-
 /** ADR 0257 決定1: the OS and toolchain locations re-opened under `denyRead: ["/"]`
  *  (Linux only — darwin runs no worker, ADR 0100 決定6). Deliberately *not* here:
  *  where data can live (`/home` `/root` `/Users` `/mnt` `/media` `/srv` `/opt`
@@ -443,10 +429,12 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
       ...(readOnly && { autoAllowBashIfSandboxed: false as const }),
       filesystem: {
         denyRead: ["/"],
+        // ADR 0033 Status addendum (#3211): no host git config location is re-opened. The re-allow existed because git
+        // died with `fatal` without `~/.gitconfig`; ADR 0358 決定2's `GIT_CONFIG_GLOBAL=/dev/null` removed that, and
+        // `~/.config/git` is git-credential-store's default home, so "config, never credentials" never held per directory.
         allowRead: [
           workspacePath,
           taskTemp,
-          ...TOOLCHAIN_READ,
           ...OS_READ,
           ...(lib64 ? ["/lib64"] : []),
           ...readPaths,

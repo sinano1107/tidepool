@@ -18,7 +18,7 @@
 # and the CLI version (pinned, and raised through docs/claude-cli-version-bump.md),
 # so this runs at deploy and at a version bump.
 #
-# SEVEN ROWS IN ONE SESSION, run by scripts/read-floor-canary-probe.sh:
+# NINE ROWS IN ONE SESSION, run by scripts/read-floor-canary-probe.sh:
 #
 #   must be refused (judged by the OS's own refusal string)
 #     other-task-temp — a file in /tmp outside this session's task temp, standing
@@ -29,8 +29,13 @@
 #                       /tmp/claude-<uid>/, where #1950 saw a worker read and append
 #                       to another session's files; the probe tries both
 #     home            — a file under the current home, outside the workspace
+#     git-config      — a stand-in file under ~/.config/git/, the directory
+#                       git-credential-store keeps credentials in (ADR 0033's
+#                       #3211 addendum: no host git config location is re-opened).
+#                       Never named `credentials`, so a host's real store is untouched
 #   controls (the same session must still work)
 #     workspace       — write and read back a file in the workspace
+#     workspace-git   — `git status` in the workspace, with ~/.gitconfig and ~/.config/git closed
 #     task-temp       — `mktemp` lands in the task temp
 #     allowed-domain  — the emitted allowlist's one domain answers 200
 #
@@ -49,7 +54,7 @@
 #
 # AND A BASELINE, because bwrap's refusal is the same string as "not there". Every
 # target is checked from OUTSIDE the sandbox first; a target missing there makes its
-# row VACUOUS. Rows other-task-temp, other-session-tmp and home are files this script
+# row VACUOUS. Rows other-task-temp, other-session-tmp, home and git-config are files this script
 # writes, each holding a token that never appears in the prompt or the probe, so "it
 # was read" is the token in the transcript or the probe's rc=0 (an append that landed
 # also counts for other-session-tmp). data-dir is a location the canary does not own (the
@@ -98,7 +103,7 @@ control_verdict() {
 }
 
 # Every row's verdict → the exit code. A hole anywhere is 1; otherwise anything not
-# PASS is 2. Four refusals with a control missing is therefore never 0.
+# PASS is 2. Every refusal with a control missing is therefore never 0.
 run_status() {
   local v status=0
   for v in "$@"; do
@@ -176,6 +181,7 @@ HOME_TARGET="$WORK/home-canary.txt"
 # Only ever inside the target files, never in the prompt or the probe.
 TMP_TOKEN="READFLOOR-TMP-4e9c71a2b05d"
 HOME_TOKEN="READFLOOR-HOME-b83d6f19c2e7"
+GIT_CONFIG_TOKEN="READFLOOR-GITCONFIG-7a3f05c8e1d9"
 SESSION_TOKEN="READFLOOR-SESSION-0d5a2e7c94f1"
 APPEND_MARK="READFLOOR-APPENDED"
 
@@ -202,14 +208,21 @@ CLAUDE_TMP="/tmp/claude-$(id -u)"
 SESSION_DIR=$(mktemp -d "$CLAUDE_TMP/read-floor-canary-XXXXXX")
 SESSION_TARGET="$SESSION_DIR/tasks.output"
 echo "$SESSION_TOKEN" > "$SESSION_TARGET"
+# git-config's target, under the same rule as the session directory: the directory is
+# created only if absent, and only then removed.
+GIT_CONFIG_DIR="$HOME/.config/git"
+[[ -d "$GIT_CONFIG_DIR" ]] && git_config_dir_existed=yes || { git_config_dir_existed=no; mkdir -p "$GIT_CONFIG_DIR"; }
+GIT_CONFIG_TARGET=$(mktemp "$GIT_CONFIG_DIR/read-floor-canary-XXXXXX")
+echo "$GIT_CONFIG_TOKEN" > "$GIT_CONFIG_TARGET"
 
 status=1
 cleanup() {
   if [[ "$status" == "0" ]]; then
-    rm -rf "$WORK" "$TASK_TEMP" "$TMP_TARGET" "$SESSION_DIR"
+    rm -rf "$WORK" "$TASK_TEMP" "$TMP_TARGET" "$SESSION_DIR" "$GIT_CONFIG_TARGET"
     [[ "$claude_tmp_existed" == "no" ]] && rmdir "$CLAUDE_TMP" 2>/dev/null
+    [[ "$git_config_dir_existed" == "no" ]] && rmdir "$GIT_CONFIG_DIR" 2>/dev/null
   else
-    log "kept $WORK, $TASK_TEMP, $TMP_TARGET and $SESSION_DIR for inspection"
+    log "kept $WORK, $TASK_TEMP, $TMP_TARGET, $SESSION_DIR and $GIT_CONFIG_TARGET for inspection"
   fi
   return 0
 }
@@ -220,6 +233,7 @@ grep -qF "$TMP_TOKEN" "$TMP_TARGET" && base_tmp=yes || base_tmp=no
 [[ -n "$DATA_DIR" && -d "$DATA_DIR" ]] && base_data=yes || base_data=no
 grep -qF "$HOME_TOKEN" "$HOME_TARGET" && base_home=yes || base_home=no
 grep -qF "$SESSION_TOKEN" "$SESSION_TARGET" && base_session=yes || base_session=no
+grep -qF "$GIT_CONFIG_TOKEN" "$GIT_CONFIG_TARGET" && base_git_config=yes || base_git_config=no
 
 # The profile comes from the DEPLOYED code, never hand-written.
 log "emitting the work profile from the deployed code…"
@@ -244,6 +258,7 @@ OTHER_TASK_FILE='$TMP_TARGET'
 DATA_DIR='$DATA_DIR'
 OTHER_SESSION_FILE='$SESSION_TARGET'
 HOME_FILE='$HOME_TARGET'
+GIT_CONFIG_FILE='$GIT_CONFIG_TARGET'
 APPEND_MARK='$APPEND_MARK'
 EOF
 
@@ -302,11 +317,14 @@ refused_row data-dir "$base_data" "$DATA_DIR" ""
 grep -qF "$APPEND_MARK" "$SESSION_TARGET" && appended=yes || appended=no
 refused_row other-session-tmp "$base_session" "$SESSION_TARGET" "$SESSION_TOKEN" "$appended"
 refused_row home "$base_home" "$HOME_TARGET" "$HOME_TOKEN"
+refused_row git-config "$base_git_config" "$GIT_CONFIG_TARGET" "$GIT_CONFIG_TOKEN"
 
 # The controls are judged on the filesystem where they leave something, so a
 # transcript cannot claim them.
 [[ "$(cat "$WS/read-floor-ws.txt" 2>/dev/null)" == "ok" ]] && ok=yes || ok=no
 record workspace "-" "$(line_of workspace)" "$(control_verdict "$ok")"
+[[ "$(line_of workspace-git)" == "rc=0"* ]] && ok=yes || ok=no
+record workspace-git "-" "$(line_of workspace-git)" "$(control_verdict "$ok")"
 made=$(line_of task-temp | sed -n 's/^rc=0 //p')
 [[ "$made" == "$TASK_TEMP"/* && -f "$made" ]] && ok=yes || ok=no
 record task-temp "-" "$(line_of task-temp)" "$(control_verdict "$ok")"
@@ -320,7 +338,7 @@ grep -oE "READ-FLOOR-DIAG .*" <<< "$SESSION"
 echo
 status=$(run_status "${VERDICTS[@]}")
 if [[ "$status" == "0" ]]; then
-  log "the OS refused all four reads outside the range, and the same session did its ordinary work"
+  log "the OS refused all five reads outside the range, and the same session did its ordinary work"
 elif [[ "$status" == "2" ]]; then
   fail "nothing was read, but this run could not tell (exit 2). Read the table above:"
   fail "  a refused row VACUOUS = its target was missing outside the sandbox (BASELINE no), or it"

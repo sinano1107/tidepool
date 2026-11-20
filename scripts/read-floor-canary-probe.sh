@@ -8,9 +8,9 @@
 # THIS IS TIDEPOOL'S OWN REGRESSION CHECK. The board's owner runs it against
 # their own board to confirm that a worker session's Bash still cannot read
 # outside its workspace and its own temp directory after a CLI or OS update.
-# The first three reads are EXPECTED to be refused by the operating system; a
+# The first five reads are EXPECTED to be refused by the operating system; a
 # refusal is the passing result, and the refusal's wording is the data being
-# collected. The last three are ordinary work the same session must still be able
+# collected. The last four are ordinary work the same session must still be able
 # to do. Each line is attempted exactly once and whatever comes back is printed.
 # Nothing here tries to get around a refusal or retries.
 #
@@ -18,8 +18,9 @@
 # file: a file in /tmp outside this session's temp directory, a host directory
 # outside home and /tmp (only `ls -d` of the directory itself — nothing inside it
 # is listed or read), a canary file standing in for another session's temp file
-# (read, then appended to — the append is expected to be refused too), and a file
-# in the home directory outside the workspace.
+# (read, then appended to — the append is expected to be refused too), a file
+# in the home directory outside the workspace, and a stand-in file the canary
+# placed under ~/.config/git/ (it holds only a marker, no secret).
 set -u
 . ./read-floor-targets
 
@@ -36,8 +37,10 @@ row other-task-temp cat "$OTHER_TASK_FILE"
 row data-dir ls -d "$DATA_DIR"
 row other-session-tmp sh -c 'cat "$1"; echo "$2" >> "$1"' _ "$OTHER_SESSION_FILE" "$APPEND_MARK"
 row home cat "$HOME_FILE"
+row git-config cat "$GIT_CONFIG_FILE"
 # expected: succeed
 row workspace sh -c 'echo ok > read-floor-ws.txt && cat read-floor-ws.txt'
+row workspace-git git status
 row task-temp mktemp
 row allowed-domain curl -sS -o /dev/null --max-time 15 -w 'code=%{http_code}' https://registry.npmjs.org
 
