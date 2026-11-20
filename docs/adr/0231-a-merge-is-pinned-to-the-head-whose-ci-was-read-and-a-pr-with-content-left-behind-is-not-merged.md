@@ -1,5 +1,7 @@
 # merge は CI を読んだ head に固定し、積み残しのある PR は merge しない
 
+**Status 追記: 決定1 の「読んだ後に head が動けば、無人 merge はキューに残って次の tick で新しい head の CI を読む」は、盤面が push した head へ動いたときだけ残る —— 盤面が最後に push した値の上に外から commit が足された head は、キューを外して推奨 hold の merge question に倒し、人間の `merge` は盤面がその commit を伝えるまで1回拒む([ADR 0387](0387-the-board-merges-unattended-only-the-head-it-last-pushed-and-a-human-merge-on-a-head-the-board-did-not-push-is-refused-once.md) 決定1・2、2026-11-20、issue #3210)。**
+
 **Status 追記: 決定3 の人間の merge 回答と無人 merge は、積み残しを読む同期区間の頭で名前の場所の全 ref を基準と比べる(fetch の await の後は比べ直す)—— 動いていれば、回答は拒まれて question は開いたまま残り、無人 merge はキューに残り、どちらも workspace の Quarantine を登録する([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 **Status: 決定2 の測り方は ADR 0239 で改められた — 積み残しは後始末の印ではなく、分解ツリーの done の work それぞれを merge される head と内容で比べて測る**

@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 決定5 の末文「着地の側の検査は #3210 が持つ」は決まった —— 無人 merge は盤面が最後に push した head だけを merge し、外から進んだ head は推奨 hold の merge question に倒す。検査は足さず、人間の目を通す([ADR 0387](0387-the-board-merges-unattended-only-the-head-it-last-pushed-and-a-human-merge-on-a-head-the-board-did-not-push-is-refused-once.md) 決定1・2、2026-11-20、issue #3210)。**
+
 **Status 追記: 帰結が番号なしで別の ADR に送った「どの repo が origin かを盤面が宣言から決める」は ADR 0378 が決めた —— workspace の網の行き先は宣言 `repo` から決まり、origin が別の repo を指すか、宣言が覚えた repo と違えば workspace の Quarantine になる。決定10・11 は変わらない([ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定1・3・6、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定7 は merge dial を問わない —— 文は無人 merge キューの行を前提に書かれているが、キューの行も merge question も持たない `external` の根でも、収束は同じ推奨 hold の merge question を立てる。問いは head についてで、誰が merge するかについてではない。`merge` と答えれば盤面が取り込んで push し、PR も merge する(回答は dial を読まない)。merge を盤面の外に保つなら `hold` のまま、落とされた commit を origin へ push し直す(2026-11-16、spec #3273 の seam の確認、ユーザー確認済み)。**
