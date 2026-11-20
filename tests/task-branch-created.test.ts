@@ -1,12 +1,12 @@
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents, listEventsOfKinds } from "../src/events.js";
 import { completeTask, getTask, humanDecomposeTask, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { recordTaskCheckoutTip, releaseWorkspace, resolveTaskBranchLineage, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, seedTaskBranch } from "./harness.js";
+import { api, bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, prepareAtPickup, seedTaskBranch } from "./harness.js";
 
 // ADR 0372 決定2〜4 / ADR 0375 決定2: タスクブランチを作ったら `task_branch_created` を残し、系譜はこの event と列で読む(#3418)
 
@@ -181,4 +181,21 @@ it("review の pickup は未着手の祖先を固定しない(ADR 0372 決定3)"
   expect(branchEvents(db, root.id)).toEqual([]);
   expect(git(ws.path, "for-each-ref", "--format=%(refname)", `refs/heads/task/${root.id}`)).toBe("");
   db.close();
+});
+
+// server boundary: 既定の名前は scheduler が渡す —— domain の試験は harness で手渡すので、渡し忘れはここでしか見えない
+it("盤面の pickup は既定の workspace を祖先の導出に渡し、列の無い根を既定で固定する(ADR 0372 決定1・3)", async () => {
+  const ws = await makeWorkspace("branch-created-scheduler");
+  const t = await bootTidepool({ workspace: ws });
+  onTestFinished(() => t.stop());
+  const root = registerTask(t.db, { type: "work", title: "root", purpose: "why", completion_criteria: "done" }, t.clock.now(), ...HUMAN_WEBUI);
+  const [child] = humanDecomposeTaskViaWebui(t.db, root, { reason: "split", children: [{ title: "child", purpose: "why", completion_criteria: "done" }] }, t.clock.now());
+
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.started.map((task) => task.id)).toEqual([child!.id]);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json as Array<{ kind: string; payload: unknown }>;
+  expect(events.filter((e) => e.kind === "task_branch_created").map((e) => e.payload)).toEqual([
+    { kind: "task_branch_created", sha: git(ws.path, "rev-parse", `task/${root.id}`), workspace: ws.name, column_filled_from: "default" },
+  ]);
 });
