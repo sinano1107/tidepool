@@ -1,5 +1,7 @@
 # conflict を受ける作業台は運ばれる側で鍵を分け、人間担当の work の作業台は子を含む tip だけを子の入口が取り込む —— 作業台の寿命は指し手でなく中身で決める
 
+**Status 追記: 決定5 で作業台を消す前(開き直し・取り込みの後・`done` の後・workspace の削除)に、持ち主の判定が依拠した ref の閉包のうち作業台が自前で持つ object を名前の場所で確かめ、欠ければ取り込み直す。揃わなければ作業台を残し、回答を拒む文が欠けた object を名指す([ADR 0388](0388-a-place-is-removed-only-after-the-objects-only-it-holds-read-whole-in-the-named-place-and-one-check-and-reimport-serves-every-removal.md) 決定1・2・4、2026-11-21、issue #3222)。**
+
 2026-11-17 の grilling(#3352)で決定。ADR 0371 は作業台を (workspace, 書く先の ref) ごとに1つとし、同じ鍵の入口に共有させた(決定1・7)。
 鍵を決めた #3182 決定6 の時点では1つの鍵に入口は1つで、その後に入口が積み重なった —— 保護ブランチの鍵に local 着地と `take in`
 (#3184 決定9、理由は「鍵は足さない」)、`task/<root>` の鍵に追いつき・merge back の撃ち直し・`pr_merge`。回答は sha も branch も
