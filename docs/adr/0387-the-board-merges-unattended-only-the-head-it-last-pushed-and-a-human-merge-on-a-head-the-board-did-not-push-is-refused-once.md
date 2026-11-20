@@ -29,8 +29,10 @@ path(ADR 0362)を変えていても、完了の門と人間の目のどちらも
    自分の push した commit が列挙される。次の `merge` で merge する。conflict を解く案内の文は、この1回の拒否を前もって言う。
    この question の上でだけ拒まない形は退けた —— question が開いている間に足された commit を、人間が見ないまま merge する。
 4. **収束が記録済みの PR へ push するときは、push の前から `pr_branch_pushed` を書くまで、tick と人間の merge 回答と同じ PR の
-   in-flight 印(ADR 0236)を持つ。取れなければ撃たず、次の突きに回す。** push と記録の間に tick が新しい head を読むと、盤面自身の
-   push を決定1 の一致しない head と読む。
+   in-flight 印(ADR 0236)を持つ。取れなければ撃たず、次の突きに回す。人間の `merge` 回答は、head を読んだ後の同期区間で印を見て、
+   印があれば判定せずに拒んで答え直させ、無ければ最後に push した値をその場で読む。** push と記録の間に tick や回答が新しい head を
+   読むと、盤面自身の push を決定1 の一致しない head と読む。tick は印を持って読むので飛ばすだけで足りるが、回答は印を merge の
+   直前まで取らない。
 
 ## Considered Options
 
