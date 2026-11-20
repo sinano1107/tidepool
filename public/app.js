@@ -4423,19 +4423,25 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   const [interview, setInterview] = React.useState(null);
   const [checkout, setCheckout] = React.useState(null);
   const [humanStops, setHumanStops] = React.useState([]);
+  const [workbench, setWorkbench] = React.useState(null);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
     setHumanStops([]);
+    setWorkbench(null);
     api("GET /api/tasks/:id", { params: { id: task.id } }).then((full) => {
       setHumanStops(full.human_stops);
+      if (full.workbench) setWorkbench({ path: full.workbench, commands: full.workbench_commands ?? [] });
       if (task.type === "interview") setInterview({ room: full.interview_room ?? "not opened yet", head: full.posed_head ?? "not posed yet" });
       else if (task.interview_root_id != null) setCheckout(full.examinee_checkout ?? "not opened yet");
     }).catch(() => {
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
+    navigator.clipboard?.writeText(command).catch(() => {
+    });
+  } }, "Copy")))), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
 }
 function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -4980,7 +4986,7 @@ function App() {
       say(
         "info",
         t.type === "question" ? "sent for approval" : "child added \u2014 appended to queue tail",
-        t.id
+        t.warning ?? t.id
       );
       await refreshFull();
     } catch (err) {

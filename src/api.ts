@@ -41,6 +41,7 @@ import {
   startWorkThroughHumanDoor,
   stopThroughHumanDoor,
   submitAnswer,
+  takeInWorkThroughHumanDoor,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
 import { closedRootOf, type Landing, landingState, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "./landing.js";
@@ -178,7 +179,7 @@ import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
-  humanWorkbenchOnDisk,
+  humanWorkbenchDisplay,
   resolveWorkspacesBaseDir,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -776,6 +777,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         db,
         workspace,
         resolveWorkspace,
+        workspacesDir,
         github,
         draftClient,
         agentRegistered,
@@ -797,7 +799,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(gateFailureStatus(kind)), body);
       return;
     }
-    sendJson(res.status(201), result.task satisfies WireContract["POST /api/tasks"]);
+    // spec #3273 group C: 取り込まれていない commit を持つ人間担当の親の分解の警告
+    sendJson(res.status(201), { ...result.task, ...(result.warning !== undefined && { warning: result.warning }) } satisfies WireContract["POST /api/tasks"]);
   });
 
   // Appends a human-approved comment to a GitHub issue (issue #49 設計点4:
@@ -1582,6 +1585,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     sendJson(res, result.value satisfies WireContract["POST /api/tasks/:id/start-work"]);
   });
 
+  // ADR 0374 決定5: 完了を伴わない取り込み(`take_in_work`)—— 人間面だけの扉。応答は text C6
+  router.post("/tasks/:id/take-in", async (req, res) => {
+    const result = await takeInWorkThroughHumanDoor(humanWorkDeps, req.params.id, () => clock.now(), "webui");
+    if (!result.ok) {
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
+      return;
+    }
+    sendJson(res, result.value satisfies WireContract["POST /api/tasks/:id/take-in"]);
+  });
+
   // the handoff-draft route (issue #13): same propose-don't-commit shape as
   // /tasks/draft — drafts the 6-field doc from a free-text/voice dump but
   // never completes the task itself; the human reviews/edits, then calls
@@ -2281,8 +2294,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
       // 受験者の答案の在り処 —— 自分の checkout(ADR 0276 決定4)
       ...(task.interview_target_id !== null && { examinee_checkout: examineeCheckoutPath(db, task.id) ?? null }),
-      // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処 —— 完了の dialog が text C4 で言う
-      ...(presented!.has_task_branch && { workbench: humanWorkbenchOnDisk(resolveWorkspacesBaseDir(workspacesDir), task.id) ?? null }),
+      // ADR 0374 決定2: 人間担当の work 自身の作業台の在り処(完了の dialog が text C4 で言う)と、開いている間のコマンド
+      ...(presented!.has_task_branch && humanWorkbenchDisplay(resolveWorkspacesBaseDir(workspacesDir), task)),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

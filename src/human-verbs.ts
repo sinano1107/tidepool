@@ -136,6 +136,8 @@ import {
   INTAKE_OPTIONS,
   type IntakeContext,
   mergeTaskToProtected,
+  NO_WORKBENCH,
+  notTakenInWarning,
   OutOfBandProtectedBranchError,
   PickupGateError,
   prepareHumanWork,
@@ -153,6 +155,7 @@ import {
   startHumanWork,
   takeInContainmentRepair,
   takeInHumanContentWorkbench,
+  takeInHumanWork,
   takeWorkspaceInFlightKey,
   taskBranch,
   UnknownWorkspaceError,
@@ -171,6 +174,8 @@ export interface RegisterThroughHumanDoorDeps {
   github?: GitHubClient;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** 分解の警告が親の作業台を読む基点(spec #3273 group C)。 */
+  workspacesDir?: string;
   /** 登録の成功は pickup の契機である(ADR 0119 決定2)。門で弾かれた登録は撃たない。 */
   pollNow: () => void;
   defaultAgentName?: string;
@@ -197,7 +202,7 @@ export type GateFailure =
     };
 
 export type RegisterThroughHumanDoorResult =
-  | { ok: true; task: BoardTask }
+  | { ok: true; task: BoardTask; warning?: string }
   | { ok: false; failure: GateFailure };
 
 export type HumanVerbResult<T> =
@@ -216,6 +221,23 @@ export interface DecomposeThroughHumanDoorDeps {
   resolvesToBuiltIn?: (name: string) => boolean;
   /** 子の登録は pickup の契機である(ADR 0119 決定2)。拒否された分解は撃たない。 */
   pollNow: () => void;
+  /** 親の作業台を読む材料(spec #3273 group C の分解の警告)。Absent → 警告を出さない。 */
+  workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  workspacesDir?: string;
+}
+
+/** spec #3273 group C(Surfaces): 作業台に取り込まれていない commit を持つ人間担当の親の分解は、拒まずに1行警告する(子は `task/<H>` から
+ *  切られる)。読めなければ言わない —— 分解は拒まれず、子はもう書いてある。 */
+function notTakenInWarningOf(deps: DecomposeThroughHumanDoorDeps, task: Task): string | undefined {
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!resolve || !hasTaskBranch(deps.db, task.id)) return undefined;
+  try {
+    return notTakenInWarning(resolve(derivedWorkspace(deps.db, task)), resolveWorkspacesBaseDir(deps.workspacesDir), task.id);
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err;
+    return undefined;
+  }
 }
 
 /** Shared human-surface decomposition. */
@@ -225,7 +247,7 @@ export function decomposeThroughHumanDoor(
   input: { reason: string; children: ChildSpec[] },
   now: () => Date,
   origin: EventOrigin,
-): HumanVerbResult<Task[]> {
+): HumanVerbResult<{ children: Task[]; warning?: string }> {
   try {
     for (const child of input.children) {
       if (child.workspace !== undefined && !hasWorkspaceField({ parent_id: taskId })) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
@@ -237,7 +259,8 @@ export function decomposeThroughHumanDoor(
     if (!task) return { ok: false, failure: { kind: "not_found", error: "parent task not found" } };
     const children = humanDecomposeTask(deps.db, task, input, now(), origin);
     deps.pollNow();
-    return { ok: true, value: children };
+    const warning = notTakenInWarningOf(deps, task);
+    return { ok: true, value: { children, ...(warning !== undefined && { warning }) } };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -467,9 +490,10 @@ export async function registerThroughHumanDoor(
               : { kind: "invalid", error: result.failure.error },
         };
       }
-      const task = result.value[0] ?? latestChild(deps.db, input.parent_id!);
+      const task = result.value.children[0] ?? latestChild(deps.db, input.parent_id!);
       if (!task) throw new Error("human decompose did not register a child or approval question");
-      return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
+      const presented = presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName);
+      return { ok: true, task: presented, ...(result.value.warning !== undefined && { warning: result.value.warning }) };
     }
     if (input.workspace !== undefined) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
@@ -1104,7 +1128,7 @@ export interface EditThroughHumanDoorDeps {
   interviewerName?: string;
 }
 
-/** 人間担当の work の扉(`start_work` と完了)が名前の場所に届く材料(ADR 0374 決定2・9): workspace の resolver、準備の fetch の GitHub 身元、
+/** 人間担当の work の扉(`start_work`・`take_in_work`・完了)が名前の場所に届く材料(ADR 0374 決定2・9): workspace の resolver、準備の fetch の GitHub 身元、
  *  作業台の基点、最初の撮りの確認が引く registry、盤面の固定点。完了は収束を突く(`pollNow`)。 */
 export interface HumanWorkDeps {
   db: Db;
@@ -1146,12 +1170,20 @@ function humanWorkPreparation(deps: HumanWorkDeps, now: Date): HumanWorkPreparat
   };
 }
 
+/** 書き始めと取り込みが通す task: 人間担当の work。 */
+const humanAssignedWork = (task: Task) => task.type === "work" && task.assignee === HUMAN_ACTOR_ID;
+
 /** 人間担当の work の扉ごとの門: 通す task と、拒否の文と、決着の文の動詞。 */
 const HUMAN_WORK_GATES = {
   "start work": {
-    admits: (task: Task) => task.type === "work" && task.assignee === HUMAN_ACTOR_ID,
+    admits: humanAssignedWork,
     refusal: "only a work task assigned to the human can start work here",
     settled: "started",
+  },
+  "take in": {
+    admits: humanAssignedWork,
+    refusal: "only a work task assigned to the human can take work in here",
+    settled: "taken in",
   },
   complete: {
     admits: (task: Task) => task.assignee === HUMAN_ACTOR_ID,
@@ -1194,6 +1226,44 @@ export async function startWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: str
   }
 }
 
+/** 取り込みとタスクブランチを持つ H の完了が共有する扉の準備: 名前の場所を引き、in-flight の鍵(ADR 0373 決定8)を取って準備を通し、
+ *  最後の await の後に門を掛け直してから、同期区間 `write` に今の行と名前の場所と作業台の基点を渡す。 */
+async function throughHumanWorkPlace<T>(
+  deps: HumanWorkDeps,
+  task: Task,
+  verb: "take in" | "complete",
+  at: Date,
+  write: (fresh: Task, named: WorkspaceConfig, base: string) => T,
+): Promise<T> {
+  const named = humanWorkPlace(deps, task, verb, at);
+  const derived = { name: derivedWorkspace(deps.db, task), place: named.name };
+  const board = humanWorkPreparation(deps, at);
+  return withWorkspaceInFlightKey(deps.db, named.name, async () => {
+    await prepareHumanWork(deps.db, named, task, verb, board);
+    return write(humanWorkGate(deps.db, task.id, verb, derived), named, board.workspacesBaseDir);
+  });
+}
+
+/** ADR 0374 決定5: 完了を伴わない取り込み(`take_in_work`)—— 人間面だけの、人間担当の work の扉。準備と in-flight の鍵は `start_work` と
+ *  同じ(ADR 0373 決定8)で、判定と執行は `takeInHumanWork` が持つ。タスクブランチの無い H は作業台も無いので、名前の場所に触れる前に
+ *  text C8 の作業台の無い拒否で返す。返すのは text C6。 */
+export async function takeInWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: string, now: () => Date, origin: EventOrigin): Promise<HumanVerbResult<{ message: string }>> {
+  const task = getTask(deps.db, taskId);
+  if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    humanWorkGate(deps.db, taskId, "take in");
+    if (!hasTaskBranch(deps.db, task.id)) throw new DomainError(NO_WORKBENCH);
+    const at = now();
+    const message = await throughHumanWorkPlace(deps, task, "take in", at, (fresh, named, base) =>
+      takeInHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, at),
+    );
+    return { ok: true, value: { message } };
+  } catch (err) {
+    if (err instanceof DomainError) return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    throw err;
+  }
+}
+
 /** Shared human-surface completion for human-assignee tasks. ADR 0374 決定1: 動作は「タスクブランチを持つか」で分ける —— 持たなければ
  *  今どおり記録だけを閉じ、持てば in-flight の鍵を取って準備を通し、作業台の取り込み・`done`・H の merge back を `completeHumanWork` に
  *  任せ、収束を突く。作業台を残した完了は text C7 を `notice` に添える。 */
@@ -1213,14 +1283,9 @@ export async function completeThroughHumanDoor(
       completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
     } else {
       const at = now();
-      const named = humanWorkPlace(deps, task, "complete", at);
-      const derived = { name: derivedWorkspace(deps.db, task), place: named.name };
-      const board = humanWorkPreparation(deps, at);
-      notice = await withWorkspaceInFlightKey(deps.db, named.name, async () => {
-        await prepareHumanWork(deps.db, named, task, "complete", board);
-        const fresh = humanWorkGate(deps.db, task.id, "complete", derived);
+      notice = await throughHumanWorkPlace(deps, task, "complete", at, (fresh, named, base) => {
         const checked = assertCompletable(deps.db, fresh, handoff);
-        return completeHumanWork(deps.db, named, fresh, board.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
+        return completeHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
           completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin);
         });
       });

@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { boardViewStatus, git, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
 
@@ -31,6 +32,14 @@ export const workbenchPath = (base: string, target: WorkbenchTarget, carried?: s
     WORKBENCH_SEGMENT,
     `${"task" in target ? target.task : `@${target.workspace}`}${carried === undefined ? "" : `@${carried.replace(/[+/@%]/g, (c) => LEAF_ESCAPES[c]!)}`}`,
   );
+
+/** ADR 0374 決定2 / spec #3273 group C(Surfaces): 開いている作業台の表示が出すコマンド —— そこへ移る `cd` と、自前の clone の remote に足す
+ *  `git remote add`。盤面は host の ssh の名前を知らないので `<name>` と `<ssh-host>` は人間が埋め、設定は足さない。Lima の guest
+ *  (host 名 `lima-<instance>`)で動く盤面だけ、作業台が VM の中にあるので VM に入るコマンドを先に足す。 */
+export function workbenchCommands(path: string, host = hostname()): string[] {
+  const instance = /^lima-(.+)$/.exec(host)?.[1];
+  return [...(instance ? [`limactl shell ${instance}`] : []), `cd ${path}`, `git remote add <name> <ssh-host>:${path}`];
+}
 
 /** 盤面が読んだ作業台: 在り処、書く先の branch とその名前の場所での今の値、作業台の書く先の branch の tip(無ければ undefined —— 作りかけ)、
  *  tip の閉包と名前の場所の objects を引ける repo(盤面所有の検証済みの写し。tip が無ければ名前の場所)。 */

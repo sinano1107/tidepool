@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, makeWorkspace, managementMcpClient, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { workbenchCommands } from "../src/workbench.js";
+import { api, bootTidepool, commitWork, makeWorkspace, managementMcpClient, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 // `start_work` の人間面の写像だけ(ADR 0107): 経路と管理MCP の tool があり、拒否を既存の status と tool error へ写し、worker MCP には無い。
 // task の読みはタスクブランチの有無と着手済みを運ぶ。判定と執行は tests/human-work.test.ts が domain 層で述べる。
@@ -43,6 +44,68 @@ it("管理MCP の start_work は作業台の在り処を返し、拒否は tool 
     const refused: any = await client.callTool({ name: "start_work", arguments: { task_id: human.id } });
 
     expect(refused.isError).toBe(true);
+  } finally {
+    await client.close();
+  }
+});
+
+// `take_in_work` と作業台の表示の人間面の写像だけ(ADR 0107、spec #3273 group C)。拒否の文と取り込みの判定は tests/human-work.test.ts。
+it("POST /api/tasks/:id/take-in は text C6 を返し、task の読みは作業台が disk にある間その在り処とコマンドを、分解の子の登録は取り込まれていない commit の警告を運ぶ —— 無い task は 404、拒否は 409", async () => {
+  t = await bootTidepool({ workspace: await makeWorkspace("take-in-route") });
+  const human = await registerWork(t, "write it myself", undefined, "human");
+  const path = (await api(t.baseUrl, "POST", `/api/tasks/${human.id}/start-work`, {})).json.path;
+  commitWork(path, "mine.txt", "mine\n");
+
+  const read = (await api(t.baseUrl, "GET", `/api/tasks/${human.id}`)).json;
+  // 人間担当の子は pickup されない —— 作業台に取り込まれていない commit がある親の分解は警告を添える
+  const child = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", title: "a slice", purpose: "p", completion_criteria: "c", assignee: "human", parent_id: human.id, decompose_reason: "split",
+  });
+  const ok = await api(t.baseUrl, "POST", `/api/tasks/${human.id}/take-in`, {});
+  const nothingNew = await api(t.baseUrl, "POST", `/api/tasks/${human.id}/take-in`, {});
+  const missing = await api(t.baseUrl, "POST", "/api/tasks/nope/take-in", {});
+
+  expect(read.workbench).toBe(path);
+  expect(read.workbench_commands).toEqual(workbenchCommands(path));
+  expect(child.status).toBe(201);
+  expect(child.json.warning).toEqual(expect.any(String));
+  expect(ok.status).toBe(200);
+  expect(ok.json.message).toMatch(/^took [0-9a-f]+ in as [0-9a-f]+ on task\//);
+  expect(nothingNew.status).toBe(409);
+  expect(missing.status).toBe(404);
+});
+
+it("管理MCP の take_in_work は拒否を tool error にし、worker MCP には無い —— get_task は作業台の在り処とコマンド、has_task_branch と started を、register_task の分解の子は警告を運ぶ", async () => {
+  t = await bootTidepool({ workspace: await makeWorkspace("take-in-tool") });
+  const human = await registerWork(t, "write it myself", undefined, "human");
+  const worker = await mcpClient(t.mcpBaseUrl, human.id);
+  try {
+    expect((await worker.listTools()).tools.map((tool) => tool.name)).not.toContain("take_in_work");
+  } finally {
+    await worker.close();
+  }
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("take_in_work");
+    const { path } = JSON.parse(((await client.callTool({ name: "start_work", arguments: { task_id: human.id } })) as any).content[0].text);
+
+    const read = JSON.parse(((await client.callTool({ name: "get_task", arguments: { task_id: human.id } })) as any).content[0].text);
+    // tip が task/<H> のまま —— 取り込むものが無い拒否(文は domain 層の釘)が tool error になる
+    const refused: any = await client.callTool({ name: "take_in_work", arguments: { task_id: human.id } });
+
+    commitWork(path, "mine.txt", "mine\n");
+    // 人間担当の子は pickup されない —— 取り込まれていない commit がある親の分解は警告を添える
+    const child = JSON.parse(
+      ((await client.callTool({
+        name: "register_task",
+        arguments: { type: "work", title: "a slice", purpose: "p", completion_criteria: "c", assignee: "human", parent_id: human.id, decompose_reason: "split" },
+      })) as any).content[0].text,
+    );
+
+    expect([read.has_task_branch, read.started, read.workbench]).toEqual([true, true, path]);
+    expect(read.workbench_commands).toEqual(workbenchCommands(path));
+    expect(refused.isError).toBe(true);
+    expect(child.warning).toEqual(expect.any(String));
   } finally {
     await client.close();
   }

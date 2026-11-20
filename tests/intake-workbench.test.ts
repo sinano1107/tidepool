@@ -24,7 +24,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -384,20 +384,7 @@ it("取り込みの間に作業台へ push が着けば、作業台の branch �
   commitWork(b.workbench(), "notes.txt", "the human's\n");
   const tip = git(b.workbench(), "rev-parse", "main");
   // 包む commit を作る瞬間に、人間の clone からの push を模して作業台の main に commit を足す
-  const shimDir = await tempDir("tidepool-git-shim-");
-  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(
-    join(shimDir, "git"),
-    `#!/bin/sh\ncase " $* " in *" commit-tree "*) "${real}" -C "${b.workbench()}" -c user.name=h -c user.email=h@example.com commit -q --allow-empty -m pushed;; esac\nexec "${real}" "$@"\n`,
-    { mode: 0o755 },
-  );
-  vi.stubEnv("PATH", `${shimDir}:${process.env.PATH}`);
-  let answered: Awaited<ReturnType<Board["answer"]>>;
-  try {
-    answered = await b.answer("take in");
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  const answered = await withPushDuringWrap(b.workbench(), () => b.answer("take in"));
 
   const commit = git(b.ws.path, "rev-parse", "main");
   expect(answered.notice).toBe(tookIn(tip, commit, " Merge `board/main` into your branch before the next take-in."));

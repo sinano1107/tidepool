@@ -638,13 +638,17 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   const [interview, setInterview] = React.useState<{ room: string; head: string } | null>(null);
   const [checkout, setCheckout] = React.useState<string | null>(null);
   const [humanStops, setHumanStops] = React.useState<WireContract['GET /api/tasks/:id']['human_stops']>([]);
+  // ADR 0374 決定2: 開いている作業台の在り処と、そこへ移るコマンドと clone の remote に足すコマンド
+  const [workbench, setWorkbench] = React.useState<{ path: string; commands: string[] } | null>(null);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
     setHumanStops([]);
+    setWorkbench(null);
     api('GET /api/tasks/:id', { params: { id: task.id } })
       .then((full) => {
         setHumanStops(full.human_stops);
+        if (full.workbench) setWorkbench({ path: full.workbench, commands: full.workbench_commands ?? [] });
         if (task.type === 'interview') setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' });
         else if (task.interview_root_id != null) setCheckout(full.examinee_checkout ?? 'not opened yet');
       })
@@ -659,6 +663,16 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
       {humanStops.map((row) => <p key={row.id} style={meta}>stopped by human · {row.reason}{row.cause && ` · ${row.cause}: ${row.evidence}`}</p>)}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
+      {workbench && <>
+        <p style={meta}>workbench: {workbench.path}</p>
+        {workbench.commands.map((command) => (
+          <div key={command} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* 平文の HTTP では navigator.clipboard が無い —— そのときも選んで写せるよう、文字は全選択で置く */}
+            <code style={{ ...meta, margin: 0, flex: 1, userSelect: 'all' }}>{command}</code>
+            <Button variant="secondary" size="sm" aria-label={`copy ${command}`} onClick={() => { navigator.clipboard?.writeText(command).catch(() => {}); }}>Copy</Button>
+          </div>
+        ))}
+      </>}
       {task.status === 'in_progress'
         ? <Button variant="primary" size="lg" full onClick={onStop}>Stop session</Button>
         : <>
@@ -1459,7 +1473,7 @@ function App() {
       say(
         'info',
         t.type === 'question' ? 'sent for approval' : 'child added — appended to queue tail',
-        t.id,
+        t.warning ?? t.id,
       );
       await refreshFull();
     } catch (err) {
