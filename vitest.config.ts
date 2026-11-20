@@ -1,4 +1,5 @@
 import { configDefaults, defineConfig } from "vitest/config";
+import { DurationSequencer } from "./scripts/test-sequencer.js";
 
 // vitest の default include は `**/*.spec.ts` も拾うが、`e2e/` の spec は Playwright
 // のもので vitest では動かない。サーバー境界までの vitest テストは `tests/*.test.ts`、
@@ -13,6 +14,8 @@ export default defineConfig({
   test: {
     // worktree 間の test lock。main process で1度だけ走る面なので globalSetup に置く(worker ごとの setupFiles ではない)
     globalSetup: ["scripts/test-lock.ts"],
+    // --shard を CI の実測の所要秒で均す(scripts/test-sequencer.ts)。shard しない run の順は既定のまま
+    sequence: { sequencer: DurationSequencer },
     // テストの git(src/ から起動するものも含む)に auto maintenance を走らせない(issue #842)
     env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "maintenance.auto", GIT_CONFIG_VALUE_0: "false" },
     // docs/experiments/ の review 対象は欠陥を仕込んだ教材で、node:test 形式。盤面のテストではない。

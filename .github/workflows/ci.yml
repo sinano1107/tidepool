@@ -22,8 +22,8 @@ jobs:
 
   # サーバー境界までの実物テスト(ADR 0027)。tidepool のリスクの大半はここが
   # 吸収している。full suite の合否は ubuntu と macOS で確かめる(ADR 0155)。
-  # shard はファイル単位で割られ、1ファイルの中は1 worker で直列に走る。1ファイルが
-  # 重いと shard を増やしても縮まないので、重いファイルは分ける(tests/landing-*.test.ts)。
+  # shard はファイル単位で、CI の実測の所要秒で均して割る(scripts/test-sequencer.ts)。1ファイルの中は
+  # 1 worker で直列に走るので、1ファイルが重いと shard を増やしても縮まない。重いファイルは分ける(tests/landing-*.test.ts)。
   test:
     strategy:
       fail-fast: false
@@ -45,7 +45,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run test -- --shard=${{ matrix.shard }}
+      # JSON の報告は scripts/update-test-durations.ts が shard の割り当て用の所要秒に使う
+      - run: npm run test -- --shard=${{ matrix.shard }} --reporter=default --reporter=json --outputFile.json=vitest-report.json
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: vitest-report-${{ matrix.os == 'macos-latest' && 'macos' || 'ubuntu' }}-${{ strategy.job-index }}
+          path: vitest-report.json
+          retention-days: 14
 
   # 実ブラウザでのみ見える React 配線層の昇格済みスモーク(ADR 0027 / 0055)。
   # サーバー境界の test job と失敗シグナルを分け、並列に走らせる。
