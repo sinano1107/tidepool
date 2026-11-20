@@ -75,13 +75,13 @@ expect "a control that succeeded" PASS "$(control_verdict yes)"
 expect "a control that is missing or failed proves nothing" VACUOUS "$(control_verdict no)"
 
 echo "the run — PASS only with every refused row AND every control"
-expect "four refusals and three controls is exit 0" \
-  0 "$(run_status PASS PASS PASS PASS PASS PASS PASS)"
-# 拒否の4行がすべて PASS でも、control が1つ欠ければ合格と読まない。
-expect "four refusals with one control missing is exit 2, never 0" \
-  2 "$(run_status PASS PASS PASS PASS PASS VACUOUS PASS)"
+expect "six refusals and four controls is exit 0" \
+  0 "$(run_status PASS PASS PASS PASS PASS PASS PASS PASS PASS PASS)"
+# 拒否の6行がすべて PASS でも、control が1つ欠ければ合格と読まない。
+expect "six refusals with one control missing is exit 2, never 0" \
+  2 "$(run_status PASS PASS PASS PASS PASS PASS PASS VACUOUS PASS PASS)"
 expect "any hole is exit 1, whatever else could not be measured" \
-  1 "$(run_status PASS FAIL VACUOUS PASS PASS PASS PASS)"
+  1 "$(run_status PASS FAIL VACUOUS PASS PASS PASS PASS PASS PASS PASS)"
 
 echo "the OS's refusal, in each spelling a host prints it"
 said() { os_refused_in "$1" && echo yes || echo no; }

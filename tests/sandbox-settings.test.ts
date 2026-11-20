@@ -48,19 +48,21 @@ describe("buildSandboxSettings", () => {
     });
   });
 
-  it("ツールチェーンの動作基盤は封じない: git の global config が allowRead に載る(無いと git が一切動かない)", () => {
-    // 期待値は独立した情報源から: ADR 0033 追記が名指しする2パスをそのまま literal で置く
-    const { allowRead } = buildSandboxSettings({
-      taskType: "work",
-      workspacePath: "/home/pi/work/tidepool",
-      ...HOST,
-    }).sandbox.filesystem;
-    expect(allowRead).toContain("~/.gitconfig");
-    expect(allowRead).toContain("~/.config/git");
-    // credential は開かない(ADR 0024: worker は GitHub credential を持たない)
-    expect(allowRead).not.toContain("~/.config/gh");
-    expect(allowRead).not.toContain("~/.ssh");
-    expect(allowRead).not.toContain("~/.netrc");
+  it("host の git config の置き場は開け直さない: ~/.gitconfig も ~/.config/git も allowRead に載らない", () => {
+    for (const taskType of ["work", "review"] as const) {
+      const { allowRead } = buildSandboxSettings({
+        taskType,
+        workspacePath: "/home/pi/work/tidepool",
+        ...HOST,
+      }).sandbox.filesystem;
+      // ADR 0033 Status 追記: 再許可の根拠(git が fatal)は ADR 0358 決定2 の GIT_CONFIG_GLOBAL=/dev/null で消え、~/.config/git は credential-store の置き場
+      expect(allowRead).not.toContain("~/.gitconfig");
+      expect(allowRead).not.toContain("~/.config/git");
+      // credential は開かない(ADR 0024: worker は GitHub credential を持たない)
+      expect(allowRead).not.toContain("~/.config/gh");
+      expect(allowRead).not.toContain("~/.ssh");
+      expect(allowRead).not.toContain("~/.netrc");
+    }
   });
 
   it("review プロファイル: allowWrite は task temp だけ(workspace の書き込み拒否は OS 強制ではない — 下のコメント参照)", () => {
@@ -118,8 +120,9 @@ describe("buildSandboxSettings", () => {
   });
 });
 
-/** ADR 0257: 読みは既定拒否。`/` を閉じ、開け直すのは workspace・task temp・git config・skill のパス・
- *  OS とツール一式の置き場所だけ。期待値は ADR 0257 決定1 が名指す組を literal で置く。 */
+/** ADR 0257: 読みは既定拒否。`/` を閉じ、開け直すのは workspace・task temp・OS とツール一式の置き場所だけ。期待値は
+ *  ADR 0257 決定1 が名指す組を literal で置く —— 決定1 の「既存の git config」は ADR 0033 Status 追記(#3211)で外れ、
+ *  skill のパスは ADR 0335 決定3 で外れた。 */
 describe("buildSandboxSettings の読みの範囲(ADR 0257)", () => {
   const OS_LOCATIONS = ["/usr", "/bin", "/lib", "/sbin", "/etc", "/proc", "/dev"];
   const DATA_LOCATIONS = ["/home", "/root", "/Users", "/mnt", "/media", "/srv", "/opt", "/var", "/tmp", "/run", "/snap", "/sys", "/boot"];
@@ -138,17 +141,9 @@ describe("buildSandboxSettings の読みの範囲(ADR 0257)", () => {
   });
 
   // ADR 0335 決定3: skill 由来の path は無い —— workspace の skill は workspace の下で読め、user / plugin の名前は許可に入らない
-  it("allowRead は workspace・task temp・git config・OS の置き場所だけからなる", () => {
+  it("allowRead は workspace・task temp・OS の置き場所だけからなる", () => {
     for (const taskType of ["work", "review"] as const) {
-      expect([...settingsOf(taskType).allowRead].sort()).toEqual(
-        [
-          "/home/pi/work/tidepool",
-          TASK_TEMP,
-          "~/.gitconfig",
-          "~/.config/git",
-          ...OS_LOCATIONS,
-        ].sort(),
-      );
+      expect([...settingsOf(taskType).allowRead].sort()).toEqual(["/home/pi/work/tidepool", TASK_TEMP, ...OS_LOCATIONS].sort());
     }
   });
 

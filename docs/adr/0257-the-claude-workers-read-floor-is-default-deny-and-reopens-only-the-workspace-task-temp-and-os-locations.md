@@ -2,6 +2,8 @@
 
 **Status 追記: Interview の root が実環境を読みに開けるのは盤面の構造(type の権限面、ADR 0273 決定2)であって、決定4 が退けた registry の宣言ではない**(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
+**Status 追記: 決定1 の「既存の git config」は ADR 0033 の Status 追記(#3211)で、「skill のパス」は ADR 0335 決定3 で開け直す組から外れた**(2026-11-20、issue #3211)。
+
 2026-10-14 の grilling(issue #1950)で決定。ADR 0033 は Claude worker の読みの床を `denyRead: ["~/"]` に置いた。名指した場所だけを
 閉じる形で、それ以外は開いている。Lima VM(CLI 2.1.286)で実測すると、worker の Bash から `/tmp` の下の他の task の task temp と、
 他の session の `/tmp/claude-<uid>/` が読め、後者には書けた。VM が読み取り専用でマウントする Mac のホーム(`.ssh` や gh の資格
