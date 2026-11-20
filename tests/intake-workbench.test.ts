@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -375,6 +375,47 @@ it("take in は人間しか書けない path を含む tip を包む commit で�
   expect(git(b.workbench(), "rev-parse", "main")).toBe(commit);
   expect(git(b.workbench(), "rev-parse", "board/main")).toBe(commit);
   expect(git(b.workbench(), "status", "--porcelain")).toBe("");
+});
+
+/** 一度取り込んだ `sub/kept.txt` の blob を名前の場所から消し、作業台は自前の store に持ったまま root に1 commit 積んで question を開き直す
+ *  (取り込んでいない commit があるので作業台は作り直されない)—— 次の取り込みの pack は除外で blob も `sub` の tree も入れず、fetch も
+ *  送らない。blob の id を返す。 */
+async function holeHeldByWorkbench(b: Board): Promise<string> {
+  await b.open();
+  mkdirSync(join(b.workbench(), "sub"));
+  commitWork(b.workbench(), "sub/kept.txt", "kept by the human\n");
+  await b.answer("take in");
+  const blob = git(b.ws.path, "rev-parse", "main:sub/kept.txt");
+  rmSync(join(b.ws.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  commitWork(b.workbench(), "more.txt", "more\n");
+  await b.open();
+  return blob;
+}
+
+it("名前の場所から欠けた blob を作業台が自前の store に持てば、取り込みの確かめが捕まえて入れ直し、名前の場所で読める(ADR 0388 決定1・2 / ADR 0371)", async () => {
+  const b = await board();
+  const blob = await holeHeldByWorkbench(b);
+
+  await b.answer("take in");
+
+  expect(git(b.ws.path, "show", "main:more.txt")).toBe("more");
+  expect(git(b.ws.path, "cat-file", "-p", blob)).toBe("kept by the human");
+});
+
+it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も workbench_taken_in も書かれず、理由が欠けた object を名指す(ADR 0388 決定1・2)", async () => {
+  const b = await board();
+  const blob = await holeHeldByWorkbench(b);
+  const main = git(b.ws.path, "rev-parse", "main");
+  const pack = join(b.ws.path, ".git", "objects", "pack");
+  chmodSync(pack, 0o555);
+  try {
+    await expect(b.answer("take in")).rejects.toThrow(blob);
+  } finally {
+    chmodSync(pack, 0o755);
+  }
+
+  expect(git(b.ws.path, "rev-parse", "main")).toBe(main);
+  expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
 });
 
 // pin A15: 読んだ tip からの CAS —— 間に push が着けば作業台の branch は人間のまま残し、`board/main` を merge するよう言う

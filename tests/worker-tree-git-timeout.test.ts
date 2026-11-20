@@ -7,7 +7,7 @@ import { listEvents } from "../src/events.js";
 import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, completionTreePaths, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { commitRoomCopy, completionTreePaths, NamedPlaceFetchError, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -359,6 +359,25 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
   expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).not.toBe("done");
   // 資源の停止を登録しないことはこの seam にだけ現れる
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+});
+
+it("運んだ後の確かめが名前の場所の byte を読む手で上限を越えれば、worker の repo の故障にせず名前の場所の側で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
+  const { db, task, place } = await pickedUp("carried-timeout");
+  commitWork(place.path, "work.txt", "work\n");
+  const shim = await tempDir("tidepool-slow-git-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  // 確かめの pack-objects は名前の場所の objects だけを借りる使い捨ての repo で撃つ
+  writeFileSync(
+    join(shim, "git"),
+    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */carried/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+  try {
+    expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(NamedPlaceFetchError);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("特別でない tracked な path の FIFO では git は即座に落ち、worker の repo の故障を投げる(ADR 0357 決定3 / ADR 0367 決定1)", async () => {
