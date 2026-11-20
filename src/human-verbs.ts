@@ -84,14 +84,17 @@ import {
   type CancelDefaults,
   CHILD_TAKES_NO_WORKSPACE,
   type ChildSpec,
+  type CompletionReviewRequest,
   cancelRcasByAnswer,
   cancelTaskDirectly,
+  checkHumanCompletionReview,
   completeTask,
   derivedWorkspace,
   dropsRefusedTarget,
   type EditTaskInput,
   editTask,
   getTask,
+  HANDOFF_FIELDS,
   type HandoffDoc,
   hasTaskBranch,
   humanDecomposeTask,
@@ -1210,6 +1213,7 @@ export interface EditThroughHumanDoorDeps {
 export interface HumanWorkDeps {
   db: Db;
   pollNow: () => void;
+  agentRegistered?: (name: string) => boolean;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   githubAuth?: GitHubAuth;
@@ -1350,6 +1354,7 @@ export async function completeThroughHumanDoor(
   handoff: Partial<HandoffDoc> | undefined,
   now: () => Date,
   origin: EventOrigin,
+  review: CompletionReviewRequest = {},
 ): Promise<HumanVerbResult<BoardTask & { notice?: string }>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
@@ -1357,13 +1362,16 @@ export async function completeThroughHumanDoor(
     humanWorkGate(deps.db, taskId, "complete");
     let notice: string | undefined;
     if (!hasTaskBranch(deps.db, task.id)) {
+      checkHumanCompletionReview(deps.db, task, review);
       completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
     } else {
       const at = now();
       notice = await throughHumanWorkPlace(deps, task, "complete", at, (fresh, named, base) => {
         const checked = assertCompletable(deps.db, fresh, handoff);
+        const designation = checkHumanCompletionReview(deps.db, fresh, review);
+        assertReviewersKnown(deps.agentRegistered, designation.review_by);
         return completeHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
-          completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin);
+          completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin, designation);
         });
       });
     }
@@ -1377,6 +1385,13 @@ export async function completeThroughHumanDoor(
     throw err;
   }
 }
+
+export const humanCompletionInputSchema = z.object({
+  handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
+  review_flag: z.boolean().optional(),
+  review_by: z.array(requiredTextSchema).optional(),
+  review_tier: z.string().optional(),
+});
 
 /** Shared human-surface edit. */
 export function editThroughHumanDoor(

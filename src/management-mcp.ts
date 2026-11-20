@@ -34,6 +34,7 @@ import {
   decomposeThroughHumanDoor,
   editThroughHumanDoor,
   gatedHumanEntryInput,
+  humanCompletionInputSchema,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
@@ -122,7 +123,6 @@ import {
   describeHandoffFields,
   directCancelDiscards,
   getTask,
-  HANDOFF_FIELDS,
   listBoard,
   listQueue,
   listYourTasks,
@@ -1175,19 +1175,19 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Complete a task assigned to the human. A task without a task branch takes the handoff doc optionally; one with a task branch " +
         "requires all of it, takes its workbench in and deletes the workbench. Handoff fields: " +
         describeHandoffFields() +
-        `. ${TASK_ACK_DESCRIPTION} A completion that kept the workbench also returns its notice.`,
-      inputSchema: {
-        task_id: z.string(),
-        handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
-      },
+        ". A root or risk-flag child with a task branch raises a completion review. Set review_flag on another child with a task branch to review it individually. " +
+        "When a review will be raised, review_by names one reviewer per review (omitted: board Auditor) and review_tier requests its tier. " +
+        `${TASK_ACK_DESCRIPTION} A completion that kept the workbench also returns its notice.`,
+      inputSchema: humanCompletionInputSchema.extend({ task_id: z.string() }),
     },
-    async ({ task_id, handoff }) => {
+    async ({ task_id, handoff, ...review }) => {
       const result = await completeThroughHumanDoor(
         deps,
         task_id,
         handoff,
         () => deps.clock.now(),
         "mcp",
+        review,
       );
       return result.ok
         ? toolResult({ ...taskAck(result.value), ...(result.value.notice !== undefined && { notice: result.value.notice }) })

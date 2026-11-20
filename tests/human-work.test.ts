@@ -4,12 +4,15 @@ import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
+import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import { completeThroughHumanDoor, decomposeThroughHumanDoor, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
-import { createLanding } from "../src/landing.js";
+import { createLanding, landingBlock } from "../src/landing.js";
 import { UnknownAgentError } from "../src/registry.js";
+import { startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, editTask, getTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { type CompletionReviewRequest, cancelTaskDirectly, completeTask, decomposeTask, editTask, getTask, listBoard, listChildren, pickupTask, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { workbenchCommands, workbenchPath } from "../src/workbench.js";
 import {
@@ -23,7 +26,7 @@ import {
   takeWorkspaceInFlightKey,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
+import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
@@ -39,19 +42,19 @@ async function board(name: string): Promise<Board> {
   return { db: openDb(":memory:"), clock: new FakeClock(), ws: await makeWorkspace(name), base: await tempDir("tidepool-task-checkouts-") };
 }
 
-function work(b: Board, title: string, extra: { parent_id?: string; workspace?: string; assignee?: string } = {}): Task {
+function work(b: Board, title: string, extra: Partial<RegisterTaskInput> = {}): Task {
   const workspace = extra.parent_id ? undefined : b.ws.name;
   return registerTask(b.db, { type: "work", title, purpose: "why", completion_criteria: "done", workspace, ...extra }, b.clock.now(), ...HUMAN_WEBUI);
 }
 
-const deps = ({ db, ws, base }: Board) => ({ db, pollNow: () => {}, workspace: ws, workspacesDir: base });
+const deps = ({ db, ws, base }: Board) => ({ db, pollNow: () => {}, workspace: ws, workspacesDir: base, agentRegistered: (name: string) => ["deckhand", "auditor"].includes(name) });
 
 async function startWork(b: Board, task: Task) {
   return startWorkThroughHumanDoor(deps(b), task.id, () => b.clock.now(), "webui");
 }
 
-async function complete(b: Board, task: Task, handoff: Partial<typeof FULL_HANDOFF> | undefined = FULL_HANDOFF) {
-  return completeThroughHumanDoor(deps(b), task.id, handoff, () => b.clock.now(), "webui");
+async function complete(b: Board, task: Task, handoff: Partial<typeof FULL_HANDOFF> | undefined = FULL_HANDOFF, review?: CompletionReviewRequest) {
+  return completeThroughHumanDoor(deps(b), task.id, handoff, () => b.clock.now(), "webui", review);
 }
 
 async function takeIn(b: Board, task: Task) {
@@ -91,6 +94,133 @@ async function finishAgentChild(b: Board, { task, place }: Awaited<ReturnType<ty
 }
 
 const completedAgentChild = async (b: Board, parent: Task, file: string, body: string) => finishAgentChild(b, await pickedAgentChild(b, parent), file, body);
+
+async function expectReviewPickedUp(b: Board, reviewId: string) {
+  const worker = new ScriptedWorker(b.clock);
+  const scheduler = startScheduler({
+    db: b.db, clock: b.clock, slot: new Slot(), worker, containers: fakeContainers(),
+    workspace: b.ws, workspacesDir: b.base,
+    retrospectiveCalls: noRetrospectiveCalls, converge: async () => [],
+    onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(b.db),
+  });
+  try {
+    scheduler.pollNow();
+    await vi.waitFor(() => expect(worker.started.map((task) => task.id)).toEqual([reviewId]));
+  } finally {
+    scheduler.stop();
+  }
+}
+
+it("a human root's handoff can be picked up for review without a parent pickup or worker spawn", async () => {
+  const b = await board("human-review-pickup");
+  const root = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  expect((await startWork(b, root)).ok).toBe(true);
+  expect((await complete(b, root)).ok).toBe(true);
+  expect(kinds(b.db, root.id)).toEqual(["task_registered", "task_branch_created", "task_work_started", "task_completed"]);
+  const [review] = listChildren(b.db, root.id);
+  expect(review).toMatchObject({ type: "review", status: "todo" });
+  await expectReviewPickedUp(b, review!.id);
+});
+
+it("invalid reviewer designations leave a human workbench's commits and completion untouched", async () => {
+  const b = await board("human-review-refusal");
+  applyExecutionSettingsChange(b.db, { setting: "insert_tier", name: "retired", description: "an obsolete tier", position: 0 }, "webui", b.clock.now());
+  applyExecutionSettingsChange(b.db, { setting: "delete_tier", name: "retired" }, "webui", b.clock.now());
+  const root = work(b, "pending intake", { assignee: HUMAN_ACTOR_ID });
+  const started = await startWork(b, root);
+  if (!started.ok) throw new Error(started.failure.error);
+  commitWork(started.value.path, "new.txt", "work to take in\n");
+  const branchBefore = namedPlace(b.ws);
+  const workbenchBefore = namedPlace({ ...b.ws, path: started.value.path });
+  const taskBefore = getTask(b.db, root.id);
+  const eventsBefore = listEvents(b.db, root.id);
+
+  for (const [input, error] of [
+    [{ review_by: ["human"] }, /^unknown agent: human$/],
+    [{ review_by: ["unknown"] }, /^unknown agent: unknown$/],
+    [{ review_by: ["deckhand", " deckhand "] }, /names the same reviewer twice/],
+    [{ review_tier: "retired" }, /unknown review_tier "retired"/],
+  ] satisfies [CompletionReviewRequest, RegExp][]) {
+    expect(await complete(b, root, FULL_HANDOFF, input)).toMatchObject({
+      ok: false, failure: { error: expect.stringMatching(error) },
+    });
+    expect(getTask(b.db, root.id)).toEqual(taskBefore);
+    expect(listEvents(b.db, root.id)).toEqual(eventsBefore);
+    expect(listChildren(b.db, root.id)).toEqual([]);
+    expect(takenIn(b.db)).toEqual([]);
+    expect(namedPlace(b.ws)).toEqual(branchBefore);
+    expect(namedPlace({ ...b.ws, path: started.value.path })).toEqual(workbenchBefore);
+  }
+});
+
+it("branchless human work refuses a completion review designation and completes without raising a review", async () => {
+  const b = await board("human-review-no-branch");
+  const root = work(b, "no task branch", { assignee: HUMAN_ACTOR_ID });
+  const before = getTask(b.db, root.id);
+  const inputs = [{ review_by: ["auditor"] }, { review_tier: "standard" }, { review_flag: true }];
+  for (const review of inputs) {
+    expect(await completeThroughHumanDoor(deps(b), root.id, undefined, () => b.clock.now(), "webui", review)).toEqual(refused(
+      "this task has no task branch, so its completion raises no review — complete it without `review_by`, `review_tier` or `review_flag`.",
+    ));
+  }
+  expect(getTask(b.db, root.id)).toEqual(before);
+  expect(kinds(b.db, root.id)).toEqual(["task_registered"]);
+
+  expect((await completeThroughHumanDoor(deps(b), root.id, undefined, () => b.clock.now(), "webui")).ok).toBe(true);
+  expect(listChildren(b.db, root.id)).toEqual([]);
+});
+
+it("the human completion door uses individual review choices and risk without storing the designation", async () => {
+  const b = await board("human-review-child");
+  const root = work(b, "plan", { assignee: HUMAN_ACTOR_ID, risk_flag: true });
+  const individual = work(b, "review it separately", { assignee: HUMAN_ACTOR_ID, parent_id: root.id });
+  const risky = work(b, "risky work", { assignee: HUMAN_ACTOR_ID, parent_id: root.id, risk_flag: true });
+  for (const task of [individual, risky]) expect((await startWork(b, task)).ok).toBe(true);
+
+  expect(await complete(b, individual, FULL_HANDOFF, { review_by: ["deckhand"] })).toMatchObject({
+    ok: false, failure: { error: expect.stringContaining("set review_flag") },
+  });
+  expect((await complete(b, individual, FULL_HANDOFF, { review_flag: true, review_by: [" deckhand ", "auditor"], review_tier: "standard" })).ok).toBe(true);
+  expect((await complete(b, risky, FULL_HANDOFF, { review_by: ["auditor"], review_tier: "standard" })).ok).toBe(true);
+
+  expect(listChildren(b.db, individual.id)).toMatchObject([
+    { type: "review", assignee: "deckhand", review_tier: "standard" },
+    { type: "review", assignee: "auditor", review_tier: "standard" },
+  ]);
+  expect(listChildren(b.db, risky.id)).toMatchObject([{ type: "review", assignee: "auditor", review_tier: "standard" }]);
+  for (const task of [individual, risky]) {
+    expect(getTask(b.db, task.id)).toMatchObject({ status: "done", review_flag: 0, review_by: null, review_tier: null });
+  }
+});
+
+it("a human completion review's repair children default to human and only an explicit agent needs approval", async () => {
+  const b = await board("human-review-repairs");
+  const root = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  expect((await startWork(b, root)).ok).toBe(true);
+  expect((await complete(b, root)).ok).toBe(true);
+  const [review] = listChildren(b.db, root.id);
+  const finding = { purpose: "fix a review finding", completion_criteria: "finding fixed" };
+  expect(landingBlock(b.db, root.id)).toBeNull();
+
+  const direct = decomposeTask(b.db, review!, {
+    reason: "three fixes",
+    children: [
+      { ...finding, title: "omitted assignee" },
+      { ...finding, title: "explicit human", assignee: "human" },
+      { ...finding, title: "explicit agent", assignee: "deckhand" },
+    ],
+  }, "auditor", b.clock.now(), { assignable_to: ["human"] }, undefined, "worker");
+
+  expect(direct.map(({ title, assignee }) => ({ title, assignee }))).toEqual([
+    { title: "omitted assignee", assignee: "human" },
+    { title: "explicit human", assignee: "human" },
+  ]);
+  expect(listChildren(b.db, review!.id).filter((child) => child.type === "question")).toMatchObject([
+    { question_pending_child: { title: "explicit agent", assignee: "deckhand" } },
+  ]);
+  expect(landingBlock(b.db, root.id)).toEqual({ kind: "attached_children", count: 1 });
+});
 
 /** 扉を準備の fetch(token の取得)で待たせ、その await の間に `during` を走らせてから続けさせる —— 最後の await の後の読みの観測。 */
 async function duringPreparation<T>(door: (githubAuth: GitHubAuth) => Promise<T>, during: () => void): Promise<T> {
@@ -393,6 +523,7 @@ it("子孫だけが走った H(タスクブランチあり・作業台なし)は
   expect((await complete(b, h)).ok).toBe(true);
 
   expect(getTask(b.db, h.id)!.status).toBe("done");
+  expect(listChildren(b.db, h.id).filter((task) => task.type === "review")).toEqual([]);
   expect(takenIn(b.db)).toEqual([]);
   expect(git(b.ws.path, "show", `task/${root.id}:child.txt`)).toBe("child");
   expect(getTask(b.db, sibling.id)!.status).toBe("in_progress");
@@ -697,6 +828,8 @@ it("子が走った後に assignee を human に替えた根は、タスクブ�
   expect(!(await complete(b, root, {})).ok).toBe(true);
   expect((await complete(b, root)).ok).toBe(true);
   expect([git(b.ws.path, "rev-parse", `task/${root.id}`), git(b.ws.path, "show", `task/${root.id}:child.txt`), takenIn(b.db)]).toEqual([branch, "child", []]);
+  const review = listChildren(b.db, root.id).find((task) => task.type === "review");
+  expect(review).toMatchObject({ status: "todo" });
 
   // registry と同じく、名前 tako だけが解決する —— `human` は agent として引かれない
   const resolveAuthority = (assignee: string | null) => {
@@ -711,6 +844,7 @@ it("子が走った後に assignee を human に替えた根は、タスクブ�
 
   expect((await submitAnswer({ db: b.db, pollNow: () => {}, landing: unusedLanding, workspace: b.ws, workspacesDir: b.base }, getTask(b.db, question.id)!, ["merge"], undefined, () => b.clock.now(), "webui")).status).toBe("done");
   expect(git(b.ws.path, "show", "main:child.txt")).toBe("child");
+  await expectReviewPickedUp(b, review!.id);
 });
 
 // ADR 0374 決定5 / spec #3273 group C: 完了を伴わない取り込み(`take_in_work`)

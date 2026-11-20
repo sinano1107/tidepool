@@ -24,6 +24,7 @@ var TidepoolRules = (() => {
     completionReviewFires: () => completionReviewFires,
     copiedOriginalLanguage: () => copiedOriginalLanguage,
     hasWorkspaceField: () => hasWorkspaceField,
+    humanCompletionReviewFields: () => humanCompletionReviewFields,
     isSettled: () => isSettled,
     normalizeText: () => normalizeText,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
@@ -158,18 +159,32 @@ var TidepoolRules = (() => {
     const languages = new Set(copied.filter((c) => c?.text === text && c.title === title).map((c) => c.language));
     return languages.size === 1 ? [...languages][0] : current;
   }
-  function whyNoCompletionReview(t) {
+  function whyNotReviewableWork(t) {
     if (t.type !== "work") return "completion review fires for work tasks only";
     if (t.examinee) return "an Interview examinee's answer is evaluated only by its Interview's scoring";
-    if (t.assignee === HUMAN_ACTOR_ID) return "completion review does not fire for a task assigned to human";
+    return void 0;
+  }
+  function whyNotReviewPoint(t) {
     if (t.parent_id && !t.review_flag && !t.risk_flag) {
       return "a child task's completion raises a review only with review_flag or risk_flag";
     }
     return void 0;
   }
+  var HUMAN_REVIEW_FIELDS = "a human-assigned task accepts review fields only at completion with a task branch";
+  function whyNoCompletionReview(t) {
+    return whyNotReviewableWork(t) ?? (t.assignee === HUMAN_ACTOR_ID ? HUMAN_REVIEW_FIELDS : whyNotReviewPoint(t));
+  }
   function whyReviewFlagIsInert(t) {
+    if (t.type === "work" && !t.examinee && t.assignee === HUMAN_ACTOR_ID) return HUMAN_REVIEW_FIELDS;
     if (t.type === "work" && !t.parent_id && !t.examinee) return "every root is already reviewed on completion";
     return whyNoCompletionReview({ ...t, review_flag: true });
+  }
+  function humanCompletionReviewFields(t) {
+    const eligible = t.assignee === HUMAN_ACTOR_ID && t.has_task_branch && whyNotReviewableWork(t) === void 0;
+    return {
+      flag: eligible && !!t.parent_id && !t.risk_flag,
+      designation: eligible && whyNotReviewPoint(t) === void 0
+    };
   }
   function whyExecutionRequestIsInert(t, field) {
     if (t.type === "interview" && field === "priority") return "an Interview root runs at the board's review priority; its tier is the measured tier";
@@ -4585,12 +4600,30 @@ const HANDOFF_FIELDS = [
   ["known_issues", "known issues (no task)"]
 ];
 function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
-  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [dump, setDump] = React.useState("");
   const [fields, setFields] = React.useState({});
   const [missing, setMissing] = React.useState([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [reviewFlag, setReviewFlag] = React.useState(false);
+  const [reviewBy, setReviewBy] = React.useState([]);
+  const [reviewTier, setReviewTier] = React.useState("");
+  const [candidates, setCandidates] = React.useState({ assignees: [], builtIns: [], workspaces: [], icons: {} });
+  const [tiers, setTiers] = React.useState([]);
+  const review = TidepoolRules.humanCompletionReviewFields({
+    ...task,
+    examinee: task.interview_root_id != null,
+    review_flag: reviewFlag
+  });
+  const showReviewControls = review.flag || review.designation;
+  React.useEffect(() => {
+    if (!showReviewControls) return;
+    api("GET /api/registry/candidates").then(setCandidates).catch(() => {
+    });
+    api("GET /api/settings/execution").then((d) => setTiers(d.tiers)).catch(() => {
+    });
+  }, [showReviewControls]);
   const draft = async () => {
     setDrafting(true);
     try {
@@ -4608,7 +4641,13 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? "").trim()]).filter(([, v]) => v)
       );
-      const done = await api("POST /api/tasks/:id/complete", { params: { id: task.id }, body: { handoff } });
+      const body = {
+        handoff,
+        ...review.flag && reviewFlag && { review_flag: true },
+        ...review.designation && reviewBy.length > 0 && { review_by: reviewBy },
+        ...review.designation && reviewTier && { review_tier: reviewTier }
+      };
+      const done = await api("POST /api/tasks/:id/complete", { params: { id: task.id }, body });
       if (done?.notice) say("info", "task completed \u2014 workbench kept", done.notice);
       else say("success", "task completed", task.id);
       await onCompleted();
@@ -4640,7 +4679,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         value: fields[field] ?? "",
         onChange: (e) => setFields((f) => ({ ...f, [field]: e.target.value }))
       }
-    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this", task.has_task_branch ? "" : " \u2014 optional"))), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? "")), onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
+    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this", task.has_task_branch ? "" : " \u2014 optional"))), review.flag && /* @__PURE__ */ React.createElement(Checkbox, { label: "Send to review individually", checked: reviewFlag, onChange: () => setReviewFlag(!reviewFlag) }), review.designation && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: reviewBy, onChange: setReviewBy }), /* @__PURE__ */ React.createElement(Select, { label: "Review tier", options: tierOptions(tiers, "(reviewer's tier, then board default)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? "")), onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
   );
 }
 function App() {
@@ -4912,7 +4951,7 @@ function App() {
     try {
       const read = await api("GET /api/tasks/:id", { params: { id } });
       if (task && (task.blocking || read.has_task_branch)) {
-        setCompleteHumanCard({ ...task, has_task_branch: read.has_task_branch, workbench: read.workbench });
+        setCompleteHumanCard({ ...read, title: task.title, blocking: task.blocking });
         return;
       }
       await api("POST /api/tasks/:id/complete", { params: { id }, body: {} });

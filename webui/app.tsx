@@ -924,6 +924,10 @@ const HANDOFF_FIELDS = [
   ['known_issues', 'known issues (no task)'],
 ] as const;
 
+type HumanCompletionTask = Pick<WireContract['GET /api/tasks/:id'],
+  'id' | 'title' | 'type' | 'assignee' | 'parent_id' | 'risk_flag' | 'interview_root_id' | 'has_task_branch' | 'workbench'>
+  & { blocking: string | null };
+
 // issue #13's handoff assist, wired by issue #301: completing a human task that
 // blocks a parent. Free-text dump → the LLM drafts the six fields → the human
 // edits and confirms. `missing` is advisory only — the server exempts human
@@ -933,17 +937,31 @@ const HANDOFF_FIELDS = [
 // dump → draft → confirm, that just leaves the fields blank to type into.
 // ADR 0374 決定1・10: タスクブランチを持つ人間担当の work は agent と同じく6欄が必須で、作業台があれば完了がそれを消す(text C4)。
 function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
-  task: { id: string; title: string; blocking: string | null; has_task_branch?: boolean; workbench?: string | null };
+  task: HumanCompletionTask;
   onCompleted: () => Promise<void> | void;
   onClose: () => void;
   say: AppSay;
 }) {
-  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [dump, setDump] = React.useState('');
   const [fields, setFields] = React.useState<Record<string, string>>({});
   const [missing, setMissing] = React.useState<string[]>([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [reviewFlag, setReviewFlag] = React.useState(false);
+  const [reviewBy, setReviewBy] = React.useState<string[]>([]);
+  const [reviewTier, setReviewTier] = React.useState('');
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], builtIns: [], workspaces: [], icons: {} });
+  const [tiers, setTiers] = React.useState<SettingsExecution['tiers']>([]);
+  const review = TidepoolRules.humanCompletionReviewFields({
+    ...task, examinee: task.interview_root_id != null, review_flag: reviewFlag,
+  });
+  const showReviewControls = review.flag || review.designation;
+  React.useEffect(() => {
+    if (!showReviewControls) return;
+    api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
+    api('GET /api/settings/execution').then((d) => setTiers(d.tiers)).catch(() => {});
+  }, [showReviewControls]);
   const draft = async () => {
     setDrafting(true);
     try {
@@ -961,7 +979,13 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? '').trim()]).filter(([, v]) => v),
       );
-      const done = await api('POST /api/tasks/:id/complete', { params: { id: task.id }, body: { handoff } });
+      const body = {
+        handoff,
+        ...(review.flag && reviewFlag && { review_flag: true }),
+        ...(review.designation && reviewBy.length > 0 && { review_by: reviewBy }),
+        ...(review.designation && reviewTier && { review_tier: reviewTier }),
+      };
+      const done = await api('POST /api/tasks/:id/complete', { params: { id: task.id }, body });
       // spec #3273 text C7: 読んだ後に届いた commit があれば、作業台を残したと言う
       if (done?.notice) say('info', 'task completed — workbench kept', done.notice);
       else say('success', 'task completed', task.id);
@@ -1008,6 +1032,11 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
             )}
           </div>
         ))}
+        {review.flag && <Checkbox label="Send to review individually" checked={reviewFlag} onChange={() => setReviewFlag(!reviewFlag)} />}
+        {review.designation && <>
+          <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />
+          <Select label="Review tier" options={tierOptions(tiers, "(reviewer's tier, then board default)")} value={reviewTier} onChange={(e) => setReviewTier(e.target.value)} />
+        </>}
         <Button variant="primary" size="lg" full disabled={busy || (!!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? '')))} onClick={submit}>Done</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Not yet</Button>
       </Card>
@@ -1036,7 +1065,7 @@ function App() {
   const [stopTaskCard, setStopTaskCard] = React.useState<BoardScreenTask | null>(null);
   // issue #301: the your-tasks row whose completion dialog is open (a row that
   // blocks a parent), or null when closed
-  const [completeHumanCard, setCompleteHumanCard] = React.useState<(AppData['humanTasks'][number] & { has_task_branch?: boolean; workbench?: string | null }) | null>(null);
+  const [completeHumanCard, setCompleteHumanCard] = React.useState<HumanCompletionTask | null>(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -1366,7 +1395,7 @@ function App() {
     try {
       const read = await api('GET /api/tasks/:id', { params: { id } });
       if (task && (task.blocking || read.has_task_branch)) {
-        setCompleteHumanCard({ ...task, has_task_branch: read.has_task_branch, workbench: read.workbench });
+        setCompleteHumanCard({ ...read, title: task.title, blocking: task.blocking });
         return;
       }
       await api('POST /api/tasks/:id/complete', { params: { id }, body: {} });
