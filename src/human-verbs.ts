@@ -84,7 +84,6 @@ import {
   type CancelDefaults,
   CHILD_TAKES_NO_WORKSPACE,
   type ChildSpec,
-  type CompletionReviewRequest,
   cancelRcasByAnswer,
   cancelTaskDirectly,
   checkHumanCompletionReview,
@@ -95,7 +94,6 @@ import {
   editTask,
   getTask,
   HANDOFF_FIELDS,
-  type HandoffDoc,
   hasTaskBranch,
   humanDecomposeTask,
   type InterviewProposal,
@@ -1345,31 +1343,44 @@ export async function takeInWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: st
   }
 }
 
+export const humanCompletionInputSchema = z.object({
+  handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
+  review_flag: z.boolean().optional(),
+  review_by: z.array(requiredTextSchema).optional(),
+  review_tier: z.string().optional(),
+});
+
+export type HumanCompletionInput = z.infer<typeof humanCompletionInputSchema>;
+
 /** Shared human-surface completion for human-assignee tasks. ADR 0374 決定1: 動作は「タスクブランチを持つか」で分ける —— 持たなければ
  *  今どおり記録だけを閉じ、持てば in-flight の鍵を取って準備を通し、作業台の取り込み・`done`・H の merge back を `completeHumanWork` に
  *  任せ、収束を突く。作業台を残した完了は text C7 を `notice` に添える。 */
 export async function completeThroughHumanDoor(
   deps: HumanWorkDeps,
   taskId: string,
-  handoff: Partial<HandoffDoc> | undefined,
+  { handoff, ...review }: HumanCompletionInput,
   now: () => Date,
   origin: EventOrigin,
-  review: CompletionReviewRequest = {},
 ): Promise<HumanVerbResult<BoardTask & { notice?: string }>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
     humanWorkGate(deps.db, taskId, "complete");
+    const checkReview = (current: Task) => {
+      const designation = checkHumanCompletionReview(deps.db, current, review);
+      assertReviewersKnown(deps.agentRegistered, designation.review_by);
+      return designation;
+    };
+    // ADR 0374 決定15: 準備の fetch や Quarantine より先に指名を検査し、準備を待った後にも現在の値で検査する。
+    checkReview(task);
     let notice: string | undefined;
     if (!hasTaskBranch(deps.db, task.id)) {
-      checkHumanCompletionReview(deps.db, task, review);
       completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
     } else {
       const at = now();
       notice = await throughHumanWorkPlace(deps, task, "complete", at, (fresh, named, base) => {
         const checked = assertCompletable(deps.db, fresh, handoff);
-        const designation = checkHumanCompletionReview(deps.db, fresh, review);
-        assertReviewersKnown(deps.agentRegistered, designation.review_by);
+        const designation = checkReview(fresh);
         return completeHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
           completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin, designation);
         });
@@ -1385,13 +1396,6 @@ export async function completeThroughHumanDoor(
     throw err;
   }
 }
-
-export const humanCompletionInputSchema = z.object({
-  handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
-  review_flag: z.boolean().optional(),
-  review_by: z.array(requiredTextSchema).optional(),
-  review_tier: z.string().optional(),
-});
 
 /** Shared human-surface edit. */
 export function editThroughHumanDoor(

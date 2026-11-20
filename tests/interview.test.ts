@@ -15,7 +15,7 @@ import { abandonConsequence, cancelTaskDirectly, completeAudit, completeIntervie
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 
-import { whyAssigneeCannotTake, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
+import { whyAssigneeCannotTake, whyReviewDesignationIsInert, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, markPickedUp, POSED_HEAD, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(GLOSSARY.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
@@ -394,7 +394,7 @@ it("受験者は人間の直接 cancel の範囲の外 —— root の agent が
 });
 
 it("受験者の完了は完了時レビューを立てない —— 規則の正本が理由を言い、完了の起票も同じ規則を読む(ADR 0267 決定1 / ADR 0111 追記8)", () => {
-  expect(whyNoCompletionReview({ type: "work", parent_id: null, examinee: true })).toMatch(/Interview examinee/);
+  expect(whyReviewDesignationIsInert({ type: "work", parent_id: null, examinee: true })).toMatch(/Interview examinee/);
   expect(whyReviewFlagIsInert({ type: "work", parent_id: null, examinee: true })).toMatch(/Interview examinee/);
   const { db, root } = registerInterview();
   const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];

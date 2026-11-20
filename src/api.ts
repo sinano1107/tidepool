@@ -1564,8 +1564,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
-    const { handoff, ...review } = parsed.data;
-    const result = await completeThroughHumanDoor(humanWorkDeps, req.params.id, handoff, () => clock.now(), "webui", review);
+    const result = await completeThroughHumanDoor(humanWorkDeps, req.params.id, parsed.data, () => clock.now(), "webui");
     if (!result.ok) {
       sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;

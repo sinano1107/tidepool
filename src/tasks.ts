@@ -19,12 +19,12 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId, tierNames } from "./tier.js";
 import {
-  completionReviewFires,
   hasWorkspaceField,
   humanCompletionReviewFields,
   type ReviewSubject,
+  raisesCompletionReview,
   whyExecutionRequestIsInert,
-  whyNoCompletionReview,
+  whyReviewDesignationIsInert,
   whyReviewFlagIsInert,
 } from "./webui-rules.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -1228,8 +1228,8 @@ function assertReviewFieldsTakeEffect(
     if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
   };
   if (state.review_flag) refuse("review_flag", whyReviewFlagIsInert(state));
-  if (reviewBy?.length) refuse("review_by", whyNoCompletionReview(state));
-  if (reviewTier !== undefined && state.type !== "review" && state.type !== "interview") refuse("review_tier", whyNoCompletionReview(state));
+  if (reviewBy?.length) refuse("review_by", whyReviewDesignationIsInert(state));
+  if (reviewTier !== undefined && state.type !== "review" && state.type !== "interview") refuse("review_tier", whyReviewDesignationIsInert(state));
 }
 
 /** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (GLOSSARY.md "Review", #1512). */
@@ -1538,17 +1538,8 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
   })();
 }
 
-/** Work tasks may not complete without a full handoff doc; every other agent
- *  task needs its outcome (ADR 0278 決定6), and the rest of a supplied doc is
- *  stored, not dropped (nothing may degrade recording). The doc lands as
- *  markdown on the task row, written once. A `human`-assignee task is exempt
- *  regardless of type (issue #13): actionable follow-up belongs to a *new*
- *  task, not this doc, so a physical/approval task carries no agent session to
- *  hand off from — the doc stays fully optional.
- *
- *  ADR 0111: root work and risk children are mandatory integration points;
- *  ordinary children opt into individual review through review_flag.
- *  ADR 0374 決定14: 人間担当の work もタスクブランチを持てば同じ統合点をレビューする。 */
+/** ADR 0278 決定6 / ADR 0374 決定10: agent の work とタスクブランチを持つ人間担当の work は handoff の全欄が要る。
+ *  他の agent の task は outcome が要り、他の人間担当の task は handoff が任意。渡された欄は markdown で保存する。 */
 export function completeTask(
   db: Db,
   task: Task,
@@ -1631,22 +1622,19 @@ export function finishTask(
       },
       at: now,
     });
-    const subject = { ...task, examinee: task.interview_target_id !== null };
     const human = task.assignee === HUMAN_ACTOR_ID;
-    const reviewFires = human
-      ? humanCompletionReviewFields({ ...subject, has_task_branch: hasTaskBranch(db, task.id), review_flag: humanReview.review_flag }).designation
-      : completionReviewFires(subject);
-    if (reviewFires) {
-      const reviewers = human ? humanReview.review_by : task.review_by;
-      const tier = human ? humanReview.review_tier : task.review_tier ?? undefined;
-      for (const assignee of reviewers?.length ? reviewers : [undefined]) {
+    const { review_by, review_tier, review_flag } = human ? humanReview : task;
+    if (raisesCompletionReview({
+      ...task, examinee: task.interview_target_id !== null, has_task_branch: human && hasTaskBranch(db, task.id), review_flag,
+    })) {
+      for (const assignee of review_by?.length ? review_by : [undefined]) {
         registerTask(
           db,
           {
             type: "review",
             integration_review: true,
             assignee,
-            review_tier: tier,
+            review_tier: review_tier ?? undefined,
             title: `review: ${task.title}`,
             purpose: `read-only review of "${task.title}"'s deliverable against its completion criteria`,
             completion_criteria:

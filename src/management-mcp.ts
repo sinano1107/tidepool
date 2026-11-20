@@ -1180,14 +1180,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${TASK_ACK_DESCRIPTION} A completion that kept the workbench also returns its notice.`,
       inputSchema: humanCompletionInputSchema.extend({ task_id: z.string() }),
     },
-    async ({ task_id, handoff, ...review }) => {
+    async ({ task_id, ...input }) => {
       const result = await completeThroughHumanDoor(
         deps,
         task_id,
-        handoff,
+        input,
         () => deps.clock.now(),
         "mcp",
-        review,
       );
       return result.ok
         ? toolResult({ ...taskAck(result.value), ...(result.value.notice !== undefined && { notice: result.value.notice }) })

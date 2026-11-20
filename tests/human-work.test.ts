@@ -8,7 +8,7 @@ import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import { completeThroughHumanDoor, decomposeThroughHumanDoor, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
 import { createLanding, landingBlock } from "../src/landing.js";
-import { UnknownAgentError } from "../src/registry.js";
+import { REVIEWER_AUTHORITY_PROFILE, UnknownAgentError } from "../src/registry.js";
 import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
@@ -54,7 +54,7 @@ async function startWork(b: Board, task: Task) {
 }
 
 async function complete(b: Board, task: Task, handoff: Partial<typeof FULL_HANDOFF> | undefined = FULL_HANDOFF, review?: CompletionReviewRequest) {
-  return completeThroughHumanDoor(deps(b), task.id, handoff, () => b.clock.now(), "webui", review);
+  return completeThroughHumanDoor(deps(b), task.id, { handoff, ...review }, () => b.clock.now(), "webui");
 }
 
 async function takeIn(b: Board, task: Task) {
@@ -154,20 +154,37 @@ it("invalid reviewer designations leave a human workbench's commits and completi
   }
 });
 
+it("an invalid reviewer is refused before dirty named-place preparation can raise Quarantine", async () => {
+  const b = await board("human-review-dirty-named-place");
+  const root = work(b, "pending review", { assignee: HUMAN_ACTOR_ID });
+  expect((await startWork(b, root)).ok).toBe(true);
+  writeFileSync(join(b.ws.path, "dirty.txt"), "outside the board\n");
+  const before = untouched(b, root);
+
+  expect(await complete(b, root, FULL_HANDOFF, { review_by: ["unknown"] })).toEqual(refused("unknown agent: unknown"));
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)).toBeUndefined();
+  expect(untouched(b, root)).toEqual(before);
+
+  const valid = await complete(b, root, FULL_HANDOFF, { review_by: ["auditor"] });
+  const question = quarantineQuestion(b.db, "workspace", b.ws.name);
+  expect(question).toBeDefined();
+  expect(valid).toEqual(refused(`cannot complete: workspace ${b.ws.name} is quarantined — answer question ${question!.id} first.`));
+});
+
 it("branchless human work refuses a completion review designation and completes without raising a review", async () => {
   const b = await board("human-review-no-branch");
   const root = work(b, "no task branch", { assignee: HUMAN_ACTOR_ID });
   const before = getTask(b.db, root.id);
   const inputs = [{ review_by: ["auditor"] }, { review_tier: "standard" }, { review_flag: true }];
   for (const review of inputs) {
-    expect(await completeThroughHumanDoor(deps(b), root.id, undefined, () => b.clock.now(), "webui", review)).toEqual(refused(
+    expect(await completeThroughHumanDoor(deps(b), root.id, review, () => b.clock.now(), "webui")).toEqual(refused(
       "this task has no task branch, so its completion raises no review — complete it without `review_by`, `review_tier` or `review_flag`.",
     ));
   }
   expect(getTask(b.db, root.id)).toEqual(before);
   expect(kinds(b.db, root.id)).toEqual(["task_registered"]);
 
-  expect((await completeThroughHumanDoor(deps(b), root.id, undefined, () => b.clock.now(), "webui")).ok).toBe(true);
+  expect((await completeThroughHumanDoor(deps(b), root.id, {}, () => b.clock.now(), "webui")).ok).toBe(true);
   expect(listChildren(b.db, root.id)).toEqual([]);
 });
 
@@ -202,6 +219,7 @@ it("a human completion review's repair children default to human and only an exp
   const [review] = listChildren(b.db, root.id);
   const finding = { purpose: "fix a review finding", completion_criteria: "finding fixed" };
   expect(landingBlock(b.db, root.id)).toBeNull();
+  appendEvent(b.db, { taskId: review!.id, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
 
   const direct = decomposeTask(b.db, review!, {
     reason: "three fixes",
@@ -210,7 +228,7 @@ it("a human completion review's repair children default to human and only an exp
       { ...finding, title: "explicit human", assignee: "human" },
       { ...finding, title: "explicit agent", assignee: "deckhand" },
     ],
-  }, "auditor", b.clock.now(), { assignable_to: ["human"] }, undefined, "worker");
+  }, "auditor", b.clock.now(), REVIEWER_AUTHORITY_PROFILE, undefined, "worker");
 
   expect(direct.map(({ title, assignee }) => ({ title, assignee }))).toEqual([
     { title: "omitted assignee", assignee: "human" },
@@ -632,12 +650,29 @@ it("最後の await の後に動いた ref も見る —— 準備の fetch を�
   await startedWithCommit(b, h);
 
   const result = await duringPreparation(
-    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, h.id, FULL_HANDOFF, () => b.clock.now(), "webui"),
+    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, h.id, { handoff: FULL_HANDOFF }, () => b.clock.now(), "webui"),
     () => git(b.ws.path, "update-ref", `refs/heads/task/${h.id}`, git(b.ws.path, "commit-tree", "-p", `task/${h.id}`, "-m", "moved", `task/${h.id}^{tree}`)),
   );
 
   expect(!result.ok && result.failure.error).toMatch(new RegExp(`^task/${h.id} has moved on since your tip`));
   expect(getTask(b.db, h.id)!.status).toBe("todo");
+});
+
+it("completion rechecks the review tier after waiting for workspace preparation", async () => {
+  const b = await board("human-review-tier-changed");
+  const root = work(b, "pending intake", { assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, root);
+  const before = untouched(b, root);
+  applyExecutionSettingsChange(b.db, { setting: "insert_tier", name: "temporary", description: "a temporary tier", position: 0 }, "webui", b.clock.now());
+
+  const result = await duringPreparation(
+    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, root.id, { handoff: FULL_HANDOFF, review_tier: "temporary" }, () => b.clock.now(), "webui"),
+    () => applyExecutionSettingsChange(b.db, { setting: "delete_tier", name: "temporary" }, "webui", b.clock.now()),
+  );
+
+  expect(result).toMatchObject({ ok: false, failure: { error: expect.stringContaining('unknown review_tier "temporary"') } });
+  expect(untouched(b, root)).toEqual(before);
+  expect(takenIn(b.db)).toEqual([]);
 });
 
 it("準備の fetch を待つ間に cancel された H には、start_work も完了も扉の門を掛け直して何も書かない(Edit・cancel は in-flight の鍵を取らない)", async () => {
@@ -652,7 +687,7 @@ it("準備の fetch を待つ間に cancel された H には、start_work も�
     () => cancelTaskDirectly(b.db, getTask(b.db, fresh.id)!, null, b.clock.now(), {}, "webui"),
   );
   const completeResult = await duringPreparation(
-    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, started.id, FULL_HANDOFF, () => b.clock.now(), "webui"),
+    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, started.id, { handoff: FULL_HANDOFF }, () => b.clock.now(), "webui"),
     () => cancelTaskDirectly(b.db, getTask(b.db, started.id)!, null, b.clock.now(), {}, "webui"),
   );
 

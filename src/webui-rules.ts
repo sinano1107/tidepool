@@ -58,16 +58,23 @@ function whyNotReviewPoint(t: ReviewSubject): string | undefined {
 const HUMAN_REVIEW_FIELDS = "a human-assigned task accepts review fields only at completion with a task branch";
 
 /** 登録・Edit で完了時レビューの指名欄が使えない理由(拒否の文の後半)。 */
-export function whyNoCompletionReview(t: ReviewSubject): string | undefined {
+export function whyReviewDesignationIsInert(t: ReviewSubject): string | undefined {
   return whyNotReviewableWork(t) ??
     (t.assignee === HUMAN_ACTOR_ID ? HUMAN_REVIEW_FIELDS : whyNotReviewPoint(t));
 }
 
 /** review_flag が意味を持たない理由。持つなら undefined。 */
 export function whyReviewFlagIsInert(t: ReviewSubject): string | undefined {
-  if (t.type === "work" && !t.examinee && t.assignee === HUMAN_ACTOR_ID) return HUMAN_REVIEW_FIELDS;
-  if (t.type === "work" && !t.parent_id && !t.examinee) return "every root is already reviewed on completion";
-  return whyNoCompletionReview({ ...t, review_flag: true });
+  const refusal = whyNotReviewableWork(t);
+  if (refusal) return refusal;
+  if (t.assignee === HUMAN_ACTOR_ID) return HUMAN_REVIEW_FIELDS;
+  return t.parent_id ? undefined : "every root is already reviewed on completion";
+}
+
+/** ADR 0374 決定14 / ADR 0111 Status 追記: 起票は指名欄の出し分けから独立して統合点を読む。 */
+export function raisesCompletionReview(t: ReviewSubject & { has_task_branch: boolean }): boolean {
+  return (t.assignee !== HUMAN_ACTOR_ID || t.has_task_branch) &&
+    whyNotReviewableWork(t) === undefined && whyNotReviewPoint(t) === undefined;
 }
 
 /** ADR 0374 決定14・15: 人間担当の work はタスクブランチがあるときだけ、完了の扉で指名する。 */
@@ -101,5 +108,5 @@ export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuil
  *  人間の登録・分解・Edit の門と、WebUI の Edit 画面の Workspace 欄の出し分けが同じ関数を呼ぶ。 */
 export const hasWorkspaceField = (t: Pick<ReviewSubject, "parent_id">): boolean => !t.parent_id;
 
-export const completionReviewFires =(t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
+export const reviewDesignationCarriesMeaning = (t: ReviewSubject): boolean => whyReviewDesignationIsInert(t) === undefined;
 export const reviewFlagCarriesMeaning = (t: ReviewSubject): boolean => whyReviewFlagIsInert(t) === undefined;
