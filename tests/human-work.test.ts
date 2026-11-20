@@ -3,14 +3,23 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import { completeThroughHumanDoor, startWorkThroughHumanDoor } from "../src/human-verbs.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, editTask, getTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
-import { boardRefWriter, completeHumanWork, prepareHumanWork, quarantineWorkspace, recordTaskCheckoutTip, takeWorkspaceInFlightKey, type WorkspaceConfig } from "../src/workspace.js";
+import {
+  boardRefWriter,
+  completeHumanWork,
+  holdsBaseline,
+  prepareHumanWork,
+  quarantineWorkspace,
+  recordTaskCheckoutTip,
+  takeWorkspaceInFlightKey,
+  type WorkspaceConfig,
+} from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -75,6 +84,19 @@ async function finishAgentChild(b: Board, { task, place }: Awaited<ReturnType<ty
 
 const completedAgentChild = async (b: Board, parent: Task, file: string, body: string) => finishAgentChild(b, await pickedAgentChild(b, parent), file, body);
 
+/** 扉を準備の fetch(token の取得)で待たせ、その await の間に `during` を走らせてから続けさせる —— 最後の await の後の読みの観測。 */
+async function duringPreparation<T>(door: (githubAuth: GitHubAuth) => Promise<T>, during: () => void): Promise<T> {
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  let held!: () => void;
+  const reached = new Promise<void>((resolve) => (held = resolve));
+  const result = door({ ensureToken: () => (held(), hold), env: () => process.env } as unknown as GitHubAuth);
+  await reached;
+  during();
+  release();
+  return result;
+}
+
 it("start_work は pickup の準備を通して task/<H> を保護ブランチから作り、作業台を開いて task_work_started を残す —— 名前の場所の作業ツリーも HEAD も動かさず、status は todo のまま(pin C2)", async () => {
   const b = await board("start-work");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
@@ -94,15 +116,20 @@ it("start_work は pickup の準備を通して task/<H> を保護ブランチ�
   expect(refs).toBe(`${before[1]}\n${git(b.ws.path, "for-each-ref", `refs/heads/task/${h.id}`)}`);
 });
 
-it("2回目の start_work は同じ在り処を返し、disk から消えた作業台は task/<H> から開き直す —— event は増えない(pin C2)", async () => {
+it("2回目の start_work は同じ在り処を返して board/* を引き直し、disk から消えた作業台は task/<H> から開き直す —— event は増えない(pin C2)", async () => {
   const b = await board("start-work-again");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   const first = await startWork(b, h);
   const path = realpathSync(humanWorkbench(b, h));
   commitWork(path, "draft.txt", "kept while open\n");
 
+  const sibling = work(b, "write another", { assignee: HUMAN_ACTOR_ID });
+  await startWork(b, sibling);
+  expect(() => git(path, "rev-parse", "--verify", `board/task/${sibling.id}`)).toThrow();
+
   expect(await startWork(b, h)).toEqual(first);
   expect(git(path, "show", "HEAD:draft.txt")).toBe("kept while open");
+  expect(git(path, "rev-parse", `board/task/${sibling.id}`)).toBe(git(b.ws.path, "rev-parse", `task/${sibling.id}`));
 
   rmSync(path, { recursive: true, force: true });
   expect(await startWork(b, h)).toEqual(first);
@@ -119,6 +146,22 @@ it("remote-backed では start_work の準備が origin の保護ブランチを
   expect((await startWork(b, h)).ok).toBe(true);
 
   expect(git(workspace.path, "show", `task/${h.id}:upstream.txt`)).toBe("merged on origin");
+});
+
+it("registry の無い盤面では、task の列がどの名前でも唯一の workspace で書き始める —— 導く名前が準備の間に変わったときだけ拒む", async () => {
+  const b = await board("start-work-no-registry");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID, workspace: "a-name-this-board-does-not-know" });
+
+  expect((await startWork(b, h)).ok).toBe(true);
+  expect(git(b.ws.path, "rev-parse", `task/${h.id}`)).toBe(git(b.ws.path, "rev-parse", "main"));
+});
+
+it("start_work は人間担当の work だけを受け、ほかは何も書かずに拒む", async () => {
+  const b = await board("start-work-gate");
+  const agent = work(b, "an agent's task", { assignee: "deckhand" });
+
+  expect(await startWork(b, agent)).toEqual(refused("only a work task assigned to the human can start work here"));
+  expect(kinds(b.db, agent.id)).toEqual(["task_registered"]);
 });
 
 it("導ける workspace が無ければ start_work は text C1b で拒み、何も書かない(pin C2)", async () => {
@@ -166,7 +209,7 @@ it("準備が落ちれば start_work は pickup と同じ workspace の Quaranti
   expect(kinds(b.db, h.id)).toEqual(["task_registered"]);
   expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${h.id}`)).toBe("");
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
-  expect(b.db.prepare("SELECT ref_snapshot <> '' FROM workspace_state WHERE name = ?").pluck().get(b.ws.name)).toBe(1);
+  expect(holdsBaseline(b.db, b.ws.name)).toBe(true);
 });
 
 it("基準の行の無い workspace の最初の撮りは、基準の行を持つ別の workspace の Quarantine が開いている間、理由を問わず待つ —— start_work は止めた Quarantine を名指して拒む(ADR 0373 決定13 追記)", async () => {
@@ -179,7 +222,7 @@ it("基準の行の無い workspace の最初の撮りは、基準の行を持�
   const result = await startWork(b, h);
 
   expect(result).toEqual(refused(`cannot start work: workspace ${held.name} is quarantined — answer question ${quarantineQuestion(b.db, "workspace", held.name)!.id} first.`));
-  expect(b.db.prepare("SELECT COUNT(*) FROM workspace_state WHERE name = ? AND ref_snapshot <> ''").pluck().get(b.ws.name)).toBe(0);
+  expect(holdsBaseline(b.db, b.ws.name)).toBe(false);
   expect(kinds(b.db, h.id)).toEqual(["task_registered"]);
 });
 
@@ -278,7 +321,7 @@ async function startedWithCommit(b: Board, h: Task, file = "mine.txt", body = "m
 /** 拒まれた完了が task に何も書いていないことの観測: `task/<H>` の値、status、event の kind。 */
 const untouched = (b: Board, h: Task) => [git(b.ws.path, "rev-parse", `task/${h.id}`), getTask(b.db, h.id)!.status, kinds(b.db, h.id)];
 
-const takenIn = (db: Db) => db.prepare("SELECT payload FROM events WHERE kind = 'workbench_taken_in'").pluck().all().map((p) => JSON.parse(p as string));
+const takenIn = (db: Db) => listEventsOfKinds(db, ["workbench_taken_in"]).map((e) => e.payload);
 
 it("タスクブランチを持つ H の完了は作業台の tip を包む commit で task/<H> に取り込み、done にし、作業台を消す —— handoff の6欄が要る(pin C7・C11)", async () => {
   const b = await board("complete-intake");
@@ -390,7 +433,7 @@ it("作業台の無い H の帰り先との conflict は、盤面がその拒否
 
   const path = realpathSync(humanWorkbench(b, h));
   expect(result).toEqual(refused(
-    `task/${h.id} does not merge cleanly into 'task/${root.id}'. The board opened the workbench at ${path} for it. There, on task/${h.id}, run \`git merge board/task/${root.id}\` and resolve the conflict ` +
+    `task/${h.id} does not merge cleanly into 'task/${root.id}'. The board opened the workbench at ${path} for it., on task/${h.id}, run \`git merge board/task/${root.id}\` and resolve the conflict ` +
       `(or, in your own clone with the workbench as a remote: fetch it, \`git merge <remote>/board/task/${root.id}\`, and push task/${h.id} to it), then complete again.`,
   ));
   expect(kinds(b.db, h.id)).not.toContain("task_work_started");
@@ -416,22 +459,30 @@ it("拒まれた完了は task に何も書かない: 子孫の後始末が済�
   expect(untouched(b, h)).toEqual(before);
 });
 
+it("tip が task/<H> のままで作業ツリーが汚れていれば、完了は答え直しに complete again を言って拒み、何も書かない(text C2d)", async () => {
+  const b = await board("complete-dirty-no-commit");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  await startWork(b, h);
+  const path = realpathSync(humanWorkbench(b, h));
+  writeFileSync(join(path, "README.md"), "not committed\n");
+  const before = untouched(b, h);
+
+  expect(await complete(b, h)).toEqual(refused(
+    `the workbench at ${path} has nothing new on task/${h.id}, but it has uncommitted changes — commit them on task/${h.id} or discard them. Then complete again.`,
+  ));
+  expect(untouched(b, h)).toEqual(before);
+});
+
 it("最後の await の後に動いた ref も見る —— 準備の fetch を待つ間に task/<H> が進めば、書く区間の検査が拒む(pin C10)", async () => {
   const b = await board("complete-after-await");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   await startedWithCommit(b, h);
-  let release!: () => void;
-  const hold = new Promise<void>((resolve) => (release = resolve));
-  let held!: () => void;
-  const reached = new Promise<void>((resolve) => (held = resolve));
-  const githubAuth = { ensureToken: () => (held(), hold), env: () => process.env } as unknown as GitHubAuth;
 
-  const completing = completeThroughHumanDoor({ ...deps(b), githubAuth }, h.id, FULL_HANDOFF, () => b.clock.now(), "webui");
-  await reached;
-  git(b.ws.path, "update-ref", `refs/heads/task/${h.id}`, git(b.ws.path, "commit-tree", "-p", `task/${h.id}`, "-m", "moved", `task/${h.id}^{tree}`));
-  release();
+  const result = await duringPreparation(
+    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, h.id, FULL_HANDOFF, () => b.clock.now(), "webui"),
+    () => git(b.ws.path, "update-ref", `refs/heads/task/${h.id}`, git(b.ws.path, "commit-tree", "-p", `task/${h.id}`, "-m", "moved", `task/${h.id}^{tree}`)),
+  );
 
-  const result = await completing;
   expect(!result.ok && result.failure.error).toMatch(new RegExp(`^task/${h.id} has moved on since your tip`));
   expect(getTask(b.db, h.id)!.status).toBe("todo");
 });
@@ -441,24 +492,13 @@ it("準備の fetch を待つ間に cancel された H には、start_work も�
   const started = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   await startedWithCommit(b, started);
   const fresh = work(b, "not started yet", { assignee: HUMAN_ACTOR_ID });
-  const heldDoor = async (door: (githubAuth: GitHubAuth) => Promise<unknown>, during: () => void) => {
-    let release!: () => void;
-    const hold = new Promise<void>((resolve) => (release = resolve));
-    let held!: () => void;
-    const reached = new Promise<void>((resolve) => (held = resolve));
-    const result = door({ ensureToken: () => (held(), hold), env: () => process.env } as unknown as GitHubAuth);
-    await reached;
-    during();
-    release();
-    return result;
-  };
   const branch = git(b.ws.path, "rev-parse", `task/${started.id}`);
 
-  const startResult = await heldDoor(
+  const startResult = await duringPreparation(
     (githubAuth) => startWorkThroughHumanDoor({ ...deps(b), githubAuth }, fresh.id, () => b.clock.now(), "webui"),
     () => cancelTaskDirectly(b.db, getTask(b.db, fresh.id)!, null, b.clock.now(), {}, "webui"),
   );
-  const completeResult = await heldDoor(
+  const completeResult = await duringPreparation(
     (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, started.id, FULL_HANDOFF, () => b.clock.now(), "webui"),
     () => cancelTaskDirectly(b.db, getTask(b.db, started.id)!, null, b.clock.now(), {}, "webui"),
   );
@@ -484,6 +524,21 @@ it("done の後に作業台の tip が読んだものから動いていれば、
   expect(notice).toBe(`completed. Commits reached the workbench at ${path} after the board read it and were not taken in; the workbench is kept. The task is done, so they do not enter through it.`);
   expect([getTask(b.db, h.id)!.status, existsSync(join(path, "late.txt"))]).toEqual(["done", true]);
   expect(() => git(b.ws.path, "show", `task/${h.id}:late.txt`)).toThrow();
+});
+
+it("done の後に作業台に stash が残っていれば、作業台を残してそれを言う —— text C7 ではない(pin C11)", async () => {
+  const b = await board("complete-kept-stash");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  writeFileSync(join(path, "mine.txt"), "parked\n");
+  git(path, "stash");
+
+  const done = await complete(b, h);
+
+  expect(done.ok && done.value.notice).toBe(
+    `completed. The workbench at ${path} is kept: the stash holds commits that task/${h.id} does not have — merge them into task/${h.id}, or delete them. The task is done, so nothing enters through it.`,
+  );
+  expect([getTask(b.db, h.id)!.status, git(b.ws.path, "show", `task/${h.id}:mine.txt`), existsSync(path)]).toEqual(["done", "mine", true]);
 });
 
 it("cancel は取り込まず、ブランチも作業台も動かさない(pin C11、ADR 0374 決定11)", async () => {
@@ -542,7 +597,9 @@ it("書き始めた H の task/<H> への子の merge back の conflict は H �
   await finishAgentChild(b, second, "work.txt", "second\n");
 
   const question = quarantineQuestion(b.db, "workspace", b.ws.name)!;
-  expect(question.purpose).toContain(`task/${second.task.id} does not merge cleanly into 'task/${h.id}'. The board opened the workbench at ${path} for it.`);
+  expect(question.purpose).toContain(
+    `task/${second.task.id} does not merge cleanly into 'task/${h.id}'. The board opened the workbench at ${path} for it; its tip does not contain task/${second.task.id}.`,
+  );
   expect(await complete(b, h)).toEqual(refused(`cannot complete: workspace ${b.ws.name} is quarantined — answer question ${question.id} first.`));
 
   git(path, "merge", "--no-edit", `board/task/${h.id}`);
@@ -555,6 +612,31 @@ it("書き始めた H の task/<H> への子の merge back の conflict は H �
   expect(existsSync(path)).toBe(true);
   expect((await complete(b, h)).ok).toBe(true);
   expect(existsSync(path)).toBe(false);
+});
+
+it("done の後に落ちた H の merge back は積み残しになり、workspace の Quarantine の受理のやり直しが運ぶ", async () => {
+  const b = await board("complete-leftover");
+  const root = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  let first = true;
+
+  // 書く区間の検査の後、H の merge back の直前に帰り先の ref を一度だけ塞ぐ(盤面の外の故障)—— done は書かれた後
+  const notice = completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {
+    completeTask(b.db, getTask(b.db, h.id)!, FULL_HANDOFF, HUMAN_ACTOR_ID, b.clock.now(), "webui");
+    if (first) writeFileSync(join(b.ws.path, ".git", "refs", "heads", "task", `${root.id}.lock`), "");
+    first = false;
+  });
+
+  expect(notice).toBeUndefined();
+  expect(getTask(b.db, h.id)!.status).toBe("done");
+  expect(() => git(b.ws.path, "show", `task/${root.id}:mine.txt`)).toThrow();
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)?.purpose).toMatch(new RegExp(`task/${root.id}`));
+  expect(existsSync(path)).toBe(false);
+
+  rmSync(join(b.ws.path, ".git", "refs", "heads", "task", `${root.id}.lock`));
+  expect((await answer(b)).status).toBe("done");
+  expect(git(b.ws.path, "show", `task/${root.id}:mine.txt`)).toBe("mine");
 });
 
 it("親が別の workspace に固定された H は根として完了する —— 帰り先は保護ブランチ(pin C8)", async () => {

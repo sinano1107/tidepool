@@ -23,7 +23,7 @@ it("POST /api/tasks/:id/start-work は作業台の在り処を返し、task の�
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${human.id}`)).json;
   expect([after.has_task_branch, after.started]).toEqual([true, true]);
   expect(missing.status).toBe(404);
-  expect([refused.status, refused.json]).toEqual([409, { error: "only a work task assigned to the human can start work here" }]);
+  expect(refused.status).toBe(409);
 });
 
 it("管理MCP の start_work は作業台の在り処を返し、拒否は tool error になり、worker MCP には無い", async () => {
@@ -39,11 +39,10 @@ it("管理MCP の start_work は作業台の在り処を返し、拒否は tool 
   try {
     expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("start_work");
 
-    // 盤面に workspace が無い —— 場所を導けない拒否(text C1b)が tool error になる
+    // 盤面に workspace が無い —— 場所を導けない拒否(文は domain 層の釘)が tool error になる
     const refused: any = await client.callTool({ name: "start_work", arguments: { task_id: human.id } });
 
     expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toBe("cannot start work: no workspace can be derived for this task — set its workspace with Edit first.");
   } finally {
     await client.close();
   }

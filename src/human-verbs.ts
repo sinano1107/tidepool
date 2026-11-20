@@ -1116,14 +1116,14 @@ export interface HumanWorkDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   githubAuth?: GitHubAuth;
+  /** 準備の失敗の Quarantine に添える repo アクセスの修復案内(ADR 0067 決定2)。Absent → 案内を訊かない。 */
+  github?: GitHubClient;
   workspacesDir?: string;
   boardState?: BoardStatePath[];
   defaultAgentName?: string;
   auditorName?: string;
   interviewerName?: string;
 }
-
-export type CompleteThroughHumanDoorDeps = HumanWorkDeps;
 
 /** 人間担当の work の名前の場所: 導出した名前を引く。導けなければ text C1b(子は根の workspace を案内する、ADR 0384 決定1)、registry に
  *  無い名前は pickup と同じく名前の Quarantine を立てて text C1a で拒む。 */
@@ -1141,6 +1141,7 @@ function humanWorkPlace(deps: HumanWorkDeps, task: Task, verb: string, now: Date
 function humanWorkPreparation(deps: HumanWorkDeps, now: Date): HumanWorkPreparation {
   return {
     githubAuth: deps.githubAuth,
+    github: deps.github,
     workspacesBaseDir: resolveWorkspacesBaseDir(deps.workspacesDir),
     now,
     resolveRegistered: deps.resolveWorkspace,
@@ -1149,20 +1150,30 @@ function humanWorkPreparation(deps: HumanWorkDeps, now: Date): HumanWorkPreparat
   };
 }
 
-/** 人間担当の work の扉の門を `task` の今の行に掛け、通れば行を返す —— 準備の await の後にも掛け直す(Edit・cancel は in-flight の鍵を取らない)。
- *  `named` は await の前に導いた名前の場所で、行の導く名前がそれと違えば拒む。 */
-function humanWorkGate(db: Db, taskId: string, verb: "start work" | "complete", named?: WorkspaceConfig): Task {
+/** 人間担当の work の扉ごとの門: 通す task と、拒否の文と、決着の文の動詞。 */
+const HUMAN_WORK_GATES = {
+  "start work": {
+    admits: (task: Task) => task.type === "work" && task.assignee === HUMAN_ACTOR_ID,
+    refusal: "only a work task assigned to the human can start work here",
+    settled: "started",
+  },
+  complete: {
+    admits: (task: Task) => task.assignee === HUMAN_ACTOR_ID,
+    refusal: "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
+    settled: "completed",
+  },
+} as const;
+
+/** 人間担当の work の扉の門を task の今の行に掛け、通れば行を返す —— 準備の await の後にも掛け直す(Edit・cancel は in-flight の鍵を取らない、
+ *  ADR 0373 決定8 の鍵は名前の場所の ref を書く回答と操作だけのもの)。`derived` は await の前に読んだ導く名前で、今の行の導く名前がそれと
+ *  違えば(その間に Edit で替わった)拒む。 */
+function humanWorkGate(db: Db, taskId: string, verb: keyof typeof HUMAN_WORK_GATES, derived?: { name: string | null; place: string }): Task {
   const task = getTask(db, taskId)!;
-  if (verb === "start work" ? task.type !== "work" || task.assignee !== HUMAN_ACTOR_ID : task.assignee !== HUMAN_ACTOR_ID) {
-    throw new DomainError(
-      verb === "start work"
-        ? "only a work task assigned to the human can start work here"
-        : "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
-    );
-  }
-  assertUnsettledNotInProgress(task, verb === "start work" ? "started" : "completed");
-  if (named && (derivedWorkspace(db, task) ?? named.name) !== named.name) {
-    throw new DomainError(`cannot ${verb}: this task's workspace changed while the board prepared ${named.name} — ${verb} again.`);
+  const gate = HUMAN_WORK_GATES[verb];
+  if (!gate.admits(task)) throw new DomainError(gate.refusal);
+  assertUnsettledNotInProgress(task, gate.settled);
+  if (derived && derivedWorkspace(db, task) !== derived.name) {
+    throw new DomainError(`cannot ${verb}: this task's workspace changed while the board prepared ${derived.place} — ${verb} again.`);
   }
   return task;
 }
@@ -1176,8 +1187,9 @@ export async function startWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: str
     humanWorkGate(deps.db, taskId, "start work");
     const at = now();
     const named = humanWorkPlace(deps, task, "start work", at);
+    const derived = { name: derivedWorkspace(deps.db, task), place: named.name };
     const path = await withWorkspaceInFlightKey(deps.db, named.name, () =>
-      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, at), () => humanWorkGate(deps.db, taskId, "start work", named)),
+      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, at), () => humanWorkGate(deps.db, taskId, "start work", derived)),
     );
     return { ok: true, value: { path } };
   } catch (err) {
@@ -1190,7 +1202,7 @@ export async function startWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: str
  *  今どおり記録だけを閉じ、持てば in-flight の鍵を取って準備を通し、作業台の取り込み・`done`・H の merge back を `completeHumanWork` に
  *  任せ、収束を突く。作業台を残した完了は text C7 を `notice` に添える。 */
 export async function completeThroughHumanDoor(
-  deps: CompleteThroughHumanDoorDeps,
+  deps: HumanWorkDeps,
   taskId: string,
   handoff: Partial<HandoffDoc> | undefined,
   now: () => Date,
@@ -1206,10 +1218,11 @@ export async function completeThroughHumanDoor(
     } else {
       const at = now();
       const named = humanWorkPlace(deps, task, "complete", at);
+      const derived = { name: derivedWorkspace(deps.db, task), place: named.name };
       const board = humanWorkPreparation(deps, at);
       notice = await withWorkspaceInFlightKey(deps.db, named.name, async () => {
         await prepareHumanWork(deps.db, named, task, "complete", board);
-        const fresh = humanWorkGate(deps.db, task.id, "complete", named);
+        const fresh = humanWorkGate(deps.db, task.id, "complete", derived);
         const checked = assertCompletable(deps.db, fresh, handoff);
         return completeHumanWork(deps.db, named, fresh, board.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
           completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin);

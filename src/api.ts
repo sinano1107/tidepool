@@ -754,7 +754,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     boardState,
   } = deps;
   // 人間担当の work の扉(`start_work` と完了)が名前の場所に届く束(ADR 0374 決定2・9)
-  const humanWorkDeps = { db, pollNow, workspace, resolveWorkspace, githubAuth, workspacesDir, boardState, defaultAgentName, auditorName, interviewerName };
+  const humanWorkDeps = { db, pollNow, workspace, resolveWorkspace, github: github ?? undefined, githubAuth, workspacesDir, boardState, defaultAgentName, auditorName, interviewerName };
   // registry で名前を引く人間の扉(task の編集・記憶の書き込みと一覧)が共有する束
   const memoryRefDeps = { db, agentRegistered, workspace, resolveWorkspace };
   const router = Router();

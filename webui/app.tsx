@@ -1350,7 +1350,7 @@ function App() {
         setCompleteHumanCard({ ...task, has_task_branch: read.has_task_branch, workbench: read.workbench });
         return;
       }
-      await api(`/api/tasks/${id}/complete`, {});
+      await api('POST /api/tasks/:id/complete', { params: { id }, body: {} });
       say('success', 'task completed', id);
       await refreshFull();
     } catch (err) {

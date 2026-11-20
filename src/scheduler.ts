@@ -1,6 +1,6 @@
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { boardHalts } from "./board-halt.js";
-import { BoardStateOverlapError, type BoardStatePath } from "./board-state.js";
+import type { BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider, recordProbeBoardCall } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type CodexAppServerProbe, type CodexAppServerProbeResult, codexProbeStop, whyRowUnlisted } from "./codex-app-server.js";
@@ -23,14 +23,13 @@ import {
   selectable,
   windowMatchesSetting,
 } from "./execution-setting.js";
-import { type GitHubClient, IssueGoneError, type IssueRef, type RepoSlug } from "./github.js";
-import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
+import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
-import { OriginRepositoryMismatchError } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -53,7 +52,6 @@ import {
   type RegistryReachabilityCheck,
 } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
-import { repairRepoAccess } from "./repo-access.js";
 import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
 import type { ParentBriefing, Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
@@ -102,6 +100,7 @@ import {
   PickupGateError,
   pickupGate,
   prepareWorkspaceAtPickup,
+  quarantineWithRepoAccessGuidance as quarantineWithGuidance,
   quarantineWorkspace,
   RefsMovedError,
   resolveOrQuarantine,
@@ -528,51 +527,9 @@ export function startScheduler(deps: {
     if (unreclaimed !== undefined) return `${unreclaimed} has not been observed empty — pickup waits`;
   }
 
-  /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
-   *  pickup の門と準備(`pickupGate` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
-   *  仲介が出せるかを訊き、出せなければ install の案内を quarantine の理由に連ねる。
-   *
-   *  訊かない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
-   *  (盤面が GitHub 身元を持たない)と、`repo` が github.com を指していない(非
-   *  GitHub の remote / remote 正本の宣言そのものが無い)。
-   *
-   *  撃ち直しはしない —— install も push 権限も GitHub 側の人間の操作であり、
-   *  盤面がこの場で直せる手は無い。 */
-  async function quarantineWithRepoAccessGuidance(
-    workspace: WorkspaceConfig,
-    err: unknown,
-    /** pickup の継続の門(#1973): 失敗が届いた時点か修復の問い合わせの後に session が終わっていれば、問い合わせも quarantine も
-     *  せず undefined —— 資源の事実は次の pickup が同じ準備でやり直す。 */
-    live: () => boolean,
-  ): Promise<ResourceStop | undefined> {
-    if (!live()) return undefined;
-    const pickupCause = err instanceof PickupGateError ? err.cause : err;
-    // ADR 0377 決定4: keep the fixed-point refusal when a workspace also has repo drift.
-    if (pickupCause instanceof BoardStateOverlapError) return quarantineWorkspace(db, workspace.name, err, clock.now());
-    // ADR 0378 決定3・6〜8: a different origin or declared repo is a local repair. A token probe cannot change the result.
-    if (pickupCause instanceof OriginRepositoryMismatchError || pickupCause instanceof WorkspaceRepoMismatchError) {
-      return quarantineWorkspace(db, workspace.name, err, clock.now());
-    }
-    // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
-    // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
-    let ref: RepoSlug | undefined;
-    try {
-      ref = workspaceNetworkDestination(workspace)?.github;
-    } catch (cause) {
-      if (!(cause instanceof WorkspaceRepoMismatchError || cause instanceof OriginRepositoryMismatchError)) throw cause;
-      return quarantineWorkspace(db, workspace.name, cause, clock.now());
-    }
-    let guidance: string | null = null;
-    // 仲介の断りも到達失敗も `tokenRefusal` が理由の文字列に畳むので、ここは投げない
-    if (github && ref) guidance = (await repairRepoAccess(github, ref)).guidance;
-    if (!live()) return undefined;
-    // 案内は元の原因を**置き換えず**に連結する —— なぜ落ちたか(生の git のエラー)と
-    // 何をすれば直るかは別の情報で、どちらも人間の1つの question に載る
-    const cause = guidance
-      ? new Error(`${err instanceof Error ? err.message : String(err)}\n\n${guidance}`)
-      : err;
-    return quarantineWorkspace(db, workspace.name, cause, clock.now());
-  }
+  /** ADR 0067 決定2: pickup の門と準備が落ちた瞬間の修復案内つき quarantine(人間担当の work の扉と共有)。 */
+  const quarantineWithRepoAccessGuidance = (workspace: WorkspaceConfig, err: unknown, live: () => boolean) =>
+    quarantineWithGuidance(db, github, workspace, err, () => clock.now(), live);
 
   /** `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter へそのまま運ぶ —— spawn 側で解決し直すと、除外の文脈を持たない再解決が
