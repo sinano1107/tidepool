@@ -604,12 +604,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     // kit's own shell) — needs this positioned, width-capped ancestor so it
     // covers the 440px column instead of the full viewport.
     <div style={{ height: '100vh', position: 'relative', overflow: 'hidden', background: 'var(--surface-page)' }}>
-      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
-      {err && (
-        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 60, fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--danger-fg, #c0392b)', borderRadius: 'var(--radius-md)', padding: '10px 16px' }}>
-          {err}
-        </div>
-      )}
+      <TpSingleQuestion q={q} onAnswer={answer} refusal={err} onClose={() => onDone(null)} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
     </div>
   );
 }
@@ -942,6 +937,8 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
   const [missing, setMissing] = React.useState<string[]>([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // 完了の送信の拒否文は toast でなく dialog に次の送信まで残す —— 作業台の path と直し方を運ぶ(#3204)
+  const [refusal, setRefusal] = React.useState<string | null>(null);
   const [reviewFlag, setReviewFlag] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState<string[]>([]);
   const [reviewTier, setReviewTier] = React.useState('');
@@ -969,6 +966,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
   };
   const submit = async () => {
     setBusy(true);
+    setRefusal(null);
     try {
       const handoff = Object.fromEntries(
         HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? '').trim()]).filter(([, v]) => v),
@@ -986,7 +984,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
       await onCompleted();
       onClose();
     } catch (err) {
-      say('danger', 'complete failed', String((err as Error).message || err));
+      setRefusal(String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1031,6 +1029,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
           <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />
           <Select label="Review tier" options={tierOptions(tiers, "(reviewer's tier, then board default)")} value={reviewTier} onChange={(e) => setReviewTier(e.target.value)} />
         </>}
+        {refusal && <TpRefusal text={refusal} />}
         <Button variant="primary" size="lg" full disabled={busy || (!!task.has_task_branch && HANDOFF_FIELDS.some(([f]) => TidepoolRules.whyBlank(fields[f] ?? '')))} onClick={submit}>Done</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Not yet</Button>
       </Card>
@@ -1200,15 +1199,11 @@ function App() {
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
+  // 拒否は toast に出さず投げ返す —— 拒否文は TriageScreen が拒まれたカードに残す(#3204)
   const answerNow = async (q: TpTriageQuestion, a: string[], amendment?: TpAmendment, comment?: string) => {
-    try {
-      const answered = await api('POST /api/tasks/:id/answer', { params: { id: q.id }, body: { answers: a, triage: true, amendment, comment } });
-      // 回答の直前に盤面が観測で閉じた —— 回答は記録されていないことを札の文言で言う(ADR 0265 決定7)
-      if (answered.settled_by_observation) say('warn', 'settled by the board, not by your answer', SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
-    } catch (err) {
-      say('danger', 'answer failed', String((err as Error).message || err));
-      throw err;
-    }
+    const answered = await api('POST /api/tasks/:id/answer', { params: { id: q.id }, body: { answers: a, triage: true, amendment, comment } });
+    // 回答の直前に盤面が観測で閉じた —— 回答は記録されていないことを札の文言で言う(ADR 0265 決定7)
+    if (answered.settled_by_observation) say('warn', 'settled by the board, not by your answer', SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
   };
 
   // S2 — the objection annotation lands on the log entry the moment it is raised

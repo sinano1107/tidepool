@@ -468,7 +468,16 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
 // render this same card. The question card's own toggle (one of the 3
 // switches ADR 0063's table enumerates): translates `purpose`/items'
 // title+detail, never the options an answer is picked from.
-function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOpenSettings }: {
+// 拒まれた回答・完了の送信の拒否文(#3204)。次の送信まで残すので、長い path やコマンドも枠の中で折り返して読ませる
+function TpRefusal({ text }: { text: string }) {
+  return (
+    <div role="alert" style={{ fontSize: 'var(--text-sm)', color: 'var(--coral-4)', background: 'var(--coral-1)', border: '1px solid var(--coral-2)', borderRadius: 'var(--radius-md)', padding: '8px 10px', marginBottom: 14, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+      {text}
+    </div>
+  );
+}
+
+function TpQuestionCard({ q, answer, onAnswer, locked = false, refusal, onTranslate, onOpenSettings }: {
   q: TpQuestion;
   /** `q.opensSettings` の question のボタンが撃つ。 */
   onOpenSettings?: () => void;
@@ -478,6 +487,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   onAnswer: (answers: string[], amendment?: TpAmendment, comment?: string) => Promise<void>;
   /** 回答済みのカードは選び直せない。 */
   locked?: boolean;
+  /** 盤面が拒んだ直前の回答の拒否文 —— 持ち主は呼び手で、次の送信を始めるまで残す(#3204)。 */
+  refusal?: string | null;
   onTranslate?: TpTranslateFn;
 }) {
   const { Card, AgentChip, Switch, Input, Button } = window.TidepoolDesignSystem_8a0ead;
@@ -518,6 +529,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const translatedItems = translation && translation.status === 'translated' ? translation.items : null;
 
   return (
+    // DS の Card は data-* を渡さないので、e2e が1枚を引く口は外側に持つ
+    <div data-testid={`question-card-${q.id}`}>
     <Card style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{q.id}</span>
@@ -582,6 +595,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
             placeholder="why" />
         </div>
       )}
+      {refusal && <TpRefusal text={refusal} />}
       {items.length > 1 && !locked && (
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
           {answeredCount} of {items.length} answered — sent together on Submit
@@ -600,6 +614,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
         </div>
       )}
     </Card>
+    </div>
   );
 }
 
@@ -793,6 +808,8 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // no questions overnight → the flow still exists for the log skim; start at the log
   const [section, setSection] = React.useState(nQuestions ? S_QUESTIONS : S_LOG);
   const [answers, setAnswers] = React.useState<Record<string, string[]>>({});
+  // 段は入るたびに作り直すので、拒否文はカードでなくここに question id ごとに持つ(#3204)
+  const [refusals, setRefusals] = React.useState<Record<string, string>>({});
   const [objections, setObjections] = React.useState<Record<string, string[]>>({});
   const [objecting, setObjecting] = React.useState<number | null>(null);
   const [draft, setDraft] = React.useState('');
@@ -808,7 +825,11 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // live answers are one-way: a persisted answer cannot be untapped or replaced
   const answerQ = async (q: TpTriageQuestion, a: string[] | null, amendment?: TpAmendment, comment?: string) => {
     if (!a || answers[q.id]) return;
-    try { await onAnswer(q, a, amendment, comment); } catch { return; }
+    setRefusals(({ [q.id]: _, ...rest }) => rest);
+    try { await onAnswer(q, a, amendment, comment); } catch (err) {
+      setRefusals((prev) => ({ ...prev, [q.id]: String((err as Error).message || err) }));
+      return;
+    }
     setAnswers((prev) => ({ ...prev, [q.id]: a }));
   };
 
@@ -1057,7 +1078,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         <div>
           {generalQuestions.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} refusal={refusals[q.id]} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
             </div>
           ))}
         </div>
@@ -1188,7 +1209,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         <div>
           {landingReady.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} refusal={refusals[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
           {/* 回答不能な着地 question は件数と理由の1行だけ — 押せば必ず 409 になる
@@ -1197,9 +1218,18 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
             const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
             if (blocked.length === 0) return null;
             return (
-              <p key={kind} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 0 8px' }}>
-                {blocked.length} landing question{blocked.length > 1 ? 's' : ''} not yet answerable — {TP_LANDING_BLOCKED[kind]}
-              </p>
+              <React.Fragment key={kind}>
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                  {blocked.length} landing question{blocked.length > 1 ? 's' : ''} not yet answerable — {TP_LANDING_BLOCKED[kind]}
+                </p>
+                {/* 盤面の blocked_by で拒否文を捨てない —— 拒否文は conflict の直し方を運ぶ(#3204) */}
+                {blocked.filter((q) => refusals[q.id]).map((q) => (
+                  <div key={q.id} data-testid={`landing-refusal-${q.id}`}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 4, overflowWrap: 'anywhere' }}>{q.id}</div>
+                    <TpRefusal text={refusals[q.id]!} />
+                  </div>
+                ))}
+              </React.Fragment>
             );
           })}
         </div>
