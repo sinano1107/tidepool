@@ -12,7 +12,7 @@ import { markTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
 import { boardRefWriter, completeHumanWork, prepareHumanWork, quarantineWorkspace, recordTaskCheckoutTip, takeWorkspaceInFlightKey, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
@@ -108,6 +108,17 @@ it("2回目の start_work は同じ在り処を返し、disk から消えた作�
   expect(await startWork(b, h)).toEqual(first);
   expect(git(path, "rev-parse", "HEAD")).toBe(git(b.ws.path, "rev-parse", `task/${h.id}`));
   expect(kinds(b.db, h.id)).toEqual(["task_registered", "task_branch_created", "task_work_started"]);
+});
+
+it("remote-backed では start_work の準備が origin の保護ブランチを fetch し、task/<H> は origin の今の値から切られる(ADR 0374 決定2)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("start-work-remote");
+  const b = { ...(await board("start-work-remote-board")), ws: workspace };
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  publish("upstream.txt", "merged on origin\n", "upstream");
+
+  expect((await startWork(b, h)).ok).toBe(true);
+
+  expect(git(workspace.path, "show", `task/${h.id}:upstream.txt`)).toBe("merged on origin");
 });
 
 it("導ける workspace が無ければ start_work は text C1b で拒み、何も書かない(pin C2)", async () => {
@@ -423,6 +434,40 @@ it("最後の await の後に動いた ref も見る —— 準備の fetch を�
   const result = await completing;
   expect(!result.ok && result.failure.error).toMatch(new RegExp(`^task/${h.id} has moved on since your tip`));
   expect(getTask(b.db, h.id)!.status).toBe("todo");
+});
+
+it("準備の fetch を待つ間に cancel された H には、start_work も完了も扉の門を掛け直して何も書かない(Edit・cancel は in-flight の鍵を取らない)", async () => {
+  const b = await board("gate-after-await");
+  const started = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, started);
+  const fresh = work(b, "not started yet", { assignee: HUMAN_ACTOR_ID });
+  const heldDoor = async (door: (githubAuth: GitHubAuth) => Promise<unknown>, during: () => void) => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const reached = new Promise<void>((resolve) => (held = resolve));
+    const result = door({ ensureToken: () => (held(), hold), env: () => process.env } as unknown as GitHubAuth);
+    await reached;
+    during();
+    release();
+    return result;
+  };
+  const branch = git(b.ws.path, "rev-parse", `task/${started.id}`);
+
+  const startResult = await heldDoor(
+    (githubAuth) => startWorkThroughHumanDoor({ ...deps(b), githubAuth }, fresh.id, () => b.clock.now(), "webui"),
+    () => cancelTaskDirectly(b.db, getTask(b.db, fresh.id)!, null, b.clock.now(), {}, "webui"),
+  );
+  const completeResult = await heldDoor(
+    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, started.id, FULL_HANDOFF, () => b.clock.now(), "webui"),
+    () => cancelTaskDirectly(b.db, getTask(b.db, started.id)!, null, b.clock.now(), {}, "webui"),
+  );
+
+  expect(startResult).toEqual(refused("a settled task cannot be started"));
+  expect(completeResult).toEqual(refused("a settled task cannot be completed"));
+  expect(kinds(b.db, fresh.id)).not.toContain("task_work_started");
+  expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${fresh.id}`)).toBe("");
+  expect([getTask(b.db, started.id)!.status, git(b.ws.path, "rev-parse", `task/${started.id}`), takenIn(b.db)]).toEqual(["cancelled", branch, []]);
 });
 
 it("done の後に作業台の tip が読んだものから動いていれば、作業台を残して text C7 を返す(pin C11)", async () => {

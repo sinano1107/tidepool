@@ -1442,16 +1442,31 @@ export async function prepareHumanWork(db: Db, workspace: WorkspaceConfig, task:
  *  祖先を上から、その時点の系譜から `task/<H>`。各 task の列・ref・event は一緒に書く)、作業台を開いて `task_work_started` を残す。2回目
  *  以降は同じ在り処を返して `board/*` を引き直し、disk から消えた作業台は `task/<H>` から開き直す。名前の場所の作業ツリーも HEAD も
  *  動かさない。固定と作業台の失敗も準備の失敗と同じに扱う(pickup はタスクブランチの作成の失敗も同じ Quarantine にする)。返すのは作業台の在り処。 */
-export async function startHumanWork(db: Db, workspace: WorkspaceConfig, task: Task, caller: Answerer, board: HumanWorkPreparation): Promise<string> {
+export async function startHumanWork(
+  db: Db,
+  workspace: WorkspaceConfig,
+  task: Task,
+  caller: Answerer,
+  board: HumanWorkPreparation,
+  /** 最後の await の後に扉の門を掛け直し、今の行を返す(拒むなら投げる)—— 準備の fetch の間に Edit や cancel が行を替えうる。 */
+  recheck: () => Task,
+): Promise<string> {
   const verb = "start work";
   await prepareHumanWork(db, workspace, task, verb, board);
-  let path = "";
+  task = recheck();
   await preparedOrRefused(db, workspace, verb, board.now, async () => {
     fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
     const source = task.workspace === null ? nearestFilledAncestor(db, task.parent_id) : undefined;
     createTaskBranch(db, workspace, task, board.now, task.workspace === null ? (source?.id ?? "default") : undefined);
-    path = openHumanWorkWorkbench(workspace, board.workspacesBaseDir, taskBranch(task.id)).path;
   });
+  // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)
+  let path: string;
+  try {
+    path = openHumanWorkWorkbench(workspace, board.workspacesBaseDir, taskBranch(task.id)).path;
+  } catch (err) {
+    if (isBoardDbRefusal(err)) throw err;
+    throw new DomainError(`cannot start work: the board could not open the workbench (${err instanceof Error ? err.message : String(err)}); start work again.`);
+  }
   if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now, payload: { kind: "task_work_started" } });
   return path;
 }

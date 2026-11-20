@@ -1149,18 +1149,35 @@ function humanWorkPreparation(deps: HumanWorkDeps, now: Date): HumanWorkPreparat
   };
 }
 
+/** 人間担当の work の扉の門を `task` の今の行に掛け、通れば行を返す —— 準備の await の後にも掛け直す(Edit・cancel は in-flight の鍵を取らない)。
+ *  `named` は await の前に導いた名前の場所で、行の導く名前がそれと違えば拒む。 */
+function humanWorkGate(db: Db, taskId: string, verb: "start work" | "complete", named?: WorkspaceConfig): Task {
+  const task = getTask(db, taskId)!;
+  if (verb === "start work" ? task.type !== "work" || task.assignee !== HUMAN_ACTOR_ID : task.assignee !== HUMAN_ACTOR_ID) {
+    throw new DomainError(
+      verb === "start work"
+        ? "only a work task assigned to the human can start work here"
+        : "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
+    );
+  }
+  assertUnsettledNotInProgress(task, verb === "start work" ? "started" : "completed");
+  if (named && (derivedWorkspace(db, task) ?? named.name) !== named.name) {
+    throw new DomainError(`cannot ${verb}: this task's workspace changed while the board prepared ${named.name} — ${verb} again.`);
+  }
+  return task;
+}
+
 /** ADR 0374 決定2: 書き始める(`start_work`)—— 人間面だけの、人間担当の work の扉。in-flight の鍵(ADR 0373 決定8)を取り、判定と執行は
  *  `startHumanWork` が持つ。返すのは作業台の在り処。 */
 export async function startWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: string, now: () => Date, origin: EventOrigin): Promise<HumanVerbResult<{ path: string }>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
-    if (task.type !== "work" || task.assignee !== HUMAN_ACTOR_ID) throw new DomainError("only a work task assigned to the human can start work here");
-    assertUnsettledNotInProgress(task, "started");
+    humanWorkGate(deps.db, taskId, "start work");
     const at = now();
     const named = humanWorkPlace(deps, task, "start work", at);
     const path = await withWorkspaceInFlightKey(deps.db, named.name, () =>
-      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, at)),
+      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, at), () => humanWorkGate(deps.db, taskId, "start work", named)),
     );
     return { ok: true, value: { path } };
   } catch (err) {
@@ -1182,12 +1199,7 @@ export async function completeThroughHumanDoor(
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
-    if (task.assignee !== HUMAN_ACTOR_ID) {
-      throw new DomainError(
-        "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
-      );
-    }
-    assertUnsettledNotInProgress(task, "completed");
+    humanWorkGate(deps.db, taskId, "complete");
     let notice: string | undefined;
     if (!hasTaskBranch(deps.db, task.id)) {
       completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
@@ -1197,7 +1209,7 @@ export async function completeThroughHumanDoor(
       const board = humanWorkPreparation(deps, at);
       notice = await withWorkspaceInFlightKey(deps.db, named.name, async () => {
         await prepareHumanWork(deps.db, named, task, "complete", board);
-        const fresh = getTask(deps.db, task.id)!;
+        const fresh = humanWorkGate(deps.db, task.id, "complete", named);
         const checked = assertCompletable(deps.db, fresh, handoff);
         return completeHumanWork(deps.db, named, fresh, board.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
           completeTask(deps.db, fresh, checked, HUMAN_ACTOR_ID, at, origin);
