@@ -223,7 +223,7 @@ function claudePairQuestion(workspace: WorkspaceConfig) {
   const clock = new FakeClock();
   registerQuarantine(db, "workspaceContainment", `claude-code/${workspace.name}`, "unhideable .claude", clock.now());
   const question = quarantineQuestion(db, "workspaceContainment", `claude-code/${workspace.name}`)!;
-  const deps = { db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, resolveWorkspace: () => workspace }) };
+  const deps = { db, pollNow() {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, resolveWorkspace: () => workspace }) };
   return {
     answer: () => submitAnswer(deps, question, ["repaired by hand"], undefined, () => clock.now(), "webui"),
     status: () => getTask(db, question.id)?.status,
@@ -300,7 +300,7 @@ it("(codex, B) の question への回答は、保護ブランチの tip の使�
     db,
     pollNow() {},
     landing: unusedLanding,
-    quarantineChecks: quarantineChecks({
+    quarantineChecks: quarantineChecks({ quarantineResolvers: {},
       db,
       resolveWorkspace: () => workspace,
       workspacesDir: await tempDir("tidepool-codex-answer-checkouts-"),
@@ -334,7 +334,7 @@ it("Codex の組の検査が配線されていない盤面では、(codex, B) �
     db,
     pollNow() {},
     landing: unusedLanding,
-    quarantineChecks: quarantineChecks({ db, resolveWorkspace: (name) => ({ name: name!, path, branch: "main" }) }),
+    quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, resolveWorkspace: (name) => ({ name: name!, path, branch: "main" }) }),
   };
 
   await expect(submitAnswer(deps, question, ["repaired by hand"], undefined, () => clock.now(), "webui")).rejects.toThrow(
@@ -498,7 +498,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
     const picked = registerTask(db, { type: "work", title: "the pickup", purpose: "p", completion_criteria: "c", workspace: ws.name }, clock.now(), ...HUMAN_WEBUI);
     if (options.pickup !== false) await prepareAtPickup(db, ws, picked);
     let current = ws;
-    const checks = quarantineChecks({
+    const checks = quarantineChecks({ quarantineResolvers: {},
       db,
       clock,
       // 本番の resolver と同じく、宣言の確かめは今の registry を読む
@@ -936,7 +936,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const workspace = await makeWorkspace("B");
       registerQuarantine(db, "workspaceContainment", "codex/B", "flat stays enabled", clock.now());
       const question = quarantineQuestion(db, "workspaceContainment", "codex/B")!;
-      const checks = quarantineChecks({ db, resolveWorkspace: () => workspace, workspacesDir: await tempDir("tidepool-no-baseline-checkouts-"), codexWorkspaceContainment: async () => ({ available: true }) });
+      const checks = quarantineChecks({ quarantineResolvers: {}, db, resolveWorkspace: () => workspace, workspacesDir: await tempDir("tidepool-no-baseline-checkouts-"), codexWorkspaceContainment: async () => ({ available: true }) });
 
       await submitAnswer({ db, pollNow() {}, landing: unusedLanding, quarantineChecks: checks }, question, ["repaired by hand"], undefined, () => clock.now(), "webui");
 

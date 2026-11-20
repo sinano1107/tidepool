@@ -60,7 +60,7 @@ it("an entry naming the registry clone that arrives after boot is refused at its
   expect(git(registryDir, "for-each-ref", "refs/heads/task/")).toBe("");
   expect(holdsBaseline(db, workspace.name)).toBe(false);
 
-  await expect(quarantineChecks({ db, workspace, boardState }).workspace!(workspace.name, "repaired by hand", "webui")).rejects.toThrow(registryCloneOverlap(registryDir, registryDir));
+  await expect(quarantineChecks({ quarantineResolvers: {}, db, workspace, boardState }).workspace!(workspace.name, "repaired by hand", "webui")).rejects.toThrow(registryCloneOverlap(registryDir, registryDir));
 });
 
 // サーバー境界: 盤面の固定点が server から scheduler の pickup に届く(ADR 0041 の配線の形)

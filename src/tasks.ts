@@ -1784,7 +1784,10 @@ export function registerFailureQuestion(
  *  again. The plan is discarded wholesale rather than branch-by-branch — no
  *  dependency edges exist between siblings to reason about, so a partial
  *  cancel can't be more correct than a full one. Every caller runs inside
- *  `withTargetQuestionSweep`, whose sweep reads the events appended here. */
+ *  `withTargetQuestionSweep`, whose sweep reads the events appended here —
+ *  except `cancelRcasByAnswer` (ADR 0385 決定3): its roots are RCAs, and nothing
+ *  under an RCA carries a refused target's key (an Interview is always a root
+ *  and an examinee has no parent), so the sweep would find nothing. */
 function cancelUnsettledSubtree(
   db: Db,
   rootTaskIds: string[],
@@ -1794,19 +1797,18 @@ function cancelUnsettledSubtree(
   origin: EventOrigin,
   approvedStopTaskId?: string,
 ): void {
-  // Interview の root の下は対象を経由して受験者とその子孫へ降りる(ADR 0267 決定3)
-  const scope = cancelScope(db, rootTaskIds, { throughExaminees: true }).filter((task) => !isSettled(task.status));
+  const scope = unsettledCancelScope(db, rootTaskIds);
   assertCancelStopApproval(db, scope, approvedStopTaskId);
-  for (const { id } of scope) {
+  for (const id of scope) {
     // a cancelled declarer holds nothing — the cancel is the record that ends its breach
     db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
     appendEvent(db, { taskId: id, actorId, origin, payload, at: now });
   }
 }
 
-function assertCancelStopApproval(db: Db, scope: Felled[], approvedStopTaskId?: string): { id: string; title: string } | undefined {
+function assertCancelStopApproval(db: Db, scope: string[], approvedStopTaskId?: string): { id: string; title: string } | undefined {
   const running = db.prepare("SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND status = 'in_progress' ORDER BY sort_key LIMIT 1")
-    .get(JSON.stringify(scope.map((task) => task.id))) as { id: string; title: string } | undefined;
+    .get(JSON.stringify(scope)) as { id: string; title: string } | undefined;
   if (running && running.id !== approvedStopTaskId) {
     throw new DomainError(`cannot cancel while "${running.title}" (${running.id}) is running; wait for it to finish, escalate, or hit its time limit, then cancel again; or cancel again with approval (stop_approval: ${running.id}) to stop this task`, { kind: "running_task", task_id: running.id, title: running.title });
   }
@@ -1865,6 +1867,9 @@ export type ClosedRootOf = (task: Pick<Task, "type" | "parent_id" | "workspace">
  *  stop. Absent `quarantined` → no quarantine gates any cancel. */
 export interface CancelDefaults extends ResourceStopDefaults {
   quarantined?: ResourceStops;
+  /** 停止を立てた開いた Quarantine の question —— 資源の名(workspace 名・写した agent 名)→ question の id。門の拒否文が先に答える
+   *  question を名指す(ADR 0385 決定4)。Absent → 拒否文は資源の名を言う。 */
+  quarantineQuestions?: { workspaces: Record<string, string>; assignees: Record<string, string> };
   /** 閉じた根に塞がれた子は範囲に入る(ADR 0265 決定6)。pickup が飛ばすのと同じ1本。Absent → 広げない。 */
   closedRootOf?: ClosedRootOf;
 }
@@ -1882,34 +1887,40 @@ export interface CancelDefaults extends ResourceStopDefaults {
  *   - a **quarantine Confirmation** whose resource is used by a subtree task:
  *     the task's workspace or resolved assignee is in `defaults.quarantined`.
  *
+ *  The refusal names the question to answer first. Besides direct cancel, the answer to an interview
+ *  room's Quarantine that cancels RCAs whose reads are missing applies this same gate to each RCA it
+ *  cancels (`doing` words the refusal for that door, ADR 0385 決定4).
+ *
  *  The subtree follows `parent_id` only, so an Interview root's examinees and their
  *  questions do not gate it: the root's cancel cancels them along (ADR 0267 決定3).
  *  It reads the cascade's felled range (`cancelScope`, ADR 0301 決定4): what the cancel leaves standing gates
  *  nothing; what it fells gates, including the work beneath a surviving RCA. The quarantine
  *  half reads only unsettled rows, as the cascade marks only those: a settled review holds no resource. */
-function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
+export function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults, doing = "directly cancel"): void {
   const felled = JSON.stringify(cancelScope(db, [taskId], { throughExaminees: false }).map((task) => task.id));
   const failure = db
     .prepare(
-      `SELECT 1 FROM tasks q
+      `SELECT q.id FROM tasks q
        WHERE q.type = 'question' AND q.status = 'todo'
          AND q.question_cancel_option IS NOT NULL
          AND q.id IN (SELECT value FROM json_each(@felled)) LIMIT 1`,
     )
-    .get({ felled });
+    .pluck()
+    .get({ felled }) as string | undefined;
   if (failure) {
     throw new DomainError(
-      "cannot directly cancel while an open Tidepool question with a cancel option (a failure or premise breach question) " +
+      `cannot ${doing} while an open Tidepool question with a cancel option (a failure or premise breach question, ${failure}) ` +
         "stands over this subtree — answer it first; that answer is the only gate",
     );
   }
   const fallback = typeAwareDefaultAgentSql("x");
+  // ADR 0385 決定4: 当たった資源の停止を立てた question を名指す(写しが無ければ資源の名)
   const quarantine = db
     .prepare(
-      `SELECT 1 FROM tasks x
-       WHERE x.id IN (SELECT value FROM json_each(@felled)) AND ${unsettledSql("x.status")}
-         AND (COALESCE(${derivedWorkspaceSql("x")}, @defaultWorkspaceName) IN (SELECT value FROM json_each(@workspaces))
-           OR COALESCE(x.assignee, ${fallback}) IN (SELECT value FROM json_each(@assignees)))
+      `SELECT m.workspace, m.agent, m.workspace IN (SELECT value FROM json_each(@workspaces)) AS byWorkspace
+       FROM (SELECT COALESCE(${derivedWorkspaceSql("x")}, @defaultWorkspaceName) AS workspace, COALESCE(x.assignee, ${fallback}) AS agent FROM tasks x
+             WHERE x.id IN (SELECT value FROM json_each(@felled)) AND ${unsettledSql("x.status")}) m
+       WHERE m.workspace IN (SELECT value FROM json_each(@workspaces)) OR m.agent IN (SELECT value FROM json_each(@assignees))
        LIMIT 1`,
     )
     .get({
@@ -1920,11 +1931,13 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
       interviewerName: defaults.interviewerName ?? null,
       workspaces: JSON.stringify(defaults.quarantined?.workspaces ?? []),
       assignees: JSON.stringify(defaults.quarantined?.assignees ?? []),
-    });
+    }) as { workspace: string; agent: string; byWorkspace: number } | undefined;
   if (quarantine) {
+    const { workspaces = {}, assignees = {} } = defaults.quarantineQuestions ?? {};
+    const named = quarantine.byWorkspace ? (workspaces[quarantine.workspace] ?? `workspace ${quarantine.workspace}`) : (assignees[quarantine.agent] ?? `agent ${quarantine.agent}`);
     throw new DomainError(
-      "cannot directly cancel while an open quarantine confirmation stands over this subtree's " +
-        "resource — answer it first; that answer is the only gate",
+      `cannot ${doing} while an open quarantine confirmation stands over this subtree's ` +
+        `resource (${named}) — answer it first; that answer is the only gate`,
     );
   }
 }
@@ -1960,8 +1973,24 @@ export function cancelTaskDirectly(
     }, origin, stopApproval?.taskId);
     beforeSweep?.();
   });
-  if (stopApproval && assertCancelStopApproval(db, cancelScope(db, [task.id], { throughExaminees: true }), stopApproval.taskId)) stopApproval.stop(cancel);
+  if (stopApproval && assertCancelStopApproval(db, cancelScope(db, [task.id], { throughExaminees: true }).map(({ id }) => id), stopApproval.taskId)) stopApproval.stop(cancel);
   else cancel();
+}
+
+/** 面接室の Quarantine への回答が、読む head の欠けた RCA を配下の未決着ごと倒す(ADR 0385 決定2・3)。直接 cancel の範囲(ADR 0198)は
+ *  広げない —— 呼び手が直接 cancel と同じ門(`assertNoGatingQuestion`)を当ててから、回答と同じ transaction で呼ぶ。event は欠けた head と
+ *  答えた question を名指す。`withTargetQuestionSweep` を通さない: 断られた対象の question の鍵を運ぶのは Interview の root と受験者だけで、
+ *  RCA の配下にそれは居ない(Interview はいつも根で、受験者は親を持たない)。 */
+export function cancelRcasByAnswer(db: Db, rcas: Array<{ id: string; head: string }>, questionId: string, now: Date, origin: EventOrigin): void {
+  for (const { id, head } of rcas) {
+    cancelUnsettledSubtree(db, [id], HUMAN_ACTOR_ID, now, { kind: "task_cancelled", origin_question_id: questionId, missing_head: head }, origin);
+  }
+}
+
+/** cancel が根たちから倒す未決着の task の id —— cascade(`cancelUnsettledSubtree`)が書く範囲そのもの。Interview の root の下は対象を
+ *  経由して受験者とその子孫へ降りる(ADR 0267 決定3)。 */
+export function unsettledCancelScope(db: Db, rootIds: string[]): string[] {
+  return cancelScope(db, rootIds, { throughExaminees: true }).flatMap((task) => (isSettled(task.status) ? [] : [task.id]));
 }
 
 /** cancel が倒す範囲の1件。done は範囲に入っても触らない(捨てるものとして数える)。 */
@@ -2018,7 +2047,7 @@ export interface Discard {
  *  人間でない)だけを盤面の順で。範囲は cascade と同じ `cancelScope`(ADR 0301 決定4)で、
  *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
  *  系譜に入らない。表示時に読み、保存しない。 */
-function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
+export function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
   const done = cancelScope(db, rootIds, { throughExaminees: false }).filter((task) => task.type === "work" && task.status === "done" && !task.underCancelled);
   const rows = db
     .prepare(
@@ -4552,7 +4581,7 @@ interface SettledChildContext {
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
   /** `cause` は断られた行でない対象の question で cancel された子だけ: その子の `target_refused` の証拠の種類。 */
-  origin_question?: { title: string; answer: string[] | null; comment: string | null; cause?: Extract<EventPayload, { kind: "target_refused" }>["cause"] };
+  origin_question?: { title: string; answer: string[] | null; comment: string | null; cause?: Extract<EventPayload, { kind: "target_refused" }>["cause"]; missing_head?: string };
   /** 再分解が破棄した子(ADR 0121): 前提の破綻を宣言した子と、その理由。 */
   origin_breach?: { title: string; reason: string };
   /** 人間が直接 cancel した子: その reason(任意なので無ければ null)。 */
@@ -4774,6 +4803,8 @@ function cancelOrigin(
   }
   const question = getTask(db, payload.origin_question_id)!;
   const answer = { answer: question.question_answer, comment: question.question_answer_comment };
+  // ADR 0385 決定3: 面接室の Quarantine への回答が倒した RCA の配下は、欠けていた出題の head も見せる
+  if ("missing_head" in payload) return { origin_question: { title: question.title, ...answer, missing_head: payload.missing_head } };
   if (!REFUSED_TARGET_KINDS.includes(question.question_quarantine_kind ?? "")) return { origin_question: { title: question.title, ...answer } };
   // 断られた対象の question の題は model を名指すので、統合復帰の history には伏せた文と証拠の種類だけを見せる(伏せた handoff、
   // ADR 0111 決定6 / ADR 0199 決定4)。別の子の拒否で開いた question に spawn 前から止められた子には自身の証拠が無い

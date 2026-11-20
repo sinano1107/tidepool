@@ -7,13 +7,14 @@ import { git, readCheckoutOrigin } from "./git.js";
 import { remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
-import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
+import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, isRca, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
-/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2 / ADR 0373 決定11 —— 手の `git init` は選択肢に替わった)。 */
-const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or answer `run with an empty room` to have the board re-create it empty";
+/** 面接室の Quarantine の、項が落ちた RCA を倒す回答(ADR 0385 決定2)。項の出口の文と受理と表示が同じ1つを読む。 */
+export const CANCEL_THE_RCAS = "cancel the RCAs that need missing objects";
 
-const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens it";
+/** ADR 0385 決定1: 項の出口は、項の持ち主を倒せる人間の扉 —— 受験者・review の鎖は Interview の root の cancel で倒れる。 */
+const cancelInterview = (rootId: string) => `cancel the Interview ${rootId}`;
 
 /** 開いた event の無い場所で、repo が既にあるときだけ当たる項の頭。予告の解除だけの上乗せも同じ句で条件を言う。 */
 export const IF_REPOSITORY_PRESENT = "if a repository is already present, ";
@@ -143,8 +144,10 @@ function afterOpenPredicates(place: WorkspaceConfig, scope: string, kind: Checko
  *  その head が引けることも項に並び、空の面接室で走らせる出口は予告しない(ADR 0329 決定5)。 */
 export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: string, fixedPoints?: BoardStatePath[]): PickupPredicate[] {
   const head = latestPosedProbe(db, rootId)?.head;
+  // ADR 0277 追記 決定2 / ADR 0373 決定11: 出題前の面接室は盤面に空で作り直させる出口も持つ(手の `git init` は選択肢に替わった)
+  const goneExits = head ? `restore it there or ${cancelInterview(rootId)}` : `restore it there, ${cancelInterview(rootId)}, or answer \`run with an empty room\` to have the board re-create it empty`;
   const predicates = recordedRoomPredicates(db, rootId, workspacesBaseDir, fixedPoints, {
-    recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${head ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`,
+    recorded: (path) => `a git repository exists at the recorded room ${path} — the board does not recreate it: ${goneExits}.`,
     create: "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there).",
   });
   const recorded = recordedPlace(db, rootId);
@@ -154,7 +157,7 @@ export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: 
     ...predicates,
     {
       phase: "before-open",
-      describe: `the posed head ${head} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
+      describe: `the posed head ${head} resolves in the interview room — ${goneExits}.`,
       check: () => {
         if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(rootId, room.path));
         if (resolvedCommit(room, head) === undefined) throw new Error(`the posed head ${head} cannot be resolved in the interview room ${rootId} at ${room.path}`);
@@ -164,17 +167,28 @@ export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: 
 }
 
 /** (task, 面接室) の項(ADR 0329 決定4 の Status 追記、issue #3136): 準備がその task たちのために面接室から fetch するものが、
- *  fetch の要る閉包(`--depth` を付けないので履歴全体)まで面接室にある。task たちの sha は1回の `rev-list` で歩く —— 共有する履歴を
- *  1度しか歩かない。文は記録だけから組み(予告は git を撃たない)、何を fetch するかは検査の中で引く。fetch するものの無い task は項を持たない。 */
-export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, workspacesBaseDir: string): PickupPredicate[] {
-  const needs = tasks.flatMap((task) => roomFetchOf(db, task, rootId) ?? []);
-  if (needs.length === 0) return [];
+ *  fetch の要る閉包(`--depth` を付けないので履歴全体)まで面接室にある。項は出口ごとに分け、異議の RCA は1つずつ項を持つ —— 回答が
+ *  どの RCA の項が落ちたかを読む(`rca`、ADR 0385 決定1・2)。`rev-list` は項ごとに1回で、同じ項の task たちの共有する履歴を1度しか
+ *  歩かない(項を跨いだ共有は項の数だけ歩く)。文は記録だけから組み(予告は git を撃たない)、何を fetch するかは検査の中で引く。
+ *  fetch するものの無い task は項を持たない。 */
+export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, workspacesBaseDir: string): RoomOpenerPredicate[] {
+  const items = new Map<string, { exit: string; rca?: string; needs: RoomFetch[] }>();
+  for (const task of tasks) {
+    const need = roomFetchOf(db, task, rootId);
+    if (!need) continue;
+    const rca = isRca(db, task.id) ? task.id : undefined;
+    const exit = rca ? `answer \`${CANCEL_THE_RCAS}\`` : cancelInterview(interviewOwnerOf(db, task));
+    const item = items.get(rca ?? exit) ?? { exit, ...(rca && { rca }), needs: [] };
+    item.needs.push(need);
+    items.set(rca ?? exit, item);
+  }
   const room = roomPlace(db, rootId, workspacesBaseDir);
-  const what = needs.map((need) => need.what).join("; ");
-  return [
-    {
+  return [...items.values()].map(({ exit, rca, needs }) => {
+    const what = needs.map((need) => need.what).join("; ");
+    return {
+      ...(rca && { rca }),
       phase: "before-open",
-      describe: `every object reachable from ${what} is present in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
+      describe: `every object reachable from ${what} is present in the interview room — restore it there or ${exit}.`,
       check: () => {
         // 面接室の repo が無ければ git の生のエラー(や外側の repo での解決)ではなく、面接室が消えた理由で止まる
         if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(rootId, room.path));
@@ -189,15 +203,29 @@ export function taskRoomPickupPredicates(db: Db, tasks: Task[], rootId: string, 
         const missing = missingObjects(room, [...shas]);
         if (missing.length > 0) throw new Error(`objects reachable from ${what} (${[...shas].join(", ")}) are missing from the interview room ${rootId} at ${room.path}: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ` and ${missing.length - 5} more` : ""}`);
       },
-    },
-  ];
+    };
+  });
+}
+
+/** (task, 面接室) の項の1つ。`rca` は項の持ち主の異議の RCA —— 回答が落ちた項から倒す RCA を読む(ADR 0385 決定2)。 */
+type RoomOpenerPredicate = PickupPredicate & { rca?: string };
+
+type RoomFetch = { what: string; rev: (room: WorkspaceConfig) => string | undefined };
+
+/** 項の持ち主を倒せる Interview の root(ADR 0385 決定1): review の鎖を root か受験者まで登り、受験者は対象の root。鎖が RCA を通るのは
+ *  RCA の下の RCA だけで(Interview の系譜は帰り先を持たず、RCA の下に work・完了時レビュー・人間の review 子は立たない —— ADR 0301 決定2)、
+ *  RCA の項は呼び手が先に回答の出口へ分ける。 */
+export function interviewOwnerOf(db: Db, task: Task): string {
+  let owner = task;
+  while (owner.type === "review") owner = getTask(db, owner.parent_id!)!;
+  return interviewRootIdOf(db, owner)!;
 }
 
 /** 準備が task のためにその面接室から fetch するもの: 面接室で走る task(受験者・root)は自分のタスクブランチ(ADR 0356 決定2)
  *  —— 無ければ受験者は fork 元の出題の head(準備がそこから切る、ADR 0276 決定1)。root はブランチがある記録された面接室だけで、
  *  記録された面接室に root のブランチが無ければ閉包の項は無い(未記録なら場所の項の「作る」分岐が当たる)。面接室を読む task は
  *  `readHeadOf` の出題の head(出題前は無い)。 */
-function roomFetchOf(db: Db, task: Task, rootId: string): { what: string; rev: (room: WorkspaceConfig) => string | undefined } | undefined {
+function roomFetchOf(db: Db, task: Task, rootId: string): RoomFetch | undefined {
   const branch = `refs/heads/${taskBranch(task.id)}`;
   // 他の面接室を読む root・受験者は、この面接室では読み手
   const role = interviewRootIdOf(db, task) === rootId ? interviewRole(db, task) : undefined;
@@ -266,7 +294,7 @@ export function namePickupPredicates(
   place: WorkspaceConfig,
   workspacesBaseDir: string,
   fixedPoints?: BoardStatePath[],
-): { own: PickupPredicate[]; openers: PickupPredicate[] } {
+): { own: PickupPredicate[]; openers: RoomOpenerPredicate[] } {
   if (getTask(db, name)?.type !== "interview") return { own: checkoutPickupPredicates(place, fixedPoints), openers: [] };
   return {
     own: roomPickupPredicates(db, name, workspacesBaseDir, fixedPoints),

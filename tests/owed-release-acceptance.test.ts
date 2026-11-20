@@ -59,7 +59,7 @@ async function tearDown(s: Pick<Session, "db" | "clock" | "slot" | "deps" | "tas
 /** 開いている workspace の Quarantine に人間が答える(回答の verb と、その検査)。 */
 function answerQuarantine(s: Pick<Session, "db" | "clock" | "resolve" | "ws"> & { workspacesDir?: string; githubAuth?: GitHubAuth }, name = s.ws.name, answer = "repaired by hand") {
   const question = quarantineQuestion(s.db, "workspace", name)!;
-  const checks = quarantineChecks({ db: s.db, resolveWorkspace: s.resolve, clock: s.clock, workspacesDir: s.workspacesDir, githubAuth: s.githubAuth });
+  const checks = quarantineChecks({ quarantineResolvers: {}, db: s.db, resolveWorkspace: s.resolve, clock: s.clock, workspacesDir: s.workspacesDir, githubAuth: s.githubAuth });
   return submitAnswer({ db: s.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: checks }, question, [answer], undefined, () => s.clock.now(), "webui");
 }
 

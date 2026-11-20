@@ -18,7 +18,7 @@ it("器がまだ書けなければ回答は拒まれて停止が残り、書け�
   registerQuarantine(db, "recordContainer", null, "worker-logs is gone", clock.now());
   const question = getTask(db, openQuarantineQuestion(db, "recordContainer", null)!.id)!;
   const answer = () =>
-    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, recordDir }) }, question, ["repaired by hand"], undefined, () => clock.now(), "webui");
+    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, recordDir }) }, question, ["repaired by hand"], undefined, () => clock.now(), "webui");
 
   await expect(answer()).rejects.toThrow(`the board's record container ${recordDir} still cannot be written`);
   expect(boardHalts(db)).toEqual([{ kind: "recordContainer" }]);

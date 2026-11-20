@@ -37,8 +37,8 @@ async function quarantined(ws: WorkspaceConfig) {
 }
 
 /** 名前 `name` の開いている workspace の Quarantine に人間が `text` で答える(回答の口)。 */
-function answerAs(db: Db, name: string, checks: Omit<QuarantineCheckDeps, "db">, text: string) {
-  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, ...checks }) }, quarantineQuestion(db, "workspace", name)!, [text], undefined, () => NOW, "webui");
+function answerAs(db: Db, name: string, checks: Omit<QuarantineCheckDeps, "db" | "quarantineResolvers">, text: string) {
+  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, ...checks }) }, quarantineQuestion(db, "workspace", name)!, [text], undefined, () => NOW, "webui");
 }
 
 /** `ws` は回答の時点で引ける workspace。 */

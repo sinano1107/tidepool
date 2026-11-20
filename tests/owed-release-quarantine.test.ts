@@ -33,7 +33,7 @@ async function boardWithOwedRelease(end: "return" | "decompose" = "return") {
   const question = () => quarantineQuestion(db, "workspace", ws.name);
 
   function answer() {
-    const checks = quarantineChecks({ db, workspace: ws, resolveWorkspace: () => ws, workspacesDir, clock });
+    const checks = quarantineChecks({ quarantineResolvers: {}, db, workspace: ws, resolveWorkspace: () => ws, workspacesDir, clock });
     return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: checks }, question()!, ["repaired by hand"], undefined, () => now, "webui");
   }
 

@@ -412,7 +412,7 @@ it("受験者の解放と再開の pickup は受験者 id の行を作らず、�
 /** 開いている workspace quarantine の question に人間が答える(human-verbs の回答の経路)。 */
 function answerQuarantine(db: Db, ws: WorkspaceConfig, text = "repaired by hand") {
   const question = quarantineQuestion(db, "workspace", ws.name)!;
-  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: ws }) }, question, [text], undefined, () => NOW, "webui");
+  return submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace: ws }) }, question, [text], undefined, () => NOW, "webui");
 }
 
 /** session の間に名前の場所に兄弟のブランチが作られ、解放が `refs/heads/sibling` を名指して quarantine に落ちた workspace。
@@ -509,10 +509,10 @@ it("面接室の名前への受理は面接室だけを比べる —— 面接�
   git(checkout.path, "branch", "examinee-repair");
   git(room.path, "branch", "room-repair");
 
-  const refused = quarantineChecks({ db }).workspace!(root.id, undefined, "webui").then(() => "accepted", (err: Error) => err.message);
+  const refused = quarantineChecks({ quarantineResolvers: {}, db }).workspace!(root.id, undefined, "webui").then(() => "accepted", (err: Error) => err.message);
   const message = await refused;
   git(room.path, "branch", "-D", "room-repair");
-  await quarantineChecks({ db }).workspace!(root.id, undefined, "webui");
+  await quarantineChecks({ quarantineResolvers: {}, db }).workspace!(root.id, undefined, "webui");
 
   expect(message).toContain("refs/heads/room-repair");
   expect(message).not.toContain("examinee-repair");

@@ -566,7 +566,7 @@ export function answerWorkspaceQuarantine(
   pollNow: () => void = () => {},
 ) {
   return submitAnswer(
-    { db, pollNow, landing, quarantineChecks: quarantineChecks({ db, workspace, workspacesDir: workbenchBase }) },
+    { db, pollNow, landing, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace, workspacesDir: workbenchBase }) },
     getTask(db, question.id)!,
     ["repaired by hand"],
     undefined,

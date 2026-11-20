@@ -58,7 +58,7 @@ it.each(["no baseline", "unlearned baseline", "purely-local baseline"] as const)
   await expect(gate()).rejects.toThrow(reason);
   const question = quarantineQuestion(db, "workspace", workspace.name)!;
   expect(question.purpose).toContain(reason);
-  const answer = () => submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace, resolveWorkspace: () => declared }) }, question, ["repaired by hand"], undefined, () => NOW, "webui");
+  const answer = () => submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace, resolveWorkspace: () => declared }) }, question, ["repaired by hand"], undefined, () => NOW, "webui");
   const dirtyFile = join(workspace.path, "uncommitted");
   writeFileSync(dirtyFile, "dirty\n");
   await expect(answer()).rejects.toThrow(reason);
@@ -133,7 +133,7 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   const reason = `workspace declared declares repo ${workspace.repo}, but its checkout's origin is ${other.workspace.repo}. In ${workspace.path}, run \`git remote set-url origin ${workspace.repo}\`. To move the workspace to another repository, delete it and register it again.`;
 
   await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(reason);
-  const accept = quarantineChecks({ db, workspace }).workspace!;
+  const accept = quarantineChecks({ quarantineResolvers: {}, db, workspace }).workspace!;
   await expect(accept(workspace.name, "repaired by hand", "webui")).rejects.toThrow(reason);
   expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
   expect(protectedAndCopy()).toBe(before);
@@ -299,7 +299,7 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   await expect(gate()).rejects.toThrow(`declares repo ${workspace.repo}, but its checkout's origin is ${origin}`);
   git(path, "remote", "set-url", "origin", workspace.repo!);
   await expect(gate()).resolves.toBeDefined();
-  await expect(quarantineChecks({ db, workspace: registered }).workspace!(registered.name, undefined, "webui")).resolves.toBeUndefined();
+  await expect(quarantineChecks({ quarantineResolvers: {}, db, workspace: registered }).workspace!(registered.name, undefined, "webui")).resolves.toBeUndefined();
 
   const locallyDeclared = { ...registered, repo: undefined };
   await expect(pickupGate(db, locallyDeclared, task, base)).rejects.toThrow(

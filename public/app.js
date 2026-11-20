@@ -4110,15 +4110,22 @@ function toQuestionCardShape(q, icons) {
     agent: registrant,
     agentIcon: isBoard ? void 0 : icons[registrant],
     board: isBoard,
-    context: q.purpose,
+    // 面接室の Quarantine に表示のたびに添える RCA を倒す選択肢(ADR 0385 決定5): 説明は本文の後に、選択肢は1つめの項目の末尾に、
+    // 捨てられる done の work はその脇に —— 保存された選択肢には無い
+    context: q.room_rca_choice ? `${q.purpose}
+
+${q.room_rca_choice.description}` : q.purpose,
     // 1-4 items, each with its own title/detail/options (issue #30) — a
     // single-item bundle is the degenerate, most common case
-    items: (q.question_items ?? []).map((item) => ({
+    items: (q.question_items ?? []).map((item, i) => ({
       title: item.title,
       detail: item.detail,
       ...movedNote && { movedNote },
       // cancel option の脇に、捨てられる done の work(ADR 0271 決定4)
-      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation, ...o === q.question_cancel_option && { discards: q.discards ?? [] } }))
+      options: [
+        ...item.options.map((o) => ({ label: o, recommended: o === item.recommendation, ...o === q.question_cancel_option && { discards: q.discards ?? [] } })),
+        ...i === 0 && q.room_rca_choice ? [{ label: q.room_rca_choice.option, recommended: false, discards: q.room_rca_choice.discards }] : []
+      ]
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ

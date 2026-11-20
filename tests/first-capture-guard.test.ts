@@ -184,7 +184,7 @@ it("最初の撮りに来た task は落ちた workspace の Quarantine の停�
 
   registry.push(old);
   const question = quarantineQuestion(db, "workspace", "old")!;
-  await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: renamed, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir }) }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
+  await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace: renamed, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir }) }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
 
   await vi.waitFor(() => expect(b.worker.started.map((t) => t.id)).toEqual([task.id]));
 });
@@ -288,7 +288,7 @@ it("基準の行を持つ workspace が休止中の変更で止まっている�
 
   rmSync(join(dirty.path, "late.txt"));
   const question = quarantineQuestion(db, "workspace", "dirty")!;
-  await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: quarantineChecks({ db, workspace: fresh, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir }) }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
+  await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace: fresh, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir }) }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
 
   await vi.waitFor(() => expect(b.worker.started.map((t) => t.id)).toEqual([task.id]));
 });
@@ -308,7 +308,7 @@ it("基準の行を持つ workspace の組の封じ込めの Quarantine が開�
   expect(b.worker.started).toEqual([]);
 
   const question = quarantineQuestion(db, "workspaceContainment", value)!;
-  const checks = quarantineChecks({ db, workspace: fresh, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir, codexWorkspaceContainment: async () => ({ available: true }) });
+  const checks = quarantineChecks({ quarantineResolvers: {}, db, workspace: fresh, resolveWorkspace: b.resolveWorkspace, workspacesDir: b.workspacesDir, codexWorkspaceContainment: async () => ({ available: true }) });
   await submitAnswer({ db, pollNow: () => b.scheduler.pollNow(), landing: unusedLanding, quarantineChecks: checks }, question, ["repaired by hand"], undefined, () => b.clock.now(), "webui");
 
   await vi.waitFor(() => expect(b.worker.started.map((t) => t.id)).toEqual([task.id]));

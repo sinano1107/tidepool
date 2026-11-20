@@ -212,7 +212,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'needs_comment' | 'free_text' | 'question_proposal' | 'question_quarantine_kind' | 'question_cancel_option'> & Partial<Pick<WireContract['GET /api/tasks/:id'], 'discards'>>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'needs_comment' | 'free_text' | 'question_proposal' | 'question_quarantine_kind' | 'question_cancel_option'> & Partial<Pick<WireContract['GET /api/tasks/:id'], 'discards' | 'room_rca_choice'>>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -230,13 +230,18 @@ function toQuestionCardShape(
     agent: registrant,
     agentIcon: isBoard ? undefined : icons[registrant],
     board: isBoard,
-    context: q.purpose,
+    // 面接室の Quarantine に表示のたびに添える RCA を倒す選択肢(ADR 0385 決定5): 説明は本文の後に、選択肢は1つめの項目の末尾に、
+    // 捨てられる done の work はその脇に —— 保存された選択肢には無い
+    context: q.room_rca_choice ? `${q.purpose}\n\n${q.room_rca_choice.description}` : q.purpose,
     // 1-4 items, each with its own title/detail/options (issue #30) — a
     // single-item bundle is the degenerate, most common case
-    items: (q.question_items ?? []).map((item) => ({
+    items: (q.question_items ?? []).map((item, i) => ({
       title: item.title, detail: item.detail, ...(movedNote && { movedNote }),
       // cancel option の脇に、捨てられる done の work(ADR 0271 決定4)
-      options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation, ...(o === q.question_cancel_option && { discards: q.discards ?? [] }) })),
+      options: [
+        ...item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation, ...(o === q.question_cancel_option && { discards: q.discards ?? [] }) })),
+        ...(i === 0 && q.room_rca_choice ? [{ label: q.room_rca_choice.option, recommended: false, discards: q.room_rca_choice.discards }] : []),
+      ],
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
