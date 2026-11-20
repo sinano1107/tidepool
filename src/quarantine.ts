@@ -10,7 +10,7 @@ import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import type { EventOrigin, ListedRefusal, ResourceStop, RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
-import { IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
+import { discardUncommitted, IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
@@ -292,13 +292,14 @@ export const QUARANTINES = [
       const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...own.map((p) => p.describe)];
       // 固定点との交差は pickup の述語として上の一覧に並ぶ(ADR 0377 決定4)
       if (!room || recorded?.hasRepository !== false) checks.push(...[
-        "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
+        `it is a usable git repository whose working tree is clean (\`git status --porcelain\` runs and is empty).${discardUncommitted("uncommitted changes")}`,
       ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
       checks.push(...openers.map((p) => p.describe));
       return {
         title: `workspace ${name} needs human attention`,
         purpose:
-          `${reason}. ${firstCapturesWait(db, name!)}` +
+          // 理由が自分で文を閉じていれば句点を重ねない(spec #3273 text A12 の文は句点で終わる)
+          `${endSentence(reason)} ${firstCapturesWait(db, name!)}` +
           "Tasks in this workspace stay out of the slot until it is repaired. " +
           "Answering confirms the repair — the board re-checks all of the following before " +
           "it accepts the answer, and refuses it if any fails:\n\n" +

@@ -864,15 +864,11 @@ const looseObject = (room: WorkspaceConfig, oid: string) => join(room.path, ".gi
 /** 面接室から loose object を1つ消す。 */
 const dropObject = (room: WorkspaceConfig, oid: string) => rmSync(looseObject(room, oid));
 
-/** 面接室から commit の keep-around と loose object を消す。戻す関数を返す。 */
+/** 面接室から commit の loose object を消す(keep-around の ref は残す —— ref を消せば受理の比較が先にそれを名指す、ADR 0373 決定7)。戻す関数を返す。 */
 function dropFromRoom(room: WorkspaceConfig, sha: string): () => void {
   const saved = readFileSync(looseObject(room, sha));
-  git(room.path, "update-ref", "-d", `refs/keep-around/${sha}`);
   dropObject(room, sha);
-  return () => {
-    writeFileSync(looseObject(room, sha), saved);
-    git(room.path, "update-ref", `refs/keep-around/${sha}`, sha);
-  };
+  return () => writeFileSync(looseObject(room, sha), saved);
 }
 
 it("RCA が読む却下した監査の出題の head が面接室から消えると、RCA の pickup の門と面接室の名前への回答の両方がその head を名指して面接室の名前(root id)で止まり、戻すと回答が受理されて RCA の準備が通る(issue #3136 / ADR 0329 決定4 / ADR 0361 決定1)", async () => {

@@ -139,8 +139,8 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   expect(protectedAndCopy()).toBe(before);
 
   git(workspace.path, "remote", "set-url", "origin", workspace.repo!);
-  // The next comparison still accepts the announced value, which a premature fold would lose.
-  git(workspace.path, "update-ref", copyRef, announced);
+  // 旧: 次の比較が予告の値をまだ受け入れた。spec #3273 の受理の順の後は、受理の1回目の比較が通った時点で2値行を ref の持つ側へ畳む
+  // —— 後の項で拒まれても畳みは残る(pin B1)ので、予告の値への移動はもう受け入れられない
   const reads = await pickupGate(db, workspace, task, base);
   await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).resolves.toBeDefined();
   await expect(accept(workspace.name, "repaired by hand", "webui")).resolves.toBeUndefined();

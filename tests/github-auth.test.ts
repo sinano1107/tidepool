@@ -515,7 +515,8 @@ describe("盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339
 
     expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main")).toThrow(
       `\`git fetch\` failed with \`transport 'ssh' not allowed\` (in ${repo}): the board reaches a remote only over https or a local path — ` +
-        "the origin `git@example.com:o/r` is an ssh remote outside GitHub",
+        "the origin `git@example.com:o/r` is an ssh remote outside GitHub. To declare it over https or as a local path instead, delete the workspace, " +
+          "point its checkout's `origin` at that value and register it again with that value as `repo:` — the board refuses an edited `repo:` of a registered workspace.",
     );
   });
 

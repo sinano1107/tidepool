@@ -1321,7 +1321,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const { own } = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
         const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, own, true);
         ctx.outcome.kept.push(
-          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf, compareRefs: () => stopRootIfRefsMoved(workspace) })),
+          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, () => stopRootIfRefsMoved(workspace))),
         );
         stopRootIfRefsMoved(workspace);
       }

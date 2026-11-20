@@ -78,7 +78,7 @@ it("知らない workspace 名は 404(update の扉と同じ)", async () => {
 // 「出し直せば通り得る呼び出し側の入力・状態の問題」の族(create の扉と同じ読み)
 it.each([
   ["already published", new WorkspaceAlreadyPublishedError("sandbox", "https://example/x.git")],
-  ["checkout already has origin", new CheckoutHasOriginError("sandbox", "https://example/y.git")],
+  ["checkout already has origin", new CheckoutHasOriginError("sandbox", "https://example/y.git", "/tmp/sandbox")],
   ["repo access missing", new RepoAccessMissingError("grant write access with: gh api ...")],
 ])("%s は 400 でメッセージを返す", async (_label, err) => {
   t = await bootTidepool({

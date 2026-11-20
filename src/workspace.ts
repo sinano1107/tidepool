@@ -67,6 +67,7 @@ import {
   assertRemoteDeclarationMatchesClone,
   checkoutPickupPredicates,
   conventionCheckoutPath,
+  discardUncommitted,
   exactProtectedBranchRef,
   gonePlaceReason,
   isRemoteBacked,
@@ -1494,13 +1495,32 @@ export function containmentWorkbenchNotTakenIn(workspace: WorkspaceConfig, base:
 /** ADR 0373 決定7・10: 封じ込めの Quarantine の受理の比較 —— pickup と同じ比較器で全 ref を基準と比べ、違えば workspace の Quarantine を立てて拒む
  *  (text B6)。基準は撮り直さない。基準の行が無い名前は比べず行も作らない(repo でない場所も読まない)。 */
 export function compareContainmentRefs(db: Db, workspace: WorkspaceConfig, now: Date): void {
+  compareOrRefuse(db, workspace, "while the containment Quarantine was open", (err) => {
+    quarantineWorkspace(db, workspace.name, err, now);
+    return new Error(`${err.message}. Answer the workspace Quarantine (question ${openQuarantineQuestion(db, "workspace", workspace.name)!.id}) first.`);
+  });
+}
+
+/** ADR 0373 決定1・7: workspace の Quarantine の受理の比較 —— pickup と同じ比較器で名前の場所(面接室の名前なら面接室)の全 ref を基準と比べ、
+ *  通れば2値行を畳み、違えば text B2 で拒む。基準は撮り直さない。基準の行が無い名前は比べず行も作らない。repo の無い場所は読まない ——
+ *  外側の repo を読まず、前半の項がその場所を拒む(spec #3273 の受理の 3)。 */
+export function compareAcceptanceRefs(db: Db, workspace: WorkspaceConfig): void {
+  if (!placeHasRepository(workspace.path)) return;
+  // Quarantine が開く前に動いた ref(その移動が Quarantine を立てた)にも当たる時の言い方
+  compareOrRefuse(db, workspace, "since the board's baseline", (err) => new RefsMovedError(
+    `${err.message}. The board does not accept moved refs. Answer \`${RESTORE_THE_BASELINE}\` to put them back; the values it removes stay under ` +
+      "`refs/keep-around/<sha>`, and to keep that content you merge or cherry-pick it in a workbench afterwards.",
+  ));
+}
+
+/** Quarantine の受理の比較の形(ADR 0373 決定7・10): 基準の行が無い名前は比べず、pickup と同じ比較器で比べ、違えば `refuse` の返す拒否を投げる。 */
+function compareOrRefuse(db: Db, workspace: WorkspaceConfig, when: string, refuse: (moved: RefsMovedError) => Error): void {
   if (!holdsBaseline(db, workspace.name)) return;
   try {
-    compareAndFoldBaseline(db, workspace, "while the containment Quarantine was open");
+    compareAndFoldBaseline(db, workspace, when);
   } catch (err) {
     if (!(err instanceof RefsMovedError)) throw err;
-    quarantineWorkspace(db, workspace.name, err, now);
-    throw new Error(`${err.message}. Answer the workspace Quarantine (question ${openQuarantineQuestion(db, "workspace", workspace.name)!.id}) first.`);
+    throw refuse(err);
   }
 }
 
@@ -2000,7 +2020,7 @@ export async function prepareWorkspaceAtPickup(
   const changes = ownWorktreeStatus(workspace.path);
   if (changes.length > 0) {
     throw new PickupGateError(workspace, new Error(
-      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout`,
+      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout.${discardUncommitted()}`,
     ));
   }
   for (const read of board.reads ?? []) {
@@ -2221,18 +2241,6 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
       return current;
     }),
   };
-}
-
-/** ADR 0351 決定4: quarantine の受理は検査がすべて成立した後に、名前に掛かる場所それぞれの基準を自分の checkout から撮り直す ——
- *  基準は名前の場所だけが持つ(ADR 0356 決定4)。撮り直すのは盤面が既に基準を持つ場所だけ —— まだ持ったことのない場所
- *  (開いていない面接室の在り処に repo がある)は最初の開きの build が口を通らずに書くので、その後の最初の
- *  pickup が最初の撮りをする(決定2)。repo の無い場所も撮らない。全部読んでから書くので、読みが落ちれば行は変わらない。 */
-export function retakeRefBaselines(db: Db, places: WorkspaceConfig[]): void {
-  const held = places.filter((place) => placeHasRepository(place.path) && holdsBaseline(db, place.name));
-  const rows = new Map(held.map((place) => [place.name, currentRefs(place)]));
-  db.transaction(() => {
-    for (const [key, refs] of rows) writeSnapshot(db, key, refs);
-  })();
 }
 
 /** ADR 0351 決定7: 行の寿命は workspace の寿命 —— 削除の扉が基準と sparse の pin の行ごと消す。残すと同名を別 path で登録し直したとき
@@ -2659,8 +2667,8 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   const remoteBacked = isRemoteBacked(workspace);
   try {
-    // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、人間の修理(ADR 0239 帰結の `merge -s ours`、ADR 0351 決定1・4)や origin にしか無い
-    // 保護ブランチは HEAD を保護ブランチの外に置く
+    // 盤面は名前の場所の HEAD を動かさない(ADR 0356 決定1)が、origin にしか無い保護ブランチは HEAD を保護ブランチの外に置く —— 人間が動かした
+    // HEAD は受理の比較が拒む(ADR 0373 決定1)
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
     if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
@@ -2707,7 +2715,7 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
     );
   }
   if (status.length > 0) {
-    throw new Error(`workspace ${workspace.name} still has uncommitted changes`);
+    throw new Error(`workspace ${workspace.name} still has uncommitted changes.${discardUncommitted()}`);
   }
 }
 
@@ -3260,9 +3268,10 @@ export async function redoMergeBacks(
   auth: GitHubAuth | undefined,
   /** 作業台の基点(ADR 0373 決定9)と、取り込みの event に残す回答者と時刻(spec #3273 の識別子の表 / pin A5)。 */
   intake: IntakeContext,
-  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)、
-   *  fetch の await の後に ref を読む前の比較(ADR 0370 決定1)。 */
-  retry?: { root: string; firstHalf: () => Promise<void>; compareRefs: () => void },
+  /** 積み残しの retry(ADR 0371 決定10): 撃ち直す根の分解ツリーと、撃ち直す前に掛ける受理の前半(受理は自分の順で先に掛け済み)。 */
+  retry?: { root: string; firstHalf: () => Promise<void> },
+  /** fetch の await の後、ref を読む前の比較(ADR 0370 決定1 / ADR 0373 決定7)。 */
+  compareRefs?: () => void,
 ): Promise<string[]> {
   const root = retry?.root;
   if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return [];
@@ -3276,7 +3285,7 @@ export async function redoMergeBacks(
     throw new Error(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`);
   }
   await refreshProtectedBranch(db, workspace, auth);
-  retry?.compareRefs();
+  compareRefs?.();
   // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
   let failure: { error: unknown } | undefined;
   // 作業台を残した取り込みの text C6

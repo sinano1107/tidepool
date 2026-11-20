@@ -357,6 +357,11 @@ export function authedClone(auth: GitHubAuth | undefined, source: string, dir: s
   runAuthedGit({ env, boardRepo: undefined, where: dir, timeoutMs, origin: source }, ["clone", "--quiet", "--", networkDestination(source, env.HOME!).url, dir]);
 }
 
+/** spec #3273 text A12(N2)の、ssh の origin を ref を動かさずに直す道。 */
+const SSH_OUTSIDE_GITHUB_REPAIR =
+  " To declare it over https or as a local path instead, delete the workspace, point its checkout's `origin` at that value " +
+  "and register it again with that value as `repo:` — the board refuses an edited `repo:` of a registered workspace.";
+
 /** The one network child (ADR 0339 決定1): the board's own `-c` only — the injected helper, ADR 0334's stall
  *  detection, and no auto maintenance or gc (the `--detach` child they spawn would outlive the stall bound). */
 function runAuthedGit(call: AuthedCall, args: string[]): string {
@@ -385,7 +390,8 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
     if (stderr?.includes("transport 'ssh' not allowed")) {
       throw new Error(
         `\`git ${args[0]}\` failed with \`transport 'ssh' not allowed\` (in ${where}): the board reaches a remote only over https or a local path — ` +
-          `the origin \`${origin}\` is an ssh remote outside GitHub`,
+          // ADR 0373 決定16 / spec #3273 text A12(N2): ref を動かさない直し方 —— 覚えた repo は書き換えた `repo:` を拒む(ADR 0378 決定6〜8)ので、削除と登録し直し
+          `the origin \`${origin}\` is an ssh remote outside GitHub.${SSH_OUTSIDE_GITHUB_REPAIR}`,
         { cause: err },
       );
     }

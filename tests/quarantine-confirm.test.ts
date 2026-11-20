@@ -64,11 +64,13 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
 
   const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
-  // 何も直さず「直した」と答える — untracked はまだ残ったまま
+  // 何も直さず答える — untracked はまだ残ったまま。動いた main は `restore the baseline` が運ぶので、拒むのは clean の検査
+  // (旧: `repaired by hand` で答えた —— ADR 0373 決定1 の後は動いた main で比較が先に拒む)
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["repaired by hand"],
+    answers: ["restore the baseline"],
   });
   expect(res.status).toBe(409);
+  expect(res.json.error).toContain("still has uncommitted changes");
 
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(after.status).toBe("todo");
@@ -95,7 +97,10 @@ it("untracked を隠す Git 設定がある checkout の修理回答も HTTP 409
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
 });
 
-it("ツリーがクリーンだと確認されれば question が done になり、pickup が即時再開する。自由記述の回答は question_answer に残る", async () => {
+// 旧: 残ったものを名前の場所で commit してツリーをクリーンにし、自由記述で答えた —— 受理が基準を撮り直した(ADR 0351 決定4)。ADR 0373 決定1 の後は
+// 手の commit も動いた ref なので、残ったものは捨て(text A12)、帯域外の commit は `restore the baseline` が外す。自由記述の扱いは
+// quarantine-answer-options.test.ts(pin B3)
+it("ツリーがクリーンで ref が基準どおりだと確認されれば question が done になり、pickup が即時再開する。回答は question_answer に残る", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
@@ -107,11 +112,10 @@ it("ツリーがクリーンだと確認されれば question が done になり
 
   const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
-  // 実際に手で直す: 残ったものを commit してツリーをクリーンにする
-  git(ws.path, "add", "-A");
-  git(ws.path, "commit", "-m", "manual repair");
+  // 実際に手で直す: 残ったものを捨ててツリーをクリーンにする(ref は動かさない)
+  git(ws.path, "clean", "-fd");
 
-  const answerText = "repaired: reinitialized git and committed the WIP by hand";
+  const answerText = "restore the baseline";
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: [answerText],
   });
