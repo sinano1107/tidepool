@@ -891,12 +891,12 @@ export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: strin
   git(workspace.path, "branch", `task/${taskId}`, from);
   const sha = git(workspace.path, "rev-parse", `task/${taskId}`);
   fillEmptyWorkspace(db, taskId, workspace.name);
-  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha, workspace: workspace.name }, at: new Date(0) });
+  recordTaskBranchCreated(db, taskId, sha, workspace.name);
 }
 
 /** setup のみ: git を持たない盤面の task に `task_branch_created` だけを残す —— 「ブランチに成果を持つ」の読み(ADR 0374 決定17)の題材。 */
-export function recordTaskBranchCreated(db: Db, taskId: string): void {
-  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha: "0".repeat(40), workspace: "home" }, at: new Date(0) });
+export function recordTaskBranchCreated(db: Db, taskId: string, sha = "0".repeat(40), workspace = "home"): void {
+  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha, workspace }, at: new Date(0) });
 }
 
 /** setup のみ: `seedTaskBranch` で置いたタスクブランチを checkout する。 */

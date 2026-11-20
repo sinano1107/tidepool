@@ -687,7 +687,7 @@ it("親が別の workspace に固定された H は根として完了する —�
   expect(!result.ok && result.failure.error).toMatch(new RegExp(`^task/${h.id} does not merge cleanly into 'main'\\. In the workbench at ${path}, on task/${h.id}, run \`git merge board/main\``));
 });
 
-it("子が走った後に assignee を human に替えた根は、タスクブランチを持つので完了に handoff の6欄が要り、取り込まずに閉じ、registry の盤面でも purely-local の local merge question で着地する(#3418 のレビューの形 1a、pin C8・C16)", async () => {
+it("子が走った後に assignee を human に替えた根は、タスクブランチを持つので完了に handoff の6欄が要り、取り込まずに閉じて子の成果は task/<根> に残り、registry の盤面でも purely-local の local merge question で着地する(#3418 のレビューの形 1a、pin C8・C16)", async () => {
   const b = await board("root-switched-to-human");
   const root = work(b, "plan");
   await completedAgentChild(b, root, "child.txt", "child\n");
@@ -696,7 +696,7 @@ it("子が走った後に assignee を human に替えた根は、タスクブ�
 
   expect(!(await complete(b, root, {})).ok).toBe(true);
   expect((await complete(b, root)).ok).toBe(true);
-  expect([git(b.ws.path, "rev-parse", `task/${root.id}`), takenIn(b.db)]).toEqual([branch, []]);
+  expect([git(b.ws.path, "rev-parse", `task/${root.id}`), git(b.ws.path, "show", `task/${root.id}:child.txt`), takenIn(b.db)]).toEqual([branch, "child", []]);
 
   // registry と同じく、名前 tako だけが解決する —— `human` は agent として引かれない
   const resolveAuthority = (assignee: string | null) => {

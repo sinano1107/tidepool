@@ -6,7 +6,7 @@ import { createLanding, type LandingDeps } from "../src/landing.js";
 import { type AuthorityProfile, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import { completeTask, getTask, landingSurface, listBoard, registerTask } from "../src/tasks.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeRemoteBackedWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import { agentQuarantines, answerMergeQuestion, convergeOn, mergeQuestions, openBoard, profile, pushPrHead, readOnNextTick } from "./landing-fixture.js";
 
 // ADR 0374 決定12・13 / spec #3273 group C(#3295): タスクブランチを持つ人間担当の work は根になり、profile なしで、常に merge question で
@@ -25,9 +25,10 @@ const registry = (assignee: string | null): AuthorityProfile => {
   throw new UnknownAgentError(assignee);
 };
 
-/** remote-backed の workspace で、タスクブランチを持って人間が完了した根。`content` なら保護ブランチに無い commit を1つ載せる。 */
-async function humanRoot(name: string, deps: Partial<LandingDeps> = {}, content = true) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+/** タスクブランチを持って人間が完了した根 —— 既定は remote-backed、`local` なら purely-local の workspace。`content` なら保護ブランチに無い
+ *  commit を1つ載せる。 */
+async function humanRoot(name: string, deps: Partial<LandingDeps> = {}, { content = true, local = false } = {}) {
+  const workspace = local ? await makeWorkspace(name) : (await makeRemoteBackedWorkspace(name)).workspace;
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, ...deps });
@@ -75,8 +76,18 @@ it("保護された workspace の人間の根は、保護の本文の merge ques
   ]);
 });
 
+it("purely-local の保護された workspace の人間の根は、C5 でなく dial の無い根と同じ汎用の本文の local merge question を持つ —— 保護を先に読む", async () => {
+  const { workspace, db, landing, root } = await humanRoot("landing-human-root-local-protected", { isProtectedWorkspace: () => true }, { local: true });
+
+  await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "landed", form: "local_merge_question" });
+
+  expect(listBoard(db).filter((q) => q.question_pending_local_merge_task_id === root.id).map((q) => q.purpose)).toEqual([
+    `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface for "by hand". Land its task branch on the protected branch now?`,
+  ]);
+});
+
 it("着地する内容の無い人間の根は nothing_to_land で終わる", async () => {
-  const { github, landing, root } = await humanRoot("landing-human-root-nothing", { resolveAuthority: registry }, false);
+  const { github, landing, root } = await humanRoot("landing-human-root-nothing", { resolveAuthority: registry }, { content: false });
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
   expect(github.requests).toEqual([]);

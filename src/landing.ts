@@ -21,6 +21,7 @@ import {
   derivedWorkspace,
   getTask,
   hasTaskBranchSql,
+  isHumanAssigned,
   landingSurface,
   localLandingOpenOrExecutedSql,
   logDecision,
@@ -983,7 +984,7 @@ export function createLanding(deps: LandingDeps): Landing {
     task: Task,
     now: Date,
   ): { profile: AuthorityProfile | undefined } | { quarantinedAgent: string } => {
-    if (task.assignee === HUMAN_ACTOR_ID) return { profile: undefined };
+    if (isHumanAssigned(task)) return { profile: undefined };
     try {
       return { profile: deps.resolveAuthority?.(task.assignee, task.type) };
     } catch (err) {
@@ -1351,8 +1352,9 @@ export function createLanding(deps: LandingDeps): Landing {
       if (!remoteBacked) {
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
-        // 保護を先に読む(ADR 0374 決定13)—— purely-local の保護された workspace の人間の根は、agent の根と同じ本文
-        const landing = landingSurface(deps.isProtectedWorkspace?.(workspace.name), task.assignee === HUMAN_ACTOR_ID, resolved.profile?.merge, task.risk_flag);
+        // 保護を先に読む(ADR 0374 決定13)—— purely-local の保護された workspace の人間の根は C5 でなく、profile を持たないので
+        // dial の無い根と同じ汎用の本文になる
+        const landing = landingSurface(deps.isProtectedWorkspace?.(workspace.name), isHumanAssigned(task), resolved.profile?.merge, task.risk_flag);
         const purpose = held
           ? reaskedLocalMergePurpose(deps.db, workspace, task, held.payload.head)
           : landing.surface === "merge_question" && landing.reason === "human_root"
@@ -1559,8 +1561,9 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.clock.now(),
         authority,
         deps.isProtectedWorkspace?.(workspace.name),
-        // spec #3273 group C: 人間の根の PR は収束が開くので origin は board(actor は今どおり assignee)
-        task.assignee === HUMAN_ACTOR_ID ? "board" : "worker",
+        // spec #3273 group C の [spec] は人間の根の pr_opened だけに origin board を決めた —— actor が人間でも開いたのは盤面だと読めるように。
+        // agent の根の origin はこの決定の外(actor は今どおり assignee)
+        isHumanAssigned(task) ? "board" : "worker",
       );
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {

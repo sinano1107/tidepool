@@ -32,7 +32,7 @@ const done = (task: Task, worker = "deckhand") => {
   return completeTask(db, getTask(db, task.id)!, FULL_HANDOFF, worker, NOW, "worker");
 };
 
-it("直接 cancel の範囲の done の work のうち agent が実行したものを、盤面の順で id と題で返す —— 人間が実行したものは入らない", () => {
+it("直接 cancel の範囲の done の work のうちタスクブランチに成果を持つものを、盤面の順で id と題で返す —— タスクブランチを持たない人間担当の work は入らない(ADR 0374 決定17)", () => {
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const [agentDone, humanDone, open] = split(root, [{ title: "a" }, { title: "b", assignee: HUMAN_ACTOR_ID }, { title: "c" }]);
@@ -48,13 +48,13 @@ it("直接 cancel の範囲の done の work のうち agent が実行したも�
   ]);
 });
 
-it("タスクブランチを持つ人間担当の done の work は捨てられる成果として入り、持たないものは入らない(pin C15、ADR 0374 決定17)", () => {
+// 持たない人間担当の work が入らないことは、上の釘が言う(ADR 0107 決定3)
+it("タスクブランチを持つ人間担当の done の work は捨てられる成果として入る(pin C15、ADR 0374 決定17)", () => {
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const [withBranch, without] = split(root, [{ title: "h1", assignee: HUMAN_ACTOR_ID }, { title: "h2", assignee: HUMAN_ACTOR_ID }]);
+  const [withBranch] = split(root, [{ title: "h1", assignee: HUMAN_ACTOR_ID }]);
   recordTaskBranchCreated(db, withBranch!.id);
   done(withBranch!, HUMAN_ACTOR_ID);
-  done(without!, HUMAN_ACTOR_ID);
 
   expect(directCancelDiscards(db, getTask(db, root.id)!, undefined)).toEqual([{ id: withBranch!.id, title: "h1" }]);
 });

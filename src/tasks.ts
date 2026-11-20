@@ -1065,6 +1065,11 @@ export function hasTaskBranch(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_branch_created") !== undefined;
 }
 
+/** 人間担当の work か —— 着地の根では「人間の根」(ADR 0374 決定13): profile を引かず、常に merge question で着地する。 */
+export function isHumanAssigned(task: Pick<Task, "assignee">): boolean {
+  return task.assignee === HUMAN_ACTOR_ID;
+}
+
 /** `hasTaskBranch` の SQL の対 —— 着地の候補(ADR 0374 決定12)と cancel の捨てる一覧(決定17)が読む。 */
 export function hasTaskBranchSql(taskRef: string): string {
   return `EXISTS (SELECT 1 FROM events b WHERE b.task_id = ${taskRef} AND b.kind = 'task_branch_created')`;
@@ -3198,7 +3203,7 @@ export function recordPrOpened(
     });
     const ask = (purpose: string) =>
       registerMergeQuestion(db, task, prNumber, purpose, "merge", now);
-    const landing = landingSurface(isProtected, task.assignee === HUMAN_ACTOR_ID, authority?.merge, task.risk_flag);
+    const landing = landingSurface(isProtected, isHumanAssigned(task), authority?.merge, task.risk_flag);
     switch (landing.surface) {
       case "merge_question":
         ask(
