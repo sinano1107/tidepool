@@ -353,6 +353,8 @@ export type PrHeadOrigin = { kind: "pushed" } | { kind: "rewritten"; outside: Ou
  *  `not_pushed`(fail-closed)。`lastPushed` は呼び手が head を読んだ同期区間で読んだ値(ADR 0387 決定4)。 */
 function prHeadOrigin(db: Db, workspace: WorkspaceConfig, taskId: string, head: string, lastPushed: string | undefined, targets: string[]): PrHeadOrigin {
   if (head === lastPushed) return { kind: "pushed" };
+  // 値が無ければ比べる起点が無い —— `outsidePushOf` に渡すと既定値で記録を読み直してしまう
+  if (lastPushed === undefined) return { kind: "not_pushed", lastPushed };
   let outside: OutsidePush | undefined;
   try {
     outside = outsidePushOf(db, workspace, taskId, head, targets, lastPushed);

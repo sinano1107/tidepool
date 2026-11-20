@@ -3,7 +3,7 @@ import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { getTask, listBoard } from "../src/tasks.js";
 import { afterCiRead, FakeGitHubClient, fakeHead } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, makeRemoteBackedWorkspace } from "./harness.js";
 import {
   afterEachPush,
   answerMergeQuestion,
@@ -12,10 +12,12 @@ import {
   CI_RED_PURPOSE,
   CONFLICT,
   convergeOn,
+  mergeQuestion,
   mergeQuestions,
   openBoard,
   openPushedPr,
   originHead,
+  profile,
   promotionFailures,
   pushedRoot,
   pushOutsideBoard,
@@ -74,11 +76,10 @@ const answerMerge = (pr: Awaited<ReturnType<typeof openPushedPr>>) =>
     },
   );
 
-/** 盤面の知らない commit を列挙する拒否文(新しい順)。 */
-const listedRefusal = (pr: Awaited<ReturnType<typeof openPushedPr>>, head: string, lastPushed: string) => {
-  const commits = git(pr.workspace.path, "log", "--format=%H %s", `${lastPushed}..${head}`).split("\n").join("; ");
-  return `PR #1's head ${head} holds commits the board did not push (the board last pushed ${lastPushed}): ${commits}. Answer \`merge\` again to merge them.`;
-};
+/** 盤面の知らない commit を列挙する拒否文。`commits` は新しい順の [sha, `pushOutsideBoard` が書いた file]。 */
+const listedRefusal = (head: string, lastPushed: string, commits: Array<[string, string]>) =>
+  `PR #1's head ${head} holds commits the board did not push (the board last pushed ${lastPushed}): ` +
+  `${commits.map(([sha, file]) => `${sha} add ${file}`).join("; ")}. Answer \`merge\` again to merge them.`;
 
 it("盤面の知らない commit を言う merge question への最初の「merge」は拒まれずに merge する", async () => {
   const pr = await openPushedPr("outside-head-question-merges", "auto_if_ci_green");
@@ -87,6 +88,30 @@ it("盤面の知らない commit を言う merge question への最初の「merg
 
   await expect(answerMerge(pr)).resolves.toBeUndefined();
 
+  expect(pr.github.merged.map(({ number }) => number)).toEqual([1]);
+});
+
+it("キューにいる PR の merge question が開いたまま外から進んだ head を tick が読んでも、伝えた記録は残らず、最初の「merge」は commit を列挙して1回拒まれる", async () => {
+  const pr = await openPushedPr("outside-head-question-already-open", "auto_if_ci_green");
+  const lastPushed = originHead(pr.workspace, pr.work.id);
+  mergeQuestion(pr.db, pr.clock, { pending_merge_pr: 1 }, pr.work.workspace ?? undefined);
+  const head = await pushOutsideBoard(pr.workspace, pr.work.id);
+
+  await pr.landing.tick("auto_merge", pr.clock.now());
+
+  expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual(["a human decides whether to land"]);
+  expect(await answerMerge(pr)).toBe(listedRefusal(head, lastPushed, [[head, "outside.txt"]]));
+});
+
+it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、伝えた head として拒まれずに merge する", async () => {
+  const pr = await openPushedPr("outside-head-surface-changed", "auto_if_ci_green");
+  const landing = autoMerging(pr.db, pr.clock, pr.workspace, pr.github, () => profile("escalate"));
+  await pushOutsideBoard(pr.workspace, pr.work.id);
+
+  await landing.tick("auto_merge", pr.clock.now());
+  expect(mergeQuestions(pr.db).map(({ recommendation }) => recommendation)).toEqual(["hold"]);
+
+  await expect(answerMerge({ ...pr, landing })).resolves.toBeUndefined();
   expect(pr.github.merged.map(({ number }) => number)).toEqual([1]);
 });
 
@@ -99,13 +124,16 @@ it("CI 赤の question が開いた後に外から進んだ head への最初の
   const first = await pushOutsideBoard(pr.workspace, pr.work.id);
   pr.github.scriptCiStatus("success");
 
-  expect(await answerMerge(pr)).toBe(listedRefusal(pr, first, lastPushed));
+  expect(await answerMerge(pr)).toBe(listedRefusal(first, lastPushed, [[first, "outside.txt"]]));
   const question = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
   expect(getTask(pr.db, question.id)?.status).toBe("todo");
   expect(pr.github.merged).toEqual([]);
 
   const second = await pushOutsideBoard(pr.workspace, pr.work.id, undefined, "outside-again.txt");
-  expect(await answerMerge(pr)).toBe(listedRefusal(pr, second, lastPushed));
+  expect(await answerMerge(pr)).toBe(listedRefusal(second, lastPushed, [
+    [second, "outside-again.txt"],
+    [first, "outside.txt"],
+  ]));
   await expect(answerMerge(pr)).resolves.toBeUndefined();
   expect(pr.github.mergedHeads).toEqual([second]);
 });
@@ -122,7 +150,7 @@ it("merge 失敗の question が開いた後に人間が conflict を解いて p
   ]);
   const resolved = await pushOutsideBoard(pr.workspace, pr.work.id, undefined, "resolved.txt");
 
-  expect(await answerMerge(pr)).toBe(listedRefusal(pr, resolved, lastPushed));
+  expect(await answerMerge(pr)).toBe(listedRefusal(resolved, lastPushed, [[resolved, "resolved.txt"]]));
   await expect(answerMerge(pr)).resolves.toBeUndefined();
   expect(pr.github.mergedHeads).toEqual([resolved]);
 });
@@ -146,7 +174,7 @@ it("回答が head を読んだ時点で同じ PR に in-flight 印が付いて�
   expect(boardEvents(pr.db, pr.work.id, "pr_head_conveyed")).toEqual([]);
 
   release!();
-  expect(await answerMerge(pr)).toBe(listedRefusal(pr, head, lastPushed));
+  expect(await answerMerge(pr)).toBe(listedRefusal(head, lastPushed, [[head, "outside.txt"]]));
 });
 
 it("無人 merge の tick が in-flight 印を持つ間、収束は記録済みの PR へ push せず次の突きに回し、retry の回答は答え直させる", async () => {
