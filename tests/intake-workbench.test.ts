@@ -392,7 +392,7 @@ async function holeHeldByWorkbench(b: Board): Promise<string> {
   return blob;
 }
 
-it("名前の場所から欠けた blob を作業台が自前の store に持てば、取り込みの確かめが捕まえて取り込み直し、名前の場所で読める(ADR 0388 決定1・2 / ADR 0371)", async () => {
+it("名前の場所から欠けた blob を作業台が自前の store に持てば、取り込みの確かめが捕まえて入れ直し、名前の場所で読める(ADR 0388 決定1・2 / ADR 0371)", async () => {
   const b = await board();
   const blob = await holeHeldByWorkbench(b);
 
@@ -402,7 +402,7 @@ it("名前の場所から欠けた blob を作業台が自前の store に持て
   expect(git(b.ws.path, "cat-file", "-p", blob)).toBe("kept by the human");
 });
 
-it("取り込み直しが落ちれば取り込みは拒まれ、書く先の ref も workbench_taken_in も書かれず、理由が欠けた object を名指す(ADR 0388 決定2・3)", async () => {
+it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も workbench_taken_in も書かれず、理由が欠けた object を名指す(ADR 0388 決定1・2)", async () => {
   const b = await board();
   const blob = await holeHeldByWorkbench(b);
   const main = git(b.ws.path, "rev-parse", "main");

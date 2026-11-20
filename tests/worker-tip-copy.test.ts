@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { CheckoutUnreadableError } from "../src/git.js";
+import { CheckoutHostError, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitRoomCopy, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -292,7 +292,7 @@ it("work の tip は名前の場所にある commit を親にしてよい ——
   expect(git(named.path, "rev-parse", `task/${task.id}^`)).toBe(elsewhere);
 });
 
-it("出題の写しが面接室に欠けた blob を root の tip に持てば、写しの確かめが捕まえて取り込み直し、面接室で読める(ADR 0388 決定1・2 / ADR 0273 決定3)", async () => {
+it("出題の写しが面接室に欠けた blob を root の tip に持てば、写しの確かめが捕まえて入れ直し、面接室で読める(ADR 0388 決定1・2 / ADR 0273 決定3)", async () => {
   const db = openDb(":memory:");
   onTestFinished(() => void db.close());
   const workspace = await makeWorkspace("tip-copy-room-hole");
@@ -357,6 +357,22 @@ it("写しの中の git が tmp の容量切れで落ちれば host の失敗で
   expect(quarantineQuestion(db, "workspace", named.name)).toBeDefined();
   expect(writeObservations(db, task.id)).toEqual([]);
   expect(existsSync(join(place.path, ".git"))).toBe(true);
+});
+
+it("運んだ後の確かめが tmp の容量切れで落ちれば写しの host の失敗で、完了の門は欠けや破損と言わずに拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
+  const { db, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  const shim = await tempDir("tidepool-enospc-git-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  // 確かめの pack-objects は盤面の写しの下の使い捨ての repo に書く
+  writeFileSync(
+    join(shim, "git"),
+    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */carried/read) echo 'fatal: unable to write file: No space left on device' >&2; exit 128;; esac; fi\nexec "${realGit}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+
+  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(CheckoutHostError);
 });
 
 it("pack の 0 の連なりは写しで穴にしても byte が保たれ、tip は記録に着く(core.compression=0、ADR 0364 決定3)", async () => {
