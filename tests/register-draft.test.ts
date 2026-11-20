@@ -59,7 +59,6 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
     purpose: "know soil moisture without walking out",
     completion_criteria: "dashboard shows a live moisture reading",
     assignee: "reef-crab",
-    workspace: "tidepool",
     risk_flag: true,
     review_flag: true,
   });
@@ -72,7 +71,7 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
 
   // 下書きの review_flag をそのまま送れるのは子追加だけ(ルートは flag によらずレビューされる、issue #1467)。
   // 親は human 担当にして slot を取らせず(走行中の親には子を足せない)、risk の子が承認 question に変わらないよう
-  // 親にも risk を付ける
+  // 親にも risk を付ける。子は workspace を持たない(ADR 0384 決定1)ので、下書きにも workspace を置かない
   const existing = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "water the tomatoes",
@@ -91,7 +90,6 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
   expect(registered.status).toBe(201);
   expect(registered.json.title).toBe("set up the greenhouse sensor");
   expect(registered.json.assignee).toBe("reef-crab");
-  expect(registered.json.workspace).toBe("tidepool");
   expect(registered.json.risk_flag).toBe(1);
   expect(registered.json.review_flag).toBe(1);
 
