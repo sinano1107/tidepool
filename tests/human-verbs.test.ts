@@ -809,12 +809,13 @@ it("根の pr_merged の書き込みが失敗した merge 回答は、question_a
 });
 
 // PR #42 を開いた escalate の work の merge question に、PR を開いてから minutesSincePrOpened 分後に「merge」と答える
-function answerMerge(github: FakeGitHubClient, minutesSincePrOpened: number) {
-  return openMergeQuestion(github).answerAt(minutesSincePrOpened);
+function answerMerge(github: FakeGitHubClient, minutesSincePrOpened: number, head?: string) {
+  return openMergeQuestion(github, head).answerAt(minutesSincePrOpened);
 }
 
-/** PR #42 を開いた escalate の work と、その merge question に PR を開いてから何分後かに「merge」と答える手。 */
-function openMergeQuestion(github: FakeGitHubClient) {
+/** PR #42 を開いた escalate の work と、その merge question に PR を開いてから何分後かに「merge」と答える手。`head` は盤面が PR を開いたときに
+ *  push した sha —— GitHub が報告する head と一致すれば盤面の push した head と読まれる(ADR 0387 決定1)。 */
+function openMergeQuestion(github: FakeGitHubClient, head = fakeHead(42)) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -828,7 +829,7 @@ function openMergeQuestion(github: FakeGitHubClient) {
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, head, "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const answerAt = (minutesSincePrOpened: number) =>
     submitAnswer(
       {
@@ -884,7 +885,9 @@ it("盤面の外の head が check 未報告なら、merge 回答は拒否の前
       .filter((e) => e.kind === "pr_head_observed")
       .map(({ actor_id, origin, payload }) => ({ actor_id, origin, payload }));
 
-  // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる
+  // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる。盤面の push していない head なので、
+  // 最初の回答はその commit を伝えて1回拒まれる(ADR 0387 決定2)
+  await expect(answerAt(6)).rejects.toThrow("holds commits the board did not push");
   await expect(answerAt(6)).rejects.toThrow("have not reported yet");
   await expect(answerAt(10)).rejects.toThrow("have not reported yet");
   expect(observed()).toEqual([
@@ -901,7 +904,7 @@ it("merge 回答は CI を読んだ head に固定して merge する", async ()
   const github = new FakeGitHubClient();
   github.scriptHead(42, "ci-read-head");
 
-  await expect(answerMerge(github, 0)).resolves.toMatchObject({ status: "done" });
+  await expect(answerMerge(github, 0, "ci-read-head")).resolves.toMatchObject({ status: "done" });
   expect(github.mergedHeads).toEqual(["ci-read-head"]);
 });
 
@@ -911,7 +914,7 @@ it("CI を読んだ後に head が動いた PR への merge 回答は失敗し�
   github.scriptHead(42, "ci-read-head");
   afterCiRead(github, () => github.scriptHead(42, "pushed-after-ci-read"));
 
-  const error = await answerMerge(github, 0).catch((err: unknown) => err);
+  const error = await answerMerge(github, 0, "ci-read-head").catch((err: unknown) => err);
   expect(error).toBeInstanceOf(DomainError);
   expect((error as Error).message).toContain("Head branch was modified");
   expect(github.merged).toEqual([]);
@@ -1263,7 +1266,7 @@ it("merge 回答が merge 中の PR への2つ目の merge 回答は拒まれ、
   const { work, question, answer, first, open, mergeCalls } = await mergeAnswerInFlight();
 
   await expect(answer()).rejects.toThrow(
-    new DomainError("PR #42 is being merged by the board right now — answer again in a moment"),
+    new DomainError("PR #42 is being merged or pushed to by the board right now — answer again in a moment"),
   );
   expect(getTask(db, question.id)?.status).toBe("todo");
   expect(prOutcomes()).toEqual([]);
@@ -1279,7 +1282,7 @@ it("merge 回答が merge 中の PR の merge question への「hold」は拒ま
   const { work, question, answer, first, open } = await mergeAnswerInFlight();
 
   await expect(answer("hold")).rejects.toThrow(
-    new DomainError("PR #42 is being merged by the board right now — answer again in a moment"),
+    new DomainError("PR #42 is being merged or pushed to by the board right now — answer again in a moment"),
   );
   expect(getTask(db, question.id)?.status).toBe("todo");
   open();
@@ -1363,7 +1366,7 @@ it("merge 回答の merge が失敗したら印は放され、次の merge 回�
 
   // spec #3273 text A6
   await expect(answer()).rejects.toThrow(
-    "merging PR #42 failed: Pull request is not mergeable: merge conflict. If PR #42 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer again.",
+    "merging PR #42 failed: Pull request is not mergeable: merge conflict. If PR #42 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer `merge`: the board refuses it once, listing the commits you pushed, and the next `merge` merges.",
   );
   await expect(answer()).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);

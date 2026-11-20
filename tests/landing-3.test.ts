@@ -509,35 +509,6 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([]);
 });
 
-it("PR を開いてから6分後に読んだ盤面の外の head が check 未報告なら、初めて読んでから5分間キューで待ち、過ぎれば merge question に倒れる。観測は1件だけ刻まれる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-unreported-outside-head");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  const landing = autoMerging(db, clock, workspace, github);
-  const work = landingWork(db, clock);
-  checkoutTaskBranch(db, workspace, work.id);
-  commitWork(workspace.path, "feature.txt", "ready\n");
-  finish(db, clock, work);
-  await landing.converge();
-  const outside = await pushOutsideBoard(workspace, work.id);
-  github.scriptCiStatus("unreported");
-
-  await clock.advance(6 * 60_000);
-  await landing.tick("auto_merge", clock.now());
-  await clock.advance(FIVE_MINUTES - 1);
-  await landing.tick("auto_merge", clock.now());
-
-  expect(mergeQuestions(db)).toEqual([]);
-  expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
-    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
-  ]);
-
-  await clock.advance(1);
-  await landing.tick("auto_merge", clock.now());
-  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([{ pr: 1, purpose: UNREPORTED_PURPOSE }]);
-  expect(boardEvents(db, work.id, "pr_head_observed")).toHaveLength(1);
-});
-
 it("check が報告中(pending)の盤面の外の head も、読んだ時点で観測として1件だけ刻まれる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-pending-outside-head");
   const { db, clock } = await openBoard();
@@ -1010,6 +981,7 @@ it("cancelled の祖先の下に残った done の work の内容は積み残し
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
+// ADR 0387 決定1: 外の push の head は無人では merge されない —— 積み残しの述語は、その head を伝えた question への「merge」で言う
 it("修理の内容がローカルの着地するタスクのブランチに無くても、merge される head に載っていれば積み残しではない", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-on-origin", "auto_if_ci_green");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
@@ -1018,9 +990,9 @@ it("修理の内容がローカルの着地するタスクのブランチに無�
   git(clone, "clone", workspace.repo!, ".");
   git(clone, "fetch", workspace.path, `task/${repair.id}`);
   git(clone, "push", "origin", `FETCH_HEAD:refs/heads/task/${work.id}`);
-
   await landing.tick("auto_merge", clock.now());
 
+  await expect(answerMergeQuestion({ db, clock, github, workspace, landing })).resolves.toMatchObject({ status: "done" });
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
@@ -1038,9 +1010,9 @@ it("PR の head に修理を `merge -s ours` で捨てた記録があれば、�
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-discarded", "auto_if_ci_green");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   await pushDiscardedRepair(workspace, work.id, repair.id);
-
   await landing.tick("auto_merge", clock.now());
 
+  await expect(answerMergeQuestion({ db, clock, github, workspace, landing })).resolves.toMatchObject({ status: "done" });
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
@@ -1058,7 +1030,7 @@ it("merge back 済み・push 前でタスクブランチが origin 側に無い�
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
-it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、無人 merge される", async () => {
+it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、無人では merge されず、立った question への「merge」で merge される", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-outside-push", "auto_if_ci_green");
   git(workspace.path, "checkout", "-b", "outside");
   commitWork(workspace.path, "outside.txt", "pushed by a human\n");
@@ -1066,9 +1038,11 @@ it("盤面の外の push で origin 側だけが先へ進んでいるのは積�
   git(workspace.path, "checkout", `task/${work.id}`);
 
   await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db).map(({ recommendation }) => recommendation)).toEqual(["hold"]);
 
+  await expect(answerMergeQuestion({ db, clock, github, workspace, landing })).resolves.toMatchObject({ status: "done" });
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
-  expect(mergeQuestions(db)).toEqual([]);
 });
 
 it("修理のブランチが PR に届いた位置へ帯域外で巻き戻されたら、merge の回答を拒み Quarantine を立てる", async () => {
@@ -1326,15 +1300,18 @@ it("push の直後に写しが消えれば、積み残しでなく動いた ref 
 // ADR 0242 決定3: 比べられなければ積み残し。人間の merge 回答は「運んでいる途中」でなく、比べられなかった事実と理由で拒む(#1854)
 const NOWHERE = "0123456789abcdef0123456789abcdef01234567";
 
-it("GitHub の head が手元にも origin にも無ければ、head の fetch が失敗して積み残しとなり、無人 merge されずキューに残る", async () => {
+// ADR 0387 決定1: 取れない head は祖先関係を確かめられない head —— キューに残さず question に倒す
+it("GitHub の head が手元にも origin にも無ければ、head の fetch が失敗し、無人 merge されずキューを外れて推奨 hold の question になる", async () => {
   const { db, github, landing, clock } = await openPushedPr("left-behind-fetch-fails", "auto_if_ci_green");
   github.scriptHead(1, NOWHERE);
 
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
-  expect(mergeQuestions(db)).toEqual([]);
-  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+  expect(mergeQuestions(db).map(({ recommendation, purpose }) => ({ recommendation, purpose }))).toEqual([
+    { recommendation: "hold", purpose: expect.stringContaining(`PR #1's head ${NOWHERE} holds commits the board did not push`) },
+  ]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
 });
 
 it("GitHub の head が手元にも origin にも無い PR への人間の merge 回答は、head の fetch が失敗したことを言って拒まれる", async () => {
