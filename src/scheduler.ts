@@ -990,17 +990,23 @@ export function startScheduler(deps: {
       let gated: TaskGated | undefined;
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
+      const workspaceNameOf = (task: Task) => derivedWorkspace(db, task) ?? workspace?.name;
+      let selectedWorkspaceName: string | undefined;
+      const workspaceStillSelected = (task: Task) => {
+        const current = getTask(db, task.id);
+        return current !== undefined && workspaceNameOf(current) === selectedWorkspaceName;
+      };
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
       // フラグは poll ごとに1度読み(判定者の task は分岐しない)、episode と種は分岐が要るときに1度だけ読む。集計は候補の段ごとに
       // 違うので pickup ごとに作る(ADR 0210 決定2)
       const promoted = readExecutionSettings(db).learnerPromoted;
       let episodes: RoutingEpisode[] | undefined;
       let seeds: Seed[] | undefined;
-      const branch = (task: Task, pool: ExecutionSetting[]) => {
+      const branch = (pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
         seeds ??= loadSeeds(db);
         // 完了タスクは pickup で祖先か既定の名前に焼き込まれる(ADR 0233 / ADR 0372 決定1)ので、未着手の空のタスクも同じ導出で照合する
-        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, seeds, pool[0]!.tier_id, derivedWorkspace(db, task) ?? workspace?.name ?? null) });
+        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, seeds, pool[0]!.tier_id, selectedWorkspaceName ?? null) });
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work 側の task(`isWorkSide`)は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 →
@@ -1013,7 +1019,7 @@ export function startScheduler(deps: {
         if (promoted && isWorkSide(task.type) && task.interview_target_id === null && pool.length > 0) {
           // 学習器が倒れたら表の先頭で走る —— 出所は表のままなので記録は偽らず、盤面も止まらない
           try {
-            branched = branch(task, pool);
+            branched = branch(pool);
           } catch (err) {
             console.error(`[scheduler] learner failed for ${task.id}; running the table's choice:`, err);
           }
@@ -1035,6 +1041,8 @@ export function startScheduler(deps: {
         }
       };
       heads: while (head) {
+        // ADR 0372 決定1: 列が空の子の行き先は、候補を選んだ後の親の Edit でも変わる(#3436)
+        selectedWorkspaceName = workspaceNameOf(head);
         if (!loadCandidates(head)) {
           head = nextHead();
           continue;
@@ -1062,6 +1070,7 @@ export function startScheduler(deps: {
             observedProviders.set(setting.provider, observation);
             if (setting.provider === "openai" && observation.status === "observed") {
               // 候補はこの観測の前に引いたもの —— 照合で外れた行(ADR 0184 決定3)を落として選び直す
+              if (!workspaceStillSelected(head)) return SUCCEEDED;
               if (!loadCandidates(head)) {
                 head = nextHead();
                 continue heads;
@@ -1114,6 +1123,7 @@ export function startScheduler(deps: {
         }
         const verdict = await taskGates(head);
         if ("pass" in verdict) {
+          if (!workspaceStillSelected(head)) return SUCCEEDED;
           gated = verdict.pass;
           chosen = setting;
           break;
@@ -1137,7 +1147,7 @@ export function startScheduler(deps: {
       const recordShadowRow = (pickupEventId: number) => {
         if (!isWorkSide(head.type) || head.interview_target_id !== null || !(branched || !promoted)) return;
         try {
-          recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now(), pickupEventId);
+          recordShadow(db, head.id, (branched ?? branch(selectable(candidates, entryExcluded))).shadow, clock.now(), pickupEventId);
         } catch (err) {
           if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: shadow 行の失敗として log に流さない
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);

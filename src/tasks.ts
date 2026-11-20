@@ -1468,9 +1468,9 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
         filled[column] = name;
       }
     }
-    const workspaceFilled = filled.workspace;
-    const fromAncestor = ancestor ? workspaceFilled : undefined;
-    if (fromAncestor) delete filled.workspace;
+    const filledWorkspaceName = filled.workspace;
+    const ancestorWorkspaceName = ancestor ? filledWorkspaceName : undefined;
+    if (ancestorWorkspaceName) delete filled.workspace;
     appendEvent(db, {
       taskId: task.id,
       actorId,
@@ -1478,8 +1478,8 @@ export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill:
       payload: {
         kind: "task_picked_up",
         ...(Object.keys(filled).length > 0 && { resolved_from_default: filled }),
-        ...(fromAncestor && { workspace_from_ancestor: fromAncestor }),
-        ...(workspaceFilled && { column_filled_from: ancestor?.id ?? "default" }),
+        ...(ancestorWorkspaceName && { workspace_from_ancestor: ancestorWorkspaceName }),
+        ...(filledWorkspaceName && { column_filled_from: ancestor?.id ?? "default" }),
       },
       at: now,
     });
