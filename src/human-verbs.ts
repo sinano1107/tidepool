@@ -43,7 +43,7 @@ import {
 } from "./harness-containment.js";
 import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, type RootVerdict, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
-import { conventionCheckoutPath, isRemoteBacked, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
+import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
@@ -75,6 +75,7 @@ import {
   assertAnswerable,
   assertCompletable,
   assertInterviewFields,
+  assertNoGatingQuestion,
   assertNoUnsettledIssueRef,
   assertTargetsRunnable,
   assertUnsettledNotInProgress,
@@ -82,6 +83,7 @@ import {
   type CancelDefaults,
   CHILD_TAKES_NO_WORKSPACE,
   type ChildSpec,
+  cancelRcasByAnswer,
   cancelTaskDirectly,
   completeTask,
   derivedWorkspace,
@@ -94,6 +96,7 @@ import {
   humanDecomposeTask,
   type InterviewProposal,
   interviewRoomPath,
+  isRca,
   latestChild,
   latestPosedProbe,
   logDecision,
@@ -110,6 +113,9 @@ import {
   settleQuestionAsObserved,
   type Task,
   taskIdForPr,
+  tasksOwingReleaseOn,
+  unsettledCancelScope,
+  unsettledOpenersOf,
 } from "./tasks.js";
 import { type FailedTeardownCheck, teardownStep, type UnclosedSessionCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
@@ -626,6 +632,8 @@ export interface QuarantineCheckDeps {
   recordDir?: string;
   /** 面接室の在り処を導く規約の基点(ADR 0018)。Absent → `resolveWorkspacesBaseDir` 自身の既定(scheduler と同じ)。 */
   workspacesDir?: string;
+  /** 面接室の Quarantine への回答が倒す RCA に当てる、直接 cancel と同じ門の resolver(ADR 0385 決定4)。Absent → 写す resolver の無い種類は誰も止めない。 */
+  quarantineResolvers?: QuarantineResolvers;
 }
 
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
@@ -657,13 +665,24 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       throw new DomainError(err instanceof Error ? err.message : String(err));
     }
   };
+  // 前半の項1つが落ちるか(盤面 DB の拒否は判定に畳まない、ADR 0342 決定4)
+  const fails = (predicate: PickupPredicate) => {
+    try {
+      if (predicate.phase === "before-open") predicate.check();
+      return false;
+    } catch (err) {
+      if (isBoardDbRefusal(err)) throw err;
+      return true;
+    }
+  };
   // verify both the named place's Git tree and its separation from the board's own state.
   // ADR 0373 決定2: 回答の文が選択肢を選ぶ —— 完全一致だけで、ほかの文(面接室でない名前への `run with an empty room` も)は `repaired by hand`
-  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
+  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice?: string; withAnswer?: () => void } | undefined> => {
     const room = getTask(deps.db, value)?.type === "interview";
     const giveUp = answer === GIVE_UP_THE_LOST_REFS;
     const restore = answer === RESTORE_THE_BASELINE || giveUp;
     const emptyRoom = room && answer === RUN_WITH_AN_EMPTY_ROOM;
+    const cancelRcas = room && answer === CANCEL_THE_RCAS;
     const now = (deps.clock ?? new SystemClock()).now();
     // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。ADR 0373 帰結: 解放の中で立った Quarantine はどの選択肢でも
     // その後始末が終わるまで答えられない
@@ -704,7 +723,36 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     });
     const checked = withRememberedRepoCheck(deps.db, target, () => now);
     const { own, openers } = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
-    const all = [...own, ...openers];
+    // ADR 0385 決定2: 倒すのは回答の時点で項が落ちている RCA だけ。項は記録だけから組まれ、ここで初めて git を撃つ
+    const fallen = cancelRcas ? openers.flatMap(({ rca, ...predicate }) => (rca !== undefined && fails(predicate) ? [{ id: rca, head: readHeadOf(deps.db, getTask(deps.db, rca)!, value)! }] : [])) : [];
+    const felled = new Set(unsettledCancelScope(deps.db, fallen.map(({ id }) => id)));
+    // ADR 0385 決定6: 回答の後に面接室を開く未決着の task が残らず、済まなかった解放も無ければ(fail-closed —— done の受験者の答案を運ぶ前に
+    // 解かない)、面接室そのものの項を撃たない。回答の transaction の中で、cancel の後にもう一度確かめる
+    const stillOpening = () => unsettledOpenersOf(deps.db, value).filter((task) => !felled.has(task.id));
+    const leftOpen = () => stillOpening().length > 0 || tasksOwingReleaseOn(deps.db, value, deps.workspace?.name).length > 0;
+    const unopened = room && !leftOpen();
+    const all = [...(unopened ? [] : own), ...openers.filter(({ rca }) => rca === undefined || !felled.has(rca))];
+    const clean = !room || placeHasRepository(target.path);
+    if (cancelRcas && fallen.length === 0) {
+      // 拒否文は落ちている他の項を名指す
+      const none = `no RCA that opens the interview room ${value} needs missing objects, so \`${CANCEL_THE_RCAS}\` cancels nothing`;
+      await refuseOnError(async () => {
+        try {
+          await checkAcceptanceFirstHalf(deps.db, target, all, clean);
+        } catch (err) {
+          if (isBoardDbRefusal(err)) throw err;
+          throw new Error(`${none}. ${err instanceof Error ? err.message : String(err)}`);
+        }
+      });
+      throw new DomainError(`${none}.`);
+    }
+    // ADR 0385 決定4: 倒す RCA には直接 cancel と同じ門 —— いま答えている面接室の Quarantine 自身は除く
+    const assertRcasUngated = () => {
+      const stops = quarantineStops(deps.db, deps.quarantineResolvers);
+      const defaults = { defaultWorkspaceName: deps.workspace?.name, defaultAgentName: deps.defaultAgentName, auditorName: deps.auditorName, interviewerName: deps.interviewerName, quarantined: { ...stops, workspaces: stops.workspaces.filter((name) => name !== value) } };
+      for (const { id } of fallen) assertNoGatingQuestion(deps.db, id, defaults, `cancel the RCA ${id} by this answer`);
+    };
+    assertRcasUngated();
     const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
       try {
         await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
@@ -722,7 +770,20 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       }
     };
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。
-    await refuseOnError(() => checkAcceptanceFirstHalf(deps.db, target, all, !room || placeHasRepository(target.path)));
+    await refuseOnError(async () => {
+      try {
+        await checkAcceptanceFirstHalf(deps.db, target, all, clean);
+      } catch (err) {
+        const still = stillOpening();
+        if (!cancelRcas || still.length === 0 || isBoardDbRefusal(err)) throw err;
+        // ADR 0385 決定3: 面接室ごと消えても root が生きていれば面接室そのものの項で拒まれる —— 残る開く task とその出口を名指す
+        const owners = [...new Set(still.filter((task) => !isRca(deps.db, task.id)).map((task) => interviewOwnerOf(deps.db, task)))];
+        throw new Error(
+          `${err instanceof Error ? err.message : String(err)}\n\n${still.map((task) => task.id).join(", ")} still open the interview room ${value} after this answer` +
+            (owners.length > 0 ? ` — cancel the Interview ${owners.join(", ")} first, then answer \`${CANCEL_THE_RCAS}\` again.` : "."),
+        );
+      }
+    });
     assertNoSessionRunning();
     // ADR 0380 決定4: 失われたと数える前に origin から取る(spec #3273 の受理の 7a)
     if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
@@ -747,7 +808,19 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     await refuseOnError(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name));
     // spec #3273 text B11: 外した値ごとに1行
     const notices = [...kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`), ...keptWorkbenches];
-    return notices.length > 0 ? { notice: notices.join("\n") } : undefined;
+    const notice = notices.length > 0 ? notices.join("\n") : undefined;
+    if (!unopened && !cancelRcas) return notice === undefined ? undefined : { notice };
+    return {
+      ...(notice !== undefined && { notice }),
+      // ADR 0385 決定3・6: RCA の cancel と解除は回答と同じ transaction —— 門と開く task をそこで読み直し、当たれば回答ごと巻き戻る
+      withAnswer: () => {
+        if (cancelRcas) {
+          assertRcasUngated();
+          cancelRcasByAnswer(deps.db, fallen, openQuarantineQuestion(deps.db, "workspace", value)!.id, now, origin);
+        }
+        if (unopened && leftOpen()) throw new DomainError(`a task started opening the interview room ${value} while the board checked this answer — answer again`);
+      },
+    };
   };
   // ADR 0373 決定7・10: 比較はほかのどの検査よりも前で、purely-local は先頭の1回。ADR 0379 決定7: 比較・fetch・比べ直し・in-flight の鍵・拒否は
   // harness で分けず、違うのは保護ブランチの tip に当てる検査だけ。ADR 0371 決定6: 取り込んだ後の tree は書く前に判定する —— Claude は取り込みの
@@ -1450,6 +1523,8 @@ export async function submitAnswer(
 
   const mark: { release: (() => void) | null } = { release: null };
   let notice: string | undefined;
+  // 回答の書き込みと同じ transaction で撃つ Quarantine の受理の段(ADR 0385 決定3・6)
+  let withAnswer: (() => void) | undefined;
   // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3)
   // hold の head は断った内容という事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
   let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
@@ -1616,7 +1691,7 @@ export async function submitAnswer(
         const confirm = await check(kind.value, answers[0], origin);
         // ADR 0343 決定1: 確認から回答の transaction まで await が無いので、検査の再開までに立った条件を見落とさない
         if (typeof confirm === "function") confirm();
-        else if (confirm) notice = confirm.notice;
+        else if (confirm) ({ notice, withAnswer } = confirm);
         break;
       }
       case "proposal":
@@ -1673,6 +1748,7 @@ export async function submitAnswer(
     // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export、defer は何もしない(ADR 0165)。routing の approve は表の書き口で
     // 行を書く —— 回答が先に question を done にするので、書き口の陳腐化の hook はこの question 自身を決着させない
     const question = deps.db.transaction(() => {
+      withAnswer?.();
       const answered = answerQuestion(
         deps.db,
         task,

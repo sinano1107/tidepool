@@ -10,11 +10,11 @@ import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import type { EventOrigin, ListedRefusal, ResourceStop, RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
-import { discardUncommitted, IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
+import { CANCEL_THE_RCAS, discardUncommitted, IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
+import { cancelDiscards, DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, isRca, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task, unsettledOpenersOf } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const UNCLOSED_SESSION_QUESTION_TITLE = "the board could not close a worker session — pickup is stopped";
@@ -515,8 +515,9 @@ export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
  *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。`answer` は回答の文 —— workspace の検査だけが読み、
  *  選択肢で盤面の行為を選ぶ(ADR 0373 決定2)。`origin` は回答が届いた面(ADR 0371 決定8)—— 取り込みの event が回答者として残す(spec #3273 の識別子の表 / pin A5)。盤面が書いたことを応答で言う検査は `notice` を返す。
  *  執行が書き込みより先に commit する検査は確認を返し、回答の書き込みと同じ同期区間で条件を読み直す。
- *  資源を検証する検査は返さない —— 資源を確かめるだけで書き込みより先に commit する執行が無く、読み直す条件が立たない(ADR 0343 決定1)。 */
-export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null, answer: string | undefined, origin: EventOrigin) => Promise<void | (() => void) | { notice: string }>>>;
+ *  資源を検証する検査は返さない —— 資源を確かめるだけで書き込みより先に commit する執行が無く、読み直す条件が立たない(ADR 0343 決定1)。
+ *  `withAnswer` は回答の書き込みと同じ transaction の中で撃つ段 —— 投げれば回答ごと巻き戻る(面接室の Quarantine の受理、ADR 0385 決定3・6)。 */
+export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null, answer: string | undefined, origin: EventOrigin) => Promise<void | (() => void) | { notice?: string; withAnswer?: () => void }>>>;
 
 /** kind → 値の集合を agent 名の集合へ写す resolver。合成 root が registry から組む。
  *  無い kind の値は誰も止めない。 */
@@ -621,6 +622,24 @@ export function registerResourceStop(
 ): ResourceStop {
   registerQuarantine(db, quarantine, value, reason, now);
   return { quarantine, value, reason };
+}
+
+/** 面接室の Quarantine の読み口に、面接室を開く未決着の RCA が居る間だけ添える選択肢・本文の説明・捨てられる done の work(ADR 0385 決定5)。
+ *  保存しない —— 表示のたびに記録だけから導き、git を撃たない。回答を受け付けるかは表示に依らず、回答の時点の状態で決まる。 */
+export function roomRcaChoice(db: Db, question: Pick<Task, "id" | "purpose" | "question_items" | "question_quarantine_kind" | "question_quarantine_value">) {
+  const name = question.question_quarantine_value;
+  // 読み口は表示用の status を持つ行を渡すので、答えの済みは保存された status で見る
+  if (question.question_quarantine_kind !== "workspace" || name === null || getTask(db, name)?.type !== "interview" || getTask(db, question.id)!.status !== "todo") return {};
+  const rcas = unsettledOpenersOf(db, name).flatMap((task) => (isRca(db, task.id) ? [task.id] : []));
+  if (rcas.length === 0) return {};
+  const [item, ...rest] = question.question_items!;
+  return {
+    question_items: [{ ...item!, options: [...item!.options, CANCEL_THE_RCAS] }, ...rest],
+    purpose: `${question.purpose}\n\n\`${CANCEL_THE_RCAS}\`: the board cancels, with their unsettled tasks, those of the RCAs ${rcas.join(", ")} whose check above fails, and accepts the answer only if every other check passes.`,
+    // 捨てられる done の work は cancel option の脇に出る(ADR 0271 決定4)
+    question_cancel_option: CANCEL_THE_RCAS,
+    discards: cancelDiscards(db, rcas),
+  };
 }
 
 /** 唯一の登録口で冪等: 鍵が開いていれば何もしない、閉じていれば確認を1枚立てる(ADR 0366 決定1)—— 呼び手は開いているかを

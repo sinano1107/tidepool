@@ -320,6 +320,9 @@ export type EventPayload =
   // origin_question_id is the answered failure question, shared by every task
   // touched by the cascade (including the failed task's own subtree)
   | { kind: "task_cancelled"; origin_question_id: string }
+  // ADR 0385 決定3: 面接室の Quarantine への回答が倒した、読む head の欠けた RCA とその配下 —— origin_question_id は答えた Quarantine の question、
+  // missing_head は RCA が読む欠けた出題の head(盤面が書く)
+  | { kind: "task_cancelled"; origin_question_id: string; missing_head: string }
   // ADR 0121: 再分解が破棄した旧判断の子 —— origin_breach_task_id は前提の破綻を宣言した子
   | { kind: "task_cancelled"; origin_breach_task_id: string }
   // issue #130: a human's direct cancel — the second cancel path (GLOSSARY.md's

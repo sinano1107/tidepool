@@ -705,6 +705,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
     // 述語と同じ1つの配列(3箇所で別々に組み立てない)
     boardState: options.boardState?.paths,
+    quarantineResolvers: options.quarantineResolvers,
   });
   // the auto_if_ci_green poll (issue #11): independent of the scheduler's
   // pickup poll, since it watches external CI state rather than the queue.

@@ -32,6 +32,7 @@ import {
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { displayedEntries, entriesReadBefore, entriesSeenBefore, episodesOfMarkers, mergedPr } from "./precedent.js";
+import { roomRcaChoice } from "./quarantine.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
@@ -1311,6 +1312,7 @@ export function questionAnnotations(
     free_text: !isFixedChoiceQuestion(task),
     settled_by_observation: settledByObservation(db, task),
     discards: questionCancelDiscards(db, task),
+    ...roomRcaChoice(db, task),
   };
 }
 

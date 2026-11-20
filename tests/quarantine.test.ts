@@ -319,7 +319,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).not.toContain("the board can create this interview room");
     expect(purpose).toContain(
       `a git repository exists at the recorded room ${room} — the board does not recreate it: ` +
-        "restore it there, cancel the task that opens it, or answer `run with an empty room` to have the board re-create it empty.",
+        `restore it there, cancel the Interview ${root.id}, or answer \`run with an empty room\` to have the board re-create it empty.`,
     );
   }, GIT_FIXTURE_TEST_TIMEOUT);
   // 旧: 受験者の checkout も記録された場所として「番地を作れる / repo がある」を予告した(ADR 0329 決定4)。ADR 0356 決定1・2 の後は受験者は

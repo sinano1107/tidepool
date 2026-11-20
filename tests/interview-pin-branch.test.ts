@@ -4,8 +4,11 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
-import { quarantineChecks } from "../src/human-verbs.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { questionAnnotations } from "../src/memory.js";
+import { namePickupPredicates } from "../src/pickup-predicates.js";
 import { openQuarantineQuestion, registerQuarantine } from "../src/quarantine.js";
+import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, runTeardown, teardownStep } from "../src/teardown.js";
@@ -29,9 +32,9 @@ import {
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { FakeClock } from "./fakes.js";
+import { FakeAttributionClient, FakeClock, noRetrospectiveCalls, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { answerQuestionViaWebui, commitWork, FULL_HANDOFF, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, sessionId } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, restedInterviewRoom, sessionId } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、root と受験者の task の checkout(ADR 0356 決定1・2 / ADR 0276)。
@@ -891,15 +894,26 @@ it("RCA が読む却下した監査の出題の head が面接室から消える
   db.close();
 });
 
-it("同じ姿で異議の RCA(self と auditor)を cancel すると、面接室の名前への回答は RCA が読んでいた head を検査せずに受理する —— 決着した task は名前を開かない(issue #3136 / ADR 0329 決定4)", async () => {
+// 旧: 失敗 question の abandon で RCA を倒してから答えた。Quarantine の間 RCA は走らず失敗 question も立たないので、その経路は開かない(ADR 0385)
+it("同じ姿で面接室の名前の Quarantine に `cancel the RCAs that need missing objects` と答えると、head の欠けた異議の RCA(self と auditor)が cancelled になって question が閉じ、cancel の event は欠けた head と答えた question を名指し、root と監査は動かず、その後に第2回の帰責が撃たれる(issue #3159 / ADR 0385 決定2・3 / issue #3136)", async () => {
   const db = openDb(":memory:");
   const { room, root, rejected, audit } = await rcaOnRejectedAudit(db);
   dropFromRoom(room, rejected);
   const rcas = listChildren(db, audit.id).filter((child) => child.type === "review");
-  for (const rca of rcas) answerQuestionViaWebui(db, failureQuestion(db, rca.id, NOW), ["abandon"], NOW);
+  registerQuarantine(db, "workspace", root.id, "the place broke", NOW);
+  const question = getTask(db, openQuarantineQuestion(db, "workspace", root.id)!.id)!;
+  const standing = () => [root.id, ...listChildren(db, root.id).map((child) => child.id)].map((id) => getTask(db, id)!.status);
+  const before = standing();
+
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ db }) }, question, [CANCEL_THE_RCAS], undefined, () => NOW, "webui");
 
   expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["cancelled", "cancelled"]);
-  await expect(quarantineChecks({ db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(standing()).toEqual(before);
+  for (const rca of rcas) expect(listEvents(db, rca.id).at(-1)!.payload).toEqual({ kind: "task_cancelled", origin_question_id: question.id, missing_head: rejected });
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, NOW);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(listEvents(db, audit.id).filter((e) => e.payload.kind === "objection_attributed" && e.payload.round === "after_rca")).toHaveLength(1);
   db.close();
 });
 
@@ -1016,10 +1030,232 @@ it.each([
 
   const refused = quarantineChecks({ db }).workspace!(root.id, undefined, "webui");
 
-  await expect(refused).rejects.toThrow(`the posed head ${head} that ${reader.id} reads`);
+  // 旧: 開く task の項は1つで、拒否が読む root を名指した。ADR 0385 決定1 の後は出口ごとに項が分かれ、先に撃つ面接室の root と受験者の項が
+  // 拒否の理由になり、読む root の項は別に落ちる
+  await expect(refused).rejects.toThrow(head);
+  const readerItem = namePickupPredicates(db, root.id, room, base).openers.find((p) => p.describe.includes(`the posed head ${head} that ${reader.id} reads`))!;
+  expect(() => { if (readerItem.phase === "before-open") readerItem.check(); }).toThrow(head);
   const failed = await pickupGate(db, workspace, getTask(db, reader.id)!, base).catch((err: unknown) => err);
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(head);
+  db.close();
+});
+
+// 面接室の Quarantine の出口(issue #3159 / ADR 0385): 項の出口の文は項の持ち主を倒せる人間の扉から導き、読む head が欠けた RCA は回答で倒す
+
+const CANCEL_THE_RCAS = "cancel the RCAs that need missing objects";
+
+/** 面接室の名前の Quarantine を立て、本文の番号つきの検査の一覧を返す。 */
+const quarantineChecksListed = (db: Db, rootId: string) => {
+  registerQuarantine(db, "workspace", rootId, "the place broke", NOW);
+  return getTask(db, openQuarantineQuestion(db, "workspace", rootId)!.id)!.purpose.split("\n").filter((line) => /^\d+\. /.test(line));
+};
+
+it("面接室の Quarantine の本文は、異議の RCA の項に回答の選択肢を、監査・root のブランチ・面接室そのものの項に Interview の root の cancel を出口として名指し、RCA の項は1つずつ並べて「開く task の cancel」を言わない(issue #3159 / ADR 0385 決定1)", async () => {
+  const db = openDb(":memory:");
+  const { root, audit, rejected, latest } = await rcaOnRejectedAudit(db);
+  const rcas = listChildren(db, audit.id).filter((child) => child.type === "review");
+  const latestAudit = listChildren(db, root.id).filter((child) => child.type === "review").at(-1)!;
+
+  const items = quarantineChecksListed(db, root.id);
+
+  for (const rca of rcas) {
+    expect(items.filter((item) => item.includes(rca.id))).toEqual([expect.stringMatching(new RegExp(`the posed head ${rejected} that ${rca.id} reads is present in the interview room — restore it there or answer \`${CANCEL_THE_RCAS}\`\\.$`))]);
+  }
+  expect(items).toContainEqual(expect.stringMatching(new RegExp(`the posed head ${latest} that ${latestAudit.id} reads.* — restore it there or cancel the Interview ${root.id}\\.$`)));
+  expect(items).toContainEqual(expect.stringMatching(new RegExp(`the task branch \`task/${root.id}\` of ${root.id}.* — restore it there or cancel the Interview ${root.id}\\.$`)));
+  expect(items).toContainEqual(expect.stringContaining(`the posed head ${latest} resolves in the interview room — restore it there or cancel the Interview ${root.id}.`));
+  expect(items.join("\n")).not.toContain("cancel the task that opens it");
+  db.close();
+});
+
+type Posed = Awaited<ReturnType<typeof posedInRoom>>;
+
+it.each([
+  ["受験者", async (_db: Db, posed: Posed) => posed.examinees[0]!, (posed: Posed) => posed.root.id],
+  ["根拠に読む root", async (db: Db, posed: Posed) => {
+    const reader = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: posed.workspace.name, evidence_task_ids: [posed.root.id], interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, reader);
+    return reader;
+  }, undefined],
+  ["retry の新しい root", async (db: Db, posed: Posed) => {
+    const again = retryInterviewRoot(db, getTask(db, posed.root.id)!, undefined, NOW, {}, "webui");
+    openTestInterviewRoom(db, again);
+    return again;
+  }, undefined],
+])("%s の (task, 面接室) の項の出口は、その task を倒せる Interview の root の cancel を名指す(issue #3159 / ADR 0385 決定1)", async (_, opening, owner) => {
+  const db = openDb(":memory:");
+  const posed = await posedInRoom(db);
+  const task = await opening(db, posed);
+
+  const { openers } = namePickupPredicates(db, posed.root.id, posed.room, posed.base);
+
+  expect(openers.filter((p) => p.describe.includes(task.id)).map((p) => p.describe)).toEqual([
+    expect.stringMatching(new RegExp(` — restore it there or cancel the Interview ${owner?.(posed) ?? task.id}\\.$`)),
+  ]);
+  db.close();
+});
+
+/** 面接室の名前の Quarantine に答える(回答の transaction の中で撃つ段があれば撃つ)。 */
+async function answerRoom(db: Db, rootId: string, answer: string) {
+  registerQuarantine(db, "workspace", rootId, "the place broke", NOW);
+  const accepted = await quarantineChecks({ db }).workspace!(rootId, answer, "webui");
+  if (accepted && typeof accepted === "object") accepted.withAnswer?.();
+}
+
+it("開く未決着の task が無く済まなかった解放も無い面接室の Quarantine は、面接室ごと消えていても `repaired by hand` で受理される —— 面接室そのものの項も repo を読む検査も撃たない(issue #3159 / ADR 0385 決定6)", async () => {
+  const { db, root, room } = await restedInterviewRoom("room-gone-no-openers", false);
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");
+  rmSync(room.path, { recursive: true });
+
+  await expect(answerRoom(db, root.id, "repaired by hand")).resolves.toBeUndefined();
+  db.close();
+});
+
+it("開く未決着の task は無くても済まなかった解放が残る面接室の Quarantine は、面接室そのものの項を撃ち、面接室ごと消えていれば拒む(issue #3159 / ADR 0385 決定6)", async () => {
+  const db = openDb(":memory:");
+  const { root, room } = await pickedRoot(db, "room-gone-owed-release");
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");
+  rmSync(room.path, { recursive: true });
+
+  await expect(answerRoom(db, root.id, "repaired by hand")).rejects.toThrow(`a git repository exists at the recorded room ${room.path}`);
+  db.close();
+});
+
+it("開く未決着の task が残る面接室の Quarantine は、今どおり面接室そのものの項を撃ち、面接室ごと消えていれば拒む(issue #3159 / ADR 0385 決定6)", async () => {
+  const { db, root, room } = await restedInterviewRoom("room-gone-root-alive", false);
+  rmSync(room.path, { recursive: true });
+
+  await expect(answerRoom(db, root.id, "repaired by hand")).rejects.toThrow(`a git repository exists at the recorded room ${room.path}`);
+  db.close();
+});
+
+/** 面接室の名前の Quarantine に新しい回答で答える直前の姿: 異議の RCA(self と auditor)と、木の event の数を返す関数。 */
+async function rcasBeforeAnswer(db: Db) {
+  const standing = await rcaOnRejectedAudit(db);
+  const rcas = listChildren(db, standing.audit.id).filter((child) => child.type === "review");
+  registerQuarantine(db, "workspace", standing.root.id, "the place broke", NOW);
+  const question = openQuarantineQuestion(db, "workspace", standing.root.id)!;
+  const tree = () => [standing.root.id, question.id, ...listChildren(db, standing.root.id).map((child) => child.id), ...rcas.map((rca) => rca.id)];
+  const written = () => tree().flatMap((id) => listEvents(db, id)).length;
+  return { ...standing, rcas, question, written };
+}
+
+/** 新しい回答への検査(受理なら回答の transaction の段まで撃つ)。 */
+async function answerCancelTheRcas(db: Db, rootId: string) {
+  const accepted = await quarantineChecks({ db }).workspace!(rootId, CANCEL_THE_RCAS, "webui");
+  if (accepted && typeof accepted === "object") accepted.withAnswer?.();
+}
+
+it("項の落ちた RCA と一緒に root のブランチの項も落ちていれば、新しい回答はその項を名指して何も書かずに拒み、RCA は todo のまま(issue #3159 / ADR 0385 決定3)", async () => {
+  const db = openDb(":memory:");
+  const { room, root, rejected, rcas, written } = await rcasBeforeAnswer(db);
+  dropFromRoom(room, rejected);
+  const tip = git(room.path, "rev-parse", `task/${root.id}`);
+  dropObject(room, tip);
+  const before = written();
+
+  await expect(answerCancelTheRcas(db, root.id)).rejects.toThrow(`task/${root.id}`);
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+  expect(written()).toBe(before);
+  db.close();
+});
+
+it("項の落ちた RCA が居なければ、新しい回答は何も書かずに拒む(issue #3159 / ADR 0385 決定2)", async () => {
+  const db = openDb(":memory:");
+  const { root, rcas, written } = await rcasBeforeAnswer(db);
+  const before = written();
+
+  await expect(answerCancelTheRcas(db, root.id)).rejects.toThrow(`no RCA that opens the interview room ${root.id} needs missing objects`);
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+  expect(written()).toBe(before);
+  db.close();
+});
+
+it("倒す RCA の配下に開いた失敗 question があれば、新しい回答はその question を名指して何も書かずに拒む(issue #3159 / ADR 0385 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { room, root, rejected, rcas, written } = await rcasBeforeAnswer(db);
+  dropFromRoom(room, rejected);
+  const failure = failureQuestion(db, rcas[0]!.id, NOW);
+  const before = written();
+
+  await expect(answerCancelTheRcas(db, root.id)).rejects.toThrow(failure.id);
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+  expect(written()).toBe(before);
+  db.close();
+});
+
+it("面接室ごと消え root を cancel した後も RCA が残れば、選択肢が保存されていなくても新しい回答で RCA が cancelled になり、面接室そのものの項も repo を読む検査も撃たずに受理する(issue #3159 / ADR 0385 決定2・5・6)", async () => {
+  const db = openDb(":memory:");
+  const { room, root, rcas, question } = await rcasBeforeAnswer(db);
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");
+  rmSync(room.path, { recursive: true });
+
+  expect(getTask(db, question.id)!.question_items![0]!.options).not.toContain(CANCEL_THE_RCAS);
+  await expect(answerCancelTheRcas(db, root.id)).resolves.toBeUndefined();
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["cancelled", "cancelled"]);
+  db.close();
+});
+
+it("面接室ごと消えても root が生きていれば、新しい回答は面接室そのものの項で何も書かずに拒み、拒否文は残る開く task を名指して root の cancel を先に案内する(issue #3159 / ADR 0385 決定3)", async () => {
+  const db = openDb(":memory:");
+  const { room, root, rcas, written } = await rcasBeforeAnswer(db);
+  rmSync(room.path, { recursive: true });
+  const before = written();
+
+  const refused = answerCancelTheRcas(db, root.id);
+
+  await expect(refused).rejects.toThrow(`a git repository exists at the recorded room ${room.path}`);
+  await expect(refused).rejects.toThrow(new RegExp(`${root.id}.* still open the interview room ${root.id} after this answer — cancel the Interview ${root.id} first, then answer \`${CANCEL_THE_RCAS}\` again\.`));
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+  expect(written()).toBe(before);
+  db.close();
+});
+
+/** 面接室の名前の Quarantine の question の読み口が見せる選択肢・本文・捨てられる work。 */
+function displayed(db: Db, name: string) {
+  const question = getTask(db, openQuarantineQuestion(db, "workspace", name)!.id)!;
+  const shown = { ...question, ...questionAnnotations(db, question) };
+  return { stored: question, options: shown.question_items![0]!.options, purpose: shown.purpose, cancelOption: shown.question_cancel_option, discards: shown.discards };
+}
+
+it("面接室の Quarantine の選択肢と本文の説明は、面接室を開く未決着の RCA が居る間だけ読み口に現れ —— Quarantine の後に RCA が立っても現れ —— question には保存されない(issue #3159 / ADR 0385 決定5)", async () => {
+  const db = openDb(":memory:");
+  const { root, audit } = await auditStanding(db);
+  completeAudit(db, audit, { verdict: "rejected", findings: "the probe leaks the real environment" }, "fugu", NOW, "worker");
+  registerQuarantine(db, "workspace", root.id, "the place broke", NOW);
+
+  const before = displayed(db, root.id);
+  const rca = rcaUnderAudit(db, getTask(db, audit.id)!);
+  const after = displayed(db, root.id);
+
+  expect(before.options).not.toContain(CANCEL_THE_RCAS);
+  expect(before.purpose).not.toContain(CANCEL_THE_RCAS);
+  expect(after.options).toContain(CANCEL_THE_RCAS);
+  expect(after.purpose).toContain(`\`${CANCEL_THE_RCAS}\`: `);
+  expect(after.purpose).toContain(rca.id);
+  expect(after.cancelOption).toBe(CANCEL_THE_RCAS);
+  expect(after.discards).toEqual([]);
+  expect(after.stored.question_items![0]!.options).not.toContain(CANCEL_THE_RCAS);
+  expect(after.stored.purpose).not.toContain(CANCEL_THE_RCAS);
+  db.close();
+});
+
+it("実環境の workspace の Quarantine の読み口には、RCA を倒す選択肢が現れない(issue #3159 / ADR 0385 決定5)", async () => {
+  const db = openDb(":memory:");
+  registerQuarantine(db, "workspace", "sandbox", "the place broke", NOW);
+
+  expect(displayed(db, "sandbox").options).not.toContain(CANCEL_THE_RCAS);
+  db.close();
+});
+
+it("選択肢が表示されていない —— 面接室を開く RCA が居ない —— ときに同じ文言で答えると、倒す RCA が無いので拒む(issue #3159 / ADR 0385 決定5)", async () => {
+  const db = openDb(":memory:");
+  const { root } = await auditStanding(db);
+  registerQuarantine(db, "workspace", root.id, "the place broke", NOW);
+
+  expect(displayed(db, root.id).options).not.toContain(CANCEL_THE_RCAS);
+  await expect(answerCancelTheRcas(db, root.id)).rejects.toThrow(`no RCA that opens the interview room ${root.id} needs missing objects`);
   db.close();
 });

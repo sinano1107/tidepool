@@ -1887,19 +1887,20 @@ export interface CancelDefaults extends ResourceStopDefaults {
  *  It reads the cascade's felled range (`cancelScope`, ADR 0301 決定4): what the cancel leaves standing gates
  *  nothing; what it fells gates, including the work beneath a surviving RCA. The quarantine
  *  half reads only unsettled rows, as the cascade marks only those: a settled review holds no resource. */
-function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
+export function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults, doing = "directly cancel"): void {
   const felled = JSON.stringify(cancelScope(db, [taskId], { throughExaminees: false }).map((task) => task.id));
   const failure = db
     .prepare(
-      `SELECT 1 FROM tasks q
+      `SELECT q.id FROM tasks q
        WHERE q.type = 'question' AND q.status = 'todo'
          AND q.question_cancel_option IS NOT NULL
          AND q.id IN (SELECT value FROM json_each(@felled)) LIMIT 1`,
     )
-    .get({ felled });
+    .pluck()
+    .get({ felled }) as string | undefined;
   if (failure) {
     throw new DomainError(
-      "cannot directly cancel while an open Tidepool question with a cancel option (a failure or premise breach question) " +
+      `cannot ${doing} while an open Tidepool question with a cancel option (a failure or premise breach question, ${failure}) ` +
         "stands over this subtree — answer it first; that answer is the only gate",
     );
   }
@@ -1923,7 +1924,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
     });
   if (quarantine) {
     throw new DomainError(
-      "cannot directly cancel while an open quarantine confirmation stands over this subtree's " +
+      `cannot ${doing} while an open quarantine confirmation stands over this subtree's ` +
         "resource — answer it first; that answer is the only gate",
     );
   }
@@ -1962,6 +1963,20 @@ export function cancelTaskDirectly(
   });
   if (stopApproval && assertCancelStopApproval(db, cancelScope(db, [task.id], { throughExaminees: true }), stopApproval.taskId)) stopApproval.stop(cancel);
   else cancel();
+}
+
+/** 面接室の Quarantine への回答が、読む head の欠けた RCA を配下の未決着ごと倒す(ADR 0385 決定2・3)。直接 cancel の範囲(ADR 0198)は
+ *  広げない —— 呼び手が直接 cancel と同じ門(`assertNoGatingQuestion`)を当ててから、回答と同じ transaction で呼ぶ。event は欠けた head と
+ *  答えた question を名指す。 */
+export function cancelRcasByAnswer(db: Db, rcas: Array<{ id: string; head: string }>, questionId: string, now: Date, origin: EventOrigin): void {
+  for (const { id, head } of rcas) {
+    cancelUnsettledSubtree(db, [id], HUMAN_ACTOR_ID, now, { kind: "task_cancelled", origin_question_id: questionId, missing_head: head }, origin);
+  }
+}
+
+/** cancel が根たちから倒す未決着の task の id(cascade と同じ範囲)。 */
+export function unsettledCancelScope(db: Db, rootIds: string[]): string[] {
+  return cancelScope(db, rootIds, { throughExaminees: true }).flatMap((task) => (isSettled(task.status) ? [] : [task.id]));
 }
 
 /** cancel が倒す範囲の1件。done は範囲に入っても触らない(捨てるものとして数える)。 */
@@ -2018,7 +2033,7 @@ export interface Discard {
  *  人間でない)だけを盤面の順で。範囲は cascade と同じ `cancelScope`(ADR 0301 決定4)で、
  *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
  *  系譜に入らない。表示時に読み、保存しない。 */
-function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
+export function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
   const done = cancelScope(db, rootIds, { throughExaminees: false }).filter((task) => task.type === "work" && task.status === "done" && !task.underCancelled);
   const rows = db
     .prepare(
