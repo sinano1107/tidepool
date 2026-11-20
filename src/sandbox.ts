@@ -431,7 +431,7 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
         denyRead: ["/"],
         // ADR 0033 Status addendum (#3211): no host git config location is re-opened. The re-allow existed because git
         // died with `fatal` without `~/.gitconfig`; ADR 0358 決定2's `GIT_CONFIG_GLOBAL=/dev/null` removed that, and
-        // `~/.config/git` is git-credential-store's default home, so "config, never credentials" never held per directory.
+        // git-credential-store also reads `~/.config/git/credentials`, so "config, never credentials" never held per directory.
         allowRead: [
           workspacePath,
           taskTemp,
