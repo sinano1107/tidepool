@@ -17,7 +17,10 @@ checkout —— その blob の最後の写し —— が消えた。門の前�
    名前の場所は commit を既に持つので何も送られない(実測)。名前の場所そのもので `index-pack` を撃つと、同じ id の壊れた loose が
    在るとき `cannot read existing object info` で落ちる(実測、git 2.47)。pack を組む段も index する段も名前の場所の filesystem の上で
    走らせ、最後の置き換えを同じ filesystem の rename にする。確かめの `pack-objects` も名前の場所を借りる使い捨ての repo で撃ち、
-   名前の場所に一時 file を書かない。揃わなければ運べなかったので、各入口の今の「名前の場所へ運ぶ段が落ちた」
+   名前の場所に一時 file を書かない。入れ直した後、集合のうち loose として読めない名前の場所の loose file は、消さずに名前の場所の
+   objects の内の退避先(`tidepool-damaged-*`)へ移してから確かめ直す —— git 2.56 の streaming は小さな blob で pack より loose を先に
+   開くので、途中で切れた loose が正しい pack の前に立ち、確かめが通っても `cat-file -p` は読めない(git の source、CI で観測)。
+   確かめ直しは pack を先に読む形と loose だけを読む形の両方で撃つ。揃わなければ運べなかったので、各入口の今の「名前の場所へ運ぶ段が落ちた」
    扱いに従う。
 3. **完了の門の除外(ADR 0364 決定1)は変えない。** 除外で取りこぼした object は決定1 の確かめが捕まえ、決定2 が補う。門の pack を
    決定1 の集合に変えると、worker が `-l` 無しに repack しただけで集合が閉包全体に膨らみ、門が上限超過で task を落としうる。
