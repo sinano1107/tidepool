@@ -1066,6 +1066,40 @@ export function hasTaskBranch(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_branch_created") !== undefined;
 }
 
+/** ADR 0375 決定2: 失われた event(`task_branch_lost`)は、その後に `task_branch_created` が無い間だけ効く。効いていればその event。 */
+export function taskBranchLostInForce(db: Db, taskId: string) {
+  const lost = latestEventOfTask(db, taskId, "task_branch_lost");
+  if (!lost) return undefined;
+  return (latestEventOfTask(db, taskId, "task_branch_created")?.id ?? 0) > lost.id ? undefined : lost;
+}
+
+/** 作成の箇所(ADR 0372 決定3 の固定、`start_work`)が読む「タスクブランチを持つ」—— 失われた event が効いていれば持たず、作り直す
+ *  (spec #3273 group H)。Edit の凍結(ADR 0372 決定5)は前の `task_branch_created` のまま `hasTaskBranch` で読む。 */
+export function hasLiveTaskBranch(db: Db, taskId: string): boolean {
+  return hasTaskBranch(db, taskId) && !taskBranchLostInForce(db, taskId);
+}
+
+/** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。 */
+const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr_merge_observed", "landing_finished"];
+
+/** ADR 0380 決定1: 効いている失われた event `lost` を持つ done の work は、失われた sha が作成時の sha と同じ(handoff だけ)か、内容が
+ *  保護ブランチに届いた記録を自身か数える祖先(`counted`)が持ち、その記録より前に完了していれば透明、それ以外は死んだ。記録だけで読む ——
+ *  作成時の sha を持たない `task_branch_created`(この event の前に作られたブランチ)は編集があった側。 */
+export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[]): boolean {
+  if (latestEventOfTask(db, taskId, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha) return true;
+  const completed = latestEventOfTask(db, taskId, "task_completed");
+  if (!completed) return false;
+  const holders = [taskId, ...counted];
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM events WHERE task_id IN (${holders.map(() => "?").join(", ")})
+          AND kind IN (${REACHED_PROTECTED_BRANCH_KINDS.map(() => "?").join(", ")}) AND id > ?`,
+      )
+      .get(...holders, ...REACHED_PROTECTED_BRANCH_KINDS, completed.id) !== undefined
+  );
+}
+
 /** 人間担当の work か —— 着地の根では「人間の根」(ADR 0374 決定13): profile を引かず、常に merge question で着地する。 */
 export function isHumanAssigned(task: Pick<Task, "assignee">): boolean {
   return task.assignee === HUMAN_ACTOR_ID;

@@ -1949,15 +1949,17 @@ it("workspace を解決できない、親を持つ完了 work は、workspace �
   expect(quarantineQuestion(db, "workspace", "ghost")).toBeDefined();
 });
 
-it("lineage が読めない完了 work は、その根の失敗として失敗 question を1枚立て、他の根は着地する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-lineage-unreadable");
+it("完了した親のタスクブランチが失われて死んでいれば、子は帰り先なしで着地の根にならず失敗 question も立たず、他の根は着地する(ADR 0380 決定3)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-lineage-lost-parent");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
-  // 完了した親は task_branch_created を持つのにタスクブランチが無いので、子の lineage を解く git が失敗する
+  // 完了した親のタスクブランチは give-up で失われ、作成時と違う sha を失った(死んだ)—— 子の系譜はその ref を git で読まない
   const parent = landingWork(db, clock);
   seedTaskBranch(db, workspace, parent.id);
+  const lostEdit = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "the parent's lost edit");
   git(workspace.path, "branch", "-D", `task/${parent.id}`);
+  appendEvent(db, { taskId: parent.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: lostEdit }, at: clock.now() });
   const child = attachUnsettledChild(db, clock, parent.id);
   git(workspace.path, "branch", `task/${child.id}`);
   finish(db, clock, child);
@@ -1969,7 +1971,7 @@ it("lineage が読めない完了 work は、その根の失敗として失敗 q
 
   const verdicts = await landing.converge();
 
-  expect(verdicts.find((root) => root.taskId === child.id)?.verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  expect(verdicts.find((root) => root.taskId === child.id)).toBeUndefined();
   expect(verdicts.find((root) => root.taskId === healthy.id)?.verdict).toMatchObject({ kind: "landed", form: "pull_request_opened" });
-  expect(promotionFailures(db, child.id)).toHaveLength(1);
+  expect(promotionFailures(db, child.id)).toEqual([]);
 });
