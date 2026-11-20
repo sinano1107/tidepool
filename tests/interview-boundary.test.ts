@@ -439,7 +439,7 @@ it.each(["directory", "repository"])("出題した根拠の root の面接室の
   const empty = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["created by hand"] });
   expect(empty.status).toBe(409);
   // 旧: 出題の head が引けないと拒んだ。ADR 0373 決定1 の後は、それより前の比較が空の repo の消えた ref を名指して拒む
-  expect(empty.json.error).toContain("The board does not accept moved refs.");
+  expect(empty.json.error).toContain("refs changed since the board's baseline");
   rmSync(moved, { recursive: true });
 
   // 解除後の読みに渡る path は実 adapter の spawn 設定で見る。quarantine 中の同じ盤面を引き継ぐ

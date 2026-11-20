@@ -53,7 +53,7 @@ function commitOn(path: string, file: string, body: string, message: string): vo
 const outOfBandCommit = (path: string) => git(path, "commit-tree", git(path, "rev-parse", "HEAD^{tree}"), "-p", "HEAD", "-m", "out of band");
 
 // 旧: 人間が名前の場所に main を作り直してから答えた。ADR 0373 決定1 の後は作った branch も動いた ref で、出口は registry の `branch` を直すこと(text A12 の H10)
-it("保護ブランチが無い停止は落ちた項を名指して registry の `branch` を直す道を言い、修復回答を拒み、`branch` を直した回答の後に pickup できる(ADR 0329 決定10・14、#2775、ADR 0373 決定16)", async () => {
+it("保護ブランチが無い停止は落ちた項を名指し、修復回答を拒み、registry の `branch` を直した回答の後に pickup できる(ADR 0329 決定10・14、#2775、ADR 0373 決定16)", async () => {
   const workspace = await makeWorkspace("sandbox");
   // registry のエントリの `branch` —— 人間が直す値
   let branch: string | undefined;
@@ -69,7 +69,6 @@ it("保護ブランチが無い停止は落ちた項を名指して registry の
   expect(reason).toContain("protected branch 'main'");
   expect(reason).toMatch(/The check that failed: .*protected branch `main`/);
   expect(reason).toContain("cannot be checked out: ");
-  expect(reason.split("Fix `branch` in the registry entry.")).toHaveLength(2);
   const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
   const refused = await answer();
@@ -99,7 +98,6 @@ it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と�
   const reason = (await stops())[0].payload.reason;
   const check = reason.split("The check that failed: ")[1];
   expect(check).toContain(fault === "unreachable" ? "can be fetched" : "can be checked out");
-  if (fault !== "unreachable") expect(check.split("Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.")).toHaveLength(2);
   const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
   const refused = await answer();

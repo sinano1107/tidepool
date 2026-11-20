@@ -329,7 +329,10 @@ it("ref を動かさない直し方(text A12): dirty な tree の拒否は捨て
   await expect(answer(db, ws, "repaired by hand")).rejects.toThrow(`workspace ${ws.name} still has uncommitted changes. ${DISCARD}`);
   git(ws.path, "checkout", "--", "README.md");
   await expect(answer(db, { ...ws, branch: "missing" }, "repaired by hand")).rejects.toThrow(`protected branch 'missing' cannot be checked out`);
-  await expect(answer(db, { ...ws, branch: "missing" }, "repaired by hand")).rejects.toThrow(`If the branch is missing: ${FIX_BRANCH}`);
+  const missing = await refusal(answer(db, { ...ws, branch: "missing" }, "repaired by hand"));
+  expect(missing).toContain(`If the branch is missing: ${FIX_BRANCH}`);
+  // 直し方は落ちた項の説明に1度だけ載る
+  expect(missing.split(FIX_BRANCH)).toHaveLength(2);
 
   expect(question.purpose).toContain(`Discard uncommitted changes with \`git restore --staged --worktree .\``);
   expect(question.purpose).toContain(`If the branch is missing: ${FIX_BRANCH}`);
