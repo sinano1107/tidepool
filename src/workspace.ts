@@ -119,9 +119,9 @@ import {
   derivedWorkspaceSql,
   fillEmptyWorkspace,
   getTask,
-  hasLiveTaskBranch,
   hasStartedWork,
   hasTaskBranch,
+  hasTaskBranchInForce,
   holdsFirstCaptures,
   interviewRole,
   interviewRoomPath,
@@ -1621,9 +1621,10 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
 /** ADR 0374 決定8: H の帰り先 —— `parent_id` でなく系譜で決まり、非根は系譜の `task/<P>`、根は保護ブランチ —— の ref・名前・今の値。
  *  ADR 0374 決定6: その値は取り込みと完了の内容の検査の入力の tip でもある。 */
 function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task, verb: "take in" | "complete"): { lineage: string | undefined; ref: string; name: string; sha: string } {
-  const { branch: lineage, noReturn } = resolveTaskBranchLineage(db, named, task);
-  // ADR 0380 決定3: 帰り先なしを保護ブランチと読まない —— 未決着の祖先なら `start_work` の固定が作り直す(spec #3273 group H)
-  if (noReturn) throw new DomainError(`cannot ${verb}: a task branch this task returns into was lost — run start_work to create it again, then ${verb} again.`);
+  // ADR 0380 決定3: 帰り先なしを保護ブランチと読まない
+  const lost = noReturnAncestor(db, named, task);
+  if (lost) throw new DomainError(lostBranchRefusal(verb, `${taskBranch(lost.id)}, the branch this task returns into,`, !isSettled(lost.status)));
+  const lineage = lineageTaskBranch(db, named, task);
   const ref = lineage ? `refs/heads/${lineage}` : exactProtectedBranchRef(named);
   return { lineage, ref, name: lineage ?? protectedBranch(named), sha: git(named.path, "rev-parse", "--verify", ref) };
 }
@@ -2071,7 +2072,7 @@ function fixUnstartedAncestors(db: Db, workspace: WorkspaceConfig, task: Task, d
   for (const ancestor of ancestorsFromTop(db, task)) {
     const name = ancestor.workspace ?? nearestFilledAncestor(db, ancestor.parent_id)?.workspace ?? defaultWorkspaceName;
     const unfixed =
-      name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) && !hasLiveTaskBranch(db, ancestor.id);
+      name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) && !hasTaskBranchInForce(db, ancestor.id);
     if (unfixed) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, filledFrom(db, ancestor));
   }
 }
@@ -2088,16 +2089,22 @@ function countedAncestors(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "
 }
 
 /** ADR 0380 決定3: 帰り先なし —— 数える祖先に、効いている失われた event を持ち透明でない祖先がいる(死んだ祖先。間に無事な祖先を挟んでも)。
- *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。記録だけで読み、git を当てない。 */
-export function lineageHasNoReturn(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">): boolean {
-  if (transparentToLineage(task.type)) return false;
+ *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。 */
+export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">): Task | undefined {
+  if (transparentToLineage(task.type)) return undefined;
   const counted: string[] = [];
   for (const ancestor of countedAncestors(db, workspace, task)) {
     const lost = taskBranchLostInForce(db, ancestor.id);
-    if (lost && !(ancestor.status === "done" && lostTaskIsTransparent(db, ancestor.id, lost, counted))) return true;
+    if (lost && !(ancestor.status === "done" && lostTaskIsTransparent(db, ancestor.id, lost, counted))) return ancestor;
     counted.push(ancestor.id);
   }
-  return false;
+  return undefined;
+}
+
+/** spec #3273 group H(pin C21): 失われたタスクブランチ `branch` で人間の扉が拒む文。`recreate` は `start_work` の固定が作り直せる
+ *  (未決着の task —— ADR 0372 決定3 の固定は未決着の祖先だけを作る)ときだけ案内する。 */
+export function lostBranchRefusal(verb: string, branch: string, recreate: boolean): string {
+  return `cannot ${verb}: ${branch} was lost when the lost refs were given up${recreate ? ` — run start_work to create it again, then ${verb} again` : ""}.`;
 }
 
 /** ADR 0053 / ADR 0105: the live integration branch plus the lineage fact a
@@ -2128,7 +2135,7 @@ export function resolveTaskBranchLineage(
     };
   }
 
-  if (lineageHasNoReturn(db, workspace, task)) return { branch: undefined, outlivedForkSource: false, noReturn: true };
+  if (noReturnAncestor(db, workspace, task)) return { branch: undefined, outlivedForkSource: false, noReturn: true };
   let candidate: string | undefined;
   let outlivedForkSource = false;
   for (const ancestor of countedAncestors(db, workspace, task)) {
@@ -2148,8 +2155,9 @@ export function resolveTaskBranchLineage(
   return { branch: candidate, outlivedForkSource };
 }
 
-/** ADR 0053: the nearest work branch in the task's live lineage, or undefined
- *  when the protected branch is the bottom of that lineage — or when it has no return (ADR 0380 決定3): merge back を撃たない読み手だけが使う。 */
+/** ADR 0053: the nearest work branch in the task's live lineage, or undefined —— the protected branch is the bottom of that lineage, or it has
+ *  no return (ADR 0380 決定3). Its callers (merge back at release and at the acceptance's redo, the closed root) skip both: they act only
+ *  on an ancestor's branch. A caller that would read undefined as the protected branch uses `resolveTaskBranchLineage`. */
 export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
@@ -2232,7 +2240,7 @@ function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: D
   if (!taskBranchExists(workspace, task.id)) {
     const source = taskForkSource(db, workspace, task);
     boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
-  } else if (hasLiveTaskBranch(db, task.id)) return;
+  } else if (hasTaskBranchInForce(db, task.id)) return;
   const sha = git(workspace.path, "rev-parse", ref);
   // ADR 0273 決定8: 面接室で切る task も列の実環境の名前を残す
   const name = task.workspace ?? workspace.name;

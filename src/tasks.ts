@@ -1075,16 +1075,18 @@ export function taskBranchLostInForce(db: Db, taskId: string) {
 
 /** 作成の箇所(ADR 0372 決定3 の固定、`start_work`)が読む「タスクブランチを持つ」—— 失われた event が効いていれば持たず、作り直す
  *  (spec #3273 group H)。Edit の凍結(ADR 0372 決定5)は前の `task_branch_created` のまま `hasTaskBranch` で読む。 */
-export function hasLiveTaskBranch(db: Db, taskId: string): boolean {
+export function hasTaskBranchInForce(db: Db, taskId: string): boolean {
   return hasTaskBranch(db, taskId) && !taskBranchLostInForce(db, taskId);
 }
 
-/** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。 */
+/** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。ADR 0380 決定1: 失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。 */
 const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr_merge_observed", "landing_finished"];
 
 /** ADR 0380 決定1: 効いている失われた event `lost` を持つ done の work は、失われた sha が作成時の sha と同じ(handoff だけ)か、内容が
- *  保護ブランチに届いた記録を自身か数える祖先(`counted`)が持ち、その記録より前に完了していれば透明、それ以外は死んだ。記録だけで読む ——
- *  作成時の sha を持たない `task_branch_created`(この event の前に作られたブランチ)は編集があった側。 */
+ *  保護ブランチに届いた記録を自身か数える祖先(`counted`)が持ち、その記録より前に完了していれば透明、それ以外は死んだ。記録だけで読む。
+ *  ADR 0375 決定2: 作成時の sha を持たない `task_branch_created`(この event の前に作られたブランチ)は編集があった側。
+ *  ADR 0380 Status 追記(#3297): 数える記録は失われた event より前のもの —— 失われた後の記録は失われた内容を運べない(届いた merge back は
+ *  tip の object を残す、ADR 0375 決定1)ので、透明か死んだかは失われた時点で決まり、生きている根が後で着地しても変わらない(同 決定6)。 */
 export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[]): boolean {
   if (latestEventOfTask(db, taskId, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha) return true;
   const completed = latestEventOfTask(db, taskId, "task_completed");
@@ -1094,9 +1096,9 @@ export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number
     db
       .prepare(
         `SELECT 1 FROM events WHERE task_id IN (${holders.map(() => "?").join(", ")})
-          AND kind IN (${REACHED_PROTECTED_BRANCH_KINDS.map(() => "?").join(", ")}) AND id > ?`,
+          AND kind IN (${REACHED_PROTECTED_BRANCH_KINDS.map(() => "?").join(", ")}) AND id > ? AND id < ?`,
       )
-      .get(...holders, ...REACHED_PROTECTED_BRANCH_KINDS, completed.id) !== undefined
+      .get(...holders, ...REACHED_PROTECTED_BRANCH_KINDS, completed.id, lost.id) !== undefined
   );
 }
 

@@ -55,8 +55,8 @@ import {
   compareRefsBeforeLanding,
   FirstCaptureRefusedError,
   type IntakeContext,
-  lineageHasNoReturn,
   lineageTaskBranch,
+  noReturnAncestor,
   outsideCommitsStop,
   outsidePushRefusal,
   PromotionStopError,
@@ -303,7 +303,7 @@ function leftBehindTargets(db: Db, workspace: WorkspaceConfig, taskId: string): 
       .all({ root: taskId }) as string[]
   ).filter(
     // ADR 0375 決定6 / ADR 0380 決定3: 生きている根の積み残しに、死んだ task も帰り先なしの task も数えない —— 失われた ref は git で読まない
-    (id) => !taskBranchLostInForce(db, id) && !lineageHasNoReturn(db, workspace, getTask(db, id)!) && taskBranchExists(workspace, id),
+    (id) => !taskBranchLostInForce(db, id) && !noReturnAncestor(db, workspace, getTask(db, id)!) && taskBranchExists(workspace, id),
   );
 }
 
