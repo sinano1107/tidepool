@@ -1576,7 +1576,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;
     }
-    sendJson(res, result.value);
+    sendJson(res, result.value satisfies WireContract["POST /api/tasks/:id/complete"]);
   });
 
   // ADR 0374 決定2: 書き始める(`start_work`)—— 人間面だけの扉。応答は作業台の在り処
