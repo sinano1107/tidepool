@@ -21,6 +21,7 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -335,6 +336,113 @@ it("the CI tick asks when the diff of the pushed PR head cannot be read", async 
   expect(t.github.merged).toEqual([]);
 });
 
+it.each(["at PR open", "at the CI tick"])("the PR's live base governs %s even if the board's cached base is stale", async (when) => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
+  });
+  const task = await registerWork(t, "ship the feature");
+  const checkout = checkoutOf(t.db, task.id);
+  commitWork(checkout, "CODEOWNERS", "* @maintainer\n");
+  const liveBase = git(checkout, "rev-parse", "HEAD");
+  git(checkout, "rm", "CODEOWNERS");
+  commitWork(checkout, "feature.txt", "finished\n");
+  // Advance the remote base while leaving the board's copy at the original base.
+  const advanceBase = () => git(workspace.repo!, "update-ref", "refs/heads/main", liveBase);
+  if (when === "at PR open") {
+    const create = t.github.createPullRequest.bind(t.github);
+    t.github.createPullRequest = async (input) => {
+      advanceBase();
+      return create(input);
+    };
+  }
+  await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
+
+  if (when === "at the CI tick") {
+    expect(await questions(t)).toEqual([]);
+    advanceBase();
+    t.github.scriptCiStatus("success");
+    await t.clock.advance(MINUTE);
+  }
+
+  expect(await questions(t)).toMatchObject([
+    { status: "todo", question_pending_merge_pr: 1, purpose: expect.stringContaining("CODEOWNERS") },
+  ]);
+  expect(t.github.merged).toEqual([]);
+});
+
+it("a replacement merge question names human merge paths in the outside head it asks about", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
+  });
+  const { task, question } = await completeUnderEscalate(t);
+  const clone = await tempDir("tidepool-outside-head-");
+  const branch = `task/${task.id}`;
+  git(clone, "clone", "--branch", branch, workspace.repo!, ".");
+  commitWork(clone, "CODEOWNERS", "* @maintainer\n");
+  git(clone, "push", "origin", branch);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["merge"] });
+
+  expect(answered.status).toBe(409);
+  const open = (await questions(t)).filter((candidate) => candidate.status === "todo");
+  expect(open).toMatchObject([{ question_pending_merge_pr: 1, purpose: expect.stringContaining("CODEOWNERS") }]);
+  expect(open[0].id).not.toBe(question.id);
+});
+
+it.each([
+  ["missing", undefined, "could not compare this PR head"],
+  ["retargeted", "different-base", 'This PR targets "different-base"'],
+] as const)("the CI tick asks about a %s PR base instead of using the cached protected branch", async (_, branch, explanation) => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
+  });
+  const task = await registerWork(t, "ship the feature");
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
+  const read = t.github.readPullRequest.bind(t.github);
+  t.github.readPullRequest = async (ref) => {
+    const pr = await read(ref);
+    if (pr.state === "unreadable") return pr;
+    return { ...pr, base: branch === undefined ? undefined : { branch, sha: pr.base!.sha } };
+  };
+  await t.clock.advance(MINUTE);
+
+  expect(await questions(t)).toMatchObject([
+    { status: "todo", question_pending_merge_pr: 1, purpose: expect.stringContaining(explanation) },
+  ]);
+  expect(t.github.merged).toEqual([]);
+});
+
+it("a queued PR stays external if the dial changes during merge token acquisition", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  let merge: "auto_if_ci_green" | "external" = "auto_if_ci_green";
+  t = await bootTidepool({ workspace, resolveAuthority: () => ({ name: "standard", guidance: "", merge }) });
+  const task = await registerWork(t, "ship the feature");
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
+
+  const runMerge = t.github.mergePullRequest.bind(t.github);
+  t.github.mergePullRequest = async (ref, head, beforeMerge) => {
+    merge = "external";
+    await runMerge(ref, head, beforeMerge);
+  };
+  await t.clock.advance(MINUTE);
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "auto_merge_withdrawn" })]));
+  expect(await questions(t)).toEqual([]);
+  expect(t.github.merged).toEqual([]);
+});
+
 it.each([
   ["merge", "scriptMergedOutside", "pr_merge_observed"],
   ["close", "scriptClosedOutside", "pr_close_observed"],
@@ -346,11 +454,12 @@ it.each([
   });
   const { question } = await completeUnderEscalate(t);
   t.github[script](1);
+  const readsAtOpen = t.github.stateChecks.length;
 
   // 60秒面は一切広げない — CI poll の周期では走査は動かない
   await t.clock.advance(MINUTE);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(t.github.stateChecks).toEqual([]);
+  expect(t.github.stateChecks).toHaveLength(readsAtOpen);
 
   await t.clock.advance(SCAN);
 

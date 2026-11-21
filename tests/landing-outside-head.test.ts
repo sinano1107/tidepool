@@ -48,6 +48,8 @@ const outsideHeadBody = (head: string, lastPushed: string) =>
   `"ship": PR #1's head ${head} holds commits the board did not push — the board last pushed ${lastPushed}. ` +
   `See them with \`git log ${lastPushed}..${head}\`. Merge, or hold?`;
 
+const UNREADABLE_PATHS = "\n\nThe board could not compare this PR head with the protected branch to check which paths require a human merge.";
+
 it.each(["success", "pending", "unreported", "failure"] as const)("外から進んだ head は CI が %s でも無人で merge されず、キューを外れて盤面の知らない commit を言う推奨 hold の merge question が1つ立つ", async (ci) => {
   const pr = await openPushedPr(`outside-head-ci-${ci}`, "auto_if_ci_green");
   const lastPushed = originHead(pr.workspace, pr.work.id);
@@ -76,7 +78,7 @@ it("最後に push した sha が手元に無いまま head が違えば、祖�
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db).map(({ recommendation, purpose }) => ({ recommendation, purpose }))).toEqual([
-    { recommendation: "hold", purpose: outsideHeadBody("head-the-board-did-not-push", fakeHead(1)) },
+    { recommendation: "hold", purpose: outsideHeadBody("head-the-board-did-not-push", fakeHead(1)) + UNREADABLE_PATHS },
   ]);
 });
 
@@ -92,7 +94,7 @@ it("GitHub の head が手元にも origin にも無ければ、取れない hea
 
   expect(pr.github.merged).toEqual([]);
   expect(mergeQuestions(pr.db).map(({ recommendation, purpose }) => ({ recommendation, purpose }))).toEqual([
-    { recommendation: "hold", purpose: outsideHeadBody(NOWHERE, lastPushed) },
+    { recommendation: "hold", purpose: outsideHeadBody(NOWHERE, lastPushed) + UNREADABLE_PATHS },
   ]);
   expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
 });

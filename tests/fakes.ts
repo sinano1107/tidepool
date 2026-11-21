@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
 import { z } from "zod";
@@ -92,6 +92,7 @@ export const unusedLanding: Landing = {
     return false;
   },
   async observeAutoMergeOutcomes() {},
+  reviewMergePaths() { return undefined; },
   async tick() {},
   takeInFlightMark() {
     return () => {};
@@ -483,6 +484,7 @@ export class FakeGitHubClient implements GitHubClient {
   readonly stateChecks: CheckoutObservation<PrRef>[] = [];
   private heads = new Map<number, string>();
   private prBranches = new Map<number, string>();
+  private prBaseBranches = new Map<number, string>();
   private unreadable = new Set<number>();
   /** merge 済みの PR と、merge した名義(`gh pr view --json mergedBy` の login)。 */
   private mergers = new Map<number, string>();
@@ -513,6 +515,7 @@ export class FakeGitHubClient implements GitHubClient {
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     this.prBranches.set(number, input.branch);
+    this.prBaseBranches.set(number, input.base);
     return { url: `https://github.com/example/repo/pull/${number}`, number };
   }
 
@@ -555,7 +558,8 @@ export class FakeGitHubClient implements GitHubClient {
     return { ci: this.ciStatus, ...this.stateRead(ref) };
   }
 
-  async mergePullRequest(ref: PrRef, head: string): Promise<void> {
+  async mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void> {
+    beforeMerge?.();
     // GitHub refuses a merge on an already-merged or closed PR; the fake must
     // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
     if (this.stateOf(ref.number) !== "OPEN") {
@@ -614,7 +618,17 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   private stateRead({ workspace, number }: PrRef): PrStateRead {
-    return { state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null, head: this.headOf(workspace, number) };
+    const state = { state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null, head: this.headOf(workspace, number) };
+    if (workspace.repo === undefined) return state;
+    const branch = this.prBaseBranches.get(number) ?? workspace.branch ?? "main";
+    try {
+      const url = declaredUrl(workspace);
+      if (!isAbsolute(url) && !url.startsWith("file:")) return state;
+      const sha = execFileSync("git", ["ls-remote", "--", url, `refs/heads/${branch}`], { cwd: workspace.path, stdio: ["ignore", "pipe", "pipe"] }).toString().split("\t")[0];
+      return sha ? { ...state, base: { branch, sha } } : state;
+    } catch {
+      return state;
+    }
   }
 
   /** Makes the state read on one PR throw — an offline Pi, a repo the token

@@ -402,7 +402,7 @@ export interface WireContract {
     clone_landing: string | null;
     claude_settings_unhideable_warning?: string;
   };
-  "PATCH /api/workspaces/:name 409": DangerousValuesConflict;
+  "PATCH /api/workspaces/:name 409": DangerousValuesConflict | { error: string; confirm_required?: never };
   /** 残る checkout の場所(ADR 0087 決定4)。 */
   "DELETE /api/workspaces/:name": { checkout: string };
   /** `open_workbench` の応答(spec #3273 text A14)。 */

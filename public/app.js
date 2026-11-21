@@ -1555,8 +1555,9 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
   const [mergePaths, setMergePaths] = React.useState(ws.human_merge_paths ?? []);
+  const [originalMergePaths, setOriginalMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []) || !sameStrings(mergePaths, ws.human_merge_paths ?? []);
+  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []) || !sameStrings(mergePaths, originalMergePaths);
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => {
     edit.close();
@@ -1568,13 +1569,17 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
     setCmds(ws.review_allowed_commands ?? []);
     setDomains(ws.allowed_domains ?? []);
     setMergePaths(ws.human_merge_paths ?? []);
+    setOriginalMergePaths(ws.human_merge_paths ?? []);
   });
   const save = () => {
     const body = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
-    if (!sameStrings(mergePaths, ws.human_merge_paths ?? [])) body.human_merge_paths = mergePaths;
+    if (!sameStrings(mergePaths, originalMergePaths)) {
+      body.human_merge_paths = mergePaths;
+      body.expected_human_merge_paths = originalMergePaths;
+    }
     submit(async (confirm) => {
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", ws.name);

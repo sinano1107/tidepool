@@ -208,12 +208,13 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
   const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
   const [mergePaths, setMergePaths] = React.useState(ws.human_merge_paths ?? []);
+  const [originalMergePaths, setOriginalMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const origin = ws.repo ?? ws.path;
   const dirty = notes.trim() !== (ws.notes ?? '')
     || prot !== !!ws.protected
     || !sameStrings(cmds, ws.review_allowed_commands ?? [])
     || !sameStrings(domains, ws.allowed_domains ?? [])
-    || !sameStrings(mergePaths, ws.human_merge_paths ?? []);
+    || !sameStrings(mergePaths, originalMergePaths);
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => { edit.close(); await onChanged(); });
 
@@ -221,15 +222,19 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
     setNotes(ws.notes ?? ''); setProt(!!ws.protected); setCmds(ws.review_allowed_commands ?? []);
     setDomains(ws.allowed_domains ?? []);
     setMergePaths(ws.human_merge_paths ?? []);
+    setOriginalMergePaths(ws.human_merge_paths ?? []);
   });
   // Notes always travels; dangerous fields join only when actually changed —
   // untouched fields stay absent from the partial patch (ADR 0061 決定2).
   const save = () => {
-    const body: Partial<Pick<SettingsWorkspace, 'notes' | 'protected' | 'review_allowed_commands' | 'allowed_domains' | 'human_merge_paths'>> = { notes: notes.trim() };
+    const body: Partial<Pick<SettingsWorkspace, 'notes' | 'protected' | 'review_allowed_commands' | 'allowed_domains' | 'human_merge_paths'>> & { expected_human_merge_paths?: string[] } = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
-    if (!sameStrings(mergePaths, ws.human_merge_paths ?? [])) body.human_merge_paths = mergePaths;
+    if (!sameStrings(mergePaths, originalMergePaths)) {
+      body.human_merge_paths = mergePaths;
+      body.expected_human_merge_paths = originalMergePaths;
+    }
     submit(async (confirm) => { await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, 'PATCH'); }, 'updated', ws.name);
   };
 
