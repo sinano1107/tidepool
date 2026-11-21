@@ -670,7 +670,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 ## PR の出元 repo(Head repo)
 
-remote-backed な workspace のタスクブランチが GitHub 上で置かれる、宣言の repo の fork。盤面は worker と人間担当の work の内容をここへ push し、ここから宣言の repo へ PR を開く。宣言の repo(origin)に出るのは保護ブランチと人間の書く道だけである。出元 repo の PR の CI には repo の資格情報(書ける token・secrets)が渡らない —— 同じ repo の branch は書き込み権のある協力者の内容として扱われるからである。出元 repo に書ける人間が、PR の conflict を解ける人間である。出元 repo は宣言の欄で、規則から導かない(2026-11-21 の grilling、issue #3482 / ADR 0395)。
+remote-backed な workspace のタスクブランチが GitHub 上で置かれる、宣言の repo の fork。盤面は worker と人間担当の work の内容をここへ push し、ここから宣言の repo へ PR を開く。宣言の repo(origin)に出るのは保護ブランチと人間の書く道だけである。出元 repo からの PR は GitHub に外部の貢献者の内容として扱われ、その CI には repo の資格情報(書ける token・secrets)が渡らない —— private では「fork の PR に書ける token・secrets を送る」設定がオフのときに限る。同じ repo の branch は書き込み権のある協力者の内容として扱われ、資格情報が渡る。出元 repo に書ける人間が、PR の conflict を解ける人間である。出元 repo は宣言の欄で、規則から導かない(2026-11-21 の grilling、issue #3482 / ADR 0395)。
 
 ## Team(チーム)
 

@@ -16,8 +16,10 @@
 ## 帰結
 
 - fork の PR では secrets の要る job は走らない。skip させればその job は無人 merge の判定から外れ(SKIPPED は緑に数える —— 変えると path filter の job が赤になる)、失敗させれば人間に倒れる。どちらにするかは installer の定義の選択である。
+- fork が完全に効くのは、人間が merge の前に差分を見る面(`escalate`・保護・人間の根)だけである。`auto_if_ci_green` では、CI の緑(#3473 で偽れる)を満たした worker の code が merge され、main の `push` の workflow が宣言された path の外の code(`package.json`・テスト・`.github/actions/**` など)を secrets 付きで走らせうる —— 露出は push の時点から merge の時点へ遅れるだけで、残りは path の宣言と merge ダイヤルの選択が持つ。
+- private では、fork の PR に資格情報が渡らないのは「書ける token・secrets を送る」がオフのときに限る。盤面がこれを確かめられるかは未測定で(決定6)、その点で同じ repo の案を退けた理由(盤面が確かめられない repo の設定に頼る)と対称である。違いは既定の向きで、同じ repo は既定が開く側、fork は閉じる側である。
 - 盤面は1つの workspace に2つの鍵(出元 repo への push、base の PR 操作)を持ち、収束と ADR 0387 が読む head は出元 repo になる。
-- 未測定: base 限定の installation token で出元 repo を head にした PR を作れるか(broker の形を決める)、App が開いた fork の PR の workflow が承認待ちになるか、fork された repo の Actions の既定の状態(どれも実装の受け入れ条件)。盤面の知らない連携が fork の PR を secrets 付きでビルドしないことは推論であり、その実例が出たら fork の根拠を問い直す。
+- 未測定: base 限定の installation token で出元 repo を head にした PR を作れるか(broker の形を決める)、App が開いた fork の PR の workflow が承認待ちになるか、fork された repo の Actions の既定の状態、PR の無い出元 repo の branch の commit を base から fetch できるか、同名の fork の改名、空の repo を fork できないこと(どれも実装の受け入れ条件)。盤面の知らない連携が fork の PR を secrets 付きでビルドしないことは推論であり、その実例が出たら fork の根拠を問い直す。
 
 ## 射程の境界
 
@@ -28,5 +30,5 @@
 ## 検討した選択肢
 
 - **同じ repo のまま付与を減らす**(App から `Workflows: write` を外す、完了の門で `.github/workflows/` を人間しか書けない path にする、repo の既定 token を read にし secrets を environment に置く運用を求める) —— CI が実行するのは定義でなく head の repo 全体なので、path の列挙では merge の前の露出が残り、残りは盤面が確かめられない repo の設定に頼る。`Workflows: write` は App 単位なので(docs の知識、未測定)、外すと出元 repo への push も worker の CI の提案も拒まれる。
-- **保護ブランチの規則を登録の条件にする** —— App に Administration が無く読めないうえ、fork の後は必要が無い。
+- **保護ブランチの規則を登録の条件にする** —— fork の後は必要が無い(ruleset は read 権で読める見込みで、読めないことは理由にしない)。
 - **人間が判断してから push する** —— CI は push しないと走らず、`auto_if_ci_green` が成り立たない。
