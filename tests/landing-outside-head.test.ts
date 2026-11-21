@@ -198,6 +198,33 @@ it("人間の merge が執行中なら収束は question を取り替えず、�
   expect(getTask(pr.db, original.id)?.status).toBe("done");
 });
 
+it("無人 merge の執行中に収束が書き換えを読んでも、merge が済む PR に question を立てない", async () => {
+  const c = await pushedRoot("rewrite-during-auto-merge-write", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ form: "open_pull_request_updated" });
+  const pushed = originHead(c.workspace, c.work.id);
+  const executing = awaitWindow();
+  const merge = c.github.mergePullRequest.bind(c.github);
+  vi.spyOn(c.github, "mergePullRequest").mockImplementationOnce(async (ref, head) => {
+    await executing.hold();
+    await merge(ref, head);
+  });
+  const tick = c.landing.tick("auto_merge", c.clock.now());
+  await executing.entered;
+  try {
+    await commitThroughTaskCheckout(c.db, c.clock, c.workspace, c.work, "another-repair.txt", "fixed\n");
+    await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
+    await convergeOn(c.landing, c.work.id);
+    c.github.scriptHead(1, pushed);
+  } finally {
+    executing.open();
+    await tick;
+  }
+
+  expect(c.github.mergedHeads).toEqual([pushed]);
+  expect(boardEvents(c.db, c.work.id, "pr_merged")).toHaveLength(1);
+  expect(mergeQuestions(c.db)).toEqual([]);
+});
+
 it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、伝えた head として拒まれずに merge する", async () => {
   const pr = await openPushedPr("outside-head-surface-changed", "auto_if_ci_green");
   const landing = autoMerging(pr.db, pr.clock, pr.workspace, pr.github, () => profile("escalate"));

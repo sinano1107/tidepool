@@ -1,3 +1,5 @@
+import { lstatSync } from "node:fs";
+import { join } from "node:path";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
@@ -11,7 +13,7 @@ import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from 
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates, resolvedCommit } from "./pickup-predicates.js";
 import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
-import { type PrMergeOutside, type PrMergeReason, type QuestionColumns, questionKindOf } from "./question-kind.js";
+import { type PrMergeQuestionContent, type PrMergeReason, type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
 import {
   ancestorsSql,
@@ -27,8 +29,10 @@ import {
   localLandingOpenOrExecutedSql,
   logDecision,
   MERGE_QUESTION_OPTIONS,
+  mergeQuestionWasReplaced,
   openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
+  QuestionClosedError,
   recordHeadConveyed,
   recordPrNumber,
   recordPrOpened,
@@ -321,10 +325,10 @@ export function lastPushedHead(db: Db, taskId: string): string | undefined {
 }
 
 /** ADR 0376 決定7: 記録済みの PR の head が、盤面が最後に push した値を祖先に持たない(書き換え・巻き戻し)。`rewound` は head が local の
- *  `task/<root>` の祖先(text A4a)で、そうでなければ書き換え(A4b)。`dropped` は外の push が落とした内容、`unpushed` は盤面がまだ push して
+ *  `task/<root>` の祖先(text A4a)で、そうでなければ書き換え(A4b)。`droppedBranches` は外の push が落とした内容、`unpushedBranches` は盤面がまだ push して
  *  いない内容(text A4d —— 未 push のものを落とされたとは言わない)。根のブランチは子孫の内容も持つので、子孫があれば子孫を名指す。
- *  同じ内容のまま書き換えた head(rebase)は何も落としていないので `dropped` は空。 */
-export type OutsidePush = { head: string; lastPushed: string; rewound: boolean; dropped: string[]; unpushed: string[] };
+ *  同じ内容のまま書き換えた head(rebase)は何も落としていないので `droppedBranches` は空。 */
+export type OutsidePush = { head: string; lastPushed: string; rewound: boolean; droppedBranches: string[]; unpushedBranches: string[] };
 
 /** head は手元にある前提。最後に push した値が無い・その commit が手元に無い・head の祖先なら undefined —— 収束はそれを止めない
  *  (ADR 0376 決定2)。無人 merge と人間の `merge` 回答は、祖先関係を確かめてから中身を読むためだけに呼ぶ(`prHeadOrigin`)。 */
@@ -346,9 +350,9 @@ function outsidePushOf(
     lastPushed,
     // 手元に根のブランチが無ければ巻き戻しとは確かめられない —— 書き換えと読む
     rewound: taskBranchExists(workspace, taskId) && isAncestor(workspace, head, `refs/heads/${taskBranch(taskId)}`),
-    dropped,
+    droppedBranches: dropped.map(taskBranch),
     // 根自身の未 push の内容は、何も落ちていないときにだけ名指す —— 落ちた根の内容と同じブランチを2度言わない
-    unpushed: unpushedDescendants.length > 0 || dropped.length > 0 ? unpushedDescendants : unpushed,
+    unpushedBranches: (unpushedDescendants.length > 0 || dropped.length > 0 ? unpushedDescendants : unpushed).map(taskBranch),
   };
 }
 
@@ -377,13 +381,12 @@ function prHeadOrigin(workspace: WorkspaceConfig, taskId: string, head: string, 
 
 /** spec #3273 text A4 の `<branches>` の句 —— 未 push の内容が重なれば text A4d の形に分け、真であるものだけを言う。何も欠いていない
  *  (同じ内容の rebase)なら、最後に push した値を持たない事実だけを言う。 */
-function lacksContentOf({ lastPushed, dropped, unpushed }: OutsidePush): string {
-  const branches = (ids: string[]) => ids.map(taskBranch).join(", ");
-  if (dropped.length > 0 && unpushed.length > 0) {
-    return `lacks the content of ${branches(dropped)} (dropped by the outside push) and of ${branches(unpushed)} (not pushed by the board yet)`;
+function lacksContentOf({ lastPushed, droppedBranches, unpushedBranches }: OutsidePush): string {
+  if (droppedBranches.length > 0 && unpushedBranches.length > 0) {
+    return `lacks the content of ${droppedBranches.join(", ")} (dropped by the outside push) and of ${unpushedBranches.join(", ")} (not pushed by the board yet)`;
   }
-  if (dropped.length > 0) return `lacks the content of ${branches(dropped)}`;
-  if (unpushed.length > 0) return `lacks the content of ${branches(unpushed)} (not pushed by the board yet)`;
+  if (droppedBranches.length > 0) return `lacks the content of ${droppedBranches.join(", ")}`;
+  if (unpushedBranches.length > 0) return `lacks the content of ${unpushedBranches.join(", ")} (not pushed by the board yet)`;
   return `no longer contains ${lastPushed}, which the board pushed`;
 }
 
@@ -569,6 +572,7 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "worksp
     .get(question.id) as { observed: number; kind: SettledByObservation | null };
   if (!row.observed) return null;
   if (question.question_pending_merge_pr === null) return row.kind;
+  if (mergeQuestionWasReplaced(db, question)) return null;
   const outcome = rootPrOutcome(db, taskIdForPr(db, question.question_pending_merge_pr, question.workspace));
   return outcome && (outcome.observed ? OBSERVED[outcome.state] : "pr_merged");
 }
@@ -833,8 +837,10 @@ export function taskBranchHeadOrNull(
 /** ADR 0394 決定1 / ADR 0370 決定1: 問う内容は基準と比べずに読む。完全修飾 ref の解決に他の ref の曖昧さは要らない。 */
 function questionTip(workspace: WorkspaceConfig, taskId: string): string | null {
   try {
+    if (lstatSync(join(workspace.path, ".git"), { throwIfNoEntry: false }) === undefined) return null;
     return git(workspace.path, "-c", "core.warnAmbiguousRefs=false", "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOTDIR") return null;
     if ((error as { status?: number } | null)?.status !== 1) throw error;
     return null;
   }
@@ -958,6 +964,12 @@ function listOpenMergeQuestions(db: Db): OpenMergeQuestion[] {
        WHERE type = 'question' AND status = 'todo' AND question_pending_merge_pr IS NOT NULL ORDER BY rowid`,
     )
     .all() as OpenMergeQuestion[];
+}
+
+function latestMergeQuestion(db: Db, workspace: string | null, prNumber: number): Pick<Task, "id" | "status"> | undefined {
+  return db.prepare(`SELECT id, status FROM tasks
+    WHERE type = 'question' AND workspace IS ? AND question_pending_merge_pr = ? ORDER BY rowid DESC LIMIT 1`)
+    .get(workspace, prNumber) as Pick<Task, "id" | "status"> | undefined;
 }
 
 function clearPendingAutoMerge(db: Db, taskId: string): void {
@@ -1164,8 +1176,7 @@ export function createLanding(deps: LandingDeps): Landing {
     origin: PrHeadOrigin,
     prompt?: MergeQuestionPrompt,
   ): string => {
-    const outside: PrMergeOutside | null = origin.kind === "pushed" ? null : { kind: origin.kind, sha: head };
-    const missingBranches = origin.kind === "rewritten" ? [...origin.outside.dropped, ...origin.outside.unpushed].map(taskBranch) : [];
+    const missingBranches = origin.kind === "rewritten" ? [...origin.outside.droppedBranches, ...origin.outside.unpushedBranches] : [];
     const outsideBody = origin.kind === "rewritten" ? outsidePushQuestionBody(task, pr, origin.outside)
       : origin.kind === "not_pushed" ? notPushedQuestionBody(task, pr, head, origin.lastPushed) : undefined;
     if (outsideBody === undefined && prompt === undefined) throw new Error("a merge question must say why it was raised");
@@ -1173,11 +1184,13 @@ export function createLanding(deps: LandingDeps): Landing {
     const purpose = outsideBody === undefined ? `${prompt!.detail} ${prompt!.question}`
       : prompt === undefined ? outsideBody : `${outsideBody}\n\n${prompt.detail}`;
     const tip = questionTip(workspace, task.id);
+    const base = { pr, tip, reason: prompt?.reason ?? "outside_head" as const };
+    const content: PrMergeQuestionContent = origin.kind === "rewritten"
+      ? { ...base, outside: { kind: "rewritten", sha: head }, missingBranches: missingBranches.length === 0 ? null : missingBranches }
+      : { ...base, outside: origin.kind === "not_pushed" ? { kind: "not_pushed", sha: head } : null, missingBranches: null };
     return deps.db.transaction(() => {
       clearPendingAutoMerge(deps.db, task.id);
-      return registerMergeQuestion(deps.db, task, {
-        pr, tip, outside, missingBranches: missingBranches.length > 0 ? missingBranches : null, reason: prompt?.reason ?? "outside_head",
-      }, purpose, prompt?.recommendation ?? "hold", now);
+      return registerMergeQuestion(deps.db, task, content, purpose, prompt?.recommendation ?? "hold", now);
     })();
   };
   /** ADR 0376 決定7: 外の push が落とした内容を問う直前に profile → 門の順に読み直し(ADR 0217 決定1・ADR 0232)、
@@ -1202,7 +1215,9 @@ export function createLanding(deps: LandingDeps): Landing {
     let workspace: WorkspaceConfig | undefined;
     try {
       workspace = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
-    } catch {}
+    } catch (error) {
+      if (!(error instanceof UnknownWorkspaceError)) throw error;
+    }
     return workspace === undefined ? null : questionTip(workspace, task.id);
   };
   const retireFailures = (taskId: string, ctx: RootContext) =>
@@ -1214,12 +1229,20 @@ export function createLanding(deps: LandingDeps): Landing {
     ctx: RootContext,
   ): Extract<LandingVerdict, { kind: "failed" }> => {
     const message = error instanceof Error ? error.message : String(error);
+    const verdict = { kind: "failed" as const, reason, error: message };
     if (!ctx.intake) {
+      let tip: string | null;
+      try {
+        tip = readQuestionTip(task);
+      } catch (tipError) {
+        console.error(`[landing] could not read the question tip for root ${task.id}:`, tipError);
+        return verdict;
+      }
       // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と origin の盤面の
       // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
-      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, readQuestionTip(task));
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, tip);
     }
-    return { kind: "failed", reason, error: message };
+    return verdict;
   };
   /** 答えている回答だけを拒む止まり —— 昇格失敗 question を立てない。 */
   const failedAnswer = (error: string): LandingVerdict => ({ kind: "failed", reason: "promotion_failed", error });
@@ -1310,10 +1333,10 @@ export function createLanding(deps: LandingDeps): Landing {
       : finishLanding(task, workspace, prNumber, "merge", ctx);
   };
   // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
-  const inFlight = new Map<string, "write" | "auto_merge">();
+  const inFlight = new Map<string, "write" | "auto_merge_read">();
   const markKey = (workspace: string | null, prNumber: number) => JSON.stringify([workspace, prNumber]);
   const isMarked = (workspace: string | null, prNumber: number) => inFlight.has(markKey(workspace, prNumber));
-  const takeInFlightMark = (workspace: string | null, prNumber: number, purpose: "write" | "auto_merge" = "write") => {
+  const takeInFlightMark = (workspace: string | null, prNumber: number, purpose: "write" | "auto_merge_read" = "write") => {
     const key = markKey(workspace, prNumber);
     if (inFlight.has(key)) return null;
     inFlight.set(key, purpose);
@@ -1343,6 +1366,11 @@ export function createLanding(deps: LandingDeps): Landing {
       intake: question === undefined ? undefined : { workbenchBase, entry, answerer: answering.get(question)!, now: () => deps.clock.now() },
       outcome,
     };
+    // ADR 0394 決定2: 収束の列で待つ間に取り替えられた回答では作業台に触れない。
+    const closedMergeAnswer = () => entry === "landing_merge" && question !== undefined && getTask(deps.db, question)?.status !== "todo"
+      ? failedAnswer(new QuestionClosedError().message) : undefined;
+    const closed = closedMergeAnswer();
+    if (closed) return closed;
     /** ADR 0370 決定1: 断念・hold の刻んだ head を今のブランチと比べる前の比較。head が無いか workspace を解決できなければ ref を読まない
      *  (`contentChangedSince` は読まずに「変わった」と読む、ADR 0225 決定1 / ADR 0234 決定3)。比較そのものが落ちれば、比べていない
      *  ref で問い直さず根の失敗にする。 */
@@ -1534,7 +1562,11 @@ export function createLanding(deps: LandingDeps): Landing {
        *  止まる(text D1)。PR が記録済みで head が最後に push した値を欠く(書き換え・巻き戻し)ときは
        *  決定7 が持つ(`outsidePushStep`)。決定7 で止まれば verdict を返し、押してよければ undefined を返す。読めない head と text D1・D2 は
        *  今どおり投げる(昇格の失敗になる)。 */
-      const checkHeadBeforePush = async (prHead: string | undefined, foundPr?: number): Promise<LandingVerdict | undefined> => {
+      const checkHeadBeforePush = async (
+        prHead: string | undefined,
+        foundPr?: number,
+        questionBeforeRead?: ReturnType<typeof latestMergeQuestion>,
+      ): Promise<LandingVerdict | undefined> => {
         const branch = taskBranch(task.id);
         // ADR 0376 決定2: 読めなかった head には push を撃たない(text D4)
         const unread = (error: unknown) => {
@@ -1549,6 +1581,8 @@ export function createLanding(deps: LandingDeps): Landing {
         } catch (error) {
           throw unread(error);
         }
+        const closed = closedMergeAnswer();
+        if (closed) return closed;
         // head の読みと token の await の後、fetch が交渉用の ref を読む前・取り込み・追いつき・tip の読みの前(ADR 0370 決定1)
         stopRootIfRefsMoved(workspace);
         try {
@@ -1557,14 +1591,21 @@ export function createLanding(deps: LandingDeps): Landing {
           throw unread(error);
         }
         if (head === undefined) return undefined;
-        const outside = task.pr_number === null ? undefined : outsidePushOf(workspace, task.id, head, leftBehindTargets(deps.db, workspace, task.id), lastPushedHead(deps.db, task.id));
+        const prNumber = task.pr_number;
+        const outside = prNumber === null ? undefined : outsidePushOf(workspace, task.id, head, leftBehindTargets(deps.db, workspace, task.id), lastPushedHead(deps.db, task.id));
         const answeringMerge = ctx.intake?.entry === "landing_merge";
-        if (outside && !answeringMerge) {
+        if (prNumber !== null && outside && !answeringMerge) {
           // ADR 0265 決定1: head を待つ間に決着した PR には、古い観測から merge question を立てない。
           const settled = rootPrOutcome(deps.db, task.id);
           if (settled?.state === "MERGED") return settleMerged(task, workspace, settled.prNumber, ctx);
           if (settled?.state === "CLOSED") return closedPr(settled.prNumber);
-          return outsidePushStep(task.pr_number!, outside);
+          const current = latestMergeQuestion(deps.db, task.workspace, prNumber);
+          if (current?.id !== questionBeforeRead?.id || current?.status !== questionBeforeRead?.status) {
+            if (current?.status !== "todo") return failedAnswer(`PR #${prNumber}'s merge question closed while the board was reading its head`);
+            if (ctx.intake) return failedAnswer(`PR #${prNumber}'s merge question changed — answer question ${current.id} (\`merge\`)`);
+            return { kind: "landed", form: "merge_question", prNumber };
+          }
+          return outsidePushStep(prNumber, outside);
         }
         const refuse = (pushed: OutsidePush) =>
           failedAnswer(outsidePushRefusal(workspace, workbenchBase, task.id, { prNumber: task.pr_number!, head, rewound: pushed.rewound, lacks: lacksContentOf(pushed) }));
@@ -1584,7 +1625,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (outsideStop) throw outsideStop;
         return undefined;
       };
-      /** ADR 0376 決定7: 収束はキューの行を外して推奨 hold の merge question を立て(開いていれば足さない)、別の失敗で開いていた昇格失敗
+      /** ADR 0376 決定7 / ADR 0394 決定2: 収束はキューの行を外して外の部分を問い、別の失敗で開いていた昇格失敗
        *  question への retry はその question を id で名指して拒む(text D3b)。 */
       const outsidePushStep = (prNumber: number, outside: OutsidePush): LandingVerdict => {
         const asked = askOutsidePush(workspace, task, prNumber, outside);
@@ -1609,6 +1650,8 @@ export function createLanding(deps: LandingDeps): Landing {
       const push = async (sha: string) => {
         const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
+          const closed = closedMergeAnswer();
+          if (closed) return closed;
           // ADR 0370 決定1: 準備の await の間に動いた ref があれば、確かめた sha も運ばない —— 比較と push を同じ同期区間に置く
           stopRootIfRefsMoved(workspace);
           const block = landingBlock(deps.db, task.id);
@@ -1629,7 +1672,10 @@ export function createLanding(deps: LandingDeps): Landing {
         });
       };
       if (task.pr_number !== null) {
-        const { state, mergedBy, head } = await deps.github.getPullRequestState({ workspace, number: task.pr_number });
+        const prNumber = task.pr_number;
+        // ADR 0394 決定2: PR を読む間に開いた、または答えられた question を、古い head で取り替えない。
+        const before = latestMergeQuestion(deps.db, task.workspace, prNumber);
+        const { state, mergedBy, head } = await deps.github.getPullRequestState({ workspace, number: prNumber });
         // 決着した PR は1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。盤面の外の決着は観測、落ちた盤面
         // 自身の merge は執行(ADR 0265 決定5)。
         // 印の付いた PR の決着は執行側が書く。印と根の決着は await の後に見る —— 読んでいる間に遅い走査が
@@ -1640,7 +1686,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
         if (state === "CLOSED") return closedPr(task.pr_number);
-        const stopped = await checkHeadBeforePush(head);
+        const stopped = await checkHeadBeforePush(head, undefined, before) ?? closedMergeAnswer();
         if (stopped) return stopped;
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
@@ -1880,7 +1926,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // 印は await の前に同期で取り、どの抜け方でも finally で放す。重なった tick は印の付いた PR を飛ばす(ADR 0236)。
           // 一覧は tick の始めに読んだものなので、重なった tick が決着させて外した行もここに来る —— 印を取った後にまだ
           // キューにあるかを確かめる
-          release = takeInFlightMark(task.workspace, pr_number, "auto_merge");
+          release = takeInFlightMark(task.workspace, pr_number, "auto_merge_read");
           if (!release || !isQueuedForAutoMerge(deps.db, task_id)) continue;
           const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
           if (!resolved) continue;
@@ -1960,6 +2006,8 @@ export function createLanding(deps: LandingDeps): Landing {
               return;
             }
             if (ci !== "success" || !content || content.left.length > 0) return;
+            // ADR 0394 決定2 / ADR 0288 決定2: 読みの間と違い、merge の執行中は収束が question を立てない。
+            inFlight.set(markKey(task.workspace, pr_number), "write");
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
             const failure = await github.mergePullRequest(ref, head).then(
               () => null,

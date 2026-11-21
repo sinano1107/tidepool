@@ -12,7 +12,7 @@ import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-import { type PrMergeOutside, type PrMergeReason, type QuestionColumns, type QuestionKind, questionColumns, questionKindOf } from "./question-kind.js";
+import { type PrMergeQuestionContent, type PrMergeReason, type QuestionColumns, type QuestionKind, questionColumns, questionKindOf } from "./question-kind.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
@@ -168,7 +168,7 @@ export interface Task {
   question_pending_pr_promotion_task_id: string | null;
   question_landing_tip: string | null;
   question_pr_merge_outside_sha: string | null;
-  question_pr_merge_outside_kind: PrMergeOutside["kind"] | null;
+  question_pr_merge_outside_kind: NonNullable<PrMergeQuestionContent["outside"]>["kind"] | null;
   question_pr_merge_missing_branches: string[] | null;
   question_pr_merge_reason: PrMergeReason | null;
   /** System-internal only (ADR 0137 決定2): the Quarantine kind this
@@ -3277,7 +3277,7 @@ export const PR_PROMOTION_FAILURE_OPTIONS = ["retry", "abandon promotion"] as co
 export function registerMergeQuestion(
   db: Db,
   task: Task,
-  content: Omit<Extract<QuestionKind, { kind: "pr_merge" }>, "kind">,
+  content: PrMergeQuestionContent,
   purpose: string,
   recommendation: (typeof MERGE_QUESTION_OPTIONS)[number],
   now: Date,
@@ -3324,13 +3324,13 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
   return row.id;
 }
 
-/** ADR 0394 決定2: 立て直しで閉じた question には、後から PR が決着しても答えられない。 */
-export function assertMergeQuestionNotReplaced(db: Db, question: Pick<Task, "id" | "workspace" | "question_pending_merge_pr">): void {
-  if (question.question_pending_merge_pr === null) return;
+/** ADR 0394 決定2: 立て直しで閉じた question を、PR が決着したために閉じた question と区別する。 */
+export function mergeQuestionWasReplaced(db: Db, question: Pick<Task, "id" | "workspace" | "question_pending_merge_pr">): boolean {
+  if (question.question_pending_merge_pr === null) return false;
   const row = db.prepare(`SELECT 1 FROM events JOIN tasks AS root ON root.id = events.task_id
     WHERE root.pr_number = ? AND root.workspace IS ? AND events.kind = 'pr_merge_question_replaced' AND json_extract(events.payload, '$.question_id') = ?`)
     .get(question.question_pending_merge_pr, question.workspace, question.id);
-  if (row !== undefined) throw new DomainError("question closed — read the replacement merge question before answering");
+  return row !== undefined;
 }
 
 /** ADR 0387 決定2: 盤面がこの head の外の commit を人間に伝えたことを刻む。 */

@@ -1,5 +1,5 @@
 
-import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -85,6 +85,7 @@ import {
   originHead,
   profile,
   promotionFailures,
+  pushedRoot,
   pushOutsideBoard,
   pushPrHead,
   queueAutoMerge,
@@ -1587,6 +1588,25 @@ it.each([
     expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
     expect(promotionFailures(db, work.id)).toEqual([expect.objectContaining({ question_landing_tip: tip })]);
   }
+});
+
+it("workspace の Git リポジトリが無ければ、収束は tip が無い昇格失敗 question を立てる", async () => {
+  const c = await pushedRoot("promotion-failed-without-repository");
+  renameSync(join(c.workspace.path, ".git"), join(c.workspace.path, "saved-git"));
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([expect.objectContaining({ question_landing_tip: null })]);
+});
+
+it("昇格失敗の question に写す ref が読めないときも、収束は元の失敗の verdict を返す", async () => {
+  const c = await pushedRoot("unreadable-promotion-question-tip");
+  git(c.workspace.path, "pack-refs", "--all");
+  breakPackedRefs(c.workspace);
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({
+    kind: "failed", reason: "promotion_failed", error: expect.stringContaining("git for-each-ref"),
+  });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([]);
 });
 
 // ADR 0240 決定5: 拒否文は積み残しを運ぶ面を名指しする。どちらも無ければ、盤面が運んでいる途中である

@@ -1,8 +1,11 @@
 import type { PendingChildSpec, QuestionProposal, Task, TierRef } from "./tasks.js";
 import type { TierId } from "./tier.js";
 
-export type PrMergeOutside = { kind: "not_pushed" | "rewritten"; sha: string };
 export type PrMergeReason = "pr_opened" | "surface_changed" | "outside_head" | "ci_red" | "ci_unreported" | "merge_failed";
+export type PrMergeQuestionContent = { pr: number; tip: string | null; reason: PrMergeReason } & (
+  | { outside: { kind: "rewritten"; sha: string }; missingBranches: string[] | null }
+  | { outside: { kind: "not_pushed"; sha: string } | null; missingBranches: null }
+);
 
 /** question の種類(ADR 0246 決定2)。表は種類ごとの列のままで、判別子はこの union だけが持つ。書く側(`questionColumns`)と
  *  読む側(`questionKindOf`)は対で、種類を足すと両方の腕と、読む側の結果で分岐する switch が tsc のエラーになる。 */
@@ -19,8 +22,8 @@ export type QuestionKind<T extends TierRef = TierId> =
   | { kind: "broken_probe"; reason: string }
   /** decomposeTask の承認 question(issue #11)。approve で pending_child を実体化する。 */
   | { kind: "approval"; pending_child: PendingChildSpec }
-  /** recordPrOpened の escalate の枝(issue #11): pr はこの question が代わりに立つ PR 番号。 */
-  | { kind: "pr_merge"; pr: number; tip: string | null; outside: PrMergeOutside | null; missingBranches: string[] | null; reason: PrMergeReason }
+  /** ADR 0394 決定1: PR 番号と、その merge question が立った時点で問うた内容。 */
+  | ({ kind: "pr_merge" } & PrMergeQuestionContent)
   /** landing.ts(ADR 0053): task_id はローカルだけのブランチが merge / hold を待つ完了済みの task。 */
   | { kind: "local_merge"; task_id: string; tip: string | null }
   /** landing.ts(issue #66): task_id は PR 昇格に失敗した完了済みの task。 */
@@ -124,16 +127,20 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
     case "question_pending_merge_pr + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
     case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
     case "question_pending_merge_pr + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason":
-    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason":
-      if (q.question_pr_merge_missing_branches !== null && q.question_pr_merge_outside_kind !== "rewritten") break;
-      return {
-        kind: "pr_merge",
+    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason": {
+      const base = {
+        kind: "pr_merge" as const,
         pr: q.question_pending_merge_pr!,
         tip: q.question_landing_tip,
-        outside: q.question_pr_merge_outside_kind === null ? null : { kind: q.question_pr_merge_outside_kind, sha: q.question_pr_merge_outside_sha! },
-        missingBranches: q.question_pr_merge_missing_branches,
         reason: q.question_pr_merge_reason!,
       };
+      if (q.question_pr_merge_outside_kind === "rewritten") {
+        return { ...base, outside: { kind: "rewritten", sha: q.question_pr_merge_outside_sha! }, missingBranches: q.question_pr_merge_missing_branches };
+      }
+      if (q.question_pr_merge_missing_branches !== null) break;
+      const outside = q.question_pr_merge_outside_kind === null ? null : { kind: q.question_pr_merge_outside_kind, sha: q.question_pr_merge_outside_sha! };
+      return { ...base, outside, missingBranches: null };
+    }
     case "question_pending_local_merge_task_id":
     case "question_pending_local_merge_task_id + question_landing_tip":
       return { kind: "local_merge", task_id: q.question_pending_local_merge_task_id!, tip: q.question_landing_tip };

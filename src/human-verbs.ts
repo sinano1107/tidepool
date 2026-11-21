@@ -77,7 +77,6 @@ import {
   assertAnswerable,
   assertCompletable,
   assertInterviewFields,
-  assertMergeQuestionNotReplaced,
   assertNoGatingQuestion,
   assertNoUnsettledIssueRef,
   assertTargetsRunnable,
@@ -105,6 +104,7 @@ import {
   latestPosedProbe,
   logDecision,
   MERGE_QUESTION_OPTIONS,
+  mergeQuestionWasReplaced,
   openedPlaceNames,
   openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -1535,6 +1535,11 @@ function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
   return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), settled_by_observation: settledByObservation(deps.db, task) };
 }
 
+/** ADR 0394 決定2: 立て直しで閉じた question には答えられない。 */
+function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
+  if (mergeQuestionWasReplaced(db, question)) throw new DomainError("question closed — read the replacement merge question before answering");
+}
+
 /** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて
  *  いれば question を observed で決着させて null を返し、下げ先に行が無い・push できないなら question は open のまま回答を断る。
  *  返り値は着地した commit。 */
@@ -1750,6 +1755,7 @@ export async function submitAnswer(
             return { pr, ...content };
           };
           let { pr, left, head } = await readAndCompare();
+          assertQuestionOpen();
           // spec #3273 text A10: push の後の拒否は、取り込みと push が済んだことを言う
           let pushed = "";
           if (head.kind === "rewritten") {
@@ -1759,6 +1765,7 @@ export async function submitAnswer(
             notice = root?.notice;
             pushed = `${root?.takenIn ? "took your merge in and pushed" : "pushed"} ${taskBranch(landingTaskId)}; `;
             ({ pr, left, head } = await readAndCompare());
+            assertQuestionOpen();
           }
           const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
           // ADR 0387 決定2: 盤面が push していない head は、外の commit をまだ伝えていなければ他の検査より先に1回拒む
@@ -1945,11 +1952,10 @@ export async function submitAnswer(
     if (!session) deps.pollNow();
     return { ...presentAnswered(deps, task), ...(notice !== undefined && { notice }) };
   } catch (err) {
-    // 待つ間に question が閉じていた(ADR 0288 決定4): 観測で閉じていれば 200 + 印、別の回答か cancel なら拒否
-    if (err instanceof QuestionClosedError) {
-      assertMergeQuestionNotReplaced(deps.db, task);
-      if (settledByObservation(deps.db, task)) return presentAnswered(deps, task);
-    }
+    // ADR 0394 決定2: GitHub の読みが失敗しても、立て直しで閉じた question への拒否を返す。
+    if (kind.kind === "pr_merge" && err instanceof DomainError && !(err instanceof WorkspaceRepoMismatchError)) assertMergeQuestionNotReplaced(deps.db, task);
+    // 待つ間に question が閉じていた(ADR 0288 決定4): PR などの決着を観測していれば 200 + 印、別の回答か cancel なら拒否
+    if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
     throw err;
   } finally {
     mark.release?.();
