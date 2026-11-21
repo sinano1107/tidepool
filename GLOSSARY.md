@@ -583,7 +583,7 @@ _Avoid_: 持ち込み(盤面は自前の clone の path も sha も受けない)
 
 ## 書き始める(Start work)
 
-人間が自分の担当する work に対して行う操作(`start_work`)。盤面は pickup と同じ準備を通してから `task/<id>` を作り、(workspace, `task/<id>`) の作業台を開いて path を返し、event `task_work_started` を残す。場所を固定する瞬間の1つで(Workspace 参照)、assignee の Edit はここで凍る(Edit 参照)。status は `todo` のままで、slot には入らない。タスクブランチを持つこと(`task_branch_created`)とは別の事実である —— 子孫の pickup がタスクブランチだけを先に作った人間担当の work は書き始めておらず、帰り先との conflict で完了を拒むときに盤面が作業台を開いても `task_work_started` は残らない(2026-11-13〜15 の wayfinder、issue #3178 / ADR 0374)。
+人間が自分の担当する work に対して行う操作(`start_work`)。盤面は pickup と同じ準備を通してから `task/<id>` を作り、(workspace, `task/<id>`) の作業台を開いて path を返し、event `task_work_started` を残す。場所を固定する瞬間の1つで(Workspace 参照)、assignee の Edit はここで凍る(Edit 参照)。status は `todo` のままで、slot には入らない。タスクブランチを持つこと(`task_branch_created`)とは別の事実である —— 子孫の pickup がタスクブランチだけを先に作った人間担当の work は書き始めておらず、帰り先との conflict で完了を拒むときに盤面が作業台を開いても `task_work_started` は残らない(2026-11-13〜15 の wayfinder、issue #3178 / ADR 0374)。系譜の帰り先の持ち主が解放を負う間(session 中・後始末中・解放待ち)は、書き始めることも完了も拒まれる —— slot の外を通る人間の扉が、走っている持ち主の `task/<id>` を動かさないため(2026-11-21 の grilling、issue #3365 / ADR 0390)。
 
 ## 報告後の書き込み(Write after the report)
 
