@@ -13,7 +13,7 @@ import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, pic
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { commitRoomCopy, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
-import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, seedTaskBranch, sessionId, WORKER_SPAWNED } from "./harness.js";
+import { commitOnRefByHand, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, newTreePointsAtDamagedNamedBlob, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, quarantineQuestion, seedTaskBranch, sessionId, WORKER_SPAWNED } from "./harness.js";
 
 // ADR 0369 決定1〜3・6: 名前の場所の事情で済まなかった解放は、その workspace の Quarantine の受理の検査がやり直す。
 
@@ -339,6 +339,24 @@ it("退避が名前の場所の事情で落ちた完了済み review の唯一�
   await answerQuarantine(s);
 
   expect(git(s.ws.path, "show", `${s.branch}:wip.txt`)).toBe("wip");
+  expect(released(s.db, s.task.id)).toEqual([{ kind: "task_checkout_released", path: s.checkout }]);
+  expect(existsSync(s.checkout)).toBe(false);
+});
+
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
+it("検証の段で名前の場所の欠けた blob に落ちた完了済み review の commit を、名前の場所を直した後の回答が task/<id> へ運び、checkout を消す(ADR 0364 決定2 / ADR 0369 決定1)", async () => {
+  const s = await sessionWithWork("owed-review-verify", { type: "review", wip: false });
+  completeTask(s.db, s.task, FULL_HANDOFF, "deckhand", s.clock.now(), "worker");
+  const { repair } = newTreePointsAtDamagedNamedBlob(s.ws.path, s.checkout);
+  const commit = git(s.checkout, "rev-parse", "HEAD");
+  await tearDown(s);
+  expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();
+  expect(released(s.db, s.task.id)).toEqual([]);
+  repair();
+
+  await answerQuarantine(s);
+
+  expect(git(s.ws.path, "rev-parse", s.branch)).toBe(commit);
   expect(released(s.db, s.task.id)).toEqual([{ kind: "task_checkout_released", path: s.checkout }]);
   expect(existsSync(s.checkout)).toBe(false);
 });

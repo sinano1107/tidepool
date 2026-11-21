@@ -26,6 +26,7 @@ import {
   git,
   HUMAN_WEBUI,
   makeWorkspace,
+  newTreePointsAtDamagedNamedBlob,
   pickedInterviewRoot,
   prepareAtPickup,
   quarantineQuestion,
@@ -854,6 +855,104 @@ it.each(["corrupt", "renamed"] as const)("入れ直しに要る blob の worker 
   }
 });
 
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
+it("未決着の work の commit が名前の場所で欠けた blob を直に指せば、解放は名前の場所の quarantine で、task を失敗にせず checkout を残す(ADR 0364 決定2 / ADR 0367 決定4)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const { blob } = newTreePointsAtDamagedNamedBlob(ws.path, place.path);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(blob);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(readFileSync(join(place.path, "copy.txt"), "utf8")).toBe("workspace\n");
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
+it("work の commit が名前の場所で欠けた blob を直に指せば、完了の門は名前の場所の側で拒み、task/<id> を書かない(ADR 0364 決定2 / ADR 0359 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const { blob } = newTreePointsAtDamagedNamedBlob(ws.path, place.path);
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+
+    expect(() => gateFetch(db, place, task)).toThrow(namedPlaceRefusal(blob));
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了済み review の pack に入る blob の名前に worker が別の object の中身を置けば、--strict の文が名前の場所の欠けと同じでも worker の repo の故障で、名前の場所を quarantine しない(ADR 0364 決定2 / ADR 0367 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    commitWork(place.path, "only.txt", "only worker copy\n");
+    const blob = git(place.path, "rev-parse", "HEAD:only.txt");
+    const bytes = workerCopyDamages.renamed(place.path);
+    rmSync(looseObject(place.path, blob));
+    writeFileSync(looseObject(place.path, blob), bytes);
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(`did not receive expected object ${blob}`) },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+const treeEntry = (mode: string, name: string, id: string) => Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(id, "hex")]);
+
+/** worker が `hash-object --literally` で書いた root tree(`entries` は名前順)の commit を task branch に積む —— `git commit` の検査を通さない。 */
+function commitLiteralRoot(checkout: string, entries: Buffer[]): void {
+  const root = execFileSync("git", ["hash-object", "-t", "tree", "--literally", "-w", "--stdin"], { cwd: checkout, input: Buffer.concat(entries) }).toString().trim();
+  git(checkout, "update-ref", "HEAD", git(checkout, "commit-tree", root, "-p", "HEAD", "-m", "literal root"));
+}
+
+it("完了済み review の新しい tree が blob の mode で worker の tree を指せば、名前の場所は全部読めるので worker の repo の故障で、名前の場所を quarantine しない(ADR 0364 決定2 / ADR 0367 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const inner = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: place.path, input: "inner\n" }).toString().trim();
+    const tree = execFileSync("git", ["mktree"], { cwd: place.path, input: `100644 blob ${inner}\ta.txt\n` }).toString().trim();
+    commitLiteralRoot(place.path, [treeEntry("100644", "README.md", git(place.path, "rev-parse", "HEAD:README.md")), treeEntry("100644", "weird", tree)]);
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(tree) },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了済み review の worker が作った tree の mode を 0 で詰めていれば、新しい tree が名前の場所で欠けた blob も指していても worker の repo の故障で、名前の場所を quarantine しない(ADR 0364 決定2 / ADR 0367 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const { blob } = newTreePointsAtDamagedNamedBlob(ws.path, place.path);
+    commitLiteralRoot(place.path, [treeEntry("100644", "README.md", blob), treeEntry("100644", "copy.txt", blob), treeEntry("0100644", "padded.txt", blob)]);
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.any(String) },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
 it("worker が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、完了の門は worker の repo の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const { db, task, ws, place } = await pickedUpSession("work", (named) => {
     mkdirSync(join(named.path, "sub"));
@@ -868,6 +967,25 @@ it("worker が借りている tree の id に壊れた loose を書けば、自�
     commitWork(place.path, "more.txt", "more\n");
 
     expect(() => gateFetch(db, place, task)).toThrow(CheckoutUnreadableError);
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
+it.each(["missing", "corrupt"] as const)("完了済み review の commit が名前の場所で %s の blob を直に指せば、worker が自前で持っていても検証の段は名前の場所の失敗で、名前の場所を quarantine して checkout と commit を残す(ADR 0364 決定2 / ADR 0367 決定3)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const { blob } = newTreePointsAtDamagedNamedBlob(ws.path, place.path, damage);
+    const commit = git(place.path, "rev-parse", "HEAD");
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(blob);
+    expect(writeObservations(db, task)).toEqual([]);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+    expect(git(place.path, "rev-parse", `task/${task.id}`)).toBe(commit);
   } finally {
     db.close();
   }

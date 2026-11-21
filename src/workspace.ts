@@ -782,12 +782,18 @@ function copyUntrustedFile(read: UntrustedRead, rel: string, to: string): void {
   }
 }
 
-/** `from` の `objects`(行ごとの object)を1つの pack にして `to` で `index-pack --strict` し、pack の path(拡張子なし)を返す。 */
-function packAndIndex(deadline: number, from: string, to: string, objects: string): string {
+/** `from` の `objects`(行ごとの object)を `to` の objects/pack に1つの pack にし、index の無い pack の path(拡張子なし)を返す。 */
+function packWithoutIndex(deadline: number, from: string, to: string, objects: string): string {
   const packBase = join(to, "objects", "pack", "pack");
   const pack = `${packBase}-${workerRepoGitUntil(deadline, from, ["pack-objects", "--quiet", packBase], objects && `${objects}\n`)}`;
   // pack-objects の idx は `from` の loose の名前(worker が付けたもの)を信じる —— 捨てて中身から作り直す
   for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
+  return pack;
+}
+
+/** `from` の `objects` を1つの pack にして `to` で `index-pack --strict` し、pack の path(拡張子なし)を返す。 */
+function packAndIndex(deadline: number, from: string, to: string, objects: string): string {
+  const pack = packWithoutIndex(deadline, from, to, objects);
   workerRepoGitUntil(deadline, to, ["index-pack", "--strict", `${pack}.pack`]);
   return pack;
 }
@@ -817,12 +823,74 @@ function copyAndVerifyUntrustedTip(place: UntrustedCheckout, read: UntrustedRead
     }
     // ADR 0364 決定1: Interview の2役は閉包が全部写しの中で解けること —— 受験者が sha を言い当てても兄弟の答案は記録に入らない
     const objects = workerRepoGitUntil(deadline, raw, ["rev-list", "--objects", sha, ...(place.borrowsNamedObjects ? ["--not", "--alternate-refs"] : [])]);
-    packAndIndex(deadline, raw, verified, objects);
+    const pack = packWithoutIndex(deadline, raw, verified, objects);
+    try {
+      workerRepoGitUntil(deadline, verified, ["index-pack", "--strict", `${pack}.pack`]);
+    } catch (cause) {
+      // 上限超過は worker の repo の故障(ADR 0357 決定2)、写しの tmp の容量切れは host の失敗のまま(ADR 0364 決定2)—— 確かめ直さない
+      if (place.borrowsNamedObjects && !(cause instanceof WorkerTreeGitTimeoutError) && !outOfSpace(verified, cause)) blameLinksOutsidePack(place, read, sha, pack, objects, verified, format, cause);
+      throw cause;
+    }
     workerRepoGitUntil(deadline, verified, ["update-ref", ref, sha]);
   } catch (cause) {
+    if (cause instanceof NamedPlaceFetchError) throw cause;
     const failure = asUntrustedFailure(read, cause);
     throw failure !== cause && outOfSpace(raw, cause) ? copyHostError(read.noun, cause) : failure;
   }
+}
+
+/** ADR 0364 決定2: 名前の場所を借りる `verified` の `index-pack --strict` は、pack の中の worker の byte の失敗も、pack の外の link(除外で
+ *  名前の場所が供給する側)が名前の場所で読めない失敗も同じ文で落とす —— stderr でも名前の場所への問い合わせでも分けられない(worker が改名した
+ *  object も名前の場所に無い)。ADR 0388 決定2 の `verifyOwnObjects` と同じく worker の byte だけを先に確かめ直す: pack を名前の場所を借りない
+ *  repo へ移して中身から index し(`--fsck-objects` は object そのものを検査し、繋がりは見ない)、中身から作った id が pack に入れた列を全部
+ *  覆い、名前の場所が pack の外の object を読めなければ、名前の場所の失敗として読めない object を名指して投げる。覆わない・名前の場所が読める・
+ *  確かめ直しが落ちるなら戻り、呼び手が元の失敗を worker の repo の故障にする。上限超過(段の上限の中、ADR 0364 決定3)と写しの tmp の容量切れは
+ *  型のまま投げる。 */
+function blameLinksOutsidePack(place: UntrustedCheckout, read: UntrustedRead, sha: string, pack: string, objects: string, verified: string, format: string, failure: unknown): void {
+  const bytes = join(dirname(verified), "bytes");
+  const moved = join(bytes, "objects", "pack", basename(pack));
+  hostStep(read.noun, () => {
+    initBoardCopy(bytes, format);
+    renameSync(`${pack}.pack`, `${moved}.pack`);
+  });
+  // 上限超過と写しの tmp の容量切れのほかで落ちれば、名前の場所の側の証拠が無い —— 戻って元の失敗を worker の repo の故障にする
+  const settled = (cause: unknown): void => {
+    if (cause instanceof WorkerTreeGitTimeoutError || outOfSpace(bytes, cause)) throw cause;
+  };
+  let outside: string[];
+  try {
+    const packed = contentIds(read.deadline, bytes, moved);
+    if (!objects.split("\n").filter(Boolean).every((line) => packed.has(line.split(" ")[0]!))) return;
+    // pack が指して持たない object(`?` の行)—— 除外で名前の場所が供給する側
+    outside = workerRepoGitUntil(read.deadline, bytes, ["rev-list", "--objects", "--missing=print", sha]).split("\n").filter((line) => line.startsWith("?")).map((line) => line.slice(1));
+  } catch (cause) {
+    settled(cause);
+    return;
+  }
+  // 覆うだけでは worker だけの形(blob の mode で tree を指す entry、名前の場所と共有する `.gitmodules` の url)も残る —— `--strict` の link と
+  // fsck の検査は落ちるが `--fsck-objects` は通る。名前の場所が pack の外の object を本当に読めないときだけ名前の場所の失敗にする。brief の
+  // 「名前の場所への問い合わせで帰責を決めない」から外れるが、改名の形は上の覆いが先に除いた。読みは `ensureCarriedWhole` と同じく中身を読む
+  // pack-objects(`verified` は名前の場所だけを借りる)—— `unreadableIds` は `--strict` の stderr の id も数え、共有した `.gitmodules` を名指す
+  const input = `${outside.join("\n")}\n`;
+  let unread: unknown;
+  try {
+    if (outside.length > 0) workerRepoGitUntil(read.deadline, verified, ["pack-objects", "--quiet", join(verified, "read")], input);
+  } catch (cause) {
+    settled(cause);
+    unread = cause;
+  }
+  if (unread === undefined) return;
+  const ids = unreadableIds(verified, outside, input, unread);
+  throw new NamedPlaceFetchError(
+    `workspace ${place.namedPlace.name}: ${read.noun}'s tip ${sha} links ${ids.join(", ") || "an object"} that the named workspace should hold but cannot read`,
+    { cause: failure },
+  );
+}
+
+/** `repo` で `pack`(拡張子なし)を中身から `--fsck-objects` で index し、中身から作った id の集合を返す。 */
+function contentIds(deadline: number, repo: string, pack: string): Set<string> {
+  workerRepoGitUntil(deadline, repo, ["index-pack", "--fsck-objects", `${pack}.pack`]);
+  return new Set(workerRepoGitUntil(deadline, repo, ["verify-pack", "-v", `${pack}.idx`]).split("\n").map((line) => line.split(" ")[0]!));
 }
 
 /** 盤面が git を撃たずに tip を読む checkout —— task の checkout(ADR 0364 決定1)と作業台(ADR 0371 決定4)。在り処、作った元の
@@ -1883,9 +1951,10 @@ function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task, verb: "take 
   return { lineage, ref, name: lineage ?? protectedBranch(named), sha: git(named.path, "rev-parse", "--verify", ref) };
 }
 
-/** 人間担当の work の扉の取り込みの失敗のうち、人間が作業台で直せる拒否だけを回答の拒否にする —— 盤面の側の失敗は素のまま投げる。 */
+/** 人間担当の work の扉の取り込みの失敗のうち、人間が作業台で直せる拒否と名前の場所の側の失敗(文が名前の場所を名指す、ADR 0359 決定4 と同じく
+ *  拒むだけ)を回答の拒否にする —— 盤面のほかの失敗は素のまま投げる。 */
 function throwHumanWorkRefusal(err: unknown): never {
-  const refusal = [IntakeRefusedError, CheckoutUnreadableError, WorktreeStatusError, WorkerTreeGitTimeoutError, CheckoutHostError].some((kind) => err instanceof kind);
+  const refusal = [IntakeRefusedError, CheckoutUnreadableError, WorktreeStatusError, WorkerTreeGitTimeoutError, CheckoutHostError, NamedPlaceFetchError].some((kind) => err instanceof kind);
   if (refusal) throw new DomainError((err as Error).message);
   throw err;
 }

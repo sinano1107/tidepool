@@ -30,7 +30,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
+import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
@@ -1146,6 +1146,18 @@ it("take_in_work は作業台の tip を包む commit で task/<H> に取り込�
   expect([git(path, "rev-parse", `task/${h.id}`), git(path, "rev-parse", `board/task/${h.id}`), git(path, "status", "--porcelain")]).toEqual([wrapped, wrapped, ""]);
   const { place } = await pickedAgentChild(b, h);
   expect(git(place.path, "show", "HEAD:ground.txt")).toBe("groundwork");
+});
+
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
+it("take_in_work は作業台の新しい tree が名前の場所で欠けた blob を直に指せば、名前の場所の側の失敗を名前の場所を名指す回答の拒否にし、task/<H> を書かない(ADR 0364 決定2)", async () => {
+  const b = await board("take-in-named-place");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  await startWork(b, h);
+  const before = untouched(b, h);
+  const { blob } = newTreePointsAtDamagedNamedBlob(b.ws.path, realpathSync(humanWorkbench(b, h)));
+
+  expect(await takeIn(b, h)).toEqual({ ok: false, failure: { kind: "domain_error", error: expect.stringMatching(new RegExp(`workspace ${b.ws.name}:[\\s\\S]*${blob}`)) } });
+  expect(untouched(b, h)).toEqual(before);
 });
 
 it("take_in_work は tip が task/<H> と同じなら取り込むものが無いと拒み、タスクブランチがあって作業台の無い H は start_work を指して拒む —— どちらも何も書かない(pin C19)", async () => {
