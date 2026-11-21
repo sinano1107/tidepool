@@ -101,7 +101,7 @@ export type LandingVerdict =
     }
   // 開いている PR に積み残しが無い —— push も GitHub の読み取りもしない(ADR 0241)
   | { kind: "up_to_date"; prNumber: number }
-  // retry が答えている根を、この回の収束は撃たなかった(ADR 0241 決定5)。error は回答の拒否文
+  // 回答が待つ根を、この回の収束は撃たなかった(ADR 0241 決定5 / ADR 0394 決定4)。error は回答の拒否文
   | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "root_pull_request_open" | "not_a_root"; error: string }
   // 止まっている原因が quarantine の question としてすでに出ている —— 失敗 question を重ねない(ADR 0241 決定6)。error は retry の拒否文
   | { kind: "quarantined"; error: string }
@@ -113,7 +113,9 @@ export type LandingVerdict =
         | "pull_request_already_merged"
         | "pull_request_closed"
         | "content_left_behind"
-        | "promotion_failed";
+        | "promotion_failed"
+        // 根の着地が回の中で例外に落ちた —— 失敗 question は立てず、ログと回答の拒否文だけに出る
+        | "landing_failed";
       error: string;
     };
 
@@ -669,7 +671,7 @@ function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } |
   );
 }
 
-/** retry が答えている根を回が候補にしなかった理由(ADR 0241 決定5)。error は回答の拒否文。 */
+/** 回答が待つ根を回が候補にしなかった理由(ADR 0241 決定5 / ADR 0394 決定4)。error は回答の拒否文。 */
 function exclusionOf(db: Db, taskId: string): Extract<LandingVerdict, { kind: "excluded" }> {
   const outcome = rootPrOutcome(db, taskId);
   if (outcome?.state === "CLOSED") {
@@ -687,7 +689,20 @@ function exclusionOf(db: Db, taskId: string): Extract<LandingVerdict, { kind: "e
       error: `task ${taskId} waits for its root task ${root.id}'s PR #${root.prNumber} to finish landing; answer again once it has`,
     };
   }
-  return { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` };
+  return { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer a landing root, so the board did not carry this answer` };
+}
+
+/** 収束を通る回答(retry と `merge`)が待つ根。`merge` の根は PR 番号で引き、引けなければ無い —— 回答の側が先に引いて拒んでいる。 */
+function answeredRootOf(db: Db, questionId: string): string | undefined {
+  const question = getTask(db, questionId);
+  if (question?.question_pending_pr_promotion_task_id) return question.question_pending_pr_promotion_task_id;
+  if (question?.question_pending_merge_pr == null) return undefined;
+  try {
+    return taskIdForPr(db, question.question_pending_merge_pr, question.workspace);
+  } catch (error) {
+    if (error instanceof DomainError) return undefined;
+    throw error;
+  }
 }
 
 
@@ -1841,11 +1856,14 @@ export function createLanding(deps: LandingDeps): Landing {
           continue;
         }
         console.error(`[landing] landing root ${id} failed; the pass goes on with the rest:`, error);
+        // ADR 0394 決定4: 例外で verdict を落とすと、回答の拒否文が「根でなくなった」と事実と違うことを言う
+        const message = error instanceof Error ? error.message : String(error);
+        record({ kind: "failed", reason: "landing_failed", error: `the board failed to land task ${id} (${message}); answer again` });
       }
     }
-    // retry が答えている根をこの回が候補にしなかったなら、なぜかを verdict にする —— 回答はそれで拒まれる
+    // ADR 0394 決定4: 回答が待つ根をこの回が飛ばしたなら、なぜかを verdict にする —— 回答はそれで拒まれる
     for (const questionId of answering.keys()) {
-      const taskId = getTask(deps.db, questionId)?.question_pending_pr_promotion_task_id;
+      const taskId = answeredRootOf(deps.db, questionId);
       if (!taskId || verdicts.some((root) => root.taskId === taskId)) continue;
       verdicts.push({ taskId, verdict: exclusionOf(deps.db, taskId) });
     }
