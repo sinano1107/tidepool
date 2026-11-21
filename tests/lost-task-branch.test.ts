@@ -871,17 +871,19 @@ it.each([["門が tip を記録した完了", false], ["旧版の完了", true]]
   expect(keptEvents(b.db)).toEqual([{ task_id: task.id, payload: { kind: "task_checkout_kept", path: place.path } }]);
 });
 
-it("S3: 門が tip を記録した後の未決着の task で人間が動かした `task/<id>` は、give-up が keep-around へ移して消し、やり直した解放は書かずに解放の失敗にして checkout を残し、failure question の retry が fork 元から作り直す(ADR 0393 決定2・3、ADR 0392 決定1・3)", async () => {
+// S1 は checkout の `.git` を消して読めない形で代える —— 2回目の session の alternates の祖先が gc で消える形そのものではない
+it.each([["S3: checkout が tip を持つ", false], ["S1: checkout が読めない", true]] as const)("%s未決着の task で人間が動かした `task/<id>` は、give-up が keep-around へ移して消し、やり直した解放は書かずに解放の失敗にして checkout を残し、failure question の retry が fork 元から作り直す(ADR 0393 決定2・3、ADR 0392 決定1・3)", async (_, unreadable) => {
   const b = await board("s3-unsettled");
   const task = work(b, "root");
   const { place, tip, human } = await movedBeforeRelease(b, task, false);
+  if (unreadable) rmSync(join(place.path, ".git"), { recursive: true, force: true });
 
   const answered = await giveUp(b);
 
   expect(accepted(b)).toBe(true);
   expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${task.id}`)).toBe("");
   expect(git(b.ws.path, "rev-parse", `refs/keep-around/${human}`)).toBe(human);
-  expect(git(place.path, "rev-parse", "HEAD")).toBe(tip);
+  if (!unreadable) expect(git(place.path, "rev-parse", "HEAD")).toBe(tip);
   expect(kindsOf(b, task)).toEqual(expect.arrayContaining(["task_checkout_release_failed", "task_checkout_kept"]));
   expect(answered.notice).toContain(place.path);
   const question = openQuestionOf(b, task)!;
@@ -988,7 +990,8 @@ function lostButPresent(b: Board, taskId: string): string {
   return main;
 }
 
-it("失われた event が効いたまま `task/<id>` が在れば、pickup は採らずに止まり、`task_branch_created` を書かず、workspace を Quarantine しない(ADR 0392 決定2)", async () => {
+// 盤面の pickup がこれを workspace の Quarantine でなく task の spawn の失敗(cancel だけ)にする分岐は scheduler にあり、ここでは見ない
+it("失われた event が効いたまま `task/<id>` が在れば、pickup の準備は採らずに止まり、`task_branch_created` を書かない(ADR 0392 決定2)", async () => {
   const b = await board("lost-but-present-pickup");
   const task = await commitThrough(b, work(b, "root"), "root.txt");
   await giveUp(b, task.id);
@@ -1000,7 +1003,6 @@ it("失われた event が効いたまま `task/<id>` が在れば、pickup は�
 
   expect(createdShas(b, task)).toEqual(created);
   expect(taskBranchLostInForce(b.db, task.id)).toBeDefined();
-  expect(accepted(b)).toBe(true);
 });
 
 it("失われた event が効いたまま `task/<H>` が在れば、`start_work` は拒み、`task_branch_created` を書かず、H に ref と値を名指す cancel だけの failure question を1つ立て、workspace を Quarantine しない(ADR 0392 決定2)", async () => {
