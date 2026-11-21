@@ -621,12 +621,13 @@ function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
   return !taskCheckoutWasReleased(db, task.id, path) && latestEventOfTask(db, task.id, "task_checkout_release_failed")?.payload.path !== path;
 }
 
-/** ADR 0390 決定1: 系譜の帰り先のタスクブランチの持ち主が解放を負う —— session 中・後始末の印がある・解放待ち(ADR 0369)。
- *  その系譜に触る人間の扉(完了と書き始める)が読む。 */
-export function returnOwnerOwesRelease(db: Db, ownerId: string): boolean {
+/** ADR 0390 決定1: 系譜の帰り先のタスクブランチの持ち主が解放を負うなら、どの形で負うか —— 後始末の印がある・session 中・解放待ち
+ *  (ADR 0369)。負わなければ undefined。その系譜に触る人間の扉(完了と書き始める)が読む。 */
+export function returnOwnerOwedRelease(db: Db, ownerId: string): "teardown" | "session" | "pending" | undefined {
+  if (db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").pluck().get(ownerId) !== null) return "teardown";
   const owner = getTask(db, ownerId)!;
-  if (owner.status === "in_progress" || owesTaskCheckoutRelease(db, owner)) return true;
-  return db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").pluck().get(ownerId) !== null;
+  if (owner.status === "in_progress") return "session";
+  return owesTaskCheckoutRelease(db, owner) ? "pending" : undefined;
 }
 
 /** task の checkout を開いたことがあり、解放の着け先が `name` の task(ADR 0369 決定2): Interview の root と受験者は面接室(root の id)、

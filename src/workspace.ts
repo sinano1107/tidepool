@@ -142,7 +142,7 @@ import {
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
-  returnOwnerOwesRelease,
+  returnOwnerOwedRelease,
   sessionReadCheckouts,
   settleQuestionAsObserved,
   subtreeSql,
@@ -1810,11 +1810,17 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
 /** ADR 0390 決定1〜3: 系譜の帰り先のタスクブランチの持ち主が解放を負う間は拒む —— 根(帰り先が保護ブランチ)には持ち主が無い。 */
 function refuseWhileReturnOwnerOwesRelease(db: Db, named: WorkspaceConfig, task: Task, verb: "complete" | "start work"): void {
   const lineage = lineageTaskBranch(db, named, task);
-  if (!lineage || !returnOwnerOwesRelease(db, taskIdOfBranch(lineage))) return;
+  const owed = lineage && returnOwnerOwedRelease(db, taskIdOfBranch(lineage));
+  if (!lineage || !owed) return;
   const owner = getTask(db, taskIdOfBranch(lineage))!;
-  // 決定3: 人間の回答待ちならその question を名指す —— 落ちた後始末・封じ込めの確認・解放待ちの workspace の Quarantine(子は帰り先と同じ workspace)
+  // 決定3: 人間の回答待ちならその question を名指す —— 後始末は落ちた後始末か封じ込めの確認を、解放待ちはやり直す workspace の Quarantine
+  // (子は帰り先と同じ workspace)を待つ。封じ込めの確認は盤面全体の鍵で能力検査も立てるので、後始末の印がある間だけ読む
   const question =
-    openQuarantineQuestion(db, "failedTeardown", owner.id) ?? openQuarantineQuestion(db, "containment", null) ?? openQuarantineQuestion(db, "workspace", named.name);
+    owed === "teardown"
+      ? (openQuarantineQuestion(db, "failedTeardown", owner.id) ?? openQuarantineQuestion(db, "containment", null))
+      : owed === "pending"
+        ? openQuarantineQuestion(db, "workspace", named.name)
+        : undefined;
   throw new DomainError(
     `task ${owner.id} "${owner.title}", whose branch this task returns to, is still running or being torn down — ${verb} again once it has finished.${question ? ` Answer question ${question.id} first.` : ""}`,
   );

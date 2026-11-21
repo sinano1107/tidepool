@@ -712,7 +712,8 @@ it("解放待ち(印は消え、解放が済んでいない)の帰り先の持�
   expect(await startWork(b, h)).toEqual(refused(ownerOwesRelease(p, "start work")));
   expect([...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)]).toEqual(before);
 
-  // 準備の await の間に Quarantine が立った形 —— 書く区間の読みがその question を名指す
+  // 準備の await の間に Quarantine が立った形 —— 書く区間の読みがその question を名指す。能力検査が立てた封じ込めの確認は解放を止めないので名指さない
+  quarantineContainment(b.db, "the host's containment check failed", b.clock.now());
   quarantineWorkspace(b.db, b.ws.name, `The release of task ${p.id} is unfinished and answering this question retries it`, b.clock.now());
   const question = quarantineQuestion(b.db, "workspace", b.ws.name)!;
   expect(() => completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {})).toThrow(
