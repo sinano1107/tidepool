@@ -222,10 +222,11 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
 
-  it("purely-local な workspace が remote-backed として宣言され、全ブランチが載る", async () => {
+  // ADR 0395 決定3: publish の段1 が origin へ送るのは保護ブランチだけ —— タスクブランチは出元 repo の宣言(段2)が出元 repo へ送る
+  it("purely-local な workspace が remote-backed として宣言され、保護ブランチだけが載り、写しも保護ブランチだけ", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
-    // publish 以前のタスクブランチ(決着後も削除されない差分の恒久記録)も連れて行く
     git(checkout, "branch", "task/abc123");
+    git(checkout, "branch", "feature");
     // タグはドメイン上の意味を持たないので送らない(ADR 0066 決定6)
     git(checkout, "tag", "v0.1.0");
     const dest = await makeDestination();
@@ -236,12 +237,13 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
       "tidepool publish workspace sandbox via WebUI",
     );
-    expect(remoteBranches(dest).sort()).toEqual(["main", "task/abc123"]);
+    expect(remoteBranches(dest)).toEqual(["main"]);
     expect(git(dest, "ls-remote", "--tags", dest)).toBe("");
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
+    expect(git(checkout, "for-each-ref", "--format=%(refname)", "refs/remotes/")).toBe("refs/remotes/origin/main");
   });
 
-  // ADR 0243 / ADR 0066 決定4: push する N 本の写しはまとめて予告され、押した値か予告の前(行が無い)の1値に畳まれる ——
+  // ADR 0243 / ADR 0066 決定4: push する写しは予告され、押した値か予告の前(行が無い)の1値に畳まれる ——
   // 2値の行のまま残れば、もう片方の値へ動いた写しを解放が通してしまう。atomic に拒まれた push は写しを作らない
   it.each([
     ["通った", false],
@@ -254,7 +256,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     if (rejected) await seedDestination(dest);
 
     const published = publishWorkspace({ name: "sandbox", repo: dest }, deps);
-    await (rejected ? expect(published).rejects.toThrow() : expect(published).resolves.toBeUndefined());
+    await (rejected ? expect(published).rejects.toThrow() : expect(published).resolves.toContain("sent its protected branch main"));
     // 押した写しは消し、拒まれた写しは予告した値で作る
     const copy = "refs/remotes/origin/main";
     const main = git(checkout, "rev-parse", "main");
@@ -266,9 +268,9 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     );
   });
 
-  // ADR 0052 Status 追記(#2827): 盤面所有の repo からの push は checkout の写しを動かさない —— 押した N 本の写しは push の成功を見て盤面が書く
+  // ADR 0052 Status 追記(#2827): 盤面所有の repo からの push は checkout の写しを動かさない —— 押した写しは push の成功を見て盤面が書く
   it.each([
-    ["通れば、押した各ブランチの写しは押した sha を指す", false],
+    ["通れば、押した保護ブランチの写しだけが押した sha を指す", false],
     ["拒まれれば、写しは1本も作られない", true],
   ])("publish の push が%s", async (_, rejected) => {
     const { deps, checkout } = await makeBoard();
@@ -279,7 +281,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     await publishWorkspace({ name: "sandbox", repo: dest }, deps).catch(() => {});
 
     const refs = (prefix: string) => git(checkout, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", prefix);
-    expect(refs("refs/remotes/origin")).toBe(rejected ? "" : git(checkout, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads"));
+    expect(refs("refs/remotes/origin")).toBe(rejected ? "" : `${git(checkout, "rev-parse", "main")} main`);
   });
 
   // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、写しを書く前の値(ここでは無い)へ戻した後に
@@ -363,13 +365,8 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
 
   // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの手順は1つが落ちても残り(ADR 0391 決定3 の覚えた repo の畳みを含む)を撃ち、
   // 投げるのは巻き戻しの失敗で、元の失敗はその原因に残る
-  it("巻き戻しで写しの削除が落ちても、後の写しは戻り、覚えた repo は予告の前の値へ畳まれ、元の失敗を原因に持つ巻き戻しの失敗を投げる", async () => {
+  it("巻き戻しで写しの削除が落ちても、覚えた repo は予告の前の値へ畳まれ、元の失敗を原因に持つ巻き戻しの失敗を投げる", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
-    const prior = git(checkout, "rev-parse", "main");
-    git(checkout, "commit", "--allow-empty", "-m", "after the copy");
-    git(checkout, "update-ref", "refs/remotes/origin/main", prior);
-    // refname 順で main より前 —— 写しが無かった名前の削除が、前に値があった名前の書き戻しより先に落ちる
-    git(checkout, "branch", "a");
     await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
     const dest = await makeDestination();
     await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
@@ -383,17 +380,15 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
 
     expect(err.cause).toBeInstanceOf(RegistryPushFailedError);
     expect(err.message).toContain(`failed: ${(err.cause as Error).message}; rolling it back failed: `);
-    expect(git(checkout, "rev-parse", "refs/remotes/origin/main")).toBe(prior);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     expect(deps.db.prepare("SELECT remembered_repo FROM workspace_state WHERE name = ?").pluck().get("sandbox")).toBe("null");
   });
 
-  // 前の値のままの写しは巻き戻しで撃たない —— 残った `origin/feature` と D/F で衝突する `origin/feature/x` は、書けずに落ちた後の
+  // 前の値のままの写しは巻き戻しで撃たない —— 残った `origin/main/x` と D/F で衝突する `origin/main` は、書けずに落ちた後の
   // `update-ref -d` も落ちる。何も残っていない巻き戻しを失敗と言わない
   it("残った写しと名前が衝突して写しを書けずに落ちた publish は、巻き戻しの失敗でなく元の失敗を投げ、publish の前のままに戻る", async () => {
     const { deps, checkout } = await makeBoard();
-    git(checkout, "update-ref", "refs/remotes/origin/feature", git(checkout, "rev-parse", "main"));
-    git(checkout, "branch", "feature/x");
+    git(checkout, "update-ref", "refs/remotes/origin/main/x", git(checkout, "rev-parse", "main"));
     const state = () => [git(checkout, "for-each-ref", "--format=%(objectname) %(symref) %(refname)"), git(checkout, "config", "--local", "--list")];
     const before = state();
     const dest = await makeDestination();
@@ -403,7 +398,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
       (e) => e as Error,
     );
 
-    expect(err.message).toContain("refs/remotes/origin/feature/x");
+    expect(err.message).toContain("refs/remotes/origin/main");
     expect(err.message).not.toContain("rolling it back failed");
     expect(state()).toEqual(before);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
@@ -506,10 +501,9 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち
-  // 「GitHub UI の Add a README」。`main` は non-fast-forward で落ちるが `task/*` は
-  // 宛先に無いので、非 atomic なら**タスクブランチだけが載って**しまう —— 失敗した
-  // publish が痕跡を残さないという不変条件がリモート側で破れる。
-  it("宛先が空でなければ落ち、ローカルの origin も宛先のブランチも増えない(--atomic)", async () => {
+  // 「GitHub UI の Add a README」。送るのは保護ブランチ1本だけ(ADR 0395 決定3)なので atomic は効かず、
+  // その1本が non-fast-forward で落ちれば、ローカルにも宛先にも痕跡は残らない。
+  it("宛先が空でなければ保護ブランチの push が non-fast-forward で落ち、ローカルの origin も宛先のブランチも増えない", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     git(checkout, "branch", "task/abc123");
     const dest = await makeDestination();

@@ -1522,23 +1522,23 @@ function PublishWorkspace({ ws, say, onPublished }) {
   const submit = async () => {
     setBusy(true);
     try {
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: TidepoolRules.normalizeText(repo) });
+      const { message } = await api("POST /api/workspaces/:name/publish", { params: { name: ws.name }, body: { repo: TidepoolRules.normalizeText(repo) } });
       setRepo("");
-      say("success", "workspace published \u2014 every branch is on the remote", ws.name);
+      say("success", "workspace published \u2014 the protected branch is on the remote", message);
       await onPublished();
     } catch (err) {
       say("danger", "publish failed \u2014 nothing landed, safe to retry", String(err.message || err));
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "Publish"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "give this purely-local workspace a remote source of truth \u2014 every branch is pushed to an empty repository you created and invited the bot to. The board creates nothing on GitHub."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "Publish"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "give this purely-local workspace a remote source of truth \u2014 its protected branch is pushed to an empty repository you created and invited the bot to. The board creates nothing on GitHub. Task branches go to the head repo (a fork) you set afterwards."), /* @__PURE__ */ React.createElement(
     Input,
     {
       value: repo,
       onChange: (e) => setRepo(e.target.value),
       placeholder: "the destination repository URL \u2014 must be empty"
     }
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(repo), onClick: submit }, "Publish \u2014 pushes every branch, then commits to the registry"));
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(repo), onClick: submit }, "Publish \u2014 pushes the protected branch, then commits to the registry"));
 }
 const workspaceProtectionCaptions = {
   registry_repository: "shares the registry's repository \u2014 protection stays on",

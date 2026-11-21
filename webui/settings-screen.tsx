@@ -150,9 +150,9 @@ function PublishWorkspace({ ws, say, onPublished }: {
   const submit = async () => {
     setBusy(true);
     try {
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: TidepoolRules.normalizeText(repo) });
+      const { message } = await api('POST /api/workspaces/:name/publish', { params: { name: ws.name }, body: { repo: TidepoolRules.normalizeText(repo) } });
       setRepo('');
-      say('success', 'workspace published — every branch is on the remote', ws.name);
+      say('success', 'workspace published — the protected branch is on the remote', message);
       await onPublished();
     } catch (err) {
       // a failed publish leaves no trace (the board rolls its own `remote add`
@@ -167,13 +167,14 @@ function PublishWorkspace({ ws, say, onPublished }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Publish</span>
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        give this purely-local workspace a remote source of truth — every branch is pushed to an
+        give this purely-local workspace a remote source of truth — its protected branch is pushed to an
         empty repository you created and invited the bot to. The board creates nothing on GitHub.
+        Task branches go to the head repo (a fork) you set afterwards.
       </p>
       <Input value={repo} onChange={(e) => setRepo(e.target.value)}
         placeholder="the destination repository URL — must be empty" />
       <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(repo)} onClick={submit}>
-        Publish — pushes every branch, then commits to the registry
+        Publish — pushes the protected branch, then commits to the registry
       </Button>
     </div>
   );

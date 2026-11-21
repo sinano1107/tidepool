@@ -26,6 +26,7 @@ import {
   exactProtectedBranchRef,
   HEAD_REPO_REMOTE,
   originUrl,
+  protectedBranch,
 } from "./pickup-predicates.js";
 import { openQuarantineQuestion, openQuarantineQuestions, parseWorkspaceContainmentValue, type QuarantineKind } from "./quarantine.js";
 import {
@@ -143,7 +144,7 @@ export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
   github?: GitHubClient;
 }
 
-/** publish の dep: push が写しを動かすので、走っている session の基準へ N 本を予告する盤面の db を足す(ADR 0243 /
+/** publish の dep: push が写しを動かすので、走っている session の基準へ写しを予告する盤面の db を足す(ADR 0243 /
  *  ADR 0066 決定4)。 */
 export interface PublishWorkspaceDeps extends WorkspaceGitHubDeps {
   db: Db;
@@ -155,7 +156,8 @@ export interface PublishWorkspaceDeps extends WorkspaceGitHubDeps {
  *  どこへ落ちたかを返すことがその代わりである。 */
 export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<string>;
 export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
-export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<void>;
+/** 返すのは送った範囲と次の手順の文(ADR 0395 決定3)。 */
+export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string>;
 /** 返すのは**残る** checkout の場所(ADR 0087 決定4): 消えるのは registry エントリ
  *  だけなので、応答はホスト上に残った checkout を名指しする。参照検査の事実を
  *  第2引数で受ける形は `DeleteAgentFn` と同じ。 */
@@ -471,6 +473,8 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   // the one GitHub read comes before the registry read, so nothing awaits between that read and the commit (ADR 0066 決定5 の線)
   const head = input.head_repo ? await readHeadRepoParent(input.head_repo, deps.github) : undefined;
+  // ADR 0093: the head repo's token for the task branch push (ADR 0395 決定3 の段2) is warmed here too, before the registry read
+  if (head) await deps.githubAuth?.ensureToken(githubKey(head.head));
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -533,6 +537,35 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
   else delete next.head_repo;
   const now = () => (deps.clock ?? new SystemClock()).now();
   writeHeadRepo(deps.db, { name: input.name, path, repo: entry.repo, head_repo: entry.head_repo }, next.head_repo, now, commit);
+  if (next.head_repo !== undefined) sendTaskBranches(deps.db, { name: input.name, path, repo: entry.repo, head_repo: next.head_repo }, deps.githubAuth);
+}
+
+/** ADR 0395 決定3 の段2 が送れなかった枝。宣言は残っていて、同じ値をもう一度通せば送り直す。 */
+export class HeadRepoTaskBranchesNotSentError extends Error {
+  constructor(name: string, headRepo: string, failures: string[]) {
+    super(`The head repo ${headRepo} of workspace ${name} was saved, but these task branches were not sent to it: ${failures.join("; ")}. Set the same head repo again to send them.`);
+    this.name = "HeadRepoTaskBranchesNotSentError";
+  }
+}
+
+/** ADR 0395 決定3 の段2: `task/*` を出元 repo へ1本ずつ送る —— 1本の分岐した枝が、他の枝の送り直しを毎回塞がないよう atomic にしない。
+ *  写しは送れた枝の `refs/remotes/head-repo/task/*` だけ。`refs/remotes/origin/*` は書かない —— `rewindStop` はそれを origin へ押した値と読む。
+ *  段1 の不変条件は持ち込まない: 失敗しても宣言は残る。同じ sha が既にある枝は up-to-date で通るので、撃ち直しは冪等。 */
+function sendTaskBranches(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
+  const branches = [...refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads/task/"))];
+  const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch, HEAD_REPO_REMOTE), sha] as const);
+  const failures: string[] = [];
+  writeBoardRefs(db, workspace, writes, () => {
+    // shortcut: N synchronous pushes — an unreachable fork holds the board for up to N stall bounds (ADR 0334), upgrade if task branches pile up
+    for (const [branch, sha] of branches) {
+      try {
+        authedPush(auth, workspace, GIT_NETWORK_TIMEOUT_MS, [[branch, sha]], HEAD_REPO_REMOTE);
+      } catch (err) {
+        failures.push(`${branch} (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+  });
+  if (failures.length > 0) throw new HeadRepoTaskBranchesNotSentError(workspace.name, workspace.head_repo!, failures);
 }
 
 /** ADR 0087 決定1/4 の workspace 半分: registry エントリだけを committed main から
@@ -651,9 +684,10 @@ export class CheckoutHasOriginError extends Error {
 }
 
 /** ADR 0066 決定2 の扉: purely-local な workspace に remote 正本を与える。
- *  `git remote add origin` → 盤面が組んだ URL へ `git push --atomic <sha>:<ref>…`(全ブランチ)→ 写しの `update-ref` → registry エントリへ `repo`。
+ *  `git remote add origin` → 盤面が組んだ URL へ `git push <sha>:<保護ブランチ>` → 写しの `update-ref` → registry エントリへ `repo`。
+ *  `task/*` は送らない —— 出元 repo の宣言が出元 repo へ送る(ADR 0395 決定3 の段2)。返すのは送った範囲と次の手順の文。
  *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
-export async function publishWorkspace(input: PublishWorkspaceInput, deps: PublishWorkspaceDeps): Promise<void> {
+export async function publishWorkspace(input: PublishWorkspaceInput, deps: PublishWorkspaceDeps): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
@@ -689,13 +723,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
   if (dir !== path) throw new Error(`workspace ${name}'s checkout path changed during publish; try again`);
   const declaration = { name, path: dir, repo: input.repo };
-  // 送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**読み、読んだ値を `<sha>:<ref>` でそのまま押し、
-  // その写しになる N 本をまとめて口に予告する(ADR 0243 / ADR 0066 決定4): tip を読み直す push(`--all`)だと、走っている
-  // session のタスクブランチが進んだぶん押した写しが予告と食い違い、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
-  // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
-  const branches = [...refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/"))].map(
-    ([ref, sha]) => [ref.slice("refs/heads/".length), sha] as const,
-  );
+  // ADR 0395 決定3: 送るのは保護ブランチだけ —— `task/*` は出元 repo の宣言が出元 repo へ送る。**push の直前に**読んだ値を
+  // `<sha>:<ref>` でそのまま押し、その写しを口に予告する(ADR 0243 / ADR 0066 決定4): tip を読み直す push だと、押した写しが予告と食い違う。
+  // 無ければ `remote add` の手前で落ちる —— refspec の無い push を撃たない
+  const branch = protectedBranch({ ...declaration, branch: fresh.branch });
+  const branches = [[branch, git(dir, "rev-parse", "--verify", `refs/heads/${branch}`)] as const];
   const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch), sha] as const);
   // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの戻す先は、書く前に checkout にあった写しの値。基準の行は使わない —— 落ちて
   // 残った行は次の比較まで残り(ADR 0351 決定4)、次の予告はその上に重なる(ADR 0373 決定3・5)ので、行からは戻す先が1つに決まらない
@@ -706,12 +738,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   const publish = () => {
     git(dir, "remote", "add", "origin", input.repo);
     try {
-      // 2本以上なら `--atomic` は必須(ADR 0066 決定6、`authedPush` が付ける): 宛先が「Add a README」つきの非空 repo
-      // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
-      // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
-      // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
-      // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
-      // (ADR 0066 決定6)。
+      // タグはドメイン上の意味を持たないので送らない(ADR 0066 決定6)。
       // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しはこれを書く前の値へ戻す(ADR 0066 決定5 の Status 追記、#3197)
       authedPush(githubAuth, declaration, GIT_NETWORK_TIMEOUT_MS, branches);
       commitWorkspaceEntry(
@@ -760,6 +787,9 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
     assertRememberedRepo(deps.db, declaration, now());
   };
   writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish, () => announcePublishedRepo(deps.db, declaration));
+  const label = repositoryLabel(input.repo);
+  return `Published workspace ${name}: sent its protected branch ${branch} to origin (${label}); task branches were not sent. ` +
+    `Next, fork ${label} and set the fork as this workspace's head repo in the workspace settings; that sends the task branches to the fork.`;
 }
 
 /** Each mode's external half, ordered so the registry commit stays last. */

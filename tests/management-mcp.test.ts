@@ -232,6 +232,7 @@ it("publish_workspace は宛先ごとオーケストレーションへ渡り、�
     if (input.repo === "https://github.com/sinano1107/taken.git") {
       throw new WorkspaceAlreadyPublishedError(input.name, input.repo);
     }
+    return "published main";
   });
   t = await bootTidepool({ workspaceAdmin: { publish: published } });
   const client = await managementMcpClient(t.baseUrl);
@@ -244,6 +245,7 @@ it("publish_workspace は宛先ごとオーケストレーションへ渡り、�
       arguments: { name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" },
     });
     expect(ok.isError ?? false).toBe(false);
+    expect(JSON.parse(ok.content[0].text)).toEqual({ message: "published main" });
     expect(published).toHaveBeenCalledWith({
       name: "sandbox",
       repo: "https://github.com/sinano1107/sandbox.git",

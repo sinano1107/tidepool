@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { GitHubAuth } from "../src/github-auth.js";
 import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
@@ -9,9 +10,11 @@ import {
   WorkspaceConfirmationRequiredError,
   WorkspaceRegistryUnprotectError,
 } from "../src/workspace-create.js";
+import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { api, bootTidepool, git, makeWorkspace, type Tidepool } from "./harness.js";
+import { api, bootTidepool, git, makeWorkspace, shimGit, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -192,7 +195,7 @@ it("registry に居ない名前は 404", async () => {
 
 // ADR 0395 決定2: 出元 repo の値の検査と危険な値の門 —— 本物の扉(updateWorkspace)を fake の GitHub client で束ねる
 describe("出元 repo の宣言(ADR 0395 決定2)", () => {
-  async function headRepoBoard() {
+  async function headRepoBoard(githubAuth?: GitHubAuth) {
     const checkout = await makeWorkspace("lagoon");
     const yaml = `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n`;
     const registryDir = await makeRegistry({ "workspaces.yaml": yaml });
@@ -203,7 +206,7 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     github.scriptRepositoryParent("acme/registry", null);
     github.scriptRepositoryParent("acme/lagoon", null);
     github.scriptRepositoryParent("acme/stranger", "acme/elsewhere");
-    t = await bootTidepool({ workspaceAdmin: { update: (input) => updateWorkspace(input, { db: t.db, github, registry, workspacesBaseDir: t.dir }) } });
+    t = await bootTidepool({ workspaceAdmin: { update: (input) => updateWorkspace(input, { db: t.db, github, githubAuth, registry, workspacesBaseDir: t.dir }) } });
     const entry = () => loadRegistry(registryDir, "purely-local").workspaces.lagoon!;
     // 扉の外の手編集(registry-edit の PR の merge と同じ形)
     const handEdit = (head: string) => {
@@ -248,6 +251,12 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     const reset = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
     expect(reset.status).toBe(200);
     expect(entry().head_repo).toBe("acme/fork");
+
+    // 同じ値をもう一度通しても壊れない(ADR 0395 決定3 の段2 の撃ち直しの扉)—— registry の書き込みは変更が無ければ何も積まない
+    const resent = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+    expect(resent.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(git(checkout.path, "config", "remote.head-repo.url")).toBe("https://github.com/acme/fork.git");
   });
 
   it("URL の綴り(資格情報つき)で送った出元 repo は owner/name に直して書き、資格情報を registry に残さない", async () => {
@@ -259,6 +268,56 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     expect(entry().head_repo).toBe("acme/fork");
     expect(readFileSync(join(registryDir, "workspaces.yaml"), "utf8")).not.toContain("dummy-token");
     expect(git(checkout.path, "config", "remote.head-repo.url")).toBe("https://github.com/acme/fork.git");
+  });
+
+  // ADR 0395 決定3 の段2: 宣言の後に扉が `task/*` を1本ずつ出元 repo へ送る。段1 の不変条件は持ち込まない —— 失敗しても宣言は残り、
+  // 同じ値をもう一度通せば送り直す。出元 repo は GitHub の名前なので、盤面が組んだ URL を shim で手元の bare へ回す
+  it("出元 repo を宣言すると task/* が出元 repo へ送られ、送れなかった枝があっても宣言は残り、同じ値をもう一度通すと送り直す", async () => {
+    const broker = await startFakeBroker((request) => issuedToken(`token-for-${request.repo}`));
+    onTestFinished(() => broker.close());
+    const tokenFile = join(await tempDir("tidepool-token-"), "token");
+    writeFileSync(tokenFile, "gho_test\n", { mode: 0o600 });
+    const { checkout, entry } = await headRepoBoard(new GitHubAuth(tokenFile, broker.url));
+    git(checkout.path, "branch", "task/aaa");
+    git(checkout.path, "branch", "task/bbb");
+    git(checkout.path, "branch", "feature");
+    const sha = git(checkout.path, "rev-parse", "main");
+    const fork = await tempDir("tidepool-fork-");
+    git(fork, "init", "--bare", "-b", "main");
+    // fork の task/aaa は盤面の知らない履歴にある —— non-fast-forward で拒まれる
+    const outside = await tempDir("tidepool-outside-");
+    git(outside, "init", "-b", "main");
+    git(outside, "commit", "--allow-empty", "-m", "diverged on the fork");
+    git(outside, "push", fork, "main:refs/heads/task/aaa");
+    const diverged = git(fork, "rev-parse", "task/aaa");
+    const calls = await shimGit({ route: ["https://github.com/acme/fork.git", fork] });
+    const forkBranches = () => git(fork, "for-each-ref", "--format=%(refname:lstrip=2) %(objectname)", "refs/heads/");
+    const copies = () => git(checkout.path, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/");
+
+    const failed = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+
+    expect(failed.status).toBe(502);
+    expect(failed.json.error).toMatch(
+      /^The head repo acme\/fork of workspace lagoon was saved, but these task branches were not sent to it: task\/aaa \(.+\)\. Set the same head repo again to send them\.$/s,
+    );
+    // remote の値は上のテストが確かめる —— shim は盤面の `remote set-url` の引数も書き換える
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(forkBranches()).toBe(`task/aaa ${diverged}\ntask/bbb ${sha}`);
+    expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sha}`);
+    // 1本ずつの push は、どれも出元 repo に絞った token で撃たれる
+    const pushes = calls().filter(({ args }) => args.includes("push"));
+    expect(pushes.map(({ args, env }) => [args.at(-1), env.GH_TOKEN])).toEqual([
+      [`${sha}:refs/heads/task/aaa`, "token-for-acme/fork"],
+      [`${sha}:refs/heads/task/bbb`, "token-for-acme/fork"],
+    ]);
+
+    git(fork, "update-ref", "-d", "refs/heads/task/aaa");
+    const again = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+
+    expect(again.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(forkBranches()).toBe(`task/aaa ${sha}\ntask/bbb ${sha}`);
+    expect(copies()).toBe(`refs/remotes/head-repo/task/aaa ${sha}\nrefs/remotes/head-repo/task/bbb ${sha}`);
   });
 
   it.each([

@@ -567,7 +567,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // ADR 0066 決定2: the board creates nothing on GitHub — the destination
       // repository is one a human prepared and installed the App on.
       description:
-        "Give a purely-local workspace a remote source of truth: push every branch to an empty repository the human prepared, then record it on the registry entry.",
+        "Give a purely-local workspace a remote source of truth: push its protected branch to an empty repository the human prepared, then record it on the registry entry. Task branches are not pushed; setting a head repo (a fork) on the workspace afterwards sends them there.",
       inputSchema: z.object({
         name: requiredTextSchema,
         repo: requiredTextSchema,
@@ -576,8 +576,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => {
       if (!deps.workspaceAdmin?.publish) return toolError("workspace administration is not configured");
       try {
-        await deps.workspaceAdmin.publish(input);
-        return toolResult({});
+        return toolResult({ message: await deps.workspaceAdmin.publish(input) });
       } catch (err) {
         return registryToolError(err);
       }

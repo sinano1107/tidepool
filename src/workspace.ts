@@ -3972,8 +3972,8 @@ export function outsidePushRefusal(
 }
 
 /** ADR 0376 決定6: PR の記録が無い根の巻き戻し —— origin の head が、盤面が最後に push した値の真の祖先。値は写し
- *  `refs/remotes/origin/task/<root>` から、盤面自身が push の成功を見て書いた値として読む(決定3 —— fetch しない。event を残さない publish の
- *  push も書く)。そのとき盤面は push せず、作業台も開かず、origin への操作2つ(落とされた commit を push し直す / ブランチを消す)を言う
+ *  `refs/remotes/origin/task/<root>` から、盤面自身が push の成功を見て書いた値として読む(決定3 —— fetch しない。publish は `task/*` を
+ *  origin へ送らず、出元 repo への送出は `refs/remotes/head-repo/*` に書く —— ADR 0395 決定3)。そのとき盤面は push せず、作業台も開かず、origin への操作2つ(落とされた commit を push し直す / ブランチを消す)を言う
  *  (spec #3273 text D2。`foundPr` は記録の無い見つけた PR)。ADR 0376 決定2: 写しが読めなければ止めない。写しと分かれた head は巻き戻しでは
  *  なく、盤面の知らない commit として `outsideCommitsStop` が受ける。巻き戻しでなければ undefined。 */
 export function rewindStop(workspace: WorkspaceConfig, taskId: string, head: string, foundPr?: number): PromotionStopError | undefined {

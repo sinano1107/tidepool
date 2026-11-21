@@ -995,8 +995,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
-      sendJson(res, {});
+      const message = await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
+      sendJson(res, { message } satisfies WireContract["POST /api/workspaces/:name/publish"]);
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         sendJson(res.status(404), { error: err.message });

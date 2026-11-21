@@ -1,13 +1,19 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { GitHubAuth } from "../src/github-auth.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
   type PublishWorkspaceInput,
+  publishWorkspace,
   WorkspaceAlreadyPublishedError,
 } from "../src/workspace-create.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, git, makeWorkspace, type Tidepool } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -21,6 +27,7 @@ it("POST /api/workspaces/:name/publish は宛先を publish オーケストレ�
     workspaceAdmin: {
       publish: async (input) => {
         calls.push(input);
+        return "published";
       },
     },
   });
@@ -33,6 +40,27 @@ it("POST /api/workspaces/:name/publish は宛先を publish オーケストレ�
   expect(calls).toEqual([
     { name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" },
   ]);
+});
+
+// ADR 0395 決定3: 段1 は保護ブランチだけを origin へ送り、成功文は送った範囲と次の手順(出元 repo を用意して宣言する)を言う
+it("POST /api/workspaces/:name/publish は保護ブランチだけを origin へ送り、送った範囲と次の手順を返す", async () => {
+  const ws = await makeWorkspace("sandbox");
+  git(ws.path, "branch", "task/abc123");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `sandbox:\n  path: ${ws.path}\n` });
+  const dest = await tempDir("tidepool-dest-");
+  git(dest, "init", "--bare", "-b", "main");
+  const token = join(await tempDir("tidepool-token-"), "token");
+  writeFileSync(token, "ghp_test\n");
+  const deps = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-"), githubAuth: new GitHubAuth(token) };
+  t = await bootTidepool({ workspaceAdmin: { publish: (input) => publishWorkspace(input, { ...deps, db: t.db }) } });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest });
+
+  expect(res.status).toBe(200);
+  expect(git(dest, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
+  expect(res.json).toEqual({
+    message: `Published workspace sandbox: sent its protected branch main to origin (${dest}); task branches were not sent. Next, fork ${dest} and set the fork as this workspace's head repo in the workspace settings; that sends the task branches to the fork.`,
+  });
 });
 
 it("publish が未設定(registry なしの盤面)なら 503 を返す", async () => {
@@ -51,6 +79,7 @@ it("宛先が空文字なら 400 で、オーケストレーションを呼ば�
     workspaceAdmin: {
       publish: async (input) => {
         calls.push(input);
+        return "published";
       },
     },
   });

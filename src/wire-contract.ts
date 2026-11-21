@@ -408,6 +408,8 @@ export interface WireContract {
   "DELETE /api/workspaces/:name": { checkout: string };
   /** `open_workbench` の応答(spec #3273 text A14)。 */
   "POST /api/workspaces/:name/workbench": { message: string };
+  /** publish の成功文: 送った範囲と次の手順(ADR 0395 決定3)。 */
+  "POST /api/workspaces/:name/publish": { message: string };
   "DELETE /api/workspaces/:name 409": DeletionConflict;
   "GET /api/agents": {
     agents: Array<{
