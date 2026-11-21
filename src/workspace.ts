@@ -881,10 +881,11 @@ function fetchUntrustedTip(place: UntrustedCheckout, branch: string): string {
  *  借りる先)で、確かめはその借りを外して数える —— 写しは使い捨てで、`own` の dir には書いてよい。 */
 type CarriedCopy = { own: string; tip: string; description: string; borrowing?: string };
 
-/** ADR 0388 決定1・2: 名前の場所へ運んだ直後に、`tip` の閉包のうち運んだ場所が自前の store に持つ object —— `own` を名前の場所の objects を
- *  借りずに辿り、`?` の付かないもの —— が名前の場所で欠けも破損も無く読めることを、pack に組んで確かめる(`rev-list` は zlib の破損を
- *  素通しする)。読めなければ `own` から入れ直して確かめ直す —— fetch は commit を既に持つ場所へ何も送らない。揃わなければ運ぶ段の失敗で、
- *  読めない object を名指す。段ごとに帰責する(ADR 0364 決定2): 写しを数える手の失敗は `from` の故障、写しの tmp の失敗は host の失敗。 */
+/** ADR 0388 決定1・2 / ADR 0398 決定1: 名前の場所へ運んだ直後に、`tip` から自前の object だけをたどって届く、運んだ場所の自前の object
+ *  —— `own` を名前の場所の objects を借りずに辿り、`?` の付かないもの —— が名前の場所で欠けも破損も無く読めることを、pack に組み、中身から
+ *  index し直して名前が揃うかで確かめる(`rev-list` は zlib の破損を、pack-objects は別の中身の loose を素通しする)。walk が借りている tree で
+ *  止まるのは定義どおりで、その下の object は守らない(ADR 0398 決定2・3)。読めなければ `own` から入れ直して確かめ直す —— fetch は commit を
+ *  既に持つ場所へ何も送らない。揃わなければ運ぶ段の失敗で、読めない object を名指す。段ごとに帰責する(ADR 0364 決定2): 写しを数える手の失敗は `from` の故障、写しの tmp の失敗は host の失敗。 */
 function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { own, tip, description, borrowing = own }: CarriedCopy): void {
   const fail = (why: string, cause?: unknown) =>
     new NamedPlaceFetchError(`workspace ${named.name}: ${description} ${tip} does not read whole in the named workspace: ${why}`, cause === undefined ? undefined : { cause });
@@ -909,12 +910,18 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   }
   // pack-objects は一時 file を撃った repo の objects/pack に書く —— 名前の場所には書かず、その objects だけを借りる使い捨ての repo で読む
   const reader = join(own, "carried");
-  hostStep(from.noun, () => initBoardCopy(reader, format, [objects]));
-  // 名前の場所の byte だけを読む手 —— 上限超過も名前の場所の側。読めなければ失敗を返す(stderr が読めない object を名指す)
+  // index-pack は同じ id の object を持つ repo では照合のために読み直す —— 何も持たない repo で撃つ
+  const blank = join(own, "blank");
+  hostStep(from.noun, () => {
+    initBoardCopy(reader, format, [objects]);
+    initBoardCopy(blank, format);
+  });
+  // 名前の場所の byte だけを読む手 —— 上限超過も中身の照合の失敗も名前の場所の側。読めなければ失敗を返す(stderr か文が読めない object を名指す)
   const unreadable = (): unknown => {
     try {
-      workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, ["pack-objects", "--quiet", join(reader, "read")], input);
-      return undefined;
+      const names = namesFromContent(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, join(reader, "read"), input, blank);
+      const renamed = ids.filter((id) => !names.has(id));
+      return renamed.length === 0 ? undefined : new Error(renamedObjects(renamed));
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(reader, cause)) throw copyHostError(from.noun, cause);
       return cause;
@@ -933,7 +940,7 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   }
   if (reinsertFailure === undefined) {
     try {
-      moveAsideDamagedLoose(objects, format, own, ids);
+      moveAsideDamagedLoose(objects, format, own, ids, blank);
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
       // 名前の場所の loose だけを読む手 —— 上限超過も名前の場所の側
@@ -951,31 +958,37 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
  *  落ちる)、中身から名前を作り直して集合の名前が揃うかを見る(別の中身を置いた名前が落ちる)。どちらも `from` の故障で、この後の入れ直しの
  *  失敗は名前の場所の側。写しの tmp の容量切れは host の失敗。 */
 function verifyOwnObjects(from: UntrustedSubject, own: string, ids: string[], input: string): void {
-  const deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS;
   let packed: Set<string>;
   try {
-    const base = join(own, "own");
-    const pack = `${base}-${workerRepoGitUntil(deadline, own, ["pack-objects", "--quiet", base], input)}`;
-    // pack-objects の idx は写しの loose の名前を信じる —— 捨てて中身から作り直す。写しは借りを外してあるので --strict の繋がりは見ない
-    for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
-    workerRepoGitUntil(deadline, own, ["index-pack", `${pack}.pack`]);
-    packed = new Set(workerRepoGitUntil(deadline, own, ["verify-pack", "-v", `${pack}.idx`]).split("\n").map((line) => line.split(" ")[0]!));
+    packed = namesFromContent(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, own, join(own, "own"), input);
   } catch (cause) {
     if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
     throw asUntrustedFailure(from, cause);
   }
   const renamed = ids.filter((id) => !packed.has(id));
-  if (renamed.length > 0) throw unreadable(from, `objects ${renamed.join(", ")} hold contents that do not hash to their names`);
+  if (renamed.length > 0) throw unreadable(from, renamedObjects(renamed));
+}
+
+const renamedObjects = (ids: string[]) => `objects ${ids.join(", ")} hold contents that do not hash to their names`;
+
+/** `input` の object を `from` で `base` の pack に組み、中身から index し直した名前を返す —— pack-objects の idx は読んだ loose の名前を信じる。
+ *  index-pack は `at` で撃つ。`--strict` は付けない(繋がりは借りている object に届く)。 */
+function namesFromContent(deadline: number, from: string, base: string, input: string, at = from): Set<string> {
+  const pack = `${base}-${workerRepoGitUntil(deadline, from, ["pack-objects", "--quiet", base], input)}`;
+  for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
+  workerRepoGitUntil(deadline, at, ["index-pack", `${pack}.pack`]);
+  return new Set(workerRepoGitUntil(deadline, at, ["verify-pack", "-v", `${pack}.idx`]).split("\n").map((line) => line.split(" ")[0]!));
 }
 
 const DAMAGED_PREFIX = "tidepool-damaged-";
 
-/** ADR 0388 決定2: 入れ直しの後、集合の id の名前の場所の loose のうち loose として読めないものを、objects の下の残す dir へ移す(消さない ——
- *  人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
+/** ADR 0388 決定2 / ADR 0398 決定1: 入れ直しの後、集合の id の名前の場所の loose のうち、loose として読めないものと中身が名前と合わない
+ *  ものを、objects の下の残す dir へ移す(消さない —— 人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
  *  object の pack の stream を断り、header の読める loose の stream を開くので、body を切り詰めた loose が入れ直した pack を覆う(source の
  *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ)。名前の場所の loose の dir だけを見せる使い捨ての repo で pack に組み、
- *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。 */
-function moveAsideDamagedLoose(objects: string, format: string, own: string, ids: string[]): void {
+ *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。組めたら中身から index し直し(`blank` で)、名前の
+ *  揃わない object を移す。 */
+function moveAsideDamagedLoose(objects: string, format: string, own: string, ids: string[], blank: string): void {
   const looseOf = (id: string) => join(objects, id.slice(0, 2), id.slice(2));
   let pending = ids.filter((id) => existsSync(looseOf(id)));
   if (pending.length === 0) return;
@@ -983,25 +996,32 @@ function moveAsideDamagedLoose(objects: string, format: string, own: string, ids
   initBoardCopy(probe, format);
   for (const dir of new Set(pending.map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
   let damaged: string | undefined;
+  const moveAside = (bad: string[]) => {
+    if (bad.length === 0) return;
+    damaged ??= mkdtempSync(join(objects, DAMAGED_PREFIX));
+    for (const id of bad) renameSync(looseOf(id), join(damaged, id));
+    pending = pending.filter((id) => !bad.includes(id));
+  };
   while (pending.length > 0) {
+    let names: Set<string>;
     try {
-      workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, ["pack-objects", "--quiet", join(probe, "read")], `${pending.join("\n")}\n`);
-      return;
+      names = namesFromContent(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, join(probe, "read"), `${pending.join("\n")}\n`, blank);
     } catch (cause) {
       const stderr = String((cause as { stderr?: unknown } | null)?.stderr ?? "");
       const bad = pending.filter((id) => stderr.includes(id));
       if (bad.length === 0) throw cause;
-      damaged ??= mkdtempSync(join(objects, DAMAGED_PREFIX));
-      for (const id of bad) renameSync(looseOf(id), join(damaged, id));
-      pending = pending.filter((id) => !bad.includes(id));
+      moveAside(bad);
+      continue;
     }
+    moveAside(pending.filter((id) => !names.has(id)));
+    return;
   }
 }
 
 /** 名前の場所で読めない object: `cat-file --batch-check` が missing と言うもの(欠けと zlib の破損)と、中身を読んで落ちた手の stderr が
- *  名指すもの(body を切り詰めた loose は header が読めて batch-check を通る)。どちらも集合の id に限る。 */
+ *  名指すもの(body を切り詰めた loose は header が読めて batch-check を通る)と、中身の照合の失敗の文が名指すもの。どれも集合の id に限る。 */
 function unreadableIds(reader: string, ids: string[], input: string, failure: unknown): string[] {
-  const stderr = String((failure as { stderr?: unknown } | null)?.stderr ?? "");
+  const stderr = String((failure as { stderr?: unknown } | null)?.stderr ?? (failure instanceof Error ? failure.message : ""));
   let missing = new Set<string>();
   try {
     const checked = workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, ["cat-file", "--batch-check"], input);
