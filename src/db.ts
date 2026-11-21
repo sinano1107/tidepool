@@ -213,8 +213,7 @@ function initializeDb(db: Db): void {
       -- "approve". Never set via MCP or the JSON API — only decomposeTask sets this.
       question_pending_child  TEXT,
       -- system-internal only (issue #11): the PR number a merge-decision
-      -- question stands in for. Never set via MCP or the JSON API — only
-      -- recordPrOpened's escalate branch sets this.
+      -- question stands in for. Only the board sets this via registerMergeQuestion.
       question_pending_merge_pr INTEGER,
       -- system-internal only (ADR 0053): the completed work task whose
       -- purely-local task branch awaits a human merge/hold decision.
@@ -223,6 +222,12 @@ function initializeDb(db: Db): void {
       -- promotion failed. submitAnswer retries it synchronously on
       -- "retry"; never set through MCP or the JSON API.
       question_pending_pr_promotion_task_id TEXT,
+      -- ADR 0394 決定1: 着地の question を立てた時点に問うた内容。
+      question_landing_tip TEXT,
+      question_pr_merge_outside_sha TEXT,
+      question_pr_merge_outside_kind TEXT CHECK (question_pr_merge_outside_kind IN ('not_pushed', 'rewritten')),
+      question_pr_merge_missing_branches TEXT,
+      question_pr_merge_reason TEXT,
       -- board-internal only (ADR 0120 決定4 / issue #620): 提案を運ぶ question の種別つき提案(JSON)と pin。
       -- 盤面の提案 verb だけが書き、この列を持つ question は親を塞がない付帯子。
       question_proposal TEXT,

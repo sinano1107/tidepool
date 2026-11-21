@@ -1,5 +1,5 @@
 
-import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -85,6 +85,7 @@ import {
   originHead,
   profile,
   promotionFailures,
+  pushedRoot,
   pushOutsideBoard,
   pushPrHead,
   queueAutoMerge,
@@ -509,8 +510,8 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([]);
 });
 
-// ADR 0387 決定1 の後も、書き換えられた head(ADR 0376 決定7)は CI の色を待つ —— 猶予の起点は盤面がその head を初めて読んだ時点
-it("PR を開いてから6分後に読んだ書き換えられた head が check 未報告なら、初めて読んでから5分間キューで待ち、過ぎれば merge question に倒れる。観測は1件だけ刻まれる", async () => {
+// ADR 0394 決定1: 書き換えられた head は CI を待たず、最初の読みで問う。
+it("書き換えられた head は check 未報告でもすぐにキューを外れて merge question になり、観測は1件だけ刻まれる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-unreported-rewritten-head");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -525,17 +526,16 @@ it("PR を開いてから6分後に読んだ書き換えられた head が check
 
   await clock.advance(6 * 60_000);
   await landing.tick("auto_merge", clock.now());
-  await clock.advance(FIVE_MINUTES - 1);
-  await landing.tick("auto_merge", clock.now());
 
-  expect(mergeQuestions(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(`task/${work.id}`) },
+  ]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: rewritten } },
   ]);
 
-  await clock.advance(1);
-  await landing.tick("auto_merge", clock.now());
-  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([{ pr: 1, purpose: UNREPORTED_PURPOSE }]);
+  await clock.advance(FIVE_MINUTES);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toHaveLength(1);
 });
 
@@ -1569,6 +1569,7 @@ it.each([
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unreadable-after-push", "escalate");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, work);
+  const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
   afterEachPush(github, () => {
     breakPackedRefs(workspace);
     if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
@@ -1585,8 +1586,27 @@ it.each([
     expect(promotionFailures(db, work.id)).toEqual([]);
   } else {
     expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
-    expect(promotionFailures(db, work.id)).toHaveLength(1);
+    expect(promotionFailures(db, work.id)).toEqual([expect.objectContaining({ question_landing_tip: tip })]);
   }
+});
+
+it("workspace の Git リポジトリが無ければ、収束は tip が無い昇格失敗 question を立てる", async () => {
+  const c = await pushedRoot("promotion-failed-without-repository");
+  renameSync(join(c.workspace.path, ".git"), join(c.workspace.path, "saved-git"));
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([expect.objectContaining({ question_landing_tip: null })]);
+});
+
+it("昇格失敗の question に写す ref が読めないときも、収束は元の失敗の verdict を返す", async () => {
+  const c = await pushedRoot("unreadable-promotion-question-tip");
+  git(c.workspace.path, "pack-refs", "--all");
+  breakPackedRefs(c.workspace);
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({
+    kind: "failed", reason: "promotion_failed", error: expect.stringContaining("git for-each-ref"),
+  });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([]);
 });
 
 // ADR 0240 決定5: 拒否文は積み残しを運ぶ面を名指しする。どちらも無ければ、盤面が運んでいる途中である

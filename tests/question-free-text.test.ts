@@ -10,9 +10,9 @@ import { HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-10-01T00:00:00.000Z");
 const QUESTIONS = {
-  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7 } },
-  "local merge": { options: ["merge", "hold"], question_kind: { kind: "local_merge", task_id: "t-1" } },
-  "PR promotion": { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1" } },
+  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7, tip: null, outside: null, missingBranches: null, reason: "pr_opened" } },
+  "local merge": { options: ["merge", "hold"], question_kind: { kind: "local_merge", task_id: "t-1", tip: null } },
+  "PR promotion": { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1", tip: null } },
   "pending child": { options: ["approve", "reject"], question_kind: { kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c" } } },
   proposal: { options: ["approve", "reject"], question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", evidence: [1], pin: { promoted: false } } } },
   "cancel option": { options: ["retry", "abandon"], question_kind: { kind: "failure", cancel_option: "abandon" } },

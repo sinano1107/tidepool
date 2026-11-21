@@ -11,6 +11,7 @@ import {
   createLanding,
   landingAnnotation,
   registerPrPromotionFailureQuestion,
+  settledByObservation,
 } from "../src/landing.js";
 import { type AuthorityProfile, type MergeDial, } from "../src/registry.js";
 import {
@@ -712,6 +713,76 @@ it.each(["rewound", "rewritten"] as const)("記録済みの PR の head が盤�
   c.expectNothingCarried();
 });
 
+it("CI 赤の merge question を収束が書き換えの question に取り替え、同じ外の部分なら修理が届いても取り替えない", async () => {
+  const c = await pushedRoot("outside-rewrite-replaces-ci-red", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  c.github.scriptCiStatus("failure");
+  await c.landing.tick("auto_merge", c.clock.now());
+  const [ciQuestion] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  const original = getTask(c.db, ciQuestion!.id)!;
+  expect(original.purpose).toBe(CI_RED_PURPOSE);
+  expect(original.question_pr_merge_reason).toBe("ci_red");
+
+  const head = await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+
+  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([textA4c(c.target)]);
+  expect(getTask(c.db, original.id)).toEqual({ ...original, status: "done" });
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(question).toMatchObject({
+    question_landing_tip: git(c.workspace.path, "rev-parse", c.target),
+    question_pr_merge_outside_sha: head,
+    question_pr_merge_outside_kind: "rewritten",
+    question_pr_merge_missing_branches: [c.target],
+    question_pr_merge_reason: "outside_head",
+  });
+  const replacement = { kind: "pr_merge_question_replaced", question_id: original.id, replacement_question_id: question!.id };
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced").map(({ payload }) => payload)).toEqual([replacement]);
+  expect(listEvents(c.db, original.id).map(({ kind }) => kind)).toEqual(["task_registered"]);
+  await expect(submitAnswer({ ...c, pollNow: () => {} }, original, ["merge"], undefined, () => c.clock.now(), "webui")).rejects.toThrow("question closed");
+  expect(c.github.merged).toEqual([]);
+
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, c.work, "another-repair.txt", "repair\n");
+  await convergeOn(c.landing, c.work.id);
+
+  expect(listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1)).toEqual([question]);
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced").map(({ payload }) => payload)).toEqual([replacement]);
+
+  c.github.scriptMergedOutside(1);
+  await c.landing.tick("outside_merge", c.clock.now());
+  expect(settledByObservation(c.db, original)).toBeNull();
+  expect(settledByObservation(c.db, question!)).toBe("pr_merge_observed");
+});
+
+it.each(["state", "CI"] as const)("回答が %s の読みを待つ間に question が取り替われば、読めなくても question closed になる", async (read) => {
+  const c = await pushedRoot(`outside-rewrite-answer-read-${read}`, { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  c.github.scriptCiStatus("failure");
+  await c.landing.tick("auto_merge", c.clock.now());
+  const original = getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+  const window = awaitWindow();
+  if (read === "state") {
+    vi.spyOn(c.github, "getPullRequestState").mockImplementationOnce(async () => {
+      await window.hold();
+      throw new Error("network unavailable");
+    });
+  } else {
+    vi.spyOn(c.github, "readPullRequest").mockImplementationOnce(async () => {
+      await window.hold();
+      return { state: "unreadable", ci: "pending" };
+    });
+  }
+  const answer = submitAnswer({ ...c, pollNow: () => {} }, original, [read === "state" ? "hold" : "merge"], undefined, () => c.clock.now(), "webui");
+  try {
+    await window.entered;
+    const outside = await moveRecordedHead(c, "rewound");
+    await convergeOn(c.landing, c.work.id);
+    expect(listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)?.question_pr_merge_outside_sha).toBe(outside);
+  } finally {
+    window.open();
+  }
+  await expect(answer).rejects.toThrow("question closed");
+  expect(c.github.merged).toEqual([]);
+});
+
 /** spec #3273 text A4b の全文(`lacks` は `<branches>` の句)。 */
 const textA4b = (c: Awaited<ReturnType<typeof pushedRoot>>, head: string, lacks: string) =>
   `PR #1's head was rewritten outside the board to ${head}, which lacks the content of ${lacks}. The board opened the workbench at ${c.workbench()}. ` +
@@ -896,24 +967,101 @@ it("2回目の「merge」の取り込みが作業台を残せば、CI 待ちの�
   );
 });
 
-// 1つの PR に merge question は1つ —— tick が PR を読む間に収束が同じ PR に question を立てても、tick は2つ目を足さない(書き手の中で確かめる)
-it("無人 merge の tick が PR を読む間に収束が書き換えの merge question を立てても、tick は2つ目の merge question を立てない", async () => {
-  const c = await pushedRoot("outside-rewrite-tick-race", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
-  await moveRecordedHead(c, "rewritten");
+it("無人 merge の tick が PR を読む間に収束が書き換えの merge question を立てたら、古い head でその question を取り替えない", async () => {
+  const c = await pushedRoot("outside-rewrite-tick-race", {
+    pr: "recorded", commits: 2, merge: "auto_if_ci_green", resolveAuthority: () => profile("escalate"),
+  });
+  c.github.scriptCiStatus("pending");
   const read = c.github.readPullRequest.bind(c.github);
-  let raced = false;
-  c.github.readPullRequest = async (ref) => {
+  let asked: string | undefined;
+  vi.spyOn(c.github, "readPullRequest").mockImplementationOnce(async (ref) => {
     const state = await read(ref);
-    if (!raced) {
-      raced = true;
-      expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
-    }
+    expect(state).toMatchObject({ state: "OPEN", head: c.pushed });
+    await moveRecordedHead(c, "rewritten");
+    expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+    const questions = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+    expect(questions).toHaveLength(1);
+    asked = questions[0]!.id;
     return state;
-  };
+  });
 
   await c.landing.tick("auto_merge", c.clock.now());
 
-  expect(mergeQuestions(c.db)).toHaveLength(1);
+  expect(asked).toBeDefined();
+  expect(listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1).map((q) => q.id)).toEqual([asked]);
+  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([textA4c(c.target)]);
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced")).toEqual([]);
+});
+
+it("収束が PR を読む間に tick が新しい head の merge question を立てたら、収束の古い head で取り替えない", async () => {
+  const c = await pushedRoot("outside-rewrite-convergence-race", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  const firstHead = await moveRecordedHead(c, "rewound");
+  const window = awaitWindow();
+  const read = c.github.getPullRequestState.bind(c.github);
+  vi.spyOn(c.github, "getPullRequestState").mockImplementationOnce(async (ref) => {
+    const state = await read(ref);
+    await window.hold();
+    expect(state.head).toBe(firstHead);
+    return state;
+  });
+  const converging = convergeOn(c.landing, c.work.id);
+  let asked: (ReturnType<typeof listBoard>)[number] | undefined;
+  try {
+    await window.entered;
+    const secondHead = await pushOutsideBoard(c.workspace, c.work.id, firstHead);
+    c.github.scriptCiStatus("pending");
+    await c.landing.tick("auto_merge", c.clock.now());
+    asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1);
+    expect(asked?.question_pr_merge_outside_sha).toBe(secondHead);
+  } finally {
+    window.open();
+    await converging;
+  }
+  expect(listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1)).toEqual([asked]);
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced")).toEqual([]);
+});
+
+it("先に走る収束が merge question を取り替えたら、後ろで待っていた古い回答は作業台を取り込まず push しない", async () => {
+  const c = await pushedRoot("queued-merge-answer-replaced", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  c.github.scriptCiStatus("failure");
+  await c.landing.tick("auto_merge", c.clock.now());
+  const original = getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+  const outside = await moveRecordedHead(c, "rewritten");
+  expect(await c.answerMerge()).toContain("opened the workbench");
+  c.mergeInWorkbench();
+  c.github.scriptCiStatus("success");
+
+  const polling = awaitWindow();
+  const read = c.github.getPullRequestState.bind(c.github);
+  vi.spyOn(c.github, "getPullRequestState").mockImplementationOnce(async (ref) => {
+    const state = await read(ref);
+    await polling.hold();
+    return state;
+  });
+  const background = c.landing.converge();
+  await polling.entered;
+
+  let signalQueued!: () => void;
+  const queued = new Promise<void>((resolve) => { signalQueued = resolve; });
+  const converge = c.landing.converge.bind(c.landing);
+  vi.spyOn(c.landing, "converge").mockImplementationOnce((options) => {
+    const result = converge(options);
+    signalQueued();
+    return result;
+  });
+  const answer = c.answerMerge();
+  try {
+    await Promise.race([queued, answer.then(() => { throw new Error("answer did not queue for convergence"); })]);
+  } finally {
+    polling.open();
+    await background;
+  }
+
+  expect(await answer).toContain("question closed");
+  expect(getTask(c.db, original.id)?.status).toBe("done");
+  expect(listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)?.question_pr_merge_outside_sha).toBe(outside);
+  expect(existsSync(c.workbenchAt)).toBe(true);
+  c.expectNothingCarried();
 });
 
 // spec #3273 "Refused once" / ADR 0227 決定2: 印は盤面のどの push でも消える —— 拒否の後に人間が origin を戻し、収束が push した後に同じ head へ

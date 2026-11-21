@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildHumanTaskPushPayload, buildQuestionPushPayload } from "../src/push.js";
 import { questionColumns } from "../src/question-kind.js";
 import type { Task } from "../src/tasks.js";
+import type { TierId } from "../src/tier.js";
 
 function questionTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -41,8 +42,8 @@ describe("buildQuestionPushPayload(issue #14): 通知タップで単発回答ビ
 
   // ADR 0190: 着地 question の通知は単体の回答ビューへ開かず、流し読みの前にある盤面へ導く
   it.each([
-    ["PR の merge question", { question_pending_merge_pr: 42 }],
-    ["purely-local の land question", { question_pending_local_merge_task_id: "w-1" }],
+    ["PR の merge question", questionColumns<TierId>({ kind: "pr_merge", pr: 42, tip: "pushed-tip", outside: null, missingBranches: null, reason: "pr_opened" })],
+    ["purely-local の land question", questionColumns<TierId>({ kind: "local_merge", task_id: "w-1", tip: "local-tip" })],
   ])("%s は url が盤面のルート、title / body は変わらない", (_label, landing) => {
     expect(buildQuestionPushPayload(questionTask(landing))).toEqual({
       title: "workspace を quarantine 解除していい?",

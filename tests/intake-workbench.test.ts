@@ -96,7 +96,7 @@ function landingQuestion(b: Board, task: Task): Task {
       purpose: "a human decides whether to land",
       completion_criteria: "the answer is recorded",
       question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
-      question_kind: { kind: "local_merge", task_id: task.id },
+      question_kind: { kind: "local_merge", task_id: task.id, tip: null },
     },
     b.clock.now(),
     ...HUMAN_WEBUI,

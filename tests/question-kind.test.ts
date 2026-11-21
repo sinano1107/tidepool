@@ -16,9 +16,9 @@ const examples: { [K in QuestionKind["kind"]]: Extract<QuestionKind, { kind: K }
   premise_breach: [{ kind: "premise_breach", cancel_option: "abandon", breached_decision: 7 }],
   broken_probe: [{ kind: "broken_probe", reason: "the probe leaks the expected output" }],
   approval: [{ kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c", risk_flag: true } }],
-  pr_merge: [{ kind: "pr_merge", pr: 12 }],
-  local_merge: [{ kind: "local_merge", task_id: "t-1" }],
-  pr_promotion_retry: [{ kind: "pr_promotion_retry", task_id: "t-2" }],
+  pr_merge: [{ kind: "pr_merge", pr: 12, tip: null, outside: null, missingBranches: null, reason: "pr_opened" }],
+  local_merge: [{ kind: "local_merge", task_id: "t-1", tip: null }],
+  pr_promotion_retry: [{ kind: "pr_promotion_retry", task_id: "t-2", tip: null }],
   proposal: [{ kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }],
   quarantine: [
     { kind: "quarantine", quarantine: "agent", value: "navigator" },
@@ -35,10 +35,11 @@ it.each(kinds.map((kind) => [kind.kind, kind] as const))("%s は 列 → 種類 
 
 it("どの種類にも当てはまらない列の組み合わせは、埋まっている列を名指して投げる", () => {
   const none = questionColumns({ kind: "escalation" });
+  const merge = questionColumns(examples.pr_merge[0]!);
 
   expect(() => questionKindOf({ ...none, question_breached_decision: 7 })).toThrow("question_breached_decision");
   expect(() =>
-    questionKindOf({ ...none, question_pending_merge_pr: 12, question_proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }),
+    questionKindOf({ ...merge, question_proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }),
   ).toThrow("question_proposal + question_pending_merge_pr");
   expect(() => questionKindOf({ ...none, question_quarantine_value: "navigator" })).toThrow("question_quarantine_value");
 });

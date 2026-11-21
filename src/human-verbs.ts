@@ -104,6 +104,7 @@ import {
   latestPosedProbe,
   logDecision,
   MERGE_QUESTION_OPTIONS,
+  mergeQuestionWasReplaced,
   openedPlaceNames,
   openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -1534,6 +1535,11 @@ function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
   return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), settled_by_observation: settledByObservation(deps.db, task) };
 }
 
+/** ADR 0394 決定2: 立て直しで閉じた question には答えられない。 */
+function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
+  if (mergeQuestionWasReplaced(db, question)) throw new DomainError("question closed — read the replacement merge question before answering");
+}
+
 /** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて
  *  いれば question を observed で決着させて null を返し、下げ先に行が無い・push できないなら question は open のまま回答を断る。
  *  返り値は着地した commit。 */
@@ -1605,6 +1611,7 @@ export async function submitAnswer(
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
+  if (task.status !== "todo") assertMergeQuestionNotReplaced(deps.db, task);
   answers = assertAnswerable(task, answers, comment);
   // 提案は段を id で持つ。修正値・書き込みは名前で喋るので、いまの名前に引いた形で読む(issue #1436)
   const kind = questionKindOf(task);
@@ -1691,7 +1698,9 @@ export async function submitAnswer(
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
         // 網が届かないなど PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
         // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
-        if (await deps.landing.observePullRequestOutcome(task)) return presentAnswered(deps, task);
+        const observed = await deps.landing.observePullRequestOutcome(task);
+        if (getTask(deps.db, task.id)?.status !== "todo") assertMergeQuestionNotReplaced(deps.db, task);
+        if (observed) return presentAnswered(deps, task);
         const beingMerged = prInFlightRefusal(mergePr);
         // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
         if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
@@ -1746,6 +1755,7 @@ export async function submitAnswer(
             return { pr, ...content };
           };
           let { pr, left, head } = await readAndCompare();
+          assertQuestionOpen();
           // spec #3273 text A10: push の後の拒否は、取り込みと push が済んだことを言う
           let pushed = "";
           if (head.kind === "rewritten") {
@@ -1755,6 +1765,7 @@ export async function submitAnswer(
             notice = root?.notice;
             pushed = `${root?.takenIn ? "took your merge in and pushed" : "pushed"} ${taskBranch(landingTaskId)}; `;
             ({ pr, left, head } = await readAndCompare());
+            assertQuestionOpen();
           }
           const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
           // ADR 0387 決定2: 盤面が push していない head は、外の commit をまだ伝えていなければ他の検査より先に1回拒む
@@ -1941,7 +1952,9 @@ export async function submitAnswer(
     if (!session) deps.pollNow();
     return { ...presentAnswered(deps, task), ...(notice !== undefined && { notice }) };
   } catch (err) {
-    // 待つ間に question が閉じていた(ADR 0288 決定4): 観測で閉じていれば 200 + 印、別の回答か cancel なら拒否
+    // ADR 0394 決定2: GitHub の読みが失敗しても、立て直しで閉じた question への拒否を返す。
+    if (kind.kind === "pr_merge" && err instanceof DomainError && !(err instanceof WorkspaceRepoMismatchError)) assertMergeQuestionNotReplaced(deps.db, task);
+    // 待つ間に question が閉じていた(ADR 0288 決定4): PR などの決着を観測していれば 200 + 印、別の回答か cancel なら拒否
     if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
     throw err;
   } finally {
