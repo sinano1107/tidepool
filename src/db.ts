@@ -38,21 +38,22 @@ export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-10";
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 
 export function openDb(path: string, { terminate = terminateOnBoardDbRefusal }: { terminate?: TerminateOnBoardDbRefusal } = {}): Db {
-  let depth = 0;
-  let reported: WeakSet<SqliteError> | undefined;
-  // ADR 0389 決定2: a returning test terminator lets a statement refusal unwind through its transaction.
+  let guardDepth = 0;
+  let reportedRefusals: WeakSet<SqliteError> | undefined;
+  // ADR 0389 決定2: terminate at the native operation before a caller can catch the refusal.
   const guard = <T>(sql: string | (() => string), operation: () => T): T => {
-    depth++;
+    guardDepth++;
     try {
       return operation();
     } catch (error) {
-      if (isBoardDbRefusal(error) && !reported?.has(error)) {
-        (reported ??= new WeakSet()).add(error);
+      // A returning test terminator allows a refusal to unwind through several guards.
+      if (isBoardDbRefusal(error) && !reportedRefusals?.has(error)) {
+        (reportedRefusals ??= new WeakSet()).add(error);
         terminate(error, typeof sql === "string" ? sql : sql());
       }
       throw error;
     } finally {
-      if (--depth === 0) reported = undefined;
+      if (--guardDepth === 0) reportedRefusals = undefined;
     }
   };
   const db = guard("", () => new Database(path));
@@ -86,29 +87,32 @@ export function openDb(path: string, { terminate = terminateOnBoardDbRefusal }: 
     let phase: Phase = "begin";
     const native = guard("", () => transaction(typeof body !== "function" ? body : function (this: unknown, ...args: unknown[]) {
       phase = "body";
-      const result = body.apply(this, args);
+      const result = Reflect.apply(body, this, args);
       phase = "commit";
       return result;
     }));
-    const wrap = (invoke: typeof body, beginSql: string) => function (this: unknown, ...args: unknown[]) {
+    const wrapTransactionVariant = (invoke: typeof body, beginSql: string) => function (this: unknown, ...args: unknown[]) {
       const nested = db.inTransaction;
       const previousPhase = phase;
       phase = "begin";
+      // better-sqlite3's transaction controller prepares these fixed savepoint statements internally.
+      const controlSql = () => {
+        if (phase === "begin") return nested ? "SAVEPOINT `\t_bs3.\t`" : beginSql;
+        if (phase === "commit") return nested ? "RELEASE `\t_bs3.\t`" : "COMMIT";
+        return "";
+      };
       try {
-        return guard(
-          () => nested || phase === "body" ? "" : phase === "commit" ? "COMMIT" : beginSql,
-          () => invoke.apply(this, args),
-        );
+        return guard(controlSql, () => Reflect.apply(invoke, this, args));
       } finally {
         phase = previousPhase;
       }
     };
-    const wrapped = wrap(native, "BEGIN");
+    const wrapped = wrapTransactionVariant(native, "BEGIN");
     const variants = {
       default: { value: wrapped },
-      deferred: { value: wrap(native.deferred, "BEGIN DEFERRED") },
-      immediate: { value: wrap(native.immediate, "BEGIN IMMEDIATE") },
-      exclusive: { value: wrap(native.exclusive, "BEGIN EXCLUSIVE") },
+      deferred: { value: wrapTransactionVariant(native.deferred, "BEGIN DEFERRED") },
+      immediate: { value: wrapTransactionVariant(native.immediate, "BEGIN IMMEDIATE") },
+      exclusive: { value: wrapTransactionVariant(native.exclusive, "BEGIN EXCLUSIVE") },
     };
     for (const { value } of Object.values(variants)) {
       Object.defineProperties(value, { ...variants, database: { value: db, enumerable: true } });

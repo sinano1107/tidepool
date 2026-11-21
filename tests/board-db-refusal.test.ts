@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import Database from "better-sqlite3";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -56,6 +57,22 @@ it.each(["get", "all"] as const)("reports a refusal from %s synchronously and re
   expect(read).toThrow(expect.objectContaining({ code: "SQLITE_CORRUPT" }));
   expect(terminate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: "SQLITE_CORRUPT" }), sql);
   expect(terminate.mock.calls[0]?.[0]).toBe(read.mock.results[0]?.value);
+});
+
+it("reports a refusal before prepare can return a statement", () => {
+  const terminate = vi.fn();
+  const db = openDb(":memory:", { terminate });
+  connections.push(db);
+  db.exec("CREATE TABLE probe (value TEXT)");
+  db.unsafeMode();
+  db.pragma("writable_schema = ON");
+  db.exec("UPDATE sqlite_schema SET sql = 'CREATE TABLE probe (not_valid' WHERE name = 'probe'");
+  db.pragma("writable_schema = RESET");
+
+  const sql = "SELECT value FROM probe";
+  const refusal = expect.objectContaining({ code: "SQLITE_CORRUPT" });
+  expect(() => db.prepare(sql)).toThrow(refusal);
+  expect(terminate).toHaveBeenCalledExactlyOnceWith(refusal, sql);
 });
 
 it("reports a refused prepared write with the SQL source only, across fluent statement methods", () => {
@@ -210,6 +227,18 @@ it("reports the original failing statement once as its error unwinds nested tran
   expect(terminate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: "SQLITE_READONLY" }), sql);
 });
 
+it("passes the receiver and arguments to a nested transaction callback with its own apply property", () => {
+  const db = openDb(":memory:");
+  connections.push(db);
+  const body = Object.assign(function (this: { base: number }, increment: number) {
+    return this.base + increment;
+  }, { apply: undefined });
+  const nested = db.transaction(body);
+  const outer = db.transaction(() => nested.immediate.call({ base: 40 }, 2));
+
+  expect(outer()).toBe(42);
+});
+
 it("exits with one stderr line before a caller can catch a corrupt read", () => {
   const path = corruptProbePage();
   const sql = `SELECT id FROM probe WHERE ? IS NOT NULL\n-- ${"1".repeat(80)}`;
@@ -231,44 +260,41 @@ it("exits with one stderr line before a caller can catch a corrupt read", () => 
   );
 });
 
-function prototypeMethods(prototype: object): string[] {
-  return Object.entries(Object.getOwnPropertyDescriptors(prototype))
-    .filter(([, descriptor]) => typeof descriptor.value === "function")
-    .map(([name]) => name)
-    .sort();
+function expectGuardCoverage(handle: object, wrapped: string[], excluded: Record<PropertyKey, string>): void {
+  const prototype: object = Object.getPrototypeOf(handle);
+  const methods = Reflect.ownKeys(prototype)
+    .filter((key) => typeof Reflect.getOwnPropertyDescriptor(prototype, key)?.value === "function");
+  expect(new Set(methods)).toEqual(new Set([...wrapped, ...Reflect.ownKeys(excluded)]));
+  for (const method of wrapped) {
+    const operation = Reflect.get(handle, method);
+    expect(operation, method).toBeTypeOf("function");
+    expect(operation, method).not.toBe(Reflect.get(prototype, method));
+  }
 }
 
 it("accounts for each better-sqlite3 Database and Statement method", () => {
-  const db = new Database(":memory:");
-  try {
-    const wrappedDb = ["prepare", "transaction", "exec", "pragma"];
-    const excludedDb = {
-      constructor: "construction is separately guarded by openDb",
-      backup: "asynchronous copy with destination database errors; never used by the board",
-      serialize: "the native method returns bytes or throws a plain Error",
-      function: "registers a callback on the connection",
-      aggregate: "registers an aggregate on the connection",
-      table: "registers a virtual table module on the connection",
-      loadExtension: "loads a shared library and reports loader errors",
-      close: "releases the native handles without propagating SQLite status codes",
-      defaultSafeIntegers: "sets a JS value conversion flag",
-      unsafeMode: "sets a connection flag",
-    };
-    const wrappedStatement = ["run", "get", "all", "iterate"];
-    const excludedStatement = {
-      constructor: "SQLite constructs statements internally; prepare is guarded",
-      bind: "binds arguments in memory and keeps the same guarded statement",
-      pluck: "sets the row shape flag and keeps the same guarded statement",
-      expand: "sets the row shape flag and keeps the same guarded statement",
-      raw: "sets the row shape flag and keeps the same guarded statement",
-      safeIntegers: "sets an integer conversion flag and keeps the same guarded statement",
-      columns: "reads column metadata from the prepared statement",
-    };
-    expect(prototypeMethods(Database.prototype)).toEqual([...wrappedDb, ...Object.keys(excludedDb)].sort());
-    expect(prototypeMethods(Object.getPrototypeOf(db.prepare("SELECT 1")))).toEqual([
-      ...wrappedStatement, ...Object.keys(excludedStatement),
-    ].sort());
-  } finally {
-    db.close();
-  }
+  const db = openDb(":memory:");
+  connections.push(db);
+  expectGuardCoverage(db, ["prepare", "transaction", "exec", "pragma"], {
+    constructor: "construction is separately guarded by openDb",
+    backup: "asynchronous copy that can fail on source or destination; unused by the board and outside the synchronous boundary",
+    serialize: "the native method returns bytes or throws a plain Error",
+    function: "registers a callback on the connection",
+    aggregate: "registers an aggregate on the connection",
+    table: "registers a virtual table module on the connection",
+    loadExtension: "loads a shared library and reports loader errors",
+    close: "releases the native handles without propagating SQLite status codes",
+    defaultSafeIntegers: "sets a JS value conversion flag",
+    unsafeMode: "sets a connection flag",
+    [inspect.custom]: "formats connection properties for inspection",
+  });
+  expectGuardCoverage(db.prepare("SELECT 1"), ["run", "get", "all", "iterate"], {
+    constructor: "SQLite constructs statements internally; prepare is guarded",
+    bind: "binds arguments in memory and keeps the same guarded statement",
+    pluck: "sets the row shape flag and keeps the same guarded statement",
+    expand: "sets the row shape flag and keeps the same guarded statement",
+    raw: "sets the row shape flag and keeps the same guarded statement",
+    safeIntegers: "sets an integer conversion flag and keeps the same guarded statement",
+    columns: "reads column metadata from the prepared statement",
+  });
 });
