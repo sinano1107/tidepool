@@ -11,13 +11,13 @@ import { quarantineStops } from "../src/quarantine.js";
 import { cancelTaskDirectly, completeTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  announcePublishedRepo,
   holdsBaseline,
   openHumanContentWorkbench,
   openIntakeQuestionId,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   releaseWorkspace,
-  rememberPublishedRepo,
   takeWorkspaceInFlightKey,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -578,7 +578,7 @@ it("question を開いた後に workspace が remote-backed になれば、take 
   const origin = await tempDir("tidepool-intake-origin-");
   git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
   const published = { ...b.ws, repo: origin };
-  rememberPublishedRepo(b.db, published);
+  announcePublishedRepo(b.db, published);
   const nothingWritten = b.unchanged();
 
   await expect(b.answer("take in", published)).rejects.toThrow(

@@ -21,13 +21,13 @@ import { queueReturnHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
+  announcePublishedRepo,
   compareContainmentRefs,
   holdsBaseline,
   openHumanContentWorkbench,
   openInterviewRoom,
   quarantineWorkspace,
   recordTaskCheckoutTip,
-  rememberPublishedRepo,
   stopContainmentPair,
   type TaskCheckoutPlace,
   takeInHumanContentWorkbench,
@@ -545,7 +545,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       git(b.ws.path, "push", "--quiet", "origin", "main");
     });
     const published = { ...b.ws, repo: origin };
-    rememberPublishedRepo(b.db, published);
+    announcePublishedRepo(b.db, published);
     b.publish(published);
     return origin;
   }

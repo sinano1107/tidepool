@@ -27,7 +27,7 @@ import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
-import { rememberPublishedRepo, withRememberedRepoCheck } from "../src/workspace.js";
+import { announcePublishedRepo, withRememberedRepoCheck } from "../src/workspace.js";
 import {
   answerSkillsFromDisk,
   answerSkillsList,
@@ -1119,7 +1119,7 @@ describe("CodexWorker (ADR 0098)", () => {
         writeFileSync(join(f.registry, "workspaces.yaml"), `work:\n  path: ${f.workspace}\n  repo: ${origin}\n`);
         git(f.registry, "add", "-A");
         commitIn(f.registry);
-        rememberPublishedRepo(f.db, { name: "work", path: f.workspace, repo: origin });
+        announcePublishedRepo(f.db, { name: "work", path: f.workspace, repo: origin });
       };
 
       await f.start(task(f.db));
