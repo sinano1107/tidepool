@@ -1,5 +1,7 @@
 # 無人 merge は盤面が最後に push した head だけを merge し、盤面が push していない head への人間の merge は1回拒む
 
+**Status 追記: 決定2 の「伝えた」の記録は ADR 0394 決定3 に置き換わる —— 回答は question が問うた内容と今の状態の一致を執行の前に確かめ、一致しなければ拒んで同じ question を今の状態に直す。1回拒んで同じ question に答え直す手応えは変わらない。帰結「hold の後は GitHub で merge か close する」は tick の question について変わらない([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) 決定3・7、2026-11-21、issue #3402)。**
+
 **Status 追記: 決定2・4 の「伝えた」と印の検査を3点で補う(2026-11-21、実装 PR #3489 のレビュー)。決定4 の印の検査だけでは足りない —— 盤面の push と記録は同期で1度に終わるので、回答が head を読む await の間に収束が push・記録・印の解放まで済ませると、回答は印を見ないまま古い head と新しい最後に push した値を組み合わせて読む。(1) 「伝えた」は回答が始まった時点で既にあった記録だけを数える —— 同じ question に同時に走る2つの `merge` の一方が刻んだ記録で、もう一方が commit を見ないまま通らない。(2) 人間の `merge` 回答は最後に push した値を head を読む前にも読み、読んだ後に値が変わっていれば、印があるときと同じく判定せずに答え直させる。(3) 収束の push が転送の後で失敗と報告されたら、印を持ったまま origin の head を読み直し、push した sha と一致すれば最後に push した値として刻む —— 盤面自身の commit を盤面が push していない commit として人間に列挙しない。読み直しも失敗すれば刻まず、Consequences の落ちた場合と同じく止まる側に倒れる。**
 
 2026-11-20 の grilling(issue #3210、発端は #3205 の前提の確認と #3233 の申し送り)で決定。無人 merge が merge してよいかを決める条件は、
