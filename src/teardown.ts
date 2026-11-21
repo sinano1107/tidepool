@@ -8,7 +8,6 @@ import type { GitHubAuth } from "./github-auth.js";
 
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueue, type Task } from "./tasks.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import {
   ensureWorkspaceToken,
   PlaceNotOpenError,
@@ -111,8 +110,7 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *  起動時の復旧)。個々の失敗はすでにそれぞれの位置で quarantine に落ちている(`releaseWorkspace`)ので、
  *  ここへ届くのは想定外だけである。そこで止まった後始末は**盤面全体の停止**である(ADR 0112 決定1):
  *  枠がまだ空いていないのではなく空かないので、後始末の runner(`runTeardownSteps`)が確認 question を
- *  1枚立てて停止の列挙に載せ、解放の門を後始末の再実行そのものにする(`acceptTeardownQuarantine`)。
- *  投げるのは盤面 DB の拒否だけで、底が process を終える(ADR 0342 決定2)。 */
+ *  1枚立てて停止の列挙に載せ、解放の門を後始末の再実行そのものにする(`acceptTeardownQuarantine`)。 */
 export async function runTeardown(
   deps: TeardownDeps,
   taskId: string,
@@ -194,7 +192,6 @@ let driving = 0;
 
 /** 後始末の step の runner(ADR 0342 決定6 / ADR 0112 / ADR 0344)。手を順に撃ち、投げた手から先を残して question を同期に立てる ——
  *  行が立ってから返るので、watchdog の tick の門(ADR 0112 決定4)がすぐ効く。受理は残した手から撃ち直す。
- *  盤面 DB の拒否は question も書けないので底へ投げる(ADR 0342 決定2・3)。
  *
  *  投げた手が session の束の手なら閉じ切らなかった session で、枠の主かに依らず spawn ごとに持つ(ADR 0344 決定1・2)。残りの先頭は
  *  入れ子を越えても投げた手そのものである。それ以外の手は枠を握ったままの throw だけが落ちた後始末である: `slot.release()` より後 ——
@@ -207,7 +204,6 @@ export function runTeardownSteps(
   if (driving > 0) return drive(actions);
   const fail = (err: unknown) => {
     const { cause, rest } = err as TeardownThrew;
-    if (isBoardDbRefusal(cause)) throw cause;
     console.error(`[teardown] task ${taskId}:`, cause);
     const spawnId = rest[0]?.closesSpawn;
     if (spawnId !== undefined) {
@@ -302,8 +298,6 @@ async function acceptRerun(deps: TeardownDeps, rerun: Rerun): Promise<() => void
   } catch (err) {
     releaseAcceptance();
     const { cause, rest } = err as TeardownThrew;
-    // ADR 0342 決定4: 盤面 DB の拒否は回答の拒否に飲まない
-    if (isBoardDbRefusal(cause)) throw cause;
     rerun.giveBack({ actions: rest, cause });
     throw threwAgain(cause);
   }

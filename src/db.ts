@@ -1,8 +1,26 @@
+import { writeSync } from "node:fs";
 import Database from "better-sqlite3";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 import { liveTierId, SEED_BOARD_TIERS, SEED_TIERS } from "./tier.js";
 
 export type Db = Database.Database;
+type SqliteError = InstanceType<typeof Database.SqliteError>;
+type TerminateOnBoardDbRefusal = (error: SqliteError, sql: string) => void;
+
+/** ADR 0389 決定1 / ADR 0342 決定1: the six refusal families include extended codes. */
+function isBoardDbRefusal(error: unknown): error is SqliteError {
+  return error instanceof Database.SqliteError && /^SQLITE_(FULL|IOERR|READONLY|CANTOPEN|CORRUPT|NOTADB)(_|$)/.test(error.code);
+}
+
+/** ADR 0389 決定2・4 / ADR 0342 決定2: write the diagnostic before exiting with EX_IOERR. */
+function terminateOnBoardDbRefusal(error: SqliteError, sql: string): never {
+  const line = `tidepool: board db refused an operation | ${error.code} | sql=${sql.slice(0, 80)} | ${error.message}`;
+  try {
+    writeSync(2, `${line.replace(/[\r\n\u2028\u2029]/g, " ")}\n`);
+  } finally {
+    process.exit(74);
+  }
+}
 
 /** Memory の FTS5 tokenizer と、TS 側の前処理(全角・半角形の畳み + NFC + CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
  *  (spec #586 B、実測は #357 / #606、順序は #610 / #1192)。
@@ -19,8 +37,99 @@ export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-10";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 
-export function openDb(path: string): Db {
-  const db = new Database(path);
+export function openDb(path: string, { terminate = terminateOnBoardDbRefusal }: { terminate?: TerminateOnBoardDbRefusal } = {}): Db {
+  let guardDepth = 0;
+  let reportedRefusals: WeakSet<SqliteError> | undefined;
+  // ADR 0389 決定2: terminate at the native operation before a caller can catch the refusal.
+  const guard = <T>(sql: string | (() => string), operation: () => T): T => {
+    guardDepth++;
+    try {
+      return operation();
+    } catch (error) {
+      // A returning test terminator allows a refusal to unwind through several guards.
+      if (isBoardDbRefusal(error) && !reportedRefusals?.has(error)) {
+        (reportedRefusals ??= new WeakSet()).add(error);
+        terminate(error, typeof sql === "string" ? sql : sql());
+      }
+      throw error;
+    } finally {
+      if (--guardDepth === 0) reportedRefusals = undefined;
+    }
+  };
+  const db = guard("", () => new Database(path));
+  const prepare = db.prepare.bind(db);
+  db.prepare = ((sql: string) => {
+    const statement = guard(sql, () => prepare(sql));
+    const get = statement.get.bind(statement);
+    const all = statement.all.bind(statement);
+    const run = statement.run.bind(statement);
+    const iterate = statement.iterate.bind(statement);
+    statement.get = (...args) => guard(statement.source, () => get(...args));
+    statement.all = (...args) => guard(statement.source, () => all(...args));
+    statement.run = (...args) => guard(statement.source, () => run(...args));
+    statement.iterate = (...args) => {
+      const iterator = guard(statement.source, () => iterate(...args));
+      const next = iterator.next.bind(iterator);
+      iterator.next = (...nextArgs) => guard(statement.source, () => next(...nextArgs));
+      return iterator;
+    };
+    return statement;
+  }) as Db["prepare"];
+
+  const exec = db.exec.bind(db);
+  db.exec = (sql) => guard(sql, () => exec(sql));
+  const pragma = db.pragma.bind(db);
+  db.pragma = (sql, options) => guard(sql, () => pragma(sql, options));
+
+  const transaction = db.transaction.bind(db);
+  db.transaction = ((body: (this: unknown, ...args: unknown[]) => unknown) => {
+    type Phase = "begin" | "body" | "commit";
+    let phase: Phase = "begin";
+    const native = guard("", () => transaction(typeof body !== "function" ? body : function (this: unknown, ...args: unknown[]) {
+      phase = "body";
+      const result = Reflect.apply(body, this, args);
+      phase = "commit";
+      return result;
+    }));
+    const wrapTransactionVariant = (invoke: typeof body, beginSql: string) => function (this: unknown, ...args: unknown[]) {
+      const nested = db.inTransaction;
+      const previousPhase = phase;
+      phase = "begin";
+      // better-sqlite3's transaction controller prepares these fixed savepoint statements internally.
+      const controlSql = () => {
+        if (phase === "begin") return nested ? "SAVEPOINT `\t_bs3.\t`" : beginSql;
+        if (phase === "commit") return nested ? "RELEASE `\t_bs3.\t`" : "COMMIT";
+        return "";
+      };
+      try {
+        return guard(controlSql, () => Reflect.apply(invoke, this, args));
+      } finally {
+        phase = previousPhase;
+      }
+    };
+    const wrapped = wrapTransactionVariant(native, "BEGIN");
+    const variants = {
+      default: { value: wrapped },
+      deferred: { value: wrapTransactionVariant(native.deferred, "BEGIN DEFERRED") },
+      immediate: { value: wrapTransactionVariant(native.immediate, "BEGIN IMMEDIATE") },
+      exclusive: { value: wrapTransactionVariant(native.exclusive, "BEGIN EXCLUSIVE") },
+    };
+    for (const { value } of Object.values(variants)) {
+      Object.defineProperties(value, { ...variants, database: { value: db, enumerable: true } });
+    }
+    return wrapped;
+  }) as Db["transaction"];
+
+  try {
+    initializeDb(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+function initializeDb(db: Db): void {
   db.pragma("journal_mode = WAL");
   // 種の段・表・盤面設定で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
   // settings から全行を消した表が再オープンで生え直す(#545)
@@ -681,5 +790,4 @@ export function openDb(path: string): Db {
       SEED_BOARD_TIERS.judgement_tier,
     );
   }
-  return db;
 }

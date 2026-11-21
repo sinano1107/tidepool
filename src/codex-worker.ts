@@ -59,7 +59,6 @@ import { liveSession, type TeardownAction } from "./teardown.js";
 
 import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { type SpawnFailure, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
@@ -1598,7 +1597,7 @@ export class CodexWorker implements WorkerAdapter {
       // kind は一撃にだけ運ぶ —— `spawn_failed` の event の型には無い
       if (this.options.onSpawnFailed) this.options.onSpawnFailed(task.id, sessionId, kind ? { ...failure, kind } : failure, record);
       else record();
-      // ADR 0342 決定5: 印は一撃が返った後 —— 盤面 DB の拒否で投げた書き込みを記録済みと読まない
+      // ADR 0342 決定5: 印は一撃が返った後 —— 失敗した書き込みを記録済みと読まない
       recorded = true;
     };
     const env = workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name);
@@ -1654,7 +1653,6 @@ export class CodexWorker implements WorkerAdapter {
               return (await containmentAt(path, true)).capability;
             });
           } catch (error) {
-            if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4
             if (!live()) return removeTaskTemp();
             const failed = opened ? SKILL_CHECK_FAILED : `the board could not prepare the throwaway checkout of ${protectedBranch(named)} for the Codex skill check`;
             spawnFailed({ error_code: null, message: `${failed}; the worker was not spawned (no fail-open): ${String(error)}` });
@@ -1842,7 +1840,6 @@ export class CodexWorker implements WorkerAdapter {
         this.containers.forceReclaim(String(sessionId));
       });
     })().catch((error) => {
-      if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: spawn_failed にせず床へ
       // shortcut: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
       // 稀な経路)。積み上がりが観測されたらここで destroy する。
       // ADR 0149 決定6: scheduler の catch の外なので、検査のあとの同期 throw(quarantine の登録、spawn まで、

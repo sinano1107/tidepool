@@ -1,6 +1,5 @@
 import type { GitHubClient } from "./github.js";
 import { type BoardTask, contentSourceFor, type TaskContent } from "./tasks.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 /** How fresh an issue-backed task's displayed content is (issue #49 §6):
@@ -57,8 +56,7 @@ export class IssueContentCache {
       const content = await fetch;
       this.entries.set(key, { content, fetchedAt: now.getTime() });
       return { ...task, ...content, issue_live_state: "live" };
-    } catch (err) {
-      if (isBoardDbRefusal(err)) throw err;
+    } catch {
       // a failed refresh keeps the entry's fetchedAt, so every later poll
       // retries GitHub until one succeeds and flips the row back to live
       if (cached) return { ...task, ...cached.content, issue_live_state: "stale" };

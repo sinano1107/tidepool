@@ -1,7 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -168,6 +167,20 @@ async function publishInChild(board: Awaited<ReturnType<typeof makeBoard>>, repo
   );
   expect(child.stdout, child.stderr).toBe("publishing\n");
   return child;
+}
+
+async function publishWithFullBoard(board: Awaited<ReturnType<typeof makeBoard>>, repo: string, triggerWhen = "") {
+  board.deps.db.exec("CREATE TABLE filler (b BLOB)");
+  const trigger = "CREATE TEMP TRIGGER fill_on_remember AFTER UPDATE OF remembered_repo ON workspace_state "
+    + triggerWhen + " BEGIN INSERT INTO filler VALUES (zeroblob(1048576)); END";
+  const child = await publishInChild(board, repo, `
+    db.exec(${JSON.stringify(trigger)});
+    db.pragma("max_page_count = " + db.pragma("page_count", { simple: true }));`);
+
+  expect(child.status, child.stderr).toBe(74);
+  expect(child.stderr.trim().split("\n")).toEqual([
+    expect.stringMatching(/^tidepool: board db refused an operation \| SQLITE_FULL \| sql=UPDATE workspace_state SET remembered_repo = /),
+  ]);
 }
 
 describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
@@ -436,66 +449,55 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     );
   });
 
-  // ADR 0391 決定1(#3336 のコメントの窓): 覚えた repo の予告は `remote add` より前の DB の書き込みなので、それが拒まれれば痕跡は1つも
-  // 無い。この issue は ADR 0389 の即時終了より先に入る —— 拒否は投げ返されても process を終えても、残る状態は同じ
-  it("覚えた repo の予告が SQLITE_FULL で拒まれると、checkout に origin も写しも無く、宛先にも何も載らない", async () => {
+  // ADR 0391 決定1: 覚えた repo の予告は remote add より前なので、盤面がその場で終わっても復旧時に Git を直す必要がない。
+  it("覚えた repo の予告が SQLITE_FULL で拒まれると Git に痕跡が残らず、復旧後に publish できる", async () => {
     const board = await makeBoard();
     const { registryDir, deps, checkout } = board;
     await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
-    deps.db.exec("CREATE TABLE filler (b BLOB)");
     const dest = await makeDestination();
 
-    const child = await publishInChild(board, dest, `
-      db.exec("CREATE TEMP TRIGGER fill_on_remember AFTER UPDATE OF remembered_repo ON workspace_state BEGIN INSERT INTO filler VALUES (zeroblob(1048576)); END");
-      db.pragma("max_page_count = " + db.pragma("page_count", { simple: true }));`);
+    await publishWithFullBoard(board, dest);
 
-    expect(child.status, child.stderr).not.toBe(0);
-    expect(child.stderr).toContain("SQLITE_FULL");
     expect(remoteBranches(dest)).toEqual([]);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     expect(git(checkout, "for-each-ref", "refs/remotes/")).toBe("");
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
+    const recovered = await publishInChild(board, dest);
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
   });
 
-  // ADR 0342 決定4: 巻き戻しの手順が受けた盤面 DB の拒否は、巻き戻しの失敗に包まずそのまま投げる
-  it("覚えた repo の畳みで盤面 DB が書きを拒むと、publish はその拒否をそのまま投げる", async () => {
-    const { registryDir, deps, checkout } = await makeBoard();
+  // ADR 0391 決定3: Git を戻してから予告を畳むので、畳みの拒否で終了しても次の検査が元へ畳める。
+  it("巻き戻しの畳みで盤面 DB が書きを拒んでも、復旧後に publish できる", async () => {
+    const board = await makeBoard();
+    const { registryDir, deps, checkout } = board;
     await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
     const dest = await makeDestination();
-    await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
-    const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
-    deps.db.function("refuse_fold", () => {
-      throw refusal;
-    });
-    // 予告の後の書き(= 巻き戻しの畳み)だけを拒む —— 予告の前の行は JSON の null、予告の行は2値
-    deps.db.exec(
-      "CREATE TEMP TRIGGER fold_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
-        "WHEN OLD.remembered_repo IS NOT NULL AND OLD.remembered_repo <> 'null' BEGIN SELECT refuse_fold(); END",
-    );
+    const lock = join(registryDir, ".git", "refs", "heads", "main.lock");
+    await writeFile(lock, "");
 
-    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toBe(refusal);
+    await publishWithFullBoard(board, dest, "WHEN OLD.remembered_repo LIKE '[%'");
+
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+    expect(git(checkout, "for-each-ref", "refs/remotes/")).toBe("");
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
+    await unlink(lock);
+    const recovered = await publishInChild(board, dest);
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
   });
 
   // ADR 0066 決定5: 成功の畳みは巻き戻しの外 —— registry の commit の後に巻き戻すと、宣言された `repo:` に origin が無いずれそのものを残す。
   // 畳めなかった行は予告のまま残り、次の検査が宣言と origin の揃った宛先へ畳む(ADR 0391 決定3)
   it("registry の commit の後に覚えた repo の畳みを盤面 DB が拒んでも、origin と `repo:` は残り、次の検査が宛先へ畳む", async () => {
-    const { registryDir, deps, checkout } = await makeBoard();
+    const board = await makeBoard();
+    const { registryDir, deps, checkout } = board;
     await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
     const dest = await makeDestination();
-    const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
-    deps.db.function("refuse_fold", () => {
-      throw refusal;
-    });
-    // 予告の行(JSON の配列)からの書き = 畳みだけを拒む
-    deps.db.exec(
-      "CREATE TEMP TRIGGER fold_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
-        "WHEN OLD.remembered_repo LIKE '[%' BEGIN SELECT refuse_fold(); END",
-    );
 
-    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toBe(refusal);
+    await publishWithFullBoard(board, dest, "WHEN OLD.remembered_repo LIKE '[%'");
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
-    deps.db.exec("DROP TRIGGER fold_refused");
     const check = (repo?: string) => assertRememberedRepo(deps.db, { name: "sandbox", path: checkout, repo }, new Date());
 
     check(dest);

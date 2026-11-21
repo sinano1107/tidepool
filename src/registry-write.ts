@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { git, gitStatus } from "./git.js";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
 import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
  *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から
@@ -184,7 +183,6 @@ function land(registry: RegistrySource, worktreeDir: string, baseSha: string, au
       syncCheckoutIfOnBranch(registry.dir, REGISTRY_BRANCH, baseSha, newSha);
     }
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
     throw new RegistryPushFailedError(String(err));
   }
 }

@@ -49,7 +49,6 @@ import {
 import { liveSession, type TeardownAction } from "./teardown.js";
 import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type Transcript, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { boardEnvByName, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
@@ -1617,7 +1616,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         protectedContainment = claudeWorkspaceContainment(withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now()));
       }
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err;
       // 判定の入力が読めない名前の場所は、pickup の準備の失敗と同じく workspace の quarantine(ADR 0360 決定1)
       stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
       return;
@@ -1745,7 +1743,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           skills: { workspace: checkout.carried, host, permitted },
         }, routing, query);
       } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: spawn_failed も同じ器に書くので、書かずに底へ
         if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, sessionId, err);
         this.recordSpawnFailed(task, sessionId, agent, {
           error_code: (err as NodeJS.ErrnoException).code ?? null,

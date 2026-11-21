@@ -5,11 +5,10 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, escalateTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
 import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
-import { firePickupPredicates, type RunPlace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { type RunPlace, recordTaskCheckoutTip, releaseWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import {
   commitWork,
@@ -670,14 +669,4 @@ it("再実行の後始末の後に休止中の main へ載った帯域外の com
 
   await expect(prepareAtPickup(s.db, s.ws, next)).rejects.toThrow(`now: ${moved} refs/heads/main`);
   expect(head(s)).toBe("main");
-});
-
-// 旧: 休止位置の checkout の予告(ADR 0342 決定4)。名前の場所の HEAD は動かないので、休止位置で盤面が書くのは remote への追従だけ
-it("休止位置の remote への追従の予告で盤面 DB が書きを拒むと、追従の失敗に包まずに投げる(ADR 0342 決定4 / ADR 0356 決定5)", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace("teardown-rerun-readonly");
-  const s = await settledSession("completed", { workspace });
-  publish("merged.txt", "merged on GitHub\n", "merged outside");
-  s.db.pragma("query_only = true");
-
-  await expect(firePickupPredicates(s.db, s.ws, checkoutPickupPredicates(s.ws), "after-open")).rejects.toMatchObject({ code: "SQLITE_READONLY" });
 });

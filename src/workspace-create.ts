@@ -44,7 +44,6 @@ import {
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, repositoryLabel, sameRepository } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
 import { settleQuestionAsObserved } from "./tasks.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import { BOARD_BRANCHES } from "./workbench.js";
 import {
@@ -618,8 +617,6 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       }
       // ADR 0391 決定3: the remembered repo folds by the check's own rule —— back to the value before the announcement only once origin is gone
       attempt(() => assertRememberedRepo(deps.db, { name, path: dir, repo: fresh.repo }, now()));
-      const refusal = [err, ...failures].find(isBoardDbRefusal);
-      if (refusal !== undefined) throw refusal; // ADR 0342 決定4: 盤面 DB の拒否は包まず、巻き戻しの失敗の陰にも隠さない
       if (failures.length > 0) {
         const text = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
         throw new Error(`publish of workspace ${input.name} failed: ${text(err)}; rolling it back failed: ${failures.map(text).join("; ")}`, { cause: err });

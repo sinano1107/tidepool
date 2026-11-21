@@ -10,7 +10,6 @@ import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 import type { Harness } from "./registry.js";
 import { parseStreamLine } from "./stream-json.js";
 import type { TeardownAction } from "./teardown.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 
 /** session の一時領域の名前の頭(ADR 0257 決定2)。adapter の mkdtemp と起動時の復旧の削除が共有する(ADR 0315 決定5)。 */
 export const taskTempPrefix = (harness: "claude" | "codex", taskId: string) => `tidepool-${harness}-${taskId}-`;
@@ -38,8 +37,8 @@ export function closeSessionActions(
 type RecordCloseOptions = { logDir: string; tmpDir: string; watermark: number; now: Date };
 
 /** 前の盤面が閉じ切らなかった session を閉じる起動時の復旧(ADR 0315 決定1〜5)。対象は `watermark`(起動時点の最大 event id)
- *  以下の spawn だけ —— 受理の門から走るとき、走行中の別の盤面の session に偽の exit を書かない。盤面 DB の拒否は投げて起動を拒み
- *  (ADR 0342 決定4)、それ以外の throw は閉じ切らなかった session の行を立てて走査を打ち切り、起動は続く(ADR 0344 決定2)。 */
+ *  以下の spawn だけ —— 受理の門から走るとき、走行中の別の盤面の session に偽の exit を書かない。
+ *  session を閉じる手が投げたら、閉じ切らなかった session の行を立てて走査を打ち切る(ADR 0344 決定2)。 */
 export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions): void {
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
@@ -47,8 +46,6 @@ export function closeUnclosedSessions(db: Db, opts: RecordCloseOptions): void {
     try {
       closeSpawned(db, events, spawned, opts);
     } catch (err) {
-      // ADR 0342 決定4: 盤面 DB の拒否は飲まない —— 投げて起動を拒む(壊れた器の上で盤面を半分だけ動かさない)
-      if (isBoardDbRefusal(err)) throw err;
       // 行は例外の本文だけを持つので、stack は log に残す(後始末の runner の fail と同じ)
       console.error(`[recovery] could not close session ${spawned.id} of task ${spawned.task_id}:`, err);
       // ADR 0344 決定2: 1原因に session の数だけ回答を求めない —— 残りは直して立て直した次の起動の復旧に任せる

@@ -131,7 +131,6 @@ import {
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
-import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import { buildWorkspaceResolver, humanWorkbenchDisplay, resolveWorkspacesBaseDir, UnknownWorkspaceError, type WorkspaceConfig, WorkspaceRepoMismatchError } from "./workspace.js";
@@ -153,8 +152,6 @@ import {
 export interface ManagementMcpDeps {
   db: Db;
   clock: Clock;
-  /** ADR 0342 決定4: 盤面 DB が書きを拒んだ verb が呼ぶ終了。Absent → 再 throw(SDK の tool error)。 */
-  terminateOnBoardDbRefusal?: TerminateOnBoardDbRefusal;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
@@ -237,7 +234,6 @@ const profileFieldsSchema = z.object({
 
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
 function registryToolError(err: unknown) {
-  if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: tool error にせず verb の包み(wrapEveryVerb の終了)へ
   if (err instanceof GitHubIdentityMissingError) return toolError(`registry configuration missing: ${err.message}`);
   if (
     err instanceof InvalidWorkspaceNameError ||
@@ -361,7 +357,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const discardsOf = (taskId: string) => directCancelDiscards(deps.db, getTask(deps.db, taskId)!, closedRoot);
   const server = wrapEveryVerb(
     new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
-    { db: deps.db, clock: deps.clock, surface: "management", terminate: deps.terminateOnBoardDbRefusal },
+    { db: deps.db, clock: deps.clock, surface: "management" },
   );
   // issue #1179: 各口は対応する HTTP の口(GET /api/tasks・GET /api/tasks/:id)と同じ注釈を持つ
   server.registerTool(
@@ -1339,7 +1335,6 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           ),
         );
       } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: tool error にせず verb の包みの終了へ
         return toolError(err instanceof Error ? err.message : String(err));
       }
     },

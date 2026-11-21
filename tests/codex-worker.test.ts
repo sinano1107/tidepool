@@ -1130,32 +1130,6 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(quarantineQuestion(f.db, "workspaceContainment", "codex/work")?.purpose).toContain("If the skill is tracked in the repository: Push the fix to origin's main from your own clone, then answer.");
     });
 
-    it("2段目の盤面 DB の拒否は spawn_failed にせず底へ届く(ADR 0342 決定4)", async () => {
-      // 一撃は記録を書かない —— 書けば読み取り専用の DB が別の経路で同じ拒否を投げ、この床を試さない
-      const board = vi.fn();
-      let during = () => {};
-      const f = await fixture(undefined, undefined, undefined, undefined, {
-        board,
-        taskCheckout: await taskCheckoutWithSkill(),
-        appServer: (args, cwds) => {
-          if (args.includes("--strict-config")) during();
-          return answerSkillsFromDisk(args, cwds);
-        },
-      });
-      commitIn(f.workspace);
-      // 覚えた repo が未学習の行 —— 2段目の宣言の確かめが書く
-      f.db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES ('work', 'stand-in')").run();
-      const value = task(f.db);
-      during = () => f.db.pragma("query_only = 1");
-
-      await expect(f.start(value)).rejects.toMatchObject({ code: "SQLITE_READONLY" });
-
-      f.db.pragma("query_only = 0");
-      expect(board).not.toHaveBeenCalled();
-      expect(listEvents(f.db, value.id).map((event) => event.kind)).not.toContain("spawn_failed");
-      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
-    });
-
     it("spawn の経路が登録した組は、作業台の直しを commit して答えると受理され、保護ブランチへ取り込まれる(ADR 0379 決定6、pin G5)", async () => {
       const f = await fixture(vi.fn(), undefined, undefined, undefined, { appServer: answerSkillsFromDisk });
       await commitSkill(f.workspace);
@@ -1339,16 +1313,6 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(rejections).toEqual([]);
     expect(listBoard(f.db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
     expect(f.slot.currentTaskId).toBe(f.value.id);
-  });
-
-  it("skill の検査の失敗で盤面側の一撃が盤面 DB の拒否で投げたら、外の catch は記録済みの印で飲まず未処理の reject へ上げる(ADR 0342 決定4)", async () => {
-    const f = await skillCheckFailsOnBoard((db) => db.pragma("query_only = 1"));
-
-    const rejections = await f.startAndSettle();
-    f.db.pragma("query_only = 0");
-
-    expect(rejections).toEqual([expect.objectContaining({ code: "SQLITE_READONLY" })]);
-    expect(listBoard(f.db).filter((t) => t.type === "question")).toEqual([]);
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、complete_task を complete_memory_review に替え、分解の verb を伏せ、普通の task は変わらない(ADR 0122 決定2 / ADR 0278 決定1 / ADR 0301 決定3)", async () => {

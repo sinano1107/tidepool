@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -661,16 +660,6 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       b.stop();
 
       expect(git(b.workbench(), "rev-parse", "refs/heads/main")).toBe(git(b.ws.path, "rev-parse", "main"));
-    });
-
-    it("盤面 DB の拒否は組の停止の外へ届く(ADR 0342 決定4)", async () => {
-      const b = await board("pair-register-db-refusal");
-      const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
-      const refusing = { ...b.ws, checkRememberedRepo: () => { throw refusal; } };
-
-      expect(() => stopContainmentPair(b.db, "claude-code", refusing, "the pair's reason", b.base, b.clock.now())).toThrow(refusal);
-
-      expect(quarantineQuestion(b.db, "workspaceContainment", "claude-code/pair-register-db-refusal")).toBeUndefined();
     });
   });
 

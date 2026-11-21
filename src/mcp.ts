@@ -107,7 +107,6 @@ import {
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { readTiers } from "./tier.js";
-import { isBoardDbRefusal, type TerminateOnBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { reclaimIntoTeardown, registerFailureAndMarkTeardown } from "./watchdog.js";
 import { WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 import {
@@ -162,8 +161,6 @@ export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
-  /** ADR 0342 決定4: 盤面 DB が書きを拒んだ verb が呼ぶ終了。Absent → 再 throw(SDK の tool error)。 */
-  terminateOnBoardDbRefusal?: TerminateOnBoardDbRefusal;
   /** 盤面側 supervisor(ADR 0099 決定2)。最終 verb の着地後、後始末はこの
    *  **回収済み観測**の後ろでしか走らない(ADR 0109 決定1)。Absent → 容器を
    *  持たない盤面なので、観測は即座に解決したものとして扱う。 */
@@ -354,7 +351,6 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
   try {
     tip = recordTaskCheckoutTip(deps.db, workspace, task.id);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
     if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
     // ADR 0373 決定12: 動いた ref は retry では直らない —— 人間へは session の終わりの解放の比較が知らせる
@@ -398,7 +394,6 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
     paths = completionTreePaths(deps.db, workspace, task.id, tip);
   } catch (err) {
     if (err instanceof DomainError) throw err;
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
     throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
   }
@@ -631,7 +626,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     clock: deps.clock,
     surface: "worker",
     taskId: attributedTaskId,
-    terminate: deps.terminateOnBoardDbRefusal,
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
@@ -872,7 +866,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             try {
               head = commitRoomCopy(deps.db, place, task.id);
             } catch (err) {
-              if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 盤面 DB の書き込み拒否は底へ渡す
               if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
               // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
               if (err instanceof CheckoutUnreadableError) {

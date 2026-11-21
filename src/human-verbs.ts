@@ -125,7 +125,6 @@ import { type FailedTeardownCheck, teardownStep, type UnclosedSessionCheck } fro
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
 import { hasWorkspaceField } from "./webui-rules.js";
 import type { SettledMark } from "./wire-contract.js";
@@ -245,8 +244,7 @@ function notTakenInWarningOf(deps: DecomposeThroughHumanDoorDeps, task: Task): s
   if (!resolve || !hasTaskBranch(deps.db, task.id)) return undefined;
   try {
     return notTakenInWarning(resolve(derivedWorkspace(deps.db, task)), resolveWorkspacesBaseDir(deps.workspacesDir), task.id);
-  } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
+  } catch {
     return undefined;
   }
 }
@@ -323,8 +321,7 @@ export async function addIssueCommentThroughHumanDoor(
       input.body,
     );
     return { ok: true };
-  } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: GitHub's destination check may write Quarantine.
+  } catch {
     return {
       ok: false,
       failure: { kind: "github_failed", error: "could not post the comment to the issue" },
@@ -522,7 +519,6 @@ export async function registerThroughHumanDoor(
             number: input.github_issue_number,
           });
         } catch (err) {
-          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: the destination check may write Quarantine.
           if (err instanceof IssueGoneError) throw new DomainError(err.message);
           return {
             ok: false,
@@ -537,7 +533,6 @@ export async function registerThroughHumanDoor(
           try {
             inspection = await recordedAnswer(deps.db, "issue_inspection", now(), deps.draftClient.inspectIssue(issue));
           } catch (err) {
-            if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: inspection_unavailable の応答にせず底へ
             quarantineBoardCallRefusal(deps.db, err, "issue_inspection", undefined, now());
             const fullError = err instanceof Error ? err.message : String(err);
             console.warn("[issue inspection] LLM inspection failed", fullError);
@@ -691,17 +686,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     try {
       return await check();
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
       throw new DomainError(err instanceof Error ? err.message : String(err));
     }
   };
-  // 前半の項1つが落ちるか(盤面 DB の拒否は判定に畳まない、ADR 0342 決定4)
+  // 前半の項1つが落ちるか
   const fails = (predicate: PickupPredicate) => {
     try {
       if (predicate.phase === "before-open") predicate.check();
       return false;
-    } catch (err) {
-      if (isBoardDbRefusal(err)) throw err;
+    } catch {
       return true;
     }
   };
@@ -779,7 +772,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       try {
         await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
       } catch (err) {
-        if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
         let message = err instanceof Error ? err.message : String(err);
         if (phase === "after-open" && deps.github && !(err instanceof PickupGateError && err.cause instanceof WorkspaceRepoMismatchError)) {
           const ref = workspaceNetworkDestination(err instanceof PickupGateError ? err.place : checked)?.github;
@@ -796,7 +788,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       try {
         await checkAcceptanceFirstHalf(deps.db, target, all, repoPresent);
       } catch (err) {
-        if (isBoardDbRefusal(err) || !cancelRcas) throw err;
+        if (!cancelRcas) throw err;
         const message = err instanceof Error ? err.message : String(err);
         // ADR 0385 決定2: 倒す RCA が無い拒否文は、落ちている他の項を名指す
         if (nothingToCancel) throw new Error(`${nothingToCancel}. ${message}`);
@@ -984,7 +976,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         try {
           await recheckIssueExpansion();
         } catch (err) {
-          if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 回答の拒否に包まない
           throw new DomainError(`the board cannot confirm it reads GitHub issues again: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
@@ -1060,11 +1051,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   };
 }
 
-/** 保護ブランチへ書く回答(local 着地の `merge` と `take in`)の失敗を回答の拒否に写す。盤面 DB の拒否は包まずに底へ(ADR 0342 決定4)。
+/** 保護ブランチへ書く回答(local 着地の `merge` と `take in`)の失敗を回答の拒否に写す。
  *  ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも汚れたツリーも git の不調も、書き込みが失敗しただけでは
  *  資源が実行不能だと証明しない —— question は開いたまま残り、人間は直してもう一度答えられる。 */
 function refuseProtectedBranchWrite(db: Db, workspaceName: string, err: unknown, now: Date): never {
-  if (isBoardDbRefusal(err)) throw err;
   if (err instanceof OutOfBandProtectedBranchError) quarantineWorkspace(db, workspaceName, err, now);
   throw new DomainError(err instanceof Error ? err.message : String(err));
 }
@@ -1724,7 +1714,7 @@ export async function submitAnswer(
                 },
               },
             ).catch((err) => {
-              if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
+              if (err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
               throw new DomainError(
                 `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
                   (err instanceof Error ? err.message : String(err)),
@@ -1774,7 +1764,7 @@ export async function submitAnswer(
             try {
               await github.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head);
             } catch (err) {
-              if (isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError) throw err;
+              if (err instanceof WorkspaceRepoMismatchError) throw err;
               const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
               throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, protectedBranch(mergeWorkspace))}`);
             }
