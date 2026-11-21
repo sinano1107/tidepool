@@ -2,13 +2,16 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { git, tempDirSync } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, tempDirSync } from "./harness.js";
 
 const FIXTURE_DIR = "tests/fixtures/repo-location-git-env";
+// 子の fixture の上限に vitest の起動の余裕を足す —— 子が自分の時限で落ちる前に kill しない
+const CHILD_TIMEOUT_MS = GIT_FIXTURE_TEST_TIMEOUT + 15_000;
 
 // #3334: a linked worktree's `git bisect run` / `rebase --exec` / hook exports GIT_DIR. A test run under it must not write
 // into that repo. The child is a light run (exactly one file) —— otherwise its test lock waits on this run's lock.
-it("a test run under an inherited GIT_DIR leaves that repo alone", { timeout: 60_000 }, () => {
+// 時限は子の上限に、この test 自身の git(呼び手の repo と worktree を組む)の余裕を足す
+it("a test run under an inherited GIT_DIR leaves that repo alone", { timeout: CHILD_TIMEOUT_MS + 10_000 }, () => {
   const caller = tempDirSync("tidepool-caller-");
   git(caller, "init", "--quiet");
   // 空の tree —— fixture の commit(README.md)が呼び手の tree と同じだと no-op になり、HEAD が動かず assert が効かない
@@ -23,7 +26,7 @@ it("a test run under an inherited GIT_DIR leaves that repo alone", { timeout: 60
   const child = spawnSync(
     "npx",
     ["vitest", "run", "--config", `${FIXTURE_DIR}/vitest.config.ts`, `${FIXTURE_DIR}/writes-a-repo.fixture.ts`],
-    { cwd: process.cwd(), env: { ...process.env, GIT_DIR: gitDir }, encoding: "utf8", timeout: 50_000 },
+    { cwd: process.cwd(), env: { ...process.env, GIT_DIR: gitDir }, encoding: "utf8", timeout: CHILD_TIMEOUT_MS },
   );
 
   // 呼び手の repo の状態を先に見る —— 子の失敗は、壊れた repo に書いた結果としても起きる
