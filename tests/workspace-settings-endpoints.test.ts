@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
@@ -210,7 +210,7 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
       writeFileSync(join(registryDir, "workspaces.yaml"), `${yaml}  head_repo: ${head}\n`);
       git(registryDir, "commit", "-am", "hand edit");
     };
-    return { checkout, github, entry, handEdit };
+    return { checkout, github, entry, handEdit, registryDir };
   }
 
   it("出元 repo の差し替えは危険な値の確認を求め、確認すれば宣言・remote・覚えた値を書く", async () => {
@@ -237,9 +237,28 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     handEdit("acme/fork");
     const afterHandEdit = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
     expect(afterHandEdit.status).toBe(400);
-    expect(afterHandEdit.json).toEqual({
-      error: "workspace lagoon declares head repo acme/fork, but the board never recorded one for it. Remove `head_repo:` and answer; to give the workspace a head repo, set it in the workspace settings.",
+    expect(afterHandEdit.json).toMatchObject({
+      error: "workspace lagoon declares head repo acme/fork, but the board never recorded one for it. Clear the head repo in the workspace settings, or remove `head_repo:` by hand, and answer; then set it there to use it.",
     });
+
+    // 外すのは閉じる側なので、扉の外の値でも扉から外せる —— その後は扉から設定し直せる(#3560)
+    const cleared = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "" });
+    expect(cleared.status).toBe(200);
+    expect(entry().head_repo).toBeUndefined();
+    const reset = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+    expect(reset.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+  });
+
+  it("URL の綴り(資格情報つき)で送った出元 repo は owner/name に直して書き、資格情報を registry に残さない", async () => {
+    const { checkout, entry, registryDir } = await headRepoBoard();
+
+    const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "https://someone:dummy-token@github.com/Acme/Fork.git", confirm: true });
+
+    expect(res.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(readFileSync(join(registryDir, "workspaces.yaml"), "utf8")).not.toContain("dummy-token");
+    expect(git(checkout.path, "config", "remote.head-repo.url")).toBe("https://github.com/acme/fork.git");
   });
 
   it.each([

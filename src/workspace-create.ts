@@ -6,13 +6,14 @@ import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "
 import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { EventOrigin } from "./events.js";
-import { git, readCheckoutOrigin } from "./git.js";
+import { git, readCheckoutRemote } from "./git.js";
 import type { GitHubClient, RepoSlug } from "./github.js";
 import {
   authedClone,
   authedPush,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
+  githubKey,
   isRelativeLocalPath,
   networkDestination,
   originValue,
@@ -341,7 +342,7 @@ export class HeadRepoRejectedError extends Error {
 async function readHeadRepoParent(value: string, github: GitHubClient | undefined): Promise<{ head: RepoSlug; parent: RepoSlug | null }> {
   const head = parseGitHubRepo(value);
   if (!head) throw new HeadRepoRejectedError(`head repo ${repositoryLabel(value)} must be a GitHub repository written as owner/name.`);
-  const label = `${head.owner}/${head.name}`;
+  const label = githubKey(head);
   const unreadable = (why: string) =>
     new HeadRepoRejectedError(`the parent of head repo ${label} could not be read from GitHub, so it is refused (${why}). Install the App on its owner and try again.`);
   if (!github) throw unreadable("the board has no GitHub identity");
@@ -354,7 +355,7 @@ async function readHeadRepoParent(value: string, github: GitHubClient | undefine
 
 /** ADR 0395 決定2: head repo ≠ the declared `repo`, ≠ the registry's repo, and its parent = the declared `repo`. */
 function assertHeadRepoFits(name: string, entry: WorkspaceEntry, { head, parent }: { head: RepoSlug; parent: RepoSlug | null }, registryDir: string, path: string): void {
-  const label = `${head.owner}/${head.name}`;
+  const label = githubKey(head);
   if (entry.repo === undefined) throw new HeadRepoRejectedError(`workspace "${name}" declares no repo, so it cannot have a head repo; publish it first.`);
   if (sameRepository(label, entry.repo)) throw new HeadRepoRejectedError(`head repo ${label} is workspace "${name}"'s own repo; it must be a fork of it.`);
   const registry = workspaceProtectionReader(registryDir)({ repo: label }, path);
@@ -364,16 +365,16 @@ function assertHeadRepoFits(name: string, entry: WorkspaceEntry, { head, parent 
   if (registry?.reason === "unreadable_registry_origin") {
     throw new HeadRepoRejectedError(`the origin of the registry clone cannot be read, so head repo ${label} cannot be told apart from the registry's repository; repair the registry checkout first.`);
   }
-  const parentLabel = parent && `${parent.owner}/${parent.name}`;
+  const parentLabel = parent && githubKey(parent);
   if (parentLabel === null || !sameRepository(parentLabel, entry.repo)) {
     throw new HeadRepoRejectedError(`head repo ${label} is not a fork of ${repositoryLabel(entry.repo)}: GitHub reports its parent as ${parentLabel ?? "none (it is no fork)"}.`);
   }
 }
 
-/** Points the checkout's head repo remote at `url`, or removes it. Not `git remote remove`: that also drops remote-tracking refs and
- *  `branch.*.remote` (#3197). */
+/** Points the checkout's head repo remote at `url`, or removes it. Not `git remote remove`: ADR 0066 決定5 の Status 追記(#3197) ——
+ *  it also drops remote-tracking refs and `branch.*.remote`. */
 function pointHeadRemote(path: string, url: string | undefined): void {
-  const present = readCheckoutOrigin(path, "first", HEAD_REPO_REMOTE) !== undefined;
+  const present = readCheckoutRemote(path, "first", HEAD_REPO_REMOTE) !== undefined;
   if (url === undefined) {
     if (present) git(path, "config", "--remove-section", `remote.${HEAD_REPO_REMOTE}`);
   } else {
@@ -386,10 +387,11 @@ function pointHeadRemote(path: string, url: string | undefined): void {
  *  (before the registry commit: back, once the remote is put back as its mismatch text says; after it: forward). */
 function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined, now: () => Date, commit: () => void): void {
   const { name, path } = workspace;
-  // a head repo edited outside the door is not passed over by it (ADR 0373 決定13 の線)
-  assertRememberedHeadRepo(db, workspace, now());
-  const before = readCheckoutOrigin(path, "first", HEAD_REPO_REMOTE) ?? undefined;
-  announceHeadRepo(db, name, workspace.head_repo, next);
+  // setting does not pass over a head repo edited outside the door (ADR 0373 決定13 の線); removal moves to the closed side and is
+  // the exit the check's texts name, so it is not gated (#3560)
+  if (next !== undefined) assertRememberedHeadRepo(db, workspace, now());
+  const before = readCheckoutRemote(path, "first", HEAD_REPO_REMOTE) ?? undefined;
+  announceHeadRepo(db, workspace, next);
   try {
     pointHeadRemote(path, next === undefined ? undefined : networkDestination(next, path).url);
     commit();
@@ -506,8 +508,9 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
     commit();
     return;
   }
-  if (input.head_repo === "") delete next.head_repo;
-  else next.head_repo = input.head_repo;
+  // the parsed `owner/name`, never the spelling sent: a URL may carry credentials into the registry and the list views
+  if (head) next.head_repo = githubKey(head.head);
+  else delete next.head_repo;
   const now = () => (deps.clock ?? new SystemClock()).now();
   writeHeadRepo(deps.db, { name: input.name, path, repo: entry.repo, head_repo: entry.head_repo }, next.head_repo, now, commit);
 }

@@ -2,6 +2,8 @@
 
 **Status 追記: remote-backed の workspace の網の行き先は、宣言 `repo` と宣言の出元 repo(fork)の2つになる。タスクブランチの push と fetch は出元 repo へ、保護ブランチと PR の操作は `repo` へ向く。出元 repo の値は扉を通る危険な値で、≠ `repo`、≠ registry の repo、parent = `repo` を検査する。決定6 の「覚えた値」に当たる仕組みを出元 repo にも持つかは spec で決める([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・2、2026-11-21、issue #3482)。**
 
+**Status 追記: 出元 repo も覚えた値を持つ —— 書くのは workspace の更新の扉だけである。決定6 と違い、覚えていない値は学ばない。覚えた値が無いのに宣言に出元 repo があれば、基準の行の有無に依らず workspace の Quarantine である(2026-11-21、issue #3560)。**
+
 **Status 追記: 決定10 の「巻き戻しは覚えた値も戻す」は、catch の中の戻しから「書く前に `予告の前の値|宛先` を予告し、宣言と origin が揃ったときだけ揃った側へ畳む」に変わる([ADR 0391](0391-publish-announces-the-remembered-repo-like-a-ref-and-folds-it-only-when-the-declaration-and-the-origin-agree.md)、2026-11-21、issue #3336)。process が死ぬと catch は走らず、覚えた repo を人間は戻せないため。予告の間は決定6〜8 の検査がどちらの値も違いと読まない。**
 
 2026-11-15 の wayfinder(map #3178、ticket #3254、実測は #3250)で決定。名前の場所で `git remote set-url origin <別の repo>` を打つと、

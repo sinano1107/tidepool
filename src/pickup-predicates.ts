@@ -3,8 +3,8 @@ import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
-import { git, readCheckoutOrigin } from "./git.js";
-import { remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
+import { git, readCheckoutRemote } from "./git.js";
+import { networkDestination, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, isRca, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
@@ -457,9 +457,14 @@ export function originUrl(checkoutPath: string): string | undefined {
   }
 }
 
-export class OriginRepositoryMismatchError extends Error {}
+export class RemoteRepositoryMismatchError extends Error {}
 
-function originRepairInstruction(verb: "add" | "set-url", repo: string, displayed: string, remote = "origin", field = "repo"): string {
+function remoteRepairInstruction(
+  verb: "add" | "set-url",
+  repo: string,
+  displayed: string,
+  { remote, field }: { remote: string; field: string } = { remote: "origin", field: "repo" },
+): string {
   const command = `git remote ${verb}${repo.startsWith("-") ? " --" : ""} ${remote}`;
   // ADR 0378 決定4: redacting a non-GitHub declaration can change the value required by the gate.
   if (!sameRepository(repo, displayed) || /[\r\n]/.test(displayed)) {
@@ -474,18 +479,18 @@ function originRepairInstruction(verb: "add" | "set-url", repo: string, displaye
 /** ADR 0378 決定3・4: compare the raw origin at both pickup and Quarantine acceptance. */
 export function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
   const { name, path, repo } = workspace;
-  const origin = readCheckoutOrigin(path, "first");
-  if (origin === null) throw new OriginRepositoryMismatchError(`workspace ${name}: could not read its checkout's origin in ${path}`);
+  const origin = readCheckoutRemote(path, "first");
+  if (origin === null) throw new RemoteRepositoryMismatchError(`workspace ${name}: could not read its checkout's origin in ${path}`);
   if (sameRepository(repo, origin)) return;
   if (repo === undefined) {
-    throw new OriginRepositoryMismatchError(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
+    throw new RemoteRepositoryMismatchError(`workspace ${name} declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`);
   }
   const declared = repositoryLabel(repo, { preserveSshUser: true });
   if (origin === undefined) {
-    throw new OriginRepositoryMismatchError(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${originRepairInstruction("add", repo, declared)}.`);
+    throw new RemoteRepositoryMismatchError(`workspace ${name} declares a remote source of truth (repo: ${declared}) but its checkout has no 'origin' remote. In ${path}, ${remoteRepairInstruction("add", repo, declared)}.`);
   }
   const configured = repositoryLabel(origin, { preserveSshUser: true });
-  throw new OriginRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${originRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
+  throw new RemoteRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${remoteRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
 }
 
 /** The checkout's remote for the declared PR head repo (ADR 0395 決定2); origin stays the declared `repo`. */
@@ -495,19 +500,23 @@ export const HEAD_REPO_REMOTE = "head-repo";
  *  repository. */
 export function assertHeadRemoteMatchesDeclaration(workspace: WorkspaceConfig): void {
   const { name, path, head_repo: declared } = workspace;
-  const remote = readCheckoutOrigin(path, "first", HEAD_REPO_REMOTE);
-  if (remote === null) throw new OriginRepositoryMismatchError(`workspace ${name}: could not read its checkout's '${HEAD_REPO_REMOTE}' remote in ${path}`);
+  const remote = readCheckoutRemote(path, "first", HEAD_REPO_REMOTE);
+  if (remote === null) throw new RemoteRepositoryMismatchError(`workspace ${name}: could not read its checkout's '${HEAD_REPO_REMOTE}' remote in ${path}`);
   if (remote === undefined && declared === undefined) return;
   if (declared === undefined) {
-    throw new OriginRepositoryMismatchError(`workspace ${name} declares no head repo (no head_repo) but its checkout has a '${HEAD_REPO_REMOTE}' remote. In ${path}, run \`git config --remove-section remote.${HEAD_REPO_REMOTE}\`.`);
+    throw new RemoteRepositoryMismatchError(`workspace ${name} declares no head repo (no head_repo) but its checkout has a '${HEAD_REPO_REMOTE}' remote. In ${path}, run \`git config --remove-section remote.${HEAD_REPO_REMOTE}\`.`);
   }
   const label = repositoryLabel(declared, { preserveSshUser: true });
+  // `owner/name` is a local path to git: the repair names the URL the board would reach (ADR 0339 決定4)
+  const url = networkDestination(declared, path).url;
+  const repair = (verb: "add" | "set-url") =>
+    remoteRepairInstruction(verb, url, repositoryLabel(url, { preserveSshUser: true }), { remote: HEAD_REPO_REMOTE, field: "head_repo" });
   if (remote === undefined) {
-    throw new OriginRepositoryMismatchError(`workspace ${name} declares head repo ${label} but its checkout has no '${HEAD_REPO_REMOTE}' remote. In ${path}, ${originRepairInstruction("add", declared, label, HEAD_REPO_REMOTE, "head_repo")}.`);
+    throw new RemoteRepositoryMismatchError(`workspace ${name} declares head repo ${label} but its checkout has no '${HEAD_REPO_REMOTE}' remote. In ${path}, ${repair("add")}.`);
   }
   if (sameRepository(declared, remote)) return;
   const configured = repositoryLabel(remote, { preserveSshUser: true });
-  throw new OriginRepositoryMismatchError(`workspace ${name} declares head repo ${label}, but its checkout's '${HEAD_REPO_REMOTE}' remote is ${configured}. In ${path}, ${originRepairInstruction("set-url", declared, label, HEAD_REPO_REMOTE, "head_repo")}.`);
+  throw new RemoteRepositoryMismatchError(`workspace ${name} declares head repo ${label}, but its checkout's '${HEAD_REPO_REMOTE}' remote is ${configured}. In ${path}, ${repair("set-url")}.`);
 }
 
 export function safeRealpath(path: string): string {

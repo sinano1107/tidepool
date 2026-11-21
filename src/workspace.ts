@@ -47,7 +47,7 @@ import {
   isAncestor,
   outOfSpace,
   ownWorktreeStatus,
-  readCheckoutOrigin,
+  readCheckoutRemote,
   type SparsePolicy,
   stagingHostStep,
   type WorktreeChange,
@@ -76,12 +76,12 @@ import {
   exactProtectedBranchRef,
   gonePlaceReason,
   isRemoteBacked,
-  OriginRepositoryMismatchError,
   type PickupPredicate,
   type PlaceFire,
   protectedBranch,
   protectedBranchRef,
   providedRev,
+  RemoteRepositoryMismatchError,
   roomForkSource,
   roomPickupPredicates,
   roomPlace,
@@ -1643,7 +1643,7 @@ export async function quarantineWithRepoAccessGuidance(
   // ADR 0377 決定4: keep the fixed-point refusal when a workspace also has repo drift.
   if (pickupCause instanceof BoardStateOverlapError) return quarantineWorkspace(db, workspace.name, err, now());
   // ADR 0378 決定3・6〜8: a different origin or declared repo is a local repair. A token probe cannot change the result.
-  if (pickupCause instanceof OriginRepositoryMismatchError || pickupCause instanceof WorkspaceRepoMismatchError) {
+  if (pickupCause instanceof RemoteRepositoryMismatchError || pickupCause instanceof WorkspaceRepoMismatchError) {
     return quarantineWorkspace(db, workspace.name, err, now());
   }
   // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と同じ `undefined` に落ちる —— どちらもこの扉を持たない
@@ -1651,7 +1651,7 @@ export async function quarantineWithRepoAccessGuidance(
   try {
     ref = workspaceNetworkDestination(workspace)?.github;
   } catch (cause) {
-    if (!(cause instanceof WorkspaceRepoMismatchError || cause instanceof OriginRepositoryMismatchError)) throw cause;
+    if (!(cause instanceof WorkspaceRepoMismatchError || cause instanceof RemoteRepositoryMismatchError)) throw cause;
     return quarantineWorkspace(db, workspace.name, cause, now());
   }
   let guidance: string | null = null;
@@ -2145,7 +2145,7 @@ export function workspaceProtectionReader(registryDir: string): (entry: Workspac
   return (entry, path) => {
     if (entry.repo !== undefined) {
       const declared = networkDestination(entry.repo, path);
-      registryOrigin ??= { value: readCheckoutOrigin(registryDir) };
+      registryOrigin ??= { value: readCheckoutRemote(registryDir) };
       const repo = registryOrigin.value;
       if (repo === null) return { reason: "unreadable_registry_origin" };
       if (repo !== undefined) {
@@ -2779,13 +2779,14 @@ function rememberedValues(saved: string): (string | null)[] {
   return Array.isArray(value) ? value : [value];
 }
 
-/** ADR 0378 決定3's predicate as a yes/no: does the checkout's origin agree with the declaration? */
-function originAgrees(workspace: WorkspaceConfig): boolean {
+/** A remote predicate (ADR 0378 決定3 for origin, ADR 0395 決定2 for the head repo) as a yes/no: does the checkout's remote agree
+ *  with the declaration? */
+function remoteAgrees(assertMatches: (workspace: WorkspaceConfig) => void, workspace: WorkspaceConfig): boolean {
   try {
-    assertRemoteDeclarationMatchesClone(workspace);
+    assertMatches(workspace);
     return true;
   } catch (err) {
-    if (err instanceof OriginRepositoryMismatchError) return false;
+    if (err instanceof RemoteRepositoryMismatchError) return false;
     throw err;
   }
 }
@@ -2807,7 +2808,7 @@ export function assertRememberedRepo(db: Db, workspace: WorkspaceConfig, now: Da
   const agreed = values.findIndex((value) => sameRepository(destination(value), destination(repo)));
   if (agreed >= 0) {
     // ADR 0391 決定3: fold only once origin agrees too — a remote-backed registry clone can show a stale declaration
-    if (values.length > 1 && originAgrees(workspace)) writeRememberedRepo(db, name, JSON.stringify(values[agreed]));
+    if (values.length > 1 && remoteAgrees(assertRemoteDeclarationMatchesClone, workspace)) writeRememberedRepo(db, name, JSON.stringify(values[agreed]));
     return;
   }
   // ADR 0391 決定2: an announced row names the value before the announcement
@@ -2835,22 +2836,31 @@ function writeRememberedHeadRepo(db: Db, name: string, value: string | null): vo
   ).run(name, value);
 }
 
+/** Which remembered head repo the declaration agrees with, or -1. */
+function agreedHeadRepo(values: (string | null)[], declared: string | undefined): number {
+  return values.findIndex((value) => value === null ? declared === undefined : declared !== undefined && sameRepository(value, declared));
+}
+
 /** ADR 0391 決定1 の形を出元 repo に: the update door announces `[before, next]` before it touches the checkout or the registry,
- *  so a door that dies midway leaves a row the check folds by itself. The row is made when the workspace has none yet. */
-export function announceHeadRepo(db: Db, name: string, before: string | undefined, next: string | undefined): void {
-  writeRememberedHeadRepo(db, name, JSON.stringify([before ?? null, next ?? null]));
+ *  so a door that dies midway leaves a row the check folds by itself. `before` is the remembered value the current declaration
+ *  agrees with, else the remembered one — a declaration edited outside the door never becomes `before`. The row is made when the
+ *  workspace has none yet. */
+export function announceHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined): void {
+  const values = readRememberedHeadRepo(db, workspace.name);
+  const before = values[agreedHeadRepo(values, workspace.head_repo)] ?? values[0] ?? null;
+  writeRememberedHeadRepo(db, workspace.name, JSON.stringify([before, next ?? null]));
 }
 
 /** ADR 0395 決定2: the declared head repo must be the one the door remembered — compared on every destination decision and in the
- *  pickup predicate like the remembered repo (ADR 0378 決定6〜8), but nothing remembered never learns: a head repo added outside the
- *  door is a workspace stop, with or without a baseline. */
+ *  pickup predicate like the remembered repo (ADR 0378 決定6〜8). #3560: nothing remembered never learns — a head repo added outside
+ *  the door is a workspace stop, with or without a baseline. The exits name the door's removal, which this check does not gate. */
 export function assertRememberedHeadRepo(db: Db, workspace: WorkspaceConfig, now: Date): void {
   const { name, head_repo: declared } = workspace;
   const values = readRememberedHeadRepo(db, name);
-  const agreed = values.findIndex((value) => value === null ? declared === undefined : declared !== undefined && sameRepository(value, declared));
+  const agreed = agreedHeadRepo(values, declared);
   if (agreed >= 0) {
     // ADR 0391 決定3: fold only once the checkout's head repo remote agrees too
-    if (values.length > 1 && headRemoteAgrees(workspace)) {
+    if (values.length > 1 && remoteAgrees(assertHeadRemoteMatchesDeclaration, workspace)) {
       const value = values[agreed]!;
       writeRememberedHeadRepo(db, name, value === null ? null : JSON.stringify(value));
     }
@@ -2858,24 +2868,14 @@ export function assertRememberedHeadRepo(db: Db, workspace: WorkspaceConfig, now
   }
   const remembered = values[0] ?? null;
   const reason = remembered === null
-    ? `workspace ${name} declares head repo ${repositoryLabel(declared!)}, but the board never recorded one for it. Remove \`head_repo:\` and answer; to give the workspace a head repo, set it in the workspace settings.`
+    ? `workspace ${name} declares head repo ${repositoryLabel(declared!)}, but the board never recorded one for it. Clear the head repo in the workspace settings, or remove \`head_repo:\` by hand, and answer; then set it there to use it.`
     : declared === undefined
-      ? `workspace ${name} was given head repo ${repositoryLabel(remembered)}, but its registry entry no longer declares one. Put \`head_repo:\` back and answer; to remove it, use the workspace settings.`
-      : `workspace ${name} was given head repo ${repositoryLabel(remembered)}, but its registry entry now says ${repositoryLabel(declared)}. Put \`head_repo:\` back and answer; to change it, use the workspace settings.`;
+      ? `workspace ${name} was given head repo ${repositoryLabel(remembered)}, but its registry entry no longer declares one. Put \`head_repo:\` back by hand and answer; then clear it in the workspace settings to drop it.`
+      : `workspace ${name} was given head repo ${repositoryLabel(remembered)}, but its registry entry now says ${repositoryLabel(declared)}. Put \`head_repo:\` back by hand, or clear the head repo in the workspace settings, and answer; then set it there to change it.`;
   const mismatch = new WorkspaceRepoMismatchError(reason);
   // Workspace Quarantine adds its own punctuation after the reason.
   quarantineWorkspace(db, name, reason.slice(0, -1), now);
   throw mismatch;
-}
-
-function headRemoteAgrees(workspace: WorkspaceConfig): boolean {
-  try {
-    assertHeadRemoteMatchesDeclaration(workspace);
-    return true;
-  } catch (err) {
-    if (err instanceof OriginRepositoryMismatchError) return false;
-    throw err;
-  }
 }
 
 export function withRememberedRepoCheck<T extends WorkspaceConfig>(
@@ -2892,7 +2892,7 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
       assertRememberedRepo(db, current, now());
       assertRememberedHeadRepo(db, current, now());
       if (current.path !== place.path) {
-        throw new OriginRepositoryMismatchError(`workspace ${place.name}: the registered checkout path changed during the operation. Retry with the current entry.`);
+        throw new RemoteRepositoryMismatchError(`workspace ${place.name}: the registered checkout path changed during the operation. Retry with the current entry.`);
       }
       // ADR 0378 決定3: an earlier pickup predicate only checked the declaration it was given.
       if (current.repo !== place.repo) assertRemoteDeclarationMatchesClone(current);
@@ -3115,7 +3115,7 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
   const missing = [...new Set(lostTargets(place, restoreTargets(db, place).targets).map(([, sha]) => sha))];
   if (missing.length === 0) return;
   // 記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさに包まない
-  const passThrough = (err: unknown) => err instanceof WorkspaceRepoMismatchError || err instanceof OriginRepositoryMismatchError;
+  const passThrough = (err: unknown) => err instanceof WorkspaceRepoMismatchError || err instanceof RemoteRepositoryMismatchError;
   const unreachable = (shas: string[], err: unknown) => {
     if (passThrough(err)) return err;
     return new Error(`could not reach origin to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once origin is reachable.`);

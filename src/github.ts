@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, workspaceNetworkDestination } from "./github-auth.js";
 import { parseGitHubRepo } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -267,7 +267,7 @@ export class GhCliClient implements GitHubClient {
   }
 
   async repositoryParent(ref: RepoSlug): Promise<RepoSlug | null> {
-    const repo = `${ref.owner}/${ref.name}`;
+    const repo = githubKey(ref);
     await this.auth.ensureToken(repo);
     // `gh api` takes no `-R`; the path names the repository
     const parent = (await this.run(["api", `repos/${repo}`, "--jq", ".parent.full_name // empty"], repo)).trim();

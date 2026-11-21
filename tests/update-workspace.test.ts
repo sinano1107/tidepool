@@ -1,17 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { openDb } from "../src/db.js";
+import { workspaceHeadRepoDestination } from "../src/github-auth.js";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { workspaceProtectionReader } from "../src/workspace.js";
+import { resolveExecutionWorkspace, withRememberedRepoCheck, workspaceProtectionReader } from "../src/workspace.js";
 import {
   listWorkspaceViews,
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
-import { makeWorkspace } from "./harness.js";
+import { FakeGitHubClient } from "./fakes.js";
+import { makeWorkspace, quarantineQuestion } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -29,10 +31,12 @@ async function makeMainRegistry(files?: Record<string, string>): Promise<string>
 }
 
 async function makeDeps(registryDir: string) {
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
   return {
     registry: { dir: registryDir, mode: "purely-local" as const },
     workspacesBaseDir: await tempDir("tidepool-ws-base-"),
-    db: openDb(":memory:"),
+    db,
   };
 }
 
@@ -399,5 +403,26 @@ describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () =
       path: deps.workspacesBaseDir,
       source: "default",
     });
+  });
+});
+
+// ADR 0395 決定2 を ADR 0391 決定1〜3 の順で書く扉: registry に届かなければ、足した remote を外し、覚えた値を前の値へ畳む
+describe("updateWorkspace: 出元 repo の書き込みの巻き戻し", () => {
+  it("registry の push が落ちると、remote を前の状態へ戻し、宣言を変えず、次の検査は Quarantine なしに通る", async () => {
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
+    const checkout = await makeWorkspace("lagoon");
+    publish("workspaces.yaml", `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n`, "add lagoon");
+    rejectRegistryPushes(registryDir);
+    const github = new FakeGitHubClient();
+    github.scriptRepositoryParent("acme/fork", "acme/lagoon");
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const }, github };
+    const declared = () => resolveExecutionWorkspace(loadRegistry(registryDir, "remote-backed"), "lagoon", "lagoon", deps.workspacesBaseDir);
+
+    await expect(updateWorkspace({ name: "lagoon", head_repo: "acme/fork", confirm: true }, deps)).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(checkout.path, "remote")).toBe("");
+    expect(declared().head_repo).toBeUndefined();
+    expect(workspaceHeadRepoDestination(withRememberedRepoCheck(deps.db, declared()))).toBeUndefined();
+    expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeUndefined();
   });
 });

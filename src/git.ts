@@ -65,7 +65,7 @@ function readConfig(readGit: (args: string[]) => Buffer, args: string[]): string
 const CHECKOUT_ORIGIN_TIMEOUT_MS = 2_000;
 
 /** A readable checkout without the remote (origin by default) returns undefined. An unreadable checkout returns null. */
-export function readCheckoutOrigin(cwd: string, selection: "first" | "last" = "last", name = "origin"): string | undefined | null {
+export function readCheckoutRemote(cwd: string, selection: "first" | "last" = "last", name = "origin"): string | undefined | null {
   // Git can block opening a config include, so both reads share a deadline.
   const deadline = Date.now() + CHECKOUT_ORIGIN_TIMEOUT_MS;
   const readGit = (args: string[]) => {
