@@ -2745,13 +2745,31 @@ function writeRememberedRepo(db: Db, name: string, value: string | null): void {
   db.prepare("UPDATE workspace_state SET remembered_repo = ? WHERE name = ?").run(value, name);
 }
 
-/** ADR 0378 決定10: publish changes a held baseline's repo alongside its registry entry, and can roll back the exact prior value. */
-export function rememberPublishedRepo(db: Db, workspace: WorkspaceConfig): () => void {
+/** ADR 0391 決定1: publish announces a held baseline's repo before it writes anything; the check folds it (ADR 0391 決定3).
+ *  The ADR's `予告の前の値|宛先` is stored as the JSON array `[before, destination]`: an array cannot be mistaken for the 1-value
+ *  JSON string or null, and a local path may contain `|` or any other separator. */
+export function announcePublishedRepo(db: Db, workspace: WorkspaceConfig): void {
   const { name } = workspace;
   const before = readRememberedRepo(db, name);
-  if (before === undefined) return () => {};
-  writeRememberedRepo(db, name, encodeWorkspaceRepo(workspace));
-  return () => writeRememberedRepo(db, name, before);
+  if (before === undefined) return;
+  writeRememberedRepo(db, name, JSON.stringify([rememberedValues(before ?? "null")[0], JSON.parse(encodeWorkspaceRepo(workspace))]));
+}
+
+/** The remembered values of a learned row: one, or `[before, destination]` while a publish is announced (ADR 0391 決定1). */
+function rememberedValues(saved: string): (string | null)[] {
+  const value = JSON.parse(saved) as string | null | (string | null)[];
+  return Array.isArray(value) ? value : [value];
+}
+
+/** ADR 0378 決定3's predicate as a yes/no: does the checkout's origin agree with the declaration? */
+function originAgrees(workspace: WorkspaceConfig): boolean {
+  try {
+    assertRemoteDeclarationMatchesClone(workspace);
+    return true;
+  } catch (err) {
+    if (err instanceof OriginRepositoryMismatchError) return false;
+    throw err;
+  }
 }
 
 export class WorkspaceRepoMismatchError extends DomainError {}
@@ -2765,9 +2783,17 @@ export function assertRememberedRepo(db: Db, workspace: WorkspaceConfig, now: Da
     writeRememberedRepo(db, name, encodeWorkspaceRepo(workspace));
     return;
   }
-  const remembered = (JSON.parse(saved) as string | null) ?? undefined;
-  const destination = (value: string | undefined) => value === undefined ? undefined : networkDestination(value, path).url;
-  if (sameRepository(destination(remembered), destination(repo))) return;
+  const values = rememberedValues(saved);
+  const destination = (value: string | null | undefined) => value == null ? undefined : networkDestination(value, path).url;
+  // ADR 0391 決定2: while announced, either value agrees with the declaration
+  const agreed = values.findIndex((value) => sameRepository(destination(value), destination(repo)));
+  if (agreed >= 0) {
+    // ADR 0391 決定3: fold only once origin agrees too — a remote-backed registry clone can show a stale declaration
+    if (values.length > 1 && originAgrees(workspace)) writeRememberedRepo(db, name, JSON.stringify(values[agreed]));
+    return;
+  }
+  // ADR 0391 決定2: an announced row names the value before the announcement
+  const remembered = values[0] ?? undefined;
   const reason = remembered === undefined
     ? `workspace ${name} was registered as purely-local, but its registry entry now declares repo ${repositoryLabel(repo!)}. Remove \`repo:\`; to give the workspace a remote, publish it.`
     : repo === undefined
@@ -2927,23 +2953,30 @@ function readCheckoutValue(workspace: WorkspaceConfig, ref: string): string {
  *  落ちれば2値の行が残り、どちらの値も違反と読まれない(決定5)—— 次の比較が ref の持つ側に畳む(ADR 0351 決定4)。
  *
  *  `write()` は同期に限る —— 予告→書く→畳むが1つの同期区間になり、盤面の他の書き込みと交差しない。token の取得
- *  (仲介への往復)は呼び手が予告の前に済ませる。 */
+ *  (仲介への往復)は呼び手が予告の前に済ませる。
+ *
+ *  `alsoAnnounce` は refs の予告と同じ transaction で撃つ別の予告 —— publish の覚えた repo(ADR 0391 決定1)。畳みは呼び手が持つ。 */
 export function writeBoardRefs(
   db: Db,
   workspace: WorkspaceConfig,
   writes: ReadonlyArray<readonly [ref: string, newValue: string]>,
   write: () => void,
+  alsoAnnounce?: () => void,
 ): void {
   const before = new Map<string, string>();
-  const announced = updateBaseline(db, workspace, (values) => {
-    for (const [ref, newValue] of writes) {
-      const previous = values.get(ref) ?? "";
-      before.set(ref, previous);
-      const candidates = baselineValues(previous);
-      // ADR 0243 決定5: a retry keeps the existing announcement if it already covers this write.
-      if (candidates.length === 1 || !candidates.includes(newValue)) values.set(ref, `${previous}|${newValue}`);
-    }
-  });
+  // ADR 0391 決定1: publish's remembered repo is announced in the same DB write as the refs, before `write()` —— a refused announcement ends before any trace exists
+  const announced = db.transaction(() => {
+    alsoAnnounce?.();
+    return updateBaseline(db, workspace, (values) => {
+      for (const [ref, newValue] of writes) {
+        const previous = values.get(ref) ?? "";
+        before.set(ref, previous);
+        const candidates = baselineValues(previous);
+        // ADR 0243 決定5: a retry keeps the existing announcement if it already covers this write.
+        if (candidates.length === 1 || !candidates.includes(newValue)) values.set(ref, `${previous}|${newValue}`);
+      }
+    });
+  })();
   if (!announced) {
     write();
     return;
