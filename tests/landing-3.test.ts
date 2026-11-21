@@ -509,8 +509,8 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([]);
 });
 
-// ADR 0387 決定1 の後も、書き換えられた head(ADR 0376 決定7)は CI の色を待つ —— 猶予の起点は盤面がその head を初めて読んだ時点
-it("PR を開いてから6分後に読んだ書き換えられた head が check 未報告なら、初めて読んでから5分間キューで待ち、過ぎれば merge question に倒れる。観測は1件だけ刻まれる", async () => {
+// ADR 0394 決定1: 書き換えられた head は CI を待たず、最初の読みで問う。
+it("書き換えられた head は check 未報告でもすぐにキューを外れて merge question になり、観測は1件だけ刻まれる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-unreported-rewritten-head");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -525,17 +525,16 @@ it("PR を開いてから6分後に読んだ書き換えられた head が check
 
   await clock.advance(6 * 60_000);
   await landing.tick("auto_merge", clock.now());
-  await clock.advance(FIVE_MINUTES - 1);
-  await landing.tick("auto_merge", clock.now());
 
-  expect(mergeQuestions(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(`task/${work.id}`) },
+  ]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: rewritten } },
   ]);
 
-  await clock.advance(1);
-  await landing.tick("auto_merge", clock.now());
-  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([{ pr: 1, purpose: UNREPORTED_PURPOSE }]);
+  await clock.advance(FIVE_MINUTES);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toHaveLength(1);
 });
 
