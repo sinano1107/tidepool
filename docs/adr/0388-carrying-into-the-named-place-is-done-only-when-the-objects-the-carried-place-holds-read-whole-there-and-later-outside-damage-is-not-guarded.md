@@ -1,5 +1,7 @@
 # 名前の場所へ運ぶのは、運んだ場所が自前で持つ object がそこで欠けも破損も無く読めて済む —— 運び終えた後の外からの損傷は守らない
 
+**Status 追記: 決定1 の「借りている object は消しても失われない」は前提でなく限界の言い換えで、名前の場所に運ぶ前から起きていた外からの損傷も決定4 と同じく守らない。自前の store の object は、借りている tree の下にあっても、新しい tree が直に指していても守る —— 決定3 の「決定1 が捕まえ決定2 が補う」は直に指された object にも成り立つ([ADR 0398](0398-the-board-guards-the-objects-the-carried-place-holds-wherever-they-sit-and-not-the-named-places-own-outside-damage-before-or-after-carrying.md) 決定1・3、2026-11-21、issue #3494)。**
+
 2026-11-21 の grilling(issue #3222、#3153 の ponytail-review の派生)で決定。完了の解放は、門の記録した tip の tree を読み、tip が
 `task/<id>` から辿れれば task の checkout を消していた。tree の読みは blob を開かないので、門の後に名前の場所から blob を消すと、
 checkout —— その blob の最後の写し —— が消えた。門の前から名前の場所に欠けていた blob も、object を借りる checkout では門が除外
