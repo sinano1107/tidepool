@@ -16,7 +16,7 @@
 ## 帰結
 
 - fork の PR では secrets の要る job は走らない。skip させればその job は無人 merge の判定から外れ(SKIPPED は緑に数える —— 変えると path filter の job が赤になる)、失敗させれば人間に倒れる。どちらにするかは installer の定義の選択である。
-- fork が完全に効くのは、人間が merge の前に差分を見る面(`escalate`・保護・人間の根)だけである。`auto_if_ci_green` では、CI の緑(#3473 で偽れる)を満たした worker の code が merge され、main の `push` の workflow が宣言された path の外の code(`package.json`・テスト・`.github/actions/**` など)を secrets 付きで走らせうる —— 露出は push の時点から merge の時点へ遅れるだけで、残りは path の宣言と merge ダイヤルの選択が持つ。
+- fork が完全に効くのは、人間が merge の前に差分を見る面(`escalate`・保護・人間の根)だけである。`auto_if_ci_green` では、CI の緑(#3473 で偽れる)を満たした worker の code が merge され、main の `push` の workflow が宣言された path の外の code(`package.json`・テスト・`.github/actions/**` など)を secrets 付きで走らせうる。床は宣言した範囲までしか効かないので、main で secrets 付きで走る workflow が実行する file(manifest・lockfile・build の設定・呼ばれる scripts)を installer が宣言すれば、無人 merge のままその変更は人間に回る。範囲は installer の宣言が決める。
 - private では、fork の PR に資格情報が渡らないのは「書ける token・secrets を送る」がオフのときに限る。盤面がこれを確かめられるかは未測定で(決定6)、その点で同じ repo の案を退けた理由(盤面が確かめられない repo の設定に頼る)と対称である。違いは既定の向きで、同じ repo は既定が開く側、fork は閉じる側である。
 - 盤面は1つの workspace に2つの鍵(出元 repo への push、base の PR 操作)を持ち、収束と ADR 0387 が読む head は出元 repo になる。
 - 未測定: base 限定の installation token で出元 repo を head にした PR を作れるか(broker の形を決める)、App が開いた fork の PR の workflow が承認待ちになるか、fork された repo の Actions の既定の状態、PR の無い出元 repo の branch の commit を base から fetch できるか、同名の fork の改名、空の repo を fork できないこと(どれも実装の受け入れ条件)。盤面の知らない連携が fork の PR を secrets 付きでビルドしないことは推論であり、その実例が出たら fork の根拠を問い直す。
