@@ -27,7 +27,7 @@ import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import type { WorkerExit, WorkerExitClassification } from "../src/worker.js";
-import { announcePublishedRepo, withRememberedRepoCheck } from "../src/workspace.js";
+import { announcePublishedRepo, assertRememberedRepo, withRememberedRepoCheck } from "../src/workspace.js";
 import {
   answerSkillsFromDisk,
   answerSkillsList,
@@ -1119,7 +1119,9 @@ describe("CodexWorker (ADR 0098)", () => {
         writeFileSync(join(f.registry, "workspaces.yaml"), `work:\n  path: ${f.workspace}\n  repo: ${origin}\n`);
         git(f.registry, "add", "-A");
         commitIn(f.registry);
+        // 本番の publish と同じく予告して畳む —— 予告のままの行は宣言の無い旧い値も通し、ADR 0378 決定7 の確かめを釘にしない
         announcePublishedRepo(f.db, { name: "work", path: f.workspace, repo: origin });
+        assertRememberedRepo(f.db, { name: "work", path: f.workspace, repo: origin }, new Date());
       };
 
       await f.start(task(f.db));

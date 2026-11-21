@@ -71,7 +71,8 @@ it.each(["no baseline", "unlearned baseline", "purely-local baseline"] as const)
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
-// ADR 0391: publish は覚えた repo を `予告の前の値|宛先` に予告し、検査は宣言と origin が揃ったときだけ揃った側へ畳む
+// ADR 0391 決定1〜3: publish は覚えた repo を `予告の前の値|宛先`(JSON の配列 `[before, destination]` で持つ —— path に `|` が出うる)に
+// 予告し、検査は宣言と origin が揃ったときだけ揃った側へ畳む
 describe("覚えた repo の予告(ADR 0391)", () => {
   async function announced(name: string, { baseline = true } = {}) {
     const workspace = await makeWorkspace(name);
@@ -96,7 +97,7 @@ describe("覚えた repo の予告(ADR 0391)", () => {
     );
   });
 
-  // 宣言だけで畳むと、remote-backed の registry の古い写しが見せる「宣言無し」へ畳んで戻らない(決定3)
+  // 宣言だけで畳むと、remote-backed の registry の古い写しが見せる「宣言無し」へ畳んで戻らない(ADR 0391 決定3)
   it("宣言が無くても origin が宛先なら畳まず、registry に届いた後の死のように宣言と origin が宛先で揃えば宛先へ畳む", async () => {
     const { workspace, destination, check } = await announced("announced-origin");
     git(workspace.path, "remote", "add", "origin", destination);

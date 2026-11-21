@@ -2717,8 +2717,9 @@ function writeRememberedRepo(db: Db, name: string, value: string | null): void {
   db.prepare("UPDATE workspace_state SET remembered_repo = ? WHERE name = ?").run(value, name);
 }
 
-/** ADR 0391 決定1: publish announces a held baseline's repo as `[before, destination]` before it writes anything; the check folds it (決定3).
- *  A JSON array cannot be mistaken for the 1-value JSON string or null, and a local path may contain any separator. */
+/** ADR 0391 決定1: publish announces a held baseline's repo before it writes anything; the check folds it (ADR 0391 決定3).
+ *  The ADR's `予告の前の値|宛先` is stored as the JSON array `[before, destination]`: an array cannot be mistaken for the 1-value
+ *  JSON string or null, and a local path may contain `|` or any other separator. */
 export function announcePublishedRepo(db: Db, workspace: WorkspaceConfig): void {
   const { name } = workspace;
   const before = readRememberedRepo(db, name);
@@ -2924,7 +2925,9 @@ function readCheckoutValue(workspace: WorkspaceConfig, ref: string): string {
  *  落ちれば2値の行が残り、どちらの値も違反と読まれない(決定5)—— 次の比較が ref の持つ側に畳む(ADR 0351 決定4)。
  *
  *  `write()` は同期に限る —— 予告→書く→畳むが1つの同期区間になり、盤面の他の書き込みと交差しない。token の取得
- *  (仲介への往復)は呼び手が予告の前に済ませる。 */
+ *  (仲介への往復)は呼び手が予告の前に済ませる。
+ *
+ *  `alsoAnnounce` は refs の予告と同じ transaction で撃つ別の予告 —— publish の覚えた repo(ADR 0391 決定1)。畳みは呼び手が持つ。 */
 export function writeBoardRefs(
   db: Db,
   workspace: WorkspaceConfig,
@@ -2933,7 +2936,7 @@ export function writeBoardRefs(
   alsoAnnounce?: () => void,
 ): void {
   const before = new Map<string, string>();
-  // ADR 0391 決定1: publish's remembered repo is announced in the same DB write as the refs
+  // ADR 0391 決定1: publish's remembered repo is announced in the same DB write as the refs, before `write()` —— a refused announcement ends before any trace exists
   const announced = db.transaction(() => {
     alsoAnnounce?.();
     return updateBaseline(db, workspace, (values) => {

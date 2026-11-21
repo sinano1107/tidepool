@@ -626,7 +626,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       }
       throw err;
     }
-    // ADR 0391 決定3: outside the rollback —— a fold that fails after the registry commit must not take origin away
+    // ADR 0066 決定5: outside the rollback —— rolling back after the registry commit would leave a declared `repo:` with no origin, the drift itself
     assertRememberedRepo(deps.db, declaration, now());
   };
   writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish, () => announcePublishedRepo(deps.db, declaration));

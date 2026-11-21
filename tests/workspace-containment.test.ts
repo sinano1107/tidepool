@@ -22,6 +22,7 @@ import { workbenchPath } from "../src/workbench.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   announcePublishedRepo,
+  assertRememberedRepo,
   compareContainmentRefs,
   holdsBaseline,
   openHumanContentWorkbench,
@@ -539,13 +540,15 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
   async function becomeRemoteBacked(b: Awaited<ReturnType<typeof board>>) {
     const origin = await tempDir("tidepool-became-remote-origin-");
     git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
-    // 本番の publish と同じく origin を足し、remote-tracking ref は盤面の口を通して書く
+    // 本番の publish と同じく origin を足し、remote-tracking ref は盤面の口を通して書き、覚えた repo は予告して畳む(ADR 0391 決定1・3)——
+    // 予告のままの行は宣言の無い旧い値も通し、ADR 0378 決定7 の確かめを釘にしない
     writeBoardRefs(b.db, b.ws, [["refs/remotes/origin/main", git(b.ws.path, "rev-parse", "main")]], () => {
       git(b.ws.path, "remote", "add", "origin", origin);
       git(b.ws.path, "push", "--quiet", "origin", "main");
     });
     const published = { ...b.ws, repo: origin };
     announcePublishedRepo(b.db, published);
+    assertRememberedRepo(b.db, published, b.clock.now());
     b.publish(published);
     return origin;
   }

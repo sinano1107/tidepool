@@ -11,7 +11,6 @@ import { quarantineStops } from "../src/quarantine.js";
 import { cancelTaskDirectly, completeTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
-  announcePublishedRepo,
   holdsBaseline,
   openHumanContentWorkbench,
   openIntakeQuestionId,
@@ -578,7 +577,8 @@ it("question を開いた後に workspace が remote-backed になれば、take 
   const origin = await tempDir("tidepool-intake-origin-");
   git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
   const published = { ...b.ws, repo: origin };
-  announcePublishedRepo(b.db, published);
+  // 公開を終えた行: 覚えた repo は宛先だけ(予告のままの行は宣言の無い旧い値も通す —— ADR 0391 決定2)
+  b.db.prepare("UPDATE workspace_state SET remembered_repo = ? WHERE name = ?").run(JSON.stringify(origin), b.ws.name);
   const nothingWritten = b.unchanged();
 
   await expect(b.answer("take in", published)).rejects.toThrow(

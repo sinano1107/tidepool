@@ -10,7 +10,7 @@ import { loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
-import { pickupGate, refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
+import { assertRememberedRepo, pickupGate, refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   createWorkspace,
@@ -143,7 +143,7 @@ function remoteBranches(dest: string): string[] {
   return out === "" ? [] : out.split("\n").map((line) => line.split("refs/heads/")[1] ?? "");
 }
 
-/** 子 process で `publishWorkspace` を撃つ(ADR 0391 の中断の窓)。`setup` は publish の前に子で撃つ文で、`db` を使える。
+/** 子 process で `publishWorkspace` を撃つ(ADR 0391 決定4 の中断の窓)。`setup` は publish の前に子で撃つ文で、`db` を使える。
  *  宛先はローカルの bare repo なので token は要らない。publish の直前に印を出す —— import で死んだ子と区別する。 */
 async function publishInChild(board: Awaited<ReturnType<typeof makeBoard>>, repo: string, setup = "") {
   const module = (rel: string) => JSON.stringify(new URL(rel, import.meta.url).href);
@@ -403,7 +403,6 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     const { registryDir, deps, checkout } = board;
     await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
     const dest = await makeDestination();
-    const remembered = () => JSON.parse(deps.db.prepare("SELECT remembered_repo FROM workspace_state WHERE name = ?").pluck().get("sandbox") as string);
 
     // registry の着地の `update-ref` に入った所で子を止める
     const child = await publishInChild(board, dest, `
@@ -418,21 +417,23 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(child.status, child.stderr).toBe(75);
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
-    expect(remembered()).toEqual([null, dest]);
     const resolve = () => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
     const task = registerTask(deps.db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: "sandbox" }, new Date(), ...HUMAN_WEBUI);
     const gate = () => pickupGate(deps.db, resolve(), task, deps.workspacesBaseDir);
+    // 覚えた repo の検査は「宣言無し」を通し(行が宛先の1値なら「`repo:` を戻せ」で止まる)、次の origin の検査が止める
     await expect(gate()).rejects.toThrow(`workspace sandbox declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${checkout}, run \`git config --remove-section remote.origin\`.`);
 
     git(checkout, "config", "--remove-section", "remote.origin");
     await gate();
-    expect(remembered()).toBeNull();
     await publishWorkspace({ name: "sandbox", repo: dest }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
-    expect(remembered()).toBe(dest);
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+    // 宛先へ畳まれている —— 予告のままなら、origin がある間の「宣言無し」は通る
+    expect(() => assertRememberedRepo(deps.db, { name: "sandbox", path: checkout, repo: undefined }, new Date())).toThrow(
+      `workspace sandbox was registered for repo ${dest}, but its registry entry no longer declares one.`,
+    );
   });
 
   // ADR 0391 決定1(#3336 のコメントの窓): 覚えた repo の予告は `remote add` より前の DB の書き込みなので、それが拒まれれば痕跡は1つも
@@ -463,16 +464,43 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     const dest = await makeDestination();
     await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
     const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
-    deps.db.function("refuse_restore", () => {
+    deps.db.function("refuse_fold", () => {
       throw refusal;
     });
     // 予告の後の書き(= 巻き戻しの畳み)だけを拒む —— 予告の前の行は JSON の null、予告の行は2値
     deps.db.exec(
-      "CREATE TEMP TRIGGER restore_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
-        "WHEN OLD.remembered_repo IS NOT NULL AND OLD.remembered_repo <> 'null' BEGIN SELECT refuse_restore(); END",
+      "CREATE TEMP TRIGGER fold_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
+        "WHEN OLD.remembered_repo IS NOT NULL AND OLD.remembered_repo <> 'null' BEGIN SELECT refuse_fold(); END",
     );
 
     await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toBe(refusal);
+  });
+
+  // ADR 0066 決定5: 成功の畳みは巻き戻しの外 —— registry の commit の後に巻き戻すと、宣言された `repo:` に origin が無いずれそのものを残す。
+  // 畳めなかった行は予告のまま残り、次の検査が宣言と origin の揃った宛先へ畳む(ADR 0391 決定3)
+  it("registry の commit の後に覚えた repo の畳みを盤面 DB が拒んでも、origin と `repo:` は残り、次の検査が宛先へ畳む", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+    const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
+    deps.db.function("refuse_fold", () => {
+      throw refusal;
+    });
+    // 予告の行(JSON の配列)からの書き = 畳みだけを拒む
+    deps.db.exec(
+      "CREATE TEMP TRIGGER fold_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
+        "WHEN OLD.remembered_repo LIKE '[%' BEGIN SELECT refuse_fold(); END",
+    );
+
+    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toBe(refusal);
+    expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
+    deps.db.exec("DROP TRIGGER fold_refused");
+    const check = (repo?: string) => assertRememberedRepo(deps.db, { name: "sandbox", path: checkout, repo }, new Date());
+
+    check(dest);
+
+    expect(() => check(undefined)).toThrow(`workspace sandbox was registered for repo ${dest}, but its registry entry no longer declares one.`);
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち
