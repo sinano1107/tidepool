@@ -2445,7 +2445,9 @@ it("着地の比較: 断念した根の最初の撮りの確認が registry を�
 });
 
 it("着地の比較: head を刻めなかった断念の根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {
-  const { workspace, db, landing, work } = await abandonedPromotion("landing-compare-abandoned-no-head", { askedTip: false });
+  const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-abandoned-no-head");
+  registerPrPromotionFailureQuestion(db, work, "token expired", clock.now());
+  await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "abandon promotion");
   git(workspace.path, "tag", "intruder");
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
