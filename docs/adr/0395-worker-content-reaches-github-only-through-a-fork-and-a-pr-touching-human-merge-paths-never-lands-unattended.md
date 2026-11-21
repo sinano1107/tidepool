@@ -2,6 +2,8 @@
 
 **Status 追記: App `tidepool-board` は公開(Any account)を前提とする —— 非公開の App は作った account にしか install できず、決定6 の出元 repo の所有者(org)に install できない。2026-11-21 に公開へ変えた。秘密鍵は broker だけが持ち、token は認証したユーザーが push 権を持つ repo にしか出ない(ADR 0093 決定2)ので、他人の install は盤面の token を与えない(issue #3482)。**
 
+**Status 追記: 帰結の未測定のうち「base 限定の installation token で出元 repo を head にした PR を作れるか」は、private では作れなかった。PR の作成は盤面にログインした人間の user token で行い、それ以外の PR の操作は宣言の repo の token のまま([ADR 0396](0396-the-board-opens-a-pr-from-the-head-repo-with-the-logged-in-humans-user-token-and-does-everything-else-with-the-declared-repos-installation-token.md)、issue #3569)。**
+
 2026-11-21 の grilling(issue #3482)で決定。盤面は人間が一度も見ていない worker の内容を origin と同じ repo の `task/<root>` に push していた。GitHub は同じ repo の branch を書き込み権のある協力者の内容として扱うので、PR の CI は head の workflow 定義と head の code を repo の資格情報で走らせる —— 使い捨ての repo で、repo の既定が `read` でも head の定義の `permissions: contents: write` が書ける token を得て、repo の secrets も渡ることを測った。fork からの PR では、fork の所有者が base の admin 本人でも token は read、secrets は渡らなかった。測ったのは public と private の両方で(どちらも個人 account の repo を同じ account の org へ fork、private は fork の PR の workflow を有効にして)、PR は人間の gh token で開いた。実測の表と、spec に運ぶ実装の制約(`file:line` 付き)は #3482 のコメントに置く。同じ repo か fork かは、これまで一度も決められていなかった。
 
 ## 決定
