@@ -13,10 +13,9 @@
 ## 帰結
 
 - GitHub 上で、PR を開いた名義は人間になる。commit の author と merge の名義は bot のままである。
-- ログインした人間は、出元 repo を読めなければならない。installer は出元 repo の所有者なので満たす。満たさなければ作成が失敗し、既存の失敗の扱いに落ちる。
+- ログインした人間は、出元 repo を読めなければならない。installer は出元 repo の所有者なので満たす。作成が失敗すれば(出元 repo を読めない、user token の失効)、その根の着地の失敗に落ちる。user token が失効しても broker が先に落ちるとは限らない —— installation token は期限までキャッシュされ、push は通りうる。
 - ひとりで運用する maintainer は、自分が作者の PR を承認できない。宣言の repo が「承認を必須」や「CODEOWNERS の承認を必須」にしていると、盤面の PR はそれを満たせない。
 - 自分の PR の探索は作者で絞らない。head の repo で照合する(issue #3561)。
-- user token が失効すれば、作成も broker も同じ所で落ちる(ADR 0093 決定7)。
 
 ## 検討した選択肢
 
