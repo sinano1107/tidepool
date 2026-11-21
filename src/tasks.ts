@@ -611,14 +611,27 @@ export function keepsCheckoutAsRecord(db: Db, task: Task): boolean {
   return interviewRole(db, task) === "examinee" && isSettled(task.status);
 }
 
+/** 後始末の印(`teardown_started_at`)が立っている —— `Task` はこの列を持たない。 */
+function hasTeardownMark(db: Db, taskId: string): boolean {
+  return db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").pluck().get(taskId) !== null;
+}
+
 /** ADR 0369 決定2・4: task が解放を負う —— 最後の pickup が開いた task の checkout を名指す `task_checkout_released` も
  *  `task_checkout_release_failed` も無く、session が走っておらず後始末の印も無い。決着した受験者の最後の checkout は負わない。
- *  受理のやり直しと poll の立て直しがこの1本を読む。 */
+ *  受理のやり直しと poll の立て直し、人間の扉が読む帰り先の持ち主の解放待ち(`releaseOwedBy`、ADR 0390 決定1)がこの1本を読む。 */
 function owesTaskCheckoutRelease(db: Db, task: Task): boolean {
   const path = taskCheckoutPath(db, task.id);
   if (path === undefined || task.status === "in_progress" || keepsCheckoutAsRecord(db, task)) return false;
-  if (db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").pluck().get(task.id) !== null) return false;
+  if (hasTeardownMark(db, task.id)) return false;
   return !taskCheckoutWasReleased(db, task.id, path) && latestEventOfTask(db, task.id, "task_checkout_release_failed")?.payload.path !== path;
+}
+
+/** task が自分の session の解放を負うなら、どの形で負うか —— 後始末の印がある・session 中・解放待ち(ADR 0369)。負わなければ
+ *  undefined。ADR 0390 決定1: 系譜の帰り先のタスクブランチの持ち主についてこれを読み、その系譜に触る人間の扉(完了と書き始める)が拒む。 */
+export function releaseOwedBy(db: Db, task: Task): "teardown" | "session" | "pending" | undefined {
+  if (hasTeardownMark(db, task.id)) return "teardown";
+  if (task.status === "in_progress") return "session";
+  return owesTaskCheckoutRelease(db, task) ? "pending" : undefined;
 }
 
 /** task の checkout を開いたことがあり、解放の着け先が `name` の task(ADR 0369 決定2): Interview の root と受験者は面接室(root の id)、
