@@ -1557,8 +1557,10 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const [mergePaths, setMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const [originalMergePaths, setOriginalMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const [headRepo, setHeadRepo] = React.useState(ws.head_repo ?? "");
+  const [headRepoTouched, setHeadRepoTouched] = React.useState(false);
+  const sendHeadRepo = headRepo.trim() !== (ws.head_repo ?? "") || headRepoTouched && headRepo.trim() !== "";
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []) || !sameStrings(mergePaths, originalMergePaths) || headRepo.trim() !== (ws.head_repo ?? "");
+  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []) || !sameStrings(mergePaths, originalMergePaths) || sendHeadRepo;
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => {
     edit.close();
@@ -1572,6 +1574,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
     setMergePaths(ws.human_merge_paths ?? []);
     setOriginalMergePaths(ws.human_merge_paths ?? []);
     setHeadRepo(ws.head_repo ?? "");
+    setHeadRepoTouched(false);
   });
   const save = () => {
     const body = { notes: notes.trim() };
@@ -1582,7 +1585,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       body.human_merge_paths = mergePaths;
       body.expected_human_merge_paths = originalMergePaths;
     }
-    if (headRepo.trim() !== (ws.head_repo ?? "")) body.head_repo = headRepo.trim();
+    if (sendHeadRepo) body.head_repo = headRepo.trim();
     submit(async (confirm) => {
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", ws.name);
@@ -1675,7 +1678,10 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
     {
       label: "Head repo",
       value: headRepo,
-      onChange: (e) => setHeadRepo(e.target.value),
+      onChange: (e) => {
+        setHeadRepo(e.target.value);
+        setHeadRepoTouched(true);
+      },
       placeholder: "owner/name of the fork task branches go to \u2014 empty removes it (confirmed on save if set)"
     }
   ), /* @__PURE__ */ React.createElement(
@@ -2037,7 +2043,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
     section.singular
   )), dialog);
 }
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, confirmLabel, failDetail, labels = DANGEROUS_REASON_LABEL, confirmOf }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, confirmLabel, failDetail, labels = DANGEROUS_REASON_LABEL, confirmOf, savedOf }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null);
@@ -2051,8 +2057,13 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         await onDone();
       } catch (err) {
         const asked = confirmOf(err);
+        const saved = savedOf?.(err);
         if (asked) {
           setConfirm({ ...asked, resend: () => attempt(true) });
+        } else if (saved) {
+          setConfirm(null);
+          say("warn", saved, String(err.message || err));
+          await onDone();
         } else {
           setConfirm(null);
           say("danger", `${noun} not ${verb}${failDetail ? ` \u2014 ${failDetail}` : ""}`, String(err.message || err));
@@ -2097,7 +2108,8 @@ function useWorkspaceSave(say, onDone) {
     confirmKey: "confirm",
     dialogTitle: "Save a change that widens what agents may do?",
     dialogLead: "This change widens what agents may do here. Review before saving:",
-    confirmOf: dangerousValuesOf("PATCH /api/workspaces/:name 409")
+    confirmOf: dangerousValuesOf("PATCH /api/workspaces/:name 409"),
+    savedOf: (err) => apiErrorDetail(err, "PATCH /api/workspaces/:name 502")?.saved ? "workspace updated \u2014 some task branches were not sent" : null
   });
 }
 function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }) {

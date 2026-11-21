@@ -7,6 +7,7 @@ import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  ProtectedBranchMissingError,
   type PublishWorkspaceInput,
   publishWorkspace,
   WorkspaceAlreadyPublishedError,
@@ -42,10 +43,9 @@ it("POST /api/workspaces/:name/publish は宛先を publish オーケストレ�
   ]);
 });
 
-// ADR 0395 決定3: 段1 は保護ブランチだけを origin へ送り、成功文は送った範囲と次の手順(出元 repo を用意して宣言する)を言う
-it("POST /api/workspaces/:name/publish は保護ブランチだけを origin へ送り、送った範囲と次の手順を返す", async () => {
+// issue #3563: 成功文は送った範囲(保護ブランチ)と次の手順(出元 repo を用意して宣言する)を言う。送る範囲そのものは publishWorkspace のテストが持つ
+it("POST /api/workspaces/:name/publish は送った範囲と次の手順を返す", async () => {
   const ws = await makeWorkspace("sandbox");
-  git(ws.path, "branch", "task/abc123");
   const registryDir = await makeRegistry({ "workspaces.yaml": `sandbox:\n  path: ${ws.path}\n` });
   const dest = await tempDir("tidepool-dest-");
   git(dest, "init", "--bare", "-b", "main");
@@ -57,7 +57,6 @@ it("POST /api/workspaces/:name/publish は保護ブランチだけを origin へ
   const res = await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest });
 
   expect(res.status).toBe(200);
-  expect(git(dest, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
   expect(res.json).toEqual({
     message: `Published workspace sandbox: sent its protected branch main to origin (${dest}); task branches were not sent. Next, fork ${dest} and set the fork as this workspace's head repo in the workspace settings; that sends the task branches to the fork.`,
   });
@@ -108,6 +107,7 @@ it("知らない workspace 名は 404(update の扉と同じ)", async () => {
 it.each([
   ["already published", new WorkspaceAlreadyPublishedError("sandbox", "https://example/x.git")],
   ["checkout already has origin", new CheckoutHasOriginError("sandbox", "https://example/y.git", "/tmp/sandbox")],
+  ["protected branch missing", new ProtectedBranchMissingError("sandbox", "trunk", "/tmp/sandbox")],
   ["repo access missing", new RepoAccessMissingError("grant write access with: gh api ...")],
 ])("%s は 400 でメッセージを返す", async (_label, err) => {
   t = await bootTidepool({

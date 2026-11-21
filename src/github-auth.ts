@@ -258,7 +258,8 @@ export function sourceCheckout(source: GitSource): string {
 }
 
 /** リモート側のブランチを指す remote-tracking ref(写し)の**綴り**。ADR 0052 のもとで「リモートの正本を読む」は registry の役
- *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れ、書くのは push の後の `authedPush` と
+ *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れる。出元 repo へ送ったタスクブランチの写しは
+ *  `remote` に head repo の remote を渡した `refs/remotes/head-repo/task/*`(ADR 0395 決定1)。書くのは push の後の `authedPush` と
  *  `fetchBranchCopy` —— 綴りそのものは1つでなければならない(2つ持つと、片方だけを直したときに黙ってずれる)。どちらの ref を
  *  読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
 export function remoteTrackingRef(branch: string, remote: PushRemote = "origin"): string {
@@ -308,9 +309,10 @@ function inBoardRepo<T>(
   remote: PushRemote = "origin",
 ): T {
   const checkout = sourceCheckout(source);
-  const destination = typeof source === "string"
-    ? networkDestination(checkoutOrigin(source, verb), source)
-    : remote === "origin" ? workspaceNetworkDestination(source) : workspaceHeadRepoDestination(source);
+  // a registry checkout (a string source) has no head repo: it reaches no destination rather than origin under head-repo copies
+  const destination = typeof source !== "string"
+    ? remote === "origin" ? workspaceNetworkDestination(source) : workspaceHeadRepoDestination(source)
+    : remote === "origin" ? networkDestination(checkoutOrigin(source, verb), source) : undefined;
   if (destination === undefined) throw new Error(`\`git ${verb}\` has no declared repo to reach (in ${checkout})`);
   const env = auth ? auth.env(destination.key) : githubChildEnv();
   const boardRepo = mkdtempSync(join(env.HOME!, "repo-"));

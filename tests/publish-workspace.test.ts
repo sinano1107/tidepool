@@ -256,7 +256,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     if (rejected) await seedDestination(dest);
 
     const published = publishWorkspace({ name: "sandbox", repo: dest }, deps);
-    await (rejected ? expect(published).rejects.toThrow() : expect(published).resolves.toContain("sent its protected branch main"));
+    await (rejected ? expect(published).rejects.toThrow() : expect(published).resolves.toEqual(expect.any(String)));
     // 押した写しは消し、拒まれた写しは予告した値で作る
     const copy = "refs/remotes/origin/main";
     const main = git(checkout, "rev-parse", "main");
@@ -501,8 +501,8 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち
-  // 「GitHub UI の Add a README」。送るのは保護ブランチ1本だけ(ADR 0395 決定3)なので atomic は効かず、
-  // その1本が non-fast-forward で落ちれば、ローカルにも宛先にも痕跡は残らない。
+  // 「GitHub UI の Add a README」。送るのは保護ブランチ1本だけ(ADR 0395 決定3)—— 1本の push なので、non-fast-forward の拒否は
+  // そのまま publish 全体の失敗になり、ローカルにも宛先にも痕跡は残らない。
   it("宛先が空でなければ保護ブランチの push が non-fast-forward で落ち、ローカルの origin も宛先のブランチも増えない", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     git(checkout, "branch", "task/abc123");
@@ -619,6 +619,21 @@ describe("publishWorkspace: 3つの拒否(ADR 0066 決定5 / issue #285)", () =>
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(
       "https://github.com/sinano1107/sandbox.git",
     );
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+  });
+
+  // 送る保護ブランチが checkout に無ければ、`remote add` の手前で名指して拒む —— refspec の無い push を撃たない
+  it("保護ブランチが checkout に無ければ拒否され、痕跡を残さない", async () => {
+    const checkout = await tempDir("tidepool-unborn-");
+    git(checkout, "init", "-b", "main");
+    const { registryDir, deps } = await makeBoard(`sandbox:\n  path: ${checkout}\n  branch: trunk\n`);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(publishWorkspace({ name: "sandbox", repo: await makeDestination() }, deps)).rejects.toThrow(
+      `workspace "sandbox" cannot be published: its protected branch trunk does not exist in its checkout (${checkout}). Create trunk there, then publish again.`,
+    );
+
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
   });
 

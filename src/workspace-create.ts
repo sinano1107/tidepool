@@ -156,7 +156,7 @@ export interface PublishWorkspaceDeps extends WorkspaceGitHubDeps {
  *  どこへ落ちたかを返すことがその代わりである。 */
 export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<string>;
 export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
-/** 返すのは送った範囲と次の手順の文(ADR 0395 決定3)。 */
+/** 返すのは送った範囲と次の手順の文(issue #3563)。 */
 export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string>;
 /** 返すのは**残る** checkout の場所(ADR 0087 決定4): 消えるのは registry エントリ
  *  だけなので、応答はホスト上に残った checkout を名指しする。参照検査の事実を
@@ -473,7 +473,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   // the one GitHub read comes before the registry read, so nothing awaits between that read and the commit (ADR 0066 決定5 の線)
   const head = input.head_repo ? await readHeadRepoParent(input.head_repo, deps.github) : undefined;
-  // ADR 0093: the head repo's token for the task branch push (ADR 0395 決定3 の段2) is warmed here too, before the registry read
+  // ADR 0093: the head repo's token for the task branch push (sendTaskBranches) is warmed here too, before the registry read
   if (head) await deps.githubAuth?.ensureToken(githubKey(head.head));
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
@@ -536,11 +536,12 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
   if (head) next.head_repo = githubKey(head.head);
   else delete next.head_repo;
   const now = () => (deps.clock ?? new SystemClock()).now();
-  writeHeadRepo(deps.db, { name: input.name, path, repo: entry.repo, head_repo: entry.head_repo }, next.head_repo, now, commit);
-  if (next.head_repo !== undefined) sendTaskBranches(deps.db, { name: input.name, path, repo: entry.repo, head_repo: next.head_repo }, deps.githubAuth);
+  const workspace = { name: input.name, path, repo: entry.repo, head_repo: entry.head_repo };
+  writeHeadRepo(deps.db, workspace, next.head_repo, now, commit);
+  if (next.head_repo !== undefined) sendTaskBranches(deps.db, { ...workspace, head_repo: next.head_repo }, next.head_repo, deps.githubAuth);
 }
 
-/** ADR 0395 決定3 の段2 が送れなかった枝。宣言は残っていて、同じ値をもう一度通せば送り直す。 */
+/** 出元 repo へ送れなかったタスクブランチ。issue #3563: 宣言は残っていて、同じ値をもう一度通せば送り直す —— API は 502 に `saved` を付ける。 */
 export class HeadRepoTaskBranchesNotSentError extends Error {
   constructor(name: string, headRepo: string, failures: string[]) {
     super(`The head repo ${headRepo} of workspace ${name} was saved, but these task branches were not sent to it: ${failures.join("; ")}. Set the same head repo again to send them.`);
@@ -548,10 +549,11 @@ export class HeadRepoTaskBranchesNotSentError extends Error {
   }
 }
 
-/** ADR 0395 決定3 の段2: `task/*` を出元 repo へ1本ずつ送る —— 1本の分岐した枝が、他の枝の送り直しを毎回塞がないよう atomic にしない。
- *  写しは送れた枝の `refs/remotes/head-repo/task/*` だけ。`refs/remotes/origin/*` は書かない —— `rewindStop` はそれを origin へ押した値と読む。
- *  段1 の不変条件は持ち込まない: 失敗しても宣言は残る。同じ sha が既にある枝は up-to-date で通るので、撃ち直しは冪等。 */
-function sendTaskBranches(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
+/** ADR 0395 決定3: 出元 repo が宣言されたとき `task/*` を出元 repo へ送る。1本ずつ送る —— 分岐したタスクブランチが1本あっても、
+ *  他のタスクブランチの送り直しを毎回塞がないよう atomic にしない。写しは送れたタスクブランチの `refs/remotes/head-repo/task/*` だけで、
+ *  `refs/remotes/origin/*` は書かない —— `rewindStop` はそれを origin へ押した値と読む。issue #3563: 失敗しても宣言は残る。同じ sha が既に
+ *  あるタスクブランチは up-to-date で通るので、同じ値をもう一度通す撃ち直しは冪等。 */
+function sendTaskBranches(db: Db, workspace: WorkspaceConfig, headRepo: string, auth: GitHubAuth | undefined): void {
   const branches = [...refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads/task/"))];
   const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch, HEAD_REPO_REMOTE), sha] as const);
   const failures: string[] = [];
@@ -565,7 +567,7 @@ function sendTaskBranches(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth |
       }
     }
   });
-  if (failures.length > 0) throw new HeadRepoTaskBranchesNotSentError(workspace.name, workspace.head_repo!, failures);
+  if (failures.length > 0) throw new HeadRepoTaskBranchesNotSentError(workspace.name, headRepo, failures);
 }
 
 /** ADR 0087 決定1/4 の workspace 半分: registry エントリだけを committed main から
@@ -683,6 +685,14 @@ export class CheckoutHasOriginError extends Error {
   }
 }
 
+/** publish の4つ目の拒否: 送る保護ブランチが checkout に無い。 */
+export class ProtectedBranchMissingError extends Error {
+  constructor(name: string, branch: string, path: string) {
+    super(`workspace "${name}" cannot be published: its protected branch ${branch} does not exist in its checkout (${path}). Create ${branch} there, then publish again.`);
+    this.name = "ProtectedBranchMissingError";
+  }
+}
+
 /** ADR 0066 決定2 の扉: purely-local な workspace に remote 正本を与える。
  *  `git remote add origin` → 盤面が組んだ URL へ `git push <sha>:<保護ブランチ>` → 写しの `update-ref` → registry エントリへ `repo`。
  *  `task/*` は送らない —— 出元 repo の宣言が出元 repo へ送る(ADR 0395 決定3 の段2)。返すのは送った範囲と次の手順の文。
@@ -727,7 +737,13 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // `<sha>:<ref>` でそのまま押し、その写しを口に予告する(ADR 0243 / ADR 0066 決定4): tip を読み直す push だと、押した写しが予告と食い違う。
   // 無ければ `remote add` の手前で落ちる —— refspec の無い push を撃たない
   const branch = protectedBranch({ ...declaration, branch: fresh.branch });
-  const branches = [[branch, git(dir, "rev-parse", "--verify", `refs/heads/${branch}`)] as const];
+  let sha: string;
+  try {
+    sha = git(dir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
+  } catch {
+    throw new ProtectedBranchMissingError(name, branch, dir);
+  }
+  const branches = [[branch, sha] as const];
   const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch), sha] as const);
   // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの戻す先は、書く前に checkout にあった写しの値。基準の行は使わない —— 落ちて
   // 残った行は次の比較まで残り(ADR 0351 決定4)、次の予告はその上に重なる(ADR 0373 決定3・5)ので、行からは戻す先が1つに決まらない
