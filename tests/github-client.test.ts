@@ -87,7 +87,7 @@ async function fakeGh(logPath: string): Promise<string> {
   const script = join(dir, "gh");
   writeFileSync(
     script,
-    `#!/bin/sh\necho "$@" >> "${logPath}"\necho "https://github.com/example/repo/pull/42"\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\n`,
   );
   chmodSync(script, 0o755);
   return dir;
@@ -221,7 +221,7 @@ it("PR の作成が断られたら、HTTP status と GitHub の理由を書き�
   });
 
   await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
-    new Error("`POST repos/acme/widget/pulls` was refused for head acme:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
+    new Error("`POST pulls` on acme/widget was refused for head acme:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
   );
 });
 
@@ -232,7 +232,7 @@ it("PR の作成は GitHub が返らなくても上限で、何 ms で切れた�
 
   const started = Date.now();
   await expect(client.createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
-    new Error("`POST repos/acme/widget/pulls` timed out after 200 ms"),
+    new Error("`POST pulls` on acme/widget timed out after 200 ms"),
   );
   expect(Date.now() - started).toBeLessThan(2_000);
 });
