@@ -2,9 +2,11 @@ import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
+import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import { completeThroughHumanDoor, decomposeThroughHumanDoor, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
 import { createLanding, landingBlock } from "../src/landing.js";
@@ -27,7 +29,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
+import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
@@ -61,6 +63,10 @@ async function takeIn(b: Board, task: Task) {
   return takeInWorkThroughHumanDoor(deps(b), task.id, () => b.clock.now(), "webui");
 }
 
+/** ADR 0390 text: 帰り先の持ち主 `owner` が解放を負う間の拒否(`verb` は答え直す行為)。 */
+const ownerOwesRelease = (owner: Task, verb: string) =>
+  `task ${owner.id} "${owner.title}", whose branch this task returns to, is still running or being torn down — ${verb} again once it has finished.`;
+
 const refused = (error: string) => ({ ok: false, failure: { kind: "domain_error", error } });
 
 /** 名前の場所の全 ref(HEAD を含む)と作業ツリーの状態 —— 盤面が名前の場所に書いていないことの観測。 */
@@ -70,26 +76,33 @@ const kinds = (db: Db, taskId: string) => listEvents(db, taskId).map((e) => e.ki
 
 const humanWorkbench = (b: Board, task: Task) => workbenchPath(b.base, { task: task.id });
 
-/** agent の子を拾い、task の checkout を開く(pickup の準備 —— 未着手の祖先を固定する)。 */
-async function pickedAgentChild(b: Board, parent: Task) {
+/** agent の task を拾い、task の checkout を開く(pickup の準備 —— 未着手の祖先を固定する)。 */
+async function picked(b: Board, task: Task) {
   const { db, clock, ws, base } = b;
-  const task = pickupTask(db, work(b, "child", { parent_id: parent.id }), "deckhand", clock.now())!;
-  const place = await prepareAtPickup(db, ws, task, { now: clock.now(), workspacesBaseDir: base, defaultWorkspaceName: ws.name });
+  const pickedUp = pickupTask(db, getTask(db, task.id)!, "deckhand", clock.now())!;
+  const place = await prepareAtPickup(db, ws, pickedUp, { now: clock.now(), workspacesBaseDir: base, defaultWorkspaceName: ws.name });
   appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });
-  return { task, place };
+  return { task: pickedUp, place };
+}
+
+const pickedAgentChild = (b: Board, parent: Task) => picked(b, work(b, "child", { parent_id: parent.id }));
+
+/** 後始末の印が立った task の後始末(解放と merge back)を、slot を握った形で通す。 */
+async function runMarkedTeardown(b: Board, taskId: string): Promise<void> {
+  const slot = new Slot();
+  slot.occupy(taskId, sessionId(b.db, taskId));
+  slot.enterTeardown();
+  await runTeardown({ db: b.db, clock: b.clock, slot, resolve: () => b.ws, pollNow: () => {} }, taskId, teardownStep(b.db, taskId));
 }
 
 /** 拾った子の task の checkout で `file` を書いて完了させ、後始末(merge back)まで通す。 */
 async function finishAgentChild(b: Board, { task, place }: Awaited<ReturnType<typeof pickedAgentChild>>, file: string, body: string): Promise<Task> {
-  const { db, clock, ws } = b;
+  const { db, clock } = b;
   commitWork(place.path, file, body);
   recordTaskCheckoutTip(db, place, task.id);
   completeTask(db, task, FULL_HANDOFF, "worker", clock.now(), "worker");
   markTeardown(db, task.id, clock.now());
-  const slot = new Slot();
-  slot.occupy(task.id, sessionId(db, task.id));
-  slot.enterTeardown();
-  await runTeardown({ db, clock, slot, resolve: () => ws, pollNow: () => {} }, task.id, teardownStep(db, task.id));
+  await runMarkedTeardown(b, task.id);
   return getTask(db, task.id)!;
 }
 
@@ -454,14 +467,22 @@ it("人間担当の親の下の agent の子は、子の pickup が固定した 
   expect(git(place.path, "show", "HEAD:first.txt")).toBe("first");
 });
 
-it("agent の親の下の人間担当の子は task/<親> の今の値から切られる(pin C20)", async () => {
+it("agent の親の下の人間担当の子の書き始めるは、親が解放を負う間(session 中・後始末の印)は拒まれ何も書かない —— 解放の後は親の commit を含む task/<親> の今の値から切られる(pin C20、ADR 0390 決定1・2)", async () => {
   const b = await board("agent-parent");
-  const parent = pickupTask(b.db, work(b, "plan"), "deckhand", b.clock.now())!;
-  const place = await prepareAtPickup(b.db, b.ws, parent, { now: b.clock.now(), workspacesBaseDir: b.base });
+  const parent = work(b, "plan");
+  const { task, place } = await picked(b, parent);
   commitWork(place.path, "plan.txt", "plan\n");
-  recordTaskCheckoutTip(b.db, place, parent.id);
   const h = work(b, "write it myself", { parent_id: parent.id, assignee: HUMAN_ACTOR_ID });
+  const before = [namedPlace(b.ws), kinds(b.db, h.id)];
 
+  expect(await startWork(b, h)).toEqual(refused(ownerOwesRelease(parent, "start work")));
+  decomposeTaskViaWorker(b.db, task, { reason: "split", children: [{ title: "later", purpose: "p", completion_criteria: "c" }] }, "deckhand", b.clock.now());
+  markTeardown(b.db, parent.id, b.clock.now());
+  expect(await startWork(b, h)).toEqual(refused(ownerOwesRelease(parent, "start work")));
+  expect([namedPlace(b.ws), kinds(b.db, h.id)]).toEqual(before);
+  expect(existsSync(humanWorkbench(b, h))).toBe(false);
+
+  await runMarkedTeardown(b, parent.id);
   expect((await startWork(b, h)).ok).toBe(true);
 
   expect(git(b.ws.path, "rev-parse", `task/${h.id}`)).toBe(git(b.ws.path, "rev-parse", `task/${parent.id}`));
@@ -526,7 +547,7 @@ it("tip が task/<H> と同じなら取り込まずに完了する —— 包む
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
 });
 
-it("子孫だけが走った H(タスクブランチあり・作業台なし)は取り込まずに完了し、兄弟の session が走っていても H の merge back を撃つ(pin C7、#3418 のレビューの形 2)", async () => {
+it("子孫だけが走った H(タスクブランチあり・作業台なし)は取り込まずに完了し、兄弟の session が走っていても H の merge back を撃つ —— 兄弟の H2 も書き始められる(pin C7、#3418 のレビューの形 2、ADR 0390 決定2)", async () => {
   const b = await board("complete-children-only");
   const root = work(b, "plan");
   const h = work(b, "integrate it", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
@@ -538,6 +559,8 @@ it("子孫だけが走った H(タスクブランチあり・作業台なし)は
   expect(git(b.ws.path, "merge-base", `task/${h.id}`, `task/${root.id}`)).toBe(git(b.ws.path, "rev-parse", "main"));
   expect(git(b.ws.path, "rev-parse", `task/${child.id}^`)).toBe(git(b.ws.path, "rev-parse", "main"));
 
+  // 帰り先の持ち主でない兄弟の session は見ない(ADR 0374 決定9)
+  expect((await startWork(b, work(b, "write it too", { parent_id: root.id, assignee: HUMAN_ACTOR_ID }))).ok).toBe(true);
   expect((await complete(b, h)).ok).toBe(true);
 
   expect(getTask(b.db, h.id)!.status).toBe("done");
@@ -628,6 +651,96 @@ it("拒まれた完了は task に何も書かない: 子孫の後始末が済�
   writeFileSync(join(path, "mine.txt"), "not committed\n");
   expect(await complete(b, h)).toEqual(refused(`the workbench at ${path} has uncommitted changes — commit or discard them, then complete again.`));
   expect(untouched(b, h)).toEqual(before);
+});
+
+it("帰り先の持ち主 P に後始末の印がある間、書き始め済みの H の完了は拒まれ何も書かない —— P の解放の後は通り、task/<P> は P の commit と H の両方を含む(ADR 0390 決定1・2)", async () => {
+  const b = await board("return-owner-teardown");
+  const p = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: p.id, assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, h);
+  const { task, place } = await picked(b, p);
+  commitWork(place.path, "plan.txt", "plan\n");
+  decomposeTaskViaWorker(b.db, task, { reason: "split", children: [{ title: "later", purpose: "p", completion_criteria: "c" }] }, "deckhand", b.clock.now());
+  markTeardown(b.db, p.id, b.clock.now());
+  const before = [...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)];
+
+  expect(await complete(b, h)).toEqual(refused(ownerOwesRelease(p, "complete")));
+  expect([...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)]).toEqual(before);
+
+  await runMarkedTeardown(b, p.id);
+  expect((await complete(b, h)).ok).toBe(true);
+  expect([git(b.ws.path, "show", `task/${p.id}:plan.txt`), git(b.ws.path, "show", `task/${p.id}:mine.txt`)]).toEqual(["plan", "mine"]);
+});
+
+it("H が開いたまま拾われた帰り先の持ち主 P の session の間、H の完了は拒まれる —— P の完了の後は通り、task/<P> は P の門の tip と H の両方を含む(ADR 0390 決定1・2)", async () => {
+  const b = await board("return-owner-session");
+  const p = work(b, "plan");
+  // 親を塞がない子(分解の決定を持たない)—— P は H を待たずに拾われる
+  const h = work(b, "write it myself", { parent_id: p.id, assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, h);
+  const { task, place } = await picked(b, p);
+  commitWork(place.path, "plan.txt", "plan\n");
+  const before = [...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)];
+
+  expect(await complete(b, h)).toEqual(refused(ownerOwesRelease(p, "complete")));
+  expect([...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)]).toEqual(before);
+
+  recordTaskCheckoutTip(b.db, place, p.id);
+  const gateTip = git(b.ws.path, "rev-parse", `task/${p.id}`);
+  completeTask(b.db, task, FULL_HANDOFF, "worker", b.clock.now(), "worker");
+  markTeardown(b.db, p.id, b.clock.now());
+  expect(await complete(b, h)).toEqual(refused(ownerOwesRelease(p, "complete")));
+  await runMarkedTeardown(b, p.id);
+
+  expect((await complete(b, h)).ok).toBe(true);
+  expect(git(b.ws.path, "merge-base", "--is-ancestor", gateTip, `task/${p.id}`)).toBe("");
+  expect(git(b.ws.path, "show", `task/${p.id}:mine.txt`)).toBe("mine");
+});
+
+it("解放待ち(印は消え、解放が済んでいない)の帰り先の持ち主 P の間、完了も書き始めるも拒まれる —— Quarantine が立てばその question を名指し、受理が解放をやり直した後は通る(ADR 0390 決定1〜3)", async () => {
+  const b = await board("return-owner-owed-release");
+  const p = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: p.id, assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, h);
+  const { task, place } = await picked(b, p);
+  commitWork(place.path, "plan.txt", "plan\n");
+  decomposeTaskViaWorker(b.db, task, { reason: "split", children: [{ title: "later", purpose: "p", completion_criteria: "c" }] }, "deckhand", b.clock.now());
+  const before = [...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)];
+
+  // poll が Quarantine を立て直す前
+  expect(await complete(b, h)).toEqual(refused(ownerOwesRelease(p, "complete")));
+  expect(await startWork(b, h)).toEqual(refused(ownerOwesRelease(p, "start work")));
+  expect([...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)]).toEqual(before);
+
+  // 準備の await の間に Quarantine が立った形 —— 書く区間の読みがその question を名指す
+  quarantineWorkspace(b.db, b.ws.name, `The release of task ${p.id} is unfinished and answering this question retries it`, b.clock.now());
+  const question = quarantineQuestion(b.db, "workspace", b.ws.name)!;
+  expect(() => completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {})).toThrow(
+    `${ownerOwesRelease(p, "complete")} Answer question ${question.id} first.`,
+  );
+  expect([...untouched(b, h), git(b.ws.path, "rev-parse", `task/${p.id}`)]).toEqual(before);
+
+  expect((await answer(b)).status).toBe("done");
+  expect((await complete(b, h)).ok).toBe(true);
+  expect([git(b.ws.path, "show", `task/${p.id}:plan.txt`), git(b.ws.path, "show", `task/${p.id}:mine.txt`)]).toEqual(["plan", "mine"]);
+});
+
+it("帰り先の持ち主 P の後始末を止めている開いた question(封じ込めの確認・落ちた後始末)があれば、拒否文がその id を名指す(ADR 0390 決定3)", async () => {
+  const b = await board("return-owner-question");
+  const p = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: p.id, assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, h);
+  const { task } = await picked(b, p);
+  decomposeTaskViaWorker(b.db, task, { reason: "split", children: [{ title: "later", purpose: "p", completion_criteria: "c" }] }, "deckhand", b.clock.now());
+  markTeardown(b.db, p.id, b.clock.now());
+
+  quarantineContainment(b.db, `the worker session for task ${p.id} is settled`, b.clock.now());
+  const containment = quarantineQuestion(b.db, "containment", null)!;
+  expect(await complete(b, h)).toEqual(refused(`${ownerOwesRelease(p, "complete")} Answer question ${containment.id} first.`));
+
+  quarantineFailedTeardown(b.db, p.id, new Error("boom"), b.clock.now());
+  const failed = quarantineQuestion(b.db, "failedTeardown", p.id)!;
+  expect(await startWork(b, h)).toEqual(refused(`${ownerOwesRelease(p, "start work")} Answer question ${failed.id} first.`));
 });
 
 it("tip が task/<H> のままで作業ツリーが汚れていれば、完了は答え直しに complete again を言って拒み、何も書かない(text C2d)", async () => {

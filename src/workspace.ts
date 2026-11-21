@@ -142,6 +142,7 @@ import {
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
+  returnOwnerOwesRelease,
   sessionReadCheckouts,
   settleQuestionAsObserved,
   subtreeSql,
@@ -1718,6 +1719,8 @@ export async function startHumanWork(
   const verb = "start work";
   await prepareHumanWork(db, workspace, task, verb, board);
   task = recheck();
+  // ADR 0390 決定2: preparedOrRefused の中で投げると Quarantine に畳まれるので、その手前で読む —— createTaskBranch まで await は無い
+  refuseWhileReturnOwnerOwesRelease(db, workspace, task, verb);
   await preparedOrRefused(db, workspace, verb, board, async () => {
     fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
     createTaskBranch(db, workspace, task, board.now, filledFrom(db, task));
@@ -1755,6 +1758,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   const target = taskBranch(task.id);
   const ref = `refs/heads/${target}`;
   const at = workbenchAt(named, base, target);
+  refuseWhileReturnOwnerOwesRelease(db, named, task, "complete");
   const unfinished = teardownUnfinishedUnder(db, task.id);
   if (unfinished) throw new DomainError(`task ${unfinished.id} "${unfinished.title}" under this task is still being torn down — complete again once it has finished.`);
   const hasWorkbench = placeHasRepository(at);
@@ -1801,6 +1805,19 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   }
   if (!hasWorkbench) return undefined;
   return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
+}
+
+/** ADR 0390 決定1〜3: 系譜の帰り先のタスクブランチの持ち主が解放を負う間は拒む —— 根(帰り先が保護ブランチ)には持ち主が無い。 */
+function refuseWhileReturnOwnerOwesRelease(db: Db, named: WorkspaceConfig, task: Task, verb: "complete" | "start work"): void {
+  const lineage = lineageTaskBranch(db, named, task);
+  if (!lineage || !returnOwnerOwesRelease(db, taskIdOfBranch(lineage))) return;
+  const owner = getTask(db, taskIdOfBranch(lineage))!;
+  // 決定3: 人間の回答待ちならその question を名指す —— 落ちた後始末・封じ込めの確認・解放待ちの workspace の Quarantine(子は帰り先と同じ workspace)
+  const question =
+    openQuarantineQuestion(db, "failedTeardown", owner.id) ?? openQuarantineQuestion(db, "containment", null) ?? openQuarantineQuestion(db, "workspace", named.name);
+  throw new DomainError(
+    `task ${owner.id} "${owner.title}", whose branch this task returns to, is still running or being torn down — ${verb} again once it has finished.${question ? ` Answer question ${question.id} first.` : ""}`,
+  );
 }
 
 /** ADR 0374 決定8: H の帰り先 —— `parent_id` でなく系譜で決まり、非根は系譜の `task/<P>`、根は保護ブランチ —— の ref・名前・今の値。
