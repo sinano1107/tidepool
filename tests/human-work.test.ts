@@ -21,6 +21,7 @@ import {
   holdsBaseline,
   humanWorkbenchDisplay,
   prepareHumanWork,
+  prepareWorkspaceAtPickup,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   takeWorkspaceInFlightKey,
@@ -241,7 +242,7 @@ it("a human completion review's repair children default to human and only an exp
 });
 
 /** 扉を準備の fetch(token の取得)で待たせ、その await の間に `during` を走らせてから続けさせる —— 最後の await の後の読みの観測。 */
-async function duringPreparation<T>(door: (githubAuth: GitHubAuth) => Promise<T>, during: () => unknown): Promise<T> {
+async function duringPreparation<T>(door: (githubAuth: GitHubAuth) => Promise<T>, during: () => void | Promise<void>): Promise<T> {
   let release!: () => void;
   const hold = new Promise<void>((resolve) => (release = resolve));
   let held!: () => void;
@@ -651,7 +652,9 @@ it("最後の await の後に動いた ref も見る —— 準備の fetch を�
 
   const result = await duringPreparation(
     (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, h.id, { handoff: FULL_HANDOFF }, () => b.clock.now(), "webui"),
-    () => git(b.ws.path, "update-ref", `refs/heads/task/${h.id}`, git(b.ws.path, "commit-tree", "-p", `task/${h.id}`, "-m", "moved", `task/${h.id}^{tree}`)),
+    () => {
+      git(b.ws.path, "update-ref", `refs/heads/task/${h.id}`, git(b.ws.path, "commit-tree", "-p", `task/${h.id}`, "-m", "moved", `task/${h.id}^{tree}`));
+    },
   );
 
   expect(!result.ok && result.failure.error).toMatch(new RegExp(`^task/${h.id} has moved on since your tip`));
@@ -672,6 +675,21 @@ it("start_work が準備を待った後に残す task_branch_created と task_wo
   expect(createdAt(b.db, h.id, ["task_branch_created", "task_work_started"])).toEqual([
     ["task_branch_created", AFTER_THE_PREPARATION],
     ["task_work_started", AFTER_THE_PREPARATION],
+  ]);
+});
+
+it("pickup の準備を待った後に残す task_branch_created と task_checkout_opened の時刻は、準備を待った後の時刻", async () => {
+  const b = await board("pickup-time");
+  const task = pickupTask(b.db, work(b, "an agent's task", { assignee: "deckhand" }), "deckhand", b.clock.now())!;
+
+  await duringPreparation(
+    (githubAuth) => prepareWorkspaceAtPickup(b.db, b.ws, task, { githubAuth, workspacesBaseDir: b.base, now: () => b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name }),
+    () => b.clock.advance(60_000),
+  );
+
+  expect(createdAt(b.db, task.id, ["task_branch_created", "task_checkout_opened"])).toEqual([
+    ["task_branch_created", AFTER_THE_PREPARATION],
+    ["task_checkout_opened", AFTER_THE_PREPARATION],
   ]);
 });
 
@@ -708,7 +726,9 @@ it("completion rechecks the review tier after waiting for workspace preparation"
 
   const result = await duringPreparation(
     (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, root.id, { handoff: FULL_HANDOFF, review_tier: "temporary" }, () => b.clock.now(), "webui"),
-    () => applyExecutionSettingsChange(b.db, { setting: "delete_tier", name: "temporary" }, "webui", b.clock.now()),
+    () => {
+      applyExecutionSettingsChange(b.db, { setting: "delete_tier", name: "temporary" }, "webui", b.clock.now());
+    },
   );
 
   expect(result).toMatchObject({ ok: false, failure: { error: expect.stringContaining('unknown review_tier "temporary"') } });
@@ -725,11 +745,15 @@ it("準備の fetch を待つ間に cancel された H には、start_work も�
 
   const startResult = await duringPreparation(
     (githubAuth) => startWorkThroughHumanDoor({ ...deps(b), githubAuth }, fresh.id, () => b.clock.now(), "webui"),
-    () => cancelTaskDirectly(b.db, getTask(b.db, fresh.id)!, null, b.clock.now(), {}, "webui"),
+    () => {
+      cancelTaskDirectly(b.db, getTask(b.db, fresh.id)!, null, b.clock.now(), {}, "webui");
+    },
   );
   const completeResult = await duringPreparation(
     (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, started.id, { handoff: FULL_HANDOFF }, () => b.clock.now(), "webui"),
-    () => cancelTaskDirectly(b.db, getTask(b.db, started.id)!, null, b.clock.now(), {}, "webui"),
+    () => {
+      cancelTaskDirectly(b.db, getTask(b.db, started.id)!, null, b.clock.now(), {}, "webui");
+    },
   );
 
   expect(startResult).toEqual(refused("a settled task cannot be started"));

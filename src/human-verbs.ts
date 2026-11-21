@@ -855,7 +855,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   // 検査の中で tree を読み、Codex は Board call を待つので書く前に当てる
   const acceptContainmentRepair = async (harness: Harness, workspace: string, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
     const clock = deps.clock ?? new SystemClock();
-    const now = clock.now();
     const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
     const intake = { workbenchBase, answerer: { actorId: HUMAN_ACTOR_ID, origin }, now: () => clock.now() };
@@ -877,7 +876,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       refuseOnError(() => (harness === "codex" ? withProtectedTipCheckout(checked, workbenchBase, codexAt) : claudeWorkspaceContainment(checked)));
     try {
       const local = await refuseOnError(async (): Promise<{ notice?: string; tip?: string; capability?: ContainmentCapability } | undefined> => {
-        compareContainmentRefs(deps.db, target, now);
+        compareContainmentRefs(deps.db, target, clock.now());
         if (harness === "codex" && !deps.codexWorkspaceContainment) throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
         if (isRemoteBacked(checked)) return undefined;
         if (harness === "claude-code") return { notice: takeInContainmentRepair(deps.db, target, intake) };

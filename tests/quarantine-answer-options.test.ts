@@ -9,8 +9,9 @@ import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { startFakeBroker } from "./fake-broker.js";
-import { awaitWindow, FakeClock, unusedLanding } from "./fakes.js";
+import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
+import { fetchHeldAtToken } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 // workspace の Quarantine の回答が盤面の行為を選ぶ(ADR 0373 決定2〜5・8・11、ADR 0380 決定4、#3277 / #3285)。
@@ -744,8 +745,7 @@ it("remote-backed の give-up が残す lost_refs_accepted・task_branch_lost・
   loseRef(db, ws, `refs/heads/task/${task.id}`);
   commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
   const clock = new FakeClock();
-  const window = awaitWindow();
-  const githubAuth = { ensureToken: () => window.hold(), env: () => process.env } as unknown as GitHubAuth;
+  const { window, githubAuth } = fetchHeldAtToken();
 
   const answering = answerAs(db, ws.name, { workspace: ws, clock, githubAuth }, GIVE_UP);
   await window.entered;
