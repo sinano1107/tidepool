@@ -785,12 +785,13 @@ it.each(["state", "CI"] as const)("回答が %s の読みを待つ間に questio
 });
 
 /** spec #3273 text A4b の全文(`lacks` は `<branches>` の句)。 */
-const textA4b = (c: Awaited<ReturnType<typeof pushedRoot>>, head: string, lacks: string) =>
+const textA4b = (c: Awaited<ReturnType<typeof pushedRoot>>, head: string, lacks: string, answerOn?: string) =>
   `PR #1's head was rewritten outside the board to ${head}, which lacks the content of ${lacks}. The board opened the workbench at ${c.workbench()}. ` +
   `There, on ${c.target}, either keep that content with \`git merge board/origin/${c.target}\` (or, in your own clone with the workbench as a remote: fetch it, ` +
   `\`git merge <remote>/board/origin/${c.target}\`, and push ${c.target} to it), or discard it with \`git merge -s ours --no-commit board/origin/${c.target}\`, ` +
   `\`git read-tree -u --reset board/origin/${c.target}\`, \`git commit\`. Your tip must contain both ${c.target} as the board has it now (\`board/${c.target}\`) ` +
-  `and origin/${c.target}, with nothing uncommitted. Then answer \`merge\` again: the board takes your merge in and pushes it, and CI runs on the result.`;
+  `and origin/${c.target}, with nothing uncommitted. Then answer \`merge\` ${answerOn === undefined ? "again" : `on question ${answerOn}`}: ` +
+  "the board takes your merge in and pushes it, and CI runs on the result.";
 
 // ADR 0371 決定10 / ADR 0376 決定7・8 / spec #3273 pin A10: 最初の `merge` は作業台を開いて拒まれ、作業台で merge した次の `merge` が取り込んで
 // 同じ回答の中で push する。その後の CI の拒否は取り込みと push を残し、そう言う(text A10)
@@ -926,7 +927,7 @@ it("書き換えられた記録済みの PR への2回目の「merge」の追い
   await pushOutsideBoard(c.workspace, c.repair.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
   const answerMerge = () =>
     submitAnswer(
-      { db: c.db, pollNow: () => {}, landing: c.landing, workspace: c.workspace, github: c.github },
+      { db: c.db, pollNow: () => {}, landing: c.landing, workspace: c.workspace, github: c.github, workspacesDir: c.workbenchBase },
       getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 2)!.id)!,
       ["merge"],
       undefined,
@@ -1117,8 +1118,8 @@ it("最初の「merge」の拒否の後に記録済みの PR の head がまた�
   expect(replacement!.id).not.toBe(asked.id);
   expect(getTask(c.db, asked.id)?.status).toBe("done");
   expect(refusal).toBe(
-    `${textA4b(c, moved, c.target)} The board did not push these commits on it: ${moved} add outside-again.txt. ` +
-      `This question is closed — question ${replacement!.id} now asks about this head; answer \`merge\` there to merge it.`,
+    `${textA4b(c, moved, c.target, replacement!.id)} The board did not push these commits on it: ${moved} add outside-again.txt. ` +
+      `This question is closed — question ${replacement!.id} now asks about this head.`,
   );
   expect(git(c.workbench(), "rev-parse", `board/origin/${c.target}`)).toBe(moved);
   c.expectNothingCarried();
@@ -1153,6 +1154,7 @@ it.each([
   if (another) {
     expect(open[0]!.id).not.toBe(asked.id);
     expect(refusal).toContain(`This question is closed — question ${open[0]!.id} now asks about this head`);
+    expect(refusal).not.toContain("answer `merge` again");
   } else {
     expect(open[0]!.id).toBe(asked.id);
   }
@@ -1179,7 +1181,45 @@ it("盤面が push していない head と問うた sha が、取り込みの�
   expect(getTask(c.db, asked.id)?.status).toBe("done");
   expect(refusal).toMatch(new RegExp(`^PR #1's head was moved outside the board to ${head}, .* The board opened the workbench at `));
   expect(refusal).toContain(`This question is closed — question ${open[0]!.id} now asks about this head`);
+  expect(refusal).not.toContain("answer `merge` again");
   expect(c.github.merged).toEqual([]);
+});
+
+// ADR 0394 決定3: 寄り道の中で収束が読んだ head が問うた書き換えと違えば、収束が立て直して拒む —— 回答の拒否は1回で、作業台の印もその head に付く
+it("作業台で merge した後の「merge」の寄り道で収束が head を読む前に別の書き換えへ動かされれば、立て直した question を名指して1回だけ拒まれ、作業台で merge した後のその question への「merge」がそのまま取り込んで merge する", async () => {
+  const c = await pushedRoot("outside-rewrite-moved-before-detour-read", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  const head = await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+  const asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!;
+  await c.answerMerge();
+  c.mergeInWorkbench();
+  const outside = await outsideClone(c.workspace);
+  const moved = await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${c.pushed}~1`), "outside-again.txt");
+  git(outside.clone, "fetch", "--quiet", "origin");
+  outside.push(`${head}:refs/heads/${c.target}`);
+  // 回答は問うた head を読み、収束はその後に動いた head を読む
+  const read = c.github.readPullRequest.bind(c.github);
+  c.github.readPullRequest = async (ref) => {
+    const status = await read(ref);
+    c.github.readPullRequest = read;
+    outside.push(`${moved}:refs/heads/${c.target}`);
+    return status;
+  };
+
+  const refusal = await c.answerMerge();
+
+  const [replacement] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(replacement!.id).not.toBe(asked.id);
+  expect(getTask(c.db, asked.id)?.status).toBe("done");
+  expect(refusal).toBe(
+    `${textA4b(c, moved, c.target, replacement!.id)} The board did not push these commits on it: ${moved} add outside-again.txt. ` +
+      `This question is closed — question ${replacement!.id} now asks about this head.`,
+  );
+  c.expectNothingCarried();
+
+  c.mergeInWorkbench();
+  expect(await c.answerMerge()).toBeUndefined();
+  expect(c.github.mergedHeads).toEqual([originHead(c.workspace, c.work.id)]);
 });
 
 // ADR 0394 決定3 / ADR 0376 Status 追記: 外の部分が無ければ head は盤面の push した値 —— 理由が消えた question への `merge` は寄り道を通さずに

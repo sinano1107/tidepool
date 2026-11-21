@@ -1193,7 +1193,7 @@ async function answerThroughConvergence(landing: Landing, question: string, orig
   const verdicts = await landing.converge({ answering: { question, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
   const root = verdicts.find((verdict) => verdict.taskId === taskId);
   const error = convergenceRefusal(root?.verdict);
-  if (error) throw new DomainError(withNotice(error, root?.notice));
+  if (error) throw new (root?.reraised ? ReraisedRefusal : DomainError)(withNotice(error, root?.notice));
   return root;
 }
 
@@ -1536,6 +1536,9 @@ function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
 }
 
 /** ADR 0394 決定2: 立て直しで閉じた question には答えられない。 */
+/** ADR 0394 決定3: 回答自身が question を立て直して返す拒否 —— 下の catch が立て直しで閉じた question への「question closed」に読み替えない。 */
+class ReraisedRefusal extends DomainError {}
+
 function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
   if (mergeQuestionWasReplaced(db, question)) throw new DomainError("question closed — read the replacement merge question before answering");
 }
@@ -1635,8 +1638,6 @@ export async function submitAnswer(
   }
 
   const mark: { release: (() => void) | null } = { release: null };
-  // ADR 0394 決定3: この回答が立て直して返す拒否 —— 下の catch が「question closed」に読み替えない
-  let unasked: DomainError | undefined;
   let notice: string | undefined;
   // 回答の書き込みと同じ transaction で撃つ Quarantine の受理の段(ADR 0385 決定3・6)
   let withAnswer: ((questionId: string) => void) | undefined;
@@ -1719,7 +1720,7 @@ export async function submitAnswer(
             "cannot check CI or merge",
             "GitHub/workspace",
           );
-          // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
+          // ADR 0242 決定1: 読んだ head と同じ head で積み残し・CI・merge を通す —— 内容が落ちた head は寄り道の後にもう一度読む(ADR 0394 決定3)
           workspaceNetworkDestination(withRememberedRepoCheck(deps.db, mergeWorkspace, now));
           const github = deps.github;
           const readAndCompare = async () => {
@@ -1764,11 +1765,11 @@ export async function submitAnswer(
           const refuseUnasked = (origin: Exclude<PrHeadOrigin, { kind: "pushed" }>) => {
             // ADR 0288 決定2(印の後): 比べる await の間に別の回答が印を取って merge していれば、その question を取り下げない
             if (deps.landing.isMarked(task.workspace, mergePr)) return new DomainError(beingMerged);
-            unasked = refuse(refuseUnaskedHead(
-              deps.db, mergeWorkspace, getTask(deps.db, landingTaskId)!, { prNumber: mergePr, head: pr.head, origin, answered: task.id }, now(),
-              (outside) => deps.landing.refuseOutsidePushOnce(mergeWorkspace, landingTaskId, mergePr, outside),
-            ));
-            return unasked;
+            const refusal = refuseUnaskedHead(
+              deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), getTask(deps.db, landingTaskId)!,
+              { prNumber: mergePr, head: pr.head, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure" }, now(),
+            );
+            return new ReraisedRefusal(withNotice(`${pushed}${refusal}`, notice));
           };
           if (head.kind !== "pushed" && !(kind.outside?.kind === head.kind && kind.outside.sha === pr.head)) throw refuseUnasked(head);
           if (head.kind === "rewritten") {
@@ -1963,7 +1964,7 @@ export async function submitAnswer(
     return { ...presentAnswered(deps, task), ...(notice !== undefined && { notice }) };
   } catch (err) {
     // ADR 0394 決定2: GitHub の読みが失敗しても、立て直しで閉じた question への拒否を返す。
-    if (kind.kind === "pr_merge" && err instanceof DomainError && err !== unasked && !(err instanceof WorkspaceRepoMismatchError)) assertMergeQuestionNotReplaced(deps.db, task);
+    if (kind.kind === "pr_merge" && err instanceof DomainError && !(err instanceof ReraisedRefusal) && !(err instanceof WorkspaceRepoMismatchError)) assertMergeQuestionNotReplaced(deps.db, task);
     // 待つ間に question が閉じていた(ADR 0288 決定4): PR などの決着を観測していれば 200 + 印、別の回答か cancel なら拒否
     if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
     throw err;

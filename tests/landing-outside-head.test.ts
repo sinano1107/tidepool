@@ -1,6 +1,8 @@
+import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
+import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { getTask, listBoard } from "../src/tasks.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead } from "./fakes.js";
@@ -30,6 +32,7 @@ import {
   recordPrOpenedViaWorker,
   textA4c,
 } from "./landing-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -161,7 +164,7 @@ it("キューにいる PR の merge question が開いたまま外から進ん�
 
   expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([outsideHeadBody(head, lastPushed)]);
   expect(getTask(pr.db, original.id)).toEqual({ ...original, status: "done" });
-  const replacement = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+  const replacement = openQuestion(pr);
   expect(boardEvents(pr.db, pr.work.id, "pr_merge_question_replaced")).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_question_replaced", question_id: original.id, replacement_question_id: replacement.id } },
   ]);
@@ -175,7 +178,7 @@ it("キューにいる PR の merge question が開いたまま外から進ん�
 
 it("人間の merge が執行中なら収束は question を取り替えず、執行が終われば書き換えを問い直す", async () => {
   const pr = await openPushedPr("rewrite-during-executing-answer", "escalate");
-  const original = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+  const original = openQuestion(pr);
   const fork = git(pr.workspace.path, "rev-parse", "HEAD~1");
   const executing = awaitWindow();
   const merge = pr.github.mergePullRequest.bind(pr.github);
@@ -279,11 +282,7 @@ it("merge 失敗の question が開いた後に人間が conflict を解いて p
   const lastPushed = originHead(pr.workspace, pr.work.id);
   vi.spyOn(pr.github, "mergePullRequest").mockRejectedValueOnce(new Error(CONFLICT));
   await pr.landing.tick("auto_merge", pr.clock.now());
-  expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([
-    `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold? If PR #1 conflicts with main, ` +
-      "merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — " +
-      "then answer `merge`: the board refuses it, listing the commits you pushed, and closes this question — answer `merge` on the new question it names to merge.",
-  ]);
+  expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([expect.stringContaining(`could not merge PR #1: ${CONFLICT}.`)]);
   const resolved = await pushOutsideBoard(pr.workspace, pr.work.id, undefined, "resolved.txt");
 
   const refusal = await answerMerge(pr);
@@ -311,6 +310,68 @@ it("同じ question に同時に走る2つの「merge」の回答は、一方が
   expect(pr.github.merged).toEqual([]);
   await expect(answerMerge(pr)).resolves.toBeUndefined();
   expect(pr.github.mergedHeads).toEqual([head]);
+});
+
+// ADR 0394 決定1・3: 回答が立て直す question も、外の本文の後ろにほかの理由を1行添える —— 回答が読んだ CI が赤ならそれを言う
+it("CI が赤のまま盤面が push していない head への「merge」が立て直す question は、外の head を先に言い、CI が赤であることを後ろに添える", async () => {
+  const pr = await openPushedPr("outside-head-reraised-on-red-ci", "escalate");
+  const lastPushed = originHead(pr.workspace, pr.work.id);
+  const head = await pushOutsideBoard(pr.workspace, pr.work.id);
+  pr.github.scriptCiStatus("failure");
+
+  expect(await answerMerge(pr)).toBe(listedRefusal(head, lastPushed, [[head, "outside.txt"]], openQuestion(pr).id));
+
+  expect(mergeQuestions(pr.db)).toEqual([{
+    pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold",
+    purpose: `${outsideHeadBody(head, lastPushed)}\n\n"ship"'s PR #1 has CI red.`,
+  }]);
+});
+
+// ADR 0288 決定2(印の後): 比べる await の間に別の回答が印を取って merge を始めれば、その question を取り下げず答え直させる
+it("回答が head を比べる間に同じ PR に in-flight 印が付けば、question を立て直さずに答え直させる", async () => {
+  const pr = await openPushedPr("outside-head-marked-during-compare", "escalate");
+  const asked = openQuestion(pr);
+  await pushOutsideBoard(pr.workspace, pr.work.id);
+  const githubAuth = new GitHubAuth(join(await tempDir("tidepool-token-"), "token"));
+  const ensureToken = githubAuth.ensureToken.bind(githubAuth);
+  let release: (() => void) | null = null;
+  // head は手元に無いので、比べる前に取る —— その token の await の間に印を取る
+  vi.spyOn(githubAuth, "ensureToken").mockImplementationOnce(async (repo, options) => {
+    release = pr.landing.takeInFlightMark(pr.work.workspace, 1);
+    return ensureToken(repo, options);
+  });
+
+  const refusal = await answerMergeQuestion({ ...pr, githubAuth }).then(() => undefined, (err: Error) => err.message);
+
+  expect(release).not.toBeNull();
+  expect(refusal).toBe(IN_FLIGHT);
+  expect(openQuestion(pr).id).toBe(asked.id);
+  expect(boardEvents(pr.db, pr.work.id, "pr_merge_question_replaced")).toEqual([]);
+});
+
+// ADR 0387 Status 追記 (1) / ADR 0288 決定2: 問うた head を読んだ回答も、merge の前にもう一方の回答が立て直していれば、question が開いているかの
+// 読み直しで拒まれる
+it("一方の「merge」が問うた head を読んだ後、merge の前にもう一方の「merge」が立て直せば、先に読んだ回答は question closed で拒まれ merge しない", async () => {
+  const pr = await openPushedPr("outside-head-reraised-before-mark", "escalate");
+  const asked = openQuestion(pr);
+  let reraising: Promise<string | undefined> | undefined;
+  const read = pr.github.readPullRequest.bind(pr.github);
+  pr.github.readPullRequest = async (ref) => {
+    const status = await read(ref);
+    pr.github.readPullRequest = read;
+    await pushOutsideBoard(pr.workspace, pr.work.id);
+    reraising = answerMerge(pr);
+    await reraising;
+    return status;
+  };
+
+  const first = await answerMerge(pr);
+
+  const replacement = openQuestion(pr);
+  expect(replacement.id).not.toBe(asked.id);
+  expect(first).toContain("question closed");
+  expect(await reraising).toContain(`This question is closed — question ${replacement.id} now asks about this head`);
+  expect(pr.github.merged).toEqual([]);
 });
 
 it("回答が PR を読んでいる間に収束が push して最後に push した値を書けば、回答は判定せず答え直させ、question も立て直さず、次の「merge」が盤面の push した head を merge する", async () => {
