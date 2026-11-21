@@ -578,7 +578,7 @@ _Avoid_: 作業用ディレクトリ、盤面が開く checkout、conflict の c
 
 ## 取り込み(Intake)
 
-盤面が作業台の tip を読み、検査し、包む commit を作って書く先の ref を書く行為。包む commit は、第1親が書く先の値、第2親が人間の tip で、tree は人間の tip のものである。入口は複数ある(conflict を拒んだ question への答え直し、purely-local の封じ込めの Quarantine の回答、`intake` question の `take in`、人間担当の work の取り込みと完了)が行為は1つで、入口で違うのは検査だけである。回答は sha も branch も path も運ばず、成功は event `workbench_taken_in` に残る(issue #3178 / ADR 0371)。書く先の ref を書く前に、作業台が自前で持つ object が名前の場所で欠けも破損も無く読めることを確かめる —— 運ぶことの完了の線は task の checkout と同じ(issue #3222 / ADR 0388)。
+盤面が作業台の tip を読み、検査し、包む commit を作って書く先の ref を書く行為。包む commit は、第1親が書く先の値、第2親が人間の tip で、tree は人間の tip のものである。入口は複数ある(conflict を拒んだ question への答え直し、purely-local の封じ込めの Quarantine の回答、`intake` question の `take in`、人間担当の work の取り込みと完了)が行為は1つで、入口で違うのは検査だけである。回答は sha も branch も path も運ばず、成功は event `workbench_taken_in` に残る(issue #3178 / ADR 0371)。書く先の ref を書く前に、作業台が作った object(tip から自前の object だけをたどって届くもの)が名前の場所で欠けも破損も無く読めることを確かめる —— 運ぶことの完了の線は task の checkout と同じ(issue #3222 / ADR 0388、issue #3494 / ADR 0398)。
 _Avoid_: 持ち込み(盤面は自前の clone の path も sha も受けない)、受理(Quarantine の回答の検査を指す)
 
 ## 書き始める(Start work)
