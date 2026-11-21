@@ -26,8 +26,13 @@ it("落ちない検証の段は index-pack を --strict の1回だけ撃ち、�
 
     recordTaskCheckoutTip(db, place, task.id);
 
-    const indexPacks = vi.mocked(execFileSync).mock.calls.filter(([file, args]) => file === "git" && (args as string[]).includes("index-pack"));
-    expect(indexPacks.map(([, args]) => (args as string[]).filter((arg) => arg.startsWith("--")))).toEqual([["--strict"]]);
+    // 運んだ後の確かめ(ADR 0398 決定1 の `misnamedObjects`)も flag の無い index-pack を撃つ —— 検証の段の `--strict` と確かめ直しの
+    // `--fsck-objects` だけを数える
+    const flags = vi
+      .mocked(execFileSync)
+      .mock.calls.filter(([file, args]) => file === "git" && (args as string[]).includes("index-pack"))
+      .flatMap(([, args]) => (args as string[]).filter((arg) => arg === "--strict" || arg === "--fsck-objects"));
+    expect(flags).toEqual(["--strict"]);
   } finally {
     db.close();
   }

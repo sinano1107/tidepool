@@ -859,7 +859,7 @@ function blameLinksOutsidePack(place: UntrustedCheckout, read: UntrustedRead, sh
   };
   let outside: string[];
   try {
-    const packed = contentIds(read.deadline, bytes, moved, ["--fsck-objects"]);
+    const packed = contentIds(read.deadline, bytes, moved);
     if (!objects.split("\n").filter(Boolean).every((line) => packed.has(line.split(" ")[0]!))) return;
     // pack が指して持たない object(`?` の行)—— 除外で名前の場所が供給する側
     outside = workerRepoGitUntil(read.deadline, bytes, ["rev-list", "--objects", "--missing=print", sha]).split("\n").filter((line) => line.startsWith("?")).map((line) => line.slice(1));
@@ -887,9 +887,9 @@ function blameLinksOutsidePack(place: UntrustedCheckout, read: UntrustedRead, sh
   );
 }
 
-/** `repo` で `pack`(拡張子なし)を中身から index し(`flags` は index-pack へ)、中身から作った id の集合を返す。 */
-function contentIds(deadline: number, repo: string, pack: string, flags: string[] = []): Set<string> {
-  workerRepoGitUntil(deadline, repo, ["index-pack", ...flags, `${pack}.pack`]);
+/** `repo` で `pack`(拡張子なし)を中身から `--fsck-objects` で index し、中身から作った id の集合を返す。 */
+function contentIds(deadline: number, repo: string, pack: string): Set<string> {
+  workerRepoGitUntil(deadline, repo, ["index-pack", "--fsck-objects", `${pack}.pack`]);
   return new Set(workerRepoGitUntil(deadline, repo, ["verify-pack", "-v", `${pack}.idx`]).split("\n").map((line) => line.split(" ")[0]!));
 }
 
@@ -949,10 +949,11 @@ function fetchUntrustedTip(place: UntrustedCheckout, branch: string): string {
  *  借りる先)で、確かめはその借りを外して数える —— 写しは使い捨てで、`own` の dir には書いてよい。 */
 type CarriedCopy = { own: string; tip: string; description: string; borrowing?: string };
 
-/** ADR 0388 決定1・2: 名前の場所へ運んだ直後に、`tip` の閉包のうち運んだ場所が自前の store に持つ object —— `own` を名前の場所の objects を
- *  借りずに辿り、`?` の付かないもの —— が名前の場所で欠けも破損も無く読めることを、pack に組んで確かめる(`rev-list` は zlib の破損を
- *  素通しする)。読めなければ `own` から入れ直して確かめ直す —— fetch は commit を既に持つ場所へ何も送らない。揃わなければ運ぶ段の失敗で、
- *  読めない object を名指す。段ごとに帰責する(ADR 0364 決定2): 写しを数える手の失敗は `from` の故障、写しの tmp の失敗は host の失敗。 */
+/** ADR 0388 決定1・2 / ADR 0398 決定1: 名前の場所へ運んだ直後に、`tip` から自前の object だけをたどって届く、運んだ場所の自前の object
+ *  —— `own` を名前の場所の objects を借りずに辿り、`?` の付かないもの —— が名前の場所で欠けも破損も無く読めることを、pack に組み、object
+ *  ごとに中身の名前を照合して確かめる(`rev-list` は zlib の破損を、pack-objects は別の中身の loose を素通しする)。walk が借りている tree で
+ *  止まるのは定義どおりで、その下の object は守らない(ADR 0398 決定2・3)。読めなければ `own` から入れ直して確かめ直す —— fetch は commit を
+ *  既に持つ場所へ何も送らない。揃わなければ運ぶ段の失敗で、読めない object を名指す。段ごとに帰責する(ADR 0364 決定2): 写しを数える手の失敗は `from` の故障、写しの tmp の失敗は host の失敗。 */
 function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { own, tip, description, borrowing = own }: CarriedCopy): void {
   const fail = (why: string, cause?: unknown) =>
     new NamedPlaceFetchError(`workspace ${named.name}: ${description} ${tip} does not read whole in the named workspace: ${why}`, cause === undefined ? undefined : { cause });
@@ -977,12 +978,15 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   }
   // pack-objects は一時 file を撃った repo の objects/pack に書く —— 名前の場所には書かず、その objects だけを借りる使い捨ての repo で読む
   const reader = join(own, "carried");
-  hostStep(from.noun, () => initBoardCopy(reader, format, [objects]));
-  // 名前の場所の byte だけを読む手 —— 上限超過も名前の場所の側。読めなければ失敗を返す(stderr が読めない object を名指す)
+  hostStep(from.noun, () => {
+    initBoardCopy(reader, format, [objects]);
+    initBoardCopy(blankOf(own), format);
+  });
+  // ADR 0364 決定2: 名前の場所の byte だけを読む手 —— 上限超過も中身の照合の失敗も名前の場所の側。読めなければ失敗を返す
   const unreadable = (): unknown => {
     try {
-      workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, ["pack-objects", "--quiet", join(reader, "read")], input);
-      return undefined;
+      const misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, join(reader, "read"), ids, blankOf(own));
+      return misnamed.length === 0 ? undefined : new MisnamedObjects(misnamed);
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(reader, cause)) throw copyHostError(from.noun, cause);
       return cause;
@@ -990,7 +994,7 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   };
   const first = unreadable();
   if (first === undefined) return;
-  verifyOwnObjects(from, own, ids, input);
+  verifyOwnObjects(from, own, ids);
   let reinsertFailure: unknown;
   try {
     reinsertOwnObjects(objects, format, own, ids.join("\n"));
@@ -1011,37 +1015,61 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   const last = reinsertFailure === undefined ? unreadable() : first;
   if (last === undefined) return;
   const why = reinsertFailure === undefined ? "" : `, and reinserting it failed: ${reinsertFailure instanceof Error ? reinsertFailure.message : String(reinsertFailure)}`;
-  throw fail(`${unreadableIds(reader, ids, input, last).join(", ") || "an object it holds"} is missing or corrupt there${why}`, reinsertFailure ?? last);
+  const bad = last instanceof MisnamedObjects ? last.ids : unreadableIds(reader, ids, input, last);
+  throw fail(`${bad.join(", ") || "an object it holds"} is missing or corrupt there${why}`, reinsertFailure ?? last);
 }
 
 /** ADR 0388 決定2 / ADR 0364 決定2: 入れ直しに要る object は門の pack が除外したもので、ADR 0364 の `index-pack --strict` を通っていない ——
  *  入れ直しの手は写しと名前の場所の両方を読むので、どちらの byte で落ちたかを言えない。先に写しの中だけで pack に組み(読めない byte で
- *  落ちる)、中身から名前を作り直して集合の名前が揃うかを見る(別の中身を置いた名前が落ちる)。どちらも `from` の故障で、この後の入れ直しの
+ *  落ちる)、object ごとに中身の名前を照合する(別の中身を置いた名前が落ちる)。どちらも `from` の故障で、この後の入れ直しの
  *  失敗は名前の場所の側。写しの tmp の容量切れは host の失敗。 */
-function verifyOwnObjects(from: UntrustedSubject, own: string, ids: string[], input: string): void {
-  const deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS;
-  let packed: Set<string>;
+function verifyOwnObjects(from: UntrustedSubject, own: string, ids: string[]): void {
+  let misnamed: string[];
   try {
-    const base = join(own, "own");
-    const pack = `${base}-${workerRepoGitUntil(deadline, own, ["pack-objects", "--quiet", base], input)}`;
-    // pack-objects の idx は写しの loose の名前を信じる —— 捨てて中身から作り直す。写しは借りを外してあるので --strict の繋がりは見ない
-    for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
-    packed = contentIds(deadline, own, pack);
+    misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, own, join(own, "own"), ids);
   } catch (cause) {
     if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
     throw asUntrustedFailure(from, cause);
   }
-  const renamed = ids.filter((id) => !packed.has(id));
-  if (renamed.length > 0) throw unreadable(from, `objects ${renamed.join(", ")} hold contents that do not hash to their names`);
+  if (misnamed.length > 0) throw unreadable(from, new MisnamedObjects(misnamed).message);
+}
+
+/** 中身が名前と合わない object(ADR 0398 決定1)。 */
+class MisnamedObjects extends Error {
+  constructor(readonly ids: string[]) {
+    super(`objects ${ids.join(", ")} hold contents that do not hash to their names`);
+  }
+}
+
+/** 運んだ写しの dir の、何も持たない repo —— index-pack は同じ id の object を持つ repo では照合のために読み直す。 */
+const blankOf = (own: string) => join(own, "blank");
+
+/** `ids` を `repo` で `base` の pack に組み、中身から index し直して、中身が名前と合わない id を返す。pack-objects の idx は読んだ loose の
+ *  名前を信じるので、同じ offset の頼んだ名前と中身の名前を object ごとに比べる —— 名前の集合では、入れ替わった loose も名前が揃う。index-pack は
+ *  `at` で撃つ。`--strict` は付けない(繋がりは借りている object に届く。入れ替わった loose では同じ中身の entry が2つある)。 */
+function misnamedObjects(deadline: number, repo: string, base: string, ids: string[], at = repo): string[] {
+  const pack = `${base}-${workerRepoGitUntil(deadline, repo, ["pack-objects", "--quiet", base], `${ids.join("\n")}\n`)}`;
+  try {
+    renameSync(`${pack}.idx`, `${pack}.asked`);
+    rmSync(`${pack}.rev`, { force: true });
+    workerRepoGitUntil(deadline, at, ["index-pack", `${pack}.pack`]);
+    const byOffset = (idx: string) =>
+      new Map(workerRepoGitUntil(deadline, at, ["show-index"], readFileSync(idx)).split("\n").map((line) => line.split(" ", 2) as [string, string]));
+    const contents = byOffset(`${pack}.idx`);
+    return [...byOffset(`${pack}.asked`)].filter(([offset, id]) => contents.get(offset) !== id).map(([, id]) => id);
+  } finally {
+    // 同じ中身の pack は同じ名前になる —— 残った中身の idx を、次の照合が頼んだ名前として読まない
+    for (const ext of [".pack", ".idx", ".asked", ".rev"]) rmSync(`${pack}${ext}`, { force: true });
+  }
 }
 
 const DAMAGED_PREFIX = "tidepool-damaged-";
 
-/** ADR 0388 決定2: 入れ直しの後、集合の id の名前の場所の loose のうち loose として読めないものを、objects の下の残す dir へ移す(消さない ——
- *  人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
+/** ADR 0388 決定2 / ADR 0398 決定1: 入れ直しの後、集合の id の名前の場所の loose のうち、loose として読めないものと中身が名前と合わない
+ *  ものを、objects の下の残す dir へ移す(消さない —— 人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
  *  object の pack の stream を断り、header の読める loose の stream を開くので、body を切り詰めた loose が入れ直した pack を覆う(source の
  *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ)。名前の場所の loose の dir だけを見せる使い捨ての repo で pack に組み、
- *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。 */
+ *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。組めたら、中身が名前と合わない object を移す。 */
 function moveAsideDamagedLoose(objects: string, format: string, own: string, ids: string[]): void {
   const looseOf = (id: string) => join(objects, id.slice(0, 2), id.slice(2));
   let pending = ids.filter((id) => existsSync(looseOf(id)));
@@ -1050,18 +1078,25 @@ function moveAsideDamagedLoose(objects: string, format: string, own: string, ids
   initBoardCopy(probe, format);
   for (const dir of new Set(pending.map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
   let damaged: string | undefined;
+  const moveAside = (bad: string[]) => {
+    if (bad.length === 0) return;
+    damaged ??= mkdtempSync(join(objects, DAMAGED_PREFIX));
+    for (const id of bad) renameSync(looseOf(id), join(damaged, id));
+    pending = pending.filter((id) => !bad.includes(id));
+  };
   while (pending.length > 0) {
+    let misnamed: string[];
     try {
-      workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, ["pack-objects", "--quiet", join(probe, "read")], `${pending.join("\n")}\n`);
-      return;
+      misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, join(probe, "read"), pending, blankOf(own));
     } catch (cause) {
       const stderr = String((cause as { stderr?: unknown } | null)?.stderr ?? "");
       const bad = pending.filter((id) => stderr.includes(id));
       if (bad.length === 0) throw cause;
-      damaged ??= mkdtempSync(join(objects, DAMAGED_PREFIX));
-      for (const id of bad) renameSync(looseOf(id), join(damaged, id));
-      pending = pending.filter((id) => !bad.includes(id));
+      moveAside(bad);
+      continue;
     }
+    moveAside(misnamed);
+    return;
   }
 }
 
@@ -3222,7 +3257,8 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
  *  `giveUpQuestion`(give-up に答えている workspace の Quarantine、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
  *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒す
- *  (ADR 0375 決定1・4・9)。根の着地の終わり(同 決定7・8)は書き戻しの後 —— 根かどうかを基準へ戻った ref で読む。失われた ref が無ければ、
+ *  (ADR 0375 決定1・4・9)。根の着地の終わり(同 決定7・8)は、選択肢を問わず書き戻しの後に記録から導く —— 根かどうかを基準へ戻った ref で読み
+ *  (ADR 0397 決定2)、書き戻しが落ちても次の受理が導き直す(同 決定1・4)。give-up で失われた ref が無ければ、
  *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUpQuestion?: string): KeptValue[] {
   const giveUp = giveUpQuestion !== undefined;
@@ -3256,9 +3292,6 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
     );
   }
   if (targets.size > 0) verifyWorkspaceClean(workspace);
-  let lostTasks: string[] = [];
-  // ADR 0375 決定6: 根かどうかは祖先のブランチを読むので、書き戻しの後に読む —— 動かされた祖先の ref で読むと、生きている親の子を根と読む
-  const endLostRootLandings = () => db.transaction(() => lostTasks.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now)))();
   if (giveUp) {
     db.transaction(() => {
       updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, lostTask(ref) ? "" : (current.get(ref) ?? ""))));
@@ -3270,7 +3303,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
         at: now,
       });
       // ADR 0375 決定1・9: 失われた `task/<id>` ごとに task へ event を残す —— 後の段で回答が拒まれても残る
-      lostTasks = lost.flatMap(([ref, sha]) => {
+      const lostTasks = lost.flatMap(([ref, sha]) => {
         const task = lostTask(ref);
         if (!task) return [];
         appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: now });
@@ -3281,7 +3314,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
     })();
   }
   if (targets.size === 0) {
-    endLostRootLandings();
+    endLostRootLandings(db, workspace, now);
     return [];
   }
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => {
@@ -3342,33 +3375,53 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
       });
     }
   }
-  endLostRootLandings();
+  // ADR 0375 決定6: 根かどうかは祖先のブランチを読むので、書き戻しの後に読む —— 動かされた祖先の ref で読むと、生きている親の子を根と読む
+  endLostRootLandings(db, workspace, now);
   return kept;
 }
 
-/** ADR 0375 決定7・8 / spec #3273 group H: ブランチを失った done の根(帰り先が保護ブランチ)で PR を開いていないものの着地を終える —— 死んだ根は
- *  `landing_ended_branch_lost`、handoff だけの根(失われた sha = 作成時の sha)は `nothing_to_land` で、どちらも失われたブランチを git で
- *  読まない。開いている着地の question(local 着地・昇格失敗)は回答なしで閉じ、`landing_ended_branch_lost` がその id を運ぶ。内容が保護
- *  ブランチに届いて透明な根と、PR を開いた根(内容は GitHub の head に在る)は終えない。根でない task(帰り先が祖先のブランチ・帰り先なし)は
- *  記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。 */
-function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date): void {
-  if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return;
-  if (db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return;
+/** ADR 0397 決定1・2: workspace の Quarantine の受理が、その workspace の対象(効いている失われた event を持ち、done で PR の無い、
+ *  着地の終わりの記録の無い work)全部に根の着地の終わりの判定を当てる —— その回答が失った分(メモリ上の差分)でなく記録から集めるので、
+ *  書き戻しが落ちた後や、前の受理で根でなかった task も拾う。ref が基準と一致した後に呼ぶ。 */
+export function endLostRootLandings(db: Db, workspace: WorkspaceConfig, now: Date): void {
+  const ids = db
+    .prepare(
+      `SELECT t.id FROM tasks t
+        WHERE t.workspace = ? AND t.type = 'work' AND t.status = 'done' AND t.pr_number IS NULL AND t.interview_target_id IS NULL
+          AND EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_branch_lost')
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS_SQL})
+        ORDER BY t.rowid`,
+    )
+    .pluck()
+    .all(workspace.name) as string[];
+  db.transaction(() => ids.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now, { closeQuestions: true })))();
+}
+
+/** ADR 0375 決定7・8 / ADR 0397 決定1: 根の着地の終わりの唯一の判定。効いている失われた event を持つ done の根(帰り先が保護ブランチ)で PR を
+ *  開いていないものの着地を終える —— 死んだ根は `landing_ended_branch_lost`、handoff だけの根(失われた sha = 作成時の sha)は `nothing_to_land`
+ *  で、どちらも失われたブランチを git で読まない。内容が保護ブランチに届いて透明な根と、PR を開いた根(内容は GitHub の head に在る)は終えない。
+ *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。`closeQuestions`(受理だけ)なら開いている
+ *  着地の question(local 着地・昇格失敗)を回答なしで閉じ、`landing_ended_branch_lost` がその id を運ぶ。書いた終わりを返す。 */
+export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { closeQuestions }: { closeQuestions: boolean }): TaskScopedPayload | undefined {
+  if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return undefined;
+  const lost = taskBranchLostInForce(db, task.id);
+  if (!lost || db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return undefined;
   try {
     const lineage = resolveTaskBranchLineage(db, workspace, task);
-    if (lineage.branch || lineage.noReturn) return;
+    if (lineage.branch || lineage.noReturn) return undefined;
   } catch {
     // 根か分からない task に恒久の終わりの記録は書かない —— 収束が自分の経路で根の失敗として見せる(`landingRootOf`)
-    return;
+    return undefined;
   }
-  const lost = taskBranchLostInForce(db, task.id)!;
   const handoffOnly = lostAsCreated(db, task.id, lost);
-  if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return;
-  const questions = [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)];
-  // ADR 0375 決定8: 受理が回答なしで閉じ、閉じた理由は根の記録に1回だけ残す —— question 自身には観測の event を刻まない
+  if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return undefined;
+  // ADR 0397 決定2 / ADR 0375 決定8: 閉じるのは受理だけ —— 人間自身の回答の帰結だから。収束が閉じれば、まだ答えていない失敗 question を先回りして潰す(ADR 0240 決定2)
+  const questions = closeQuestions ? [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)] : [];
+  // ADR 0375 決定8: 閉じた理由は根の記録に1回だけ残す —— question 自身には観測の event を刻まない
   for (const id of questions) settleQuestionAsObserved(db, id, null, now);
   const ending: TaskScopedPayload = handoffOnly ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : { kind: "landing_ended_branch_lost", question_ids: questions };
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: ending, at: now });
+  return ending;
 }
 
 function objectExists(workspace: WorkspaceConfig, sha: string): boolean {

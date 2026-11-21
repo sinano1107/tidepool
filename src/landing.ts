@@ -60,6 +60,7 @@ import {
   checkAcceptanceFirstHalf,
   clearRefusedOnce,
   compareRefsBeforeLanding,
+  endLostRootLanding,
   FirstCaptureRefusedError,
   type IntakeContext,
   lineageTaskBranch,
@@ -522,11 +523,13 @@ export function landingAnnotation(
 export type RootVerdict = { taskId: string; verdict: LandingVerdict; notice?: string; takenIn?: true; reraised?: true };
 
 /** 盤面がまだ着地を運ぶ根(GLOSSARY.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
- *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。 */
+ *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。`workspace` は
+ *  lineage を読めた根の解決した workspace。 */
 interface LandingRoot {
   task: Task;
   outlivedForkSource: boolean;
   lineageError?: unknown;
+  workspace?: WorkspaceConfig;
 }
 
 /** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
@@ -629,7 +632,7 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
  *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
- *  (ADR 0265 決定3) / `nothing_to_land`)と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
+ *  (ADR 0265 決定3) / `nothing_to_land` / ブランチを失って終えた根の `landing_ended_branch_lost`(ADR 0375 決定7))と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
  *  候補に残り、撃つ側が hold の head と比べる(`landRoot`)。人間が担当した work は盤面の
  *  タスクブランチを持たなければ根にしない(人間の完了は祖先の着地の契機である)—— 持てば根になる(ADR 0374 決定12)。Interview の子(pin を持つ
  *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
@@ -676,7 +679,7 @@ function landingRootOf(
     const resolved = workspace;
     const lineage = resolveTaskBranchLineage(db, resolved, task, readBase(resolved), compareBeforeLineage && (() => compareBeforeLineage(resolved)));
     // ADR 0380 決定3: 帰り先なしは「自分が根」と別の答え —— 着地の根に数えない
-    return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
+    return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource, workspace: resolved };
   } catch (lineageError) {
     if (lineageError instanceof RootStopped) throw lineageError;
     return { task, outlivedForkSource: false, lineageError };
@@ -1890,6 +1893,13 @@ export function createLanding(deps: LandingDeps): Landing {
       return failed(task, "promotion_failed", error, ctx);
     }
   };
+  /** ADR 0397 決定3: 失われた event が効いている根(受理の後で根になった task を含む)は、着地させる前に受理と同じ判定で終える —— 失われた
+   *  ブランチを git で読まない。昇格失敗の question が開いている根は終えずに `landRoot` へ渡す —— 人間がまだ答えていない失敗 question を
+   *  先回りして潰さない(ADR 0240 決定2)。閉じるのは受理だけ(ADR 0397 決定2)。終えなければ undefined。 */
+  const endLostRoot = ({ task, workspace }: LandingRoot): LandingVerdict | undefined => {
+    if (!workspace || !taskBranchLostInForce(deps.db, task.id) || openPrPromotionQuestionIds(deps.db, task.id).length > 0) return undefined;
+    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), { closeQuestions: false }) ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
+  };
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
    *  候補の読み取りそのものの失敗はログに出して回を終え、次の突きで走り直す。 */
   const pass = async (answering: ReadonlyMap<string, Answerer>): Promise<RootVerdict[]> => {
@@ -1915,7 +1925,7 @@ export function createLanding(deps: LandingDeps): Landing {
         });
       try {
         const root = landingRootOf(deps.db, resolve, id, (workspace) => protectedBranchRef(checked(workspace)), stopRootIfRefsMoved);
-        const verdict = root && (await landRoot(root, answering, outcome));
+        const verdict = root && (endLostRoot(root) ?? (await landRoot(root, answering, outcome)));
         if (verdict) record(verdict);
       } catch (error) {
         if (error instanceof RootStopped) {
