@@ -3880,12 +3880,13 @@ export function clearRefusedOnce(workspace: WorkspaceConfig, base: string, taskI
 
 /** ADR 0376 決定7 / ADR 0371 決定10: 記録済みの PR の head が盤面の外で巻き戻された・書き換えられた —— `merge` を拒み、(`task/<root>`, GitHub の
  *  head) の作業台を開いて `board/origin/task/<root>` をその head に置き、印をその head にして、戻す・捨てる手順を言う(spec #3273 text A4a・A4b。
- *  開けなければ A7d)。`lacks` は text A4 / A4d の `<branches>` の句。 */
+ *  開けなければ A7d)。`lacks` は text A4 / A4d の `<branches>` の句。`answerOn` は拒否が question を立て直したときの、次に答える question
+ *  (ADR 0394 決定3)—— 無ければ同じ question に答え直す。 */
 export function outsidePushRefusal(
   workspace: WorkspaceConfig,
   base: string,
   taskId: string,
-  { prNumber, head, rewound, lacks }: { prNumber: number; head: string; rewound: boolean; lacks: string },
+  { prNumber, head, rewound, lacks, answerOn }: { prNumber: number; head: string; rewound: boolean; lacks: string; answerOn?: string },
 ): string {
   const target = taskBranch(taskId);
   const carried = outsideHead(taskId, head);
@@ -3897,11 +3898,12 @@ export function outsidePushRefusal(
   const merge = boardBranch(source);
   const discard = `\`git merge -s ours --no-commit ${merge}\`, \`git read-tree -u --reset ${merge}\`, \`git commit\``;
   const place = `${lead} The board opened the workbench at ${opened.path}.`;
+  const again = answerOn === undefined ? "again" : `on question ${answerOn}`;
   return rewound
-    ? `${place} Answer \`merge\` again and the board pushes that content back. To discard it instead, first run there, on ${target}: ${discard} ` +
-        `(or the same in your own clone, then push ${target} to the workbench); then answer \`merge\` again.`
+    ? `${place} Answer \`merge\` ${again} and the board pushes that content back. To discard it instead, first run there, on ${target}: ${discard} ` +
+        `(or the same in your own clone, then push ${target} to the workbench); then answer \`merge\` ${again}.`
     : `${place} There, on ${target}, either keep that content with \`git merge ${merge}\` ${fromOwnClone(target, merge)}, or discard it with ${discard}. ` +
-        `${tipCondition(target, source)} Then answer \`merge\` again: the board takes your merge in and pushes it, and CI runs on the result.`;
+        `${tipCondition(target, source)} Then answer \`merge\` ${again}: the board takes your merge in and pushes it, and CI runs on the result.`;
 }
 
 /** ADR 0376 決定6: PR の記録が無い根の巻き戻し —— origin の head が、盤面が最後に push した値の真の祖先。値は写し

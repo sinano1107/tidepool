@@ -344,7 +344,7 @@ export async function pushedRoot(
   };
   /** PR #1 の merge question への「merge」。拒否なら DomainError の文を、通れば undefined を返す。 */
   const answerMerge = () =>
-    answerMergeQuestion({ db, clock, github, workspace, landing }).then(
+    answerMergeQuestion({ db, clock, github, workspace, landing, workspacesDir: workbenchBase }).then(
       () => undefined,
       (err: unknown) => {
         expect(err).toBeInstanceOf(DomainError);
@@ -595,10 +595,11 @@ export function answerMergeQuestion({
   workspace,
   githubAuth,
   landing = unusedLanding,
-}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig; githubAuth?: GitHubAuth; landing?: Landing }) {
+  workspacesDir,
+}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig; githubAuth?: GitHubAuth; landing?: Landing; workspacesDir?: string }) {
   const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
   return submitAnswer(
-    { db, pollNow: () => {}, landing, workspace, github, githubAuth },
+    { db, pollNow: () => {}, landing, workspace, github, githubAuth, workspacesDir },
     question,
     ["merge"],
     undefined,

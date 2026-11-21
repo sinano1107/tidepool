@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, conveyUnpushedHeadOnce, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, lastPushedHead, observePrHead, prInFlightRefusal, type RootVerdict, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, recordPrPromotionAbandoned, refuseUnaskedHead, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -1193,7 +1193,7 @@ async function answerThroughConvergence(landing: Landing, question: string, orig
   const verdicts = await landing.converge({ answering: { question, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
   const root = verdicts.find((verdict) => verdict.taskId === taskId);
   const error = convergenceRefusal(root?.verdict);
-  if (error) throw new DomainError(withNotice(error, root?.notice));
+  if (error) throw new (root?.reraised ? ReraisedRefusal : DomainError)(withNotice(error, root?.notice));
   return root;
 }
 
@@ -1536,6 +1536,9 @@ function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
 }
 
 /** ADR 0394 決定2: 立て直しで閉じた question には答えられない。 */
+/** ADR 0394 決定3: 回答自身が question を立て直して返す拒否 —— 下の catch が立て直しで閉じた question への「question closed」に読み替えない。 */
+class ReraisedRefusal extends DomainError {}
+
 function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
   if (mergeQuestionWasReplaced(db, question)) throw new DomainError("question closed — read the replacement merge question before answering");
 }
@@ -1691,8 +1694,6 @@ export async function submitAnswer(
         break;
       case "pr_merge": {
         const mergePr = kind.pr;
-        // ADR 0387 決定2: この回答が始まった時点の記録 —— 同時に走る回答が刻んだ「伝えた」を、この回答は伝えたと読まない
-        const answeredFrom = latestEventId(deps.db);
         // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
         // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
@@ -1719,7 +1720,7 @@ export async function submitAnswer(
             "cannot check CI or merge",
             "GitHub/workspace",
           );
-          // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
+          // ADR 0242 決定1: 読んだ head と同じ head で積み残し・CI・merge を通す —— 内容が落ちた head は寄り道の後にもう一度読む(ADR 0394 決定3)
           workspaceNetworkDestination(withRememberedRepoCheck(deps.db, mergeWorkspace, now));
           const github = deps.github;
           const readAndCompare = async () => {
@@ -1758,6 +1759,19 @@ export async function submitAnswer(
           assertQuestionOpen();
           // spec #3273 text A10: push の後の拒否は、取り込みと push が済んだことを言う
           let pushed = "";
+          const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
+          // ADR 0394 決定3: question が問うていない外の部分は、書き手で立て直して拒む。question が開いていると読んだ同期区間で立て直すので、
+          // 同時に走るもう一方の回答は question closed で拒まれる(ADR 0387 Status 追記 (1) を記録を足さずに保つ)
+          const refuseUnasked = (origin: Exclude<PrHeadOrigin, { kind: "pushed" }>) => {
+            // ADR 0288 決定2(印の後): 比べる await の間に別の回答が印を取って merge していれば、その question を取り下げない
+            if (deps.landing.isMarked(task.workspace, mergePr)) return new DomainError(beingMerged);
+            const refusal = refuseUnaskedHead(
+              deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), getTask(deps.db, landingTaskId)!,
+              { prNumber: mergePr, head: pr.head, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure" }, now(),
+            );
+            return new ReraisedRefusal(withNotice(`${pushed}${refusal}`, notice));
+          };
+          if (head.kind !== "pushed" && !(kind.outside?.kind === head.kind && kind.outside.sha === pr.head)) throw refuseUnasked(head);
           if (head.kind === "rewritten") {
             // ADR 0376 決定7・8 / ADR 0371 決定10: 外の push が head から落とした内容は、最初の `merge` が作業台を開いて拒まれ、次の `merge` が
             // 取り込み → 追いつき → push を収束で通す —— 昇格失敗 question を名指して返さない(#3250 の loop)
@@ -1766,12 +1780,9 @@ export async function submitAnswer(
             pushed = `${root?.takenIn ? "took your merge in and pushed" : "pushed"} ${taskBranch(landingTaskId)}; `;
             ({ pr, left, head } = await readAndCompare());
             assertQuestionOpen();
+            // ADR 0394 決定3: 寄り道の後は外の部分が無しのときだけ通す —— 同じ書き換えへ戻されても拒む(#3485)
+            if (head.kind !== "pushed") throw refuseUnasked(head);
           }
-          const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
-          // ADR 0387 決定2: 盤面が push していない head は、外の commit をまだ伝えていなければ他の検査より先に1回拒む
-          const unconveyed =
-            head.kind === "not_pushed" && conveyUnpushedHeadOnce(deps.db, mergeWorkspace, landingTaskId, mergePr, pr.head, head.lastPushed, answeredFrom, now());
-          if (unconveyed) throw refuse(unconveyed);
           if (left.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`));
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
           if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
@@ -1953,7 +1964,7 @@ export async function submitAnswer(
     return { ...presentAnswered(deps, task), ...(notice !== undefined && { notice }) };
   } catch (err) {
     // ADR 0394 決定2: GitHub の読みが失敗しても、立て直しで閉じた question への拒否を返す。
-    if (kind.kind === "pr_merge" && err instanceof DomainError && !(err instanceof WorkspaceRepoMismatchError)) assertMergeQuestionNotReplaced(deps.db, task);
+    if (kind.kind === "pr_merge" && err instanceof DomainError && !(err instanceof ReraisedRefusal) && !(err instanceof WorkspaceRepoMismatchError)) assertMergeQuestionNotReplaced(deps.db, task);
     // 待つ間に question が閉じていた(ADR 0288 決定4): PR などの決着を観測していれば 200 + 印、別の回答か cancel なら拒否
     if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
     throw err;

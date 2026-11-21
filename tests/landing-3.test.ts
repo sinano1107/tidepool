@@ -1010,7 +1010,7 @@ it("cancelled の祖先の下に残った done の work の内容は積み残し
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
-// ADR 0387 決定1: 外の push の head は無人では merge されない —— 積み残しの述語は、その head を伝えた question への「merge」で言う
+// ADR 0387 決定1: 外の push の head は無人では merge されない —— 積み残しの述語は、その head を問うた question への「merge」で言う
 it("修理の内容がローカルの着地するタスクのブランチに無くても、merge される head に載っていれば積み残しではない", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-on-origin", "auto_if_ci_green");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
@@ -1059,7 +1059,7 @@ it("merge back 済み・push 前でタスクブランチが origin 側に無い�
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
-it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、その head を伝えた question への「merge」で merge される", async () => {
+it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、その head を問うた question への「merge」で merge される", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-outside-push", "auto_if_ci_green");
   git(workspace.path, "checkout", "-b", "outside");
   commitWork(workspace.path, "outside.txt", "pushed by a human\n");

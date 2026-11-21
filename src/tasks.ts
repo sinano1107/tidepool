@@ -3303,10 +3303,6 @@ export function registerMergeQuestion(
     if (open) {
       settleQuestionAsObserved(db, open.id, { kind: "pr_merge_question_replaced", question_id: open.id, replacement_question_id: question.id }, now, task.id);
     }
-    // ADR 0387 決定2: 作業台を要する書き換えと分け、外の commit を伝える question が立ったときだけ刻む。
-    if (outside?.kind === "not_pushed") {
-      recordHeadConveyed(db, task.id, pr, outside.sha, now);
-    }
     return question.id;
   })();
 }
@@ -3331,11 +3327,6 @@ export function mergeQuestionWasReplaced(db: Db, question: Pick<Task, "id" | "wo
     WHERE root.pr_number = ? AND root.workspace IS ? AND events.kind = 'pr_merge_question_replaced' AND json_extract(events.payload, '$.question_id') = ?`)
     .get(question.question_pending_merge_pr, question.workspace, question.id);
   return row !== undefined;
-}
-
-/** ADR 0387 決定2: 盤面がこの head の外の commit を人間に伝えたことを刻む。 */
-export function recordHeadConveyed(db: Db, taskId: string, prNumber: number, head: string, now: Date): void {
-  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_conveyed", pr_number: prNumber, sha: head }, at: now });
 }
 
 /** 観測決着の1つの綴り: `status='todo'` 限定の UPDATE で question を閉じ、盤面名義の

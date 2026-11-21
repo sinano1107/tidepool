@@ -885,8 +885,8 @@ it("盤面の外の head が check 未報告なら、merge 回答は拒否の前
       .filter((e) => e.kind === "pr_head_observed")
       .map(({ actor_id, origin, payload }) => ({ actor_id, origin, payload }));
 
-  // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる。盤面の push していない head なので、
-  // 最初の回答はその commit を伝えて1回拒まれる(ADR 0387 決定2)
+  // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる。盤面の push していない head は question が
+  // 問うていないので、最初の回答は question を立て直して拒まれ、以後の回答は立て直した question に答える(ADR 0394 決定3)
   await expect(answerAt(6)).rejects.toThrow("holds commits the board did not push");
   await expect(answerAt(6)).rejects.toThrow("have not reported yet");
   await expect(answerAt(10)).rejects.toThrow("have not reported yet");
@@ -1366,7 +1366,7 @@ it("merge 回答の merge が失敗したら印は放され、次の merge 回�
 
   // spec #3273 text A6
   await expect(answer()).rejects.toThrow(
-    "merging PR #42 failed: Pull request is not mergeable: merge conflict. If PR #42 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer `merge`: the board refuses it once, listing the commits you pushed, and the next `merge` merges.",
+    "merging PR #42 failed: Pull request is not mergeable: merge conflict. If PR #42 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer `merge`: the board refuses it, listing the commits you pushed, and closes this question — answer `merge` on the new question it names to merge.",
   );
   await expect(answer()).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
