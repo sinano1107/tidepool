@@ -1,5 +1,7 @@
 # merge ダイヤルは3値必須 — `external` が盤面の外の merge を宣言し、正典の主張は盤面決裁の merge に狭まる
 
+**Status 追記: `auto_if_ci_green` の無人 merge に床が1つ足される —— PR の差分が workspace の宣言する人間が merge する path(外せない既定は `.github/workflows/**` と CODEOWNERS)に当たれば、CI が緑でも merge question に倒れる。判定は無人 merge が固定する head の差分で行う。`external` には掛けない —— 盤面が question を立てない宣言を破らない([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定4、2026-11-21、issue #3482)。**
+
 **Status 追記: 決定1 のダイヤルは agent の authority profile の欄のままだが、面がダイヤルの外で決まる場合が1つ足される —— 人間担当の根は profile を持たず、常に盤面の merge question に住む([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定13、2026-11-15、issue #3178)。**
 
 **Status: 決定3 の契機は ADR 0217 で4つ目が加わった — agent 名の quarantine でスキップされた CI 待ちの PR は merge 失敗時の検査に届かないので、その quarantine への回答の受理直前に観測する**
