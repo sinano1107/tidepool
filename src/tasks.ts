@@ -606,6 +606,11 @@ export function taskCheckoutWasReleased(db: Db, taskId: string, checkout: string
   return latestEventOfTask(db, taskId, "task_checkout_released")?.payload.path === checkout;
 }
 
+/** ADR 0393 決定1: 最後の session の checkout を開いた後に失われた event が刻まれた —— 作り直されて効かなくなっても読む。 */
+export function taskBranchLostAfterCheckoutOpened(db: Db, taskId: string): boolean {
+  return (latestEventOfTask(db, taskId, "task_branch_lost")?.id ?? 0) > (latestEventOfTask(db, taskId, "task_checkout_opened")?.id ?? 0);
+}
+
 /** ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 解放済みとも刻まず、解放を負いもしない。 */
 export function keepsCheckoutAsRecord(db: Db, task: Task): boolean {
   return interviewRole(db, task) === "examinee" && isSettled(task.status);

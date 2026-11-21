@@ -95,6 +95,7 @@ import {
   CheckoutHostError,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
+  LostTaskBranchPresentError,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
@@ -620,6 +621,8 @@ export function startScheduler(deps: {
           if (err instanceof CheckoutHostError) throw err;
           // ADR 0373 決定13: 確認が registry を読めないのは、task 自身の名前の解決が registry を読めないのと同じ spawn の失敗
           if (err instanceof FirstCaptureRegistryReadError) throw err;
+          // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>` はその task の失敗(出口は cancel)—— 名前の場所を quarantine しない
+          if (err instanceof LostTaskBranchPresentError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
           // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、落ちた場所の名前で止める(受験者は root id、ADR 0276 決定3)
           if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {
@@ -650,7 +653,12 @@ export function startScheduler(deps: {
             payload: { kind: "spawn_failed", ...failure },
             at: clock.now(),
           }),
-        () => onSpawnFailed(picked.id, sessionId, err instanceof UnhideableTaskSettingsError ? { ...failure, kind: "unhideable-task-settings" } : failure),
+        () =>
+          onSpawnFailed(
+            picked.id,
+            sessionId,
+            err instanceof UnhideableTaskSettingsError ? { ...failure, kind: "unhideable-task-settings" } : err instanceof LostTaskBranchPresentError ? { ...failure, kind: "lost-task-branch-present" } : failure,
+          ),
       );
     }
   }

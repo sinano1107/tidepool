@@ -193,7 +193,7 @@ it("戻す先の object が1つでも無ければ、`restore the baseline` は�
   const comparisonBefore = await nextComparison(db, ws);
 
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
-    `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path} Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
+    `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path}. Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
   );
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
@@ -485,7 +485,7 @@ const B1 = (place: string) =>
   `Answering checks that every ref of ${place} equals the board's baseline; nothing that moved is accepted. ` +
   "`repaired by hand`: you repaired something other than refs — the board checks and refuses if a ref differs. " +
   "`restore the baseline`: the board writes every differing ref back to the baseline and keeps each value it removes under `refs/keep-around/<sha>`. " +
-  "`give up the lost refs and restore the baseline`: the same, and refs whose commits no longer exist are accepted as they are now; landing ends for a completed root whose work was lost with its branch, and the reviews and repairs attached to such work, and to work that returns into it, are cancelled. " +
+  "`give up the lost refs and restore the baseline`: the same, and refs whose commits no longer exist are accepted as they are now, except a lost task branch `task/<id>`: the board keeps its current value under `refs/keep-around/<sha>` and deletes it, and the next pickup or start_work of an unsettled task makes it again; landing ends for a completed root whose work was lost with its branch, and the reviews and repairs attached to such work, and to work that returns into it, are cancelled. " +
   "If a merge back conflicts, the refusal says where to resolve it.";
 
 it("workspace の Quarantine の本文は選択肢がそれぞれ何をするかを言い、選択肢は `repaired by hand`・`restore the baseline`・`give up the lost refs and restore the baseline` の常設の3つ(ADR 0373 決定2・16、#3273 text B1)", async () => {
@@ -842,7 +842,7 @@ it("remote-backed: origin に無い sha(2度の probe の間で fetch が落ち�
   const refsBefore = git(ws.path, "for-each-ref");
 
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
-    `cannot restore refs/heads/other to ${lost}: that commit no longer exists in ${ws.path} Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
+    `cannot restore refs/heads/other to ${lost}: that commit no longer exists in ${ws.path}. Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
   );
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);

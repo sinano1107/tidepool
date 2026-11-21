@@ -235,6 +235,8 @@ export type EventPayload =
   | ({ kind: "task_checkout_written_after_completion"; path: string } & TaskCheckoutWriteObservation)
   // ADR 0356 決定2: 解放で worker の repo を読めず、task の checkout を path に残した —— reason は git の失敗の本文
   | { kind: "task_checkout_release_failed"; path: string; reason: string }
+  // ADR 0393 決定3: 失われた event を刻んだ task の checkout を、盤面が path に残した(disk に在るものだけ)—— 盤面はもう触らない
+  | { kind: "task_checkout_kept"; path: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // 位置を変えずに `todo` へ戻された(ADR 0333 決定1)。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
