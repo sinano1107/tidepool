@@ -193,7 +193,7 @@ it("戻す先の object が1つでも無ければ、`restore the baseline` は�
   const comparisonBefore = await nextComparison(db, ws);
 
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
-    `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path} Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
+    `cannot restore refs/heads/lost to ${lost}: that commit no longer exists in ${ws.path}. Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
   );
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);
@@ -842,7 +842,7 @@ it("remote-backed: origin に無い sha(2度の probe の間で fetch が落ち�
   const refsBefore = git(ws.path, "for-each-ref");
 
   await expect(answer(db, ws, "restore the baseline")).rejects.toThrow(
-    `cannot restore refs/heads/other to ${lost}: that commit no longer exists in ${ws.path} Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
+    `cannot restore refs/heads/other to ${lost}: that commit no longer exists in ${ws.path}. Nothing was written. If these are lost for good, answer \`give up the lost refs and restore the baseline\`.`,
   );
 
   expect(git(ws.path, "for-each-ref")).toBe(refsBefore);

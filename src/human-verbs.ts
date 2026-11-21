@@ -71,6 +71,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { interviewTitle } from "./routing-review.js";
 import type { PollOutcome, TaskExecutionCandidates } from "./scheduler.js";
+import { isSettled } from "./task-status.js";
 import {
   answerQuestion,
   assertAnswerable,
@@ -144,6 +145,7 @@ import {
   type HumanWorkPreparation,
   INTAKE_OPTIONS,
   type IntakeContext,
+  KEPT_TASK_CHECKOUT,
   lostBranchRefusal,
   mergeTaskToProtected,
   NO_WORKBENCH,
@@ -661,10 +663,6 @@ export interface QuarantineCheckDeps {
   quarantineResolvers: QuarantineResolvers | undefined;
 }
 
-/** ADR 0393 決定3: 残した checkout の告知 —— 事実だけを言い、中身が揃っているとは言わない。 */
-const keptCheckoutNotice = (path: string) =>
-  `the board kept the task checkout at ${path} and no longer touches it; you may delete it. A retry picks the task up in a new task checkout, and if its task branch was lost, the board makes it again from the fork source.`;
-
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
@@ -814,18 +812,32 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
     const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), giveUp ? openQuarantineQuestion(deps.db, "workspace", value)!.id : undefined)) : [];
     await fire(all, "after-open");
-    // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
-    // ADR 0393 決定3: この回答が刻んだ残した checkout だけを告げる —— 同期の手の前後で読むので、ほかの場所の後始末が刻んだ分は混ざらない
+    // ADR 0393 決定3: この回答が刻んだ残した checkout だけを、通っても拒まれても1回告げる —— 同期の手の前後で読むので、ほかの場所の後始末が
+    // 刻んだ分は混ざらない
     const keptCheckouts: string[] = [];
     const noteKept = (run: () => void) => () => {
       const after = latestEventId(deps.db);
-      run();
-      keptCheckouts.push(...listEventsOfKinds(deps.db, ["task_checkout_kept"], { after }).map(({ payload }) => payload.path));
+      try {
+        run();
+      } finally {
+        keptCheckouts.push(
+          ...listEventsOfKinds(deps.db, ["task_checkout_kept"], { after }).map(({ task_id, payload }) => KEPT_TASK_CHECKOUT.kept(payload.path, isSettled(getTask(deps.db, task_id!)?.status))),
+        );
+      }
     };
-    await refuseOnError(noteKept(() => redoOwedReleases(deps.db, target, deps.workspace?.name, clock.now(), (task) => teardownStep(deps.db, task.id).completion === true)));
+    const refuseNamingKept = async <T>(check: () => T | Promise<T>): Promise<T> => {
+      try {
+        return await refuseOnError(check);
+      } catch (err) {
+        if (keptCheckouts.length === 0) throw err;
+        throw new DomainError(`${err instanceof Error ? err.message : String(err)}\n\n${keptCheckouts.join("\n")}`);
+      }
+    };
+    // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
+    await refuseNamingKept(noteKept(() => redoOwedReleases(deps.db, target, deps.workspace?.name, clock.now(), (task) => teardownStep(deps.db, task.id).completion === true)));
     // ADR 0373 決定7: 2回目の比較は merge back のやり直しの直前 —— どの選択肢も、後半の await の間に動いた ref を運ばない。やり直しが
     // fetch を待つなら、その await の後にもう一度比べてから `task/<id>` を読む(ADR 0370 決定1)
-    await refuseOnError(compare);
+    await refuseNamingKept(compare);
     // ADR 0373 決定9 / spec #3273 の受理の 11: conflict は作業台を開いて拒み、作業台が取り込める tip を持てば先に取り込む
     const intake: IntakeContext = {
       workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
@@ -834,11 +846,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       now: () => clock.now(),
     };
     // spec #3273 text C6: 作業台を残した取り込みごとに1行
-    const keptWorkbenches = placeHasRepository(target.path) ? await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake, undefined, compare)) : [];
+    const keptWorkbenches = placeHasRepository(target.path) ? await refuseNamingKept(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake, undefined, compare)) : [];
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
-    await refuseOnError(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
+    await refuseNamingKept(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
     // spec #3273 text B11: 外した値ごとに1行
-    const notices = [...kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`), ...keptWorkbenches, ...keptCheckouts.map(keptCheckoutNotice)];
+    const notices = [...kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`), ...keptWorkbenches, ...keptCheckouts];
     const notice = notices.length > 0 ? notices.join("\n") : undefined;
     if (!unopened && !cancelRcas) return notice === undefined ? undefined : { notice };
     return {
