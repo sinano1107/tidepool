@@ -43,6 +43,7 @@ import {
   squashTaskIntoOrigin,
 } from "./harness.js";
 import {
+  answerMergeQuestion,
   answerPromotion,
   attachUnsettledChild,
   autoMergeOutcomeEvents,
@@ -138,6 +139,94 @@ it("retry が答えている根を回が撃たなければ、閉じた PR・未�
   registerPrPromotionFailureQuestion(db, done, "stale", clock.now());
   const [stale] = promotionFailures(db, done.id);
   await expect(convergeOn(landing, done.id, stale!.id)).resolves.toMatchObject({ kind: "excluded", reason: "not_a_root" });
+});
+
+// ADR 0394 決定4: 回答が待つ根を収束が飛ばしたら、回答の拒否文は飛ばした理由を言う。以下がこの拒否文を述べる唯一の場所(ADR 0107)
+/** `c` の盤面の収束で、回が始まる直前に `effect` を1回だけ走らせる —— 回答が収束を待つ間に根の状態が変わる形。 */
+const landingThatFirst = (c: Awaited<ReturnType<typeof pushedRoot>>, effect: () => void) => {
+  let fired = false;
+  return c.landingWith({
+    pickupIdle: async () => {
+      if (!fired) effect();
+      fired = true;
+    },
+  });
+};
+/** 根の着地を終わらせる記録 —— 根は候補から外れる。 */
+const endLanding = (c: Awaited<ReturnType<typeof pushedRoot>>) => () =>
+  appendEvent(c.db, { taskId: c.work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "nothing_to_land", base: "main" }, at: c.clock.now() });
+const refusalOf = (answer: Promise<unknown>) =>
+  answer.then(
+    () => undefined,
+    (err: unknown) => {
+      expect(err).toBeInstanceOf(DomainError);
+      return (err as Error).message;
+    },
+  );
+
+it("外の push が内容を落とした PR の merge question への「merge」を待つ間に根が候補から外れれば、拒否文は根でなくなったことを言い、merge されず question は開いたまま", async () => {
+  const { c } = await droppedRepair("skipped-root-merge-answer");
+  await c.landing.tick("auto_merge", c.clock.now());
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  const landing = landingThatFirst(c, endLanding(c));
+
+  expect(await refusalOf(answerMergeQuestion({ ...c, landing }))).toBe(`task ${c.work.id} is no longer a landing root, so the board did not carry this answer`);
+
+  expect(c.github.merged).toEqual([]);
+  expect(getTask(c.db, question!.id)?.status).toBe("todo");
+});
+
+it("PR 昇格失敗の question への「retry」を待つ間に根が候補から外れれば、拒否文は根でなくなったことを言い、何も運ばず question は開いたまま", async () => {
+  const c = await pushedRoot("skipped-root-retry-answer", { openFailure: true });
+  const [failure] = promotionFailures(c.db, c.work.id);
+  const landing = landingThatFirst(c, endLanding(c));
+
+  expect(await refusalOf(answerPromotion(c.db, c.clock, landing, c.workspace, failure!, "retry"))).toBe(
+    `task ${c.work.id} is no longer a landing root, so the board did not carry this answer`,
+  );
+
+  c.expectNothingCarried();
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+});
+
+it("「retry」が待つ根の着地が回の中で例外に落ちれば、拒否文は根が外れたとは言わず、その根の着地が失敗したことを言う", async () => {
+  const c = await pushedRoot("skipped-root-landing-threw", { openFailure: true });
+  const [failure] = promotionFailures(c.db, c.work.id);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const prepare = c.db.prepare.bind(c.db);
+  const landing = landingThatFirst(c, () => {
+    // 根の PR の決着の読み(回が根ごとに最初に読む記録)が1回だけ落ちる
+    const spy = vi.spyOn(c.db, "prepare").mockImplementation(((sql: string) => {
+      if (!sql.includes("pr_merge_observed")) return prepare(sql);
+      spy.mockRestore();
+      throw new Error("database is locked");
+    }) as typeof c.db.prepare);
+  });
+
+  expect(await refusalOf(answerPromotion(c.db, c.clock, landing, c.workspace, failure!, "retry"))).toBe(
+    `the board failed to land task ${c.work.id} (database is locked); answer again`,
+  );
+
+  c.expectNothingCarried();
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+});
+
+it("「retry」が待つ回で候補の読みそのものが失敗すれば、拒否文は根を読めなかったことを言う", async () => {
+  const c = await pushedRoot("skipped-root-candidates-unread", { openFailure: true });
+  const [failure] = promotionFailures(c.db, c.work.id);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const landing = landingThatFirst(c, () => {
+    vi.spyOn(c.db, "prepare").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+  });
+
+  expect(await refusalOf(answerPromotion(c.db, c.clock, landing, c.workspace, failure!, "retry"))).toBe(
+    "the board could not read its landing roots; answer again",
+  );
+
+  c.expectNothingCarried();
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
 });
 
 it("1つの根の失敗はその根に閉じ込められ、回は残りの根を着地させる", async () => {
