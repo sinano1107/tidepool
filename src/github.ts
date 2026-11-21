@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, workspaceNetworkDestination } from "./github-auth.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, workspaceHeadRepoDestination, workspaceNetworkDestination } from "./github-auth.js";
 import { parseGitHubRepo } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -153,7 +153,7 @@ export class IssueGoneError extends Error {
  *  "unreported" past ADR 0227's grace — and only on the head that read was
  *  taken on (ADR 0231 決定1). */
 export interface GitHubClient {
-  /** push 済みのタスクブランチに PR を開く(`gh pr create` だけ)。push は呼び手が `preparePush` で先に撃つ ——
+  /** push 済みのタスクブランチに、出元 repo を head にした PR を開く(ADR 0396 決定1)。push は呼び手が `preparePush` で先に撃つ ——
    *  盤面の push は基準への予告で包む口を通る(ADR 0243)。 */
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
@@ -218,7 +218,28 @@ export interface RepoSlug {
   name: string;
 }
 
-const PR_URL_RE = /\/pull\/(\d+)\s*$/;
+/** ADR 0396 決定5: 作者が人間になる PR を、人間が手で開いた PR と見分ける手がかり。 */
+const PR_OPENED_BY = "Opened by the tidepool board.";
+
+/** The declared repo, and the repo a PR's head lives in: the declared head repo, or the declared repo itself when none is
+ *  declared (ADR 0395 決定2). Both come from the rechecked declaration (ADR 0378 決定1). */
+function prRepos(workspace: WorkspaceConfig, call: string): { repo: string; head: RepoSlug } {
+  const repo = workspaceNetworkDestination(workspace)?.github;
+  if (repo === undefined) throw new Error(`\`${call}\` cannot run: workspace ${workspace.name} has no declared GitHub repo`);
+  const headRepo = workspaceHeadRepoDestination(workspace);
+  if (headRepo === undefined) return { repo: githubKey(repo), head: repo };
+  if (headRepo.github === undefined) throw new Error(`\`${call}\` cannot run: workspace ${workspace.name}'s head repo ${headRepo.source} is not a GitHub repo`);
+  return { repo: githubKey(repo), head: headRepo.github };
+}
+
+/** A GitHub answer's JSON, or undefined when its body is not JSON (a proxy's error page). */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
 
 /** One entry of `gh pr view --json statusCheckRollup`: a CheckRun carries its
  *  verdict in `conclusion`, a StatusContext in `state`. Only those two fields
@@ -252,31 +273,39 @@ function ciStatusOf(checks: RollupEntry[]): CiStatus {
 
 /** Real implementation: shells out to `gh`/`git` as `tidepool-board[bot]` (ADR 0093)
  *  — every call injects a repo-scoped installation token into the child env
- *  fresh via GitHubAuth, never the host's ambient `gh auth`. `gh` prints the
- *  new PR's URL on stdout; the number is the last path segment. */
+ *  fresh via GitHubAuth, never the host's ambient `gh auth`. The one exception is
+ *  opening a PR, which the board sends itself with the logged-in human's user token (ADR 0396 決定1・3). */
 export class GhCliClient implements GitHubClient {
   private readonly timeoutMs: number;
+  private readonly apiUrl: string;
 
-  /** `timeoutMs` はテストが上限を短くするためだけにある —— 本番の呼び手は既定のまま(#2726 の完了基準、釘は ADR 0107 の domain 層)。 */
+  /** `timeoutMs` と `apiUrl` はテストが上限を短くし、GitHub の REST を loopback に向けるためだけにある —— 本番の呼び手は既定のまま
+   *  (#2726 の完了基準、釘は ADR 0107 の domain 層)。 */
   constructor(
     private readonly auth: GitHubAuth,
-    { timeoutMs = GIT_NETWORK_TIMEOUT_MS }: { timeoutMs?: number } = {},
+    { timeoutMs = GIT_NETWORK_TIMEOUT_MS, apiUrl = "https://api.github.com" }: { timeoutMs?: number; apiUrl?: string } = {},
   ) {
     this.timeoutMs = timeoutMs;
+    this.apiUrl = apiUrl;
   }
 
-  /** 盤面の `gh` はすべてここを通る(ADR 0330 決定4)。宣言の repo の token を温め(ADR 0378 決定1)、
+  /** 宣言の repo への `gh` はここを通り、上限は `run` の1箇所で効く(ADR 0330 決定4)。宣言の repo の token を温め(ADR 0378 決定1)、
    *  `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(ADR 0330 決定1)。
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
   private async gh(workspace: WorkspaceConfig, args: string[], beforeSpawn?: () => void): Promise<string> {
-    const cwd = workspace.path;
+    const repo = await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`);
+    beforeSpawn?.();
+    return this.run([...args, "-R", repo], repo, workspace.path);
+  }
+
+  /** The declared repo, with its token warmed and the declaration rechecked after that await. */
+  private async warmDeclaredRepo(workspace: WorkspaceConfig, call: string): Promise<string> {
     const repo = workspaceNetworkDestination(workspace)?.key;
-    if (repo === undefined) throw new Error(`\`gh ${args[0]} ${args[1]}\` cannot run: workspace ${workspace.name} has no declared GitHub repo`);
+    if (repo === undefined) throw new Error(`\`${call}\` cannot run: workspace ${workspace.name} has no declared GitHub repo`);
     await this.auth.ensureToken(repo);
     if (workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
-    beforeSpawn?.();
-    return this.run([...args, "-R", repo], repo, cwd);
+    return repo;
   }
 
   /** `gh` with `repo`'s warmed token, bounded by the timeout. */
@@ -305,24 +334,46 @@ export class GhCliClient implements GitHubClient {
     return (sha) => authedPush(this.auth, input.workspace, this.timeoutMs, [[input.branch, sha]]);
   }
 
+  /** ADR 0396 決定3: the user token reaches only this in-process request, never a `gh` or git child's env (ADR 0093 決定4).
+   *  Nothing is awaited before the request, so the declaration it reads is the one it sends to. */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
-    const url = (
-      await this.gh(input.workspace, [
-        "pr",
-        "create",
-        "--head",
-        input.branch,
-        "--base",
-        input.base,
-        "--title",
-        input.title,
-        "--body",
-        input.body,
-      ])
-    ).trim();
-    const match = url.match(PR_URL_RE);
-    if (!match) throw new Error(`unexpected gh pr create output: ${url}`);
-    return { url, number: Number(match[1]) };
+    const { repo, head } = prRepos(input.workspace, "POST pulls");
+    const call = `POST repos/${repo}/pulls`;
+    const token = this.auth.token();
+    let status: number;
+    let text: string;
+    try {
+      const response = await fetch(new URL(`/repos/${repo}/pulls`, this.apiUrl), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "User-Agent": "tidepool-board",
+        },
+        body: JSON.stringify({
+          head: `${head.owner}:${input.branch}`,
+          base: input.base,
+          title: input.title,
+          body: `${input.body}\n\n${PR_OPENED_BY}`,
+          // ADR 0396 決定4: 宣言の repo の maintainer に PR の head への push を開かない
+          maintainer_can_modify: false,
+        }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      status = response.status;
+      text = await response.text();
+    } catch (err) {
+      if ((err as { name?: string }).name === "TimeoutError") throw new Error(`\`${call}\` timed out after ${this.timeoutMs} ms`, { cause: err });
+      throw new Error(`\`${call}\` could not reach GitHub: ${String(err)}`, { cause: err });
+    }
+    const parsed = parseJson(text) as { html_url?: unknown; number?: unknown; message?: unknown; errors?: Array<{ message?: unknown; code?: unknown }> } | undefined;
+    if (status < 200 || status >= 300) {
+      const detail = parsed ? [parsed.message, ...(parsed.errors ?? []).map((e) => e.message ?? e.code)].filter(Boolean).join("; ") : text.trim();
+      throw new Error(`\`${call}\` was refused for head ${head.owner}:${input.branch} (HTTP ${status}: ${detail || "no error text"})`);
+    }
+    if (typeof parsed?.html_url !== "string" || typeof parsed.number !== "number") throw new Error(`unexpected \`${call}\` response: ${text}`);
+    return { url: parsed.html_url, number: parsed.number };
   }
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
@@ -354,26 +405,27 @@ export class GhCliClient implements GitHubClient {
     return prStateRead(JSON.parse(output) as GhPrState);
   }
 
+  /** ADR 0396 帰結: the author is the human who opened it, so the board's PR is matched by its head repo, never its author.
+   *  Read with the declared repo's installation token, which also sees a private head repo's PR here (#3558). */
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
-    const output = await this.gh(input.workspace, [
-      "pr",
-      "list",
-      "--head",
-      input.branch,
-      "--state",
-      "all",
-      "--limit",
-      "10",
-      "--json",
-      "number,state,headRefOid,isCrossRepository",
-    ]);
-    // --head matches the branch name alone: a fork's PR from a same-named branch is not the board's
+    const { workspace, branch } = input;
+    const repo = await this.warmDeclaredRepo(workspace, "gh api");
+    // read after the await, so the head repo is the rechecked declaration's
+    const { head } = prRepos(workspace, "gh api");
+    const output = await this.run(
+      ["api", `repos/${repo}/pulls`, "--method", "GET", "-f", `head=${head.owner}:${branch}`, "-f", "state=all"],
+      repo,
+      workspace.path,
+    );
+    const headRepo = githubKey(head);
+    // a PR from another fork's same-named branch is not the board's; a deleted fork leaves `head.repo` null
     const prs = (
-      JSON.parse(output) as Array<{ number: number; state: PrState; headRefOid: string; isCrossRepository: boolean }>
-    ).filter((p) => !p.isCrossRepository);
-    // gh does not document its order: an open PR wins, then a merged one, over closed ones on the same branch
-    const pr = prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0];
-    return pr ? { number: pr.number, state: pr.state, head: pr.headRefOid } : null;
+      JSON.parse(output) as Array<{ number: number; state: string; merged_at: string | null; head: { ref: string; sha: string; repo: { full_name: string } | null } }>
+    )
+      .filter((p) => p.head.ref === branch && p.head.repo?.full_name.toLowerCase() === headRepo)
+      .map((p): FoundPr => ({ number: p.number, state: p.merged_at ? "MERGED" : p.state === "open" ? "OPEN" : "CLOSED", head: p.head.sha }));
+    // an open PR wins, then a merged one, over closed ones on the same branch
+    return prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0] ?? null;
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {

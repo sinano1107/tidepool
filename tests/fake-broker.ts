@@ -1,10 +1,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 /** 何が観測された要求か: 仲介が受け取った repo と bearer(= 差し替え可能な user
- *  token の実物)。 */
+ *  token の実物)。GitHub の REST の代役として立てたときは method・path・body も読む(ADR 0396)。 */
 export interface BrokerRequest {
   repo: string;
   bearer: string | undefined;
+  method: string | undefined;
+  path: string | undefined;
+  body: Record<string, unknown>;
 }
 
 export interface BrokerAnswer {
@@ -12,6 +15,8 @@ export interface BrokerAnswer {
   body?: unknown;
   /** 応答せずに接続を切る —— 到達失敗(timeout も同じ catch 節)の再現。 */
   destroy?: boolean;
+  /** 応答しないまま接続を持ち続ける —— 呼び手の上限の再現。 */
+  hang?: boolean;
 }
 
 export interface FakeBroker {
@@ -36,8 +41,12 @@ export async function startFakeBroker(
     });
     req.on("end", () => {
       const authorization = req.headers.authorization;
+      const body = JSON.parse(raw || "{}") as Record<string, unknown>;
       const request: BrokerRequest = {
-        repo: String((JSON.parse(raw || "{}") as { repo?: unknown }).repo),
+        repo: String(body.repo),
+        method: req.method,
+        path: req.url,
+        body,
         bearer: authorization?.startsWith("Bearer ")
           ? authorization.slice("Bearer ".length)
           : undefined,
@@ -48,6 +57,7 @@ export async function startFakeBroker(
         res.socket?.destroy();
         return;
       }
+      if (answer.hang) return;
       res.writeHead(answer.status ?? 200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(answer.body ?? {}));
     });

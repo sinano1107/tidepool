@@ -545,19 +545,21 @@ it("teardown and landing use the declared repository after origin changes during
   const tokenFile = join(bin, "user-token");
   writeFileSync(tokenFile, "user-token", { mode: 0o600 });
   writeFileSync(join(bin, "gh"), `#!/bin/sh
-case "$2" in
-  list) echo '[]' ;;
-  create) echo 'https://github.com/acme/declared/pull/7' ;;
+case "$1" in
+  api) echo '[]' ;;
   *) exit 1 ;;
 esac
 `, { mode: 0o755 });
+  // ADR 0396 決定3: the PR is opened by the board's own REST request, not by `gh`
+  const api = await startFakeBroker(() => ({ status: 201, body: { html_url: "https://github.com/acme/declared/pull/7", number: 7 } }));
+  onTestFinished(() => api.close());
   const previousPath = process.env.PATH;
   process.env.PATH = `${bin}${delimiter}${previousPath}`;
   onTestFinished(() => { process.env.PATH = previousPath; });
   const auth = new GitHubAuth(tokenFile, broker.url);
   const beforeTeardown = gitCalls().length;
   await runTeardown({ db, clock, slot, resolve: () => workspace, pollNow() {}, githubAuth: auth }, task.id, { completion: true });
-  const landing = createLanding({ db, clock, workspace, github: new GhCliClient(auth), githubAuth: auth, defaultAgentName: "deckhand" });
+  const landing = createLanding({ db, clock, workspace, github: new GhCliClient(auth, { apiUrl: api.url }), githubAuth: auth, defaultAgentName: "deckhand" });
 
   const verdicts = await landing.converge();
 
@@ -569,6 +571,7 @@ esac
     token: env.GH_TOKEN,
   }))).toEqual(["ls-remote", "fetch", "ls-remote", "push"].map((verb) => ({ verb, destination: declared.workspace.repo, token: "installation-token" })));
   expect(broker.requests.map(({ repo }) => repo)).toEqual(["acme/declared"]);
+  expect(api.requests.map(({ path }) => path)).toEqual(["/repos/acme/declared/pulls"]);
   expect(verdicts).toEqual([expect.objectContaining({ taskId: task.id, verdict: expect.objectContaining({ kind: "landed", prNumber: 7 }) })]);
   expect(git(declared.workspace.repo!, "rev-parse", `refs/heads/task/${task.id}`)).toBe(git(workspace.path, "rev-parse", `refs/heads/task/${task.id}`));
   expect(git(other.workspace.repo!, "for-each-ref", "refs/heads/task")).toBe("");

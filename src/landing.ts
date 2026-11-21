@@ -888,7 +888,7 @@ function settleMergeQuestionAsObserved(
 }
 
 /** 収束が着地を成立させたら、同じタスクを指す PR 昇格失敗の question はもう誰にも訊く
- *  ことがない(issue #406)。開いたままにすると `retry` が既に開いている PR へ `gh pr create`
+ *  ことがない(issue #406)。開いたままにすると `retry` が既に開いている PR へ PR の作成
  *  を撃ち、`abandon promotion` は「PR は無い」と事実と逆の決定を記録する。引退は上と同じ
  *  観測決着 —— 収束は人間の決定ではない。失敗 question が積み上がっている場合もあるので、
  *  答えている question(ADR 0106 決定5)を除く todo の行はすべて引退させる。 */
@@ -1844,7 +1844,7 @@ export function createLanding(deps: LandingDeps): Landing {
         prNumber = found.number;
       } else {
         const { title } = await contentSourceFor(task, deps.github, () => workspace).expand();
-        // PR の作成は push 済みのブランチに `gh pr create` だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
+        // PR の作成は push 済みのブランチに作成の要求だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
         const refusal = await push(sha);
         if (refusal) return refusal;
         const created = await deps.github.createPullRequest({
