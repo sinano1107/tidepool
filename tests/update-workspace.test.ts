@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { workspaceProtectionReader } from "../src/workspace.js";
@@ -31,6 +32,7 @@ async function makeDeps(registryDir: string) {
   return {
     registry: { dir: registryDir, mode: "purely-local" as const },
     workspacesBaseDir: await tempDir("tidepool-ws-base-"),
+    db: openDb(":memory:"),
   };
 }
 

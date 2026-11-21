@@ -1554,8 +1554,9 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const [prot, setProt] = React.useState(!!ws.protected);
   const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
+  const [headRepo, setHeadRepo] = React.useState(ws.head_repo ?? "");
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []);
+  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []) || headRepo.trim() !== (ws.head_repo ?? "");
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => {
     edit.close();
@@ -1566,12 +1567,14 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
     setProt(!!ws.protected);
     setCmds(ws.review_allowed_commands ?? []);
     setDomains(ws.allowed_domains ?? []);
+    setHeadRepo(ws.head_repo ?? "");
   });
   const save = () => {
     const body = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
+    if (headRepo.trim() !== (ws.head_repo ?? "")) body.head_repo = headRepo.trim();
     submit(async (confirm) => {
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", ws.name);
@@ -1609,6 +1612,14 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       tags: ws.allowed_domains ?? [],
       unsetLabel: "external fetches unavailable"
     }
+  ), ws.repo && /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "head repo",
+      kind: ws.head_repo ? "mono" : "unset",
+      value: ws.head_repo ?? "",
+      unsetLabel: "no fork declared"
+    }
   ), publishable && /* @__PURE__ */ React.createElement(PublishWorkspace, { ws, say, onPublished: onChanged })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1633,6 +1644,14 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       label: "Allowed domains",
       description: "domains this workspace's worker sessions may reach. Empty keeps external fetches closed (confirmed on save if non-empty).",
       placeholder: 'domain \u2014 e.g. "registry.npmjs.org"'
+    }
+  ), ws.repo && /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Head repo",
+      value: headRepo,
+      onChange: (e) => setHeadRepo(e.target.value),
+      placeholder: "owner/name of the fork task branches go to \u2014 empty removes it (confirmed on save if set)"
     }
   ), /* @__PURE__ */ React.createElement(
     EditActions,
@@ -1833,7 +1852,8 @@ const DANGEROUS_REASON_LABEL = {
   allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
   unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
   review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
-  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
+  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains.",
+  head_repo_set: "The head repo is being set \u2014 the fork this workspace's task branches go to and its PRs are opened from."
 };
 const LIVE_CHECKOUT_SIGNAL_LABEL = {
   uncommitted_changes: "The checkout has uncommitted changes or untracked files \u2014 someone is working in this tree right now.",

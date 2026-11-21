@@ -140,6 +140,7 @@ import {
   CheckoutHasOriginError,
   type CreateWorkspaceInput,
   GitHubIdentityMissingError,
+  HeadRepoRejectedError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   RelativeClonePathError,
@@ -260,6 +261,7 @@ function registryToolError(err: unknown) {
     err instanceof InvalidAgentDefinitionError ||
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
+    err instanceof HeadRepoRejectedError ||
     err instanceof InvalidAuthorityProfileNameError
   ) {
     return toolError(err.message);
@@ -543,6 +545,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // door has no `confirm`, so the domain gate always rejects it.
         review_allowed_commands: z.array(z.string()).optional(),
         allowed_domains: z.array(z.string()).optional(),
+        // ADR 0395 決定2: setting it is a dangerous value, so only `""` (remove) gets through this door
+        head_repo: z.string().optional().describe("The PR head repo (a fork of the workspace's repo) as owner/name; an empty string removes it."),
       }),
     },
     async (input) => {

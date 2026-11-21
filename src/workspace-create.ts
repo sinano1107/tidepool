@@ -6,14 +6,15 @@ import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "
 import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { EventOrigin } from "./events.js";
-import { git } from "./git.js";
-import type { GitHubClient } from "./github.js";
+import { git, readCheckoutOrigin } from "./git.js";
+import type { GitHubClient, RepoSlug } from "./github.js";
 import {
   authedClone,
   authedPush,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   isRelativeLocalPath,
+  networkDestination,
   originValue,
   remoteTrackingRef,
   repoKey,
@@ -22,6 +23,7 @@ import {
   assertOwnGitDirectory,
   conventionCheckoutPath,
   exactProtectedBranchRef,
+  HEAD_REPO_REMOTE,
   originUrl,
 } from "./pickup-predicates.js";
 import { openQuarantineQuestion, openQuarantineQuestions, parseWorkspaceContainmentValue, type QuarantineKind } from "./quarantine.js";
@@ -47,7 +49,9 @@ import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import { BOARD_BRANCHES } from "./workbench.js";
 import {
+  announceHeadRepo,
   announcePublishedRepo,
+  assertRememberedHeadRepo,
   assertRememberedRepo,
   dropWorkspaceState,
   entryCheckoutPath,
@@ -272,8 +276,8 @@ export class BoardNamedProtectedBranchError extends Error {
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
- *  `notes`, `protected`, `review_allowed_commands` (ADR 0061), and
- *  `allowed_domains` (ADR 0072) are editable
+ *  `notes`, `protected`, `review_allowed_commands` (ADR 0061),
+ *  `allowed_domains` (ADR 0072), and `head_repo` (ADR 0395 決定2) are editable
  *  — changing `path`/`repo`/`branch` re-points the entry at a different real
  *  checkout, which stays a manual edit (the registry is a git repository).
  *  A partial patch throughout: an absent field is untouched, which is what
@@ -290,6 +294,8 @@ export interface UpdateWorkspaceInput {
   review_allowed_commands?: string[];
   /** ADR 0072's workspace-scoped network egress lift. Empty removes it. */
   allowed_domains?: string[];
+  /** ADR 0395 決定2: the PR head repo as `owner/name`. Provided → checked and set (a dangerous value); empty string → removed. */
+  head_repo?: string;
   /** Consent to every dangerous value in this payload, not to unprotecting
    *  alone (ADR 0061 決定1) — one boolean, the refusal's reason codes say
    *  what it bought. */
@@ -302,7 +308,8 @@ export interface UpdateWorkspaceInput {
 export type DangerousWorkspaceValueReason =
   | "unprotect"
   | "review_allowed_commands_set"
-  | "allowed_domains_set";
+  | "allowed_domains_set"
+  | "head_repo_set";
 
 /** Pure judgment of which values in *this payload* widen what agents may do
  *  (ADR 0061 決定2): removing protection, and setting the review write-floor
@@ -311,13 +318,97 @@ export type DangerousWorkspaceValueReason =
  *  absent, and the empty array (clearing the list) moves in the safe
  *  direction and asks nothing. */
 function dangerousWorkspaceValues(
-  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands" | "allowed_domains">,
+  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands" | "allowed_domains" | "head_repo">,
 ): DangerousWorkspaceValueReason[] {
   const reasons: DangerousWorkspaceValueReason[] = [];
   if (input.protected === false) reasons.push("unprotect");
   if (input.review_allowed_commands?.length) reasons.push("review_allowed_commands_set");
   if (input.allowed_domains?.length) reasons.push("allowed_domains_set");
+  // ADR 0395 決定2: replacing the head repo goes through the gate; removing it moves to the closed side
+  if (input.head_repo) reasons.push("head_repo_set");
   return reasons;
+}
+
+/** ADR 0395 決定2: a head repo value the door refuses — no confirmation buys it. */
+export class HeadRepoRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HeadRepoRejectedError";
+  }
+}
+
+/** The head repo's parent, read from GitHub with the head repo's own token (#3558). Unreadable → refused. */
+async function readHeadRepoParent(value: string, github: GitHubClient | undefined): Promise<{ head: RepoSlug; parent: RepoSlug | null }> {
+  const head = parseGitHubRepo(value);
+  if (!head) throw new HeadRepoRejectedError(`head repo ${repositoryLabel(value)} must be a GitHub repository written as owner/name.`);
+  const label = `${head.owner}/${head.name}`;
+  const unreadable = (why: string) =>
+    new HeadRepoRejectedError(`the parent of head repo ${label} could not be read from GitHub, so it is refused (${why}). Install the App on its owner and try again.`);
+  if (!github) throw unreadable("the board has no GitHub identity");
+  try {
+    return { head, parent: await github.repositoryParent(head) };
+  } catch (err) {
+    throw unreadable(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** ADR 0395 決定2: head repo ≠ the declared `repo`, ≠ the registry's repo, and its parent = the declared `repo`. */
+function assertHeadRepoFits(name: string, entry: WorkspaceEntry, { head, parent }: { head: RepoSlug; parent: RepoSlug | null }, registryDir: string, path: string): void {
+  const label = `${head.owner}/${head.name}`;
+  if (entry.repo === undefined) throw new HeadRepoRejectedError(`workspace "${name}" declares no repo, so it cannot have a head repo; publish it first.`);
+  if (sameRepository(label, entry.repo)) throw new HeadRepoRejectedError(`head repo ${label} is workspace "${name}"'s own repo; it must be a fork of it.`);
+  const registry = workspaceProtectionReader(registryDir)({ repo: label }, path);
+  if (registry?.reason === "registry_repository") {
+    throw new HeadRepoRejectedError(`head repo ${label} is the registry's repository; it must be a fork of workspace "${name}"'s repo.`);
+  }
+  if (registry?.reason === "unreadable_registry_origin") {
+    throw new HeadRepoRejectedError(`the origin of the registry clone cannot be read, so head repo ${label} cannot be told apart from the registry's repository; repair the registry checkout first.`);
+  }
+  const parentLabel = parent && `${parent.owner}/${parent.name}`;
+  if (parentLabel === null || !sameRepository(parentLabel, entry.repo)) {
+    throw new HeadRepoRejectedError(`head repo ${label} is not a fork of ${repositoryLabel(entry.repo)}: GitHub reports its parent as ${parentLabel ?? "none (it is no fork)"}.`);
+  }
+}
+
+/** Points the checkout's head repo remote at `url`, or removes it. Not `git remote remove`: that also drops remote-tracking refs and
+ *  `branch.*.remote` (#3197). */
+function pointHeadRemote(path: string, url: string | undefined): void {
+  const present = readCheckoutOrigin(path, "first", HEAD_REPO_REMOTE) !== undefined;
+  if (url === undefined) {
+    if (present) git(path, "config", "--remove-section", `remote.${HEAD_REPO_REMOTE}`);
+  } else {
+    git(path, "remote", present ? "set-url" : "add", HEAD_REPO_REMOTE, url);
+  }
+}
+
+/** ADR 0395 決定2 with ADR 0391 決定1〜3's order: announce `[before, next]`, then the remote and the registry commit with no await in
+ *  between; the check folds the row once the declaration and the remote agree. A death midway leaves a row the check folds by itself
+ *  (before the registry commit: back, once the remote is put back as its mismatch text says; after it: forward). */
+function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined, now: () => Date, commit: () => void): void {
+  const { name, path } = workspace;
+  // a head repo edited outside the door is not passed over by it (ADR 0373 決定13 の線)
+  assertRememberedHeadRepo(db, workspace, now());
+  const before = readCheckoutOrigin(path, "first", HEAD_REPO_REMOTE) ?? undefined;
+  announceHeadRepo(db, name, workspace.head_repo, next);
+  try {
+    pointHeadRemote(path, next === undefined ? undefined : networkDestination(next, path).url);
+    commit();
+  } catch (err) {
+    const failures: unknown[] = [];
+    for (const step of [() => pointHeadRemote(path, before), () => assertRememberedHeadRepo(db, workspace, now())]) {
+      try {
+        step();
+      } catch (failure) {
+        failures.push(failure);
+      }
+    }
+    if (failures.length > 0) {
+      const text = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
+      throw new Error(`setting the head repo of workspace ${name} failed: ${text(err)}; rolling it back failed: ${failures.map(text).join("; ")}`, { cause: err });
+    }
+    throw err;
+  }
+  assertRememberedHeadRepo(db, { ...workspace, head_repo: next }, now());
 }
 
 /** A payload carrying dangerous values arrived without `confirm` (issue #57,
@@ -355,8 +446,17 @@ export class WorkspaceRegistryUnprotectError extends Error {
   }
 }
 
-export async function updateWorkspace(input: UpdateWorkspaceInput, deps: WorkspaceAdminDeps): Promise<void> {
+/** The update door's deps: the board db remembers the head repo, and `github` reads its parent (ADR 0395 決定2). */
+export interface UpdateWorkspaceDeps extends WorkspaceAdminDeps {
+  db: Db;
+  github?: GitHubClient;
+  clock?: Clock;
+}
+
+export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateWorkspaceDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  // the one GitHub read comes before the registry read, so nothing awaits between that read and the commit (ADR 0066 決定5 の線)
+  const head = input.head_repo ? await readHeadRepoParent(input.head_repo, deps.github) : undefined;
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -376,6 +476,8 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (input.allowed_domains !== undefined) {
     assertValidAllowedDomains(input.allowed_domains);
   }
+  const path = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
+  if (head) assertHeadRepoFits(input.name, entry, head, deps.registry.dir, path);
   const dangerous = dangerousWorkspaceValues(input);
   if (dangerous.length > 0 && input.confirm !== true) {
     throw new WorkspaceConfirmationRequiredError(input.name, dangerous);
@@ -399,7 +501,15 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
     if (input.allowed_domains.length === 0) delete next.allowed_domains;
     else next.allowed_domains = input.allowed_domains;
   }
-  commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
+  const commit = () => commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
+  if (input.head_repo === undefined) {
+    commit();
+    return;
+  }
+  if (input.head_repo === "") delete next.head_repo;
+  else next.head_repo = input.head_repo;
+  const now = () => (deps.clock ?? new SystemClock()).now();
+  writeHeadRepo(deps.db, { name: input.name, path, repo: entry.repo, head_repo: entry.head_repo }, next.head_repo, now, commit);
 }
 
 /** ADR 0087 決定1/4 の workspace 半分: registry エントリだけを committed main から

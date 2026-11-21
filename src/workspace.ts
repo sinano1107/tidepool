@@ -67,6 +67,7 @@ import {
   workspaceNetworkDestination,
 } from "./github-auth.js";
 import {
+  assertHeadRemoteMatchesDeclaration,
   assertOwnGitDirectory,
   assertRemoteDeclarationMatchesClone,
   checkoutPickupPredicates,
@@ -174,8 +175,10 @@ export interface WorkspaceConfig {
   branch?: string;
   /** ADR 0378 決定1: the registry declares the network destination in `repo`. An absent value declares a purely-local workspace. */
   repo?: string;
+  /** ADR 0395 決定2: the declared PR head repo (a fork of `repo`). */
+  head_repo?: string;
   /** ADR 0378 決定7・8: board operations recheck the live declaration before using its destination. */
-  checkRememberedRepo?: (place: WorkspaceConfig) => Pick<WorkspaceConfig, "path" | "repo">;
+  checkRememberedRepo?: (place: WorkspaceConfig) => Pick<WorkspaceConfig, "path" | "repo" | "head_repo">;
   /** Command prefixes a review session may run despite the `manual` write
    *  floor (issue #144 / ADR 0035), passed through from the registry entry the
    *  same way `branch` is. Absent → none: a `WorkspaceConfig` built outside the
@@ -269,6 +272,7 @@ export function resolveExecutionWorkspace(
     path,
     branch: entry.branch,
     repo: entry.repo,
+    head_repo: entry.head_repo,
     review_allowed_commands: entry.review_allowed_commands,
     allowed_domains: entry.allowed_domains,
   };
@@ -2168,6 +2172,7 @@ export function listRegisteredWorkspaces(
     path: entryCheckoutPath(entry, name, workspacesBaseDir),
     branch: entry.branch,
     repo: entry.repo,
+    head_repo: entry.head_repo,
     review_allowed_commands: entry.review_allowed_commands,
     allowed_domains: entry.allowed_domains,
   }));
@@ -2818,6 +2823,61 @@ export function assertRememberedRepo(db: Db, workspace: WorkspaceConfig, now: Da
   throw mismatch;
 }
 
+function readRememberedHeadRepo(db: Db, name: string): (string | null)[] {
+  const saved = db.prepare("SELECT remembered_head_repo FROM workspace_state WHERE name = ?").pluck().get(name) as string | null | undefined;
+  return saved == null ? [null] : rememberedValues(saved);
+}
+
+function writeRememberedHeadRepo(db: Db, name: string, value: string | null): void {
+  db.prepare(
+    `INSERT INTO workspace_state (name, remembered_head_repo) VALUES (?, ?)
+     ON CONFLICT(name) DO UPDATE SET remembered_head_repo = excluded.remembered_head_repo`,
+  ).run(name, value);
+}
+
+/** ADR 0391 決定1 の形を出元 repo に: the update door announces `[before, next]` before it touches the checkout or the registry,
+ *  so a door that dies midway leaves a row the check folds by itself. The row is made when the workspace has none yet. */
+export function announceHeadRepo(db: Db, name: string, before: string | undefined, next: string | undefined): void {
+  writeRememberedHeadRepo(db, name, JSON.stringify([before ?? null, next ?? null]));
+}
+
+/** ADR 0395 決定2: the declared head repo must be the one the door remembered — compared on every destination decision and in the
+ *  pickup predicate like the remembered repo (ADR 0378 決定6〜8), but nothing remembered never learns: a head repo added outside the
+ *  door is a workspace stop, with or without a baseline. */
+export function assertRememberedHeadRepo(db: Db, workspace: WorkspaceConfig, now: Date): void {
+  const { name, head_repo: declared } = workspace;
+  const values = readRememberedHeadRepo(db, name);
+  const agreed = values.findIndex((value) => value === null ? declared === undefined : declared !== undefined && sameRepository(value, declared));
+  if (agreed >= 0) {
+    // ADR 0391 決定3: fold only once the checkout's head repo remote agrees too
+    if (values.length > 1 && headRemoteAgrees(workspace)) {
+      const value = values[agreed]!;
+      writeRememberedHeadRepo(db, name, value === null ? null : JSON.stringify(value));
+    }
+    return;
+  }
+  const remembered = values[0] ?? null;
+  const reason = remembered === null
+    ? `workspace ${name} declares head repo ${repositoryLabel(declared!)}, but the board never recorded one for it. Remove \`head_repo:\` and answer; to give the workspace a head repo, set it in the workspace settings.`
+    : declared === undefined
+      ? `workspace ${name} was given head repo ${repositoryLabel(remembered)}, but its registry entry no longer declares one. Put \`head_repo:\` back and answer; to remove it, use the workspace settings.`
+      : `workspace ${name} was given head repo ${repositoryLabel(remembered)}, but its registry entry now says ${repositoryLabel(declared)}. Put \`head_repo:\` back and answer; to change it, use the workspace settings.`;
+  const mismatch = new WorkspaceRepoMismatchError(reason);
+  // Workspace Quarantine adds its own punctuation after the reason.
+  quarantineWorkspace(db, name, reason.slice(0, -1), now);
+  throw mismatch;
+}
+
+function headRemoteAgrees(workspace: WorkspaceConfig): boolean {
+  try {
+    assertHeadRemoteMatchesDeclaration(workspace);
+    return true;
+  } catch (err) {
+    if (err instanceof OriginRepositoryMismatchError) return false;
+    throw err;
+  }
+}
+
 export function withRememberedRepoCheck<T extends WorkspaceConfig>(
   db: Db,
   workspace: T,
@@ -2830,11 +2890,13 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
       // ADR 0066 決定5 / ADR 0378 決定7: a token lookup can span publish's synchronous update, so check the current declaration.
       const current = resolveCurrent?.(place.name) ?? place;
       assertRememberedRepo(db, current, now());
+      assertRememberedHeadRepo(db, current, now());
       if (current.path !== place.path) {
         throw new OriginRepositoryMismatchError(`workspace ${place.name}: the registered checkout path changed during the operation. Retry with the current entry.`);
       }
       // ADR 0378 決定3: an earlier pickup predicate only checked the declaration it was given.
       if (current.repo !== place.repo) assertRemoteDeclarationMatchesClone(current);
+      if (current.head_repo !== place.head_repo) assertHeadRemoteMatchesDeclaration(current);
       return current;
     }),
   };

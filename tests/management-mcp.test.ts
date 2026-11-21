@@ -3,7 +3,7 @@ import { BuiltInAgentNotEditableError } from "../src/agent-create.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
-import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
+import { InvalidAllowedDomainError, InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { HANDOFF_FIELDS, logDecision, registerTask } from "../src/tasks.js";
@@ -14,17 +14,19 @@ import {
   LiveCheckoutSignalsError,
   type PublishWorkspaceInput,
   type UpdateWorkspaceInput,
+  updateWorkspace,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
   WorkspaceRegistryUnprotectError,
 } from "../src/workspace-create.js";
-import { FakeDraftClient } from "./fakes.js";
+import { FakeDraftClient, FakeGitHubClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
   HOUR,
   HUMAN_WEBUI,
   holdChildren,
+  makeWorkspace,
   managementMcpClient,
   queueChild,
   queueWork,
@@ -32,6 +34,7 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -114,6 +117,33 @@ it("update_workspace は confirm を持たず、危険な値は WebUI への案�
 
     const { tools } = await client.listTools();
     expect((tools.find((tool) => tool.name === "update_workspace") as any).inputSchema.properties.confirm).toBeUndefined();
+  } finally {
+    await client.close();
+  }
+});
+
+// ADR 0395 決定2 / ADR 0088: 出元 repo の差し替えは危険な値で、確認の無いこの扉では買えない。検査に落ちる値は検査の文で拒む
+it("update_workspace の出元 repo の差し替えは危険な値として WebUI へ案内され、検査に落ちる値はその理由で拒まれる", async () => {
+  const checkout = await makeWorkspace("lagoon");
+  const registryDir = await makeRegistry({
+    "workspaces.yaml": `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n`,
+  });
+  const github = new FakeGitHubClient();
+  github.scriptRepositoryParent("acme/fork", "acme/lagoon");
+  const registry = { dir: registryDir, mode: "purely-local" as const };
+  t = await bootTidepool({ workspaceAdmin: { update: (input) => updateWorkspace(input, { db: t.db, github, registry, workspacesBaseDir: t.dir }) } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const replaced: any = await client.callTool({ name: "update_workspace", arguments: { name: "lagoon", head_repo: "acme/fork" } });
+    expect(replaced.isError).toBe(true);
+    expect(replaced.content[0].text).toBe("dangerous values (head_repo_set) require human confirmation; confirm and save this in the WebUI's settings screen.");
+
+    const unreadable: any = await client.callTool({ name: "update_workspace", arguments: { name: "lagoon", head_repo: "acme/private-fork" } });
+    expect(unreadable.isError).toBe(true);
+    expect(unreadable.content[0].text).toBe(
+      "the parent of head repo acme/private-fork could not be read from GitHub, so it is refused (gh: Not Found (HTTP 404) for repos/acme/private-fork). Install the App on its owner and try again.",
+    );
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon?.head_repo).toBeUndefined();
   } finally {
     await client.close();
   }
