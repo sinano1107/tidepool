@@ -21,6 +21,7 @@ import {
 import {
   breakCheckoutStaging,
   commitWork,
+  damageNamedBlobHeldByWorker,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -854,6 +855,57 @@ it.each(["corrupt", "renamed"] as const)("入れ直しに要る blob の worker 
   }
 });
 
+it("未決着の work の commit が名前の場所で欠けた blob を直に指せば、解放は名前の場所の quarantine で、task を失敗にせず checkout を残す(ADR 0364 決定2 / ADR 0367 決定4)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const { blob } = damageNamedBlobHeldByWorker(ws.path, place.path);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(blob);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
+    expect(listChildren(db, task.id)).toEqual([]);
+    expect(readFileSync(join(place.path, "copy.txt"), "utf8")).toBe("workspace\n");
+  } finally {
+    db.close();
+  }
+});
+
+it("work の commit が名前の場所で欠けた blob を直に指せば、完了の門は名前の場所の側で拒み、task/<id> を書かない(ADR 0364 決定2 / ADR 0359 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const { blob } = damageNamedBlobHeldByWorker(ws.path, place.path);
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+
+    expect(() => gateFetch(db, place, task)).toThrow(namedPlaceRefusal(blob));
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了済み review の pack に入る blob の名前に worker が別の object の中身を置けば、--strict の文が名前の場所の欠けと同じでも worker の repo の故障で、名前の場所を quarantine しない(ADR 0364 決定2 / ADR 0367 決定3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    commitWork(place.path, "only.txt", "only worker copy\n");
+    const blob = git(place.path, "rev-parse", "HEAD:only.txt");
+    const bytes = workerCopyDamages.renamed(place.path);
+    rmSync(looseObject(place.path, blob));
+    writeFileSync(looseObject(place.path, blob), bytes);
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(writeObservations(db, task)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.stringContaining(`did not receive expected object ${blob}`) },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
 it("worker が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、完了の門は worker の repo の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const { db, task, ws, place } = await pickedUpSession("work", (named) => {
     mkdirSync(join(named.path, "sub"));
@@ -868,6 +920,24 @@ it("worker が借りている tree の id に壊れた loose を書けば、自�
     commitWork(place.path, "more.txt", "more\n");
 
     expect(() => gateFetch(db, place, task)).toThrow(CheckoutUnreadableError);
+  } finally {
+    db.close();
+  }
+});
+
+it.each(["missing", "corrupt"] as const)("完了済み review の commit が名前の場所で %s の blob を直に指せば、worker が自前で持っていても検証の段は名前の場所の失敗で、名前の場所を quarantine して checkout と commit を残す(ADR 0364 決定2 / ADR 0367 決定3)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession("review");
+  try {
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const { blob } = damageNamedBlobHeldByWorker(ws.path, place.path, damage);
+    const commit = git(place.path, "rev-parse", "HEAD");
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(blob);
+    expect(writeObservations(db, task)).toEqual([]);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(false);
+    expect(git(place.path, "rev-parse", `task/${task.id}`)).toBe(commit);
   } finally {
     db.close();
   }

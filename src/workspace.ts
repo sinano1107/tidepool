@@ -782,12 +782,18 @@ function copyUntrustedFile(read: UntrustedRead, rel: string, to: string): void {
   }
 }
 
-/** `from` の `objects`(行ごとの object)を1つの pack にして `to` で `index-pack --strict` し、pack の path(拡張子なし)を返す。 */
-function packAndIndex(deadline: number, from: string, to: string, objects: string): string {
+/** `from` の `objects`(行ごとの object)を `to` の objects/pack に1つの pack にし、index の無い pack の path(拡張子なし)を返す。 */
+function packWithoutIndex(deadline: number, from: string, to: string, objects: string): string {
   const packBase = join(to, "objects", "pack", "pack");
   const pack = `${packBase}-${workerRepoGitUntil(deadline, from, ["pack-objects", "--quiet", packBase], objects && `${objects}\n`)}`;
   // pack-objects の idx は `from` の loose の名前(worker が付けたもの)を信じる —— 捨てて中身から作り直す
   for (const derived of [".idx", ".rev"]) rmSync(`${pack}${derived}`, { force: true });
+  return pack;
+}
+
+/** `from` の `objects` を1つの pack にして `to` で `index-pack --strict` し、pack の path(拡張子なし)を返す。 */
+function packAndIndex(deadline: number, from: string, to: string, objects: string): string {
+  const pack = packWithoutIndex(deadline, from, to, objects);
   workerRepoGitUntil(deadline, to, ["index-pack", "--strict", `${pack}.pack`]);
   return pack;
 }
@@ -817,12 +823,56 @@ function copyAndVerifyUntrustedTip(place: UntrustedCheckout, read: UntrustedRead
     }
     // ADR 0364 決定1: Interview の2役は閉包が全部写しの中で解けること —— 受験者が sha を言い当てても兄弟の答案は記録に入らない
     const objects = workerRepoGitUntil(deadline, raw, ["rev-list", "--objects", sha, ...(place.borrowsNamedObjects ? ["--not", "--alternate-refs"] : [])]);
-    packAndIndex(deadline, raw, verified, objects);
+    const pack = packWithoutIndex(deadline, raw, verified, objects);
+    try {
+      workerRepoGitUntil(deadline, verified, ["index-pack", "--strict", `${pack}.pack`]);
+    } catch (cause) {
+      // 上限超過は worker の repo の故障(ADR 0357 決定2)、写しの tmp の容量切れは host の失敗のまま —— 確かめ直さない
+      if (place.borrowsNamedObjects && !(cause instanceof WorkerTreeGitTimeoutError) && !outOfSpace(verified, cause)) blameLinksOutsidePack(place, read, sha, pack, objects, verified, format, cause);
+      throw cause;
+    }
     workerRepoGitUntil(deadline, verified, ["update-ref", ref, sha]);
   } catch (cause) {
+    if (cause instanceof NamedPlaceFetchError) throw cause;
     const failure = asUntrustedFailure(read, cause);
     throw failure !== cause && outOfSpace(raw, cause) ? copyHostError(read.noun, cause) : failure;
   }
+}
+
+/** ADR 0364 決定2: 名前の場所を借りる `verified` の `index-pack --strict` は、pack の中の worker の byte の失敗も、pack の外の link(除外で
+ *  名前の場所が供給する側)が名前の場所で読めない失敗も同じ文で落とす —— stderr でも名前の場所への問い合わせでも分けられない(worker が改名した
+ *  object も名前の場所に無い)。ADR 0388 決定2 の `verifyOwnObjects` と同じく worker の byte だけを先に確かめ直す: pack を名前の場所を借りない
+ *  repo へ移して中身から index し(`--fsck-objects` は object そのものを検査し、繋がりは見ない)、中身から作った id が pack に入れた列を全部
+ *  覆えば、落ちた link は pack の外 —— 名前の場所の失敗として、読めない object を名指して投げる。覆わない・確かめ直しが落ちるなら戻り、呼び手が
+ *  元の失敗を worker の repo の故障にする。上限超過(段の上限の中、ADR 0364 決定3)と写しの tmp の容量切れは型のまま投げる。 */
+function blameLinksOutsidePack(place: UntrustedCheckout, read: UntrustedRead, sha: string, pack: string, objects: string, verified: string, format: string, failure: unknown): void {
+  const bytes = join(dirname(verified), "bytes");
+  const moved = join(bytes, "objects", "pack", basename(pack));
+  hostStep(read.noun, () => {
+    initBoardCopy(bytes, format);
+    renameSync(`${pack}.pack`, `${moved}.pack`);
+  });
+  let packed: Set<string>;
+  try {
+    workerRepoGitUntil(read.deadline, bytes, ["index-pack", "--fsck-objects", `${moved}.pack`]);
+    packed = new Set(workerRepoGitUntil(read.deadline, bytes, ["verify-pack", "-v", `${moved}.idx`]).split("\n").map((line) => line.split(" ")[0]!));
+  } catch (cause) {
+    if (cause instanceof WorkerTreeGitTimeoutError || outOfSpace(bytes, cause)) throw cause;
+    return;
+  }
+  if (!objects.split("\n").filter(Boolean).every((line) => packed.has(line.split(" ")[0]!))) return;
+  // 名指すだけ —— pack が指して持たない object(`?` の行)のうち名前の場所で読めないもの。名指せなくても帰責は変わらない
+  let outside: string[] = [];
+  try {
+    outside = workerRepoGitUntil(read.deadline, bytes, ["rev-list", "--objects", "--missing=print", sha]).split("\n").filter((line) => line.startsWith("?")).map((line) => line.slice(1));
+  } catch {
+    // 名指さずに言う
+  }
+  const ids = outside.length > 0 ? unreadableIds(verified, outside, `${outside.join("\n")}\n`, failure) : [];
+  throw new NamedPlaceFetchError(
+    `workspace ${place.namedPlace.name}: ${read.noun}'s tip ${sha} links ${ids.join(", ") || "an object"} that the named workspace should hold but cannot read`,
+    { cause: failure },
+  );
 }
 
 /** 盤面が git を撃たずに tip を読む checkout —— task の checkout(ADR 0364 決定1)と作業台(ADR 0371 決定4)。在り処、作った元の
