@@ -9,6 +9,7 @@ import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead } from "./fakes.js
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace } from "./harness.js";
 import {
   afterEachPush,
+  answerHoldOnPr,
   answerMergeQuestion,
   autoMerging,
   boardEvents,
@@ -143,20 +144,13 @@ const listedRefusal = (head: string, lastPushed: string, commits: Array<[string,
 /** PR #1 の開いている merge question。 */
 const openQuestion = (pr: Awaited<ReturnType<typeof openPushedPr>>) => listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
 
-/** PR #1 の開いている merge question への人間の「hold」。答えた question を返す。 */
-async function answerHold(pr: Awaited<ReturnType<typeof openPushedPr>>) {
-  const question = getTask(pr.db, openQuestion(pr).id)!;
-  await submitAnswer({ ...pr, pollNow: () => {} }, question, ["hold"], undefined, () => pr.clock.now(), "webui");
-  return question;
-}
-
 // ADR 0394 決定5・7: tick の question への hold も同じ記録を刻む。tick はキューの行を外しているので立て直さない
 it("tick が立てた盤面の知らない commit の merge question に「hold」と答えると、question の内容を根に刻み、次の tick は question を立て直さない", async () => {
   const pr = await openPushedPr("outside-head-tick-held", "auto_if_ci_green");
   const head = await pushOutsideBoard(pr.workspace, pr.work.id);
   await pr.landing.tick("auto_merge", pr.clock.now());
 
-  const held = await answerHold(pr);
+  const held = await answerHoldOnPr(pr);
 
   expect(boardEvents(pr.db, pr.work.id, "landing_declined")).toEqual([{
     actor_id: BOARD_ACTOR_ID,
@@ -174,7 +168,7 @@ it("CI 赤の merge question が開いた後に head が外から進んでも、
   await pr.landing.tick("auto_merge", pr.clock.now());
   await pushOutsideBoard(pr.workspace, pr.work.id);
 
-  const held = await answerHold(pr);
+  const held = await answerHoldOnPr(pr);
 
   expect(getTask(pr.db, held.id)).toMatchObject({ status: "done", question_answer: ["hold"] });
   expect(boardEvents(pr.db, pr.work.id, "landing_declined").map(({ payload }) => payload)).toEqual([

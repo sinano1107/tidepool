@@ -8,7 +8,6 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import { submitAnswer } from "../src/human-verbs.js";
 import {
   closedRootOf,
   createLanding,
@@ -78,6 +77,7 @@ import {
 import {
   agentQuarantines,
   announceThenCrash,
+  answerHoldOnPr,
   answerLocalMerge,
   answerMerge,
   answerMergeQuestion,
@@ -1146,8 +1146,8 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
   },
 );
 
-// ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着の後の収束は、
-// 刻んだ head から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
+// ADR 0225 / ADR 0394 決定5: abandon promotion が断念するのは question が問うた内容の昇格。付帯子の決着の後の収束は、
+// question が問うた tip から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
 /** 完了した work の PR 昇格を失敗させ、人間が abandon promotion と答えた形。`askedTip: false` は tip を読めずに立った
  *  失敗 question への回答 —— 断った内容に tip が無い。 */
 async function abandonedPromotion(name: string, { askedTip = true } = {}) {
@@ -1213,7 +1213,11 @@ it("昇格失敗の question を立てた後に修理が届いてから abandon 
   await answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion");
   await landing.converge();
 
-  expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+  expect(openPromotionQuestions(db, work.id).map(({ title, purpose }) => ({ title, purpose }))).toEqual([{
+    title: "PR promotion re-asked: ship",
+    purpose: `PR promotion for completed task "ship" was abandoned, but task/${work.id} no longer matches ` +
+      "(or could not be compared with) the content that question asked about. Promote the current content?",
+  }]);
 });
 
 /** 付帯子を登録して決着させる。`repair` があれば盤面の経路で親のブランチの内容を変える: 拾い(親のブランチから fork)、task の
@@ -1317,7 +1321,7 @@ it("PR 昇格を abandon した後に内容が変わっても、別の付帯子�
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
 });
 
-it("立て直した question にもう一度 abandon と答えるとその時点の head が刻まれ、内容を変えない次の決着では何も起きない", async () => {
+it("立て直した question にもう一度 abandon と答えるとその question が問うた tip が刻まれ、内容を変えない次の決着では何も起きない", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-again");
   await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await landing.converge();
@@ -1464,8 +1468,7 @@ it("abandon → retry で PR が開く → PR の merge question に hold、の�
   await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await landing.converge();
   await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "retry");
-  const merge = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1 && q.status === "todo")!.id)!;
-  await submitAnswer({ db, pollNow: () => {}, landing, workspace }, merge, ["hold"], undefined, () => clock.now(), "webui");
+  await answerHoldOnPr({ db, clock, landing, workspace });
   const pushed = github.pushes.length;
 
   await settleAttachedChild(db, clock, workspace, work.id, "second-repair");
@@ -2444,7 +2447,7 @@ it("着地の比較: 断念した根の最初の撮りの確認が registry を�
   expect(holdsBaseline(db, rowless.name)).toBe(false);
 });
 
-it("着地の比較: head を刻めなかった断念の根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {
+it("着地の比較: tip を読めずに立った question を断念した根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {
   const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-abandoned-no-head");
   registerPrPromotionFailureQuestion(db, work, "token expired", clock.now());
   await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "abandon promotion");

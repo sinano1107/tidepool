@@ -608,6 +608,16 @@ export function answerMergeQuestion({
   );
 }
 
+/** PR #1 の開いている merge question。 */
+export const openPrMergeQuestion = (db: Db) => listBoard(db).find((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
+
+/** PR #1 の開いている merge question に人間が「hold」と答える。答えた question を返す。 */
+export async function answerHoldOnPr({ db, clock, landing, workspace, github }: { db: Db; clock: FakeClock; landing: Landing; workspace: WorkspaceConfig; github?: FakeGitHubClient }) {
+  const question = getTask(db, openPrMergeQuestion(db)!.id)!;
+  await submitAnswer({ db, pollNow: () => {}, landing, workspace, github }, question, ["hold"], undefined, () => clock.now(), "webui");
+  return question;
+}
+
 /** `dropRepairOutsideBoard` の形を作業台の在る根で作る: 修理を merge back して収束が push した後、別の clone が PR のブランチを修理より前へ
  *  巻き戻す。 */
 export async function droppedRepair(name: string) {

@@ -3318,7 +3318,8 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
   return id;
 }
 
-/** `taskIdForPr` の引けない場合を undefined で返す形 —— 引けなくても回答を拒まない hold が使う。 */
+/** `taskIdForPr` の引けない場合を undefined で返す形。ADR 0394 決定5: hold は拒まないので、根が引けなくても回答は通る —— PR の記録は
+ *  それを開いた根に刻む(ADR 0265 決定1)ので、根が無ければ刻む先が無く、断った記録は書かない。 */
 export function rootOfPr(db: Db, prNumber: number, workspace: string | null): string | undefined {
   const row = db.prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?").get(prNumber, workspace) as { id: string } | undefined;
   return row?.id;

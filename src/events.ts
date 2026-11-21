@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields, MemoryJudgmentItem } from "./memory.js";
 import type { Provider } from "./provider.js";
+import type { PrMergeQuestionContent } from "./question-kind.js";
 import type { RoutingJudgmentItem, RoutingObject } from "./routing-review.js";
 import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
@@ -320,7 +321,7 @@ export type EventPayload =
       kind: "landing_declined";
       question_id: string;
       tip: string | null;
-      outside: { kind: "rewritten" | "not_pushed"; sha: string } | null;
+      outside: PrMergeQuestionContent["outside"];
       missing_branches: string[] | null;
     }
   // ADR 0289 決定1: ローカル着地の merge 回答が保護ブランチに置いた commit(ff ならタスクブランチの tip、追いつきなら

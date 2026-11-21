@@ -718,7 +718,7 @@ it("PR promotion の abandon を decision log に残す", async () => {
     status: "done",
     decision: {
       kind: "decision_logged",
-      line: `PR promotion abandoned for task ${completedTask.id} — this content stays on its task branch; a later change to the branch asks again`,
+      line: `PR promotion abandoned for task ${completedTask.id} — this content stays on its task branch; a change from the content this question asked about asks again`,
     },
   });
 });

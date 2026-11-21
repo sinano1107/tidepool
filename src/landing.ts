@@ -196,12 +196,19 @@ function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): T
 }
 
 type Declined = EventRowOf<"landing_declined">["payload"];
+/** 断った内容のうち、今の内容と比べる外の部分(PR の外の push の段だけが今の値を持つ)。 */
+type DeclinedOutside = Pick<Declined, "outside" | "missing_branches">;
+/** 断る回答を受ける question の種類(ADR 0394 決定5)。 */
+type DeclinableQuestion = Extract<QuestionKind, { kind: "pr_merge" | "local_merge" | "pr_promotion_retry" }>;
 
 /** ADR 0394 決定5: 断る回答が根に刻む記録 —— 答えた question が問うた内容を、その question の列から写す。 */
-export function landingDeclined(questionId: string, kind: Extract<QuestionKind, { kind: "pr_merge" | "local_merge" | "pr_promotion_retry" }>): Declined {
+export function landingDeclined(questionId: string, kind: DeclinableQuestion): Declined {
   const pr = kind.kind === "pr_merge" ? kind : undefined;
   return { kind: "landing_declined", question_id: questionId, tip: kind.tip, outside: pr?.outside ?? null, missing_branches: pr?.missingBranches ?? null };
 }
+
+/** 欠けたブランチの組 —— 並びは読み手の列挙の順に依るので、順に依らずに比べる。 */
+const branchSet = (branches: string[] | null) => JSON.stringify(branches && [...branches].sort());
 
 /** ADR 0394 決定5: 断った内容と今の内容が違うか —— 比べ方はここだけ。盤面の部分は tip の sha、外の部分は sha と種類の組で、写した全体を
  *  比べる(`current` は今の外の部分。PR の外の push の段だけが渡す)。tip が無い・読めない・workspace を解決できなければ「変わった」——
@@ -210,11 +217,11 @@ function declinedContentChanged(
   resolve: WorkspaceResolver | undefined,
   task: Task,
   declined: Declined,
-  current: Pick<Declined, "outside" | "missing_branches"> = { outside: null, missing_branches: null },
+  current: DeclinedOutside = { outside: null, missing_branches: null },
 ): boolean {
   if (declined.tip === null || !resolve) return true;
   if (declined.outside?.sha !== current.outside?.sha || declined.outside?.kind !== current.outside?.kind) return true;
-  if (JSON.stringify(declined.missing_branches) !== JSON.stringify(current.missing_branches)) return true;
+  if (branchSet(declined.missing_branches) !== branchSet(current.missing_branches)) return true;
   try {
     return questionTip(resolve(task.workspace), task.id) !== declined.tip;
   } catch {
@@ -222,34 +229,27 @@ function declinedContentChanged(
   }
 }
 
-const DECLINED_QUESTION_COLUMN = {
-  pr_merge: "question_pending_merge_pr",
-  local_merge: "question_pending_local_merge_task_id",
-  pr_promotion_retry: "question_pending_pr_promotion_task_id",
-} as const;
-
-/** ADR 0394 決定6: 根の断る記録のうち、`kind` の question を断った最新のもの —— 効いている間だけ返す。効かなくなる条件は種類ごと:
- *  abandon は後の retry が PR を開くか push したとき(ADR 0225 決定2)、ローカル着地の hold は merge の執行の記録(ADR 0289 決定1・3)、
- *  PR の hold はその PR の決着(ADR 0265)か、同じ PR に新しい question が立ったとき。 */
-function declineInForce(db: Db, taskId: string, kind: keyof typeof DECLINED_QUESTION_COLUMN): EventRowOf<"landing_declined"> | undefined {
-  const row = db
-    .prepare(
-      `SELECT e.* FROM events e JOIN tasks q ON q.id = json_extract(e.payload, '$.question_id')
-        WHERE e.task_id = ? AND e.kind = 'landing_declined' AND q.${DECLINED_QUESTION_COLUMN[kind]} IS NOT NULL ORDER BY e.id DESC LIMIT 1`,
-    )
-    .get(taskId);
-  if (row === undefined) return undefined;
-  const declined = parseEventRow(row) as EventRowOf<"landing_declined">;
-  if (kind === "pr_merge") {
-    const question = getTask(db, declined.payload.question_id)!;
-    const stillAsked = latestMergeQuestion(db, question.workspace, question.question_pending_merge_pr!)?.id === question.id;
-    return rootPrOutcome(db, taskId) === null && stillAsked ? declined : undefined;
+/** ADR 0394 決定6: 根の断る記録のうち、`kind` の question を断った最新のもの —— 効いている間だけ返す。種類は記録が指す question から
+ *  読む(`questionKindOf`)。効かなくなる条件は種類ごと: abandon は後の retry が PR を開くか push したとき(ADR 0225 決定2)、ローカル着地の
+ *  hold は merge の執行の記録(ADR 0289 決定1・3)、PR の hold はその PR の決着(ADR 0265)か、同じ PR に新しい question が立ったとき。 */
+function declineInForce(db: Db, taskId: string, kind: DeclinableQuestion["kind"]): EventRowOf<"landing_declined"> | undefined {
+  const rows = db.prepare("SELECT * FROM events WHERE task_id = ? AND kind = 'landing_declined' ORDER BY id DESC").all(taskId);
+  for (const row of rows) {
+    const declined = parseEventRow(row) as EventRowOf<"landing_declined">;
+    const question = getTask(db, declined.payload.question_id);
+    const asked = question && questionKindOf(question);
+    if (asked?.kind !== kind) continue;
+    if (asked.kind === "pr_merge") {
+      const stillAsked = latestMergeQuestion(db, question!.workspace, asked.pr)?.id === question!.id;
+      return rootPrOutcome(db, taskId) === null && stillAsked ? declined : undefined;
+    }
+    const ends = kind === "local_merge" ? ["local_merge_executed"] : ["pr_opened", "pr_branch_pushed"];
+    const ended = db
+      .prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN (${ends.map(() => "?").join(", ")}) AND id > ?`)
+      .get(taskId, ...ends, declined.id);
+    return ended === undefined ? declined : undefined;
   }
-  const ends = kind === "local_merge" ? ["local_merge_executed"] : ["pr_opened", "pr_branch_pushed"];
-  const ended = db
-    .prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN (${ends.map(() => "?").join(", ")}) AND id > ?`)
-    .get(taskId, ...ends, declined.id);
-  return ended === undefined ? declined : undefined;
+  return undefined;
 }
 
 export function landingBlock(db: Db, taskId: string): LandingBlock | null {
@@ -1300,7 +1300,7 @@ export function createLanding(deps: LandingDeps): Landing {
       throw error;
     }
   };
-  const changedSince = (task: Task, declined: Declined, current?: Pick<Declined, "outside" | "missing_branches">) =>
+  const changedSince = (task: Task, declined: Declined, current?: DeclinedOutside) =>
     declinedContentChanged(buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace), task, declined, current);
   /** 閉じた観測を根に刻んだ直後(ADR 0265 決定6): 閉じた根に塞がれて走らない子があれば、盤面名義の判断行を1行流す。
    *  観測は根に1回だけ刻まれるので、行も1つの観測に1回。子が無ければ流さない。 */
@@ -1412,8 +1412,8 @@ export function createLanding(deps: LandingDeps): Landing {
     /** ADR 0370 決定1: 断念・hold が写した tip を今のブランチと比べる前の比較。tip が無いか workspace を解決できなければ ref を読まない
      *  (`declinedContentChanged` は読まずに「変わった」と読む、ADR 0225 決定1 / ADR 0234 決定3)。比較そのものが落ちれば、比べていない
      *  ref で問い直さず根の失敗にする。 */
-    const compareBeforeChangedSince = (head: string | null): LandingVerdict | undefined => {
-      if (head === null) return undefined;
+    const compareBeforeChangedSince = (tip: string | null): LandingVerdict | undefined => {
+      if (tip === null) return undefined;
       let workspace: WorkspaceConfig | undefined;
       try {
         workspace = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
@@ -1453,16 +1453,15 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.db,
         task,
         `PR promotion re-asked: ${task.title}`,
-        `PR promotion for completed task "${task.title}" was abandoned. An attached child ` +
-          `settled afterwards, and ${taskBranch(task.id)} no longer matches (or could not be ` +
-          `compared with) the content abandoned then. Promote the current content?`,
+        `PR promotion for completed task "${task.title}" was abandoned, but ${taskBranch(task.id)} no longer matches ` +
+          "(or could not be compared with) the content that question asked about. Promote the current content?",
         deps.clock.now(),
         readQuestionTip(task),
       );
       return {
         kind: "failed",
         reason: "promotion_failed",
-        error: `the content of ${taskBranch(task.id)} changed after PR promotion was abandoned`,
+        error: `the content of ${taskBranch(task.id)} differs from the content PR promotion abandoned`,
       };
     }
     // ADR 0289 決定3: ローカル着地の hold は断念と同じ形で読む —— 門が閉じていれば待ち(記録は刻まない)、hold した内容のままなら
@@ -1654,9 +1653,9 @@ export function createLanding(deps: LandingDeps): Landing {
             return { kind: "landed", form: "merge_question", prNumber };
           }
           // ADR 0394 決定6・7: PR の hold が効き内容が同じなら問い直さない。retry は hold を外して新しく立てる(決定6)
-          const held = ctx.intake ? undefined : declineInForce(deps.db, task.id, "pr_merge");
-          if (held && !changedSince(task, held.payload, { outside: { kind: "rewritten", sha: head }, missing_branches: missingBranchesOf(outside) })) {
-            return { kind: "awaiting_held_question", prNumber, question: held.payload.question_id };
+          const prHold = ctx.intake ? undefined : declineInForce(deps.db, task.id, "pr_merge");
+          if (prHold && !changedSince(task, prHold.payload, { outside: { kind: "rewritten", sha: head }, missing_branches: missingBranchesOf(outside) })) {
+            return { kind: "awaiting_held_question", prNumber, question: prHold.payload.question_id };
           }
           return outsidePushStep(prNumber, outside);
         }

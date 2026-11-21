@@ -1865,7 +1865,7 @@ it("hold の後に内容が変わっていなければ、収束を2回撃って�
   expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([]);
 });
 
-it("立て直した local merge question に hold と答えるとその時点の head が刻まれ、以後の収束はその head を基準に立て直さない", async () => {
+it("立て直した local merge question に hold と答えるとその question が問うた tip が刻まれ、以後の収束はその tip を基準に立て直さない", async () => {
   const local = await landLocally("local-hold-again");
   const { workspace, db, landing, work } = local;
   await answerLocalMerge(local, "hold");

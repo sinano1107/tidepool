@@ -1944,7 +1944,7 @@ export async function submitAnswer(
       logDecision(
         deps.db,
         question,
-        `PR promotion abandoned for task ${kind.task_id} — this content stays on its task branch; a later change to the branch asks again`,
+        `PR promotion abandoned for task ${kind.task_id} — this content stays on its task branch; a change from the content this question asked about asks again`,
         HUMAN_ACTOR_ID,
         now(),
         origin,
