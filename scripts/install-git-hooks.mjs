@@ -4,15 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripRepoLocationGitEnv } from './repo-location-git-env.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const env = { ...process.env };
 // ADR 0349 決定2: target this package's checkout while retaining caller config restrictions.
-for (const name of [
-  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE', 'GIT_PREFIX',
-  'GIT_SHALLOW_FILE', 'GIT_GRAFT_FILE', 'GIT_CONFIG',
-]) delete env[name];
+const env = stripRepoLocationGitEnv({ ...process.env });
 const gitArgs = ['--git-dir', join(ROOT, '.git'), '--work-tree', ROOT];
 const gitOptions = { cwd: ROOT, encoding: 'utf8', env };
 function git(...args) {
