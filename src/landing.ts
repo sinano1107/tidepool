@@ -700,8 +700,9 @@ function answeredRootOf(db: Db, questionId: string): string | undefined {
   if (question?.question_pending_merge_pr == null) return undefined;
   try {
     return taskIdForPr(db, question.question_pending_merge_pr, question.workspace);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof DomainError) return undefined;
+    throw error;
   }
 }
 

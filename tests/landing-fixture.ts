@@ -292,7 +292,10 @@ export async function pushedRoot(
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const workbenchBase = await tempDir("tidepool-task-checkouts-");
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, workspacesDir: workbenchBase, resolveAuthority });
+  /** この盤面の landing を同じ材料で作る —— `pickupIdle` だけを足せる。 */
+  const landingWith = ({ pickupIdle }: { pickupIdle?: () => Promise<void> } = {}) =>
+    createLanding({ defaultAgentName: "tako", db, clock, workspace, github, workspacesDir: workbenchBase, resolveAuthority, pickupIdle });
+  const landing = landingWith();
   const work = landingWork(db, clock);
   const target = `task/${work.id}`;
   git(workspace.path, "checkout", "-b", target);
@@ -348,7 +351,7 @@ export async function pushedRoot(
         return (err as Error).message;
       },
     );
-  return { workspace, db, clock, github, landing, work: getTask(db, work.id)!, target, pushed, workbenchAt, workbench, d1, d2, expectNothingCarried, retry, mergeInWorkbench, answerMerge };
+  return { workspace, db, clock, github, landing, work: getTask(db, work.id)!, target, pushed, workbenchAt, workbench, d1, d2, expectNothingCarried, retry, mergeInWorkbench, answerMerge, landingWith };
 }
 
 /** 盤面の外の clone。origin のタスクブランチを force-push で `refspec` に書き換えるのに使う(巻き戻し・削除・push し直し)。 */

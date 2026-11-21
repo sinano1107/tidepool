@@ -145,8 +145,7 @@ it("retry が答えている根を回が撃たなければ、閉じた PR・未�
 /** `c` の盤面の収束で、回が始まる直前に `effect` を1回だけ走らせる —— 回答が収束を待つ間に根の状態が変わる形。 */
 const landingThatFirst = (c: Awaited<ReturnType<typeof pushedRoot>>, effect: () => void) => {
   let fired = false;
-  return createLanding({
-    defaultAgentName: "tako", db: c.db, clock: c.clock, workspace: c.workspace, github: c.github, resolveAuthority: () => profile("auto_if_ci_green"),
+  return c.landingWith({
     pickupIdle: async () => {
       if (!fired) effect();
       fired = true;
