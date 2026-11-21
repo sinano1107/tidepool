@@ -1229,8 +1229,8 @@ function advanceKeptWorkbench(named: WorkspaceConfig, workbench: string, target:
   );
 }
 
-/** 取り込みの手が受け取る束: 作業台の基点、入口、`workbench_taken_in` に残す回答者と時刻。 */
-export type IntakeContext = { workbenchBase: string; entry: IntakeEntry; answerer: Answerer; now: Date };
+/** 取り込みの手が受け取る束: 作業台の基点、入口、`workbench_taken_in` に残す回答者と、書く瞬間に読む時刻(#3384: 取り込みの前に await を挟む呼び手がある)。 */
+export type IntakeContext = { workbenchBase: string; entry: IntakeEntry; answerer: Answerer; now: () => Date };
 
 /** 取り込みの event の actor —— 回答者か呼び手(spec #3273 の識別子の表 / pin A5)。 */
 export type Answerer = { actorId: string; origin: EventOrigin };
@@ -1345,7 +1345,7 @@ function takeInWorkbench(
     ensureCarriedWhole(named, subjectOf(place), { own, tip, description: "the workbench tip" });
     const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
     advanceBranch(db, named, ref, old, commit);
-    appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
+    appendEvent(db, { taskId: null, ...answerer, at: now(), payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
     return { tip, commit };
   });
 }
@@ -1603,10 +1603,11 @@ async function captureFirstBaseline(
   board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: Date },
 ): Promise<void> {
   refuseWhileHeld(db, workspace.name, "open a workbench");
-  const named = withRememberedRepoCheck(db, workspace, () => board.now);
-  await preparedOrRefused(db, workspace, "open a workbench", board, async () => {
+  const now = () => board.now;
+  const named = withRememberedRepoCheck(db, workspace, now);
+  await preparedOrRefused(db, workspace, "open a workbench", { now }, async () => {
     await firePickupPredicates(db, named, checkoutPickupPredicates(named, board.fixedPoints), "before-open");
-    prepareRefBaseline(db, named, board);
+    prepareRefBaseline(db, named, { resolveRegistered: board.resolveRegistered, now });
   });
 }
 
@@ -1669,7 +1670,7 @@ async function preparedOrRefused(
   db: Db,
   workspace: WorkspaceConfig,
   verb: string,
-  board: { now: Date; github?: GitHubClient },
+  board: { now: () => Date; github?: GitHubClient },
   prepare: () => Promise<void>,
 ): Promise<void> {
   const stopped = (stop: ResourceStop) => quarantinedRefusal(verb, stop.value!, openQuarantineQuestion(db, "workspace", stop.value)!.id);
@@ -1682,9 +1683,9 @@ async function preparedOrRefused(
     if (err instanceof CheckoutHostError) throw new DomainError(`cannot ${verb}: ${err.message}`);
     const place = err instanceof PickupGateError ? err.place : workspace;
     if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {
-      throw stopped(quarantineWorkspace(db, place.name, err, board.now));
+      throw stopped(quarantineWorkspace(db, place.name, err, board.now()));
     }
-    throw stopped((await quarantineWithRepoAccessGuidance(db, board.github, place, err, () => board.now))!);
+    throw stopped((await quarantineWithRepoAccessGuidance(db, board.github, place, err, board.now))!);
   }
 }
 
@@ -1719,8 +1720,9 @@ export async function startHumanWork(
   await prepareHumanWork(db, workspace, task, verb, board);
   task = recheck();
   await preparedOrRefused(db, workspace, verb, board, async () => {
-    fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
-    createTaskBranch(db, workspace, task, board.now, filledFrom(db, task));
+    const now = board.now();
+    fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
+    createTaskBranch(db, workspace, task, now, filledFrom(db, task));
   });
   // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)
   let path: string;
@@ -1730,7 +1732,7 @@ export async function startHumanWork(
     if (isBoardDbRefusal(err)) throw err;
     throw new DomainError(`cannot start work: the board could not open the workbench (${err instanceof Error ? err.message : String(err)}); start work again.`);
   }
-  if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now, payload: { kind: "task_work_started" } });
+  if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now(), payload: { kind: "task_work_started" } });
   return path;
 }
 
@@ -1778,7 +1780,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
     if (hasWorkbench) {
       const place = workbenchPlace(named, realpathSync(at));
       taken = repointingOnRefusal(named, place.path, () =>
-        takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now }, {
+        takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now: () => now }, {
           humanWork: { again: "complete again", gone: workbenchGone(at, target, "complete") },
           returnValue: returnSha,
           beforeWrite: ({ tip, verified }) => assertMerges(tip, { ...named, path: verified }),
@@ -1835,7 +1837,7 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
   try {
     // ADR 0374 決定7: 取り込むものが無い拒否も、拒否として `board/*` を引き直す
     taken = repointingOnRefusal(named, place.path, () => {
-      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, {
+      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now: () => now }, {
         humanWork: { again: "take in again", gone },
         // ADR 0374 決定6: 人間が merge した帰り先の値も入力の tip —— 完了と同じ
         returnValue: returnBranchOf(db, named, task, "take in").sha,
@@ -1880,7 +1882,7 @@ export function takeInHumanContentWorkbench(db: Db, workspace: WorkspaceConfig, 
   const branch = protectedBranch(workspace);
   const at = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, workspace, branch);
   const shown = existsSync(at) ? realpathSync(at) : at;
-  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, () => intake.now))) {
+  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, intake.now))) {
     throw new Error(
       `workspace ${workspace.name} is remote-backed now, so ${branch} is changed on origin.${originRoute(workspace)} Commits you made in the workbench at ${shown} ` +
         "are not taken in: fetch them from the workbench into your own clone and carry them from there. Answer `close`.",
@@ -2527,16 +2529,17 @@ export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfi
   await preparePickupPlace(db, workspace, task, board);
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
-  fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
-  createTaskBranch(db, workspace, task, board.now);
-  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, board.now);
+  const now = board.now();
+  fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
+  createTaskBranch(db, workspace, task, now);
+  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, now);
 }
 
 type PickupPreparation = PickupPrep & {
   reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }>;
-  /** task の checkout の番地の基点と、開いた event の時刻(ADR 0356 決定2)。 */
+  /** task の checkout の番地の基点と、開いた event の時刻(ADR 0356 決定2)。時刻は準備の await の後、書く同期区間ごとに読む(#3384)。 */
   workspacesBaseDir: string;
-  now: Date;
+  now: () => Date;
   /** registry の名前を引く口(ADR 0373 決定13 の最初の撮りの確認が引く)。省けない —— 撮る呼び手が渡し忘れれば確認が黙って消える。
    *  undefined は registry の無い盤面で、確認は掛からない。 */
   resolveRegistered: WorkspaceResolver | undefined;
@@ -2635,12 +2638,12 @@ export class FirstCaptureRegistryReadError extends Error {
   }
 }
 
-function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
+function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: () => Date }): void {
   const key = workspace.name;
   const first = !holdsBaseline(db, key);
-  const declaration = withRememberedRepoCheck(db, workspace, () => board.now).checkRememberedRepo(workspace);
+  const declaration = withRememberedRepoCheck(db, workspace, board.now).checkRememberedRepo(workspace);
   if (!first) compareAndFoldBaseline(db, workspace, "while the checkout rested since the last session");
-  else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now);
+  else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now());
   const pin = storedSparsePolicy(db, key);
   if (pin !== undefined && !first) return;
   // ADR 0356 決定3: an existing checkout without a pin may already carry worker-written rules.
@@ -2665,7 +2668,7 @@ export function compareRefsBeforeLanding(db: Db, workspace: WorkspaceConfig, boa
   }
   const held = firstCaptureHold(db, workspace.name);
   if (held) throw new FirstCaptureRefusedError({ quarantine: held.quarantine, value: held.value, reason: `workspace ${held.workspace} is quarantined` });
-  prepareRefBaseline(db, workspace, board);
+  prepareRefBaseline(db, workspace, { resolveRegistered: board.resolveRegistered, now: () => board.now });
 }
 
 /** 面接室の名前(鍵は root id)。 */

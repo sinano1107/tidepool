@@ -241,14 +241,14 @@ it("a human completion review's repair children default to human and only an exp
 });
 
 /** 扉を準備の fetch(token の取得)で待たせ、その await の間に `during` を走らせてから続けさせる —— 最後の await の後の読みの観測。 */
-async function duringPreparation<T>(door: (githubAuth: GitHubAuth) => Promise<T>, during: () => void): Promise<T> {
+async function duringPreparation<T>(door: (githubAuth: GitHubAuth) => Promise<T>, during: () => unknown): Promise<T> {
   let release!: () => void;
   const hold = new Promise<void>((resolve) => (release = resolve));
   let held!: () => void;
   const reached = new Promise<void>((resolve) => (held = resolve));
   const result = door({ ensureToken: () => (held(), hold), env: () => process.env } as unknown as GitHubAuth);
   await reached;
-  during();
+  await during();
   release();
   return result;
 }
@@ -658,6 +658,47 @@ it("最後の await の後に動いた ref も見る —— 準備の fetch を�
   expect(getTask(b.db, h.id)!.status).toBe("todo");
 });
 
+// #3384: 準備の await の後に書く記録は、書く同期区間で読んだ時刻を持つ —— 扉の先頭で読んだ時刻ではない
+const createdAt = (db: Db, taskId: string | null, kinds: Parameters<typeof listEventsOfKinds>[1]) =>
+  listEventsOfKinds(db, kinds).filter((e) => e.task_id === taskId).map(({ payload, created_at }) => [payload.kind, created_at]);
+const AFTER_THE_PREPARATION = new Date(60_000).toISOString();
+
+it("start_work が準備を待った後に残す task_branch_created と task_work_started の時刻は、準備を待った後の時刻", async () => {
+  const b = await board("start-work-time");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+
+  await duringPreparation((githubAuth) => startWorkThroughHumanDoor({ ...deps(b), githubAuth }, h.id, () => b.clock.now(), "webui"), () => b.clock.advance(60_000));
+
+  expect(createdAt(b.db, h.id, ["task_branch_created", "task_work_started"])).toEqual([
+    ["task_branch_created", AFTER_THE_PREPARATION],
+    ["task_work_started", AFTER_THE_PREPARATION],
+  ]);
+});
+
+it("take_in_work が準備を待った後に残す workbench_taken_in の時刻は、準備を待った後の時刻", async () => {
+  const b = await board("take-in-time");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, h);
+
+  await duringPreparation((githubAuth) => takeInWorkThroughHumanDoor({ ...deps(b), githubAuth }, h.id, () => b.clock.now(), "webui"), () => b.clock.advance(60_000));
+
+  expect(createdAt(b.db, null, ["workbench_taken_in"])).toEqual([["workbench_taken_in", AFTER_THE_PREPARATION]]);
+});
+
+it("タスクブランチを持つ H の完了が準備を待った後に残す workbench_taken_in と task_completed の時刻は、準備を待った後の時刻", async () => {
+  const b = await board("complete-time");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, h);
+
+  await duringPreparation(
+    (githubAuth) => completeThroughHumanDoor({ ...deps(b), githubAuth }, h.id, { handoff: FULL_HANDOFF }, () => b.clock.now(), "webui"),
+    () => b.clock.advance(60_000),
+  );
+
+  expect(createdAt(b.db, null, ["workbench_taken_in"])).toEqual([["workbench_taken_in", AFTER_THE_PREPARATION]]);
+  expect(createdAt(b.db, h.id, ["task_completed"])).toEqual([["task_completed", AFTER_THE_PREPARATION]]);
+});
+
 it("completion rechecks the review tier after waiting for workspace preparation", async () => {
   const b = await board("human-review-tier-changed");
   const root = work(b, "pending intake", { assignee: HUMAN_ACTOR_ID });
@@ -703,7 +744,7 @@ it("done の後に作業台の tip が読んだものから動いていれば、
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   const path = await startedWithCommit(b, h);
   expect(humanWorkbenchDisplay(b.base, getTask(b.db, h.id)!)).toEqual({ workbench: path, workbench_commands: workbenchCommands(path) });
-  await prepareHumanWork(b.db, b.ws, h, "complete", { workspacesBaseDir: b.base, now: b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name });
+  await prepareHumanWork(b.db, b.ws, h, "complete", { workspacesBaseDir: b.base, now: () => b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name });
 
   const notice = completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {
     completeTask(b.db, getTask(b.db, h.id)!, FULL_HANDOFF, HUMAN_ACTOR_ID, b.clock.now(), "webui");
