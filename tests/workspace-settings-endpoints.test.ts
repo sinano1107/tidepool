@@ -1,12 +1,17 @@
-import { afterEach, expect, it } from "vitest";
-import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError } from "../src/registry.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   type UpdateWorkspaceInput,
+  updateWorkspace,
   WorkspaceConfirmationRequiredError,
   WorkspaceRegistryUnprotectError,
 } from "../src/workspace-create.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { FakeGitHubClient } from "./fakes.js";
+import { api, bootTidepool, git, makeWorkspace, type Tidepool } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -183,4 +188,93 @@ it("registry に居ない名前は 404", async () => {
   expect((await api(t.baseUrl, "PATCH", "/api/workspaces/ghost", { notes: "x" })).status).toBe(
     404,
   );
+});
+
+// ADR 0395 決定2: 出元 repo の値の検査と危険な値の門 —— 本物の扉(updateWorkspace)を fake の GitHub client で束ねる
+describe("出元 repo の宣言(ADR 0395 決定2)", () => {
+  async function headRepoBoard() {
+    const checkout = await makeWorkspace("lagoon");
+    const yaml = `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n`;
+    const registryDir = await makeRegistry({ "workspaces.yaml": yaml });
+    git(registryDir, "remote", "add", "origin", "https://github.com/acme/registry.git");
+    const registry = { dir: registryDir, mode: "purely-local" as const };
+    const github = new FakeGitHubClient();
+    github.scriptRepositoryParent("acme/fork", "acme/lagoon");
+    github.scriptRepositoryParent("acme/registry", null);
+    github.scriptRepositoryParent("acme/lagoon", null);
+    github.scriptRepositoryParent("acme/stranger", "acme/elsewhere");
+    t = await bootTidepool({ workspaceAdmin: { update: (input) => updateWorkspace(input, { db: t.db, github, registry, workspacesBaseDir: t.dir }) } });
+    const entry = () => loadRegistry(registryDir, "purely-local").workspaces.lagoon!;
+    // 扉の外の手編集(registry-edit の PR の merge と同じ形)
+    const handEdit = (head: string) => {
+      writeFileSync(join(registryDir, "workspaces.yaml"), `${yaml}  head_repo: ${head}\n`);
+      git(registryDir, "commit", "-am", "hand edit");
+    };
+    return { checkout, github, entry, handEdit, registryDir };
+  }
+
+  it("出元 repo の差し替えは危険な値の確認を求め、確認すれば宣言・remote・覚えた値を書く", async () => {
+    const { checkout, entry, handEdit } = await headRepoBoard();
+
+    const unconfirmed = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork" });
+    expect(unconfirmed.status).toBe(409);
+    expect(unconfirmed.json).toMatchObject({ confirm_required: true, dangerous_values: ["head_repo_set"] });
+    expect(entry().head_repo).toBeUndefined();
+
+    const confirmed = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+    expect(confirmed.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(git(checkout.path, "config", "remote.head-repo.url")).toBe("https://github.com/acme/fork.git");
+    expect(git(checkout.path, "remote")).toBe("head-repo");
+
+    // 外すのは安全側なので確認は要らない。扉は書く前に覚えた値と宣言を比べるので、通ること自体が扉が覚えた証拠
+    const removed = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "" });
+    expect(removed.status).toBe(200);
+    expect(entry().head_repo).toBeUndefined();
+    expect(git(checkout.path, "remote")).toBe("");
+
+    // 扉の外で足した出元 repo は、扉も素通りしない
+    handEdit("acme/fork");
+    const afterHandEdit = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+    expect(afterHandEdit.status).toBe(400);
+    expect(afterHandEdit.json).toMatchObject({
+      error: "workspace lagoon declares head repo acme/fork, but the board never recorded one for it. Clear the head repo in the workspace settings, or remove `head_repo:` by hand, and answer; then set it there to use it.",
+    });
+
+    // 外すのは閉じる側なので、扉の外の値でも扉から外せる —— その後は扉から設定し直せる(#3560)
+    const cleared = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "" });
+    expect(cleared.status).toBe(200);
+    expect(entry().head_repo).toBeUndefined();
+    const reset = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+    expect(reset.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+  });
+
+  it("URL の綴り(資格情報つき)で送った出元 repo は owner/name に直して書き、資格情報を registry に残さない", async () => {
+    const { checkout, entry, registryDir } = await headRepoBoard();
+
+    const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "https://someone:dummy-token@github.com/Acme/Fork.git", confirm: true });
+
+    expect(res.status).toBe(200);
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(readFileSync(join(registryDir, "workspaces.yaml"), "utf8")).not.toContain("dummy-token");
+    expect(git(checkout.path, "config", "remote.head-repo.url")).toBe("https://github.com/acme/fork.git");
+  });
+
+  it.each([
+    ["宣言 repo そのもの", "acme/lagoon", "head repo acme/lagoon is workspace \"lagoon\"'s own repo; it must be a fork of it."],
+    ["registry の repo", "acme/registry", "head repo acme/registry is the registry's repository; it must be a fork of workspace \"lagoon\"'s repo."],
+    ["宣言 repo の fork でない repo", "acme/stranger", "head repo acme/stranger is not a fork of https://github.com/acme/lagoon.git: GitHub reports its parent as acme/elsewhere."],
+    ["親を読めない repo", "acme/unreadable", "the parent of head repo acme/unreadable could not be read from GitHub, so it is refused (gh: Not Found (HTTP 404) for repos/acme/unreadable). Install the App on its owner and try again."],
+    ["GitHub でない値", "../somewhere", "head repo ../somewhere must be a GitHub repository written as owner/name."],
+  ])("%sは確認があっても 400 で拒まれ、宣言も remote も書かない", async (_, head, error) => {
+    const { checkout, entry } = await headRepoBoard();
+
+    const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: head, confirm: true });
+
+    expect(res.status).toBe(400);
+    expect(res.json).toEqual({ error });
+    expect(entry().head_repo).toBeUndefined();
+    expect(git(checkout.path, "remote")).toBe("");
+  });
 });

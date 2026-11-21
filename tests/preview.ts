@@ -46,7 +46,7 @@ export async function bootPreview(): Promise<Preview> {
       workspaceAdmin: {
         create: (input) => createWorkspace(input, workspaceDeps),
         list: () => listWorkspaceViews(workspaceDeps, "configured"),
-        update: (input) => updateWorkspace(input, workspaceDeps),
+        update: (input) => updateWorkspace(input, { ...workspaceDeps, db: board.db }),
       },
       agentAdmin: {
         create: (input) => createAgent(input, agentDeps),

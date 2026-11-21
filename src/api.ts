@@ -190,6 +190,7 @@ import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  HeadRepoRejectedError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
@@ -363,6 +364,8 @@ const updateWorkspaceSchema = z.object({
   // this file's usual split. Absent → untouched; `[]` removes the key.
   review_allowed_commands: z.array(z.string()).optional(),
   allowed_domains: z.array(z.string()).optional(),
+  // ADR 0395 決定2: the value checks live in the domain; "" removes it
+  head_repo: z.string().optional(),
   human_merge_paths: z.array(z.string()).optional(),
   expected_human_merge_paths: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
@@ -952,10 +955,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         sendJson(res.status(404), { error: err.message });
       } else if (
         err instanceof InvalidReviewAllowedCommandError ||
-        err instanceof InvalidAllowedDomainError
+        err instanceof InvalidAllowedDomainError ||
+        err instanceof HeadRepoRejectedError ||
+        err instanceof WorkspaceRepoMismatchError
       ) {
         // 400, not 409: no confirmation can buy malformed allowlist grammar
-        // (ADR 0061 根拠5 / ADR 0072 決定2).
+        // (ADR 0061 根拠5 / ADR 0072 決定2), a head repo that fails its checks, or one edited outside the door (ADR 0395 決定2).
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof WorkspaceConfirmationRequiredError) {
         // machine-readable flag plus the reason codes the dialog enumerates

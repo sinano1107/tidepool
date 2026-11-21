@@ -172,7 +172,10 @@ export function repoKey(url: string | undefined): string | undefined {
   return githubKey(parseGitHubRepo(url));
 }
 
-function githubKey(ref: RepoSlug | undefined): string | undefined {
+/** GitHub's `owner/name` for a parsed repository. */
+export function githubKey(ref: RepoSlug): string;
+export function githubKey(ref: RepoSlug | undefined): string | undefined;
+export function githubKey(ref: RepoSlug | undefined): string | undefined {
   return ref && `${ref.owner}/${ref.name}`;
 }
 
@@ -233,6 +236,14 @@ export function workspaceNetworkDestination(workspace: WorkspaceConfig & { named
   const place = workspace.namedPlace ?? workspace;
   const { path, repo } = place.checkRememberedRepo?.(place) ?? place;
   return repo === undefined ? undefined : networkDestination(repo, path);
+}
+
+/** ADR 0378 決定1 / ADR 0395 決定1・2: the head repo's destination also comes from the rechecked declaration, never from the
+ *  checkout's remote. */
+export function workspaceHeadRepoDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }) {
+  const place = workspace.namedPlace ?? workspace;
+  const { path, head_repo } = place.checkRememberedRepo?.(place) ?? place;
+  return head_repo === undefined ? undefined : networkDestination(head_repo, path);
 }
 
 /** A workspace declaration or the path of the board's registry checkout (ADR 0378 決定1・2). */

@@ -446,6 +446,9 @@ const workspaceEntrySchema = z.object({
   /** Domains this workspace's worker sessions may reach through the sandbox
    *  network proxy (issue #321 / ADR 0072). Absent keeps egress closed. */
   allowed_domains: z.array(z.string()).optional(),
+  /** The PR head repo (ADR 0395 決定2): the fork of `repo` task branches go to, as `owner/name`. Changed only through the
+   *  workspace update door, which checks it and remembers it. */
+  head_repo: z.string().optional(),
   /** ADR 0395 決定4: repository-relative globs adding to the mandatory human merge paths. */
   human_merge_paths: z.array(z.string()).optional(),
 });

@@ -253,7 +253,7 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 ## 危険な値(Dangerous value)
 
-人間面が**明示の確認を要求する** registry の値。権限を広げる向きの値であり、理由コードとして数え上げられる — profile の無人 merge(`merge_auto_if_ci_green`)、profile のワイルドカード(`assignable_to_wildcard` —— `allowed_workspaces` は欄ごと削除された、ADR 0384)、workspace の保護剥奪(`unprotect`)、レビューコマンド許可リストの非空(`review_allowed_commands_set`)、ドメイン許可リストの非空(`allowed_domains_set`)、人間が merge する path の宣言からの削除(`human_merge_paths_removed`、ADR 0395 決定4)。
+人間面が**明示の確認を要求する** registry の値。権限を広げる向きの値であり、理由コードとして数え上げられる — profile の無人 merge(`merge_auto_if_ci_green`)、profile のワイルドカード(`assignable_to_wildcard` —— `allowed_workspaces` は欄ごと削除された、ADR 0384)、workspace の保護剥奪(`unprotect`)、レビューコマンド許可リストの非空(`review_allowed_commands_set`)、ドメイン許可リストの非空(`allowed_domains_set`)、人間が merge する path の宣言からの削除(`human_merge_paths_removed`、ADR 0395 決定4)、PR の出元 repo の差し替え(`head_repo_set`、ADR 0395 決定2 —— 外すのは閉じる側なので確認しない、issue #3560)。
 
 **強める向きに確認は要らない**という非対称を持つ — 保護の付与、許可リストの縮小、そもそも保護を持たない workspace の作成は、いずれも同意を求める対象ではない。
 

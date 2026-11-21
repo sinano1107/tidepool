@@ -367,7 +367,9 @@ function initializeDb(db: Db): void {
     CREATE TABLE IF NOT EXISTS workspace_state (
       name            TEXT PRIMARY KEY,
       ref_snapshot    TEXT,
-      remembered_repo TEXT
+      remembered_repo TEXT,
+      -- ADR 0395 決定2: 扉が書いた出元 repo。NULL は「覚えていない」で、宣言があれば Quarantine(覚えた repo と違い学ばない)
+      remembered_head_repo TEXT
     );
 
     -- ADR 0356 決定3: the board's read policy is pinned before workers can edit it.

@@ -3,7 +3,7 @@ import { delimiter, join, relative } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GhCliClient } from "../src/github.js";
-import { GitHubAuth } from "../src/github-auth.js";
+import { GitHubAuth, workspaceHeadRepoDestination, workspaceNetworkDestination } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
@@ -13,7 +13,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { announcePublishedRepo, assertRememberedRepo, boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
+import { announceHeadRepo, announcePublishedRepo, assertRememberedRepo, boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
@@ -127,6 +127,150 @@ describe("覚えた repo の予告(ADR 0391)", () => {
     check(third.repo);
 
     expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  });
+});
+
+// #3560: 覚えた出元 repo(ADR 0395 決定2)は覚えた repo(ADR 0378 決定6)と違い、覚えていないことを「学ぶ」と読まない —— 扉の外で
+// 足した宣言を通さない。基準の行の有無にも依らない
+describe("覚えた出元 repo(ADR 0395 決定2)", () => {
+  const HEAD = "https://github.com/acme/fork.git";
+
+  it.each(["no baseline", "baseline"] as const)("覚えた値が無いまま扉の外で宣言に出元 repo を足すと、網に出ずに workspace の Quarantine に落ちる(%s)", async (history) => {
+    const { workspace } = await makeRemoteBackedWorkspace(`head-unremembered-${history.replace(" ", "-")}`);
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    if (history === "baseline") await leaveBaseline(db, workspace);
+    git(workspace.path, "remote", "add", "head-repo", HEAD);
+    const declared = { ...workspace, head_repo: "acme/fork" };
+    const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+    const base = await tempDir("tidepool-destination-checkouts-");
+    const calls = await shimGit();
+    const reason = `workspace ${workspace.name} declares head repo acme/fork, but the board never recorded one for it. Clear the head repo in the workspace settings, or remove \`head_repo:\` by hand, and answer; then set it there to use it.`;
+
+    expect(() => workspaceNetworkDestination(withRememberedRepoCheck(db, declared, () => NOW))).toThrow(new WorkspaceRepoMismatchError(reason));
+    await expect(pickupGate(db, declared, task, base)).rejects.toThrow(reason);
+
+    expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(reason.slice(0, -1));
+    expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
+  });
+
+  it.each([
+    ["書き換える", "acme/other-fork", "but its registry entry now says acme/other-fork. Put `head_repo:` back by hand, or clear the head repo in the workspace settings, and answer; then set it there to change it."],
+    ["消す", undefined, "but its registry entry no longer declares one. Put `head_repo:` back by hand and answer; then clear it in the workspace settings to drop it."],
+  ] as const)("扉の外で宣言の出元 repo を%sと、網に出ずに workspace の Quarantine に落ちる", async (_, edited, tail) => {
+    const { workspace } = await makeRemoteBackedWorkspace("head-edited");
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    git(workspace.path, "remote", "add", "head-repo", HEAD);
+    const declared = { ...workspace, head_repo: "acme/fork" };
+    // 扉の書き方: 予告してから checkout と registry を書き、検査が畳む(ADR 0391 決定1・3)
+    announceHeadRepo(db, workspace, "acme/fork");
+    expect(workspaceNetworkDestination(withRememberedRepoCheck(db, declared, () => NOW))?.url).toBe(workspace.repo);
+    const calls = await shimGit();
+    const reason = `workspace ${workspace.name} was given head repo acme/fork, ${tail}`;
+
+    expect(() => workspaceNetworkDestination(withRememberedRepoCheck(db, { ...workspace, head_repo: edited }, () => NOW))).toThrow(new WorkspaceRepoMismatchError(reason));
+
+    expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(reason.slice(0, -1));
+    expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
+  });
+
+  // ADR 0378 決定3・4 を出元 repo の remote に: origin と同じ扱い・同じ「同じ repo」の比べ方
+  it("出元 repo の remote が宣言と違う repo を指すと、pickup も Quarantine の受理も網に出ずに拒む", async () => {
+    const { workspace } = await makeRemoteBackedWorkspace("head-remote");
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    const declared = { ...workspace, head_repo: "acme/fork" };
+    git(workspace.path, "remote", "add", "head-repo", "git@GitHub.com:Acme/FORK");
+    announceHeadRepo(db, workspace, "acme/fork");
+    const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+    const base = await tempDir("tidepool-destination-checkouts-");
+    await expect(pickupGate(db, declared, task, base)).resolves.toBeDefined();
+    git(workspace.path, "remote", "set-url", "head-repo", "https://github.com/acme/elsewhere.git");
+    const calls = await shimGit();
+    const reason = `workspace ${workspace.name} declares head repo acme/fork, but its checkout's 'head-repo' remote is https://github.com/acme/elsewhere.git. In ${workspace.path}, run \`git remote set-url head-repo https://github.com/acme/fork.git\`.`;
+
+    await expect(pickupGate(db, declared, task, base)).rejects.toThrow(reason);
+    const accept = quarantineChecks({ quarantineResolvers: {}, db, workspace: declared }).workspace!;
+    await expect(accept(workspace.name, "repaired by hand", "webui")).rejects.toThrow(reason);
+    expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
+
+    git(workspace.path, "config", "--remove-section", "remote.head-repo");
+    await expect(pickupGate(db, declared, task, base)).rejects.toThrow(
+      `workspace ${workspace.name} declares head repo acme/fork but its checkout has no 'head-repo' remote. In ${workspace.path}, run \`git remote add head-repo https://github.com/acme/fork.git\`.`,
+    );
+    await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(`workspace ${workspace.name} was given head repo acme/fork, but its registry entry no longer declares one.`);
+  });
+
+  // ADR 0378 決定1 / ADR 0395 決定1・2: 網の行き先は宣言 `repo` と宣言の出元 repo だけで、checkout の remote の綴りは使わない
+  it("網の行き先は宣言 repo と宣言の出元 repo の2つで、remote の値には出ない", async () => {
+    const { workspace } = await makeRemoteBackedWorkspace("head-destination");
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    git(workspace.path, "remote", "add", "head-repo", HEAD);
+    announceHeadRepo(db, workspace, "acme/fork");
+    const declared = withRememberedRepoCheck(db, { ...workspace, head_repo: "acme/fork" }, () => NOW);
+    const taskCheckout = { ...declared, path: await tempDir("tidepool-head-task-checkout-"), namedPlace: declared };
+    const destinations = (place: typeof declared) => [workspaceNetworkDestination(place), workspaceHeadRepoDestination(place)].map((destination) => destination?.url);
+    expect(destinations(declared)).toEqual([workspace.repo, HEAD]);
+    // 覚えた後で remote を別の repo へ向けても、行き先は宣言のまま(remote の食い違いは pickup の述語が止める)
+    git(workspace.path, "remote", "set-url", "head-repo", "https://github.com/acme/elsewhere.git");
+
+    expect(destinations(declared)).toEqual([workspace.repo, HEAD]);
+    expect(destinations(taskCheckout)).toEqual([workspace.repo, HEAD]);
+  });
+
+  it("扉が覚えた出元 repo と同じ repo を指す remote を持つ workspace は、pickup・準備・解放を Quarantine なしに通る", async () => {
+    const { workspace } = await makeRemoteBackedWorkspace("head-positive");
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    git(workspace.path, "remote", "add", "head-repo", HEAD);
+    announceHeadRepo(db, workspace, "acme/fork");
+    const declared = { ...workspace, head_repo: "acme/fork" };
+    const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+
+    await expect(pickupGate(db, declared, task, await tempDir("tidepool-destination-checkouts-"))).resolves.toBeDefined();
+    await leaveBaseline(db, declared);
+    await leaveBaseline(db, declared);
+
+    expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  });
+
+  // ADR 0378 決定3・8 と同じく、出元 repo の remote の食い違いも scheduler が workspace の Quarantine にする
+  it("scheduler は出元 repo の remote の食い違いを修理の文で workspace の Quarantine にする", async ({ onTestFinished }) => {
+    const workspace = { ...(await makeWorkspace("scheduler-head-repointed")), repo: "https://github.com/acme/widget", head_repo: "acme/fork" };
+    git(workspace.path, "remote", "add", "origin", workspace.repo);
+    git(workspace.path, "remote", "add", "head-repo", "https://github.com/acme/elsewhere.git");
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    announceHeadRepo(db, workspace, "acme/fork");
+    const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
+    const clock = new FakeClock();
+    const worker = new ScriptedWorker(clock);
+    const slot = new Slot();
+    const containers = fakeContainers();
+    const scheduler = startScheduler({
+      retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
+      db, clock, slot, worker, containers, github: new FakeGitHubClient(),
+      onSpawnFailed: () => {},
+      onRecordContainerFailed: () => {},
+      onPickupStopped: queueReturnHandler({ db, clock, slot, resolve: () => workspace, pollNow: () => scheduler.pollNow() }, containers, { defaultWorkspaceName: workspace.name }),
+      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+      workspace,
+      resolveWorkspace: () => workspace,
+      workspacesDir: await tempDir("tidepool-destination-checkouts-"),
+    });
+    onTestFinished(() => scheduler.stop());
+
+    await clock.advance(HOURLY);
+    await vi.waitFor(() => expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined());
+
+    expect(quarantineQuestion(db, "workspace", workspace.name)!.purpose).toContain(
+      `workspace ${workspace.name} declares head repo acme/fork, but its checkout's 'head-repo' remote is https://github.com/acme/elsewhere.git. In ${workspace.path}, run \`git remote set-url head-repo https://github.com/acme/fork.git\`.`,
+    );
+    expect(worker.started).toEqual([]);
+    expect(getTask(db, task.id)).toMatchObject({ status: "todo" });
   });
 });
 

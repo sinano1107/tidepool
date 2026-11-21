@@ -389,6 +389,7 @@ export interface WireContract {
       protectionReason?: "registry_repository" | "unreadable_registry_origin";
       review_allowed_commands?: string[];
       allowed_domains?: string[];
+      head_repo?: string;
       human_merge_paths?: string[];
     }>;
     /** 値集合の正本は src/workspace.ts の WorkspacesBaseDirSource(ADR 0082 決定1)。 */

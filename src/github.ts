@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, workspaceNetworkDestination } from "./github-auth.js";
+import { parseGitHubRepo } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
@@ -206,6 +207,9 @@ export interface GitHubClient {
    *
    *  The board's only repo-access probe, fired on failure paths alone. */
   tokenRefusal(ref: RepoSlug): Promise<string | null>;
+  /** The repository `ref` was forked from, or null when it is no fork (ADR 0395 決定2). Read with `ref`'s own token: a token for
+   *  the base cannot see a private fork (#3558). Throws when it cannot be read. */
+  repositoryParent(ref: RepoSlug): Promise<RepoSlug | null>;
 }
 
 /** Which repository, as GitHub's own `owner/name` (ADR 0067). */
@@ -272,15 +276,28 @@ export class GhCliClient implements GitHubClient {
     await this.auth.ensureToken(repo);
     if (workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
     beforeSpawn?.();
+    return this.run([...args, "-R", repo], repo, cwd);
+  }
+
+  /** `gh` with `repo`'s warmed token, bounded by the timeout. */
+  private async run(args: string[], repo: string, cwd?: string): Promise<string> {
     try {
-      return (await execFileAsync("gh", [...args, "-R", repo], { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
+      return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
       // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
       if ((err as { killed?: boolean }).killed) {
-        throw new Error(`\`gh ${args[0]} ${args[1]}\` timed out after ${this.timeoutMs} ms (in ${cwd})`, { cause: err });
+        throw new Error(`\`gh ${args[0]} ${args[1]}\` timed out after ${this.timeoutMs} ms${cwd === undefined ? "" : ` (in ${cwd})`}`, { cause: err });
       }
       throw err;
     }
+  }
+
+  async repositoryParent(ref: RepoSlug): Promise<RepoSlug | null> {
+    const repo = githubKey(ref);
+    await this.auth.ensureToken(repo);
+    // `gh api` takes no `-R`; the path names the repository
+    const parent = (await this.run(["api", `repos/${repo}`, "--jq", ".parent.full_name // empty"], repo)).trim();
+    return parent === "" ? null : (parseGitHubRepo(parent) ?? null);
   }
 
   async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {

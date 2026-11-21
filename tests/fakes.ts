@@ -743,6 +743,20 @@ export class FakeGitHubClient implements GitHubClient {
   repoAccessCalls = 0;
   private unreachable = new Map<string, string>();
 
+  private parents = new Map<string, string | null>();
+
+  /** fork の親(ADR 0395 決定2)。置いていない repo は読めない —— 既定は「読めなければ拒む」の側。 */
+  scriptRepositoryParent(fullName: string, parent: string | null): void {
+    this.parents.set(fullName.toLowerCase(), parent);
+  }
+
+  async repositoryParent(ref: RepoSlug): Promise<RepoSlug | null> {
+    const key = `${ref.owner}/${ref.name}`.toLowerCase();
+    if (!this.parents.has(key)) throw new Error(`gh: Not Found (HTTP 404) for repos/${key}`);
+    const [owner, name] = this.parents.get(key)?.split("/") ?? [];
+    return owner && name ? { owner, name } : null;
+  }
+
   async tokenRefusal(ref: RepoSlug): Promise<string | null> {
     this.repoAccessCalls++;
     return this.unreachable.get(`${ref.owner}/${ref.name}`.toLowerCase()) ?? null;

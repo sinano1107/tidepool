@@ -140,6 +140,7 @@ import {
   CheckoutHasOriginError,
   type CreateWorkspaceInput,
   GitHubIdentityMissingError,
+  HeadRepoRejectedError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   RelativeClonePathError,
@@ -260,6 +261,7 @@ function registryToolError(err: unknown) {
     err instanceof InvalidAgentDefinitionError ||
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
+    err instanceof HeadRepoRejectedError ||
     err instanceof InvalidAuthorityProfileNameError
   ) {
     return toolError(err.message);
@@ -296,7 +298,7 @@ WebUI themselves. This implies:
 - Registry changes you make (agents, profiles, workspaces) are committed to
   main as human-authored changes. Authority profile and workspace edits that
   carry a dangerous value (unattended merge, a wildcard, unprotecting, a
-  non-empty allowlist) are rejected here outright — confirm and save those in
+  non-empty allowlist, setting a workspace's head repo) are rejected here outright — confirm and save those in
   the WebUI's settings screen instead.
 - Reading the decision log here does NOT mark it as seen by the human. The
   board's unread cursor advances only in the WebUI. If the human relies on
@@ -543,6 +545,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // door has no `confirm`, so the domain gate always rejects it.
         review_allowed_commands: z.array(z.string()).optional(),
         allowed_domains: z.array(z.string()).optional(),
+        // ADR 0395 決定2: setting it is a dangerous value and this door has no confirm (ADR 0088), so only `""` (remove) gets through
+        head_repo: z.string().optional().describe("The PR head repo (a fork of the workspace's repo) as owner/name; an empty string removes it."),
         // ADR 0395 決定4: adding a human merge path is safe, removing one needs confirmation in the WebUI.
         human_merge_paths: z.array(z.string()).optional(),
       }),

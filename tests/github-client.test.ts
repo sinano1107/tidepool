@@ -614,7 +614,35 @@ const unansweredCalls: Array<[string, (client: GhCliClient, workspace: Workspace
   ["getIssueWithState", (c, workspace) => c.getIssueWithState({ workspace, number: 49 })],
   ["listIssues", (c, workspace) => c.listIssues({ workspace })],
   ["addIssueComment", (c, workspace) => c.addIssueComment({ workspace, number: 49 }, "body")],
+  ["repositoryParent", (c) => c.repositoryParent({ owner: "acme", name: "fork" })],
 ];
+
+// ADR 0395 決定2 / #3558: fork の親は出元 repo 自身の token で読む —— base の token は private の fork を見られない
+it("repositoryParent は出元 repo の token で gh api を撃ち、親を owner/name に、fork でなければ null にする", async () => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  const parentPath = join(dir, "parent");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$GH_TOKEN $*" >> "${logPath}"\ncat "${parentPath}"\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+  const secrets = await tempDir("tidepool-secrets-");
+  const tokenFile = join(secrets, "github-token");
+  writeFileSync(tokenFile, "gho_user\n", { mode: 0o600 });
+  const broker = await startFakeBroker((request) => issuedToken(`token-for-${request.repo}`));
+  brokers.push(broker);
+  const client = new GhCliClient(new GitHubAuth(tokenFile, broker.url));
+
+  writeFileSync(parentPath, "Acme/Lagoon\n");
+  expect(await client.repositoryParent({ owner: "acme", name: "fork" })).toEqual({ owner: "acme", name: "lagoon" });
+  writeFileSync(parentPath, "");
+  expect(await client.repositoryParent({ owner: "acme", name: "plain" })).toBeNull();
+
+  expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
+    "token-for-acme/fork api repos/acme/fork --jq .parent.full_name // empty",
+    "token-for-acme/plain api repos/acme/plain --jq .parent.full_name // empty",
+  ]);
+});
 
 // ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗(untyped)。not_found に誤判定しない
 it.each(unansweredCalls)("%s は gh が返らなくても上限で、どの呼び出しが何 ms で切れたかを書いた一時的失敗として返る(ADR 0330)", async (_, call) => {
@@ -628,7 +656,7 @@ it.each(unansweredCalls)("%s は gh が返らなくても上限で、どの呼�
   expect(Date.now() - started).toBeLessThan(2_000);
   expect(err).toBeInstanceOf(Error);
   expect(err).not.toBeInstanceOf(IssueGoneError);
-  expect((err as Error).message).toMatch(/^`gh \w+ \w+` timed out after 200 ms/);
+  expect((err as Error).message).toMatch(/^`gh \w+ [\w/]+` timed out after 200 ms/);
 });
 
 // ADR 0330 決定1: 同期の gh は待つ間、盤面の唯一の実行の糸(人間面・poll・着地)ごと止める

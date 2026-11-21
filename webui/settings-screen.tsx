@@ -209,12 +209,14 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
   const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
   const [mergePaths, setMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const [originalMergePaths, setOriginalMergePaths] = React.useState(ws.human_merge_paths ?? []);
+  const [headRepo, setHeadRepo] = React.useState(ws.head_repo ?? '');
   const origin = ws.repo ?? ws.path;
   const dirty = notes.trim() !== (ws.notes ?? '')
     || prot !== !!ws.protected
     || !sameStrings(cmds, ws.review_allowed_commands ?? [])
     || !sameStrings(domains, ws.allowed_domains ?? [])
-    || !sameStrings(mergePaths, originalMergePaths);
+    || !sameStrings(mergePaths, originalMergePaths)
+    || headRepo.trim() !== (ws.head_repo ?? '');
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => { edit.close(); await onChanged(); });
 
@@ -223,11 +225,12 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
     setDomains(ws.allowed_domains ?? []);
     setMergePaths(ws.human_merge_paths ?? []);
     setOriginalMergePaths(ws.human_merge_paths ?? []);
+    setHeadRepo(ws.head_repo ?? '');
   });
   // Notes always travels; dangerous fields join only when actually changed —
   // untouched fields stay absent from the partial patch (ADR 0061 決定2).
   const save = () => {
-    const body: Partial<Pick<SettingsWorkspace, 'notes' | 'protected' | 'review_allowed_commands' | 'allowed_domains' | 'human_merge_paths'>> & { expected_human_merge_paths?: string[] } = { notes: notes.trim() };
+    const body: Partial<Pick<SettingsWorkspace, 'notes' | 'protected' | 'review_allowed_commands' | 'allowed_domains' | 'human_merge_paths' | 'head_repo'>> & { expected_human_merge_paths?: string[] } = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
@@ -235,6 +238,8 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
       body.human_merge_paths = mergePaths;
       body.expected_human_merge_paths = originalMergePaths;
     }
+    // ADR 0395 決定2: sent only when changed — every send asks GitHub and, when non-empty, a confirmation
+    if (headRepo.trim() !== (ws.head_repo ?? '')) body.head_repo = headRepo.trim();
     submit(async (confirm) => { await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, 'PATCH'); }, 'updated', ws.name);
   };
 
@@ -269,6 +274,10 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
             tags={ws.allowed_domains ?? []} unsetLabel="external fetches unavailable" />
           <FieldRow label="human merge paths" kind={(ws.human_merge_paths ?? []).length ? 'tags' : 'unset'}
             tags={ws.human_merge_paths ?? []} unsetLabel="built-in workflow and CODEOWNERS paths only" />
+          {ws.repo && (
+            <FieldRow label="head repo" kind={ws.head_repo ? 'mono' : 'unset'} value={ws.head_repo ?? ''}
+              unsetLabel="no fork declared" />
+          )}
           {publishable && <PublishWorkspace ws={ws} say={say} onPublished={onChanged} />}
         </React.Fragment>
       )}
@@ -287,6 +296,10 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
             label="Human merge paths"
             description="Repository-relative globs for additional paths that require a human merge. Name any leading dot explicitly. .github/workflows/** and CODEOWNERS in the root, .github and docs always require a human merge."
             placeholder='path glob — e.g. "deploy/**"' />
+          {ws.repo && (
+            <Input label="Head repo" value={headRepo} onChange={(e) => setHeadRepo(e.target.value)}
+              placeholder="owner/name of the fork task branches go to — empty removes it (confirmed on save if set)" />
+          )}
           <EditActions dirty={dirty} busy={busy} saveLabel="Save — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
@@ -589,6 +602,8 @@ const DANGEROUS_REASON_LABEL: Record<string, string> = {
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
   human_merge_paths_removed:
     'Human merge paths are being removed. Changes matching those paths may become eligible for unattended merge.',
+  head_repo_set:
+    "The head repo is being set — the fork this workspace's task branches go to and its PRs are opened from.",
 };
 
 // issue #383 の信号コード。DANGEROUS_REASON_LABEL とは別の表である — この族は
