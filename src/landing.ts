@@ -632,7 +632,7 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
  *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
- *  (ADR 0265 決定3) / `nothing_to_land`)と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
+ *  (ADR 0265 決定3) / `nothing_to_land` / ブランチを失って終えた根の `landing_ended_branch_lost`(ADR 0375 決定7))と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
  *  候補に残り、撃つ側が hold の head と比べる(`landRoot`)。人間が担当した work は盤面の
  *  タスクブランチを持たなければ根にしない(人間の完了は祖先の着地の契機である)—— 持てば根になる(ADR 0374 決定12)。Interview の子(pin を持つ
  *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
@@ -1894,12 +1894,11 @@ export function createLanding(deps: LandingDeps): Landing {
     }
   };
   /** ADR 0397 決定3: 失われた event が効いている根(受理の後で根になった task を含む)は、着地させる前に受理と同じ判定で終える —— 失われた
-   *  ブランチを git で読まない。workspace の Quarantine が開いている間は終えずに受理へ任せる —— 開いた着地の question を閉じるのは受理だけ
-   *  (同 決定2・4)。終えも止めもしなければ undefined。 */
+   *  ブランチを git で読まない。昇格失敗の question が開いている根は終えずに `landRoot` へ渡す —— 人間がまだ答えていない失敗 question を
+   *  先回りして潰さない(ADR 0240 決定2)。閉じるのは受理だけ(ADR 0397 決定2)。終えなければ undefined。 */
   const endLostRoot = ({ task, workspace }: LandingRoot): LandingVerdict | undefined => {
-    if (!workspace || !taskBranchLostInForce(deps.db, task.id)) return undefined;
-    if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
-    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), false) ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
+    if (!workspace || !taskBranchLostInForce(deps.db, task.id) || openPrPromotionQuestionIds(deps.db, task.id).length > 0) return undefined;
+    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), { closeQuestions: false }) ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
   };
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
    *  候補の読み取りそのものの失敗はログに出して回を終え、次の突きで走り直す。 */

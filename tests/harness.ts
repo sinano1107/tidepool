@@ -676,11 +676,13 @@ export function failTeardownMark(db: Db): () => void {
   return () => db.exec("DROP TRIGGER fail_teardown_mark");
 }
 
-/** 落ちた盤面の畳みはディスクに届かない: 予告(2値の行)は書けて、1値へ畳む書き込みだけが届かない形。返り値で外す。 */
-export function dropBoardBeforeFold(db: Db): () => void {
+/** 落ちた盤面の畳みはディスクに届かない形: 予告(2値の行)は書けて、基準を1値だけにする UPDATE は届かない。返り値で外す。既定はその
+ *  UPDATE すべてで落ち、畳み(2値の行を1値へ)に限らない。予告の前に1値の UPDATE を書く経路(give-up の transaction が失われた行を今の値で
+ *  基準へ入れる)を通すなら `foldOnly` で畳みだけを落とす —— 既定のままだとその UPDATE で先に落ちて偽の pass になる。 */
+export function dropBoardBeforeFold(db: Db, { foldOnly = false }: { foldOnly?: boolean } = {}): () => void {
   db.exec(
     "CREATE TEMP TRIGGER board_drops_before_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
-      "WHEN NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END",
+      `WHEN ${foldOnly ? "OLD.ref_snapshot LIKE '%|%' AND " : ""}NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END`,
   );
   return () => db.exec("DROP TRIGGER board_drops_before_fold");
 }

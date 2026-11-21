@@ -3155,7 +3155,7 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  `giveUpQuestion`(give-up に答えている workspace の Quarantine、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
  *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒す
  *  (ADR 0375 決定1・4・9)。根の着地の終わり(同 決定7・8)は、選択肢を問わず書き戻しの後に記録から導く —— 根かどうかを基準へ戻った ref で読み
- *  (ADR 0397 決定2)、書き戻しが落ちても次の受理が導き直す。give-up で失われた ref が無ければ、
+ *  (ADR 0397 決定2)、書き戻しが落ちても次の受理が導き直す(同 決定1・4)。give-up で失われた ref が無ければ、
  *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUpQuestion?: string): KeptValue[] {
   const giveUp = giveUpQuestion !== undefined;
@@ -3291,15 +3291,15 @@ export function endLostRootLandings(db: Db, workspace: WorkspaceConfig, now: Dat
     )
     .pluck()
     .all(workspace.name) as string[];
-  db.transaction(() => ids.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now, true)))();
+  db.transaction(() => ids.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now, { closeQuestions: true })))();
 }
 
 /** ADR 0375 決定7・8 / ADR 0397 決定1: 根の着地の終わりの唯一の判定。効いている失われた event を持つ done の根(帰り先が保護ブランチ)で PR を
  *  開いていないものの着地を終える —— 死んだ根は `landing_ended_branch_lost`、handoff だけの根(失われた sha = 作成時の sha)は `nothing_to_land`
  *  で、どちらも失われたブランチを git で読まない。内容が保護ブランチに届いて透明な根と、PR を開いた根(内容は GitHub の head に在る)は終えない。
- *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。`byAccept` なら開いている
+ *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。`closeQuestions`(受理だけ)なら開いている
  *  着地の question(local 着地・昇格失敗)を回答なしで閉じ、`landing_ended_branch_lost` がその id を運ぶ。書いた終わりを返す。 */
-export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, byAccept: boolean): TaskScopedPayload | undefined {
+export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { closeQuestions }: { closeQuestions: boolean }): TaskScopedPayload | undefined {
   if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return undefined;
   const lost = taskBranchLostInForce(db, task.id);
   if (!lost || db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return undefined;
@@ -3313,8 +3313,8 @@ export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Tas
   const handoffOnly = lostAsCreated(db, task.id, lost);
   if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return undefined;
   // ADR 0397 決定2 / ADR 0375 決定8: 閉じるのは受理だけ —— 人間自身の回答の帰結だから。収束が閉じれば、まだ答えていない失敗 question を先回りして潰す(ADR 0240 決定2)
-  const questions = byAccept ? [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)] : [];
-  // 閉じた理由は根の記録に1回だけ残す —— question 自身には観測の event を刻まない
+  const questions = closeQuestions ? [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)] : [];
+  // ADR 0375 決定8: 閉じた理由は根の記録に1回だけ残す —— question 自身には観測の event を刻まない
   for (const id of questions) settleQuestionAsObserved(db, id, null, now);
   const ending: TaskScopedPayload = handoffOnly ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : { kind: "landing_ended_branch_lost", question_ids: questions };
   appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: ending, at: now });
