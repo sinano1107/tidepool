@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -367,25 +366,6 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(err.message).not.toContain("rolling it back failed");
     expect(state()).toEqual(before);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
-  });
-
-  // ADR 0342 決定4: 巻き戻しの手順が受けた盤面 DB の拒否は、巻き戻しの失敗に包まずそのまま投げる
-  it("覚えた repo の戻しで盤面 DB が書きを拒むと、publish はその拒否をそのまま投げる", async () => {
-    const { registryDir, deps, checkout } = await makeBoard();
-    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
-    const dest = await makeDestination();
-    await writeFile(join(registryDir, ".git", "refs", "heads", "main.lock"), "");
-    const refusal = new Database.SqliteError("database or disk is full", "SQLITE_FULL");
-    deps.db.function("refuse_restore", () => {
-      throw refusal;
-    });
-    // 宛先を覚えた後の書き(= 戻し)だけを拒む
-    deps.db.exec(
-      "CREATE TEMP TRIGGER restore_refused BEFORE UPDATE OF remembered_repo ON workspace_state " +
-        "WHEN OLD.remembered_repo IS NOT NULL AND OLD.remembered_repo <> 'null' BEGIN SELECT refuse_restore(); END",
-    );
-
-    await expect(publishWorkspace({ name: "sandbox", repo: dest }, deps)).rejects.toBe(refusal);
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち

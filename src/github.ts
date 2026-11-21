@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
@@ -294,8 +293,7 @@ export class GhCliClient implements GitHubClient {
       parsed = JSON.parse(
         await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"]),
       );
-    } catch (err) {
-      if (isBoardDbRefusal(err)) throw err;
+    } catch {
       return { ci: "pending", state: "unreadable" };
     }
     return {

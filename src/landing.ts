@@ -44,7 +44,6 @@ import {
   teardownUnfinishedUnder,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import type { LandingState, RootSettledByObservation, SettledByObservation } from "./wire-contract.js";
 import {
   type Answerer,
@@ -248,7 +247,7 @@ export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveReg
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(value!));
     }
     if (!(error instanceof RefsMovedError)) {
-      if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
+      if (error instanceof WorkspaceRepoMismatchError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       throw new LandingRefCheckError(`could not verify refs for workspace "${workspace.name}" before landing: ${reason}`);
     }
@@ -434,7 +433,7 @@ export async function checkPrMergeContent(
   const forContent = targets.length > 0;
   // 積み残しを比べないなら、取れない head は拒まず、祖先関係を確かめられない head と読む(ADR 0387 決定1)
   const unfetched = (error: unknown) => {
-    if (forContent || isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
+    if (forContent || error instanceof WorkspaceRepoMismatchError) throw error;
   };
   const fetching = forContent || pr.head !== pr.lastPushed ? prepareFetchCommitIfMissing(db, workspace, pr.head, auth) : undefined;
   if (fetching) {
@@ -641,7 +640,7 @@ function landingRootOf(
     // ADR 0380 決定3: 帰り先なしは「自分が根」と別の答え —— 着地の根に数えない
     return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
   } catch (lineageError) {
-    if (isBoardDbRefusal(lineageError) || lineageError instanceof RootStopped) throw lineageError;
+    if (lineageError instanceof RootStopped) throw lineageError;
     return { task, outlivedForkSource: false, lineageError };
   }
 }
@@ -1333,7 +1332,7 @@ export function createLanding(deps: LandingDeps): Landing {
       try {
         stopRootIfRefsMoved(workspace);
       } catch (error) {
-        if (error instanceof RootStopped || isBoardDbRefusal(error)) throw error;
+        if (error instanceof RootStopped) throw error;
         return failed(task, "promotion_failed", error, ctx);
       }
       return undefined;
@@ -1513,7 +1512,6 @@ export function createLanding(deps: LandingDeps): Landing {
         const branch = taskBranch(task.id);
         // ADR 0376 決定2: 読めなかった head には push を撃たない(text D4)
         const unread = (error: unknown) => {
-          if (isBoardDbRefusal(error)) return error;
           return new Error(`could not read origin's ${branch} (${error instanceof Error ? error.message : String(error)}), so the board did not push.`);
         };
         let head: string | undefined;
@@ -1628,7 +1626,7 @@ export function createLanding(deps: LandingDeps): Landing {
         } catch (error) {
           // 転送の後に失敗と報告された push(ADR 0243 決定2 の形)も、origin に載っていれば盤面の push —— 印を持ったまま1度だけ読んで刻む。
           // 刻まなければ、次の tick と回答は盤面自身の commit を盤面の push していない head と読む(ADR 0387 決定1)。読めなければ刻まない
-          if (!isBoardDbRefusal(error) && !(error instanceof RootStopped)) {
+          if (!(error instanceof RootStopped)) {
             const landed = await readOriginBranchHead(deps.db, workspace, deps.githubAuth, taskBranch(task.id)).catch(() => undefined);
             if (landed === sha) recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
           }
@@ -1699,7 +1697,6 @@ export function createLanding(deps: LandingDeps): Landing {
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
       if (error instanceof RootStopped) throw error;
-      if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: 昇格の失敗 question も同じ器に書くので、書かずに底へ
       // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
       if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
         return quarantined("workspace", resolvedWorkspace);
@@ -1738,7 +1735,6 @@ export function createLanding(deps: LandingDeps): Landing {
           record(error.verdict);
           continue;
         }
-        if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: 根ごとの失敗として log に流さない
         console.error(`[landing] landing root ${id} failed; the pass goes on with the rest:`, error);
       }
     }
@@ -1789,7 +1785,7 @@ export function createLanding(deps: LandingDeps): Landing {
       try {
         read = await readPrState(deps.github, checked(resolve(question.workspace)), prNumber);
       } catch (error) {
-        if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
+        if (error instanceof WorkspaceRepoMismatchError) throw error;
         const reason = error instanceof Error ? error.message : String(error);
         throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
@@ -1811,8 +1807,7 @@ export function createLanding(deps: LandingDeps): Landing {
         let read: PrStateRead;
         try {
           read = await readPrState(github, checked(resolve(task.workspace)), pr_number);
-        } catch (error) {
-          if (isBoardDbRefusal(error)) throw error;
+        } catch {
           continue;
         }
         // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
@@ -1833,16 +1828,12 @@ export function createLanding(deps: LandingDeps): Landing {
             const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
             if (!workspace) continue;
             // 状態が読めない(網・認証)回は黙って次の tick へ回す —— 瞬断のたびにログを出さない
-            const read = await readPrState(github, checked(workspace), pr_number).catch((error) => {
-              if (isBoardDbRefusal(error)) throw error;
-              return null;
-            });
+            const read = await readPrState(github, checked(workspace), pr_number).catch(() => null);
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
             if (read && read.state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
               settleObserved({ id, workspace: taskWorkspace }, pr_number, prOutcomeKind(read.state, read.mergedBy), now);
             }
           } catch (error) {
-            if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: その question の失敗として log に流さない
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
             console.error(`[landing] outside-merge scan of PR #${pr_number} (question ${id}) failed; it stays open:`, error);
           }
@@ -1912,7 +1903,7 @@ export function createLanding(deps: LandingDeps): Landing {
                 auth: deps.githubAuth,
                 compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now),
               }).catch((error) => {
-                if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
+                if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 return null;
               })
               : null;
@@ -1942,7 +1933,7 @@ export function createLanding(deps: LandingDeps): Landing {
               const failure = await github.mergePullRequest(ref, head).then(
                 () => null,
                 (error: unknown) => {
-                  if (isBoardDbRefusal(error) || error instanceof WorkspaceRepoMismatchError) throw error;
+                  if (error instanceof WorkspaceRepoMismatchError) throw error;
                   return error instanceof Error ? error.message : String(error);
                 },
               );
@@ -1972,7 +1963,6 @@ export function createLanding(deps: LandingDeps): Landing {
             askHuman();
           });
         } catch (error) {
-          if (isBoardDbRefusal(error)) throw error; // ADR 0342 決定4: その PR の失敗として log に流さない
           if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefsRefusedError) continue;
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         } finally {

@@ -1,4 +1,3 @@
-import Database from "better-sqlite3";
 import { afterEach, expect, it, vi } from "vitest";
 import { listBoardCalls } from "../src/board-call-usage.js";
 import type { CliAuthCheck } from "../src/cli-auth.js";
@@ -110,16 +109,4 @@ it("使用量を読めない poll が撃った認証 probe は、usage を返せ
   expect(listBoardCalls(db)).toEqual([
     { use: "cli_auth_probe", ...boardCall.setting, fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: clock.now().toISOString() },
   ]);
-});
-
-// ADR 0342 決定4: probe の catch は境界 —— 盤面 DB の拒否は「分類できなかった」の log にせず投げる
-it("認証 probe の区間で盤面 DB が拒めば、poll は投げる", async () => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  const refusal = new Database.SqliteError("disk I/O error", "SQLITE_IOERR_WRITE");
-  const { scheduler } = usageBlindScheduler(async () => {
-    throw refusal;
-  });
-
-  await expect(scheduler.rerunPoll()).rejects.toBe(refusal);
-  scheduler.stop();
 });

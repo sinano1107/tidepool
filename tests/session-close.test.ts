@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "../src/claude-stream-reader.js";
 import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl } from "../src/codex-stream-reader.js";
@@ -388,26 +387,6 @@ it.each([
   expect(episodeOf(b.db, neverRan)).toBeUndefined();
   expect(existsSync(temp)).toBe(true);
   expect(silenced).not.toHaveBeenCalled();
-});
-
-// ADR 0342 決定4 / ADR 0344 決定2: session ごとの catch は境界 —— 盤面 DB の拒否は飲まずに投げて起動を拒み、盤面のバグは閉じ切らなかった session の行を立てて起動を続ける
-it("盤面 DB が書きを拒めば、起動時の復旧は投げて起動を拒む", async () => {
-  const b = await board();
-  b.db.pragma("query_only = 1");
-
-  expect(() => b.close()).toThrow("attempt to write a readonly database");
-});
-
-it("exit の記録だけが盤面 DB に拒まれても投げて起動を拒み、question を立てない", async () => {
-  const b = await board();
-  // query_only は question の書き込みも拒むので、再 throw と行の登録を見分けられない —— exit の INSERT にだけ (A) を投げる
-  b.db.function("refuse_write", () => {
-    throw new Database.SqliteError("database or disk is full", "SQLITE_FULL");
-  });
-  b.db.exec("CREATE TEMP TRIGGER exit_refused BEFORE INSERT ON events WHEN NEW.kind = 'worker_exited' BEGIN SELECT refuse_write(); END");
-
-  expect(() => b.close()).toThrow("database or disk is full");
-  expect(questions(b.db)).toEqual([]);
 });
 
 it("exit の記録が盤面のバグで投げた session は question を1枚立て、残りの session はその起動では閉じない —— 同じ spawn の再 throw で question は増えない(ADR 0344 決定2)", async () => {

@@ -23,7 +23,6 @@ import {
 } from "../src/server-options.js";
 import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { terminateOnBoardDbRefusal } from "../src/unhandled-rejection-floor.js";
 import { restoreBaseline } from "../src/workspace.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, TEST_CREDENTIAL } from "./harness.js";
@@ -281,13 +280,6 @@ it("組み立てられたオプションは watchdog を持つ(#172)", async () 
   const options = await buildOptions(composition());
 
   expect(options.watchdog).toBe(WATCHDOG);
-});
-
-// ADR 0342 決定4: 本番の盤面は盤面 DB が書きを拒んだら process を終える —— 省略時の再 throw はテスト盤面の形。
-it("組み立てられたオプションは本物の terminateOnBoardDbRefusal を持つ", async () => {
-  const options = await buildOptions(composition());
-
-  expect(options.terminateOnBoardDbRefusal).toBe(terminateOnBoardDbRefusal);
 });
 
 // 値は「一晩を無駄にしない上限」と「正常な長時間タスクを殺さない下限」の間の判断で

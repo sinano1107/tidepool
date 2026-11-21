@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
@@ -383,20 +382,6 @@ it("直さずに受理すると拒まれ(DomainError)、question は開いたま
   expect(b.slot.currentTaskId).toBeNull();
 });
 
-it("runner の中で盤面 DB が書きを拒めば(A)、question を立てずに投げる —— 底が process を終える(ADR 0342 決定2・6)", () => {
-  const b = board();
-  b.containers.forceReclaim(String(sessionId(b.db, b.task.id)));
-  b.db.pragma("query_only = 1");
-
-  expect(() => b.watchdog.onWorkerExited(b.task.id, { ...QUIET_EXIT, exit_code: 1 }, { sessionId: sessionId(b.db, b.task.id), workerSpawnedEventId: b.spawned, turnRan: true, writes: [], classification: { capInterrupted: false } })).toThrow(
-    expect.objectContaining({ code: "SQLITE_READONLY" }),
-  );
-
-  b.db.pragma("query_only = 0");
-  expect(questions(b.db)).toEqual([]);
-  expect(getTask(b.db, b.task.id)?.status).toBe("in_progress");
-});
-
 it("破られた契約への備え: 分類の Promise が reject しても(adapter の書き込みは束の step へ移ったのでそこからは来ない)、slot を黙って握り続けず閉じ切らなかった session が立ち、梯子は進まず未処理の reject も出ない(#2822 / ADR 0344 決定1 の Status 追記)", async () => {
   const b = board({ hold: true });
 
@@ -665,24 +650,6 @@ it("飲まれた回収済み観測の後で人間が止めると、受理の後�
   expect(steps.fired).toEqual(["exit", "temp", "project"]);
   expect(questions(b.db)).toEqual(["stopped by human: one"]);
   expect(b.slot.currentTaskId).toBeNull();
-});
-
-it("書く step の中で盤面 DB が書きを拒めば(A)、question を立てずに底へ投げる —— 同期は throw、Promise の分類は reject(ADR 0342 決定2・6)", async () => {
-  const b = board();
-  const write = () => appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
-  const refused = expect.objectContaining({ code: "SQLITE_READONLY" });
-  b.db.pragma("query_only = 1");
-
-  expect(() => b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { sessionId: sessionId(b.db, b.task.id), workerSpawnedEventId: b.spawned, turnRan: true, classification: { capInterrupted: false }, writes: [write] })).toThrow(refused);
-  const rejections = await unhandledRejectionsDuring(async () => {
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { sessionId: sessionId(b.db, b.task.id), workerSpawnedEventId: b.spawned, turnRan: true, classification: Promise.resolve({ capInterrupted: false }), writes: [write] });
-    await settle();
-  });
-
-  b.db.pragma("query_only = 0");
-  expect(rejections).toContainEqual(refused);
-  expect(questions(b.db)).toEqual([]);
-  expect(b.slot.hasFailedTeardownRest(b.task.id)).toBe(false);
 });
 
 it("時間制限の停止の後の exit で書く step が投げても、飲まれた回収済み観測は受理の後ろで受ける —— 偽の Containment question を立てずに枠が空く(ADR 0112 決定4)", async () => {
@@ -1255,29 +1222,6 @@ describe("閉じ切らなかった session(ADR 0344)", () => {
     expectHeld(b);
   });
 
-  it("受理の撃ち直しで盤面 DB が書きを拒めば(A)、回答の拒否に飲まず投げる(ADR 0342 決定4)", async () => {
-    const b = board();
-    let broken = true;
-    b.watchdog.onWorkerExited(b.task.id, FAILED_EXIT, { sessionId: sessionId(b.db, b.task.id),
-      workerSpawnedEventId: b.spawned,
-      turnRan: true,
-      classification: { capInterrupted: false },
-      writes: [
-        () => {
-          if (broken) throw new Error("exit write bug");
-          appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: b.clock.now() });
-        },
-      ],
-    });
-    broken = false;
-    b.db.pragma("query_only = 1");
-
-    await expect(acceptUnclosedSession(b.deps, b.spawned, () => {})).rejects.toMatchObject({ code: "SQLITE_READONLY" });
-
-    b.db.pragma("query_only = 0");
-    expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE]);
-  });
-
   describe("再起動を跨いだ受理は記録から閉じ直す", () => {
     function restartFixture() {
       const b = board();
@@ -1405,24 +1349,6 @@ describe("live transcript projection", () => {
     await b.clock.advance(CONFIG.reclaimTimeout * 2);
     expect(b.slot.currentTaskId).toBeNull();
     expect(questions(b.db)).toEqual([UNCLOSED_SESSION_QUESTION_TITLE, "watchdog killed task: one"]);
-  });
-
-  it.each([false, true])("a projection DB refusal escapes to the floor without a halt and clears pending (already closed: %s)", (closed) => {
-    const b = board();
-    const dir = mkdtempSync(join(tmpdir(), "tidepool-refused-projection-"));
-    const path = join(dir, "stream.jsonl");
-    writeFileSync(path, "");
-    b.db.function("refuse_projection", () => { throw new Database.SqliteError("disk is full", "SQLITE_FULL"); });
-    b.db.exec("CREATE TEMP TRIGGER projection_refused BEFORE INSERT ON episodes BEGIN SELECT refuse_projection(); END");
-    const stream = Object.assign(new EventEmitter(), { closed });
-    markProjectionPending(b.db, b.spawned);
-    const schedule = () => projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath: path, taskId: b.task.id },
-      (step) => runTeardownSteps(b.deps, b.task.id, ...sessionCloseSteps(b.spawned, [step])));
-    if (!closed) schedule();
-
-    expect(closed ? schedule : () => stream.emit("close")).toThrow(expect.objectContaining({ code: "SQLITE_FULL" }));
-    expect(openQuarantineValues(b.db, "unclosedSession")).toEqual([]);
-    expect(projectionPending(b.db, b.spawned)).toBe(false);
   });
 
   it.each([false, true])("a projection bug halts its session with replayable work (already closed: %s)", async (closed) => {

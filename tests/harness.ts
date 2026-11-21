@@ -363,8 +363,6 @@ export interface BootOptions {
    *  `TEST_CREDENTIAL`。認証が成立しない盤面の振る舞い(fail-open と、それを
    *  検出する封じ込め能力ゲート — issue #154)を駆動するテストだけが渡す。 */
   credential?: HumanCredential;
-  /** ADR 0342 決定4: 盤面 DB が書きを拒んだときの終了。Absent → 再 throw。 */
-  terminateOnBoardDbRefusal?: Parameters<typeof startServer>[0]["terminateOnBoardDbRefusal"];
 }
 
 /** The server wants a per-request candidates provider; a test may pass one
@@ -391,7 +389,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
-  const db = openDb(dbPath);
+  const db = openDb(dbPath, { terminate: () => {} });
   containers.taskIdForSession = (id) => /^\d+$/.test(id) ? getEvent(db, Number(id))?.task_id ?? undefined : undefined;
   const server = await startServer({
     db,
@@ -463,7 +461,6 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubAuth: options.githubAuth,
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
-    terminateOnBoardDbRefusal: options.terminateOnBoardDbRefusal,
   });
   // 起動完了の poll は起動の収束の後に走る(ADR 0241 決定5)。GitHub を待たない起動の収束と poll はここで終わる ——
   // テストが盤面に何かを足す前に、起動完了の poll が空の queue を読み終えている(待つ GitHub の fake を渡した盤面は別)

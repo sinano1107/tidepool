@@ -154,7 +154,6 @@ import {
   tasksReleasedOn,
   teardownUnfinishedUnder,
 } from "./tasks.js";
-import { isBoardDbRefusal } from "./unhandled-rejection-floor.js";
 import { BOARD_BRANCHES, foreignTaskBranches, humanWorkLeft, type WorkbenchOwner, type WorkbenchRead, workbenchCommands, workbenchOwner, workbenchPath } from "./workbench.js";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerGitCopyTimeoutError, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 
@@ -353,7 +352,6 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       await firePickupPredicates(db, place, list, "before-open", { live });
       checks.push({ place, predicates: list });
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       if (err instanceof PickupGateError) throw err;
       throw new PickupGateError(place, err);
     }
@@ -393,7 +391,6 @@ export async function firePickupPredicates(
       if (predicate.phase === "before-open") predicate.check();
       else await predicate.check(fire);
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: 包むと判定が届かない
       throw new PickupGateError(predicate.phase === "after-open" ? predicate.place : place, err, predicate.describe);
     }
   }
@@ -1196,12 +1193,11 @@ function repointBoardRefs(named: WorkspaceConfig, workbench: string, carried?: C
   if (typeof carried === "object") git(workbench, "update-ref", `refs/heads/${boardBranch(shortRef(carried.ref))}`, carried.sha);
 }
 
-/** ADR 0371 決定7: 取り込みの拒否は `board/*` を引き直してから投げる —— 盤面 DB の拒否は回答の拒否に包まず底へ、引き直しもしない(ADR 0342 決定4)。 */
+/** ADR 0371 決定7: 取り込みの拒否は `board/*` を引き直してから投げる。 */
 function repointingOnRefusal<T>(named: WorkspaceConfig, workbench: string, intake: () => T, carried?: Carried): T {
   try {
     return intake();
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
     try {
       repointBoardRefs(named, workbench, carried);
     } catch {
@@ -1489,8 +1485,7 @@ const holdsTargetBranch = (at: string, branch: string) =>
   placeHasRepository(at) && gitAnswers(() => workerRepoGit(at, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`));
 
 /** ADR 0373 決定9: 組の停止が開く作業台 —— 開くのは鍵ごとに冪等で、書く先の branch のある作業台は作り直さない(無視された file も人間のもの)。
- *  作りかけは開く手の規則で作り直す。返すのは修理の道の文(text B8、ADR 0382 決定4 の句)。開けなければそう言う(fail-closed)—— 盤面 DB の
- *  拒否だけは底へ(ADR 0342 決定4)。 */
+ *  作りかけは開く手の規則で作り直す。返すのは修理の道の文(text B8、ADR 0382 決定4 の句)。開けなければそう言う(fail-closed)。 */
 function containmentStopRoute(db: Db, named: WorkspaceConfig, base: string, now: Date): string {
   const branch = protectedBranch(named);
   try {
@@ -1503,7 +1498,6 @@ function containmentStopRoute(db: Db, named: WorkspaceConfig, base: string, now:
     } else opened = openWorkbench(named, base, branch);
     return `${commitFixInWorkbench(opened.path, branch)}${heldCommitsClause(opened.owner, branch)}`;
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
     return ` The board could not open the workbench (${err instanceof Error ? err.message : String(err)}); ${openWorkbenchExit(branch)}`;
   }
 }
@@ -1543,7 +1537,6 @@ export async function openHumanContentWorkbench(
     opened = leaveAlone ? { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) } : openWorkbench(workspace, base, branch);
   } catch (err) {
     if (err instanceof WorkbenchUnreadableError) throw new DomainError(`the board cannot read the workbench at ${err.at} (${err.message}); remove it by hand, then open it again.`);
-    if (isBoardDbRefusal(err)) throw err;
     throw new DomainError(`the board could not open the workbench (${err instanceof Error ? err.message : String(err)}); open it again.`);
   }
   const { path, owner } = opened;
@@ -1676,7 +1669,6 @@ async function preparedOrRefused(
   try {
     await prepare();
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
     if (err instanceof FirstCaptureRefusedError) throw stopped(err.stop);
     if (err instanceof FirstCaptureRegistryReadError) throw new DomainError(`cannot ${verb}: the board could not read the registry (${err.message}).`);
     if (err instanceof CheckoutHostError) throw new DomainError(`cannot ${verb}: ${err.message}`);
@@ -1727,7 +1719,6 @@ export async function startHumanWork(
   try {
     path = openHumanWorkWorkbench(workspace, board.workspacesBaseDir, taskBranch(task.id)).path;
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
     throw new DomainError(`cannot start work: the board could not open the workbench (${err instanceof Error ? err.message : String(err)}); start work again.`);
   }
   if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now, payload: { kind: "task_work_started" } });
@@ -1795,7 +1786,6 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
     try {
       mergeBackInto(db, named, base, lineage, task.id, "release");
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err;
       quarantineWorkspace(db, named.name, err, now);
     }
   }
@@ -1814,7 +1804,7 @@ function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task, verb: "take 
   return { lineage, ref, name: lineage ?? protectedBranch(named), sha: git(named.path, "rev-parse", "--verify", ref) };
 }
 
-/** 人間担当の work の扉の取り込みの失敗のうち、人間が作業台で直せる拒否だけを回答の拒否にする —— 盤面の側の失敗(と盤面 DB の拒否)は素のまま投げる。 */
+/** 人間担当の work の扉の取り込みの失敗のうち、人間が作業台で直せる拒否だけを回答の拒否にする —— 盤面の側の失敗は素のまま投げる。 */
 function throwHumanWorkRefusal(err: unknown): never {
   const refusal = [IntakeRefusedError, CheckoutUnreadableError, WorktreeStatusError, WorkerTreeGitTimeoutError, CheckoutHostError].some((kind) => err instanceof kind);
   if (refusal) throw new DomainError((err as Error).message);
@@ -2052,7 +2042,6 @@ export function humanContentWorkbenchLeft(named: WorkspaceConfig, base: string):
   if (!placeHasRepository(at)) return undefined;
   const workbench = realpathSync(at);
   const unreadable = (place: string, err: unknown): HumanContentWorkbenchLeft => {
-    if (isBoardDbRefusal(err)) throw err;
     return { workbench, branch, unreadable: { place, error: err instanceof Error ? err.message : String(err) } };
   };
   try {
@@ -2564,7 +2553,7 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
     try {
       prepareRefBaseline(db, read.place, board);
     } catch (err) {
-      if (isBoardDbRefusal(err) || err instanceof FirstCaptureRefusedError || err instanceof FirstCaptureRegistryReadError) throw err;
+      if (err instanceof FirstCaptureRefusedError || err instanceof FirstCaptureRegistryReadError) throw err;
       throw new PickupGateError(read.place, err);
     }
     await firePickupPredicates(db, read.place, read.predicates, "after-open", board);
@@ -2690,7 +2679,6 @@ function confirmBaselinesBeforeFirstCapture(db: Db, resolveRegistered: Workspace
       compareAndFoldBaseline(db, place, "while the checkout rested since the last session");
     } catch (err) {
       // 読めない checkout も基準どおりとは言えない —— 違いと同じくその名前で止める
-      if (isBoardDbRefusal(err)) throw err;
       throw new FirstCaptureRefusedError(quarantineWorkspace(db, name, err, now));
     }
   }
@@ -2931,7 +2919,6 @@ export function writeBoardRefs(
     try {
       fold();
     } catch (foldErr) {
-      if (isBoardDbRefusal(foldErr)) throw foldErr; // ADR 0342 決定4: 盤面 DB の拒否は書き込みの失敗の陰に隠さない
       console.warn(`[workspace] ${workspace.name}: folding the announced baseline failed after the write failed`, foldErr);
     }
     throw err;
@@ -2979,8 +2966,8 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
   if (!isRemoteBacked(place)) return;
   const missing = [...new Set(lostTargets(place, restoreTargets(db, place).targets).map(([, sha]) => sha))];
   if (missing.length === 0) return;
-  // 盤面 DB の拒否(ADR 0342 決定4)と記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさに包まない
-  const passThrough = (err: unknown) => isBoardDbRefusal(err) || err instanceof WorkspaceRepoMismatchError || err instanceof OriginRepositoryMismatchError;
+  // 記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさに包まない
+  const passThrough = (err: unknown) => err instanceof WorkspaceRepoMismatchError || err instanceof OriginRepositoryMismatchError;
   const unreachable = (shas: string[], err: unknown) => {
     if (passThrough(err)) return err;
     return new Error(`could not reach origin to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once origin is reachable.`);
@@ -3140,9 +3127,8 @@ function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now:
   try {
     const lineage = resolveTaskBranchLineage(db, workspace, task);
     if (lineage.branch || lineage.noReturn) return;
-  } catch (err) {
+  } catch {
     // 根か分からない task に恒久の終わりの記録は書かない —— 収束が自分の経路で根の失敗として見せる(`landingRootOf`)
-    if (isBoardDbRefusal(err)) throw err;
     return;
   }
   const lost = taskBranchLostInForce(db, task.id)!;
@@ -3246,7 +3232,6 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     // HEAD は受理の比較が拒む(ADR 0373 決定1)
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
-    if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (!remoteBacked) return;
@@ -3262,7 +3247,6 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     }
     if (!isAncestor(workspace, remoteSha, localSha)) throw new Error("the local and remote histories diverged");
   } catch (cause) {
-    if (isBoardDbRefusal(cause)) throw cause; // ADR 0342 決定4: 包むと判定が届かない
     throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   throw new Error(
@@ -3283,7 +3267,6 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
     // ADR 0356 決定3: 名前の場所(面接室を含む)は自分の git で読む
     status = ownWorktreeStatus(workspace.path);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err;
     throw new Error(
       `workspace ${workspace.name} is not a usable git repository: ` +
         (err instanceof Error ? err.message : String(err)),
@@ -3435,7 +3418,6 @@ function releaseTaskCheckout(
     try {
       if (!bringTaskCheckout(db, place, task, now, completed, "during the session")) return;
     } catch (err) {
-      if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
       quarantineWorkspace(db, namedPlace.name, err, now);
       return;
     }
@@ -3451,7 +3433,6 @@ function releaseTaskCheckout(
     // 作業台は task の checkout と同じ基点の下(spec #3273 の番地)
     settleBranches(db, namedPlace, task, mergeBack, githubAuth, tokenFailure, CHECKOUT_LAYOUT.task.base(checkout), verifiedTip);
   } catch (err) {
-    if (isBoardDbRefusal(err)) throw err; // ADR 0342 決定4: quarantine も同じ器に書くので、書かずに底へ
     quarantineWorkspace(db, namedPlace.name, err, now);
   }
   removeReleasedTaskCheckout(db, task.id);
@@ -3893,7 +3874,7 @@ export async function redoMergeBacks(
   try {
     parkOnProtectedBranch(db, workspace);
   } catch (parkError) {
-    if (!failure || isBoardDbRefusal(parkError)) throw parkError; // ADR 0342 決定4: 盤面 DB の拒否は先の理由の陰に隠さない
+    if (!failure) throw parkError;
   }
   if (failure) throw failure.error;
   return kept;
