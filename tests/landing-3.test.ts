@@ -1569,6 +1569,7 @@ it.each([
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unreadable-after-push", "escalate");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, work);
+  const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
   afterEachPush(github, () => {
     breakPackedRefs(workspace);
     if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
@@ -1585,7 +1586,7 @@ it.each([
     expect(promotionFailures(db, work.id)).toEqual([]);
   } else {
     expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
-    expect(promotionFailures(db, work.id)).toHaveLength(1);
+    expect(promotionFailures(db, work.id)).toEqual([expect.objectContaining({ question_landing_tip: tip })]);
   }
 });
 

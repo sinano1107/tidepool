@@ -404,8 +404,8 @@ export function mergeQuestion(
       question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
       question_kind:
         "pending_merge_pr" in pending
-          ? { kind: "pr_merge", pr: pending.pending_merge_pr }
-          : { kind: "local_merge", task_id: pending.pending_local_merge_task_id },
+          ? { kind: "pr_merge", pr: pending.pending_merge_pr, tip: null, outside: null, missingBranches: null, reason: "pr_opened" }
+          : { kind: "local_merge", task_id: pending.pending_local_merge_task_id, tip: null },
     },
     clock.now(),
     ...HUMAN_WEBUI,

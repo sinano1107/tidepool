@@ -1,8 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
+import { submitAnswer } from "../src/human-verbs.js";
 import { getTask, listBoard } from "../src/tasks.js";
-import { afterCiRead, FakeGitHubClient, fakeHead } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead } from "./fakes.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace } from "./harness.js";
 import {
   afterEachPush,
@@ -11,6 +12,7 @@ import {
   boardEvents,
   CI_RED_PURPOSE,
   CONFLICT,
+  commitThroughTaskCheckout,
   convergeOn,
   finish,
   landingWork,
@@ -53,7 +55,8 @@ it.each(["success", "pending", "unreported", "failure"] as const)("外から進�
   expect(pr.github.merged).toEqual([]);
   expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
   expect(mergeQuestions(pr.db)).toEqual([
-    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: outsideHeadBody(head, lastPushed) },
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold",
+      purpose: outsideHeadBody(head, lastPushed) + (ci === "failure" ? '\n\n"ship"\'s auto_if_ci_green auto-merge found CI red on PR #1.' : "") },
   ]);
 });
 
@@ -91,8 +94,8 @@ it("GitHub の head が手元にも origin にも無ければ、取れない hea
 });
 
 // 書き換え・巻き戻しの head は ADR 0376 決定7 が受ける —— 着地するタスクのブランチが手元に無くても、祖先関係で確かめた書き換えは書き換え
-it("手元に根のタスクブランチが無い PR の head が書き換えられれば、盤面の知らない commit の question でなく、落ちた内容の推奨 hold の question が立つ", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("outside-head-rewritten-no-local-branch");
+it.each(["success", "failure", "pending"] as const)("手元に根のタスクブランチが無い PR の head が書き換えられれば、CI が %s でも落ちた内容の推奨 hold の question が立つ", async (ci) => {
+  const { workspace } = await makeRemoteBackedWorkspace(`outside-head-rewritten-no-local-branch-${ci}`);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github);
@@ -106,11 +109,15 @@ it("手元に根のタスクブランチが無い PR の head が書き換えら
   github.scriptPullRequestOnBranch(`task/${work.id}`, 1);
   recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
   await pushOutsideBoard(workspace, work.id, `${lastPushed}~1`);
+  github.scriptCiStatus(ci);
 
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
-  expect(mergeQuestions(db).map(({ purpose }) => purpose)).toEqual([textA4c(`task/${work.id}`)]);
+  expect(mergeQuestions(db)).toEqual([{
+    pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold",
+    purpose: textA4c(`task/${work.id}`) + (ci === "failure" ? '\n\n"ship"\'s auto_if_ci_green auto-merge found CI red on PR #1.' : ""),
+  }]);
 });
 
 /** 人間の「merge」の回答。拒否なら DomainError の文を、通れば undefined を返す。 */
@@ -138,25 +145,70 @@ it("盤面の知らない commit を言う merge question への最初の「merg
   expect(pr.github.merged.map(({ number }) => number)).toEqual([1]);
 });
 
-it("キューにいる PR の merge question が開いたまま外から進んだ head を tick が読んでも、伝えた記録は残らず、最初の「merge」は commit を列挙して1回拒まれる", async () => {
+it("キューにいる PR の merge question が開いたまま外から進んだ head を tick が読むと、古い question は閉じ、新しい question への最初の「merge」が通る", async () => {
   const pr = await openPushedPr("outside-head-question-already-open", "auto_if_ci_green");
   const lastPushed = originHead(pr.workspace, pr.work.id);
-  mergeQuestion(pr.db, pr.clock, { pending_merge_pr: 1 }, pr.work.workspace ?? undefined);
+  const registered = mergeQuestion(pr.db, pr.clock, { pending_merge_pr: 1 }, pr.work.workspace ?? undefined);
+  const original = getTask(pr.db, registered.id)!;
   const head = await pushOutsideBoard(pr.workspace, pr.work.id);
 
   await pr.landing.tick("auto_merge", pr.clock.now());
 
-  expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual(["a human decides whether to land"]);
-  expect(await answerMerge(pr)).toBe(listedRefusal(head, lastPushed, [[head, "outside.txt"]]));
+  expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([outsideHeadBody(head, lastPushed)]);
+  expect(getTask(pr.db, original.id)).toEqual({ ...original, status: "done" });
+  const replacement = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+  expect(boardEvents(pr.db, pr.work.id, "pr_merge_question_replaced")).toEqual([
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_question_replaced", question_id: original.id, replacement_question_id: replacement.id } },
+  ]);
+  await expect(submitAnswer(
+    { ...pr, pollNow: () => {} }, getTask(pr.db, original.id)!, ["merge"], undefined, () => pr.clock.now(), "webui",
+  )).rejects.toThrow("question closed");
+  expect(pr.github.merged).toEqual([]);
+  await expect(answerMerge(pr)).resolves.toBeUndefined();
+  expect(pr.github.mergedHeads).toEqual([head]);
+});
+
+it("人間の merge が執行中なら収束は question を取り替えず、執行が終われば書き換えを問い直す", async () => {
+  const pr = await openPushedPr("rewrite-during-executing-answer", "escalate");
+  const original = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+  const fork = git(pr.workspace.path, "rev-parse", "HEAD~1");
+  const executing = awaitWindow();
+  const merge = pr.github.mergePullRequest.bind(pr.github);
+  vi.spyOn(pr.github, "mergePullRequest").mockImplementationOnce(async (ref, head) => {
+    await executing.hold();
+    await merge(ref, head);
+  });
+  const answer = answerMerge(pr);
+  await executing.entered;
+
+  try {
+    finish(pr.db, pr.clock, pr.work);
+    await commitThroughTaskCheckout(pr.db, pr.clock, pr.workspace, pr.work, "repair.txt", "fixed\n");
+    await pushOutsideBoard(pr.workspace, pr.work.id, fork);
+    await convergeOn(pr.landing, pr.work.id);
+
+    expect(listBoard(pr.db).filter((q) => q.question_pending_merge_pr === 1)).toEqual([original]);
+  } finally {
+    executing.open();
+  }
+
+  expect(await answer).toContain("Head branch was modified");
+  await convergeOn(pr.landing, pr.work.id);
+  expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([textA4c(`task/${pr.work.id}`)]);
+  expect(getTask(pr.db, original.id)?.status).toBe("done");
 });
 
 it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、伝えた head として拒まれずに merge する", async () => {
   const pr = await openPushedPr("outside-head-surface-changed", "auto_if_ci_green");
   const landing = autoMerging(pr.db, pr.clock, pr.workspace, pr.github, () => profile("escalate"));
-  await pushOutsideBoard(pr.workspace, pr.work.id);
+  const lastPushed = originHead(pr.workspace, pr.work.id);
+  const head = await pushOutsideBoard(pr.workspace, pr.work.id);
 
   await landing.tick("auto_merge", pr.clock.now());
-  expect(mergeQuestions(pr.db).map(({ recommendation }) => recommendation)).toEqual(["hold"]);
+  expect(mergeQuestions(pr.db)).toEqual([{
+    pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold",
+    purpose: outsideHeadBody(head, lastPushed) + '\n\n"ship"\'s PR #1 was queued for auto_if_ci_green auto-merge, but its landing surface changed after it was queued: the merge dial is now escalate.',
+  }]);
 
   await expect(answerMerge({ ...pr, landing })).resolves.toBeUndefined();
   expect(pr.github.merged.map(({ number }) => number)).toEqual([1]);

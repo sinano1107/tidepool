@@ -11,7 +11,7 @@ import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from 
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates, resolvedCommit } from "./pickup-predicates.js";
 import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
-import { type QuestionColumns, questionKindOf } from "./question-kind.js";
+import { type PrMergeOutside, type PrMergeReason, type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
 import {
   ancestorsSql,
@@ -29,6 +29,7 @@ import {
   MERGE_QUESTION_OPTIONS,
   openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
+  recordHeadConveyed,
   recordPrNumber,
   recordPrOpened,
   registerMergeQuestion,
@@ -763,8 +764,9 @@ export function registerPrPromotionFailureQuestion(
   error: string,
   now: Date,
   purpose = `Creating a PR for completed task "${task.title}" failed: ${error}`,
+  tip: string | null = null,
 ): void {
-  registerPrPromotionQuestion(db, task, `PR promotion failed: ${task.title}`, purpose, now);
+  registerPrPromotionQuestion(db, task, `PR promotion failed: ${task.title}`, purpose, now, tip);
 }
 
 function registerPrPromotionQuestion(
@@ -773,6 +775,7 @@ function registerPrPromotionQuestion(
   title: string,
   purpose: string,
   now: Date,
+  tip: string | null,
 ): void {
   registerTask(
     db,
@@ -788,7 +791,7 @@ function registerPrPromotionQuestion(
           recommendation: "retry",
         },
       ],
-      question_kind: { kind: "pr_promotion_retry", task_id: task.id },
+      question_kind: { kind: "pr_promotion_retry", task_id: task.id, tip },
       workspace: task.workspace ?? undefined,
     },
     now,
@@ -825,6 +828,16 @@ export function taskBranchHeadOrNull(
     if (resolve) return git(resolve(taskWorkspace).path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
   } catch {}
   return null;
+}
+
+/** ADR 0394 決定1 / ADR 0370 決定1: 問う内容は基準と比べずに読む。完全修飾 ref の解決に他の ref の曖昧さは要らない。 */
+function questionTip(workspace: WorkspaceConfig, taskId: string): string | null {
+  try {
+    return git(workspace.path, "-c", "core.warnAmbiguousRefs=false", "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
+  } catch (error) {
+    if ((error as { status?: number } | null)?.status !== 1) throw error;
+    return null;
+  }
 }
 
 /** ADR 0079 決定3/4 / ADR 0229 決定4: retires a merge question whose PR turned out to be
@@ -877,6 +890,7 @@ export function registerLocalMergeQuestion(
   task: Task,
   purpose: string,
   now: Date,
+  tip: string | null = null,
 ): void {
   const title = `land completed task: ${task.title}`;
   registerTask(
@@ -887,7 +901,7 @@ export function registerLocalMergeQuestion(
       purpose,
       completion_criteria: "a human decides whether to land the completed task branch",
       question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation: "merge" }],
-      question_kind: { kind: "local_merge", task_id: task.id },
+      question_kind: { kind: "local_merge", task_id: task.id, tip },
       workspace: task.workspace ?? undefined,
     },
     now,
@@ -1002,11 +1016,6 @@ export function observePrHead(db: Db, taskId: string, prNumber: number, head: st
   });
 }
 
-/** ADR 0387 決定2: 盤面がこの head の外の commit を人間に伝えたことを、盤面名義で刻む。 */
-function recordHeadConveyed(db: Db, taskId: string, prNumber: number, head: string, now: Date): void {
-  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_conveyed", pr_number: prNumber, sha: head }, at: now });
-}
-
 /** 拒否文に列挙する commit の上限 —— 保護ブランチを merge した head は、その commit も全部並ぶ。 */
 const LISTED_COMMITS = 10;
 
@@ -1105,16 +1114,7 @@ export function createLanding(deps: LandingDeps): Landing {
     prNumber: number,
     workspaceName: string,
     now: Date,
-    askQuestion = (changed: string) =>
-      registerMergeQuestion(
-        deps.db,
-        task,
-        prNumber,
-        `"${task.title}"'s PR #${prNumber} was queued for auto_if_ci_green auto-merge, but its ` +
-          `landing surface changed after it was queued: ${changed}. Merge it now?`,
-        "merge",
-        now,
-      ),
+    askQuestion: (changed: string) => void,
   ) => {
     const landing = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
@@ -1148,32 +1148,49 @@ export function createLanding(deps: LandingDeps): Landing {
     })();
     return true;
   };
-  const openMergeQuestion = (task: Task, prNumber: number) =>
-    listOpenMergeQuestions(deps.db).find((question) => question.pr_number === prNumber && question.workspace === task.workspace)?.id;
-  /** 推奨 hold の merge question の1つの書き手 —— キューの行を外すことと問うことを1つにし(ADR 0217 決定2)、同じ同期区間で開いている
-   *  merge question があれば足さない(1つの PR に question は1つ)。無人 merge の tick と、外の push が落とした内容を見つけた収束
-   *  (ADR 0376 決定7)が呼ぶ。開いている question の id と、立てたかを返す。`conveyedHead` は本文が外の commit を言う head の sha —— ADR 0387 決定2:
-   *  question を新しく立てたときだけ、同じ transaction でその head を伝えたと刻む(開いていた question はその head を言っていない)。 */
-  const askHold = (task: Task, prNumber: number, purpose: string, now: Date, conveyedHead?: string): { question: string; raised: boolean } =>
-    deps.db.transaction(() => {
+  type MergeQuestionPrompt = {
+    reason: PrMergeReason;
+    detail: string;
+    question: string;
+    recommendation: (typeof MERGE_QUESTION_OPTIONS)[number];
+  };
+  /** ADR 0217 決定2: キューの行を外すことと問うことを1つにする。 */
+  const askMerge = (
+    workspace: WorkspaceConfig,
+    task: Task,
+    pr: number,
+    now: Date,
+    head: string,
+    origin: PrHeadOrigin,
+    prompt?: MergeQuestionPrompt,
+  ): string => {
+    const outside: PrMergeOutside | null = origin.kind === "pushed" ? null : { kind: origin.kind, sha: head };
+    const missingBranches = origin.kind === "rewritten" ? [...origin.outside.dropped, ...origin.outside.unpushed].map(taskBranch) : [];
+    const outsideBody = origin.kind === "rewritten" ? outsidePushQuestionBody(task, pr, origin.outside)
+      : origin.kind === "not_pushed" ? notPushedQuestionBody(task, pr, head, origin.lastPushed) : undefined;
+    if (outsideBody === undefined && prompt === undefined) throw new Error("a merge question must say why it was raised");
+    // ADR 0394 決定1: 外の head を先に言い、CI や面の変化は後ろに添える。
+    const purpose = outsideBody === undefined ? `${prompt!.detail} ${prompt!.question}`
+      : prompt === undefined ? outsideBody : `${outsideBody}\n\n${prompt.detail}`;
+    const tip = questionTip(workspace, task.id);
+    return deps.db.transaction(() => {
       clearPendingAutoMerge(deps.db, task.id);
-      const open = openMergeQuestion(task, prNumber);
-      if (open !== undefined) return { question: open, raised: false };
-      registerMergeQuestion(deps.db, task, prNumber, purpose, "hold", now);
-      if (conveyedHead !== undefined) recordHeadConveyed(deps.db, task.id, prNumber, conveyedHead, now);
-      return { question: openMergeQuestion(task, prNumber)!, raised: true };
+      return registerMergeQuestion(deps.db, task, {
+        pr, tip, outside, missingBranches: missingBranches.length > 0 ? missingBranches : null, reason: prompt?.reason ?? "outside_head",
+      }, purpose, prompt?.recommendation ?? "hold", now);
     })();
-  /** ADR 0376 決定7 / spec #3273 group D: 外の push が落とした内容の推奨 hold の merge question を、tick と同じ書き手で立てる —— 開いていれば
-   *  足さない。tick と同じく profile → 門の順に読み直し(ADR 0217 決定1・ADR 0232)、止まれば立てずにその verdict を返す。着地の面は読まない。 */
-  const askOutsidePush = (task: Task, prNumber: number, outside: OutsidePush): { question: string; raised: boolean } | LandingVerdict => {
-    const open = openMergeQuestion(task, prNumber);
-    if (open !== undefined) return { question: open, raised: false };
+  };
+  /** ADR 0376 決定7: 外の push が落とした内容を問う直前に profile → 門の順に読み直し(ADR 0217 決定1・ADR 0232)、
+   *  止まればその verdict を返す。着地の面は読まない。 */
+  const askOutsidePush = (workspace: WorkspaceConfig, task: Task, prNumber: number, outside: OutsidePush): { question: string } | LandingVerdict => {
+    // ADR 0288 決定2 / ADR 0394 決定2: 執行中の回答を閉じず、tick の読みを待つ間は収束が問い直せる。
+    if (inFlight.get(markKey(task.workspace, prNumber)) === "write") return failedAnswer(prInFlightRefusal(prNumber));
     const now = deps.clock.now();
     const resolved = readAuthority(task, now);
     if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
     const block = landingBlock(deps.db, task.id);
     if (block) return { kind: "deferred", reason: block.kind, count: block.count };
-    return askHold(task, prNumber, outsidePushQuestionBody(task, prNumber, outside), now);
+    return { question: askMerge(workspace, task, prNumber, now, outside.head, { kind: "rewritten", outside }) };
   };
   /** 回答の取り込みが根の verdict に添えるもの: 作業台を残したときの text C6(`kept`)と、取り込んだこと(`takenIn`、text A10)。 */
   type IntakeOutcome = { kept: string[]; takenIn: boolean };
@@ -1181,6 +1198,13 @@ export function createLanding(deps: LandingDeps): Landing {
    *  (ADR 0106 決定5)失敗 question を立て直さず、答えている question を引退の対象から除く。`intake` はその回答の取り込みの束で、
    *  retry か、外の push が落とした内容の merge question への `merge`(entry `landing_merge`)が答えている途中であることを表す。 */
   type RootContext = { answering: ReadonlyMap<string, Answerer>; intake?: IntakeContext; outcome: IntakeOutcome };
+  const readQuestionTip = (task: Task) => {
+    let workspace: WorkspaceConfig | undefined;
+    try {
+      workspace = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
+    } catch {}
+    return workspace === undefined ? null : questionTip(workspace, task.id);
+  };
   const retireFailures = (taskId: string, ctx: RootContext) =>
     settlePrPromotionQuestionsAsObserved(deps.db, taskId, deps.clock.now(), ctx.answering);
   const failed = (
@@ -1193,7 +1217,7 @@ export function createLanding(deps: LandingDeps): Landing {
     if (!ctx.intake) {
       // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と origin の盤面の
       // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
-      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined);
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, readQuestionTip(task));
     }
     return { kind: "failed", reason, error: message };
   };
@@ -1286,13 +1310,13 @@ export function createLanding(deps: LandingDeps): Landing {
       : finishLanding(task, workspace, prNumber, "merge", ctx);
   };
   // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, "write" | "auto_merge">();
   const markKey = (workspace: string | null, prNumber: number) => JSON.stringify([workspace, prNumber]);
   const isMarked = (workspace: string | null, prNumber: number) => inFlight.has(markKey(workspace, prNumber));
-  const takeInFlightMark = (workspace: string | null, prNumber: number) => {
+  const takeInFlightMark = (workspace: string | null, prNumber: number, purpose: "write" | "auto_merge" = "write") => {
     const key = markKey(workspace, prNumber);
     if (inFlight.has(key)) return null;
-    inFlight.add(key);
+    inFlight.set(key, purpose);
     return () => {
       inFlight.delete(key);
     };
@@ -1367,6 +1391,7 @@ export function createLanding(deps: LandingDeps): Landing {
           `settled afterwards, and ${taskBranch(task.id)} no longer matches (or could not be ` +
           `compared with) the content abandoned then. Promote the current content?`,
         deps.clock.now(),
+        readQuestionTip(task),
       );
       return {
         kind: "failed",
@@ -1420,6 +1445,7 @@ export function createLanding(deps: LandingDeps): Landing {
               `has not reached ${root}. Answer \`retry\` and the board re-fires those merge backs. If one conflicts, the answer is ` +
               "refused and the refusal says where to resolve it.",
             deps.clock.now(),
+            questionTip(workspace, task.id),
           );
         }
         return { kind: "failed", reason: "content_left_behind", error: `pushed ${root}, but the content of ${branches} has not reached it` };
@@ -1479,7 +1505,7 @@ export function createLanding(deps: LandingDeps): Landing {
               `protected branch now?`
             : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
               `for "${task.title}". Land its task branch on the protected branch now?`;
-        registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now());
+        registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), questionTip(workspace, task.id));
         retireFailures(task.id, ctx);
         return { kind: "landed", form: "local_merge_question" };
       }
@@ -1533,7 +1559,13 @@ export function createLanding(deps: LandingDeps): Landing {
         if (head === undefined) return undefined;
         const outside = task.pr_number === null ? undefined : outsidePushOf(workspace, task.id, head, leftBehindTargets(deps.db, workspace, task.id), lastPushedHead(deps.db, task.id));
         const answeringMerge = ctx.intake?.entry === "landing_merge";
-        if (outside && !answeringMerge) return outsidePushStep(task.pr_number!, outside);
+        if (outside && !answeringMerge) {
+          // ADR 0265 決定1: head を待つ間に決着した PR には、古い観測から merge question を立てない。
+          const settled = rootPrOutcome(deps.db, task.id);
+          if (settled?.state === "MERGED") return settleMerged(task, workspace, settled.prNumber, ctx);
+          if (settled?.state === "CLOSED") return closedPr(settled.prNumber);
+          return outsidePushStep(task.pr_number!, outside);
+        }
         const refuse = (pushed: OutsidePush) =>
           failedAnswer(outsidePushRefusal(workspace, workbenchBase, task.id, { prNumber: task.pr_number!, head, rewound: pushed.rewound, lacks: lacksContentOf(pushed) }));
         // spec #3273 "Refused once": 印がこの head でなければ、作業台を開いて拒む —— 作業台があるだけでは印でない
@@ -1555,7 +1587,7 @@ export function createLanding(deps: LandingDeps): Landing {
       /** ADR 0376 決定7: 収束はキューの行を外して推奨 hold の merge question を立て(開いていれば足さない)、別の失敗で開いていた昇格失敗
        *  question への retry はその question を id で名指して拒む(text D3b)。 */
       const outsidePushStep = (prNumber: number, outside: OutsidePush): LandingVerdict => {
-        const asked = askOutsidePush(task, prNumber, outside);
+        const asked = askOutsidePush(workspace, task, prNumber, outside);
         if (!("question" in asked)) return asked;
         if (ctx.intake) {
           return failedAnswer(
@@ -1566,6 +1598,11 @@ export function createLanding(deps: LandingDeps): Landing {
         // 開いていた question も同じ形 —— 根の着地はその question を待つ
         return { kind: "landed", form: "merge_question", prNumber };
       };
+      const closedPr = (prNumber: number): LandingVerdict => ({
+        kind: "failed",
+        reason: "pull_request_closed",
+        error: `PR #${prNumber} was closed outside the board, so ${taskBranch(task.id)} is not pushed to it`,
+      });
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
@@ -1602,13 +1639,7 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
-        if (state === "CLOSED") {
-          return {
-            kind: "failed",
-            reason: "pull_request_closed",
-            error: `PR #${task.pr_number} was closed outside the board, so ${taskBranch(task.id)} is not pushed to it`,
-          };
-        }
+        if (state === "CLOSED") return closedPr(task.pr_number);
         const stopped = await checkHeadBeforePush(head);
         if (stopped) return stopped;
         catchUp();
@@ -1849,7 +1880,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // 印は await の前に同期で取り、どの抜け方でも finally で放す。重なった tick は印の付いた PR を飛ばす(ADR 0236)。
           // 一覧は tick の始めに読んだものなので、重なった tick が決着させて外した行もここに来る —— 印を取った後にまだ
           // キューにあるかを確かめる
-          release = landing.takeInFlightMark(task.workspace, pr_number);
+          release = takeInFlightMark(task.workspace, pr_number, "auto_merge");
           if (!release || !isQueuedForAutoMerge(deps.db, task_id)) continue;
           const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
           if (!resolved) continue;
@@ -1863,7 +1894,9 @@ export function createLanding(deps: LandingDeps): Landing {
             const resolved = readAuthority(task, now);
             return "profile" in resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
-          const stop = (askQuestion?: (changed: string) => void) => {
+          const stop = (askQuestion: (changed: string) => void) => {
+            // ADR 0394 決定2: GitHub を待つ間に収束がキューを外して問うたら、古い読みで立て直さない。
+            if (!isQueuedForAutoMerge(deps.db, task_id)) return true;
             workspaceNetworkDestination(workspace);
             const resolved = authorityIfGateOpen();
             return !resolved || withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion);
@@ -1872,6 +1905,7 @@ export function createLanding(deps: LandingDeps): Landing {
           const ref = { workspace, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
           const pr = await github.readPullRequest(ref);
+          if (!isQueuedForAutoMerge(deps.db, task_id)) continue;
           if (pr.state === "MERGED" || pr.state === "CLOSED") {
             retire(task_id, { kind: prOutcomeKind(pr.state, pr.mergedBy), pr_number }, now);
             continue;
@@ -1883,16 +1917,18 @@ export function createLanding(deps: LandingDeps): Landing {
           // tick は印を持って読むので、収束の push と記録の間の値を読まない(ADR 0387 決定4)
           const lastPushed = lastPushedHead(deps.db, task_id);
           const red = ci === "failure" || (ci === "unreported" && unreportedCiGraceElapsed(deps.db, task_id, head, now));
-          const hold = (purpose: string, conveyedHead?: string) => () => askHold(task, pr_number, purpose, now, conveyedHead);
-          const askCiRed = red
-            ? hold(
-                `"${task.title}"'s auto_if_ci_green auto-merge ` +
+          const ciPrompt: MergeQuestionPrompt | undefined = red
+            ? {
+                detail: `"${task.title}"'s auto_if_ci_green auto-merge ` +
                   (ci === "failure"
                     ? `found CI red on PR #${pr_number}`
                     : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
                       `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`) +
-                  ". Merge anyway, or hold?",
-              )
+                  ".",
+                question: "Merge anyway, or hold?",
+                reason: ci === "failure" ? "ci_red" : "ci_unreported",
+                recommendation: "hold",
+              }
             : undefined;
           // 積み残しは門と同じくキューに残す(ADR 0231 決定3)。CI を読んだ head と比べ、手元に無ければ sha で取る
           // (ADR 0242 決定1)。比べられなければ null(積み残し)。fetch を待つので面の読み直しより前に読む。
@@ -1909,58 +1945,54 @@ export function createLanding(deps: LandingDeps): Landing {
               : null;
           // 比べられなかった head は、最後に push した値と違えば祖先関係を確かめられない head と読む(ADR 0387 決定1)
           const origin: PrHeadOrigin = content?.head ?? (head === lastPushed ? { kind: "pushed" } : { kind: "not_pushed", lastPushed });
-          // ADR 0387 決定1: 盤面が push していない head は CI の色を待たずに推奨 hold の question に倒す —— CI 赤と重なればこの本文を先にする
-          const askNotPushed = origin.kind === "not_pushed" ? hold(notPushedQuestionBody(task, pr_number, head, lastPushed), head) : undefined;
-          // 盤面の外の push が落とした内容は、キューを外して推奨 hold の question に倒す(ADR 0242 決定4 / ADR 0376 決定7、text A4c)
-          const askDropped = origin.kind === "rewritten" ? hold(outsidePushQuestionBody(task, pr_number, origin.outside)) : undefined;
-          // 面が question 側へ変わっていれば、盤面が push していない head ならその question、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、
-          // 外の push が落とした内容はその question、それ以外は推奨 merge の面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも
-          // 同じ tick で外す(ADR 0238 決定2)。ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
-          await actIfGateOpen(() => stop(askNotPushed ?? askCiRed ?? askDropped) ? true : null, async () => {
-            let askHuman: () => void;
-            if (askNotPushed) {
-              askHuman = askNotPushed;
-            } else if (askCiRed) {
-              askHuman = askCiRed;
-            } else if (ci !== "success") {
+          const ask = (prompt?: MergeQuestionPrompt) => askMerge(workspace, task, pr_number, now, head, origin, prompt);
+          const askSurface = (changed: string) => ask(ciPrompt ?? {
+            detail: `"${task.title}"'s PR #${pr_number} was queued for auto_if_ci_green auto-merge, but its ` +
+              `landing surface changed after it was queued: ${changed}.`,
+            question: "Merge it now?",
+            reason: "surface_changed",
+            recommendation: "merge",
+          });
+          await actIfGateOpen(() => stop(askSurface) ? true : null, async () => {
+            // ADR 0394 決定1 / ADR 0387 決定1: 外の head は CI の色を待たずに問う。
+            if (origin.kind !== "pushed" || ciPrompt !== undefined) {
+              ask(ciPrompt);
               return;
-            } else if (askDropped) {
-              askHuman = askDropped;
-            } else {
-              // ADR 0387 決定1: merge するのは盤面が最後に push した head だけ
-              if (!content || content.left.length > 0 || head !== lastPushed) return;
-              // merge は CI を読んだ head に固定する(ADR 0231 決定1)
-              const failure = await github.mergePullRequest(ref, head).then(
-                () => null,
-                (error: unknown) => {
-                  if (error instanceof WorkspaceRepoMismatchError) throw error;
-                  return error instanceof Error ? error.message : String(error);
-                },
-              );
-              if (failure === null) {
-                retire(task_id, { kind: "pr_merged", pr_number }, now);
-                return;
-              }
-              // merge の失敗の後に状態と head を読み直す。読めなければ分類できない失敗(ADR 0229 決定3)
-              const after = await github.readPullRequest(ref);
-              if (after.state === "unreadable") {
-                throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
-              }
-              if (after.state !== "OPEN") {
-                retire(task_id, { kind: prOutcomeKind(after.state, after.mergedBy), pr_number }, now);
-                return;
-              }
-              observePrHead(deps.db, task_id, pr_number, after.head, now);
-              // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
-              if (after.head !== head) return;
-              askHuman = hold(
-                `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
-                  `Merge once it is fixed, or hold?${conflictedPrRoute(pr_number, protectedBranch(workspace))}`,
-              );
-              // merge を待つ間に変わりうるので、question の前に読み直す
-              if (stop(askHuman)) return;
             }
-            askHuman();
+            if (ci !== "success" || !content || content.left.length > 0) return;
+            // merge は CI を読んだ head に固定する(ADR 0231 決定1)
+            const failure = await github.mergePullRequest(ref, head).then(
+              () => null,
+              (error: unknown) => {
+                if (error instanceof WorkspaceRepoMismatchError) throw error;
+                return error instanceof Error ? error.message : String(error);
+              },
+            );
+            if (failure === null) {
+              retire(task_id, { kind: "pr_merged", pr_number }, now);
+              return;
+            }
+            // merge の失敗の後に状態と head を読み直す。読めなければ分類できない失敗(ADR 0229 決定3)
+            const after = await github.readPullRequest(ref);
+            if (!isQueuedForAutoMerge(deps.db, task_id)) return;
+            if (after.state === "unreadable") {
+              throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
+            }
+            if (after.state !== "OPEN") {
+              retire(task_id, { kind: prOutcomeKind(after.state, after.mergedBy), pr_number }, now);
+              return;
+            }
+            observePrHead(deps.db, task_id, pr_number, after.head, now);
+            // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
+            if (after.head !== head) return;
+            const askFailure = () => ask({
+              detail: `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}.`,
+              question: `Merge once it is fixed, or hold?${conflictedPrRoute(pr_number, protectedBranch(workspace))}`,
+              reason: "merge_failed",
+              recommendation: "hold",
+            });
+            // merge を待つ間に変わりうるので、question の前に読み直す
+            if (!stop(askFailure)) askFailure();
           });
         } catch (error) {
           if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefsRefusedError) continue;

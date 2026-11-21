@@ -712,6 +712,41 @@ it.each(["rewound", "rewritten"] as const)("記録済みの PR の head が盤�
   c.expectNothingCarried();
 });
 
+it("CI 赤の merge question を収束が書き換えの question に取り替え、同じ外の部分なら修理が届いても取り替えない", async () => {
+  const c = await pushedRoot("outside-rewrite-replaces-ci-red", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  c.github.scriptCiStatus("failure");
+  await c.landing.tick("auto_merge", c.clock.now());
+  const [ciQuestion] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  const original = getTask(c.db, ciQuestion!.id)!;
+  expect(original.purpose).toBe(CI_RED_PURPOSE);
+  expect(original.question_pr_merge_reason).toBe("ci_red");
+
+  const head = await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+
+  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([textA4c(c.target)]);
+  expect(getTask(c.db, original.id)).toEqual({ ...original, status: "done" });
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(question).toMatchObject({
+    question_landing_tip: git(c.workspace.path, "rev-parse", c.target),
+    question_pr_merge_outside_sha: head,
+    question_pr_merge_outside_kind: "rewritten",
+    question_pr_merge_missing_branches: [c.target],
+    question_pr_merge_reason: "outside_head",
+  });
+  const replacement = { kind: "pr_merge_question_replaced", question_id: original.id, replacement_question_id: question!.id };
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced").map(({ payload }) => payload)).toEqual([replacement]);
+  expect(listEvents(c.db, original.id).map(({ kind }) => kind)).toEqual(["task_registered"]);
+  await expect(submitAnswer({ ...c, pollNow: () => {} }, original, ["merge"], undefined, () => c.clock.now(), "webui")).rejects.toThrow("question closed");
+  expect(c.github.merged).toEqual([]);
+
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, c.work, "another-repair.txt", "repair\n");
+  await convergeOn(c.landing, c.work.id);
+
+  expect(listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1)).toEqual([question]);
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced").map(({ payload }) => payload)).toEqual([replacement]);
+});
+
 /** spec #3273 text A4b の全文(`lacks` は `<branches>` の句)。 */
 const textA4b = (c: Awaited<ReturnType<typeof pushedRoot>>, head: string, lacks: string) =>
   `PR #1's head was rewritten outside the board to ${head}, which lacks the content of ${lacks}. The board opened the workbench at ${c.workbench()}. ` +
@@ -896,24 +931,30 @@ it("2回目の「merge」の取り込みが作業台を残せば、CI 待ちの�
   );
 });
 
-// 1つの PR に merge question は1つ —— tick が PR を読む間に収束が同じ PR に question を立てても、tick は2つ目を足さない(書き手の中で確かめる)
-it("無人 merge の tick が PR を読む間に収束が書き換えの merge question を立てても、tick は2つ目の merge question を立てない", async () => {
-  const c = await pushedRoot("outside-rewrite-tick-race", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
-  await moveRecordedHead(c, "rewritten");
+it("無人 merge の tick が PR を読む間に収束が書き換えの merge question を立てたら、古い head でその question を取り替えない", async () => {
+  const c = await pushedRoot("outside-rewrite-tick-race", {
+    pr: "recorded", commits: 2, merge: "auto_if_ci_green", resolveAuthority: () => profile("escalate"),
+  });
+  c.github.scriptCiStatus("pending");
   const read = c.github.readPullRequest.bind(c.github);
-  let raced = false;
-  c.github.readPullRequest = async (ref) => {
+  let asked: string | undefined;
+  vi.spyOn(c.github, "readPullRequest").mockImplementationOnce(async (ref) => {
     const state = await read(ref);
-    if (!raced) {
-      raced = true;
-      expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
-    }
+    expect(state).toMatchObject({ state: "OPEN", head: c.pushed });
+    await moveRecordedHead(c, "rewritten");
+    expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+    const questions = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+    expect(questions).toHaveLength(1);
+    asked = questions[0]!.id;
     return state;
-  };
+  });
 
   await c.landing.tick("auto_merge", c.clock.now());
 
-  expect(mergeQuestions(c.db)).toHaveLength(1);
+  expect(asked).toBeDefined();
+  expect(listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1).map((q) => q.id)).toEqual([asked]);
+  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([textA4c(c.target)]);
+  expect(boardEvents(c.db, c.work.id, "pr_merge_question_replaced")).toEqual([]);
 });
 
 // spec #3273 "Refused once" / ADR 0227 決定2: 印は盤面のどの push でも消える —— 拒否の後に人間が origin を戻し、収束が push した後に同じ head へ

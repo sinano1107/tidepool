@@ -772,7 +772,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const landing = registerTask(b.db, {
         type: "question", title: "land it", purpose: "a human decides", completion_criteria: "answered",
         question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
-        question_kind: { kind: "local_merge", task_id: other.id },
+        question_kind: { kind: "local_merge", task_id: other.id, tip: null },
       }, b.clock.now(), ...HUMAN_WEBUI);
       b.stop();
       git(b.workbench(), "merge", "--quiet", "--no-edit", `board/task/${other.id}`);

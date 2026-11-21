@@ -1,6 +1,9 @@
 import type { PendingChildSpec, QuestionProposal, Task, TierRef } from "./tasks.js";
 import type { TierId } from "./tier.js";
 
+export type PrMergeOutside = { kind: "not_pushed" | "rewritten"; sha: string };
+export type PrMergeReason = "pr_opened" | "surface_changed" | "outside_head" | "ci_red" | "ci_unreported" | "merge_failed";
+
 /** question の種類(ADR 0246 決定2)。表は種類ごとの列のままで、判別子はこの union だけが持つ。書く側(`questionColumns`)と
  *  読む側(`questionKindOf`)は対で、種類を足すと両方の腕と、読む側の結果で分岐する switch が tsc のエラーになる。 */
 export type QuestionKind<T extends TierRef = TierId> =
@@ -17,11 +20,11 @@ export type QuestionKind<T extends TierRef = TierId> =
   /** decomposeTask の承認 question(issue #11)。approve で pending_child を実体化する。 */
   | { kind: "approval"; pending_child: PendingChildSpec }
   /** recordPrOpened の escalate の枝(issue #11): pr はこの question が代わりに立つ PR 番号。 */
-  | { kind: "pr_merge"; pr: number }
+  | { kind: "pr_merge"; pr: number; tip: string | null; outside: PrMergeOutside | null; missingBranches: string[] | null; reason: PrMergeReason }
   /** landing.ts(ADR 0053): task_id はローカルだけのブランチが merge / hold を待つ完了済みの task。 */
-  | { kind: "local_merge"; task_id: string }
+  | { kind: "local_merge"; task_id: string; tip: string | null }
   /** landing.ts(issue #66): task_id は PR 昇格に失敗した完了済みの task。 */
-  | { kind: "pr_promotion_retry"; task_id: string }
+  | { kind: "pr_promotion_retry"; task_id: string; tip: string | null }
   /** memory.ts・routing-review.ts の提案 question(ADR 0120 決定4)。副種別は proposal の kind / op に残す。 */
   | { kind: "proposal"; proposal: QuestionProposal<T> }
   /** quarantine.ts の Confirmation question(ADR 0137 決定2)。quarantine の語彙は quarantine.ts にあり、この向きには依存しないので開いた文字列。 */
@@ -41,6 +44,11 @@ const COLUMNS = [
   "question_pending_merge_pr",
   "question_pending_local_merge_task_id",
   "question_pending_pr_promotion_task_id",
+  "question_landing_tip",
+  "question_pr_merge_outside_sha",
+  "question_pr_merge_outside_kind",
+  "question_pr_merge_missing_branches",
+  "question_pr_merge_reason",
   "question_quarantine_kind",
   "question_quarantine_value",
   "question_intake_workspace",
@@ -68,11 +76,19 @@ export function questionColumns<T extends TierRef>(kind: QuestionKind<T>): Quest
     case "approval":
       return { ...none, question_pending_child: kind.pending_child };
     case "pr_merge":
-      return { ...none, question_pending_merge_pr: kind.pr };
+      return {
+        ...none,
+        question_pending_merge_pr: kind.pr,
+        question_landing_tip: kind.tip,
+        question_pr_merge_outside_sha: kind.outside?.sha ?? null,
+        question_pr_merge_outside_kind: kind.outside?.kind ?? null,
+        question_pr_merge_missing_branches: kind.missingBranches,
+        question_pr_merge_reason: kind.reason,
+      };
     case "local_merge":
-      return { ...none, question_pending_local_merge_task_id: kind.task_id };
+      return { ...none, question_pending_local_merge_task_id: kind.task_id, question_landing_tip: kind.tip };
     case "pr_promotion_retry":
-      return { ...none, question_pending_pr_promotion_task_id: kind.task_id };
+      return { ...none, question_pending_pr_promotion_task_id: kind.task_id, question_landing_tip: kind.tip };
     case "proposal":
       return { ...none, question_proposal: kind.proposal };
     case "quarantine":
@@ -103,12 +119,27 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
       return { kind: "approval", pending_child: q.question_pending_child! };
     case "question_proposal":
       return { kind: "proposal", proposal: q.question_proposal! };
-    case "question_pending_merge_pr":
-      return { kind: "pr_merge", pr: q.question_pending_merge_pr! };
+    case "question_pending_merge_pr + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason":
+      if (q.question_pr_merge_missing_branches !== null && q.question_pr_merge_outside_kind !== "rewritten") break;
+      return {
+        kind: "pr_merge",
+        pr: q.question_pending_merge_pr!,
+        tip: q.question_landing_tip,
+        outside: q.question_pr_merge_outside_kind === null ? null : { kind: q.question_pr_merge_outside_kind, sha: q.question_pr_merge_outside_sha! },
+        missingBranches: q.question_pr_merge_missing_branches,
+        reason: q.question_pr_merge_reason!,
+      };
     case "question_pending_local_merge_task_id":
-      return { kind: "local_merge", task_id: q.question_pending_local_merge_task_id! };
+    case "question_pending_local_merge_task_id + question_landing_tip":
+      return { kind: "local_merge", task_id: q.question_pending_local_merge_task_id!, tip: q.question_landing_tip };
     case "question_pending_pr_promotion_task_id":
-      return { kind: "pr_promotion_retry", task_id: q.question_pending_pr_promotion_task_id! };
+    case "question_pending_pr_promotion_task_id + question_landing_tip":
+      return { kind: "pr_promotion_retry", task_id: q.question_pending_pr_promotion_task_id!, tip: q.question_landing_tip };
     case "question_quarantine_kind":
     case "question_quarantine_kind + question_quarantine_value":
       return { kind: "quarantine", quarantine: q.question_quarantine_kind!, value: q.question_quarantine_value };

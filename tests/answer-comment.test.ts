@@ -140,8 +140,8 @@ const QUESTIONS = {
   approval: { options: ["approve", "reject"], question_kind: { kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c" } } },
   escalation: { options: ["a", "b"] },
   failure: { options: ["retry", "abandon"], question_kind: { kind: "failure", cancel_option: "abandon" } },
-  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7 } },
-  promotion: { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1" } },
+  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7, tip: null, outside: null, missingBranches: null, reason: "pr_opened" } },
+  promotion: { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1", tip: null } },
 } satisfies Record<string, Partial<RegisterTaskInput> & { options: string[] }>;
 
 function domainQuestion(kind: keyof typeof QUESTIONS) {

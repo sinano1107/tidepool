@@ -77,6 +77,7 @@ import {
   assertAnswerable,
   assertCompletable,
   assertInterviewFields,
+  assertMergeQuestionNotReplaced,
   assertNoGatingQuestion,
   assertNoUnsettledIssueRef,
   assertTargetsRunnable,
@@ -1605,6 +1606,7 @@ export async function submitAnswer(
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
+  if (task.status !== "todo") assertMergeQuestionNotReplaced(deps.db, task);
   answers = assertAnswerable(task, answers, comment);
   // 提案は段を id で持つ。修正値・書き込みは名前で喋るので、いまの名前に引いた形で読む(issue #1436)
   const kind = questionKindOf(task);
@@ -1691,7 +1693,9 @@ export async function submitAnswer(
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
         // 網が届かないなど PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
         // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
-        if (await deps.landing.observePullRequestOutcome(task)) return presentAnswered(deps, task);
+        const observed = await deps.landing.observePullRequestOutcome(task);
+        if (getTask(deps.db, task.id)?.status !== "todo") assertMergeQuestionNotReplaced(deps.db, task);
+        if (observed) return presentAnswered(deps, task);
         const beingMerged = prInFlightRefusal(mergePr);
         // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
         if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
@@ -1942,7 +1946,10 @@ export async function submitAnswer(
     return { ...presentAnswered(deps, task), ...(notice !== undefined && { notice }) };
   } catch (err) {
     // 待つ間に question が閉じていた(ADR 0288 決定4): 観測で閉じていれば 200 + 印、別の回答か cancel なら拒否
-    if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
+    if (err instanceof QuestionClosedError) {
+      assertMergeQuestionNotReplaced(deps.db, task);
+      if (settledByObservation(deps.db, task)) return presentAnswered(deps, task);
+    }
     throw err;
   } finally {
     mark.release?.();
