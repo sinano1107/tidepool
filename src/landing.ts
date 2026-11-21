@@ -11,10 +11,12 @@ import { git, isAncestor } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
 import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
+import { humanMergePathChanges } from "./human-merge-paths.js";
 import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates, resolvedCommit } from "./pickup-predicates.js";
 import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type PrMergeQuestionContent, type PrMergeReason, type QuestionColumns, type QuestionKind, questionKindOf } from "./question-kind.js";
-import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
+import { type AuthorityProfile, isUnresolvableAgentError, type MergeDial } from "./registry.js";
+import { treeDeltaEntries } from "./sandbox.js";
 import {
   ancestorsSql,
   type ClosedRootOf,
@@ -1051,6 +1053,17 @@ type MergeQuestionPrompt = {
   question: string;
   recommendation: (typeof MERGE_QUESTION_OPTIONS)[number];
 };
+
+/** ADR 0395 決定4: Read the exact protected ref and the head that would be merged. An unreadable diff needs a human too. */
+function humanMergePathNote(workspace: WorkspaceConfig, head: string, declared: readonly string[] = []): string | undefined {
+  try {
+    const base = git(workspace.path, "show-ref", "--verify", "--hash", "--", remoteTrackingRef(protectedBranch(workspace)));
+    const paths = humanMergePathChanges(treeDeltaEntries(workspace.path, base, head), declared);
+    if (paths.length > 0) return `This PR changes paths that require a human merge. ${paths.map((path) => JSON.stringify(path)).join(", ")}.`;
+  } catch {
+    return "The board could not compare this PR head with the protected branch to check which paths require a human merge.";
+  }
+}
 /** 書き換えの question の盤面の部分が名指す欠けたブランチ(ADR 0394 決定1)。無ければ null。 */
 function missingBranchesOf({ droppedBranches, unpushedBranches }: OutsidePush): string[] | null {
   const missing = [...droppedBranches, ...unpushedBranches];
@@ -1067,6 +1080,7 @@ function askMerge(
   head: string,
   origin: PrHeadOrigin,
   prompt?: MergeQuestionPrompt,
+  humanMergeNote?: string,
 ): string {
   const outsideBody = origin.kind === "rewritten" ? outsidePushQuestionBody(task, pr, origin.outside)
     : origin.kind === "not_pushed" ? notPushedQuestionBody(task, pr, head, origin.lastPushed) : undefined;
@@ -1081,7 +1095,7 @@ function askMerge(
     : { ...base, outside: origin.kind === "not_pushed" ? { kind: "not_pushed", sha: head } : null, missingBranches: null };
   return db.transaction(() => {
     clearPendingAutoMerge(db, task.id);
-    return registerMergeQuestion(db, task, content, purpose, prompt?.recommendation ?? "hold", now);
+    return registerMergeQuestion(db, task, content, humanMergeNote === undefined ? purpose : `${purpose}\n\n${humanMergeNote}`, prompt?.recommendation ?? "hold", now);
   })();
 }
 
@@ -1168,6 +1182,11 @@ function recordLandingDeferred(
 export function createLanding(deps: LandingDeps): Landing {
   const checked = (workspace: WorkspaceConfig) => withRememberedRepoCheck(deps.db, workspace, () => deps.clock.now(), deps.resolveWorkspace);
   const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
+  const mergePathNote = (workspace: WorkspaceConfig, head: string, dial: MergeDial | undefined) => {
+    if (dial === "external") return undefined;
+    const current = deps.resolveWorkspace?.(workspace.name) ?? workspace;
+    return humanMergePathNote(workspace, head, current.human_merge_paths);
+  };
   const readPrState = async (github: GitHubClient, workspace: WorkspaceConfig, number: number): Promise<PrStateRead> => {
     workspaceNetworkDestination(workspace);
     return github.getPullRequestState({ workspace, number });
@@ -1197,13 +1216,15 @@ export function createLanding(deps: LandingDeps): Landing {
     prNumber: number,
     workspaceName: string,
     now: Date,
-    askQuestion: (changed: string) => void,
+    askQuestion: (changed: string | null) => void,
+    humanMergeRequired: boolean,
   ) => {
     const landing = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
       false,
       authority?.merge,
       task.risk_flag,
+      humanMergeRequired,
     );
     if (landing.surface === "auto_merge_queue") return false;
     deps.db.transaction(() => {
@@ -1226,6 +1247,7 @@ export function createLanding(deps: LandingDeps): Landing {
         protected: `workspace "${workspaceName}" is now protected, which always needs a human merge`,
         dial: "the merge dial is now escalate",
         risk: "the task now carries risk, and auto_if_ci_green never auto-merges a risky task",
+        human_merge_paths: null,
       }[landing.reason];
       askQuestion(changed);
     })();
@@ -1821,6 +1843,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // spec #3273 group C の [spec] は人間の根の pr_opened だけに origin board を決めた —— actor が人間でも開いたのは盤面だと読めるように。
         // agent の根の origin はこの決定の外(actor は今どおり assignee)
         isHumanAssigned(task) ? "board" : "worker",
+        mergePathNote(workspace, sha, authority?.merge),
       );
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
@@ -1995,13 +2018,6 @@ export function createLanding(deps: LandingDeps): Landing {
             const resolved = readAuthority(task, now);
             return "profile" in resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
-          const stop = (askQuestion: (changed: string) => void) => {
-            // ADR 0394 決定2: GitHub を待つ間に収束がキューを外して問うたら、古い読みで立て直さない。
-            if (!isQueuedForAutoMerge(deps.db, task_id)) return true;
-            workspaceNetworkDestination(workspace);
-            const resolved = authorityIfGateOpen();
-            return !resolved || withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion);
-          };
           if (!authorityIfGateOpen()) continue;
           const ref = { workspace, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
@@ -2015,6 +2031,17 @@ export function createLanding(deps: LandingDeps): Landing {
           if (pr.state === "unreadable") continue;
           observePrHead(deps.db, task_id, pr_number, pr.head, now);
           const { ci, head } = pr;
+          let humanMergeNote: string | undefined;
+          const stop = (askQuestion: (changed: string | null) => void) => {
+            // ADR 0394 決定2: GitHub を待つ間に収束がキューを外して問うたら、古い読みで立て直さない。
+            if (!isQueuedForAutoMerge(deps.db, task_id)) return true;
+            workspaceNetworkDestination(workspace);
+            const resolved = authorityIfGateOpen();
+            if (!resolved) return true;
+            // ADR 0395 決定4: decide on the same head CI read and merge would pin, with the current declaration.
+            humanMergeNote = mergePathNote(workspace, head, resolved.profile?.merge);
+            return withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion, humanMergeNote !== undefined);
+          };
           // tick は印を持って読むので、収束の push と記録の間の値を読まない(ADR 0387 決定4)
           const lastPushed = lastPushedHead(deps.db, task_id);
           const red = ci === "failure" || (ci === "unreported" && unreportedCiGraceElapsed(deps.db, task_id, head, now));
@@ -2046,11 +2073,11 @@ export function createLanding(deps: LandingDeps): Landing {
               : null;
           // 比べられなかった head は、最後に push した値と違えば祖先関係を確かめられない head と読む(ADR 0387 決定1)
           const origin: PrHeadOrigin = content?.head ?? (head === lastPushed ? { kind: "pushed" } : { kind: "not_pushed", lastPushed });
-          const ask = (prompt?: MergeQuestionPrompt) => askMerge(deps.db, workspace, task, pr_number, now, head, origin, prompt);
-          const askSurface = (changed: string) => ask(ciPrompt ?? {
-            detail: `"${task.title}"'s PR #${pr_number} was queued for auto_if_ci_green auto-merge, but its ` +
-              `landing surface changed after it was queued: ${changed}.`,
-            question: "Merge it now?",
+          const ask = (prompt?: MergeQuestionPrompt) => askMerge(deps.db, workspace, task, pr_number, now, head, origin, prompt, humanMergeNote);
+          const askSurface = (changed: string | null) => ask(ciPrompt ?? {
+            detail: `"${task.title}"'s PR #${pr_number} was queued for auto_if_ci_green auto-merge` +
+              (changed === null ? "." : `, but its landing surface changed after it was queued: ${changed}.`),
+            question: changed === null ? "Merge it now, or hold?" : "Merge it now?",
             reason: "surface_changed",
             recommendation: "merge",
           });

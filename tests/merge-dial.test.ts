@@ -1,16 +1,23 @@
+import { mkdirSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   addTaskChange,
   api,
+  attachChild,
   bootTidepool,
   checkoutOf,
+  commitWork,
   completeIntegrationReviews,
+  completeViaMcp,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
+  git,
   HOUR,
   makeRemoteBackedWorkspace,
   mcpClient,
   NOTHING_TO_REPAIR,
+  questions,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -30,7 +37,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  commitWork(checkoutOf(t.db, task.id), "CODEOWNERS", "* @maintainer\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -49,6 +56,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board.find((x: any) => x.type === "question" && x.parent_id === null);
   expect(question).toBeDefined();
+  expect(question.purpose).toContain("CODEOWNERS");
   expect(question.question_items[0].options).toEqual(["merge", "hold"]);
   expect(question.question_items[0].recommendation).toBe("merge");
 });
@@ -61,7 +69,7 @@ it("completing a work task under the external merge dial opens the PR and stops 
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  commitWork(checkoutOf(t.db, task.id), "CODEOWNERS", "* @maintainer\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -249,6 +257,83 @@ it("同じ question に「hold」で回答しても観測決着になり、hold 
 const MINUTE = 60 * 1000;
 
 const SCAN = 10 * 60 * 1000;
+
+it("a PR changing a workflow asks at PR open even under auto_if_ci_green", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
+  });
+  const task = await registerWork(t, "change the release workflow");
+  const checkout = checkoutOf(t.db, task.id);
+  const path = ".github/workflows/release.yml";
+  mkdirSync(dirname(join(checkout, path)), { recursive: true });
+  commitWork(checkout, path, "name: Release\n");
+  await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
+
+  expect(await questions(t)).toMatchObject([
+    { status: "todo", question_pending_merge_pr: 1, purpose: expect.stringContaining(path) },
+  ]);
+  t.github.scriptCiStatus("success");
+  await t.clock.advance(MINUTE);
+  expect(t.github.merged).toEqual([]);
+});
+
+it("the CI tick asks about a human merge path added by a repair after the PR was queued", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
+  });
+  const root = await registerWork(t, "ship before a repair is needed");
+  addTaskChange(checkoutOf(t.db, root.id), root.id);
+  await completeViaMcp(t, root.id);
+  await completeIntegrationReviews(t, root.id);
+  expect(await questions(t)).toEqual([]);
+  t.github.scriptCiStatus("pending");
+
+  const repair = attachChild(t, root.id, "repair CODEOWNERS");
+  const review = attachChild(t, repair.id, "check the repair", "human");
+  await t.clock.advance(HOUR);
+  commitWork(checkoutOf(t.db, repair.id), "CODEOWNERS", "* @maintainer\n");
+  await completeViaMcp(t, repair.id);
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/complete`, {});
+  expect(git(workspace.path, "show", `refs/remotes/origin/task/${root.id}:CODEOWNERS`)).toBe("* @maintainer");
+  expect(await questions(t)).toEqual([]);
+
+  t.github.scriptCiStatus("success");
+  await t.clock.advance(MINUTE);
+  expect(await questions(t)).toMatchObject([
+    { status: "todo", question_pending_merge_pr: 1, purpose: expect.stringContaining("CODEOWNERS") },
+  ]);
+  expect(t.github.merged).toEqual([]);
+});
+
+it("the CI tick asks when the diff of the pushed PR head cannot be read", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
+  });
+  const task = await registerWork(t, "ship the feature");
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
+  expect(await questions(t)).toEqual([]);
+
+  // Leave the PR head commit readable and green, but remove its tree from the board's cache.
+  const tree = git(workspace.path, "rev-parse", `refs/remotes/origin/task/${task.id}^{tree}`);
+  const object = join(workspace.path, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+  renameSync(object, join(workspace.path, ".git", "missing-pr-tree"));
+  t.github.scriptCiStatus("success");
+  await t.clock.advance(MINUTE);
+
+  expect(await questions(t)).toMatchObject([
+    { status: "todo", question_pending_merge_pr: 1, purpose: expect.stringContaining("could not compare this PR head") },
+  ]);
+  expect(t.github.merged).toEqual([]);
+});
 
 it.each([
   ["merge", "scriptMergedOutside", "pr_merge_observed"],

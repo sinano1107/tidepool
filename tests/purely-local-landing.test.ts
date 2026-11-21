@@ -107,7 +107,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   });
   const task = await registerWork(t, "ship automatically");
   await t.clock.advance(HOUR);
-  commitWork(checkoutOf(t.db, task.id), "automatic.txt", "finished\n");
+  commitWork(checkoutOf(t.db, task.id), "CODEOWNERS", "* @maintainer\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -120,6 +120,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   expect(question.purpose).toContain(
     "CI cannot be observed and auto_if_ci_green cannot auto-merge",
   );
+  expect(question.purpose).not.toContain("require a human merge");
   expect(t.github.requests).toEqual([]);
   await t.clock.advance(60 * 1000);
   expect(t.github.merged).toEqual([]);

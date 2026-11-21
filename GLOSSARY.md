@@ -253,11 +253,11 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 ## 危険な値(Dangerous value)
 
-人間面が**明示の確認を要求する** registry の値。権限を広げる向きの値であり、理由コードとして数え上げられる — profile の無人 merge(`merge_auto_if_ci_green`)、profile のワイルドカード(`assignable_to_wildcard` —— `allowed_workspaces` は欄ごと削除された、ADR 0384)、workspace の保護剥奪(`unprotect`)、レビューコマンド許可リストの非空(`review_allowed_commands_set`)、ドメイン許可リストの非空(`allowed_domains_set`)。
+人間面が**明示の確認を要求する** registry の値。権限を広げる向きの値であり、理由コードとして数え上げられる — profile の無人 merge(`merge_auto_if_ci_green`)、profile のワイルドカード(`assignable_to_wildcard` —— `allowed_workspaces` は欄ごと削除された、ADR 0384)、workspace の保護剥奪(`unprotect`)、レビューコマンド許可リストの非空(`review_allowed_commands_set`)、ドメイン許可リストの非空(`allowed_domains_set`)、人間が merge する path の宣言からの削除(`human_merge_paths_removed`、ADR 0395 決定4)。
 
 **強める向きに確認は要らない**という非対称を持つ — 保護の付与、許可リストの縮小、そもそも保護を持たない workspace の作成は、いずれも同意を求める対象ではない。
 
-判定は**ペイロードの純関数**であり、盤面が編集前の値を読んで差分を取ることはしない。それでも人間が触っていない値の確認が出ないのは、編集が部分的だから — 送られなかったフィールドは「触らない」であって、値ではない。 この形は workspace・profile の両編集扉に共通(profile は 2026-08-17 のグリリング、issue #266 / ADR 0086 で揃えた)。作成扉は全フィールドを要求し、確認の対象は同じ純関数が数える。
+通常の判定はペイロードの値で決まる。人間が merge する path の編集では、今の宣言と比べて削除を判定する(ADR 0395 決定4)。編集は部分的で、送られなかったフィールドはそのままにする。この形は workspace・profile の両編集扉に共通(profile は 2026-08-17 のグリリング、issue #266 / ADR 0086 で揃えた)。作成扉は全フィールドを要求し、確認の対象は同じ判定が数える。
 
 同意は**列挙されたものすべてに対して**与えられる。1回の保存が複数の危険な値を含むとき、拒否の本文が理由コードを列挙し、人間が見たものと同意したものが一致する。
 

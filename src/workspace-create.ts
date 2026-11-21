@@ -290,6 +290,8 @@ export interface UpdateWorkspaceInput {
   review_allowed_commands?: string[];
   /** ADR 0072's workspace-scoped network egress lift. Empty removes it. */
   allowed_domains?: string[];
+  /** ADR 0395 決定4: additional paths that require a human merge. Empty removes the declaration. */
+  human_merge_paths?: string[];
   /** Consent to every dangerous value in this payload, not to unprotecting
    *  alone (ADR 0061 決定1) — one boolean, the refusal's reason codes say
    *  what it bought. */
@@ -302,21 +304,23 @@ export interface UpdateWorkspaceInput {
 export type DangerousWorkspaceValueReason =
   | "unprotect"
   | "review_allowed_commands_set"
-  | "allowed_domains_set";
+  | "allowed_domains_set"
+  | "human_merge_paths_removed";
 
-/** Pure judgment of which values in *this payload* widen what agents may do
- *  (ADR 0061 決定2): removing protection, and setting the review write-floor
- *  lift to a non-empty list. It never reads the entry being edited — the
- *  update is a partial patch, so a field the human did not touch is simply
- *  absent, and the empty array (clearing the list) moves in the safe
- *  direction and asks nothing. */
+/** ADR 0061 決定2: omitted fields are untouched. ADR 0395 決定4: removing
+ *  any declared human merge path widens what can land unattended. */
 function dangerousWorkspaceValues(
-  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands" | "allowed_domains">,
+  input: UpdateWorkspaceInput,
+  declaredMergePaths: readonly string[] = [],
 ): DangerousWorkspaceValueReason[] {
   const reasons: DangerousWorkspaceValueReason[] = [];
   if (input.protected === false) reasons.push("unprotect");
   if (input.review_allowed_commands?.length) reasons.push("review_allowed_commands_set");
   if (input.allowed_domains?.length) reasons.push("allowed_domains_set");
+  if (input.human_merge_paths !== undefined) {
+    const nextPaths = new Set(input.human_merge_paths);
+    if (declaredMergePaths.some((path) => !nextPaths.has(path))) reasons.push("human_merge_paths_removed");
+  }
   return reasons;
 }
 
@@ -376,7 +380,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (input.allowed_domains !== undefined) {
     assertValidAllowedDomains(input.allowed_domains);
   }
-  const dangerous = dangerousWorkspaceValues(input);
+  const dangerous = dangerousWorkspaceValues(input, entry.human_merge_paths);
   if (dangerous.length > 0 && input.confirm !== true) {
     throw new WorkspaceConfirmationRequiredError(input.name, dangerous);
   }
@@ -398,6 +402,10 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (input.allowed_domains !== undefined) {
     if (input.allowed_domains.length === 0) delete next.allowed_domains;
     else next.allowed_domains = input.allowed_domains;
+  }
+  if (input.human_merge_paths !== undefined) {
+    if (input.human_merge_paths.length === 0) delete next.human_merge_paths;
+    else next.human_merge_paths = input.human_merge_paths;
   }
   commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }

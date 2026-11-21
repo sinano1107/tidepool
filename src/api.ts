@@ -362,6 +362,7 @@ const updateWorkspaceSchema = z.object({
   // this file's usual split. Absent → untouched; `[]` removes the key.
   review_allowed_commands: z.array(z.string()).optional(),
   allowed_domains: z.array(z.string()).optional(),
+  human_merge_paths: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
 });
 
