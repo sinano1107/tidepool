@@ -1,6 +1,6 @@
 import { renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, join, relative } from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GhCliClient } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -13,7 +13,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, withRememberedRepoCheck } from "../src/workspace.js";
+import { announcePublishedRepo, assertRememberedRepo, boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
@@ -69,6 +69,65 @@ it.each(["no baseline", "unlearned baseline", "purely-local baseline"] as const)
   declared = { ...workspace, repo: undefined };
   await answer();
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+// ADR 0391 決定1〜3: publish は覚えた repo を `予告の前の値|宛先`(JSON の配列 `[before, destination]` で持つ —— path に `|` が出うる)に
+// 予告し、検査は宣言と origin が揃ったときだけ揃った側へ畳む
+describe("覚えた repo の予告(ADR 0391)", () => {
+  async function announced(name: string, { baseline = true } = {}) {
+    const workspace = await makeWorkspace(name);
+    const destination = await tempDir(`tidepool-${name}-destination-`);
+    git(destination, "init", "--quiet", "--bare", "--initial-branch=main");
+    const db = openDb(":memory:");
+    onTestFinished(() => { db.close(); });
+    if (baseline) await leaveBaseline(db, workspace);
+    announcePublishedRepo(db, { ...workspace, repo: destination });
+    const check = (repo?: string) => assertRememberedRepo(db, { ...workspace, repo }, NOW);
+    return { db, workspace, destination, check };
+  }
+
+  it("宣言が宛先でも origin が無ければ畳まず、宣言も origin も無くなれば予告の前の値へ畳む", async () => {
+    const { workspace, destination, check } = await announced("announced-no-origin");
+
+    check(destination);
+    check(undefined);
+
+    expect(() => check(destination)).toThrow(
+      `workspace ${workspace.name} was registered as purely-local, but its registry entry now declares repo ${destination}.`,
+    );
+  });
+
+  // 宣言だけで畳むと、remote-backed の registry の古い写しが見せる「宣言無し」へ畳んで戻らない(ADR 0391 決定3)
+  it("宣言が無くても origin が宛先なら畳まず、registry に届いた後の死のように宣言と origin が宛先で揃えば宛先へ畳む", async () => {
+    const { workspace, destination, check } = await announced("announced-origin");
+    git(workspace.path, "remote", "add", "origin", destination);
+
+    check(undefined);
+    check(destination);
+    git(workspace.path, "config", "--remove-section", "remote.origin");
+
+    expect(() => check(undefined)).toThrow(
+      `workspace ${workspace.name} was registered for repo ${destination}, but its registry entry no longer declares one.`,
+    );
+  });
+
+  it("予告の間に宣言が第3の repo を指せば、今どおり workspace の Quarantine", async () => {
+    const { db, workspace, check } = await announced("announced-third");
+    const { workspace: third } = await makeRemoteBackedWorkspace("announced-third-repo");
+    const reason = `workspace ${workspace.name} was registered as purely-local, but its registry entry now declares repo ${third.repo}. Remove \`repo:\`; to give the workspace a remote, publish it.`;
+
+    expect(() => check(third.repo)).toThrow(new WorkspaceRepoMismatchError(reason));
+    expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(reason.slice(0, -1));
+  });
+
+  it("基準の行を持たない workspace には予告せず、宣言を比べない", async () => {
+    const { db, workspace, check } = await announced("announced-no-baseline", { baseline: false });
+    const { workspace: third } = await makeRemoteBackedWorkspace("announced-no-baseline-repo");
+
+    check(third.repo);
+
+    expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  });
 });
 
 it("remembers where a relative repo declaration resolved when the baseline was captured", async ({ onTestFinished }) => {

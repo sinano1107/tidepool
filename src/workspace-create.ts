@@ -47,6 +47,7 @@ import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import { BOARD_BRANCHES } from "./workbench.js";
 import {
+  announcePublishedRepo,
   assertRememberedRepo,
   dropWorkspaceState,
   entryCheckoutPath,
@@ -55,7 +56,6 @@ import {
   openHumanContentWorkbench,
   openIntakeQuestionId,
   refValues,
-  rememberPublishedRepo,
   removeHumanContentWorkbench,
   resolveExecutionWorkspace,
   UnknownWorkspaceError,
@@ -572,7 +572,6 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // 巻き戻しも口の内側に置く —— 畳みは写しを戻した後の ref を読み返して2択で畳む(ADR 0243 決定2)
   const publish = () => {
     git(dir, "remote", "add", "origin", input.repo);
-    let restoreRememberedRepo: (() => void) | undefined;
     try {
       // 2本以上なら `--atomic` は必須(ADR 0066 決定6、`authedPush` が付ける): 宛先が「Add a README」つきの非空 repo
       // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
@@ -582,7 +581,6 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // (ADR 0066 決定6)。
       // 写しは push の成功を見て authedPush が書く(ADR 0052 Status 追記、#2827)—— 巻き戻しはこれを書く前の値へ戻す(ADR 0066 決定5 の Status 追記、#3197)
       authedPush(githubAuth, declaration, GIT_NETWORK_TIMEOUT_MS, branches);
-      restoreRememberedRepo = rememberPublishedRepo(deps.db, declaration);
       commitWorkspaceEntry(
         deps,
         input.name,
@@ -617,15 +615,18 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
         if (copies !== undefined && copies.get(ref) === prior) continue;
         attempt(() => (prior === undefined ? git(dir, "update-ref", "-d", ref) : git(dir, "update-ref", ref, prior)));
       }
-      attempt(() => restoreRememberedRepo?.());
+      // ADR 0391 決定3: the remembered repo folds by the check's own rule —— back to the value before the announcement only once origin is gone
+      attempt(() => assertRememberedRepo(deps.db, { name, path: dir, repo: fresh.repo }, now()));
       if (failures.length > 0) {
         const text = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
         throw new Error(`publish of workspace ${input.name} failed: ${text(err)}; rolling it back failed: ${failures.map(text).join("; ")}`, { cause: err });
       }
       throw err;
     }
+    // ADR 0066 決定5: outside the rollback —— rolling back after the registry commit would leave a declared `repo:` with no origin, the drift itself
+    assertRememberedRepo(deps.db, declaration, now());
   };
-  writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish);
+  writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish, () => announcePublishedRepo(deps.db, declaration));
 }
 
 /** Each mode's external half, ordered so the registry commit stays last. */

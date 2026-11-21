@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { chmod, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmod, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -9,7 +9,7 @@ import { loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
-import { refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
+import { assertRememberedRepo, pickupGate, refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   createWorkspace,
@@ -140,6 +140,47 @@ async function seedDestination(dest: string): Promise<void> {
 function remoteBranches(dest: string): string[] {
   const out = git(dest, "ls-remote", "--heads", dest);
   return out === "" ? [] : out.split("\n").map((line) => line.split("refs/heads/")[1] ?? "");
+}
+
+/** 子 process で `publishWorkspace` を撃つ(ADR 0391 決定4 の中断の窓)。`setup` は publish の前に子で撃つ文で、`db` を使える。
+ *  宛先はローカルの bare repo なので token は要らない。publish の直前に印を出す —— import で死んだ子と区別する。 */
+async function publishInChild(board: Awaited<ReturnType<typeof makeBoard>>, repo: string, setup = "") {
+  const module = (rel: string) => JSON.stringify(new URL(rel, import.meta.url).href);
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--import", "tsx", "--input-type=module", "-e",
+      `const { openDb } = await import(${module("../src/db.ts")});
+       const { GitHubAuth } = await import(${module("../src/github-auth.ts")});
+       const { publishWorkspace } = await import(${module("../src/workspace-create.ts")});
+       const db = openDb(${JSON.stringify(board.deps.db.name)});
+       ${setup}
+       console.log("publishing");
+       await publishWorkspace({ name: "sandbox", repo: ${JSON.stringify(repo)} }, {
+         registry: { dir: ${JSON.stringify(board.registryDir)}, mode: "purely-local" },
+         workspacesBaseDir: ${JSON.stringify(board.deps.workspacesBaseDir)},
+         githubAuth: new GitHubAuth("/nonexistent-token"),
+         db,
+       });`,
+    ],
+    { timeout: 30_000, encoding: "utf8" },
+  );
+  expect(child.stdout, child.stderr).toBe("publishing\n");
+  return child;
+}
+
+async function publishWithFullBoard(board: Awaited<ReturnType<typeof makeBoard>>, repo: string, triggerWhen = "") {
+  board.deps.db.exec("CREATE TABLE filler (b BLOB)");
+  const trigger = "CREATE TEMP TRIGGER fill_on_remember AFTER UPDATE OF remembered_repo ON workspace_state "
+    + triggerWhen + " BEGIN INSERT INTO filler VALUES (zeroblob(1048576)); END";
+  const child = await publishInChild(board, repo, `
+    db.exec(${JSON.stringify(trigger)});
+    db.pragma("max_page_count = " + db.pragma("page_count", { simple: true }));`);
+
+  expect(child.status, child.stderr).toBe(74);
+  expect(child.stderr.trim().split("\n")).toEqual([
+    expect.stringMatching(/^tidepool: board db refused an operation \| SQLITE_FULL \| sql=UPDATE workspace_state SET remembered_repo = /),
+  ]);
 }
 
 describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
@@ -320,9 +361,9 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
 
-  // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの手順は1つが落ちても残り(ADR 0378 決定10 の覚えた repo の戻しを含む)を撃ち、
+  // ADR 0066 決定5 の Status 追記(#3197): 巻き戻しの手順は1つが落ちても残り(ADR 0391 決定3 の覚えた repo の畳みを含む)を撃ち、
   // 投げるのは巻き戻しの失敗で、元の失敗はその原因に残る
-  it("巻き戻しで写しの削除が落ちても、後の写しと覚えた repo は戻り、元の失敗を原因に持つ巻き戻しの失敗を投げる", async () => {
+  it("巻き戻しで写しの削除が落ちても、後の写しは戻り、覚えた repo は予告の前の値へ畳まれ、元の失敗を原因に持つ巻き戻しの失敗を投げる", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const prior = git(checkout, "rev-parse", "main");
     git(checkout, "commit", "--allow-empty", "-m", "after the copy");
@@ -366,6 +407,102 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(err.message).not.toContain("rolling it back failed");
     expect(state()).toEqual(before);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+  });
+
+  // ADR 0391 決定4(#3336 の本文の窓): registry に届く前に死んだ publish は、宣言が無く origin があり、覚えた repo は2値で残る。案内は
+  // origin の検査の文で、origin を外せば予告の前の値へ畳まれ、もう一度 publish すれば完了する
+  it("registry の書き込みで死んだ publish は origin の検査で止まり、origin を外すと畳まれ、もう一度 publish すると完了する", async () => {
+    const board = await makeBoard();
+    const { registryDir, deps, checkout } = board;
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+
+    // registry の着地の `update-ref` に入った所で子を止める
+    const child = await publishInChild(board, dest, `
+      const childProcess = process.getBuiltinModule("node:child_process");
+      const execFileSync = childProcess.execFileSync;
+      childProcess.execFileSync = (file, args, options) => {
+        if (args[0] === "update-ref" && options?.cwd === ${JSON.stringify(registryDir)}) process.exit(75);
+        return execFileSync(file, args, options);
+      };
+      process.getBuiltinModule("node:module").syncBuiltinESMExports();`);
+
+    expect(child.status, child.stderr).toBe(75);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
+    expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
+    const resolve = () => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
+    const task = registerTask(deps.db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: "sandbox" }, new Date(), ...HUMAN_WEBUI);
+    const gate = () => pickupGate(deps.db, resolve(), task, deps.workspacesBaseDir);
+    // 覚えた repo の検査は「宣言無し」を通し(行が宛先の1値なら「`repo:` を戻せ」で止まる)、次の origin の検査が止める
+    await expect(gate()).rejects.toThrow(`workspace sandbox declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${checkout}, run \`git config --remove-section remote.origin\`.`);
+
+    git(checkout, "config", "--remove-section", "remote.origin");
+    await gate();
+    await publishWorkspace({ name: "sandbox", repo: dest }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
+    expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
+    // 宛先へ畳まれている —— 予告のままなら、origin がある間の「宣言無し」は通る
+    expect(() => assertRememberedRepo(deps.db, { name: "sandbox", path: checkout, repo: undefined }, new Date())).toThrow(
+      `workspace sandbox was registered for repo ${dest}, but its registry entry no longer declares one.`,
+    );
+  });
+
+  // ADR 0391 決定1: 覚えた repo の予告は remote add より前なので、盤面がその場で終わっても復旧時に Git を直す必要がない。
+  it("覚えた repo の予告が SQLITE_FULL で拒まれると Git に痕跡が残らず、復旧後に publish できる", async () => {
+    const board = await makeBoard();
+    const { registryDir, deps, checkout } = board;
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+
+    await publishWithFullBoard(board, dest);
+
+    expect(remoteBranches(dest)).toEqual([]);
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+    expect(git(checkout, "for-each-ref", "refs/remotes/")).toBe("");
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
+    const recovered = await publishInChild(board, dest);
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
+  });
+
+  // ADR 0391 決定3: Git を戻してから予告を畳むので、畳みの拒否で終了しても次の検査が元へ畳める。
+  it("巻き戻しの畳みで盤面 DB が書きを拒んでも、復旧後に publish できる", async () => {
+    const board = await makeBoard();
+    const { registryDir, deps, checkout } = board;
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+    const lock = join(registryDir, ".git", "refs", "heads", "main.lock");
+    await writeFile(lock, "");
+
+    await publishWithFullBoard(board, dest, "WHEN OLD.remembered_repo LIKE '[%'");
+
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+    expect(git(checkout, "for-each-ref", "refs/remotes/")).toBe("");
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
+    await unlink(lock);
+    const recovered = await publishInChild(board, dest);
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
+  });
+
+  // ADR 0066 決定5: 成功の畳みは巻き戻しの外 —— registry の commit の後に巻き戻すと、宣言された `repo:` に origin が無いずれそのものを残す。
+  // 畳めなかった行は予告のまま残り、次の検査が宣言と origin の揃った宛先へ畳む(ADR 0391 決定3)
+  it("registry の commit の後に覚えた repo の畳みを盤面 DB が拒んでも、origin と `repo:` は残り、次の検査が宛先へ畳む", async () => {
+    const board = await makeBoard();
+    const { registryDir, deps, checkout } = board;
+    await leaveBaseline(deps.db, { name: "sandbox", path: checkout });
+    const dest = await makeDestination();
+
+    await publishWithFullBoard(board, dest, "WHEN OLD.remembered_repo LIKE '[%'");
+    expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
+    const check = (repo?: string) => assertRememberedRepo(deps.db, { name: "sandbox", path: checkout, repo }, new Date());
+
+    check(dest);
+
+    expect(() => check(undefined)).toThrow(`workspace sandbox was registered for repo ${dest}, but its registry entry no longer declares one.`);
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち

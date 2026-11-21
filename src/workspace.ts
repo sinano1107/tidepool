@@ -30,6 +30,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type IntakeEntry, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation, type TaskScopedPayload } from "./events.js";
+import { sessionHaltQuestion } from "./failed-teardown.js";
 import {
   boardReadTree,
   boardViewStatus,
@@ -142,6 +143,7 @@ import {
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
+  releaseOwedBy,
   sessionReadCheckouts,
   settleQuestionAsObserved,
   subtreeSql,
@@ -1225,8 +1227,8 @@ function advanceKeptWorkbench(named: WorkspaceConfig, workbench: string, target:
   );
 }
 
-/** 取り込みの手が受け取る束: 作業台の基点、入口、`workbench_taken_in` に残す回答者と時刻。 */
-export type IntakeContext = { workbenchBase: string; entry: IntakeEntry; answerer: Answerer; now: Date };
+/** 取り込みの手が受け取る束: 作業台の基点、入口、`workbench_taken_in` に残す回答者と、書く瞬間に読む時刻(#3384: 取り込みの前に await を挟む呼び手がある)。 */
+export type IntakeContext = { workbenchBase: string; entry: IntakeEntry; answerer: Answerer; now: () => Date };
 
 /** 取り込みの event の actor —— 回答者か呼び手(spec #3273 の識別子の表 / pin A5)。 */
 export type Answerer = { actorId: string; origin: EventOrigin };
@@ -1341,7 +1343,7 @@ function takeInWorkbench(
     ensureCarriedWhole(named, subjectOf(place), { own, tip, description: "the workbench tip" });
     const commit = git(named.path, "commit-tree", `${tip}^{tree}`, "-p", old, "-p", tip, "-m", `Take in ${target} from the workbench`);
     advanceBranch(db, named, ref, old, commit);
-    appendEvent(db, { taskId: null, ...answerer, at: now, payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
+    appendEvent(db, { taskId: null, ...answerer, at: now(), payload: { kind: "workbench_taken_in", workspace: named.name, target: ref, tip, commit, entry } });
     return { tip, commit };
   });
 }
@@ -1596,10 +1598,11 @@ async function captureFirstBaseline(
   board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: Date },
 ): Promise<void> {
   refuseWhileHeld(db, workspace.name, "open a workbench");
-  const named = withRememberedRepoCheck(db, workspace, () => board.now);
-  await preparedOrRefused(db, workspace, "open a workbench", board, async () => {
+  const now = () => board.now;
+  const named = withRememberedRepoCheck(db, workspace, now);
+  await preparedOrRefused(db, workspace, "open a workbench", { now }, async () => {
     await firePickupPredicates(db, named, checkoutPickupPredicates(named, board.fixedPoints), "before-open");
-    prepareRefBaseline(db, named, board);
+    prepareRefBaseline(db, named, { resolveRegistered: board.resolveRegistered, now });
   });
 }
 
@@ -1662,7 +1665,7 @@ async function preparedOrRefused(
   db: Db,
   workspace: WorkspaceConfig,
   verb: string,
-  board: { now: Date; github?: GitHubClient },
+  board: { now: () => Date; github?: GitHubClient },
   prepare: () => Promise<void>,
 ): Promise<void> {
   const stopped = (stop: ResourceStop) => quarantinedRefusal(verb, stop.value!, openQuarantineQuestion(db, "workspace", stop.value)!.id);
@@ -1674,9 +1677,9 @@ async function preparedOrRefused(
     if (err instanceof CheckoutHostError) throw new DomainError(`cannot ${verb}: ${err.message}`);
     const place = err instanceof PickupGateError ? err.place : workspace;
     if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {
-      throw stopped(quarantineWorkspace(db, place.name, err, board.now));
+      throw stopped(quarantineWorkspace(db, place.name, err, board.now()));
     }
-    throw stopped((await quarantineWithRepoAccessGuidance(db, board.github, place, err, () => board.now))!);
+    throw stopped((await quarantineWithRepoAccessGuidance(db, board.github, place, err, board.now))!);
   }
 }
 
@@ -1697,7 +1700,8 @@ export async function prepareHumanWork(db: Db, workspace: WorkspaceConfig, task:
  *  祖先を上から、その時点の系譜から `task/<H>`。各 task の列・ref・event は一緒に書く)、作業台を開いて `task_work_started` を残す。2回目
  *  以降は同じ在り処を返して `board/*` を引き直し、disk から消えた作業台は `task/<H>` から開き直す。名前の場所の作業ツリーも HEAD も
  *  動かさない。固定の失敗は準備の失敗と同じに扱う(pickup はタスクブランチの作成の失敗も同じ Quarantine にする)。作業台を開けない失敗は
- *  名前の場所を止めずに拒む。返すのは作業台の在り処。 */
+ *  名前の場所を止めずに拒む。返すのは作業台の在り処。ADR 0390 決定1・2: 準備の後の同じ同期区間で、系譜の帰り先の持ち主が解放を負えば
+ *  何も書かずに拒む(系譜を読む git の失敗は固定の失敗と同じに扱う)。 */
 export async function startHumanWork(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1710,10 +1714,16 @@ export async function startHumanWork(
   const verb = "start work";
   await prepareHumanWork(db, workspace, task, verb, board);
   task = recheck();
+  let refusal: DomainError | undefined;
   await preparedOrRefused(db, workspace, verb, board, async () => {
-    fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
-    createTaskBranch(db, workspace, task, board.now, filledFrom(db, task));
+    // ADR 0390 決定2: createTaskBranch まで await は無い。系譜を読む git の失敗は Quarantine に畳み、拒否はこの外で投げる(中で投げても畳まれる)
+    refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task), verb);
+    if (refusal) return;
+    const now = board.now();
+    fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
+    createTaskBranch(db, workspace, task, now, filledFrom(db, task));
   });
+  if (refusal) throw refusal;
   // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)
   let path: string;
   try {
@@ -1721,7 +1731,7 @@ export async function startHumanWork(
   } catch (err) {
     throw new DomainError(`cannot start work: the board could not open the workbench (${err instanceof Error ? err.message : String(err)}); start work again.`);
   }
-  if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now, payload: { kind: "task_work_started" } });
+  if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now(), payload: { kind: "task_work_started" } });
   return path;
 }
 
@@ -1737,7 +1747,7 @@ const workbenchGone = (at: string, target: string, verb: string) =>
 
 /** ADR 0374 決定6〜11 / spec #3273 group C: タスクブランチを持つ人間担当の work の完了の、準備の後の同期区間 —— 検査 → `task/<H>` を書く →
  *  `done`(`finish`)→ H の1件の merge back。作業台があれば取り込みを先に(tip が `task/<H>` に含まれれば取り込まない)、無ければ取り込まない。
- *  検査: 子孫の後始末が済んでいる(text C2c)、書き始めたのに作業台が disk に無くない(C2e)、取り込みの検査(帰り先の値も入力の tip、`task/<H>`
+ *  検査: 系譜の帰り先の持ち主が解放を負っていない(ADR 0390 決定1〜3)、子孫の後始末が済んでいる(text C2c)、書き始めたのに作業台が disk に無くない(C2e)、取り込みの検査(帰り先の値も入力の tip、`task/<H>`
  *  の今の値を含む —— C2a、未 commit —— C2d)、帰り先(系譜で決まる。根は保護ブランチ)へ clean に merge できる(C2b。できなければ帰り先の値を
  *  作業台に引き、作業台が無ければ `task_work_started` を書かずに開く)。ref は await を挟まずに読むので、最後の await の後に動いた ref も見る。
  *  拒否は task に何も書かない。`done` の後の merge back の失敗は積み残しで、後始末と同じく workspace の Quarantine を立てる。`done` では
@@ -1746,11 +1756,13 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   const target = taskBranch(task.id);
   const ref = `refs/heads/${target}`;
   const at = workbenchAt(named, base, target);
+  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task, "complete");
+  const refusal = returnOwnerRefusal(db, named, lineage, "complete");
+  if (refusal) throw refusal;
   const unfinished = teardownUnfinishedUnder(db, task.id);
   if (unfinished) throw new DomainError(`task ${unfinished.id} "${unfinished.title}" under this task is still being torn down — complete again once it has finished.`);
   const hasWorkbench = placeHasRepository(at);
   if (!hasWorkbench && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
-  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task, "complete");
   const assertMerges = (tip: string, repo: WorkspaceConfig) => {
     if (isAncestor(repo, returnSha, tip) || writeMergeTree(repo, returnSha, tip) !== undefined) return;
     const conflict = `${target} does not merge cleanly into '${returnName}'.`;
@@ -1769,7 +1781,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
     if (hasWorkbench) {
       const place = workbenchPlace(named, realpathSync(at));
       taken = repointingOnRefusal(named, place.path, () =>
-        takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now }, {
+        takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now: () => now }, {
           humanWork: { again: "complete again", gone: workbenchGone(at, target, "complete") },
           returnValue: returnSha,
           beforeWrite: ({ tip, verified }) => assertMerges(tip, { ...named, path: verified }),
@@ -1791,6 +1803,24 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   }
   if (!hasWorkbench) return undefined;
   return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
+}
+
+/** ADR 0390 決定1〜3: 系譜の帰り先 `lineage`(`lineageTaskBranch` の値)のタスクブランチの持ち主が解放を負う間の拒否 —— 根(帰り先が
+ *  保護ブランチ)と帰り先なしには持ち主が無い。拒まなければ undefined。 */
+function returnOwnerRefusal(db: Db, named: WorkspaceConfig, lineage: string | undefined, verb: "complete" | "start work"): DomainError | undefined {
+  const owner = lineage === undefined ? undefined : getTask(db, taskIdOfBranch(lineage))!;
+  const owed = owner && releaseOwedBy(db, owner);
+  if (!owner || !owed) return undefined;
+  // ADR 0390 決定3: 人間の回答待ちならその question を名指す。解放待ちは解放をやり直す workspace の Quarantine(子は帰り先と同じ workspace)を、
+  // session と後始末は枠の主の session の行(落ちた後始末・閉じ切らなかった session)を待つ。後始末の印がある間は梯子の底の封じ込めの確認も
+  // 待ちうるが、その question は盤面全体の鍵で能力検査も立てる(ADR 0033)—— 持ち主の保留は watchdog の記憶にしか無く、ここでは確かめられない
+  const question =
+    owed === "pending"
+      ? openQuarantineQuestion(db, "workspace", named.name)
+      : (sessionHaltQuestion(db, owner.id) ?? (owed === "teardown" ? openQuarantineQuestion(db, "containment", null) : undefined));
+  return new DomainError(
+    `task ${owner.id} "${owner.title}", whose branch this task returns to, is still running or being torn down — ${verb} again once it has finished.${question ? ` Answer question ${question.id} first.` : ""}`,
+  );
 }
 
 /** ADR 0374 決定8: H の帰り先 —— `parent_id` でなく系譜で決まり、非根は系譜の `task/<P>`、根は保護ブランチ —— の ref・名前・今の値。
@@ -1825,7 +1855,7 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
   try {
     // ADR 0374 決定7: 取り込むものが無い拒否も、拒否として `board/*` を引き直す
     taken = repointingOnRefusal(named, place.path, () => {
-      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now }, {
+      const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now: () => now }, {
         humanWork: { again: "take in again", gone },
         // ADR 0374 決定6: 人間が merge した帰り先の値も入力の tip —— 完了と同じ
         returnValue: returnBranchOf(db, named, task, "take in").sha,
@@ -1870,7 +1900,7 @@ export function takeInHumanContentWorkbench(db: Db, workspace: WorkspaceConfig, 
   const branch = protectedBranch(workspace);
   const at = CHECKOUT_LAYOUT.workbench.at(intake.workbenchBase, workspace, branch);
   const shown = existsSync(at) ? realpathSync(at) : at;
-  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, () => intake.now))) {
+  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, intake.now))) {
     throw new Error(
       `workspace ${workspace.name} is remote-backed now, so ${branch} is changed on origin.${originRoute(workspace)} Commits you made in the workbench at ${shown} ` +
         "are not taken in: fetch them from the workbench into your own clone and carry them from there. Answer `close`.",
@@ -2308,8 +2338,8 @@ export function resolveTaskBranchLineage(
 }
 
 /** ADR 0053: the nearest work branch in the task's live lineage, or undefined —— the protected branch is the bottom of that lineage, or it has
- *  no return (ADR 0380 決定3). Its callers (merge back at release and at the acceptance's redo, the closed root) skip both: they act only
- *  on an ancestor's branch. A caller that would read undefined as the protected branch uses `resolveTaskBranchLineage`. */
+ *  no return (ADR 0380 決定3). Its callers (merge back at release and at the acceptance's redo, the closed root, the human doors' wait
+ *  for the return branch's owner —— ADR 0390 決定1) skip both: they act only on an ancestor's branch. A caller that would read undefined as the protected branch uses `resolveTaskBranchLineage`. */
 export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
@@ -2516,16 +2546,17 @@ export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfi
   await preparePickupPlace(db, workspace, task, board);
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
-  fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
-  createTaskBranch(db, workspace, task, board.now);
-  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, board.now);
+  const now = board.now();
+  fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
+  createTaskBranch(db, workspace, task, now);
+  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, now);
 }
 
 type PickupPreparation = PickupPrep & {
   reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }>;
-  /** task の checkout の番地の基点と、開いた event の時刻(ADR 0356 決定2)。 */
+  /** task の checkout の番地の基点と、開いた event の時刻(ADR 0356 決定2)。時刻は準備の await の後、書く同期区間ごとに読む(#3384)。 */
   workspacesBaseDir: string;
-  now: Date;
+  now: () => Date;
   /** registry の名前を引く口(ADR 0373 決定13 の最初の撮りの確認が引く)。省けない —— 撮る呼び手が渡し忘れれば確認が黙って消える。
    *  undefined は registry の無い盤面で、確認は掛からない。 */
   resolveRegistered: WorkspaceResolver | undefined;
@@ -2624,12 +2655,12 @@ export class FirstCaptureRegistryReadError extends Error {
   }
 }
 
-function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
+function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: () => Date }): void {
   const key = workspace.name;
   const first = !holdsBaseline(db, key);
-  const declaration = withRememberedRepoCheck(db, workspace, () => board.now).checkRememberedRepo(workspace);
+  const declaration = withRememberedRepoCheck(db, workspace, board.now).checkRememberedRepo(workspace);
   if (!first) compareAndFoldBaseline(db, workspace, "while the checkout rested since the last session");
-  else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now);
+  else if (board.resolveRegistered && !isInterviewRoomName(db, key)) confirmBaselinesBeforeFirstCapture(db, board.resolveRegistered, board.now());
   const pin = storedSparsePolicy(db, key);
   if (pin !== undefined && !first) return;
   // ADR 0356 決定3: an existing checkout without a pin may already carry worker-written rules.
@@ -2654,7 +2685,7 @@ export function compareRefsBeforeLanding(db: Db, workspace: WorkspaceConfig, boa
   }
   const held = firstCaptureHold(db, workspace.name);
   if (held) throw new FirstCaptureRefusedError({ quarantine: held.quarantine, value: held.value, reason: `workspace ${held.workspace} is quarantined` });
-  prepareRefBaseline(db, workspace, board);
+  prepareRefBaseline(db, workspace, { resolveRegistered: board.resolveRegistered, now: () => board.now });
 }
 
 /** 面接室の名前(鍵は root id)。 */
@@ -2705,13 +2736,31 @@ function writeRememberedRepo(db: Db, name: string, value: string | null): void {
   db.prepare("UPDATE workspace_state SET remembered_repo = ? WHERE name = ?").run(value, name);
 }
 
-/** ADR 0378 決定10: publish changes a held baseline's repo alongside its registry entry, and can roll back the exact prior value. */
-export function rememberPublishedRepo(db: Db, workspace: WorkspaceConfig): () => void {
+/** ADR 0391 決定1: publish announces a held baseline's repo before it writes anything; the check folds it (ADR 0391 決定3).
+ *  The ADR's `予告の前の値|宛先` is stored as the JSON array `[before, destination]`: an array cannot be mistaken for the 1-value
+ *  JSON string or null, and a local path may contain `|` or any other separator. */
+export function announcePublishedRepo(db: Db, workspace: WorkspaceConfig): void {
   const { name } = workspace;
   const before = readRememberedRepo(db, name);
-  if (before === undefined) return () => {};
-  writeRememberedRepo(db, name, encodeWorkspaceRepo(workspace));
-  return () => writeRememberedRepo(db, name, before);
+  if (before === undefined) return;
+  writeRememberedRepo(db, name, JSON.stringify([rememberedValues(before ?? "null")[0], JSON.parse(encodeWorkspaceRepo(workspace))]));
+}
+
+/** The remembered values of a learned row: one, or `[before, destination]` while a publish is announced (ADR 0391 決定1). */
+function rememberedValues(saved: string): (string | null)[] {
+  const value = JSON.parse(saved) as string | null | (string | null)[];
+  return Array.isArray(value) ? value : [value];
+}
+
+/** ADR 0378 決定3's predicate as a yes/no: does the checkout's origin agree with the declaration? */
+function originAgrees(workspace: WorkspaceConfig): boolean {
+  try {
+    assertRemoteDeclarationMatchesClone(workspace);
+    return true;
+  } catch (err) {
+    if (err instanceof OriginRepositoryMismatchError) return false;
+    throw err;
+  }
 }
 
 export class WorkspaceRepoMismatchError extends DomainError {}
@@ -2725,9 +2774,17 @@ export function assertRememberedRepo(db: Db, workspace: WorkspaceConfig, now: Da
     writeRememberedRepo(db, name, encodeWorkspaceRepo(workspace));
     return;
   }
-  const remembered = (JSON.parse(saved) as string | null) ?? undefined;
-  const destination = (value: string | undefined) => value === undefined ? undefined : networkDestination(value, path).url;
-  if (sameRepository(destination(remembered), destination(repo))) return;
+  const values = rememberedValues(saved);
+  const destination = (value: string | null | undefined) => value == null ? undefined : networkDestination(value, path).url;
+  // ADR 0391 決定2: while announced, either value agrees with the declaration
+  const agreed = values.findIndex((value) => sameRepository(destination(value), destination(repo)));
+  if (agreed >= 0) {
+    // ADR 0391 決定3: fold only once origin agrees too — a remote-backed registry clone can show a stale declaration
+    if (values.length > 1 && originAgrees(workspace)) writeRememberedRepo(db, name, JSON.stringify(values[agreed]));
+    return;
+  }
+  // ADR 0391 決定2: an announced row names the value before the announcement
+  const remembered = values[0] ?? undefined;
   const reason = remembered === undefined
     ? `workspace ${name} was registered as purely-local, but its registry entry now declares repo ${repositoryLabel(repo!)}. Remove \`repo:\`; to give the workspace a remote, publish it.`
     : repo === undefined
@@ -2887,23 +2944,30 @@ function readCheckoutValue(workspace: WorkspaceConfig, ref: string): string {
  *  落ちれば2値の行が残り、どちらの値も違反と読まれない(決定5)—— 次の比較が ref の持つ側に畳む(ADR 0351 決定4)。
  *
  *  `write()` は同期に限る —— 予告→書く→畳むが1つの同期区間になり、盤面の他の書き込みと交差しない。token の取得
- *  (仲介への往復)は呼び手が予告の前に済ませる。 */
+ *  (仲介への往復)は呼び手が予告の前に済ませる。
+ *
+ *  `alsoAnnounce` は refs の予告と同じ transaction で撃つ別の予告 —— publish の覚えた repo(ADR 0391 決定1)。畳みは呼び手が持つ。 */
 export function writeBoardRefs(
   db: Db,
   workspace: WorkspaceConfig,
   writes: ReadonlyArray<readonly [ref: string, newValue: string]>,
   write: () => void,
+  alsoAnnounce?: () => void,
 ): void {
   const before = new Map<string, string>();
-  const announced = updateBaseline(db, workspace, (values) => {
-    for (const [ref, newValue] of writes) {
-      const previous = values.get(ref) ?? "";
-      before.set(ref, previous);
-      const candidates = baselineValues(previous);
-      // ADR 0243 決定5: a retry keeps the existing announcement if it already covers this write.
-      if (candidates.length === 1 || !candidates.includes(newValue)) values.set(ref, `${previous}|${newValue}`);
-    }
-  });
+  // ADR 0391 決定1: publish's remembered repo is announced in the same DB write as the refs, before `write()` —— a refused announcement ends before any trace exists
+  const announced = db.transaction(() => {
+    alsoAnnounce?.();
+    return updateBaseline(db, workspace, (values) => {
+      for (const [ref, newValue] of writes) {
+        const previous = values.get(ref) ?? "";
+        before.set(ref, previous);
+        const candidates = baselineValues(previous);
+        // ADR 0243 決定5: a retry keeps the existing announcement if it already covers this write.
+        if (candidates.length === 1 || !candidates.includes(newValue)) values.set(ref, `${previous}|${newValue}`);
+      }
+    });
+  })();
   if (!announced) {
     write();
     return;

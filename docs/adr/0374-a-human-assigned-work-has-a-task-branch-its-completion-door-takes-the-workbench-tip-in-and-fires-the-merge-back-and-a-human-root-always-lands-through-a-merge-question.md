@@ -1,5 +1,7 @@
 # 人間担当の work もタスクブランチを持ち、完了の扉が作業台の tip を取り込んで merge back を撃ち、人間の根は常に merge question で着地する
 
+**Status 追記: 決定9 の「走行中の session の有無は見ない」と決定3 の「`task/<親>` の今の値から切られる」に例外が1つ足される —— 系譜の帰り先の持ち主が解放を負う間(`in_progress`・後始末の印・解放待ち)は、完了の扉も「書き始める」も拒む。兄弟の session は今までどおり見ず、取り込みだけの操作も拒まない([ADR 0390](0390-a-human-door-on-a-lineage-waits-while-the-return-branch-owner-still-owes-its-release.md) 決定1〜3、2026-11-21、issue #3365)。**
+
 **Status 追記: 決定2 の拒否文「workspace を Edit で指定してから」は、子には当たらない —— 子は workspace を入力に持たず、Edit の欄も無い。子の場所が導出できないのは祖先の側も導出できないときで、拒否文は根の workspace を指定するよう案内する([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定1、2026-11-19、issue #1796)。**
 
 **Status 追記: 決定16 の「修理子に専用の規則は足さない」に既定が1つ足される —— タスクブランチを持つ H の完了時レビューが立てる修理子で `assignee` が省かれたら、宛先は `human` である。レビュー由来の修理子は reviewer が書いた値のまま登録され、省略は既定 agent への参照になる(ADR 0011)ので、足さなければ承認なしに既定 agent が人間の成果を直す。agent を名指す道とその承認 question は変わらない。異議由来の修理子が従う「元タスクを担った者に戻る」(ADR 0237 決定1・3)を、レビュー由来の省略の側へ延ばした形である。agent の task のレビューは変えていない(#3271)(2026-11-16、spec #3273 の seam の確認、ユーザー確認済み)。**

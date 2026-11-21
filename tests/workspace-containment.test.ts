@@ -20,13 +20,14 @@ import { queueReturnHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
+  announcePublishedRepo,
+  assertRememberedRepo,
   compareContainmentRefs,
   holdsBaseline,
   openHumanContentWorkbench,
   openInterviewRoom,
   quarantineWorkspace,
   recordTaskCheckoutTip,
-  rememberPublishedRepo,
   stopContainmentPair,
   type TaskCheckoutPlace,
   takeInHumanContentWorkbench,
@@ -538,13 +539,15 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
   async function becomeRemoteBacked(b: Awaited<ReturnType<typeof board>>) {
     const origin = await tempDir("tidepool-became-remote-origin-");
     git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
-    // 本番の publish と同じく origin を足し、remote-tracking ref は盤面の口を通して書く
+    // 本番の publish と同じく origin を足し、remote-tracking ref は盤面の口を通して書き、覚えた repo は予告して畳む(ADR 0391 決定1・3)——
+    // 予告のままの行は宣言の無い旧い値も通し、ADR 0378 決定7 の確かめを釘にしない
     writeBoardRefs(b.db, b.ws, [["refs/remotes/origin/main", git(b.ws.path, "rev-parse", "main")]], () => {
       git(b.ws.path, "remote", "add", "origin", origin);
       git(b.ws.path, "push", "--quiet", "origin", "main");
     });
     const published = { ...b.ws, repo: origin };
-    rememberPublishedRepo(b.db, published);
+    announcePublishedRepo(b.db, published);
+    assertRememberedRepo(b.db, published, b.clock.now());
     b.publish(published);
     return origin;
   }
@@ -889,6 +892,23 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       expect(getTask(b.db, b.question().id)?.status).toBe("todo");
     });
 
+    it("fetch の後の比較が立てる workspace の Quarantine の時刻は、fetch を待った後の時刻(#3384)", async () => {
+      const { workspace } = await makeRemoteBackedWorkspace("compare-after-fetch-time");
+      git(workspace.path, "fetch", "--quiet", "origin");
+      let during = async () => {};
+      const githubAuth = { ensureToken: async () => during(), env: () => process.env } as unknown as GitHubAuth;
+      const b = await board("compare-after-fetch-time", { workspace, githubAuth });
+      b.stop();
+      during = async () => {
+        git(workspace.path, "branch", "moved-during-the-fetch");
+        await b.clock.advance(60_000);
+      };
+
+      await expect(b.answer()).rejects.toThrow(/refs\/heads\/moved-during-the-fetch\./);
+
+      expect(quarantineQuestion(b.db, "workspace", workspace.name)?.created_at).toBe(new Date(60_000).toISOString());
+    });
+
     it("remote-backed の回答は origin の直しを引いても基準と食い違わず受理される", async () => {
       const { workspace, publish } = await makeRemoteBackedWorkspace("compare-remote-clean");
       git(workspace.path, "fetch", "--quiet", "origin");
@@ -1130,7 +1150,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const caller = { actorId: "human", origin: "webui" } as const;
       await openHumanContentWorkbench(b.db, b.ws, b.base, caller, b.clock.now(), { resolveRegistered: undefined });
       const tip = removeSkill(b.workbench());
-      takeInHumanContentWorkbench(b.db, b.ws, { workbenchBase: b.base, answerer: caller, now: b.clock.now() });
+      takeInHumanContentWorkbench(b.db, b.ws, { workbenchBase: b.base, answerer: caller, now: () => b.clock.now() });
       const id = b.question("codex").id;
 
       await b.answer("codex");

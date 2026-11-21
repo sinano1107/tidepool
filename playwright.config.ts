@@ -12,6 +12,8 @@ const scratch = Boolean(process.env.PLAYWRIGHT_SCRATCH);
 // 恒久回帰や CI を赤くしない。
 export default defineConfig({
   testDir: "./e2e",
+  // 呼び手の GIT_DIR などを runner の env から落とす —— worker はこの env を受け継ぐ(#3334)
+  globalSetup: "./scripts/repo-location-git-env.mjs",
   testMatch: scratch ? /.*\.scratch\.spec\.ts/ : undefined,
   testIgnore: scratch ? undefined : /.*\.scratch\.spec\.ts/,
   // 各テストが自前のサーバーを ephemeral port で起動する。ポート衝突は無いが、

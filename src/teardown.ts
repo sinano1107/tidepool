@@ -3,9 +3,8 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
 
-import { quarantineFailedTeardown, quarantineUnclosedSession } from "./failed-teardown.js";
+import { quarantineFailedTeardown, quarantineUnclosedSession, sessionHaltQuestion, spawnOfCurrentPickup } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { openQuarantineQuestion } from "./quarantine.js";
 
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueue, type Task } from "./tasks.js";
@@ -161,24 +160,9 @@ function takeUnclosedRest(slot: Slot, spawnId: number): TeardownRest | undefined
   return rest;
 }
 
-/** その spawn が task の今の pickup のものか。後の pickup が来ていれば、その spawn の session はもう枠の主ではない。 */
-export function spawnedAfterLatestPickup(db: Db, taskId: string, spawnId: number): boolean {
-  return spawnId > (latestEventOfTask(db, taskId, "task_picked_up")?.id ?? 0);
-}
-
-/** task の今の pickup の session の spawn event id(ADR 0344 決定1: 停止の鍵)。前の pickup の spawn は死んだ session で、今の pickup に
- *  spawn が無ければ process を持たなかった session —— 鍵は task id だけになる。 */
-function spawnOfCurrentPickup(db: Db, taskId: string): number | undefined {
-  const spawned = latestEventOfTask(db, taskId, "worker_spawned");
-  return spawned && spawnedAfterLatestPickup(db, taskId, spawned.id) ? spawned.id : undefined;
-}
-
-/** ADR 0112 決定4 の門(ADR 0344 決定4): 枠の主の session の行が開いているか —— `failedTeardown` は task id、`unclosedSession` は
- *  spawn event id で引く。死んだ session の行は読まない —— 走っている session の梯子を止めない。`answeredSpawn` は回答中の spawn で、行はまだ開いている。 */
+/** ADR 0112 決定4 の門(ADR 0344 決定4): 枠の主の session の行が開いているか(`sessionHaltQuestion`)。 */
 export function sessionHaltOpen(db: Db, taskId: string, answeredSpawn?: number): boolean {
-  if (openQuarantineQuestion(db, "failedTeardown", taskId)) return true;
-  const spawnId = spawnOfCurrentPickup(db, taskId);
-  return spawnId !== undefined && spawnId !== answeredSpawn && openQuarantineQuestion(db, "unclosedSession", String(spawnId)) !== undefined;
+  return sessionHaltQuestion(db, taskId, answeredSpawn) !== undefined;
 }
 
 /** 枠の主の session の残りがあれば `action` をその後ろに継いで true —— 呼び手は自分では撃たず、受理に任せる(ADR 0112 決定4 / ADR 0344 決定4)。

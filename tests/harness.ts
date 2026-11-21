@@ -161,7 +161,7 @@ export const HUMAN_WEBUI = [HUMAN_ACTOR_ID, "webui"] as const;
 
 /** conflict しない local 着地(`mergeTaskToProtected` を直に呼ぶ試験)の取り込みの束。作業台の基点は作れない path なので、試験の間で
  *  共有される dir も、実 HOME の既定の基点も読まない。 */
-export const CLEAN_LANDING_INTAKE = { workbenchBase: "/dev/null/workbenches", answerer: { actorId: HUMAN_ACTOR_ID, origin: "webui" }, now: new Date(0) } as const;
+export const CLEAN_LANDING_INTAKE = { workbenchBase: "/dev/null/workbenches", answerer: { actorId: HUMAN_ACTOR_ID, origin: "webui" }, now: () => new Date(0) } as const;
 
 /** domain 層の出題が記録する root の分岐元の仮の sha。checkout で引く受験者の pickup が要るテストは実の sha を渡す。 */
 export const POSED_HEAD = "0000000000000000000000000000000000000000";
@@ -910,7 +910,7 @@ export async function prepareAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: Partial<Parameters<typeof prepareWorkspaceAtPickup>[3]> & { real?: WorkspaceConfig } = {},
+  board: Omit<Partial<Parameters<typeof prepareWorkspaceAtPickup>[3]>, "now"> & { now?: Date; real?: WorkspaceConfig } = {},
 ): Promise<RunPlace> {
   const now = board.now ?? new Date("2026-11-07T00:00:00.000Z");
   if (!latestEventOfTask(db, task.id, "task_picked_up") || taskCheckoutPath(db, task.id) !== undefined) {
@@ -920,7 +920,7 @@ export async function prepareAtPickup(
   fillEmptyWorkspace(db, task.id, workspace.name);
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   // 既定は registry の無い盤面(最初の撮りの確認は掛からない、ADR 0373 決定13)
-  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
+  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now: () => now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
 
