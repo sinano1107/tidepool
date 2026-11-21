@@ -8,6 +8,8 @@
 
 **Status 追記: 決定13 の確認が別の workspace で落ちうるので、最初の撮りを待つ task の止め方を足す。基準の行を持つ面接室でない workspace の Quarantine(workspace の Quarantine と、その workspace を含む組の封じ込めの Quarantine —— 封じ込めの修理は保護ブランチへの commit を求めるので、開いている間に ref が動くのはむしろこちらである)が1つでも開いている間、行の無い名前を開く task は、Quarantine の理由を問わず待つ —— 開いている間、その場所は人間の手の中にあり、ref は受理(決定1)まで誰も保証しないので、「確認が通る停止」は確認を走らせた瞬間にしか言えない。停止に原因の印を持たせて ref に関わる停止だけで待たせる形は退けた —— Quarantine は名前に1つで、開いた後に人間が動かした ref は同じ名前の開いた Quarantine に吸われ、印が実際の状態を言わなくなる。pickup が観測した停止を門が読む形は ADR 0368 の退けた形のまま。受験者も例外にしない(ADR 0368 決定3 と同じ理屈 —— root が実環境を読む場所として撮るので、同じ停止で止まる)。その Quarantine の本文は、基準をまだ撮っていない workspace もその question が閉じるまで待つことを毎回言う。決定13 の「この確認を通れば今どおり最初の撮りをする」は、この待ちの外で読む。spec #3273 の「確認に落ちた workspace の Quarantine で持つ」は「基準の行を持つ workspace の Quarantine が全て閉じるまで待つ」になる(2026-11-16 の grilling、issue #3319、実装は #3278)。**
 
+**Status 追記: 決定5 の「今の値で基準に入れる」は `task/<id>` には当たらない —— 失われた event を書く `task/<id>` は、今の値を `refs/keep-around/<sha>` で持ち続けて ref と基準の行を消し、未決着なら固定か `start_work` が作り直す。基準に無い値を基準に入れる道は、その他の ref の今の値として残る([ADR 0392](0392-giving-up-a-lost-task-branch-moves-its-current-value-to-keep-around-and-deletes-the-ref-so-the-fixing-re-creates-it.md) 決定1、2026-11-21、issue #3480)。**
+
 2026-11-13〜15 の wayfinder(map #3178、入口は #3158)で決定。ADR 0370 は「残る穴と根」で、Quarantine の受理が比べずに全撮りし、
 開いている間に動いた ref を見せないまま受け入れて merge back で運ぶ穴を、人間の内容の扉の設計に渡した。渡された要件は「門を通った内容を、
 回答1つで落とせない」。人間が書く場所と取り込みは ADR 0371 が決めた。この ADR は、受理が何を確かめるか、動いた ref の出口、基準が
