@@ -35,10 +35,11 @@ it.each(kinds.map((kind) => [kind.kind, kind] as const))("%s は 列 → 種類 
 
 it("どの種類にも当てはまらない列の組み合わせは、埋まっている列を名指して投げる", () => {
   const none = questionColumns({ kind: "escalation" });
+  const merge = questionColumns(examples.pr_merge[0]!);
 
   expect(() => questionKindOf({ ...none, question_breached_decision: 7 })).toThrow("question_breached_decision");
   expect(() =>
-    questionKindOf({ ...none, question_pending_merge_pr: 12, question_proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }),
+    questionKindOf({ ...merge, question_proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }),
   ).toThrow("question_proposal + question_pending_merge_pr");
   expect(() => questionKindOf({ ...none, question_quarantine_value: "navigator" })).toThrow("question_quarantine_value");
 });
