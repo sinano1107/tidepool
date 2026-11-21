@@ -9,6 +9,7 @@ import { whyInvalidEffort } from "./effort.js";
 import { type AuditVerdict, appendEvent, type DecisionLogEntry, type EventOrigin, type EventPayload, getEvent, type InterviewProbe, type InterviewVerdict, isDecisionLogEntry, latestEventOfTask, listEvents, type ReadCheckout, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
+import { type HumanMergePathReview, humanMergePathExplanation } from "./human-merge-paths.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
@@ -3281,6 +3282,7 @@ export function registerMergeQuestion(
   purpose: string,
   recommendation: (typeof MERGE_QUESTION_OPTIONS)[number],
   now: Date,
+  mergePathReview?: HumanMergePathReview,
 ): string {
   return db.transaction(() => {
     const { pr, outside } = content;
@@ -3294,7 +3296,7 @@ export function registerMergeQuestion(
     const question = registerTask(db, {
       type: "question",
       title,
-      purpose,
+      purpose: mergePathReview === undefined ? purpose : `${purpose}\n\n${humanMergePathExplanation(mergePathReview)}`,
       completion_criteria: "a human decides whether to merge",
       question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation: outside === null ? recommendation : "hold" }],
       question_kind: { kind: "pr_merge", ...content },
@@ -3408,6 +3410,7 @@ export function recordPrOpened(
   authority: AuthorityContext | undefined,
   isProtected: boolean | undefined,
   origin: EventOrigin,
+  mergePathReview?: HumanMergePathReview,
 ): void {
   db.transaction(() => {
     recordPrNumber(db, task.id, prNumber);
@@ -3418,9 +3421,10 @@ export function recordPrOpened(
       payload: { kind: "pr_opened", pr_number: prNumber, sha },
       at: now,
     });
-    const ask = (purpose: string) =>
-      registerMergeQuestion(db, task, { pr: prNumber, tip: sha, outside: null, missingBranches: null, reason: "pr_opened" }, purpose, "merge", now);
-    const landing = landingSurface(isProtected, isHumanAssigned(task), authority?.merge, task.risk_flag);
+    const ask = (purpose: string) => registerMergeQuestion(db, task,
+      { pr: prNumber, tip: sha, outside: null, missingBranches: null, reason: "pr_opened" },
+      purpose, "merge", now, mergePathReview);
+    const landing = landingSurface(isProtected, isHumanAssigned(task), authority?.merge, task.risk_flag, mergePathReview !== undefined);
     switch (landing.surface) {
       case "merge_question":
         ask(
@@ -3435,6 +3439,7 @@ export function recordPrOpened(
             risk:
               `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
               `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+            human_merge_paths: `"${task.title}" completed and opened PR #${prNumber}. Merge it now, or hold?`,
           }[landing.reason],
         );
         break;
@@ -3450,7 +3455,7 @@ export function recordPrOpened(
 /** 着地の面の判定(ADR 0217 決定1): PR を開く時点の recordPrOpened と、無人 merge の
  *  poll(landing.ts)の両方がこれを呼ぶ。着地の面は人間の merge 判断が住む場所で、3つある
  *  (ADR 0079 決定1): 盤面の merge question / 無人 merge キュー / 盤面の外(`external` の
- *  PR 面)。question 面へ倒れる理由(保護・人間の根・ダイヤル・risk)は4つあるが面は1つで、違うのは
+ *  PR 面)。question 面へ倒れる理由(保護・人間の根・ダイヤル・risk・人間が merge する path、ADR 0395 決定4)にかかわらず面は1つで、違うのは
  *  question 本文に書く理由だけなので `reason` で返す。保護はダイヤルに依らない資源側の
  *  不変条件なので最初に読む。人間の根は profile を持たず、dial に依らず常に問う(ADR 0374 決定13)ので次に読む。
  *  `external` は宣言された不作為(ADR 0079 決定2)で、盤面の外。
@@ -3461,14 +3466,15 @@ type LandingSurface<Reason> =
   | { surface: "merge_question"; reason: Reason }
   | { surface: "auto_merge_queue" }
   | { surface: "outside_board" };
-type MergeQuestionReason = "protected" | "human_root" | "dial" | "risk";
-export function landingSurface(isProtected: boolean | undefined, humanRoot: false, merge: MergeDial | undefined, riskFlag: number): LandingSurface<Exclude<MergeQuestionReason, "human_root">>;
-export function landingSurface(isProtected: boolean | undefined, humanRoot: boolean, merge: MergeDial | undefined, riskFlag: number): LandingSurface<MergeQuestionReason>;
+type MergeQuestionReason = "protected" | "human_root" | "dial" | "risk" | "human_merge_paths";
+export function landingSurface(isProtected: boolean | undefined, humanRoot: false, merge: MergeDial | undefined, riskFlag: number, humanMergeRequired?: boolean): LandingSurface<Exclude<MergeQuestionReason, "human_root">>;
+export function landingSurface(isProtected: boolean | undefined, humanRoot: boolean, merge: MergeDial | undefined, riskFlag: number, humanMergeRequired?: boolean): LandingSurface<MergeQuestionReason>;
 export function landingSurface(
   isProtected: boolean | undefined,
   humanRoot: boolean,
   merge: MergeDial | undefined,
   riskFlag: number,
+  humanMergeRequired = false,
 ): LandingSurface<MergeQuestionReason> {
   if (isProtected) return { surface: "merge_question", reason: "protected" };
   if (humanRoot) return { surface: "merge_question", reason: "human_root" };
@@ -3476,9 +3482,9 @@ export function landingSurface(
     case "escalate":
       return { surface: "merge_question", reason: "dial" };
     case "auto_if_ci_green":
-      return riskFlag
-        ? { surface: "merge_question", reason: "risk" }
-        : { surface: "auto_merge_queue" };
+      if (riskFlag) return { surface: "merge_question", reason: "risk" };
+      if (humanMergeRequired) return { surface: "merge_question", reason: "human_merge_paths" };
+      return { surface: "auto_merge_queue" };
     case "external":
     case undefined:
       return { surface: "outside_board" };

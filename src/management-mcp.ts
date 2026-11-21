@@ -547,6 +547,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         allowed_domains: z.array(z.string()).optional(),
         // ADR 0395 決定2: setting it is a dangerous value and this door has no confirm (ADR 0088), so only `""` (remove) gets through
         head_repo: z.string().optional().describe("The PR head repo (a fork of the workspace's repo) as owner/name; an empty string removes it."),
+        // ADR 0395 決定4: adding a human merge path is safe, removing one needs confirmation in the WebUI.
+        human_merge_paths: z.array(z.string()).optional(),
       }),
     },
     async (input) => {

@@ -1770,9 +1770,13 @@ export async function submitAnswer(
           const refuseUnasked = (origin: Exclude<PrHeadOrigin, { kind: "pushed" }>) => {
             // ADR 0288 決定2(印の後): 比べる await の間に別の回答が印を取って merge していれば、その question を取り下げない
             if (deps.landing.isMarked(task.workspace, mergePr)) return new DomainError(beingMerged);
+            const root = getTask(deps.db, landingTaskId)!;
             const refusal = refuseUnaskedHead(
-              deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), getTask(deps.db, landingTaskId)!,
-              { prNumber: mergePr, head: pr.head, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure" }, now(),
+              deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), root,
+              {
+                prNumber: mergePr, head: pr.head, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure",
+                pathReview: deps.landing.reviewMergePaths(mergeWorkspace, root, pr),
+              }, now(),
             );
             return new ReraisedRefusal(withNotice(`${pushed}${refusal}`, notice));
           };

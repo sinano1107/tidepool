@@ -1295,6 +1295,8 @@ it("refspec を絞った checkout の PR への人間の merge 回答は通り�
 it("盤面自身が push した head は手元にあるので、origin に届かなくても fetch を撃たずに無人 merge される", async () => {
   const { workspace, github, work, landing, clock } = await openPrByConvergence("left-behind-no-fetch", "auto_if_ci_green");
   github.scriptHead(1, originHead(workspace, work.id));
+  const observed = await github.readPullRequest({ workspace, number: 1 });
+  vi.spyOn(github, "readPullRequest").mockResolvedValue(observed);
   rmSync(workspace.repo!, { recursive: true });
 
   await landing.tick("auto_merge", clock.now());

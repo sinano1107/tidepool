@@ -186,6 +186,7 @@ export interface WorkspaceConfig {
   review_allowed_commands?: string[];
   /** Workspace-scoped sandbox egress domains (ADR 0072). Absent opens none. */
   allowed_domains?: string[];
+  human_merge_paths?: string[];
 }
 
 /** Where a task runs: its task checkout (ADR 0356 決定1) — the spawn view (`taskRunPlace`) or the view the board's gates and
@@ -275,6 +276,7 @@ export function resolveExecutionWorkspace(
     head_repo: entry.head_repo,
     review_allowed_commands: entry.review_allowed_commands,
     allowed_domains: entry.allowed_domains,
+    human_merge_paths: entry.human_merge_paths,
   };
 }
 
@@ -2175,6 +2177,7 @@ export function listRegisteredWorkspaces(
     head_repo: entry.head_repo,
     review_allowed_commands: entry.review_allowed_commands,
     allowed_domains: entry.allowed_domains,
+    human_merge_paths: entry.human_merge_paths,
   }));
 }
 

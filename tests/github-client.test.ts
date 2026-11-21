@@ -43,13 +43,13 @@ afterEach(async () => {
  *  仲介の代役を1つ立てて繋ぐ — GhCliClient は workspace が宣言する repo
  *  の installation token を各呼び出しの env に都度注入する(process.env には
  *  決して書かない)。 */
-async function makeAuth(answer: BrokerAnswer = issuedToken("installation-token")): Promise<GitHubAuth> {
+async function makeAuth(answer: BrokerAnswer | (() => BrokerAnswer) = issuedToken("installation-token")): Promise<GitHubAuth> {
   // 1つの test で2度呼ばれる(getIssue の not_found / outage)ので、共有変数でなく test 終了で消す
   const dir = await tempDir("tidepool-secrets-");
   const file = join(dir, "github-token");
   writeFileSync(file, "gho_user\n");
   chmodSync(file, 0o600);
-  const broker = await startFakeBroker(() => answer);
+  const broker = await startFakeBroker(() => typeof answer === "function" ? answer() : answer);
   brokers.push(broker);
   return new GitHubAuth(file, broker.url);
 }
@@ -259,12 +259,12 @@ it("readPullRequest は gh が非ゼロ終了したら(到達不能)CI を pendi
 });
 
 // ADR 0229 決定2 / ADR 0231 決定1 / ADR 0265 決定5: 状態と head と merge した名義は CI と同じ1回の読み取りに載せる —— tick の網の呼び出しを増やさない
-it("readPullRequest は1回の gh pr view --json state,statusCheckRollup,headRefOid,mergedBy で CI と状態と head と merge した名義を読む", async () => {
+it("readPullRequest reads CI, state, merge author, head and base in one GitHub call", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"headRefOid":"abc123","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}'\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"headRefOid":"abc123","baseRefName":"main","baseRefOid":"abc456","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}'\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
@@ -272,9 +272,9 @@ it("readPullRequest は1回の gh pr view --json state,statusCheckRollup,headRef
 
   const pr = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 7 });
 
-  expect(pr).toEqual({ ci: "success", state: "MERGED", head: "abc123", mergedBy: "app/tidepool-board" });
+  expect(pr).toEqual({ ci: "success", state: "MERGED", head: "abc123", mergedBy: "app/tidepool-board", base: { branch: "main", sha: "abc456" } });
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
-    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy -R acme/widget",
+    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid -R acme/widget",
   ]);
 });
 
@@ -415,14 +415,34 @@ it("mergePullRequest は CI を読んだ head を --match-head-commit に渡し�
   expect(invocations.trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
 });
 
+it("a final unattended merge guard can stop gh after the token request", async () => {
+  const logPath = join(await tempDir("tidepool-gh-log-"), "invocations");
+  const fakeBinDir = await fakeGh(logPath);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBinDir}:${originalPath}`;
+  let tokenRequested = false;
+  const client = new GhCliClient(await makeAuth(() => {
+    tokenRequested = true;
+    return issuedToken("installation-token");
+  }));
+  const guard = () => {
+    expect(tokenRequested).toBe(true);
+    throw new Error("the merge now needs human review");
+  };
+
+  await expect(client.mergePullRequest({ workspace: await githubCheckout(), number: 7 }, "abc123", guard))
+    .rejects.toThrow("the merge now needs human review");
+  await expect(readFile(logPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 // ADR 0265 決定5: merge した名義は状態と同じ1回の読み取りで読む。7 の綴りは App が merge した PR の実測(#2079)。
 // ADR 0376 決定1: 収束が push の前に確かめる head も同じ読み取りで読む
-it("getPullRequestState は gh pr view --json state,mergedBy,headRefOid を1回読み、状態と merge した名義の login と head を返す(ADR 0079 / ADR 0229 / ADR 0376)", async () => {
+it("getPullRequestState reads state, merge author, head and base in one GitHub call", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","mergedBy":null,"state":"OPEN"}';; esac\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","baseRefName":"main","baseRefOid":"base9","mergedBy":null,"state":"OPEN"}';; esac\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
@@ -431,10 +451,10 @@ it("getPullRequestState は gh pr view --json state,mergedBy,headRefOid を1回�
   const client = new GhCliClient(await makeAuth());
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board", head: "abc7" });
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 8 })).toEqual({ state: "CLOSED", mergedBy: null, head: "abc8" });
-  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9" });
+  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9", base: { branch: "main", sha: "base9" } });
 
   const invocations = await readFile(logPath, "utf8");
-  expect(invocations.trim().split("\n")).toEqual(["pr view 7 --json state,mergedBy,headRefOid -R acme/widget", "pr view 8 --json state,mergedBy,headRefOid -R acme/widget", "pr view 9 --json state,mergedBy,headRefOid -R acme/widget"]);
+  expect(invocations.trim().split("\n")).toEqual([7, 8, 9].map((n) => `pr view ${n} --json state,mergedBy,headRefOid,baseRefName,baseRefOid -R acme/widget`));
 });
 
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {

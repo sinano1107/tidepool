@@ -449,6 +449,8 @@ const workspaceEntrySchema = z.object({
   /** The PR head repo (ADR 0395 決定2): the fork of `repo` task branches go to, as `owner/name`. Changed only through the
    *  workspace update door, which checks it and remembers it. */
   head_repo: z.string().optional(),
+  /** ADR 0395 決定4: repository-relative globs adding to the mandatory human merge paths. */
+  human_merge_paths: z.array(z.string()).optional(),
 });
 
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on

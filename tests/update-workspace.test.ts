@@ -40,6 +40,40 @@ async function makeDeps(registryDir: string) {
   };
 }
 
+it("removing a declared human merge path requires confirmation, and additions do not", async () => {
+  const registryDir = await makeMainRegistry();
+  const deps = await makeDeps(registryDir);
+  const mergePaths = () => loadRegistry(registryDir, "purely-local").workspaces.tidepool?.human_merge_paths;
+
+  await updateWorkspace({ name: "tidepool", human_merge_paths: ["deploy/**", "release.sh"] }, deps);
+  expect(mergePaths()).toEqual(["deploy/**", "release.sh"]);
+
+  await expect(updateWorkspace({ name: "tidepool", human_merge_paths: ["release.sh"] }, deps))
+    .rejects.toMatchObject({ name: "WorkspaceConfirmationRequiredError", reasons: ["human_merge_paths_removed"] });
+  await expect(updateWorkspace({ name: "tidepool", human_merge_paths: [] }, deps))
+    .rejects.toMatchObject({ name: "WorkspaceConfirmationRequiredError", reasons: ["human_merge_paths_removed"] });
+  expect(mergePaths()).toEqual(["deploy/**", "release.sh"]);
+
+  await updateWorkspace({ name: "tidepool", human_merge_paths: [], confirm: true }, deps);
+  expect(mergePaths()).toBeUndefined();
+});
+
+it("a confirmed Settings edit cannot remove a human merge path added after the confirmation prompt", async () => {
+  const registryDir = await makeMainRegistry();
+  const deps = await makeDeps(registryDir);
+  await updateWorkspace({ name: "tidepool", human_merge_paths: ["deploy/**"] }, deps);
+
+  const remove = { name: "tidepool", human_merge_paths: [], expected_human_merge_paths: ["deploy/**"] };
+  await expect(updateWorkspace(remove, deps)).rejects.toBeInstanceOf(WorkspaceConfirmationRequiredError);
+  await updateWorkspace({ name: "tidepool", human_merge_paths: ["deploy/**", "release.sh"] }, deps);
+
+  await expect(updateWorkspace({ ...remove, confirm: true }, deps)).rejects.toThrow("human merge paths changed");
+  expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.human_merge_paths).toEqual(["deploy/**", "release.sh"]);
+
+  await updateWorkspace({ ...remove, human_merge_paths: ["release.sh"], expected_human_merge_paths: ["deploy/**", "release.sh"], confirm: true }, deps);
+  expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.human_merge_paths).toEqual(["release.sh"]);
+});
+
 describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)", () => {
   it("notes の変更が Tidepool 名義で registry にコミットされる", async () => {
     const registryDir = await makeMainRegistry();
