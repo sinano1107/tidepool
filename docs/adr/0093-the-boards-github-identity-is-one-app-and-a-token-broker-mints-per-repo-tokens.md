@@ -1,5 +1,7 @@
 # 盤面の GitHub 身元は単一の GitHub App で、仲介が repo 単位の installation token を発行する
 
+**Status 追記: 1つの workspace に鍵が2つ要る —— 出元 repo(fork)への push と、宣言 `repo` の PR の操作。installer は出元 repo の所有者にも App を install する。base 限定の token で cross-repo の PR を作れるかは未測定で、broker の形はその結果で決まる([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・6、2026-11-21、issue #3482)。**
+
 issue #392 のグリリング(2026-08-21、#364 の続き)で決定。友人テスト(#367)では各自の Mac の盤面が各自の
 repo に触るが、現行の身元は machine user `tidepool-bot` の classic PAT(ADR 0024 / 0067)で、アカウント全体に
 効くうえ人数分を用意できない。issue 本文の「ユーザーごとの App(manifest flow)」は 2026-08-20 のコメントで
