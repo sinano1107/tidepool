@@ -1,6 +1,6 @@
 # 盤面は worker の `.git` をリポジトリとして開かない —— regular file だけを盤面所有の repo に写し、tip はそこから fetch する
 
-**Status 追記: 検証の段で、名前の場所が解けない除外側の link を checkout の自前の store が満たすときは、拒まずに ADR 0388 決定2 の入れ直しへ進める([ADR 0398](0398-the-board-guards-the-objects-the-carried-place-holds-wherever-they-sit-and-not-the-named-places-own-outside-damage-before-or-after-carrying.md) 決定1、2026-11-21、issue #3501)。**
+**Status 追記: 検証の段で、名前の場所が解けない除外側の link を checkout の自前の store が満たすとき(新しい tree が直に指す自前の object)は、拒まずに ADR 0388 決定2 の入れ直しへ進める([ADR 0398](0398-the-board-guards-what-the-carried-place-made-and-not-the-named-places-outside-damage-before-or-after-carrying.md) 決定1、2026-11-21、issue #3501)。**
 
 **Status 追記: 名前の場所へ fetch した直後に、checkout が自前で持つ tip の閉包の object が名前の場所で欠けも破損も無く読めることを確かめる。名前の場所に commit が既にあって object だけが欠けているとき fetch は何も送らないので、欠けは検証済みの写しの pack を名前の場所で直に `index-pack --strict` して補う。決定1 の除外(`--not --alternate-refs`)は変えない([ADR 0388](0388-carrying-into-the-named-place-is-done-only-when-the-objects-the-carried-place-holds-read-whole-there-and-later-outside-damage-is-not-guarded.md) 決定1・2・3、2026-11-21、issue #3222)。**
 
