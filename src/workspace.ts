@@ -30,6 +30,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type IntakeEntry, type KeptValue, latestEventOfTask, type ReadCheckout, type ResourceStop, type TaskCheckoutWriteObservation, type TaskScopedPayload } from "./events.js";
+import { sessionHaltQuestion } from "./failed-teardown.js";
 import {
   boardReadTree,
   boardViewStatus,
@@ -142,7 +143,7 @@ import {
   readableInterviewRooms,
   registerFailureQuestion,
   registerTask,
-  returnOwnerOwedRelease,
+  releaseOwedBy,
   sessionReadCheckouts,
   settleQuestionAsObserved,
   subtreeSql,
@@ -1706,7 +1707,8 @@ export async function prepareHumanWork(db: Db, workspace: WorkspaceConfig, task:
  *  祖先を上から、その時点の系譜から `task/<H>`。各 task の列・ref・event は一緒に書く)、作業台を開いて `task_work_started` を残す。2回目
  *  以降は同じ在り処を返して `board/*` を引き直し、disk から消えた作業台は `task/<H>` から開き直す。名前の場所の作業ツリーも HEAD も
  *  動かさない。固定の失敗は準備の失敗と同じに扱う(pickup はタスクブランチの作成の失敗も同じ Quarantine にする)。作業台を開けない失敗は
- *  名前の場所を止めずに拒む。返すのは作業台の在り処。 */
+ *  名前の場所を止めずに拒む。返すのは作業台の在り処。ADR 0390 決定1・2: 準備の後の同じ同期区間で、系譜の帰り先の持ち主が解放を負えば
+ *  何も書かずに拒む(系譜を読む git の失敗は固定の失敗と同じに扱う)。 */
 export async function startHumanWork(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1719,12 +1721,15 @@ export async function startHumanWork(
   const verb = "start work";
   await prepareHumanWork(db, workspace, task, verb, board);
   task = recheck();
-  // ADR 0390 決定2: preparedOrRefused の中で投げると Quarantine に畳まれるので、その手前で読む —— createTaskBranch まで await は無い
-  refuseWhileReturnOwnerOwesRelease(db, workspace, task, verb);
+  let refusal: DomainError | undefined;
   await preparedOrRefused(db, workspace, verb, board, async () => {
+    // ADR 0390 決定2: createTaskBranch まで await は無い。系譜を読む git の失敗は Quarantine に畳み、拒否はこの外で投げる(中で投げても畳まれる)
+    refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task), verb);
+    if (refusal) return;
     fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, board.now);
     createTaskBranch(db, workspace, task, board.now, filledFrom(db, task));
   });
+  if (refusal) throw refusal;
   // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)
   let path: string;
   try {
@@ -1749,7 +1754,7 @@ const workbenchGone = (at: string, target: string, verb: string) =>
 
 /** ADR 0374 決定6〜11 / spec #3273 group C: タスクブランチを持つ人間担当の work の完了の、準備の後の同期区間 —— 検査 → `task/<H>` を書く →
  *  `done`(`finish`)→ H の1件の merge back。作業台があれば取り込みを先に(tip が `task/<H>` に含まれれば取り込まない)、無ければ取り込まない。
- *  検査: 子孫の後始末が済んでいる(text C2c)、書き始めたのに作業台が disk に無くない(C2e)、取り込みの検査(帰り先の値も入力の tip、`task/<H>`
+ *  検査: 系譜の帰り先の持ち主が解放を負っていない(ADR 0390 決定1〜3)、子孫の後始末が済んでいる(text C2c)、書き始めたのに作業台が disk に無くない(C2e)、取り込みの検査(帰り先の値も入力の tip、`task/<H>`
  *  の今の値を含む —— C2a、未 commit —— C2d)、帰り先(系譜で決まる。根は保護ブランチ)へ clean に merge できる(C2b。できなければ帰り先の値を
  *  作業台に引き、作業台が無ければ `task_work_started` を書かずに開く)。ref は await を挟まずに読むので、最後の await の後に動いた ref も見る。
  *  拒否は task に何も書かない。`done` の後の merge back の失敗は積み残しで、後始末と同じく workspace の Quarantine を立てる。`done` では
@@ -1758,12 +1763,13 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   const target = taskBranch(task.id);
   const ref = `refs/heads/${target}`;
   const at = workbenchAt(named, base, target);
-  refuseWhileReturnOwnerOwesRelease(db, named, task, "complete");
+  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task, "complete");
+  const refusal = returnOwnerRefusal(db, named, lineage, "complete");
+  if (refusal) throw refusal;
   const unfinished = teardownUnfinishedUnder(db, task.id);
   if (unfinished) throw new DomainError(`task ${unfinished.id} "${unfinished.title}" under this task is still being torn down — complete again once it has finished.`);
   const hasWorkbench = placeHasRepository(at);
   if (!hasWorkbench && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
-  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task, "complete");
   const assertMerges = (tip: string, repo: WorkspaceConfig) => {
     if (isAncestor(repo, returnSha, tip) || writeMergeTree(repo, returnSha, tip) !== undefined) return;
     const conflict = `${target} does not merge cleanly into '${returnName}'.`;
@@ -1807,21 +1813,20 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
 }
 
-/** ADR 0390 決定1〜3: 系譜の帰り先のタスクブランチの持ち主が解放を負う間は拒む —— 根(帰り先が保護ブランチ)には持ち主が無い。 */
-function refuseWhileReturnOwnerOwesRelease(db: Db, named: WorkspaceConfig, task: Task, verb: "complete" | "start work"): void {
-  const lineage = lineageTaskBranch(db, named, task);
-  const owed = lineage && returnOwnerOwedRelease(db, taskIdOfBranch(lineage));
-  if (!lineage || !owed) return;
-  const owner = getTask(db, taskIdOfBranch(lineage))!;
-  // 決定3: 人間の回答待ちならその question を名指す —— 後始末は落ちた後始末か封じ込めの確認を、解放待ちはやり直す workspace の Quarantine
-  // (子は帰り先と同じ workspace)を待つ。封じ込めの確認は盤面全体の鍵で能力検査も立てるので、後始末の印がある間だけ読む
+/** ADR 0390 決定1〜3: 系譜の帰り先 `lineage`(`lineageTaskBranch` の値)のタスクブランチの持ち主が解放を負う間の拒否 —— 根(帰り先が
+ *  保護ブランチ)と帰り先なしには持ち主が無い。拒まなければ undefined。 */
+function returnOwnerRefusal(db: Db, named: WorkspaceConfig, lineage: string | undefined, verb: "complete" | "start work"): DomainError | undefined {
+  const owner = lineage === undefined ? undefined : getTask(db, taskIdOfBranch(lineage))!;
+  const owed = owner && releaseOwedBy(db, owner);
+  if (!owner || !owed) return undefined;
+  // ADR 0390 決定3: 人間の回答待ちならその question を名指す。解放待ちは解放をやり直す workspace の Quarantine(子は帰り先と同じ workspace)を、
+  // session と後始末は枠の主の session の行(落ちた後始末・閉じ切らなかった session)を待つ。後始末の印がある間は梯子の底の封じ込めの確認も
+  // 待ちうるが、その question は盤面全体の鍵で能力検査も立てる(ADR 0033)—— 持ち主の保留は watchdog の記憶にしか無く、ここでは確かめられない
   const question =
-    owed === "teardown"
-      ? (openQuarantineQuestion(db, "failedTeardown", owner.id) ?? openQuarantineQuestion(db, "containment", null))
-      : owed === "pending"
-        ? openQuarantineQuestion(db, "workspace", named.name)
-        : undefined;
-  throw new DomainError(
+    owed === "pending"
+      ? openQuarantineQuestion(db, "workspace", named.name)
+      : (sessionHaltQuestion(db, owner.id) ?? (owed === "teardown" ? openQuarantineQuestion(db, "containment", null) : undefined));
+  return new DomainError(
     `task ${owner.id} "${owner.title}", whose branch this task returns to, is still running or being torn down — ${verb} again once it has finished.${question ? ` Answer question ${question.id} first.` : ""}`,
   );
 }
@@ -2342,8 +2347,8 @@ export function resolveTaskBranchLineage(
 }
 
 /** ADR 0053: the nearest work branch in the task's live lineage, or undefined —— the protected branch is the bottom of that lineage, or it has
- *  no return (ADR 0380 決定3). Its callers (merge back at release and at the acceptance's redo, the closed root) skip both: they act only
- *  on an ancestor's branch. A caller that would read undefined as the protected branch uses `resolveTaskBranchLineage`. */
+ *  no return (ADR 0380 決定3). Its callers (merge back at release and at the acceptance's redo, the closed root, the human doors' wait
+ *  for the return branch's owner —— ADR 0390 決定1) skip both: they act only on an ancestor's branch. A caller that would read undefined as the protected branch uses `resolveTaskBranchLineage`. */
 export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
