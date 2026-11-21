@@ -43,6 +43,7 @@ import {
   squashTaskIntoOrigin,
 } from "./harness.js";
 import {
+  afterEachPush,
   answerPromotion,
   attachUnsettledChild,
   autoMergeOutcomeEvents,
@@ -1023,13 +1024,13 @@ it("収束が PR を読む間に tick が新しい head の merge question を�
 
 it("先に走る収束が merge question を取り替えたら、後ろで待っていた古い回答は作業台を取り込まず push しない", async () => {
   const c = await pushedRoot("queued-merge-answer-replaced", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
-  c.github.scriptCiStatus("failure");
-  await c.landing.tick("auto_merge", c.clock.now());
-  const original = getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
   const outside = await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+  const original = getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
   expect(await c.answerMerge()).toContain("opened the workbench");
   c.mergeInWorkbench();
-  c.github.scriptCiStatus("success");
+  // 収束は動いた head を読み、回答は question が問うた head を読む —— 回答は一致の検査を通って収束の列で待つ
+  const movedAgain = await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${c.pushed}~1`), "outside-again.txt");
 
   const polling = awaitWindow();
   const read = c.github.getPullRequestState.bind(c.github);
@@ -1040,6 +1041,7 @@ it("先に走る収束が merge question を取り替えたら、後ろで待っ
   });
   const background = c.landing.converge();
   await polling.entered;
+  c.github.scriptHead(1, outside);
 
   let signalQueued!: () => void;
   const queued = new Promise<void>((resolve) => { signalQueued = resolve; });
@@ -1059,7 +1061,7 @@ it("先に走る収束が merge question を取り替えたら、後ろで待っ
 
   expect(await answer).toContain("question closed");
   expect(getTask(c.db, original.id)?.status).toBe("done");
-  expect(listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)?.question_pr_merge_outside_sha).toBe(outside);
+  expect(listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)?.question_pr_merge_outside_sha).toBe(movedAgain);
   expect(existsSync(c.workbenchAt)).toBe(true);
   c.expectNothingCarried();
 });
@@ -1099,18 +1101,102 @@ it("別の入口が開いた同じ鍵の作業台がある根の記録済みの 
   expect(originHead(c.workspace, c.work.id)).toBe(head);
 });
 
-// spec #3273 pin A10: 印は拒否が伝えた head —— 拒否の後に head がまた動けば、もう一度拒む
-it("最初の「merge」の拒否の後に記録済みの PR の head がまた書き換えられれば、次の「merge」はもう一度 text A4b で拒まれ、`board/origin/task/<root>` を新しい head へ引き直す", async () => {
+// spec #3273 pin A10: 印は拒否が伝えた head —— 拒否の後に head がまた動けば、もう一度拒む。ADR 0394 決定3: その拒否は question を立て直し、
+// 新しい head に「1回拒んだ」印を付ける —— 立て直した question への次の `merge` はそのまま取り込みへ進む
+it("最初の「merge」の拒否の後に記録済みの PR の head がまた書き換えられれば、次の「merge」は text A4b で拒まれて足された commit と立て直した question を名指し、`board/origin/task/<root>` を新しい head へ引き直し、作業台で merge した後の立て直した question への「merge」が取り込んで merge する", async () => {
   const c = await pushedRoot("outside-rewrite-moved-again", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
   await moveRecordedHead(c, "rewritten");
   await convergeOn(c.landing, c.work.id);
+  const asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!;
   await c.answerMerge();
   const moved = await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${c.pushed}~1`), "outside-again.txt");
 
-  expect(await c.answerMerge()).toBe(textA4b(c, moved, c.target));
+  const refusal = await c.answerMerge();
 
+  const [replacement] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(replacement!.id).not.toBe(asked.id);
+  expect(getTask(c.db, asked.id)?.status).toBe("done");
+  expect(refusal).toBe(
+    `${textA4b(c, moved, c.target)} The board did not push these commits on it: ${moved} add outside-again.txt. ` +
+      `This question is closed — question ${replacement!.id} now asks about this head; answer \`merge\` there to merge it.`,
+  );
   expect(git(c.workbench(), "rev-parse", `board/origin/${c.target}`)).toBe(moved);
   c.expectNothingCarried();
+
+  c.mergeInWorkbench();
+  expect(await c.answerMerge()).toBeUndefined();
+  expect(c.github.mergedHeads).toEqual([originHead(c.workspace, c.work.id)]);
+  expect(git(c.workspace.path, "show", `${c.target}:outside-again.txt`)).toBe("pushed on GitHub");
+});
+
+// ADR 0394 決定3 / #3485: 内容が落ちた head の question への `merge` は、寄り道の後に外の部分が無しのときだけ通す —— 寄り道の push の後に
+// head が動けば、同じ書き換えへ戻されても、人間の見ていない head を merge しない
+it.each([
+  ["同じ書き換え", false],
+  ["別の書き換え", true],
+] as const)("作業台で merge した後の「merge」が取り込んで push した後、2回目の読みの前に head が%sの sha へ差し替えられれば、merge されず拒まれる", async (_, another) => {
+  const c = await pushedRoot(`outside-rewrite-moved-during-detour-${another}`, { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  const head = await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+  const asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!;
+  await c.answerMerge();
+  c.mergeInWorkbench();
+  const swapped = another ? git(c.workspace.path, "rev-parse", `${c.pushed}~1`) : head;
+  afterEachPush(c.github, () => c.github.scriptHead(1, swapped));
+
+  const refusal = await c.answerMerge();
+
+  expect(refusal).toMatch(new RegExp(`^took your merge in and pushed ${c.target}; PR #1's head was (rewritten|moved) outside the board to ${swapped}`));
+  expect(c.github.merged).toEqual([]);
+  const open = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(open).toHaveLength(1);
+  if (another) {
+    expect(open[0]!.id).not.toBe(asked.id);
+    expect(refusal).toContain(`This question is closed — question ${open[0]!.id} now asks about this head`);
+  } else {
+    expect(open[0]!.id).toBe(asked.id);
+  }
+});
+
+// ADR 0394 決定1・3: 外の部分は sha と種類の組で比べる —— 問うた時の種類のまま執行すると、寄り道を通さずに内容の落ちた head を merge する
+it("盤面が push していない head と問うた sha が、取り込みの後に内容が落ちた head と読めれば、「merge」は拒まれ、作業台を開いて立て直した question を名指す", async () => {
+  const c = await pushedRoot("outside-head-reads-rewritten-after-intake", { pr: "recorded", merge: "auto_if_ci_green" });
+  const head = await pushOutsideBoard(c.workspace, c.work.id);
+  await c.landing.tick("auto_merge", c.clock.now());
+  const asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!;
+  expect(asked.purpose).toContain(`PR #1's head ${head} holds commits the board did not push`);
+  await convergeOn(c.landing, c.work.id);
+  const [failure] = promotionFailures(c.db, c.work.id);
+  c.mergeInWorkbench();
+  expect(await c.retry(failure!)).toBeUndefined();
+  (await outsideClone(c.workspace)).push(`${head}:refs/heads/${c.target}`);
+
+  const refusal = await c.answerMerge();
+
+  const open = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
+  expect(open).toHaveLength(1);
+  expect(open[0]!.id).not.toBe(asked.id);
+  expect(getTask(c.db, asked.id)?.status).toBe("done");
+  expect(refusal).toMatch(new RegExp(`^PR #1's head was moved outside the board to ${head}, .* The board opened the workbench at `));
+  expect(refusal).toContain(`This question is closed — question ${open[0]!.id} now asks about this head`);
+  expect(c.github.merged).toEqual([]);
+});
+
+// ADR 0394 決定3 / ADR 0376 Status 追記: 外の部分が無ければ head は盤面の push した値 —— 理由が消えた question への `merge` は寄り道を通さずに
+// 執行し、`external` の根でも merge する
+it.each(["auto_if_ci_green", "external"] as const)("落とされた commit を origin へ push し直した後の、内容が落ちた head の question への「merge」は、merge dial が %s でも取り込まずにそのまま merge する", async (merge) => {
+  const c = await pushedRoot(`outside-rewrite-repushed-${merge}`, { pr: "recorded", commits: 2, merge });
+  await moveRecordedHead(c, "rewritten");
+  await convergeOn(c.landing, c.work.id);
+  const asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!;
+  (await outsideClone(c.workspace)).push(`${c.pushed}:refs/heads/${c.target}`);
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+
+  expect(await c.answerMerge()).toBeUndefined();
+
+  expect(c.github.mergedHeads).toEqual([originHead(c.workspace, c.work.id)]);
+  expect(getTask(c.db, asked.id)?.status).toBe("done");
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
 });
 
 // ADR 0376 Status 追記 / spec #3273 pin D11: 問いは head についてで、誰が merge するかについてではない —— `external` の根にも立ち、`merge` は
@@ -1872,7 +1958,7 @@ it("merge に失敗した開いたままの PR は、tick を落とさずキュ�
       registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "hold",
       // spec #3273 text A6: どの失敗でも、conflict した PR を head への merge で解く道を足す
-      purpose: `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold? If PR #1 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer \`merge\`: the board refuses it once, listing the commits you pushed, and the next \`merge\` merges.`,
+      purpose: `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold? If PR #1 conflicts with main, merge main into the PR's head in your own clone and push it — do not rebase or force-push; the board treats such a head as rewritten outside — then answer \`merge\`: the board refuses it, listing the commits you pushed, and closes this question — answer \`merge\` on the new question it names to merge.`,
     },
   ]);
 });

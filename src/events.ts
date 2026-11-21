@@ -284,9 +284,6 @@ export type EventPayload =
   | { kind: "pr_branch_pushed"; pr_number: number; sha: string }
   // ADR 0231 決定4: 盤面が記録に無い(盤面の外で push された)PR の head を初めて読んだ —— その head の猶予の起点
   | { kind: "pr_head_observed"; pr_number: number; sha: string }
-  // ADR 0387 決定2: 記録済みの PR のこの head にある盤面の知らない commit を、盤面が人間に伝えた —— その head で推奨 hold の merge
-  // question を新しく立てたか、`merge` の回答をその commit を列挙して1回拒んだ。伝えた head への次の `merge` は通る
-  | { kind: "pr_head_conveyed"; pr_number: number; sha: string }
   // ADR 0394 決定2: 外の部分が変わり、根の merge question を観測で取り下げて立て直した。
   | { kind: "pr_merge_question_replaced"; question_id: string; replacement_question_id: string }
   // issue #11: the merge dial actually merged this PR — via the escalate

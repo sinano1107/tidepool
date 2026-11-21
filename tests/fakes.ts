@@ -99,6 +99,9 @@ export const unusedLanding: Landing = {
   isMarked() {
     return false;
   },
+  refuseOutsidePushOnce() {
+    throw new Error("unexpected landing call");
+  },
   async stop() {},
 };
 
