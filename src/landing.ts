@@ -1317,7 +1317,7 @@ export function createLanding(deps: LandingDeps): Landing {
     const entry = retrying === undefined ? "landing_merge" : "promotion_retry";
     const ctx: RootContext = {
       answering,
-      intake: question === undefined ? undefined : { workbenchBase, entry, answerer: answering.get(question)!, now: deps.clock.now() },
+      intake: question === undefined ? undefined : { workbenchBase, entry, answerer: answering.get(question)!, now: () => deps.clock.now() },
       outcome,
     };
     /** ADR 0370 決定1: 断念・hold の刻んだ head を今のブランチと比べる前の比較。head が無いか workspace を解決できなければ ref を読まない

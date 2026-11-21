@@ -962,7 +962,7 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
 
   // やり直しそのものを撃つ —— 受理は動いた ref を拒む(ADR 0373 決定1)ので、帯域外の main を残したまま merge back のやり直しだけを測る
-  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: clock.now() });
+  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: () => clock.now() });
 
   expect(head(workspace)).toBe("main");
   expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow(OutOfBandProtectedBranchError);
@@ -972,7 +972,7 @@ it("内容が帰り先に届いていない done の work が無ければ、merg
   const pr = await openPushedPr("redo-merge-back-nothing", "escalate");
   const { workspace, db, work, clock } = pr;
 
-  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: clock.now() });
+  await redoMergeBacks(db, workspace, workspace.name, undefined, { workbenchBase: await tempDir("tidepool-workbenches-"), entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: () => clock.now() });
 
   expect(head(workspace)).toBe(`task/${work.id}`);
 });
@@ -1512,6 +1512,39 @@ it("積み残しの retry が撃ち直す merge back が同じ帰り先へ2つ c
     expect(git(workspace.path, "merge-base", "--is-ancestor", source, `refs/remotes/origin/${target}`)).toBe("");
   }
   expect(git(workspace.path, "ls-remote", "origin", `refs/heads/${target}`).split("\t")[0]).toBe(git(workspace.path, "rev-parse", target));
+});
+
+// #3384: 取り込みの時刻は `redoMergeBacks` の中の await(前半・保護ブランチの fetch の token)の後、書く瞬間に読む —— 呼び手が渡す前に読んだ値ではない
+it("積み残しの retry が作業台から取り込む記録の時刻は、merge back のやり直しの中の token を待った後の時刻", async () => {
+  const { workspace, db, clock, github, work } = await openPushedPr("left-behind-intake-time", "escalate");
+  const workbenchBase = await tempDir("tidepool-task-checkouts-");
+  const landingWith = (githubAuth?: GitHubAuth) =>
+    createLanding({ defaultAgentName: "tako", db, clock, workspace, github, githubAuth, resolveAuthority: () => profile("escalate"), workspacesDir: workbenchBase });
+  const child = attachUnsettledChild(db, clock, work.id);
+  const place = await prepareAtPickup(db, workspace, child);
+  commitWork(place.path, "repair.txt", "from the child\n");
+  recordTaskCheckoutTip(db, place, child.id);
+  completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
+  await commitThroughTaskCheckout(db, clock, workspace, work, "repair.txt", "from the root\n");
+  finish(db, clock, work);
+  await expect(convergeOn(landingWith(), work.id)).resolves.toMatchObject({ kind: "failed", reason: "content_left_behind" });
+  const [leftover] = promotionFailures(db, work.id);
+  const source = `task/${child.id}`;
+  await expect(answerPromotion(db, clock, landingWith(), workspace, leftover!, "retry")).rejects.toThrow(DomainError);
+  const workbench = realpathSync(workbenchPath(workbenchBase, { task: work.id }, source));
+  expect(() => git(workbench, "merge", `board/${source}`)).toThrow();
+  writeFileSync(join(workbench, "repair.txt"), "from the root\nfrom the child\n");
+  git(workbench, "commit", "-am", `resolve ${source}`);
+  const { window, githubAuth } = fetchHeldAtToken();
+
+  const answering = answerPromotion(db, clock, landingWith(githubAuth), workspace, leftover!, "retry");
+  await window.entered;
+  await clock.advance(60_000);
+  const afterTheToken = clock.now().toISOString();
+  window.open();
+  await answering;
+
+  expect(listEventsOfKinds(db, ["workbench_taken_in"]).map(({ created_at }) => created_at)).toEqual([afterTheToken]);
 });
 
 it("push の後に積み残しが残っても、workspace の quarantine が抱えていれば失敗 question を立てず、その quarantine を名乗る", async () => {

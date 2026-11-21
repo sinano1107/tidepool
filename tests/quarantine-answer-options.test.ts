@@ -9,8 +9,9 @@ import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { startFakeBroker } from "./fake-broker.js";
-import { unusedLanding } from "./fakes.js";
+import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
+import { fetchHeldAtToken } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 // workspace の Quarantine の回答が盤面の行為を選ぶ(ADR 0373 決定2〜5・8・11、ADR 0380 決定4、#3277 / #3285)。
@@ -736,6 +737,28 @@ it("remote-backed: `give up the lost refs and restore the baseline` も取って
   expect(git(ws.path, "rev-parse", CHILD)).toBe(child);
   expect(git(ws.path, "for-each-ref", "refs/heads/other")).toBe("");
   expect(lostEvents(db)).toEqual([{ kind: "lost_refs_accepted", workspace: ws.name, lost: [{ ref: "refs/heads/other", sha: lost }] }]);
+  db.close();
+});
+
+it("remote-backed の give-up が残す lost_refs_accepted・task_branch_lost・baseline_restored の時刻は、origin から取る前の token を待った後の時刻(#3384)", async () => {
+  const { ws, db, task } = await quarantinedWorkspace("give-up-time", true);
+  loseRef(db, ws, `refs/heads/task/${task.id}`);
+  commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
+  const clock = new FakeClock();
+  const { window, githubAuth } = fetchHeldAtToken();
+
+  const answering = answerAs(db, ws.name, { workspace: ws, clock, githubAuth }, GIVE_UP);
+  await window.entered;
+  await clock.advance(60_000);
+  const afterTheToken = clock.now().toISOString();
+  window.open();
+  await answering;
+
+  expect(listEventsOfKinds(db, ["lost_refs_accepted", "task_branch_lost", "baseline_restored"]).map(({ payload, created_at }) => [payload.kind, created_at])).toEqual([
+    ["lost_refs_accepted", afterTheToken],
+    ["task_branch_lost", afterTheToken],
+    ["baseline_restored", afterTheToken],
+  ]);
   db.close();
 });
 

@@ -713,7 +713,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     const restore = answer === RESTORE_THE_BASELINE || giveUp;
     const emptyRoom = room && answer === RUN_WITH_AN_EMPTY_ROOM;
     const cancelRcas = room && answer === CANCEL_THE_RCAS;
-    const now = (deps.clock ?? new SystemClock()).now();
+    const clock = deps.clock ?? new SystemClock();
     // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。ADR 0373 帰結: 解放の中で立った Quarantine はどの選択肢でも
     // その後始末が終わるまで答えられない
     const assertNoSessionRunning = () => {
@@ -751,7 +751,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         if (!restore || !(err instanceof RefsMovedError)) throw err;
       }
     });
-    const checked = withRememberedRepoCheck(deps.db, target, () => now);
+    const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     // ADR 0386 決定4: 項は pickup の門・本文と同じ並び
     const predicates = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
     // ADR 0385 決定2: 倒すのは回答の時点で項が落ちている RCA だけ。項は記録だけから組まれ、ここで初めて git を撃つ
@@ -816,10 +816,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0380 決定4: 失われたと数える前に origin から取る(spec #3273 の受理の 7a)
     if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
-    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, now, giveUp ? openQuarantineQuestion(deps.db, "workspace", value)!.id : undefined)) : [];
+    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), giveUp ? openQuarantineQuestion(deps.db, "workspace", value)!.id : undefined)) : [];
     await fire(all, "after-open");
     // 決着は後始末と同じく記録から導く(ADR 0113 決定3)
-    await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, now, (task) => teardownStep(deps.db, task.id).completion === true));
+    await refuseOnError(() => redoOwedReleases(deps.db, target, deps.workspace?.name, clock.now(), (task) => teardownStep(deps.db, task.id).completion === true));
     // ADR 0373 決定7: 2回目の比較は merge back のやり直しの直前 —— どの選択肢も、後半の await の間に動いた ref を運ばない。やり直しが
     // fetch を待つなら、その await の後にもう一度比べてから `task/<id>` を読む(ADR 0370 決定1)
     await refuseOnError(compare);
@@ -828,7 +828,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
       entry: "workspace_quarantine",
       answerer: { actorId: HUMAN_ACTOR_ID, origin },
-      now,
+      now: () => clock.now(),
     };
     // spec #3273 text C6: 作業台を残した取り込みごとに1行
     const keptWorkbenches = placeHasRepository(target.path) ? await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake, undefined, compare)) : [];
@@ -844,7 +844,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       withAnswer: (questionId) => {
         if (cancelRcas) {
           assertRcasUngated();
-          cancelRcasByAnswer(deps.db, rcasToCancel, questionId, now, origin);
+          cancelRcasByAnswer(deps.db, rcasToCancel, questionId, clock.now(), origin);
         }
         if (unopened && leftOpen()) throw new DomainError(`a task started opening the interview room ${value} while the board checked this answer — answer again`);
       },
@@ -855,10 +855,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   // 検査の中で tree を読み、Codex は Board call を待つので書く前に当てる
   const acceptContainmentRepair = async (harness: Harness, workspace: string, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice: string } | undefined> => {
     const clock = deps.clock ?? new SystemClock();
-    const now = clock.now();
-    const checked = withRememberedRepoCheck(deps.db, target, () => now);
+    const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
-    const intake = () => ({ workbenchBase, answerer: { actorId: HUMAN_ACTOR_ID, origin }, now: clock.now() });
+    const intake = { workbenchBase, answerer: { actorId: HUMAN_ACTOR_ID, origin }, now: () => clock.now() };
     // 拒否の文が修理の道をもう言ったか —— 言っていない拒否にだけ text A8e を足す
     let routeSaid = false;
     const withRoute = (refusal: string, route: string) => {
@@ -877,10 +876,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       refuseOnError(() => (harness === "codex" ? withProtectedTipCheckout(checked, workbenchBase, codexAt) : claudeWorkspaceContainment(checked)));
     try {
       const local = await refuseOnError(async (): Promise<{ notice?: string; tip?: string; capability?: ContainmentCapability } | undefined> => {
-        compareContainmentRefs(deps.db, target, now);
+        compareContainmentRefs(deps.db, target, clock.now());
         if (harness === "codex" && !deps.codexWorkspaceContainment) throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
         if (isRemoteBacked(checked)) return undefined;
-        if (harness === "claude-code") return { notice: takeInContainmentRepair(deps.db, target, intake()) };
+        if (harness === "claude-code") return { notice: takeInContainmentRepair(deps.db, target, intake) };
         return (await checkContainmentIntake(deps.db, target, workbenchBase, codexAt)) ?? {};
       });
       if (local?.capability) {
@@ -891,7 +890,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
             throw new DomainError(withRoute(`workspace ${workspace} became remote-backed while the board was checking the workbench tip`, containmentRepairRoute(checked, workbenchBase)));
           }
           assertEstablished(capability);
-          return takeInContainmentRepair(deps.db, target, intake(), tip);
+          return takeInContainmentRepair(deps.db, target, intake, tip);
         });
         return notice === undefined ? undefined : { notice };
       }
@@ -901,7 +900,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       }
       // remote-backed なら人間の push を origin から引いてから読み、fetch の間に動いた ref も比べる
       await refuseOnError(() => refreshProtectedBranch(deps.db, target, deps.githubAuth));
-      await refuseOnError(() => compareContainmentRefs(deps.db, target, now));
+      await refuseOnError(() => compareContainmentRefs(deps.db, target, clock.now()));
       assertEstablished(await recheck());
       return undefined;
     } catch (err) {
@@ -1240,7 +1239,7 @@ function humanWorkPlace(deps: HumanWorkDeps, task: Task, verb: string, now: Date
   throw new DomainError(`cannot ${verb}: workspace ${stopped} is quarantined — answer question ${openQuarantineQuestion(deps.db, "workspace", stopped ?? null)?.id} first.`);
 }
 
-function humanWorkPreparation(deps: HumanWorkDeps, now: Date): HumanWorkPreparation {
+function humanWorkPreparation(deps: HumanWorkDeps, now: () => Date): HumanWorkPreparation {
   return {
     githubAuth: deps.githubAuth,
     github: deps.github,
@@ -1303,7 +1302,7 @@ export async function startWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: str
     const named = humanWorkPlace(deps, task, "start work", at);
     const derived = { name: derivedWorkspace(deps.db, task), place: named.name };
     const path = await withWorkspaceInFlightKey(deps.db, named.name, () =>
-      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, at), () => humanWorkGate(deps.db, taskId, "start work", derived)),
+      startHumanWork(deps.db, named, task, { actorId: HUMAN_ACTOR_ID, origin }, humanWorkPreparation(deps, now), () => humanWorkGate(deps.db, taskId, "start work", derived)),
     );
     return { ok: true, value: { path } };
   } catch (err) {
@@ -1318,12 +1317,12 @@ async function throughHumanWorkPlace<T>(
   deps: HumanWorkDeps,
   task: Task,
   verb: "take in" | "complete",
-  at: Date,
+  now: () => Date,
   write: (fresh: Task, named: WorkspaceConfig, base: string) => T,
 ): Promise<T> {
-  const named = humanWorkPlace(deps, task, verb, at);
+  const named = humanWorkPlace(deps, task, verb, now());
   const derived = { name: derivedWorkspace(deps.db, task), place: named.name };
-  const board = humanWorkPreparation(deps, at);
+  const board = humanWorkPreparation(deps, now);
   return withWorkspaceInFlightKey(deps.db, named.name, async () => {
     await prepareHumanWork(deps.db, named, task, verb, board);
     return write(humanWorkGate(deps.db, task.id, verb, derived), named, board.workspacesBaseDir);
@@ -1339,9 +1338,8 @@ export async function takeInWorkThroughHumanDoor(deps: HumanWorkDeps, taskId: st
   try {
     humanWorkGate(deps.db, taskId, "take in");
     if (!hasTaskBranch(deps.db, task.id)) throw new DomainError(NO_WORKBENCH);
-    const at = now();
-    const message = await throughHumanWorkPlace(deps, task, "take in", at, (fresh, named, base) =>
-      takeInHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, at),
+    const message = await throughHumanWorkPlace(deps, task, "take in", now, (fresh, named, base) =>
+      takeInHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, now()),
     );
     return { ok: true, value: { message } };
   } catch (err) {
@@ -1384,8 +1382,8 @@ export async function completeThroughHumanDoor(
     if (!hasTaskBranch(deps.db, task.id)) {
       completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
     } else {
-      const at = now();
-      notice = await throughHumanWorkPlace(deps, task, "complete", at, (fresh, named, base) => {
+      notice = await throughHumanWorkPlace(deps, task, "complete", now, (fresh, named, base) => {
+        const at = now();
         const checked = assertCompletable(deps.db, fresh, handoff);
         const designation = checkReview(fresh);
         return completeHumanWork(deps.db, named, fresh, base, { actorId: HUMAN_ACTOR_ID, origin }, at, () => {
@@ -1658,7 +1656,7 @@ export async function submitAnswer(
             const { landed, kept } = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id, {
               workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
               answerer: { actorId: HUMAN_ACTOR_ID, origin },
-              now: now(),
+              now,
             });
             rootRecord = { root: kind.task_id, payload: { kind: "local_merge_executed", sha: landed } };
             notice = kept;
@@ -1825,7 +1823,7 @@ export async function submitAnswer(
               return takeInHumanContentWorkbench(deps.db, intakeWorkspace, {
                 workbenchBase: resolveWorkspacesBaseDir(deps.workspacesDir),
                 answerer: { actorId: HUMAN_ACTOR_ID, origin },
-                now: now(),
+                now,
               });
             } catch (err) {
               // local 着地の `merge` と同じ条件(spec #3273 の入口の表)
