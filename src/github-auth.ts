@@ -17,8 +17,10 @@ import type { WorkspaceConfig } from "./workspace.js";
  *  the moment of the call, never written to the board's own process.env —
  *  which the `/usage` scrape still inherits (outside ADR 0358 決定1); workers
  *  hold zero GitHub credentials — and never committed to the registry. Every
- *  board-driven GitHub network call flows through this module: credentials
- *  take effect in exactly one place.
+ *  board-driven GitHub network call flows through this module, with two
+ *  exceptions that call GitHub with `fetch` directly: opening a PR, which
+ *  `github.ts` sends in process with the user token (ADR 0396 決定3), and the
+ *  device-flow login in `github-login.ts`, which obtains that user token.
  *
  *  Acquisition and injection are **split** because acquisition is now a network
  *  round trip while injection must stay synchronous: ADR 0066 決定5 requires

@@ -87,40 +87,154 @@ async function fakeGh(logPath: string): Promise<string> {
   const script = join(dir, "gh");
   writeFileSync(
     script,
-    `#!/bin/sh\necho "$@" >> "${logPath}"\necho "https://github.com/example/repo/pull/42"\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\n`,
   );
   chmodSync(script, 0o755);
   return dir;
 }
 
-// ADR 0243: push は呼び手が基準への予告で包んで先に撃つ —— PR の作成は gh pr create だけで、ref を書かない
-it("PR の作成は push 済みのブランチに gh pr create だけを撃ち、自分ではタスクブランチを push しない", async () => {
-  repoPath = await tempDir("tidepool-repo-");
-  remotePath = await tempDir("tidepool-remote-");
-  repoOnTaskBranch(repoPath, remotePath, "notes.txt", "WIP: task abc");
-  git(repoPath, "remote", "set-url", "origin", "https://github.com/acme/widget.git");
+/** GitHub の REST の代役(ADR 0396 決定3: PR の作成は盤面が fetch で直接撃つ)。既定は作成の成功。 */
+async function fakeGitHubApi(
+  answer: BrokerAnswer = { status: 201, body: { html_url: "https://github.com/acme/widget/pull/42", number: 42 } },
+): Promise<FakeBroker> {
+  const api = await startFakeBroker(() => answer);
+  brokers.push(api);
+  return api;
+}
 
-  const logPath = join(repoPath, "gh-invocations.log");
-  const fakeBinDir = await fakeGh(logPath);
-  originalPath = process.env.PATH;
-  process.env.PATH = `${fakeBinDir}:${originalPath}`;
+// ADR 0396 決定1・4・5: 作成は人間の user token で REST の POST pulls だけを撃つ —— push は呼び手が先に撃つ(ADR 0243)
+it.each([
+  ["未宣言なら宣言の repo", undefined, "acme:task/abc"],
+  ["宣言した出元 repo", "Reef-Org/widget", "reef-org:task/abc"],
+])("PR の作成は user token で POST pulls を1回だけ撃ち、head は%sの owner:branch にする", async (_, head_repo, head) => {
+  const api = await fakeGitHubApi();
+  const client = new GhCliClient(await makeAuth(), { apiUrl: api.url });
 
-  const client = new GhCliClient(await makeAuth());
   const result = await client.createPullRequest({
-    workspace: workspaceAt(repoPath),
+    workspace: { ...workspaceAt(await tempDir("tidepool-repo-")), head_repo },
     branch: "task/abc",
     base: "main",
     title: "ship it",
     body: "the body",
   });
 
-  expect(result).toEqual({ url: "https://github.com/example/repo/pull/42", number: 42 });
+  expect(result).toEqual({ url: "https://github.com/acme/widget/pull/42", number: 42 });
+  expect(api.requests.map(({ method, path, bearer, body }) => ({ method, path, bearer, body }))).toEqual([{
+    method: "POST",
+    path: "/repos/acme/widget/pulls",
+    bearer: "gho_user",
+    body: { head, base: "main", title: "ship it", body: "the body\n\nOpened by the tidepool board.", maintainer_can_modify: false },
+  }]);
+});
 
-  expect(git(remotePath, "branch", "--list", "task/abc")).toBe("");
+// ADR 0396 帰結 / ADR 0241 決定4: 自分の PR は作者でなく head の repo で照合する —— 他人の fork の同名 branch の PR は拾わない
+it.each([
+  ["未宣言なら宣言の repo", undefined, "acme", "Acme/Widget"],
+  ["宣言した出元 repo", "reef-org/widget", "reef-org", "Reef-Org/widget"],
+])("自分の PR の探索は%sを head にした PR だけを拾い、open > merged > closed で1つ返す", async (_, head_repo, owner, ours) => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  const pr = (number: number, fullName: string | null, extra: Record<string, unknown>) => ({
+    number, state: "closed", merged_at: null, head: { ref: "task/abc", sha: `sha${number}`, repo: fullName && { full_name: fullName } }, ...extra,
+  });
+  const prs = [
+    pr(1, ours, {}),
+    pr(2, "stranger/widget", { state: "open" }),
+    pr(3, ours, { merged_at: "2026-11-21T00:00:00Z" }),
+    pr(4, null, { state: "open" }),
+    pr(5, ours, { state: "open", head: { ref: "task/other", sha: "sha5", repo: { full_name: ours } } }),
+  ];
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$GH_TOKEN $*" >> "${logPath}"\nprintf '%s' '${JSON.stringify(prs)}'\n`, { mode: 0o755 });
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
 
-  const invocations = await readFile(logPath, "utf8");
-  expect(invocations).toContain("pr create");
-  expect(invocations).toContain("task/abc");
+  const found = await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: { ...(await githubCheckout()), head_repo }, branch: "task/abc" });
+
+  expect(found).toEqual({ number: 3, state: "MERGED", head: "sha3" });
+  expect((await readFile(logPath, "utf8")).trim()).toBe(`installation-token api repos/acme/widget/pulls --method GET -f head=${owner}:task/abc -f state=all`);
+});
+
+it("自分の PR の探索は、開いている自分の PR を merged と closed より先に返す", async () => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const head = (sha: string) => ({ ref: "task/abc", sha, repo: { full_name: "acme/widget" } });
+  const prs = [
+    { number: 1, state: "closed", merged_at: "2026-11-21T00:00:00Z", head: head("m1") },
+    { number: 2, state: "open", merged_at: null, head: head("o2") },
+  ];
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\nprintf '%s' '${JSON.stringify(prs)}'\n`, { mode: 0o755 });
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  expect(await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: await githubCheckout(), branch: "task/abc" }))
+    .toEqual({ number: 2, state: "OPEN", head: "o2" });
+});
+
+// ADR 0396 決定2・3 / ADR 0093 決定4: user token は盤面の中の作成の要求だけに使い、gh と git の子の env に入れない。
+// 作成の後の読み・merge は宣言の repo の installation token のまま —— merge の名義が bot でなくなると盤面の merge を見分けられない
+it("user token は PR の作成の要求にだけ載り、gh と git の子の env に現れず、作成の後の読みと merge は installation token で撃つ", async () => {
+  repoPath = await tempDir("tidepool-repo-");
+  remotePath = await tempDir("tidepool-remote-");
+  repoOnTaskBranch(repoPath, remotePath, "notes.txt", "WIP: task abc");
+  const dir = await tempDir("tidepool-fakebin-");
+  const ghEnv = join(dir, "gh-env.log");
+  const gitEnv = join(dir, "git-env.log");
+  const calls = join(dir, "gh-calls.log");
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh\nenv >> "${ghEnv}"\necho "$GH_TOKEN $1 $2" >> "${calls}"\n` +
+      `case "$1 $2" in "api "*) echo '[]';; "pr view") printf '{"state":"OPEN","headRefOid":"abc","mergedBy":null,"statusCheckRollup":[]}';; esac\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(join(remotePath, "hooks", "pre-receive"), `#!/bin/sh\nenv > "${gitEnv}"\n`, { mode: 0o755 });
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+  const api = await fakeGitHubApi();
+  const client = new GhCliClient(await makeAuth(), { apiUrl: api.url });
+  const workspace = workspaceAt(repoPath);
+
+  (await client.preparePush({ workspace: workspaceAt(repoPath, remotePath), branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  expect(await client.findPullRequestByHead({ workspace, branch: "task/abc" })).toBeNull();
+  const { number } = await client.createPullRequest(createInput(workspace));
+  expect((await client.readPullRequest({ workspace, number })).state).toBe("OPEN");
+  expect((await client.getPullRequestState({ workspace, number })).state).toBe("OPEN");
+  await client.mergePullRequest({ workspace, number }, "abc");
+
+  expect(api.requests.map(({ bearer }) => bearer)).toEqual(["gho_user"]);
+  expect((await readFile(calls, "utf8")).trim().split("\n")).toEqual([
+    "installation-token api repos/acme/widget/pulls",
+    "installation-token pr view",
+    "installation-token pr view",
+    "installation-token pr merge",
+  ]);
+  expect(await readFile(gitEnv, "utf8")).not.toBe("");
+  expect(await readFile(ghEnv, "utf8")).not.toContain("gho_user");
+  expect(await readFile(gitEnv, "utf8")).not.toContain("gho_user");
+});
+
+const createInput = (workspace: WorkspaceConfig) => ({ workspace, branch: "task/abc", base: "main", title: "t", body: "b" });
+
+// ADR 0396 帰結: 作成の失敗は根の着地の失敗に落ちる —— 人間が読む文は status と GitHub の理由を持ち、token を持たない
+it("PR の作成が断られたら、HTTP status と GitHub の理由を書き、token を書かずに投げる", async () => {
+  const api = await fakeGitHubApi({
+    status: 422,
+    body: { message: "Validation Failed", errors: [{ resource: "PullRequest", code: "custom", message: "not all refs are readable" }] },
+  });
+
+  await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
+    new Error("`POST pulls` on acme/widget was refused for head acme:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
+  );
+});
+
+// ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗。どの呼び出しが何 ms で切れたかを書く
+it("PR の作成は GitHub が返らなくても上限で、何 ms で切れたかを書いた一時的失敗として返る(ADR 0330)", async () => {
+  const api = await fakeGitHubApi({ hang: true });
+  const client = new GhCliClient(await makeAuth(), { apiUrl: api.url, timeoutMs: 200 });
+
+  const started = Date.now();
+  await expect(client.createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
+    new Error("`POST pulls` on acme/widget timed out after 200 ms"),
+  );
+  expect(Date.now() - started).toBeLessThan(2_000);
 });
 
 it("トークンは gh の子プロセス env にだけ注入され、盤面プロセスの env には載らない(ADR 0093)", async () => {
@@ -607,7 +721,6 @@ async function withSleepingGh(): Promise<void> {
 }
 
 const unansweredCalls: Array<[string, (client: GhCliClient, workspace: WorkspaceConfig) => Promise<unknown>]> = [
-  ["createPullRequest", (c, workspace) => c.createPullRequest({ workspace, branch: "task/abc", base: "main", title: "t", body: "b" })],
   ["mergePullRequest", (c, workspace) => c.mergePullRequest({ workspace, number: 7 }, "abc123")],
   ["getPullRequestState", (c, workspace) => c.getPullRequestState({ workspace, number: 7 })],
   ["findPullRequestByHead", (c, workspace) => c.findPullRequestByHead({ workspace, branch: "task/abc" })],

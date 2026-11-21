@@ -189,7 +189,8 @@ and answer that question.
 
 Everything above ran on a workspace that lives only on your Mac. This stage puts it on GitHub —
 **a fresh, empty repository you create for the trial**, not one you already care about. The board
-pushes as the `tidepool-board` GitHub App, never as you, and what it does to a repository is
+pushes and merges as the `tidepool-board` GitHub App. The one thing it does as you is open a pull
+request, so its pull requests show you as their author. What it does to a repository is
 narrow: it writes `task/<id>` branches and opens pull requests; it never writes to `main`
 directly, and it merges only when you answer a merge question. Installing the App is per
 repository and you can remove it at any time from https://github.com/settings/installations —
@@ -266,8 +267,9 @@ Completion criteria: README.md has a "Usage" heading followed by two bullet poin
 ```
 
 What you should see this time: the worker finishes, a pull request opens on `tidepool-trial`
-authored by `tidepool-board[bot]`, the board asks you a merge question, and answering it merges
-the pull request. The commit's author is `tidepool` with the App's noreply address.
+authored by you, with a description that ends with `Opened by the tidepool board.`; the board asks
+you a merge question, and answering it merges the pull request. The commit's author is `tidepool`
+with the App's noreply address.
 
 ### Checklist
 
@@ -276,7 +278,7 @@ In the VM:
 ```bash
 gh pr list --repo YOUR_GITHUB_LOGIN/tidepool-trial --state all --json author --jq '.[].author.login'
 ```
-Expect `tidepool-board`.
+Expect your own GitHub login (`YOUR_GITHUB_LOGIN`).
 
 ```bash
 curl -s -H "Authorization: Bearer $(cat ~/.tidepool/github-token)" \
