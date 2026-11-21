@@ -1,5 +1,7 @@
 # workspace の Claude settings は記録の中で人間しか書けない path であり、完了の門は fork 元と entry が違う tip を harness に依らず拒む
 
+**Status 追記: 「origin に書ける者が人間であるという前提」は、worker の内容を origin と同じ repo に push しないことで保たれる —— 同じ repo の PR の CI は head の定義と code を repo の資格情報で走らせた(実測は #3482 のコメント)。worker の内容は fork 先へ push し、`.github/workflows/**` は人間しか書けない path に足さない。代わりに、人間が merge する path に当たる PR は無人で着地しない。射程の境界の「review と merge ダイヤルの仕事」は、CI が着地の前に走ることを含めていなかった([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・4、2026-11-21、issue #3482)。**
+
 **Status 追記: 決定1 の人間の書く道の remote-backed の側 —— 扉は作らず、人間は origin の保護ブランチに入れる(自前の clone からの fast-forward の push か、自分の PR の merge)。盤面は記録も検査も足さない。この path を守るのは worker の完了の門(決定2)と、origin に書ける者が人間であるという前提である([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定10・11、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定1 の人間の書く道が足される —— purely-local の workspace では、人間は作業台で commit し、`intake` question の `take in` か封じ込めの Quarantine の回答が取り込む。決定2 の拒む場所に取り込みが加わる —— それ以外の入口は、この path の entry が入力の tip のどちらとも違えば拒み、比べる相手は fork 元との merge-base でなく入力の tip である([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定5・6、2026-11-15、issue #3178)。**

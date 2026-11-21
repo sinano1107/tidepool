@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 収束が読む GitHub の head と、決定9 で人間が conflict を解くために push する PR の head は、workspace の宣言の fork 先にある。conflict を解ける人間は fork 先に書ける人間である。保護ブランチと人間しか書けない path の道(決定10)は origin のまま([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・5、2026-11-21、issue #3482)。**
+
 **Status 追記: 決定7 の「すでに開いていれば何もしない」は「同じ外の head の question が開いていれば何もしない」に改める —— 外の head が違えば、開いた question を観測で閉じて今の内容で立て直す。この question への `hold` は答えた question の内容を根に刻み、内容が変わったときだけ問い直す。理由が消えた question への `merge` は、head が盤面の push した値なのでそのまま執行する。PR の hold の後に名指す question が無い `retry` は、merge question を新しく立ててそれを名指す([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) 決定2・3・5・6・7、2026-11-21、issue #3402)。**
 
 **Status 追記: 決定5 の末文「着地の側の検査は #3210 が持つ」は決まった —— 無人 merge は盤面が最後に push した head だけを merge し、最後に push した sha と違う head(書き換え・巻き戻しを除く)は推奨 hold の merge question に倒す。検査は足さず、人間の目を通す([ADR 0387](0387-the-board-merges-unattended-only-the-head-it-last-pushed-and-a-human-merge-on-a-head-the-board-did-not-push-is-refused-once.md) 決定1・2、2026-11-20、issue #3210)。**

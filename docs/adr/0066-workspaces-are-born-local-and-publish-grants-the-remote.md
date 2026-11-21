@@ -1,5 +1,7 @@
 # 盤面は GitHub 上に repo を作らない — workspace はローカルに生まれ、`publish` が remote 正本を与える
 
+**Status 追記: 決定2 の「全ブランチを宛先へ送る」は2段に割れる —— publish は保護ブランチだけを atomic に origin へ送り(決定5・6 の巻き戻しは origin に閉じる)、`task/*` は workspace の宣言の fork 先へ送る。タスクブランチの恒久記録は fork 先が持つ。fork 先の無い remote-backed の workspace は `task/*` を送らない([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定2・3、2026-11-21、issue #3482)。**
+
 **Status 追記: 決定5 の await を挟まない区間は交差を防ぐが process の死は防がず、覚えた repo の巻き戻しは catch に頼らない形に変わる —— 書く前に予告し、宣言と origin が揃ったときだけ畳む。中断の出口は巻き戻しの1つで、完了はもう一度 publish する。中断した publish が宛先に push したブランチは盤面が消さない([ADR 0391](0391-publish-announces-the-remembered-repo-like-a-ref-and-folds-it-only-when-the-declaration-and-the-origin-agree.md)、2026-11-21、issue #3336)。**
 
 **Status 追記: 決定5 の巻き戻しのコマンドは `git remote remove origin` から「`remote add` が書いた `remote.origin` の節を外し、push の後に書いた写しを予告の前の値へ戻す」に変わる(2026-11-19、issue #3197)。`remote remove` は publish の前から checkout にあった写し・`refs/remotes/origin/HEAD`・`branch.*.remote` も消し、「失敗した publish は痕跡を残さない」を破るため。戻す先は書く前に checkout にあった ref の値で、基準の行ではない —— 落ちて残った行は次の比較まで残り([ADR 0351](0351-the-checkout-is-the-boards-territory-from-the-first-pickup-and-the-ref-baseline-never-breaks.md) 決定4)、次の予告はその上に重なる([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定3・5)ので、行からは戻す先が1つに決まらない。巻き戻しの手順は1つが落ちても残りを撃つ。決定の目的は変わらない。**
