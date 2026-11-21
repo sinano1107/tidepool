@@ -1762,6 +1762,8 @@ export async function submitAnswer(
           // ADR 0394 決定3: question が問うていない外の部分は、書き手で立て直して拒む。question が開いていると読んだ同期区間で立て直すので、
           // 同時に走るもう一方の回答は question closed で拒まれる(ADR 0387 Status 追記 (1) を記録を足さずに保つ)
           const refuseUnasked = (origin: Exclude<PrHeadOrigin, { kind: "pushed" }>) => {
+            // ADR 0288 決定2(印の後): 比べる await の間に別の回答が印を取って merge していれば、その question を取り下げない
+            if (deps.landing.isMarked(task.workspace, mergePr)) return new DomainError(beingMerged);
             unasked = refuse(refuseUnaskedHead(
               deps.db, mergeWorkspace, getTask(deps.db, landingTaskId)!, { prNumber: mergePr, head: pr.head, origin, answered: task.id }, now(),
               (outside) => deps.landing.refuseOutsidePushOnce(mergeWorkspace, landingTaskId, mergePr, outside),

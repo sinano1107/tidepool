@@ -230,7 +230,7 @@ it("無人 merge の執行中に収束が書き換えを読んでも、merge が
   expect(mergeQuestions(c.db)).toEqual([]);
 });
 
-it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、伝えた head として拒まれずに merge する", async () => {
+it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、question が問うた head として拒まれずに merge する", async () => {
   const pr = await openPushedPr("outside-head-surface-changed", "auto_if_ci_green");
   const landing = autoMerging(pr.db, pr.clock, pr.workspace, pr.github, () => profile("escalate"));
   const lastPushed = originHead(pr.workspace, pr.work.id);
