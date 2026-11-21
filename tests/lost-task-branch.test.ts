@@ -692,6 +692,120 @@ it("event・倒したもの・閉じた question は書き戻しと一緒に書�
   expect(ended(b, dead)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: [question] }]);
 });
 
+/** 書いて畳む前に盤面が落ちる: 2値の行を1値へ畳む書き込みだけを落とす。`dropBoardBeforeFold` は give-up の transaction の1値への UPDATE で
+ *  先に落ち、失われた event ごと巻き戻して偽の pass になる。 */
+const dropBeforeFold = (b: Board) =>
+  b.db.exec(
+    "CREATE TEMP TRIGGER board_drops_before_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
+      "WHEN OLD.ref_snapshot LIKE '%|%' AND NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END",
+  );
+
+/** local 着地の question が開いた PR の無い死んだ根の `task/<id>` を失わせ、書き戻しが消す人間の ref(`refs/heads/stray`)を足して、`breakWriteBack` で
+ *  書き戻しを落とした give-up で答える。1回目の give-up の拒否を返す。 */
+async function giveUpWithFailedWriteBack(name: string, breakWriteBack: (b: Board) => void) {
+  const b = await board(name);
+  const root = await completeThrough(b, work(b, "root"), "root.txt");
+  await landingFor(b).converge();
+  const open = openLandingQuestions(b, root);
+  const refusal = giveUpAfter(
+    b,
+    () => {
+      git(b.ws.path, "update-ref", "refs/heads/stray", "main");
+      breakWriteBack(b);
+    },
+    root.id,
+  ).then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  return { b, root, open, refusal: await refusal };
+}
+
+it("書き戻しが落ちた give-up の後も Quarantine は開いたまま残り、次の `restore the baseline` の受理が記録から根の着地を終え、local 着地の question を閉じる —— 収束は問い直さず、削除の扉を塞がない(ADR 0397 決定1・2・4)", async () => {
+  const lock = (b: Board) => join(b.ws.path, ".git", "refs", "heads", "stray.lock");
+  const { b, root, open, refusal } = await giveUpWithFailedWriteBack("write-back-fails-then-restore", (b) => writeFileSync(lock(b), ""));
+  expect(String(refusal)).toContain("stray.lock");
+  expect(accepted(b)).toBe(false);
+  expect(taskBranchLostInForce(b.db, root.id)).toBeDefined();
+  expect(ended(b, root)).toEqual([]);
+  rmSync(lock(b));
+
+  await answerQuarantine(b, "restore the baseline");
+
+  expect(accepted(b)).toBe(true);
+  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(openLandingQuestions(b, root)).toEqual([]);
+  expect((await landingFor(b).converge()).map(({ taskId }) => taskId)).not.toContain(root.id);
+  expect(openLandingQuestions(b, root)).toEqual([]);
+  expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
+});
+
+it("書き戻しを書いて畳む前に盤面が落ちた give-up の後、ref が基準どおりになった `repaired by hand` の受理も根の着地を終える(ADR 0397 決定1・2・4)", async () => {
+  const { b, root, open, refusal } = await giveUpWithFailedWriteBack("board-drops-then-repaired-by-hand", dropBeforeFold);
+  expect(String(refusal)).toContain("the board dropped");
+  expect(accepted(b)).toBe(false);
+  expect(taskBranchLostInForce(b.db, root.id)).toBeDefined();
+  expect(git(b.ws.path, "for-each-ref", "refs/heads/stray")).toBe("");
+  b.db.exec("DROP TRIGGER board_drops_before_fold");
+
+  await answerQuarantine(b, "repaired by hand");
+
+  expect(accepted(b)).toBe(true);
+  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(openLandingQuestions(b, root)).toEqual([]);
+});
+
+it("書き戻しが落ちて Quarantine が開いている間の収束は、失われた根の着地を終えず昇格失敗の question も残す —— 終わりと閉じるのは次の受理(ADR 0397 決定2・4、ADR 0375 決定8)", async () => {
+  const b = await board("quarantined-convergence-leaves-lost-root");
+  const root = await completeThrough(b, work(b, "root"), "root.txt");
+  registerPrPromotionFailureQuestion(b.db, root, "gh failed", b.clock.now());
+  const open = openLandingQuestions(b, root);
+  await expect(
+    giveUpAfter(
+      b,
+      () => {
+        git(b.ws.path, "update-ref", "refs/heads/stray", "main");
+        dropBeforeFold(b);
+      },
+      root.id,
+    ),
+  ).rejects.toThrow("the board dropped");
+  b.db.exec("DROP TRIGGER board_drops_before_fold");
+
+  await landingFor(b).converge();
+
+  expect(accepted(b)).toBe(false);
+  expect(ended(b, root)).toEqual([]);
+  expect(openLandingQuestions(b, root)).toEqual(open);
+
+  await answerQuarantine(b, "repaired by hand");
+
+  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(openLandingQuestions(b, root)).toEqual([]);
+});
+
+it("親が生きている間に失われた死んだ子は、親の local 着地の後に根と読まれると、収束が失われたブランチを git で読まずに着地を終える —— 昇格失敗の question を立てず、着地を待つ数えから外れる(ADR 0397 決定3)", async () => {
+  const b = await board("dead-child-becomes-root");
+  const parent = work(b, "parent");
+  const child = await completeUndelivered(b, work(b, "child", { parent_id: parent.id }), "child.txt");
+  await giveUp(b, child.id);
+  expect(accepted(b)).toBe(true);
+  expect(ended(b, child)).toEqual([]);
+  await completeThrough(b, parent, "parent.txt");
+  await landingFor(b).converge();
+  const [question] = openLandingQuestions(b, getTask(b.db, parent.id)!);
+  await answer(b, question!, "merge");
+  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([child.id]);
+
+  const verdicts = await landingFor(b).converge();
+
+  expect(verdicts.filter(({ verdict }) => verdict.kind === "failed")).toEqual([]);
+  expect(ended(b, child)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: [] }]);
+  expect(openLandingQuestions(b, child)).toEqual([]);
+  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
+  expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
+});
+
 it("review の権限の文の当時版は spawn の時点の失われた event・`task_branch_created` で読む —— 失われる前の spawn は帰り先あり、失われた後は無し、作り直した後はまたあり(ADR 0380 帰結、pin H16)", async () => {
   const b = await board("as-of-spawn");
   const dead = await completeThrough(b, work(b, "dead"), "dead.txt");

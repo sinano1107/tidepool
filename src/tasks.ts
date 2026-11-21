@@ -1051,7 +1051,7 @@ export function localLandingOpenOrExecutedSql(taskRef: string): string {
 
 /** 着地が終わった根の記録の kind —— merge の記録か内容で終わった PR の根(`landing_finished`、ADR 0265 決定3)、運ぶ内容が無かった根
  *  (`nothing_to_land`)、ブランチを失って終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)。収束の候補・着地を待つ数え・削除の扉・
- *  give-up の着地の終わりが読む1つの列(landing.ts は import の向きでここから読む)。 */
+ *  失われた根の着地の終わりの判定(ADR 0397 決定1)が読む1つの列(landing.ts は import の向きでここから読む)。 */
 export const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost')";
 
 /** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地が終わった)SQL 述語。

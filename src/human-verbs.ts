@@ -142,6 +142,7 @@ import {
   completeHumanWork,
   containmentRepairRoute,
   containmentWorkbenchNotTakenIn,
+  endLostRootLandings,
   fetchLostTargets,
   firePickupPredicates,
   type HumanWorkPreparation,
@@ -746,7 +747,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         compare();
       } catch (err) {
         if (!restore || !(err instanceof RefsMovedError)) throw err;
+        return;
       }
+      // ADR 0397 決定2: 戻さない選択肢は、ref が基準と一致した比較の直後の同じ同期区間で根の着地の終わりを導く —— 戻す選択肢は書き戻しの後に導く
+      if (!restore && !room) endLostRootLandings(deps.db, target, clock.now());
     });
     const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     // ADR 0386 決定4: 項は pickup の門・本文と同じ並び
