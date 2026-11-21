@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, recordPrPromotionAbandoned, refuseUnaskedHead, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -115,6 +115,7 @@ import {
   type RegistryProposal,
   registerTask,
   retryInterviewRoot,
+  rootOfPr,
   settleQuestionAsObserved,
   type Task,
   taskBranchLostInForce,
@@ -1180,6 +1181,9 @@ function convergenceRefusal(verdict: LandingVerdict | undefined): string | undef
     case "excluded":
     case "quarantined":
       return verdict.error;
+    // ADR 0394 決定6: retry は hold を外すのでここへは来ないが、来れば待っている question を名指す
+    case "awaiting_held_question":
+      return `PR #${verdict.prNumber} waits on its held merge question ${verdict.question}: the board asks again only once the PR's head or the task's content changes`;
     case "deferred":
       return verdict.reason === "attached_children"
         ? `review still running: ${verdict.count} attached child task(s) unsettled`
@@ -1641,8 +1645,8 @@ export async function submitAnswer(
   let notice: string | undefined;
   // 回答の書き込みと同じ transaction で撃つ Quarantine の受理の段(ADR 0385 決定3・6)
   let withAnswer: ((questionId: string) => void) | undefined;
-  // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3)
-  // hold の head は断った内容という事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
+  // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3、
+  // 断る回答は ADR 0394 決定5)。断った内容は事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
   let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
   try {
     // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
@@ -1650,6 +1654,8 @@ export async function submitAnswer(
       case "pr_promotion_retry":
         if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
           notice = (await answerThroughConvergence(deps.landing, task.id, origin, kind.task_id))?.notice;
+        } else {
+          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind), byBoard: true };
         }
         break;
       case "local_merge":
@@ -1687,9 +1693,8 @@ export async function submitAnswer(
             refuseProtectedBranchWrite(deps.db, mergeWorkspace.name, err, now());
           }
         } else {
-          // ADR 0289 決定3: hold が断るのはこの時点の内容。読めなくても hold は拒まない(null は「変わった」と読まれる)
-          const head = taskBranchHeadOrNull(buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace), task.workspace, kind.task_id);
-          rootRecord = { root: kind.task_id, payload: { kind: "local_merge_held", head }, byBoard: true };
+          // ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容
+          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind), byBoard: true };
         }
         break;
       case "pr_merge": {
@@ -1815,6 +1820,10 @@ export async function submitAnswer(
             }
           });
           rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };
+        } else {
+          // ADR 0394 決定5: 外の部分が今と違っても拒まない —— 断るのは人間が見た question の内容。PR を開いた根が無ければ刻む先が無い
+          const root = rootOfPr(deps.db, mergePr, task.workspace);
+          if (root !== undefined) rootRecord = { root, payload: landingDeclined(task.id, kind), byBoard: true };
         }
         break;
       }
@@ -1931,7 +1940,6 @@ export async function submitAnswer(
     })();
     // Giving up promotion otherwise leaves no trace beyond a settled question;
     // preserve the reason on the immutable decision log of that question.
-    // 断念した内容(その時点の head)は盤面名義の事実としてタスクに刻む(ADR 0225 決定1)
     if (kind.kind === "pr_promotion_retry" && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
       logDecision(
         deps.db,
@@ -1940,13 +1948,6 @@ export async function submitAnswer(
         HUMAN_ACTOR_ID,
         now(),
         origin,
-      );
-      recordPrPromotionAbandoned(
-        deps.db,
-        buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
-        task.workspace,
-        kind.task_id,
-        now(),
       );
     }
     // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は

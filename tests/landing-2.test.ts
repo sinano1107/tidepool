@@ -969,6 +969,98 @@ it("別の失敗で昇格失敗 question が開いている根の記録済みの
   expect(getTask(c.db, failure!.id)?.status).toBe("done");
 });
 
+/** PR #1 の開いている merge question に人間が「hold」と答える。答えた question を返す。 */
+async function holdMergeQuestion(c: Awaited<ReturnType<typeof pushedRoot>>) {
+  const question = getTask(c.db, listBoard(c.db).find((q) => q.question_pending_merge_pr === 1 && q.status === "todo")!.id)!;
+  await submitAnswer({ ...c, pollNow: () => {} }, question, ["hold"], undefined, () => c.clock.now(), "webui");
+  return question;
+}
+
+/** 書き換えの head の merge question に「hold」と答えた根 —— 盤面には未 push の修理(積み残し)が残る(#3402 の再現の形)。 */
+async function heldRewrite(name: string) {
+  const c = await pushedRoot(name, { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  const head = await moveRecordedHead(c, "rewritten");
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+  const held = await holdMergeQuestion(c);
+  return { c, head, held };
+}
+
+// ADR 0394 決定5〜7(#3402): PR の hold は答えた question の内容を断ったと根に刻み、内容が同じ間は収束が問い直さず、書き換えの head にも push しない
+it("書き換えの head の merge question に「hold」と答えると、question の内容を根に刻み、次の収束は question を立てず hold された question を待つと返し、push もしない", async () => {
+  const { c, head, held } = await heldRewrite("outside-rewrite-held");
+
+  expect(boardEvents(c.db, c.work.id, "landing_declined")).toEqual([{
+    actor_id: BOARD_ACTOR_ID,
+    origin: "board",
+    payload: {
+      kind: "landing_declined",
+      question_id: held.id,
+      tip: git(c.workspace.path, "rev-parse", c.target),
+      outside: { kind: "rewritten", sha: head },
+      missing_branches: [c.target],
+    },
+  }]);
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "awaiting_held_question", prNumber: 1, question: held.id });
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "awaiting_held_question", prNumber: 1, question: held.id });
+
+  expect(mergeQuestions(c.db)).toEqual([]);
+  c.expectNothingCarried();
+});
+
+it("書き換えの head の merge question を hold した後に修理が届けば、次の収束は新しい merge question を立て、push はしない", async () => {
+  const { c, held } = await heldRewrite("outside-rewrite-held-repair");
+
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, c.work, "another-repair.txt", "repair\n");
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
+  expect(question!.id).not.toBe(held.id);
+  expect(question!.question_landing_tip).toBe(git(c.workspace.path, "rev-parse", c.target));
+  expect(c.github.pushes).toEqual([]);
+});
+
+it("書き換えの head の merge question を hold した後、積み残しがあるまま head がまた書き換えられれば、次の収束は新しい merge question を立てる", async () => {
+  const { c, held } = await heldRewrite("outside-rewrite-held-rewritten-again");
+
+  const again = await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${c.pushed}~1`), "again.txt");
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
+  expect(question).toMatchObject({ question_pr_merge_outside_sha: again, question_pr_merge_outside_kind: "rewritten" });
+  expect(question!.id).not.toBe(held.id);
+});
+
+// ADR 0394 決定6 / ADR 0376 決定7: PR の hold が効いている間の retry は、人間の明示の操作として merge question を新しく立て、それを名指す
+it("PR の hold が効いている間に、別の失敗の昇格失敗 question への retry が外の push の段に来れば、merge question を新しく立てて text D3b で名指して拒まれ、収束はその question を待つ", async () => {
+  const { c, held } = await heldRewrite("outside-rewrite-held-retry");
+  registerPrPromotionFailureQuestion(c.db, c.work, "push failed", c.clock.now());
+  const [failure] = promotionFailures(c.db, c.work.id);
+
+  const refusal = await c.retry(failure!);
+
+  const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
+  expect(question!.id).not.toBe(held.id);
+  expect(refusal).toBe(textD3b("rewritten", question!.id));
+  expect(mergeQuestions(c.db)).toHaveLength(1);
+  c.expectNothingCarried();
+});
+
+// ADR 0394 決定7 / ADR 0387 の帰結: 収束が GitHub の head を読むのは積み残しがあるときだけ —— 無ければ hold の後に head が動いても問い直さない
+it("積み残しの無い PR の書き換えの head の merge question を hold した後に head がまた動いても、収束も tick も問い直さない", async () => {
+  const c = await pushedRoot("outside-rewrite-held-nothing-left", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ form: "open_pull_request_updated" });
+  const pushed = originHead(c.workspace, c.work.id);
+  await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
+  await c.landing.tick("auto_merge", c.clock.now());
+  await holdMergeQuestion(c);
+
+  await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${pushed}~1`), "again.txt");
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "up_to_date", prNumber: 1 });
+  expect(await readOnNextTick(c.landing, c.github, c.clock.now())).toEqual([]);
+  expect(mergeQuestions(c.db)).toEqual([]);
+});
+
 // ADR 0376 決定4・7: 印が head と同じでも、書き換えた head を人間が作業台で merge していなければ盤面は押せない —— retry を言う text D1 でなく、
 // 同じ text A4b で拒む
 it("書き換えられた記録済みの PR への2回目の「merge」は、作業台で何も commit していなければもう一度 text A4b で拒まれ、何も取り込まず push もしない", async () => {

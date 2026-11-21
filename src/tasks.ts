@@ -3312,12 +3312,16 @@ export function registerMergeQuestion(
  *  が `pr_number` を書いてから question を立てるので、開いている question には必ず対応
  *  する行がある。 */
 export function taskIdForPr(db: Db, prNumber: number, workspace: string | null): string {
-  const row = db
-    .prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?")
-    .get(prNumber, workspace) as { id: string } | undefined;
+  const id = rootOfPr(db, prNumber, workspace);
   // 引けないなら門を素通りさせず止める(fail-closed — ADR 0092 決定5 は UI に依らず盤面が守る)
-  if (!row) throw new DomainError(`cannot merge: no task in this workspace opened PR #${prNumber}`);
-  return row.id;
+  if (id === undefined) throw new DomainError(`cannot merge: no task in this workspace opened PR #${prNumber}`);
+  return id;
+}
+
+/** `taskIdForPr` の引けない場合を undefined で返す形 —— 引けなくても回答を拒まない hold が使う。 */
+export function rootOfPr(db: Db, prNumber: number, workspace: string | null): string | undefined {
+  const row = db.prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?").get(prNumber, workspace) as { id: string } | undefined;
+  return row?.id;
 }
 
 /** ADR 0394 決定2: 立て直しで閉じた question を、PR が決着したために閉じた question と区別する。 */
