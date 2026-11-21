@@ -779,7 +779,7 @@ export function commitWork(path: string, file: string, body: string): void {
 /** 名前の場所 `named` の README.md の blob の loose を外し(`corrupt` なら zlib でない byte に置く)、worker が同じ中身の `copy.txt` を
  *  `checkout` で commit する —— 新しい root tree が blob を直に指し、worker の `git add` は名前の場所に無い blob を自前の store に書く。
  *  門の pack は除外(名前の場所の ref から届く)で blob を入れない。blob の id と、名前の場所の loose を元に戻す手を返す。 */
-export function damageNamedBlobHeldByWorker(named: string, checkout: string, damage: "missing" | "corrupt" = "missing"): { blob: string; repair: () => void } {
+export function newTreePointsAtDamagedNamedBlob(named: string, checkout: string, damage: "missing" | "corrupt" = "missing"): { blob: string; repair: () => void } {
   const blob = git(named, "rev-parse", "HEAD:README.md");
   const loose = (repo: string) => join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2));
   const original = readFileSync(loose(named));
