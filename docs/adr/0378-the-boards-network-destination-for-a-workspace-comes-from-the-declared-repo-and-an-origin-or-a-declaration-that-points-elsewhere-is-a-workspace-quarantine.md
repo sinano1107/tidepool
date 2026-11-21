@@ -1,5 +1,7 @@
 # workspace の網の行き先は宣言 `repo` から決める —— origin が別の repo を指すか、宣言が覚えた repo と違えば workspace の Quarantine
 
+**Status 追記: 決定10 の「巻き戻しは覚えた値も戻す」は、catch の中の戻しから「書く前に `予告の前の値|宛先` を予告し、宣言と origin が揃ったときだけ揃った側へ畳む」に変わる([ADR 0391](0391-publish-announces-the-remembered-repo-like-a-ref-and-folds-it-only-when-the-declaration-and-the-origin-agree.md)、2026-11-21、issue #3336)。process が死ぬと catch は走らず、覚えた repo を人間は戻せないため。予告の間は決定6〜8 の検査がどちらの値も違いと読まない。**
+
 2026-11-15 の wayfinder(map #3178、ticket #3254、実測は #3250)で決定。名前の場所で `git remote set-url origin <別の repo>` を打つと、
 ref は1つも動かないのに、次の pickup が別の repo から fetch して保護ブランチを fast-forward し、その内容が Quarantine・question・event
 なしに task の fork 元へ入る(実 GitHub の盤面で再現)。pickup の述語が比べるのは origin の有無までで、盤面の URL・token・`gh` の `-R` は
