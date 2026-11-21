@@ -191,9 +191,11 @@ import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
   HeadRepoRejectedError,
+  HeadRepoTaskBranchesNotSentError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
+  ProtectedBranchMissingError,
   RelativeClonePathError,
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
@@ -975,6 +977,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof WorkspaceRegistryUnprotectError) {
         // ADR 0377 決定6 / ADR 0381 決定1: confirmation cannot override protection computed from the declared repo.
         sendJson(res.status(403), { error: err.message });
+      } else if (err instanceof HeadRepoTaskBranchesNotSentError) {
+        // issue #3563: the push failed after the declaration was saved, so the client reloads instead of reading "not saved"
+        sendJson(res.status(502), { error: err.message, saved: true } satisfies WireContract["PATCH /api/workspaces/:name 502"]);
       } else {
         sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
@@ -995,8 +1000,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
-      sendJson(res, {});
+      const message = await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
+      sendJson(res, { message } satisfies WireContract["POST /api/workspaces/:name/publish"]);
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         sendJson(res.status(404), { error: err.message });
@@ -1006,6 +1011,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof WorkspaceAlreadyPublishedError ||
         err instanceof WorkspaceRepoMismatchError ||
         err instanceof CheckoutHasOriginError ||
+        err instanceof ProtectedBranchMissingError ||
         err instanceof RepoAccessMissingError
       ) {
         sendJson(res.status(400), { error: err.message });

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
+  HeadRepoTaskBranchesNotSentError,
   type UpdateWorkspaceInput,
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
@@ -190,6 +191,23 @@ it("registry に居ない名前は 404", async () => {
   );
 });
 
+// issue #3563: 宣言を書いた後に出元 repo へ送れなかったタスクブランチは、502 のまま `saved` を付ける —— 画面は「保存されなかった」と読まない
+it("出元 repo へ送れなかったタスクブランチがあれば 502 に saved を付けて返す", async () => {
+  const err = new HeadRepoTaskBranchesNotSentError("lagoon", "acme/fork", ["task/aaa (rejected)"]);
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async () => {
+        throw err;
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+
+  expect(res.status).toBe(502);
+  expect(res.json).toEqual({ error: err.message, saved: true });
+});
+
 // ADR 0395 決定2: 出元 repo の値の検査と危険な値の門 —— 本物の扉(updateWorkspace)を fake の GitHub client で束ねる
 describe("出元 repo の宣言(ADR 0395 決定2)", () => {
   async function headRepoBoard() {
@@ -248,6 +266,7 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     const reset = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
     expect(reset.status).toBe(200);
     expect(entry().head_repo).toBe("acme/fork");
+
   });
 
   it("URL の綴り(資格情報つき)で送った出元 repo は owner/name に直して書き、資格情報を registry に残さない", async () => {

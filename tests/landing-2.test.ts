@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
-import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
@@ -28,7 +27,6 @@ import { workbenchPath } from "../src/workbench.js";
 import {
   workspaceProtectionReader,
 } from "../src/workspace.js";
-import { publishWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   checkoutTaskBranch,
@@ -80,10 +78,8 @@ import {
   tearDownRepair,
   textA4a,
   textA4c,
-  textD2,
 } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
-import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -651,7 +647,7 @@ it("origin のタスクブランチを読めなければ、収束は push も PR
 });
 
 // ADR 0376 決定6 / spec #3273 pin D4: PR の記録が無い巻き戻しは push を止め、retry を毎回拒む。同意は origin への操作で表す。作業台は開かず、
-// 印も event も足さない。event を残さない push(publish)の巻き戻しは、写しで見分ける
+// 印も event も足さない
 it("PR を記録していない根の origin のタスクブランチが最後に push した値より前へ巻き戻されていれば、収束は push せず本文が text D2 を言い、retry は毎回拒まれて作業台も event も足さず、落とされた commit を push し直した後の retry が通る", async () => {
   const c = await pushedRoot("outside-rewind-pushed-back", { pr: "found", commits: 2 });
   const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
@@ -680,50 +676,6 @@ it("PR を記録していない根の origin のタスクブランチが最後�
   expect(getTask(c.db, failure!.id)?.status).toBe("done");
   expect(getTask(c.db, c.work.id)?.pr_number).toBe(1);
   expect(originHead(c.workspace, c.work.id)).toBe(c.pushed);
-});
-
-// ADR 0376 決定3・6 / spec #3273 pin D4: publish の push は event を残さない —— その巻き戻しは、publish が push の成功を見て書いた写しで見分ける
-it("publish だけが push したタスクブランチが origin で巻き戻されていれば、収束は publish の書いた写しから巻き戻しと読み、push せず text D2 を言う", async () => {
-  const checkout = await tempDir("tidepool-published-");
-  git(checkout, "init", "-b", "main");
-  commitWork(checkout, "README.md", "sandbox\n");
-  const { db, clock } = await openBoard();
-  const work = landingWork(db, clock);
-  const target = `task/${work.id}`;
-  git(checkout, "checkout", "-b", target);
-  commitWork(checkout, "feature-1.txt", "ready\n");
-  commitWork(checkout, "feature-2.txt", "ready\n");
-  git(checkout, "checkout", "main");
-  finish(db, clock, work);
-  const origin = await tempDir("tidepool-published-origin-");
-  git(origin, "init", "--bare", "-b", "main");
-  const tokenFile = join(await tempDir("tidepool-token-"), "token");
-  writeFileSync(tokenFile, "gho_test\n", { mode: 0o600 });
-  await publishWorkspace(
-    { name: "published", repo: origin },
-    {
-      registry: { dir: await makeRegistry({ "workspaces.yaml": `published:\n  path: ${checkout}\n` }), mode: "purely-local" },
-      workspacesBaseDir: await tempDir("tidepool-ws-base-"),
-      githubAuth: new GitHubAuth(tokenFile),
-      db,
-    },
-  );
-  const workspace = { name: "published", path: checkout, repo: origin };
-  const pushed = git(checkout, "rev-parse", target);
-  expect(originHead(workspace, work.id)).toBe(pushed);
-  expect(listEventsOfKinds(db, ["pr_opened", "pr_branch_pushed"])).toEqual([]);
-  const head = git(checkout, "rev-parse", `${pushed}~1`);
-  (await outsideClone(workspace)).push(`${head}:refs/heads/${target}`);
-  const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
-
-  const verdict = await convergeOn(landing, work.id);
-
-  expect(verdict).toEqual({ kind: "failed", reason: "promotion_failed", error: textD2(workspace, target, pushed, head) });
-  expect(originHead(workspace, work.id)).toBe(head);
-  expect(git(checkout, "rev-parse", `refs/remotes/origin/${target}`)).toBe(pushed);
-  expect(github.pushes).toEqual([]);
-  expect(github.requests).toEqual([]);
 });
 
 // ADR 0376 決定6: 巻き戻しは取り込みより前に決まる —— 前の text D1 の作業台に取り込める tip が残っていても、印も event も足さない

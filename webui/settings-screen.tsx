@@ -150,9 +150,9 @@ function PublishWorkspace({ ws, say, onPublished }: {
   const submit = async () => {
     setBusy(true);
     try {
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: TidepoolRules.normalizeText(repo) });
+      const { message } = await api('POST /api/workspaces/:name/publish', { params: { name: ws.name }, body: { repo: TidepoolRules.normalizeText(repo) } });
       setRepo('');
-      say('success', 'workspace published — every branch is on the remote', ws.name);
+      say('success', 'workspace published — the protected branch is on the remote', message);
       await onPublished();
     } catch (err) {
       // a failed publish leaves no trace (the board rolls its own `remote add`
@@ -167,13 +167,14 @@ function PublishWorkspace({ ws, say, onPublished }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Publish</span>
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        give this purely-local workspace a remote source of truth — every branch is pushed to an
+        give this purely-local workspace a remote source of truth — its protected branch is pushed to an
         empty repository you created and invited the bot to. The board creates nothing on GitHub.
+        Task branches go to the head repo (a fork) you set afterwards.
       </p>
       <Input value={repo} onChange={(e) => setRepo(e.target.value)}
         placeholder="the destination repository URL — must be empty" />
       <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(repo)} onClick={submit}>
-        Publish — pushes every branch, then commits to the registry
+        Publish — pushes the protected branch, then commits to the registry
       </Button>
     </div>
   );
@@ -210,13 +211,16 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
   const [mergePaths, setMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const [originalMergePaths, setOriginalMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const [headRepo, setHeadRepo] = React.useState(ws.head_repo ?? '');
+  // issue #3563: setting the same head repo again re-sends the task branches, so a touched non-empty field travels even when unchanged
+  const [headRepoTouched, setHeadRepoTouched] = React.useState(false);
+  const sendHeadRepo = headRepo.trim() !== (ws.head_repo ?? '') || (headRepoTouched && headRepo.trim() !== '');
   const origin = ws.repo ?? ws.path;
   const dirty = notes.trim() !== (ws.notes ?? '')
     || prot !== !!ws.protected
     || !sameStrings(cmds, ws.review_allowed_commands ?? [])
     || !sameStrings(domains, ws.allowed_domains ?? [])
     || !sameStrings(mergePaths, originalMergePaths)
-    || headRepo.trim() !== (ws.head_repo ?? '');
+    || sendHeadRepo;
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => { edit.close(); await onChanged(); });
 
@@ -226,6 +230,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
     setMergePaths(ws.human_merge_paths ?? []);
     setOriginalMergePaths(ws.human_merge_paths ?? []);
     setHeadRepo(ws.head_repo ?? '');
+    setHeadRepoTouched(false);
   });
   // Notes always travels; dangerous fields join only when actually changed —
   // untouched fields stay absent from the partial patch (ADR 0061 決定2).
@@ -238,8 +243,8 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
       body.human_merge_paths = mergePaths;
       body.expected_human_merge_paths = originalMergePaths;
     }
-    // ADR 0395 決定2: sent only when changed — every send asks GitHub and, when non-empty, a confirmation
-    if (headRepo.trim() !== (ws.head_repo ?? '')) body.head_repo = headRepo.trim();
+    // ADR 0395 決定2: sent only when changed or touched — every send asks GitHub and, when non-empty, a confirmation
+    if (sendHeadRepo) body.head_repo = headRepo.trim();
     submit(async (confirm) => { await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, 'PATCH'); }, 'updated', ws.name);
   };
 
@@ -297,7 +302,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
             description="Repository-relative globs for additional paths that require a human merge. Name any leading dot explicitly. .github/workflows/** and CODEOWNERS in the root, .github and docs always require a human merge."
             placeholder='path glob — e.g. "deploy/**"' />
           {ws.repo && (
-            <Input label="Head repo" value={headRepo} onChange={(e) => setHeadRepo(e.target.value)}
+            <Input label="Head repo" value={headRepo} onChange={(e) => { setHeadRepo(e.target.value); setHeadRepoTouched(true); }}
               placeholder="owner/name of the fork task branches go to — empty removes it (confirmed on save if set)" />
           )}
           <EditActions dirty={dirty} busy={busy} saveLabel="Save — commits to the registry"
@@ -906,11 +911,13 @@ interface DangerousSaveOptions {
   /** その扉の 409 を契約のエラー行で読む —— 確認で買える拒否なら、ダイアログが列挙する
    *  理由コードと、その扉だけが持つ一行(issue #383 の clone 入口の着地先など)を返す。 */
   confirmOf: (err: unknown) => { reasons: string[]; note?: React.ReactNode } | null;
+  /** 保存の後に落ちた失敗なら、その見出し(issue #3563 —— 出元 repo へ送れなかったタスクブランチ)。 */
+  savedOf?: (err: unknown) => string | null;
 }
 function useDangerousSave(
   say: AppSay,
   onDone: () => Promise<void> | void,
-  { noun, confirmKey, dialogTitle, dialogLead, confirmLabel, failDetail, labels = DANGEROUS_REASON_LABEL, confirmOf }: DangerousSaveOptions,
+  { noun, confirmKey, dialogTitle, dialogLead, confirmLabel, failDetail, labels = DANGEROUS_REASON_LABEL, confirmOf, savedOf }: DangerousSaveOptions,
 ) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
@@ -930,8 +937,13 @@ function useDangerousSave(
         // (bad input, a push that never landed — ADR 0052 決定1) by its
         // confirm_required flag — only that one opens the dialog for a resend
         const asked = confirmOf(err);
+        const saved = savedOf?.(err);
         if (asked) {
           setConfirm({ ...asked, resend: () => attempt(true) });
+        } else if (saved) {
+          setConfirm(null);
+          say('warn', saved, String((err as Error).message || err));
+          await onDone();
         } else {
           setConfirm(null);
           // `not ${verb}` であって `${verb} failed` ではない — verb は過去分詞
@@ -995,6 +1007,7 @@ function useWorkspaceSave(say: AppSay, onDone: () => Promise<void> | void) {
     dialogTitle: 'Save a change that widens what agents may do?',
     dialogLead: 'This change widens what agents may do here. Review before saving:',
     confirmOf: dangerousValuesOf('PATCH /api/workspaces/:name 409'),
+    savedOf: (err) => apiErrorDetail(err, 'PATCH /api/workspaces/:name 502')?.saved ? 'workspace updated — some task branches were not sent' : null,
   });
 }
 

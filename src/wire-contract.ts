@@ -404,10 +404,14 @@ export interface WireContract {
     claude_settings_unhideable_warning?: string;
   };
   "PATCH /api/workspaces/:name 409": DangerousValuesConflict | { error: string; confirm_required?: never };
+  /** `saved` は宣言が書けた後の失敗 —— 出元 repo へ送れなかったタスクブランチ(issue #3563)。 */
+  "PATCH /api/workspaces/:name 502": { error: string; saved?: true };
   /** 残る checkout の場所(ADR 0087 決定4)。 */
   "DELETE /api/workspaces/:name": { checkout: string };
   /** `open_workbench` の応答(spec #3273 text A14)。 */
   "POST /api/workspaces/:name/workbench": { message: string };
+  /** publish の成功文: 送った範囲と次の手順(issue #3563)。 */
+  "POST /api/workspaces/:name/publish": { message: string };
   "DELETE /api/workspaces/:name 409": DeletionConflict;
   "GET /api/agents": {
     agents: Array<{

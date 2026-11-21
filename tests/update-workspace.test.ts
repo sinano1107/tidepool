@@ -1,19 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { openDb } from "../src/db.js";
-import { workspaceHeadRepoDestination } from "../src/github-auth.js";
+import { GitHubAuth, workspaceHeadRepoDestination } from "../src/github-auth.js";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { resolveExecutionWorkspace, withRememberedRepoCheck, workspaceProtectionReader } from "../src/workspace.js";
+import { compareRefsBeforeLanding, resolveExecutionWorkspace, withRememberedRepoCheck, workspaceProtectionReader } from "../src/workspace.js";
 import {
+  HeadRepoTaskBranchesNotSentError,
   listWorkspaceViews,
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
+import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { makeWorkspace, quarantineQuestion } from "./harness.js";
+import { makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -459,4 +461,104 @@ describe("updateWorkspace: 出元 repo の書き込みの巻き戻し", () => {
     expect(workspaceHeadRepoDestination(withRememberedRepoCheck(deps.db, declared()))).toBeUndefined();
     expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeUndefined();
   });
+});
+
+// ADR 0395 決定3: 出元 repo が宣言されたとき、扉が `task/*` を出元 repo へ送る(送るのは1本ずつ)。issue #3563: 失敗しても宣言は残り、同じ値をもう一度
+// 通せば送り直す。出元 repo は GitHub の名前なので、盤面が組んだ URL を shim で手元の bare へ回す(shim は盤面の `remote set-url` の引数も書き換える)
+describe("updateWorkspace: タスクブランチを出元 repo へ送る", () => {
+  async function headRepoBoard() {
+    const checkout = await makeWorkspace("lagoon");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n` });
+    git(registryDir, "remote", "add", "origin", "https://github.com/acme/registry.git");
+    const github = new FakeGitHubClient();
+    github.scriptRepositoryParent("acme/fork", "acme/lagoon");
+    const broker = await startFakeBroker((request) => issuedToken(`token-for-${request.repo}`));
+    onTestFinished(() => broker.close());
+    const tokenFile = join(await tempDir("tidepool-token-"), "token");
+    await writeFile(tokenFile, "gho_test\n");
+    await chmod(tokenFile, 0o600);
+    const deps = { ...(await makeDeps(registryDir)), github, githubAuth: new GitHubAuth(tokenFile, broker.url) };
+    const entry = () => loadRegistry(registryDir, "purely-local").workspaces.lagoon!;
+    const workspace = { name: "lagoon", path: checkout.path, repo: "https://github.com/acme/lagoon.git" };
+    git(checkout.path, "branch", "task/aaa");
+    git(checkout.path, "branch", "task/bbb");
+    git(checkout.path, "branch", "feature");
+    const sha = git(checkout.path, "rev-parse", "main");
+    // fork の task/aaa は盤面の知らない履歴にある —— non-fast-forward で拒まれる
+    const fork = await tempDir("tidepool-fork-");
+    git(fork, "init", "--bare", "-b", "main");
+    const outside = await tempDir("tidepool-outside-");
+    git(outside, "init", "-b", "main");
+    git(outside, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "diverged on the fork");
+    git(outside, "push", fork, "main:refs/heads/task/aaa");
+    const diverged = git(fork, "rev-parse", "task/aaa");
+    const calls = await shimGit({ route: ["https://github.com/acme/fork.git", fork] });
+    return {
+      deps, entry, workspace, sha, fork, diverged, calls,
+      set: () => updateWorkspace({ name: "lagoon", head_repo: "acme/fork", confirm: true }, deps),
+      forkBranches: () => git(fork, "for-each-ref", "--format=%(refname:lstrip=2) %(objectname)", "refs/heads/"),
+      copies: () => git(checkout.path, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/"),
+    };
+  }
+
+  it("タスクブランチだけを1本ずつ出元 repo の token で送り、送れなかったタスクブランチがあっても宣言は残り、同じ値をもう一度通すと送り直す", async () => {
+    const { entry, sha, fork, diverged, calls, set, forkBranches, copies } = await headRepoBoard();
+
+    const failed = await set().then(() => undefined, (e: Error) => e);
+
+    expect(failed).toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    expect(failed?.message).toMatch(
+      /^The head repo acme\/fork of workspace lagoon was saved, but these task branches were not sent to it: task\/aaa \(.+\)\. Set the same head repo again to send them\.$/s,
+    );
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(forkBranches()).toBe(`task/aaa ${diverged}\ntask/bbb ${sha}`);
+    // 写しは送れたタスクブランチだけ。origin の写しは書かない
+    expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sha}`);
+    expect(calls().filter(({ args }) => args.includes("push")).map(({ args, env }) => [args.at(-1), env.GH_TOKEN])).toEqual([
+      [`${sha}:refs/heads/task/aaa`, "token-for-acme/fork"],
+      [`${sha}:refs/heads/task/bbb`, "token-for-acme/fork"],
+    ]);
+
+    // task/bbb は同じ sha で出元 repo に既にある
+    git(fork, "update-ref", "-d", "refs/heads/task/aaa");
+    await set();
+
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(forkBranches()).toBe(`task/aaa ${sha}\ntask/bbb ${sha}`);
+    expect(copies()).toBe(`refs/remotes/head-repo/task/aaa ${sha}\nrefs/remotes/head-repo/task/bbb ${sha}`);
+  });
+
+  // ADR 0243: 写しは口を通る —— 基準の行は送れたタスクブランチの写しだけを持ち、次の比較は Quarantine を立てない
+  it("基準があっても、送れたタスクブランチの写しだけが基準に入り、次の比較は違反にならない", async () => {
+    const { deps, workspace, sha, set } = await headRepoBoard();
+    const now = () => new Date();
+    compareRefsBeforeLanding(deps.db, workspace, { resolveRegistered: undefined, now: now() });
+
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+
+    const rows = (deps.db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get("lagoon") as string)
+      .split("\n").filter((line) => line.includes("refs/remotes/"));
+    expect(rows).toEqual([`${sha} refs/remotes/head-repo/task/bbb`]);
+    compareRefsBeforeLanding(deps.db, { ...workspace, head_repo: "acme/fork" }, { resolveRegistered: undefined, now: now() });
+    expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeUndefined();
+  });
+});
+
+// issue #3563 の撃ち直しの扉: 同じ出元 repo をもう一度通しても registry の書き込みは何も積まず、宣言と remote はそのまま
+it("同じ出元 repo をもう一度通しても壊れない", async () => {
+  const checkout = await makeWorkspace("lagoon");
+  const registryDir = await makeMainRegistry({ "workspaces.yaml": `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n` });
+  git(registryDir, "remote", "add", "origin", "https://github.com/acme/registry.git");
+  const github = new FakeGitHubClient();
+  github.scriptRepositoryParent("acme/fork", "acme/lagoon");
+  const deps = { ...(await makeDeps(registryDir)), github };
+  const set = () => updateWorkspace({ name: "lagoon", head_repo: "acme/fork", confirm: true }, deps);
+  await set();
+  const head = git(registryDir, "rev-parse", "HEAD");
+
+  await set();
+
+  expect(git(registryDir, "rev-parse", "HEAD")).toBe(head);
+  expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon?.head_repo).toBe("acme/fork");
+  expect(git(checkout.path, "config", "remote.head-repo.url")).toBe("https://github.com/acme/fork.git");
 });

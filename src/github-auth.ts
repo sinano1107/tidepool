@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { git, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
 import type { RepoSlug } from "./github.js";
+import type { HEAD_REPO_REMOTE } from "./pickup-predicates.js";
 import { parseGitHubRepo } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -257,12 +258,16 @@ export function sourceCheckout(source: GitSource): string {
 }
 
 /** リモート側のブランチを指す remote-tracking ref(写し)の**綴り**。ADR 0052 のもとで「リモートの正本を読む」は registry の役
- *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れ、書くのは push の後の `authedPush` と
+ *  (`registryRef` の下)と workspace の役(`protectedBranchRef`)の2箇所に現れる。出元 repo へ送ったタスクブランチの写しは
+ *  `remote` に head repo の remote を渡した `refs/remotes/head-repo/task/*`(ADR 0395 決定1)。書くのは push の後の `authedPush` と
  *  `fetchBranchCopy` —— 綴りそのものは1つでなければならない(2つ持つと、片方だけを直したときに黙ってずれる)。どちらの ref を
  *  読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
-export function remoteTrackingRef(branch: string): string {
-  return `refs/remotes/origin/${branch}`;
+export function remoteTrackingRef(branch: string, remote: PushRemote = "origin"): string {
+  return `refs/remotes/${remote}/${branch}`;
 }
+
+/** Which declared repo a workspace push reaches: `origin` is `repo`, the head repo remote is `head_repo` (ADR 0395 決定1). */
+type PushRemote = "origin" | typeof HEAD_REPO_REMOTE;
 
 /** The inline helper serving the injected GH_TOKEN. ADR 0339 決定3: it answers only `protocol=https host=github.com`,
  *  so the token goes out only to the https URL the board built for a GitHub origin (決定4) and never to a non-GitHub
@@ -301,11 +306,13 @@ function inBoardRepo<T>(
   timeoutMs: number,
   verb: string,
   run: (call: AuthedCall & { boardRepo: string }, url: string) => T,
+  remote: PushRemote = "origin",
 ): T {
   const checkout = sourceCheckout(source);
-  const destination = typeof source === "string"
-    ? networkDestination(checkoutOrigin(source, verb), source)
-    : workspaceNetworkDestination(source);
+  // a registry checkout (a string source) has no head repo: it reaches no destination rather than origin under head-repo copies
+  const destination = typeof source !== "string"
+    ? remote === "origin" ? workspaceNetworkDestination(source) : workspaceHeadRepoDestination(source)
+    : remote === "origin" ? networkDestination(checkoutOrigin(source, verb), source) : undefined;
   if (destination === undefined) throw new Error(`\`git ${verb}\` has no declared repo to reach (in ${checkout})`);
   const env = auth ? auth.env(destination.key) : githubChildEnv();
   const boardRepo = mkdtempSync(join(env.HOME!, "repo-"));
@@ -344,21 +351,22 @@ export function authedFetch(auth: GitHubAuth | undefined, source: GitSource, tim
   });
 }
 
-/** Pushes each `[branch, sha]` — atomically when there is more than one — and, once the push succeeded, writes each
- *  copy `refs/remotes/origin/<branch>` to its sha. ADR 0052 Status 追記(#2827): a push from the board repo does not
- *  move the checkout's copies, so the board writes them, inside the caller's ADR 0243 口. The sha is the caller's —
- *  the value it announced — never re-read here. */
+/** Pushes each `[branch, sha]` to `remote`'s declared repo — atomically when there is more than one — and, once the push
+ *  succeeded, writes each copy `refs/remotes/<remote>/<branch>` to its sha. ADR 0052 Status 追記(#2827): a push from the
+ *  board repo does not move the checkout's copies, so the board writes them, inside the caller's ADR 0243 口. The sha is
+ *  the caller's — the value it announced — never re-read here. */
 export function authedPush(
   auth: GitHubAuth | undefined,
   source: GitSource,
   timeoutMs: number,
   branches: ReadonlyArray<readonly [branch: string, sha: string]>,
+  remote: PushRemote = "origin",
 ): void {
   const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
   const flags = branches.length > 1 ? ["--atomic"] : [];
-  inBoardRepo(auth, source, timeoutMs, "push", (call, url) => runAuthedGit(call, ["push", ...flags, "--", url, ...refspecs]));
+  inBoardRepo(auth, source, timeoutMs, "push", (call, url) => runAuthedGit(call, ["push", ...flags, "--", url, ...refspecs]), remote);
   const checkout = sourceCheckout(source);
-  for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch), sha);
+  for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch, remote), sha);
 }
 
 /** ADR 0339 決定5: `clone` runs from the board-owned HOME, so no checkout's config — not even a parent of
