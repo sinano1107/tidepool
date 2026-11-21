@@ -1,5 +1,7 @@
 # 無人 merge は merge の瞬間に着地の面を読み直し、読めない profile は agent の quarantine に落とす
 
+**Status 追記: 決定2 の面変化の question も、PR の merge question の1つの書き手を通る —— 同じ外の head の question が開いていれば足さず、外の head が違えば開いた question を観測で閉じて立て直す。本文は外の head があればそれを先に言い、面の変化は後ろに添える([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) 決定1・2、2026-11-21、issue #3402)。**
+
 **Status 追記: 決定1 の「保護・ダイヤル・risk flag から面を決める」入力に「人間の根」が足されて4つになる —— 人間担当の根は常に merge question に倒れ、面の判定の中で読む順は 保護 → 人間の根 → ダイヤル(profile → 門 → 面の順はそのまま)。判定を1つにすることはそのまま。決定3 の「profile が読めなければ…agent を quarantine に落とす」は agent についての決定のままで、`human` は agent として解決せず、profile なしで返す([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定13、2026-11-15、issue #3178)。**
 
 **Status 追記: 帰結が別 issue に回した「解決できてダイヤルを持たない profile」の枝は ADR 0228 で閉じた** —— 組み込みは work を実行しないので、その枝に届くのは registry の無い盤面だけになる。決定4 の「組み込みを上書きするエントリの削除は今日どおり許す」は、work の参照について狭まった。
