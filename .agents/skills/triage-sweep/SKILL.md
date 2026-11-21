@@ -33,7 +33,10 @@ Watch for a **family** as you cluster: issues one design mechanism would explain
 
 Print the clusters to the user — issue numbers and a one-line reason each, plus any family candidate — then go on without waiting.
 
-**Codex login.** The one wait: when any picked issue needs a real `codex` run — a Codex worker, the Codex harness, or Codex CLI behaviour — the base's ChatGPT login is likely dead. Clones share one refresh token, and the first clone that refreshed it in an earlier sweep left the base holding a spent one. Before dispatching, ask the user to log in again in the base and wait for them: `limactl start tidepool-sweep-base`, then they run `! limactl shell tidepool-sweep-base bash -lc 'codex login --device-auth'`, then `limactl stop tidepool-sweep-base`. `codex login status` reads only the file and reports a dead login as logged in, so it is no check.
+**Logins.** The one wait. Ask for both logins below in a single start of the base, before dispatching, and wait for the user: `limactl start tidepool-sweep-base`, the logins that apply, then `limactl stop tidepool-sweep-base`. Lima cannot clone a running instance, so a base started mid-run breaks the next sub-agent's `take-vm-slot.sh`.
+
+- **Codex**, when any picked issue needs a real `codex` run — a Codex worker, the Codex harness, or Codex CLI behaviour. The base's ChatGPT login is likely dead: clones share one refresh token, and the first clone that refreshed it in an earlier sweep left the base holding a spent one. The user runs `! limactl shell tidepool-sweep-base bash -lc 'codex login --device-auth'`. `codex login status` reads only the file and reports a dead login as logged in, so it is no check. The login lands in `~/.codex`, not in the board's `TIDEPOOL_CODEX_HOME` (default `~/.tidepool/codex`); PROCEDURE.md tells sub-agents to point a board at it.
+- **GitHub**, when any picked issue needs a board on real GitHub — a remote-backed workspace on github.com, opening or merging a PR, the broker. The base's GitHub user token is likely dead (#3255). The user runs `! limactl shell tidepool-sweep-base bash -lc 'cd ~/tidepool && TIDEPOOL_GITHUB_TOKEN_FILE=$HOME/.tidepool/github-token npm run github-login'`; check it with `limactl shell tidepool-sweep-base bash -lc 'curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(cat ~/.tidepool/github-token)" https://api.github.com/user'` before stopping the base — anything but `200` means log in again.
 
 ## 4. Dispatch
 
@@ -42,7 +45,7 @@ One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), all dispa
 - the absolute path of [PROCEDURE.md](PROCEDURE.md) (this skill's base directory + `PROCEDURE.md`), with the instruction to read it first and follow it;
 - the cluster's issue numbers, newest first, and the reason they were grouped;
 - the session link, or the fact that there is none;
-- whether `tidepool-sweep-base` exists.
+- whether `tidepool-sweep-base` exists, and which of the step 3 logins were refreshed this run (with the GitHub one, its token path `~/.tidepool/github-token`).
 
 After dispatching, end your turn. Each sub-agent's report arrives as its own message; act on step 5 only from those.
 
