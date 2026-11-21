@@ -344,7 +344,7 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 const subcommandOf = (args: string[]): string => args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
 
 /** `timeout` kills the call; `bound` is the limit its expiry names (the stage's, when the call ran on what remained of it). */
-function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string, timeout?: number, bound = timeout): Buffer {
+function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, timeout?: number, bound = timeout): Buffer {
   try {
     return execFileSync("git", args, {
       cwd,
@@ -372,7 +372,7 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
 
 /** ADR 0357 決定1: the one runner for the git the board runs on a worker's tree or repo, bounded by one constant. ADR 0364 決定3: a call
  *  inside one bounded stage runs on what remains before the stage's `deadline`, and its expiry names the constant. */
-function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string, deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS): Buffer {
+function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS): Buffer {
   const remaining = deadline - Date.now();
   // execFileSync の timeout 0 は無期限 —— 使い切った段では撃たない
   if (remaining <= 0) throw new WorkerTreeGitTimeoutError(subcommandOf(args), WORKER_TREE_GIT_TIMEOUT_MS, "");
@@ -385,7 +385,7 @@ export function workerRepoGit(cwd: string, ...args: string[]): string {
 }
 
 /** ADR 0364 決定3: git inside the copy-and-verify stage, all bounded by the stage's one `deadline`. */
-export function workerRepoGitUntil(deadline: number, cwd: string, args: string[], input?: string): string {
+export function workerRepoGitUntil(deadline: number, cwd: string, args: string[], input?: string | Buffer): string {
   return runOnWorkerTree(cwd, args, undefined, input, deadline).toString().trim();
 }
 

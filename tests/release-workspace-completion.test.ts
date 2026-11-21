@@ -891,7 +891,7 @@ it("退避の WIP が名前の場所に欠けた blob を持てば、staging rep
   }
 });
 
-it("集合の blob の名前の場所の loose が別の blob の中身なら、完了の門の確かめが破損に数えて入れ直し、差し替えた loose を退避する(ADR 0398 決定1)", async () => {
+it("集合の blob の名前の場所の loose が別の blob の中身なら、完了の門の確かめが破損に数えて入れ直し、差し替えた loose を残す dir へ移す(ADR 0398 決定1)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
     const blob = damagedHeldByWorker(db, place, task, ws);
@@ -907,9 +907,61 @@ it("集合の blob の名前の場所の loose が別の blob の中身なら、
   }
 });
 
+/** worker が `sub/a.txt` と `sub/b.txt` を自前で持って門で一度運び、root に1 commit 積む。2つの blob の id を返す。 */
+function twoHeldByWorker(db: Db, place: RunPlace, task: Task): [string, string] {
+  mkdirSync(join(place.path, "sub"));
+  commitWork(place.path, "sub/a.txt", "a by the worker\n");
+  commitWork(place.path, "sub/b.txt", "b by the worker\n");
+  gateFetch(db, place, task);
+  commitWork(place.path, "more.txt", "more\n");
+  return [git(place.path, "rev-parse", "HEAD:sub/a.txt"), git(place.path, "rev-parse", "HEAD:sub/b.txt")];
+}
+
+/** 名前の場所の objects の下の残す dir へ移された loose の id。 */
+const damagedIds = (ws: WorkspaceConfig) => damagedLoose(ws).map((path) => path.slice(path.lastIndexOf("/") + 1)).sort();
+
+it("集合の2つの blob の名前の場所の loose が互いの中身なら、完了の門の確かめが両方を破損に数えて入れ直し、両方の loose を残す dir へ移す(ADR 0398 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const [a, b] = twoHeldByWorker(db, place, task);
+    const [bytesA, bytesB] = [readFileSync(looseObject(ws.path, a)), readFileSync(looseObject(ws.path, b))];
+    // 名前の集合は揃ったまま —— object ごとに照合しないと素通しする
+    rmSync(looseObject(ws.path, a));
+    rmSync(looseObject(ws.path, b));
+    writeFileSync(looseObject(ws.path, a), bytesB);
+    writeFileSync(looseObject(ws.path, b), bytesA);
+
+    gateFetch(db, place, task);
+
+    expect(git(ws.path, "cat-file", "-p", a)).toBe("a by the worker");
+    expect(git(ws.path, "cat-file", "-p", b)).toBe("b by the worker");
+    expect(damagedIds(ws)).toEqual([a, b].sort());
+  } finally {
+    db.close();
+  }
+});
+
+it("集合の blob の名前の場所の loose が集合の別の blob の中身なら、その loose だけを残す dir へ移し、別の blob の健全な loose は残す(ADR 0398 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const [a, b] = twoHeldByWorker(db, place, task);
+    const bytesB = readFileSync(looseObject(ws.path, b));
+    rmSync(looseObject(ws.path, a));
+    writeFileSync(looseObject(ws.path, a), bytesB);
+
+    gateFetch(db, place, task);
+
+    expect(git(ws.path, "cat-file", "-p", a)).toBe("a by the worker");
+    expect(damagedIds(ws)).toEqual([a]);
+    expect(readFileSync(looseObject(ws.path, b))).toEqual(bytesB);
+  } finally {
+    db.close();
+  }
+});
+
 // 受け入れた限界(ADR 0398 決定2・3): 借りている tree の下の object は守らない —— 集合の walk は借りている `sub` で止まり、staging repo が
 // 自前の store に書いた blob を数えない。名前の場所で先に欠けた blob は、最後の写しごと checkout が消える
-it("借りている tree の下の object は守らない: 名前の場所で欠けた blob の下に WIP を積んでも、未決着の解放は今どおり運んで checkout を消す(ADR 0398 決定2・3)", async () => {
+it("借りている tree の下の object は守らない: その blob が名前の場所で欠けていても、root に WIP を足した未決着の解放は今どおり運んで checkout を消す(ADR 0398 決定2・3)", async () => {
   const { db, task, ws, place } = await pickedUpSession("work", (named) => {
     mkdirSync(join(named.path, "sub"));
     commitWork(named.path, "sub/kept.txt", "kept by the named place\n");
