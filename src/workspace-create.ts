@@ -271,13 +271,7 @@ export class BoardNamedProtectedBranchError extends Error {
   }
 }
 
-/** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
- *  `notes`, `protected`, `review_allowed_commands` (ADR 0061), and
- *  `allowed_domains` (ADR 0072) are editable
- *  — changing `path`/`repo`/`branch` re-points the entry at a different real
- *  checkout, which stays a manual edit (the registry is a git repository).
- *  A partial patch throughout: an absent field is untouched, which is what
- *  lets the confirmation gate below judge the payload alone. */
+/** A partial patch to workspace Settings. `path`, `repo` and `branch` are registry edits. */
 export interface UpdateWorkspaceInput {
   name: string;
   /** Provided → set; empty string → remove the field. */
@@ -290,6 +284,10 @@ export interface UpdateWorkspaceInput {
   review_allowed_commands?: string[];
   /** ADR 0072's workspace-scoped network egress lift. Empty removes it. */
   allowed_domains?: string[];
+  /** ADR 0395 決定4: additional paths that require a human merge. Empty removes the declaration. */
+  human_merge_paths?: string[];
+  /** Declaration the Settings edit was based on. Kept through the confirmation retry. */
+  expected_human_merge_paths?: string[];
   /** Consent to every dangerous value in this payload, not to unprotecting
    *  alone (ADR 0061 決定1) — one boolean, the refusal's reason codes say
    *  what it bought. */
@@ -302,21 +300,23 @@ export interface UpdateWorkspaceInput {
 export type DangerousWorkspaceValueReason =
   | "unprotect"
   | "review_allowed_commands_set"
-  | "allowed_domains_set";
+  | "allowed_domains_set"
+  | "human_merge_paths_removed";
 
-/** Pure judgment of which values in *this payload* widen what agents may do
- *  (ADR 0061 決定2): removing protection, and setting the review write-floor
- *  lift to a non-empty list. It never reads the entry being edited — the
- *  update is a partial patch, so a field the human did not touch is simply
- *  absent, and the empty array (clearing the list) moves in the safe
- *  direction and asks nothing. */
+/** ADR 0061 決定2: omitted fields are untouched. ADR 0395 決定4: removing
+ *  any declared human merge path widens what can land unattended. */
 function dangerousWorkspaceValues(
-  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands" | "allowed_domains">,
+  input: UpdateWorkspaceInput,
+  declaredMergePaths: readonly string[],
 ): DangerousWorkspaceValueReason[] {
   const reasons: DangerousWorkspaceValueReason[] = [];
   if (input.protected === false) reasons.push("unprotect");
   if (input.review_allowed_commands?.length) reasons.push("review_allowed_commands_set");
   if (input.allowed_domains?.length) reasons.push("allowed_domains_set");
+  if (input.human_merge_paths !== undefined) {
+    const nextPaths = new Set(input.human_merge_paths);
+    if (declaredMergePaths.some((path) => !nextPaths.has(path))) reasons.push("human_merge_paths_removed");
+  }
   return reasons;
 }
 
@@ -335,6 +335,18 @@ export class WorkspaceConfirmationRequiredError extends Error {
       `workspace "${name}" edit contains dangerous values (${reasons.join(", ")}); resubmit with confirm: true`,
     );
     this.name = "WorkspaceConfirmationRequiredError";
+  }
+}
+
+export class WorkspaceMergePathsChangedError extends Error {
+  constructor(name: string) {
+    super(`workspace "${name}" human merge paths changed. Reload Settings and review your edit.`);
+  }
+}
+
+function assertMergePathsUnchanged(name: string, expected: readonly string[], declared: unknown): void {
+  if (!Array.isArray(declared) || declared.length !== expected.length || declared.some((path, index) => path !== expected[index])) {
+    throw new WorkspaceMergePathsChangedError(name);
   }
 }
 
@@ -360,6 +372,10 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
+  // ADR 0395 決定4: a confirmation covers only the paths in the declaration the human reviewed.
+  const expected = input.human_merge_paths === undefined ? undefined : input.expected_human_merge_paths;
+  const declared = entry.human_merge_paths ?? [];
+  if (expected !== undefined) assertMergePathsUnchanged(input.name, expected, declared);
   if (input.protected === false) {
     const path = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
     const protection = workspaceProtectionReader(deps.registry.dir)(entry, path);
@@ -376,7 +392,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (input.allowed_domains !== undefined) {
     assertValidAllowedDomains(input.allowed_domains);
   }
-  const dangerous = dangerousWorkspaceValues(input);
+  const dangerous = dangerousWorkspaceValues(input, declared);
   if (dangerous.length > 0 && input.confirm !== true) {
     throw new WorkspaceConfirmationRequiredError(input.name, dangerous);
   }
@@ -399,7 +415,11 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
     if (input.allowed_domains.length === 0) delete next.allowed_domains;
     else next.allowed_domains = input.allowed_domains;
   }
-  commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
+  if (input.human_merge_paths !== undefined) {
+    if (input.human_merge_paths.length === 0) delete next.human_merge_paths;
+    else next.human_merge_paths = input.human_merge_paths;
+  }
+  commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`, expected);
 }
 
 /** ADR 0087 決定1/4 の workspace 半分: registry エントリだけを committed main から
@@ -959,6 +979,7 @@ function commitWorkspaceEntry(
   name: string,
   entry: WorkspaceEntry,
   message: string,
+  expectedMergePaths?: readonly string[],
 ): void {
   commitToRegistry(
     deps.registry,
@@ -966,6 +987,11 @@ function commitWorkspaceEntry(
     (worktreeDir) => {
       const file = join(worktreeDir, "workspaces.yaml");
       const doc = parseDocument(readFileSync(file, "utf8"));
+      if (expectedMergePaths !== undefined) {
+        const current = ownEntry(doc.toJS() as Record<string, WorkspaceEntry>, name);
+        if (!current) throw new UnknownWorkspaceError(name);
+        assertMergePathsUnchanged(name, expectedMergePaths, current.human_merge_paths ?? []);
+      }
       doc.set(name, entry);
       writeFileSync(file, doc.toString());
     },

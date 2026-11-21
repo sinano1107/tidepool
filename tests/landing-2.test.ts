@@ -814,10 +814,13 @@ it("CI 赤の merge question を収束が書き換えの question に取り替�
   expect(original.purpose).toBe(CI_RED_PURPOSE);
   expect(original.question_pr_merge_reason).toBe("ci_red");
 
-  const head = await moveRecordedHead(c, "rewritten");
+  const before = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
+  const head = await pushOutsideBoard(c.workspace, c.work.id, before, "CODEOWNERS");
   await convergeOn(c.landing, c.work.id);
 
-  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([textA4c(c.target)]);
+  expect(mergeQuestions(c.db).map(({ purpose }) => purpose)).toEqual([
+    `${textA4c(c.target)}\n\nThis PR changes paths that require a human merge. "CODEOWNERS".`,
+  ]);
   expect(getTask(c.db, original.id)).toEqual({ ...original, status: "done" });
   const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
   expect(question).toMatchObject({

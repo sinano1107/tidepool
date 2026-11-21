@@ -1554,8 +1554,10 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const [prot, setProt] = React.useState(!!ws.protected);
   const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
+  const [mergePaths, setMergePaths] = React.useState(ws.human_merge_paths ?? []);
+  const [originalMergePaths, setOriginalMergePaths] = React.useState(ws.human_merge_paths ?? []);
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []);
+  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []) || !sameStrings(mergePaths, originalMergePaths);
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => {
     edit.close();
@@ -1566,12 +1568,18 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
     setProt(!!ws.protected);
     setCmds(ws.review_allowed_commands ?? []);
     setDomains(ws.allowed_domains ?? []);
+    setMergePaths(ws.human_merge_paths ?? []);
+    setOriginalMergePaths(ws.human_merge_paths ?? []);
   });
   const save = () => {
     const body = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
+    if (!sameStrings(mergePaths, originalMergePaths)) {
+      body.human_merge_paths = mergePaths;
+      body.expected_human_merge_paths = originalMergePaths;
+    }
     submit(async (confirm) => {
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", ws.name);
@@ -1609,6 +1617,14 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       tags: ws.allowed_domains ?? [],
       unsetLabel: "external fetches unavailable"
     }
+  ), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "human merge paths",
+      kind: (ws.human_merge_paths ?? []).length ? "tags" : "unset",
+      tags: ws.human_merge_paths ?? [],
+      unsetLabel: "built-in workflow and CODEOWNERS paths only"
+    }
   ), publishable && /* @__PURE__ */ React.createElement(PublishWorkspace, { ws, say, onPublished: onChanged })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1633,6 +1649,15 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       label: "Allowed domains",
       description: "domains this workspace's worker sessions may reach. Empty keeps external fetches closed (confirmed on save if non-empty).",
       placeholder: 'domain \u2014 e.g. "registry.npmjs.org"'
+    }
+  ), /* @__PURE__ */ React.createElement(
+    FreeEntryAllowlistInput,
+    {
+      values: mergePaths,
+      onChange: setMergePaths,
+      label: "Human merge paths",
+      description: "Repository-relative globs for additional paths that require a human merge. Name any leading dot explicitly. .github/workflows/** and CODEOWNERS in the root, .github and docs always require a human merge.",
+      placeholder: 'path glob \u2014 e.g. "deploy/**"'
     }
   ), /* @__PURE__ */ React.createElement(
     EditActions,
@@ -1833,7 +1858,8 @@ const DANGEROUS_REASON_LABEL = {
   allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
   unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
   review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
-  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
+  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains.",
+  human_merge_paths_removed: "Human merge paths are being removed. Changes matching those paths may become eligible for unattended merge."
 };
 const LIVE_CHECKOUT_SIGNAL_LABEL = {
   uncommitted_changes: "The checkout has uncommitted changes or untracked files \u2014 someone is working in this tree right now.",

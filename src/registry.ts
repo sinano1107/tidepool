@@ -446,6 +446,8 @@ const workspaceEntrySchema = z.object({
   /** Domains this workspace's worker sessions may reach through the sandbox
    *  network proxy (issue #321 / ADR 0072). Absent keeps egress closed. */
   allowed_domains: z.array(z.string()).optional(),
+  /** ADR 0395 決定4: repository-relative globs adding to the mandatory human merge paths. */
+  human_merge_paths: z.array(z.string()).optional(),
 });
 
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on

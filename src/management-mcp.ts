@@ -543,6 +543,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // door has no `confirm`, so the domain gate always rejects it.
         review_allowed_commands: z.array(z.string()).optional(),
         allowed_domains: z.array(z.string()).optional(),
+        // ADR 0395 決定4: adding a human merge path is safe, removing one needs confirmation in the WebUI.
+        human_merge_paths: z.array(z.string()).optional(),
       }),
     },
     async (input) => {

@@ -197,6 +197,7 @@ import {
   type WorkspaceAdmin,
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
+  WorkspaceMergePathsChangedError,
   WorkspaceRegistryUnprotectError,
 } from "./workspace-create.js";
 
@@ -362,6 +363,8 @@ const updateWorkspaceSchema = z.object({
   // this file's usual split. Absent → untouched; `[]` removes the key.
   review_allowed_commands: z.array(z.string()).optional(),
   allowed_domains: z.array(z.string()).optional(),
+  human_merge_paths: z.array(z.string()).optional(),
+  expected_human_merge_paths: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
 });
 
@@ -962,6 +965,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // true once the human accepts — same round trip a direct API caller
         // gets, no client-side pre-judgment of danger (ADR 0027)
         sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
+      } else if (err instanceof WorkspaceMergePathsChangedError) {
+        sendJson(res.status(409), { error: err.message });
       } else if (err instanceof WorkspaceRegistryUnprotectError) {
         // ADR 0377 決定6 / ADR 0381 決定1: confirmation cannot override protection computed from the declared repo.
         sendJson(res.status(403), { error: err.message });

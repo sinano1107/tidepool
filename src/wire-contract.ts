@@ -389,6 +389,7 @@ export interface WireContract {
       protectionReason?: "registry_repository" | "unreadable_registry_origin";
       review_allowed_commands?: string[];
       allowed_domains?: string[];
+      human_merge_paths?: string[];
     }>;
     /** 値集合の正本は src/workspace.ts の WorkspacesBaseDirSource(ADR 0082 決定1)。 */
     workspacesBaseDir: { path: string; source: "configured" | "default" };
@@ -401,7 +402,7 @@ export interface WireContract {
     clone_landing: string | null;
     claude_settings_unhideable_warning?: string;
   };
-  "PATCH /api/workspaces/:name 409": DangerousValuesConflict;
+  "PATCH /api/workspaces/:name 409": DangerousValuesConflict | { error: string; confirm_required?: never };
   /** 残る checkout の場所(ADR 0087 決定4)。 */
   "DELETE /api/workspaces/:name": { checkout: string };
   /** `open_workbench` の応答(spec #3273 text A14)。 */

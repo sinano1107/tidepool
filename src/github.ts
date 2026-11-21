@@ -79,12 +79,18 @@ export type CiStatus = "pending" | "success" | "failure" | "unreported";
 /** GitHub's own PR state (ADR 0229 決定2). */
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
-/** The PR's state, who merged it and its head, read in one call (ADR 0265 決定5 / ADR 0376 決定1): `mergedBy` is `gh`'s
- *  `mergedBy.login`, null unless merged. */
+export interface PrBase {
+  branch: string;
+  sha: string;
+}
+
+/** The PR's state, who merged it, head and live base, read together (ADR 0265 決定5 / ADR 0376 決定1 / ADR 0395 決定4).
+ *  `mergedBy` is `gh`'s `mergedBy.login`, null unless merged. */
 export interface PrStateRead {
   state: PrState;
   mergedBy: string | null;
   head: string;
+  base?: PrBase;
 }
 
 /** The PR found on a task branch, whatever its state (ADR 0241 決定4). */
@@ -101,6 +107,24 @@ export interface FoundPr {
 export type PrStatus =
   | (PrStateRead & { ci: CiStatus })
   | { ci: "pending"; state: "unreadable" };
+
+type GhPrState = {
+  state: PrState;
+  headRefOid: string;
+  mergedBy: { login: string } | null;
+  baseRefName?: string | null;
+  baseRefOid?: string | null;
+};
+
+function prStateRead(parsed: GhPrState): PrStateRead {
+  const { state, mergedBy, headRefOid, baseRefName, baseRefOid } = parsed;
+  return {
+    state,
+    mergedBy: mergedBy?.login ?? null,
+    head: headRefOid,
+    ...(baseRefName && baseRefOid && { base: { branch: baseRefName, sha: baseRefOid } }),
+  };
+}
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
  *  reference, as part of getIssue's contract: the referenced issue is gone
@@ -142,8 +166,9 @@ export interface GitHubClient {
   preparePush(input: PushBranchInput): Promise<(sha: string) => void>;
   readPullRequest(ref: PrRef): Promise<PrStatus>;
   /** Merges only while the PR's head is still `head` — the one whose CI was
-   *  read (ADR 0231 決定1); GitHub refuses it once the head has moved. */
-  mergePullRequest(ref: PrRef, head: string): Promise<void>;
+   *  read (ADR 0231 決定1); GitHub refuses it once the head has moved.
+   *  `beforeMerge` may refuse in the same synchronous section as spawn, after token acquisition (ADR 0330 決定1). */
+  mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void>;
   /** The PR's state and who merged it (ADR 0079 決定3 / ADR 0229 / ADR 0265 決定5) — the read the board needs to
    *  tell "the merge is still mine to make" from "someone merged or closed it
    *  outside the board". Only asked on the two surfaces the board holds a
@@ -240,12 +265,13 @@ export class GhCliClient implements GitHubClient {
    *  `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(ADR 0330 決定1)。
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
-  private async gh(workspace: WorkspaceConfig, args: string[]): Promise<string> {
+  private async gh(workspace: WorkspaceConfig, args: string[], beforeSpawn?: () => void): Promise<string> {
     const cwd = workspace.path;
     const repo = workspaceNetworkDestination(workspace)?.key;
     if (repo === undefined) throw new Error(`\`gh ${args[0]} ${args[1]}\` cannot run: workspace ${workspace.name} has no declared GitHub repo`);
     await this.auth.ensureToken(repo);
     if (workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
+    beforeSpawn?.();
     try {
       return (await execFileAsync("gh", [...args, "-R", repo], { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
@@ -288,30 +314,27 @@ export class GhCliClient implements GitHubClient {
     // `gh pr view --json statusCheckRollup` は未設定なら exit 0 + 空配列を返し、
     // 非ゼロ終了は「読めなかった」だけを意味する。token 取得(仲介への往復)も
     // 同じ try に入れて、どちらの失敗も pending / unreadable に倒す。
-    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string; mergedBy: { login: string } | null };
+    let parsed: GhPrState & { statusCheckRollup?: RollupEntry[] };
     try {
       parsed = JSON.parse(
-        await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"]),
+        await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid"]),
       );
     } catch {
       return { ci: "pending", state: "unreadable" };
     }
     return {
       ci: ciStatusOf(parsed.statusCheckRollup ?? []),
-      state: parsed.state,
-      head: parsed.headRefOid,
-      mergedBy: parsed.mergedBy?.login ?? null,
+      ...prStateRead(parsed),
     };
   }
 
-  async mergePullRequest(ref: PrRef, head: string): Promise<void> {
-    await this.gh(ref.workspace, ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head]);
+  async mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void> {
+    await this.gh(ref.workspace, ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head], beforeMerge);
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
-    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy,headRefOid"]);
-    const { state, mergedBy, headRefOid } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null; headRefOid: string };
-    return { state, mergedBy: mergedBy?.login ?? null, head: headRefOid };
+    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy,headRefOid,baseRefName,baseRefOid"]);
+    return prStateRead(JSON.parse(output) as GhPrState);
   }
 
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
