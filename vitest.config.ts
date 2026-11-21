@@ -12,8 +12,10 @@ const canary = process.env.TIDEPOOL_CANARY !== undefined;
 
 export default defineConfig({
   test: {
-    // worktree 間の test lock。main process で1度だけ走る面なので globalSetup に置く(worker ごとの setupFiles ではない)
-    globalSetup: ["scripts/test-lock.ts"],
+    // globalSetup は main process で順に走り、worker は main process の env を受け継ぐ。先頭で呼び手の GIT_DIR などを落とすと(#3334)、
+    // 次の test lock の `git rev-parse --git-common-dir` も全 worker の git も覆う —— 順を入れ替えると lock が呼び手の repo に queue を作る。
+    // test lock は worktree 間の直列化。main process で1度だけ走る面なので globalSetup に置く(worker ごとの setupFiles ではない)
+    globalSetup: ["scripts/repo-location-git-env.mjs", "scripts/test-lock.ts"],
     // --shard を CI の実測の所要秒で均す(scripts/test-sequencer.ts)。shard しない run の順は既定のまま
     sequence: { sequencer: DurationSequencer },
     // テストの git(src/ から起動するものも含む)に auto maintenance を走らせない(issue #842)
