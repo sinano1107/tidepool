@@ -1720,8 +1720,15 @@ export async function startHumanWork(
     refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task), verb);
     if (refusal) return;
     const now = board.now();
-    fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
-    createTaskBranch(db, workspace, task, now, filledFrom(db, task));
+    try {
+      fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
+      createTaskBranch(db, workspace, task, now, filledFrom(db, task));
+    } catch (err) {
+      if (!(err instanceof LostTaskBranchPresentError)) throw err;
+      // ADR 0392 決定2: その task の failure question(出口は cancel)で止め、workspace の Quarantine に畳まない
+      if (!hasOpenFailureQuestion(db, task.id)) registerFailureQuestion(db, task, `task branch cannot be taken: ${task.title}`, err.message, now, null);
+      refusal = new DomainError(`cannot ${verb}: ${err.message}`);
+    }
   });
   if (refusal) throw refusal;
   // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)
@@ -2402,6 +2409,13 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
   }
 }
 
+/** ADR 0392 決定2: 失われた event が効いている task の `task/<id>` が在る —— 止めるのはその task で、workspace の Quarantine に畳まない。 */
+export class LostTaskBranchPresentError extends Error {
+  constructor(ref: string, value: string) {
+    super(`${ref} is at ${value}, but its task branch was recorded lost when the lost refs were given up, so the board does not take that value as this task's work.`);
+  }
+}
+
 /** タスクブランチを切る sha(ADR 0053)。面接室で走る受験者と root は、面接室が提供する切る元から切る(ADR 0386 決定1 / ADR 0276 決定1)。
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
@@ -2423,6 +2437,8 @@ function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: D
     const source = taskForkSource(db, workspace, task);
     boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
   } else if (hasTaskBranchInForce(db, task.id)) return;
+  // ADR 0392 決定2: 失われた event が効いているのに在る ref は、クラッシュ後の回復と読まず採らずに止まる(give-up の後は届かない状態)
+  else if (taskBranchLostInForce(db, task.id)) throw new LostTaskBranchPresentError(ref, git(workspace.path, "rev-parse", ref));
   const sha = git(workspace.path, "rev-parse", ref);
   // ADR 0273 決定8: 面接室で切る task も列の実環境の名前を残す
   const name = task.workspace ?? workspace.name;
@@ -3066,16 +3082,27 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
  *  `giveUpQuestion`(give-up に答えている workspace の Quarantine、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
- *  行を消す)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒す
+ *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒す
  *  (ADR 0375 決定1・4・9)。根の着地の終わり(同 決定7・8)は書き戻しの後 —— 根かどうかを基準へ戻った ref で読む。失われた ref が無ければ、
  *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, giveUpQuestion?: string): KeptValue[] {
   const giveUp = giveUpQuestion !== undefined;
   const { current, targets } = restoreTargets(db, workspace);
   const lost = lostTargets(workspace, targets);
+  const lostTask = (ref: string) => (ref.startsWith("refs/heads/task/") ? getTask(db, taskIdOfBranch(ref.slice("refs/heads/".length))) : undefined);
+  // ADR 0393 決定3: give-up は開きの後に失われた event を刻むので、disk に在る最後の session の checkout は消されずに残る
+  const keptOnGiveUp = (ref: string) => {
+    const task = lostTask(ref);
+    const checkout = task && taskCheckoutPath(db, task.id);
+    return checkout && existsSync(checkout) ? `. The task checkout at ${checkout} stays even if you give up the lost refs.` : "";
+  };
   if (giveUp) {
     if (lost.length === 0) throw new Error(`no ref of workspace ${workspace.name} is lost — answer \`${RESTORE_THE_BASELINE}\`.`);
-    for (const [ref] of lost) targets.delete(ref);
+    // ADR 0392 決定1: 失われた event を書く `task/<id>` は決着を問わず消す —— 今の値は書き戻しが keep-around で持ち続ける
+    for (const [ref] of lost) {
+      if (lostTask(ref) && current.has(ref)) targets.set(ref, "");
+      else targets.delete(ref);
+    }
     // ADR 0373 決定5: 書き戻しの前に保護ブランチの ref が在ることを明示で確かめる —— purely-local では後半の休止がそれを読まず、空の `git init` が通ってしまう(#3242)
     const branch = protectedBranch(workspace);
     if (!current.has(`refs/heads/${branch}`)) {
@@ -3085,7 +3112,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
     }
   } else if (lost.length > 0) {
     throw new Error(
-      `${lost.map(([ref, sha]) => `cannot restore ${ref} to ${sha}: that commit no longer exists in ${workspace.path}`).join("\n")} Nothing was written. ` +
+      `${lost.map(([ref, sha]) => `cannot restore ${ref} to ${sha}: that commit no longer exists in ${workspace.path}${keptOnGiveUp(ref)}`).join("\n")} Nothing was written. ` +
         `If these are lost for good, answer \`${GIVE_UP_THE_LOST_REFS}\`.`,
     );
   }
@@ -3095,7 +3122,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
   const endLostRootLandings = () => db.transaction(() => lostTasks.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now)))();
   if (giveUp) {
     db.transaction(() => {
-      updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, current.get(ref) ?? "")));
+      updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, lostTask(ref) ? "" : (current.get(ref) ?? ""))));
       appendEvent(db, {
         taskId: null,
         actorId: BOARD_ACTOR_ID,
@@ -3105,7 +3132,7 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
       });
       // ADR 0375 決定1・9: 失われた `task/<id>` ごとに task へ event を残す —— 後の段で回答が拒まれても残る
       lostTasks = lost.flatMap(([ref, sha]) => {
-        const task = ref.startsWith("refs/heads/task/") ? getTask(db, taskIdOfBranch(ref.slice("refs/heads/".length))) : undefined;
+        const task = lostTask(ref);
         if (!task) return [];
         appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: now });
         return [task.id];
@@ -3499,15 +3526,25 @@ function releaseTaskCheckout(
   } catch (err) {
     quarantineWorkspace(db, namedPlace.name, err, now);
   }
-  removeReleasedTaskCheckout(db, task.id);
+  removeReleasedTaskCheckout(db, task.id, now);
 }
 
-/** ADR 0369 決定7: drift で名前を解けなくても、運び終えた session の checkout は消せる。 */
-export function removeReleasedTaskCheckout(db: Db, taskId: string): void {
+/** ADR 0369 決定7: drift で名前を解けなくても、運び終えた session の checkout は消せる。
+ *  ADR 0393 決定1: 開きの後に失われた event が刻まれていれば消さず、残したことを1回だけ刻む —— 作り直されて効かなくなっても読む。 */
+export function removeReleasedTaskCheckout(db: Db, taskId: string, now: Date): void {
   const checkout = taskCheckoutPath(db, taskId);
-  if (checkout !== undefined && taskCheckoutWasReleased(db, taskId, checkout)) {
-    removeBoardCheckout(checkout, CHECKOUT_LAYOUT.task.parents);
+  if (checkout === undefined || !taskCheckoutWasReleased(db, taskId, checkout)) return;
+  if ((latestEventOfTask(db, taskId, "task_branch_lost")?.id ?? 0) > latestEventOfTask(db, taskId, "task_checkout_opened")!.id) {
+    recordTaskCheckoutKept(db, taskId, checkout, now);
+    return;
   }
+  removeBoardCheckout(checkout, CHECKOUT_LAYOUT.task.parents);
+}
+
+/** ADR 0393 決定3: disk に在る checkout だけを、同じ path に未だ刻んでいなければ残したと刻む。 */
+function recordTaskCheckoutKept(db: Db, taskId: string, path: string, now: Date): void {
+  if (!existsSync(path) || latestEventOfTask(db, taskId, "task_checkout_kept")?.payload.path === path) return;
+  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_kept", path }, at: now });
 }
 
 /** この session の読み専用の checkout を消す(冪等)。issue #3105 の spec: 記録の価値の無い派生物なので、決着が落ちて task の checkout を
@@ -3546,8 +3583,8 @@ export function redoOwedReleases(
 }
 
 /** ADR 0369 決定7: 着け先が `name` の、解放済みでまだ残る最後の session の checkout を消す —— 消せずに投げても、次の回答が消し直す。 */
-export function removeReleasedTaskCheckoutsOn(db: Db, name: string, defaultWorkspaceName: string | undefined): void {
-  for (const task of tasksReleasedOn(db, name, defaultWorkspaceName)) removeReleasedTaskCheckout(db, task.id);
+export function removeReleasedTaskCheckoutsOn(db: Db, name: string, defaultWorkspaceName: string | undefined, now: Date): void {
+  for (const task of tasksReleasedOn(db, name, defaultWorkspaceName)) removeReleasedTaskCheckout(db, task.id, now);
 }
 
 /** ADR 0369 決定7: tip と WIP が名前の場所のタスクブランチに着けば `task_checkout_released` を刻んで true、worker の repo の故障を
@@ -3563,6 +3600,17 @@ function bringTaskCheckout(
 ): boolean {
   const { namedPlace, path: checkout } = place;
   const taskRef = `refs/heads/${taskBranch(task.id)}`;
+  // ADR 0393 決定2 / ADR 0392 決定3: 失われた event が効いていれば門の有無より前に、`task/<id>` を書かず解放の失敗にして checkout を残す ——
+  // give-up が ref と基準の行を消した後は、門の側が投げて回答が拒まれ続ける
+  const lost = taskBranchLostInForce(db, task.id);
+  if (lost) {
+    const reason = `${taskRef} was lost (its commit ${lost.payload.sha} no longer existed in ${namedPlace.path} when the lost refs were given up), so the board did not write it from the task checkout.`;
+    db.transaction(() => {
+      failTaskOnRelease(db, task, checkout, new Error(reason), now);
+      recordTaskCheckoutKept(db, task.id, checkout, now);
+    })();
+    return false;
+  }
   const gated = completed && completionTreeGateApplies(task);
   let recorded: string | undefined;
   let tipLookupFailure: unknown;
@@ -3672,10 +3720,20 @@ function releaseRefMoved(workspace: WorkspaceConfig, ref: string, when: string, 
 
 /** ADR 0356 決定2: 残った task の checkout を failure question が言う文 —— 中身はタスクブランチに無く、retry は新しい checkout で走る。 */
 export const KEPT_TASK_CHECKOUT = {
-  beyondBranch: "what it holds beyond the task branch is not on the task branch.",
+  // ADR 0393 決定3: タスクブランチが失われた場面でも正しい文
+  beyondBranch: "what it holds beyond the task branch (all of it, if the task branch was lost) is not on the task branch.",
   at: (path: string): string => `The board kept the task checkout at ${path}: ${KEPT_TASK_CHECKOUT.beyondBranch}`,
-  retry: `"retry" picks this task up again at the queue head in a new task checkout made from its task branch. `,
+  retry: `"retry" picks this task up again at the queue head in a new task checkout; if its task branch was lost, the board makes it again from the fork source. `,
 } as const;
+
+function hasOpenFailureQuestion(db: Db, taskId: string): boolean {
+  return db
+    .prepare(
+      `SELECT 1 FROM tasks WHERE type = 'question' AND status = 'todo' AND parent_id = ?
+         AND question_cancel_option IS NOT NULL AND question_breached_decision IS NULL`,
+    )
+    .get(taskId) !== undefined;
+}
 
 /** ADR 0356 決定2: 解放で worker の repo を読めなかった。checkout を残して event に在り処と理由を刻み、`todo` に戻る決着なら
  *  failure question を立てる —— 既に立っている(倒された session)なら足さない。 */
@@ -3684,14 +3742,7 @@ function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: 
   db.transaction(() => {
     appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_release_failed", path, reason }, at: now });
     const current = getTask(db, task.id)!;
-    if (current.status === "done" || current.status === "cancelled") return;
-    const open = db
-      .prepare(
-        `SELECT 1 FROM tasks WHERE type = 'question' AND status = 'todo' AND parent_id = ?
-           AND question_cancel_option IS NOT NULL AND question_breached_decision IS NULL`,
-      )
-      .get(task.id);
-    if (open) return;
+    if (current.status === "done" || current.status === "cancelled" || hasOpenFailureQuestion(db, task.id)) return;
     registerFailureQuestion(
       db,
       current,
@@ -3876,7 +3927,7 @@ function undeliveredMergeBacks(
     )
     .all(root ?? null, defaultWorkspaceName ?? null, workspace.name, root ?? null) as Array<{ id: string }>;
   return rows.flatMap(({ id }) => {
-    // ADR 0380 決定3: 失われた ref は人間の値で残っていても git で読まない
+    // ADR 0380 決定3: 失われた ref は git で読まない —— give-up が消す(ADR 0392 決定1)ので、在っても task の成果ではない
     if (taskBranchLostInForce(db, id) || !taskBranchExists(workspace, id)) return [];
     const target = lineageTaskBranch(db, workspace, getTask(db, id)!);
     return target && branchMergeEffect(workspace, target, taskBranch(id)).changesCandidate ? [{ taskId: id, target }] : [];

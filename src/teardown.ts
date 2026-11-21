@@ -424,7 +424,7 @@ function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task): Wo
       releaseReadCheckouts(db, task.id);
       // ADR 0369 決定6: 理由は解決の失敗だけ —— 残した checkout は受理が運ぶので、在り処を告げない
       quarantineWorkspace(db, err.workspaceName, err, clock.now());
-      removeReleasedTaskCheckout(db, task.id);
+      removeReleasedTaskCheckout(db, task.id, clock.now());
       return undefined;
     }
     // この session の task の checkout が開いていなければ worker も走っておらず、触る checkout が無い(ADR 0356 決定2)。

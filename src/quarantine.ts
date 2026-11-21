@@ -308,11 +308,11 @@ export const QUARANTINES = [
           (room ? "\nA task that starts opening this name after this question was opened adds its own check of the same kind when the answer is checked.\n" : "") +
           // ADR 0369 決定6: 受理は済まなかった解放をやり直す —— 登録した観測者に依らない文だけを本文に置く
           "\nAccepting the answer also finishes the releases this workspace kept from finishing, bringing each such task's last session's work to its task branch.\n" +
-          // ADR 0373 決定2・16: 受理は全 ref が基準と同じことを確かめ、選択肢がそれぞれ何をするかを言う(spec #3273 text B1)
+          // ADR 0373 決定2・16: 受理は全 ref が基準と同じことを確かめ、選択肢がそれぞれ何をするかを言う(spec #3273 text B1)。ADR 0392 決定4: give-up で `task/<id>` が今の値で入らないことを言う
           `\nAnswering checks that every ref of ${room ? `the interview room ${name}` : `workspace ${name}`} equals the board's baseline; nothing that moved is accepted. ` +
           `\`${REPAIRED_BY_HAND}\`: you repaired something other than refs — the board checks and refuses if a ref differs. ` +
           `\`${RESTORE_THE_BASELINE}\`: the board writes every differing ref back to the baseline and keeps each value it removes under \`refs/keep-around/<sha>\`. ` +
-          `\`${GIVE_UP_THE_LOST_REFS}\`: the same, and refs whose commits no longer exist are accepted as they are now; landing ends for a completed root whose work was lost with its branch, and the reviews and repairs attached to such work, and to work that returns into it, are cancelled. ` +
+          `\`${GIVE_UP_THE_LOST_REFS}\`: the same, and refs whose commits no longer exist are accepted as they are now, except a lost task branch \`task/<id>\`: the board keeps its current value under \`refs/keep-around/<sha>\` and deletes it, and the next pickup or start_work of an unsettled task makes it again; landing ends for a completed root whose work was lost with its branch, and the reviews and repairs attached to such work, and to work that returns into it, are cancelled. ` +
           "If a merge back conflicts, the refusal says where to resolve it." +
           (room ? ` \`${RUN_WITH_AN_EMPTY_ROOM}\`: the board re-creates the room empty.` : "") +
           "\n\nAny answer text is kept as a repair note.",
