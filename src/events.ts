@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields, MemoryJudgmentItem } from "./memory.js";
 import type { Provider } from "./provider.js";
+import type { PrMergeQuestionContent } from "./question-kind.js";
 import type { RoutingJudgmentItem, RoutingObject } from "./routing-review.js";
 import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
@@ -313,15 +314,19 @@ export type EventPayload =
   // 着地そのもの(`pr_opened` / `nothing_to_land`)は question が指すタスクの側に
   // 残っているので、この行は payload を持たない
   | { kind: "pr_promotion_observed" }
-  // ADR 0225 決定1: PR 昇格失敗の question への abandon promotion が断念した内容 —— 回答の時点の
-  // タスクブランチの head。断念という人間の判断は question の decision log に、断念した内容はこの事実として
-  // タスクの側に残る(ADR 0073 決定2)。head を読めなかったときは null(「変わった」と扱う)
-  | { kind: "pr_promotion_abandoned"; head: string | null }
+  // ADR 0394 決定5: 断る回答(`pr_merge` と local_merge の hold、abandon promotion)が断った question と、その question が問うた
+  // 内容の写し —— 盤面の部分(tip、書き換えの question では欠けたブランチも)と、`pr_merge` では外の部分。判断は question の decision log に、
+  // 断った内容はこの事実として根に残る(ADR 0073 決定2)。何を止め、いつ効かなくなるかは question の種類で読む(決定6)。tip が null は「変わった」
+  | {
+      kind: "landing_declined";
+      question_id: string;
+      tip: string | null;
+      outside: PrMergeQuestionContent["outside"];
+      missing_branches: string[] | null;
+    }
   // ADR 0289 決定1: ローカル着地の merge 回答が保護ブランチに置いた commit(ff ならタスクブランチの tip、追いつきなら
   // 盤面名義の merge commit)。回答と同じ transaction で根に刻み、収束はこれで根を終わらせる。`pr_merged` のローカルの対
   | { kind: "local_merge_executed"; sha: string }
-  // ADR 0289 決定3: ローカル着地の hold が断った内容 —— 回答の時点のタスクブランチの tip。読めなければ null(「変わった」と扱う)
-  | { kind: "local_merge_held"; head: string | null }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join

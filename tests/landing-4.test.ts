@@ -77,6 +77,7 @@ import {
 import {
   agentQuarantines,
   announceThenCrash,
+  answerHoldOnPr,
   answerLocalMerge,
   answerMerge,
   answerMergeQuestion,
@@ -1145,11 +1146,11 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
   },
 );
 
-// ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着の後の収束は、
-// 刻んだ head から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
-/** 完了した work の PR 昇格を失敗させ、人間が abandon promotion と答えた形。`stampHead: false` は
- *  workspace を持たない回答 —— head を刻めない。 */
-async function abandonedPromotion(name: string, { stampHead = true } = {}) {
+// ADR 0225 / ADR 0394 決定5: abandon promotion が断念するのは question が問うた内容の昇格。付帯子の決着の後の収束は、
+// question が問うた tip から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
+/** 完了した work の PR 昇格を失敗させ、人間が abandon promotion と答えた形。`askedTip: false` は tip を読めずに立った
+ *  失敗 question への回答 —— 断った内容に tip が無い。 */
+async function abandonedPromotion(name: string, { askedTip = true } = {}) {
   const { workspace } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -1171,24 +1172,52 @@ async function abandonedPromotion(name: string, { stampHead = true } = {}) {
   for (const review of listBoard(db).filter((t) => t.parent_id === work.id)) {
     settleReview(db, getTask(db, review.id)!, "shako", clock.now());
   }
-  github.scriptFailure(new Error("token expired"));
-  await landing.converge();
-  github.scriptFailure(null);
+  if (askedTip) {
+    github.scriptFailure(new Error("token expired"));
+    await landing.converge();
+    github.scriptFailure(null);
+  } else {
+    registerPrPromotionFailureQuestion(db, getTask(db, work.id)!, "token expired", clock.now());
+  }
   const [failure] = promotionFailures(db, work.id);
-  await answerPromotion(db, clock, landing, stampHead ? workspace : undefined, failure!, "abandon promotion");
+  await answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion");
   return { db, clock, workspace, github, landing, authority, work: getTask(db, work.id)! };
 }
 
-it("PR 昇格の abandon promotion は task ブランチが動いていても受理され、その時点の tip を根に刻む", async () => {
+// ADR 0225 決定1 / ADR 0394 決定5: 断念するのは question が問うた時点の内容(旧・回答の時点の tip)
+it("PR 昇格の abandon promotion は question を立てた後に task ブランチが動いていても受理され、動いた tip でなく question が問うた tip を根に刻む", async () => {
   const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-abandon-moved-ref");
-  registerPrPromotionFailureQuestion(db, work, "push failed", clock.now());
+  const asked = git(workspace.path, "rev-parse", `task/${work.id}`);
+  registerPrPromotionFailureQuestion(db, work, "push failed", clock.now(), undefined, asked);
   const [failure] = openPromotionQuestions(db, work.id);
   const moved = commitOutOfBand(workspace, `task/${work.id}`);
 
   await expect(answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion")).resolves.toMatchObject({ status: "done" });
 
-  expect(latestEventOfTask(db, work.id, "pr_promotion_abandoned")?.payload.head).toBe(moved);
+  expect(moved).not.toBe(asked);
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_declined", question_id: failure!.id, tip: asked, outside: null, missing_branches: null } },
+  ]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+// ADR 0394 決定5: question が開いている間に届いた修理は、人間が見ていないので断念したことにならない
+it("昇格失敗の question を立てた後に修理が届いてから abandon と答えても、次の収束は昇格の question を立て直す", async () => {
+  const { db, clock, workspace, github, landing, work } = await doneRootWithBaseline("landing-abandon-after-repair");
+  github.scriptFailure(new Error("token expired"));
+  await landing.converge();
+  github.scriptFailure(null);
+  const [failure] = promotionFailures(db, work.id);
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
+
+  await answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion");
+  await landing.converge();
+
+  expect(openPromotionQuestions(db, work.id).map(({ title, purpose }) => ({ title, purpose }))).toEqual([{
+    title: "PR promotion re-asked: ship",
+    purpose: `PR promotion for completed task "ship" was abandoned, but task/${work.id} no longer matches ` +
+      "(or could not be compared with) the content that question asked about. Promote the current content?",
+  }]);
 });
 
 /** 付帯子を登録して決着させる。`repair` があれば盤面の経路で親のブランチの内容を変える: 拾い(親のブランチから fork)、task の
@@ -1292,20 +1321,16 @@ it("PR 昇格を abandon した後に内容が変わっても、別の付帯子�
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
 });
 
-it("立て直した question にもう一度 abandon と答えるとその時点の head が刻まれ、内容を変えない次の決着では何も起きない", async () => {
+it("立て直した question にもう一度 abandon と答えるとその question が問うた tip が刻まれ、内容を変えない次の決着では何も起きない", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-again");
   await settleAttachedChild(db, clock, workspace, work.id, "repair");
   await landing.converge();
   const [reasked] = openPromotionQuestions(db, work.id);
 
   await answerPromotion(db, clock, landing, workspace, reasked!, "abandon promotion");
-  expect(
-    listEvents(db, work.id)
-      .filter((e) => e.kind === "pr_promotion_abandoned")
-      .map((e) => e.payload),
-  ).toEqual([
-    { kind: "pr_promotion_abandoned", head: expect.any(String) },
-    { kind: "pr_promotion_abandoned", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
+  expect(boardEvents(db, work.id, "landing_declined").map(({ payload }) => payload)).toEqual([
+    { kind: "landing_declined", question_id: expect.any(String), tip: expect.any(String), outside: null, missing_branches: null },
+    { kind: "landing_declined", question_id: reasked!.id, tip: git(workspace.path, "rev-parse", `task/${work.id}`), outside: null, missing_branches: null },
   ]);
 
   await settleAttachedChild(db, clock, workspace, work.id);
@@ -1315,18 +1340,20 @@ it("立て直した question にもう一度 abandon と答えるとその時点
   expect(github.requests).toHaveLength(1);
 });
 
-it("head を刻めなかった abandon は、内容を変えない次の決着でも昇格の question を立てる", async () => {
+// ADR 0394 決定5: 写すのは question の tip —— 立てた時点に tip を読めなかった question への abandon は、tip の無い記録になる(旧・回答の時点に読めなかった head)
+it("tip を読めずに立った question への abandon は、内容を変えない次の決着でも昇格の question を立てる", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-no-head", {
-    stampHead: false,
+    askedTip: false,
   });
-  expect(latestEventOfTask(db, work.id, "pr_promotion_abandoned")?.payload.head).toBeNull();
+  expect(latestEventOfTask(db, work.id, "landing_declined")?.payload.tip).toBeNull();
+  const requests = github.requests.length;
 
   await settleAttachedChild(db, clock, workspace, work.id);
 
   await landing.converge();
 
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
-  expect(github.requests).toHaveLength(1);
+  expect(github.requests).toHaveLength(requests);
 });
 
 // ADR 0234 決定3: 扉の外で消えた workspace を着地し直しで解決できないときも「変わった」と読む
@@ -1432,6 +1459,22 @@ it("abandon の後の retry が着地させた根は、次の修理の決着で�
   await landing.converge();
 
   expect(github.pushes).toHaveLength(1);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+});
+
+// ADR 0394 決定6: 読み手は記録が指す question の種類で絞る —— PR の hold を断念と読まない
+it("abandon → retry で PR が開く → PR の merge question に hold、の順に答えても、次の修理の決着で収束は開いた PR へ push する", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-retry-pr-hold");
+  await settleAttachedChild(db, clock, workspace, work.id, "repair");
+  await landing.converge();
+  await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "retry");
+  await answerHoldOnPr({ db, clock, landing, workspace });
+  const pushed = github.pushes.length;
+
+  await settleAttachedChild(db, clock, workspace, work.id, "second-repair");
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "open_pull_request_updated", prNumber: 1 });
+  expect(github.pushes).toHaveLength(pushed + 1);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
 });
 
@@ -2395,7 +2438,8 @@ it("着地の比較: 断念した根の最初の撮りの確認が registry を�
   const { rowless, db, clock, landing, work } = await rowlessRootBesideHeldWorkspace("landing-compare-abandoned-registry", () => {
     throw new Error("the registry cannot be read");
   });
-  appendEvent(db, { taskId: work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_promotion_abandoned", head: git(rowless.path, "rev-parse", "main") }, at: clock.now() });
+  registerPrPromotionFailureQuestion(db, work, "push failed", clock.now(), undefined, git(rowless.path, "rev-parse", "main"));
+  await answerPromotion(db, clock, landing, rowless, openPromotionQuestions(db, work.id)[0]!, "abandon promotion");
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed", error: expect.stringContaining("the registry cannot be read") });
 
@@ -2403,8 +2447,10 @@ it("着地の比較: 断念した根の最初の撮りの確認が registry を�
   expect(holdsBaseline(db, rowless.name)).toBe(false);
 });
 
-it("着地の比較: head を刻めなかった断念の根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {
-  const { workspace, db, landing, work } = await abandonedPromotion("landing-compare-abandoned-no-head", { stampHead: false });
+it("着地の比較: tip を読めずに立った question を断念した根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-abandoned-no-head");
+  registerPrPromotionFailureQuestion(db, work, "token expired", clock.now());
+  await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "abandon promotion");
   git(workspace.path, "tag", "intruder");
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });

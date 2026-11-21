@@ -226,7 +226,7 @@ settled() {
   case "$(jq -r .status <<< "$task")" in
     cancelled) return 0 ;;
     done) [[ "$(jq -r .type <<< "$task")" != work ]] \
-      || api GET "/tasks/$1/events" | jq -e 'any(.[]; .kind | IN("local_merge_executed", "local_merge_held", "nothing_to_land", "landing_finished", "pr_merged"))' > /dev/null ;;
+      || api GET "/tasks/$1/events" | jq -e 'any(.[]; .kind | IN("local_merge_executed", "landing_declined", "nothing_to_land", "landing_finished", "pr_merged"))' > /dev/null ;;
     *) return 1 ;;
   esac
 }

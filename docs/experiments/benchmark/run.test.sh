@@ -167,7 +167,7 @@ case "$method $path" in
     id="${path#/tasks/}"; id="${id%/events}"
     case "$(at_poll "$CASE_DIR/state/status/$id" landed)" in
       landed) echo '[{"kind":"task_registered"},{"kind":"local_merge_executed"}]' ;;
-      held) echo '[{"kind":"local_merge_held"}]' ;;
+      held) echo '[{"kind":"landing_declined"}]' ;;
       *) echo '[{"kind":"task_registered"}]' ;;
     esac ;;
   "GET /tasks/"*)

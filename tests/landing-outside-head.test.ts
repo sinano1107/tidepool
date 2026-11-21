@@ -9,6 +9,7 @@ import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead } from "./fakes.js
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace } from "./harness.js";
 import {
   afterEachPush,
+  answerHoldOnPr,
   answerMergeQuestion,
   autoMerging,
   boardEvents,
@@ -142,6 +143,38 @@ const listedRefusal = (head: string, lastPushed: string, commits: Array<[string,
 
 /** PR #1 の開いている merge question。 */
 const openQuestion = (pr: Awaited<ReturnType<typeof openPushedPr>>) => listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+
+// ADR 0394 決定5・7: tick の question への hold も同じ記録を刻む。tick はキューの行を外しているので立て直さない
+it("tick が立てた盤面の知らない commit の merge question に「hold」と答えると、question の内容を根に刻み、次の tick は question を立て直さない", async () => {
+  const pr = await openPushedPr("outside-head-tick-held", "auto_if_ci_green");
+  const head = await pushOutsideBoard(pr.workspace, pr.work.id);
+  await pr.landing.tick("auto_merge", pr.clock.now());
+
+  const held = await answerHoldOnPr(pr);
+
+  expect(boardEvents(pr.db, pr.work.id, "landing_declined")).toEqual([{
+    actor_id: BOARD_ACTOR_ID,
+    origin: "board",
+    payload: { kind: "landing_declined", question_id: held.id, tip: held.question_landing_tip, outside: { kind: "not_pushed", sha: head }, missing_branches: null },
+  }]);
+  expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
+  expect(mergeQuestions(pr.db)).toEqual([]);
+});
+
+// ADR 0394 決定5: hold は外の部分が今と違っても拒まない —— 断るのは人間が見た question の内容
+it("CI 赤の merge question が開いた後に head が外から進んでも、その question への「hold」は拒まれず、question が問うた内容(外の head 無し)を刻む", async () => {
+  const pr = await openPushedPr("outside-head-hold-after-move", "auto_if_ci_green");
+  pr.github.scriptCiStatus("failure");
+  await pr.landing.tick("auto_merge", pr.clock.now());
+  await pushOutsideBoard(pr.workspace, pr.work.id);
+
+  const held = await answerHoldOnPr(pr);
+
+  expect(getTask(pr.db, held.id)).toMatchObject({ status: "done", question_answer: ["hold"] });
+  expect(boardEvents(pr.db, pr.work.id, "landing_declined").map(({ payload }) => payload)).toEqual([
+    { kind: "landing_declined", question_id: held.id, tip: held.question_landing_tip, outside: null, missing_branches: null },
+  ]);
+});
 
 it("盤面の知らない commit を言う merge question への最初の「merge」は拒まれずに merge する", async () => {
   const pr = await openPushedPr("outside-head-question-merges", "auto_if_ci_green");

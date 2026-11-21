@@ -1780,20 +1780,22 @@ it("ローカル着地の merge 回答が受理されると、保護ブランチ
   expect(openLocalMergeQuestions(db, work.id)).toEqual([]);
 });
 
-// ADR 0289 決定3: hold が断るのはその時点の内容 —— 回答の時点のタスクブランチの tip を根に刻む
-it("ローカル着地の hold 回答は task ブランチが動いていても受理され、その時点の tip を根に刻む", async () => {
+// ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容 —— question の tip を写して根に刻む(旧・回答の時点の tip)
+it("ローカル着地の hold 回答は question を立てた後に task ブランチが動いていても受理され、動いた tip でなく question が問うた tip を根に刻む", async () => {
   const local = await landLocally("local-merge-held");
-  const { workspace, db, work } = local;
+  const { workspace, db, work, question } = local;
+  const asked = git(workspace.path, "rev-parse", `task/${work.id}`);
   const moved = commitOutOfBand(workspace, `task/${work.id}`);
 
   await answerLocalMerge(local, "hold");
 
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
-  expect(boardEvents(db, work.id, "local_merge_held")).toEqual([
+  expect(moved).not.toBe(asked);
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([
     {
       actor_id: BOARD_ACTOR_ID,
       origin: "board",
-      payload: { kind: "local_merge_held", head: moved },
+      payload: { kind: "landing_declined", question_id: question.id, tip: asked, outside: null, missing_branches: null },
     },
   ]);
 });
@@ -1824,6 +1826,33 @@ it("hold の後に修理の後始末が merge back してタスクブランチ�
   expect(reasked[0]!.purpose).toContain(`the content of task/${repair.id} has reached it since`);
 });
 
+// ADR 0394 決定5: question が開いている間に届いた修理は、人間が見ていないので hold が断ったことにならない
+it("question を立てた後に修理が merge back されてから hold と答えても、次の収束は local merge question を立て直す", async () => {
+  const local = await landLocally("local-hold-after-repair");
+  const { workspace, db, landing, work } = local;
+  await mergeBackRepair(local);
+
+  await answerLocalMerge(local, "hold");
+
+  expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([work.id]);
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "local_merge_question" });
+  expect(openLocalMergeQuestions(db, work.id)).toHaveLength(1);
+});
+
+// ADR 0394 決定1: 盤面の部分は記録にだけ使う —— 盤面自身の修理で tip が進んでも `merge` は拒まない
+it("question を立てた後に盤面の修理で tip が進んでいても、ローカル着地の merge は拒まれず今の tip を保護ブランチへ置く", async () => {
+  const local = await landLocally("local-merge-after-repair");
+  const { workspace, db, work, question } = local;
+  await mergeBackRepair(local);
+  const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
+  expect(getTask(db, question.id)!.question_landing_tip).not.toBe(tip);
+
+  await answerLocalMerge(local);
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed");
+});
+
 it("hold の後に内容が変わっていなければ、収束を2回撃っても local merge question を立て直さず、根は着地を待つ完了タスクに数えない", async () => {
   const local = await landLocally("local-hold-unchanged");
   const { workspace, db, landing, work } = local;
@@ -1836,7 +1865,7 @@ it("hold の後に内容が変わっていなければ、収束を2回撃って�
   expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([]);
 });
 
-it("立て直した local merge question に hold と答えるとその時点の head が刻まれ、以後の収束はその head を基準に立て直さない", async () => {
+it("立て直した local merge question に hold と答えるとその question が問うた tip が刻まれ、以後の収束はその tip を基準に立て直さない", async () => {
   const local = await landLocally("local-hold-again");
   const { workspace, db, landing, work } = local;
   await answerLocalMerge(local, "hold");
@@ -1846,9 +1875,9 @@ it("立て直した local merge question に hold と答えるとその時点の
 
   await answerLocalMerge(local, "hold", reasked);
 
-  expect(boardEvents(db, work.id, "local_merge_held").map(({ payload }) => payload)).toEqual([
-    { kind: "local_merge_held", head: expect.any(String) },
-    { kind: "local_merge_held", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
+  expect(boardEvents(db, work.id, "landing_declined").map(({ payload }) => payload)).toEqual([
+    { kind: "landing_declined", question_id: local.question.id, tip: expect.any(String), outside: null, missing_branches: null },
+    { kind: "landing_declined", question_id: reasked.id, tip: git(workspace.path, "rev-parse", `task/${work.id}`), outside: null, missing_branches: null },
   ]);
   await expect(convergeOn(landing, work.id)).resolves.toBeUndefined();
   expect(openLocalMergeQuestions(db, work.id)).toEqual([]);
