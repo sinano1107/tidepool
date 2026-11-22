@@ -156,7 +156,6 @@ import {
   OutOfBandProtectedBranchError,
   PickupGateError,
   prepareHumanWork,
-  protectedBranch,
   quarantineWorkspace,
   RefsMovedError,
   recreateEmptyRoom,
@@ -812,7 +811,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     });
     if (nothingToCancel) throw new DomainError(`${nothingToCancel}.`);
     assertNoSessionRunning();
-    // ADR 0380 決定4: 失われたと数える前に origin から取る(spec #3273 の受理の 7a)
+    // ADR 0380 決定4 / ADR 0395 決定1・3: 失われたと数える前に、タスクブランチの sha は出元 repo、それ以外は origin から取る
     if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
     const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), giveUp ? openQuarantineQuestion(deps.db, "workspace", value)!.id : undefined)) : [];
@@ -1777,7 +1776,7 @@ export async function submitAnswer(
             const refusal = refuseUnaskedHead(
               deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), root,
               {
-                prNumber: mergePr, head: pr.head, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure",
+                prNumber: mergePr, head: pr.head, headRef: pr.headRef, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure",
                 pathReview: deps.landing.reviewMergePaths(mergeWorkspace, root, pr),
               }, now(),
             );
@@ -1823,7 +1822,7 @@ export async function submitAnswer(
             } catch (err) {
               if (err instanceof WorkspaceRepoMismatchError) throw err;
               const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
-              throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, protectedBranch(mergeWorkspace))}`);
+              throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, pr.headRef)}`);
             }
           });
           rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };

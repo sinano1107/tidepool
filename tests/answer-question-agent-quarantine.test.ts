@@ -16,8 +16,9 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   quarantineQuestion,
+  rememberFixtureHeadRepos,
   settleReviews,
 } from "./harness.js";
 
@@ -119,8 +120,9 @@ describe("quarantine が抱えている根への PR 昇格失敗 question の re
         'agent "tako" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question',
     ],
   ] as const)("%s の quarantine が抱えていれば、retry はその quarantine を名指して拒まれ、question は開いたまま残る", async (_, hold, message) => {
-    const { workspace } = await makeRemoteBackedWorkspace("retry-held-by-quarantine");
+    const { workspace } = await makeLandingWorkspace("retry-held-by-quarantine");
     const db = openDb(":memory:");
+    rememberFixtureHeadRepos(db);
     const clock = new FakeClock();
     const github = new FakeGitHubClient();
     authority = () => undefined;

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { git, readCheckoutRemote } from "./git.js";
-import { networkDestination, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
+import { HEAD_REPO_REMOTE, networkDestination, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import { repositoryLabel, sameRepository } from "./repo-access.js";
 import { auditedPosedEventId, getTask, interviewRole, interviewRoomPath, interviewRootIdOf, isRca, latestPosedProbe, posedProbe, type Task, unsettledOpenersOf } from "./tasks.js";
@@ -492,9 +492,6 @@ export function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig):
   const configured = repositoryLabel(origin, { preserveSshUser: true });
   throw new RemoteRepositoryMismatchError(`workspace ${name} declares repo ${declared}, but its checkout's origin is ${configured}. In ${path}, ${remoteRepairInstruction("set-url", repo, declared)}. To move the workspace to another repository, delete it and register it again.`);
 }
-
-/** The checkout's remote for the declared PR head repo (ADR 0395 決定2); origin stays the declared `repo`. */
-export const HEAD_REPO_REMOTE = "head-repo";
 
 /** ADR 0395 決定2 / ADR 0378 決定3・4: the head repo remote is compared like origin — present exactly when declared, and the same
  *  repository. */

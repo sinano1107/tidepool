@@ -8,7 +8,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   mcpClient,
   registerQuestion,
@@ -33,7 +33,7 @@ const fullHandoff = {
 };
 
 it("work タスクの complete_task 成立後、タスクブランチから PR が作成される", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
@@ -59,7 +59,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
 });
 
 it("PR 本文がハンドオフドキュメントの6項目を反映している", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
@@ -87,7 +87,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
 });
 
 it("PR 作成が失敗しても complete_task 自体は成立し、ツリーはクリーンなまま", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);

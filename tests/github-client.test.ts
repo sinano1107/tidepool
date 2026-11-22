@@ -20,7 +20,7 @@ let originalPath: string | undefined;
 let savedGhToken: string | undefined;
 const brokers: FakeBroker[] = [];
 const GITHUB_REPO = "https://github.com/acme/widget.git";
-const workspaceAt = (path: string, repo = GITHUB_REPO): WorkspaceConfig => ({ name: "widget", path, repo });
+const workspaceAt = (path: string, repo = GITHUB_REPO): WorkspaceConfig => ({ name: "widget", path, repo, head_repo: "reef-org/widget" });
 
 beforeEach(() => {
   savedGhToken = process.env.GH_TOKEN;
@@ -104,7 +104,6 @@ async function fakeGitHubApi(
 
 // ADR 0396 決定1・4・5: 作成は人間の user token で REST の POST pulls だけを撃つ —— push は呼び手が先に撃つ(ADR 0243)
 it.each([
-  ["未宣言なら宣言の repo", undefined, "acme:task/abc"],
   ["宣言した出元 repo", "Reef-Org/widget", "reef-org:task/abc"],
 ])("PR の作成は user token で POST pulls を1回だけ撃ち、head は%sの owner:branch にする", async (_, head_repo, head) => {
   const api = await fakeGitHubApi();
@@ -129,7 +128,6 @@ it.each([
 
 // ADR 0396 帰結 / ADR 0241 決定4: 自分の PR は作者でなく head の repo で照合する —— 他人の fork の同名 branch の PR は拾わない
 it.each([
-  ["未宣言なら宣言の repo", undefined, "acme", "Acme/Widget"],
   ["宣言した出元 repo", "reef-org/widget", "reef-org", "Reef-Org/widget"],
 ])("自分の PR の探索は%sを head にした PR だけを拾い、open > merged > closed で1つ返す", async (_, head_repo, owner, ours) => {
   const dir = await tempDir("tidepool-fakebin-");
@@ -150,23 +148,23 @@ it.each([
 
   const found = await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: { ...(await githubCheckout()), head_repo }, branch: "task/abc" });
 
-  expect(found).toEqual({ number: 3, state: "MERGED", head: "sha3" });
+  expect(found).toEqual({ number: 3, state: "MERGED", head: "sha3", headRef: { branch: "task/abc", repo: ours } });
   expect((await readFile(logPath, "utf8")).trim()).toBe(`installation-token api repos/acme/widget/pulls --method GET -f head=${owner}:task/abc -f state=all`);
 });
 
 it("自分の PR の探索は、開いている自分の PR を merged と closed より先に返す", async () => {
   const dir = await tempDir("tidepool-fakebin-");
-  const head = (sha: string) => ({ ref: "task/abc", sha, repo: { full_name: "acme/widget" } });
+  const head = (sha: string) => ({ ref: "task/abc", sha, repo: { full_name: "reef-org/widget" } });
   const prs = [
     { number: 1, state: "closed", merged_at: "2026-11-21T00:00:00Z", head: head("m1") },
-    { number: 2, state: "open", merged_at: null, head: head("o2") },
+    { number: 2, state: "open", merged_at: null, head: head("o2"), base: { ref: "main", sha: "b2" } },
   ];
   writeFileSync(join(dir, "gh"), `#!/bin/sh\nprintf '%s' '${JSON.stringify(prs)}'\n`, { mode: 0o755 });
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   expect(await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: await githubCheckout(), branch: "task/abc" }))
-    .toEqual({ number: 2, state: "OPEN", head: "o2" });
+    .toEqual({ number: 2, state: "OPEN", head: "o2", headRef: { branch: "task/abc", repo: "reef-org/widget" }, base: { branch: "main", sha: "b2" } });
 });
 
 // ADR 0396 決定2・3 / ADR 0093 決定4: user token は盤面の中の作成の要求だけに使い、gh と git の子の env に入れない。
@@ -192,7 +190,7 @@ it("user token は PR の作成の要求にだけ載り、gh と git の子の e
   const client = new GhCliClient(await makeAuth(), { apiUrl: api.url });
   const workspace = workspaceAt(repoPath);
 
-  (await client.preparePush({ workspace: workspaceAt(repoPath, remotePath), branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await client.preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
   expect(await client.findPullRequestByHead({ workspace, branch: "task/abc" })).toBeNull();
   const { number } = await client.createPullRequest(createInput(workspace));
   expect((await client.readPullRequest({ workspace, number })).state).toBe("OPEN");
@@ -221,7 +219,7 @@ it("PR の作成が断られたら、HTTP status と GitHub の理由を書き�
   });
 
   await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
-    new Error("`POST pulls` on acme/widget was refused for head acme:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
+    new Error("`POST pulls` on acme/widget was refused for head reef-org:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
   );
 });
 
@@ -388,7 +386,7 @@ it("readPullRequest reads CI, state, merge author, head and base in one GitHub c
 
   expect(pr).toEqual({ ci: "success", state: "MERGED", head: "abc123", mergedBy: "app/tidepool-board", base: { branch: "main", sha: "abc456" } });
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
-    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid -R acme/widget",
+    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid,headRefName,headRepository -R acme/widget",
   ]);
 });
 
@@ -556,7 +554,7 @@ it("getPullRequestState reads state, merge author, head and base in one GitHub c
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","baseRefName":"main","baseRefOid":"base9","mergedBy":null,"state":"OPEN"}';; esac\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","headRefName":"task/abc","headRepository":{"nameWithOwner":"old-fork/widget"},"baseRefName":"main","baseRefOid":"base9","mergedBy":null,"state":"OPEN"}';; esac\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
@@ -565,10 +563,10 @@ it("getPullRequestState reads state, merge author, head and base in one GitHub c
   const client = new GhCliClient(await makeAuth());
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board", head: "abc7" });
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 8 })).toEqual({ state: "CLOSED", mergedBy: null, head: "abc8" });
-  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9", base: { branch: "main", sha: "base9" } });
+  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9", headRef: { branch: "task/abc", repo: "old-fork/widget" }, base: { branch: "main", sha: "base9" } });
 
   const invocations = await readFile(logPath, "utf8");
-  expect(invocations.trim().split("\n")).toEqual([7, 8, 9].map((n) => `pr view ${n} --json state,mergedBy,headRefOid,baseRefName,baseRefOid -R acme/widget`));
+  expect(invocations.trim().split("\n")).toEqual([7, 8, 9].map((n) => `pr view ${n} --json state,mergedBy,headRefOid,baseRefName,baseRefOid,headRefName,headRepository -R acme/widget`));
 });
 
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {
@@ -628,12 +626,12 @@ it("tokenRefusal は持っている token を答えにせず、扉のたびに�
   expect(await client.tokenRefusal(ref)).toContain("repo_unreachable");
 });
 
-it("preparePush が返す push はタスクブランチを origin へ push する(PR 作成と切り離した1操作)", async () => {
+it("preparePush が返す push はタスクブランチを出元 repo へ push する(PR 作成と切り離した1操作)", async () => {
   repoPath = await tempDir("tidepool-repo-");
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
 
-  (await new GhCliClient(await makeAuth()).preparePush({ workspace: workspaceAt(repoPath, remotePath), branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await new GhCliClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });
@@ -646,31 +644,31 @@ it("preparePush の push は渡された sha を押して写しに書き、予�
   const announced = git(repoPath, "rev-parse", "task/abc");
   git(repoPath, "commit", "--allow-empty", "-m", "after the announcement");
 
-  (await new GhCliClient(await makeAuth()).preparePush({ workspace: workspaceAt(repoPath, remotePath), branch: "task/abc" }))(announced);
+  (await new GhCliClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(announced);
 
-  expect({ pushed: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "rev-parse", "refs/remotes/origin/task/abc") }).toEqual({
+  expect({ pushed: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({
     pushed: announced,
     copy: announced,
   });
 });
 
 // ADR 0052 Status 追記(#2827): 盤面所有の repo からの push は checkout の写しを動かさない —— 写しは push の成功を見て盤面が書く
-it("preparePush の push は成功したときだけ、写し refs/remotes/origin/<branch> を push した sha へ書く", async () => {
+it("preparePush の push は成功したときだけ、写し refs/remotes/head-repo/<branch> を push した sha へ書く", async () => {
   repoPath = await tempDir("tidepool-repo-");
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
   const sha = git(repoPath, "rev-parse", "task/abc");
-  const push = await new GhCliClient(await makeAuth()).preparePush({ workspace: workspaceAt(repoPath, remotePath), branch: "task/abc" });
+  const push = await new GhCliClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" });
   const hook = join(remotePath, "hooks", "pre-receive");
   writeFileSync(hook, "#!/bin/sh\nexit 1\n");
   chmodSync(hook, 0o755);
 
   expect(() => push(sha)).toThrow();
-  const rejectedCopy = git(repoPath, "for-each-ref", "refs/remotes/origin/task/abc");
+  const rejectedCopy = git(repoPath, "for-each-ref", "refs/remotes/head-repo/task/abc");
   writeFileSync(hook, "#!/bin/sh\nexit 0\n");
   push(sha);
 
-  expect({ rejectedCopy, copy: git(repoPath, "rev-parse", "refs/remotes/origin/task/abc") }).toEqual({ rejectedCopy: "", copy: sha });
+  expect({ rejectedCopy, copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({ rejectedCopy: "", copy: sha });
 });
 
 // ADR 0378 決定1: gh には宣言から解いた GitHub repo が要る。

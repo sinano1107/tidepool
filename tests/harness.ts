@@ -30,7 +30,8 @@ import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents, type ReadCheckout } from "../src/events.js";
 import { type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
-import type { GitHubAuth } from "../src/github-auth.js";
+import type { GitHubClient } from "../src/github.js";
+import { type GitHubAuth, HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
@@ -91,6 +92,8 @@ import { startWatchdog, type WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
 import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import {
+  announceHeadRepo,
+  assertRememberedHeadRepo,
   boardRefWriter,
   commitRoomCopy,
   holdsBaseline,
@@ -213,6 +216,7 @@ export interface Tidepool {
   worker: ScriptedWorker;
   /** 容器機構の fake(ADR 0099 決定2)。強制回収の記録と、空の観測の駆動口。 */
   containers: FakeContainerRuntime;
+  /** The default fake, or the explicitly supplied FakeGitHubClient. */
   github: FakeGitHubClient;
   push: FakePushClient;
   /** Shared setup connection; assertions still go through public read surfaces. */
@@ -228,8 +232,8 @@ export interface BootOptions {
   dir?: string;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
-  /** 起動の間に GitHub を待たせるテスト(起動の収束 —— ADR 0241 決定5)が、起動前に細工した fake を渡す。 */
-  github?: FakeGitHubClient;
+  /** Use a scripted fake or exercise the real client against a test transport. */
+  github?: GitHubClient;
   workerAdapter?: Parameters<typeof startServer>[0]["worker"];
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
@@ -385,11 +389,13 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers =
     options.containerRuntime instanceof FakeContainerRuntime ? options.containerRuntime : new FakeContainerRuntime();
-  const github = options.github ?? new FakeGitHubClient();
+  const github = options.github instanceof FakeGitHubClient ? options.github : new FakeGitHubClient();
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
+  const existingBoard = existsSync(dbPath);
   const db = openDb(dbPath, { terminate: () => {} });
+  if (!existingBoard) rememberFixtureHeadRepos(db);
   containers.taskIdForSession = (id) => /^\d+$/.test(id) ? getEvent(db, Number(id))?.task_id ?? undefined : undefined;
   const server = await startServer({
     db,
@@ -419,7 +425,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     // 面接室(ADR 0273 決定1)は盤面の dir の下に作る —— テストがホームの既定の基点に書かない
     workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
-    github,
+    github: options.github ?? github,
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,
@@ -1081,7 +1087,7 @@ export async function shimGit(
   writeFileSync(
     join(dir, "git"),
     "#!/bin/sh\n" +
-      (from ? `for a; do shift; [ "$a" = "${from}" ] && a="${to}"; set -- "$@" "$a"; done\n` : "") +
+      (from ? `case " $* " in *" remote add "*|*" remote set-url "*) ;; *) for a; do shift; [ "$a" = "${from}" ] && a="${to}"; set -- "$@" "$a"; done;; esac\n` : "") +
       `alt=\nfor a in "$@"; do case "$a" in --git-dir=*) alt="\${a#--git-dir=}/objects/info/alternates";; esac; done\n` +
       `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; ` +
       `echo "env.GH_TOKEN=\${GH_TOKEN-}"; echo "env.GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}"; ` +
@@ -1158,6 +1164,28 @@ export async function makeRemoteBackedWorkspace(
       netGit(publisher, "push", "origin", "main");
     },
   };
+}
+
+const landingWorkspaces = new Set<WorkspaceConfig>();
+
+/** A workspace whose fork is already configured. Both remotes still use real Git. */
+export async function makeLandingWorkspace(name: string) {
+  const { workspace, publish } = await makeRemoteBackedWorkspace(name);
+  const head_repo = await tempDir(`tidepool-${name}-fork-`);
+  git(head_repo, "clone", "--bare", workspace.repo!, ".");
+  git(workspace.path, "remote", "add", HEAD_REPO_REMOTE, head_repo);
+  const configured = { ...workspace, head_repo };
+  landingWorkspaces.add(configured);
+  onTestFinished(() => { landingWorkspaces.delete(configured); });
+  return { workspace: configured, publish };
+}
+
+/** Seed only workspaces opened with the fixture for an already configured fork. */
+export function rememberFixtureHeadRepos(db: Db): void {
+  for (const workspace of landingWorkspaces) {
+    announceHeadRepo(db, workspace, workspace.head_repo);
+    assertRememberedHeadRepo(db, workspace, new Date(0));
+  }
 }
 
 let remoteTemplate: ReturnType<typeof buildRemoteTemplate> | undefined;

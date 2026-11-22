@@ -10,7 +10,7 @@ import { markTeardown } from "../src/teardown.js";
 import { boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { startFakeBroker } from "./fake-broker.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, rememberFixtureHeadRepos, restedInterviewRoom, shimGit } from "./harness.js";
 import { fetchHeldAtToken } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -26,11 +26,12 @@ function work(db: Db, title: string) {
 
 /** 1件を拾って解放し(基準の行と `task/<id>` が残る)、workspace の Quarantine が開いた盤面。 */
 async function quarantinedWorkspace(name: string, remoteBacked = false) {
-  return quarantined(remoteBacked ? (await makeRemoteBackedWorkspace(name)).workspace : await makeWorkspace(name));
+  return quarantined(remoteBacked ? (await makeLandingWorkspace(name)).workspace : await makeWorkspace(name));
 }
 
 async function quarantined(ws: WorkspaceConfig) {
   const db = openDb(":memory:");
+  rememberFixtureHeadRepos(db);
   const task = work(db, "leaves a task branch");
   releaseWorkspace(db, await prepareAtPickup(db, ws, task), task, NOW);
   quarantineWorkspace(db, ws.name, new Error("a human touched the checkout"), NOW);
@@ -636,17 +637,17 @@ function originHoldsOther(ws: WorkspaceConfig) {
 }
 
 // 根が refname 順で先 —— 根の head が先に届き、そこから届く子の tip は sha で取り直さない
-const ROOT = "refs/heads/a-root";
-const CHILD = "refs/heads/b-child";
+const ROOT = "refs/heads/task/a-root";
+const CHILD = "refs/heads/task/b-child";
 
-/** 根 `ROOT` とその merge back が届いている子 `CHILD` を盤面が書き、根の head だけを origin へ push してから手元で失わせる。 */
-function loseRootAndChildKeptOnOrigin(db: Db, ws: WorkspaceConfig) {
+/** 根 `ROOT` とその merge back が届いている子 `CHILD` を盤面が書き、根の head だけを出元 repo へ push してから手元で失わせる。 */
+function loseRootAndChildKeptOnFork(db: Db, ws: WorkspaceConfig) {
   const child = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "the child's tip");
   const root = git(ws.path, "commit-tree", "main^{tree}", "-p", child, "-m", "the root's head, merged back from the child");
   boardWrites(db, ws, CHILD, child);
   boardWrites(db, ws, ROOT, root);
-  // origin の側から取る —— git 2.56 から、remote と同じ URL への push は写しの ref(refs/remotes/origin/*)も書き、残った写しが gc から commit を守る
-  git(ws.repo!, "fetch", "--quiet", ws.path, `${ROOT}:${ROOT}`);
+  // 出元 repo の側から取る —— git 2.56 から、remote と同じ URL への push は写しの ref も書き、残った写しが gc から commit を守る
+  git(ws.head_repo!, "fetch", "--quiet", ws.path, `${ROOT}:${ROOT}`);
   dropAndPrune(ws, CHILD, ROOT);
   return { child, root };
 }
@@ -707,9 +708,9 @@ it("保護ブランチの無い repo(空の `git init`)への `give up the lost 
   db.close();
 });
 
-it("remote-backed: `restore the baseline` は object の無い戻す先を origin から取ってから戻す —— 根の head が届けば、そこから届く子の tip も戻り、失われたとは数えない(ADR 0380 決定4、pin B24)", async () => {
+it("remote-backed: `restore the baseline` は object の無いタスクブランチの sha を出元 repo から取ってから戻す —— 根の head が届けば、そこから届く子の tip も戻り、失われたとは数えない(ADR 0380 決定4、pin B24)", async () => {
   const { ws, db, question } = await quarantinedWorkspace("restore-fetches-lost", true);
-  const { child, root } = loseRootAndChildKeptOnOrigin(db, ws);
+  const { child, root } = loseRootAndChildKeptOnFork(db, ws);
   expect(() => git(ws.path, "cat-file", "-e", child)).toThrow();
   const calls = await shimGit();
 
@@ -727,7 +728,7 @@ it("remote-backed: `restore the baseline` は object の無い戻す先を origi
 
 it("remote-backed: `give up the lost refs and restore the baseline` も取ってから数える —— 届いた根と子は戻って失われたと数えず、origin が別の sha で持つ branch はその sha へ戻さず今の値で入れる(ADR 0380 決定4、pin B24)", async () => {
   const { ws, db } = await quarantinedWorkspace("give-up-fetches-lost", true);
-  const { child, root } = loseRootAndChildKeptOnOrigin(db, ws);
+  const { child, root } = loseRootAndChildKeptOnFork(db, ws);
   originHoldsOther(ws);
   const lost = loseRef(db, ws, "refs/heads/other");
 
@@ -740,7 +741,7 @@ it("remote-backed: `give up the lost refs and restore the baseline` も取って
   db.close();
 });
 
-it("remote-backed の give-up が残す lost_refs_accepted・task_branch_lost・baseline_restored の時刻は、origin から取る前の token を待った後の時刻(#3384)", async () => {
+it("remote-backed の give-up が残す lost_refs_accepted・task_branch_lost・baseline_restored の時刻は、出元 repo から取る前の token を待った後の時刻(#3384)", async () => {
   const { ws, db, task } = await quarantinedWorkspace("give-up-time", true);
   loseRef(db, ws, `refs/heads/task/${task.id}`);
   commitWork(ws.path, "by-hand.txt", "committed on main by hand\n");
@@ -764,6 +765,19 @@ it("remote-backed の give-up が残す lost_refs_accepted・task_branch_lost・
 
 /** B4c の文: 取りに行けなかった sha と git の失敗をそのまま挟む。 */
 const unreachable = (sha: string) => new RegExp(`^could not reach origin to look for ${sha} \\(.+\\)\\. Nothing was written; answer again once origin is reachable\\.$`, "s");
+
+it("give-up leaves a lost task ref unresolved when the workspace has no head repo", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("lost-task-without-head-repo");
+  const { ws, db, task, question } = await quarantined(workspace);
+  const lost = loseRef(db, ws, `refs/heads/task/${task.id}`);
+
+  await expect(answer(db, ws, GIVE_UP)).rejects.toThrow(
+    `could not reach the head repo to look for ${lost} (workspace ${ws.name} has no declared head repo (head_repo)`,
+  );
+  expect(lostEvents(db)).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  db.close();
+});
 
 it.each(["restore the baseline", GIVE_UP])("remote-backed: `%s` は probe で origin に届かなければ拒み、何も書かず、失われたとも数えない(ADR 0380 決定4、pin B24、text B4c)", async (text) => {
   const { ws, db, question } = await quarantinedWorkspace("lost-origin-unreachable", true);
