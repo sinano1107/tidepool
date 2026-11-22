@@ -67,7 +67,7 @@ export function resolveExecutionAgent(
     if (!(err instanceof InvalidAgentDefinitionError) || !inTierRenameWindow(definition.tier, tiers)) throw err;
     // 段より先の門で落ちたならその理由のまま。段だけなら改名の窓の出口を添える(ADR 0401 決定6)—— 作成・編集の扉は門を直に呼ぶので出さない
     assertValidAgentDefinition(name, { ...definition, tier: undefined }, tiers);
-    const from = registry.source && renamedTierFrom(registry.source, definition.tier);
+    const from = registry.source && renamedTierFrom(registry.source, name, definition.tier);
     throw new InvalidAgentDefinitionError(name, `${err.reason}. ${tierRenameExit(definition.tier, from && tiers.includes(from) ? from : undefined)}`);
   }
   // 組み込みが走らせる type は assignee の門と同じ線(ADR 0275 決定1 / ADR 0228 決定4): 名前ではなく

@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentTierMismatchError, agentTierChangeMessage, changeAgentTier, findTierApproval, renameAgentTiers, renamedTierFrom, tierRenameMessage, updateAgent } from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, loadRegistry, UnknownAgentError, UnknownAuthorityProfileError } from "../src/registry.js";
@@ -450,19 +452,22 @@ describe("registry の log の探索: 盤面の tier の書き込みの commit �
     expect(findTierApproval(local(registryDir), "shrimp", "12")).toBeUndefined();
   });
 
-  it("段の改名の commit から旧い名前を引き、無ければ undefined", async () => {
+  it("agent.md を最後に変えた commit が段の改名ならその旧い名前を引き、後の手編集があれば引かない", async () => {
     const registryDir = await makeMainRegistry({ "agents/crab.md": agentAt("crab", "standard") });
 
     await renameAgentTiers({ from: "standard", to: "mid", message: tierRenameMessage("standard", "mid") }, { registry: local(registryDir) });
 
-    expect(renamedTierFrom(local(registryDir), "mid")).toBe("standard");
-    expect(renamedTierFrom(local(registryDir), "id")).toBeUndefined();
-    expect(renamedTierFrom(local(registryDir), "top")).toBeUndefined();
+    expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBe("standard");
+    expect(renamedTierFrom(local(registryDir), "crab", "id")).toBeUndefined();
+    expect(renamedTierFrom(local(registryDir), "crab", "top")).toBeUndefined();
+    writeFileSync(join(registryDir, "agents/crab.md"), agentAt("crab", "mid").replace("You are", "Hand-edited, you are"));
+    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", "hand edit");
+    expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBeUndefined();
   });
 
   it("git が読めなければ投げずに見つからない側へ落ちる", () => {
     const missing = local("/nonexistent/registry");
     expect(findTierApproval(missing, "crab", "12")).toBeUndefined();
-    expect(renamedTierFrom(missing, "mid")).toBeUndefined();
+    expect(renamedTierFrom(missing, "crab", "mid")).toBeUndefined();
   });
 });

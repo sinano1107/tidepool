@@ -288,12 +288,16 @@ export interface TierApproval {
   to: Tier;
 }
 
-/** registry の ref の log で、`message(x)` の形の subject を最新から探して x を返す。x は段の名前なので空白を含まない。
- *  git が読めなければ見つからない側へ落ちる —— 呼び手は今の挙動(stale・条件つきの文)に戻る。 */
-function findInRegistryLog(registry: RegistrySource, message: (x: string) => string): { commit: string; x: string } | undefined {
+/** registry の ref の log で、`message(x)` の形の subject を最新から探して x を返す。x は段の名前なので空白を含まない。`lastTouching` を
+ *  渡せば、そのファイルを最後に変えた commit がその形のときだけ。git が読めなければ見つからない側へ落ちる —— 呼び手は今の挙動
+ *  (stale・条件つきの文)に戻る。 */
+function findInRegistryLog(registry: RegistrySource, message: (x: string) => string, lastTouching?: string): { commit: string; x: string } | undefined {
   const [prefix, suffix] = message("\0").split("\0") as [string, string];
+  const ref = registryRef(registry.mode);
   try {
-    const log = git(registry.dir, "log", "--format=%H %s", "--fixed-strings", `--grep=${suffix}`, registryRef(registry.mode));
+    const log = lastTouching
+      ? git(registry.dir, "log", "-1", "--format=%H %s", ref, "--", lastTouching)
+      : git(registry.dir, "log", "--format=%H %s", "--fixed-strings", `--grep=${suffix}`, ref);
     for (const line of log.split("\n")) {
       const [commit, subject] = [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)];
       const x = subject.slice(prefix.length, subject.length - suffix.length);
@@ -311,9 +315,10 @@ export function findTierApproval(registry: RegistrySource, agent: string, questi
   return found && { commit: found.commit, to: found.x };
 }
 
-/** registry の log の最新の `rename tier <old> to <to>` の旧い名前(ADR 0401 決定6)。 */
-export function renamedTierFrom(registry: RegistrySource, to: string): string | undefined {
-  return findInRegistryLog(registry, (from) => tierRenameMessage(from, to))?.x;
+/** agent.md を最後に変えた commit が `rename tier <old> to <to>` ならその旧い名前(ADR 0401 決定6)。後の手編集・改名し直しがあれば
+ *  古い改名を名指さない。 */
+export function renamedTierFrom(registry: RegistrySource, agent: string, to: string): string | undefined {
+  return findInRegistryLog(registry, (from) => tierRenameMessage(from, to), `agents/${agent}.md`)?.x;
 }
 
 /** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で

@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
-import { type CreateAgentInput, tierRenameMessage } from "../src/agent-create.js";
+import { agentTierChangeMessage, type CreateAgentInput, tierRenameMessage } from "../src/agent-create.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -720,6 +720,16 @@ it("盤面の段でない tier の agent の解決は改名の再実行を名指
     await expect(door()).rejects.toThrow('unknown tier "mid"');
     await expect(door()).rejects.not.toThrow(/re-run/);
   }
+});
+
+it("合成 root の tierApproval は、承認の書き込みが registry に打った commit を同じ綴りで引き、下げ先と sha を返す(ADR 0401 決定6)", async () => {
+  const registryDir = await makeRegistry({ "agents/crab.md": agentMd("anthropic").replace("skills: []\n", "tier: standard\nskills: []\n") });
+  const { agentAdmin } = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
+
+  const sha = await agentAdmin!.changeTier!({ name: "crab", expectTier: "standard", to: "economy", assertLandable: () => {}, message: agentTierChangeMessage("crab", "economy", "q-7") });
+
+  expect(agentAdmin!.tierApproval!("crab", "q-7")).toEqual({ commit: sha, to: "economy" });
+  expect(agentAdmin!.tierApproval!("crab", "q-8")).toBeUndefined();
 });
 
 // ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは
