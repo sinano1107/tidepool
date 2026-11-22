@@ -7,7 +7,7 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventRowOf, latestEventOfTask, parseEventRow, type TaskScopedPayload } from "./events.js";
 import { git, isAncestor } from "./git.js";
-import type { GitHubClient, PrHeadRef, PrStateRead } from "./github.js";
+import { forkPrCredentialRefusal, type GitHubClient, type PrHeadRef, type PrStateRead } from "./github.js";
 import { type GitHubAuth, HEAD_REPO_REMOTE, landingHeadRepo, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { type HumanMergePathReview, humanMergePathChanges } from "./human-merge-paths.js";
@@ -439,31 +439,6 @@ function lacksContentOf({ lastPushed, droppedBranches, unpushedBranches }: Outsi
 
 /** 盤面がその PR に in-flight 印を持つ(merge しているか、push して記録するまでの)間の回答の拒否文(ADR 0236 決定3 / ADR 0387 決定4)。 */
 export const prInFlightRefusal = (prNumber: number) => `PR #${prNumber} is being merged or pushed to by the board right now — answer again in a moment`;
-
-/** ADR 0395 決定6 / #3564: a private declared repo that sends write tokens or secrets to fork PRs' workflows would hand the head
- *  repo's content its credentials, so the board does not push there; an unreadable setting stops it too (fail-closed). */
-async function refuseForkPrCredentials(github: GitHubClient, workspace: WorkspaceConfig, headRepoLabel: string): Promise<void> {
-  const repo = repositoryLabel(workspace.repo ?? workspace.name);
-  const where = `${repo}'s Settings → Actions → General → "Fork pull request workflows in private repositories"`;
-  let settings: string[];
-  try {
-    settings = await github.forkPrCredentialSettings({ workspace });
-  } catch (error) {
-    // a declaration that changed under the read is that stop, not a failed read
-    if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError) throw error;
-    throw new Error(
-      `could not read declared repo ${repo}'s fork pull request workflow settings (${error instanceof Error ? error.message : String(error)}), ` +
-        `so the board did not push to head repo ${headRepoLabel}. The ${GITHUB_APP_SLUG} App needs the Administration: read repository permission ` +
-        `to read them (${where}).`,
-    );
-  }
-  if (settings.length > 0) {
-    throw new Error(
-      `declared repo ${repo} sends credentials to workflows from fork pull requests (${settings.join("; ")}), so the board did not push to ` +
-        `head repo ${headRepoLabel}. Turn them off in ${where}, then retry.`,
-    );
-  }
-}
 
 const headBranchLabel = (head: PrHeadRef) => `${head.branch} on head repo ${repositoryLabel(head.repo)}`;
 const headLocation = (head: PrHeadRef | undefined) => head === undefined ? "" : ` (${headBranchLabel(head)})`;
@@ -1808,7 +1783,8 @@ export function createLanding(deps: LandingDeps): Landing {
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
       const push = async (sha: string) => {
-        await refuseForkPrCredentials(github, workspace, headRepoLabel);
+        const withheld = await forkPrCredentialRefusal(github, workspace, headRepoLabel);
+        if (withheld) throw new Error(`${withheld} Then retry.`);
         const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
           const closed = closedMergeAnswer();

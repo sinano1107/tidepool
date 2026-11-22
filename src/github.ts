@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { DomainError } from "./domain-error.js";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, HEAD_REPO_REMOTE, landingHeadRepo, workspaceNetworkDestination } from "./github-auth.js";
+import { GITHUB_APP_SLUG } from "./github-login.js";
 import { parseGitHubRepo, repositoryLabel } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -218,17 +220,46 @@ export interface GitHubClient {
   /** The repository `ref` was forked from, or null when it is no fork (ADR 0395 決定2). Read with `ref`'s own token: a token for
    *  the base cannot see a private fork (#3558). Throws when it cannot be read. */
   repositoryParent(ref: RepoSlug): Promise<RepoSlug | null>;
-  /** The declared repo's fork pull request workflow settings that send credentials to a fork PR's workflows, by their
-   *  label in GitHub's settings page; empty when none is on or the repo is public (which has no such setting and sends none).
-   *  Read with the declared repo's installation token (the App's Administration: read). Throws when it cannot be read. */
-  forkPrCredentialSettings(ref: RepoRef): Promise<string[]>;
+  /** The declared repo's fork pull request workflow settings that send credentials to a fork PR's workflows and are on; empty
+   *  when none is on or the repo is public (which has no such setting and sends none). ADR 0395 決定6 and its 2026-11-22 Status
+   *  line (#3564): read with the declared repo's installation token, which the App's Administration: read lets read them.
+   *  Throws when it cannot be read. */
+  forkPrCredentialSettings(ref: RepoRef): Promise<ForkPrCredentialSetting[]>;
 }
 
-/** The fork PR workflow settings that send credentials to a fork PR's workflows, and their labels on the settings page. */
-const FORK_PR_CREDENTIAL_SETTINGS = {
+/** The fork PR workflow settings that send credentials to a fork PR's workflows (ADR 0395 決定6). */
+const FORK_PR_CREDENTIAL_SETTINGS = ["send_write_tokens_to_workflows", "send_secrets_and_variables"] as const;
+export type ForkPrCredentialSetting = (typeof FORK_PR_CREDENTIAL_SETTINGS)[number];
+
+/** Each setting's label on GitHub's settings page, for the refusal a human reads. */
+const FORK_PR_CREDENTIAL_LABELS: Record<ForkPrCredentialSetting, string> = {
   send_write_tokens_to_workflows: "Send write tokens to workflows from fork pull requests",
   send_secrets_and_variables: "Send secrets and variables to workflows from fork pull requests",
-} as const;
+};
+
+/** ADR 0395 決定6 and its 2026-11-22 Status line (#3564): why the board must not push to the head repo of `workspace`, or null.
+ *  A private declared repo that sends write tokens or secrets to fork PRs' workflows would hand the pushed content its
+ *  credentials; an unreadable setting refuses too (fail-closed). Landing's push and the declaration's task-branch send both ask
+ *  this. A DomainError from the read (the declaration changed under it) is that stop, not a failed read, and is rethrown. */
+export async function forkPrCredentialRefusal(github: GitHubClient, workspace: WorkspaceConfig, headRepoLabel: string): Promise<string | null> {
+  const repo = repositoryLabel(workspace.repo ?? workspace.name);
+  const where = `${repo}'s Settings → Actions → General → "Fork pull request workflows in private repositories"`;
+  let settings: ForkPrCredentialSetting[];
+  try {
+    settings = await github.forkPrCredentialSettings({ workspace });
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    const cause = error instanceof Error ? error.message : String(error);
+    // only a refusal of the token says the permission is missing; a timeout, an outage or a malformed answer keeps its own cause
+    const permission = /HTTP 403|Resource not accessible by integration/.test(cause)
+      ? ` The ${GITHUB_APP_SLUG} App needs the Administration: read repository permission to read them (${where}).`
+      : "";
+    return `could not read declared repo ${repo}'s fork pull request workflow settings (${cause}), so the board did not push to head repo ${headRepoLabel}.${permission}`;
+  }
+  if (settings.length === 0) return null;
+  return `declared repo ${repo} sends credentials to workflows from fork pull requests (${settings.map((key) => FORK_PR_CREDENTIAL_LABELS[key]).join("; ")}), ` +
+    `so the board did not push to head repo ${headRepoLabel}. Turn them off in ${where}.`;
+}
 
 /** Which repository, as GitHub's own `owner/name` (ADR 0067). */
 export interface RepoSlug {
@@ -357,18 +388,18 @@ export class GhCliClient implements GitHubClient {
     return parent === "" ? null : (parseGitHubRepo(parent) ?? null);
   }
 
-  async forkPrCredentialSettings({ workspace }: RepoRef): Promise<string[]> {
+  async forkPrCredentialSettings({ workspace }: RepoRef): Promise<ForkPrCredentialSetting[]> {
     const repo = await this.warmDeclaredRepo(workspace, "gh api");
     const visibility = (await this.run(["api", `repos/${repo}`, "--jq", ".private"], repo, workspace)).trim();
-    // a public repo answers the settings read with 422: decide by visibility, and read nothing else as public
+    // ADR 0395 決定6 / 2026-11-22 Status line (#3564): a public repo has no such setting and answers its read with 422 —
+    // decide by visibility, and read nothing else as public
     if (visibility === "false") return [];
     if (visibility !== "true") throw new Error(`\`gh api repos/${repo}\` returned no visibility: ${excerpt(visibility) || "empty output"}`);
     const path = `repos/${repo}/actions/permissions/fork-pr-workflows-private-repos`;
     const text = await this.run(["api", path], repo, workspace);
     const settings = parseJson(text) as Record<string, unknown> | undefined;
-    const keys = Object.keys(FORK_PR_CREDENTIAL_SETTINGS) as Array<keyof typeof FORK_PR_CREDENTIAL_SETTINGS>;
-    if (keys.some((key) => typeof settings?.[key] !== "boolean")) throw new Error(`\`gh api ${path}\` returned an unexpected response: ${excerpt(text)}`);
-    return keys.filter((key) => settings![key]).map((key) => FORK_PR_CREDENTIAL_SETTINGS[key]);
+    if (FORK_PR_CREDENTIAL_SETTINGS.some((key) => typeof settings?.[key] !== "boolean")) throw new Error(`\`gh api ${path}\` returned an unexpected response: ${excerpt(text)}`);
+    return FORK_PR_CREDENTIAL_SETTINGS.filter((key) => settings![key]);
   }
 
   async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {

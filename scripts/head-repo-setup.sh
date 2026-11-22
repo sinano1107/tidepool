@@ -6,14 +6,14 @@
 #
 # <owner> is the organization the fork goes to. A repository owned by an organization may also be
 # forked into your own account. GitHub calls run with your `gh` login; the board is reached at
-# 127.0.0.1:4589 with the board token (TIDEPOOL_API_TOKEN, or typed in — it is never stored).
+# 127.0.0.1:$PORT (default 4589, as the board) with the board token (TIDEPOOL_API_TOKEN, or typed in — it is never stored).
 #
 # 各段は自分の状態を先に確かめる: 途中で止まれば続きから走り、済んだ段は何も変えない(mac-install.sh と同じ性質)。
 # macOS の bash 3.2 でテストを走らせるので、3.2 で書く。
 
 set -euo pipefail
 
-BOARD="http://127.0.0.1:4589"
+BOARD="http://127.0.0.1:${PORT:-4589}"
 ORG_NEW_URL="https://github.com/account/organizations/new"
 APP_INSTALL_URL="https://github.com/apps/tidepool-board/installations/new"
 FORK_PR_SECTION='"Fork pull request workflows in private repositories"'
@@ -22,6 +22,7 @@ log() { printf '\033[1;34m[head-repo]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+declared_is_fork() { [[ "$(lower "$DECLARED")" == "$(lower "$FORK")" ]]; }
 
 # 入力が尽きたら set -e で黙って落ちず、続きから走れることを言って止まる
 ask() {
@@ -62,9 +63,10 @@ read_workspace() {
   [[ "$STATUS" == 200 ]] || fail "the board refused to list workspaces (HTTP $STATUS): $(board_error). Check the board token."
   local fields
   # a unit separator, not a tab: IFS whitespace would fold an empty head_repo away
-  fields="$(printf '%s' "$BODY" | WS="$WORKSPACE" json '((w) => w && [w.repo ?? "", w.head_repo ?? "", w.path ?? ""].join("\x1f"))(j.workspaces.find((w) => w.name === process.env.WS))')"
+  # an absent branch is main, as the board reads it
+  fields="$(printf '%s' "$BODY" | WS="$WORKSPACE" json '((w) => w && [w.repo ?? "", w.head_repo ?? "", w.path ?? "", w.branch ?? "main"].join("\x1f"))(j.workspaces.find((w) => w.name === process.env.WS))')"
   [[ -n "$fields" ]] || fail "the board has no workspace named $WORKSPACE."
-  IFS=$'\x1f' read -r REPO DECLARED CHECKOUT <<< "$fields"
+  IFS=$'\x1f' read -r REPO DECLARED CHECKOUT BRANCH <<< "$fields"
   [[ -n "$REPO" ]] || fail "workspace $WORKSPACE has no repository yet. Publish it first (Settings → Publish), then run this again."
   BASE="$(printf '%s' "$REPO" | sed -E 's#^(https://([^/@]+@)?github\.com/|ssh://git@github\.com/|git@github\.com:)##; s#/$##; s#\.git$##')"
   [[ "$BASE" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]] || fail "workspace $WORKSPACE's repository $REPO is not on GitHub."
@@ -131,8 +133,8 @@ ensure_fork() {
 }
 
 fork_refused() {
-  if [[ "$1" == *"forking is disabled"* ]]; then
-    fail "GitHub refused to fork $BASE: forking is disabled. For a private repository of an organization, the organization must allow forking of private repositories (members_can_fork_private_repositories: organization Settings → Member privileges → Repository forking), then the repository must allow it (allow_forking: repository Settings → General → Allow forking). Turn them on and run this again."
+  if [[ "$1" == *"HTTP 403"* || "$1" == *"forking is disabled"* ]]; then
+    fail "GitHub refused to fork $BASE ($1). For a private repository of an organization, the organization must allow forking of private repositories (members_can_fork_private_repositories: organization Settings → Member privileges → Repository forking), then the repository must allow it (allow_forking: repository Settings → General → Allow forking). Turn them on and run this again."
   fi
   fail "GitHub refused to fork $BASE into $OWNER: $1"
 }
@@ -140,7 +142,7 @@ fork_refused() {
 # Stage 3. The installation is not readable with a gh login: a missing one surfaces when the board checks the
 # declaration (stage 7), which reads the fork with the App's token.
 ensure_app() {
-  if [[ "$(lower "$DECLARED")" == "$(lower "$FORK")" ]]; then
+  if declared_is_fork; then
     log "$FORK is already the declared head repo, so the tidepool-board App is installed on it."
     return
   fi
@@ -190,7 +192,7 @@ ensure_fork_pr_settings() {
 # Stage 6. Warnings only: these forms run outside what a fork PR is limited to, and the board does not check them.
 warn_workflows() {
   local paths path content
-  if ! paths="$(gh api "repos/$BASE/contents/.github/workflows" --jq '.[].path' 2>&1)"; then
+  if ! paths="$(gh api "repos/$BASE/contents/.github/workflows?ref=$BRANCH" --jq '.[].path' 2>&1)"; then
     if [[ "$paths" == *"HTTP 404"* ]]; then
       log "$BASE has no workflows."
     else
@@ -199,7 +201,7 @@ warn_workflows() {
     return
   fi
   while read -r path; do
-    content="$(gh api "repos/$BASE/contents/$path" -H 'Accept: application/vnd.github.raw')" || { warn "could not read $path."; continue; }
+    content="$(gh api "repos/$BASE/contents/$path?ref=$BRANCH" -H 'Accept: application/vnd.github.raw')" || { warn "could not read $path."; continue; }
     if grep -q 'pull_request_target' <<< "$content"; then
       warn "$path uses pull_request_target: it runs with $BASE's write token and secrets on a fork PR, and gives them to any PR code it checks out."
     fi
@@ -210,6 +212,20 @@ warn_workflows() {
       warn "$path uses a self-hosted runner: a fork PR's workflow runs on your own machine."
     fi
   done <<< "$paths"
+}
+
+# A runner with a custom label or in a runner group does not say self-hosted in the workflow: list the registered ones too.
+warn_runners() {
+  warn_runners_at "repos/$BASE" "$BASE"
+  if [[ "$BASE_OWNER_TYPE" == Organization ]]; then warn_runners_at "orgs/$BASE_OWNER" "the organization $BASE_OWNER"; fi
+}
+warn_runners_at() {
+  local count
+  if ! count="$(gh api "$1/actions/runners" --jq .total_count 2>&1)"; then
+    warn "could not list the self-hosted runners of $2 ($count). Check yourself whether any are registered."
+  elif [[ "$count" != 0 ]]; then
+    warn "$2 has $count self-hosted runner(s) registered: a fork PR's workflow that runs on one runs on your own machine."
+  fi
 }
 
 # 盤面は送れたタスクブランチだけを refs/remotes/head-repo/task/* に写す(issue #3563)。checkout は読むだけ
@@ -226,7 +242,7 @@ all_task_branches_sent() {
 
 # Stages 7 and 8: the declaration goes through the board's dangerous-value gate, and saving it sends the task branches.
 declare_head_repo() {
-  if [[ "$(lower "$DECLARED")" == "$(lower "$FORK")" ]] && all_task_branches_sent; then
+  if declared_is_fork && all_task_branches_sent; then
     log "$FORK is the declared head repo of $WORKSPACE, and every task branch is on it."
     return
   fi
@@ -243,7 +259,7 @@ declare_head_repo() {
         log "The board asks you to confirm: $(board_error) ($(printf '%s' "$BODY" | json '(j.dangerous_values ?? []).join(", ")'))"
         ask "Declare $FORK as the head repo of $WORKSPACE? [y/N]"
         if [[ "$ANSWER" != y && "$ANSWER" != Y && "$ANSWER" != yes ]]; then
-          [[ "$(lower "$DECLARED")" != "$(lower "$FORK")" ]] || fail "$FORK stays the declared head repo, but the task branches it lacks were not sent. Run this again to send them."
+          ! declared_is_fork || fail "$FORK stays the declared head repo, but the task branches it lacks were not sent. Run this again to send them."
           fail "the head repo was not declared. Run this again to declare it."
         fi
         confirm=',"confirm":true' ;;
@@ -272,6 +288,7 @@ main() {
   ensure_actions_disabled
   ensure_fork_pr_settings
   warn_workflows
+  warn_runners
   declare_head_repo
   log "Done: $WORKSPACE lands task branches from $FORK."
 }

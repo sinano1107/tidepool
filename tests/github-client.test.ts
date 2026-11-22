@@ -795,11 +795,8 @@ it("forkPrCredentialSettings は public なら設定を読まず、private な�
 
   expect(await read("false")).toEqual([]);
   expect(await read("true")).toEqual([]);
-  expect(await read("true", { send_write_tokens_to_workflows: true, send_secrets_and_variables: true })).toEqual([
-    "Send write tokens to workflows from fork pull requests",
-    "Send secrets and variables to workflows from fork pull requests",
-  ]);
-  expect(await read("true", { send_secrets_and_variables: true })).toEqual(["Send secrets and variables to workflows from fork pull requests"]);
+  expect(await read("true", { send_write_tokens_to_workflows: true, send_secrets_and_variables: true })).toEqual(["send_write_tokens_to_workflows", "send_secrets_and_variables"]);
+  expect(await read("true", { send_secrets_and_variables: true })).toEqual(["send_secrets_and_variables"]);
   // 読めた形でなければ「オフ」と読まない(fail-closed)
   await expect(read("true", { send_secrets_and_variables: undefined })).rejects.toThrow(/fork-pr-workflows-private-repos/);
   await expect(read("true", { send_write_tokens_to_workflows: "false" })).rejects.toThrow(/fork-pr-workflows-private-repos/);

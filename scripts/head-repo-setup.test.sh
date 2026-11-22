@@ -72,6 +72,7 @@ write_stubs() {
 args="$*"
 if [[ "$args" == *"--input -"* ]]; then args="$args <<< $(cat)"; fi
 echo "gh $args" >> "$CMD_LOG"
+runners() { if [[ "$1" == unreadable ]]; then echo "gh: Must have admin rights to Repository. (HTTP 403)" >&2; exit 1; fi; echo "$1"; }
 count() { local n; n=$(($(cat "$CASE_DIR/$1" 2> /dev/null || echo 0) + 1)); echo "$n" > "$CASE_DIR/$1"; echo "$n"; }
 case "$*" in
   "api repos/acme/widget --jq"*) printf '%s\n' "$S_BASE_OWNER" "$S_BASE_OWNER_TYPE" "$S_BASE_PRIVATE" ;;
@@ -89,11 +90,13 @@ case "$*" in
   "api -X PUT repos/"*"/actions/permissions --input -") : ;;
   "api repos/acme/widget/actions/permissions/fork-pr-workflows-private-repos"*)
     if [[ "$SETTINGS_FIXED_AFTER_WAIT" == 1 ]] && [[ "$(count settings)" -gt 1 ]]; then echo "true false false"; else echo "$FORK_PR_SETTINGS"; fi ;;
-  "api repos/acme/widget/contents/.github/workflows --jq"*)
+  "api repos/acme/widget/contents/.github/workflows?ref=$S_BRANCH --jq"*)
     if [[ -z "$WORKFLOWS" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     for f in $WORKFLOWS; do echo ".github/workflows/$f"; done ;;
-  "api repos/acme/widget/contents/.github/workflows/"*)
-    f="${2##*/}"; printf '%s\n' "$(eval "echo \"\$WF_${f%%.*}\"")" ;;
+  "api repos/acme/widget/contents/.github/workflows/"*"?ref=$S_BRANCH -H"*)
+    f="${2##*/}"; f="${f%%\?*}"; printf '%s\n' "$(eval "echo \"\$WF_${f%%.*}\"")" ;;
+  "api repos/acme/widget/actions/runners --jq .total_count") runners "$S_REPO_RUNNERS" ;;
+  "api orgs/acme/actions/runners --jq .total_count") runners "$S_ORG_RUNNERS" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 STUB
@@ -113,7 +116,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-echo "curl $method ${url#http://127.0.0.1:4589}${data:+ $data}" >> "$CMD_LOG"
+echo "curl $method ${url#http://127.0.0.1:}${data:+ $data}" >> "$CMD_LOG"
 if [[ "$method" == GET ]]; then
   printf '%s\n200' "$WORKSPACES_JSON"
   exit 0
@@ -156,6 +159,9 @@ reset_case() {
   FORK_PR_SETTINGS="true false false"
   SETTINGS_FIXED_AFTER_WAIT=0
   WORKFLOWS=""
+  BRANCH=""
+  REPO_RUNNERS=0
+  ORG_RUNNERS=0
   DECLARED=""
   CHECKOUT=""
   PATCH_ANSWERS="409 200"
@@ -175,14 +181,14 @@ run_setup() {
   write_stubs
   chmod +x "$STUB_DIR"/gh "$STUB_DIR"/curl
   local workspaces
-  workspaces="{\"workspaces\":[{\"name\":\"other\",\"repo\":\"https://github.com/acme/other.git\"},{\"name\":\"trial\",\"repo\":\"https://github.com/acme/widget.git\",\"protected\":false${DECLARED:+,\"head_repo\":\"$DECLARED\"}${CHECKOUT:+,\"path\":\"$CHECKOUT\"}}],\"workspacesBaseDir\":{\"path\":\"/x\",\"source\":\"default\"}}"
+  workspaces="{\"workspaces\":[{\"name\":\"other\",\"repo\":\"https://github.com/acme/other.git\"},{\"name\":\"trial\",\"repo\":\"https://github.com/acme/widget.git\",\"protected\":false${BRANCH:+,\"branch\":\"$BRANCH\"}${DECLARED:+,\"head_repo\":\"$DECLARED\"}${CHECKOUT:+,\"path\":\"$CHECKOUT\"}}],\"workspacesBaseDir\":{\"path\":\"/x\",\"source\":\"default\"}}"
   output=$(printf '%b' "$INPUT" | env -i \
     PATH="$STUB_DIR:/usr/bin:/bin" HOME="$CASE_DIR" CASE_DIR="$CASE_DIR" CMD_LOG="$CMD_LOG" SCRIPT_DIR="$SCRIPT_DIR" \
     S_BASE_OWNER="$BASE_OWNER" S_BASE_OWNER_TYPE="$BASE_OWNER_TYPE" S_BASE_PRIVATE="$BASE_PRIVATE" \
     S_OWNER_TYPE="$OWNER_TYPE" OWNER_APPEARS="$OWNER_APPEARS" EXISTING_FORK="$EXISTING_FORK" \
     FORK_CREATED="$FORK_CREATED" FORK_ERROR="$FORK_ERROR" ACTIONS_ENABLED="$ACTIONS_ENABLED" \
     FORK_PR_SETTINGS="$FORK_PR_SETTINGS" SETTINGS_FIXED_AFTER_WAIT="$SETTINGS_FIXED_AFTER_WAIT" \
-    WORKFLOWS="$WORKFLOWS" WF_target="on: pull_request_target" WF_after="on:
+    WORKFLOWS="$WORKFLOWS" S_BRANCH="${BRANCH:-main}" S_REPO_RUNNERS="$REPO_RUNNERS" S_ORG_RUNNERS="$ORG_RUNNERS" WF_target="on: pull_request_target" WF_after="on:
   workflow_run:" WF_runner="runs-on: self-hosted" WF_plain="on: pull_request" \
     WORKSPACES_JSON="$workspaces" PATCH_ANSWERS="$PATCH_ANSWERS" ${TOKEN_ENV} \
     bash -c "set -euo pipefail; source \"\$SCRIPT_DIR/head-repo-setup.sh\"; main $ARGS" 2>&1) && rc=0 || rc=$?
@@ -198,7 +204,7 @@ OWNER_APPEARS=1
 INPUT='\n\ny\n'
 run_setup
 assert_eq "fresh: exits 0" "0" "$rc"
-assert_eq "fresh: runs every stage in order" "curl GET /api/workspaces
+assert_eq "fresh: runs every stage in order" "curl GET 4589/api/workspaces
 gh api repos/acme/widget --jq .owner.login, .owner.type, .private
 gh api user --jq .login
 gh api users/reef --jq .type
@@ -208,9 +214,10 @@ gh api -X POST repos/acme/widget/forks -f organization=reef --jq .full_name
 gh api repos/reef/widget/actions/permissions --jq .enabled
 gh api -X PUT repos/reef/widget/actions/permissions --input - <<< {\"enabled\":false}
 gh api repos/acme/widget/actions/permissions/fork-pr-workflows-private-repos --jq [.run_workflows_from_fork_pull_requests, .send_write_tokens_to_workflows, .send_secrets_and_variables] | map(tostring) | join(\" \")
-gh api repos/acme/widget/contents/.github/workflows --jq .[].path
-curl PATCH /api/workspaces/trial {\"head_repo\":\"reef/widget\"}
-curl PATCH /api/workspaces/trial {\"head_repo\":\"reef/widget\",\"confirm\":true}" "$log"
+gh api repos/acme/widget/contents/.github/workflows?ref=main --jq .[].path
+gh api repos/acme/widget/actions/runners --jq .total_count
+curl PATCH 4589/api/workspaces/trial {\"head_repo\":\"reef/widget\"}
+curl PATCH 4589/api/workspaces/trial {\"head_repo\":\"reef/widget\",\"confirm\":true}" "$log"
 assert_contains "fresh: opens the organization creation page" "https://github.com/account/organizations/new" "$output"
 assert_contains "fresh: recommends an organization only for head repos" "an organization's secrets can reach the workflows of a fork it owns" "$output"
 assert_contains "fresh: opens the App installation page for the organization" "https://github.com/apps/tidepool-board/installations/new, choose reef" "$output"
@@ -334,6 +341,41 @@ assert_contains "warnings: self-hosted runner" ".github/workflows/runner.yml use
 assert_not_contains "warnings: a plain workflow is not warned about" "plain.yml uses" "$output"
 assert_contains "warnings: the declaration still runs" "curl PATCH" "$log"
 
+# The workflows are read on the workspace's protected branch, not the repository's default branch.
+reset_case
+BRANCH="trunk"
+WORKFLOWS="target.yml"
+INPUT='\ny\n'
+run_setup
+assert_eq "workspace branch: exits 0" "0" "$rc"
+assert_contains "workspace branch: lists the workflows on it" "contents/.github/workflows?ref=trunk" "$log"
+assert_contains "workspace branch: reads each workflow on it" "contents/.github/workflows/target.yml?ref=trunk" "$log"
+
+# Registered runners: a custom label or a runner group does not say self-hosted in the workflow.
+reset_case
+BASE_OWNER_TYPE="Organization"
+REPO_RUNNERS=2
+ORG_RUNNERS=unreadable
+INPUT='\ny\n'
+run_setup
+assert_eq "runners: warnings do not stop the run" "0" "$rc"
+assert_contains "runners: warns about the repository's registered runners" "acme/widget has 2 self-hosted runner(s) registered" "$output"
+assert_contains "runners: an unreadable organization list is a warning that it could not be checked" "could not list the self-hosted runners of the organization acme" "$output"
+assert_contains "runners: the declaration still runs" "curl PATCH" "$log"
+
+reset_case
+INPUT='\ny\n'
+run_setup
+assert_not_contains "runners: a personal base has no organization runners to list" "orgs/acme/actions/runners" "$log"
+assert_not_contains "runners: none registered, nothing warned" "self-hosted runner(s)" "$output"
+
+# The board's port follows PORT, as the board does.
+reset_case
+TOKEN_ENV="TIDEPOOL_API_TOKEN=s3cret-board-token PORT=4700"
+INPUT='\ny\n'
+run_setup
+assert_contains "port: reaches the board on PORT" "curl GET 4700/api/workspaces" "$log"
+
 # --- stop conditions --------------------------------------------------------
 # Each stops before any fork, prompt or declaration.
 
@@ -366,6 +408,15 @@ assert_eq "forking disabled: exits non-zero" "1" "$rc"
 assert_contains "forking disabled: names the organization setting" "members_can_fork_private_repositories" "$output"
 assert_contains "forking disabled: names the repository setting" "allow_forking" "$output"
 assert_not_contains "forking disabled: does not go on" "actions/permissions" "$log"
+
+# Any 403 from the fork names both settings, whatever GitHub's wording.
+reset_case
+BASE_OWNER_TYPE="Organization"
+FORK_ERROR="gh: Resource not accessible by personal access token (HTTP 403)"
+run_setup
+assert_eq "fork 403: exits non-zero" "1" "$rc"
+assert_contains "fork 403: names the organization setting" "members_can_fork_private_repositories" "$output"
+assert_contains "fork 403: names the repository setting" "allow_forking" "$output"
 
 # A base owned by an organization may be forked into your own account (no organization parameter).
 reset_case

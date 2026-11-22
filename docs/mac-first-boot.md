@@ -298,12 +298,18 @@ The helper then works through these steps, waiting where it needs you:
 4. For a private repository, checks its fork pull request workflow settings and waits until they
    are as described below.
 5. Warns when the trial repository's workflows use `pull_request_target`, `workflow_run` or a
-   self-hosted runner. Those run outside what a fork pull request is limited to, and the board
-   does not check them.
+   self-hosted runner, or when the repository or its organization has self-hosted runners
+   registered. Those run outside what a fork pull request is limited to, and the board does not
+   check them.
 6. Declares the fork as the workspace's head repo. The board asks for a confirmation every time a
    head repo is set; the helper shows its reasons and confirms only when you answer `y`.
 7. Checks that the board sent the existing `task/…` branches to the fork. If some were not sent,
-   it shows why and sends them again when you press Enter.
+   it shows why and sends them again when you press Enter. The board sends none while the
+   repository sends write tokens or secrets to fork pull requests (below).
+
+Run it once per workspace. A workspace that lets workers edit the registry (see
+[Let workers edit the registry](#let-workers-edit-the-registry)) needs its own run, which forks
+the registry repository.
 
 It stops with the reason when the organization is the repository's own owner (GitHub cannot fork
 into the same owner) or when forking is disabled. For an organization's private repository, the
