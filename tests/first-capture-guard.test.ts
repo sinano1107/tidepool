@@ -34,7 +34,7 @@ async function rested(name: string): Promise<WorkspaceConfig> {
   return ws;
 }
 
-it("workspaces.yaml の手編集で改名した名前の最初の撮りは行を作らずに止まり、消えた名前の下に unknown workspace の Quarantine を立てる(spec #3273 text B9)", async () => {
+it("workspaces.yaml の手編集で改名した名前の最初の撮りは行を作らずに止まり、消えた名前の下に unknown workspace の Quarantine を立て、削除の commit が無いので条件つきの文で出口を名指す(spec #3273 text B9 / ADR 0401 決定5)", async () => {
   db = openDb(":memory:");
   const old = await rested("old");
   const renamed = { ...old, name: "new" };
@@ -44,7 +44,7 @@ it("workspaces.yaml の手編集で改名した名前の最初の撮りは行を
   expect(holdsBaseline(db, "new")).toBe(false);
   expect(quarantineQuestion(db, "workspace", "new")).toBeUndefined();
   expect(quarantineQuestion(db, "workspace", "old")!.purpose).toContain(
-    'unknown workspace: old. The board holds a baseline for "old", so no workspace captures a first baseline until it resolves again: put the entry back in the registry under that name. To remove the workspace, delete it through the deletion door after this question is closed; to rename it, delete it and register it under the new name. Workspaces that have not captured a baseline yet also wait until this question is closed. Tasks in this workspace',
+    'unknown workspace: old. The board holds a baseline for "old", so no workspace captures a first baseline until it resolves again. The board found no registry commit from the deletion door for "old"; the entry was likely removed or renamed by hand. To clear it, in order: put the entry back in the registry under that name as it was before it was removed (in workspaces.yaml at the parent of the commit that removed it, if it was committed), with its repo and head_repo as well as its path (a repo other than the one the board remembers is refused again); accept the open Quarantine question for "old", if any; delete the workspace through the deletion door; register it again (under a new name to rename it). Workspaces that have not captured a baseline yet also wait until this question is closed. Tasks in this workspace',
   );
 });
 

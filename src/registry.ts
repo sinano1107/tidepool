@@ -464,6 +464,8 @@ export interface Registry {
   agents: Record<string, AgentDefinition>;
   authority: Record<string, AuthorityProfile>;
   workspaces: Record<string, WorkspaceEntry>;
+  /** 読んだ clone と mode。名前が引けないときに削除の扉の commit を探す先(ADR 0401 決定5)。手で組んだ registry には無い。 */
+  source?: RegistrySource;
 }
 
 /** One roster line's worth of an `AgentDefinition` (issue #43 / ADR 0014):
@@ -1113,5 +1115,5 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   if (workspacesYaml === undefined) throw new Error(`workspaces.yaml is missing at ${commit}`);
   const workspaces = workspacesSchema.parse(parseYaml(workspacesYaml));
   assertValidWorkspaces(workspaces);
-  return { commit, agents, authority, workspaces };
+  return { commit, agents, authority, workspaces, source: { dir, mode } };
 }
