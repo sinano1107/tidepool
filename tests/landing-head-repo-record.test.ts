@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { DomainError } from "../src/domain-error.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { closedRootOf, createLanding, landingState, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, createLanding, landingState, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import type { MergeDial } from "../src/registry.js";
 import { loadRegistry } from "../src/registry.js";
@@ -241,14 +241,27 @@ it("出元 repo の食い違いで止まった PR のある根は「end landing�
   const child = attachUnsettledChild(db, clock, root.id);
   await landing.tick("outside_merge", clock.now());
   const [failure] = promotionFailures(db, root.id);
-  expect(failure?.question_items?.[0]?.options).toEqual(["retry", "abandon promotion", "end landing"]);
-  expect(closedRootOf(db, resolve)(child)).toBeNull();
+  expect(failure?.question_items?.[0]?.options).toEqual(["retry", "end landing"]);
+  expect(blockingRootOf(db, resolve)(child)).toBeNull();
 
   await submitAnswer({ db, pollNow: () => {}, landing, resolveWorkspace: resolve, github }, getTask(db, failure!.id)!, ["end landing"], undefined, () => clock.now(), "webui");
 
   expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
-  expect(closedRootOf(db, resolve)(child)).toEqual({ task_id: root.id, pr_number: 1 });
-  expect(nextSlotTask(db, "lagoon", undefined, undefined, undefined, undefined, closedRootOf(db, resolve))).toBeUndefined();
+  expect(blockingRootOf(db, resolve)(child)).toEqual({ task_id: root.id, pr_number: 1 });
+  expect(nextSlotTask(db, "lagoon", undefined, undefined, undefined, undefined, blockingRootOf(db, resolve))).toBeUndefined();
+});
+
+it("収束が出元 repo の食い違いで止めた PR の根の question も、断念を出さず retry と「end landing」だけを出す(ADR 0399 決定5)", async () => {
+  const { db, clock, landing, resolve, root, setHeadRepo } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ prNumber: 1 });
+  await commitThroughTaskCheckout(db, clock, resolve(), root, "repair.txt", "repair\n");
+  await setHeadRepo("another/fork");
+
+  await landing.converge();
+
+  expectStoppedNamingBoth(db, root.id);
+  expect(promotionFailures(db, root.id)[0]?.question_items?.[0]?.options).toEqual(["retry", "end landing"]);
 });
 
 it("PR の無い根の昇格失敗の question は今どおり retry と断念だけを出し、「end landing」を受けない(ADR 0399 決定5)", async () => {

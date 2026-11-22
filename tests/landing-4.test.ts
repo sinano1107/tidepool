@@ -10,7 +10,7 @@ import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from ".
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
-  closedRootOf,
+  blockingRootOf,
   createLanding,
   landingState,
   registerLocalMergeQuestion,
@@ -2663,7 +2663,7 @@ it("着地の比較: 追いつきが作業台の tip を取り込んだ retry �
 });
 
 /** 盤面の外で閉じた PR の根と、その下で走らない todo の子。 */
-async function closedRootWithStrandedChild(name: string) {
+async function blockingRootWithStrandedChild(name: string) {
   const root = await pushedRootWithBaseline(name);
   const { db, clock, work } = root;
   appendEvent(db, { taskId: work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: clock.now() });
@@ -2671,20 +2671,20 @@ async function closedRootWithStrandedChild(name: string) {
 }
 
 it("着地の比較: キューとタスクの表示の読み(閉じた根に塞がれた子・着地の状態)は、ref が動いていても Quarantine を立てない", async () => {
-  const { workspace, db, work, child } = await closedRootWithStrandedChild("landing-compare-views");
+  const { workspace, db, work, child } = await blockingRootWithStrandedChild("landing-compare-views");
   git(workspace.path, "tag", "intruder");
 
-  expect(closedRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1 });
+  expect(blockingRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1 });
   expect(landingState(db, getTask(db, work.id)!)).toBe("close_observed");
 
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
 it("着地の比較: キューとタスクの表示の読みは、基準の行が無い workspace で最初の撮りをしない", async () => {
-  const { workspace, db, work, child } = await closedRootWithStrandedChild("landing-compare-views-rowless");
+  const { workspace, db, work, child } = await blockingRootWithStrandedChild("landing-compare-views-rowless");
   dropWorkspaceState(db, workspace.name);
 
-  expect(closedRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1 });
+  expect(blockingRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1 });
 
   expect(holdsBaseline(db, workspace.name)).toBe(false);
 });

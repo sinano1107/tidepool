@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { completeThroughHumanDoor, quarantineChecks, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
-import { closedRootOf, contentLeftBehindLocally, createLanding, landingState, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, contentLeftBehindLocally, createLanding, landingState, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
@@ -459,7 +459,7 @@ it("帰り先なしの task は閉じた根に塞がれた子と読まない —
   await giveUp(b);
 
   expect(taskBranchLostInForce(b.db, dead.id)).toBeDefined();
-  expect(closedRootOf(b.db, () => b.ws)(getTask(b.db, child.id)!)).toBeNull();
+  expect(blockingRootOf(b.db, () => b.ws)(getTask(b.db, child.id)!)).toBeNull();
 });
 
 const doorDeps = (b: Board) => ({ db: b.db, pollNow: () => {}, workspace: b.ws, workspacesDir: b.base });

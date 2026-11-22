@@ -19,7 +19,7 @@ import { repositoryLabel } from "./repo-access.js";
 import { treeDeltaEntries } from "./sandbox.js";
 import {
   ancestorsSql,
-  type ClosedRootOf,
+  type BlockingRootOf,
   contentSourceFor,
   countUnsettledAttachedChildren,
   derivedWorkspace,
@@ -584,11 +584,13 @@ function blockingRootPr(db: Db, root: Pick<Task, "id" | "pr_number">): number | 
   return latestEventOfTask(db, root.id, "landing_ended_pr_left") ? (root.pr_number ?? undefined) : undefined;
 }
 
-/** 閉じた根に塞がれた子(ADR 0265 決定6)の唯一の述語: lineage の帰り先を辿ると盤面の外で閉じた PR の根(人間が着地を終えた根も、ADR 0399 決定6)のブランチに行き着き、
+/** 根に塞がれた子(ADR 0265 決定6)の唯一の述語: lineage の帰り先を辿ると盤面の外で閉じた PR の根(人間が着地を終えた根も、ADR 0399 決定6)のブランチに行き着き、
  *  その根の内容がまだ保護ブランチに無い(ADR 0250 決定1 の前の場合)。帰り先は pickup がブランチを切るときの lineage そのもので、
  *  完了した修理の review は修理のブランチへ、修理は根へ帰るので、行き着く先まで辿る。question は pickup されないので当たらない。
- *  閉じた根が祖先にいなければ git を読まない。workspace や git が読めなければ当たらない —— pickup が自分の経路で同じ失敗を見せる。 */
-export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): ClosedRootOf {
+ *  塞ぐ根が祖先にいなければ git を読まない。workspace や git が読めなければ当たらない —— pickup が自分の経路で同じ失敗を見せる。ただし
+ *  着地を終えた根が祖先にいれば、そのブランチが名前の場所に無いときも読めないときも塞ぐ(別の checkout で登録し直した名前 —— 子の pickup が
+ *  workspace を Quarantine に落とさない、ADR 0399 決定5)。 */
+export function blockingRootOf(db: Db, resolve: WorkspaceResolver | undefined): BlockingRootOf {
   return (task) => {
     const ancestors: Task[] = [];
     for (let id = task.parent_id; id !== null; ) {
@@ -597,8 +599,11 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
       id = ancestor.parent_id;
     }
     if (task.type === "question" || !resolve || !ancestors.some((a) => blockingRootPr(db, a) !== undefined)) return null;
+    const ended = ancestors.find((a) => latestEventOfTask(db, a.id, "landing_ended_pr_left"));
+    const endedBlock = ended && { task_id: ended.id, pr_number: ended.pr_number! };
     try {
       const workspace = resolve(derivedWorkspace(db, task));
+      if (endedBlock && !taskBranchExists(workspace, endedBlock.task_id)) return endedBlock;
       const base = declaredProtectedBranchRef(workspace);
       for (let current: Pick<Task, "type" | "parent_id"> = task; ; ) {
         const branch = lineageTaskBranch(db, workspace, current, base);
@@ -611,7 +616,7 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
         current = target;
       }
     } catch {
-      return null;
+      return endedBlock ?? null;
     }
   };
 }
@@ -846,8 +851,9 @@ export function registerPrPromotionFailureQuestion(
   now: Date,
   purpose = `Creating a PR for completed task "${task.title}" failed: ${error}`,
   tip: string | null = null,
+  repoMismatch = false,
 ): void {
-  registerPrPromotionQuestion(db, task, `PR promotion failed: ${task.title}`, purpose, now, tip);
+  registerPrPromotionQuestion(db, task, `PR promotion failed: ${task.title}`, purpose, now, tip, repoMismatch);
 }
 
 function registerPrPromotionQuestion(
@@ -857,7 +863,17 @@ function registerPrPromotionQuestion(
   purpose: string,
   now: Date,
   tip: string | null,
+  repoMismatch = false,
 ): void {
+  // ADR 0399 決定5: PR を記録した根にだけ着地を終える出口を足す(行は読み直す —— 同じ回に PR を記録した根もある)。記録と宣言の食い違いで
+  // 止まった PR の根には断念を出さない —— 断念はキューの行と merge question を残し、次の tick が同じ食い違いを問い直す。他の止まりは
+  // PR の有無によらず断念を残す(ADR 0241 決定3)
+  const options: string[] =
+    getTask(db, task.id)?.pr_number == null
+      ? [...PR_PROMOTION_FAILURE_OPTIONS]
+      : repoMismatch
+        ? [PR_PROMOTION_FAILURE_OPTIONS[0], END_LANDING_OPTION]
+        : [...PR_PROMOTION_FAILURE_OPTIONS, END_LANDING_OPTION];
   registerTask(
     db,
     {
@@ -868,8 +884,7 @@ function registerPrPromotionQuestion(
       question: [
         {
           title,
-          // ADR 0399 決定5: PR を記録した根にだけ着地を終える出口を足す。行は読み直す —— 同じ回に PR を記録した根もある
-          options: getTask(db, task.id)?.pr_number == null ? [...PR_PROMOTION_FAILURE_OPTIONS] : [...PR_PROMOTION_FAILURE_OPTIONS, END_LANDING_OPTION],
+          options,
           recommendation: "retry",
         },
       ],
@@ -1046,11 +1061,9 @@ function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
  *  (merge・昇格失敗)を PR の観測を刻まずに閉じる。閉じた question の id を返す —— 着地の終わりの記録が運ぶ。 */
 export function endPrRootLanding(db: Db, rootId: string, answering: string, now: Date): string[] {
   clearPendingAutoMerge(db, rootId);
-  const open = db
-    .prepare(`SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND id <> ?
-      AND (question_pending_merge_task_id = ? OR question_pending_pr_promotion_task_id = ?) ORDER BY rowid`)
-    .pluck()
-    .all(answering, rootId, rootId) as string[];
+  // 開いた merge question は根に1つ(ADR 0394 決定2 の立て直しが前のものを閉じる)
+  const merge = latestMergeQuestion(db, rootId);
+  const open = [...(merge?.status === "todo" ? [merge.id] : []), ...openPrPromotionQuestionIds(db, rootId).filter((id) => id !== answering)];
   for (const id of open) settleQuestionAsObserved(db, id, null, now);
   return open;
 }
@@ -1374,7 +1387,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と出元 repo の盤面の
       // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
-      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, tip);
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, tip, error instanceof DeclaredRepoMismatchError);
     }
     return verdict;
   };
@@ -1383,7 +1396,7 @@ export function createLanding(deps: LandingDeps): Landing {
     try {
       const task = getTask(deps.db, root);
       if (!task || openPrPromotionQuestionIds(deps.db, root).some((id) => getTask(deps.db, id)?.purpose.endsWith(error.message))) return;
-      registerPrPromotionFailureQuestion(deps.db, task, error.message, now, error.message);
+      registerPrPromotionFailureQuestion(deps.db, task, error.message, now, error.message, null, true);
     } catch (questionError) {
       console.error(`[landing] could not ask about the repo mismatch for root ${root}:`, questionError);
     }
@@ -1411,7 +1424,7 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 閉じた観測を根に刻んだ直後(ADR 0265 決定6): 閉じた根に塞がれて走らない子があれば、盤面名義の判断行を1行流す。
    *  観測は根に1回だけ刻まれるので、行も1つの観測に1回。子が無ければ流さない。 */
   const announceClosed = (rootId: string, prNumber: number, now: Date) => {
-    const blocking = closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
+    const blocking = blockingRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
     const stranded = (
       deps.db
         .prepare(

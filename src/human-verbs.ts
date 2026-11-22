@@ -45,7 +45,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, endPrRootLanding, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, endPrRootLanding, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -1141,7 +1141,7 @@ function humanCancelDefaults(
     quarantined: quarantineStops(deps.db, deps.quarantineResolvers),
     quarantineQuestions: quarantineStopQuestions(deps.db, deps.quarantineResolvers),
     // 閉じた根に塞がれた子(ADR 0265 決定6)—— pickup が飛ばすのと同じ1本
-    closedRootOf: closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
+    blockingRootOf: blockingRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
   };
 }
 
@@ -1695,7 +1695,7 @@ export async function submitAnswer(
           notice = (await answerThroughConvergence(deps.landing, task.id, origin, kind.task_id))?.notice;
         } else if (answers[0] === END_LANDING_OPTION) {
           const root = kind.task_id;
-          // ADR 0288 決定2: 盤面が merge・push している根の着地は終えない —— 執行が決着を刻む
+          // 無人 merge の tick は await をまたいで処理中の印を持つ。印がある間に終えると、キューの行の取り下げ(ADR 0399 決定6)が執行中の merge と競る
           if (deps.landing.isMarked(root)) throw new DomainError(prInFlightRefusal(getTask(deps.db, root)!.pr_number!));
           // ADR 0399 決定6: キューの行と開いた着地の question の後始末は、回答と同じ transaction で
           withAnswer = (questionId) => {

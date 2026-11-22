@@ -342,7 +342,7 @@ it("遅い走査は、workspace の解決が分類できない失敗で落ちた
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const broken = escalatedRoot(db, clock, 1, "broken").question;
-  const { root: closedRoot, question: closed } = escalatedRoot(db, clock, 2, "healthy");
+  const { root: blockingRoot, question: closed } = escalatedRoot(db, clock, 2, "healthy");
   github.scriptClosedOutside(2);
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
   const landing = createLanding({
@@ -360,7 +360,7 @@ it("遅い走査は、workspace の解決が分類できない失敗で落ちた
 
   expect(getTask(db, broken.id)!.status).toBe("todo");
   expect(getTask(db, closed.id)!.status).toBe("done");
-  expect(boardEvents(db, closedRoot.id, "pr_close_observed")).toEqual(closeObserved(2));
+  expect(boardEvents(db, blockingRoot.id, "pr_close_observed")).toEqual(closeObserved(2));
   expect(logged).toHaveBeenCalledWith(expect.stringContaining(`PR #1 (question ${broken.id})`), expect.any(Error));
 });
 

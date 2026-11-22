@@ -4,7 +4,7 @@ import { warnCliAuthExpiry } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
-import { closedRootOf } from "../src/landing.js";
+import { blockingRootOf } from "../src/landing.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import {
@@ -33,7 +33,7 @@ import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import {
   answerQuestionViaWebui,
   auditorRcaOn,
-  closedRootTree,
+  blockingRootTree,
   decomposedChild,
   decomposeTaskViaWorker,
   FULL_HANDOFF,
@@ -191,21 +191,21 @@ it("盤面名義の RCA review(異議の付帯子)は直接 cancel を拒否さ�
 
 // ADR 0265 決定6 / ADR 0198 の Status 追記: 根が死んだ時点で、付帯子は規則が要求する入力ではなくなる
 it("盤面の外で閉じた PR の根の付帯子(異議由来の修理と、盤面名義の RCA review)は直接 cancel できる", async () => {
-  const tree = await closedRootTree("direct-cancel-closed-root");
+  const tree = await blockingRootTree("direct-cancel-closed-root");
   db = tree.db;
 
   for (const repair of tree.repairs) {
-    cancelTaskDirectly(db, repair, null, NOW, { closedRootOf: closedRootOf(db, () => tree.workspace) }, "webui");
+    cancelTaskDirectly(db, repair, null, NOW, { blockingRootOf: blockingRootOf(db, () => tree.workspace) }, "webui");
     expect(getTask(db, repair.id)!.status).toBe("cancelled");
   }
 });
 
 it("閉じていない根の盤面名義の付帯子(RCA review)は、閉じた根の述語を渡しても直接 cancel を拒否される", async () => {
-  const tree = await closedRootTree("direct-cancel-open-root", { closed: false });
+  const tree = await blockingRootTree("direct-cancel-open-root", { closed: false });
   db = tree.db;
 
   for (const rca of tree.repairs.filter((repair) => repair.type === "review")) {
-    expect(() => cancelTaskDirectly(db, rca, null, NOW, { closedRootOf: closedRootOf(db, () => tree.workspace) }, "webui")).toThrow(DomainError);
+    expect(() => cancelTaskDirectly(db, rca, null, NOW, { blockingRootOf: blockingRootOf(db, () => tree.workspace) }, "webui")).toThrow(DomainError);
     expect(getTask(db, rca.id)!.status).toBe("todo");
   }
 });

@@ -89,8 +89,8 @@ export interface QueueTask {
   assignee: string | null;
   risk_flag: number;
   issue_live_state?: "live" | "stale" | "unavailable";
-  /** キューの読み口だけ: この行を skipped にしている閉じた根と PR(ADR 0265 決定6)。 */
-  closed_root?: { task_id: string; pr_number: number };
+  /** キューの読み口だけ: この行を skipped にしている根と PR —— 盤面の外で閉じた PR の根(ADR 0265 決定6)か、人間が着地を終えた根(ADR 0399 決定6)。 */
+  blocking_root?: { task_id: string; pr_number: number };
 }
 
 /** 盤面の行と task 詳細が共有する欄。 */

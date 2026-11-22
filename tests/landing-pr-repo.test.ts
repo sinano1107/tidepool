@@ -5,13 +5,13 @@ import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { GhCliClient } from "../src/github.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
-import { countUnsettledTasksReferencing, getTask, listBoard, registerMergeQuestion } from "../src/tasks.js";
+import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, holdAfterMerge } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace } from "./harness.js";
-import { boardEvents, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -356,7 +356,8 @@ it("無人 merge キューで止まった PR のある根は「end landing」で
   const { db, clock, root, landing, move, answerFailure } = fixture;
   await move();
   await landing.tick("auto_merge", clock.now());
-  expect(promotionFailures(db, root.id).map((task) => task.question_items?.[0]?.options)).toEqual([["retry", "abandon promotion", "end landing"]]);
+  // ADR 0399 決定5: 食い違いで止まった PR の根には断念を出さない —— 断念はキューの行を残し、次の tick が同じ食い違いを問い直す
+  expect(promotionFailures(db, root.id).map((task) => task.question_items?.[0]?.options)).toEqual([["retry", "end landing"]]);
 
   const answered = await answerFailure("end landing");
 
@@ -396,4 +397,42 @@ it("merge 中の印が付いた根への「end landing」は拒まれ、根の�
   release();
   expect(boardEvents(db, root.id, "landing_ended_pr_left")).toEqual([]);
   expect(landingState(db, getTask(db, root.id)!)).toBe("auto_merge_queue");
+});
+
+it("食い違い以外で止まった PR の根(修理の push が拒まれた)は、断念も着地を終える出口も出す(ADR 0241 決定3 / ADR 0399 決定5)", async () => {
+  const { db, clock, reef, root, github, landing, answerFailure } = await reefWithPr("escalate");
+  await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), root, "repair.txt", "repair\n");
+  github.scriptPushFailure(new Error("push rejected"));
+
+  await landing.converge();
+
+  expect(promotionFailures(db, root.id).map((task) => task.question_items?.[0]?.options)).toEqual([["retry", "abandon promotion", "end landing"]]);
+  await answerFailure("end landing");
+  expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
+});
+
+it("同じ根に開いた別の昇格失敗の question も「end landing」の回答が閉じ、記録が名指す", async () => {
+  const { db, clock, root, landing, move, answerFailure } = await reefWithPr("auto_if_ci_green");
+  await move();
+  await landing.tick("auto_merge", clock.now());
+  registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+  const [answering, second] = promotionFailures(db, root.id);
+
+  await answerFailure("end landing");
+
+  expect(getTask(db, answering!.id)?.question_answer).toEqual(["end landing"]);
+  expect([getTask(db, second!.id)?.status, getTask(db, second!.id)?.question_answer]).toEqual(["done", null]);
+  expect(boardEvents(db, root.id, "landing_ended_pr_left").map(({ payload }) => payload)).toEqual([{ kind: "landing_ended_pr_left", question_ids: [second!.id] }]);
+});
+
+it("別の checkout で登録し直した名前でも、着地を終えた根の下の子は塞がれて拾われない —— 根のブランチが読めなくても塞ぐ(ADR 0399 決定5・6)", async () => {
+  const { db, clock, reef, root, landing, move, answerFailure } = await reefWithPr("escalate");
+  const child = attachUnsettledChild(db, clock, root.id);
+  await move();
+  await landing.tick("outside_merge", clock.now());
+
+  await answerFailure("end landing");
+
+  expect(blockingRootOf(db, reef.resolve)(getTask(db, child.id)!)).toEqual({ task_id: root.id, pr_number: 1 });
+  expect(nextSlotTask(db, "reef", undefined, undefined, undefined, undefined, blockingRootOf(db, reef.resolve))).toBeUndefined();
 });

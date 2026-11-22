@@ -2023,15 +2023,15 @@ export interface ResourceStopDefaults {
   interviewerName?: string;
 }
 
-/** 子を塞いでいる閉じた根(ADR 0265 決定6)—— 盤面の外で閉じた PR の根か人間が着地を終えた PR の根(ADR 0399 決定6)と、その PR。 */
-export interface ClosedRoot {
+/** 子を塞いでいる根 —— 盤面の外で閉じた PR の根(ADR 0265 決定6)か人間が着地を終えた PR の根(ADR 0399 決定6)と、その PR。 */
+export interface BlockingRoot {
   task_id: string;
   pr_number: number;
 }
 
-/** 「閉じた根に塞がれた子」の唯一の述語の形(landing.ts の `closedRootOf` が作る)。git を読むので呼び手が渡す ——
+/** 「根に塞がれた子」の唯一の述語の形(landing.ts の `blockingRootOf` が作る)。git を読むので呼び手が渡す ——
  *  pickup の候補(`nextSlotTask`)・キューの skipped(`listQueue`)・直接 cancel の範囲が同じ1本を受け取る。 */
-export type ClosedRootOf = (task: Pick<Task, "type" | "parent_id" | "workspace">) => ClosedRoot | null;
+export type BlockingRootOf = (task: Pick<Task, "type" | "parent_id" | "workspace">) => BlockingRoot | null;
 
 /** The pointers the direct-cancel question gate's quarantine half resolves an
  *  unset workspace/assignee against (issue #130), same fallbacks the pickup
@@ -2043,7 +2043,7 @@ export interface CancelDefaults extends ResourceStopDefaults {
    *  question を名指す(ADR 0385 決定4)。Absent → 拒否文は資源の名を言う。 */
   quarantineQuestions?: { workspaces: Record<string, string>; assignees: Record<string, string> };
   /** 閉じた根に塞がれた子は範囲に入る(ADR 0265 決定6)。pickup が飛ばすのと同じ1本。Absent → 広げない。 */
-  closedRootOf?: ClosedRootOf;
+  blockingRootOf?: BlockingRootOf;
 }
 
 /** The direct-cancel question gate (issue #130, GLOSSARY.md's Cancel): while a
@@ -2136,7 +2136,7 @@ export function cancelTaskDirectly(
   /** The human door validates the live slot, records the stop and teardown with `cancel`, then starts reclaim outside the transaction. */
   stopApproval?: { taskId: string; stop: (cancel: () => void) => void },
 ): void {
-  assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
+  assertDirectlyCancellableScope(db, task, defaults.blockingRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
   const cancel = () => withTargetQuestionSweep(db, now, () => {
     cancelUnsettledSubtree(db, [task.id], HUMAN_ACTOR_ID, now, {
@@ -2252,10 +2252,10 @@ export function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
 }
 
 /** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定4・5)。直接 cancel できない task は空。 */
-export function directCancelDiscards(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): Discard[] {
+export function directCancelDiscards(db: Db, task: Task, blockingRootOf: BlockingRootOf | undefined): Discard[] {
   // 直接 cancel の門と同じ1本で判定する —— 門が拒む task は cancel されないので捨てるものも無い
   try {
-    assertDirectlyCancellableScope(db, task, closedRootOf);
+    assertDirectlyCancellableScope(db, task, blockingRootOf);
   } catch (error) {
     if (error instanceof DomainError) return [];
     throw error;
@@ -3796,10 +3796,10 @@ function assertHumanEditableScope(db: Db, task: Task): void {
  *  judgment and also stay out (ADR 0211). Every one of these comes into scope once it is stranded under a
  *  root whose PR was closed outside the board, or whose landing a human ended (ADR 0399 決定6) — the same one predicate pickup skips by,
  *  which reaches any todo the lineage returns to that root's branch, not only its attached children (ADR 0265 決定6). */
-function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
+function assertDirectlyCancellableScope(db: Db, task: Task, blockingRootOf: BlockingRootOf | undefined): void {
   // 受験者は親を持たないが root ではない —— root の agent が登録した答案で、外すのは failure の abandon か対象外し(ADR 0267 決定1)
   const root = task.parent_id === null && task.interview_target_id === null && task.type !== "question";
-  const inScope = getTextAuthor(db, task.id) === HUMAN_ACTOR_ID || root || !!closedRootOf?.(task);
+  const inScope = getTextAuthor(db, task.id) === HUMAN_ACTOR_ID || root || !!blockingRootOf?.(task);
   if (!inScope) {
     throw new DomainError(
       "only a human-authored task, a board-registered root other than a question, or a task stranded under a root whose PR " +
@@ -4486,8 +4486,8 @@ export type BoardTask = Omit<Task, "status" | "question_proposal" | typeof store
   registrant?: string;
   /** 受験者だけ: その Interview の root の id(ADR 0267 決定6)。親の無い受験者の行がどの Interview のものかを人間に言う。 */
   interview_root_id: string | null;
-  /** キューの読み口だけ: この行を skipped にしている閉じた根(ADR 0265 決定6)。 */
-  closed_root?: ClosedRoot;
+  /** キューの読み口だけ: この行を skipped にしている根 —— 閉じた根(ADR 0265 決定6)か人間が着地を終えた根(ADR 0399 決定6)。 */
+  blocking_root?: BlockingRoot;
 };
 
 /** Who registered `taskId` — its own `task_registered` event's worker id.
@@ -4715,7 +4715,7 @@ export function listQueue(
    *  (scheduler.ts の `pickupExclusions` + selector)から渡す。 */
   isSkipped?: (task: BoardTask) => boolean,
   /** 閉じた根に塞がれた子は skipped で、理由に閉じた根と PR を持つ(ADR 0265 決定6)。`nextSlotTask` と同じ1本を渡す。 */
-  closedRootOf?: ClosedRootOf,
+  blockingRootOf?: BlockingRootOf,
   interviewerName?: string,
   /** issue 展開の一時的失敗が続く間(ADR 0328 決定7): GitHub を読む task を skipped に見せる。`nextSlotTask` と同じ引数。 */
   excludeGitHubReading = false,
@@ -4735,8 +4735,8 @@ export function listQueue(
     .map((row) => toBoardTask(db, row))
     .map((task) => {
       if (task.status !== "todo") return task;
-      const closed_root = closedRootOf?.(task);
-      if (closed_root) return { ...task, status: "skipped" as const, closed_root };
+      const blocking_root = blockingRootOf?.(task);
+      if (blocking_root) return { ...task, status: "skipped" as const, blocking_root };
       return isSkipped?.(task) ? { ...task, status: "skipped" as const } : task;
     });
 }
@@ -5103,7 +5103,7 @@ export function nextSlotTask(
    *  その agent のどのタスクも走れないので、広さが実態と一致する。 */
   excludedTaskIds?: string[],
   /** 閉じた根に塞がれた子を飛ばす(ADR 0265 決定6)。Absent → 飛ばさない。 */
-  closedRootOf?: ClosedRootOf,
+  blockingRootOf?: BlockingRootOf,
   interviewerName?: string,
   /** この poll で issue 展開が一時的に失敗した(ADR 0328 決定2): pickup で GitHub を読む task を外す。 */
   excludeGitHubReading = false,
@@ -5133,7 +5133,7 @@ export function nextSlotTask(
       excludeGitHubReading: excludeGitHubReading ? 1 : 0,
     }) as TaskRow | undefined;
     const task = row && rowToTask(row);
-    if (!task || !closedRootOf?.(task)) return task;
+    if (!task || !blockingRootOf?.(task)) return task;
     excluded.push(task.id);
   }
 }
