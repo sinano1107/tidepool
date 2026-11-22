@@ -71,7 +71,7 @@ function expectStopped({ db, root, old, moved }: Awaited<ReturnType<typeof reefW
   expect(rootPrOutcome(db, root.id)).toBeNull();
   const [failure, ...repeated] = promotionFailures(db, root.id);
   expect(repeated).toEqual([]);
-  expect(failure?.purpose).toContain(`picked up for repo ${old.repo}`);
+  expect(failure?.purpose).toContain(`recorded repo ${old.repo}`);
   expect(failure?.purpose).toContain(`now declares repo ${moved.repo}`);
   expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
 }
@@ -126,7 +126,7 @@ it("登録し直した名前で旧い根への merge の回答は、PR を読む
   const refusal = await answer("merge").catch((error: Error) => error);
 
   expect(refusal).toBeInstanceOf(DomainError);
-  expect((refusal as Error).message).toContain(`picked up for repo ${old.repo}`);
+  expect((refusal as Error).message).toContain(`recorded repo ${old.repo}`);
   expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
   expect([github.stateChecks, github.ciChecks, github.merged]).toEqual([[], [], []]);
   expect(rootPrOutcome(db, root.id)).toBeNull();
@@ -213,7 +213,7 @@ it("merge の回答が CI の読みを待つ間に登録し直すと、両方の
   const refusal = await answering;
 
   expect(refusal).toBeInstanceOf(DomainError);
-  expect((refusal as Error).message).toContain(`picked up for repo ${old.repo}`);
+  expect((refusal as Error).message).toContain(`recorded repo ${old.repo}`);
   expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
   expect(github.ciChecks).toEqual([{ path: old.path, number: 1 }]);
   expect(github.merged).toEqual([]);
@@ -244,7 +244,7 @@ it("書き換えられた head への merge 回答の寄り道で登録し直す
   const refusal = await answering;
 
   expect(refusal).toBeInstanceOf(DomainError);
-  expect((refusal as Error).message).toContain(`picked up for repo ${old.repo}`);
+  expect((refusal as Error).message).toContain(`recorded repo ${old.repo}`);
   expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
   expect(github.stateChecks).toEqual([{ path: old.path, number: 1 }, { path: old.path, number: 1 }]);
   expect(rootPrOutcome(db, root.id)).toBeNull();
@@ -306,7 +306,7 @@ it("無人 merge の PR 読み取りが token を待つ間に登録し直すと�
   expect(ghCommands()).toBe("");
   expect(rootPrOutcome(db, root.id)).toBeNull();
   const [failure] = promotionFailures(db, root.id);
-  expect(failure?.purpose).toContain("picked up for repo acme/reef-old");
+  expect(failure?.purpose).toContain("recorded repo acme/reef-old");
   expect(failure?.purpose).toContain(`now declares repo ${moved.repo}`);
   expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
 });
@@ -329,7 +329,7 @@ it("merge の回答が執行用 token を待つ間に登録し直すと、取得
   const refusal = await answering;
 
   expect(refusal).toBeInstanceOf(DomainError);
-  expect((refusal as Error).message).toContain("picked up for repo acme/reef-old");
+  expect((refusal as Error).message).toContain("recorded repo acme/reef-old");
   expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
   expect(ghCommands()).toBe("");
   expect(rootPrOutcome(db, root.id)).toBeNull();
