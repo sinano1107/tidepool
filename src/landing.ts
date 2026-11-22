@@ -292,8 +292,12 @@ export function assertLandingRefs(
       }
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(value!));
     }
-    // ADR 0399 決定7: 最初の撮りの前の項に落ちた名前も、動いた ref と同じくその名前の Quarantine
-    if (!(error instanceof RefsMovedError || error instanceof PickupGateError)) {
+    // ADR 0399 決定7: 最初の撮りの前の項に落ちた名前もその名前の Quarantine。理由と落ちた項は question が持つ
+    if (error instanceof PickupGateError) {
+      quarantineWorkspace(db, workspace.name, error, now);
+      throw new LandingRefsRefusedError(workspaceQuarantinedMessage(workspace.name));
+    }
+    if (!(error instanceof RefsMovedError)) {
       if (error instanceof WorkspaceRepoMismatchError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       throw new LandingRefCheckError(`could not verify refs for workspace "${workspace.name}" before landing: ${reason}`);
