@@ -277,7 +277,7 @@ async function lagoonWithPurelyLocalDoneRoot() {
   return { addFork, db, doors, github, landing, registerAgain, resolve, root };
 }
 
-it("purely-local で拾われた根は publish では宣言の repo を記録せず、最初の push の直前に記録して PR を開く", async () => {
+it("purely-local で拾われた根は publish では宣言の repo を記録せず、着地の最初の push の直前に記録して PR を開く", async () => {
   const { addFork, db, doors, github, landing, registerAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
   const purelyLocal = resolve();
   await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
@@ -288,9 +288,11 @@ it("purely-local で拾われた根は publish では宣言の repo を記録せ
   let startedPush = false;
   vi.spyOn(github, "preparePush").mockImplementationOnce(async (input) => {
     const push = await preparePush(input);
+    const checkDeclaredRepo = withDeclaredRepoCheck(db, input.workspace, root.id).checkDeclaredRepo!;
+    expect(() => checkDeclaredRepo(purelyLocal)).not.toThrow();
     return (sha) => {
       startedPush = true;
-      expect(() => withDeclaredRepoCheck(db, input.workspace, root.id).checkDeclaredRepo!(purelyLocal)).toThrow(/repo acme\/lagoon/);
+      expect(() => checkDeclaredRepo(purelyLocal)).toThrow(/repo acme\/lagoon/);
       push(sha);
     };
   });
