@@ -1,18 +1,21 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { parseDocument } from "yaml";
 import { openDb } from "../src/db.js";
 import { NoOwnGitDirError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
+import { announceHeadRepo } from "../src/workspace.js";
 import {
   BoardNamedProtectedBranchError,
   BoardStateOverlapError,
   createWorkspace,
+  LeftoverWorkspaceStateError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
@@ -20,7 +23,8 @@ import {
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { startGitHttpRemote, startRecordingHttpRemote } from "./git-http-remote.js";
-import { makeRegistry, makeRemoteBackedRegistry, registryCloneOverlap, registryFixedPoints, rejectRegistryPushes } from "./registry-fixture.js";
+import { leaveBaseline, makeWorkspace } from "./harness.js";
+import { commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry, registryCloneOverlap, registryFixedPoints, rejectRegistryPushes, setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.mock("../src/github-auth.js", async (importOriginal) => ({
@@ -884,6 +888,51 @@ describe("createWorkspace: clone モード(issue #57)", () => {
       head: git(path, "rev-parse", "HEAD"),
       leaked: reached.requests().filter((r) => r.headers.cookie !== undefined || r.headers["x-leak"] !== undefined),
     }).toEqual({ head: git(upstream, "rev-parse", "HEAD"), leaked: [] });
+  });
+});
+
+describe("createWorkspace: 削除の途中で残った行の上には登録しない(ADR 0401 決定5 / issue #3198)", () => {
+  it("削除の扉の commit の後で基準の行が残った名前は断られ、文が削除の commit と出口を順に名指し、clone を残さない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const reef = await makeWorkspace("reef");
+    setWorkspaceEntry(registryDir, "reef", "path", reef.path);
+    const deletion = commitWorkspaceDeletion(registryDir, "reef");
+    await leaveBaseline(deps.db, reef);
+
+    await expect(createWorkspace({ mode: "create", name: "reef" }, deps)).rejects.toThrow(
+      `workspace "reef" cannot be registered: the board still holds state from an earlier workspace with that name. A deletion of "reef" stopped midway: registry commit ${deletion} removed the entry, but the board kept its state. To clear it, in order: put the entry back in the registry under that name as it was in workspaces.yaml at ${deletion}^, with its repo and head_repo as well as its path (a repo other than the one the board remembers is refused again); accept the open Quarantine question for "reef", if any; delete the workspace through the deletion door; register it again (under a new name to rename it).`,
+    );
+    expect(existsSync(join(deps.workspacesBaseDir, "reef"))).toBe(false);
+  });
+
+  it("撮りを持たない行(出元 repo を覚えただけ)が残る名前も断られる", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    announceHeadRepo(deps.db, await makeWorkspace("reef"), "octo/reef-fork");
+
+    await expect(createWorkspace({ mode: "create", name: "reef" }, deps)).rejects.toThrow(LeftoverWorkspaceStateError);
+    expect(existsSync(join(deps.workspacesBaseDir, "reef"))).toBe(false);
+  });
+
+  it("扉で削除した後に登録し直して手で消した名前は、古い削除の commit を名指さず条件つきの文になる", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const reef = await makeWorkspace("reef");
+    setWorkspaceEntry(registryDir, "reef", "path", reef.path);
+    const completed = commitWorkspaceDeletion(registryDir, "reef");
+    setWorkspaceEntry(registryDir, "reef", "path", (await makeWorkspace("reef-moved")).path);
+    const file = join(registryDir, "workspaces.yaml");
+    const entries = parseDocument(readFileSync(file, "utf8"));
+    entries.delete("reef");
+    writeFileSync(file, entries.toString());
+    commitAll(registryDir, "remove reef by hand");
+    await leaveBaseline(deps.db, reef);
+
+    const refusal = createWorkspace({ mode: "create", name: "reef" }, deps);
+
+    await expect(refusal).rejects.toThrow('The board found no registry commit from the deletion door for "reef"');
+    await expect(refusal).rejects.not.toThrow(completed);
   });
 });
 

@@ -70,6 +70,7 @@ import {
   type WorkspaceConfig,
   type WorkspaceRegistryProtection,
   type WorkspacesBaseDirSource,
+  workspaceDeletionMessage,
   workspaceProtectionReader,
   writeBoardRefs,
 } from "./workspace.js";
@@ -638,7 +639,7 @@ export async function deleteWorkspace(
       doc.delete(input.name);
       writeFileSync(file, doc.toString());
     },
-    `delete workspace ${input.name} via WebUI`,
+    workspaceDeletionMessage(input.name),
   );
   // 行の無い名前の削除は、開いていた Quarantine を観測で閉じて event に残す(ADR 0373 決定14)。閉じるものは行を消すのと同じ transaction で
   // 読み直す —— 拒否の検査の後に立ったもの(この名前の B9 など)も残さない

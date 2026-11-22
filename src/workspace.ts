@@ -3077,7 +3077,7 @@ export function holdsWorkspaceState(db: Db, name: string): boolean {
 /** 名前が registry に無いのに行が残るときの原因と出口(ADR 0401 決定5)。登録の扉の拒否と B9 が共有する。削除の扉の commit を
  *  registry の ref で探し、見つかればその sha を、無ければ(手編集)条件つきで戻す先を言う。`registry` が無い呼び手も条件つき。 */
 export function leftoverStateExit(name: string, registry: RegistrySource | undefined): string {
-  const deletion = registry && git(registry.dir, "log", "-1", "--format=%H", "--fixed-strings", "--grep", `delete workspace ${name} via WebUI`, registryRef(registry.mode));
+  const deletion = registry && doorDeletionCommit(name, registry);
   const cause = deletion
     ? `A deletion of "${name}" stopped midway: registry commit ${deletion} removed the entry, but the board kept its state`
     : `The board found no registry commit from the deletion door for "${name}"; the entry was likely removed or renamed by hand`;
@@ -3086,6 +3086,24 @@ export function leftoverStateExit(name: string, registry: RegistrySource | undef
     : "as it was before it was removed (in workspaces.yaml at the parent of the commit that removed it, if it was committed)";
   // 覚えた repo と違う宣言は戻した後の2回目の拒否になる(ADR 0378 決定10)
   return `${cause}. To clear it, in order: put the entry back in the registry under that name ${restore}, with its repo and head_repo as well as its path (a repo other than the one the board remembers is refused again); accept the open Quarantine question for "${name}", if any; delete the workspace through the deletion door; register it again (under a new name to rename it)`;
+}
+
+/** 削除の扉が registry に打つ commit の message。扉の書き込みと `doorDeletionCommit` の探索が同じ綴りを読む。 */
+export function workspaceDeletionMessage(name: string): string {
+  return `delete workspace ${name} via WebUI`;
+}
+
+/** 名前の top-level の行を最後に変えた commit が削除の扉の commit ならその sha。後の再登録・手編集・revert があれば古い削除を名指さない。
+ *  git が読めなければ条件つきの文へ落とす —— B9 の Quarantine を立てる前に投げない。 */
+function doorDeletionCommit(name: string, { dir, mode }: RegistrySource): string | undefined {
+  try {
+    // 名前の規則(英数字・`-`・`_`・`.`、registry の読みも課す)で正規表現に効くのは `.` だけ
+    const keyLine = `^${name.replaceAll(".", "\\.")}:`;
+    const [sha, subject] = git(dir, "log", "-1", "--format=%H%n%s", "-G", keyLine, registryRef(mode), "--", "workspaces.yaml").split("\n");
+    return subject === workspaceDeletionMessage(name) ? sha : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 盤面がその名前の基準の行を持つか(ADR 0373 決定13・14)。 */

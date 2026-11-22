@@ -781,9 +781,7 @@ it("合成 root の resolver は引けない名前に読んだ registry を運�
     await t.clock.advance(HOUR);
 
     await vi.waitFor(async () => expect(await servedQuarantineQuestion(t, "workspace", "reef")).toBeDefined());
-    expect((await servedQuarantineQuestion(t, "workspace", "reef")).purpose).toContain(
-      `unknown workspace: reef. The board holds a baseline for "reef", so no workspace captures a first baseline until it resolves again. A deletion of "reef" stopped midway: registry commit ${deletion} removed the entry, but the board kept its state. To clear it, in order: put the entry back in the registry under that name as it was in workspaces.yaml at ${deletion}^, with its repo and head_repo as well as its path (a repo other than the one the board remembers is refused again); accept the open Quarantine question for "reef", if any; delete the workspace through the deletion door; register it again (under a new name to rename it). Workspaces`,
-    );
+    expect((await servedQuarantineQuestion(t, "workspace", "reef")).purpose).toContain(`registry commit ${deletion} removed the entry`);
   } finally {
     await t.stop();
   }

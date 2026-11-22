@@ -8,6 +8,7 @@ import { type BoardStatePath, boardStatePaths } from "../src/board-state.js";
 import { loadRegistry, ownEntry } from "../src/registry.js";
 import { SKILL_WILDCARD } from "../src/skill-allowlist.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
+import { workspaceDeletionMessage } from "../src/workspace.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 状態パスはどれも存在しない場所に置き、registry clone だけを本物の固定点にした盤面の固定点(ADR 0377 決定3)。
@@ -35,7 +36,7 @@ export function commitWorkspaceDeletion(registryDir: string, name: string): stri
   const entries = parseDocument(readFileSync(file, "utf8"));
   entries.delete(name);
   writeFileSync(file, entries.toString());
-  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", `delete workspace ${name} via WebUI`], { cwd: registryDir, stdio: "pipe" });
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", workspaceDeletionMessage(name)], { cwd: registryDir, stdio: "pipe" });
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: registryDir, encoding: "utf8" }).trim();
 }
 
