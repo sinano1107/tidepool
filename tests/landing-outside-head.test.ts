@@ -191,7 +191,7 @@ it("盤面の知らない commit を言う merge question への最初の「merg
 it("キューにいる PR の merge question が開いたまま外から進んだ head を tick が読むと、古い question は閉じ、新しい question への最初の「merge」が通る", async () => {
   const pr = await openPushedPr("outside-head-question-already-open", "auto_if_ci_green");
   const lastPushed = originHead(pr.workspace, pr.work.id);
-  const registered = mergeQuestion(pr.db, pr.clock, { pending_merge_pr: 1 }, pr.work.workspace ?? undefined);
+  const registered = mergeQuestion(pr.db, pr.clock, { pending_merge_pr: 1, root: pr.work.id }, pr.work.workspace ?? undefined);
   const original = getTask(pr.db, registered.id)!;
   const head = await pushOutsideBoard(pr.workspace, pr.work.id);
 
@@ -372,7 +372,7 @@ it("回答が head を比べる間に同じ PR に in-flight 印が付けば、q
   let release: (() => void) | null = null;
   // head は手元に無いので、比べる前に取る —— その token の await の間に印を取る
   vi.spyOn(githubAuth, "ensureToken").mockImplementationOnce(async (repo, options) => {
-    release = pr.landing.takeInFlightMark(pr.work.workspace, 1);
+    release = pr.landing.takeInFlightMark(pr.work.id);
     return ensureToken(repo, options);
   });
 
@@ -451,7 +451,7 @@ it("回答が head を読んだ時点で同じ PR に in-flight 印が付いて�
   pr.github.scriptCiStatus("success");
   let release: (() => void) | null = null;
   afterCiRead(pr.github, () => {
-    release ??= pr.landing.takeInFlightMark(pr.work.workspace, 1);
+    release ??= pr.landing.takeInFlightMark(pr.work.id);
   });
 
   const asked = openQuestion(pr);
@@ -467,7 +467,7 @@ it("回答が head を読んだ時点で同じ PR に in-flight 印が付いて�
 
 it("無人 merge の tick が in-flight 印を持つ間、収束は記録済みの PR へ push せず次の突きに回し、retry の回答は答え直させる", async () => {
   const c = await pushedRoot("outside-head-convergence-waits-for-mark", { pr: "recorded", merge: "auto_if_ci_green", openFailure: true });
-  const release = c.landing.takeInFlightMark(c.work.workspace, 1)!;
+  const release = c.landing.takeInFlightMark(c.work.id)!;
 
   expect(await c.retry(promotionFailures(c.db, c.work.id)[0]!)).toBe(IN_FLIGHT);
   expect(c.github.pushes).toEqual([]);
@@ -479,7 +479,7 @@ it("無人 merge の tick が in-flight 印を持つ間、収束は記録済み�
 
 it("in-flight 印が付いている間の突きでは収束は push せず、印が放された次の突きで push する", async () => {
   const c = await pushedRoot("outside-head-poke-waits-for-mark", { pr: "recorded", merge: "auto_if_ci_green" });
-  const release = c.landing.takeInFlightMark(c.work.workspace, 1)!;
+  const release = c.landing.takeInFlightMark(c.work.id)!;
 
   await expect(convergeOn(c.landing, c.work.id)).resolves.toBeUndefined();
   expect(c.github.pushes).toEqual([]);

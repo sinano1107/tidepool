@@ -106,6 +106,7 @@ function makeTask(
     question_pending_child: null,
     question_proposal: null,
     question_pending_merge_pr: null,
+    question_pending_merge_task_id: null,
     question_pending_local_merge_task_id: null,
     question_pending_pr_promotion_task_id: null,
     question_landing_tip: null,

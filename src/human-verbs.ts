@@ -115,11 +115,9 @@ import {
   type RegistryProposal,
   registerTask,
   retryInterviewRoot,
-  rootOfPr,
   settleQuestionAsObserved,
   type Task,
   taskBranchLostInForce,
-  taskIdForPr,
   tasksOwingReleaseOn,
   unsettledCancelScope,
   unsettledOpenersOf,
@@ -1712,12 +1710,12 @@ export async function submitAnswer(
         if (observed) return presentAnswered(deps, task);
         const beingMerged = prInFlightRefusal(mergePr);
         // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
-        if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
+        if (deps.landing.isMarked(kind.task_id)) throw new DomainError(beingMerged);
         if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
           const assertQuestionOpen = () => {
             if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
           };
-          const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
+          const landingTaskId = kind.task_id;
           assertLandingAllowed(deps.db, landingTaskId);
           if (!deps.github) {
             throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
@@ -1740,7 +1738,7 @@ export async function submitAnswer(
             }
             // ADR 0387 決定4: 読んだ後の同期区間で印を見て、印があるか、読む間に収束が push を記録していれば判定せずに答え直させる ——
             // 収束の push の前後の head を、盤面の push していない head とも書き換えとも読まない
-            if (deps.landing.isMarked(task.workspace, mergePr) || lastPushedHead(deps.db, landingTaskId) !== lastPushed) throw new DomainError(beingMerged);
+            if (deps.landing.isMarked(kind.task_id) || lastPushedHead(deps.db, landingTaskId) !== lastPushed) throw new DomainError(beingMerged);
             // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
             observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
             // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
@@ -1772,7 +1770,7 @@ export async function submitAnswer(
           // 同時に走るもう一方の回答は question closed で拒まれる(ADR 0387 Status 追記 (1) を記録を足さずに保つ)
           const refuseUnasked = (origin: Exclude<PrHeadOrigin, { kind: "pushed" }>) => {
             // ADR 0288 決定2(印の後): 比べる await の間に別の回答が印を取って merge していれば、その question を取り下げない
-            if (deps.landing.isMarked(task.workspace, mergePr)) return new DomainError(beingMerged);
+            if (deps.landing.isMarked(kind.task_id)) return new DomainError(beingMerged);
             const root = getTask(deps.db, landingTaskId)!;
             const refusal = refuseUnaskedHead(
               deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), root,
@@ -1809,7 +1807,7 @@ export async function submitAnswer(
           // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
           // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
           await actIfGateOpen(() => {
-            mark.release = deps.landing.takeInFlightMark(task.workspace, mergePr);
+            mark.release = deps.landing.takeInFlightMark(kind.task_id);
             if (!mark.release) throw new DomainError(beingMerged);
             // ADR 0288 決定2: 上の await の間に閉じた question と門を、印と同じ同期の区間で読み直す。印は finally が放す
             assertQuestionOpen();
@@ -1828,9 +1826,8 @@ export async function submitAnswer(
           });
           rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };
         } else {
-          // ADR 0394 決定5: 外の部分が今と違っても拒まない —— 断るのは人間が見た question の内容。PR を開いた根が無ければ刻む先が無い
-          const root = rootOfPr(deps.db, mergePr, task.workspace);
-          if (root !== undefined) rootRecord = { root, payload: landingDeclined(task.id, kind), byBoard: true };
+          // ADR 0394 決定5: 外の部分が今と違っても拒まない —— 断るのは人間が見た question の内容
+          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind), byBoard: true };
         }
         break;
       }
