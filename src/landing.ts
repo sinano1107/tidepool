@@ -23,6 +23,7 @@ import {
   contentSourceFor,
   countUnsettledAttachedChildren,
   derivedWorkspace,
+  END_LANDING_OPTION,
   getTask,
   hasTaskBranchSql,
   isHumanAssigned,
@@ -576,7 +577,14 @@ export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOS
   return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
 }
 
-/** 閉じた根に塞がれた子(ADR 0265 決定6)の唯一の述語: lineage の帰り先を辿ると盤面の外で閉じた PR の根のブランチに行き着き、
+/** ADR 0265 決定6 / ADR 0399 決定6: 子を塞ぐ根の PR —— 盤面の外で閉じた PR か、人間が着地を終えた根の PR。どちらでもなければ undefined。 */
+function blockingRootPr(db: Db, root: Pick<Task, "id" | "pr_number">): number | undefined {
+  const outcome = rootPrOutcome(db, root.id);
+  if (outcome?.state === "CLOSED") return outcome.prNumber;
+  return latestEventOfTask(db, root.id, "landing_ended_pr_left") ? (root.pr_number ?? undefined) : undefined;
+}
+
+/** 閉じた根に塞がれた子(ADR 0265 決定6)の唯一の述語: lineage の帰り先を辿ると盤面の外で閉じた PR の根(人間が着地を終えた根も、ADR 0399 決定6)のブランチに行き着き、
  *  その根の内容がまだ保護ブランチに無い(ADR 0250 決定1 の前の場合)。帰り先は pickup がブランチを切るときの lineage そのもので、
  *  完了した修理の review は修理のブランチへ、修理は根へ帰るので、行き着く先まで辿る。question は pickup されないので当たらない。
  *  閉じた根が祖先にいなければ git を読まない。workspace や git が読めなければ当たらない —— pickup が自分の経路で同じ失敗を見せる。 */
@@ -588,7 +596,7 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
       ancestors.push(ancestor);
       id = ancestor.parent_id;
     }
-    if (task.type === "question" || !resolve || !ancestors.some((a) => rootPrOutcome(db, a.id)?.state === "CLOSED")) return null;
+    if (task.type === "question" || !resolve || !ancestors.some((a) => blockingRootPr(db, a) !== undefined)) return null;
     try {
       const workspace = resolve(derivedWorkspace(db, task));
       const base = declaredProtectedBranchRef(workspace);
@@ -596,9 +604,9 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
         const branch = lineageTaskBranch(db, workspace, current, base);
         const target = ancestors.find((a) => taskBranch(a.id) === branch);
         if (!target) return null;
-        const outcome = rootPrOutcome(db, target.id);
-        if (outcome?.state === "CLOSED") {
-          return taskHasContentToLand(workspace, target.id, base) ? { task_id: target.id, pr_number: outcome.prNumber } : null;
+        const prNumber = blockingRootPr(db, target);
+        if (prNumber !== undefined) {
+          return taskHasContentToLand(workspace, target.id, base) ? { task_id: target.id, pr_number: prNumber } : null;
         }
         current = target;
       }
@@ -637,7 +645,7 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "questi
 }
 
 /** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 無人 merge キュー → 開いた merge question → 内容で
- *  終わった(`landing_finished`)→ ブランチを失って終えた(`landing_ended_branch_lost`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
+ *  終わった(`landing_finished`)→ ブランチを失って終えた(`landing_ended_branch_lost`)→ 人間が着地を終えた(`landing_ended_pr_left`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
  *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
  *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
 export function landingState(db: Db, task: Pick<Task, "id" | "type"> & { status: string }): LandingState | null {
@@ -649,13 +657,16 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type"> & { status:
   if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   // spec #3273 group H: ブランチを失って終えた根 —— ADR 0265 決定7 の7つの外の8つ目(同 Status 追記)
   if (latestEventOfTask(db, task.id, "landing_ended_branch_lost")) return "branch_lost";
+  // ADR 0399 決定6: 人間が着地を終えた PR の根 —— PR は記録の repo に残る
+  if (latestEventOfTask(db, task.id, "landing_ended_pr_left")) return "pr_left";
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
 }
 
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
  *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
- *  (ADR 0265 決定3) / `nothing_to_land` / ブランチを失って終えた根の `landing_ended_branch_lost`(ADR 0375 決定7))と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
+ *  (ADR 0265 決定3) / `nothing_to_land` / ブランチを失って終えた根の `landing_ended_branch_lost`(ADR 0375 決定7) / 人間が着地を終えた根の
+ *  `landing_ended_pr_left`(ADR 0399 決定6))と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
  *  候補に残り、撃つ側が hold の head と比べる(`landRoot`)。人間が担当した work は盤面の
  *  タスクブランチを持たなければ根にしない(人間の完了は祖先の着地の契機である)—— 持てば根になる(ADR 0374 決定12)。Interview の子(pin を持つ
  *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
@@ -857,7 +868,8 @@ function registerPrPromotionQuestion(
       question: [
         {
           title,
-          options: [...PR_PROMOTION_FAILURE_OPTIONS],
+          // ADR 0399 決定5: PR を記録した根にだけ着地を終える出口を足す。行は読み直す —— 同じ回に PR を記録した根もある
+          options: getTask(db, task.id)?.pr_number == null ? [...PR_PROMOTION_FAILURE_OPTIONS] : [...PR_PROMOTION_FAILURE_OPTIONS, END_LANDING_OPTION],
           recommendation: "retry",
         },
       ],
@@ -1028,6 +1040,19 @@ function retireAutoMerge(
 
 function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
   return db.prepare("SELECT 1 FROM pending_auto_merges WHERE task_id = ?").get(taskId) !== undefined;
+}
+
+/** ADR 0399 決定6: 「end landing」の回答と同じ transaction で、根を無人 merge キューから外し、答えている question を除く根の着地の question
+ *  (merge・昇格失敗)を PR の観測を刻まずに閉じる。閉じた question の id を返す —— 着地の終わりの記録が運ぶ。 */
+export function endPrRootLanding(db: Db, rootId: string, answering: string, now: Date): string[] {
+  clearPendingAutoMerge(db, rootId);
+  const open = db
+    .prepare(`SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND id <> ?
+      AND (question_pending_merge_task_id = ? OR question_pending_pr_promotion_task_id = ?) ORDER BY rowid`)
+    .pluck()
+    .all(answering, rootId, rootId) as string[];
+  for (const id of open) settleQuestionAsObserved(db, id, null, now);
+  return open;
 }
 
 const UNREPORTED_CI_GRACE_MS = 5 * 60_000;

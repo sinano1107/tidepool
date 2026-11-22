@@ -33,6 +33,7 @@ const LANDING_STATE_COPY = {
   withdrawn: 'landing · withdrawn from auto-merge',
   landed: 'landing · landed',
   branch_lost: 'landing · ended — the task branch was lost',
+  pr_left: 'landing · ended by a human — the PR was left as it is',
 } satisfies Record<import('../src/wire-contract').LandingState, string>;
 /** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
 type AppIcons = Record<string, string | undefined>;

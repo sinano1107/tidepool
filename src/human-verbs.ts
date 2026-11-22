@@ -45,7 +45,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, endPrRootLanding, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -96,6 +96,7 @@ import {
   derivedWorkspace,
   dropsRefusedTarget,
   type EditTaskInput,
+  END_LANDING_OPTION,
   editTask,
   getTask,
   HANDOFF_FIELDS,
@@ -1692,6 +1693,14 @@ export async function submitAnswer(
       case "pr_promotion_retry":
         if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
           notice = (await answerThroughConvergence(deps.landing, task.id, origin, kind.task_id))?.notice;
+        } else if (answers[0] === END_LANDING_OPTION) {
+          const root = kind.task_id;
+          // ADR 0288 決定2: 盤面が merge・push している根の着地は終えない —— 執行が決着を刻む
+          if (deps.landing.isMarked(root)) throw new DomainError(prInFlightRefusal(getTask(deps.db, root)!.pr_number!));
+          // ADR 0399 決定6: キューの行と開いた着地の question の後始末は、回答と同じ transaction で
+          withAnswer = (questionId) => {
+            rootRecord = { root, payload: { kind: "landing_ended_pr_left", question_ids: endPrRootLanding(deps.db, root, questionId, now()) } };
+          };
         } else {
           rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };
         }

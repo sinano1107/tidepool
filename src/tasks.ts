@@ -1052,9 +1052,10 @@ export function localLandingOpenOrExecutedSql(taskRef: string): string {
 }
 
 /** 着地が終わった根の記録の kind —— merge の記録か内容で終わった PR の根(`landing_finished`、ADR 0265 決定3)、運ぶ内容が無かった根
- *  (`nothing_to_land`)、ブランチを失って終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)。収束の候補・着地を待つ数え・削除の扉・
+ *  (`nothing_to_land`)、ブランチを失って終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)、人間が着地を終えた PR の根
+ *  (`landing_ended_pr_left`、ADR 0399 決定6)。収束の候補・着地を待つ数え・削除の扉・
  *  失われた根の着地の終わりの判定(ADR 0397 決定1)が読む1つの列(landing.ts は import の向きでここから読む)。 */
-export const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost')";
+export const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost', 'landing_ended_pr_left')";
 
 /** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地が終わった)SQL 述語。
  *  workspace の削除の扉が数える線はこれを読む。 */
@@ -2022,7 +2023,7 @@ export interface ResourceStopDefaults {
   interviewerName?: string;
 }
 
-/** 子を塞いでいる閉じた根(ADR 0265 決定6)—— 盤面の外で閉じた PR の根と、その PR。 */
+/** 子を塞いでいる閉じた根(ADR 0265 決定6)—— 盤面の外で閉じた PR の根か人間が着地を終えた PR の根(ADR 0399 決定6)と、その PR。 */
 export interface ClosedRoot {
   task_id: string;
   pr_number: number;
@@ -3276,6 +3277,9 @@ export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
 
 export const PR_PROMOTION_FAILURE_OPTIONS = ["retry", "abandon promotion"] as const;
 
+/** ADR 0399 決定5: PR を記録した根の昇格失敗の question にだけ足す出口 —— 根の着地を終え、PR は記録の repo に残す。 */
+export const END_LANDING_OPTION = "end landing";
+
 /** ADR 0394 決定2: 外の部分が変わったときだけ、開いた question を観測で閉じて立て直す。 */
 export function registerMergeQuestion(
   db: Db,
@@ -3790,8 +3794,8 @@ function assertHumanEditableScope(db: Db, task: Task): void {
  *  answer, and a board-named attached child (completion review, RCA review)
  *  is an input the rules require, so both stay out. Approved children retain their agent's decomposition
  *  judgment and also stay out (ADR 0211). Every one of these comes into scope once it is stranded under a
- *  root whose PR was closed outside the board — the same one predicate pickup skips by, which reaches any
- *  todo the lineage returns to that root's branch, not only its attached children (ADR 0265 決定6). */
+ *  root whose PR was closed outside the board, or whose landing a human ended (ADR 0399 決定6) — the same one predicate pickup skips by,
+ *  which reaches any todo the lineage returns to that root's branch, not only its attached children (ADR 0265 決定6). */
 function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
   // 受験者は親を持たないが root ではない —— root の agent が登録した答案で、外すのは failure の abandon か対象外し(ADR 0267 決定1)
   const root = task.parent_id === null && task.interview_target_id === null && task.type !== "question";
@@ -3799,7 +3803,7 @@ function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: Closed
   if (!inScope) {
     throw new DomainError(
       "only a human-authored task, a board-registered root other than a question, or a task stranded under a root whose PR " +
-        "was closed outside the board can be directly cancelled — an agent-authored child (including an approved child), " +
+        "was closed outside the board or whose landing a human ended can be directly cancelled — an agent-authored child (including an approved child), " +
         "an Interview examinee, a board-named attached child, and a board-named question are out of scope",
     );
   }

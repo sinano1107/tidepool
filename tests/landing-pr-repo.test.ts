@@ -1,10 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { GhCliClient } from "../src/github.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { createLanding, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, registerMergeQuestion } from "../src/tasks.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
@@ -57,14 +58,15 @@ async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?:
   const head = pushPrHead(github, workspace, root.id, 1);
   recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head, workspace });
   const landing = createLanding({ db, clock, resolveWorkspace: reef.resolve, defaultAgentName: "tako", github, resolveAuthority: () => profile(merge) });
-  const answer = (option: "merge" | "hold") => {
-    const question = listBoard(db).find((task) => task.status === "todo" && task.question_pending_merge_task_id === root.id)!;
-    return submitAnswer(
+  const submit = (questionId: string, option: string) =>
+    submitAnswer(
       { db, pollNow: () => {}, landing, resolveWorkspace: reef.resolve, github, workspacesDir: join(reef.admin.workspacesBaseDir, "workbenches") },
-      getTask(db, question.id)!, [option], undefined, () => clock.now(), "webui",
+      getTask(db, questionId)!, [option], undefined, () => clock.now(), "webui",
     );
-  };
-  return { db, clock, reef, old, moved, root, github, landing, move, answer };
+  const answer = (option: "merge" | "hold") =>
+    submit(listBoard(db).find((task) => task.status === "todo" && task.question_pending_merge_task_id === root.id)!.id, option);
+  const answerFailure = (option: string) => submit(promotionFailures(db, root.id).find((task) => task.status === "todo")!.id, option);
+  return { db, clock, reef, old, moved, root, github, landing, move, answer, answerFailure };
 }
 
 function expectStopped({ db, root, old, moved }: Awaited<ReturnType<typeof reefWithPr>>) {
@@ -333,4 +335,65 @@ it("merge の回答が執行用 token を待つ間に登録し直すと、取得
   expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
   expect(ghCommands()).toBe("");
   expect(rootPrOutcome(db, root.id)).toBeNull();
+});
+
+// ADR 0399 決定5・6: 止まった PR のある根の出口「この根の着地を終える」(spec #3595 の振る舞い 4)
+/** 着地を終えた根に、収束・両方の tick・無人 merge の観測をもう一度流す —— どれも問い直さず GitHub を撃たない(#3604 のコメント)。 */
+async function expectNothingReasked({ db, clock, root, github, landing }: Awaited<ReturnType<typeof reefWithPr>>) {
+  const calls = () => [github.stateChecks.length, github.ciChecks.length, github.merged.length, github.pushes.length, github.requests.length];
+  const before = calls();
+  await landing.converge();
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("outside_merge", clock.now());
+  await landing.observeAutoMergeOutcomes("tako");
+  expect(calls()).toEqual(before);
+  expect(promotionFailures(db, root.id).filter((task) => task.status === "todo")).toEqual([]);
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+}
+
+it("無人 merge キューで止まった PR のある根は「end landing」で着地を終え、キューから外れ、収束も tick も問い直さない", async () => {
+  const fixture = await reefWithPr("auto_if_ci_green");
+  const { db, clock, root, landing, move, answerFailure } = fixture;
+  await move();
+  await landing.tick("auto_merge", clock.now());
+  expect(promotionFailures(db, root.id).map((task) => task.question_items?.[0]?.options)).toEqual([["retry", "abandon promotion", "end landing"]]);
+
+  const answered = await answerFailure("end landing");
+
+  expect(getTask(db, answered.id)?.question_answer).toEqual(["end landing"]);
+  expect(boardEvents(db, root.id, "landing_ended_pr_left")).toEqual([
+    { actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { kind: "landing_ended_pr_left", question_ids: [] } },
+  ]);
+  expect(boardEvents(db, root.id, "landing_declined")).toEqual([]);
+  expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
+  await expectNothingReasked(fixture);
+});
+
+it("merge question で止まった PR のある根は「end landing」で、merge question を PR の観測を刻まずに引退させる", async () => {
+  const fixture = await reefWithPr("escalate");
+  const { db, clock, root, landing, move, answerFailure } = fixture;
+  await move();
+  await landing.tick("outside_merge", clock.now());
+  const merge = listBoard(db).find((task) => task.status === "todo" && task.question_pending_merge_task_id === root.id)!;
+
+  await answerFailure("end landing");
+
+  const retired = getTask(db, merge.id)!;
+  expect([retired.status, retired.question_answer]).toEqual(["done", null]);
+  expect(settledByObservation(db, retired)).toBeNull();
+  expect(boardEvents(db, root.id, "landing_ended_pr_left").map(({ payload }) => payload)).toEqual([{ kind: "landing_ended_pr_left", question_ids: [merge.id] }]);
+  expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
+  await expectNothingReasked(fixture);
+});
+
+it("merge 中の印が付いた根への「end landing」は拒まれ、根の着地は終わらない", async () => {
+  const { db, clock, root, landing, answerFailure } = await reefWithPr("auto_if_ci_green");
+  registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+  const release = landing.takeInFlightMark(root.id)!;
+
+  await expect(answerFailure("end landing")).rejects.toThrow("PR #1 is being merged or pushed to by the board right now");
+
+  release();
+  expect(boardEvents(db, root.id, "landing_ended_pr_left")).toEqual([]);
+  expect(landingState(db, getTask(db, root.id)!)).toBe("auto_merge_queue");
 });
