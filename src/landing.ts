@@ -1811,6 +1811,8 @@ export function createLanding(deps: LandingDeps): Landing {
         // ADR 0394 決定2: PR を読む間に開いた、または答えられた question を、古い head で取り替えない。
         const before = latestMergeQuestion(deps.db, task.id);
         const pr = await deps.github.getPullRequestState({ workspace, number: prNumber });
+        // ADR 0399 決定3: merge 回答の寄り道でも、読みを待つ間に登録し直せば、その読みで決着させない。
+        workspaceNetworkDestination(workspace);
         const { state, mergedBy } = pr;
         // 決着した PR は1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。盤面の外の決着は観測、落ちた盤面
         // 自身の merge は執行(ADR 0265 決定5)。
@@ -2060,7 +2062,9 @@ export function createLanding(deps: LandingDeps): Landing {
         try {
           read = await readPrState(github, checkedRoot(resolve(task.workspace), task_id), pr_number);
         } catch (error) {
-          if (error instanceof DeclaredRepoMismatchError && isQueuedForAutoMerge(deps.db, task_id)) stopForRepoMismatch(task_id, error, deps.clock.now());
+          if (error instanceof DeclaredRepoMismatchError && !isMarked(task_id) && isQueuedForAutoMerge(deps.db, task_id)) {
+            stopForRepoMismatch(task_id, error, deps.clock.now());
+          }
           continue;
         }
         // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
@@ -2090,7 +2094,7 @@ export function createLanding(deps: LandingDeps): Landing {
             }
           } catch (error) {
             if (error instanceof DeclaredRepoMismatchError) {
-              if (getTask(deps.db, id)?.status === "todo") stopForRepoMismatch(question.root, error, now);
+              if (!isMarked(question.root) && getTask(deps.db, id)?.status === "todo") stopForRepoMismatch(question.root, error, now);
               continue;
             }
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
