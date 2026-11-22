@@ -1,5 +1,7 @@
 # publish は覚えた repo も ref と同じく予告し、宣言と origin が揃ったときだけ畳む —— 中断の出口は巻き戻しの1つ
 
+**Status 追記: 帰結の「この ADR はその先例である」は広がらなかった —— 族の根は予告と畳みを他の箇所へ広げず、死の後に求めるのは床(fail-closed・決定が読む誤った記録を残さない・出口を名指す)だけと決めた。publish の予告と畳みはそのまま残る([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-floor-fail-closed-no-wrong-record-and-a-named-exit.md) 決定1、2026-11-22、issue #3515)。**
+
 2026-11-21 の triage → grilling(issue #3336)で決定。publish(ADR 0066 決定2)は1つの await の無い区間で、checkout の origin と写し、
 基準の行の覚えた repo(ADR 0378 決定10)、registry の `repo:` を書き、失敗は同じ process の catch が巻き戻す(ADR 0066 決定5)。await の無い
 区間が防ぐのは交差であって process の死ではない。写しは予告と畳みで死を越える(ADR 0243 決定5)が、覚えた repo の戻し先は memory の中にしか
