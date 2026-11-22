@@ -829,9 +829,9 @@ function deferLanding(board: Db, taskId: string, now: Date): void {
   });
 }
 
-const observationWorkspace = { name: "reef", path: "/reef", repo: "https://github.com/test/reef" };
-
+// 盤面は出元 repo へ push して PR を開く(ADR 0395 決定2)—— PR を持つ根の名前は出元 repo を宣言する(ADR 0399 決定3)
 it("既定 agent の quarantine 回答前の観測は、assignee 未指定の work の外部 merge を記録してキューを退ける", async () => {
+  const { workspace: observationWorkspace } = await makeLandingWorkspace("reef");
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
@@ -859,6 +859,7 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
 });
 
 it("quarantine 回答前の観測は、盤面の名義で merge 済みのキューの PR を pr_merged として根に刻みキューから外す(ADR 0265 決定5)", async () => {
+  const { workspace: observationWorkspace } = await makeLandingWorkspace("reef");
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
@@ -885,6 +886,7 @@ it("quarantine 回答前の観測は、盤面の名義で merge 済みのキュ�
 });
 
 it("quarantine 回答前の観測は、盤面の外で閉じられたキューの PR を閉じた観測としてキューから外す(ADR 0229 決定4)", async () => {
+  const { workspace: observationWorkspace } = await makeLandingWorkspace("reef");
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
@@ -2427,7 +2429,7 @@ async function outlivedRootWithBaseline(name: string, prNumber?: number) {
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now(), { workspace });
   const repair = attachUnsettledChild(db, clock, parent.id);
   checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   const head = prNumber === undefined ? undefined : pushPrHead(github, workspace, repair.id, prNumber);
@@ -2435,7 +2437,7 @@ async function outlivedRootWithBaseline(name: string, prNumber?: number) {
   commitWork(workspace.path, "repair.txt", "fixed\n");
   git(workspace.path, "checkout", "main");
   finish(db, clock, repair);
-  if (prNumber !== undefined) recordPrOpenedOutsideConvergence(db, getTask(db, repair.id)!, prNumber, clock.now(), { head });
+  if (prNumber !== undefined) recordPrOpenedOutsideConvergence(db, getTask(db, repair.id)!, prNumber, clock.now(), { head, workspace });
   await leaveBaseline(db, workspace);
   return { workspace, db, clock, github, landing, repair };
 }

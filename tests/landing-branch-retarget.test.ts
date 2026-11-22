@@ -35,7 +35,7 @@ async function queuedRoot({ opened = true } = {}) {
   const done = finish(db, clock, root);
   if (opened) {
     const head = pushPrHead(github, workspace, root.id, 1);
-    recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head });
+    recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head, workspace });
   }
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, resolveAuthority: () => profile("auto_if_ci_green") });
   const declareBranch = (branch: string) => setWorkspaceEntry(registryDir, "reef", "branch", branch);

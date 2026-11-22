@@ -78,6 +78,7 @@ import {
   queueAutoMerge,
   raiseUnbundledObjection,
   recordPrOpenedOutsideConvergence,
+  recordPushedHeadRepo,
   rootWithOpenedPr,
   settle,
   straddle,
@@ -137,6 +138,7 @@ async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAutho
     git(workspace.path, "push", "head-repo", `task/${work.id}`);
     const number = github.scriptPullRequestOnBranch(`task/${work.id}`);
     if (path === "recorded open PR") {
+      recordPushedHeadRepo(db, work.id, workspace);
       recordPrOpened(db, work, number, git(workspace.path, "rev-parse", "HEAD"), clock.now(), undefined, undefined);
       commitWork(workspace.path, "repair.txt", "fixed\n");
     }
@@ -637,7 +639,7 @@ it("open PR への push をまたぐ session は盤面の push を違反に数�
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   finish(db, clock, task);
-  recordPrOpenedOutsideConvergence(db, task, 1, clock.now(), { head });
+  recordPrOpenedOutsideConvergence(db, task, 1, clock.now(), { head, workspace });
 
   // push をまたいで走る別タスクのセッションは、盤面の push を違反に数えない
   await straddle(db, clock, workspace, () => landing.converge());
@@ -747,7 +749,7 @@ it("無人 merge キューにいる閉じた PR は、収束が閉じた観測�
   const { workspace } = await makeLandingWorkspace("landing-closed-queued-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const work = queueAutoMerge(db, clock, 1);
+  const work = queueAutoMerge(db, clock, 1, workspace);
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
@@ -766,7 +768,7 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
   const { workspace } = await makeLandingWorkspace("landing-closed-marked-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const work = queueAutoMerge(db, clock, 1);
+  const work = queueAutoMerge(db, clock, 1, workspace);
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   github.scriptClosedOutside(1);
@@ -806,7 +808,7 @@ async function openPrWhosePushFailsAfterTransfer(name: string) {
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, task);
-  recordPrOpenedOutsideConvergence(db, task, 1, clock.now(), { head });
+  recordPrOpenedOutsideConvergence(db, task, 1, clock.now(), { head, workspace });
   const pushFailed = () =>
     expect(convergeOn(landing, task.id)).resolves.toEqual({
       kind: "failed",
@@ -1043,6 +1045,8 @@ it("GitHub に同じ head の merge 済み PR がある根の着地は、番号�
   const work = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
+  // 作成の後・記録の前に落ちた盤面の跡 —— PR の前の push が出元 repo を記録している(ADR 0399 決定1)
+  recordPushedHeadRepo(db, work.id, workspace);
   const merged = github.scriptPullRequestOnBranch(`task/${work.id}`);
   github.scriptMergedOutside(merged);
   finish(db, clock, work);
@@ -1379,7 +1383,7 @@ it("収束は open PR を持つ根を更新し、ローカル着地の question 
   checkoutTaskBranch(db, workspace, parent.id, "main");
   commitWork(workspace.path, "feature.txt", "ready\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now(), { head: pushPrHead(github, workspace, parent.id, 1) });
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now(), { head: pushPrHead(github, workspace, parent.id, 1), workspace });
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const settled = registerTask(
     db,
@@ -1908,7 +1912,7 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge をせず�
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   finish(db, clock, parent);
-  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now(), { workspace });
   const repair = attachUnsettledChild(db, clock, parent.id);
   checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
@@ -1916,7 +1920,7 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge をせず�
   boardMerged(db, clock, parent.id, 1);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, repair);
-  recordPrOpenedOutsideConvergence(db, repair, 2, clock.now());
+  recordPrOpenedOutsideConvergence(db, repair, 2, clock.now(), { workspace });
   github.scriptClosedOutside(2);
   const before = git(workspace.path, "rev-parse", `task/${repair.id}`);
 

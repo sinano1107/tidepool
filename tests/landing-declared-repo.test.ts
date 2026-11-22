@@ -105,7 +105,7 @@ async function reRegisteredDuringAwait(hold: (github: FakeGitHubClient) => { ent
   await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), root, "feature.txt", "ready\n");
   const done = finish(db, clock, root);
   const head = pushPrHead(github, reef.resolve("reef"), done.id, 1);
-  recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" }, head });
+  recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" }, head, workspace: reef.resolve("reef") });
   await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), done, "repair.txt", "repair\n");
   const window = hold(github);
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github, ...window.deps });

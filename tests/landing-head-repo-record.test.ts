@@ -1,0 +1,211 @@
+import { chmod, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { DomainError } from "../src/domain-error.js";
+import { GitHubAuth } from "../src/github-auth.js";
+import { submitAnswer } from "../src/human-verbs.js";
+import { createLanding, rootPrOutcome } from "../src/landing.js";
+import { openQuarantineQuestion } from "../src/quarantine.js";
+import type { MergeDial } from "../src/registry.js";
+import { loadRegistry } from "../src/registry.js";
+import { getTask, listBoard, recordPrOpened } from "../src/tasks.js";
+import { resolveExecutionWorkspace } from "../src/workspace.js";
+import { updateWorkspace } from "../src/workspace-create.js";
+import { issuedToken, startFakeBroker } from "./fake-broker.js";
+import { FakeGitHubClient } from "./fakes.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace, shimGit } from "./harness.js";
+import { boardEvents, commitThroughTaskCheckout, convergeOn, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
+import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+// ADR 0399 決定1・3・5: 根は最初に `task/<id>` を出元 repo へ push する直前にその出元 repo を記録し、PR を扱う所で今の宣言の出元 repo と
+// 比べる。出元 repo の足し替えは設定の扉(updateWorkspace)を通す —— 扉は GitHub の owner/name しか受けないので、盤面が組む網の行き先を
+// shim で手元の bare へ回す(spec #3595 の振る舞い 8)。
+
+const REPO = "https://github.com/acme/lagoon.git";
+
+/** `lagoon`(宣言の repo は GitHub の acme/lagoon)に、done の根を1つ持つ盤面。`setHeadRepo` は設定の扉で出元 repo を足し替える。 */
+async function lagoonWithDoneRoot(merge?: MergeDial) {
+  const { db, clock } = await openBoard();
+  const { workspace: checkout } = await makeRemoteBackedWorkspace("lagoon");
+  const origin = checkout.repo!;
+  git(checkout.path, "remote", "set-url", "origin", REPO);
+  const registryDir = await makeRegistry({ "workspaces.yaml": `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: ${REPO}\n` });
+  git(registryDir, "branch", "-M", "main");
+  const broker = await startFakeBroker((request) => issuedToken(`token-for-${request.repo}`));
+  onTestFinished(() => broker.close());
+  const tokenFile = join(await tempDir("tidepool-token-"), "token");
+  await writeFile(tokenFile, "gho_test\n");
+  await chmod(tokenFile, 0o600);
+  const githubAuth = new GitHubAuth(tokenFile, broker.url);
+  const github = new FakeGitHubClient();
+  // the fake reads a PR's base only from a declared repo on disk; this one is GitHub's, which the shim routes to `origin`
+  const read = github.getPullRequestState.bind(github);
+  github.getPullRequestState = async (ref) => {
+    const state = await read(ref);
+    return state.base ? state : { ...state, base: { branch: "main", sha: git(origin, "rev-parse", "main") } };
+  };
+  const admin = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-") };
+  const resolve = () => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "lagoon", null, admin.workspacesBaseDir);
+  await shimGit({ route: [REPO, origin] });
+  const forks: Record<string, string> = {};
+  const setHeadRepo = async (fullName: string) => {
+    if (!(fullName in forks)) {
+      forks[fullName] = await tempDir("tidepool-fork-");
+      git(forks[fullName], "clone", "--quiet", "--bare", origin, ".");
+      await shimGit({ route: [`https://github.com/${fullName}.git`, forks[fullName]] });
+      github.scriptRepositoryParent(fullName, "acme/lagoon");
+    }
+    await updateWorkspace({ name: "lagoon", head_repo: fullName, confirm: true }, { ...admin, db, github, githubAuth, clock });
+  };
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, githubAuth, resolveAuthority: merge && (() => profile(merge)) });
+  const work = landingWork(db, clock, "lagoon");
+  await commitThroughTaskCheckout(db, clock, resolve(), work, "feature.txt", "ready\n");
+  const root = finish(db, clock, work);
+  const forkBranch = (fullName: string) => git(forks[fullName]!, "for-each-ref", "--format=%(objectname)", `refs/heads/task/${root.id}`);
+  const answer = (option: "merge" | "hold") => {
+    const question = listBoard(db).find((task) => task.status === "todo" && task.question_pending_merge_task_id === root.id)!;
+    return submitAnswer(
+      { db, pollNow: () => {}, landing, resolveWorkspace: resolve, github, workspacesDir: join(admin.workspacesBaseDir, "workbenches") },
+      getTask(db, question.id)!, [option], undefined, () => clock.now(), "webui",
+    );
+  };
+  return { db, clock, github, landing, resolve, root, setHeadRepo, forkBranch, answer };
+}
+
+it("古い出元 repo に push して PR を開いた根は、扉で出元 repo を差し替えると、新しい出元 repo へ push せず記録と今の宣言を名指して止まる", async () => {
+  const { db, clock, github, landing, resolve, root, setHeadRepo, forkBranch } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
+  await commitThroughTaskCheckout(db, clock, resolve(), root, "repair.txt", "repair\n");
+  await setHeadRepo("another/fork");
+  const mirrored = forkBranch("another/fork");
+
+  await landing.converge();
+
+  expect(github.pushes).toEqual([]);
+  expect(forkBranch("another/fork")).toBe(mirrored);
+  const [failure, ...rest] = promotionFailures(db, root.id);
+  expect(rest).toEqual([]);
+  expect(failure?.purpose).toContain("pushed to head repo acme/fork");
+  expect(failure?.purpose).toContain("now declares head repo another/fork");
+  expect(openQuarantineQuestion(db, "workspace", "lagoon")).toBeUndefined();
+});
+
+// 扉の写し(sendTaskBranches)は記録を書かない —— 写されただけで PR の無い根は、出元 repo を作り直しても止まらない(spec #3595 の user story 15)
+it("出元 repo へ写されただけでまだ push していない根は、扉で出元 repo を差し替えても止まらず、新しい出元 repo へ push して PR を開く", async () => {
+  const { db, github, landing, resolve, root, setHeadRepo, forkBranch } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  await setHeadRepo("another/fork");
+
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
+
+  expect(forkBranch("another/fork")).toBe(git(resolve().path, "rev-parse", `task/${root.id}`));
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
+  expect(promotionFailures(db, root.id)).toEqual([]);
+});
+
+// fail-closed: 記録の書き漏れで守りが外れない。PR の記録は収束の外で刻む —— 盤面の経路は PR の前に必ず push して記録を書く
+it.each([
+  ["出元 repo を宣言している", true, "declares head repo acme/fork"],
+  ["出元 repo を宣言していない", false, "declares no head repo"],
+] as const)("PR を記録しているのに出元 repo の記録が無い根は、%s名前でも PR を読まずに止まる", async (_, declared, declares) => {
+  const { db, clock, github, landing, root, setHeadRepo } = await lagoonWithDoneRoot();
+  if (declared) await setHeadRepo("acme/fork");
+  recordPrOpened(db, root, 1, "f".repeat(40), clock.now(), { merge: "external" }, undefined);
+
+  await landing.converge();
+
+  expect([github.stateChecks, github.pushes, github.requests]).toEqual([[], [], []]);
+  const [failure, ...rest] = promotionFailures(db, root.id);
+  expect(rest).toEqual([]);
+  expect(failure?.purpose).toContain("the board has no record of the head repo its PR #1 was pushed from");
+  expect(failure?.purpose).toContain(`now ${declares}`);
+});
+
+/** 出元 repo acme/fork へ push して PR #1 を開いた根(merge dial は `merge`)を残し、扉で出元 repo を another/fork へ差し替えた盤面。 */
+async function prOnReplacedFork(merge: MergeDial) {
+  const board = await lagoonWithDoneRoot(merge);
+  await board.setHeadRepo("acme/fork");
+  await expect(convergeOn(board.landing, board.root.id)).resolves.toMatchObject({ prNumber: 1 });
+  await board.setHeadRepo("another/fork");
+  return board;
+}
+
+const expectStoppedNamingBoth = (db: Parameters<typeof promotionFailures>[0], rootId: string) => {
+  expect(rootPrOutcome(db, rootId)).toBeNull();
+  const [failure, ...rest] = promotionFailures(db, rootId);
+  expect(rest).toEqual([]);
+  expect(failure?.purpose).toContain("pushed to head repo acme/fork");
+  expect(failure?.purpose).toContain("now declares head repo another/fork");
+};
+
+// ADR 0399 決定3: 比べる所は根を運ぶ所だけでなく PR を読む所・merge する所の全部(#3600 と同じ場所)
+it("無人 merge の tick は、出元 repo を差し替えた後の PR を読まずに、記録と今の宣言を名指して根を止める", async () => {
+  const { db, clock, github, landing, root } = await prOnReplacedFork("auto_if_ci_green");
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect([github.ciChecks, github.merged]).toEqual([[], []]);
+  expectStoppedNamingBoth(db, root.id);
+});
+
+it("外の merge の tick は、出元 repo を差し替えた後の PR を読まずに、記録と今の宣言を名指して根を止める", async () => {
+  const { db, clock, github, landing, root } = await prOnReplacedFork("escalate");
+  const before = github.stateChecks.length;
+
+  await landing.tick("outside_merge", clock.now());
+
+  expect(github.stateChecks).toHaveLength(before);
+  expectStoppedNamingBoth(db, root.id);
+});
+
+it("無人 merge の観測は、出元 repo を差し替えた後の PR を読まずに、記録と今の宣言を名指して根を止める", async () => {
+  const { db, github, landing, root } = await prOnReplacedFork("auto_if_ci_green");
+  const before = github.stateChecks.length;
+
+  await landing.observeAutoMergeOutcomes("tako");
+
+  expect(github.stateChecks).toHaveLength(before);
+  expectStoppedNamingBoth(db, root.id);
+});
+
+it("出元 repo を差し替えた後の merge の回答は、PR を読む前に記録と今の宣言を名指して拒み、hold は受ける(ADR 0394 決定5)", async () => {
+  const { db, github, root, answer } = await prOnReplacedFork("escalate");
+  const before = github.stateChecks.length;
+
+  const refusal = await answer("merge").catch((error: Error) => error);
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain("pushed to head repo acme/fork");
+  expect((refusal as Error).message).toContain("now declares head repo another/fork");
+  expect(github.stateChecks).toHaveLength(before);
+  expect([github.ciChecks, github.merged]).toEqual([[], []]);
+
+  const held = await answer("hold");
+
+  expect(getTask(db, held.id)?.status).toBe("done");
+  expect(boardEvents(db, root.id, "landing_declined")).toHaveLength(1);
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+});
+
+// 記録は最初の push の直前に書かれ、上書きされない —— PR の作成に落ちた根も記録を持ち、差し替えを重ねても最初の出元 repo を名指す
+it("PR の作成に落ちても出元 repo へ push した根は記録を持ち、出元 repo を2度差し替えた後の retry は最初の出元 repo を名指して拒まれる", async () => {
+  const { db, clock, github, landing, resolve, root, setHeadRepo } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  github.scriptFailure(new Error("PR creation unavailable"));
+  await landing.converge();
+  github.scriptFailure(null);
+  await setHeadRepo("another/fork");
+  await setHeadRepo("third/fork");
+  const [question] = promotionFailures(db, root.id);
+
+  const refusal = await submitAnswer({ db, pollNow: () => {}, landing, resolveWorkspace: resolve, github }, getTask(db, question!.id)!, ["retry"], undefined, () => clock.now(), "webui")
+    .catch((error: Error) => error);
+
+  expect((refusal as Error).message).toContain("pushed to head repo acme/fork");
+  expect((refusal as Error).message).toContain("now declares head repo third/fork");
+  expect(github.requests).toHaveLength(1);
+});

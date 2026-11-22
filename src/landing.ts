@@ -74,6 +74,7 @@ import {
   quarantineWorkspace,
   RefsMovedError,
   readTaskBranchHead,
+  recordHeadRepo,
   redoMergeBacks,
   refreshProtectedBranch,
   refusedOnceHead,
@@ -1802,7 +1803,8 @@ export function createLanding(deps: LandingDeps): Landing {
           }
           return null;
         }, async () => {
-          landingHeadRepo(workspace);
+          // ADR 0399 決定1: 比べた後、push と同じ同期区間で最初の push の前に出元 repo を記録する
+          recordHeadRepo(deps.db, task.id, landingHeadRepo(workspace));
           boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id), HEAD_REPO_REMOTE), sha, () => pushBranch(sha));
           return null;
         });

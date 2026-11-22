@@ -39,7 +39,7 @@ async function reRegisteredWithSameNumber() {
   commitWork(workspace.path, "feature.txt", "ready\n");
   const done = finish(db, clock, newRoot);
   const head = pushPrHead(github, workspace, newRoot.id, 1);
-  recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "escalate" }, head });
+  recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "escalate" }, head, workspace });
 
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github });
   const answer = (questionId: string, option: "merge" | "hold") =>
