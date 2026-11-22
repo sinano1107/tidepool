@@ -12,10 +12,12 @@ import {
   createLanding,
   type Landing,
   registerPrPromotionFailureQuestion,
+  taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
-import { type AuthorityProfile, type MergeDial, UnknownAgentError } from "../src/registry.js";
+import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import {
   completeTask,
+  countUnsettledTasksReferencing,
   getTask,
   listBoard,
   recordPrOpened,
@@ -25,14 +27,20 @@ import {
 import { raiseObjection } from "../src/triage.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  announceHeadRepo,
+  assertRememberedHeadRepo,
+  buildWorkspaceResolver,
   protectedBranch,
+  recordDeclaredRepo,
   recordTaskCheckoutTip,
   refreshProtectedBranch,
   releaseWorkspace,
+  resolveExecutionWorkspace,
   taskRunPlaceForBoard,
   type WorkspaceConfig,
   writeBoardRefs,
 } from "../src/workspace.js";
+import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { awaitWindow, FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
 import {
   checkoutTaskBranch,
@@ -47,6 +55,7 @@ import {
   settleReviews,
   squashTaskIntoOrigin,
 } from "./harness.js";
+import { makeRegistry, setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 let opened: Db | undefined;
@@ -302,6 +311,7 @@ export async function pushedRoot(
   const work = landingWork(db, clock);
   const target = `task/${work.id}`;
   git(workspace.path, "checkout", "-b", target);
+  recordDeclaredRepo(db, work.id, workspace);
   for (let n = 1; n <= commits; n++) commitWork(workspace.path, `feature-${n}.txt`, "ready\n");
   git(workspace.path, "push", "head-repo", target);
   git(workspace.path, "checkout", "main");
@@ -733,4 +743,37 @@ export function commitOutOfBand(workspace: WorkspaceConfig, branch: string): str
 export function fetchHeldAtToken() {
   const window = awaitWindow();
   return { window, githubAuth: { ensureToken: () => window.hold(), env: () => process.env } as unknown as GitHubAuth };
+}
+
+/** The name `reef` registered for `old`'s checkout: the registry, the doors' materials, and the resolver that reads it fresh. */
+export async function registeredReef(old: WorkspaceConfig) {
+  const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${old.path}\n  repo: ${old.repo}\n` });
+  const admin = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-") };
+  const resolve = (name: string | null) => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), name ?? "reef", null, admin.workspacesBaseDir);
+  return { registryDir, admin, resolve };
+}
+
+export type RegisteredReef = Awaited<ReturnType<typeof registeredReef>>;
+
+/** 削除の扉 → 登録の扉(register)で `reef` を `moved` の checkout に登録し直す —— 扉は checkout の origin から `repo:` を書く。`between` は
+ *  削除の後・登録の前の人間の手(checkout の origin を向け替えるなど)。`moved` が出元 repo を持てば `giveHeadRepo` で足す。 */
+export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceConfig, between = () => {}): Promise<void> {
+  await deleteWorkspace({ name: "reef", confirm: true }, {
+    ...reef.admin,
+    db,
+    unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "reef"),
+    awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(reef.resolve, undefined), "reef"),
+  });
+  between();
+  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
+  expect(reef.resolve("reef").repo).toBe(moved.repo);
+  if (moved.head_repo !== undefined) giveHeadRepo(db, reef, moved.head_repo);
+}
+
+/** `reef` に出元 repo を足す。設定の扉(updateWorkspace)は GitHub の owner/name しか受けず fixture の local path を通せないので、扉が書く
+ *  もの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)。 */
+export function giveHeadRepo(db: Db, reef: RegisteredReef, headRepo: string): void {
+  announceHeadRepo(db, reef.resolve("reef"), headRepo);
+  setWorkspaceEntry(reef.registryDir, "reef", "head_repo", headRepo);
+  assertRememberedHeadRepo(db, reef.resolve("reef"), new Date());
 }

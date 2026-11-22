@@ -26,6 +26,7 @@ import { markTeardown } from "../src/teardown.js";
 import {
   boardRefWriter,
   quarantineWorkspace,
+  recordDeclaredRepo,
   recordTaskCheckoutTip,
   refreshProtectedBranch,
   releaseWorkspace,
@@ -293,6 +294,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
     ...HUMAN_WEBUI,
   );
   git(workspace.path, "branch", `task/${task.id}`);
+  recordDeclaredRepo(db, task.id, workspace);
   finish(db, clock, task);
   registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
   registerPrPromotionFailureQuestion(db, task, "second failed attempt", clock.now());
@@ -1649,6 +1651,7 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
   const nested = attachUnsettledChild(db, clock, child.id);
   git(workspace.path, "branch", `task/${nested.id}`, `task/${child.id}`);
+  recordDeclaredRepo(db, nested.id, workspace);
   finish(db, clock, nested);
   finish(db, clock, child);
   // 読めば壊れていると分かる checkout でも、PR の開いた根の子孫の lineage は読まれない(記録で外れる)
@@ -1824,6 +1827,7 @@ it("運ぶ内容の無い根の nothing_to_land と、門で待った根の land
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const empty = landingWork(db, clock);
   git(workspace.path, "branch", `task/${empty.id}`);
+  recordDeclaredRepo(db, empty.id, workspace);
   finish(db, clock, empty);
   const waiting = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, waiting.id);

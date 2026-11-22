@@ -7,7 +7,7 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { type AuthorityProfile, UnknownAgentError } from "../src/registry.js";
 import { completeTask, getTask, listBoard, registerTask } from "../src/tasks.js";
-import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { quarantineWorkspace, recordDeclaredRepo, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import {
   answerQuestionViaWebui,
@@ -129,6 +129,7 @@ describe("quarantine が抱えている根への PR 昇格失敗 question の re
     const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, resolveAuthority: () => authority() });
     const work = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
     git(workspace.path, "checkout", "-b", `task/${work.id}`);
+    recordDeclaredRepo(db, work.id, workspace);
     commitWork(workspace.path, "feature.txt", "ready\n");
     github.scriptFailure(new Error("first promotion failed"));
     completeTask(db, work, FULL_HANDOFF, "worker", clock.now(), "worker");

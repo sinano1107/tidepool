@@ -59,6 +59,7 @@ import {
 import type { GitHubClient, RepoSlug } from "./github.js";
 import {
   authedLsRemote,
+  comparedRepo,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   HEAD_REPO_REMOTE,
@@ -183,6 +184,9 @@ export interface WorkspaceConfig {
   head_repo?: string;
   /** ADR 0378 決定7・8: board operations recheck the live declaration before using its destination. */
   checkRememberedRepo?: (place: WorkspaceConfig) => Pick<WorkspaceConfig, "path" | "repo" | "head_repo">;
+  /** ADR 0399 決定3: a destination read also checks the declared repo recorded for the task it carries against the rechecked
+   *  declaration —— only destination reads, never the pickup predicate that rechecks the remembered repo. */
+  checkDeclaredRepo?: (current: Pick<WorkspaceConfig, "name" | "path" | "repo">) => void;
   /** Command prefixes a review session may run despite the `manual` write
    *  floor (issue #144 / ADR 0035), passed through from the registry entry the
    *  same way `branch` is. Absent → none: a `WorkspaceConfig` built outside the
@@ -2587,6 +2591,8 @@ function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: D
       taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: now,
       payload: { kind: "task_branch_created", sha, workspace: name, ...(filledFrom !== undefined && { column_filled_from: filledFrom }) },
     });
+    // ADR 0399 決定3: 面接室の受験者は面接室にしか届かず着地しないので記録しない
+    if (interviewRootIdOf(db, task) === undefined) recordDeclaredRepo(db, task.id, workspace);
   })();
 }
 
@@ -3057,6 +3063,45 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
       if (current.head_repo !== place.head_repo) assertHeadRemoteMatchesDeclaration(current);
       return current;
     }),
+  };
+}
+
+/** A declaration's repo in the form the record keeps and compares (ADR 0378 決定4), null when it is purely-local. */
+function recordedForm({ path, repo }: Pick<WorkspaceConfig, "path" | "repo">): string | null {
+  return repo === undefined ? null : comparedRepo(networkDestination(repo, path));
+}
+
+/** ADR 0399 決定1: the one writer of a task's declared repo, called where its task branch is made, after pickup's fetch reached
+ *  `workspace`'s declaration. Written once and never overwritten —— a lost branch's rebuild (ADR 0392) keeps the first value. */
+export function recordDeclaredRepo(db: Db, taskId: string, workspace: Pick<WorkspaceConfig, "path" | "repo">): void {
+  db.prepare("UPDATE tasks SET declared_repo = ? WHERE id = ? AND declared_repo IS NULL").run(JSON.stringify(recordedForm(workspace)), taskId);
+}
+
+/** ADR 0399 決定3: the one comparison of a task's declared repo with the current declaration. No record —— a task without a row
+ *  included —— disagrees (fail-closed), a purely-local record agrees with any declaration, a different kind disagrees, the same kind
+ *  compares by ADR 0378 決定4. Returns the stop naming both in that form, or undefined when they agree. */
+export function declaredRepoDisagreement(db: Db, taskId: string, current: Pick<WorkspaceConfig, "name" | "path" | "repo">): string | undefined {
+  const saved = db.prepare("SELECT declared_repo FROM tasks WHERE id = ?").pluck().get(taskId) as string | null | undefined;
+  const recorded = saved == null ? undefined : (JSON.parse(saved) as string | null);
+  const declared = recordedForm(current);
+  if (recorded === null || recorded === declared) return undefined;
+  const declares = declared === null ? "declares no repo (purely-local)" : `declares repo ${repositoryLabel(declared)}`;
+  const was = recorded === undefined ? "the board has no record of the repo it was picked up for" : `it was picked up for repo ${repositoryLabel(recorded)}`;
+  return `${taskBranch(taskId)} cannot be carried: ${was}, but workspace ${current.name} now ${declares}, so the board does not carry it there.`;
+}
+
+export class DeclaredRepoMismatchError extends Error {}
+
+/** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo with the rechecked declaration, in
+ *  the same synchronous section as the read and before the network. It runs after the remembered-repo check, so a hand-edited
+ *  `repo:` stays the workspace's stop (ADR 0378 決定6・8). */
+export function withDeclaredRepoCheck<T extends WorkspaceConfig>(db: Db, workspace: T, taskId: string): T {
+  return {
+    ...workspace,
+    checkDeclaredRepo: (current) => {
+      const disagreement = declaredRepoDisagreement(db, taskId, current);
+      if (disagreement) throw new DeclaredRepoMismatchError(disagreement);
+    },
   };
 }
 

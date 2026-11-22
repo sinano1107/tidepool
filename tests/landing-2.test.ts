@@ -25,6 +25,7 @@ import {
 import { markTeardown } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  recordDeclaredRepo,
   workspaceProtectionReader,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
@@ -609,6 +610,7 @@ it("PR も 出元 repo のタスクブランチも無い根を収束は「読め
   const work = landingWork(db, clock);
   const target = `task/${work.id}`;
   git(workspace.path, "checkout", "-b", target);
+  recordDeclaredRepo(db, work.id, workspace);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   finish(db, clock, work);
