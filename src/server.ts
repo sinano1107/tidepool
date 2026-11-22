@@ -534,8 +534,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     github: options.github ?? null,
     resolveAuthority: options.resolveAuthority,
     defaultAgentName: worker.id,
-    auditorName,
-    interviewerName,
     isProtectedWorkspace: options.isProtectedWorkspace,
     githubAuth: options.githubAuth,
     workspacesDir: options.workspacesDir,

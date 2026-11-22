@@ -65,17 +65,16 @@ export async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
   return { db: database, clock: new FakeClock() };
 }
 
-/** PR を worker として記録する。保護 workspace は無い。`head` を渡さない PR の head はどこにも無い sha —— 収束が push する根には
+/** 収束を通さずに PR を開いた記録を刻む。保護 workspace は無い。`head` を渡さない PR の head はどこにも無い sha —— 収束が push する根には
  *  `pushPrHead` の実在する head を渡す(ADR 0376 決定1: 収束は push の前に PR の head を読む)。 */
-export function recordPrOpenedViaWorker(
+export function recordPrOpenedOutsideConvergence(
   db: Db,
   task: Task,
   prNumber: number,
-  actorId: string,
   now: Date,
-  { authority, isProtected, head = fakeHead(prNumber) }: { authority?: Parameters<typeof recordPrOpened>[6]; isProtected?: boolean; head?: string } = {},
+  { authority, isProtected, head = fakeHead(prNumber) }: { authority?: Parameters<typeof recordPrOpened>[5]; isProtected?: boolean; head?: string } = {},
 ): void {
-  recordPrOpened(db, task, prNumber, head, actorId, now, authority, isProtected, "worker");
+  recordPrOpened(db, task, prNumber, head, now, authority, isProtected);
 }
 
 /** PR #`prNumber` の実在する head を作る: 今のタスクブランチの先端を出元 repo へ push し、GitHub にその PR を置いて sha を返す。この後に
@@ -217,7 +216,7 @@ export async function catchUpConflictRoot(name: string, { openFailure = false, u
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
   const repair = registerTask(
     db,
     { type: "work", parent_id: parent.id, title: "repair", purpose: "repair the landed result", completion_criteria: "a repair PR exists" },
@@ -309,7 +308,7 @@ export async function pushedRoot(
   const pushed = git(workspace.path, "rev-parse", target);
   if (pr) github.scriptPullRequestOnBranch(target);
   if (pr === "recorded") {
-    recordPrOpened(db, getTask(db, work.id)!, 1, recordedSha ?? pushed, "worker", clock.now(), merge && { merge }, undefined, "worker");
+    recordPrOpened(db, getTask(db, work.id)!, 1, recordedSha ?? pushed, clock.now(), merge && { merge }, undefined);
     await commitThroughTaskCheckout(db, clock, workspace, getTask(db, work.id)!, "repair.txt", "fixed\n");
   }
   if (openFailure) registerPrPromotionFailureQuestion(db, getTask(db, work.id)!, "push failed", clock.now());
@@ -455,7 +454,7 @@ export const profile = (merge: MergeDial) => ({
 /** auto_if_ci_green で PR を開き、無人 merge キューへ入れる。 */
 export function queueAutoMerge(db: Db, clock: FakeClock, prNumber: number): Task {
   const work = landingWork(db, clock);
-  recordPrOpenedViaWorker(db, work, prNumber, "worker", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, work, prNumber, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
   return work;
@@ -535,7 +534,7 @@ export async function openPushedPr(name: string, merge: MergeDial) {
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "push", "-u", "head-repo", `task/${work.id}`);
   github.scriptPullRequestOnBranch(`task/${work.id}`);
-  recordPrOpened(db, work, 1, git(workspace.path, "rev-parse", "HEAD"), "worker", clock.now(), { merge }, undefined, "worker");
+  recordPrOpened(db, work, 1, git(workspace.path, "rev-parse", "HEAD"), clock.now(), { merge }, undefined);
   const landing = createLanding({
     defaultAgentName: "tako",
     db,

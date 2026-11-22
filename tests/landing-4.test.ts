@@ -110,7 +110,7 @@ import {
   promotionFailures,
   pushPrHead,
   queueAutoMerge,
-  recordPrOpenedViaWorker,
+  recordPrOpenedOutsideConvergence,
   settleRepairNotMergedBack,
 } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -137,7 +137,7 @@ it("shadow が消えて組み込みに落ちた work のキューの PR は、�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  recordPrOpenedViaWorker(db, work, 1, "fugu", clock.now(), { authority: { merge: "auto_if_ci_green" } });
+  recordPrOpenedOutsideConvergence(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" } });
   const registry = loadRegistry(await makeRegistry(), "purely-local");
   let resolveAuthority = (assignee: string | null, taskType: TaskType): AuthorityProfile =>
     resolveExecutionAgent(registry, "tako", assignee, seedTierNames, taskType).profile;
@@ -831,7 +831,7 @@ function deferLanding(board: Db, taskId: string, now: Date): void {
 it("既定 agent の quarantine 回答前の観測は、assignee 未指定の work の外部 merge を記録してキューを退ける", async () => {
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
   const github = new FakeGitHubClient();
@@ -842,7 +842,6 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
     workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
     github,
     defaultAgentName: "tako",
-    auditorName: "shako",
   });
 
   await landing.observeAutoMergeOutcomes("shako");
@@ -858,7 +857,7 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
 it("quarantine 回答前の観測は、盤面の名義で merge 済みのキューの PR を pr_merged として根に刻みキューから外す(ADR 0265 決定5)", async () => {
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
   const github = new FakeGitHubClient();
@@ -883,7 +882,7 @@ it("quarantine 回答前の観測は、盤面の名義で merge 済みのキュ�
 it("quarantine 回答前の観測は、盤面の外で閉じられたキューの PR を閉じた観測としてキューから外す(ADR 0229 決定4)", async () => {
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
   const github = new FakeGitHubClient();
@@ -908,7 +907,7 @@ it.each(["auto_merge", "promotion_failure"] as const)("assignee 未指定の完�
   const clock = new FakeClock();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   if (waiting === "auto_merge") {
-    recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+    recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
       authority: { merge: "auto_if_ci_green" },
     });
   } else {
@@ -925,7 +924,7 @@ it("着地を待つ完了タスクは、PR をまだ開いていない未着地�
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
   deferLanding(db, completedWork(db, now, "tako").id, now);
-  recordPrOpenedViaWorker(db, completedWork(db, now, "tako"), 7, "tako", now, {
+  recordPrOpenedOutsideConvergence(db, completedWork(db, now, "tako"), 7, now, {
     authority: { merge: "auto_if_ci_green" },
   });
   registerPrPromotionFailureQuestion(db, completedWork(db, now, "tako"), "boom", now);
@@ -945,7 +944,7 @@ it("parentless landing questions register in the completed task's workspace", ()
   const failedWork = completedWork(db, now, "tako", undefined, "reef");
   const localWork = completedWork(db, now, "tako", undefined, "reef");
 
-  recordPrOpenedViaWorker(db, prWork, 7, "tako", now, { authority: { merge: "escalate" } });
+  recordPrOpenedOutsideConvergence(db, prWork, 7, now, { authority: { merge: "escalate" } });
   registerPrPromotionFailureQuestion(db, failedWork, "push failed", now);
   registerLocalMergeQuestion(db, localWork, "merge it", now);
 
@@ -969,7 +968,7 @@ async function abandonedWork(board: Db, now: Date, workspace?: string): Promise<
 it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先の枝に乗る子は、着地を待つ完了タスクに数えない", async () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
-  recordPrOpenedViaWorker(db, completedWork(db, now, "tako"), 7, "tako", now, { authority: { merge: "escalate" } });
+  recordPrOpenedOutsideConvergence(db, completedWork(db, now, "tako"), 7, now, { authority: { merge: "escalate" } });
   completedWork(db, now, "squid");
   await abandonedWork(db, now);
   // 未完了の親と、その枝へ帰る完了した子(収束は何も記録しない)
@@ -1012,7 +1011,7 @@ it("workspace 名でも、無人 merge キューにいる・PR 昇格失敗の q
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
   const queued = completedWorkIn(db, now, "reef");
-  recordPrOpenedViaWorker(db, queued, 7, "tako", now, {
+  recordPrOpenedOutsideConvergence(db, queued, 7, now, {
     authority: { merge: "auto_if_ci_green" },
   });
   const failed = completedWorkIn(db, now, "reef");
@@ -1026,7 +1025,7 @@ it("workspace 名では、abandon 済み・着地済み・別 workspace・worksp
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
   await abandonedWork(db, now, "reef");
-  recordPrOpenedViaWorker(db, completedWorkIn(db, now, "reef"), 7, "tako", now, { authority: { merge: "escalate" } });
+  recordPrOpenedOutsideConvergence(db, completedWorkIn(db, now, "reef"), 7, now, { authority: { merge: "escalate" } });
   appendEvent(db, {
     taskId: completedWorkIn(db, now, "reef").id,
     actorId: BOARD_ACTOR_ID,
@@ -1047,7 +1046,7 @@ it("workspace 名では、abandon 済み・着地済み・別 workspace・worksp
 function rerunnableWorkInReef(board: Db, now: Date, shape: "abandoned" | "pr_opened"): Task {
   const work = completedWork(board, now, "tako", undefined, "reef");
   if (shape === "pr_opened") {
-    recordPrOpenedViaWorker(board, work, 7, "tako", now, { authority: { merge: "escalate" } });
+    recordPrOpenedOutsideConvergence(board, work, 7, now, { authority: { merge: "escalate" } });
   } else {
     deferLanding(board, work.id, now);
     registerPrPromotionFailureQuestion(board, work, "boom", now);
@@ -1136,7 +1135,7 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
     );
     const parent = completedWork(db, now, "tako", grand.id, "lagoon");
     landWithoutPr(db, now, parent, form);
-    recordPrOpenedViaWorker(db, completeTask(db, grand, FULL_HANDOFF, "tako", now, "worker"), 7, "tako", now, {
+    recordPrOpenedOutsideConvergence(db, completeTask(db, grand, FULL_HANDOFF, "tako", now, "worker"), 7, now, {
       authority: { merge: "escalate" },
     });
     settleReviews(db, now);
@@ -1197,7 +1196,7 @@ it("PR 昇格の abandon promotion は question を立てた後に task ブラ�
 
   expect(moved).not.toBe(asked);
   expect(boardEvents(db, work.id, "landing_declined")).toEqual([
-    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_declined", question_id: failure!.id, tip: asked, outside: null, missing_branches: null } },
+    { actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { kind: "landing_declined", question_id: failure!.id, tip: asked, outside: null, missing_branches: null } },
   ]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
@@ -1497,7 +1496,7 @@ it("既定 workspace a で pickup した workspace 未指定の完了タスク�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   for (const pr of [7, 8]) {
-    recordPrOpenedViaWorker(db, pickedUpAndCompleted(db, clock, "tako", a), pr, "tako", clock.now(), {
+    recordPrOpenedOutsideConvergence(db, pickedUpAndCompleted(db, clock, "tako", a), pr, clock.now(), {
       authority: { merge: "auto_if_ci_green" },
     });
   }
@@ -1554,7 +1553,7 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
   const workspace = await makeWorkspace("landing-pinned-agent");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  recordPrOpenedViaWorker(db, pickedUpAndCompleted(db, clock, "a"), 7, "a", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, pickedUpAndCompleted(db, clock, "a"), 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
   const landing = createLanding({
@@ -2349,7 +2348,7 @@ async function outlivedRootWithBaseline(name: string, prNumber?: number) {
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
   checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   const head = prNumber === undefined ? undefined : pushPrHead(github, workspace, repair.id, prNumber);
@@ -2357,7 +2356,7 @@ async function outlivedRootWithBaseline(name: string, prNumber?: number) {
   commitWork(workspace.path, "repair.txt", "fixed\n");
   git(workspace.path, "checkout", "main");
   finish(db, clock, repair);
-  if (prNumber !== undefined) recordPrOpenedViaWorker(db, getTask(db, repair.id)!, prNumber, "worker", clock.now(), { head });
+  if (prNumber !== undefined) recordPrOpenedOutsideConvergence(db, getTask(db, repair.id)!, prNumber, clock.now(), { head });
   await leaveBaseline(db, workspace);
   return { workspace, db, clock, github, landing, repair };
 }

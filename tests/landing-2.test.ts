@@ -2,7 +2,7 @@
 import { existsSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { BOARD_ACTOR_ID, } from "../src/actor-id.js";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
@@ -71,7 +71,7 @@ import {
   queueAutoMerge,
   raiseUnbundledObjection,
   readOnNextTick,
-  recordPrOpenedViaWorker,
+  recordPrOpenedOutsideConvergence,
   rootWithOpenedPr,
   settleRepairNotMergedBack,
   straddle,
@@ -320,7 +320,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
   const repair = registerTask(
     db,
     {
@@ -941,8 +941,8 @@ it("書き換えの head の merge question に「hold」と答えると、quest
   const { c, head, held } = await heldRewrite("outside-rewrite-held");
 
   expect(boardEvents(c.db, c.work.id, "landing_declined")).toEqual([{
-    actor_id: BOARD_ACTOR_ID,
-    origin: "board",
+    actor_id: HUMAN_ACTOR_ID,
+    origin: "webui",
     payload: {
       kind: "landing_declined",
       question_id: held.id,
@@ -1073,7 +1073,7 @@ it("書き換えられた記録済みの PR への2回目の「merge」の追い
   git(c.workspace.path, "push", "head-repo", c.target);
   const pushed = git(c.workspace.path, "rev-parse", c.target);
   c.github.scriptPullRequestOnBranch(c.target, 2);
-  recordPrOpened(c.db, c.repair, 2, pushed, "worker", c.clock.now(), { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(c.db, c.repair, 2, pushed, c.clock.now(), { merge: "escalate" }, undefined);
   await pushOutsideBoard(c.workspace, c.repair.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
   const answerMerge = () =>
     submitAnswer(
@@ -1525,7 +1525,7 @@ it("追いつき merge をまたいで走るセッションは、盤面が動か
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
   checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
@@ -1609,7 +1609,7 @@ it("付帯子と異議が両方あれば attached_children を名乗り、回答
 it("PR の merge question は問うた根の付帯子で塞がる", async () => {
   const { db, clock } = await openBoard();
   const work = landingWork(db, clock);
-  recordPrOpenedViaWorker(db, work, 7, "worker", clock.now());
+  recordPrOpenedOutsideConvergence(db, work, 7, clock.now());
   const question = mergeQuestion(db, clock, { pending_merge_pr: 7, root: work.id });
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: null });
 
@@ -1623,8 +1623,8 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptCiStatus("failure");
-  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), { authority: { merge: "escalate" } });
-  recordPrOpenedViaWorker(db, landingWork(db, clock), 2, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" } });
+  recordPrOpenedOutsideConvergence(db, landingWork(db, clock), 1, clock.now(), { authority: { merge: "escalate" } });
+  recordPrOpenedOutsideConvergence(db, landingWork(db, clock), 2, clock.now(), { authority: { merge: "auto_if_ci_green" } });
 
   await createLanding({
     defaultAgentName: "tako",
@@ -1711,11 +1711,11 @@ it("宣言が registry の repo の workspace は、pickup の後に origin を�
 // 着地の面(question)の理由 3 つは、question 本文の違いだけで区別される。本文を逐語で釘付けする。
 it("PR を開いた時点で question 面に倒れた理由は、保護・ダイヤル・risk のそれぞれの本文で merge question に残る", async () => {
   const { db, clock } = await openBoard();
-  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, landingWork(db, clock), 1, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
     isProtected: true,
   });
-  recordPrOpenedViaWorker(db, landingWork(db, clock), 2, "worker", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, landingWork(db, clock), 2, clock.now(), {
     authority: { merge: "escalate" },
   });
   const risky = registerTask(
@@ -1730,7 +1730,7 @@ it("PR を開いた時点で question 面に倒れた理由は、保護・ダイ
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  recordPrOpenedViaWorker(db, risky, 3, "worker", clock.now(), {
+  recordPrOpenedOutsideConvergence(db, risky, 3, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
 
@@ -2309,7 +2309,7 @@ it("CI を読んだ後に head が動いた PR は merge されず、question �
   // どちらの head も盤面が push した head(ADR 0387 決定1)—— PR を開いた head と、CI を読んだ後に盤面が push した head。盤面の push の
   // 記録は tick が印を放した後に書かれる(ADR 0387 決定4)
   const work = landingWork(db, clock);
-  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" }, head: "ci-read-head" });
+  recordPrOpenedOutsideConvergence(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head: "ci-read-head" });
   github.scriptHead(1, "ci-read-head");
   afterCiRead(github, () => github.scriptHead(1, "pushed-after-ci-read"));
 

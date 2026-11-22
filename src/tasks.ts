@@ -3366,9 +3366,9 @@ export function recordPrNumber(db: Db, taskId: string, prNumber: number): void {
   db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, taskId);
 }
 
-/** Records that a completed task's work opened a PR (issue #11): pr_number is
- *  set once, paired with a pr_opened event — the invariant lives here, not in
- *  the MCP layer's PR side effect, per ADR 0002. The merge dial then decides
+/** Records that convergence opened a PR for a root, or found one already open
+ *  on its head (ADR 0241): pr_number is set once, paired with a pr_opened
+ *  event — the invariant lives here, per ADR 0002. The merge dial then decides
  *  what happens next: `escalate` always asks a human before merging, via a
  *  merge-decision question whose "merge" answer submitAnswer gates on a
  *  live CI check (never performed here — this module stays free of any
@@ -3389,19 +3389,18 @@ export function recordPrOpened(
   task: Task,
   prNumber: number,
   sha: string,
-  actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
   isProtected: boolean | undefined,
-  origin: EventOrigin,
   mergePathReview?: HumanMergePathReview,
 ): void {
   db.transaction(() => {
     recordPrNumber(db, task.id, prNumber);
+    // ADR 0400 決定2・4: PR を開くと決めたのは収束の規則なので盤面の名義 —— 呼び手が名義を渡すと移設のたびに写しが運ばれる
     appendEvent(db, {
       taskId: task.id,
-      actorId,
-      origin,
+      actorId: BOARD_ACTOR_ID,
+      origin: "board",
       payload: { kind: "pr_opened", pr_number: prNumber, sha },
       at: now,
     });

@@ -4,7 +4,6 @@ import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventRowOf, latestEventOfTask, parseEventRow, type TaskScopedPayload } from "./events.js";
 import { git, isAncestor } from "./git.js";
@@ -40,7 +39,6 @@ import {
   recordPrOpened,
   registerMergeQuestion,
   registerTask,
-  resolveTaskAgent,
   settleQuestionAsObserved,
   subtreeSql,
   type Task,
@@ -773,8 +771,6 @@ export interface LandingDeps {
   github: GitHubClient | null;
   resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   defaultAgentName: string;
-  auditorName?: string;
-  interviewerName?: string;
   isProtectedWorkspace?: (name: string) => boolean;
   /** merge 済みの根を比べる前の保護ブランチの fetch(ADR 0241 決定1)が使う盤面の GitHub 身元(ADR 0093)。 */
   githubAuth?: GitHubAuth;
@@ -1893,13 +1889,9 @@ export function createLanding(deps: LandingDeps): Landing {
         task,
         prNumber,
         sha,
-        resolveTaskAgent(task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME, deps.interviewerName ?? DEFAULT_INTERVIEWER_NAME),
         deps.clock.now(),
         authority,
         protectedWorkspace,
-        // spec #3273 group C の [spec] は人間の根の pr_opened だけに origin board を決めた —— actor が人間でも開いたのは盤面だと読めるように。
-        // agent の根の origin はこの決定の外(actor は今どおり assignee)
-        humanRoot ? "board" : "worker",
         inspectPr ? mergePathReview(workspace, openedPr, dial) : undefined,
       );
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);

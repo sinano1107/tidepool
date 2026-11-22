@@ -11,7 +11,7 @@ import { announceHeadRepo, assertRememberedHeadRepo, buildWorkspaceResolver, res
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
-import { finish, landingWork, openBoard, pushPrHead, recordPrOpenedViaWorker } from "./landing-fixture.js";
+import { finish, landingWork, openBoard, pushPrHead, recordPrOpenedOutsideConvergence } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -33,7 +33,7 @@ async function reRegisteredWithSameNumber() {
 
   // `external` の根は merge question もキューの行も持たないので、削除の扉を止めずに生き残る(ADR 0370 決定1)
   const oldRoot = finish(db, clock, landingWork(db, clock, "reef"));
-  recordPrOpenedViaWorker(db, oldRoot, 1, "worker", clock.now(), { authority: { merge: "external" } });
+  recordPrOpenedOutsideConvergence(db, oldRoot, 1, clock.now(), { authority: { merge: "external" } });
 
   await deleteWorkspace({ name: "reef", confirm: true }, {
     ...admin,
@@ -62,7 +62,7 @@ async function reRegisteredWithSameNumber() {
   commitWork(workspace.path, "feature.txt", "ready\n");
   const done = finish(db, clock, newRoot);
   const head = pushPrHead(github, workspace, newRoot.id, 1);
-  recordPrOpenedViaWorker(db, done, 1, "worker", clock.now(), { authority: { merge: "escalate" }, head });
+  recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "escalate" }, head });
 
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github });
   const answer = (questionId: string, option: "merge" | "hold") =>
