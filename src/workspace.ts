@@ -1346,7 +1346,8 @@ function repointingOnRefusal<T>(named: WorkspaceConfig, workbench: string, intak
 function advanceKeptWorkbench(named: WorkspaceConfig, workbench: string, target: string, { tip, commit }: { tip: string; commit: string }, carried?: Carried): string {
   let advanced = false;
   try {
-    workerRepoGit(workbench, "update-ref", `refs/heads/${target}`, commit, tip);
+    // ADR 0401 決定4: 死の前に包む commit へ進めた作業台(答え直し)は進んだまま
+    if (workerRepoGit(workbench, "rev-parse", `refs/heads/${target}`) !== commit) workerRepoGit(workbench, "update-ref", `refs/heads/${target}`, commit, tip);
     advanced = true;
   } catch {}
   try {
@@ -4395,6 +4396,47 @@ function protectedValueAsRecorded(db: Db, workspace: WorkspaceConfig): string {
   return protectedSha;
 }
 
+/** ADR 0401 決定4: `task/<id>` が保護ブランチ(`protectedSha`、省略時は今の値)に含まれていれば、この根を持ち込んだ commit —— first-parent の鎖の上で
+ *  task を含み、first parent が含まない commit(ff なら task の tip)。含まれていなければ undefined。含まれるかは内容(ADR 0105)でなく履歴で読む
+ *  —— 別の根が同じ変更を運んでもこの根の着地ではない(ADR 0289 決定3)。鎖の先頭は他の根の commit でありうる(ADR 0289 決定1)。`task/<id>` が
+ *  無ければ含まれていると読まない。git が読めなければ投げる。 */
+export function localLandingCommit(workspace: WorkspaceConfig, taskId: string, protectedSha = git(workspace.path, "rev-parse", `refs/heads/${protectedBranch(workspace)}`)): string | undefined {
+  const task = `refs/heads/${taskBranch(taskId)}`;
+  if (!gitAnswers(() => git(workspace.path, "rev-parse", "--verify", "--quiet", task))) return undefined;
+  if (!isAncestor(workspace, task, protectedSha)) return undefined;
+  const tip = git(workspace.path, "rev-parse", task);
+  const revList = (...args: string[]) => git(workspace.path, "rev-list", ...args, `${tip}..${protectedSha}`).split("\n").filter(Boolean);
+  // `--first-parent` と `--ancestry-path` を併せると、task の tip が第2親の先にある取り込みの commit を落とす —— 子孫を別に引いて鎖と突き合わせる
+  const descendants = new Set(revList("--ancestry-path"));
+  const oldest = revList("--first-parent").filter((commit) => descendants.has(commit)).at(-1);
+  return oldest === undefined || git(workspace.path, "rev-parse", `${oldest}^1`) === tip ? tip : oldest;
+}
+
+/** ADR 0401 決定4: 含まれていた着地の後に残る鍵の作業台を、取り込みの後(`takeInExistingWorkbench`)と同じに片付ける —— 人間の作業が残って
+ *  いなければ消し、残っていれば残す。残す作業台の tip が `landed` の取り込んだ tip(包む commit の第2親)か包む commit なら text C6 を返す。
+ *  読めなければ残す —— 着地はもう保護ブランチにあるので拒まない。 */
+function settleLandedWorkbench(named: WorkspaceConfig, base: string, target: string, carried: string, landed: string): string | undefined {
+  const at = workbenchAt(named, base, target, carried);
+  if (!placeHasRepository(at)) return undefined;
+  const place = workbenchPlace(named, realpathSync(at));
+  let judged: { owner: WorkbenchOwner; tip: string | undefined; taken: string | undefined };
+  try {
+    judged = judgeWorkbench(named, place, target, { carried, boardMove: true }, (owner, read) => ({
+      owner,
+      tip: read?.tip,
+      taken: git(named.path, "rev-list", "--parents", "-n", "1", landed).split(" ")[2],
+    }));
+  } catch {
+    return undefined;
+  }
+  const { owner, tip, taken } = judged;
+  if (owner.kind === "nothing") {
+    removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
+    return undefined;
+  }
+  return taken !== undefined && (tip === taken || tip === landed) ? advanceKeptWorkbench(named, place.path, target, { tip: taken, commit: landed }, carried) : undefined;
+}
+
 /** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
  *
  *  帯域外の判定は ff の成否ではなく**盤面自身の記録との突き合わせ**で下す(決定1)。
@@ -4416,6 +4458,9 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   const protectedSha = protectedValueAsRecorded(db, workspace);
 
   const task = taskBranch(taskId);
+  // ADR 0401 決定4: 保護ブランチを動かした後・記録の前に死んだ着地の答え直しは何も書かず、この根を持ち込んだ commit を返す
+  const included = localLandingCommit(workspace, taskId, protectedSha);
+  if (included !== undefined) return { landed: included, kept: settleLandedWorkbench(workspace, intake.workbenchBase, branch, `refs/heads/${task}`, included) };
   // ADR 0382 決定4: 決着済み・cancel 済みを含むすべての task のブランチの commit を作業台の tip に許さない —— 答えている task の tip にある
   // commit は数えない。ADR 0371 決定2・4: 作業台に人間の merge があれば、この回答がそれを取り込み、包む commit が着地
   const refusalFor = (branches: string[], at: string) =>

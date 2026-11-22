@@ -309,6 +309,49 @@ it.each([
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
+// ADR 0401 決定4: 着地が保護ブランチを動かした後・記録の前に死んだ盤面の答え直し —— 含まれているかを履歴で読み、何も書かずにこの根を持ち込んだ commit を返す
+it("非 ff で着地した task をもう一度着地させると、commit を足さずにその merge commit を返す", async () => {
+  const workspace = await makeWorkspace("landing-reanswer-non-ff");
+  const { db, clock } = await openBoard();
+  const first = await recordedWork(db, clock, workspace, "first\n", "first.txt");
+  const second = await recordedWork(db, clock, workspace, "second\n", "second.txt");
+  mergeTaskToProtected(db, workspace, first.id, CLEAN_LANDING_INTAKE);
+  const { landed } = mergeTaskToProtected(db, workspace, second.id, CLEAN_LANDING_INTAKE);
+  expect(git(workspace.path, "rev-parse", `${landed}^2`)).toBe(git(workspace.path, "rev-parse", `task/${second.id}`));
+
+  expect(mergeTaskToProtected(db, workspace, second.id, CLEAN_LANDING_INTAKE)).toEqual({ landed, kept: undefined });
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(landed);
+});
+
+// ADR 0289 決定1: 保護ブランチの tip は他の根の commit でありうる —— 返すのはこの根を持ち込んだ commit
+it.each([
+  ["ff", 0],
+  ["非 ff", 1],
+])("%s で着地した task の後に別の根が着地しても、もう一度着地させると commit を足さずにこの根の commit を返す", async (_form, index) => {
+  const workspace = await makeWorkspace("landing-reanswer-after-other-root");
+  const { db, clock } = await openBoard();
+  const works = [];
+  for (const file of ["first.txt", "second.txt", "third.txt"]) works.push(await recordedWork(db, clock, workspace, `${file}\n`, file));
+  const landings = works.map((work) => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE).landed);
+  const after = git(workspace.path, "rev-parse", "refs/heads/main");
+
+  expect(mergeTaskToProtected(db, workspace, works[index]!.id, CLEAN_LANDING_INTAKE)).toEqual({ landed: landings[index], kept: undefined });
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(after);
+});
+
+it("task のブランチが無ければ、保護ブランチに含まれていると読まない", async () => {
+  const workspace = await makeWorkspace("landing-reanswer-branch-gone");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
+  git(workspace.path, "branch", "-D", `task/${work.id}`);
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
+
+  // ADR 0401 帰結: 諦めて(ADR 0392)ブランチが消えた後は判定できず fail-closed のまま
+  expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow();
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(before);
+});
+
 it("基準の行が無い workspace のローカル着地の merge 回答は、最初の撮りをして着地する", async () => {
   const workspace = await makeWorkspace("landing-answer-first-capture");
   const { db, clock } = await openBoard();
@@ -610,6 +653,30 @@ it("local 着地の取り込みの後に作業台に人間の作業が残れば�
   expect(git(c.workbench(), "rev-parse", "main")).toBe(landed);
   expect(git(c.workbench(), "rev-parse", "board/main")).toBe(landed);
   expect(git(c.workbench(), "status", "--porcelain")).toBe("");
+});
+
+// ADR 0401 決定4: 取り込みで着地した後・記録の前に死んだ盤面の答え直しは、取り込みの後の片付けと同じに、人間の作業が残る作業台は残して
+// text C6 を言い、残っていなければ消す
+it("取り込みで着地した task をもう一度着地させると、commit を足さずに包む commit を返し、人間の作業が残る作業台は残し、残らなくなれば消す", async () => {
+  const c = await localLandingConflict("local-landing-reanswer-workbench");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  const tip = c.resolve();
+  git(c.workbench(), "checkout", "--quiet", "-b", "side");
+  commitWork(c.workbench(), "side.txt", "the human's other work\n");
+  git(c.workbench(), "checkout", "--quiet", "main");
+  const intake = { ...CLEAN_LANDING_INTAKE, workbenchBase: c.base };
+  const first = mergeTaskToProtected(c.db, c.workspace, c.work.id, intake);
+  const kept = `took ${tip} in as ${first.landed} on main. In a clone, fetch the workbench and fast-forward to \`board/main\` before you write on.`;
+  expect(first.kept).toBe(kept);
+
+  expect(mergeTaskToProtected(c.db, c.workspace, c.work.id, intake)).toEqual({ landed: first.landed, kept });
+  expect(git(c.workbench(), "rev-parse", "main")).toBe(first.landed);
+
+  git(c.workbench(), "branch", "--quiet", "-D", "side");
+  expect(mergeTaskToProtected(c.db, c.workspace, c.work.id, intake)).toEqual({ landed: first.landed, kept: undefined });
+  expect(existsSync(workbenchPath(c.base, { workspace: c.workspace.name }, c.source))).toBe(false);
+  expect(git(c.workspace.path, "rev-parse", "refs/heads/main")).toBe(first.landed);
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toHaveLength(1);
 });
 
 // ADR 0371 決定3・5 / spec #3273 pin A4: 受け取る条件は保護ブランチの今の値と task の tip を祖先に持つことで、人間しか書けない path は

@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listEvents, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
@@ -20,6 +20,7 @@ import {
   completeTask,
   getTask,
   listBoard,
+  lostTaskIsTransparent,
   pickupTask,
   registerTask,
   type Task,
@@ -1802,6 +1803,90 @@ it("ローカル着地の hold 回答は question を立てた後に task ブラ
       payload: { kind: "landing_declined", question_id: question.id, tip: asked, outside: null, missing_branches: null },
     },
   ]);
+});
+
+/** ADR 0401 決定4 の死: 別の根を先に着地させてから根 W を非 ff で保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。
+ *  W を持ち込んだ merge commit を返す。 */
+async function landNonFfWithoutRecord(local: Awaited<ReturnType<typeof landLocally>>): Promise<string> {
+  const { db, clock, workspace, work, base } = local;
+  const other = landingWork(db, clock, workspace.name);
+  const place = await prepareAtPickup(db, workspace, other);
+  commitWork(place.path, "other.txt", "another root\n");
+  releaseWorkspace(db, place, other, clock.now());
+  const intake = { ...CLEAN_LANDING_INTAKE, workbenchBase: base };
+  mergeTaskToProtected(db, workspace, other.id, intake);
+  const { landed } = mergeTaskToProtected(db, workspace, work.id, intake);
+  expect(git(workspace.path, "rev-parse", `${landed}^2`)).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  return landed;
+}
+
+// ADR 0401 決定4: 保護ブランチを動かした後・記録の前に死んだローカル着地の答え直し —— merge は何も書かずに持ち込んだ commit の執行を刻み、
+// 刻んだ記録で失われた task は透明に読まれる(ADR 0380 決定1)
+it("非 ff の着地の後に記録だけ欠けた local merge question に merge と答えると、保護ブランチを動かさずにその merge commit を local_merge_executed として刻む", async () => {
+  const local = await landLocally("local-merge-reanswer");
+  const { workspace, db, clock, work, question } = local;
+  const landed = await landNonFfWithoutRecord(local);
+
+  await answerLocalMerge(local);
+
+  expect(git(workspace.path, "rev-parse", "main")).toBe(landed);
+  expect(boardEvents(db, work.id, "local_merge_executed").map(({ payload }) => payload)).toEqual([{ kind: "local_merge_executed", sha: landed }]);
+  expect(getTask(db, question.id)!.status).toBe("done");
+  const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
+  const lost = appendEvent(db, { taskId: work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: tip }, at: clock.now() });
+  expect(lostTaskIsTransparent(db, work.id, { id: lost, payload: { sha: tip } }, [])).toBe(true);
+});
+
+// ADR 0401 決定4: 載った内容に断念を刻まない —— 出口は merge
+it("非 ff の着地の後に記録だけ欠けた local merge question に hold と答えると、merge を名指して断り何も刻まない", async () => {
+  const local = await landLocally("local-hold-reanswer");
+  const { db, work, question } = local;
+  await landNonFfWithoutRecord(local);
+
+  const refused = answerLocalMerge(local, "hold");
+
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow("answer `merge`");
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
+// ADR 0401 帰結: 諦めて(ADR 0392)ブランチが消えた後は含まれているかを判定できない —— hold は今までどおり通る
+it("task のブランチが無ければ、着地の後に記録だけ欠けた local merge question への hold は今までどおり断念を刻む", async () => {
+  const local = await landLocally("local-hold-branch-gone");
+  const { workspace, db, work } = local;
+  await landNonFfWithoutRecord(local);
+  git(workspace.path, "branch", "-D", `task/${work.id}`);
+
+  await answerLocalMerge(local, "hold");
+
+  expect(boardEvents(db, work.id, "landing_declined")).toHaveLength(1);
+});
+
+// ADR 0401 決定4(fail-closed): 含まれているかを読めなければ hold は断る
+it("workspace が解決できなければ、local merge question への hold は断り何も刻まない", async () => {
+  const local = await landLocally("local-hold-unresolved");
+  const { db, clock, work, question, base } = local;
+
+  const refused = submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, workspacesDir: base }, getTask(db, question.id)!, ["hold"], undefined, () => clock.now(), "webui");
+
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow("no workspace configured");
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
+it("workspace の git が読めなければ、local merge question への hold は断り何も刻まない", async () => {
+  const local = await landLocally("local-hold-unreadable");
+  const { db, work, question, workspace } = local;
+  rmSync(join(workspace.path, ".git"), { recursive: true, force: true });
+
+  const refused = answerLocalMerge(local, "hold");
+
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow(`cannot hold: could not tell whether task/${work.id} has landed`);
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
 /** 根 W の付帯子として修理 F を pickup(lineage で W から fork)して commit し、完了して後始末の merge back で W へ届ける。 */

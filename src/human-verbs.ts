@@ -47,7 +47,7 @@ import {
 } from "./harness-containment.js";
 import { actIfGateOpen, assertLandingRefs, checkPrMergeContent, closedRootOf, conflictedPrRoute, contentLeftBehindLocally, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
-import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, readHeadOf } from "./pickup-predicates.js";
+import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
@@ -152,6 +152,7 @@ import {
   INTAKE_OPTIONS,
   type IntakeContext,
   KEPT_TASK_CHECKOUT,
+  localLandingCommit,
   lostBranchRefusal,
   mergeTaskToProtected,
   NO_WORKBENCH,
@@ -1729,6 +1730,17 @@ export async function submitAnswer(
             refuseProtectedBranchWrite(deps.db, mergeWorkspace.name, err, now());
           }
         } else {
+          // ADR 0401 決定4: 保護ブランチに載った内容に断念を刻まない —— 読めなければ断る(fail-closed)。task のブランチが無ければ含まれていると読まない
+          const holdWorkspace = resolveWorkspaceForAnswer(deps, task.workspace, "cannot tell whether the task branch has landed");
+          let landed: string | undefined;
+          try {
+            landed = localLandingCommit(holdWorkspace, kind.task_id);
+          } catch (err) {
+            throw new DomainError(`cannot hold: could not tell whether ${taskBranch(kind.task_id)} has landed — ${err instanceof Error ? err.message : String(err)}`);
+          }
+          if (landed !== undefined) {
+            throw new DomainError(`cannot hold: ${taskBranch(kind.task_id)} has already landed on ${protectedBranch(holdWorkspace)} as ${landed} — answer \`merge\` to record the landing.`);
+          }
           // ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容
           rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };
         }
