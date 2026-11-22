@@ -482,6 +482,8 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
     const deps = { ...(await makeDeps(registryDir)), github, githubAuth: new GitHubAuth(tokenFile, broker.url) };
     const entry = () => loadRegistry(registryDir, "purely-local").workspaces.lagoon!;
     const workspace = { name: "lagoon", path: checkout.path, repo: "https://github.com/acme/lagoon.git" };
+    // 着地の最初の撮りは pickup の開く前の項を撃つ(ADR 0399 決定7)—— 宣言の repo を指す origin を持つ checkout
+    git(checkout.path, "remote", "add", "origin", workspace.repo);
     git(checkout.path, "branch", "task/aaa");
     git(checkout.path, "branch", "task/bbb");
     git(checkout.path, "branch", "feature");

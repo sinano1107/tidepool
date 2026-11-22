@@ -584,6 +584,8 @@ export interface SubmitAnswerDeps {
   /** 作業台の基点: local 着地の `merge` が conflict でその task の作業台をここに開き(ADR 0371 決定7 / ADR 0382 決定1)、次の `merge` が
    *  取り込む。Absent → `resolveWorkspacesBaseDir` 自身の既定。 */
   workspacesDir?: string;
+  /** 盤面の固定点(ADR 0040 / ADR 0377 決定3): 着地の回答の最初の撮りが pickup と同じ開く前の項で交差を拒む(ADR 0399 決定7)。 */
+  boardState?: BoardStatePath[];
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
    *  持たない盤面(回収を待っている slot が存在しない)。 */
@@ -1666,7 +1668,7 @@ export async function submitAnswer(
             task.workspace,
             "cannot land the task branch",
           );
-          assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, now());
+          assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, deps.boardState, now());
           // ADR 0289 決定2: 積み残しは PR の回答と同じ述語で、比べる相手はローカルのタスクブランチ。同期で読み、
           // merge の実行まで await を挟まない(ADR 0288 決定2)。比べられなければ積み残し
           const branch = taskBranch(kind.task_id);
@@ -1747,7 +1749,7 @@ export async function submitAnswer(
                 compareRefs: () => {
                   // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
                   assertQuestionOpen();
-                  assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, now());
+                  assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, deps.boardState, now());
                 },
               },
             ).catch((err) => {

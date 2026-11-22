@@ -379,6 +379,19 @@ export async function checkAcceptanceFirstHalf(db: Db, place: WorkspaceConfig, p
   if (clean) verifyWorkspaceClean(place);
 }
 
+/** 開く前の項は同期で撃てる —— 同期の呼び手(着地の最初の撮り、ADR 0399 決定7)も await を挟まずに pickup と同じ項を撃つ。 */
+export function fireBeforeOpenPredicates(place: WorkspaceConfig, predicates: PickupPredicate[], live?: () => boolean): void {
+  for (const predicate of predicates) {
+    if (live?.() === false) return;
+    if (predicate.phase !== "before-open") continue;
+    try {
+      predicate.check();
+    } catch (err) {
+      throw new PickupGateError(place, err, predicate.describe);
+    }
+  }
+}
+
 export async function firePickupPredicates(
   db: Db,
   place: WorkspaceConfig,
@@ -386,6 +399,7 @@ export async function firePickupPredicates(
   phase: PickupPredicate["phase"],
   board: PickupPrep & { fresh?: boolean } = {},
 ): Promise<void> {
+  if (phase === "before-open") return fireBeforeOpenPredicates(place, predicates, board.live);
   const fire: PlaceFire = {
     fetch: async (target) => {
       target = withRememberedRepoCheck(db, target);
@@ -397,12 +411,11 @@ export async function firePickupPredicates(
   };
   for (const predicate of predicates) {
     if (board.live?.() === false) return;
-    if (predicate.phase !== phase) continue;
+    if (predicate.phase !== "after-open") continue;
     try {
-      if (predicate.phase === "before-open") predicate.check();
-      else await predicate.check(fire);
+      await predicate.check(fire);
     } catch (err) {
-      throw new PickupGateError(predicate.phase === "after-open" ? predicate.place : place, err, predicate.describe);
+      throw new PickupGateError(predicate.place, err, predicate.describe);
     }
   }
 }
@@ -2818,17 +2831,31 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
 }
 
 /** ADR 0370 決定1: 着地が名前の場所の ref を読む前の比較 —— pickup と同じ比較器で全 ref を基準と比べ、動いていれば `RefsMovedError`。
- *  基準の行が無い名前は `prepareRefBaseline` で最初の撮りをする(ADR 0373 決定13 の確認はそこが掛ける)。pickup が開く前に掛ける項は
- *  掛けない —— 撮る前にそれを求めるのは作業台を開く道だけである(ADR 0383 決定2)。撮れない間は、止めている Quarantine を持つ
+ *  基準の行が無い名前は、pickup が開く前に掛ける項(固定点 `fixedPoints` との交差を含む)を撃ってから `prepareRefBaseline` で最初の
+ *  撮りをする(ADR 0383 決定2 の Status 追記 / ADR 0399 決定7 —— 最初に触れる入口はどれも同じ項を通る。ADR 0373 決定13 の確認は
+ *  `prepareRefBaseline` が掛ける)。項は同期で撃ち、撮るまで await を挟まない。落ちた項は `PickupGateError`(覚えた repo の食い違いは
+ *  自分で Quarantine を立てる `WorkspaceRepoMismatchError` のまま)。撮れない間は、止めている Quarantine を持つ
  *  `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
-export function compareRefsBeforeLanding(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
+export function compareRefsBeforeLanding(
+  db: Db,
+  workspace: WorkspaceConfig,
+  board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: Date },
+): void {
   if (holdsBaseline(db, workspace.name)) {
     compareAndFoldBaseline(db, workspace, "before landing read them");
     return;
   }
   const held = firstCaptureHold(db, workspace.name);
   if (held) throw new FirstCaptureRefusedError({ quarantine: held.quarantine, value: held.value, reason: `workspace ${held.workspace} is quarantined` });
-  prepareRefBaseline(db, workspace, { resolveRegistered: board.resolveRegistered, now: () => board.now });
+  const now = () => board.now;
+  const named = withRememberedRepoCheck(db, workspace, now);
+  try {
+    fireBeforeOpenPredicates(named, checkoutPickupPredicates(named, board.fixedPoints));
+  } catch (err) {
+    // 覚えた repo の項は自分で Quarantine を立てる —— 着地へは今までどおり素の `WorkspaceRepoMismatchError` で返す
+    throw err instanceof PickupGateError && err.cause instanceof WorkspaceRepoMismatchError ? err.cause : err;
+  }
+  prepareRefBaseline(db, named, { resolveRegistered: board.resolveRegistered, now });
 }
 
 /** 面接室の名前(鍵は root id)。 */

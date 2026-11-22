@@ -65,6 +65,7 @@ import {
   noReturnAncestor,
   outsideCommitsStop,
   outsidePushRefusal,
+  PickupGateError,
   PromotionStopError,
   prepareFetchCommitIfMissing,
   protectedBranch,
@@ -268,10 +269,17 @@ function workspaceQuarantinedMessage(name: string): string {
 }
 
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
- *  Quarantine の question を名指す(ADR 0373 決定13 追記)。 */
-export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveRegistered: WorkspaceResolver | undefined, now: Date): void {
+ *  Quarantine の question を名指す(ADR 0373 決定13 追記)。最初の撮りの前の開く前の項(`fixedPoints` との交差を含む)に落ちた名前も
+ *  workspace の Quarantine を立てる(ADR 0399 決定7)。 */
+export function assertLandingRefs(
+  db: Db,
+  workspace: WorkspaceConfig,
+  resolveRegistered: WorkspaceResolver | undefined,
+  fixedPoints: BoardStatePath[] | undefined,
+  now: Date,
+): void {
   try {
-    compareRefsBeforeLanding(db, workspace, { resolveRegistered, now });
+    compareRefsBeforeLanding(db, workspace, { resolveRegistered, fixedPoints, now });
   } catch (error) {
     if (error instanceof FirstCaptureRefusedError) {
       const { quarantine, value } = error.stop;
@@ -282,6 +290,11 @@ export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveReg
         );
       }
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(value!));
+    }
+    // ADR 0399 決定7: 最初の撮りの前の項に落ちた名前もその名前の Quarantine。理由と落ちた項は question が持つ
+    if (error instanceof PickupGateError) {
+      quarantineWorkspace(db, workspace.name, error, now);
+      throw new LandingRefsRefusedError(workspaceQuarantinedMessage(workspace.name));
     }
     if (!(error instanceof RefsMovedError)) {
       if (error instanceof WorkspaceRepoMismatchError) throw error;
@@ -776,7 +789,8 @@ export interface LandingDeps {
   githubAuth?: GitHubAuth;
   /** 作業台を開く基点(`resolveWorkspacesBaseDir` に渡す値、ADR 0371 決定7)—— 追いつきの conflict と、retry の取り込み。 */
   workspacesDir?: string;
-  /** 盤面の状態の在り処 —— 積み残しの retry が受理と同じ前半の項に渡す(ADR 0371 決定10)。 */
+  /** 盤面の状態の在り処 —— 積み残しの retry が受理と同じ前半の項に渡し(ADR 0371 決定10)、基準の行が無い名前の最初の撮りが開く前の
+   *  項で交差を拒む(ADR 0399 決定7)。Absent → 着地の最初の撮りは固定点との交差を見ない。 */
   boardState?: BoardStatePath[];
   /** 走っている pickup の poll が終わると解ける。収束の回はこれを待ってから始まる —— 同じ checkout で pickup の
    *  fetch・checkout と着地の push が重ならない(GLOSSARY.md「収束」)。Absent → pickup を持たない盤面。 */
@@ -1340,7 +1354,7 @@ export function createLanding(deps: LandingDeps): Landing {
   // ADR 0241 決定6: Quarantine が抱える根に着地の失敗 question を重ねない。
   const stopRootIfRefsMoved = (workspace: WorkspaceConfig) => {
     try {
-      assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.clock.now());
+      assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
     } catch (error) {
       if (error instanceof LandingRefsRefusedError) throw new RootStopped({ kind: "quarantined", error: error.message });
       throw error;
@@ -2122,7 +2136,7 @@ export function createLanding(deps: LandingDeps): Landing {
             ci === "success" || head !== lastPushed
               ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, base: pr.base, lastPushed }, {
                 auth: deps.githubAuth,
-                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now),
+                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now),
               }).catch((error) => {
                 if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 return null;
@@ -2157,7 +2171,7 @@ export function createLanding(deps: LandingDeps): Landing {
             const stoppedBeforeMerge = Symbol();
             const failure = await github.mergePullRequest(ref, head, () => {
               // ADR 0330 決定1: Registry changes during token acquisition must reach the final guard.
-              assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now);
+              assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now);
               if (stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head)) throw stoppedBeforeMerge;
             }).then(
               () => null,
