@@ -550,11 +550,12 @@ it("teardown uses the declared repository and landing uses its fork after origin
   const tokenFile = join(bin, "user-token");
   writeFileSync(tokenFile, "user-token", { mode: 0o600 });
   writeFileSync(join(bin, "gh"), `#!/bin/sh
-case "$1" in
-  api) echo '[]' ;;
+case "$1 $3" in
+  "api --jq") echo false ;;
+  api*) echo '[]' ;;
   *) exit 1 ;;
 esac
-`, { mode: 0o755 });
+`, { mode: 0o755 }); // a public declared repo: the fork PR workflow settings are not read
   // ADR 0396 決定3: the PR is opened by the board's own REST request, not by `gh`
   const api = await startFakeBroker(() => ({ status: 201, body: { html_url: "https://github.com/acme/declared/pull/7", number: 7 } }));
   onTestFinished(() => api.close());

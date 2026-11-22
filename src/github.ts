@@ -218,7 +218,17 @@ export interface GitHubClient {
   /** The repository `ref` was forked from, or null when it is no fork (ADR 0395 決定2). Read with `ref`'s own token: a token for
    *  the base cannot see a private fork (#3558). Throws when it cannot be read. */
   repositoryParent(ref: RepoSlug): Promise<RepoSlug | null>;
+  /** The declared repo's fork pull request workflow settings that send credentials to a fork PR's workflows, by their
+   *  label in GitHub's settings page; empty when none is on or the repo is public (which has no such setting and sends none).
+   *  Read with the declared repo's installation token (the App's Administration: read). Throws when it cannot be read. */
+  forkPrCredentialSettings(ref: RepoRef): Promise<string[]>;
 }
+
+/** The fork PR workflow settings that send credentials to a fork PR's workflows, and their labels on the settings page. */
+const FORK_PR_CREDENTIAL_SETTINGS = {
+  send_write_tokens_to_workflows: "Send write tokens to workflows from fork pull requests",
+  send_secrets_and_variables: "Send secrets and variables to workflows from fork pull requests",
+} as const;
 
 /** Which repository, as GitHub's own `owner/name` (ADR 0067). */
 export interface RepoSlug {
@@ -345,6 +355,20 @@ export class GhCliClient implements GitHubClient {
     // `gh api` takes no `-R`; the path names the repository
     const parent = (await this.run(["api", `repos/${repo}`, "--jq", ".parent.full_name // empty"], repo)).trim();
     return parent === "" ? null : (parseGitHubRepo(parent) ?? null);
+  }
+
+  async forkPrCredentialSettings({ workspace }: RepoRef): Promise<string[]> {
+    const repo = await this.warmDeclaredRepo(workspace, "gh api");
+    const visibility = (await this.run(["api", `repos/${repo}`, "--jq", ".private"], repo, workspace)).trim();
+    // a public repo answers the settings read with 422: decide by visibility, and read nothing else as public
+    if (visibility === "false") return [];
+    if (visibility !== "true") throw new Error(`\`gh api repos/${repo}\` returned no visibility: ${excerpt(visibility) || "empty output"}`);
+    const path = `repos/${repo}/actions/permissions/fork-pr-workflows-private-repos`;
+    const text = await this.run(["api", path], repo, workspace);
+    const settings = parseJson(text) as Record<string, unknown> | undefined;
+    const keys = Object.keys(FORK_PR_CREDENTIAL_SETTINGS) as Array<keyof typeof FORK_PR_CREDENTIAL_SETTINGS>;
+    if (keys.some((key) => typeof settings?.[key] !== "boolean")) throw new Error(`\`gh api ${path}\` returned an unexpected response: ${excerpt(text)}`);
+    return keys.filter((key) => settings![key]).map((key) => FORK_PR_CREDENTIAL_SETTINGS[key]);
   }
 
   async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {

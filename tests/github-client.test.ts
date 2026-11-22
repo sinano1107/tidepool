@@ -741,6 +741,7 @@ const unansweredCalls: Array<[string, (client: GhCliClient, workspace: Workspace
   ["listIssues", (c, workspace) => c.listIssues({ workspace })],
   ["addIssueComment", (c, workspace) => c.addIssueComment({ workspace, number: 49 }, "body")],
   ["repositoryParent", (c) => c.repositoryParent({ owner: "acme", name: "fork" })],
+  ["forkPrCredentialSettings", (c, workspace) => c.forkPrCredentialSettings({ workspace })],
 ];
 
 // ADR 0395 決定2 / #3558: fork の親は出元 repo 自身の token で読む —— base の token は private の fork を見られない
@@ -767,6 +768,47 @@ it("repositoryParent は出元 repo の token で gh api を撃ち、親を owne
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
     "token-for-acme/fork api repos/acme/fork --jq .parent.full_name // empty",
     "token-for-acme/plain api repos/acme/plain --jq .parent.full_name // empty",
+  ]);
+});
+
+// ADR 0395 決定6 / #3564: private の宣言の repo の fork の PR の workflow 設定を、宣言の repo の installation token で読む。
+// public には設定が無く(422)fork の PR に資格情報は渡らないので、visibility で分けて設定を読まない
+it("forkPrCredentialSettings は public なら設定を読まず、private なら資格情報を送る設定のうちオンのものを返す", async () => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  const visibility = join(dir, "private");
+  const settings = join(dir, "settings");
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh\necho "$GH_TOKEN $*" >> "${logPath}"\ncase "$2" in *fork-pr-workflows-private-repos) cat "${settings}";; *) cat "${visibility}";; esac\n`,
+    { mode: 0o755 },
+  );
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+  const client = new GhCliClient(await makeAuth());
+  const workspace = await githubCheckout();
+  const read = (value: string, fields: Record<string, unknown> = {}) => {
+    writeFileSync(visibility, `${value}\n`);
+    writeFileSync(settings, JSON.stringify({ run_workflows_from_fork_pull_requests: true, send_write_tokens_to_workflows: false, send_secrets_and_variables: false, require_approval_for_fork_pr_workflows: false, ...fields }));
+    return client.forkPrCredentialSettings({ workspace });
+  };
+
+  expect(await read("false")).toEqual([]);
+  expect(await read("true")).toEqual([]);
+  expect(await read("true", { send_write_tokens_to_workflows: true, send_secrets_and_variables: true })).toEqual([
+    "Send write tokens to workflows from fork pull requests",
+    "Send secrets and variables to workflows from fork pull requests",
+  ]);
+  expect(await read("true", { send_secrets_and_variables: true })).toEqual(["Send secrets and variables to workflows from fork pull requests"]);
+  // 読めた形でなければ「オフ」と読まない(fail-closed)
+  await expect(read("true", { send_secrets_and_variables: undefined })).rejects.toThrow(/fork-pr-workflows-private-repos/);
+  await expect(read("true", { send_write_tokens_to_workflows: "false" })).rejects.toThrow(/fork-pr-workflows-private-repos/);
+  await expect(read("")).rejects.toThrow(/repos\/acme\/widget/);
+
+  expect((await readFile(logPath, "utf8")).trim().split("\n").slice(0, 3)).toEqual([
+    "installation-token api repos/acme/widget --jq .private",
+    "installation-token api repos/acme/widget --jq .private",
+    "installation-token api repos/acme/widget/actions/permissions/fork-pr-workflows-private-repos",
   ]);
 });
 

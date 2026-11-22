@@ -4,6 +4,8 @@
 
 **Status 追記: 帰結の未測定のうち「base 限定の installation token で出元 repo を head にした PR を作れるか」は、private では作れなかった。PR の作成は盤面にログインした人間の user token で行い、それ以外の PR の操作は宣言の repo の token のまま([ADR 0396](0396-the-board-opens-a-pr-from-the-head-repo-with-the-logged-in-humans-user-token-and-does-everything-else-with-the-declared-repos-installation-token.md)、issue #3569)。**
 
+**Status 追記: 2026-11-22 に App `tidepool-board` に Repository permission の Administration: Read-only を足し、installation token で fork の PR の workflow 設定を読めた(issue #3564、実測は #3556 のコメント 7078335373)。決定6 の「読めるなら盤面の検査に上げる」を採る —— 盤面は出元 repo へ push する前に宣言の repo の設定を読み、private で「書ける token・secrets を送る」のどちらかがオンなら着地しない。読めなければ同じく着地しない(fail-closed)。public はこの設定を持たず、読まない。**
+
 2026-11-21 の grilling(issue #3482)で決定。盤面は人間が一度も見ていない worker の内容を origin と同じ repo の `task/<root>` に push していた。GitHub は同じ repo の branch を書き込み権のある協力者の内容として扱うので、PR の CI は head の workflow 定義と head の code を repo の資格情報で走らせる —— 使い捨ての repo で、repo の既定が `read` でも head の定義の `permissions: contents: write` が書ける token を得て、repo の secrets も渡ることを測った。fork からの PR では、fork の所有者が base の admin 本人でも token は read、secrets は渡らなかった。測ったのは public と private の両方で(どちらも個人 account の repo を同じ account の org へ fork、private は fork の PR の workflow を有効にして)、PR は人間の gh token で開いた。実測の表と、spec に運ぶ実装の制約(`file:line` 付き)は #3482 のコメントに置く。同じ repo か fork かは、これまで一度も決められていなかった。
 
 ## 決定
