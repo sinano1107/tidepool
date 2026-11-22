@@ -2818,17 +2818,33 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
 }
 
 /** ADR 0370 決定1: 着地が名前の場所の ref を読む前の比較 —— pickup と同じ比較器で全 ref を基準と比べ、動いていれば `RefsMovedError`。
- *  基準の行が無い名前は `prepareRefBaseline` で最初の撮りをする(ADR 0373 決定13 の確認はそこが掛ける)。pickup が開く前に掛ける項は
- *  掛けない —— 撮る前にそれを求めるのは作業台を開く道だけである(ADR 0383 決定2)。撮れない間は、止めている Quarantine を持つ
+ *  基準の行が無い名前は、pickup が開く前に掛ける項(固定点 `fixedPoints` との交差を含む)を撃ってから `prepareRefBaseline` で最初の
+ *  撮りをする(ADR 0383 決定2 の Status 追記 / ADR 0399 決定7 —— 最初に触れる入口はどれも同じ項を通る。ADR 0373 決定13 の確認は
+ *  `prepareRefBaseline` が掛ける)。項は同期で撃ち、撮るまで await を挟まない。落ちた項は `PickupGateError`(覚えた repo の食い違いは
+ *  自分で Quarantine を立てる `WorkspaceRepoMismatchError` のまま)。撮れない間は、止めている Quarantine を持つ
  *  `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
-export function compareRefsBeforeLanding(db: Db, workspace: WorkspaceConfig, board: { resolveRegistered: WorkspaceResolver | undefined; now: Date }): void {
+export function compareRefsBeforeLanding(
+  db: Db,
+  workspace: WorkspaceConfig,
+  board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: Date },
+): void {
   if (holdsBaseline(db, workspace.name)) {
     compareAndFoldBaseline(db, workspace, "before landing read them");
     return;
   }
   const held = firstCaptureHold(db, workspace.name);
   if (held) throw new FirstCaptureRefusedError({ quarantine: held.quarantine, value: held.value, reason: `workspace ${held.workspace} is quarantined` });
-  prepareRefBaseline(db, workspace, { resolveRegistered: board.resolveRegistered, now: () => board.now });
+  const now = () => board.now;
+  const named = withRememberedRepoCheck(db, workspace, now);
+  for (const predicate of checkoutPickupPredicates(named, board.fixedPoints)) {
+    if (predicate.phase !== "before-open") continue;
+    try {
+      predicate.check();
+    } catch (err) {
+      throw err instanceof WorkspaceRepoMismatchError ? err : new PickupGateError(named, err, predicate.describe);
+    }
+  }
+  prepareRefBaseline(db, named, { resolveRegistered: board.resolveRegistered, now });
 }
 
 /** 面接室の名前(鍵は root id)。 */

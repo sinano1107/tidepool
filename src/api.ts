@@ -1543,6 +1543,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           interviewerName,
           taskExecutionCandidates,
           workspacesDir,
+          boardState,
         },
         task,
         parsed.data.answers,

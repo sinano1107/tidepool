@@ -67,6 +67,7 @@ import {
   noReturnAncestor,
   outsideCommitsStop,
   outsidePushRefusal,
+  PickupGateError,
   PromotionStopError,
   prepareFetchCommitIfMissing,
   protectedBranch,
@@ -271,9 +272,15 @@ function workspaceQuarantinedMessage(name: string): string {
 
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
  *  Quarantine の question を名指す(ADR 0373 決定13 追記)。 */
-export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveRegistered: WorkspaceResolver | undefined, now: Date): void {
+export function assertLandingRefs(
+  db: Db,
+  workspace: WorkspaceConfig,
+  resolveRegistered: WorkspaceResolver | undefined,
+  fixedPoints: BoardStatePath[] | undefined,
+  now: Date,
+): void {
   try {
-    compareRefsBeforeLanding(db, workspace, { resolveRegistered, now });
+    compareRefsBeforeLanding(db, workspace, { resolveRegistered, fixedPoints, now });
   } catch (error) {
     if (error instanceof FirstCaptureRefusedError) {
       const { quarantine, value } = error.stop;
@@ -285,7 +292,8 @@ export function assertLandingRefs(db: Db, workspace: WorkspaceConfig, resolveReg
       }
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(value!));
     }
-    if (!(error instanceof RefsMovedError)) {
+    // ADR 0399 決定7: 最初の撮りの前の項に落ちた名前も、動いた ref と同じくその名前の Quarantine
+    if (!(error instanceof RefsMovedError || error instanceof PickupGateError)) {
       if (error instanceof WorkspaceRepoMismatchError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       throw new LandingRefCheckError(`could not verify refs for workspace "${workspace.name}" before landing: ${reason}`);
@@ -1344,7 +1352,7 @@ export function createLanding(deps: LandingDeps): Landing {
   // ADR 0241 決定6: Quarantine が抱える根に着地の失敗 question を重ねない。
   const stopRootIfRefsMoved = (workspace: WorkspaceConfig) => {
     try {
-      assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.clock.now());
+      assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
     } catch (error) {
       if (error instanceof LandingRefsRefusedError) throw new RootStopped({ kind: "quarantined", error: error.message });
       throw error;
@@ -2130,7 +2138,7 @@ export function createLanding(deps: LandingDeps): Landing {
             ci === "success" || head !== lastPushed
               ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, base: pr.base, lastPushed }, {
                 auth: deps.githubAuth,
-                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now),
+                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now),
               }).catch((error) => {
                 if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 return null;
@@ -2165,7 +2173,7 @@ export function createLanding(deps: LandingDeps): Landing {
             const stoppedBeforeMerge = Symbol();
             const failure = await github.mergePullRequest(ref, head, () => {
               // ADR 0330 決定1: Registry changes during token acquisition must reach the final guard.
-              assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now);
+              assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now);
               if (stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head)) throw stoppedBeforeMerge;
             }).then(
               () => null,

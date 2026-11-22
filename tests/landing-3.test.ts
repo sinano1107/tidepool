@@ -1594,6 +1594,8 @@ it.each([
 
 it("workspace の Git リポジトリが無ければ、収束は tip が無い昇格失敗 question を立てる", async () => {
   const c = await pushedRoot("promotion-failed-without-repository");
+  // 基準の行が無い名前なら、着地の最初の撮りの開く前の項(`.git` がディレクトリ)が Quarantine で止める(ADR 0399 決定7)
+  await leaveBaseline(c.db, c.workspace);
   renameSync(join(c.workspace.path, ".git"), join(c.workspace.path, "saved-git"));
 
   expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "failed", reason: "promotion_failed" });

@@ -35,6 +35,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
+  leaveBaseline,
   makeLandingWorkspace,
   makeWorkspace,
   quarantineQuestion,
@@ -1684,6 +1685,8 @@ it("宣言が registry の repo の workspace は、pickup の後に origin を�
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
+  // pickup の後の向け替え —— 基準の行の無い名前なら、着地の最初の撮りの開く前の項が止める(ADR 0399 決定7)
+  await leaveBaseline(db, workspace);
   git(workspace.path, "remote", "set-url", "origin", other.workspace.repo!);
   const landing = createLanding({
     defaultAgentName: "tako",

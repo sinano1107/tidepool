@@ -8,6 +8,7 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { GitHubAuth } from "../src/github-auth.js";
+import { submitAnswer } from "../src/human-verbs.js";
 import {
   closedRootOf,
   createLanding,
@@ -2294,6 +2295,79 @@ it("着地の比較: 行の無い名前自身の Quarantine の間は最初の�
 
   expect(holdsBaseline(db, workspace.name)).toBe(true);
   expect(github.requests).toHaveLength(1);
+});
+
+/** 基準の行が無い名前の根で、checkout の origin が宣言と別の repo を指す形(登録の後の帯域外の `set-url`、#3390)。 */
+async function rowlessRootWithForeignOrigin(name: string) {
+  const root = await doneRootWithBaseline(name);
+  const { workspace, db } = root;
+  dropWorkspaceState(db, workspace.name);
+  announceHeadRepo(db, workspace, workspace.head_repo);
+  const other = await tempDir(`tidepool-${name}-other-`);
+  git(other, "clone", "--bare", workspace.repo!, ".");
+  git(workspace.path, "remote", "set-url", "origin", other);
+  return root;
+}
+
+// ADR 0399 決定7 / ADR 0383 決定2 の Status 追記: 着地の最初の撮りも pickup の開く前の項を通す
+it("着地の比較: 行の無い名前の checkout の origin が宣言と別の repo を指せば、最初の撮りをせず push せず、その名前の Quarantine で止まる", async () => {
+  const { workspace, db, github, landing, work } = await rowlessRootWithForeignOrigin("landing-compare-first-capture-origin");
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });
+
+  expect(holdsBaseline(db, workspace.name)).toBe(false);
+  expect(github.requests).toEqual([]);
+  expect(github.pushes).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("its checkout's origin is");
+});
+
+it("着地の比較: 開く前の項に落ちた行の無い名前は、直さずに受理すると拒まれ、直して受理すれば次の収束が撮って着地する", async () => {
+  const { workspace, db, clock, github, landing, work } = await rowlessRootWithForeignOrigin("landing-compare-first-capture-origin-exit");
+  await convergeOn(landing, work.id);
+  const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
+
+  // 受理は同じ項を撃ち直す(ADR 0378 決定3)
+  await expect(answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantine)).rejects.toThrow("its checkout's origin is");
+
+  git(workspace.path, "remote", "set-url", "origin", workspace.repo!);
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantine);
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(holdsBaseline(db, workspace.name)).toBe(true);
+  expect(github.requests).toHaveLength(1);
+});
+
+/** 名前の場所の中に盤面の DB を置く固定点 —— 名前の場所と交差する(ADR 0040)。 */
+const overlappingFixedPoint = (workspace: WorkspaceConfig) => [{ label: "board database (TIDEPOOL_DB)", path: join(workspace.path, "board.sqlite") }];
+
+it("着地の比較: 行の無い名前の場所が盤面の固定点と重なれば、着地は最初の撮りをせず、その名前の Quarantine で止まる", async () => {
+  const { workspace, db, clock, github, work } = await doneRootWithBaseline("landing-compare-first-capture-fixed-point");
+  dropWorkspaceState(db, workspace.name);
+  announceHeadRepo(db, workspace, workspace.head_repo);
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, boardState: overlappingFixedPoint(workspace) });
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });
+
+  expect(holdsBaseline(db, workspace.name)).toBe(false);
+  expect(github.requests).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("overlaps the board's board database (TIDEPOOL_DB)");
+});
+
+it("基準の行が無い workspace のローカル着地の merge 回答は、名前の場所が盤面の固定点と重なれば拒まれ、その名前の Quarantine になり、保護ブランチを動かさない", async () => {
+  const workspace = await makeWorkspace("landing-answer-first-capture-fixed-point");
+  const { db, clock } = await openBoard();
+  const work = await unrecordedWork(db, clock, workspace);
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  const main = git(workspace.path, "rev-parse", "main");
+
+  await expect(
+    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, workspace, boardState: overlappingFixedPoint(workspace) }, question, ["merge"], undefined, () => clock.now(), "webui"),
+  ).rejects.toThrow(`workspace "${workspace.name}"`);
+
+  expect(holdsBaseline(db, workspace.name)).toBe(false);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("overlaps the board's board database (TIDEPOOL_DB)");
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(git(workspace.path, "rev-parse", "main")).toBe(main);
 });
 
 it("着地の比較: 積み残しの retry は、保護ブランチの fetch を待つ間に動いた ref があれば merge back を撃ち直さない", async () => {
