@@ -77,8 +77,8 @@ export function recordPrOpenedOutsideConvergence(
   recordPrOpened(db, task, prNumber, head, now, authority, isProtected);
 }
 
-/** PR #`prNumber` の実在する head を作る: 今のタスクブランチの先端を出元 repo へ push し、GitHub にその PR を置いて sha を返す。この後に
- *  ブランチへ載る commit が、盤面のまだ push していない内容になる。写しは書かない —— 記録済みの PR の最後に push した値は記録から読む
+/** PR #`prNumber` の実在する head を作る: 今のタスクブランチの先端を出元 repo へ push し、GitHub に今の宣言の `branch` を base とする
+ *  その PR を置いて sha を返す。この後にブランチへ載る commit が、盤面のまだ push していない内容になる。写しは書かない —— 記録済みの PR の最後に push した値は記録から読む
  *  (ADR 0376 決定3)。git の版によっては URL への push でも写しが動くので、push の前の写しへ戻す(CI の git 2.56 で、
  *  写しの無い前提のテストが落ちた)。 */
 export function pushPrHead(github: FakeGitHubClient, workspace: WorkspaceConfig, taskId: string, prNumber: number): string {
@@ -92,7 +92,7 @@ export function pushPrHead(github: FakeGitHubClient, workspace: WorkspaceConfig,
   git(workspace.path, "push", workspace.head_repo!, `task/${taskId}`);
   if (before === null) git(workspace.path, "update-ref", "-d", copy);
   else git(workspace.path, "update-ref", copy, before);
-  github.scriptPullRequestOnBranch(`task/${taskId}`, prNumber);
+  github.scriptPullRequestOnBranch(`task/${taskId}`, prNumber, undefined, workspace.branch ?? "main");
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
 

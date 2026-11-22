@@ -1,0 +1,130 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
+import { parseDocument } from "yaml";
+import { createLanding } from "../src/landing.js";
+import { loadRegistry } from "../src/registry.js";
+import { getTask } from "../src/tasks.js";
+import { releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
+import { FakeGitHubClient } from "./fakes.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, prepareAtPickup } from "./harness.js";
+import { convergeOn, finish, landingWork, mergeQuestions, openBoard, profile, pushPrHead, recordPrOpenedOutsideConvergence } from "./landing-fixture.js";
+import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+// ADR 0399 決定4: `branch` は記録しない。PR の base と宣言の食い違いは ADR 0395 決定4 の `retargeted` の経路で merge question に回る
+// (spec #3595 の振る舞い 10、#3584)。宣言の `branch` は registry の workspaces.yaml を書き換えて変える —— 設定の扉は `branch` を受けない。
+
+/** registry に宣言した `reef` で、PR #1 を開いて無人 merge キューにいる根(`opened: false` なら PR をまだ開いていない done の根)。
+ *  origin には `release` ブランチもある。 */
+async function queuedRoot({ opened = true } = {}) {
+  const { workspace: fixture } = await makeLandingWorkspace("reef");
+  const { db, clock } = await openBoard();
+  const clone = await tempDir("tidepool-reef-release-");
+  git(clone, "clone", fixture.repo!, ".");
+  git(clone, "push", "origin", "main:release");
+  const registryDir = await makeRegistry({
+    "workspaces.yaml": `reef:\n  path: ${fixture.path}\n  repo: ${fixture.repo}\n  head_repo: ${fixture.head_repo}\n`,
+  });
+  const workspacesBaseDir = await tempDir("tidepool-ws-base-");
+  const resolve = (name: string | null) => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), name ?? "reef", null, workspacesBaseDir);
+  const github = new FakeGitHubClient();
+  const workspace = resolve("reef");
+  const root = landingWork(db, clock, "reef");
+  checkoutTaskBranch(db, workspace, root.id);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const done = finish(db, clock, root);
+  if (opened) {
+    const head = pushPrHead(github, workspace, root.id, 1);
+    recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head });
+  }
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, resolveAuthority: () => profile("auto_if_ci_green") });
+  const declareBranch = (branch: string) => {
+    const entries = parseDocument(readFileSync(join(registryDir, "workspaces.yaml"), "utf8"));
+    entries.setIn(["reef", "branch"], branch);
+    writeFileSync(join(registryDir, "workspaces.yaml"), entries.toString());
+    git(registryDir, "commit", "-qam", `declare ${branch}`);
+  };
+  // 新しい保護ブランチの写しは pickup の fetch で手元に来る —— 収束は PR の無い根の写しを読み直さない
+  const pickUpAnother = async () => {
+    const other = landingWork(db, clock, "reef");
+    releaseWorkspace(db, await prepareAtPickup(db, resolve("reef"), other), getTask(db, other.id)!, clock.now());
+  };
+  return { db, clock, github, landing, workspace, root: getTask(db, root.id)!, declareBranch, pickUpAnother };
+}
+
+it("宣言の branch が変わらなければ、キューの PR は tick で merge される(対照)", async () => {
+  const { db, clock, github, landing, workspace } = await queuedRoot();
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+  expect(mergeQuestions(db)).toEqual([]);
+});
+
+it("開いた PR を持つ根を残して宣言の branch を変えると、tick は merge せず retargeted の merge question を立てる", async () => {
+  const { db, clock, github, landing, declareBranch } = await queuedRoot();
+  declareBranch("release");
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toMatchObject([
+    { pr: 1, purpose: expect.stringContaining('This PR targets "main". The workspace\'s protected branch is "release".') },
+  ]);
+});
+
+it("GitHub で保護ブランチを改名して PR の base が付け替わり、宣言も新しい名前に直れば、tick は止まらず merge する", async () => {
+  const { db, clock, github, landing, workspace, declareBranch } = await queuedRoot();
+  git(workspace.repo!, "branch", "-m", "main", "trunk");
+  github.scriptPrBase(1, "trunk");
+  declareBranch("trunk");
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+  expect(mergeQuestions(db)).toEqual([]);
+});
+
+it("まだ PR の無い根は、宣言の branch を変えた後、新しい宣言の branch 宛てに PR を作る", async () => {
+  const { github, landing, root, declareBranch, pickUpAnother } = await queuedRoot({ opened: false });
+  declareBranch("release");
+  await pickUpAnother();
+
+  expect(await convergeOn(landing, root.id)).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+
+  expect(github.requests).toMatchObject([{ branch: `task/${root.id}`, base: "release" }]);
+});
+
+// 作成の後・記録の前に落ちた盤面の PR は、収束が head で探して拾い直す(ADR 0241 決定4)。拾った PR の base も PR を開く所の読みで比べる
+it("head で探して拾い直した PR の base が古い branch なら、retargeted の merge question を立て、作らず merge もしない", async () => {
+  const { db, clock, github, landing, root, workspace, declareBranch, pickUpAnother } = await queuedRoot({ opened: false });
+  pushPrHead(github, workspace, root.id, 1);
+  declareBranch("release");
+  await pickUpAnother();
+
+  expect(await convergeOn(landing, root.id)).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.requests).toEqual([]);
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toMatchObject([
+    { pr: 1, purpose: expect.stringContaining('This PR targets "main". The workspace\'s protected branch is "release".') },
+  ]);
+});
+
+it("head で探して拾い直した PR の base が読めなければ、既存の読めない扱いで merge question を立てる", async () => {
+  const { db, clock, github, landing, root, workspace } = await queuedRoot({ opened: false });
+  pushPrHead(github, workspace, root.id, 1);
+  github.scriptPrBase(1, "gone");
+
+  expect(await convergeOn(landing, root.id)).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toMatchObject([
+    { pr: 1, purpose: expect.stringContaining("The board could not compare this PR head with the protected branch") },
+  ]);
+});

@@ -601,12 +601,19 @@ export class FakeGitHubClient implements GitHubClient {
 
   /** GitHub にだけ、そのブランチの PR がある形 —— 作成の後・記録の前に盤面が落ちた跡。状態は
    *  scriptMergedOutside / scriptClosedOutside で動かす。`number` を渡せば、fixture が記録する番号の PR をそのブランチに置く ——
-   *  head が origin のブランチの先端を映す(ADR 0376 決定1)。 */
-  scriptPullRequestOnBranch(branch: string, number = this.nextNumber, headRepo?: string): number {
+   *  head が origin のブランチの先端を映す(ADR 0376 決定1)。`base` を渡せば PR の base はその名前に固定され、宣言の `branch` を後で
+   *  変えても動かない(#3584)。渡さなければ今の宣言に従う。 */
+  scriptPullRequestOnBranch(branch: string, number = this.nextNumber, headRepo?: string, base?: string): number {
     this.nextNumber = Math.max(this.nextNumber, number + 1);
     this.prBranches.set(number, branch);
     if (headRepo !== undefined) this.prHeadRepos.set(number, headRepo);
+    if (base !== undefined) this.prBaseBranches.set(number, base);
     return number;
+  }
+
+  /** GitHub 上で PR の base を付け替える —— base のブランチの改名で GitHub が付け替えた形(#3584)。 */
+  scriptPrBase(number: number, base: string): void {
+    this.prBaseBranches.set(number, base);
   }
 
   /** head で探す読みを失敗させる。 */
