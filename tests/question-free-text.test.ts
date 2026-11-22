@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { questionAnnotations } from "../src/memory.js";
-import { type RegisterTaskInput, recordPrNumber, registerTask } from "../src/tasks.js";
+import { type RegisterTaskInput, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 // 自由記述を受けるかは盤面が決めて読み口に載せる(issue #1309・ADR 0179 決定4)。門(assertAnswerable)が
@@ -10,7 +10,7 @@ import { HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-10-01T00:00:00.000Z");
 const QUESTIONS = {
-  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7, tip: null, outside: null, missingBranches: null, reason: "pr_opened" } },
+  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", task_id: "t-1", pr: 7, tip: null, outside: null, missingBranches: null, reason: "pr_opened" } },
   "local merge": { options: ["merge", "hold"], question_kind: { kind: "local_merge", task_id: "t-1", tip: null } },
   "PR promotion": { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1", tip: null } },
   "pending child": { options: ["approve", "reject"], question_kind: { kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c" } } },
@@ -25,8 +25,6 @@ const QUESTIONS = {
 function freeTextOf(kind: keyof typeof QUESTIONS) {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  // merge question は PR 7 を開いた根から立つ(ADR 0265)
-  recordPrNumber(db, parent.id, 7);
   const { options, ...fields } = QUESTIONS[kind];
   const question = registerTask(
     db,

@@ -1606,11 +1606,11 @@ it("付帯子と異議が両方あれば attached_children を名乗り、回答
   ).rejects.toThrow("attached child task(s) unsettled");
 });
 
-it("PR の merge question は PR から引いた着地タスクの付帯子で塞がる", async () => {
+it("PR の merge question は問うた根の付帯子で塞がる", async () => {
   const { db, clock } = await openBoard();
   const work = landingWork(db, clock);
   recordPrOpenedViaWorker(db, work, 7, "worker", clock.now());
-  const question = mergeQuestion(db, clock, { pending_merge_pr: 7 });
+  const question = mergeQuestion(db, clock, { pending_merge_pr: 7, root: work.id });
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: null });
 
   attachUnsettledChild(db, clock, work.id);
