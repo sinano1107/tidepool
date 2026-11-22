@@ -30,7 +30,7 @@ import {
   pushOutsideBoard,
   queueAutoMerge,
   readOnNextTick,
-  recordPrOpenedViaWorker,
+  recordPrOpenedOutsideConvergence,
   textA4c,
 } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -113,7 +113,7 @@ it.each(["success", "failure", "pending"] as const)("手元に根のタスクブ
   git(workspace.path, "checkout", "main");
   git(workspace.path, "branch", "-D", "scratch");
   github.scriptPullRequestOnBranch(`task/${work.id}`, 1);
-  recordPrOpenedViaWorker(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
+  recordPrOpenedOutsideConvergence(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
   await pushOutsideBoard(workspace, work.id, `${lastPushed}~1`);
   github.scriptCiStatus(ci);
 

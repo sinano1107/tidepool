@@ -26,7 +26,7 @@ import {
   shimGit,
   type Tidepool,
 } from "./harness.js";
-import { commitThroughTaskCheckout, convergeOn, finish, landingWork, mergeQuestions, openBoard, profile, promotionFailures, pushedRoot, recordPrOpenedViaWorker } from "./landing-fixture.js";
+import { commitThroughTaskCheckout, convergeOn, finish, landingWork, mergeQuestions, openBoard, profile, promotionFailures, pushedRoot, recordPrOpenedOutsideConvergence } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -136,7 +136,7 @@ it("the merge path floor reads a recorded head that is only available from the f
   const head = git(outside, "rev-parse", "HEAD");
   git(outside, "push", "origin", `HEAD:refs/heads/${branch}`);
   github.scriptPullRequestOnBranch(branch);
-  recordPrOpenedViaWorker(db, finish(db, clock, work), 1, clock.now(), { head, authority: { merge: "auto_if_ci_green" } });
+  recordPrOpenedOutsideConvergence(db, finish(db, clock, work), 1, clock.now(), { head, authority: { merge: "auto_if_ci_green" } });
   expect(() => git(workspace.path, "cat-file", "-e", head)).toThrow();
 
   await landing.tick("auto_merge", clock.now());

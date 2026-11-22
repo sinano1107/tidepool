@@ -67,7 +67,7 @@ export async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
 
 /** 収束を通さずに PR を開いた記録を刻む。保護 workspace は無い。`head` を渡さない PR の head はどこにも無い sha —— 収束が push する根には
  *  `pushPrHead` の実在する head を渡す(ADR 0376 決定1: 収束は push の前に PR の head を読む)。 */
-export function recordPrOpenedViaWorker(
+export function recordPrOpenedOutsideConvergence(
   db: Db,
   task: Task,
   prNumber: number,
@@ -216,7 +216,7 @@ export async function catchUpConflictRoot(name: string, { openFailure = false, u
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, clock.now());
+  recordPrOpenedOutsideConvergence(db, parent, 1, clock.now());
   const repair = registerTask(
     db,
     { type: "work", parent_id: parent.id, title: "repair", purpose: "repair the landed result", completion_criteria: "a repair PR exists" },
@@ -454,7 +454,7 @@ export const profile = (merge: MergeDial) => ({
 /** auto_if_ci_green で PR を開き、無人 merge キューへ入れる。 */
 export function queueAutoMerge(db: Db, clock: FakeClock, prNumber: number): Task {
   const work = landingWork(db, clock);
-  recordPrOpenedViaWorker(db, work, prNumber, clock.now(), {
+  recordPrOpenedOutsideConvergence(db, work, prNumber, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
   });
   return work;
