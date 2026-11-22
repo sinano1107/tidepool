@@ -25,8 +25,8 @@ import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from ".
 import { TranscriptStore } from "../src/transcript-store.js";
 import { restoreBaseline } from "../src/workspace.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, TEST_CREDENTIAL } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
+import { commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -763,4 +763,28 @@ it("purely-local な registry の update-ref は、registry clone を名指す e
   const written = git(registryDir, "rev-parse", "refs/heads/main");
   expect(restoreBaseline(db, entry, new Date())).toEqual([{ ref: "refs/heads/main", sha: written }]);
   db.close();
+});
+
+it("合成 root の resolver は引けない名前に読んだ registry を運び、B9 の文が削除の扉の commit を名指す(ADR 0401 決定5)", async () => {
+  const reef = await makeWorkspace("reef");
+  const other = await makeWorkspace("other");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${reef.path}\nother:\n  path: ${other.path}\n` });
+  const deletion = commitWorkspaceDeletion(registryDir, "reef");
+  // 盤面の db は boot が開くので、合成 root の resolver は boot の後に組んで差し込む
+  let resolve: BootOptions["resolveWorkspace"];
+  const t = await bootTidepool({ workspace: other, resolveWorkspace: (name) => resolve!(name) });
+  try {
+    resolve = (await buildServerOptions({ ...composition(), registryDir, workspaceName: "other", workspacesDir: await tempDir("server-options-b9-") }, t.db)).resolveWorkspace;
+    await leaveBaseline(t.db, reef);
+
+    queueWork(t, "first capture of other", "other");
+    await t.clock.advance(HOUR);
+
+    await vi.waitFor(async () => expect(await servedQuarantineQuestion(t, "workspace", "reef")).toBeDefined());
+    expect((await servedQuarantineQuestion(t, "workspace", "reef")).purpose).toContain(
+      `unknown workspace: reef. The board holds a baseline for "reef", so no workspace captures a first baseline until it resolves again. A deletion of "reef" stopped midway: registry commit ${deletion} removed the entry, but the board kept its state. To clear it, in order: put the entry back in the registry under that name as it was in workspaces.yaml at ${deletion}^, with its repo and head_repo as well as its path (a repo other than the one the board remembers is refused again); accept the open Quarantine question for "reef", if any; delete the workspace through the deletion door; register it again (under a new name to rename it). Workspaces`,
+    );
+  } finally {
+    await t.stop();
+  }
 });
