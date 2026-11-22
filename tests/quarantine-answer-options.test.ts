@@ -766,6 +766,19 @@ it("remote-backed の give-up が残す lost_refs_accepted・task_branch_lost・
 /** B4c の文: 取りに行けなかった sha と git の失敗をそのまま挟む。 */
 const unreachable = (sha: string) => new RegExp(`^could not reach origin to look for ${sha} \\(.+\\)\\. Nothing was written; answer again once origin is reachable\\.$`, "s");
 
+it("give-up leaves a lost task ref unresolved when the workspace has no head repo", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("lost-task-without-head-repo");
+  const { ws, db, task, question } = await quarantined(workspace);
+  const lost = loseRef(db, ws, `refs/heads/task/${task.id}`);
+
+  await expect(answer(db, ws, GIVE_UP)).rejects.toThrow(
+    `could not reach the head repo to look for ${lost} (workspace ${ws.name} has no declared head repo (head_repo)`,
+  );
+  expect(lostEvents(db)).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  db.close();
+});
+
 it.each(["restore the baseline", GIVE_UP])("remote-backed: `%s` は probe で origin に届かなければ拒み、何も書かず、失われたとも数えない(ADR 0380 決定4、pin B24、text B4c)", async (text) => {
   const { ws, db, question } = await quarantinedWorkspace("lost-origin-unreachable", true);
   const lost = loseRef(db, ws, "refs/heads/gone");

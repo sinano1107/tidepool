@@ -525,7 +525,7 @@ it("追いつきの作業台に人間の `board/origin/main` の merge があり
   expect(git(c.workspace.path, "diff", "--name-only", `refs/remotes/origin/main...${c.target}`)).toBe("child.txt\nrepair-only.txt");
 });
 
-// ADR 0376 決定1・4 / spec #3273 pin D1・D6: PR の無い origin のブランチに盤面の知らない commit があれば、clean に merge できても盤面は merge も
+// ADR 0376 決定1・4 / spec #3273 pin D1・D6: PR の無い出元 repo のブランチに盤面の知らない commit があれば、clean に merge できても盤面は merge も
 // push もしない。収束が先に見つければ本文が作業台を言い(text D1)、人間の merge の後の retry が取り込んで push する
 it("出元 repo のタスクブランチに盤面の知らない commit がある PR の無い根を収束は merge も push もせず、作業台を開いて本文が text D1 を言い、作業台で merge した retry が取り込んで push し PR を開く", async () => {
   const c = await pushedRoot("outside-commits-no-pr");
@@ -598,7 +598,7 @@ it("別の失敗で昇格失敗 question が開いている間に 出元 repo �
   expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
 });
 
-// ADR 0376 決定1・2 / spec #3273 pin D2: PR が見つからず origin のブランチも「読めて、無い」根は、今どおり push して PR を作る。head の読みは
+// ADR 0376 決定1・2 / spec #3273 pin D2: PR が見つからず出元 repo のブランチも「読めて、無い」根は、今どおり push して PR を作る。head の読みは
 // 写しを書かない —— 写しを書くのは push だけ(決定3)
 it("PR も 出元 repo のタスクブランチも無い根を収束は「読めて、無い」と読んで push し PR を開き、head の読みは写しを書かない", async () => {
   const { workspace } = await makeLandingWorkspace("outside-head-absent");
@@ -647,9 +647,9 @@ it("出元 repo のタスクブランチを読めなければ、収束は push �
   c.expectNothingCarried();
 });
 
-// ADR 0376 決定6 / spec #3273 pin D4: PR の記録が無い巻き戻しは push を止め、retry を毎回拒む。同意は origin への操作で表す。作業台は開かず、
+// ADR 0376 決定6 / spec #3273 pin D4: PR の記録が無い巻き戻しは push を止め、retry を毎回拒む。同意は出元 repo への操作で表す。作業台は開かず、
 // 印も event も足さない
-it("PR を記録していない根の 出元 repo のタスクブランチが最後に push した値より前へ巻き戻されていれば、収束は push せず本文が text D2 を言い、retry は毎回拒まれて作業台も event も足さず、落とされた commit を push し直した後の retry が通る", async () => {
+it("PR を記録していない根の出元 repo のタスクブランチが最後に push した値より前へ巻き戻されていれば、収束は push せず本文が text D2 を言い、retry は毎回拒まれて作業台も event も足さず、落とされた commit を push し直した後の retry が通る", async () => {
   const c = await pushedRoot("outside-rewind-pushed-back", { pr: "found", commits: 2 });
   const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
   const outside = await outsideClone(c.workspace);
@@ -680,7 +680,7 @@ it("PR を記録していない根の 出元 repo のタスクブランチが最
 });
 
 // ADR 0376 決定6: 巻き戻しは取り込みより前に決まる —— 前の text D1 の作業台に取り込める tip が残っていても、印も event も足さない
-it("作業台で merge した後に 出元 repo のタスクブランチが最後に push した値より前へ巻き戻されれば、retry は text D2 で拒まれ、作業台の tip を取り込まない", async () => {
+it("作業台で merge した後に出元 repo のタスクブランチが最後に push した値より前へ巻き戻されれば、retry は text D2 で拒まれ、作業台の tip を取り込まない", async () => {
   const c = await pushedRoot("outside-rewind-after-merge", { commits: 2 });
   await pushOutsideBoard(c.workspace, c.work.id);
   await convergeOn(c.landing, c.work.id);
@@ -695,7 +695,7 @@ it("作業台で merge した後に 出元 repo のタスクブランチが最�
   c.expectNothingCarried();
 });
 
-it("別の失敗で昇格失敗 question が開いている PR の無い根の 出元 repo のタスクブランチが巻き戻されていれば、retry は text D2 で拒まれ、origin のブランチを消した後の retry が push し直して PR を開く", async () => {
+it("別の失敗で昇格失敗 question が開いている PR の無い根の出元 repo のタスクブランチが巻き戻されていれば、retry は text D2 で拒まれ、出元 repo のブランチを消した後の retry が push し直して PR を開く", async () => {
   const c = await pushedRoot("outside-rewind-deleted", { commits: 2, openFailure: true });
   const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
   const outside = await outsideClone(c.workspace);
@@ -716,7 +716,7 @@ it("別の失敗で昇格失敗 question が開いている PR の無い根の �
 
 // spec #3273 pin D9("Rewind, precisely"): 最後に push した値から分かれた head は巻き戻しではない —— 人間が merge するまで push する sha の
 // 祖先にならないので盤面の知らない commit として入り、その merge を取り込んだ後は、最後に push した値を欠いたままでも盤面が push する
-it("PR を記録していない根の 出元 repo のタスクブランチが最後に push した値と分かれた head に書き換えられていれば、巻き戻しでなく text D1 で作業台を開き、作業台で merge した retry が push する", async () => {
+it("PR を記録していない根の出元 repo のタスクブランチが最後に push した値と分かれた head に書き換えられていれば、巻き戻しでなく text D1 で作業台を開き、作業台で merge した retry が push する", async () => {
   const c = await pushedRoot("outside-rewrite-no-pr", { commits: 2, openFailure: true });
   const head = await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${c.pushed}~1`));
   const [failure] = promotionFailures(c.db, c.work.id);
@@ -837,7 +837,7 @@ const textA4b = (c: Awaited<ReturnType<typeof pushedRoot>>, head: string, lacks:
   `There, on ${c.target}, either keep that content with \`git merge board/origin/${c.target}\` (or, in your own clone with the workbench as a remote: fetch it, ` +
   `\`git merge <remote>/board/origin/${c.target}\`, and push ${c.target} to it), or discard it with \`git merge -s ours --no-commit board/origin/${c.target}\`, ` +
   `\`git read-tree -u --reset board/origin/${c.target}\`, \`git commit\`. Your tip must contain both ${c.target} as the board has it now (\`board/${c.target}\`) ` +
-  `and origin/${c.target}, with nothing uncommitted. Then answer \`merge\` ${answerOn === undefined ? "again" : `on question ${answerOn}`}: ` +
+  `and the PR's observed head (\`board/origin/${c.target}\`), with nothing uncommitted. Then answer \`merge\` ${answerOn === undefined ? "again" : `on question ${answerOn}`}: ` +
   "the board takes your merge in and pushes it, and CI runs on the result.";
 
 // ADR 0371 決定10 / ADR 0376 決定7・8 / spec #3273 pin A10: 最初の `merge` は作業台を開いて拒まれ、作業台で merge した次の `merge` が取り込んで
@@ -1184,9 +1184,9 @@ it("先に走る収束が merge question を取り替えたら、後ろで待っ
   const movedAgain = await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${c.pushed}~1`), "outside-again.txt");
 
   const polling = awaitWindow();
-  const read = c.github.getPullRequestState.bind(c.github);
-  vi.spyOn(c.github, "getPullRequestState").mockImplementationOnce(async (ref) => {
-    const state = await read(ref);
+  const find = c.github.findPullRequestByHead.bind(c.github);
+  vi.spyOn(c.github, "findPullRequestByHead").mockImplementationOnce(async (ref) => {
+    const state = await find(ref);
     await polling.hold();
     return state;
   });
@@ -1217,9 +1217,9 @@ it("先に走る収束が merge question を取り替えたら、後ろで待っ
   c.expectNothingCarried();
 });
 
-// spec #3273 "Refused once" / ADR 0227 決定2: 印は盤面のどの push でも消える —— 拒否の後に人間が origin を戻し、収束が push した後に同じ head へ
+// spec #3273 "Refused once" / ADR 0227 決定2: 印は盤面のどの push でも消える —— 拒否の後に人間が出元 repo の head を戻し、収束が push した後に同じ head へ
 // また巻き戻されれば、最初の `merge` はもう一度拒まれる
-it("拒否の後に origin が戻され収束が push した後、同じ head へまた巻き戻されれば、最初の「merge」はもう一度 text A4a で拒まれる", async () => {
+it("拒否の後に出元 repo の head が戻され収束が push した後、同じ head へまた巻き戻されれば、最初の「merge」はもう一度 text A4a で拒まれる", async () => {
   const c = await pushedRoot("outside-rewind-stale-mark", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
   const head = await moveRecordedHead(c, "rewound");
   await convergeOn(c.landing, c.work.id);
@@ -1374,7 +1374,7 @@ it("作業台で merge した後の「merge」の寄り道で収束が head を�
 
 // ADR 0394 決定3 / ADR 0376 Status 追記: 外の部分が無ければ head は盤面の push した値 —— 理由が消えた question への `merge` は寄り道を通さずに
 // 執行し、`external` の根でも merge する
-it.each(["auto_if_ci_green", "external"] as const)("落とされた commit を origin へ push し直した後の、内容が落ちた head の question への「merge」は、merge dial が %s でも取り込まずにそのまま merge する", async (merge) => {
+it.each(["auto_if_ci_green", "external"] as const)("落とされた commit を出元 repo へ push し直した後の、内容が落ちた head の question への「merge」は、merge dial が %s でも取り込まずにそのまま merge する", async (merge) => {
   const c = await pushedRoot(`outside-rewrite-repushed-${merge}`, { pr: "recorded", commits: 2, merge });
   await moveRecordedHead(c, "rewritten");
   await convergeOn(c.landing, c.work.id);
@@ -1463,7 +1463,7 @@ it("外の push が修理を落とした記録済みの PR に未 push の修理
 });
 
 // spec #3273 pin D7: 取り込みが読むのは今の head —— 作業台の ref ではない
-it("作業台で merge した後に 出元 repo のタスクブランチがまた進めば、retry は `board/origin/task/<root>` を名指して拒まれ、その ref を新しい head へ引き直し、何も書かず、それを merge した次の retry が通る", async () => {
+it("作業台で merge した後に出元 repo のタスクブランチがまた進めば、retry は `board/origin/task/<root>` を名指して拒まれ、その ref を新しい head へ引き直し、何も書かず、それを merge した次の retry が通る", async () => {
   const c = await pushedRoot("outside-commits-moved-again");
   await pushOutsideBoard(c.workspace, c.work.id);
   await convergeOn(c.landing, c.work.id);
@@ -1474,7 +1474,7 @@ it("作業台で merge した後に 出元 repo のタスクブランチがま�
   const refusal = await c.retry(failure!);
 
   expect(refusal).toContain(
-    `the workbench at ${c.workbench()} is not ready: ${c.target} there does not contain origin/${c.target} (\`board/origin/${c.target}\`). Run \`git merge board/origin/${c.target}\` there`,
+    `the workbench at ${c.workbench()} is not ready: ${c.target} there does not contain ${c.target} on head repo ${c.workspace.head_repo} (\`board/origin/${c.target}\`). Run \`git merge board/origin/${c.target}\` there`,
   );
   expect(git(c.workbench(), "rev-parse", `board/origin/${c.target}`)).toBe(moved);
   expect(getTask(c.db, failure!.id)?.status).toBe("todo");
@@ -1489,7 +1489,7 @@ it("作業台で merge した後に 出元 repo のタスクブランチがま�
 
 // ADR 0376 決定8 / spec #3273 pin D7: 順は「人間の tip の取り込み → 追いつき → push」—— 追いつきが先なら、収束は conflict の文(text A2)で
 // 止まり、retry は人間の tip が書く先の新しい値を欠くとして拒む
-it("追いつきが conflict する根でも収束は先に origin の head を確かめて text D1 で止まり、人間の tip が origin の保護ブランチも含めば、retry の追いつきは何も足さず取り込んだ commit がそのまま push される", async () => {
+it("追いつきが conflict する根でも収束は先に出元 repo の head を確かめて text D1 で止まり、人間の tip が origin の保護ブランチも含めば、retry の追いつきは何も足さず取り込んだ commit がそのまま push される", async () => {
   const c = await catchUpConflictRoot("outside-commits-before-catch-up");
   git(c.workspace.path, "push", "head-repo", c.target);
   const head = await pushOutsideBoard(c.workspace, c.repair.id);

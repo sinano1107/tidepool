@@ -30,6 +30,7 @@ import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents, type ReadCheckout } from "../src/events.js";
 import { type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
+import type { GitHubClient } from "../src/github.js";
 import { type GitHubAuth, HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordShadow, type TrackRecord } from "../src/learner.js";
@@ -215,6 +216,7 @@ export interface Tidepool {
   worker: ScriptedWorker;
   /** 容器機構の fake(ADR 0099 決定2)。強制回収の記録と、空の観測の駆動口。 */
   containers: FakeContainerRuntime;
+  /** The default fake, or the explicitly supplied FakeGitHubClient. */
   github: FakeGitHubClient;
   push: FakePushClient;
   /** Shared setup connection; assertions still go through public read surfaces. */
@@ -230,9 +232,8 @@ export interface BootOptions {
   dir?: string;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
-  /** 起動の間に GitHub を待たせるテスト(起動の収束 —— ADR 0241 決定5)が、起動前に細工した fake を渡す。 */
-  github?: FakeGitHubClient;
-  githubClient?: Parameters<typeof startServer>[0]["github"];
+  /** Use a scripted fake or exercise the real client against a test transport. */
+  github?: GitHubClient;
   workerAdapter?: Parameters<typeof startServer>[0]["worker"];
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
@@ -388,7 +389,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers =
     options.containerRuntime instanceof FakeContainerRuntime ? options.containerRuntime : new FakeContainerRuntime();
-  const github = options.github ?? new FakeGitHubClient();
+  const github = options.github instanceof FakeGitHubClient ? options.github : new FakeGitHubClient();
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
@@ -424,7 +425,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     // 面接室(ADR 0273 決定1)は盤面の dir の下に作る —— テストがホームの既定の基点に書かない
     workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
-    github: options.githubClient ?? github,
+    github: options.github ?? github,
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,

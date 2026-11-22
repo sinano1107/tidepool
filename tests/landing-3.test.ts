@@ -528,7 +528,7 @@ it("書き換えられた head は check 未報告でもすぐにキューを外
   await landing.tick("auto_merge", clock.now());
 
   expect(mergeQuestions(db)).toEqual([
-    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(`task/${work.id}`) },
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(`task/${work.id}`, `task/${work.id} on head repo ${workspace.head_repo}`) },
   ]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: rewritten } },
@@ -1012,7 +1012,7 @@ it("cancelled の祖先の下に残った done の work の内容は積み残し
 
 // ADR 0387 決定1: 外の push の head は無人では merge されない —— 積み残しの述語は、その head を問うた question への「merge」で言う
 it("修理の内容がローカルの着地するタスクのブランチに無くても、merge される head に載っていれば積み残しではない", async () => {
-  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-on-origin", "auto_if_ci_green");
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-on-fork", "auto_if_ci_green");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   // 盤面の外の clone が修理を PR のブランチへ push する —— 名前の場所の ref は動かさない
   const clone = await tempDir("tidepool-outside-push-");
@@ -1045,7 +1045,7 @@ it("PR の head に修理を `merge -s ours` で捨てた記録があれば、�
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
-it("merge back 済み・push 前でタスクブランチが origin 側に無い内容を持てば積み残しで無人 merge されず、着地が push した後の tick で merge される", async () => {
+it("merge back 済み・push 前でタスクブランチが出元 repo に無い内容を持てば積み残しで無人 merge されず、着地が push した後の tick で merge される", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unpushed", "auto_if_ci_green");
   commitWork(workspace.path, "repair.txt", "fixed\n");
 
@@ -1059,7 +1059,7 @@ it("merge back 済み・push 前でタスクブランチが origin 側に無い�
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
-it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、その head を問うた question への「merge」で merge される", async () => {
+it("盤面の外の push で出元 repo だけが先へ進んでいるのは積み残しではなく、その head を問うた question への「merge」で merge される", async () => {
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-outside-push", "auto_if_ci_green");
   git(workspace.path, "checkout", "-b", "outside");
   commitWork(workspace.path, "outside.txt", "pushed by a human\n");
@@ -1261,7 +1261,7 @@ it("外の push が落とした修理を作業台で捨てた次の「merge」�
  *  checkout(`--single-branch` の clone)で、push しても写しが書かれない。 */
 async function openPrByConvergence(name: string, merge: MergeDial, { narrowRefspec = false } = {}) {
   const { workspace } = await makeLandingWorkspace(name);
-  if (narrowRefspec) git(workspace.path, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  if (narrowRefspec) git(workspace.path, "config", "remote.head-repo.fetch", "+refs/heads/main:refs/remotes/head-repo/main");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github, () => profile(merge));
@@ -1328,7 +1328,7 @@ it("push の直後に写しが消えれば、積み残しでなく動いた ref 
 // ADR 0242 決定3: 比べられなければ積み残し。人間の merge 回答は「運んでいる途中」でなく、比べられなかった事実と理由で拒む(#1854)
 const NOWHERE = "0123456789abcdef0123456789abcdef01234567";
 
-it("GitHub の head が手元にも origin にも無い PR への人間の merge 回答は、head の fetch が失敗したことを言って拒まれる", async () => {
+it("GitHub の head が手元にも出元 repo にも無い PR への人間の merge 回答は、head の fetch が失敗したことを言って拒まれる", async () => {
   const pr = await openPushedPr("left-behind-fetch-fails-answer", "escalate");
   pr.github.scriptHead(1, NOWHERE);
 

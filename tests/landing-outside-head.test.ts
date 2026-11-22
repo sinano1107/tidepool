@@ -85,7 +85,7 @@ it("最後に push した sha が手元に無いまま head が違えば、祖�
 /** origin にも手元にも無い sha。 */
 const NOWHERE = "0123456789abcdef0123456789abcdef01234567";
 
-it("GitHub の head が手元にも origin にも無ければ、取れない head として merge されずキューを外れ、推奨 hold の question になる", async () => {
+it("GitHub の head が手元にも出元 repo にも無ければ、取れない head として merge されずキューを外れ、推奨 hold の question になる", async () => {
   const pr = await openPushedPr("outside-head-unfetchable", "auto_if_ci_green");
   const lastPushed = forkHead(pr.workspace, pr.work.id);
   pr.github.scriptHead(1, NOWHERE);
@@ -318,13 +318,31 @@ it("merge 失敗の question が開いた後に人間が conflict を解いて p
   vi.spyOn(pr.github, "mergePullRequest").mockRejectedValueOnce(new Error(CONFLICT));
   await pr.landing.tick("auto_merge", pr.clock.now());
   expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([expect.stringContaining(`could not merge PR #1: ${CONFLICT}.`)]);
-  expect(openQuestion(pr).purpose).toContain(`merge main into task/${pr.work.id} in your own clone and push it to head repo ${pr.workspace.head_repo}`);
+  expect(openQuestion(pr).purpose).toContain("merge main into the PR's head in your own clone and push it");
   const resolved = await pushOutsideBoard(pr.workspace, pr.work.id, undefined, "resolved.txt");
 
   const refusal = await answerMerge(pr);
   expect(refusal).toBe(listedRefusal(resolved, lastPushed, [[resolved, "resolved.txt"]], openQuestion(pr).id));
   await expect(answerMerge(pr)).resolves.toBeUndefined();
   expect(pr.github.mergedHeads).toEqual([resolved]);
+});
+
+it("conflict and outside-head questions name the branch GitHub reports for an older PR", async () => {
+  const pr = await openPushedPr("outside-head-previous-fork", "auto_if_ci_green");
+  const headRef = { branch: `task/${pr.work.id}`, repo: "acme/previous-fork" };
+  const read = pr.github.readPullRequest.bind(pr.github);
+  vi.spyOn(pr.github, "readPullRequest").mockImplementation(async (ref) => {
+    const current = await read(ref);
+    return current.state === "unreadable" ? current : { ...current, headRef };
+  });
+  vi.spyOn(pr.github, "mergePullRequest").mockRejectedValueOnce(new Error(CONFLICT));
+  await pr.landing.tick("auto_merge", pr.clock.now());
+
+  expect(openQuestion(pr).purpose).toContain(`merge main into ${headRef.branch} in your own clone and push it to head repo ${headRef.repo}`);
+  const outside = await pushOutsideBoard(pr.workspace, pr.work.id);
+
+  expect(await answerMerge(pr)).toContain(`PR #1's head ${outside} (${headRef.branch} on head repo ${headRef.repo}) holds commits the board did not push`);
+  expect(openQuestion(pr).purpose).toContain(`${headRef.branch} on head repo ${headRef.repo}`);
 });
 
 
@@ -431,7 +449,7 @@ it("回答が PR を読んでいる間に収束が push して最後に push し
   expect(pr.github.mergedHeads).toEqual([forkHead(pr.workspace, pr.work.id)]);
 });
 
-it("転送の後に失敗と報告された収束の push も、origin に載っていれば盤面の push として記録され、次の tick が盤面の push した head を merge する", async () => {
+it("転送の後に失敗と報告された収束の push も、出元 repo に載っていれば盤面の push として記録され、次の tick が盤面の push した head を merge する", async () => {
   const c = await pushedRoot("outside-head-push-fails-after-transfer", { pr: "recorded", merge: "auto_if_ci_green" });
   c.github.scriptPushFailure(new Error("push rejected"));
   await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", error: "push rejected" });

@@ -148,7 +148,7 @@ it.each([
 
   const found = await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: { ...(await githubCheckout()), head_repo }, branch: "task/abc" });
 
-  expect(found).toEqual({ number: 3, state: "MERGED", head: "sha3" });
+  expect(found).toEqual({ number: 3, state: "MERGED", head: "sha3", headRef: { branch: "task/abc", repo: ours } });
   expect((await readFile(logPath, "utf8")).trim()).toBe(`installation-token api repos/acme/widget/pulls --method GET -f head=${owner}:task/abc -f state=all`);
 });
 
@@ -157,14 +157,14 @@ it("自分の PR の探索は、開いている自分の PR を merged と close
   const head = (sha: string) => ({ ref: "task/abc", sha, repo: { full_name: "reef-org/widget" } });
   const prs = [
     { number: 1, state: "closed", merged_at: "2026-11-21T00:00:00Z", head: head("m1") },
-    { number: 2, state: "open", merged_at: null, head: head("o2") },
+    { number: 2, state: "open", merged_at: null, head: head("o2"), base: { ref: "main", sha: "b2" } },
   ];
   writeFileSync(join(dir, "gh"), `#!/bin/sh\nprintf '%s' '${JSON.stringify(prs)}'\n`, { mode: 0o755 });
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   expect(await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: await githubCheckout(), branch: "task/abc" }))
-    .toEqual({ number: 2, state: "OPEN", head: "o2" });
+    .toEqual({ number: 2, state: "OPEN", head: "o2", headRef: { branch: "task/abc", repo: "reef-org/widget" }, base: { branch: "main", sha: "b2" } });
 });
 
 // ADR 0396 決定2・3 / ADR 0093 決定4: user token は盤面の中の作成の要求だけに使い、gh と git の子の env に入れない。
@@ -386,7 +386,7 @@ it("readPullRequest reads CI, state, merge author, head and base in one GitHub c
 
   expect(pr).toEqual({ ci: "success", state: "MERGED", head: "abc123", mergedBy: "app/tidepool-board", base: { branch: "main", sha: "abc456" } });
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
-    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid -R acme/widget",
+    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid,headRefName,headRepository -R acme/widget",
   ]);
 });
 
@@ -554,7 +554,7 @@ it("getPullRequestState reads state, merge author, head and base in one GitHub c
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","baseRefName":"main","baseRefOid":"base9","mergedBy":null,"state":"OPEN"}';; esac\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"headRefOid":"abc7","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"headRefOid":"abc8","mergedBy":null,"state":"CLOSED"}';; *) printf '{"headRefOid":"abc9","headRefName":"task/abc","headRepository":{"nameWithOwner":"old-fork/widget"},"baseRefName":"main","baseRefOid":"base9","mergedBy":null,"state":"OPEN"}';; esac\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
@@ -563,10 +563,10 @@ it("getPullRequestState reads state, merge author, head and base in one GitHub c
   const client = new GhCliClient(await makeAuth());
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board", head: "abc7" });
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 8 })).toEqual({ state: "CLOSED", mergedBy: null, head: "abc8" });
-  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9", base: { branch: "main", sha: "base9" } });
+  expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9", headRef: { branch: "task/abc", repo: "old-fork/widget" }, base: { branch: "main", sha: "base9" } });
 
   const invocations = await readFile(logPath, "utf8");
-  expect(invocations.trim().split("\n")).toEqual([7, 8, 9].map((n) => `pr view ${n} --json state,mergedBy,headRefOid,baseRefName,baseRefOid -R acme/widget`));
+  expect(invocations.trim().split("\n")).toEqual([7, 8, 9].map((n) => `pr view ${n} --json state,mergedBy,headRefOid,baseRefName,baseRefOid,headRefName,headRepository -R acme/widget`));
 });
 
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {

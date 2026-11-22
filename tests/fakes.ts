@@ -591,7 +591,10 @@ export class FakeGitHubClient implements GitHubClient {
     for (const [number, branch] of this.prBranches) {
       if (branch !== input.branch || (input.number !== undefined && input.number !== number)) continue;
       const repo = this.prHeadRepos.get(number) ?? input.workspace.head_repo;
-      if (sameRepository(repo, input.workspace.head_repo)) return { number, state: this.stateOf(number), head: this.headOf(input.workspace, number) };
+      if (sameRepository(repo, input.workspace.head_repo)) {
+        const { state, head, headRef, base } = this.stateRead({ workspace: input.workspace, number });
+        return { number, state, head, headRef, base };
+      }
     }
     return null;
   }
@@ -599,9 +602,10 @@ export class FakeGitHubClient implements GitHubClient {
   /** GitHub にだけ、そのブランチの PR がある形 —— 作成の後・記録の前に盤面が落ちた跡。状態は
    *  scriptMergedOutside / scriptClosedOutside で動かす。`number` を渡せば、fixture が記録する番号の PR をそのブランチに置く ——
    *  head が origin のブランチの先端を映す(ADR 0376 決定1)。 */
-  scriptPullRequestOnBranch(branch: string, number = this.nextNumber): number {
+  scriptPullRequestOnBranch(branch: string, number = this.nextNumber, headRepo?: string): number {
     this.nextNumber = Math.max(this.nextNumber, number + 1);
     this.prBranches.set(number, branch);
+    if (headRepo !== undefined) this.prHeadRepos.set(number, headRepo);
     return number;
   }
 
@@ -624,7 +628,12 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   private stateRead({ workspace, number }: PrRef): PrStateRead {
-    const state = { state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null, head: this.headOf(workspace, number) };
+    const branchName = this.prBranches.get(number);
+    const repo = this.prHeadRepos.get(number);
+    const state = {
+      state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null, head: this.headOf(workspace, number),
+      ...(repo && branchName && { headRef: { repo, branch: branchName } }),
+    };
     if (workspace.repo === undefined) return state;
     const branch = this.prBaseBranches.get(number) ?? workspace.branch ?? "main";
     try {

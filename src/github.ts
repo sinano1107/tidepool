@@ -85,20 +85,24 @@ export interface PrBase {
   sha: string;
 }
 
+export interface PrHeadRef {
+  branch: string;
+  repo: string;
+}
+
 /** The PR's state, who merged it, head and live base, read together (ADR 0265 決定5 / ADR 0376 決定1 / ADR 0395 決定4).
  *  `mergedBy` is `gh`'s `mergedBy.login`, null unless merged. */
 export interface PrStateRead {
   state: PrState;
   mergedBy: string | null;
   head: string;
+  headRef?: PrHeadRef;
   base?: PrBase;
 }
 
 /** The PR found on a task branch, whatever its state (ADR 0241 決定4). */
-export interface FoundPr {
+export interface FoundPr extends Pick<PrStateRead, "state" | "head" | "base" | "headRef"> {
   number: number;
-  state: PrState;
-  head: string;
 }
 
 /** One read of a PR, CI, state, merger and head together (ADR 0229 決定2 / ADR 0231
@@ -112,17 +116,20 @@ export type PrStatus =
 type GhPrState = {
   state: PrState;
   headRefOid: string;
+  headRefName?: string;
+  headRepository?: { nameWithOwner?: string } | null;
   mergedBy: { login: string } | null;
   baseRefName?: string | null;
   baseRefOid?: string | null;
 };
 
 function prStateRead(parsed: GhPrState): PrStateRead {
-  const { state, mergedBy, headRefOid, baseRefName, baseRefOid } = parsed;
+  const { state, mergedBy, headRefOid, headRefName, headRepository, baseRefName, baseRefOid } = parsed;
   return {
     state,
     mergedBy: mergedBy?.login ?? null,
     head: headRefOid,
+    ...(headRefName && headRepository?.nameWithOwner && { headRef: { branch: headRefName, repo: headRepository.nameWithOwner } }),
     ...(baseRefName && baseRefOid && { base: { branch: baseRefName, sha: baseRefOid } }),
   };
 }
@@ -400,7 +407,7 @@ export class GhCliClient implements GitHubClient {
     let parsed: GhPrState & { statusCheckRollup?: RollupEntry[] };
     try {
       parsed = JSON.parse(
-        await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid"]),
+        await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid,headRefName,headRepository"]),
       );
     } catch {
       return { ci: "pending", state: "unreadable" };
@@ -416,7 +423,7 @@ export class GhCliClient implements GitHubClient {
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
-    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy,headRefOid,baseRefName,baseRefOid"]);
+    const output = await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,mergedBy,headRefOid,baseRefName,baseRefOid,headRefName,headRepository"]);
     return prStateRead(JSON.parse(output) as GhPrState);
   }
 
@@ -437,10 +444,14 @@ export class GhCliClient implements GitHubClient {
     );
     // a PR from another fork's same-named branch is not the board's; a deleted fork leaves `head.repo` null
     const prs = (
-      JSON.parse(output) as Array<{ number: number; state: string; merged_at: string | null; head: { ref: string; sha: string; repo: { full_name: string } | null } }>
+      JSON.parse(output) as Array<{ number: number; state: string; merged_at: string | null; head: { ref: string; sha: string; repo: { full_name: string } | null }; base?: { ref: string; sha: string } }>
     )
       .filter((p) => (number === undefined || p.number === number) && p.head.ref === branch && p.head.repo?.full_name.toLowerCase() === headRepoKey)
-      .map((p): FoundPr => ({ number: p.number, state: p.merged_at ? "MERGED" : p.state === "open" ? "OPEN" : "CLOSED", head: p.head.sha }));
+      .map((p): FoundPr => ({
+        number: p.number, state: p.merged_at ? "MERGED" : p.state === "open" ? "OPEN" : "CLOSED", head: p.head.sha,
+        headRef: { branch: p.head.ref, repo: p.head.repo!.full_name },
+        ...(p.base && { base: { branch: p.base.ref, sha: p.base.sha } }),
+      }));
     // an open PR wins, then a merged one, over closed ones on the same branch
     return prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0] ?? null;
   }

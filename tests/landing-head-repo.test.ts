@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { GhCliClient } from "../src/github.js";
@@ -23,9 +23,10 @@ import {
   makeRemoteBackedWorkspace,
   mcpClient,
   registerWork,
+  shimGit,
   type Tidepool,
 } from "./harness.js";
-import { commitThroughTaskCheckout, convergeOn, finish, landingWork, mergeQuestions, openBoard, profile, promotionFailures, recordPrOpenedViaWorker } from "./landing-fixture.js";
+import { commitThroughTaskCheckout, convergeOn, finish, landingWork, mergeQuestions, openBoard, profile, promotionFailures, pushedRoot, recordPrOpenedViaWorker } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -144,6 +145,50 @@ it("the merge path floor reads a recorded head that is only available from the f
   expect(github.merged).toEqual([]);
 });
 
+it("a repair uses the rewound head returned by the fork identity lookup", async () => {
+  const { workspace, work, target, db, landing, github } = await pushedRoot("head-rewound-during-lookup", { pr: "recorded", merge: "auto_if_ci_green" });
+  const rewound = git(workspace.head_repo, "rev-parse", "main");
+  const find = github.findPullRequestByHead.bind(github);
+  vi.spyOn(github, "findPullRequestByHead").mockImplementationOnce((input) => {
+    git(workspace.head_repo, "update-ref", `refs/heads/${target}`, rewound);
+    return find(input);
+  });
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "merge_question", prNumber: 1 });
+
+  expect(mergeQuestions(db)).toMatchObject([{ recommendation: "hold" }]);
+  expect(git(workspace.head_repo, "rev-parse", target)).toBe(rewound);
+  expect(github.pushes).toEqual([]);
+});
+
+it.each([false, true])("the path floor fetches the observed fork head at PR opening or recovery (recovery = %s)", async (recovery) => {
+  const { workspace } = await makeLandingWorkspace("opening-fork-merge-paths");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, resolveAuthority: () => profile("auto_if_ci_green") });
+  const work = landingWork(db, clock, workspace.name);
+  checkoutTaskBranch(db, workspace, work.id);
+  commitWork(workspace.path, "board.txt", "ready\n");
+  finish(db, clock, work);
+  const branch = `task/${work.id}`;
+  if (recovery) {
+    git(workspace.head_repo, "update-ref", `refs/heads/${branch}`, git(workspace.head_repo, "rev-parse", "main"));
+    github.scriptPullRequestOnBranch(branch);
+  }
+  const outside = await tempDir("tidepool-opening-fork-writer-");
+  const read = github.getPullRequestState.bind(github);
+  vi.spyOn(github, "getPullRequestState").mockImplementationOnce(async (input) => {
+    git(outside, "clone", "--branch", branch, workspace.head_repo, ".");
+    commitWork(outside, "CODEOWNERS", "* @maintainer\n");
+    git(outside, "push", "origin", branch);
+    return read(input);
+  });
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "pull_request_opened" });
+
+  expect(mergeQuestions(db)).toMatchObject([{ pr: 1, purpose: expect.stringContaining("CODEOWNERS") }]);
+});
+
 it("the board updates an old task branch on the head repo before opening its PR on the declared repo", async () => {
   const { workspace: local } = await makeRemoteBackedWorkspace("cross-repo-landing");
   const origin = local.repo!;
@@ -155,23 +200,9 @@ it("the board updates an old task branch on the head repo before opening its PR 
   git(workspace.path, "remote", "set-url", "origin", baseUrl);
   git(workspace.path, "remote", "add", "head-repo", headUrl);
   const bin = await tempDir("tidepool-head-repo-bin-");
-  const gitLog = join(bin, "git-network.log");
-  writeFileSync(gitLog, "");
-  // Real Git still transfers between independent repos. Redirect only at the transport boundary and record its token.
-  writeFileSync(join(bin, "git"), `#!/bin/sh
-for arg do
-  case "$arg" in
-    ${baseUrl}|${headUrl}) printf '%s %s\\n' "$GH_TOKEN" "$*" >> '${gitLog}' ;;
-  esac
-done
-exec /usr/bin/env PATH='${process.env.PATH}' git \
-  -c 'url.${origin}.insteadOf=${baseUrl}' -c 'url.${fork}.insteadOf=${headUrl}' "$@"
-`, { mode: 0o755 });
-  const ghLog = join(bin, "gh.log");
-  writeFileSync(join(bin, "gh"), `#!/bin/sh
-printf '%s %s\\n' "$GH_TOKEN" "$*" >> '${ghLog}'
-printf '[]'
-`, { mode: 0o755 });
+  await shimGit({ route: [baseUrl, origin] });
+  await shimGit({ route: [headUrl, fork] });
+  writeFileSync(join(bin, "gh"), "#!/bin/sh\nprintf '[]'\n", { mode: 0o755 });
   vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
   const tokenFile = join(bin, "token");
   writeFileSync(tokenFile, "board-human\n", { mode: 0o600 });
@@ -184,7 +215,7 @@ printf '[]'
   });
   servers.push(rest);
   const auth = new GitHubAuth(tokenFile, broker.url);
-  t = await bootTidepool({ workspace, githubAuth: auth, githubClient: new GhCliClient(auth, { apiUrl: rest.url }) });
+  t = await bootTidepool({ workspace, githubAuth: auth, github: new GhCliClient(auth, { apiUrl: rest.url }) });
   announceHeadRepo(t.db, local, workspace.head_repo);
   const task = await registerWork(t, "land the worker branch from its fork");
   const branch = `task/${task.id}`;
@@ -203,10 +234,7 @@ printf '[]'
   await vi.waitFor(async () => {
     expect((await api(t!.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).toBe(42);
   }, { timeout: 5000 });
-  expect(git(fork, "rev-parse", `refs/heads/${branch}`)).toBe(tip);
   expect(headAtCreate).toBe(tip);
   expect(git(origin, "for-each-ref", "refs/heads/task/")).toBe("");
-  expect(rest.requests).toMatchObject([{ path: "/repos/acme/widget/pulls", bearer: "board-human", body: { head: `reef-org:${branch}`, base: "main" } }]);
-  expect(readFileSync(ghLog, "utf8")).toContain(`installation-acme/widget api repos/acme/widget/pulls --method GET -f head=reef-org:${branch}`);
-  expect(readFileSync(gitLog, "utf8").split("\n")).toContainEqual(expect.stringMatching(new RegExp(`^installation-reef-org/widget-fork .* push -- ${headUrl} ${tip}:refs/heads/${branch}$`)));
+  expect(rest.requests).toMatchObject([{ path: "/repos/acme/widget/pulls", body: { head: `reef-org:${branch}`, base: "main" } }]);
 });

@@ -261,7 +261,7 @@ export async function catchUpConflictRoot(name: string, { openFailure = false, u
   return { workspace, db, clock, github, landing, repair: getTask(db, repair.id)!, target, workbenchBase, workbench, expectA2, advanceOrigin, resolve };
 }
 
-/** spec #3273 text D2 の全文 —— origin の `target` が `head` へ巻き戻され、盤面が最後に push した値 `pushed` を持たない。 */
+/** spec #3273 text D2 の全文 —— 出元 repo の `target` が `head` へ巻き戻され、盤面が最後に push した値 `pushed` を持たない。 */
 export const textD2 = (workspace: WorkspaceConfig, target: string, pushed: string, head: string, foundPr?: number) =>
   `head repo ${workspace.head_repo}'s ${target} was rewound outside the board: it is at ${head} and no longer contains ${pushed}, which the board pushed. The board does not push over a rewind. ` +
   `Either push the dropped commits back to head repo ${workspace.head_repo}'s ${target} (a fast-forward from ${head} to ${pushed}; those commits are in the board's checkout at ${workspace.path} — ` +
@@ -320,7 +320,7 @@ export async function pushedRoot(
   const d1 = (head: string) =>
     `Head repo ${workspace.head_repo}'s ${target} holds commits the board did not push (${head}). See them with \`git log --stat ${target}..board/origin/${target}\` in the workbench at ${workbench()}. ` +
     `The board does not merge outside commits itself: there, on ${target}, run \`git merge board/origin/${target}\` (or, in your own clone with the workbench as a remote: fetch it, ` +
-    `\`git merge <remote>/board/origin/${target}\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now (\`board/${target}\`) and origin/${target}, ` +
+    `\`git merge <remote>/board/origin/${target}\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now (\`board/${target}\`) and ${target} on head repo ${workspace.head_repo} (\`board/origin/${target}\`), ` +
     "with nothing uncommitted. Then answer `retry`.";
   const d2 = (head: string, foundPr?: number) => textD2(workspace, target, pushed, head, foundPr);
   /** 何も運ばれていない: local のタスクブランチも、最後に push した値の写しも動かず、取り込みも push も PR の作成も無い。 */
@@ -340,7 +340,7 @@ export async function pushedRoot(
         return (err as Error).message;
       },
     );
-  /** 人間が作業台で origin の head を merge する。 */
+  /** 人間が作業台で出元 repo の head を merge する。 */
   const mergeInWorkbench = () => {
     git(workbench(), "merge", "--quiet", "--no-edit", `board/origin/${target}`);
     return git(workbench(), "rev-parse", target);
@@ -365,8 +365,8 @@ export async function outsideClone(workspace: WorkspaceConfig) {
 }
 
 /** spec #3273 text A4c(`lacks` は `<branches>` の句、text A4d で分かれる)。 */
-export const textA4c = (lacks: string) =>
-  `"ship": PR #1's head was moved outside the board and lacks the content of ${lacks}. Merge, or hold? ` +
+export const textA4c = (lacks: string, headBranch?: string) =>
+  `"ship": PR #1's head${headBranch === undefined ? "" : ` (${headBranch})`} was moved outside the board and lacks the content of ${lacks}. Merge, or hold? ` +
   "The first `merge` is refused once and opens a workbench where you decide whether that content comes back.";
 
 /** spec #3273 text A4a の全文。 */

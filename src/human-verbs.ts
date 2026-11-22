@@ -1776,7 +1776,7 @@ export async function submitAnswer(
             const refusal = refuseUnaskedHead(
               deps.db, mergeWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir), root,
               {
-                prNumber: mergePr, head: pr.head, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure",
+                prNumber: mergePr, head: pr.head, headRef: pr.headRef, origin, answeredQuestion: task.id, ciRed: pr.ci === "failure",
                 pathReview: deps.landing.reviewMergePaths(mergeWorkspace, root, pr),
               }, now(),
             );
@@ -1822,7 +1822,7 @@ export async function submitAnswer(
             } catch (err) {
               if (err instanceof WorkspaceRepoMismatchError) throw err;
               const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
-              throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, landingTaskId)}`);
+              throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, pr.headRef)}`);
             }
           });
           rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };

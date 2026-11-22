@@ -554,6 +554,7 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
     expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sha}\nrefs/remotes/origin/main ${sha}`);
 
     git(workspace.path, "symbolic-ref", "refs/remotes/head-repo/HEAD", "refs/remotes/origin/main");
+    git(workspace.path, "update-ref", "-d", "refs/remotes/head-repo/task/bbb");
     const replacement = await tempDir("tidepool-replacement-fork-");
     git(replacement, "init", "--bare", "-b", "main");
     git(replacement, "fetch", fork, "refs/heads/task/aaa:refs/heads/task/bbb");

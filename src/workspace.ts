@@ -1350,7 +1350,7 @@ const boardBranch = (short: string) => `${BOARD_BRANCHES}/${short}`;
 
 /** 運ばれる側: 名前の場所の ref か、盤面が origin から読んだばかりの値をその名前で運ぶもの(ADR 0376 決定1・3 —— GitHub の head は名前の場所の
  *  ref に書かない。写し `refs/remotes/origin/task/<root>` は最後に push した値のまま)。鍵と `board/*` の名前は `ref` から、値は `sha` から。 */
-type Carried = string | { ref: string; sha: string };
+type Carried = string | { ref: string; sha: string; label?: string };
 const carriedRef = (carried: Carried) => (typeof carried === "string" ? carried : carried.ref);
 const carriedSha = (named: WorkspaceConfig, carried: Carried) => (typeof carried === "string" ? git(named.path, "rev-parse", "--verify", carried) : carried.sha);
 
@@ -1376,7 +1376,11 @@ function inspectWorkbenchTip<T>(
   use: (read: VerifiedTip, old: string) => T,
 ): T | undefined {
   const old = approved ?? git(named.path, "rev-parse", "--verify", `refs/heads/${target}`);
-  const inputs = [{ branch: target, sha: old }, ...(carried ? [{ branch: shortRef(carriedRef(carried)), sha: carriedSha(named, carried) }] : [])];
+  const inputs = [{ branch: target, sha: old, label: target }];
+  if (carried) {
+    const branch = shortRef(carriedRef(carried));
+    inputs.push({ branch, sha: carriedSha(named, carried), label: (typeof carried === "object" && carried.label) || branch });
+  }
   const at = place.path;
   const again = humanWork?.again ?? "answer again";
   try {
@@ -1396,7 +1400,7 @@ function inspectWorkbenchTip<T>(
         if (humanWork && missing.branch === target) {
           throw new IntakeRefusedError(`${target} has moved on since your tip (work of its children arrived). In the workbench at ${at}, on ${target}, run \`git merge ${merge}\` ${fromOwnClone(target, merge)}, then ${again}.`);
         }
-        throw new IntakeRefusedError(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.branch} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then ${again}.`);
+        throw new IntakeRefusedError(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.label} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then ${again}.`);
       }
       if (otherTasks) {
         const branches = otherTaskBranches(db, named, verified, tip, inputs.map(({ sha }) => sha), otherTasks.range);
@@ -1493,13 +1497,13 @@ export const takeInCatchUp = (db: Db, workspace: WorkspaceConfig, taskId: string
 
 /** ADR 0382 決定1: preserve the workbench key and its `board/origin/task/*` alias for work already in progress. */
 const outsideHeadRef = (taskId: string) => remoteTrackingRef(taskBranch(taskId));
-const outsideHead = (taskId: string, head: string): Carried => ({ ref: outsideHeadRef(taskId), sha: head });
+const outsideHead = (taskId: string, head: string, label?: string): Carried => ({ ref: outsideHeadRef(taskId), sha: head, label });
 
 /** ADR 0376 決定4・7・8: 昇格の retry と、外の push が落とした内容の merge question への `merge` は、追いつきより前に、
  *  (`task/<root>`, GitHub の head) の作業台が取り込める tip を持てば先に取り込み、
  *  取り込んだなら、作業台を残したときの text C6 を返す。tip が今読んだ head を欠けば、`board/origin/task/<root>` をその head へ引き直して拒む。 */
-export const takeInOutsideHead = (db: Db, workspace: WorkspaceConfig, taskId: string, head: string, intake: IntakeContext): { kept: string | undefined } | undefined =>
-  takeInExistingWorkbench(db, workspace, taskBranch(taskId), outsideHead(taskId, head), intake);
+export const takeInOutsideHead = (db: Db, workspace: WorkspaceConfig, taskId: string, head: string, label: string, intake: IntakeContext): { kept: string | undefined } | undefined =>
+  takeInExistingWorkbench(db, workspace, taskBranch(taskId), outsideHead(taskId, head, label), intake);
 
 /** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`otherTasks` は
  *  ADR 0382 決定4: 数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)。`humanContent` は
@@ -2976,7 +2980,11 @@ export function assertRememberedHeadRepo(db: Db, workspace: WorkspaceConfig, now
       if (agreed > 0 && !sameRepository(values[0] ?? undefined, declared)) {
         assertHeadRemoteMatchesDeclaration(workspace);
         // ADR 0376 決定3 / ADR 0395 決定2: copies belong to the old fork until this change is committed.
-        const refs = git(workspace.path, "for-each-ref", "--format=%(refname)", remoteTrackingRef("", HEAD_REPO_REMOTE)).split("\n").filter(Boolean);
+        const prefix = remoteTrackingRef("", HEAD_REPO_REMOTE);
+        const refs = [...new Set([
+          ...git(workspace.path, "for-each-ref", "--format=%(refname)", prefix).split("\n").filter(Boolean),
+          ...[...refValues(storedRefs(db, name)).keys()].filter((ref) => ref.startsWith(prefix)),
+        ])];
         if (refs.length > 0) writeBoardRefs(db, workspace, refs.map((ref) => [ref, ""]), () => {
           for (const ref of refs) git(workspace.path, "update-ref", "--no-deref", "-d", ref);
         });
@@ -3239,11 +3247,12 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
   const passThrough = (err: unknown) => err instanceof WorkspaceRepoMismatchError || err instanceof RemoteRepositoryMismatchError;
   for (const remote of ["origin", HEAD_REPO_REMOTE] as const) {
     const headRepo = remote === HEAD_REPO_REMOTE;
-    if (headRepo && place.head_repo === undefined) continue;
     const missing = [...new Set(lost.filter(([ref]) => taskRef(ref) === headRepo).map(([, sha]) => sha))]
       .filter((sha) => !objectExists(place, sha));
     if (missing.length === 0) continue;
-    const location = headRepo ? `head repo ${repositoryLabel(place.head_repo!)}` : "origin";
+    const location = headRepo
+      ? place.head_repo === undefined ? "the head repo" : `head repo ${repositoryLabel(place.head_repo)}`
+      : "origin";
     const unreachable = (shas: string[], err: unknown) => {
       if (passThrough(err)) return err;
       return new Error(`could not reach ${location} to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once ${location} is reachable.`);
@@ -4050,7 +4059,7 @@ function openWorkbenchOrSayWhy(workspace: WorkspaceConfig, base: string, target:
   }
 }
 
-/** ADR 0376 決定4: origin の `task/<root>`(PR が在ればその head)に盤面の知らない commit がある —— head が local の `task/<root>` の祖先で
+/** ADR 0376 決定4 / ADR 0395 決定1: 出元 repo の `task/<root>`(PR が在ればその head)に盤面の知らない commit がある —— head が local の `task/<root>` の祖先で
  *  ない。そのとき盤面は merge も push もせず、(`task/<root>`, GitHub の head) の作業台を開いて `board/origin/task/<root>` をその head に置き、
  *  中身を見るコマンド・そこで打つ merge・tip の条件・答え直す回答を言う(spec #3273 text D1。開けなければ A7d)。clean に merge できるかは
  *  問わない。head が祖先なら undefined。 */
@@ -4058,14 +4067,15 @@ export function outsideCommitsStop(workspace: WorkspaceConfig, workbenchBase: st
   const target = taskBranch(taskId);
   if (isAncestor(workspace, head, `refs/heads/${target}`)) return undefined;
   const carried = outsideHead(taskId, head);
-  const found = `Head repo ${repositoryLabel(workspace.head_repo!)}'s ${target} holds commits the board did not push (${head}).`;
+  const repo = repositoryLabel(workspace.head_repo!);
+  const found = `Head repo ${repo}'s ${target} holds commits the board did not push (${head}).`;
   const opened = openWorkbenchOrSayWhy(workspace, workbenchBase, target, carried, found, ".");
   if (typeof opened === "string") return new PromotionStopError(opened);
   const source = shortRef(carriedRef(carried));
   const merge = boardBranch(source);
   return new PromotionStopError(
     `${found} See them with \`git log --stat ${target}..${merge}\` in the workbench at ${opened.path}. The board does not merge outside commits itself: ` +
-      `there, on ${target}, run \`git merge ${merge}\` ${fromOwnClone(target, merge)}. ${tipCondition(target, source)} Then answer \`retry\`.`,
+      `there, on ${target}, run \`git merge ${merge}\` ${fromOwnClone(target, merge)}. ${tipCondition(target, `${target} on head repo ${repo} (\`${merge}\`)`)} Then answer \`retry\`.`,
   );
 }
 
@@ -4097,11 +4107,12 @@ export function outsidePushRefusal(
   workspace: WorkspaceConfig,
   base: string,
   taskId: string,
-  { prNumber, head, rewound, lacks, answerOn }: { prNumber: number; head: string; rewound: boolean; lacks: string; answerOn?: string },
+  { prNumber, head, headBranch, rewound, lacks, answerOn }: { prNumber: number; head: string; headBranch?: string; rewound: boolean; lacks: string; answerOn?: string },
 ): string {
   const target = taskBranch(taskId);
   const carried = outsideHead(taskId, head);
-  const lead = `PR #${prNumber}'s head was ${rewound ? "moved" : "rewritten"} outside the board to ${head}, which ${lacks}.`;
+  const location = headBranch ? ` (${headBranch})` : "";
+  const lead = `PR #${prNumber}'s head${location} was ${rewound ? "moved" : "rewritten"} outside the board to ${head}, which ${lacks}.`;
   const opened = openWorkbenchOrSayWhy(workspace, base, target, carried, lead, ".");
   if (typeof opened === "string") return opened;
   workerRepoGit(opened.path, "update-ref", REFUSED_ONCE, head);
@@ -4114,7 +4125,7 @@ export function outsidePushRefusal(
     ? `${place} Answer \`merge\` ${again} and the board pushes that content back. To discard it instead, first run there, on ${target}: ${discard} ` +
         `(or the same in your own clone, then push ${target} to the workbench); then answer \`merge\` ${again}.`
     : `${place} There, on ${target}, either keep that content with \`git merge ${merge}\` ${fromOwnClone(target, merge)}, or discard it with ${discard}. ` +
-        `${tipCondition(target, source)} Then answer \`merge\` ${again}: the board takes your merge in and pushes it, and CI runs on the result.`;
+        `${tipCondition(target, `${headBranch ?? "the PR's observed head"} (\`${merge}\`)`)} Then answer \`merge\` ${again}: the board takes your merge in and pushes it, and CI runs on the result.`;
 }
 
 /** ADR 0376 決定6: PR の記録が無い根の巻き戻し —— 出元 repo の head が、盤面が最後に push した値の真の祖先。値は写し
