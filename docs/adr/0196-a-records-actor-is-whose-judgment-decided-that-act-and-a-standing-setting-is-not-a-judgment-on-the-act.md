@@ -1,5 +1,7 @@
 # 記録の行為者はその行為を決めた判断の主であり、常設の設定はその行為についての判断ではない
 
+**Status 追記: 人間の回答から起きる行為のうち、回答者の名義になるのは選択肢が名指す行為だけで、回答の後に規則が決めた行為(`retry` の後に PR を開くこと・push すること)は決定2 により盤面の名義である。収束が刻む `pr_opened` は根の種類によらず盤面の名義である([ADR 0400](0400-an-answer-names-only-the-act-its-option-names-and-what-the-boards-rules-decide-after-it-is-the-boards.md) 決定1・2、2026-11-22、issue #3507)。**
+
 2026-10-05 の grilling(issue #1359、発端は #1357 / ADR 0194)で決定。`auto_if_ci_green` の無人 merge で盤面が merge した
 `pr_merged` が human 名義で記録されていた。ADR 0194 は登録者を「その task の存在を決めた判断の主」としたが、event の
 行為者に同じ読みを当てるかは決めていなかった。調べた経路は #1359 に置く。

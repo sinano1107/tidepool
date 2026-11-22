@@ -9,7 +9,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   mcpClient,
   registerWork,
   type Tidepool,
@@ -24,7 +24,7 @@ afterEach(async () => {
 
 describe("issue #27: workspace ごとの保護ブランチ設定", () => {
   it("branch: master な workspace のタスクは master 起点で fork され、master base で PR が開く", async () => {
-    const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
+    const { workspace: prod } = await makeLandingWorkspace("prod");
     git(prod.path, "branch", "master");
     git(prod.path, "push", "origin", "master");
     t = await bootTidepool({

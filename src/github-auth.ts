@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { git, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
 import type { RepoSlug } from "./github.js";
-import type { HEAD_REPO_REMOTE } from "./pickup-predicates.js";
-import { parseGitHubRepo } from "./repo-access.js";
+import { parseGitHubRepo, repositoryLabel, sameRepository } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -249,6 +248,18 @@ export function workspaceHeadRepoDestination(workspace: WorkspaceConfig & { name
   return head_repo === undefined ? undefined : networkDestination(head_repo, path);
 }
 
+/** ADR 0395 決定1・2: a landing uses the same fork from observation through push and PR creation. */
+export function landingHeadRepo(workspace: WorkspaceConfig) {
+  const destination = workspaceHeadRepoDestination(workspace);
+  if (destination === undefined) {
+    throw new Error(`workspace ${workspace.name} has no declared head repo (head_repo). Set its fork in workspace settings to land task branches.`);
+  }
+  if (!sameRepository(workspace.head_repo, destination.source)) {
+    throw new Error(`workspace ${workspace.name}'s head repo changed to ${repositoryLabel(destination.source)} during landing. Retry with the current workspace settings.`);
+  }
+  return destination;
+}
+
 /** A workspace declaration or the path of the board's registry checkout (ADR 0378 決定1・2). */
 export type GitSource = WorkspaceConfig | string;
 
@@ -262,12 +273,15 @@ export function sourceCheckout(source: GitSource): string {
  *  `remote` に head repo の remote を渡した `refs/remotes/head-repo/task/*`(ADR 0395 決定1)。書くのは push の後の `authedPush` と
  *  `fetchBranchCopy` —— 綴りそのものは1つでなければならない(2つ持つと、片方だけを直したときに黙ってずれる)。どちらの ref を
  *  読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
-export function remoteTrackingRef(branch: string, remote: PushRemote = "origin"): string {
+export function remoteTrackingRef(branch: string, remote: GitRemote = "origin"): string {
   return `refs/remotes/${remote}/${branch}`;
 }
 
-/** Which declared repo a workspace push reaches: `origin` is `repo`, the head repo remote is `head_repo` (ADR 0395 決定1). */
-type PushRemote = "origin" | typeof HEAD_REPO_REMOTE;
+/** The checkout's remote for the PR head repo (ADR 0395 決定2). */
+export const HEAD_REPO_REMOTE = "head-repo";
+
+/** Which declared repo an operation reaches (ADR 0395 決定1). */
+export type GitRemote = "origin" | typeof HEAD_REPO_REMOTE;
 
 /** The inline helper serving the injected GH_TOKEN. ADR 0339 決定3: it answers only `protocol=https host=github.com`,
  *  so the token goes out only to the https URL the board built for a GitHub origin (決定4) and never to a non-GitHub
@@ -295,7 +309,7 @@ export const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
 /** One network child's surroundings: its built env, the board repo it runs in (none for `clone`), the place a human
  *  reads in the error, the stall bound, and the origin value the URL was built from. */
-type AuthedCall = { env: NodeJS.ProcessEnv; boardRepo: string | undefined; where: string; timeoutMs: number; origin: string };
+type AuthedCall = { env: NodeJS.ProcessEnv; boardRepo: string | undefined; where: string; timeoutMs: number; origin: string; remote?: GitRemote };
 
 /** ADR 0339 決定5: a network call from a checkout never runs inside it. One disposable board-owned repo per call
  *  (`--git-dir`, never env) borrows the checkout's objects read-only through `objects/info/alternates`, and is
@@ -306,12 +320,12 @@ function inBoardRepo<T>(
   timeoutMs: number,
   verb: string,
   run: (call: AuthedCall & { boardRepo: string }, url: string) => T,
-  remote: PushRemote = "origin",
+  remote: GitRemote = "origin",
 ): T {
   const checkout = sourceCheckout(source);
   // a registry checkout (a string source) has no head repo: it reaches no destination rather than origin under head-repo copies
   const destination = typeof source !== "string"
-    ? remote === "origin" ? workspaceNetworkDestination(source) : workspaceHeadRepoDestination(source)
+    ? remote === "origin" ? workspaceNetworkDestination(source) : landingHeadRepo(source)
     : remote === "origin" ? networkDestination(checkoutOrigin(source, verb), source) : undefined;
   if (destination === undefined) throw new Error(`\`git ${verb}\` has no declared repo to reach (in ${checkout})`);
   const env = auth ? auth.env(destination.key) : githubChildEnv();
@@ -321,7 +335,7 @@ function inBoardRepo<T>(
     // ADR 0339 退けた形: GIT_OBJECT_DIRECTORY で借りると、ref を持たない盤面 repo の gc が checkout の objects を全部消す
     const objects = git(checkout, "rev-parse", "--path-format=absolute", "--git-path", "objects");
     writeFileSync(join(boardRepo, "objects", "info", "alternates"), `${objects}\n`);
-    return run({ env, boardRepo, where: checkout, timeoutMs, origin: destination.source }, destination.url);
+    return run({ env, boardRepo, where: checkout, timeoutMs, origin: destination.source, remote }, destination.url);
   } finally {
     rmSync(boardRepo, { recursive: true, force: true });
   }
@@ -332,23 +346,24 @@ export function authedLsRemote(
   source: GitSource,
   timeoutMs: number,
   ref: string,
+  remote: GitRemote = "origin",
 ): string {
-  return inBoardRepo(auth, source, timeoutMs, "ls-remote", (call, url) => runAuthedGit(call, ["ls-remote", "--", url, ref]));
+  return inBoardRepo(auth, source, timeoutMs, "ls-remote", (call, url) => runAuthedGit(call, ["ls-remote", "--", url, ref]), remote);
 }
 
 /** ADR 0339 決定5: brings the commit `want` into the checkout's object store without writing any of its refs, in two
  *  hops — hop1 fetches it from the network into the board repo's `refs/board/fetched`, hop2 takes it from there into
  *  the checkout. */
-export function authedFetch(auth: GitHubAuth | undefined, source: GitSource, timeoutMs: number, want: string): void {
+export function authedFetch(auth: GitHubAuth | undefined, source: GitSource, timeoutMs: number, want: string, remote: GitRemote = "origin"): void {
   inBoardRepo(auth, source, timeoutMs, "fetch", (call, url) => {
     const checkout = call.where;
     // ADR 0339 帰結: 空の盤面 repo は have を言えないので、checkout の写しの sha を交渉の tip に渡す
-    const tips = git(checkout, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin").split("\n").filter(Boolean);
+    const tips = git(checkout, "for-each-ref", "--format=%(objectname)", remoteTrackingRef("", remote)).split("\n").filter(Boolean);
     runAuthedGit(call, ["fetch", "--quiet", ...tips.map((tip) => `--negotiation-tip=${tip}`), "--", url, `${want}:refs/board/fetched`]);
     // ADR 0339 決定5: hop2 は網に出ない —— checkout の insteadOf が盤面 repo の path を書き換えても local の転送しか通らず(`git` の床)、submodule も辿らない
     // ADR 0356 決定5: the named checkout disables auto-GC explicitly. The network runner already disables it under ADR 0339 決定1.
     git(checkout, "fetch", "--quiet", "--no-auto-gc", "--no-recurse-submodules", "--", call.boardRepo, "refs/board/fetched");
-  });
+  }, remote);
 }
 
 /** Pushes each `[branch, sha]` to `remote`'s declared repo — atomically when there is more than one — and, once the push
@@ -360,7 +375,7 @@ export function authedPush(
   source: GitSource,
   timeoutMs: number,
   branches: ReadonlyArray<readonly [branch: string, sha: string]>,
-  remote: PushRemote = "origin",
+  remote: GitRemote = "origin",
 ): void {
   const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
   const flags = branches.length > 1 ? ["--atomic"] : [];
@@ -402,10 +417,11 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
       .toString()
       .trim();
   } catch (err) {
+    const target = call.remote === HEAD_REPO_REMOTE ? ` on head repo ${repositoryLabel(origin)}` : "";
     // ADR 0334 決定4: 接続前の無音では curl 28 が無く、Operation too slow だけが出る。
     const stderr = (err as { stderr?: Buffer }).stderr?.toString();
     if (stderr?.includes("Operation too slow")) {
-      throw new Error(`\`git ${args[0]}\` stalled: no bytes for ${Math.ceil(timeoutMs / 1000)} s (in ${where})`, { cause: err });
+      throw new Error(`\`git ${args[0]}\` stalled: no bytes for ${Math.ceil(timeoutMs / 1000)} s (in ${where})${target}`, { cause: err });
     }
     // ADR 0339 決定4: GitHub はどの綴りでも https に組むので、ssh が出る出所は非 GitHub の origin の値だけ
     if (stderr?.includes("transport 'ssh' not allowed")) {
@@ -417,7 +433,7 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
       );
     }
     // 理由は argv でなく stderr で言う —— argv は呼び出しごとに変わる盤面 repo の path と交渉の tip を持ち、同じ失敗を別の文にする
-    throw new Error(`\`git ${args[0]}\` failed (in ${where}): ${stderr?.trim() || String(err)}`, { cause: err });
+    throw new Error(`\`git ${args[0]}\` failed (in ${where})${target}: ${stderr?.trim() || String(err)}`, { cause: err });
   }
 }
 

@@ -9,7 +9,7 @@ import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -95,7 +95,7 @@ const MINUTE = 60 * 1000;
 
 it("completing a task in a protected workspace under the external merge dial still asks for a human merge (ADR 0079: the resource-side invariant outranks the dial)", async () => {
   const sandbox = await makeWorkspace("sandbox");
-  const { workspace: registry } = await makeRemoteBackedWorkspace("registry");
+  const { workspace: registry } = await makeLandingWorkspace("registry");
   t = await bootTidepool({
     workspace: sandbox,
     resolveWorkspace: defaultingTo(sandbox, registry),
@@ -122,7 +122,7 @@ it("completing a task in a protected workspace under the external merge dial sti
 
 it("completing a low-risk task in a protected workspace under auto_if_ci_green asks for merge approval immediately, instead of queueing for auto-merge", async () => {
   const sandbox = await makeWorkspace("sandbox");
-  const { workspace: registry } = await makeRemoteBackedWorkspace("registry");
+  const { workspace: registry } = await makeLandingWorkspace("registry");
   t = await bootTidepool({
     workspace: sandbox,
     resolveWorkspace: defaultingTo(sandbox, registry),

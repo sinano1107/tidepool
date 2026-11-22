@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth, workspaceHeadRepoDestination } from "../src/github-auth.js";
+import { createLanding } from "../src/landing.js";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { compareRefsBeforeLanding, resolveExecutionWorkspace, withRememberedRepoCheck, workspaceProtectionReader } from "../src/workspace.js";
@@ -14,8 +15,9 @@ import {
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeGitHubClient } from "./fakes.js";
-import { makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
+import { FakeClock, FakeGitHubClient } from "./fakes.js";
+import { checkoutTaskBranch, commitWork, makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
+import { convergeOn, finish, landingWork } from "./landing-fixture.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -464,7 +466,7 @@ describe("updateWorkspace: 出元 repo の書き込みの巻き戻し", () => {
 });
 
 // ADR 0395 決定3: 出元 repo が宣言されたとき、扉が `task/*` を出元 repo へ送る(送るのは1本ずつ)。issue #3563: 失敗しても宣言は残り、同じ値をもう一度
-// 通せば送り直す。出元 repo は GitHub の名前なので、盤面が組んだ URL を shim で手元の bare へ回す(shim は盤面の `remote set-url` の引数も書き換える)
+// 通せば送り直す。出元 repo は GitHub の名前なので、盤面が組んだ網の行き先を shim で手元の bare へ回す
 describe("updateWorkspace: タスクブランチを出元 repo へ送る", () => {
   async function headRepoBoard() {
     const checkout = await makeWorkspace("lagoon");
@@ -541,6 +543,58 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
     expect(rows).toEqual([`${sha} refs/remotes/head-repo/task/bbb`]);
     compareRefsBeforeLanding(deps.db, { ...workspace, head_repo: "acme/fork" }, { resolveRegistered: undefined, now: now() });
     expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeUndefined();
+  });
+
+  it("replacing or removing the head repo discards only copies from the previous head repo", async () => {
+    const { deps, workspace, sha, set, copies, entry, fork } = await headRepoBoard();
+    const now = () => new Date();
+    git(workspace.path, "update-ref", "refs/remotes/origin/main", sha);
+    compareRefsBeforeLanding(deps.db, workspace, { resolveRegistered: undefined, now: now() });
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sha}\nrefs/remotes/origin/main ${sha}`);
+
+    git(workspace.path, "symbolic-ref", "refs/remotes/head-repo/HEAD", "refs/remotes/origin/main");
+    git(workspace.path, "update-ref", "-d", "refs/remotes/head-repo/task/bbb");
+    const replacement = await tempDir("tidepool-replacement-fork-");
+    git(replacement, "init", "--bare", "-b", "main");
+    git(replacement, "fetch", fork, "refs/heads/task/aaa:refs/heads/task/bbb");
+    await shimGit({ route: ["https://github.com/another/fork.git", replacement] });
+    deps.github.scriptRepositoryParent("another/fork", "acme/lagoon");
+    await expect(updateWorkspace({ name: "lagoon", head_repo: "another/fork", confirm: true }, deps)).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+
+    expect(entry().head_repo).toBe("another/fork");
+    expect(copies()).toBe(`refs/remotes/head-repo/task/aaa ${sha}\nrefs/remotes/origin/main ${sha}`);
+    compareRefsBeforeLanding(deps.db, { ...workspace, head_repo: "another/fork" }, { resolveRegistered: undefined, now: now() });
+
+    await updateWorkspace({ name: "lagoon", head_repo: "" }, deps);
+
+    expect(entry().head_repo).toBeUndefined();
+    expect(copies()).toBe(`refs/remotes/origin/main ${sha}`);
+    compareRefsBeforeLanding(deps.db, workspace, { resolveRegistered: undefined, now: now() });
+  });
+
+  it("convergence refuses to overwrite a rewind of a task branch sent only by publish", async () => {
+    const { deps, workspace, sha, fork, set } = await headRepoBoard();
+    const clock = new FakeClock();
+    git(workspace.path, "update-ref", "refs/remotes/origin/main", sha);
+    const work = landingWork(deps.db, clock, workspace.name);
+    checkoutTaskBranch(deps.db, workspace, work.id);
+    commitWork(workspace.path, "feature.txt", "ready\n");
+    git(workspace.path, "checkout", "main");
+    finish(deps.db, clock, work);
+    const branch = `refs/heads/task/${work.id}`;
+    const pushed = git(workspace.path, "rev-parse", branch);
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    expect(git(fork, "rev-parse", branch)).toBe(pushed);
+    git(fork, "update-ref", branch, sha);
+    const landing = createLanding({ ...deps, defaultAgentName: "tako", clock, workspace: { ...workspace, head_repo: "acme/fork" } });
+
+    await expect(convergeOn(landing, work.id)).resolves.toMatchObject({
+      kind: "failed", reason: "promotion_failed", error: expect.stringContaining(`head repo acme/fork's task/${work.id} was rewound`),
+    });
+
+    expect(git(fork, "rev-parse", branch)).toBe(sha);
+    expect(deps.github.requests).toEqual([]);
   });
 });
 

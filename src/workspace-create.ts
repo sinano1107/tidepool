@@ -14,6 +14,7 @@ import {
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   githubKey,
+  HEAD_REPO_REMOTE,
   isRelativeLocalPath,
   networkDestination,
   originValue,
@@ -24,7 +25,6 @@ import {
   assertOwnGitDirectory,
   conventionCheckoutPath,
   exactProtectedBranchRef,
-  HEAD_REPO_REMOTE,
   originUrl,
   protectedBranch,
 } from "./pickup-predicates.js";
@@ -551,7 +551,7 @@ export class HeadRepoTaskBranchesNotSentError extends Error {
 
 /** ADR 0395 決定3: 出元 repo が宣言されたとき `task/*` を出元 repo へ送る。1本ずつ送る —— 分岐したタスクブランチが1本あっても、
  *  他のタスクブランチの送り直しを毎回塞がないよう atomic にしない。写しは送れたタスクブランチの `refs/remotes/head-repo/task/*` だけで、
- *  `refs/remotes/origin/*` は書かない —— `rewindStop` はそれを origin へ押した値と読む。issue #3563: 失敗しても宣言は残る。同じ sha が既に
+ *  巻き戻しは出元 repo の写しを読む(ADR 0376 決定3)。issue #3563: 失敗しても宣言は残る。同じ sha が既に
  *  あるタスクブランチは up-to-date で通るので、同じ値をもう一度通す撃ち直しは冪等。 */
 function sendTaskBranches(db: Db, workspace: WorkspaceConfig, headRepo: string, auth: GitHubAuth | undefined): void {
   const branches = [...refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads/task/"))];

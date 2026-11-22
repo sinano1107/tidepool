@@ -11,7 +11,7 @@ import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   mcpClient,
   registerWork,
   type Tidepool,
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 it("a failed PR promotion leaves the work done and asks Tidepool whether to retry or abandon promotion", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
@@ -61,7 +61,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
 });
 
 it("human retry maps failure to a visible error, then lands while excluding the answered question and retiring siblings", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
@@ -125,7 +125,7 @@ it("human retry maps failure to a visible error, then lands while excluding the 
 });
 
 it("abandoning PR promotion settles the failure question without changing completed work", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -161,7 +161,7 @@ it("abandoning PR promotion settles the failure question without changing comple
 });
 
 it("a settled failure question cannot be re-answered into a retry", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -194,7 +194,7 @@ it("a settled failure question cannot be re-answered into a retry", async () => 
 });
 
 it("a typo'd answer is rejected outright instead of silently settling the question as an implicit abandon", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -224,7 +224,7 @@ it("a typo'd answer is rejected outright instead of silently settling the questi
 });
 
 it("a malformed POST (answer count mismatch) to an open promotion-failure question is rejected before any retry (issue #111)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");

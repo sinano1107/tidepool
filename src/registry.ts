@@ -13,6 +13,7 @@ import {
   authedLsRemote,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
+  type GitRemote,
   type GitSource,
   originRepo,
   remoteTrackingRef,
@@ -699,17 +700,17 @@ export interface RegistrySource {
  *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
 export type RefWriter = (ref: string, newValue: string, write: () => void) => void;
 
-/** origin から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
+/** 指定した repo から commit を sha で1つ取る。checkout の `refs/` には何も書かない(ADR 0339 決定5 の 2 hop)—— merge の門が
  *  head を取る fetch(ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
-export function fetchCommit(source: GitSource, auth: GitHubAuth | undefined, sha: string): void {
-  authedFetch(auth, source, GIT_NETWORK_TIMEOUT_MS, sha);
+export function fetchCommit(source: GitSource, auth: GitHubAuth | undefined, sha: string, remote: GitRemote = "origin"): void {
+  authedFetch(auth, source, GIT_NETWORK_TIMEOUT_MS, sha, remote);
 }
 
-/** origin のブランチの今の sha を上限つきの `ls-remote` 1回で読む。ブランチが無ければ undefined(exit 0 で行が無い)、読めなければ投げる。
+/** 指定した repo のブランチの今の sha を上限つきの `ls-remote` 1回で読む。ブランチが無ければ undefined(exit 0 で行が無い)、読めなければ投げる。
  *  token は呼び手が温めておく。 */
-export function originBranchSha(source: GitSource, auth: GitHubAuth | undefined, branch: string): string | undefined {
+export function remoteBranchSha(source: GitSource, auth: GitHubAuth | undefined, branch: string, remote: GitRemote = "origin"): string | undefined {
   const head = `refs/heads/${branch}`;
-  return authedLsRemote(auth, source, GIT_NETWORK_TIMEOUT_MS, head)
+  return authedLsRemote(auth, source, GIT_NETWORK_TIMEOUT_MS, head, remote)
     .split("\n")
     .map((line) => line.split("\t"))
     .find(([, name]) => name === head)?.[0];
@@ -719,7 +720,7 @@ export function originBranchSha(source: GitSource, auth: GitHubAuth | undefined,
  *  その sha を取り、`update-ref` で写しを書く。原本にブランチが無ければ fetch の失敗と同じく投げる(fail-closed)。
  *  token は呼び手が温めておく。 */
 export function fetchBranchCopy(source: GitSource, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
-  const sha = originBranchSha(source, auth, branch);
+  const sha = remoteBranchSha(source, auth, branch);
   if (!sha) throw new Error(`origin has no branch ${branch}`);
   const copy = remoteTrackingRef(branch);
   writeRef(copy, sha, () => {

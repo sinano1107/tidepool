@@ -6,7 +6,7 @@ import { createLanding, type LandingDeps } from "../src/landing.js";
 import { type AuthorityProfile, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import { completeTask, getTask, landingSurface, listBoard, registerTask } from "../src/tasks.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeWorkspace } from "./harness.js";
 import { agentQuarantines, answerMergeQuestion, convergeOn, mergeQuestions, openBoard, profile, pushPrHead, readOnNextTick } from "./landing-fixture.js";
 
 // ADR 0374 決定12・13 / spec #3273 group C(#3295): タスクブランチを持つ人間担当の work は根になり、profile なしで、常に merge question で
@@ -28,7 +28,7 @@ const registry = (assignee: string | null): AuthorityProfile => {
 /** タスクブランチを持って人間が完了した根 —— 既定は remote-backed、`local` なら purely-local の workspace。`content` なら保護ブランチに無い
  *  commit を1つ載せる。 */
 async function humanRoot(name: string, deps: Partial<LandingDeps> = {}, { content = true, local = false } = {}) {
-  const workspace = local ? await makeWorkspace(name) : (await makeRemoteBackedWorkspace(name)).workspace;
+  const workspace = local ? await makeWorkspace(name) : (await makeLandingWorkspace(name)).workspace;
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, ...deps });
@@ -46,9 +46,12 @@ it.each([
   ["registry の盤面", registry],
   ["全 agent が external の盤面", () => profile("external")],
 ] as const)("%s でも、人間の根は PR を開いた記録から merge question を持ち、無人 merge キューに入らず、名前 human の agent の Quarantine も立たない —— pr_opened は actor human・origin board(pin C8・C16・C20)", async (_, resolveAuthority) => {
-  const { db, clock, github, landing, root } = await humanRoot("landing-human-root", { resolveAuthority });
+  const { workspace, db, clock, github, landing, root } = await humanRoot("landing-human-root", { resolveAuthority });
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+
+  expect(git(workspace.head_repo!, "rev-parse", `refs/heads/task/${root.id}`)).toBe(git(workspace.path, "rev-parse", `refs/heads/task/${root.id}`));
+  expect(git(workspace.repo!, "for-each-ref", "refs/heads/task/")).toBe("");
 
   expect(mergeQuestions(db)).toEqual([{ pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "merge", purpose: textC5Remote(1) }]);
   expect(listEventsOfKinds(db, ["pr_opened"]).map((e) => [e.task_id, e.actor_id, e.origin])).toEqual([[root.id, HUMAN_ACTOR_ID, "board"]]);

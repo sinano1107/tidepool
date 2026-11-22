@@ -36,6 +36,7 @@ import {
 } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  announceHeadRepo,
   dropWorkspaceState,
   holdsBaseline,
   mergeTaskToProtected,
@@ -64,7 +65,7 @@ import {
   git,
   HUMAN_WEBUI,
   leaveBaseline,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   prepareAtPickup,
   quarantineQuestion,
@@ -1151,7 +1152,7 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
 /** 完了した work の PR 昇格を失敗させ、人間が abandon promotion と答えた形。`askedTip: false` は tip を読めずに立った
  *  失敗 question への回答 —— 断った内容に tip が無い。 */
 async function abandonedPromotion(name: string, { askedTip = true } = {}) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const authority = { resolve: (): AuthorityProfile => profile("escalate") };
@@ -1386,7 +1387,7 @@ it("PR 昇格を abandon した後、workspace を解決できないまま内容
 // ADR 0241 決定3: 断念した根の守りは PR の有無によらない
 /** PR を開いた完了 work の修理の push を失敗させ、人間が abandon promotion と答えた形。 */
 async function abandonedPushToOpenPr(name: string) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const authority = { resolve: (): AuthorityProfile => profile("escalate") };
@@ -1526,8 +1527,8 @@ it("既定 workspace a で pickup した workspace 未指定の完了タスク�
 });
 
 it("既定 workspace a で pickup した workspace 未指定のタスクの PR 昇格は、既定を b に差し替えた盤面でも a のタスクブランチから PR を開く", async () => {
-  const { workspace: a } = await makeRemoteBackedWorkspace("landing-pinned-land-a");
-  const { workspace: b } = await makeRemoteBackedWorkspace("landing-pinned-land-b");
+  const { workspace: a } = await makeLandingWorkspace("landing-pinned-land-a");
+  const { workspace: b } = await makeLandingWorkspace("landing-pinned-land-b");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const done = pickedUpAndCompleted(db, clock, "tako", a);
@@ -1758,7 +1759,7 @@ async function mergedOutsideOpenPr(name: string, quarantine = false) {
 
 /** 作成の後・記録の前に落ち、その PR が盤面の外で merge された根。 */
 async function mergedOutsideFoundPr(name: string, quarantine = false) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1890,7 +1891,7 @@ it.each<[string, StopBeforePr]>([
   ["quarantine", (db, clock, workspace) => quarantineWorkspace(db, workspace.name, new Error("repair"), clock.now())],
   ["failure-question", (db, clock, _, task) => registerPrPromotionFailureQuestion(db, task, "push failed", clock.now())],
 ])("PR を開く前に %s で止まっている根の着地の状態は null", async (stoppedBy, stop) => {
-  const { workspace } = await makeRemoteBackedWorkspace(`landing-state-stopped-${stoppedBy}`);
+  const { workspace } = await makeLandingWorkspace(`landing-state-stopped-${stoppedBy}`);
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient() });
   const task = landingWork(db, clock);
@@ -1906,7 +1907,7 @@ it.each<[string, StopBeforePr]>([
 
 /** 着地の比較(ADR 0370 決定1)の題材: 盤面の経路(pickup と解放)で基準を持ち、完了した根。 */
 async function doneRootWithBaseline(name: string) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1969,7 +1970,7 @@ it("着地の比較: 何も動いていなければ、盤面自身の push と f
 });
 
 it("着地の比較: 運ぶ内容の無い根は、ref が動いていれば nothing_to_land を刻まない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-compare-nothing");
+  const { workspace } = await makeLandingWorkspace("landing-compare-nothing");
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient() });
   const work = landingWork(db, clock);
@@ -2189,6 +2190,7 @@ it("着地の比較: 削除の扉が読む hold の内容の比較は、基準�
 it("着地の比較: 基準の行が無い workspace は最初の撮りをして着地し、その後の移動を捕まえる", async () => {
   const { workspace, db, github, landing, work } = await doneRootWithBaseline("landing-compare-first-capture");
   dropWorkspaceState(db, workspace.name);
+  announceHeadRepo(db, workspace, workspace.head_repo);
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
   expect(holdsBaseline(db, workspace.name)).toBe(true);
@@ -2200,7 +2202,7 @@ it("着地の比較: 基準の行が無い workspace は最初の撮りをして
 
 /** 基準の行の無い根の workspace(`rowless`)と、基準の行を持つもう1つの workspace(`held`)が registry に並ぶ盤面。 */
 async function rowlessRootBesideHeldWorkspace(name: string, resolveHeld?: () => WorkspaceConfig) {
-  const { workspace: rowless } = await makeRemoteBackedWorkspace(`${name}-rowless`);
+  const { workspace: rowless } = await makeLandingWorkspace(`${name}-rowless`);
   const held = await makeWorkspace(`${name}-held`);
   const { db, clock } = await openBoard();
   await leaveBaseline(db, held);
@@ -2278,6 +2280,7 @@ it("着地の比較: 最初の撮りの確認が registry を読めなければ�
 it("着地の比較: 行の無い名前自身の Quarantine の間は最初の撮りをせず、その名前で待つ", async () => {
   const { workspace, db, clock, github, landing, work } = await doneRootWithBaseline("landing-compare-own-quarantine");
   dropWorkspaceState(db, workspace.name);
+  announceHeadRepo(db, workspace, workspace.head_repo);
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });
@@ -2294,7 +2297,7 @@ it("着地の比較: 行の無い名前自身の Quarantine の間は最初の�
 });
 
 it("着地の比較: 積み残しの retry は、保護ブランチの fetch を待つ間に動いた ref があれば merge back を撃ち直さない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-compare-retry-wait");
+  const { workspace } = await makeLandingWorkspace("landing-compare-retry-wait");
   const { db, clock } = await openBoard();
   const window = awaitWindow();
   let holdFetch = false;
@@ -2338,7 +2341,7 @@ it("着地の比較: hold した内容のままの根も、別の ref が動い�
 
 /** fork 元(親)が squash で着地した後に完了した修理の根 —— 収束は親を内容で終え、同じ回で修理を根にして追いつかせる。`prNumber` があれば修理の根自身の PR が開いている。 */
 async function outlivedRootWithBaseline(name: string, prNumber?: number) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });

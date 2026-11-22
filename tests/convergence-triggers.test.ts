@@ -14,7 +14,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   queueWork,
   registerWork,
   settleReviews,
@@ -61,7 +61,7 @@ function silentlyCompletedRoot(board: Tidepool, workspace: WorkspaceConfig) {
 }
 
 it("後始末の途中で落ちた盤面は、再起動で後始末を完走し、その後の起動の収束で着地してから最初の pickup を判定する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("restart-converge");
+  const { workspace } = await makeLandingWorkspace("restart-converge");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
@@ -90,7 +90,7 @@ it("後始末の途中で落ちた盤面は、再起動で後始末を完走し�
 
 // #1766: 後始末が印を消した後、着地の前に落ちた盤面
 it("後始末が印を消した後、着地の前に落ちた盤面は、再起動の収束で着地する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("restart-after-teardown");
+  const { workspace } = await makeLandingWorkspace("restart-after-teardown");
   t = await bootTidepool({ workspace });
   const root = silentlyCompletedRoot(t, workspace);
   await t.stopServer();
@@ -105,7 +105,7 @@ it.each([
   ["毎時のティック", () => t.clock.advance(HOUR)],
   ["人間の run now", (next: string) => api(t.baseUrl, "POST", `/api/tasks/${next}/move`, { after: null })],
 ] as const)("%s は収束を突き、pickup は走っている収束が終わってから判定する", async (_, trigger) => {
-  const { workspace } = await makeRemoteBackedWorkspace("trigger-converge");
+  const { workspace } = await makeLandingWorkspace("trigger-converge");
   const { github, window, creating } = heldGitHub();
   t = await bootTidepool({ workspace, github });
   const root = silentlyCompletedRoot(t, workspace);
@@ -126,7 +126,7 @@ it.each([
 
 // GLOSSARY.md「収束」: 同じ checkout で pickup の fetch・checkout と着地の push が重ならない —— 逆向きも同じ
 it("poll が走っている間に届いた契機の収束は、その poll が終わってから走る", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("converge-after-poll");
+  const { workspace } = await makeLandingWorkspace("converge-after-poll");
   const poll = awaitWindow();
   let holdPoll = false;
   t = await bootTidepool({
@@ -155,7 +155,7 @@ it("poll が走っている間に届いた契機の収束は、その poll が�
 
 // issue #1851: `stop()` の resolve は「盤面がもう何も書かない」—— 走っている収束の回を待ってから DB を閉じる
 it("収束の回が根の処理中に呼んだ stop は、その回が終わるまで resolve せず、回の記録は DB に残る", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("stop-awaits-convergence");
+  const { workspace } = await makeLandingWorkspace("stop-awaits-convergence");
   const { github, window } = heldGitHub();
   t = await bootTidepool({ workspace, github });
   const root = silentlyCompletedRoot(t, workspace);
