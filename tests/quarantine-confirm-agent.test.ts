@@ -10,7 +10,7 @@ import {
   completeViaMcp,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   questions,
   queueWork,
   registerWork,
@@ -113,7 +113,7 @@ it("registry にエントリはあるが定義が成立しない agent 名の qu
 
 // ADR 0241 決定5・6: quarantine の受理は回答なので収束を突く —— quarantine が抱えていた根は失敗 question を持たないまま着地する
 it("PR を開く時点で profile が読めず agent 名の quarantine が抱えていた根は、registry を直して quarantine に答えると、その受理の後の収束で PR が開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("quarantine-confirm-agent-lands");
+  const { workspace } = await makeLandingWorkspace("quarantine-confirm-agent-lands");
   let repaired = false;
   t = await bootTidepool({
     workspace,

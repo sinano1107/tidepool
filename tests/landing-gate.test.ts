@@ -13,7 +13,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   mcpClient,
   questions,
@@ -71,7 +71,7 @@ it("purely-local: 未決着の付帯子がある間は着地 question を立て�
 });
 
 it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決着後に PR と merge question が立つ", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
@@ -97,7 +97,7 @@ it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決�
 });
 
 it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら auto-merge キューに入らず、決着後に無人 merge へ進む", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
@@ -125,7 +125,7 @@ it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら a
 });
 
 it("remote-backed(external): 付帯子の決着後に PR が開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "external" }),
@@ -387,7 +387,7 @@ async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<v
 /** Complete an external-dial work task while an objection against its running
  *  session is still waiting for triage to bundle it. */
 async function completeObjectedExternalWorkAndExpectNoPr(): Promise<any> {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "external" }),
@@ -581,7 +581,7 @@ it("分解子の判断への異議も親の着地 question を 409 にし、comm
 });
 
 it("PR の merge question も同じ検証を通る — 未決着の付帯子があれば CI も見ずに 409", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),

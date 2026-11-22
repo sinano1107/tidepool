@@ -14,7 +14,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace, makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -223,7 +223,7 @@ it("走行中の session が開く workspace の修復回答は休止操作の�
 
 // ADR 0241 決定5・6: workspace の quarantine の受理は回答なので収束を突く —— quarantine が抱えていた根は失敗 question を持たないまま着地する
 it("workspace の quarantine が抱えていた根は、その quarantine に答えると、受理の後の収束で PR が開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("quarantine-confirm-workspace-lands");
+  const { workspace } = await makeLandingWorkspace("quarantine-confirm-workspace-lands");
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship reviewable work");
   await t.clock.advance(HOUR);

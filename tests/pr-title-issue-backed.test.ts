@@ -8,7 +8,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   HUMAN_WEBUI,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   mcpClient,
   type Tidepool,
 } from "./harness.js";
@@ -30,7 +30,7 @@ const fullHandoff = {
 };
 
 it("issue参照タスクの complete_task 成立後、PR の title は GitHub の issue タイトルを解決したものになる(issue #49, ADR 0016: PR titleでのlive展開)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const task = registerTask(

@@ -8,7 +8,7 @@ import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -24,7 +24,7 @@ afterEach(async () => {
 
 it("prod workspace のタスクを complete すると、PR は sandbox ではなく prod の checkout に向けて作られる", async () => {
   const sandbox = await makeWorkspace("sandbox");
-  const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
+  const { workspace: prod } = await makeLandingWorkspace("prod");
   t = await bootTidepool({
     workspace: sandbox,
     resolveWorkspace: defaultingTo(sandbox, prod),

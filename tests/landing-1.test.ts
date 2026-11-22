@@ -42,7 +42,7 @@ import {
   git,
   HUMAN_WEBUI,
   leaveBaseline,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   prepareAtPickup,
   quarantineQuestion,
@@ -63,6 +63,7 @@ import {
   completeThroughTaskCheckout,
   convergeOn,
   finish,
+  forkHead,
   HUMAN_ANSWERER,
   landingWork,
   mergeOnGitHub,
@@ -70,7 +71,6 @@ import {
   openBoard,
   openPromotionQuestions,
   openPushedPr,
-  originHead,
   profile,
   promotionFailures,
   pushPrHead,
@@ -86,7 +86,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 // ADR 0241 決定1: 着地は入口が名指しせず、収束が記録と内容から根を導いて撃つ
 it("収束は、保護ブランチへ帰る done の work を根に導いて PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-converge-root");
+  const { workspace } = await makeLandingWorkspace("landing-converge-root");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -104,7 +104,7 @@ it("収束は、保護ブランチへ帰る done の work を根に導いて PR 
 const PUSH_PATHS = ["new PR", "found open PR", "recorded open PR"] as const;
 
 async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAuthority?: () => AuthorityProfile) {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-push-recheck");
+  const { workspace } = await makeLandingWorkspace("landing-push-recheck");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = landingWork(db, clock);
@@ -113,7 +113,7 @@ async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAutho
   finish(db, clock, work);
   if (path !== "new PR") {
     // PR の head は実在し、origin に載っている(ADR 0376 決定1)
-    git(workspace.path, "push", "origin", `task/${work.id}`);
+    git(workspace.path, "push", "head-repo", `task/${work.id}`);
     const number = github.scriptPullRequestOnBranch(`task/${work.id}`);
     if (path === "recorded open PR") {
       recordPrOpened(db, work, number, git(workspace.path, "rev-parse", "HEAD"), "worker", clock.now(), undefined, undefined, "worker");
@@ -297,7 +297,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
 });
 
 it("squash 済みで内容差が無い work は commit 差が残っていても着地しない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-squashed");
+  const { workspace } = await makeLandingWorkspace("landing-squashed");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -327,7 +327,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
 
 // ADR 0240 決定2: 失敗 question が開いている根は、人間の回答を先回りしない。retry の回だけが門を読む
 it("失敗 question が開いている根は収束が撃たず、retry の回が門で止まれば failure question を開いたままにして GitHub を再試行しない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-deferred");
+  const { workspace } = await makeLandingWorkspace("landing-deferred");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("first promotion failed"));
@@ -422,7 +422,7 @@ it("またいだセッションが偽造した remote ref は、purely-local の
   checkoutTaskBranch(db, workspace, task.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
-  const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
+  const remoteTaskRef = `refs/remotes/head-repo/task/${task.id}`;
 
   await straddle(
     db,
@@ -436,7 +436,7 @@ it("またいだセッションが偽造した remote ref は、purely-local の
 });
 
 it("GitHub の無い remote-backed work は閉じた理由で失敗し failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-no-github");
+  const { workspace } = await makeLandingWorkspace("landing-no-github");
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const task = registerTask(
@@ -468,7 +468,7 @@ it("GitHub の無い remote-backed work は閉じた理由で失敗し failure q
 });
 
 it("remote-backed work は PR を開いた面を返す", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-pr");
+  const { workspace } = await makeLandingWorkspace("landing-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -499,7 +499,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
 });
 
 it("open PR を持つ work の修理は同じ PR の branch を更新する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-open-pr");
+  const { workspace } = await makeLandingWorkspace("landing-open-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -531,7 +531,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
 
 // ADR 0378 決定8: the destination check raises Quarantine even when a tick ignores a failed PR read.
 it.each(["rewritten", "removed"] as const)("quarantines a workspace when its open PR's repo declaration is %s", async (drift) => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-repo-drift");
+  const { workspace } = await makeLandingWorkspace("landing-repo-drift");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   let current = workspace;
@@ -569,7 +569,7 @@ it.each(["rewritten", "removed"] as const)("quarantines a workspace when its ope
 });
 
 it("checks the repo before convergence can mistake a descendant's open PR for work that still returns to its ancestor", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-repo-drift-descendant");
+  const { workspace } = await makeLandingWorkspace("landing-repo-drift-descendant");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   let current = workspace;
@@ -595,7 +595,7 @@ it("checks the repo before convergence can mistake a descendant's open PR for wo
 });
 
 it("open PR への push をまたぐ session は盤面の push を違反に数えず、名前の場所の帯域外の tag は収束の比較が名指して止め、worker の task の checkout の tag は読まない(ADR 0356 決定4 / ADR 0370 決定1)", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-announce-fold");
+  const { workspace } = await makeLandingWorkspace("landing-announce-fold");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -640,7 +640,7 @@ it("open PR への push をまたぐ session は盤面の push を違反に数�
 });
 
 it("merge 済み PR に残った修理は閉じた理由で失敗し failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-merged-pr");
+  const { workspace } = await makeLandingWorkspace("landing-merged-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -692,7 +692,7 @@ it.each([
 
 // ADR 0241 決定3: 盤面の外で閉じられた PR には push せず、閉じたことを観測として刻む(#1734)
 it("盤面の外で閉じた PR を持つ根の収束は push せず、閉じた観測を1件だけ刻み、着地したと返さず失敗 question も立てない。次の回からは候補に入らず、retry は閉じたことを理由に拒まれる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-pr");
+  const { workspace } = await makeLandingWorkspace("landing-closed-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -722,7 +722,7 @@ it("盤面の外で閉じた PR を持つ根の収束は push せず、閉じた
 });
 
 it("無人 merge キューにいる閉じた PR は、収束が閉じた観測を刻んだ後の tick で観測を重ねない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-queued-pr");
+  const { workspace } = await makeLandingWorkspace("landing-closed-queued-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
@@ -741,7 +741,7 @@ it("無人 merge キューにいる閉じた PR は、収束が閉じた観測�
 });
 
 it("執行側が印を取っている閉じた PR は、収束が観測を刻まず、印を放した後の tick が1件だけ刻む", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-marked-pr");
+  const { workspace } = await makeLandingWorkspace("landing-closed-marked-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
@@ -763,7 +763,7 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
 
 /** 開いている PR を持つ根。fake の push は転送の**後**に失敗する —— 写しは動いたのに失敗と報告される形。 */
 async function openPrWhosePushFailsAfterTransfer(name: string) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptPushFailure(new Error("push rejected"));
@@ -791,7 +791,7 @@ async function openPrWhosePushFailsAfterTransfer(name: string) {
       reason: "promotion_failed",
       error: "push rejected",
     });
-  return { workspace, db, clock, github, task, pushFailed, remoteTaskRef: `refs/remotes/origin/task/${task.id}` };
+  return { workspace, db, clock, github, task, pushFailed, remoteTaskRef: `refs/remotes/head-repo/task/${task.id}` };
 }
 
 // ADR 0243 決定2: 畳みは ref を読み返した2択なので、失敗の報告のされ方に依らず、転送が済んでいれば押した値に畳む
@@ -800,6 +800,10 @@ it("転送の後に失敗と報告された open PR branch の push は failure 
 
   await straddle(db, clock, workspace, pushFailed);
 
+  expect(latestEventOfTask(db, task.id, "pr_branch_pushed")?.payload).toEqual({
+    kind: "pr_branch_pushed", pr_number: 1, sha: git(workspace.path, "rev-parse", `task/${task.id}`),
+  });
+  expect(git(workspace.repo!, "for-each-ref", "refs/heads/task/")).toBe("");
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({ question_pending_pr_promotion_task_id: task.id }),
   );
@@ -834,21 +838,20 @@ it("push の後・畳みの前に worker が写しを偽造すれば、偽造は
 });
 
 // ADR 0334 決定1・4: 着地の push は同期のまま(ADR 0243)無音で投げ、口は実 ref を読んで基準を畳む
-it("origin が返らない push は何秒の無音で切れたかを書いて投げ、基準は予告の前の値に畳まれる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-push-hangs");
+it("出元 repo が返らない push は何秒の無音で切れたかを書いて投げ、基準は予告の前の値に畳まれる", async () => {
+  const { workspace } = await makeLandingWorkspace("landing-push-hangs");
   const { db, clock } = await openBoard();
-  const ref = "refs/remotes/origin/task/pushed";
+  const ref = "refs/remotes/head-repo/task/pushed";
   git(workspace.path, "branch", "task/pushed");
   const pushed = git(workspace.path, "rev-parse", "task/pushed");
   const elsewhere = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "elsewhere");
   // 返らない origin: hook は自分の pid を残して眠る —— 投げた後に殺し、test の後始末まで生き残らせない
-  const hookPid = join(workspace.repo!, "hook.pid");
-  const remote = await startGitHttpRemote(workspace.repo!, "stall-push");
-  git(workspace.path, "remote", "set-url", "origin", remote);
+  const hookPid = join(workspace.head_repo!, "hook.pid");
+  const remote = await startGitHttpRemote(workspace.head_repo!, "stall-push");
   const client = new GhCliClient(new GitHubAuth(join(workspace.path, "no-token")), { timeoutMs: 1000 });
 
   await straddle(db, clock, workspace, async () => {
-    const push = await client.preparePush({ workspace: { ...workspace, repo: remote }, branch: "task/pushed" });
+    const push = await client.preparePush({ workspace: { ...workspace, head_repo: remote }, branch: "task/pushed" });
     expect(() => boardRefWriter(db, workspace)(ref, pushed, () => push(pushed))).toThrow(/^`git push` stalled: no bytes for 1 s/);
     process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL");
     // 畳みの後に写しが3つ目の値へ動く —— 予告の行が2値のまま残っていれば `was: |<押した値>` が載る
@@ -867,9 +870,9 @@ it.each<[string, boolean, (path: string, ref: string, announced: string, elsewhe
   ["予告の前の値(無い)のまま", false, () => {}],
   ["どちらでもない値へ動いた", true, (path, ref, _announced, elsewhere) => git(path, "update-ref", ref, elsewhere)],
 ])("予告だけを残して盤面が落ち、ref が%s解放は quarantine=%s", async (_, quarantined, move) => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-crash-after-announce");
+  const { workspace } = await makeLandingWorkspace("landing-crash-after-announce");
   const { db, clock } = await openBoard();
-  const ref = "refs/remotes/origin/task/pushed-by-the-board";
+  const ref = "refs/remotes/head-repo/task/pushed-by-the-board";
   const announced = git(workspace.path, "rev-parse", "HEAD");
   const elsewhere = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "elsewhere");
   const running = landingWork(db, clock);
@@ -889,7 +892,7 @@ it.each<[string, boolean, (path: string, ref: string, announced: string, elsewhe
 
 // 畳みの失敗が書き込みの失敗を置き換えれば、人間に届く理由が git の理由ではなくなる
 it("書き込みが投げた後に畳みも落ちれば、口は書き込みの失敗のほうを投げる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-fold-fails");
+  const { workspace } = await makeLandingWorkspace("landing-fold-fails");
   const { db, clock } = await openBoard();
   await prepareAtPickup(db, workspace, landingWork(db, clock));
   const write = () => {
@@ -897,14 +900,14 @@ it("書き込みが投げた後に畳みも落ちれば、口は書き込みの�
     throw new Error("push rejected");
   };
 
-  expect(() => writeBoardRefs(db, workspace, [["refs/remotes/origin/task/x", git(workspace.path, "rev-parse", "HEAD")]], write)).toThrow(
+  expect(() => writeBoardRefs(db, workspace, [["refs/remotes/head-repo/task/x", git(workspace.path, "rev-parse", "HEAD")]], write)).toThrow(
     "push rejected",
   );
 });
 
 // ADR 0243 決定3: 写しを進める fetch は原本の sha を先に知ってから予告し、その sha だけを取って写しを書く
 it("収束前の保護ブランチの fetch は写しを原本の sha へ進め、基準をその1値に畳み、refs/ に写し以外の差を残さない", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace("landing-split-fetch");
+  const { workspace, publish } = await makeLandingWorkspace("landing-split-fetch");
   const { db, clock } = await openBoard();
   const running = landingWork(db, clock);
   const place = await prepareAtPickup(db, workspace, running);
@@ -927,7 +930,7 @@ it("収束前の保護ブランチの fetch は写しを原本の sha へ進め�
 });
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-pr-failure");
+  const { workspace } = await makeLandingWorkspace("landing-pr-failure");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
@@ -963,7 +966,7 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
 // ADR 0241 決定4: PR は作る前に、同じタスクブランチの PR を探す。ADR 0376 決定1〜3: 見つけた PR の head は探す読みが返す —— 盤面が最後に
 // push した値(写し)のままなら、その上に今のタスクブランチを押す
 it("GitHub に同じ head の開いた PR がある根の着地は PR を作らず、その head が盤面の push した値のままなら落ちた後に帰った修理ごと押し、番号を記録して merge question を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-find-open-pr");
+  const { workspace } = await makeLandingWorkspace("landing-find-open-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
@@ -971,7 +974,7 @@ it("GitHub に同じ head の開いた PR がある根の着地は PR を作ら�
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
   // 盤面が push して PR を作り、番号を記録する前に落ちた
-  git(workspace.path, "push", "origin", `task/${work.id}`);
+  git(workspace.path, "push", "head-repo", `task/${work.id}`);
   const existing = github.scriptPullRequestOnBranch(`task/${work.id}`);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, work);
@@ -982,30 +985,36 @@ it("GitHub に同じ head の開いた PR がある根の着地は PR を作ら�
   expect(mergeQuestions(db).map(({ pr }) => pr)).toEqual([existing]);
   // 作ったときと同じく、タスクブランチの今の内容を押してから記録する —— 落ちた後に帰った修理も PR に載る
   expect(github.pushes.map(({ branch }) => branch)).toEqual([`task/${work.id}`]);
-  expect(git(workspace.path, "rev-parse", `origin/task/${work.id}`)).toBe(git(workspace.path, "rev-parse", "HEAD"));
-  expect(originHead(workspace, work.id)).toBe(git(workspace.path, "rev-parse", "HEAD"));
+  expect(git(workspace.path, "rev-parse", `head-repo/task/${work.id}`)).toBe(git(workspace.path, "rev-parse", "HEAD"));
+  expect(forkHead(workspace, work.id)).toBe(git(workspace.path, "rev-parse", "HEAD"));
 });
 
-it("PR の作成の後・記録の前に盤面が落ちた根(GitHub にだけ PR がある)の着地は、作成を呼ばず失敗 question も立てない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-find-unrecorded-pr");
+it("retry rediscovers the fork PR after its creation response is lost", async () => {
+  const { workspace } = await makeLandingWorkspace("landing-find-unrecorded-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  git(workspace.path, "push", "origin", `task/${work.id}`);
-  github.scriptPullRequestOnBranch(`task/${work.id}`);
   finish(db, clock, work);
 
-  await landing.converge();
+  const create = github.createPullRequest.bind(github);
+  vi.spyOn(github, "createPullRequest").mockImplementationOnce(async (input) => {
+    await create(input);
+    throw new Error("the creation response was lost");
+  });
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  const [failure] = promotionFailures(db, work.id);
 
-  expect(github.requests).toEqual([]);
-  expect(promotionFailures(db, work.id)).toEqual([]);
+  await expect(answerPromotion(db, clock, landing, workspace, failure!, "retry")).resolves.toMatchObject({ status: "done" });
+  expect(github.requests).toHaveLength(1);
+  expect(getTask(db, work.id)?.pr_number).toBe(1);
+  expect(git(workspace.repo!, "for-each-ref", "refs/heads/task/")).toBe("");
 });
 
 it("GitHub に同じ head の merge 済み PR がある根の着地は、番号と merge の観測を刻み、失敗 question を1枚立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-find-merged-pr");
+  const { workspace } = await makeLandingWorkspace("landing-find-merged-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1026,7 +1035,7 @@ it("GitHub に同じ head の merge 済み PR がある根の着地は、番号�
 });
 
 it("GitHub に同じ head の閉じた PR がある根の着地は、番号と閉じた観測を刻み、PR を作らず失敗 question も立てない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-find-closed-pr");
+  const { workspace } = await makeLandingWorkspace("landing-find-closed-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1045,7 +1054,7 @@ it("GitHub に同じ head の閉じた PR がある根の着地は、番号と�
 });
 
 it("同じ head の PR を探す読み取りが失敗した根の着地は、PR を作らず失敗 question に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-find-failure");
+  const { workspace } = await makeLandingWorkspace("landing-find-failure");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFindFailure(new Error("gh pr list failed"));
@@ -1088,7 +1097,7 @@ it("workspace 不在は閉じた理由で返す", async () => {
 });
 
 it("retry 時の registry drift は workspace の quarantine を名乗る verdict を返し、既存の failure question を引退させない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-registry-drift");
+  const { workspace } = await makeLandingWorkspace("landing-registry-drift");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   let drifted = false;
@@ -1216,7 +1225,7 @@ it("着地判定の Git failure も throw せず閉じた失敗 verdict と ques
 });
 
 it("着地成立は積み上がった failure question を引退させ、回答中の1件だけ除外する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-retirement");
+  const { workspace } = await makeLandingWorkspace("landing-retirement");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
@@ -1254,7 +1263,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
 });
 
 it("retry の時点で運ぶ内容が無ければ回答を受理し、着地対象なしを1件だけ刻んで兄弟の failure question を引退させる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-retry-nothing");
+  const { workspace } = await makeLandingWorkspace("landing-retry-nothing");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
@@ -1315,7 +1324,7 @@ it("未束ねの異議がある work は同じ門で理由と数を返す", asyn
 });
 
 it("収束は open PR を持つ根を更新し、ローカル着地の question を持つ根は撃たない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-ancestors");
+  const { workspace } = await makeLandingWorkspace("landing-ancestors");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1376,7 +1385,7 @@ it("収束は open PR を持つ根を更新し、ローカル着地の question 
 
 // ADR 0241 決定2 / ADR 0106 決定7: 着地の書き込みは盤面で1本の列を流れる —— 並走の窓(#412・#1835)そのものが無い
 it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の途中の突きは束ねられて、その後にちょうど1回走る", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-lane");
+  const { workspace } = await makeLandingWorkspace("landing-lane");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const window = awaitWindow();
@@ -1442,7 +1451,7 @@ it("stop の後の収束は回を始めず空を返す", async () => {
 });
 
 it("stop の時点で走っている回と列に入った回は走り切り、stop はその後に解ける", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-stop-drains");
+  const { workspace } = await makeLandingWorkspace("landing-stop-drains");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const window = awaitWindow();
@@ -1529,7 +1538,7 @@ it("retry の回が答えている question を読めずに reject しても、�
 });
 
 it("人間が担当して完了した work は根にならず、何も撃たれない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-human-work");
+  const { workspace } = await makeLandingWorkspace("landing-human-work");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1548,7 +1557,7 @@ it("人間が担当して完了した work は根にならず、何も撃たれ�
 
 // ADR 0240 決定2: 後始末が未了の行と、その行が着地し直す祖先は、その後始末の分なので外す
 it("後始末が未了の行を木に持つ根は、収束が撃たない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-teardown-unfinished");
+  const { workspace } = await makeLandingWorkspace("landing-teardown-unfinished");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1867,7 +1876,7 @@ it("断念した根の PR が盤面の外で閉じられたと観測されてい
 });
 
 it("閉じた PR を初めて読んだ根は、追いつきの merge をせずにタスクブランチを残す", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-no-catch-up");
+  const { workspace } = await makeLandingWorkspace("landing-closed-no-catch-up");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1893,7 +1902,7 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge をせず�
 });
 
 it("nothing_to_land を刻んだ根の子の修理は根のブランチへ帰らず、自分で根になって着地する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-nothing-then-repair");
+  const { workspace } = await makeLandingWorkspace("landing-nothing-then-repair");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1918,7 +1927,7 @@ it("nothing_to_land を刻んだ根の子の修理は根のブランチへ帰ら
 
 // 根かどうか読めない候補は、黙って飛ばさず、その根の失敗として人間に見せる(着地の module の旧 land() と同じ結果)
 it("workspace を解決できない、親を持つ完了 work は、workspace を quarantine に落とし、失敗 question を立てない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-child-unresolvable");
+  const { workspace } = await makeLandingWorkspace("landing-child-unresolvable");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({
@@ -1950,7 +1959,7 @@ it("workspace を解決できない、親を持つ完了 work は、workspace �
 });
 
 it("lineage が読めない完了 work は、その根の失敗として失敗 question を1枚立て、他の根は着地する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-lineage-unreadable");
+  const { workspace } = await makeLandingWorkspace("landing-lineage-unreadable");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -1975,7 +1984,7 @@ it("lineage が読めない完了 work は、その根の失敗として失敗 q
 });
 
 it("完了した親のタスクブランチが失われて死んでいれば、子は帰り先なしで着地の根にならず失敗 question も立たず、他の根は着地する(ADR 0380 決定3)", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-lineage-lost-parent");
+  const { workspace } = await makeLandingWorkspace("landing-lineage-lost-parent");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });

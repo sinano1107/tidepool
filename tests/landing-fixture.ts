@@ -39,9 +39,10 @@ import {
   FULL_HANDOFF,
   git,
   HUMAN_WEBUI,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   prepareAtPickup,
+  rememberFixtureHeadRepos,
   settleReviews,
   squashTaskIntoOrigin,
 } from "./harness.js";
@@ -59,6 +60,7 @@ afterEach(async () => {
 export async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
   const boardDir = await tempDir("tidepool-landing-");
   const database = openDb(join(boardDir, "board.sqlite"));
+  rememberFixtureHeadRepos(database);
   opened = database;
   return { db: database, clock: new FakeClock() };
 }
@@ -76,19 +78,19 @@ export function recordPrOpenedViaWorker(
   recordPrOpened(db, task, prNumber, head, actorId, now, authority, isProtected, "worker");
 }
 
-/** PR #`prNumber` の実在する head を作る: 今のタスクブランチの先端を origin へ push し、GitHub にその PR を置いて sha を返す。この後に
+/** PR #`prNumber` の実在する head を作る: 今のタスクブランチの先端を出元 repo へ push し、GitHub にその PR を置いて sha を返す。この後に
  *  ブランチへ載る commit が、盤面のまだ push していない内容になる。写しは書かない —— 記録済みの PR の最後に push した値は記録から読む
  *  (ADR 0376 決定3)。git の版によっては URL への push でも写しが動くので、push の前の写しへ戻す(CI の git 2.56 で、
  *  写しの無い前提のテストが落ちた)。 */
 export function pushPrHead(github: FakeGitHubClient, workspace: WorkspaceConfig, taskId: string, prNumber: number): string {
-  const copy = `refs/remotes/origin/task/${taskId}`;
+  const copy = `refs/remotes/head-repo/task/${taskId}`;
   let before: string | null = null;
   try {
     before = git(workspace.path, "rev-parse", "--verify", "--quiet", copy);
   } catch {
     // 写しが無い
   }
-  git(workspace.path, "push", workspace.repo!, `task/${taskId}`);
+  git(workspace.path, "push", workspace.head_repo!, `task/${taskId}`);
   if (before === null) git(workspace.path, "update-ref", "-d", copy);
   else git(workspace.path, "update-ref", copy, before);
   github.scriptPullRequestOnBranch(`task/${taskId}`, prNumber);
@@ -180,7 +182,7 @@ export const settle = () => new Promise((resolve) => setImmediate(resolve));
 // ADR 0241 決定1(spec #1839 A): merge 済みの PR の根は、根自身のブランチを保護ブランチと比べる
 /** 収束が PR #1 を開いた根。checkout は根のタスクブランチに残る。 */
 export async function rootWithOpenedPr(name: string) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -192,12 +194,13 @@ export async function rootWithOpenedPr(name: string) {
   return { workspace, db, clock, github, landing, root: getTask(db, root.id)! };
 }
 
-/** GitHub が PR を merge する —— origin 側のタスクブランチ(PR の head)を origin の保護ブランチへ squash する。
+/** GitHub が PR を merge する —— 出元 repo のタスクブランチ(PR の head)を origin の保護ブランチへ squash する。
  *  手元の保護ブランチの写しは動かさない(盤面が fetch するまで古い)。 */
 export async function mergeOnGitHub(workspace: WorkspaceConfig, taskId: string) {
   const merger = await tempDir("tidepool-github-merge-");
   git(merger, "clone", workspace.repo!, ".");
-  git(merger, "merge", "--squash", `origin/task/${taskId}`);
+  git(merger, "fetch", workspace.head_repo!, `task/${taskId}`);
+  git(merger, "merge", "--squash", "FETCH_HEAD");
   git(merger, "commit", "-m", "squash the PR on GitHub");
   git(merger, "push", "origin", "main");
 }
@@ -205,7 +208,7 @@ export async function mergeOnGitHub(workspace: WorkspaceConfig, taskId: string) 
 /** 追いつきの conflict(H6): fork 元が squash 着地した後、origin の保護ブランチが修理と同じ行を変えた根。`openFailure` なら収束の前に
  *  別の失敗で昇格失敗 question が開いている(回答が先に conflict に当たる)。 */
 export async function catchUpConflictRoot(name: string, { openFailure = false, undeliveredChild = false } = {}) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const workbenchBase = await tempDir("tidepool-task-checkouts-");
@@ -260,12 +263,12 @@ export async function catchUpConflictRoot(name: string, { openFailure = false, u
 
 /** spec #3273 text D2 の全文 —— origin の `target` が `head` へ巻き戻され、盤面が最後に push した値 `pushed` を持たない。 */
 export const textD2 = (workspace: WorkspaceConfig, target: string, pushed: string, head: string, foundPr?: number) =>
-  `origin's ${target} was rewound outside the board: it is at ${head} and no longer contains ${pushed}, which the board pushed. The board does not push over a rewind. ` +
-  `Either push the dropped commits back to origin's ${target} (a fast-forward from ${head} to ${pushed}; those commits are in the board's checkout at ${workspace.path} — ` +
-  `fetch them from there into your clone, and never push from there), or delete origin's ${target} and the board re-creates it` +
+  `head repo ${workspace.head_repo}'s ${target} was rewound outside the board: it is at ${head} and no longer contains ${pushed}, which the board pushed. The board does not push over a rewind. ` +
+  `Either push the dropped commits back to head repo ${workspace.head_repo}'s ${target} (a fast-forward from ${head} to ${pushed}; those commits are in the board's checkout at ${workspace.path} — ` +
+  `fetch them from there into your clone, and never push from there), or delete head repo ${workspace.head_repo}'s ${target} and the board re-creates it` +
   `${foundPr === undefined ? "" : ` — deleting it closes PR #${foundPr}`}. Then answer \`retry\`.`;
 
-/** ADR 0376: origin に `task/<root>` が載っている根 —— 盤面の push だけが載り、写しはその値。`pr` が無ければ PR も event も無い(push の後に
+/** ADR 0376: 出元 repo に `task/<root>` が載っている根 —— 盤面の push だけが載り、写しはその値。`pr` が無ければ PR も event も無い(push の後に
  *  PR の作成が落ちた根の形。publish の push が残す形は、下でその扉を実際に通す)。`found` は GitHub にだけ PR #1 がある(作成の後・記録の前に落ちた盤面)。`recorded` は
  *  PR #1 を記録した後に、盤面の経路で根のブランチへ届いた未 push の修理を持つ。名前の場所は保護ブランチに休む。`openFailure` なら別の失敗で
  *  昇格失敗 question が開いている。 */
@@ -288,7 +291,7 @@ export async function pushedRoot(
     recordedSha?: string;
   } = {},
 ) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const workbenchBase = await tempDir("tidepool-task-checkouts-");
@@ -300,7 +303,7 @@ export async function pushedRoot(
   const target = `task/${work.id}`;
   git(workspace.path, "checkout", "-b", target);
   for (let n = 1; n <= commits; n++) commitWork(workspace.path, `feature-${n}.txt`, "ready\n");
-  git(workspace.path, "push", "origin", target);
+  git(workspace.path, "push", "head-repo", target);
   git(workspace.path, "checkout", "main");
   finish(db, clock, work);
   const pushed = git(workspace.path, "rev-parse", target);
@@ -315,7 +318,7 @@ export async function pushedRoot(
   const workbench = () => realpathSync(workbenchAt);
   /** spec #3273 text D1 の全文。 */
   const d1 = (head: string) =>
-    `origin's ${target} holds commits the board did not push (${head}). See them with \`git log --stat ${target}..board/origin/${target}\` in the workbench at ${workbench()}. ` +
+    `Head repo ${workspace.head_repo}'s ${target} holds commits the board did not push (${head}). See them with \`git log --stat ${target}..board/origin/${target}\` in the workbench at ${workbench()}. ` +
     `The board does not merge outside commits itself: there, on ${target}, run \`git merge board/origin/${target}\` (or, in your own clone with the workbench as a remote: fetch it, ` +
     `\`git merge <remote>/board/origin/${target}\`, and push ${target} to it). Your tip must contain both ${target} as the board has it now (\`board/${target}\`) and origin/${target}, ` +
     "with nothing uncommitted. Then answer `retry`.";
@@ -323,7 +326,7 @@ export async function pushedRoot(
   /** 何も運ばれていない: local のタスクブランチも、最後に push した値の写しも動かず、取り込みも push も PR の作成も無い。 */
   const expectNothingCarried = () => {
     expect(git(workspace.path, "rev-parse", target)).toBe(local);
-    expect(git(workspace.path, "rev-parse", `refs/remotes/origin/${target}`)).toBe(pushed);
+    expect(git(workspace.path, "rev-parse", `refs/remotes/head-repo/${target}`)).toBe(pushed);
     expect(listEventsOfKinds(db, ["workbench_taken_in"])).toEqual([]);
     expect(github.pushes).toEqual([]);
     expect(github.requests).toEqual([]);
@@ -354,10 +357,10 @@ export async function pushedRoot(
   return { workspace, db, clock, github, landing, work: getTask(db, work.id)!, target, pushed, workbenchAt, workbench, d1, d2, expectNothingCarried, retry, mergeInWorkbench, answerMerge, landingWith };
 }
 
-/** 盤面の外の clone。origin のタスクブランチを force-push で `refspec` に書き換えるのに使う(巻き戻し・削除・push し直し)。 */
+/** 盤面の外の clone。出元 repo のタスクブランチを force-push で `refspec` に書き換えるのに使う(巻き戻し・削除・push し直し)。 */
 export async function outsideClone(workspace: WorkspaceConfig) {
   const clone = await tempDir("tidepool-outside-clone-");
-  git(clone, "clone", workspace.repo!, ".");
+  git(clone, "clone", workspace.head_repo!, ".");
   return { clone, push: (refspec: string) => git(clone, "push", "--force", "origin", refspec) };
 }
 
@@ -511,7 +514,7 @@ export const CONFLICT = "Pull request is not mergeable: the merge commit cannot 
  *  force-push する。PR の head はその sha になり、盤面の checkout の写しは動かない。 */
 export async function pushOutsideBoard(workspace: WorkspaceConfig, taskId: string, onto?: string, file = "outside.txt"): Promise<string> {
   const clone = await tempDir("tidepool-outside-push-");
-  git(clone, "clone", "--branch", `task/${taskId}`, git(workspace.path, "remote", "get-url", "origin"), ".");
+  git(clone, "clone", "--branch", `task/${taskId}`, workspace.head_repo!, ".");
   if (onto) git(clone, "reset", "--hard", onto);
   commitWork(clone, file, "pushed on GitHub\n");
   git(clone, "push", "--force", "origin", `task/${taskId}`);
@@ -523,14 +526,14 @@ export async function pushOutsideBoard(workspace: WorkspaceConfig, taskId: strin
 /** タスクブランチを push して PR #1 を開く。auto_if_ci_green なら無人 merge キューに入り、
  *  escalate なら merge question が立つ。checkout はタスクブランチに残る。 */
 export async function openPushedPr(name: string, merge: MergeDial) {
-  const { workspace, publish } = await makeRemoteBackedWorkspace(name);
+  const { workspace, publish } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const { id } = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, id);
   const work = getTask(db, id)!;
   commitWork(workspace.path, "feature.txt", "ready\n");
-  git(workspace.path, "push", "-u", "origin", `task/${work.id}`);
+  git(workspace.path, "push", "-u", "head-repo", `task/${work.id}`);
   github.scriptPullRequestOnBranch(`task/${work.id}`);
   recordPrOpened(db, work, 1, git(workspace.path, "rev-parse", "HEAD"), "worker", clock.now(), { merge }, undefined, "worker");
   const landing = createLanding({
@@ -582,9 +585,9 @@ export const head = (workspace: WorkspaceConfig) => git(workspace.path, "rev-par
 
 export const HUMAN_ANSWERER = { actorId: HUMAN_ACTOR_ID, origin: "webui" } as const;
 
-/** origin のタスクブランチの先端 —— GitHub が報告する PR の head。 */
-export const originHead = (workspace: WorkspaceConfig, taskId: string) =>
-  git(workspace.path, "ls-remote", "origin", `refs/heads/task/${taskId}`).split("\t")[0]!;
+/** 出元 repo のタスクブランチの先端 —— GitHub が報告する PR の head。 */
+export const forkHead = (workspace: WorkspaceConfig, taskId: string) =>
+  git(workspace.path, "ls-remote", "head-repo", `refs/heads/task/${taskId}`).split("\t")[0]!;
 
 // ADR 0242 決定1: merge の門は GitHub が報告した head と比べる —— 盤面の checkout の写しは読まない
 /** PR #1 の merge question に人間が「merge」と答える。 */

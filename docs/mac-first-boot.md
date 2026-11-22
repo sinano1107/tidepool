@@ -250,10 +250,20 @@ environment file. The settings tab now shows "GitHub: logged in".
 ### Publish the trial
 
 In the settings tab, open the `trial` workspace and use **Publish** with the clone URL
-`https://github.com/YOUR_GITHUB_LOGIN/tidepool-trial.git`. The board pushes every branch the
-trial already has — including the `task/…` branch from your first task — and records the
-repository on the workspace. If the App is not installed on the repository, the publish is
+`https://github.com/YOUR_GITHUB_LOGIN/tidepool-trial.git`. The board pushes the protected
+branch and records the repository on the workspace. If the App is not installed on the repository, the publish is
 refused with the install link and nothing lands; install and retry.
+
+### Configure the PR head repo
+
+Fork `tidepool-trial` into a separate organization you control. Install the App on the fork as
+well. In the workspace settings, set **Head repo** to the fork's actual `owner/name` and confirm
+the change. Saving sends the existing `task/…` branches to the fork. The board needs a configured
+head repo before it can push task branches or open PRs.
+
+For a private repository, allow forking and enable workflows from fork pull requests on the base
+repository. Leave the options to send write tokens and secrets to fork pull requests disabled.
+Disable Actions on the fork itself.
 
 ### Second task
 
@@ -266,10 +276,10 @@ Purpose: README.md describes this workspace in one sentence. Add a "Usage" secti
 Completion criteria: README.md has a "Usage" heading followed by two bullet points.
 ```
 
-What you should see this time: the worker finishes, a pull request opens on `tidepool-trial`
-authored by you, with a description that ends with `Opened by the tidepool board.`; the board asks
-you a merge question, and answering it merges the pull request. The commit's author is `tidepool`
-with the App's noreply address.
+The worker finishes, the board pushes the task branch to the fork and opens a pull request from
+it on `tidepool-trial`. You are the PR author and its description ends with
+`Opened by the tidepool board.` Answer the board's merge question to merge the pull request.
+The commit's author is `tidepool` with the App's noreply address.
 
 ### Checklist
 
@@ -292,7 +302,8 @@ The same mechanics apply to a repository you already work in. Add it to the App'
 (https://github.com/settings/installations → `tidepool-board` → **Configure**; a repository you
 do not administer needs its admin to install the App from the link above), then in the settings tab add
 a workspace with **clone a repository** and its clone URL. The board refuses the registration with
-the install link when the App is missing or you cannot push to the repository.
+the install link when the App is missing or you cannot push to the repository. Follow
+[Configure the PR head repo](#configure-the-pr-head-repo) for that workspace before landing a task.
 
 Register a checkout you do not write in yourself: the board treats a workspace's checkout as its
 own from the first time it touches it, between tasks too, and a checkout you also edit by hand will
@@ -319,7 +330,8 @@ depends on the workspace:
   push from your own clone, or a merge of your own PR. Never push from the workspace's checkout.
   Tasks that have already forked do not get it; it takes effect from the next fork.
   Resolve a conflicted PR with a merge; a rebased or force-pushed head is treated as rewritten
-  outside the board. Merge the protected branch into the PR's head in your own clone and push it.
+  outside the board. In your own clone, merge the protected branch into the PR's task branch
+  and push it to the head repo.
   When the board finds a PR head that no longer holds what it pushed, it asks a merge question
   with `hold` recommended, and the first `merge` is refused and opens a workbench. For a head
   moved back, answer `merge` again to have the board push that content back. For a rewritten

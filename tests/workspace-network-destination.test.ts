@@ -514,15 +514,20 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   );
 });
 
-it("teardown and landing use the declared repository after origin changes during the session", async ({ onTestFinished }) => {
+it("teardown uses the declared repository and landing uses its fork after origin changes during the session", async ({ onTestFinished }) => {
   const declared = await makeRemoteBackedWorkspace("session");
   const other = await makeRemoteBackedWorkspace("other");
   const url = "https://github.com/acme/declared.git";
-  const workspace = { ...declared.workspace, repo: ` ${url} ` };
+  const fork = await tempDir("tidepool-declared-destination-fork-");
+  git(fork, "clone", "--bare", declared.workspace.repo!, ".");
+  const workspace = { ...declared.workspace, repo: ` ${url} `, head_repo: "reef-org/fork" };
   git(workspace.path, "remote", "set-url", "origin", url);
+  git(workspace.path, "remote", "add", "head-repo", "https://github.com/reef-org/fork.git");
   const gitCalls = await shimGit({ route: [url, declared.workspace.repo!] });
+  await shimGit({ route: ["https://github.com/reef-org/fork.git", fork] });
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
+  announceHeadRepo(db, declared.workspace, workspace.head_repo);
   const clock = new FakeClock();
   const slot = new Slot();
   const registered = registerTask(db, { type: "work", title: "work to land", purpose: "p", completion_criteria: "c", workspace: workspace.name }, clock.now(), ...HUMAN_WEBUI);
@@ -564,15 +569,19 @@ esac
   const verdicts = await landing.converge();
 
   const network = gitCalls().slice(beforeTeardown).filter(({ args }) => args.some((arg) => arg.startsWith("--git-dir=")) && args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg)));
-  // ADR 0376 決定1: push の前に origin のタスクブランチの head を読む2つ目の `ls-remote` も、宣言の repo へ出る
+  // ADR 0376 決定1 / ADR 0395 決定1: base refresh and task-branch landing use different repositories.
   expect(network.map(({ args, env }) => ({
     verb: args.find((arg) => ["fetch", "ls-remote", "push"].includes(arg)),
-    destination: args.find((arg) => [declared.workspace.repo, other.workspace.repo].includes(arg)),
+    destination: args.find((arg) => [declared.workspace.repo, other.workspace.repo, fork].includes(arg)),
     token: env.GH_TOKEN,
-  }))).toEqual(["ls-remote", "fetch", "ls-remote", "push"].map((verb) => ({ verb, destination: declared.workspace.repo, token: "installation-token" })));
-  expect(broker.requests.map(({ repo }) => repo)).toEqual(["acme/declared"]);
+  }))).toEqual([
+    ...["ls-remote", "fetch"].map((verb) => ({ verb, destination: declared.workspace.repo, token: "installation-token" })),
+    ...["ls-remote", "push"].map((verb) => ({ verb, destination: fork, token: "installation-token" })),
+  ]);
+  expect(broker.requests.map(({ repo }) => repo)).toEqual(["acme/declared", "reef-org/fork"]);
   expect(api.requests.map(({ path }) => path)).toEqual(["/repos/acme/declared/pulls"]);
   expect(verdicts).toEqual([expect.objectContaining({ taskId: task.id, verdict: expect.objectContaining({ kind: "landed", prNumber: 7 }) })]);
-  expect(git(declared.workspace.repo!, "rev-parse", `refs/heads/task/${task.id}`)).toBe(git(workspace.path, "rev-parse", `refs/heads/task/${task.id}`));
+  expect(git(fork, "rev-parse", `refs/heads/task/${task.id}`)).toBe(git(workspace.path, "rev-parse", `refs/heads/task/${task.id}`));
+  expect(git(declared.workspace.repo!, "for-each-ref", "refs/heads/task")).toBe("");
   expect(git(other.workspace.repo!, "for-each-ref", "refs/heads/task")).toBe("");
 });

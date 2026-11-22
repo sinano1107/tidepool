@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, workspaceHeadRepoDestination, workspaceNetworkDestination } from "./github-auth.js";
-import { parseGitHubRepo } from "./repo-access.js";
+import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, HEAD_REPO_REMOTE, landingHeadRepo, workspaceNetworkDestination } from "./github-auth.js";
+import { parseGitHubRepo, repositoryLabel } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
 
-/** どの checkout のどのブランチを `origin` へ push するか。 */
+/** どの checkout のどのタスクブランチを出元 repo へ push するか。 */
 export interface PushBranchInput extends RepoRef {
   branch: string;
 }
@@ -157,7 +157,7 @@ export interface GitHubClient {
    *  user token である(ADR 0396 決定1)。push は呼び手が `preparePush` で先に撃つ ——
    *  盤面の push は基準への予告で包む口を通る(ADR 0243)。 */
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
-  /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
+  /** タスクブランチを出元 repo へ push する。
    *  PR 作成の前段であると同時に、**既に開いている PR の更新**でもある: 付帯子の
    *  修理が merge back されたタスクブランチを押し直すと、その PR が黙って更新される
    *  (ADR 0053 / issue #400)。
@@ -179,11 +179,10 @@ export interface GitHubClient {
    *  watch over every open PR. The same read gives the head convergence checks before that push (ADR 0376 決定1).
    *  Throws when it cannot be read. */
   getPullRequestState(ref: PrRef): Promise<PrStateRead>;
-  /** The PR whose head is `branch` in the head repo (the declared head repo, or the declared repo when none is declared),
-   *  in any state, or null (ADR 0241 決定4) — read before opening one, so a PR the board opened but never recorded is not
-   *  opened twice. Matched by branch and head repo, never by author: the author is the human who opened it (ADR 0396 帰結).
+  /** The PR whose head is `branch` in the declared head repo, or null. Read before opening one (ADR 0241 決定4) and,
+   *  with a number, before updating that PR. The author is the human who opened it (ADR 0396 帰結).
    *  Throws when it cannot be read. */
-  findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null>;
+  findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null>;
   getIssue(ref: IssueRef): Promise<Issue>;
   /** 親の briefing は closed でも読む(ADR 0321 決定5)。not_found と一時失敗は getIssue と同じ。 */
   getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }>;
@@ -230,13 +229,10 @@ function declaredRepo(workspace: WorkspaceConfig, call: string): RepoSlug {
   return repo;
 }
 
-/** The repo a PR's head lives in: the declared head repo (ADR 0395 決定1), read from the rechecked declaration (ADR 0378 決定1).
- *  With none declared it is `repo` itself — #3561's transitional state while landing still pushes task branches to origin. It
- *  contradicts ADR 0395 決定2's end state (no head repo, no landing) until #3562 removes it. */
-function headRepoOf(workspace: WorkspaceConfig, repo: RepoSlug, call: string): RepoSlug {
-  const headRepo = workspaceHeadRepoDestination(workspace);
-  if (headRepo === undefined) return repo;
-  if (headRepo.github === undefined) throw new Error(`\`${call}\` cannot run: workspace ${workspace.name}'s head repo ${headRepo.source} is not a GitHub repo`);
+/** ADR 0395 決定1・2: create/find use a head in the declared fork. */
+function headRepoOf(workspace: WorkspaceConfig, call: string): RepoSlug {
+  const headRepo = landingHeadRepo(workspace);
+  if (headRepo.github === undefined) throw new Error(`\`${call}\` cannot run: workspace ${workspace.name}'s head repo ${repositoryLabel(headRepo.source)} is not a GitHub repo`);
   return headRepo.github;
 }
 
@@ -345,8 +341,8 @@ export class GhCliClient implements GitHubClient {
   }
 
   async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {
-    await this.auth.ensureToken(workspaceNetworkDestination(input.workspace)?.key);
-    return (sha) => authedPush(this.auth, input.workspace, this.timeoutMs, [[input.branch, sha]]);
+    await this.auth.ensureToken(landingHeadRepo(input.workspace).key);
+    return (sha) => authedPush(this.auth, input.workspace, this.timeoutMs, [[input.branch, sha]], HEAD_REPO_REMOTE);
   }
 
   /** ADR 0396 決定3: the user token reaches only this in-process request, never a `gh` or git child's env (ADR 0093 決定4).
@@ -355,7 +351,7 @@ export class GhCliClient implements GitHubClient {
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     const call = "POST pulls";
     const repo = declaredRepo(input.workspace, call);
-    const prHead = `${headRepoOf(input.workspace, repo, call).owner}:${input.branch}`;
+    const prHead = `${headRepoOf(input.workspace, call).owner}:${input.branch}`;
     const target = `\`${call}\` on ${githubKey(repo)}`;
     const token = this.auth.token();
     let status: number;
@@ -426,13 +422,13 @@ export class GhCliClient implements GitHubClient {
 
   /** ADR 0396 帰結: the author is the human who opened it, so the board's PR is matched by its head repo, never its author.
    *  Read with the declared repo's installation token, which also sees a private head repo's PR here (#3558). */
-  async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
-    const { workspace, branch } = input;
+  async findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null> {
+    const { workspace, branch, number } = input;
     const call = "gh api";
     const declared = await this.warmDeclaredRepo(workspace, call);
     const repo = githubKey(declared);
     // ADR 0330 決定1: the head repo is read after the await, from the rechecked declaration
-    const headRepo = headRepoOf(workspace, declared, call);
+    const headRepo = headRepoOf(workspace, call);
     const headRepoKey = githubKey(headRepo);
     const output = await this.run(
       ["api", `repos/${repo}/pulls`, "--method", "GET", "-f", `head=${headRepo.owner}:${branch}`, "-f", "state=all"],
@@ -443,7 +439,7 @@ export class GhCliClient implements GitHubClient {
     const prs = (
       JSON.parse(output) as Array<{ number: number; state: string; merged_at: string | null; head: { ref: string; sha: string; repo: { full_name: string } | null } }>
     )
-      .filter((p) => p.head.ref === branch && p.head.repo?.full_name.toLowerCase() === headRepoKey)
+      .filter((p) => (number === undefined || p.number === number) && p.head.ref === branch && p.head.repo?.full_name.toLowerCase() === headRepoKey)
       .map((p): FoundPr => ({ number: p.number, state: p.merged_at ? "MERGED" : p.state === "open" ? "OPEN" : "CLOSED", head: p.head.sha }));
     // an open PR wins, then a merged one, over closed ones on the same branch
     return prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0] ?? null;

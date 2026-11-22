@@ -45,7 +45,7 @@ import type {
   RepoSlug,
 } from "../src/github.js";
 import { IssueGoneError } from "../src/github.js";
-import { remoteTrackingRef, workspaceNetworkDestination } from "../src/github-auth.js";
+import { HEAD_REPO_REMOTE, landingHeadRepo, networkDestination, remoteTrackingRef, workspaceHeadRepoDestination, workspaceNetworkDestination } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { Landing } from "../src/landing.js";
 import type { InjectionQuery } from "../src/memory.js";
@@ -62,6 +62,7 @@ import {
 } from "../src/process-container.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import { type Harness, InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
+import { sameRepository } from "../src/repo-access.js";
 import type {
   AttributionClient,
   AttributionInput,
@@ -484,6 +485,7 @@ export class FakeGitHubClient implements GitHubClient {
   readonly stateChecks: CheckoutObservation<PrRef>[] = [];
   private heads = new Map<number, string>();
   private prBranches = new Map<number, string>();
+  private prHeadRepos = new Map<number, string>();
   private prBaseBranches = new Map<number, string>();
   private unreadable = new Set<number>();
   /** merge 済みの PR と、merge した名義(`gh pr view --json mergedBy` の login)。 */
@@ -504,7 +506,7 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
-  /** 本物と同じく push はしない —— 呼び手が先に `preparePush` で押したブランチに PR を開く。PR の head は origin の
+  /** 本物と同じく push はしない —— 呼び手が先に `preparePush` で押したブランチに PR を開く。PR の head は出元 repo の
    *  ブランチ先端から読む。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     const { workspace, ...request } = input;
@@ -515,19 +517,18 @@ export class FakeGitHubClient implements GitHubClient {
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     this.prBranches.set(number, input.branch);
+    if (workspace.head_repo !== undefined) this.prHeadRepos.set(number, workspace.head_repo);
     this.prBaseBranches.set(number, input.base);
     return { url: `https://github.com/example/repo/pull/${number}`, number };
   }
 
-  /** 返す push は記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
-   *  なければ、盤面が自分の書き込みを基準に畳んだか(ADR 0243)を測れない。
-   *  本物と同じく宣言の repo へ押し、写しを盤面が書く(ADR 0378 決定1)。宣言の無い workspace(purely-local)には呼ばれない。 */
+  /** 実際に出元 repo へ push し、写しを書く。盤面が書き込みを基準に畳んだかを測る(ADR 0243 / ADR 0395 決定1)。 */
   async preparePush({ workspace, branch }: PushBranchInput): Promise<(sha: string) => void> {
     return (sha) => {
       this.pushes.push({ branch, path: workspace.path });
       const cwd = workspace.path;
-      execFileSync("git", ["push", "--", declaredUrl(workspace), `${sha}:refs/heads/${branch}`], { cwd, stdio: ["ignore", "pipe", "pipe"] });
-      execFileSync("git", ["update-ref", remoteTrackingRef(branch), sha], { cwd });
+      execFileSync("git", ["push", "--", landingHeadRepo(workspace).url, `${sha}:refs/heads/${branch}`], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["update-ref", remoteTrackingRef(branch, HEAD_REPO_REMOTE), sha], { cwd });
       // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形 —— 畳みが失敗の
       // 報告ではなく ref の読み返しで決まること(ADR 0243 決定2)を測る
       if (this.pushFailure) throw this.pushFailure;
@@ -544,12 +545,15 @@ export class FakeGitHubClient implements GitHubClient {
     return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
   }
 
-  /** PR の head は宣言の repo のそのブランチの先端 —— 盤面の push も、別の clone からの push も映る(ADR 0242)。
+  /** PR の head は出元 repo のそのブランチの先端 —— 盤面の push も、別の clone からの push も映る(ADR 0242)。
    *  scriptHead で置いた head が先に立つ。ブランチを知らない PR は fakeHead。 */
   private headOf(workspace: WorkspaceConfig, number: number): string {
     const branch = this.prBranches.get(number);
     if (this.heads.has(number) || branch === undefined) return this.heads.get(number) ?? fakeHead(number);
-    return execFileSync("git", ["ls-remote", "--", declaredUrl(workspace), `refs/heads/${branch}`], { cwd: workspace.path }).toString().split("\t")[0] || fakeHead(number);
+    const original = this.prHeadRepos.get(number);
+    const headRepo = original === undefined ? workspaceHeadRepoDestination(workspace) : networkDestination(original, workspace.path);
+    if (!headRepo) return fakeHead(number);
+    return execFileSync("git", ["ls-remote", "--", headRepo.url, `refs/heads/${branch}`], { cwd: workspace.path }).toString().split("\t")[0] || fakeHead(number);
   }
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
@@ -582,10 +586,12 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   /** head で探す読み(ADR 0241 決定4)。盤面が開いた PR も、scriptPullRequestOnBranch で置いた PR も見つかる。 */
-  async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
+  async findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null> {
     if (this.findFailure) throw this.findFailure;
     for (const [number, branch] of this.prBranches) {
-      if (branch === input.branch) return { number, state: this.stateOf(number), head: this.headOf(input.workspace, number) };
+      if (branch !== input.branch || (input.number !== undefined && input.number !== number)) continue;
+      const repo = this.prHeadRepos.get(number) ?? input.workspace.head_repo;
+      if (sameRepository(repo, input.workspace.head_repo)) return { number, state: this.stateOf(number), head: this.headOf(input.workspace, number) };
     }
     return null;
   }

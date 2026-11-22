@@ -15,7 +15,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   questions,
   registerWork,
@@ -75,7 +75,7 @@ async function changeProtectedFile(
 }
 
 it("PR が開いたままの祖先へ merge back された修理を、盤面が push して PR を更新する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("open-pr-push");
+  const { workspace } = await makeLandingWorkspace("open-pr-push");
   const work = await landedWork(workspace);
   expect(t.github.requests).toHaveLength(1);
 
@@ -90,7 +90,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
 // 予告と畳み(ADR 0243)はここでは述べない: 釘は landing.test.ts の、盤面の書き込みを
 // またいで走るセッションの解放にある。
 it("push のあとに拾った次のタスクは quarantine されずに着地し、2本目の PR が開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("push-then-release");
+  const { workspace } = await makeLandingWorkspace("push-then-release");
   const work = await landedWork(workspace);
   await completeRepair(work);
 
@@ -117,7 +117,7 @@ it("purely-local の同じ構図では push は起きない", async () => {
 });
 
 it("祖先の PR が既に merge 済みなら push しない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("merged-pr");
+  const { workspace } = await makeLandingWorkspace("merged-pr");
   const work = await landedWork(workspace);
   t.github.scriptMergedOutside(work.pr_number);
 
@@ -128,7 +128,7 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
 });
 
 it("squash merge 後に review 子が決着しただけの再発火は、push も question も nothing_to_land も増やさない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("merged-pr-review-settlement");
+  const { workspace } = await makeLandingWorkspace("merged-pr-review-settlement");
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship work reviewed after PR open");
   await t.clock.advance(HOUR);
@@ -154,7 +154,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
 });
 
 it("走行中に fork 元が squash merge された修理は、保護ブランチへ追いついて自分の差分だけの PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up");
+  const { workspace } = await makeLandingWorkspace("squash-catch-up");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair after squash landing");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
@@ -203,7 +203,7 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
 // 作業台の場面そのもの(本文、取り込み、PR、差分)は landing.test.ts が述べる(ADR 0107 決定3)。ここで述べるのは盤面が組んだ着地が
 // 作業台を盤面の workspacesDir の下に開くこと(server.ts の配線)と、retry が走行中の別タスクの checkout を触らないことだけ
 it("追いつき merge の conflict は盤面の workspacesDir の下に作業台を開き、そこで解いた retry は走行中の別タスクの checkout を触らない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up-conflict");
+  const { workspace } = await makeLandingWorkspace("squash-catch-up-conflict");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair conflicting after squash");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
@@ -239,7 +239,7 @@ it("追いつき merge の conflict は盤面の workspacesDir の下に作業�
 });
 
 it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇格失敗 question に残す", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up-tool-error");
+  const { workspace } = await makeLandingWorkspace("squash-catch-up-tool-error");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair before a git tool error");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
@@ -272,7 +272,7 @@ it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇
 });
 
 it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、merge 済み PR の前で無言にしない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("merged-pr-with-repair");
+  const { workspace } = await makeLandingWorkspace("merged-pr-with-repair");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair a line changed after squash");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
@@ -298,7 +298,7 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
 });
 
 it("push の失敗は PR 昇格失敗 question として人間に見える", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("push-failure");
+  const { workspace } = await makeLandingWorkspace("push-failure");
   const work = await landedWork(workspace);
   t.github.scriptPushFailure(new Error("remote hung up after upload"));
 

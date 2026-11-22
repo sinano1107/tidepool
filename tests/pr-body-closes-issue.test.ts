@@ -9,7 +9,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   HUMAN_WEBUI,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   mcpClient,
   type Tidepool,
 } from "./harness.js";
@@ -33,7 +33,7 @@ const fullHandoff = {
 /** 2つのテストが共有する「issue参照タスクを complete_task で完了させる」下ごしらえ
  *  (issue #303 の /ponytail-review 指摘: セットアップの重複を1箇所に)。 */
 async function completeIssueBackedTask(handoff: Record<string, string> = fullHandoff) {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   const t = await bootTidepool({ workspace: ws });
 
   const task = registerTask(
@@ -101,7 +101,7 @@ it("PR body は handoff の直後・`Closes #N` の直前に盤面の定型フ�
 });
 
 it("通常タスク(github_issue_number なし)の complete_task 成立後、PR body に Closes 行は付与されない", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  const { workspace: ws } = await makeLandingWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const task = registerTask(

@@ -9,7 +9,7 @@ import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -25,7 +25,7 @@ afterEach(async () => {
 
 it("prod workspace のタスクの merge 回答は、CI チェックと merge を prod の checkout に対して行う", async () => {
   const sandbox = await makeWorkspace("sandbox");
-  const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
+  const { workspace: prod } = await makeLandingWorkspace("prod");
   t = await bootTidepool({
     workspace: sandbox,
     resolveWorkspace: defaultingTo(sandbox, prod),

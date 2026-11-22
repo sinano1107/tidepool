@@ -9,13 +9,14 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventRowOf, latestEventOfTask, parseEventRow, type TaskScopedPayload } from "./events.js";
 import { git, isAncestor } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
-import { type GitHubAuth, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
+import { type GitHubAuth, HEAD_REPO_REMOTE, landingHeadRepo, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { type HumanMergePathReview, humanMergePathChanges } from "./human-merge-paths.js";
 import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates, resolvedCommit } from "./pickup-predicates.js";
 import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type PrMergeQuestionContent, type PrMergeReason, type QuestionColumns, type QuestionKind, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, type MergeDial } from "./registry.js";
+import { repositoryLabel } from "./repo-access.js";
 import { treeDeltaEntries } from "./sandbox.js";
 import {
   ancestorsSql,
@@ -73,7 +74,7 @@ import {
   protectedBranchRef,
   quarantineWorkspace,
   RefsMovedError,
-  readOriginBranchHead,
+  readTaskBranchHead,
   redoMergeBacks,
   refreshProtectedBranch,
   refusedOnceHead,
@@ -430,10 +431,15 @@ export const prInFlightRefusal = (prNumber: number) => `PR #${prNumber} is being
 /** spec #3273 text A6(ADR 0376 決定9): PR の merge の失敗の拒否と tick の question 本文に、失敗が何でも足す —— GitHub 上で conflict した PR
  *  は head への merge で解き、rebase・force-push した head は書き換えとして扱われる(決定7)。ADR 0387 決定3 / ADR 0394 決定3: 盤面は人間の push
  *  を見分けないので、答え直した `merge` は push した commit を列挙して拒まれ、question が立て直されることを前もって言う。 */
-export const conflictedPrRoute = (prNumber: number, protectedName: string) =>
-  ` If PR #${prNumber} conflicts with ${protectedName}, merge ${protectedName} into the PR's head in your own clone and push it — ` +
-  "do not rebase or force-push; the board treats such a head as rewritten outside — " +
-  "then answer `merge`: the board refuses it, listing the commits you pushed, and closes this question — answer `merge` on the new question it names to merge.";
+export function conflictedPrRoute(prNumber: number, workspace: WorkspaceConfig, taskId: string): string {
+  const protectedName = protectedBranch(workspace);
+  const instructions = workspace.head_repo === undefined
+    ? "the PR's head in your own clone and push it"
+    : `${taskBranch(taskId)} in your own clone and push it to head repo ${repositoryLabel(workspace.head_repo)}`;
+  return ` If PR #${prNumber} conflicts with ${protectedName}, merge ${protectedName} into ${instructions} — ` +
+    "do not rebase or force-push; the board treats such a head as rewritten outside — " +
+    "then answer `merge`: the board refuses it, listing the commits you pushed, and closes this question — answer `merge` on the new question it names to merge.";
+}
 
 /** ADR 0387 決定1・2: 盤面が push していない head の question の本文と `merge` の拒否文が共有する句。 */
 const notPushedText = {
@@ -463,17 +469,19 @@ export async function checkPrMergeContent(
   db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
-  pr: { number: number; head: string; lastPushed: string | undefined },
+  pr: PrDiff & { number: number; lastPushed: string | undefined },
   { auth, compareRefs }: { auth: GitHubAuth | undefined; compareRefs: () => void },
 ): Promise<{ left: string[]; head: PrHeadOrigin }> {
   compareRefs();
   let targets = leftBehindTargets(db, workspace, taskId);
   const forContent = targets.length > 0;
+  // ADR 0395 決定4: the path floor still needs the exact head when there is no local task branch to compare.
+  const forPaths = pr.base?.branch === protectedBranch(workspace) && COMMIT_OID.test(pr.base.sha) && COMMIT_OID.test(pr.head);
   // 積み残しを比べないなら、取れない head は拒まず、祖先関係を確かめられない head と読む(ADR 0387 決定1)
   const unfetched = (error: unknown) => {
     if (forContent || error instanceof WorkspaceRepoMismatchError) throw error;
   };
-  const fetching = forContent || pr.head !== pr.lastPushed ? prepareFetchCommitIfMissing(db, workspace, pr.head, auth) : undefined;
+  const fetching = forContent || forPaths || pr.head !== pr.lastPushed ? prepareFetchCommitIfMissing(db, workspace, pr.head, auth) : undefined;
   if (fetching) {
     const fetch = await fetching.catch(unfetched);
     compareRefs();
@@ -1627,6 +1635,7 @@ export function createLanding(deps: LandingDeps): Landing {
         retireFailures(task.id, ctx);
         return { kind: "up_to_date", prNumber: task.pr_number };
       }
+      const headRepoLabel = repositoryLabel(landingHeadRepo(workspace).source);
       if (!deps.github) {
         return failed(task, "github_not_configured", "GitHub is not configured for PR promotion", ctx);
       }
@@ -1640,7 +1649,7 @@ export function createLanding(deps: LandingDeps): Landing {
         catchUpTaskBranch(deps.db, workspace, task.id, workbenchBase, ctx.intake?.entry === "landing_merge" ? "merge" : "retry");
       };
       /** ADR 0376 決定1〜6・8: push すると決めた後・追いつきと push の前に GitHub の head(`prHead` は PR の読みが返した head、PR が無ければ
-       *  origin のブランチを読む)を確かめる。origin にブランチが無ければ今どおり押す。PR の記録が無い巻き戻しは、作業台を開かずに止まる
+       *  出元 repo のブランチを読む)を確かめる。出元 repo にブランチが無ければ今どおり押す。PR の記録が無い巻き戻しは、作業台を開かずに止まる
        *  (text D2)—— retry の取り込みより前に決めるので、前の text D1 の作業台に tip が残っていても印も event も足さない(決定6)。
        *  それ以外は retry が人間の tip を先に取り込み、head が push する sha の祖先でなければ、盤面は merge も push もせず作業台を開いて
        *  止まる(text D1)。PR が記録済みで head が最後に push した値を欠く(書き換え・巻き戻し)ときは
@@ -1654,12 +1663,12 @@ export function createLanding(deps: LandingDeps): Landing {
         const branch = taskBranch(task.id);
         // ADR 0376 決定2: 読めなかった head には push を撃たない(text D4)
         const unread = (error: unknown) => {
-          return new Error(`could not read origin's ${branch} (${error instanceof Error ? error.message : String(error)}), so the board did not push.`);
+          return new Error(`could not read head repo ${headRepoLabel}'s ${branch} (${error instanceof Error ? error.message : String(error)}), so the board did not push.`);
         };
         let head: string | undefined;
         let fetch: (() => void) | undefined;
         try {
-          head = pr?.head ?? (await readOriginBranchHead(deps.db, workspace, deps.githubAuth, branch));
+          head = pr?.head ?? (await readTaskBranchHead(deps.db, workspace, deps.githubAuth, branch));
           const fetching = head === undefined ? undefined : prepareFetchCommitIfMissing(deps.db, workspace, head, deps.githubAuth);
           fetch = fetching && (await fetching);
         } catch (error) {
@@ -1767,7 +1776,8 @@ export function createLanding(deps: LandingDeps): Landing {
           }
           return null;
         }, async () => {
-          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, () => pushBranch(sha));
+          landingHeadRepo(workspace);
+          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id), HEAD_REPO_REMOTE), sha, () => pushBranch(sha));
           return null;
         });
       };
@@ -1787,6 +1797,10 @@ export function createLanding(deps: LandingDeps): Landing {
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
         if (state === "CLOSED") return closedPr(task.pr_number);
+        // ADR 0395 決定1: after a fork replacement, a recorded PR can still point to the previous fork.
+        const branch = taskBranch(task.id);
+        const matching = await github.findPullRequestByHead({ workspace, branch, number: prNumber });
+        if (matching?.state !== "OPEN") throw new Error(`PR #${prNumber} does not have an open head at head repo ${headRepoLabel}'s ${branch}, so the board did not push.`);
         const stopped = await checkHeadBeforePush(pr, undefined, before) ?? closedMergeAnswer();
         if (stopped) return stopped;
         catchUp();
@@ -1802,10 +1816,10 @@ export function createLanding(deps: LandingDeps): Landing {
           // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
           recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
         } catch (error) {
-          // 転送の後に失敗と報告された push(ADR 0243 決定2 の形)も、origin に載っていれば盤面の push —— 印を持ったまま1度だけ読んで刻む。
+          // 転送の後に失敗と報告された push(ADR 0243 決定2 の形)も、出元 repo に載っていれば盤面の push —— 印を持ったまま1度だけ読んで刻む。
           // 刻まなければ、次の tick と回答は盤面自身の commit を盤面の push していない head と読む(ADR 0387 決定1)。読めなければ刻まない
           if (!(error instanceof RootStopped)) {
-            const landed = await readOriginBranchHead(deps.db, workspace, deps.githubAuth, taskBranch(task.id)).catch(() => undefined);
+            const landed = await readTaskBranchHead(deps.db, workspace, deps.githubAuth, taskBranch(task.id)).catch(() => undefined);
             if (landed === sha) recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
           }
           throw error;
@@ -1850,6 +1864,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // PR の作成は push 済みのブランチに作成の要求だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
         const refusal = await push(sha);
         if (refusal) return refusal;
+        landingHeadRepo(workspace);
         const created = await deps.github.createPullRequest({
           workspace,
           branch: taskBranch(task.id),
@@ -2109,7 +2124,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // 最後に push した値と違う head は CI の色に依らず出所を読む(ADR 0387 決定1)
           const content =
             ci === "success" || head !== lastPushed
-              ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, lastPushed }, {
+              ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, base: pr.base, lastPushed }, {
                 auth: deps.githubAuth,
                 compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, now),
               }).catch((error) => {
@@ -2176,7 +2191,7 @@ export function createLanding(deps: LandingDeps): Landing {
             if (after.head !== head) return;
             const askFailure = () => ask({
               detail: `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}.`,
-              question: `Merge once it is fixed, or hold?${conflictedPrRoute(pr_number, protectedBranch(workspace))}`,
+              question: `Merge once it is fixed, or hold?${conflictedPrRoute(pr_number, workspace, task_id)}`,
               reason: "merge_failed",
               recommendation: "hold",
             });

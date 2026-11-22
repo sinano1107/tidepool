@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 決定3 の最後に push した値は、出元 repo の写し `refs/remotes/head-repo/task/<root>` から読む。着地と publish の push が書き、出元 repo の差し替え・削除で前の repo の写しを消す。保護ブランチの写しは origin のまま([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1〜3、2026-11-22、issue #3562)。**
+
 **Status 追記: 決定3 の「event を残さない publish の push も書く」は外れる —— publish は `task/*` を origin へ送らないので、写し `refs/remotes/origin/task/<root>` を書くのは着地の push だけになる。出元 repo へ送ったタスクブランチの写しは `refs/remotes/head-repo/task/*` に書く([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定3、2026-11-22、issue #3563)。**
 
 **Status 追記: 収束が読む GitHub の head と、決定9 で人間が conflict を解くために push する PR の head は、workspace の宣言の出元 repo にある。conflict を解ける人間は出元 repo に書ける人間である。保護ブランチと人間しか書けない path の道(決定10)は origin のまま([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・5、2026-11-21、issue #3482)。**

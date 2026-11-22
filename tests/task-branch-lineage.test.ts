@@ -17,7 +17,7 @@ import {
   git,
   HOUR,
   HUMAN_WEBUI,
-  makeRemoteBackedWorkspace,
+  makeLandingWorkspace,
   makeWorkspace,
   mcpClient,
   queueWork,
@@ -187,7 +187,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
 });
 
 it("review の修理は元 PR が未 merge なら被レビュー work へ戻り、PR を増やさない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("open-pr-repair");
+  const { workspace } = await makeLandingWorkspace("open-pr-repair");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship repairable work");
   await t.clock.advance(HOUR);
@@ -223,7 +223,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
 });
 
 it("review の修理は元 PR が merge 済みなら保護ブランチから切られ、自分の PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("merged-pr-repair");
+  const { workspace } = await makeLandingWorkspace("merged-pr-repair");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship merged work");
   await t.clock.advance(HOUR);
@@ -265,7 +265,7 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
 it.each(["squash", "rebase"] as const)(
   "review の修理は元 PR が %s merge 済みでも保護ブランチから切られ、自分の PR を開く",
   async (method) => {
-    const { workspace } = await makeRemoteBackedWorkspace(`${method}-merged-pr-repair`);
+    const { workspace } = await makeLandingWorkspace(`${method}-merged-pr-repair`);
     t = await bootTidepool({ workspace });
     const reviewed = await registerWork(t, `ship ${method}-merged work`);
     await t.clock.advance(HOUR);
@@ -446,7 +446,7 @@ it("decompose 子の review 修理は、着地済みの子ブランチを飛ば�
 });
 
 it("付帯子の実行中に祖先が着地したら、完了時の再解決で保護ブランチへ帰り先を切り替える", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-reresolution");
+  const { workspace } = await makeLandingWorkspace("landing-reresolution");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "work that lands during repair");
   await t.clock.advance(HOUR);
