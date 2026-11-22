@@ -1765,6 +1765,8 @@ export function createLanding(deps: LandingDeps): Landing {
       const push = async (sha: string) => {
         const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
+          // ADR 0399 決定3: 準備の await の間の登録し直しは、古い宣言で名前の場所を比べる前に、根の記録と今の宣言の食い違いとして止める
+          workspaceNetworkDestination(workspace);
           const closed = closedMergeAnswer();
           if (closed) return closed;
           // ADR 0370 決定1: 準備の await の間に動いた ref があれば、確かめた sha も運ばない —— 比較と push を同じ同期区間に置く

@@ -32,9 +32,9 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 // ADR 0399 決定1・3・5: task は pickup が宣言の repo に届いたときにその repo を記録し、根を運ぶ・PR を読む前に今の宣言と比べ、食い違えば
 // その根だけを、記録と今の宣言を名指す PR 昇格失敗の question で止める(spec #3595 の振る舞い 1)。
 
-/** 旧い repo で拾われ PR #1 を開いた done の根を残して、`reef` を削除の扉 → 登録の扉で別の repo の checkout に登録し直し、盤面の経路で
- *  根に修理を載せた盤面 —— 根は運ぶ内容を持ち、PR を読みに行く所まで進む。`external` の根は削除の扉を止めない(ADR 0370 決定1)。 */
-async function reRegisteredWithRepairedRoot() {
+/** 旧い repo で拾われ PR #1 を開いた done の根を残して、`reef` を削除の扉 → 登録の扉で別の repo の checkout に登録し直し、`repair` なら
+ *  盤面の経路で根に修理を載せた盤面 —— 根は運ぶ内容を持ち、PR を読みに行く所まで進む。`external` の根は削除の扉を止めない(ADR 0370 決定1)。 */
+async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
   const { workspace: moved } = await makeLandingWorkspace("reef-new");
@@ -49,7 +49,7 @@ async function reRegisteredWithRepairedRoot() {
   recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" } });
 
   await reRegister(db, admin, resolve, moved, registryDir);
-  await commitThroughTaskCheckout(db, clock, resolve("reef"), done, "repair.txt", "repair\n");
+  if (repair) await commitThroughTaskCheckout(db, clock, resolve("reef"), done, "repair.txt", "repair\n");
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github });
   return { db, github, landing, old, moved, root: done };
 }
@@ -109,6 +109,16 @@ it.each([
   stoppedNamingBoth(db, root, old.repo!, moved.repo!);
 });
 
+// 運ぶ内容の無い根も、新しい repo の保護ブランチと比べて内容で終わらず、人間に知らせて止まる —— 根の最初の行き先の読みが比べる
+it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ修理が無くても記録と今の宣言を名指して止まる", async () => {
+  const { db, github, landing, old, moved, root } = await reRegisteredWithRepairedRoot({ repair: false });
+
+  await landing.converge();
+
+  expect([github.stateChecks, github.pushes, github.requests]).toEqual([[], [], []]);
+  stoppedNamingBoth(db, root, old.repo!, moved.repo!);
+});
+
 /** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` に渡した GitHub の呼び出しの await の間に、同じ checkout の origin を
  *  別の repo へ向けて扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。 */
 async function reRegisteredDuringAwait(hold: (github: FakeGitHubClient, wait: () => Promise<void>) => void) {
@@ -151,10 +161,8 @@ it("PR の状態を読む前の await(token の取得)の間に扉で別の repo
   stoppedNamingBoth(db, root, old.repo!, other.repo!);
 });
 
-// push の門は待った後に名前の場所の ref を比べ直し、その最初の撮りの開く前の項が古い宣言と向け替えた origin の食い違いで先に止まる ——
-// 比較はこの経路では後ろの守りで、釘は「push しない」だけ
-it("push の準備の await の間に扉で別の repo へ登録し直しても、盤面はその根を push しない", async () => {
-  const { github, old, root, head } = await reRegisteredDuringAwait((github, wait) => {
+it("push の準備の await の間に扉で別の repo へ登録し直しても、盤面はその根を push せず、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async () => {
+  const { db, github, old, other, root, head } = await reRegisteredDuringAwait((github, wait) => {
     const preparePush = github.preparePush.bind(github);
     github.preparePush = async (input) => {
       const push = await preparePush(input);
@@ -165,6 +173,7 @@ it("push の準備の await の間に扉で別の repo へ登録し直しても�
 
   expect([github.pushes, github.requests]).toEqual([[], []]);
   expect(git(old.head_repo!, "rev-parse", `task/${root.id}`)).toBe(head);
+  stoppedNamingBoth(db, root, old.repo!, other.repo!);
 });
 
 it("repo を記録した根の名前を、扉で purely-local の checkout に登録し直すと、根はローカル着地の question を立てずに記録と今の宣言を名指して止まる", async () => {
