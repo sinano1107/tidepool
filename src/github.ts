@@ -312,18 +312,22 @@ export class GhCliClient implements GitHubClient {
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
   private async gh(workspace: WorkspaceConfig, args: string[], beforeSpawn?: () => void): Promise<string> {
-    const repo = githubKey(await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`));
+    const repo = await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`);
+    this.recheckDeclaredRepo(workspace, repo);
     beforeSpawn?.();
     return this.run([...args, "-R", repo], repo, workspace.path);
   }
 
-  /** The declared repo, with its token warmed. ADR 0330 決定1: the declaration is rechecked after that await, so a registry
-   *  change during token acquisition is not acted on with the old destination. */
-  private async warmDeclaredRepo(workspace: WorkspaceConfig, call: string): Promise<RepoSlug> {
-    const repo = declaredRepo(workspace, call);
-    await this.auth.ensureToken(githubKey(repo));
-    if (workspaceNetworkDestination(workspace)?.key !== githubKey(repo)) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
+  /** The declared repo, with its token warmed. */
+  private async warmDeclaredRepo(workspace: WorkspaceConfig, call: string): Promise<string> {
+    const repo = githubKey(declaredRepo(workspace, call));
+    await this.auth.ensureToken(repo);
     return repo;
+  }
+
+  /** ADR 0330 決定1 / ADR 0399 決定3: recheck in the same synchronous section as spawning `gh`. */
+  private recheckDeclaredRepo(workspace: WorkspaceConfig, repo: string): void {
+    if (workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
   }
 
   /** `gh` with `repo`'s warmed token, bounded by the timeout. */
@@ -432,8 +436,8 @@ export class GhCliClient implements GitHubClient {
   async findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null> {
     const { workspace, branch, number } = input;
     const call = "gh api";
-    const declared = await this.warmDeclaredRepo(workspace, call);
-    const repo = githubKey(declared);
+    const repo = await this.warmDeclaredRepo(workspace, call);
+    this.recheckDeclaredRepo(workspace, repo);
     // ADR 0330 決定1: the head repo is read after the await, from the rechecked declaration
     const headRepo = headRepoOf(workspace, call);
     const headRepoKey = githubKey(headRepo);

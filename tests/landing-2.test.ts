@@ -1821,7 +1821,7 @@ it("キュー投入の後に registry と同じ repo の workspace が保護さ�
   const registryDir = await makeRegistry();
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  queueAutoMerge(db, clock, 1);
+  queueAutoMerge(db, clock, 1, workspace);
   const landing = createLanding({
     defaultAgentName: "tako",
     db,

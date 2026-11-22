@@ -71,7 +71,7 @@ it("最後に push した sha が手元に無いまま head が違えば、祖�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = autoMerging(db, clock, workspace, github);
-  queueAutoMerge(db, clock, 1);
+  queueAutoMerge(db, clock, 1, workspace);
   github.scriptHead(1, "head-the-board-did-not-push");
 
   await landing.tick("auto_merge", clock.now());
@@ -113,7 +113,7 @@ it.each(["success", "failure", "pending"] as const)("手元に根のタスクブ
   git(workspace.path, "checkout", "main");
   git(workspace.path, "branch", "-D", "scratch");
   github.scriptPullRequestOnBranch(`task/${work.id}`, 1);
-  recordPrOpenedOutsideConvergence(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
+  recordPrOpenedOutsideConvergence(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed, workspace });
   await pushOutsideBoard(workspace, work.id, `${lastPushed}~1`);
   github.scriptCiStatus(ci);
 

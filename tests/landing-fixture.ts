@@ -75,15 +75,16 @@ export async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
   return { db: database, clock: new FakeClock() };
 }
 
-/** 収束を通さずに PR を開いた記録を刻む。保護 workspace は無い。`head` を渡さない PR の head はどこにも無い sha —— 収束が push する根には
- *  `pushPrHead` の実在する head を渡す(ADR 0376 決定1: 収束は push の前に PR の head を読む)。 */
+/** 収束を通さずに PR を開いた記録を刻む。pickup 前の fixture には `workspace` の repo を記録する(省略時は purely-local)。
+ *  `head` を渡さない PR の head はどこにも無い sha —— 収束が push する根には `pushPrHead` の実在する head を渡す(ADR 0376 決定1)。 */
 export function recordPrOpenedOutsideConvergence(
   db: Db,
   task: Task,
   prNumber: number,
   now: Date,
-  { authority, isProtected, head = fakeHead(prNumber) }: { authority?: Parameters<typeof recordPrOpened>[5]; isProtected?: boolean; head?: string } = {},
+  { authority, isProtected, head = fakeHead(prNumber), workspace = { path: "." } }: { authority?: Parameters<typeof recordPrOpened>[5]; isProtected?: boolean; head?: string; workspace?: Pick<WorkspaceConfig, "path" | "repo"> } = {},
 ): void {
+  recordDeclaredRepo(db, task.id, workspace);
   recordPrOpened(db, task, prNumber, head, now, authority, isProtected);
 }
 
@@ -463,10 +464,11 @@ export const profile = (merge: MergeDial) => ({
 });
 
 /** auto_if_ci_green で PR を開き、無人 merge キューへ入れる。 */
-export function queueAutoMerge(db: Db, clock: FakeClock, prNumber: number): Task {
+export function queueAutoMerge(db: Db, clock: FakeClock, prNumber: number, workspace?: Pick<WorkspaceConfig, "path" | "repo">): Task {
   const work = landingWork(db, clock);
   recordPrOpenedOutsideConvergence(db, work, prNumber, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
+    workspace,
   });
   return work;
 }

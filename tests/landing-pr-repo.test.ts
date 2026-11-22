@@ -1,0 +1,290 @@
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
+import { DomainError } from "../src/domain-error.js";
+import { GhCliClient } from "../src/github.js";
+import { submitAnswer } from "../src/human-verbs.js";
+import { createLanding, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { openQuarantineQuestion } from "../src/quarantine.js";
+import { countUnsettledTasksReferencing, getTask, listBoard } from "../src/tasks.js";
+import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
+import { awaitWindow, FakeGitHubClient } from "./fakes.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
+import { boardEvents, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?: string) {
+  const { db, clock } = await openBoard();
+  const { workspace: old } = await makeLandingWorkspace("reef-old");
+  if (declaredRepo) {
+    git(old.path, "remote", "set-url", "origin", declaredRepo);
+    old.repo = declaredRepo;
+  }
+  const { workspace: moved } = await makeRemoteBackedWorkspace("reef-new");
+  const reef = await registeredReef(old);
+  giveHeadRepo(db, reef, old.head_repo!);
+  const github = new FakeGitHubClient();
+
+  // 削除の扉は参照を数えた時点の値を受ける。その後に PR がキューや question に載った盤面を作る。
+  const references = {
+    unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "reef"),
+    awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, reef.resolve, "reef"),
+  };
+  const move = async () => {
+    await deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, ...references });
+    await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
+    expect(reef.resolve("reef").repo).toBe(moved.repo);
+  };
+  const workspace = reef.resolve("reef");
+  const work = landingWork(db, clock, "reef");
+  checkoutTaskBranch(db, workspace, work.id);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const root = finish(db, clock, work);
+  const head = pushPrHead(github, workspace, root.id, 1);
+  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head });
+  const landing = createLanding({ db, clock, resolveWorkspace: reef.resolve, defaultAgentName: "tako", github, resolveAuthority: () => profile(merge) });
+  const answer = (option: "merge" | "hold") => {
+    const question = listBoard(db).find((task) => task.question_pending_merge_task_id === root.id)!;
+    return submitAnswer(
+      { db, pollNow: () => {}, landing, resolveWorkspace: reef.resolve, github, workspacesDir: join(reef.admin.workspacesBaseDir, "workbenches") },
+      getTask(db, question.id)!, [option], undefined, () => clock.now(), "webui",
+    );
+  };
+  return { db, clock, reef, old, moved, root, github, landing, move, answer };
+}
+
+function expectStopped({ db, root, old, moved }: Awaited<ReturnType<typeof reefWithPr>>) {
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+  const [failure, ...repeated] = promotionFailures(db, root.id);
+  expect(repeated).toEqual([]);
+  expect(failure?.purpose).toContain(`picked up for repo ${old.repo}`);
+  expect(failure?.purpose).toContain(`now declares repo ${moved.repo}`);
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+}
+
+it("無人 merge の tick は登録し直した repo の同じ番号の PR を旧い根として読まず、旧い根だけを止める", async () => {
+  const fixture = await reefWithPr("auto_if_ci_green");
+  const { db, clock, reef, moved, github, landing, move } = fixture;
+  await move();
+  const newWork = landingWork(db, clock, "reef");
+  checkoutTaskBranch(db, reef.resolve("reef"), newWork.id);
+  const newRoot = finish(db, clock, newWork);
+  recordPrOpenedOutsideConvergence(db, newRoot, 1, clock.now(), { authority: { merge: "auto_if_ci_green" } });
+  github.scriptClosedOutside(1, moved.repo);
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toEqual([{ path: moved.path, number: 1 }]);
+  expect(rootPrOutcome(db, newRoot.id)).toEqual({ state: "CLOSED", observed: true, prNumber: 1 });
+  expectStopped(fixture);
+});
+
+it("外の merge の tick は登録し直した repo の同じ番号の PR を読まず、旧い根を止める", async () => {
+  const fixture = await reefWithPr("escalate");
+  const { clock, moved, github, landing, move } = fixture;
+  await move();
+  github.scriptClosedOutside(1, moved.repo);
+
+  await landing.tick("outside_merge", clock.now());
+
+  expect(github.stateChecks).toEqual([]);
+  expectStopped(fixture);
+});
+
+it("無人 merge の観測は登録し直した repo の同じ番号の PR を読まず、旧い根を止める", async () => {
+  const fixture = await reefWithPr("auto_if_ci_green");
+  const { moved, github, landing, move } = fixture;
+  await move();
+  github.scriptClosedOutside(1, moved.repo);
+
+  await landing.observeAutoMergeOutcomes("tako");
+
+  expect(github.stateChecks).toEqual([]);
+  expectStopped(fixture);
+});
+
+it("登録し直した名前で旧い根への merge の回答は、PR を読む前に両方の repo を名指して拒む", async () => {
+  const { db, old, moved, root, github, move, answer } = await reefWithPr("escalate");
+  await move();
+  github.scriptClosedOutside(1, moved.repo);
+
+  const refusal = await answer("merge").catch((error: Error) => error);
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain(`picked up for repo ${old.repo}`);
+  expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
+  expect([github.stateChecks, github.ciChecks, github.merged]).toEqual([[], [], []]);
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+});
+
+it("登録し直した名前で旧い根への hold は、PR を読まずに受ける", async () => {
+  const { db, moved, root, github, move, answer } = await reefWithPr("escalate");
+  await move();
+  github.scriptClosedOutside(1, moved.repo);
+
+  const answered = await answer("hold");
+
+  expect(github.stateChecks).toEqual([]);
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+  expect(getTask(db, answered.id)?.status).toBe("done");
+  expect(boardEvents(db, root.id, "landing_declined")).toHaveLength(1);
+});
+
+it("無人 merge の tick が PR の読みを待つ間に登録し直すと、読みから決着を刻まず旧い根を止める", async () => {
+  const fixture = await reefWithPr("auto_if_ci_green");
+  const { clock, old, github, landing, move } = fixture;
+  github.scriptClosedOutside(1, old.repo);
+  const window = awaitWindow();
+  const read = github.readPullRequest.bind(github);
+  vi.spyOn(github, "readPullRequest").mockImplementation(async (ref) => {
+    const result = await read(ref);
+    await window.hold();
+    return result;
+  });
+
+  const ticking = landing.tick("auto_merge", clock.now());
+  await window.entered;
+  await move();
+  window.open();
+  await ticking;
+
+  expect(github.ciChecks).toEqual([{ path: old.path, number: 1 }]);
+  expectStopped(fixture);
+});
+
+it.each(["outside_merge", "observe"] as const)("%s が PR の状態を待つ間に登録し直すと、観測を刻まず旧い根を止める", async (action) => {
+  const fixture = await reefWithPr(action === "observe" ? "auto_if_ci_green" : "escalate");
+  const { clock, old, github, landing, move } = fixture;
+  github.scriptClosedOutside(1, old.repo);
+  const window = awaitWindow();
+  const read = github.getPullRequestState.bind(github);
+  vi.spyOn(github, "getPullRequestState").mockImplementation(async (ref) => {
+    const result = await read(ref);
+    await window.hold();
+    return result;
+  });
+
+  const observing = action === "observe" ? landing.observeAutoMergeOutcomes("tako") : landing.tick(action, clock.now());
+  await window.entered;
+  await move();
+  window.open();
+  await observing;
+
+  expect(github.stateChecks).toEqual([{ path: old.path, number: 1 }]);
+  expectStopped(fixture);
+});
+
+it("merge の回答が CI の読みを待つ間に登録し直すと、両方の repo を名指して拒む", async () => {
+  const { db, old, moved, root, github, move, answer } = await reefWithPr("escalate");
+  const window = awaitWindow();
+  const read = github.readPullRequest.bind(github);
+  vi.spyOn(github, "readPullRequest").mockImplementation(async (ref) => {
+    const result = await read(ref);
+    await window.hold();
+    return result;
+  });
+
+  const answering = answer("merge").catch((error: Error) => error);
+  await window.entered;
+  await move();
+  window.open();
+  const refusal = await answering;
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain(`picked up for repo ${old.repo}`);
+  expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
+  expect(github.ciChecks).toEqual([{ path: old.path, number: 1 }]);
+  expect(github.merged).toEqual([]);
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+});
+
+it("無人 merge の執行が token を待つ間に登録し直すと、最後の確認で旧い根を止める", async () => {
+  const fixture = await reefWithPr("auto_if_ci_green");
+  const { clock, old, github, landing, move } = fixture;
+  const window = awaitWindow();
+  const merge = github.mergePullRequest.bind(github);
+  const waiting = vi.spyOn(github, "mergePullRequest").mockImplementation(async (ref, head, beforeMerge) => {
+    await window.hold();
+    return merge(ref, head, beforeMerge);
+  });
+
+  const ticking = landing.tick("auto_merge", clock.now());
+  await Promise.race([window.entered, ticking]);
+  expect(waiting).toHaveBeenCalledOnce();
+  await move();
+  window.open();
+  await ticking;
+
+  expect(github.ciChecks).toEqual([{ path: old.path, number: 1 }]);
+  expect(github.merged).toEqual([]);
+  expectStopped(fixture);
+});
+
+it("無人 merge の失敗を待つ間に登録し直すと、PR を読み直す前に旧い根を止める", async () => {
+  const fixture = await reefWithPr("auto_if_ci_green");
+  const { clock, old, github, landing, move } = fixture;
+  const window = awaitWindow();
+  const merging = vi.spyOn(github, "mergePullRequest").mockImplementation(async () => {
+    await window.hold();
+    throw new Error("merge unavailable");
+  });
+
+  const ticking = landing.tick("auto_merge", clock.now());
+  await Promise.race([window.entered, ticking]);
+  expect(merging).toHaveBeenCalledOnce();
+  await move();
+  window.open();
+  await ticking;
+
+  expect(github.ciChecks).toEqual([{ path: old.path, number: 1 }]);
+  expectStopped(fixture);
+});
+
+it("無人 merge の PR 読み取りが token を待つ間に登録し直すと、gh を起動せず旧い根を止める", async () => {
+  const { db, clock, reef, moved, root, move } = await reefWithPr("auto_if_ci_green", "https://github.com/acme/reef-old.git");
+  const { window, githubAuth } = fetchHeldAtToken();
+  const token = vi.spyOn(githubAuth, "ensureToken");
+  const launchEnv = vi.spyOn(githubAuth, "env").mockImplementation(() => { throw new Error("unexpected gh command"); });
+  const github = new GhCliClient(githubAuth);
+  const landing = createLanding({ db, clock, resolveWorkspace: reef.resolve, defaultAgentName: "tako", github });
+
+  const ticking = landing.tick("auto_merge", clock.now());
+  await Promise.race([window.entered, ticking]);
+  expect(token).toHaveBeenCalledWith("acme/reef-old");
+  await move();
+  window.open();
+  await ticking;
+
+  expect(launchEnv).not.toHaveBeenCalled();
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+  const [failure] = promotionFailures(db, root.id);
+  expect(failure?.purpose).toContain("picked up for repo acme/reef-old");
+  expect(failure?.purpose).toContain(`now declares repo ${moved.repo}`);
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+});
+
+it("merge の回答が執行用 token を待つ間に登録し直すと、取得に失敗しても両方の repo を名指す", async () => {
+  const { db, moved, root, github, move, answer } = await reefWithPr("escalate", "https://github.com/acme/reef-old.git");
+  const { window, githubAuth } = fetchHeldAtToken();
+  const token = vi.spyOn(githubAuth, "ensureToken").mockImplementation(async () => {
+    await window.hold();
+    throw new Error("token unavailable");
+  });
+  const launchEnv = vi.spyOn(githubAuth, "env").mockImplementation(() => { throw new Error("unexpected gh command"); });
+  const client = new GhCliClient(githubAuth);
+  vi.spyOn(github, "mergePullRequest").mockImplementation(client.mergePullRequest.bind(client));
+
+  const answering = answer("merge").catch((error: Error) => error);
+  await Promise.race([window.entered, answering]);
+  expect(token).toHaveBeenCalledWith("acme/reef-old");
+  await move();
+  window.open();
+  const refusal = await answering;
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain("picked up for repo acme/reef-old");
+  expect((refusal as Error).message).toContain(`now declares repo ${moved.repo}`);
+  expect(launchEnv).not.toHaveBeenCalled();
+  expect(rootPrOutcome(db, root.id)).toBeNull();
+});

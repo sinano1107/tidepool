@@ -249,14 +249,14 @@ export function workspaceHeadRepoDestination(workspace: WorkspaceConfig & { name
   return declaredDestination(workspace, "head_repo");
 }
 
-/** The destination `field` of the rechecked declaration (ADR 0378 決定7). A read that reaches one compares the record of the task it
- *  carries first (ADR 0399 決定3); a purely-local declaration reaches no network and compares nothing. */
+/** The destination `field` of the rechecked declaration (ADR 0378 決定7). Compare the task's record even when the current
+ *  declaration is purely-local (ADR 0399 決定3). */
 function declaredDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }, field: "repo" | "head_repo") {
   const place = workspace.namedPlace ?? workspace;
   const declaration = place.checkRememberedRepo?.(place) ?? place;
+  place.checkDeclaredRepo?.({ ...declaration, name: place.name });
   const value = declaration[field];
   if (value === undefined) return undefined;
-  place.checkDeclaredRepo?.({ ...declaration, name: place.name });
   return networkDestination(value, declaration.path);
 }
 

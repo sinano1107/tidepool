@@ -59,7 +59,6 @@ import {
   clearRefusedOnce,
   compareRefsBeforeLanding,
   DeclaredRepoMismatchError,
-  declaredRepoDisagreement,
   endLostRootLanding,
   FirstCaptureRefusedError,
   type IntakeContext,
@@ -1210,6 +1209,7 @@ function recordLandingDeferred(
 
 export function createLanding(deps: LandingDeps): Landing {
   const checked = (workspace: WorkspaceConfig) => withRememberedRepoCheck(deps.db, workspace, () => deps.clock.now(), deps.resolveWorkspace);
+  const checkedRoot = (workspace: WorkspaceConfig, taskId: string) => withDeclaredRepoCheck(deps.db, checked(workspace), taskId);
   const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
   const mergePathReview = (workspace: WorkspaceConfig, pr: PrDiff | undefined, dial: MergeDial | undefined) => {
     if (dial === "external" || workspace.repo === undefined) return undefined;
@@ -1230,7 +1230,12 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   const readPrState = async (github: GitHubClient, workspace: WorkspaceConfig, number: number): Promise<PrStateRead> => {
     workspaceNetworkDestination(workspace);
-    return github.getPullRequestState({ workspace, number });
+    try {
+      return await github.getPullRequestState({ workspace, number });
+    } finally {
+      // ADR 0399 決定3: 読みを待つ間に登録し直した根は、古い読みで決着させない。
+      workspaceNetworkDestination(workspace);
+    }
   };
   /** ADR 0217 決定3: 解決できない profile はダイヤルを推測せず、agent 名の quarantine に落として
    *  その名前を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。
@@ -1344,6 +1349,16 @@ export function createLanding(deps: LandingDeps): Landing {
       registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, tip);
     }
     return verdict;
+  };
+  // ADR 0399 決定5: 食い違った根だけに問う。同じ食い違いで tick が繰り返し問わない。
+  const stopForRepoMismatch = (root: string, error: DeclaredRepoMismatchError, now: Date) => {
+    try {
+      const task = getTask(deps.db, root);
+      if (!task || openPrPromotionQuestionIds(deps.db, root).some((id) => getTask(deps.db, id)?.purpose.endsWith(error.message))) return;
+      registerPrPromotionFailureQuestion(deps.db, task, error.message, now, error.message);
+    } catch (questionError) {
+      console.error(`[landing] could not ask about the repo mismatch for root ${root}:`, questionError);
+    }
   };
   /** 答えている回答だけを拒む止まり —— 昇格失敗 question を立てない。 */
   const failedAnswer = (error: string): LandingVerdict => ({ kind: "failed", reason: "promotion_failed", error });
@@ -1547,14 +1562,8 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       resolvedWorkspace = workspace.name;
       // ADR 0399 決定3: この根の push・PR の作成・PR の読みは、行き先を読むたびに根の記録を今の宣言と比べる
-      workspace = withDeclaredRepoCheck(deps.db, checked(workspace), task.id);
+      workspace = checkedRoot(workspace, task.id);
       const remoteBacked = isRemoteBacked(workspace);
-      if (!remoteBacked) {
-        // ADR 0399 決定3: purely-local の宣言は行き先を読まないので行き先の読みが比べない —— repo を記録した根は lineage も内容も
-        // 読む前に止める(登録し直した名前の checkout の ref で根を終えない)
-        const disagreement = declaredRepoDisagreement(deps.db, task.id, workspace);
-        if (disagreement) return failed(task, "promotion_failed", disagreement, ctx);
-      }
       /** await の後の名前の場所の比較(ADR 0370 決定1)。ADR 0399 決定3・5: その前に根の記録を今の宣言と比べる —— await の間の
        *  登録し直しを、古い宣言で名前の場所を比べた workspace の Quarantine にせず、その根の止まりにする。 */
       const recheckAfterAwait = () => {
@@ -2026,9 +2035,9 @@ export function createLanding(deps: LandingDeps): Landing {
       // 決着の書き込みの失敗も呼び手(回答)へ投げる
       let read: PrStateRead;
       try {
-        read = await readPrState(deps.github, checked(resolve(question.workspace)), prNumber);
+        read = await readPrState(deps.github, checkedRoot(resolve(question.workspace), root), prNumber);
       } catch (error) {
-        if (error instanceof WorkspaceRepoMismatchError) throw error;
+        if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError) throw error;
         const reason = error instanceof Error ? error.message : String(error);
         throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
@@ -2049,8 +2058,9 @@ export function createLanding(deps: LandingDeps): Landing {
         if (task?.type !== "work" || (task.assignee ?? deps.defaultAgentName) !== agentName) continue;
         let read: PrStateRead;
         try {
-          read = await readPrState(github, checked(resolve(task.workspace)), pr_number);
-        } catch {
+          read = await readPrState(github, checkedRoot(resolve(task.workspace), task_id), pr_number);
+        } catch (error) {
+          if (error instanceof DeclaredRepoMismatchError && isQueuedForAutoMerge(deps.db, task_id)) stopForRepoMismatch(task_id, error, deps.clock.now());
           continue;
         }
         // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
@@ -2070,12 +2080,19 @@ export function createLanding(deps: LandingDeps): Landing {
             const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
             if (!workspace) continue;
             // 状態が読めない(網・認証)回は黙って次の tick へ回す —— 瞬断のたびにログを出さない
-            const read = await readPrState(github, checked(workspace), pr_number).catch(() => null);
+            const read = await readPrState(github, checkedRoot(workspace, question.root), pr_number).catch((error) => {
+              if (error instanceof DeclaredRepoMismatchError) throw error;
+              return null;
+            });
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
             if (read && read.state !== "OPEN" && !isMarked(question.root)) {
               settleObserved(question, prOutcomeKind(read.state, read.mergedBy), now);
             }
           } catch (error) {
+            if (error instanceof DeclaredRepoMismatchError) {
+              if (getTask(deps.db, id)?.status === "todo") stopForRepoMismatch(question.root, error, now);
+              continue;
+            }
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
             console.error(`[landing] outside-merge scan of PR #${pr_number} (question ${id}) failed; it stays open:`, error);
           }
@@ -2095,7 +2112,7 @@ export function createLanding(deps: LandingDeps): Landing {
           if (!release || !isQueuedForAutoMerge(deps.db, task_id)) continue;
           const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
           if (!resolved) continue;
-          const workspace = checked(resolved);
+          const workspace = checkedRoot(resolved, task_id);
           workspaceNetworkDestination(workspace);
           // 盤面の名義の行為(merge / merge question)の直前に profile → 門 → 着地の面の順で読み直す(ADR 0217 決定1・
           // ADR 0232)。CI を読む前は profile と門だけを読み、面は PR の状態の後で読む —— 閉じた PR は面に依らず観測になり、
@@ -2109,6 +2126,7 @@ export function createLanding(deps: LandingDeps): Landing {
           const ref = { workspace, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
           const pr = await github.readPullRequest(ref);
+          workspaceNetworkDestination(workspace);
           if (!isQueuedForAutoMerge(deps.db, task_id)) continue;
           if (pr.state === "MERGED" || pr.state === "CLOSED") {
             retire(task_id, { kind: prOutcomeKind(pr.state, pr.mergedBy), pr_number }, now);
@@ -2152,9 +2170,12 @@ export function createLanding(deps: LandingDeps): Landing {
             ci === "success" || head !== lastPushed
               ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, base: pr.base, lastPushed }, {
                 auth: deps.githubAuth,
-                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now),
+                compareRefs: () => {
+                  workspaceNetworkDestination(workspace);
+                  assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now);
+                },
               }).catch((error) => {
-                if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
+                if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 return null;
               })
               : null;
@@ -2187,12 +2208,13 @@ export function createLanding(deps: LandingDeps): Landing {
             const stoppedBeforeMerge = Symbol();
             const failure = await github.mergePullRequest(ref, head, () => {
               // ADR 0330 決定1: Registry changes during token acquisition must reach the final guard.
+              workspaceNetworkDestination(workspace);
               assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, now);
               if (stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head)) throw stoppedBeforeMerge;
             }).then(
               () => null,
               (error: unknown) => {
-                if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefCheckError) throw error;
+                if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 if (error === stoppedBeforeMerge) return stoppedBeforeMerge;
                 return error instanceof Error ? error.message : String(error);
               },
@@ -2203,7 +2225,9 @@ export function createLanding(deps: LandingDeps): Landing {
               return;
             }
             // merge の失敗の後に状態と head を読み直す。読めなければ分類できない失敗(ADR 0229 決定3)
+            workspaceNetworkDestination(workspace);
             const after = await github.readPullRequest(ref);
+            workspaceNetworkDestination(workspace);
             if (!isQueuedForAutoMerge(deps.db, task_id)) return;
             if (after.state === "unreadable") {
               throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
@@ -2225,6 +2249,10 @@ export function createLanding(deps: LandingDeps): Landing {
             if (!stop(askFailure, after)) askFailure();
           });
         } catch (error) {
+          if (error instanceof DeclaredRepoMismatchError) {
+            if (isQueuedForAutoMerge(deps.db, task_id)) stopForRepoMismatch(task_id, error, now);
+            continue;
+          }
           if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefsRefusedError) continue;
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         } finally {

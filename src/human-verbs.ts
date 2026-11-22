@@ -140,6 +140,7 @@ import {
   completeHumanWork,
   containmentRepairRoute,
   containmentWorkbenchNotTakenIn,
+  DeclaredRepoMismatchError,
   endLostRootLandings,
   fetchLostTargets,
   firePickupPredicates,
@@ -173,6 +174,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
+  withDeclaredRepoCheck,
   withProtectedTipCheckout,
   withRememberedRepoCheck,
 } from "./workspace.js";
@@ -1701,18 +1703,23 @@ export async function submitAnswer(
         break;
       case "pr_merge": {
         const mergePr = kind.pr;
+        const merging = answers[0] === MERGE_QUESTION_OPTIONS[0];
         // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
         // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
-        // 網が届かないなど PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
+        // 網が届かないなど同じ repo の PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
         // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
-        const observed = await deps.landing.observePullRequestOutcome(task);
+        const observed = await deps.landing.observePullRequestOutcome(task).catch((error) => {
+          // ADR 0399 決定3 / ADR 0394 決定5: 食い違う repo を読まず、hold は問うた内容を断る。
+          if (!merging && error instanceof DeclaredRepoMismatchError) return false;
+          throw error;
+        });
         if (getTask(deps.db, task.id)?.status !== "todo") assertMergeQuestionNotReplaced(deps.db, task);
         if (observed) return presentAnswered(deps, task);
         const beingMerged = prInFlightRefusal(mergePr);
         // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
         if (deps.landing.isMarked(kind.task_id)) throw new DomainError(beingMerged);
-        if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
+        if (merging) {
           const assertQuestionOpen = () => {
             if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
           };
@@ -1720,18 +1727,23 @@ export async function submitAnswer(
           if (!deps.github) {
             throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
           }
-          const mergeWorkspace = resolveWorkspaceForAnswer(
+          const workspace = resolveWorkspaceForAnswer(
             deps,
             task.workspace,
             "cannot check CI or merge",
             "GitHub/workspace",
           );
           // ADR 0242 決定1: 読んだ head と同じ head で積み残し・CI・merge を通す —— 内容が落ちた head は寄り道の後にもう一度読む(ADR 0394 決定3)
-          workspaceNetworkDestination(withRememberedRepoCheck(deps.db, mergeWorkspace, now));
+          const mergeWorkspace = withDeclaredRepoCheck(deps.db, withRememberedRepoCheck(deps.db, workspace, now, deps.resolveWorkspace), kind.task_id);
+          const assertMergeRepo = () => {
+            workspaceNetworkDestination(mergeWorkspace);
+          };
           const github = deps.github;
           const readAndCompare = async () => {
             const lastPushed = lastPushedHead(deps.db, kind.task_id);
+            assertMergeRepo();
             const pr = await github.readPullRequest({ workspace: mergeWorkspace, number: mergePr });
+            assertMergeRepo();
             // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
             if (pr.state === "unreadable") {
               throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
@@ -1749,11 +1761,13 @@ export async function submitAnswer(
                 compareRefs: () => {
                   // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
                   assertQuestionOpen();
+                  assertMergeRepo();
                   assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, deps.boardState, now());
                 },
               },
             ).catch((err) => {
-              if (err instanceof WorkspaceRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
+              if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
+              assertMergeRepo();
               throw new DomainError(
                 `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
                   (err instanceof Error ? err.message : String(err)),
@@ -1817,9 +1831,10 @@ export async function submitAnswer(
             // External merge precedes the persisted answer. Failure leaves the question open.
             // CI を読んだ head に固定する(ADR 0231 決定1)。失敗は文面で分けず DomainError に包む
             try {
-              await github.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head);
+              await github.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head, assertMergeRepo);
             } catch (err) {
-              if (err instanceof WorkspaceRepoMismatchError) throw err;
+              if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError) throw err;
+              assertMergeRepo();
               const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
               throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, pr.headRef)}`);
             }

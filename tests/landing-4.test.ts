@@ -829,18 +829,21 @@ function deferLanding(board: Db, taskId: string, now: Date): void {
   });
 }
 
+const observationWorkspace = { name: "reef", path: "/reef", repo: "https://github.com/test/reef" };
+
 it("既定 agent の quarantine 回答前の観測は、assignee 未指定の work の外部 merge を記録してキューを退ける", async () => {
   const { db, clock } = await openBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
+    workspace: observationWorkspace,
   });
   const github = new FakeGitHubClient();
   github.scriptMergedOutside(7);
   const landing = createLanding({
     db,
     clock,
-    workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
+    workspace: observationWorkspace,
     github,
     defaultAgentName: "tako",
   });
@@ -860,13 +863,14 @@ it("quarantine 回答前の観測は、盤面の名義で merge 済みのキュ�
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
+    workspace: observationWorkspace,
   });
   const github = new FakeGitHubClient();
   github.scriptMergedByBoard(7);
   const landing = createLanding({
     db,
     clock,
-    workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
+    workspace: observationWorkspace,
     github,
     defaultAgentName: "tako",
   });
@@ -885,13 +889,14 @@ it("quarantine 回答前の観測は、盤面の外で閉じられたキュー�
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
+    workspace: observationWorkspace,
   });
   const github = new FakeGitHubClient();
   github.scriptClosedOutside(7);
   const landing = createLanding({
     db,
     clock,
-    workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
+    workspace: observationWorkspace,
     github,
     defaultAgentName: "tako",
   });
