@@ -3,7 +3,7 @@ import type { Db } from "../src/db.js";
 import { createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { registerTask, type Task } from "../src/tasks.js";
-import { declaredRepoDisagreement, type WorkspaceConfig } from "../src/workspace.js";
+import { declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
   commitWork,
@@ -54,11 +54,11 @@ async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
 
   await reRegister(db, reef, moved);
   if (repair) {
-    const branch = `task/${done.id}`;
+    const branch = taskBranch(done.id);
     git(moved.path, "fetch", "--quiet", old.path, branch);
     git(moved.path, "checkout", "--quiet", "-b", branch, "FETCH_HEAD");
     commitWork(moved.path, "repair.txt", "repair\n");
-    git(moved.path, "checkout", "--quiet", "main");
+    git(moved.path, "checkout", "--quiet", protectedBranch(moved));
   }
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
   return { db, github, landing, old, moved, root: done };
