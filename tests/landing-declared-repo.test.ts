@@ -61,7 +61,7 @@ async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
 const stoppedNamingBoth = (db: Db, root: Task, recorded: string, current: string) => {
   const [question, ...rest] = promotionFailures(db, root.id);
   expect(rest).toEqual([]);
-  expect(question!.purpose).toContain(`picked up for repo ${recorded}`);
+  expect(question!.purpose).toContain(`recorded repo ${recorded}`);
   expect(question!.purpose).toContain(`now declares ${current}`);
   expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
 };

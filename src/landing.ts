@@ -75,6 +75,7 @@ import {
   RefsMovedError,
   readTaskBranchHead,
   recordHeadRepo,
+  recordPublishedDeclaredRepo,
   redoMergeBacks,
   refreshProtectedBranch,
   refusedOnceHead,
@@ -1806,8 +1807,10 @@ export function createLanding(deps: LandingDeps): Landing {
           return null;
         }, async () => {
           // ADR 0399 決定3 / ADR 0378 決定7: 行き先は比較と同じ同期区間で読み、await を挟まずに push する
+          const declaredRepo = workspaceNetworkDestination(workspace);
           const headRepo = landingHeadRepo(workspace);
           boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id), HEAD_REPO_REMOTE), sha, () => {
+            if (declaredRepo) recordPublishedDeclaredRepo(deps.db, task.id, declaredRepo);
             pushBranch(sha);
             // ADR 0399 決定1(Status 追記): 記録は push が届いた後 —— 届かなかった push の出元 repo で根を止めない
             recordHeadRepo(deps.db, task.id, headRepo);

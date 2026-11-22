@@ -3081,10 +3081,15 @@ function recordedForm(declaration: Pick<WorkspaceConfig, "path" | "repo" | "head
   return value === undefined ? null : comparedRepo(networkDestination(value, declaration.path));
 }
 
-/** ADR 0399 決定1: the one writer of a task's declared repo, called where its task branch is made, after pickup's fetch reached
- *  `workspace`'s declaration. Written once and never overwritten —— a lost branch's rebuild (ADR 0392) keeps the first value. */
+/** ADR 0399 決定1: pickup records the declared repo where the task branch is made, after fetch reached the declaration.
+ *  A lost branch's rebuild (ADR 0392) keeps the recorded value. */
 export function recordDeclaredRepo(db: Db, taskId: string, workspace: Pick<WorkspaceConfig, "path" | "repo">): void {
   db.prepare("UPDATE tasks SET declared_repo = ? WHERE id = ? AND declared_repo IS NULL").run(JSON.stringify(recordedForm(workspace)), taskId);
+}
+
+/** ADR 0399 決定1: the first landing write after publish replaces only a purely-local record (JSON null), once. */
+export function recordPublishedDeclaredRepo(db: Db, taskId: string, repo: Pick<ReturnType<typeof networkDestination>, "key" | "url">): void {
+  db.prepare("UPDATE tasks SET declared_repo = ? WHERE id = ? AND declared_repo = 'null'").run(JSON.stringify(comparedRepo(repo)), taskId);
 }
 
 /** ADR 0399 決定1: the one writer of a root's head repo —— `headRepo` is the fork its first push of `task/<id>` reached, or the fork
@@ -3108,7 +3113,7 @@ export function declaredRepoDisagreement(db: Db, taskId: string, current: Pick<W
     `${taskBranch(taskId)} cannot be carried: ${was}, but workspace ${current.name} now ${declares}, so the board does not carry it there.`;
   if (recorded !== null && recorded !== declared) {
     const declares = declared === null ? "declares no repo (purely-local)" : `declares repo ${repositoryLabel(declared)}`;
-    return stop(recorded === undefined ? "the board has no record of the repo it was picked up for" : `it was picked up for repo ${repositoryLabel(recorded)}`, declares);
+    return stop(recorded === undefined ? "the board has no record of the repo it was picked up for" : `the board recorded repo ${repositoryLabel(recorded)} for it`, declares);
   }
   const headRepo = recordedForm(current, "head_repo");
   const declaresHead = headRepo === null ? "declares no head repo" : `declares head repo ${repositoryLabel(headRepo)}`;

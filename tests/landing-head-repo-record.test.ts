@@ -9,7 +9,7 @@ import { openQuarantineQuestion } from "../src/quarantine.js";
 import type { MergeDial } from "../src/registry.js";
 import { loadRegistry } from "../src/registry.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, recordPrOpened } from "../src/tasks.js";
-import { buildWorkspaceResolver, resolveExecutionWorkspace } from "../src/workspace.js";
+import { buildWorkspaceResolver, resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, publishWorkspace, updateWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
@@ -235,9 +235,7 @@ it("PR の作成に落ちても出元 repo へ push した根は記録を持ち�
   expect(github.requests).toHaveLength(1);
 });
 
-// ADR 0399 Status 追記: 記録があれば、宣言が repo を持たなくても比べる。purely-local で拾われた根の宣言の repo の記録は purely-local のまま
-// (上書きしない)なので、publish の後に push した根を purely-local へ登録し直したとき、止めるのは出元 repo の記録である
-it("purely-local で拾われ publish の後に出元 repo へ push して PR を開いた根は、名前を purely-local の checkout に登録し直すと、出元 repo の記録と今の宣言を名指して止まる", async () => {
+async function lagoonWithPurelyLocalDoneRoot() {
   const { db, clock } = await openBoard();
   const checkout = await makeWorkspace("lagoon");
   const origin = await tempDir("tidepool-lagoon-origin-");
@@ -261,21 +259,53 @@ it("purely-local で拾われ publish の後に出元 repo へ push して PR �
   const work = landingWork(db, clock, "lagoon");
   await commitThroughTaskCheckout(db, clock, resolve(), work, "feature.txt", "ready\n");
   const root = finish(db, clock, work);
-  await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
-  git(fork, "init", "--quiet", "--bare", "-b", "main");
-  git(fork, "fetch", "--quiet", origin, "main:main");
-  await updateWorkspace({ name: "lagoon", head_repo: "acme/fork", confirm: true }, doors);
+  const addFork = async () => {
+    git(fork, "init", "--quiet", "--bare", "-b", "main");
+    git(fork, "fetch", "--quiet", origin, "main:main");
+    await updateWorkspace({ name: "lagoon", head_repo: "acme/fork", confirm: true }, doors);
+  };
   // `external` の根は削除の扉を止めない(ADR 0370 決定1)
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, githubAuth, resolveAuthority: () => profile("external") });
-  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
-  const local = await makeWorkspace("lagoon-local");
-  await deleteWorkspace({ name: "lagoon", confirm: true }, {
-    ...doors,
-    unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "lagoon"),
-    awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(resolve, undefined), "lagoon"),
+  const registerAgain = async (path: string) => {
+    await deleteWorkspace({ name: "lagoon", confirm: true }, {
+      ...doors,
+      unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "lagoon"),
+      awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(resolve, undefined), "lagoon"),
+    });
+    await createWorkspace({ name: "lagoon", mode: "register", path, confirm: true }, doors);
+  };
+  return { addFork, db, doors, github, landing, registerAgain, resolve, root };
+}
+
+it("purely-local で拾われた根は publish では宣言の repo を記録せず、着地の最初の push の直前に記録して PR を開く", async () => {
+  const { addFork, db, doors, github, landing, registerAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
+  const purelyLocal = resolve();
+  await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
+  expect(resolve().repo).toBe(REPO);
+  expect(() => withDeclaredRepoCheck(db, resolve(), root.id).checkDeclaredRepo!(purelyLocal)).not.toThrow();
+  await addFork();
+  const preparePush = github.preparePush.bind(github);
+  let startedPush = false;
+  vi.spyOn(github, "preparePush").mockImplementationOnce(async (input) => {
+    const push = await preparePush(input);
+    const checkDeclaredRepo = withDeclaredRepoCheck(db, input.workspace, root.id).checkDeclaredRepo!;
+    expect(() => checkDeclaredRepo(purelyLocal)).not.toThrow();
+    return (sha) => {
+      startedPush = true;
+      expect(() => checkDeclaredRepo(purelyLocal)).toThrow(/repo acme\/lagoon/);
+      push(sha);
+    };
   });
-  await createWorkspace({ name: "lagoon", mode: "register", path: local.path, confirm: true }, doors);
-  expect(resolve().repo).toBeUndefined();
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
+  expect(startedPush).toBe(true);
+
+  // ADR 0399 決定3: 宣言の repo が同じでも、出元 repo を無くした名前では根だけが止まる。
+  const replacement = await tempDir("tidepool-lagoon-replacement-");
+  git(replacement, "clone", "--quiet", resolve().path, ".");
+  git(replacement, "remote", "set-url", "origin", REPO);
+  await registerAgain(replacement);
+  expect(resolve()).toMatchObject({ repo: REPO });
+  expect(resolve().head_repo).toBeUndefined();
 
   await landing.converge();
 
@@ -283,4 +313,27 @@ it("purely-local で拾われ publish の後に出元 repo へ push して PR �
   expect(rest).toEqual([]);
   expect(failure?.purpose).toContain("pushed to head repo acme/fork");
   expect(failure?.purpose).toContain("now declares no head repo");
+});
+
+it("publish の後に PR を開いた根は、名前を別の repo に登録し直すと、記録と今の宣言を名指して止まる", async () => {
+  const { addFork, db, doors, github, landing, registerAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
+  await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
+  await addFork();
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
+  const { workspace: replacement } = await makeRemoteBackedWorkspace("lagoon-replacement");
+  const newRepo = "https://github.com/other/lagoon.git";
+  await shimGit({ route: [newRepo, replacement.repo!] });
+  git(replacement.path, "remote", "set-url", "origin", newRepo);
+  await registerAgain(replacement.path);
+  expect(resolve().repo).toBe(newRepo);
+  const previousReads = github.stateChecks.length;
+
+  await landing.converge();
+
+  const [failure, ...rest] = promotionFailures(db, root.id);
+  expect(rest).toEqual([]);
+  expect(failure?.purpose).toContain("the board recorded repo acme/lagoon for it");
+  expect(failure?.purpose).toContain("now declares repo other/lagoon");
+  expect(github.stateChecks).toHaveLength(previousReads);
+  expect(openQuarantineQuestion(db, "workspace", "lagoon")).toBeUndefined();
 });
