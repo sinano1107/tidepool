@@ -58,6 +58,7 @@ import {
   checkAcceptanceFirstHalf,
   clearRefusedOnce,
   compareRefsBeforeLanding,
+  declaredRepoDisagreement,
   endLostRootLanding,
   FirstCaptureRefusedError,
   type IntakeContext,
@@ -89,6 +90,7 @@ import {
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
   type WorkspaceResolver,
+  withDeclaredRepoCheck,
   withRememberedRepoCheck,
   workspaceNeedsHuman,
 } from "./workspace.js";
@@ -1543,7 +1545,8 @@ export function createLanding(deps: LandingDeps): Landing {
         return quarantined("workspace", err.workspaceName);
       }
       resolvedWorkspace = workspace.name;
-      workspace = checked(workspace);
+      // ADR 0399 決定3: この根の push・PR の作成・PR の読みは、行き先を読むたびに根の記録を今の宣言と比べる
+      workspace = withDeclaredRepoCheck(deps.db, checked(workspace), task.id);
       const remoteBacked = isRemoteBacked(workspace);
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
       const afterPush = (landed: LandingVerdict, pushed: string): LandingVerdict => {
@@ -1608,6 +1611,9 @@ export function createLanding(deps: LandingDeps): Landing {
       if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
       if (mergedPr !== undefined) return alreadyMerged(task, mergedPr, ctx);
       if (!remoteBacked) {
+        // ADR 0399 決定3: ローカル着地は網に出ないので行き先の読みが比べない —— repo を記録した根を purely-local の名前へ運ばない
+        const disagreement = declaredRepoDisagreement(deps.db, task.id, workspace);
+        if (disagreement) return failed(task, "promotion_failed", disagreement, ctx);
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
         // 保護を先に読む(ADR 0374 決定13)—— purely-local の保護された workspace の人間の根は C5 でなく、profile を持たないので

@@ -185,6 +185,9 @@ function initializeDb(db: Db): void {
       -- no workspace/github configured, or nothing to hand off. Set once by
       -- recordPrOpened, never by the MCP layer directly.
       pr_number           INTEGER,
+      -- ADR 0399 決定1: the declared repo this task's content goes to, written once when its pickup first reached it.
+      -- SQL NULL is no record (a disagreement), JSON null a purely-local record, a JSON string the repo as compared (ADR 0378 決定4).
+      declared_repo       TEXT,
       -- question-only fields (issue #30): 1-4 question items (JSON array of
       -- {title, detail?, options, recommendation} — the common context lives
       -- on purpose), and the human's answers once given, one per item, in

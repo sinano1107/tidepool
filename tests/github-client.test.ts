@@ -2,16 +2,18 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { openDb } from "../src/db.js";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { registerTask } from "../src/tasks.js";
+import { recordDeclaredRepo, type WorkspaceConfig, withDeclaredRepoCheck } from "../src/workspace.js";
 import {
   type BrokerAnswer,
   type FakeBroker,
   issuedToken,
   startFakeBroker,
 } from "./fake-broker.js";
-import { git } from "./harness.js";
+import { git, HUMAN_WEBUI } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 let repoPath: string | undefined;
@@ -221,6 +223,19 @@ it("PR の作成が断られたら、HTTP status と GitHub の理由を書き�
   await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
     new Error("`POST pulls` on acme/widget was refused for head reef-org:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
   );
+});
+
+// ADR 0399 決定3: user token の REST の経路も、行き先(宣言の repo)を読むのと同じ同期区間で根の記録と比べ、食い違えば網に出ない
+it("PR を作る根の記録の repo が今の宣言と食い違えば、PR の作成は REST を撃たずに両方を名指して投げる", async () => {
+  const api = await fakeGitHubApi();
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "ship", purpose: "why", completion_criteria: "done" }, new Date(), ...HUMAN_WEBUI);
+  const workspace = await githubCheckout();
+  recordDeclaredRepo(db, root.id, { ...workspace, repo: "https://github.com/acme/old-widget.git" });
+
+  await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(withDeclaredRepoCheck(db, workspace, root.id))))
+    .rejects.toThrow(/picked up for repo acme\/old-widget, but workspace widget now declares repo https:\/\/github\.com\/acme\/widget\.git/);
+  expect(api.requests).toEqual([]);
 });
 
 // ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗。どの呼び出しが何 ms で切れたかを書く

@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { completeTask, getTask } from "../src/tasks.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { recordDeclaredRepo, type WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
   api,
@@ -53,6 +53,7 @@ function heldGitHub() {
 function silentlyCompletedRoot(board: Tidepool, workspace: WorkspaceConfig) {
   const root = queueWork(board, "landed by the convergence");
   git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  recordDeclaredRepo(board.db, root.id, workspace);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   completeTask(board.db, root, FULL_HANDOFF, "fake-worker", board.clock.now(), "worker");

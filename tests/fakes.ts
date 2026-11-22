@@ -469,9 +469,19 @@ function declaredUrl(workspace: WorkspaceConfig): string {
   return destination.url;
 }
 
+/** PR state scripted without a repo applies to that number in every repo. */
+const ANY_REPO = "*";
+
+/** A repo as `-R` names it: GitHub's `owner/name`, any other repo its URL (ADR 0378 決定4). */
+const repoKey = (repo: string, base = "/") => {
+  const destination = networkDestination(repo, base);
+  return destination.key ?? destination.url;
+};
+
 /** Scripted stand-in at the GitHubClient seam (issue #19): records every PR
  *  request in call order; scriptFailure lets a test make the call throw
- *  without touching a real GitHub API. */
+ *  without touching a real GitHub API. PRs live in the declared repo they were opened or scripted on and are read back
+ *  through the rechecked declaration, as the real client's `-R` (ADR 0399 決定3) —— a number in another repo is another PR. */
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CheckoutObservation<CreatePrInput>[] = [];
   /** 開いている PR への push(PR を開く前段の push は数えない)。 */
@@ -483,16 +493,17 @@ export class FakeGitHubClient implements GitHubClient {
   /** The head each entry of `merged` was pinned to (ADR 0231 決定1), same order. */
   readonly mergedHeads: string[] = [];
   readonly stateChecks: CheckoutObservation<PrRef>[] = [];
-  private heads = new Map<number, string>();
-  private prBranches = new Map<number, string>();
-  private prHeadRepos = new Map<number, string>();
-  private prBaseBranches = new Map<number, string>();
-  private unreadable = new Set<number>();
+  // keyed by `<repo>#<number>` (`prKey`)
+  private heads = new Map<string, string>();
+  private prBranches = new Map<string, string>();
+  private prHeadRepos = new Map<string, string>();
+  private prBaseBranches = new Map<string, string>();
+  private unreadable = new Set<string>();
   /** merge 済みの PR と、merge した名義(`gh pr view --json mergedBy` の login)。 */
-  private mergers = new Map<number, string>();
-  private closedOutside = new Set<number>();
-  private mergeFailures = new Map<number, Error>();
-  private stateReadFailures = new Map<number, Error>();
+  private mergers = new Map<string, string>();
+  private closedOutside = new Set<string>();
+  private mergeFailures = new Map<string, Error>();
+  private stateReadFailures = new Map<string, Error>();
   private failure: Error | null = null;
   private findFailure: Error | null = null;
   private pushFailure: Error | null = null;
@@ -506,19 +517,47 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
+  /** The key of PR `number` scripted on `repo`, or on every repo when none is named. */
+  private scripted(number: number, repo?: string): string {
+    return `${repo === undefined ? ANY_REPO : repoKey(repo)}#${number}`;
+  }
+
+  /** The repo `-R` names for `workspace` —— read through the rechecked declaration like the real client. A workspace with no
+   *  declared repo reads PRs scripted on every repo. */
+  private repoOf(workspace: WorkspaceConfig): string {
+    const destination = workspaceNetworkDestination(workspace);
+    return destination === undefined ? ANY_REPO : (destination.key ?? destination.url);
+  }
+
+  /** The keys PR `number` is read under from `workspace`: its own repo's entry first, then one scripted on every repo. */
+  private keysOf(workspace: WorkspaceConfig, number: number): string[] {
+    return [`${this.repoOf(workspace)}#${number}`, `${ANY_REPO}#${number}`];
+  }
+
+  private lookup<V>(map: Map<string, V>, workspace: WorkspaceConfig, number: number): V | undefined {
+    for (const key of this.keysOf(workspace, number)) if (map.has(key)) return map.get(key);
+    return undefined;
+  }
+
+  private holds(set: Set<string>, workspace: WorkspaceConfig, number: number): boolean {
+    return this.keysOf(workspace, number).some((key) => set.has(key));
+  }
+
   /** 本物と同じく push はしない —— 呼び手が先に `preparePush` で押したブランチに PR を開く。PR の head は出元 repo の
    *  ブランチ先端から読む。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     const { workspace, ...request } = input;
+    const repo = this.repoOf(workspace);
     this.requests.push({ ...request, path: workspace.path });
     // 作成の前段の push は開いている PR への push ではない —— そのブランチの最後の push を `pushes` から外す
     const last = this.pushes.map((push) => push.branch).lastIndexOf(input.branch);
     if (last !== -1) this.pushes.splice(last, 1);
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
-    this.prBranches.set(number, input.branch);
-    if (workspace.head_repo !== undefined) this.prHeadRepos.set(number, workspace.head_repo);
-    this.prBaseBranches.set(number, input.base);
+    const key = `${repo}#${number}`;
+    this.prBranches.set(key, input.branch);
+    if (workspace.head_repo !== undefined) this.prHeadRepos.set(key, workspace.head_repo);
+    this.prBaseBranches.set(key, input.base);
     return { url: `https://github.com/example/repo/pull/${number}`, number };
   }
 
@@ -540,17 +579,18 @@ export class FakeGitHubClient implements GitHubClient {
     this.pushFailure = err;
   }
 
-  private stateOf(number: number): PrState {
-    if (this.mergers.has(number)) return "MERGED";
-    return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
+  private stateOf(workspace: WorkspaceConfig, number: number): PrState {
+    if (this.lookup(this.mergers, workspace, number) !== undefined) return "MERGED";
+    return this.holds(this.closedOutside, workspace, number) ? "CLOSED" : "OPEN";
   }
 
   /** PR の head は出元 repo のそのブランチの先端 —— 盤面の push も、別の clone からの push も映る(ADR 0242)。
    *  scriptHead で置いた head が先に立つ。ブランチを知らない PR は fakeHead。 */
   private headOf(workspace: WorkspaceConfig, number: number): string {
-    const branch = this.prBranches.get(number);
-    if (this.heads.has(number) || branch === undefined) return this.heads.get(number) ?? fakeHead(number);
-    const original = this.prHeadRepos.get(number);
+    const branch = this.lookup(this.prBranches, workspace, number);
+    const scripted = this.lookup(this.heads, workspace, number);
+    if (scripted !== undefined || branch === undefined) return scripted ?? fakeHead(number);
+    const original = this.lookup(this.prHeadRepos, workspace, number);
     const headRepo = original === undefined ? workspaceHeadRepoDestination(workspace) : networkDestination(original, workspace.path);
     if (!headRepo) return fakeHead(number);
     return execFileSync("git", ["ls-remote", "--", headRepo.url, `refs/heads/${branch}`], { cwd: workspace.path }).toString().split("\t")[0] || fakeHead(number);
@@ -558,7 +598,12 @@ export class FakeGitHubClient implements GitHubClient {
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
     this.ciChecks.push({ path: ref.workspace.path, number: ref.number });
-    if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
+    // the real client reads every failure, the declaration's included, as unreadable
+    try {
+      if (this.holds(this.unreadable, ref.workspace, ref.number)) return { ci: "pending", state: "unreadable" };
+    } catch {
+      return { ci: "pending", state: "unreadable" };
+    }
     return { ci: this.ciStatus, ...this.stateRead(ref) };
   }
 
@@ -566,14 +611,15 @@ export class FakeGitHubClient implements GitHubClient {
     beforeMerge?.();
     // GitHub refuses a merge on an already-merged or closed PR; the fake must
     // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
-    if (this.stateOf(ref.number) !== "OPEN") {
-      throw new Error(`PR #${ref.number} is ${this.stateOf(ref.number).toLowerCase()}`);
+    const state = this.stateOf(ref.workspace, ref.number);
+    if (state !== "OPEN") {
+      throw new Error(`PR #${ref.number} is ${state.toLowerCase()}`);
     }
     // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
     if (head !== this.headOf(ref.workspace, ref.number)) {
       throw new Error("Head branch was modified. Review and try the merge again.");
     }
-    const failure = this.mergeFailures.get(ref.number);
+    const failure = this.lookup(this.mergeFailures, ref.workspace, ref.number);
     if (failure) throw failure;
     this.merged.push({ path: ref.workspace.path, number: ref.number });
     this.mergedHeads.push(head);
@@ -582,18 +628,20 @@ export class FakeGitHubClient implements GitHubClient {
   /** Pins one PR's head, over its branch's tip on origin — a push the fixture cannot make, or a sha that exists
    *  nowhere (ADR 0231 決定1 / ADR 0242). */
   scriptHead(number: number, head: string): void {
-    this.heads.set(number, head);
+    this.heads.set(this.scripted(number), head);
   }
 
   /** head で探す読み(ADR 0241 決定4)。盤面が開いた PR も、scriptPullRequestOnBranch で置いた PR も見つかる。 */
   async findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null> {
+    const repo = this.repoOf(input.workspace);
     if (this.findFailure) throw this.findFailure;
-    for (const [number, branch] of this.prBranches) {
-      if (branch !== input.branch || (input.number !== undefined && input.number !== number)) continue;
-      const repo = this.prHeadRepos.get(number) ?? input.workspace.head_repo;
-      if (sameRepository(repo, input.workspace.head_repo)) {
-        const { state, head, headRef, base } = this.stateRead({ workspace: input.workspace, number });
-        return { number, state, head, headRef, base };
+    for (const [key, branch] of this.prBranches) {
+      const [prRepo, prNumber] = [key.slice(0, key.lastIndexOf("#")), Number(key.slice(key.lastIndexOf("#") + 1))];
+      if ((prRepo !== repo && prRepo !== ANY_REPO) || branch !== input.branch || (input.number !== undefined && input.number !== prNumber)) continue;
+      const headRepo = this.prHeadRepos.get(key) ?? input.workspace.head_repo;
+      if (sameRepository(headRepo, input.workspace.head_repo)) {
+        const { state, head, headRef, base } = this.stateRead({ workspace: input.workspace, number: prNumber });
+        return { number: prNumber, state, head, headRef, base };
       }
     }
     return null;
@@ -603,18 +651,19 @@ export class FakeGitHubClient implements GitHubClient {
    *  scriptMergedOutside / scriptClosedOutside で動かす。`number` を渡せば、fixture が記録する番号の PR をそのブランチに置く ——
    *  head が origin のブランチの先端を映す(ADR 0376 決定1)。`base` を渡せば PR の base はその名前に固定され、宣言の `branch` を後で
    *  変えても動かない(#3584)。渡さなければ base は今の宣言に従う —— 本物の PR の base は宣言に従わないので、宣言の `branch` を変える
-   *  テストは `base` を渡すか `pushPrHead` を使う。 */
-  scriptPullRequestOnBranch(branch: string, number = this.nextNumber, headRepo?: string, base?: string): number {
+   *  テストは `base` を渡すか `pushPrHead` を使う。`repo` を渡せばその宣言の repo の PR、渡さなければどの repo でもその番号の PR。 */
+  scriptPullRequestOnBranch(branch: string, number = this.nextNumber, headRepo?: string, base?: string, repo?: string): number {
     this.nextNumber = Math.max(this.nextNumber, number + 1);
-    this.prBranches.set(number, branch);
-    if (headRepo !== undefined) this.prHeadRepos.set(number, headRepo);
-    if (base !== undefined) this.prBaseBranches.set(number, base);
+    const key = this.scripted(number, repo);
+    this.prBranches.set(key, branch);
+    if (headRepo !== undefined) this.prHeadRepos.set(key, headRepo);
+    if (base !== undefined) this.prBaseBranches.set(key, base);
     return number;
   }
 
   /** GitHub 上で PR の base を付け替える —— base のブランチの改名で GitHub が付け替えた形(#3584)。 */
   scriptPullRequestBase(number: number, base: string): void {
-    this.prBaseBranches.set(number, base);
+    this.prBaseBranches.set(this.scripted(number), base);
   }
 
   /** head で探す読みを失敗させる。 */
@@ -625,25 +674,26 @@ export class FakeGitHubClient implements GitHubClient {
   /** Makes the combined read on one PR come back unreadable — gh exited
    *  non-zero. The real client never throws there. */
   scriptUnreadable(number: number): void {
-    this.unreadable.add(number);
+    this.unreadable.add(this.scripted(number));
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
+    this.repoOf(ref.workspace);
     this.stateChecks.push({ path: ref.workspace.path, number: ref.number });
-    const failure = this.stateReadFailures.get(ref.number);
+    const failure = this.lookup(this.stateReadFailures, ref.workspace, ref.number);
     if (failure) throw failure;
     return this.stateRead(ref);
   }
 
   private stateRead({ workspace, number }: PrRef): PrStateRead {
-    const branchName = this.prBranches.get(number);
-    const repo = this.prHeadRepos.get(number);
+    const branchName = this.lookup(this.prBranches, workspace, number);
+    const repo = this.lookup(this.prHeadRepos, workspace, number);
     const state = {
-      state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null, head: this.headOf(workspace, number),
+      state: this.stateOf(workspace, number), mergedBy: this.lookup(this.mergers, workspace, number) ?? null, head: this.headOf(workspace, number),
       ...(repo && branchName && { headRef: { repo, branch: branchName } }),
     };
     if (workspace.repo === undefined) return state;
-    const branch = this.prBaseBranches.get(number) ?? protectedBranch(workspace);
+    const branch = this.lookup(this.prBaseBranches, workspace, number) ?? protectedBranch(workspace);
     try {
       const url = declaredUrl(workspace);
       if (!isAbsolute(url) && !url.startsWith("file:")) return state;
@@ -658,18 +708,19 @@ export class FakeGitHubClient implements GitHubClient {
    *  lost, a GitHub outage. `gh` exits non-zero and the real client rethrows.
    *  The combined read (readPullRequest) is untouched. */
   scriptStateReadFailure(number: number, err: Error): void {
-    this.stateReadFailures.set(number, err);
+    this.stateReadFailures.set(this.scripted(number), err);
   }
 
   /** Makes merging one still-open PR fail — a conflict, a protection refusal. */
   scriptMergeFailure(number: number, err: Error): void {
-    this.mergeFailures.set(number, err);
+    this.mergeFailures.set(this.scripted(number), err);
   }
 
   /** Scripts the PR as merged by someone on GitHub's own surface, behind the
-   *  board's back (ADR 0079) — every later merge attempt on it fails. */
-  scriptMergedOutside(number: number): void {
-    this.mergers.set(number, "octocat");
+   *  board's back (ADR 0079) — every later merge attempt on it fails. `repo` names the declared repo it is on; without it,
+   *  the number is merged in every repo. */
+  scriptMergedOutside(number: number, repo?: string): void {
+    this.mergers.set(this.scripted(number, repo), "octocat");
   }
 
   /** Scripts the PR as merged under the board's own name — the board merged it and fell before recording it
@@ -677,12 +728,12 @@ export class FakeGitHubClient implements GitHubClient {
    *  mergedBy` gives `{"is_bot":true,"login":"app/tidepool-board"}` (REST `merged_by.login` would be
    *  `tidepool-board[bot]`). Written out, not derived from the slug, so a drift in the board's derivation fails. */
   scriptMergedByBoard(number: number): void {
-    this.mergers.set(number, "app/tidepool-board");
+    this.mergers.set(this.scripted(number), "app/tidepool-board");
   }
 
-  /** Scripts the PR as closed without merging on GitHub's own surface (ADR 0229). */
-  scriptClosedOutside(number: number): void {
-    this.closedOutside.add(number);
+  /** Scripts the PR as closed without merging on GitHub's own surface (ADR 0229). `repo` as in `scriptMergedOutside`. */
+  scriptClosedOutside(number: number, repo?: string): void {
+    this.closedOutside.add(this.scripted(number, repo));
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {

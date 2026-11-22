@@ -235,17 +235,24 @@ export function networkDestination(source: string, base: string) {
 
 /** ADR 0378 決定1: use the declaration even when Git runs from a task checkout, which has no origin of its own. */
 export function workspaceNetworkDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }) {
-  const place = workspace.namedPlace ?? workspace;
-  const { path, repo } = place.checkRememberedRepo?.(place) ?? place;
-  return repo === undefined ? undefined : networkDestination(repo, path);
+  return declaredDestination(workspace, "repo");
 }
 
 /** ADR 0378 決定1 / ADR 0395 決定1・2: the head repo's destination also comes from the rechecked declaration, never from the
  *  checkout's remote. */
 export function workspaceHeadRepoDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }) {
+  return declaredDestination(workspace, "head_repo");
+}
+
+/** The destination `field` of the rechecked declaration (ADR 0378 決定7). A read that reaches one compares the record of the task it
+ *  carries first (ADR 0399 決定3); a purely-local declaration reaches no network and compares nothing. */
+function declaredDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }, field: "repo" | "head_repo") {
   const place = workspace.namedPlace ?? workspace;
-  const { path, head_repo } = place.checkRememberedRepo?.(place) ?? place;
-  return head_repo === undefined ? undefined : networkDestination(head_repo, path);
+  const declaration = place.checkRememberedRepo?.(place) ?? place;
+  const value = declaration[field];
+  if (value === undefined) return undefined;
+  place.checkDestination?.({ ...declaration, name: place.name });
+  return networkDestination(value, declaration.path);
 }
 
 /** ADR 0395 決定1・2: a landing uses the same fork from observation through push and PR creation. */

@@ -26,6 +26,7 @@ import { raiseObjection } from "../src/triage.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
   protectedBranch,
+  recordDeclaredRepo,
   recordTaskCheckoutTip,
   refreshProtectedBranch,
   releaseWorkspace,
@@ -302,6 +303,7 @@ export async function pushedRoot(
   const work = landingWork(db, clock);
   const target = `task/${work.id}`;
   git(workspace.path, "checkout", "-b", target);
+  recordDeclaredRepo(db, work.id, workspace);
   for (let n = 1; n <= commits; n++) commitWork(workspace.path, `feature-${n}.txt`, "ready\n");
   git(workspace.path, "push", "head-repo", target);
   git(workspace.path, "checkout", "main");

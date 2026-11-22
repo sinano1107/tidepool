@@ -100,6 +100,7 @@ import {
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   type RunPlace,
+  recordDeclaredRepo,
   recordedInterviewRoom,
   releaseWorkspace,
   resolveExecutionWorkspace,
@@ -911,6 +912,7 @@ export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: strin
   const sha = git(workspace.path, "rev-parse", `task/${taskId}`);
   fillEmptyWorkspace(db, taskId, workspace.name);
   recordTaskBranchCreated(db, taskId, sha, workspace.name);
+  recordDeclaredRepo(db, taskId, workspace);
 }
 
 /** setup のみ: git を持たない盤面の task に `task_branch_created` だけを残す —— 「ブランチに成果を持つ」の読み(ADR 0374 決定17)の題材。 */
