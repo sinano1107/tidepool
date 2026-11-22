@@ -25,7 +25,7 @@ async function reRegisteredWithSameNumber() {
 
   // `external` の根は merge question もキューの行も持たないので、削除の扉を止めずに生き残る(ADR 0370 決定1)
   const oldRoot = finish(db, clock, landingWork(db, clock, "reef"));
-  recordPrOpenedOutsideConvergence(db, oldRoot, 1, clock.now(), { authority: { merge: "external" } });
+  recordPrOpenedOutsideConvergence(db, oldRoot, 1, clock.now(), { authority: { merge: "external" }, workspace: old });
 
   // 盤面は出元 repo(head_repo)へ push する(ADR 0395 決定2)—— 登録し直しは出元 repo も足す
   await reRegister(db, reef, moved);

@@ -32,7 +32,7 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { quarantineWorkspace, recordDeclaredRepo, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
@@ -737,6 +737,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     NOW,
     ...HUMAN_WEBUI,
   );
+  recordDeclaredRepo(db, work.id, PRODUCT);
   recordPrOpened(db, work, 42, fakeHead(42), NOW, { merge: "escalate" }, undefined);
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
@@ -829,6 +830,7 @@ function openMergeQuestion(github: FakeGitHubClient, head = fakeHead(42)) {
     NOW,
     ...HUMAN_WEBUI,
   );
+  recordDeclaredRepo(db, work.id, PRODUCT);
   recordPrOpened(db, work, 42, head, NOW, { merge: "escalate" }, undefined);
   const answerAt = (minutesSincePrOpened: number) =>
     submitAnswer(
@@ -1085,6 +1087,7 @@ it.each([
     NOW,
     ...HUMAN_WEBUI,
   );
+  recordDeclaredRepo(db, work.id, PRODUCT);
   recordPrOpened(db, work, 42, fakeHead(42), NOW, { merge: "escalate" }, undefined);
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
@@ -1149,6 +1152,7 @@ function escalatedMergeQuestionWith(github: FakeGitHubClient, landingDeps: Parti
     NOW,
     ...HUMAN_WEBUI,
   );
+  recordDeclaredRepo(db, work.id, PRODUCT);
   recordPrOpened(db, work, 42, fakeHead(42), NOW, { merge: "escalate" }, undefined);
   const question = onlyQuestion(db);
   const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, ...landingDeps });
@@ -1390,6 +1394,7 @@ it("GitHub の無い盤面の agent quarantine の解除検査は、無人 merge
 it("agent quarantine の解除検査は、盤面の外で merge 済みのキューの PR を盤面の名義で観測してキューから外し、そのうえで通す", async () => {
   db = openDb(":memory:");
   const queued = queuedForAutoMerge(db, NOW, "specialist");
+  recordDeclaredRepo(db, queued.id, PRODUCT);
   const github = new FakeGitHubClient();
   github.scriptMergedOutside(7);
 

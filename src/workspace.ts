@@ -3056,6 +3056,8 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
       assertRememberedRepo(db, current, now());
       assertRememberedHeadRepo(db, current, now());
       if (current.path !== place.path) {
+        // ADR 0399 決定3・5: 登録し直しで repo も変わった根には、一般の path の拒否より両方の repo を名指す。
+        place.checkDeclaredRepo?.(current);
         throw new RemoteRepositoryMismatchError(`workspace ${place.name}: the registered checkout path changed during the operation. Retry with the current entry.`);
       }
       // ADR 0378 決定3: an earlier pickup predicate only checked the declaration it was given.
@@ -3090,7 +3092,7 @@ export function declaredRepoDisagreement(db: Db, taskId: string, current: Pick<W
   return `${taskBranch(taskId)} cannot be carried: ${was}, but workspace ${current.name} now ${declares}, so the board does not carry it there.`;
 }
 
-export class DeclaredRepoMismatchError extends Error {}
+export class DeclaredRepoMismatchError extends DomainError {}
 
 /** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo with the rechecked declaration, in
  *  the same synchronous section as the read and before the network. It runs after the remembered-repo check, so a hand-edited

@@ -312,22 +312,22 @@ export class GhCliClient implements GitHubClient {
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
   private async gh(workspace: WorkspaceConfig, args: string[], beforeSpawn?: () => void): Promise<string> {
-    const repo = githubKey(await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`));
-    beforeSpawn?.();
-    return this.run([...args, "-R", repo], repo, workspace.path);
+    const repo = await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`);
+    return this.run([...args, "-R", repo], repo, workspace, beforeSpawn);
   }
 
-  /** The declared repo, with its token warmed. ADR 0330 決定1: the declaration is rechecked after that await, so a registry
-   *  change during token acquisition is not acted on with the old destination. */
-  private async warmDeclaredRepo(workspace: WorkspaceConfig, call: string): Promise<RepoSlug> {
-    const repo = declaredRepo(workspace, call);
-    await this.auth.ensureToken(githubKey(repo));
-    if (workspaceNetworkDestination(workspace)?.key !== githubKey(repo)) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
+  /** The declared repo, with its token warmed. */
+  private async warmDeclaredRepo(workspace: WorkspaceConfig, call: string): Promise<string> {
+    const repo = githubKey(declaredRepo(workspace, call));
+    await this.auth.ensureToken(repo);
     return repo;
   }
 
-  /** `gh` with `repo`'s warmed token, bounded by the timeout. */
-  private async run(args: string[], repo: string, cwd?: string): Promise<string> {
+  /** ADR 0330 決定1・4 / ADR 0399 決定3: recheck the destination and the caller's guard in the same synchronous section as spawning `gh`. */
+  private async run(args: string[], repo: string, workspace?: WorkspaceConfig, beforeSpawn?: () => void): Promise<string> {
+    if (workspace && workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
+    beforeSpawn?.();
+    const cwd = workspace?.path;
     try {
       return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
@@ -432,15 +432,14 @@ export class GhCliClient implements GitHubClient {
   async findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null> {
     const { workspace, branch, number } = input;
     const call = "gh api";
-    const declared = await this.warmDeclaredRepo(workspace, call);
-    const repo = githubKey(declared);
+    const repo = await this.warmDeclaredRepo(workspace, call);
     // ADR 0330 決定1: the head repo is read after the await, from the rechecked declaration
     const headRepo = headRepoOf(workspace, call);
     const headRepoKey = githubKey(headRepo);
     const output = await this.run(
       ["api", `repos/${repo}/pulls`, "--method", "GET", "-f", `head=${headRepo.owner}:${branch}`, "-f", "state=all"],
       repo,
-      workspace.path,
+      workspace,
     );
     // a PR from another fork's same-named branch is not the board's; a deleted fork leaves `head.repo` null
     const prs = (
