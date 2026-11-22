@@ -379,6 +379,19 @@ export async function checkAcceptanceFirstHalf(db: Db, place: WorkspaceConfig, p
   if (clean) verifyWorkspaceClean(place);
 }
 
+/** 開く前の項は同期で撃てる —— 同期の呼び手(着地の最初の撮り、ADR 0399 決定7)も await を挟まずに pickup と同じ項を撃つ。 */
+export function fireBeforeOpenPredicates(place: WorkspaceConfig, predicates: PickupPredicate[], live?: () => boolean): void {
+  for (const predicate of predicates) {
+    if (live?.() === false) return;
+    if (predicate.phase !== "before-open") continue;
+    try {
+      predicate.check();
+    } catch (err) {
+      throw new PickupGateError(place, err, predicate.describe);
+    }
+  }
+}
+
 export async function firePickupPredicates(
   db: Db,
   place: WorkspaceConfig,
@@ -386,6 +399,7 @@ export async function firePickupPredicates(
   phase: PickupPredicate["phase"],
   board: PickupPrep & { fresh?: boolean } = {},
 ): Promise<void> {
+  if (phase === "before-open") return fireBeforeOpenPredicates(place, predicates, board.live);
   const fire: PlaceFire = {
     fetch: async (target) => {
       target = withRememberedRepoCheck(db, target);
@@ -397,12 +411,11 @@ export async function firePickupPredicates(
   };
   for (const predicate of predicates) {
     if (board.live?.() === false) return;
-    if (predicate.phase !== phase) continue;
+    if (predicate.phase !== "after-open") continue;
     try {
-      if (predicate.phase === "before-open") predicate.check();
-      else await predicate.check(fire);
+      await predicate.check(fire);
     } catch (err) {
-      throw new PickupGateError(predicate.phase === "after-open" ? predicate.place : place, err, predicate.describe);
+      throw new PickupGateError(predicate.place, err, predicate.describe);
     }
   }
 }
@@ -2836,13 +2849,11 @@ export function compareRefsBeforeLanding(
   if (held) throw new FirstCaptureRefusedError({ quarantine: held.quarantine, value: held.value, reason: `workspace ${held.workspace} is quarantined` });
   const now = () => board.now;
   const named = withRememberedRepoCheck(db, workspace, now);
-  for (const predicate of checkoutPickupPredicates(named, board.fixedPoints)) {
-    if (predicate.phase !== "before-open") continue;
-    try {
-      predicate.check();
-    } catch (err) {
-      throw err instanceof WorkspaceRepoMismatchError ? err : new PickupGateError(named, err, predicate.describe);
-    }
+  try {
+    fireBeforeOpenPredicates(named, checkoutPickupPredicates(named, board.fixedPoints));
+  } catch (err) {
+    // 覚えた repo の項は自分で Quarantine を立てる —— 着地へは今までどおり素の `WorkspaceRepoMismatchError` で返す
+    throw err instanceof PickupGateError && err.cause instanceof WorkspaceRepoMismatchError ? err.cause : err;
   }
   prepareRefBaseline(db, named, { resolveRegistered: board.resolveRegistered, now });
 }

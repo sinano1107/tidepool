@@ -271,7 +271,8 @@ function workspaceQuarantinedMessage(name: string): string {
 }
 
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
- *  Quarantine の question を名指す(ADR 0373 決定13 追記)。 */
+ *  Quarantine の question を名指す(ADR 0373 決定13 追記)。最初の撮りの前の開く前の項(`fixedPoints` との交差を含む)に落ちた名前も
+ *  workspace の Quarantine を立てる(ADR 0399 決定7)。 */
 export function assertLandingRefs(
   db: Db,
   workspace: WorkspaceConfig,
@@ -792,7 +793,8 @@ export interface LandingDeps {
   githubAuth?: GitHubAuth;
   /** 作業台を開く基点(`resolveWorkspacesBaseDir` に渡す値、ADR 0371 決定7)—— 追いつきの conflict と、retry の取り込み。 */
   workspacesDir?: string;
-  /** 盤面の状態の在り処 —— 積み残しの retry が受理と同じ前半の項に渡す(ADR 0371 決定10)。 */
+  /** 盤面の状態の在り処 —— 積み残しの retry が受理と同じ前半の項に渡し(ADR 0371 決定10)、基準の行が無い名前の最初の撮りが開く前の
+   *  項で交差を拒む(ADR 0399 決定7)。Absent → 着地の最初の撮りは固定点との交差を見ない。 */
   boardState?: BoardStatePath[];
   /** 走っている pickup の poll が終わると解ける。収束の回はこれを待ってから始まる —— 同じ checkout で pickup の
    *  fetch・checkout と着地の push が重ならない(GLOSSARY.md「収束」)。Absent → pickup を持たない盤面。 */

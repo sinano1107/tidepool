@@ -640,7 +640,8 @@ export interface ApiRouterDeps {
   taskExecutionCandidates: TaskExecutionCandidates;
   /** 作業台の基点 —— 回答の口(`submitAnswer`)へそのまま渡す。 */
   workspacesDir?: string;
-  /** 盤面の固定点(ADR 0040 / ADR 0377 決定3): 人間担当の work の扉の準備が pickup と同じ門で交差を拒む。 */
+  /** 盤面の固定点(ADR 0040 / ADR 0377 決定3): 人間担当の work の扉の準備が pickup と同じ門で交差を拒み、回答の口(`submitAnswer`)の
+   *  merge の回答の最初の撮りも同じ項で拒む(ADR 0399 決定7)。 */
   boardState?: BoardStatePath[];
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
