@@ -1,5 +1,7 @@
 # checkout は最初の pickup 以降、休止中も盤面の専有領域であり、ref の基準は切れない
 
+**Status 追記: 決定5 の「dirty は休止の後に書かれたもの」には、盤面自身の checkout の移動(`read-tree` の後・ref の前)が途中で止まった場合が加わる。扱い(Quarantine)は変わらず、文面がその場合と目標 sha を名指す([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定7、2026-11-22、issue #3515)。**
+
 **Status 追記: 表題と決定1 の「最初の pickup 以降」は「盤面がその名前に最初に触れた時点(pickup・着地・書き始める・作業台を開く操作の最初の撮り)から」になる。決定2 の全撮りを撮る開きにも作業台を開く操作が加わる([ADR 0383](0383-the-named-place-becomes-the-boards-territory-at-the-boards-first-touch-and-opening-a-workbench-is-one-of-them.md) 決定1・2、2026-11-18、issue #3367)。**
 
 **Status 追記: 決定2・7 の基準の行は、作るときの宣言の repo も一緒に覚える —— 盤面は行き先を決めるたびに今の宣言と比べ、publish の扉が書き換え、削除の扉が行ごと落とす。基準そのものは `refs/*` と HEAD のままで、`remote.origin.url` は足さない(置き場所は spec。[ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定5・6・10、2026-11-15、issue #3178)。**
