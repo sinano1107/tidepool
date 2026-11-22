@@ -1045,8 +1045,6 @@ it("GitHub に同じ head の merge 済み PR がある根の着地は、番号�
   const work = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, work.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  // 作成の後・記録の前に落ちた盤面の跡 —— PR の前の push が出元 repo を記録している(ADR 0399 決定1)
-  recordPushedHeadRepo(db, work.id, workspace);
   const merged = github.scriptPullRequestOnBranch(`task/${work.id}`);
   github.scriptMergedOutside(merged);
   finish(db, clock, work);

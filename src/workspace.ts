@@ -184,8 +184,8 @@ export interface WorkspaceConfig {
   head_repo?: string;
   /** ADR 0378 決定7・8: board operations recheck the live declaration before using its destination. */
   checkRememberedRepo?: (place: WorkspaceConfig) => Pick<WorkspaceConfig, "path" | "repo" | "head_repo">;
-  /** ADR 0399 決定3: a destination read also checks the declared repo recorded for the task it carries against the rechecked
-   *  declaration —— only destination reads, never the pickup predicate that rechecks the remembered repo. */
+  /** ADR 0399 決定3: a destination read also checks the declared repo and the head repo recorded for the task it carries against the
+   *  rechecked declaration —— only destination reads, never the pickup predicate that rechecks the remembered repo. */
   checkDeclaredRepo?: (current: Pick<WorkspaceConfig, "name" | "path" | "repo" | "head_repo">) => void;
   /** Command prefixes a review session may run despite the `manual` write
    *  floor (issue #144 / ADR 0035), passed through from the registry entry the
@@ -3068,9 +3068,11 @@ export function withRememberedRepoCheck<T extends WorkspaceConfig>(
   };
 }
 
-/** A declaration's repo in the form the record keeps and compares (ADR 0378 決定4), null when it is purely-local. */
-function recordedForm({ path, repo }: Pick<WorkspaceConfig, "path" | "repo">): string | null {
-  return repo === undefined ? null : comparedRepo(networkDestination(repo, path));
+/** A declaration's `field` in the form the record keeps and compares (ADR 0378 決定4), null when it is not declared (for `repo`,
+ *  purely-local). */
+function recordedForm(declaration: Pick<WorkspaceConfig, "path" | "repo" | "head_repo">, field: "repo" | "head_repo" = "repo"): string | null {
+  const value = declaration[field];
+  return value === undefined ? null : comparedRepo(networkDestination(value, declaration.path));
 }
 
 /** ADR 0399 決定1: the one writer of a task's declared repo, called where its task branch is made, after pickup's fetch reached
@@ -3079,8 +3081,9 @@ export function recordDeclaredRepo(db: Db, taskId: string, workspace: Pick<Works
   db.prepare("UPDATE tasks SET declared_repo = ? WHERE id = ? AND declared_repo IS NULL").run(JSON.stringify(recordedForm(workspace)), taskId);
 }
 
-/** ADR 0399 決定1: the one writer of a root's head repo, called just before its first push of `task/<id>` to `headRepo` —— the
- *  rechecked destination, after the comparison and in its synchronous section. Written once and never overwritten. */
+/** ADR 0399 決定1: the one writer of a root's head repo —— `headRepo` is the fork its first push of `task/<id>` reached, or the fork
+ *  a PR on that branch was found on. Written once and never overwritten. The destination is read in the comparison's synchronous
+ *  section (ADR 0399 決定3 / ADR 0378 決定7). */
 export function recordHeadRepo(db: Db, taskId: string, headRepo: Pick<ReturnType<typeof networkDestination>, "key" | "url">): void {
   db.prepare("UPDATE tasks SET head_repo = ? WHERE id = ? AND head_repo IS NULL").run(comparedRepo(headRepo), taskId);
 }
@@ -3101,19 +3104,21 @@ export function declaredRepoDisagreement(db: Db, taskId: string, current: Pick<W
     const declares = declared === null ? "declares no repo (purely-local)" : `declares repo ${repositoryLabel(declared)}`;
     return stop(recorded === undefined ? "the board has no record of the repo it was picked up for" : `it was picked up for repo ${repositoryLabel(recorded)}`, declares);
   }
-  const headRepo = current.head_repo === undefined ? null : comparedRepo(networkDestination(current.head_repo, current.path));
+  const headRepo = recordedForm(current, "head_repo");
+  const declaresHead = headRepo === null ? "declares no head repo" : `declares head repo ${repositoryLabel(headRepo)}`;
   const pushed = row?.head_repo ?? null;
+  if (pushed !== null) return pushed === headRepo ? undefined : stop(`it was pushed to head repo ${repositoryLabel(pushed)}`, declaresHead);
+  const prNumber = row?.pr_number ?? null;
   // ADR 0399 Status 追記: without a declared repo the board reaches no GitHub, so a missing record guards nothing there
-  if (pushed === null ? row?.pr_number == null || current.repo === undefined : pushed === headRepo) return undefined;
-  const was = pushed === null ? `the board has no record of the head repo its PR #${row!.pr_number} was pushed from` : `it was pushed to head repo ${repositoryLabel(pushed)}`;
-  return stop(was, headRepo === null ? "declares no head repo" : `declares head repo ${repositoryLabel(headRepo)}`);
+  if (prNumber === null || current.repo === undefined) return undefined;
+  return stop(`the board has no record of the head repo its PR #${prNumber} was pushed from`, declaresHead);
 }
 
 export class DeclaredRepoMismatchError extends DomainError {}
 
-/** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo with the rechecked declaration, in
- *  the same synchronous section as the read and before the network. It runs after the remembered-repo check, so a hand-edited
- *  `repo:` stays the workspace's stop (ADR 0378 決定6・8). */
+/** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo and head repo records with the
+ *  rechecked declaration, in the same synchronous section as the read and before the network. It runs after the remembered-repo
+ *  check, so a hand-edited `repo:` stays the workspace's stop (ADR 0378 決定6・8). */
 export function withDeclaredRepoCheck<T extends WorkspaceConfig>(db: Db, workspace: T, taskId: string): T {
   return {
     ...workspace,

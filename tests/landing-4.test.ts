@@ -829,10 +829,15 @@ function deferLanding(board: Db, taskId: string, now: Date): void {
   });
 }
 
-// 盤面は出元 repo へ push して PR を開く(ADR 0395 決定2)—— PR を持つ根の名前は出元 repo を宣言する(ADR 0399 決定3)
-it("既定 agent の quarantine 回答前の観測は、assignee 未指定の work の外部 merge を記録してキューを退ける", async () => {
+/** 下の3つの観測の題材の盤面。PR を持つ根は出元 repo へ push してから PR を開いているので、その名前は出元 repo を宣言している
+ *  (ADR 0395 決定2)。 */
+async function observationBoard() {
   const { workspace: observationWorkspace } = await makeLandingWorkspace("reef");
-  const { db, clock } = await openBoard();
+  return { ...(await openBoard()), observationWorkspace };
+}
+
+it("既定 agent の quarantine 回答前の観測は、assignee 未指定の work の外部 merge を記録してキューを退ける", async () => {
+  const { db, clock, observationWorkspace } = await observationBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
@@ -859,8 +864,7 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
 });
 
 it("quarantine 回答前の観測は、盤面の名義で merge 済みのキューの PR を pr_merged として根に刻みキューから外す(ADR 0265 決定5)", async () => {
-  const { workspace: observationWorkspace } = await makeLandingWorkspace("reef");
-  const { db, clock } = await openBoard();
+  const { db, clock, observationWorkspace } = await observationBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },
@@ -886,8 +890,7 @@ it("quarantine 回答前の観測は、盤面の名義で merge 済みのキュ�
 });
 
 it("quarantine 回答前の観測は、盤面の外で閉じられたキューの PR を閉じた観測としてキューから外す(ADR 0229 決定4)", async () => {
-  const { workspace: observationWorkspace } = await makeLandingWorkspace("reef");
-  const { db, clock } = await openBoard();
+  const { db, clock, observationWorkspace } = await observationBoard();
   const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
   recordPrOpenedOutsideConvergence(db, work, 7, clock.now(), {
     authority: { merge: "auto_if_ci_green" },

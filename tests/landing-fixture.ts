@@ -91,7 +91,7 @@ export function recordPrOpenedOutsideConvergence(
   recordPrOpened(db, task, prNumber, head, now, authority, isProtected);
 }
 
-/** 収束を通さずに `workspace` の出元 repo へ push した根の記録 —— 着地の最初の push の直前に書く記録と同じ(ADR 0399 決定1)。 */
+/** 収束を通さずに `workspace` の出元 repo へ push した根の記録 —— 着地の最初の push が届いたときに書く記録と同じ(ADR 0399 決定1)。 */
 export function recordPushedHeadRepo(db: Db, taskId: string, workspace: Pick<WorkspaceConfig, "path" | "head_repo">): void {
   if (workspace.head_repo !== undefined) recordHeadRepo(db, taskId, networkDestination(workspace.head_repo, workspace.path));
 }
