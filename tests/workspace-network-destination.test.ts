@@ -492,11 +492,11 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   git(path, "config", `url.${workspace.repo}.insteadOf`, origin);
   const registry = { dir: await makeRegistry(), mode: "purely-local" } as const;
   const base = await tempDir("tidepool-destination-checkouts-");
-  await createWorkspace({ name: "rewritten", mode: "register", path, confirm: true }, { registry, workspacesBaseDir: base });
-  const registered = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), "rewritten", "rewritten", base);
-  expect(registered.repo).toBe(workspace.repo);
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
+  await createWorkspace({ name: "rewritten", mode: "register", path, confirm: true }, { registry, workspacesBaseDir: base, db });
+  const registered = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), "rewritten", "rewritten", base);
+  expect(registered.repo).toBe(workspace.repo);
   const task = registerTask(db, { type: "work", title: "first pickup", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const gate = () => pickupGate(db, registered, task, base);
   await expect(gate()).rejects.toThrow(`declares repo ${workspace.repo}, but its checkout's origin is ${origin}`);

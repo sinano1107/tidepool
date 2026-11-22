@@ -1,5 +1,7 @@
 # workspace の網の行き先は宣言 `repo` から決める —— origin が別の repo を指すか、宣言が覚えた repo と違えば workspace の Quarantine
 
+**Status 追記: 決定10 の「削除の扉が行ごと消すので、登録し直しは新しい repo を覚える」は、削除が registry の commit の後・行の削除の前に止まると成り立たない。その名前に行が残っていれば登録の扉は断り、entry を戻して削除し直す出口を名指す([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定5、2026-11-22、issue #3515)。**
+
 **Status 追記: 決定6 の「盤面は PR を番号で覚えている」危険は、削除の扉 → 登録し直し(決定9)でも起きる —— PR を開いた根は削除を生き残る。task が自分の中身の向かう repo(宣言の repo・出元 repo)を覚え、根を運ぶ・PR を扱う所でそれを今の宣言と比べ、食い違えばその根だけを止める。決定9 の道はそのまま残る([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定1〜3・5、2026-11-22、issue #3500)。**
 
 **Status 追記: remote-backed の workspace の網の行き先は、宣言 `repo` と宣言の出元 repo(fork)の2つになる。タスクブランチの push と fetch は出元 repo へ、保護ブランチと PR の操作は `repo` へ向く。出元 repo の値は扉を通る危険な値で、≠ `repo`、≠ registry の repo、parent = `repo` を検査する。決定6 の「覚えた値」に当たる仕組みを出元 repo にも持つかは spec で決める([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・2、2026-11-21、issue #3482)。**

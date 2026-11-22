@@ -11,6 +11,7 @@ import {
   BoardStateOverlapError,
   type CreateWorkspaceInput,
   GitHubIdentityMissingError,
+  LeftoverWorkspaceStateError,
   LiveCheckoutSignalsError,
   type PublishWorkspaceInput,
   type UpdateWorkspaceInput,
@@ -508,6 +509,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
         if (input.name === "overlap") throw new BoardStateOverlapError("workspace overlaps board state");
         if (input.name === "missing-identity") throw new GitHubIdentityMissingError();
         if (input.name === "no-repo-access") throw new RepoAccessMissingError("grant it with: gh api -X PUT ...");
+        if (input.name === "leftover") throw new LeftoverWorkspaceStateError(input.name, "Put the entry back");
         throw new Error("registry remote unavailable");
       },
       update: async () => {
@@ -564,6 +566,15 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
       arguments: { name: "no-repo-access", mode: "register", path: "/work/no-repo-access" },
     });
     expect(noRepoAccess.content[0].text).toContain("gh api -X PUT");
+
+    // ADR 0401 決定5: 残った行の拒否は出口の文ごと届く —— 盤面の故障に畳まない
+    const leftover: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "leftover", mode: "create" },
+    });
+    expect(leftover.isError).toBe(true);
+    expect(leftover.content[0].text).toContain('workspace "leftover" cannot be registered');
+    expect(leftover.content[0].text).not.toContain("registry upstream error");
 
     const upstream: any = await client.callTool({
       name: "create_workspace",

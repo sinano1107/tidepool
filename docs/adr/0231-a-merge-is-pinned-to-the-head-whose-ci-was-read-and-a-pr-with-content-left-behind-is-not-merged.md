@@ -1,6 +1,6 @@
 # merge は CI を読んだ head に固定し、積み残しのある PR は merge しない
 
-**Status 追記: 決定4 の「記録に無い head(盤面の外の push)」の括弧は断定でなくなる —— push の後・記録の前に盤面が落ちると、盤面自身の push が記録に無い head になる。`pr_head_observed` は誰が push したかを言わない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-floor-fail-closed-no-wrong-record-and-a-named-exit.md) 決定3、2026-11-22、issue #3515)。**
+**Status 追記: 決定4 の「盤面の外で push された head」は断定でなくなり、「盤面の記録に無い head」と読む —— push の後・記録の前に盤面が落ちると、盤面自身の push が記録に無い head になる。`pr_head_observed` は誰が push したかを言わない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定3、2026-11-22、issue #3515)。**
 
 **Status 追記: 決定1 の「読んだ後に head が動けば、無人 merge はキューに残って次の tick で新しい head の CI を読む」は、盤面が push した head へ動いたときだけ残る —— 盤面が最後に push した sha と違う head(書き換え・巻き戻しを除く)は、キューを外して推奨 hold の merge question に倒し、人間の `merge` は盤面がその commit を伝えるまで1回拒む([ADR 0387](0387-the-board-merges-unattended-only-the-head-it-last-pushed-and-a-human-merge-on-a-head-the-board-did-not-push-is-refused-once.md) 決定1・2、2026-11-20、issue #3210)。**
 

@@ -192,6 +192,7 @@ import {
   GitHubIdentityMissingError,
   HeadRepoRejectedError,
   HeadRepoTaskBranchesNotSentError,
+  LeftoverWorkspaceStateError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
@@ -909,7 +910,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // register モードで拾えば通る、呼び出し側の状態の問題である
         err instanceof OrphanCheckoutMismatchError ||
         err instanceof RelativeClonePathError ||
-        err instanceof BoardNamedProtectedBranchError
+        err instanceof BoardNamedProtectedBranchError ||
+        // ADR 0401 決定5: 文が名指す出口を辿れば同じ登録が通る
+        err instanceof LeftoverWorkspaceStateError
       ) {
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof LiveCheckoutSignalsError) {

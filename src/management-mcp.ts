@@ -141,6 +141,7 @@ import {
   type CreateWorkspaceInput,
   GitHubIdentityMissingError,
   HeadRepoRejectedError,
+  LeftoverWorkspaceStateError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   ProtectedBranchMissingError,
@@ -245,6 +246,7 @@ function registryToolError(err: unknown) {
     err instanceof NotAGitRepositoryError ||
     err instanceof RelativeClonePathError ||
     err instanceof BoardNamedProtectedBranchError ||
+    err instanceof LeftoverWorkspaceStateError ||
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||

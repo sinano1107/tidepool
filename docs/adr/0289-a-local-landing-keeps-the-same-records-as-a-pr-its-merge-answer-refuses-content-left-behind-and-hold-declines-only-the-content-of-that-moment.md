@@ -1,5 +1,7 @@
 # ローカル着地も根に記録を持つ —— merge 回答は積み残しで拒み、hold が断るのはその時点の内容である
 
+**Status 追記: hold は、タスクブランチがもう保護ブランチに履歴で含まれていれば断られ、`merge` が名指される(merge の後・記録の前に盤面が落ちた場合)—— 載った内容に断念を刻まない。それ以外の hold を拒まない振る舞いは変わらない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定4、2026-11-22、issue #3515)。**
+
 **Status 追記: 決定3 の「hold が断るのはその時点の内容」の時点は、回答の時点から question が問うた時点に改める。記録は abandon promotion・PR の hold と同じ1種類になる。何を止め、いつ効かなくなるかは変わらない([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) 決定5・6、2026-11-21、issue #3402)。**
 
 **Status 追記: 決定1 の「収束が候補から外す根」は3つから4つになる —— タスクブランチが失われて着地が終わった根(効いている「ブランチが失われた」event を持ち、PR を開いていない)が足される。編集があった根は専用の記録、handoff だけの根は `nothing_to_land` で終わる。決定3 の「head が引けなければ変わったと読み、立て直す」はその根では起きず、恒久の「着地しない」が失われたブランチに限って戻る —— 届く先のブランチが無いので、決定3 が恒久を外した理由が当たらない([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定7、2026-11-15、issue #3178)。**

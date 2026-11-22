@@ -765,7 +765,7 @@ export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceC
     awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(reef.resolve, undefined), "reef"),
   });
   between();
-  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, reef.admin);
+  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
   expect(reef.resolve("reef").repo).toBe(moved.repo);
   if (moved.head_repo !== undefined) giveHeadRepo(db, reef, moved.head_repo);
 }

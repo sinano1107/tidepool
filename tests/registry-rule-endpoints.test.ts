@@ -25,7 +25,7 @@ it.each([
   const deps = { registry, tiers: () => seedTierNames };
   const workspacesBaseDir = await tempDir("tidepool-name-rule-");
   t = await bootTidepool({
-    workspaceAdmin: { create: (input) => createWorkspace(input, { registry, workspacesBaseDir }) },
+    workspaceAdmin: { create: (input) => createWorkspace(input, { registry, workspacesBaseDir, db: t.db }) },
     agentAdmin: { create: (input) => createAgent(input, deps), update: (input) => updateAgent(input, deps) },
     profileAdmin: { create: (input) => createProfile(input, { registry }) },
   });

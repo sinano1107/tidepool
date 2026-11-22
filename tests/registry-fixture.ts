@@ -8,6 +8,7 @@ import { type BoardStatePath, boardStatePaths } from "../src/board-state.js";
 import { loadRegistry, ownEntry } from "../src/registry.js";
 import { SKILL_WILDCARD } from "../src/skill-allowlist.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
+import { workspaceDeletionMessage } from "../src/workspace.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 状態パスはどれも存在しない場所に置き、registry clone だけを本物の固定点にした盤面の固定点(ADR 0377 決定3)。
@@ -28,6 +29,16 @@ export function registryFixedPoints(registryDir?: string): BoardStatePath[] {
 /** spec #3273 text E1: `path` が registry clone に重なる拒否(登録・boot の一斉検査・pickup の述語で同じ文)。 */
 export const registryCloneOverlap = (path: string, registryDir: string) =>
   `${path} overlaps the registry clone (${registryDir}), which is not a workspace. To let agents edit the registry, clone the registry's repository to another path and register that.`;
+
+/** 削除の扉の registry の commit だけを打ち、行の削除の前に盤面が落ちた状態を作る(ADR 0401 決定5)。返すのはその commit。 */
+export function commitWorkspaceDeletion(registryDir: string, name: string): string {
+  const file = join(registryDir, "workspaces.yaml");
+  const entries = parseDocument(readFileSync(file, "utf8"));
+  entries.delete(name);
+  writeFileSync(file, entries.toString());
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", workspaceDeletionMessage(name)], { cwd: registryDir, stdio: "pipe" });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: registryDir, encoding: "utf8" }).trim();
+}
 
 /** registry の workspaces.yaml で workspace `name` の欄 `key` を `value` に書き換えて commit する —— 設定の扉が受けない欄
  *  (`branch`、GitHub の外の `head_repo`)を宣言する手。 */

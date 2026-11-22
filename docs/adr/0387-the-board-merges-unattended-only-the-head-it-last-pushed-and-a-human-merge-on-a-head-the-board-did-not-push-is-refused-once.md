@@ -1,6 +1,6 @@
 # 無人 merge は盤面が最後に push した head だけを merge し、盤面が push していない head への人間の merge は1回拒む
 
-**Status 追記: 決定1・2 の「盤面が push していない head」は「盤面の記録に無い head」と読む —— push の後・記録の前に盤面が落ちると、盤面自身の push がこの head になり、question は推奨 hold で立ち、その PR は以後キューへ戻らない。question と拒否の文は「盤面は push していない」と断定しない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-floor-fail-closed-no-wrong-record-and-a-named-exit.md) 決定3、2026-11-22、issue #3515)。**
+**Status 追記: 決定1・2 の「盤面が push していない head」は「盤面の記録に無い head」と読む —— push の後・記録の前に盤面が落ちると、盤面自身の push がこの head になり、question は推奨 hold で立ち、その PR は以後キューへ戻らない。question と拒否の文は「盤面は push していない」と断定しない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定3、2026-11-22、issue #3515)。**
 
 **Status 追記: 「盤面が最後に push した head」と読む GitHub の head は、宣言の出元 repo(fork)のタスクブランチにある。PR の無いブランチの head を宣言 `repo` で読むと「無い」と読めて fail-open になるので、読む先も出元 repo に揃える([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1、2026-11-21、issue #3482)。**
 

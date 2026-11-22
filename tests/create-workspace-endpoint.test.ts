@@ -5,6 +5,7 @@ import { RepoAccessMissingError } from "../src/repo-access.js";
 import {
   BoardStateOverlapError,
   type CreateWorkspaceInput,
+  LeftoverWorkspaceStateError,
   LiveCheckoutSignalsError,
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
@@ -111,6 +112,21 @@ it("盤面の状態パスと重なる登録(BoardStateOverlapError)は 400 で�
   // 盤面が壊れている(502)のでも未設定(503)のでもない
   expect(res.status).toBe(400);
   expect(res.json.error).toContain("board database (TIDEPOOL_DB)");
+});
+
+it("削除の途中で残った行の上の登録(LeftoverWorkspaceStateError)は 400 で出口の文を返す(ADR 0401 決定5)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async (input) => {
+        throw new LeftoverWorkspaceStateError(input.name, "Put the entry back");
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces", { mode: "create", name: "reef" });
+
+  expect(res.status).toBe(400);
+  expect(res.json.error).toContain('workspace "reef" cannot be registered');
 });
 
 it("repo アクセスが足りない登録(RepoAccessMissingError)は 400 で案内をそのまま返す(ADR 0067)", async () => {
