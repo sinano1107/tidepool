@@ -24,12 +24,13 @@ import {
   windowMatchesSetting,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
-import type { GitHubAuth } from "./github-auth.js";
+import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
+import { RemoteRepositoryMismatchError } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -70,6 +71,7 @@ import {
   owedReleases,
   type PickupStopped,
   pickupTask,
+  registerFailureQuestion,
   resolveTaskAgent,
   settleQuestionAsObserved,
   type Task,
@@ -93,12 +95,14 @@ import type { SpawnFailure, WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   CheckoutHostError,
+  DeclaredRepoMismatchError,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   LostTaskBranchPresentError,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
+  pickupRepoCheck,
   prepareWorkspaceAtPickup,
   quarantineWithRepoAccessGuidance as quarantineWithGuidance,
   quarantineWorkspace,
@@ -106,8 +110,10 @@ import {
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   taskNamedPlace,
+  UnknownWorkspaceError,
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
+  type WorkspaceResolver,
 } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
@@ -291,8 +297,8 @@ export interface Scheduler {
 }
 
 /** task の性質の門の答え(ADR 0328 決定6): 通す / この head を外す / GitHub が読めなかった —— 外す・計測・log は heads ループが行う。
- *  head を外す門は理由を自分で記録済み(drift の quarantine、Gone の failure question)。 */
-type GateVerdict<T> = { pass: T } | { skip: "head" } | { skip: "gitHub"; ref: IssueRef; error: unknown };
+ *  drift と Gone は門が記録し、task の repo の食い違いは head の確認と合わせて loop で記録する。 */
+type GateVerdict<T> = { pass: T } | { skip: "head" } | { skip: "gitHub"; ref: IssueRef; error: unknown } | { skip: "repo"; error: DeclaredRepoMismatchError };
 /** 門を通った head が spawn へ運ぶもの。 */
 type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing | undefined };
 
@@ -478,16 +484,26 @@ export function startScheduler(deps: {
     const open = openQuarantineQuestion(db, "issueExpansion", null);
     if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "issueExpansion", value: null }, clock.now());
   };
-  /** pickup の GitHub の読み1つ: 結果を投げずに返し、答えたかの会計を足す。会計の DB 書き込みはどの try の中にも置かない ——
+  /** pickup の GitHub の読み1つ: 網の結果を値で返し、答えたかの会計を足す。会計の DB 書き込みはどの try の中にも置かない ——
    *  その失敗は poll の throw であって GitHub の失敗に数えない(ADR 0328 決定6)。 */
-  async function readGitHub<T>(read: Promise<T>): Promise<{ value: T } | { error: unknown }> {
+  async function readGitHub<T>(read: Promise<T>, checkedWorkspace?: WorkspaceConfig): Promise<{ value: T } | { error: unknown }> {
     let result: { value: T } | { error: unknown };
     try {
       result = { value: await read };
     } catch (error) {
       result = { error };
     }
+    if ("error" in result && (result.error instanceof DeclaredRepoMismatchError || result.error instanceof WorkspaceRepoMismatchError)) throw result.error;
     if ("value" in result || result.error instanceof IssueGoneError) issueExpansionAnswered();
+    // ADR 0399 決定3・5: a reply can arrive after the task's declaration has changed, including an old repo's Gone result.
+    if (checkedWorkspace?.checkDeclaredRepo) {
+      try {
+        workspaceNetworkDestination(checkedWorkspace);
+      } catch (error) {
+        if (error instanceof RemoteRepositoryMismatchError || error instanceof UnknownWorkspaceError) return result;
+        throw error;
+      }
+    }
     return result;
   }
   const resumeTimer = createResumeTimers(clock, pollNow);
@@ -516,6 +532,24 @@ export function startScheduler(deps: {
     // 最後に読むのは、停止と封じ込めの理由を隠さず、上の await の後の容器の今を読むため
     const unreclaimed = pendingReclaim?.();
     if (unreclaimed !== undefined) return `${unreclaimed} has not been observed empty — pickup waits`;
+  }
+
+  /** ADR 0399 決定3・5: check the selected task at the issue destination read, including when it is reading a parent's briefing. */
+  function issueWorkspaceAtPickup(head: Task, issueWorkspace: WorkspaceConfig, resolve: WorkspaceResolver): WorkspaceConfig | undefined {
+    const guard = pickupRepoCheck(db, head, () => clock.now(), resolve);
+    if (!guard) return issueWorkspace;
+    const name = derivedWorkspace(db, head) ?? workspace?.name ?? null;
+    const place = name === issueWorkspace.name ? issueWorkspace : resolveOrQuarantine(db, resolve, name, clock.now());
+    if (!place) return undefined;
+    const checked = guard(place);
+    if (place.name === issueWorkspace.name) return checked;
+    return {
+      ...issueWorkspace,
+      checkDeclaredRepo: (current) => {
+        workspaceNetworkDestination(checked);
+        issueWorkspace.checkDeclaredRepo?.(current);
+      },
+    };
   }
 
   /** ADR 0067 決定2: pickup の門と準備が落ちた瞬間の修復案内つき quarantine(人間担当の work の扉と共有)。 */
@@ -623,6 +657,9 @@ export function startScheduler(deps: {
           if (err instanceof FirstCaptureRegistryReadError) throw err;
           // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>` はその task の失敗(出口は cancel)—— 名前の場所を quarantine しない
           if (err instanceof LostTaskBranchPresentError) throw err;
+          // ADR 0399 決定5: a task's recorded repo disagreement goes to its normal failure question.
+          if (err instanceof DeclaredRepoMismatchError) throw err;
+          if (err instanceof PickupGateError && err.cause instanceof DeclaredRepoMismatchError) throw err.cause;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
           // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、落ちた場所の名前で止める(受験者は root id、ADR 0276 決定3)
           if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {
@@ -691,17 +728,17 @@ export function startScheduler(deps: {
   async function issuePickupGate(head: Task): Promise<GateVerdict<Partial<TaskContent>>> {
     if (head.github_issue_number == null || !github) return { pass: {} };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
+    if (!resolve) return { pass: await contentSourceFor(head, github, () => undefined).expand() };
     // board-driven async workspace use: registry drift quarantines the name
     // (ADR 0009) and the loop re-reads the stops before the next head
-    const resolved = resolve && resolveOrQuarantine(db, resolve, head.workspace, clock.now());
-    if (resolve && !resolved) return { skip: "head" };
-    // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
-    if (!resolved) return { pass: await contentSourceFor(head, github, () => undefined).expand() };
-    const ref = { workspace: resolved, number: head.github_issue_number };
-    const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand());
+    const resolved = resolveOrQuarantine(db, resolve, head.workspace, clock.now());
+    const checked = resolved && issueWorkspaceAtPickup(head, resolved, resolve);
+    if (!checked) return { skip: "head" };
+    const ref = { workspace: checked, number: head.github_issue_number };
+    const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand(), checked);
     if ("value" in read) return { pass: read.value };
     const err = read.error;
-    if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
     if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
     // 確定的失敗 (ADR 0016): the reference is dead for good, not this
     // cycle's weather — the same watchdog-shaped retry/abandon question
@@ -743,10 +780,16 @@ export function startScheduler(deps: {
 
   /** task の性質の門を順に通す: issue の展開 → 親の文面。 */
   async function taskGates(head: Task): Promise<GateVerdict<TaskGated>> {
-    const content = await issuePickupGate(head);
-    if (!("pass" in content)) return content;
-    const parentBriefing = await parentBriefingAtPickup(head);
-    return "pass" in parentBriefing ? { pass: { content: content.pass, parentBriefing: parentBriefing.pass } } : parentBriefing;
+    try {
+      const content = await issuePickupGate(head);
+      if (!("pass" in content)) return content;
+      const parentBriefing = await parentBriefingAtPickup(head);
+      return "pass" in parentBriefing ? { pass: { content: content.pass, parentBriefing: parentBriefing.pass } } : parentBriefing;
+    } catch (err) {
+      if (err instanceof DeclaredRepoMismatchError) return { skip: "repo", error: err };
+      if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
+      throw err;
+    }
   }
 
   /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。 */
@@ -775,14 +818,14 @@ export function startScheduler(deps: {
     const stored = { ...briefing, title: parent.title, purpose: parent.purpose, completion_criteria: parent.completion_criteria };
     if (parent.github_issue_number === null || !github) return { pass: stored };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-    const resolved = resolve && resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
-    if (resolve && !resolved) return { skip: "head" };
-    if (!resolved) return { pass: stored };
-    const ref = { workspace: resolved, number: parent.github_issue_number };
-    const read = await readGitHub(github.getIssueWithState(ref));
+    if (!resolve) return { pass: stored };
+    const resolved = resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
+    const checked = resolved && issueWorkspaceAtPickup(head, resolved, resolve);
+    if (!checked) return { skip: "head" };
+    const ref = { workspace: checked, number: parent.github_issue_number };
+    const read = await readGitHub(github.getIssueWithState(ref), checked);
     if ("error" in read) {
       const err = read.error;
-      if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
       if (err instanceof IssueGoneError && err.reason === "not_found") return { pass: { ...briefing, issue: { number: ref.number, state: "not_found" } } };
       return { skip: "gitHub", ref, error: err };
     }
@@ -1084,6 +1127,14 @@ export function startScheduler(deps: {
         if (verdict.skip === "gitHub") {
           gitHubUnreadable = true;
           issueExpansionFailed(head.id, verdict.ref, verdict.error);
+        } else if (verdict.skip === "repo") {
+          const candidate = head;
+          db.transaction(() => {
+            const current = getTask(db, candidate.id);
+            if (current?.status !== "todo" || current.assignee !== candidate.assignee || workspaceNameOf(current) !== selectedWorkspaceName) return;
+            if (candidate.workspace !== null && current.workspace !== candidate.workspace) return;
+            registerFailureQuestion(db, current, `repository changed before pickup: ${current.title}`, verdict.error.message, clock.now());
+          })();
         } else stopped = quarantineStops(db);
         head = nextHead();
       }

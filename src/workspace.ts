@@ -132,6 +132,7 @@ import {
   fillEmptyWorkspace,
   getTask,
   hasStartedWork,
+  hasTaskBranch,
   hasTaskBranchInForce,
   holdsFirstCaptures,
   interviewRole,
@@ -2714,6 +2715,12 @@ type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
  *  ADR 0351 決定2: 基準は切れない —— 行が無いか NULL なら最初の撮り、あれば盤面が書く前に除外無しで比べる。以後の書き込みは口が畳む。
  *  比較は読む場所の後半(`reads`、ADR 0329 決定10・11)より前 —— 走る場所の違反は読む場所を書く前に止まる。 */
 export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfig, task: Task, board: PickupPreparation): Promise<void> {
+  const checkRepo = pickupRepoCheck(db, task, board.now, board.resolveRegistered);
+  if (checkRepo) {
+    workspace = checkRepo(workspace);
+    // ADR 0399 決定5: a stopped task should not leave the new registration's first baseline behind.
+    if (!holdsBaseline(db, workspace.name)) workspaceNetworkDestination(workspace);
+  }
   await preparePickupPlace(db, workspace, task, board);
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
@@ -3126,6 +3133,12 @@ export function declaredRepoDisagreement(db: Db, taskId: string, current: Pick<W
 }
 
 export class DeclaredRepoMismatchError extends DomainError {}
+
+/** ADR 0399 決定1・3: a prior task branch records that preparation reached the repo. A pickup stopped before then can still try for the first time. */
+export function pickupRepoCheck(db: Db, task: Task, now: () => Date, resolveRegistered: WorkspaceResolver | undefined) {
+  if (interviewRootIdOf(db, task) !== undefined || !hasTaskBranch(db, task.id)) return undefined;
+  return (workspace: WorkspaceConfig) => withDeclaredRepoCheck(db, withRememberedRepoCheck(db, workspace, now, resolveRegistered), task.id);
+}
 
 /** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo and head repo records with the
  *  rechecked declaration, in the same synchronous section as the read and before the network. It runs after the remembered-repo

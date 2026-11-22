@@ -3,9 +3,10 @@ import type { Db } from "../src/db.js";
 import { createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { registerTask, type Task } from "../src/tasks.js";
-import { declaredRepoDisagreement, type WorkspaceConfig } from "../src/workspace.js";
+import { declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
+  commitWork,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
@@ -38,7 +39,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 // その根だけを、記録と今の宣言を名指す PR 昇格失敗の question で止める(spec #3595 の振る舞い 1)。
 
 /** 旧い repo で拾われ PR #1 を開いた done の根を残して、`reef` を削除の扉 → 登録の扉で別の repo の checkout に登録し直し、`repair` なら
- *  盤面の経路で根に修理を載せた盤面 —— 根は運ぶ内容を持ち、PR を読みに行く所まで進む。`external` の根は削除の扉を止めない(ADR 0370 決定1)。 */
+ *  着地の最初の撮りより前に新しい checkout の根に修理を置く。`external` の根は削除の扉を止めない(ADR 0370 決定1)。 */
 async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
@@ -52,7 +53,13 @@ async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
   recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" } });
 
   await reRegister(db, reef, moved);
-  if (repair) await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), done, "repair.txt", "repair\n");
+  if (repair) {
+    const branch = taskBranch(done.id);
+    git(moved.path, "fetch", "--quiet", old.path, branch);
+    git(moved.path, "checkout", "--quiet", "-b", branch, "FETCH_HEAD");
+    commitWork(moved.path, "repair.txt", "repair\n");
+    git(moved.path, "checkout", "--quiet", protectedBranch(moved));
+  }
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
   return { db, github, landing, old, moved, root: done };
 }
