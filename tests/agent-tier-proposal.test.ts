@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput, type TierApproval } from "../src/agent-create.js";
+import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput, RegistryLogUnreadableError, type TierApproval } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
@@ -445,7 +445,7 @@ it("承認の commit が registry にあり記録が無い提案への approve �
   }
 });
 
-it("改名の窓(agent の tier が盤面の段の名前でない)の間、提案は due 判定で決着せず、approve は改名の再実行を名指して断られ何も残らない", async () => {
+it("改名の窓(agent の tier が盤面の段の名前でない)の間、提案は due 判定で決着せず、approve はその段を名指して断られ何も残らない", async () => {
   const registry = fakeRegistry();
   const { client, call, changeTier } = await boardWithRoutingReview(registry);
   try {
@@ -460,7 +460,9 @@ it("改名の窓(agent の tier が盤面の段の名前でない)の間、提�
     const refusedAt = async () => {
       const res = await answer(questionId, { answers: ["approve"] });
       expect(res.status).toBe(409);
-      expect(res.json.error).toMatch(/agent deckhand declares tier top, which is not one of the board's tiers.*re-run that rename/);
+      expect(res.json.error).toMatch(/^agent deckhand declares tier top, which is not one of the board's tiers/);
+      // 改名の再実行を名指す文は agent の解決にだけ出す(ADR 0401 決定6)
+      expect(res.json.error).not.toMatch(/rename/);
       expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
       expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
     };
@@ -487,6 +489,31 @@ it("agent の tier が盤面の段の名前でなければ、tier の提案は�
       error: expect.stringMatching(/^agent deckhand declares tier top, which is not one of the board's tiers/),
     });
     expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === review.id)).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("registry の log が読めなければ、due 判定は崩れた pin の提案をこの回は決着させず、approve は断られ question は open のまま", async () => {
+  const registry = fakeRegistry();
+  registry.agentAdmin.tierApproval = () => {
+    throw new RegistryLogUnreadableError(new Error("fatal: bad object"));
+  };
+  const { client, call, changeTier } = await boardWithRoutingReview(registry);
+  try {
+    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
+    const questionId = await proposeDeckhand(call);
+    registry.agents.set("deckhand", agent("deckhand", "openai", "standard"));
+
+    await t.clock.advance(2 * DAY);
+    expect(await task(questionId)).toMatchObject({ status: "todo" });
+
+    const res = await answer(questionId, { answers: ["approve"] });
+    expect(res.status).toBe(409);
+    expect(res.json.error).toContain("fatal: bad object");
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+    expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
+    expect(changeTier).not.toHaveBeenCalled();
   } finally {
     await client.close();
   }

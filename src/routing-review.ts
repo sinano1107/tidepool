@@ -17,6 +17,7 @@ import {
   type RowKey,
   readExecutionSettings,
   rowName,
+  undeclaredTier,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import {
@@ -501,16 +502,13 @@ export type RegistryAgent = { name: string; tier?: string; builtin?: boolean };
 
 /** agent の今の段(書いていなければ盤面既定)と、その1段下(ADR 0150 決定5)。「1段下」は盤面の一覧の順序(ADR 0200 決定4)で、
  *  一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。書いた段が盤面の段でなければ(改名の窓、
- *  ADR 0401 決定6)段の位置が無いので undefined —— 最下位と読まない。 */
+ *  ADR 0401 決定6)段の位置が無いので全体が undefined —— 最下位と読まない。 */
 function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } | undefined {
   const tiers = tierNames(db);
   const from = agent.tier ?? boardDefaultTier(db);
   const at = tiers.indexOf(from);
   return at === -1 ? undefined : { from, below: tiers[at - 1] };
 }
-
-/** 盤面の段でない段を書いた agent の名指し(tier の提案の門と、agent の世代の理由)。 */
-const undeclaredTier = (agent: RegistryAgent) => `agent ${agent.name} declares tier ${agent.tier}, which is not one of the board's tiers`;
 
 /** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど
  *  1段下へ。下げ先に agent の entry の行が無ければ下げた agent は skipped になるので断る。根拠はその agent の worker_spawned で、
@@ -522,7 +520,8 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
   if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
   const step = tierStep(db, agent);
-  if (!step) throw new DomainError(`${undeclaredTier(agent)} (${tierNames(db).join(", ")}), so it has no step to lower from`);
+  // 盤面既定の段は生きているので、段が無いのは agent が書いた段のとき
+  if (!step) throw new DomainError(`${undeclaredTier(name, agent.tier!)} (${tierNames(db).join(", ")}), so it has no step to lower from`);
   const { from, below } = step;
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   assertTierRunnableFor(db, name, agentViewProviders(agent), to);
@@ -532,7 +531,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const { lines, cited } = sessionEvidence(
     db,
     evidence,
-    productionPopulation(db, { agent: name, "tier source": "agent", tier: agentGeneration(db, agent) }),
+    productionPopulation(db, { agent: name, "tier source": "agent", tier: agentGeneration(db, name, from) }),
     `production sessions of ${name} whose tier came from its default tier, in its current declared tier ${from}`,
   );
   const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
@@ -779,11 +778,8 @@ function rowGeneration(db: Db, table: ExecutionSettingTable): Condition<RoutingE
 }
 
 /** agent の世代(ADR 0307 決定2): agent の今の宣言の段で走ったか —— 出所が agent の session は宣言の段で走る(ADR 0210 決定1)。 */
-function agentGeneration(db: Db, agent: RegistryAgent): Condition<RoutingEpisode> {
-  const step = tierStep(db, agent);
-  if (!step) return [() => false, (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, but ${undeclaredTier(agent)}`];
-  const { from } = step;
-  return [(e) => e.tier_id === tierIdOf(db, from), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${from}, the current declared tier of ${agent.name}`];
+function agentGeneration(db: Db, agent: string, from: Tier): Condition<RoutingEpisode> {
+  return [(e) => e.tier_id === tierIdOf(db, from), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${from}, the current declared tier of ${agent}`];
 }
 
 /** 学習器でない op の detail の根拠の節(ADR 0302 決定3): 組ごとに件数・task id・outcome の内訳・配分評価の allocation × cause の件数と

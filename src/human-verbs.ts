@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
-import { type AgentAdmin, AgentTierMismatchError, agentTierChangeMessage, agentViewProviders, tierRenameExit } from "./agent-create.js";
+import { type AgentAdmin, AgentTierMismatchError, agentTierChangeMessage, agentViewProviders, RegistryLogUnreadableError, type TierApproval } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import { recordedAnswer } from "./board-call-usage.js";
 import type { BoardStatePath } from "./board-state.js";
@@ -21,6 +21,7 @@ import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin, getEvent, latestEventId, listEventsOfKinds, type TaskScopedPayload } from "./events.js";
 import {
   type AddTierAmendment,
+  agentTierChangedPayload,
   applyExecutionSettingsChange,
   assertTierRunnableFor,
   composeRoutingRow,
@@ -35,6 +36,7 @@ import {
   type RoutingRowChange,
   registryPinChanges,
   settleProposalAsApplied,
+  undeclaredTier,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
@@ -1568,16 +1570,22 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
     return null;
   };
   // ADR 0401 決定6: 承認の commit が registry にあれば、記録の前に盤面が死んだ適用 —— stale でなく適用済みとして閉じる
+  // log が読めなければ承認の有無が分からないので、stale と読まずに question を開いたまま断る
   const applied = () => {
-    const approval = deps.agentAdmin?.tierApproval?.(proposal.agent, questionId);
+    let approval: TierApproval | undefined;
+    try {
+      approval = deps.agentAdmin?.tierApproval?.(proposal.agent, questionId);
+    } catch (err) {
+      if (err instanceof RegistryLogUnreadableError) throw new DomainError(err.message);
+      throw err;
+    }
     if (approval) settleProposalAsApplied(deps.db, questionId, proposal, approval, now());
     return approval !== undefined;
   };
-  // ADR 0401 決定6: 改名の窓の間は照合せず、question を開いたまま断る —— stale と刻めば適用できる提案を決定が読む誤った記録で閉じる
+  // ADR 0401 決定6: 改名の窓の間は照合せず、question を開いたまま断る —— stale と刻めば適用できる提案を決定が読む誤った記録で閉じる。
+  // 改名の再実行を名指す文は agent の解決にだけ出す
   const refuseInRenameWindow = (tier: string | undefined) => {
-    if (inTierRenameWindow(tier, tierNames(deps.db))) {
-      throw new DomainError(`agent ${proposal.agent} declares tier ${tier}, which is not one of the board's tiers, so the proposal cannot be checked against it. ${tierRenameExit(tier, undefined)}`);
-    }
+    if (tier !== undefined && inTierRenameWindow(tier, tierNames(deps.db))) throw new DomainError(undeclaredTier(proposal.agent, tier));
   };
   // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
   const agent = list().find((a) => a.name === proposal.agent);
@@ -1881,7 +1889,7 @@ export async function submitAnswer(
             taskId: null,
             actorId: HUMAN_ACTOR_ID,
             origin,
-            payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to, question_id: task.id, registry_commit: registryCommit },
+            payload: agentTierChangedPayload(proposal, to, task.id, registryCommit),
             at: now(),
           });
         }

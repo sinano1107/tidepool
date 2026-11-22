@@ -288,37 +288,52 @@ export interface TierApproval {
   to: Tier;
 }
 
-/** registry の ref の log で、`message(x)` の形の subject を最新から探して x を返す。x は段の名前なので空白を含まない。`lastTouching` を
- *  渡せば、そのファイルを最後に変えた commit がその形のときだけ。git が読めなければ見つからない側へ落ちる —— 呼び手は今の挙動
- *  (stale・条件つきの文)に戻る。 */
-function findInRegistryLog(registry: RegistrySource, message: (x: string) => string, lastTouching?: string): { commit: string; x: string } | undefined {
+/** registry の log から、提案 question を名指す盤面の tier の承認の commit を引く口(ADR 0401 決定6)。log が読めなければ
+ *  `RegistryLogUnreadableError` —— 見つからないと区別する。 */
+export type FindTierApproval = (agent: string, questionId: string) => TierApproval | undefined;
+
+/** registry の log が読めない(ADR 0401 決定6)。承認の有無が分からないので、呼び手は stale と読まずに止まる。 */
+export class RegistryLogUnreadableError extends Error {
+  constructor(cause: unknown) {
+    super(`the registry log could not be read to check whether this approval already landed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "RegistryLogUnreadableError";
+  }
+}
+
+/** registry の ref の log で、`message(tier)` の形の subject を最新から探してその段の名前を返す(段の名前は空白を含まない)。`lastTouching` を
+ *  渡せば、そのファイルを最後に変えた commit がその形のときだけ。git が読めなければ投げる。 */
+function findInRegistryLog(registry: RegistrySource, message: (tier: string) => string, lastTouching?: string): { commit: string; tier: Tier } | undefined {
   const [prefix, suffix] = message("\0").split("\0") as [string, string];
   const ref = registryRef(registry.mode);
-  try {
-    const log = lastTouching
-      ? git(registry.dir, "log", "-1", "--format=%H %s", ref, "--", lastTouching)
-      : git(registry.dir, "log", "--format=%H %s", "--fixed-strings", `--grep=${suffix}`, ref);
-    for (const line of log.split("\n")) {
-      const [commit, subject] = [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)];
-      const x = subject.slice(prefix.length, subject.length - suffix.length);
-      if (subject.startsWith(prefix) && subject.endsWith(suffix) && /^\S+$/.test(x)) return { commit, x };
-    }
-  } catch {
-    // 下の undefined
+  const log = lastTouching
+    ? git(registry.dir, "log", "-1", "--format=%H %s", ref, "--", lastTouching)
+    : git(registry.dir, "log", "--format=%H %s", "--fixed-strings", `--grep=${suffix}`, ref);
+  for (const line of log.split("\n")) {
+    const [commit, subject] = [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)];
+    const tier = subject.slice(prefix.length, subject.length - suffix.length);
+    if (subject.startsWith(prefix) && subject.endsWith(suffix) && /^\S+$/.test(tier)) return { commit, tier };
   }
   return undefined;
 }
 
 /** その question を名指す盤面の tier の承認の commit(ADR 0401 決定6)。 */
 export function findTierApproval(registry: RegistrySource, agent: string, questionId: string): TierApproval | undefined {
-  const found = findInRegistryLog(registry, (to) => agentTierChangeMessage(agent, to, questionId));
-  return found && { commit: found.commit, to: found.x };
+  try {
+    const found = findInRegistryLog(registry, (to) => agentTierChangeMessage(agent, to, questionId));
+    return found && { commit: found.commit, to: found.tier };
+  } catch (err) {
+    throw new RegistryLogUnreadableError(err);
+  }
 }
 
 /** agent.md を最後に変えた commit が `rename tier <old> to <to>` ならその旧い名前(ADR 0401 決定6)。後の手編集・改名し直しがあれば
- *  古い改名を名指さない。 */
+ *  古い改名を名指さない。git が読めなければ undefined —— 出口の文が条件つきになるだけ。 */
 export function renamedTierFrom(registry: RegistrySource, agent: string, to: string): string | undefined {
-  return findInRegistryLog(registry, (from) => tierRenameMessage(from, to), `agents/${agent}.md`)?.x;
+  try {
+    return findInRegistryLog(registry, (from) => tierRenameMessage(from, to), `agents/${agent}.md`)?.tier;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で
@@ -479,7 +494,7 @@ export interface AgentAdmin {
   /** 段の改名の registry 側(issue #1422)。 */
   renameTier: RenameAgentTiers;
   /** registry の log の承認の commit(ADR 0401 決定6)。 */
-  tierApproval: (agent: string, questionId: string) => TierApproval | undefined;
+  tierApproval: FindTierApproval;
 }
 
 /** registry の提案の照合が読む口(ADR 0401 決定6)を扉の agentAdmin から。一覧の無い盤面は照合しない。 */

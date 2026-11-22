@@ -639,7 +639,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
     boardState: options.boardState?.paths,
-    agents: registryTiersOf(agentAdmin),
+    registryTiers: registryTiersOf(agentAdmin),
     retrospectiveCalls,
     translationClient: options.translationClient,
     converge: () => landing.converge(),

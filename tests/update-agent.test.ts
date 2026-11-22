@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentTierMismatchError, agentTierChangeMessage, changeAgentTier, findTierApproval, renameAgentTiers, renamedTierFrom, tierRenameMessage, updateAgent } from "../src/agent-create.js";
+import { AgentTierMismatchError, agentTierChangeMessage, changeAgentTier, findTierApproval, RegistryLogUnreadableError, renameAgentTiers, renamedTierFrom, tierRenameMessage, updateAgent } from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, loadRegistry, UnknownAgentError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";
@@ -465,9 +465,9 @@ describe("registry の log の探索: 盤面の tier の書き込みの commit �
     expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBeUndefined();
   });
 
-  it("git が読めなければ投げずに見つからない側へ落ちる", () => {
+  it("git が読めなければ、承認の探索は見つからないと区別して投げ、改名の探索は条件つきの文へ落ちる", () => {
     const missing = local("/nonexistent/registry");
-    expect(findTierApproval(missing, "crab", "12")).toBeUndefined();
+    expect(() => findTierApproval(missing, "crab", "12")).toThrow(RegistryLogUnreadableError);
     expect(renamedTierFrom(missing, "crab", "mid")).toBeUndefined();
   });
 });

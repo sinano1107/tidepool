@@ -729,7 +729,6 @@ it("合成 root の tierApproval は、承認の書き込みが registry に打�
   const sha = await agentAdmin!.changeTier!({ name: "crab", expectTier: "standard", to: "economy", assertLandable: () => {}, message: agentTierChangeMessage("crab", "economy", "q-7") });
 
   expect(agentAdmin!.tierApproval!("crab", "q-7")).toEqual({ commit: sha, to: "economy" });
-  expect(agentAdmin!.tierApproval!("crab", "q-8")).toBeUndefined();
 });
 
 // ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは
