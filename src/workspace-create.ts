@@ -7,7 +7,7 @@ import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { EventOrigin } from "./events.js";
 import { git, readCheckoutRemote } from "./git.js";
-import type { GitHubClient, RepoSlug } from "./github.js";
+import { forkPrCredentialRefusal, type GitHubClient, type RepoSlug } from "./github.js";
 import {
   authedClone,
   authedPush,
@@ -486,6 +486,11 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   // the one GitHub read comes before the registry read, so nothing awaits between that read and the commit (ADR 0066 決定5 の線)
   const head = input.head_repo ? await readHeadRepoParent(input.head_repo, deps.github) : undefined;
+  // ADR 0395 決定6 / #3564: the task-branch send is a push to the head repo like landing's, so it asks the same refusal. Read here,
+  // before the registry read, on the parent: assertHeadRepoFits refuses a parent other than the declared repo. `path` is gh's cwd only
+  const withheld = head?.parent && deps.github
+    ? await forkPrCredentialRefusal(deps.github, { name: input.name, path: deps.registry.dir, repo: githubKey(head.parent) }, githubKey(head.head))
+    : null;
   // ADR 0093: the head repo's token for the task branch push (sendTaskBranches) is warmed here too, before the registry read
   if (head) await deps.githubAuth?.ensureToken(githubKey(head.head));
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
@@ -551,13 +556,15 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
   const now = () => (deps.clock ?? new SystemClock()).now();
   const workspace = { name: input.name, path, repo: entry.repo, head_repo: entry.head_repo };
   writeHeadRepo(deps.db, workspace, next.head_repo, now, commit);
-  if (next.head_repo !== undefined) sendTaskBranches(deps.db, { ...workspace, head_repo: next.head_repo }, next.head_repo, deps.githubAuth);
+  if (next.head_repo === undefined) return;
+  if (withheld) throw new HeadRepoTaskBranchesNotSentError(input.name, next.head_repo, `no task branch was sent to it: ${withheld}`);
+  sendTaskBranches(deps.db, { ...workspace, head_repo: next.head_repo }, next.head_repo, deps.githubAuth);
 }
 
 /** 出元 repo へ送れなかったタスクブランチ。issue #3563: 宣言は残っていて、同じ値をもう一度通せば送り直す —— API は 502 に `saved` を付ける。 */
 export class HeadRepoTaskBranchesNotSentError extends Error {
-  constructor(name: string, headRepo: string, failures: string[]) {
-    super(`The head repo ${headRepo} of workspace ${name} was saved, but these task branches were not sent to it: ${failures.join("; ")}. Set the same head repo again to send them.`);
+  constructor(name: string, headRepo: string, detail: string) {
+    super(`The head repo ${headRepo} of workspace ${name} was saved, but ${detail} Set the same head repo again to send them.`);
     this.name = "HeadRepoTaskBranchesNotSentError";
   }
 }
@@ -580,7 +587,7 @@ function sendTaskBranches(db: Db, workspace: WorkspaceConfig, headRepo: string, 
       }
     }
   });
-  if (failures.length > 0) throw new HeadRepoTaskBranchesNotSentError(workspace.name, headRepo, failures);
+  if (failures.length > 0) throw new HeadRepoTaskBranchesNotSentError(workspace.name, headRepo, `these task branches were not sent to it: ${failures.join("; ")}.`);
 }
 
 /** ADR 0087 決定1/4 の workspace 半分: registry エントリだけを committed main から

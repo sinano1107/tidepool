@@ -188,13 +188,24 @@ and answer that question.
 ## Stage two: a repository of your own
 
 Everything above ran on a workspace that lives only on your Mac. This stage puts it on GitHub —
-**a fresh, empty repository you create for the trial**, not one you already care about. The board
-pushes and merges as the `tidepool-board` GitHub App. The one thing it does as you is open a pull
-request, so its pull requests show you as their author. What it does to a repository is
-narrow: it writes `task/<id>` branches and opens pull requests; it never writes to `main`
-directly, and it merges only when you answer a merge question. Installing the App is per
-repository and you can remove it at any time from https://github.com/settings/installations —
-the board then stops on that workspace instead of carrying on silently.
+**a fresh, empty repository you create for the trial**, not one you already care about. Two
+repositories take part:
+
+- **The trial repository** holds `main` and the pull requests. Apart from the protected branch you
+  publish once, the board pushes nothing there: it opens pull requests and merges one when you
+  answer its merge question — or, if you set the merge dial to `auto_if_ci_green`, once CI is
+  green.
+- **The head repo** is a fork of it in an organization of yours. Every `task/<id>` branch goes
+  there, and the board opens its pull requests from it. GitHub treats a pull request from a fork as
+  an outside contribution: its workflows get a read-only token and none of the trial repository's
+  secrets, so nothing a worker wrote runs with your repository's credentials before you see it.
+
+The board pushes and merges as the `tidepool-board` GitHub App. The one thing it does as you is
+open a pull request, so its pull requests show you as their author. The App is installed in two
+places: your own account, for the trial and registry repositories, and the organization, for the
+fork. You can remove either installation at any time (https://github.com/settings/installations,
+or the organization's settings) — the board then stops on that workspace instead of carrying on
+silently.
 
 This stage is the only one that needs a shell in the VM. Open one from the Mac with
 `limactl shell tidepool` and start it with `cd ~/tidepool`: the shell opens in the Mac's current
@@ -215,7 +226,7 @@ npm run github-login
 A code and a URL are printed; open the URL, enter the code, and approve. The token lands in
 `$TIDEPOOL_GITHUB_TOKEN_FILE` (mode 600). Re-run the same command if you ever revoke it.
 
-### Create the trial repository and install the App on it
+### Create the trial repository and install the App on your account
 
 In the VM:
 
@@ -228,12 +239,16 @@ Leave it empty — no README. Then install the App on it **and on `tidepool-regi
 https://github.com/apps/tidepool-board/installations/new
 
 The page is titled "Install tidepool-board". If you belong to organizations it first asks where
-to install — pick your own account. Then:
+to install — choose your own account for this first installation; the organization gets its own
+later. Then:
 
 1. Select **Only select repositories**.
 2. In the **Select repositories** dropdown, search for and add `tidepool-trial` and
    `tidepool-registry`.
 3. Press the green **Install** button at the bottom.
+
+Among its permissions the App asks for read access to Administration: the board uses it only to
+read a private repository's fork pull request workflow settings (see below).
 
 To add a repository later, go to https://github.com/settings/installations, find
 `tidepool-board`, press **Configure**, and add it under "Repository access".
@@ -252,18 +267,89 @@ environment file. The settings tab now shows "GitHub: logged in".
 In the settings tab, open the `trial` workspace and use **Publish** with the clone URL
 `https://github.com/YOUR_GITHUB_LOGIN/tidepool-trial.git`. The board pushes the protected
 branch and records the repository on the workspace. If the App is not installed on the repository, the publish is
-refused with the install link and nothing lands; install and retry.
+refused with the install link and nothing lands; install and retry. The task branches stay in
+the VM until the head repo is declared, and until then the board lands nothing on this workspace.
 
-### Configure the PR head repo
+### Prepare the head repo
 
-Fork `tidepool-trial` into a separate organization you control. Install the App on the fork as
-well. In the workspace settings, set **Head repo** to the fork's actual `owner/name` and confirm
-the change. Saving sends the existing `task/…` branches to the fork. The board needs a configured
-head repo before it can push task branches or open PRs.
+With the board running, in the VM from the checkout:
 
-For a private repository, allow forking and enable workflows from fork pull requests on the base
-repository. Leave the options to send write tokens and secrets to fork pull requests disabled.
-Disable Actions on the fork itself.
+```bash
+scripts/head-repo-setup.sh trial YOUR_ORG
+```
+
+It asks for the board token — the one the first boot printed; it is not stored. If you lost it,
+issue a new one as [docs/human-surface-credential.md](human-surface-credential.md) says.
+
+`YOUR_ORG` is the organization the fork goes to. Use one that holds nothing but head repos: the
+secrets of an organization you already use can reach the workflows of a fork it owns. If it does
+not exist yet, the helper gives you https://github.com/account/organizations/new and waits; create
+it under that name (the free plan is enough) and press Enter. A repository owned by your personal
+account cannot be forked into that same account, so its fork always goes to an organization; a
+repository owned by an organization may go to your own account instead.
+
+The helper then works through these steps, waiting where it needs you:
+
+1. Forks the trial repository into the organization with your `gh` login. If the name is taken
+   there, GitHub names the fork `tidepool-trial-1`; the helper uses the name GitHub gave.
+2. Gives you the App's installation page again. This time choose the organization, select the
+   fork (or All repositories), install, and press Enter.
+3. Disables Actions on the fork, so the fork's own workflows do not run on the board's pushes.
+4. For a private repository, checks its fork pull request workflow settings and waits until they
+   are as described below.
+5. Warns when the trial repository's workflows use `pull_request_target`, `workflow_run` or a
+   self-hosted runner, or when the repository or its organization has self-hosted runners
+   registered. Those run outside what a fork pull request is limited to, and the board does not
+   check them.
+6. Declares the fork as the workspace's head repo. The board asks for a confirmation every time a
+   head repo is set; the helper shows its reasons and confirms only when you answer `y`.
+7. Checks that the board sent the existing `task/…` branches to the fork. If some were not sent,
+   it shows why and sends them again when you press Enter. The board sends none while the
+   repository sends write tokens or secrets to fork pull requests (below).
+
+Run it once per workspace. A workspace that lets workers edit the registry (see
+[Let workers edit the registry](#let-workers-edit-the-registry)) needs its own run, which forks
+the registry repository.
+
+It stops with the reason when the organization is the repository's own owner (GitHub cannot fork
+into the same owner) or when forking is disabled. For an organization's private repository, the
+organization must allow forking of private repositories (organization Settings → Member
+privileges → Repository forking), and then the repository must allow forking (Settings → General
+→ Allow forking). Each step checks its own state first: after a stop, run the same command again
+and it continues; on a finished setup it changes nothing.
+
+#### Fork pull request settings of a private repository
+
+In the repository's Settings → Actions → General → "Fork pull request workflows in private
+repositories":
+
+- Turn **on** "Run workflows from fork pull requests". Without it, CI never runs on the board's
+  pull requests, and each one waits for you.
+- Keep **off** "Send write tokens to workflows from fork pull requests" and "Send secrets and
+  variables to workflows from fork pull requests". While either is on, the board pushes nothing
+  and opens no pull request for the workspace; it raises a PR promotion failure question naming
+  the setting, and lands once you turn it off and answer `retry`.
+
+For a repository owned by an organization, the organization's own Settings → Actions → General
+must allow "Run workflows from fork pull requests" first; until it does, the repository cannot
+turn it on. A public repository has no such settings: fork pull requests never get them.
+
+#### CI that needs secrets
+
+Workflows on the board's pull requests get no secrets. A job that needs one either fails, and the
+pull request waits for your answer, or is skipped because you made it conditional. A skipped job
+counts as passing: with the merge dial at `auto_if_ci_green`, the board merges without that job
+having run.
+
+#### Human merge paths
+
+Once merged, a pull request's files run on `main` with your repository's credentials. The board
+never merges unattended a pull request that changes `.github/workflows/**` or a `CODEOWNERS` file;
+it asks you instead, even with the merge dial at `auto_if_ci_green`. In the settings tab, add to the workspace's **Human
+merge paths** every file that a workflow running on `main` with secrets executes: package
+manifests and lockfiles, build configuration, and the scripts it calls. A pull request that
+changes only paths outside the list can be merged unattended and then run in that workflow with
+your secrets.
 
 ### Second task
 
@@ -276,8 +362,8 @@ Purpose: README.md describes this workspace in one sentence. Add a "Usage" secti
 Completion criteria: README.md has a "Usage" heading followed by two bullet points.
 ```
 
-The worker finishes, the board pushes the task branch to the fork and opens a pull request from
-it on `tidepool-trial`. You are the PR author and its description ends with
+The worker finishes, the board pushes the task branch to the head repo and opens a pull request
+from it on `tidepool-trial`. You are the PR author and its description ends with
 `Opened by the tidepool board.` Answer the board's merge question to merge the pull request.
 The commit's author is `tidepool` with the App's noreply address.
 
@@ -286,15 +372,21 @@ The commit's author is `tidepool` with the App's noreply address.
 In the VM:
 
 ```bash
-gh pr list --repo YOUR_GITHUB_LOGIN/tidepool-trial --state all --json author --jq '.[].author.login'
+gh pr list --repo YOUR_GITHUB_LOGIN/tidepool-trial --state all --json author,headRepositoryOwner \
+  --jq '.[] | "\(.author.login) \(.headRepositoryOwner.login)"'
 ```
-Expect your own GitHub login (`YOUR_GITHUB_LOGIN`).
+Expect your own GitHub login followed by `YOUR_ORG` — you opened it, from the head repo.
+
+```bash
+gh api repos/YOUR_GITHUB_LOGIN/tidepool-trial/branches --jq '.[].name'
+```
+Expect `main` only — no `task/…` branch on the trial repository.
 
 ```bash
 curl -s -H "Authorization: Bearer $(cat ~/.tidepool/github-token)" \
-  https://api.github.com/user/installations | grep -c tidepool-board
+  https://api.github.com/user/installations | grep -o '"app_slug": *"tidepool-board"' | wc -l
 ```
-Expect `1` — the login works and the App is installed where you can reach it.
+Expect `2` — the login works and the App is installed on your account and on the organization.
 
 ## Stage three (optional): an existing repository
 
@@ -302,13 +394,17 @@ The same mechanics apply to a repository you already work in. Add it to the App'
 (https://github.com/settings/installations → `tidepool-board` → **Configure**; a repository you
 do not administer needs its admin to install the App from the link above), then in the settings tab add
 a workspace with **clone a repository** and its clone URL. The board refuses the registration with
-the install link when the App is missing or you cannot push to the repository. Follow
-[Configure the PR head repo](#configure-the-pr-head-repo) for that workspace before landing a task.
+the install link when the App is missing or you cannot push to the repository. Run
+[the head repo helper](#prepare-the-head-repo) for that workspace before landing a task; the
+organization and its App installation can be the ones you already made. Read
+[CI that needs secrets](#ci-that-needs-secrets) and [Human merge paths](#human-merge-paths) for
+this repository's own workflows before you let anything merge unattended.
 
 Register a checkout you do not write in yourself: the board treats a workspace's checkout as its
 own from the first time it touches it, between tasks too, and a checkout you also edit by hand will
-end up quarantined. Your own changes go where [Where you write](#where-you-write) says. Nothing else
-changes — task branches, pull requests, and a merge question you answer.
+end up quarantined. Your own changes go where [Where you write](#where-you-write) says. Task
+branches go to the workspace's head repo, pull requests open on your repository, and each merge
+waits for your answer unless you set the merge dial otherwise.
 
 ## Where you write
 
@@ -330,8 +426,9 @@ depends on the workspace:
   push from your own clone, or a merge of your own PR. Never push from the workspace's checkout.
   Tasks that have already forked do not get it; it takes effect from the next fork.
   Resolve a conflicted PR with a merge; a rebased or force-pushed head is treated as rewritten
-  outside the board. In your own clone, merge the protected branch into the PR's task branch
-  and push it to the head repo.
+  outside the board. In your own clone, fetch the PR's task branch from the head repo, merge the
+  protected branch into it and push it back to the head repo. Anyone who can push to the head
+  repo can do this; to let someone else resolve conflicts, add them to its organization.
   When the board finds a PR head that no longer holds what it pushed, it asks a merge question
   with `hold` recommended, and the first `merge` is refused and opens a workbench. For a head
   moved back, answer `merge` again to have the board push that content back. For a rewritten
@@ -382,7 +479,8 @@ remote stays configured after the task is done — remove it with `git remote re
 The registry clone at `$TIDEPOOL_REGISTRY` is not a workspace, and registering it is refused. To let
 workers edit the registry, add a workspace with **clone a repository** and the registry repository's
 clone URL: the board clones it to another path. Its changes always wait for your merge; you do not
-need to turn on protection for it.
+need to turn on protection for it. Like any repository, it lands task branches only from a head
+repo: run [the head repo helper](#prepare-the-head-repo) for that workspace too.
 
 ## When a workspace is quarantined
 

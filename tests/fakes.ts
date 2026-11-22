@@ -30,6 +30,7 @@ import { type ExecutionSetting, type ExecutionSettingRow, SEED_EXECUTION_SETTING
 import type {
   CiStatus,
   CreatePrInput,
+  ForkPrCredentialSetting,
   FoundPr,
   GitHubClient,
   Issue,
@@ -818,6 +819,19 @@ export class FakeGitHubClient implements GitHubClient {
     if (!this.parents.has(key)) throw new Error(`gh: Not Found (HTTP 404) for repos/${key}`);
     const [owner, name] = this.parents.get(key)?.split("/") ?? [];
     return owner && name ? { owner, name } : null;
+  }
+
+  /** 既定は public(読む設定が無く、何も送らない)—— 着地の各テストは置かずに今どおり着地する。 */
+  private forkPrCredentials: ForkPrCredentialSetting[] | Error = [];
+
+  /** 宣言の repo の fork の PR の workflow 設定のうち、資格情報を送るオンの設定、または読めない失敗(#3564)。 */
+  scriptForkPrCredentialSettings(answer: ForkPrCredentialSetting[] | Error): void {
+    this.forkPrCredentials = answer;
+  }
+
+  async forkPrCredentialSettings(_ref: RepoRef): Promise<ForkPrCredentialSetting[]> {
+    if (this.forkPrCredentials instanceof Error) throw this.forkPrCredentials;
+    return this.forkPrCredentials;
   }
 
   async tokenRefusal(ref: RepoSlug): Promise<string | null> {

@@ -202,7 +202,8 @@ it("the board updates an old task branch on the head repo before opening its PR 
   const bin = await tempDir("tidepool-head-repo-bin-");
   await shimGit({ route: [baseUrl, origin] });
   await shimGit({ route: [headUrl, fork] });
-  writeFileSync(join(bin, "gh"), "#!/bin/sh\nprintf '[]'\n", { mode: 0o755 });
+  // a public declared repo: the fork PR workflow settings are not read
+  writeFileSync(join(bin, "gh"), "#!/bin/sh\ncase \"$3\" in --jq) echo false;; *) printf '[]';; esac\n", { mode: 0o755 });
   vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
   const tokenFile = join(bin, "token");
   writeFileSync(tokenFile, "board-human\n", { mode: 0o600 });
@@ -237,4 +238,37 @@ it("the board updates an old task branch on the head repo before opening its PR 
   expect(headAtCreate).toBe(tip);
   expect(git(origin, "for-each-ref", "refs/heads/task/")).toBe("");
   expect(rest.requests).toMatchObject([{ path: "/repos/acme/widget/pulls", body: { head: `reef-org:${branch}`, base: "main" } }]);
+});
+
+// #3564: private の宣言の repo が fork の PR に書ける token か secrets を送るなら、出元 repo へ push せず PR も開かない。
+// 設定が読めなければ同じく止める(fail-closed)。public は設定を読まない —— visibility で分ける読みは domain 層の client のテストが言う
+const PERMISSION = "The tidepool-board App needs the Administration: read repository permission";
+it.each([
+  ["write tokens or secrets reach fork PRs", ["send_write_tokens_to_workflows"], "sends credentials to workflows from fork pull requests (Send write tokens to workflows from fork pull requests)", true],
+  ["the App may not read the settings", new Error("gh: Resource not accessible by integration (HTTP 403)"), PERMISSION, true],
+  // a failure that is not the permission keeps its own cause and does not blame the App's permission
+  ["the settings read times out", new Error("`gh api repos/x` timed out after 1000 ms"), "(`gh api repos/x` timed out after 1000 ms)", false],
+] as const)("the board does not push to the head repo or open a PR when %s, and lands once they are off", async (_, answer, reason, namesSettingsPage) => {
+  const { workspace } = await makeLandingWorkspace("fork-pr-credentials");
+  t = await bootTidepool({ workspace, resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }) });
+  t.github.scriptForkPrCredentialSettings(answer instanceof Error ? answer : [...answer]);
+  const task = await registerWork(t, "land only where fork PRs get no credentials");
+  await t.clock.advance(HOUR);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  await completeIntegrationReviews(t, task.id);
+
+  const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.question_pending_pr_promotion_task_id === task.id);
+  expect(failure.purpose).toContain(reason);
+  expect(failure.purpose.includes("Fork pull request workflows in private repositories")).toBe(namesSettingsPage);
+  expect(failure.purpose.includes(PERMISSION)).toBe(reason === PERMISSION);
+  expect(t.github.requests).toEqual([]);
+  expect(git(workspace.head_repo, "for-each-ref", "refs/heads/task/")).toBe("");
+
+  t.github.scriptForkPrCredentialSettings([]);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).toBe(1);
+  expect(git(workspace.head_repo, "for-each-ref", "--format=%(refname)", "refs/heads/task/")).toBe(`refs/heads/task/${task.id}`);
 });

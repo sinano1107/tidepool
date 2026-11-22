@@ -11,8 +11,9 @@ import {
   WorkspaceRegistryUnprotectError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { api, bootTidepool, git, makeWorkspace, type Tidepool } from "./harness.js";
+import { api, bootTidepool, git, makeWorkspace, shimGit, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -193,7 +194,7 @@ it("registry に居ない名前は 404", async () => {
 
 // issue #3563: 宣言を書いた後に出元 repo へ送れなかったタスクブランチは、502 のまま `saved` を付ける —— 画面は「保存されなかった」と読まない
 it("出元 repo へ送れなかったタスクブランチがあれば 502 に saved を付けて返す", async () => {
-  const err = new HeadRepoTaskBranchesNotSentError("lagoon", "acme/fork", ["task/aaa (rejected)"]);
+  const err = new HeadRepoTaskBranchesNotSentError("lagoon", "acme/fork", "these task branches were not sent to it: task/aaa (rejected).");
   t = await bootTidepool({
     workspaceAdmin: {
       update: async () => {
@@ -267,6 +268,32 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     expect(reset.status).toBe(200);
     expect(entry().head_repo).toBe("acme/fork");
 
+  });
+
+  // ADR 0395 決定6 / #3564: 宣言が撃つタスクブランチの送出も出元 repo への push —— 着地と同じく、private の宣言の repo が fork の PR に
+  // 書ける token か secrets を送るなら何も送らない。宣言は残り、同じ値を通し直せば送る(502 の saved)
+  it("宣言の repo が fork の PR に資格情報を送るなら、宣言は書くがタスクブランチを出元 repo へ送らず、502 に理由と saved を付ける", async () => {
+    const { checkout, github, entry } = await headRepoBoard();
+    github.scriptForkPrCredentialSettings(["send_secrets_and_variables"]);
+    git(checkout.path, "branch", "task/aaa");
+    const fork = await tempDir("tidepool-fork-");
+    git(fork, "init", "--bare", "-b", "main");
+    const calls = await shimGit({ route: ["https://github.com/acme/fork.git", fork] });
+
+    const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+
+    expect(res.status).toBe(502);
+    expect(res.json).toEqual({
+      saved: true,
+      error: expect.stringContaining(
+        "was saved, but no task branch was sent to it: declared repo acme/lagoon sends credentials to workflows from fork pull requests " +
+          "(Send secrets and variables to workflows from fork pull requests)",
+      ),
+    });
+    expect(entry().head_repo).toBe("acme/fork");
+    expect(calls().filter(({ args }) => args.includes("push"))).toEqual([]);
+    expect(git(fork, "for-each-ref", "refs/heads/")).toBe("");
+    expect(git(checkout.path, "for-each-ref", "refs/remotes/")).toBe("");
   });
 
   it("URL の綴り(資格情報つき)で送った出元 repo は owner/name に直して書き、資格情報を registry に残さない", async () => {

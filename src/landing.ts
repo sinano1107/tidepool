@@ -7,7 +7,7 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventRowOf, latestEventOfTask, parseEventRow, type TaskScopedPayload } from "./events.js";
 import { git, isAncestor } from "./git.js";
-import type { GitHubClient, PrHeadRef, PrStateRead } from "./github.js";
+import { forkPrCredentialRefusal, type GitHubClient, type PrHeadRef, type PrStateRead } from "./github.js";
 import { type GitHubAuth, HEAD_REPO_REMOTE, landingHeadRepo, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { type HumanMergePathReview, humanMergePathChanges } from "./human-merge-paths.js";
@@ -1783,6 +1783,8 @@ export function createLanding(deps: LandingDeps): Landing {
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
       const push = async (sha: string) => {
+        const withheld = await forkPrCredentialRefusal(github, workspace, headRepoLabel);
+        if (withheld) throw new Error(`${withheld} Then retry.`);
         const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
           const closed = closedMergeAnswer();
