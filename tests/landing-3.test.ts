@@ -130,7 +130,7 @@ function escalatedRoot(db: Db, clock: FakeClock, prNumber: number, workspace?: s
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  recordPrOpenedViaWorker(db, root, prNumber, "worker", clock.now(), { authority: { merge: "escalate" } });
+  recordPrOpenedViaWorker(db, root, prNumber, clock.now(), { authority: { merge: "escalate" } });
   const question = listBoard(db).find((q) => q.question_pending_merge_pr === prNumber && q.workspace === root.workspace)!;
   return { root, question };
 }
@@ -1795,8 +1795,8 @@ it("ローカル着地の hold 回答は question を立てた後に task ブラ
   expect(moved).not.toBe(asked);
   expect(boardEvents(db, work.id, "landing_declined")).toEqual([
     {
-      actor_id: BOARD_ACTOR_ID,
-      origin: "board",
+      actor_id: HUMAN_ACTOR_ID,
+      origin: "webui",
       payload: { kind: "landing_declined", question_id: question.id, tip: asked, outside: null, missing_branches: null },
     },
   ]);
@@ -1906,7 +1906,7 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
   const workspace = await makeWorkspace("landing-loosened-dial");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), {
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, clock.now(), {
     authority: { merge: "escalate" },
   });
 
@@ -2011,7 +2011,7 @@ it("開いている PR へ修理を push する着地は profile を読まない
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
-  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now(), { head });
+  recordPrOpenedViaWorker(db, task, 1, clock.now(), { head });
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
     kind: "landed",

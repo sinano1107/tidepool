@@ -3405,19 +3405,18 @@ export function recordPrOpened(
   task: Task,
   prNumber: number,
   sha: string,
-  actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
   isProtected: boolean | undefined,
-  origin: EventOrigin,
   mergePathReview?: HumanMergePathReview,
 ): void {
   db.transaction(() => {
     recordPrNumber(db, task.id, prNumber);
+    // ADR 0400 決定2・4: PR を開くと決めたのは収束の規則なので盤面の名義 —— 呼び手が名義を渡すと移設のたびに写しが運ばれる
     appendEvent(db, {
       taskId: task.id,
-      actorId,
-      origin,
+      actorId: BOARD_ACTOR_ID,
+      origin: "board",
       payload: { kind: "pr_opened", pr_number: prNumber, sha },
       at: now,
     });

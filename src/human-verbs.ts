@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { z } from "zod";
-import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
@@ -1648,8 +1648,8 @@ export async function submitAnswer(
   // 回答の書き込みと同じ transaction で撃つ Quarantine の受理の段(ADR 0385 決定3・6)
   let withAnswer: ((questionId: string) => void) | undefined;
   // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3、
-  // 断る回答は ADR 0394 決定5)。断った内容は事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
-  let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
+  // 断る回答は ADR 0394 決定5)。merge も断りも選択肢が名指す行為なので、どれも回答した人間の名義(ADR 0400 決定1・3)
+  let rootRecord: { root: string; payload: TaskScopedPayload } | undefined;
   try {
     // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
     switch (kind.kind) {
@@ -1657,7 +1657,7 @@ export async function submitAnswer(
         if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
           notice = (await answerThroughConvergence(deps.landing, task.id, origin, kind.task_id))?.notice;
         } else {
-          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind), byBoard: true };
+          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };
         }
         break;
       case "local_merge":
@@ -1696,7 +1696,7 @@ export async function submitAnswer(
           }
         } else {
           // ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容
-          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind), byBoard: true };
+          rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };
         }
         break;
       case "pr_merge": {
@@ -1829,7 +1829,7 @@ export async function submitAnswer(
         } else {
           // ADR 0394 決定5: 外の部分が今と違っても拒まない —— 断るのは人間が見た question の内容。PR を開いた根が無ければ刻む先が無い
           const root = rootOfPr(deps.db, mergePr, task.workspace);
-          if (root !== undefined) rootRecord = { root, payload: landingDeclined(task.id, kind), byBoard: true };
+          if (root !== undefined) rootRecord = { root, payload: landingDeclined(task.id, kind) };
         }
         break;
       }
@@ -1916,7 +1916,8 @@ export async function submitAnswer(
       if (rootRecord) {
         appendEvent(deps.db, {
           taskId: rootRecord.root,
-          ...(rootRecord.byBoard ? { actorId: BOARD_ACTOR_ID, origin: "board" as const } : { actorId: HUMAN_ACTOR_ID, origin }),
+          actorId: HUMAN_ACTOR_ID,
+          origin,
           payload: rootRecord.payload,
           at: now(),
         });

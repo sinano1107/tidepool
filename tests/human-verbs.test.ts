@@ -737,7 +737,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, fakeHead(42), NOW, { merge: "escalate" }, undefined);
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const afterCi = new Date(NOW.getTime() + 60_000);
@@ -829,7 +829,7 @@ function openMergeQuestion(github: FakeGitHubClient, head = fakeHead(42)) {
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, head, "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, head, NOW, { merge: "escalate" }, undefined);
   const answerAt = (minutesSincePrOpened: number) =>
     submitAnswer(
       {
@@ -1085,7 +1085,7 @@ it.each([
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, fakeHead(42), NOW, { merge: "escalate" }, undefined);
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   if (observedKind === "pr_close_observed") github.scriptClosedOutside(42);
@@ -1149,7 +1149,7 @@ function escalatedMergeQuestionWith(github: FakeGitHubClient, landingDeps: Parti
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, fakeHead(42), NOW, { merge: "escalate" }, undefined);
   const question = onlyQuestion(db);
   const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, ...landingDeps });
   const answer = (value: string) =>

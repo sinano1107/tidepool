@@ -105,7 +105,7 @@ it.each(["auto_merge", "outside_merge"] as const)("%s の poll が先に drift �
   const s = await sessionWithWork(`owed-landing-${poll}`);
   escalateTask(s.db, s.task, ESCALATION, "deckhand", s.clock.now(), "worker");
   const waiting = registerTask(s.db, { type: "work", title: "ship", purpose: "why", completion_criteria: "done", workspace: s.ws.name }, s.clock.now(), ...HUMAN_WEBUI);
-  recordPrOpened(s.db, waiting, 1, fakeHead(1), "worker", s.clock.now(), { merge: poll === "auto_merge" ? "auto_if_ci_green" : "escalate" }, undefined, "worker");
+  recordPrOpened(s.db, waiting, 1, fakeHead(1), s.clock.now(), { merge: poll === "auto_merge" ? "auto_if_ci_green" : "escalate" }, undefined);
   const repair = breakNamedPlace(s, "drift");
   await createLanding({ defaultAgentName: "tako", db: s.db, clock: s.clock, resolveWorkspace: s.resolve, github: new FakeGitHubClient() }).tick(poll, s.clock.now());
   expect(quarantineQuestion(s.db, "workspace", s.ws.name)).toBeDefined();

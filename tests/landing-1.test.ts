@@ -101,6 +101,26 @@ it("収束は、保護ブランチへ帰る done の work を根に導いて PR 
   expect(github.requests).toMatchObject([{ branch: `task/${work.id}` }]);
 });
 
+// ADR 0400 決定2: PR を開くかどうかは収束の規則が決める —— 完了した agent の名前は pr_opened に載らない
+it.each(["new PR", "found open PR"] as const)("agent の根の収束が開いた PR(%s)の pr_opened は盤面の名義で、origin board", async (path) => {
+  const { workspace } = await makeLandingWorkspace("landing-pr-opened-by-board");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  checkoutTaskBranch(db, workspace, work.id);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  if (path === "found open PR") {
+    git(workspace.path, "push", "head-repo", `task/${work.id}`);
+    github.scriptPullRequestOnBranch(`task/${work.id}`);
+  }
+  finish(db, clock, work);
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(github.requests).toHaveLength(path === "new PR" ? 1 : 0);
+  expect(listEvents(db, work.id).filter((e) => e.kind === "pr_opened").map((e) => [e.actor_id, e.origin])).toEqual([[BOARD_ACTOR_ID, "board"]]);
+});
+
 const PUSH_PATHS = ["new PR", "found open PR", "recorded open PR"] as const;
 
 async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAuthority?: () => AuthorityProfile) {
@@ -116,7 +136,7 @@ async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAutho
     git(workspace.path, "push", "head-repo", `task/${work.id}`);
     const number = github.scriptPullRequestOnBranch(`task/${work.id}`);
     if (path === "recorded open PR") {
-      recordPrOpened(db, work, number, git(workspace.path, "rev-parse", "HEAD"), "worker", clock.now(), undefined, undefined, "worker");
+      recordPrOpened(db, work, number, git(workspace.path, "rev-parse", "HEAD"), clock.now(), undefined, undefined);
       commitWork(workspace.path, "repair.txt", "fixed\n");
     }
   }
@@ -615,7 +635,7 @@ it("open PR への push をまたぐ session は盤面の push を違反に数�
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   finish(db, clock, task);
-  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now(), { head });
+  recordPrOpenedViaWorker(db, task, 1, clock.now(), { head });
 
   // push をまたいで走る別タスクのセッションは、盤面の push を違反に数えない
   await straddle(db, clock, workspace, () => landing.converge());
@@ -784,7 +804,7 @@ async function openPrWhosePushFailsAfterTransfer(name: string) {
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, task);
-  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now(), { head });
+  recordPrOpenedViaWorker(db, task, 1, clock.now(), { head });
   const pushFailed = () =>
     expect(convergeOn(landing, task.id)).resolves.toEqual({
       kind: "failed",
@@ -1357,7 +1377,7 @@ it("収束は open PR を持つ根を更新し、ローカル着地の question 
   checkoutTaskBranch(db, workspace, parent.id, "main");
   commitWork(workspace.path, "feature.txt", "ready\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now(), { head: pushPrHead(github, workspace, parent.id, 1) });
+  recordPrOpenedViaWorker(db, parent, 1, clock.now(), { head: pushPrHead(github, workspace, parent.id, 1) });
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const settled = registerTask(
     db,
@@ -1884,7 +1904,7 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge をせず�
   checkoutTaskBranch(db, workspace, parent.id);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   finish(db, clock, parent);
-  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
+  recordPrOpenedViaWorker(db, parent, 1, clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
   checkoutTaskBranch(db, workspace, repair.id, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
@@ -1892,7 +1912,7 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge をせず�
   boardMerged(db, clock, parent.id, 1);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, repair);
-  recordPrOpenedViaWorker(db, repair, 2, "worker", clock.now());
+  recordPrOpenedViaWorker(db, repair, 2, clock.now());
   github.scriptClosedOutside(2);
   const before = git(workspace.path, "rev-parse", `task/${repair.id}`);
 

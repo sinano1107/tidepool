@@ -45,7 +45,7 @@ it.each([
   ["registry の無い盤面", undefined],
   ["registry の盤面", registry],
   ["全 agent が external の盤面", () => profile("external")],
-] as const)("%s でも、人間の根は PR を開いた記録から merge question を持ち、無人 merge キューに入らず、名前 human の agent の Quarantine も立たない —— pr_opened は actor human・origin board(pin C8・C16・C20)", async (_, resolveAuthority) => {
+] as const)("%s でも、人間の根は PR を開いた記録から merge question を持ち、無人 merge キューに入らず、名前 human の agent の Quarantine も立たない —— pr_opened は盤面の名義で origin board(pin C8・C16・C20、ADR 0400 決定2)", async (_, resolveAuthority) => {
   const { workspace, db, clock, github, landing, root } = await humanRoot("landing-human-root", { resolveAuthority });
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
@@ -54,7 +54,7 @@ it.each([
   expect(git(workspace.repo!, "for-each-ref", "refs/heads/task/")).toBe("");
 
   expect(mergeQuestions(db)).toEqual([{ pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "merge", purpose: textC5Remote(1) }]);
-  expect(listEventsOfKinds(db, ["pr_opened"]).map((e) => [e.task_id, e.actor_id, e.origin])).toEqual([[root.id, HUMAN_ACTOR_ID, "board"]]);
+  expect(listEventsOfKinds(db, ["pr_opened"]).map((e) => [e.task_id, e.actor_id, e.origin])).toEqual([[root.id, BOARD_ACTOR_ID, "board"]]);
   expect(agentQuarantines(db)).toEqual([]);
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
 });

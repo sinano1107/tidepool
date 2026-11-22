@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { BOARD_ACTOR_ID } from "../src/actor-id.js";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
@@ -113,7 +113,7 @@ it.each(["success", "failure", "pending"] as const)("手元に根のタスクブ
   git(workspace.path, "checkout", "main");
   git(workspace.path, "branch", "-D", "scratch");
   github.scriptPullRequestOnBranch(`task/${work.id}`, 1);
-  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
+  recordPrOpenedViaWorker(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head: lastPushed });
   await pushOutsideBoard(workspace, work.id, `${lastPushed}~1`);
   github.scriptCiStatus(ci);
 
@@ -155,8 +155,8 @@ it("tick が立てた盤面の知らない commit の merge question に「hold�
   const held = await answerHoldOnPr(pr);
 
   expect(boardEvents(pr.db, pr.work.id, "landing_declined")).toEqual([{
-    actor_id: BOARD_ACTOR_ID,
-    origin: "board",
+    actor_id: HUMAN_ACTOR_ID,
+    origin: "webui",
     payload: { kind: "landing_declined", question_id: held.id, tip: held.question_landing_tip, outside: { kind: "not_pushed", sha: head }, missing_branches: null },
   }]);
   expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
