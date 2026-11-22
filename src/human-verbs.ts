@@ -1149,7 +1149,8 @@ function humanCancelDefaults(
  *  出た未束ねの異議はここでしか捕まらない。異議は Commit で修理子へ束ねられ(ADR 0046)、
  *  以後は (a) 側で捕まるので、2つの検査は同じ待ちを別の時刻から見た姿である。
  *  PR 回答の始めの読みは早期退出、印の後の読みが merge を縛る(ADR 0330 決定1)。
- *  `hold` は検証しない — 着地しない決定はいつでもできる。 */
+ *  `hold` はこれを通さない — 着地しない決定はいつでもできる。ローカル着地の `hold` が拒まれるのは、履歴で保護ブランチに載ったと
+ *  分かるときだけ(ADR 0401 決定4)。 */
 function assertLandingAllowed(db: Db, landingTaskId: string): void {
   const block = landingBlock(db, landingTaskId);
   if (!block) return;
@@ -1730,16 +1731,16 @@ export async function submitAnswer(
             refuseProtectedBranchWrite(deps.db, mergeWorkspace.name, err, now());
           }
         } else {
-          // ADR 0401 決定4: 保護ブランチに載った内容に断念を刻まない —— 読めなければ断る(fail-closed)。task のブランチが無ければ含まれていると読まない
-          const holdWorkspace = resolveWorkspaceForAnswer(deps, task.workspace, "cannot tell whether the task branch has landed");
-          let landed: string | undefined;
+          // ADR 0401 決定4: 履歴で保護ブランチに載ったと分かる内容にだけ断念を刻まない。ADR 0289 Status 追記 / ADR 0370 決定1: それ以外の
+          // hold は拒まない —— workspace が引けない・git が読めないときも刻む。ADR 0401 帰結: task のブランチが無ければ含まれていると読まない
+          let landed: { sha: string; branch: string } | undefined;
           try {
-            landed = localLandingCommit(holdWorkspace, kind.task_id);
-          } catch (err) {
-            throw new DomainError(`cannot hold: could not tell whether ${taskBranch(kind.task_id)} has landed — ${err instanceof Error ? err.message : String(err)}`);
-          }
+            const holdWorkspace = resolveWorkspaceForAnswer(deps, task.workspace, "cannot tell whether the task branch has landed");
+            const sha = localLandingCommit(holdWorkspace, kind.task_id);
+            if (sha !== undefined) landed = { sha, branch: protectedBranch(holdWorkspace) };
+          } catch {}
           if (landed !== undefined) {
-            throw new DomainError(`cannot hold: ${taskBranch(kind.task_id)} has already landed on ${protectedBranch(holdWorkspace)} as ${landed} — answer \`merge\` to record the landing.`);
+            throw new DomainError(`cannot hold: ${taskBranch(kind.task_id)} has already landed on ${landed.branch} as ${landed.sha} — answer \`merge\` to record the landing.`);
           }
           // ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容
           rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };

@@ -348,7 +348,7 @@ it("task のブランチが無ければ、保護ブランチに含まれてい�
   const before = git(workspace.path, "rev-parse", "refs/heads/main");
 
   // ADR 0401 帰結: 諦めて(ADR 0392)ブランチが消えた後は判定できず fail-closed のまま
-  expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow();
+  expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow(`fatal: Not a valid object name task/${work.id}`);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(before);
 });
 
@@ -657,25 +657,51 @@ it("local 着地の取り込みの後に作業台に人間の作業が残れば�
 
 // ADR 0401 決定4: 取り込みで着地した後・記録の前に死んだ盤面の答え直しは、取り込みの後の片付けと同じに、人間の作業が残る作業台は残して
 // text C6 を言い、残っていなければ消す
-it("取り込みで着地した task をもう一度着地させると、commit を足さずに包む commit を返し、人間の作業が残る作業台は残し、残らなくなれば消す", async () => {
-  const c = await localLandingConflict("local-landing-reanswer-workbench");
+/** 作業台の取り込みで着地し、人間の別の branch が残るので作業台は残った盤面 —— 回答の記録は刻まない(question は開いたまま)。 */
+async function landedThroughKeptWorkbench(name: string) {
+  const c = await localLandingConflict(name);
   await expect(c.answer()).rejects.toThrow(c.refused());
   const tip = c.resolve();
   git(c.workbench(), "checkout", "--quiet", "-b", "side");
   commitWork(c.workbench(), "side.txt", "the human's other work\n");
   git(c.workbench(), "checkout", "--quiet", "main");
   const intake = { ...CLEAN_LANDING_INTAKE, workbenchBase: c.base };
-  const first = mergeTaskToProtected(c.db, c.workspace, c.work.id, intake);
-  const kept = `took ${tip} in as ${first.landed} on main. In a clone, fetch the workbench and fast-forward to \`board/main\` before you write on.`;
-  expect(first.kept).toBe(kept);
+  const { landed, kept } = mergeTaskToProtected(c.db, c.workspace, c.work.id, intake);
+  const notice = `took ${tip} in as ${landed} on main. In a clone, fetch the workbench and fast-forward to \`board/main\` before you write on.`;
+  expect(kept).toBe(notice);
+  return { ...c, tip, landed, notice, again: () => mergeTaskToProtected(c.db, c.workspace, c.work.id, intake) };
+}
 
-  expect(mergeTaskToProtected(c.db, c.workspace, c.work.id, intake)).toEqual({ landed: first.landed, kept });
-  expect(git(c.workbench(), "rev-parse", "main")).toBe(first.landed);
+// ADR 0382 決定5: tip が取り込んだまま(包む commit へ進めた後でも、進める前に死んでも)なら、人間の作業が残る間は残して text C6 を言い、
+// 残らなくなれば消す
+it("取り込みで着地した task をもう一度着地させると、commit を足さずに包む commit を返し、人間の作業が残る作業台は残し、残らなくなれば消す", async () => {
+  const c = await landedThroughKeptWorkbench("local-landing-reanswer-workbench");
+
+  expect(c.again()).toEqual({ landed: c.landed, kept: c.notice });
+  expect(git(c.workbench(), "rev-parse", "main")).toBe(c.landed);
+
+  // 包む commit へ進める前に死んだ形: 作業台の tip は取り込んだ tip のまま
+  git(c.workbench(), "update-ref", "refs/heads/main", c.tip);
+  expect(c.again()).toEqual({ landed: c.landed, kept: c.notice });
+  expect(git(c.workbench(), "rev-parse", "main")).toBe(c.landed);
 
   git(c.workbench(), "branch", "--quiet", "-D", "side");
-  expect(mergeTaskToProtected(c.db, c.workspace, c.work.id, intake)).toEqual({ landed: first.landed, kept: undefined });
+  git(c.workbench(), "update-ref", "refs/heads/main", c.tip);
+  expect(c.again()).toEqual({ landed: c.landed, kept: undefined });
   expect(existsSync(workbenchPath(c.base, { workspace: c.workspace.name }, c.source))).toBe(false);
-  expect(git(c.workspace.path, "rev-parse", "refs/heads/main")).toBe(first.landed);
+  expect(git(c.workspace.path, "rev-parse", "refs/heads/main")).toBe(c.landed);
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toHaveLength(1);
+});
+
+it("取り込みで着地した後に作業台へ人間の commit が届いていれば、もう一度着地させても取り込まずに作業台を残してそう言う", async () => {
+  const c = await landedThroughKeptWorkbench("local-landing-reanswer-workbench-moved");
+  commitWork(c.workbench(), "later.txt", "after the crash\n");
+  const moved = git(c.workbench(), "rev-parse", "main");
+  const at = c.workbench();
+
+  expect(c.again()).toEqual({ landed: c.landed, kept: `Commits reached the workbench at ${at} after the board read it and were not taken in; the workbench is kept.` });
+  expect(git(c.workbench(), "rev-parse", "main")).toBe(moved);
+  expect(git(c.workspace.path, "rev-parse", "refs/heads/main")).toBe(c.landed);
   expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toHaveLength(1);
 });
 
