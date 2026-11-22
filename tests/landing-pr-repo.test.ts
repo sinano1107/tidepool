@@ -9,7 +9,7 @@ import { openQuarantineQuestion } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, registerMergeQuestion } from "../src/tasks.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, holdAfterMerge } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace } from "./harness.js";
 import { boardEvents, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -32,7 +32,8 @@ async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?:
     git(old.path, "remote", "set-url", "origin", declaredRepo);
     old.repo = declaredRepo;
   }
-  const { workspace: moved } = await makeRemoteBackedWorkspace("reef-new");
+  // 盤面は出元 repo へ push する(ADR 0395 決定2)—— 新しい repo の根も出元 repo を記録して PR を開く(ADR 0399 決定1)
+  const { workspace: moved } = await makeLandingWorkspace("reef-new");
   const reef = await registeredReef(old);
   giveHeadRepo(db, reef, old.head_repo!);
   const github = new FakeGitHubClient();
@@ -46,6 +47,7 @@ async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?:
     await deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, ...references });
     await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
     expect(reef.resolve("reef").repo).toBe(moved.repo);
+    giveHeadRepo(db, reef, moved.head_repo!);
   };
   const workspace = reef.resolve("reef");
   const work = landingWork(db, clock, "reef");
@@ -53,7 +55,7 @@ async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?:
   commitWork(workspace.path, "feature.txt", "ready\n");
   const root = finish(db, clock, work);
   const head = pushPrHead(github, workspace, root.id, 1);
-  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head });
+  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head, workspace });
   const landing = createLanding({ db, clock, resolveWorkspace: reef.resolve, defaultAgentName: "tako", github, resolveAuthority: () => profile(merge) });
   const answer = (option: "merge" | "hold") => {
     const question = listBoard(db).find((task) => task.status === "todo" && task.question_pending_merge_task_id === root.id)!;
@@ -81,7 +83,7 @@ it("無人 merge の tick は登録し直した repo の同じ番号の PR を�
   const newWork = landingWork(db, clock, "reef");
   checkoutTaskBranch(db, reef.resolve("reef"), newWork.id);
   const newRoot = finish(db, clock, newWork);
-  recordPrOpenedOutsideConvergence(db, newRoot, 1, clock.now(), { authority: { merge: "auto_if_ci_green" } });
+  recordPrOpenedOutsideConvergence(db, newRoot, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, workspace: reef.resolve("reef") });
   github.scriptClosedOutside(1, moved.repo);
 
   await landing.tick("auto_merge", clock.now());

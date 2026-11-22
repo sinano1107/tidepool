@@ -116,7 +116,7 @@ it("a repair does not push to the replacement fork when its open PR still uses t
   workspace = { ...workspace, head_repo: replacement };
 
   await expect(convergeOn(landing, work.id)).resolves.toEqual({
-    kind: "failed", reason: "promotion_failed", error: expect.stringContaining(`PR #1 does not have an open head at head repo ${replacement}`),
+    kind: "failed", reason: "promotion_failed", error: expect.stringContaining(`pushed to head repo ${previous.head_repo}, but workspace ${previous.name} now declares head repo ${replacement}`),
   });
 
   expect(git(previous.head_repo, "rev-parse", branch)).toBe(previousHead);
@@ -136,7 +136,7 @@ it("the merge path floor reads a recorded head that is only available from the f
   const head = git(outside, "rev-parse", "HEAD");
   git(outside, "push", "origin", `HEAD:refs/heads/${branch}`);
   github.scriptPullRequestOnBranch(branch);
-  recordPrOpenedOutsideConvergence(db, finish(db, clock, work), 1, clock.now(), { head, authority: { merge: "auto_if_ci_green" } });
+  recordPrOpenedOutsideConvergence(db, finish(db, clock, work), 1, clock.now(), { head, authority: { merge: "auto_if_ci_green" }, workspace });
   expect(() => git(workspace.path, "cat-file", "-e", head)).toThrow();
 
   await landing.tick("auto_merge", clock.now());

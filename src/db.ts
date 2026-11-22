@@ -188,6 +188,9 @@ function initializeDb(db: Db): void {
       -- ADR 0399 決定1: the declared repo this task's content goes to, written once when its pickup first reached it.
       -- SQL NULL is no record (a disagreement), JSON null a purely-local record, a JSON string the repo as compared (ADR 0378 決定4).
       declared_repo       TEXT,
+      -- ADR 0399 決定1: the head repo this root first pushed task/<id> to (or found its PR on), as compared (ADR 0378 決定4), written once after that push.
+      -- NULL is no record —— a disagreement only for a root with a recorded PR under a declared repo (決定3, Status 追記).
+      head_repo           TEXT,
       -- question-only fields (issue #30): 1-4 question items (JSON array of
       -- {title, detail?, options, recommendation} — the common context lives
       -- on purpose), and the human's answers once given, one per item, in

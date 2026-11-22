@@ -74,6 +74,7 @@ import {
   quarantineWorkspace,
   RefsMovedError,
   readTaskBranchHead,
+  recordHeadRepo,
   redoMergeBacks,
   refreshProtectedBranch,
   refusedOnceHead,
@@ -1804,8 +1805,13 @@ export function createLanding(deps: LandingDeps): Landing {
           }
           return null;
         }, async () => {
-          landingHeadRepo(workspace);
-          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id), HEAD_REPO_REMOTE), sha, () => pushBranch(sha));
+          // ADR 0399 決定3 / ADR 0378 決定7: 行き先は比較と同じ同期区間で読み、await を挟まずに push する
+          const headRepo = landingHeadRepo(workspace);
+          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id), HEAD_REPO_REMOTE), sha, () => {
+            pushBranch(sha);
+            // ADR 0399 決定1(Status 追記): 記録は push が届いた後 —— 届かなかった push の出元 repo で根を止めない
+            recordHeadRepo(deps.db, task.id, headRepo);
+          });
           return null;
         });
       };
@@ -1827,7 +1833,8 @@ export function createLanding(deps: LandingDeps): Landing {
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
         if (state === "CLOSED") return closedPr(task.pr_number);
-        // ADR 0395 決定1: after a fork replacement, a recorded PR can still point to the previous fork.
+        // ADR 0395 決定1: a recorded PR whose head is not on the declared fork is not pushed to. After a fork replacement the head repo
+        // record already stops the root (ADR 0399 決定3); this stays as the second line, from the PR's own head.
         const branch = taskBranch(task.id);
         const matching = await github.findPullRequestByHead({ workspace, branch, number: prNumber });
         if (matching?.state !== "OPEN") throw new Error(`PR #${prNumber} does not have an open head at head repo ${headRepoLabel}'s ${branch}, so the board did not push.`);
@@ -1866,7 +1873,10 @@ export function createLanding(deps: LandingDeps): Landing {
       if (found && found.state !== "OPEN") {
         // 名義を見ない —— 盤面は記録した PR 番号にしか merge を撃たないので、番号の記録が無い PR は盤面の merge ではない
         const observed = { kind: OBSERVED[found.state], pr_number: found.number };
+        // ADR 0399 決定1(Status 追記): 見つけた PR の出元 repo を記録する。読みは Quarantine を立てて投げうるので transaction の外で
+        const headRepo = landingHeadRepo(workspace);
         deps.db.transaction(() => {
+          recordHeadRepo(deps.db, task.id, headRepo);
           recordPrNumber(deps.db, task.id, found.number);
           retire(task.id, observed, deps.clock.now());
         })();

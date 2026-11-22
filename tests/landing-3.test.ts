@@ -2106,7 +2106,7 @@ it("開いている PR へ修理を push する着地は profile を読まない
   const head = pushPrHead(github, workspace, task.id, 1);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
-  recordPrOpenedOutsideConvergence(db, task, 1, clock.now(), { head });
+  recordPrOpenedOutsideConvergence(db, task, 1, clock.now(), { head, workspace });
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
     kind: "landed",

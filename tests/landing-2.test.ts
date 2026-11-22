@@ -74,6 +74,7 @@ import {
   raiseUnbundledObjection,
   readOnNextTick,
   recordPrOpenedOutsideConvergence,
+  recordPushedHeadRepo,
   rootWithOpenedPr,
   settleRepairNotMergedBack,
   straddle,
@@ -1076,6 +1077,7 @@ it("書き換えられた記録済みの PR への2回目の「merge」の追い
   git(c.workspace.path, "push", "head-repo", c.target);
   const pushed = git(c.workspace.path, "rev-parse", c.target);
   c.github.scriptPullRequestOnBranch(c.target, 2);
+  recordPushedHeadRepo(c.db, c.repair.id, c.workspace);
   recordPrOpened(c.db, c.repair, 2, pushed, c.clock.now(), { merge: "escalate" }, undefined);
   await pushOutsideBoard(c.workspace, c.repair.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
   const answerMerge = () =>
