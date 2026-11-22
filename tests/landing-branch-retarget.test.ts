@@ -1,15 +1,12 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { parseDocument } from "yaml";
 import { createLanding } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
-import { getTask } from "../src/tasks.js";
+import { getTask, listBoard } from "../src/tasks.js";
 import { releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, prepareAtPickup } from "./harness.js";
 import { convergeOn, finish, landingWork, mergeQuestions, openBoard, profile, pushPrHead, recordPrOpenedOutsideConvergence } from "./landing-fixture.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -41,13 +38,8 @@ async function queuedRoot({ opened = true } = {}) {
     recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, head });
   }
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, resolveAuthority: () => profile("auto_if_ci_green") });
-  const declareBranch = (branch: string) => {
-    const entries = parseDocument(readFileSync(join(registryDir, "workspaces.yaml"), "utf8"));
-    entries.setIn(["reef", "branch"], branch);
-    writeFileSync(join(registryDir, "workspaces.yaml"), entries.toString());
-    git(registryDir, "commit", "-qam", `declare ${branch}`);
-  };
-  // 新しい保護ブランチの写しは pickup の fetch で手元に来る —— 収束は PR の無い根の写しを読み直さない
+  const declareBranch = (branch: string) => setWorkspaceEntry(registryDir, "reef", "branch", branch);
+  // #3613: 収束は新しい保護ブランチを fetch しないので、その写しを手元に持ってくる pickup を先に通す
   const pickUpAnother = async () => {
     const other = landingWork(db, clock, "reef");
     releaseWorkspace(db, await prepareAtPickup(db, resolve("reef"), other), getTask(db, other.id)!, clock.now());
@@ -74,12 +66,14 @@ it("開いた PR を持つ根を残して宣言の branch を変えると、tick
   expect(mergeQuestions(db)).toMatchObject([
     { pr: 1, purpose: expect.stringContaining('This PR targets "main". The workspace\'s protected branch is "release".') },
   ]);
+  // 同じ観測に扱いを2つ作らない(ADR 0399 決定4): 開いている question は merge question だけ
+  expect(listBoard(db).filter((q) => q.status === "todo").map((q) => q.question_pending_merge_pr)).toEqual([1]);
 });
 
 it("GitHub で保護ブランチを改名して PR の base が付け替わり、宣言も新しい名前に直れば、tick は止まらず merge する", async () => {
   const { db, clock, github, landing, workspace, declareBranch } = await queuedRoot();
   git(workspace.repo!, "branch", "-m", "main", "trunk");
-  github.scriptPrBase(1, "trunk");
+  github.scriptPullRequestBase(1, "trunk");
   declareBranch("trunk");
 
   await landing.tick("auto_merge", clock.now());
@@ -118,7 +112,7 @@ it("head で探して拾い直した PR の base が古い branch なら、retar
 it("head で探して拾い直した PR の base が読めなければ、既存の読めない扱いで merge question を立てる", async () => {
   const { db, clock, github, landing, root, workspace } = await queuedRoot({ opened: false });
   pushPrHead(github, workspace, root.id, 1);
-  github.scriptPrBase(1, "gone");
+  github.scriptPullRequestBase(1, "gone");
 
   expect(await convergeOn(landing, root.id)).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
   await landing.tick("auto_merge", clock.now());

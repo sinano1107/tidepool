@@ -1,7 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { parseDocument } from "yaml";
 import type { Db } from "../src/db.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { createLanding, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
@@ -10,9 +8,9 @@ import { countUnsettledTasksReferencing, getTask, listBoard, registerMergeQuesti
 import { announceHeadRepo, assertRememberedHeadRepo, buildWorkspaceResolver, resolveExecutionWorkspace } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
 import { finish, landingWork, openBoard, pushPrHead, recordPrOpenedOutsideConvergence } from "./landing-fixture.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -47,10 +45,7 @@ async function reRegisteredWithSameNumber() {
   // 扉が書くもの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)
   const registered = resolve("reef");
   announceHeadRepo(db, registered, moved.head_repo);
-  const entries = parseDocument(readFileSync(join(registryDir, "workspaces.yaml"), "utf8"));
-  entries.setIn(["reef", "head_repo"], moved.head_repo);
-  writeFileSync(join(registryDir, "workspaces.yaml"), entries.toString());
-  git(registryDir, "commit", "-qam", "declare the head repo");
+  setWorkspaceEntry(registryDir, "reef", "head_repo", moved.head_repo);
   assertRememberedHeadRepo(db, resolve("reef"), clock.now());
 
   const oldQuestion = registerMergeQuestion(

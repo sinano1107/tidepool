@@ -25,6 +25,7 @@ import {
 import { raiseObjection } from "../src/triage.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  protectedBranch,
   recordTaskCheckoutTip,
   refreshProtectedBranch,
   releaseWorkspace,
@@ -92,7 +93,7 @@ export function pushPrHead(github: FakeGitHubClient, workspace: WorkspaceConfig,
   git(workspace.path, "push", workspace.head_repo!, `task/${taskId}`);
   if (before === null) git(workspace.path, "update-ref", "-d", copy);
   else git(workspace.path, "update-ref", copy, before);
-  github.scriptPullRequestOnBranch(`task/${taskId}`, prNumber, undefined, workspace.branch ?? "main");
+  github.scriptPullRequestOnBranch(`task/${taskId}`, prNumber, undefined, protectedBranch(workspace));
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
 
