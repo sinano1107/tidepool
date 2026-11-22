@@ -132,6 +132,7 @@ import {
   fillEmptyWorkspace,
   getTask,
   hasStartedWork,
+  hasTaskBranch,
   hasTaskBranchInForce,
   holdsFirstCaptures,
   interviewRole,
@@ -2714,6 +2715,10 @@ type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
  *  ADR 0351 決定2: 基準は切れない —— 行が無いか NULL なら最初の撮り、あれば盤面が書く前に除外無しで比べる。以後の書き込みは口が畳む。
  *  比較は読む場所の後半(`reads`、ADR 0329 決定10・11)より前 —— 走る場所の違反は読む場所を書く前に止まる。 */
 export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfig, task: Task, board: PickupPreparation): Promise<void> {
+  // ADR 0399 決定1・3: the task branch records that preparation reached the repo. A pickup that stopped before then can still try for the first time.
+  if (interviewRootIdOf(db, task) === undefined && hasTaskBranch(db, task.id)) {
+    workspace = withDeclaredRepoCheck(db, withRememberedRepoCheck(db, workspace, board.now, board.resolveRegistered), task.id);
+  }
   await preparePickupPlace(db, workspace, task, board);
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る

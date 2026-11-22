@@ -93,6 +93,7 @@ import type { SpawnFailure, WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   CheckoutHostError,
+  DeclaredRepoMismatchError,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   LostTaskBranchPresentError,
@@ -623,6 +624,9 @@ export function startScheduler(deps: {
           if (err instanceof FirstCaptureRegistryReadError) throw err;
           // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>` はその task の失敗(出口は cancel)—— 名前の場所を quarantine しない
           if (err instanceof LostTaskBranchPresentError) throw err;
+          // ADR 0399 決定5: a task's recorded repo disagreement goes to its normal failure question.
+          if (err instanceof DeclaredRepoMismatchError) throw err;
+          if (err instanceof PickupGateError && err.cause instanceof DeclaredRepoMismatchError) throw err.cause;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
           // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、落ちた場所の名前で止める(受験者は root id、ADR 0276 決定3)
           if (err instanceof RefsMovedError || (err instanceof PickupGateError && err.cause instanceof RefsMovedError)) {
