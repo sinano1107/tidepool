@@ -1,14 +1,16 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { parseDocument } from "yaml";
 import type { Db } from "../src/db.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { createLanding, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, registerMergeQuestion, type Task } from "../src/tasks.js";
-import { buildWorkspaceResolver, resolveExecutionWorkspace } from "../src/workspace.js";
+import { announceHeadRepo, assertRememberedHeadRepo, buildWorkspaceResolver, resolveExecutionWorkspace } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, makeRemoteBackedWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
 import { finish, landingWork, openBoard, pushPrHead, recordPrOpenedViaWorker } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -23,7 +25,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 async function reRegisteredWithSameNumber() {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
-  const { workspace: moved } = await makeRemoteBackedWorkspace("reef-new");
+  const { workspace: moved } = await makeLandingWorkspace("reef-new");
   const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${old.path}\n  repo: ${old.repo}\n` });
   const admin = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-") };
   const resolve = (name: string | null) => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), name ?? "reef", null, admin.workspacesBaseDir);
@@ -41,6 +43,15 @@ async function reRegisteredWithSameNumber() {
   });
   await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, admin);
   expect(resolve("reef").repo).toBe(moved.repo);
+  // 盤面は出元 repo(head_repo)へ push する(ADR 0395 決定2)。設定の扉(updateWorkspace)は GitHub の owner/name しか受けないので、
+  // 扉が書くもの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)
+  const registered = resolve("reef");
+  announceHeadRepo(db, registered, moved.head_repo);
+  const entries = parseDocument(readFileSync(join(registryDir, "workspaces.yaml"), "utf8"));
+  entries.setIn(["reef", "head_repo"], moved.head_repo);
+  writeFileSync(join(registryDir, "workspaces.yaml"), entries.toString());
+  git(registryDir, "commit", "-qam", "declare the head repo");
+  assertRememberedHeadRepo(db, resolve("reef"), clock.now());
 
   const oldQuestion = registerMergeQuestion(
     db, getTask(db, oldRoot.id)!, { pr: 1, tip: null, outside: null, missingBranches: null, reason: "surface_changed" }, "merge the old root?", "merge", clock.now(),
