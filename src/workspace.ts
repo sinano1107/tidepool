@@ -113,6 +113,8 @@ import {
   ownEntry,
   type RefWriter,
   type Registry,
+  type RegistrySource,
+  registryRef,
   remoteBranchSha,
   type WorkspaceEntry,
 } from "./registry.js";
@@ -245,7 +247,8 @@ export function workspacesBaseDirSource(configured: string | undefined): Workspa
 /** A task's `workspace` (or the board's default) names a workspace absent
  *  from the registry — registry drift (issue #26). */
 export class UnknownWorkspaceError extends Error {
-  constructor(public readonly workspaceName: string) {
+  /** `registry`: 名前を引いた registry —— B9 の文が削除の扉の commit を探す先(ADR 0401 決定5)。 */
+  constructor(public readonly workspaceName: string, public readonly registry?: RegistrySource) {
     super(`unknown workspace: ${workspaceName}`);
   }
 }
@@ -266,7 +269,7 @@ export function resolveExecutionWorkspace(
 ): WorkspaceConfig {
   const name = taskWorkspace ?? defaultWorkspaceName;
   const entry = ownEntry(registry.workspaces, name);
-  if (!entry) throw new UnknownWorkspaceError(name);
+  if (!entry) throw new UnknownWorkspaceError(name, registry.source);
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too
   const path = entryCheckoutPath(entry, name, workspacesBaseDir);
@@ -3066,6 +3069,25 @@ export function dropWorkspaceState(db: Db, name: string): void {
   })();
 }
 
+/** その名前の行が残っているか —— 撮りを持たない行(出元 repo を覚えただけ)も数える(ADR 0401 決定5)。 */
+export function holdsWorkspaceState(db: Db, name: string): boolean {
+  return db.prepare("SELECT 1 FROM workspace_state WHERE name = ?").get(name) !== undefined;
+}
+
+/** 名前が registry に無いのに行が残るときの原因と出口(ADR 0401 決定5)。登録の扉の拒否と B9 が共有する。削除の扉の commit を
+ *  registry の ref で探し、見つかればその sha を、無ければ(手編集)条件つきで戻す先を言う。`registry` が無い呼び手も条件つき。 */
+export function leftoverStateExit(name: string, registry: RegistrySource | undefined): string {
+  const deletion = registry && git(registry.dir, "log", "-1", "--format=%H", "--fixed-strings", "--grep", `delete workspace ${name} via WebUI`, registryRef(registry.mode));
+  const cause = deletion
+    ? `A deletion of "${name}" stopped midway: registry commit ${deletion} removed the entry, but the board kept its state`
+    : `The board found no registry commit from the deletion door for "${name}"; the entry was likely removed or renamed by hand`;
+  const restore = deletion
+    ? `as it was in workspaces.yaml at ${deletion}^`
+    : "as it was before it was removed (in workspaces.yaml at the parent of the commit that removed it, if it was committed)";
+  // 覚えた repo と違う宣言は戻した後の2回目の拒否になる(ADR 0378 決定10)
+  return `${cause}. To clear it, in order: put the entry back in the registry under that name ${restore}, with its repo and head_repo as well as its path (a repo other than the one the board remembers is refused again); accept the open Quarantine question for "${name}", if any; delete the workspace through the deletion door; register it again (under a new name to rename it)`;
+}
+
 /** 盤面がその名前の基準の行を持つか(ADR 0373 決定13・14)。 */
 export function holdsBaseline(db: Db, name: string): boolean {
   return storedRefs(db, name) !== "";
@@ -3642,9 +3664,9 @@ export function quarantineWorkspace(
   now: Date,
 ): ResourceStop {
   const reason = cause instanceof Error ? cause.message : String(cause);
-  // spec #3273 text B9: 基準の行を持つ名前が引けない間は、どの workspace も最初の撮りをしない(ADR 0373 決定13)
+  // spec #3273 text B9: 基準の行を持つ名前が引けない間は、どの workspace も最初の撮りをしない(ADR 0373 決定13)。出口は登録の扉の拒否と同じ文(ADR 0401 決定5)
   const baselineHeldSentence = cause instanceof UnknownWorkspaceError && holdsBaseline(db, workspaceName)
-    ? `. The board holds a baseline for "${workspaceName}", so no workspace captures a first baseline until it resolves again: put the entry back in the registry under that name. To remove the workspace, delete it through the deletion door after this question is closed; to rename it, delete it and register it under the new name`
+    ? `. The board holds a baseline for "${workspaceName}", so no workspace captures a first baseline until it resolves again. ${leftoverStateExit(workspaceName, cause.registry)}`
     : "";
   return registerResourceStop(db, "workspace", workspaceName, `${reason}${baselineHeldSentence}`, now);
 }

@@ -39,7 +39,7 @@ async function reRegisteredWithSameNumber() {
     unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "reef"),
     awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(resolve, undefined), "reef"),
   });
-  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, admin);
+  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...admin, db });
   expect(resolve("reef").repo).toBe(moved.repo);
   // 盤面は出元 repo(head_repo)へ push する(ADR 0395 決定2)。設定の扉(updateWorkspace)は GitHub の owner/name しか受けないので、
   // 扉が書くもの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)

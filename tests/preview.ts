@@ -44,7 +44,7 @@ export async function bootPreview(): Promise<Preview> {
     const profileDeps = { registry };
     const board = await bootTidepool({
       workspaceAdmin: {
-        create: (input) => createWorkspace(input, workspaceDeps),
+        create: (input) => createWorkspace(input, { ...workspaceDeps, db: board.db }),
         list: () => listWorkspaceViews(workspaceDeps, "configured"),
         update: (input) => updateWorkspace(input, { ...workspaceDeps, db: board.db }),
       },

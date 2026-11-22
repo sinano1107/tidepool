@@ -58,7 +58,9 @@ import {
   dropWorkspaceState,
   entryCheckoutPath,
   holdsBaseline,
+  holdsWorkspaceState,
   humanContentWorkbenchLeft,
+  leftoverStateExit,
   openHumanContentWorkbench,
   openIntakeQuestionId,
   refValues,
@@ -225,10 +227,12 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<string> {
+export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps & { db: Db }): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
+  // ADR 0401 決定5: 削除の途中で残った行の上に登録すると、次の pickup がその行を新しい checkout の基準として比べる
+  if (holdsWorkspaceState(deps.db, input.name)) throw new LeftoverWorkspaceStateError(input.name, leftoverStateExit(input.name, deps.registry));
   const path = intendedCheckoutPath(input, deps);
   // ADR 0040: before any external effect — a refused registration must not
   // leave a clone or a GitHub repository behind.
@@ -268,6 +272,14 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
   if (input.protected) entry.protected = true;
   commitWorkspaceEntry(deps, input.name, entry, `add workspace ${input.name} via WebUI`);
   return path;
+}
+
+/** ADR 0401 決定5: registry に無い名前に盤面の行が残っている —— 削除が途中で止まった。 */
+export class LeftoverWorkspaceStateError extends Error {
+  constructor(name: string, exit: string) {
+    super(`workspace "${name}" cannot be registered: the board still holds state from an earlier workspace with that name. ${exit}.`);
+    this.name = "LeftoverWorkspaceStateError";
+  }
 }
 
 /** spec #3273(ADR 0371 決定7): 作業台で盤面が引き直す `refs/heads/board/*` と重なる保護ブランチ —— `board` か `board/` の下。 */

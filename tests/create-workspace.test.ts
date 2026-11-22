@@ -4,6 +4,7 @@ import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { openDb } from "../src/db.js";
 import { NoOwnGitDirError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
@@ -159,6 +160,7 @@ async function makeDeps(registryDir: string) {
     registry: { dir: registryDir, mode: "purely-local" as const },
     workspacesBaseDir: await tempDir("tidepool-ws-base-"),
     github: new FakeGitHubClient(),
+    db: openDb(":memory:"),
   };
 }
 
@@ -634,8 +636,9 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
       [
         "--import", "tsx", "--input-type=module", "-e",
         `const { createWorkspace } = await import(${module("../src/workspace-create.ts")});
+         const { openDb } = await import(${module("../src/db.ts")});
          await createWorkspace({ mode: "register", name: "sandbox", path: ${JSON.stringify(path)} },
-           { registry: { dir: ${JSON.stringify(registryDir)}, mode: "purely-local" }, workspacesBaseDir: ${JSON.stringify(workspacesBaseDir)} });`,
+           { registry: { dir: ${JSON.stringify(registryDir)}, mode: "purely-local" }, workspacesBaseDir: ${JSON.stringify(workspacesBaseDir)}, db: openDb(":memory:") });`,
       ],
       { timeout: 5000, encoding: "utf8" },
     );
