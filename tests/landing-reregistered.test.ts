@@ -18,7 +18,8 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 // ADR 0399 決定2: 根を指す記録は根の id で持つ。名前を別の repo で登録し直した後、新しい repo の新しい根が旧い根と同じ番号の PR を
 // 開いても、merge question・処理中の印・merge の回答・観測決着はそれぞれ自分の根に当たる(spec #3595 の振る舞い 2)。
 /** PR #1 を開いた旧い根を残して `reef` を削除の扉 → 登録の扉で別の repo の checkout に登録し直し、新しい repo で新しい根が PR #1 を
- *  開いた盤面。旧い根の merge question は登録し直しの後に立つ —— 開いた merge question は削除の扉を止める。 */
+ *  開いた盤面。旧い根の merge question は登録し直しの後に立つ —— 開いた merge question は workspace を参照する未決着タスクとして
+ *  削除の扉を止める(ADR 0087 決定2)。 */
 async function reRegisteredWithSameNumber() {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");

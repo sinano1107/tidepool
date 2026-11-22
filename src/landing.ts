@@ -489,14 +489,12 @@ export async function checkPrMergeContent(
 
 export function landingAnnotation(
   db: Db,
-  task: QuestionColumns<TierRef> & Pick<Task, "workspace">,
+  task: QuestionColumns<TierRef>,
 ): { blocked_by: LandingBlock["kind"] | null } | null {
   const kind = questionKindOf(task);
   let landingTaskId: string;
   switch (kind.kind) {
     case "local_merge":
-      landingTaskId = kind.task_id;
-      break;
     case "pr_merge":
       landingTaskId = kind.task_id;
       break;
@@ -615,12 +613,12 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "questi
  *  終わった(`landing_finished`)→ ブランチを失って終えた(`landing_ended_branch_lost`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
  *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
  *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
-export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "pr_number"> & { status: string }): LandingState | null {
+export function landingState(db: Db, task: Pick<Task, "id" | "type"> & { status: string }): LandingState | null {
   if (task.type !== "work" || task.status !== "done") return null;
   const outcome = rootPrOutcome(db, task.id);
   if (outcome) return outcome.state === "CLOSED" ? "close_observed" : outcome.observed ? "merge_observed" : "merged";
   if (isQueuedForAutoMerge(db, task.id)) return "auto_merge_queue";
-  if (listOpenMergeQuestions(db).some((q) => q.root === task.id)) return "merge_question";
+  if (db.prepare("SELECT 1 FROM tasks WHERE type = 'question' AND status = 'todo' AND question_pending_merge_task_id = ?").get(task.id)) return "merge_question";
   if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   // spec #3273 group H: ブランチを失って終えた根 —— ADR 0265 決定7 の7つの外の8つ目(同 Status 追記)
   if (latestEventOfTask(db, task.id, "landing_ended_branch_lost")) return "branch_lost";
@@ -739,17 +737,17 @@ export interface Landing {
    *  引退の対象からも除く(ADR 0106 決定5)。 */
   converge(options?: { answering?: { question: string; answerer: Answerer } }): Promise<RootVerdict[]>;
   /** 回答受理直前のバックストップ(ADR 0079 決定3)。merge 済み・閉じた PR を観測で決着させたら true、該当しない
-   *  (PR 番号・GitHub・workspace が無い)か PR が開いている・印が付いていれば false。PR を読めなければ DomainError を
+   *  (merge question でない・GitHub・workspace が無い)か PR が開いている・印が付いていれば false。PR を読めなければ DomainError を
    *  投げる(ADR 0265 決定4)。 */
   observePullRequestOutcome(question: Task): Promise<boolean>;
   observeAutoMergeOutcomes(agentName: string): Promise<void>;
   /** Annotates a replacement question with the diff of the head it asks about. */
   reviewMergePaths(workspace: WorkspaceConfig, task: Task, pr: PrDiff | undefined): HumanMergePathReview | undefined;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;
-  /** ADR 0236 決定2・3: 執行する経路が PR に処理中の印を取り、印を放す関数を返す。既に印が付いていれば取らずに
+  /** ADR 0236 決定2・3: 執行する経路が PR を開いた根に処理中の印を取り、印を放す関数を返す。既に印が付いていれば取らずに
    *  null を返す。印の鍵は PR を開いた根の id(ADR 0399 決定2)。 */
   takeInFlightMark(rootId: string): (() => void) | null;
-  /** 印が付いているかを読むだけ —— 執行しない回答が印の付いた PR を拒むための口(ADR 0288 決定2)。 */
+  /** 根に印が付いているかを読むだけ —— 執行しない回答が印の付いた根の PR を拒むための口(ADR 0288 決定2)。 */
   isMarked(rootId: string): boolean;
   /** 盤面の停止(issue #1851): 以後の `converge()` は回を始めず空を返し、走っている回と列に入った回の終わりで解ける。
    *  回の失敗では reject しない。 */
@@ -869,7 +867,7 @@ function questionTip(workspace: WorkspaceConfig, taskId: string): string | null 
  *  a second observation must not re-stamp an already-closed question. Returns the root it recorded the outcome on, if any. */
 function settleMergeQuestionAsObserved(
   db: Db,
-  question: OpenMergeQuestion,
+  question: Pick<OpenMergeQuestion, "id" | "root" | "pr_number">,
   kind: ReturnType<typeof prOutcomeKind>,
   now: Date,
 ): string | null {
@@ -899,9 +897,8 @@ function settlePrPromotionQuestionsAsObserved(
 /** ADR 0053 decision 3: a purely-local root completion cannot be promoted to a PR, so
  *  the board asks whether to land its task branch on the protected branch (a fast-forward,
  *  or a catch-up merge commit — ADR 0103) or hold it there — a hold declines only the content of that moment, and
- *  the question is asked again once the content changes (ADR 0289 決定3). The task id is deliberately stored
- *  separately from question_pending_merge_pr: one names a local branch while
- *  the other names a GitHub PR. */
+ *  the question is asked again once the content changes (ADR 0289 決定3). The task id names the root whose
+ *  local branch waits; a PR merge question names its root in its own column (ADR 0399 決定2). */
 export function registerLocalMergeQuestion(
   db: Db,
   task: Task,
@@ -973,7 +970,7 @@ function listOpenMergeQuestions(db: Db): OpenMergeQuestion[] {
   return db
     .prepare(
       `SELECT id, question_pending_merge_pr AS pr_number, workspace, question_pending_merge_task_id AS root FROM tasks
-       WHERE type = 'question' AND status = 'todo' AND question_pending_merge_pr IS NOT NULL ORDER BY rowid`,
+       WHERE type = 'question' AND status = 'todo' AND question_pending_merge_task_id IS NOT NULL ORDER BY rowid`,
     )
     .all() as OpenMergeQuestion[];
 }
@@ -1369,7 +1366,7 @@ export function createLanding(deps: LandingDeps): Landing {
     if (payload.kind === OBSERVED.CLOSED) announceClosed(taskId, payload.pr_number, now);
   };
   /** merge question を観測で閉じる(`settleMergeQuestionAsObserved`)。閉じた観測を根に刻んだなら判断行も流す。 */
-  const settleObserved = (question: OpenMergeQuestion, kind: ReturnType<typeof prOutcomeKind>, now: Date) => {
+  const settleObserved = (question: Pick<OpenMergeQuestion, "id" | "root" | "pr_number">, kind: ReturnType<typeof prOutcomeKind>, now: Date) => {
     const root = settleMergeQuestionAsObserved(deps.db, question, kind, now);
     if (root !== null && kind === OBSERVED.CLOSED) announceClosed(root, question.pr_number, now);
   };
@@ -1776,7 +1773,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (stopped) return stopped;
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
-        // ADR 0387 決定4: push の前から最後に push した値を書くまで、tick と人間の merge 回答と同じ PR の印を持つ —— その間に読まれた
+        // ADR 0387 決定4: push の前から最後に push した値を書くまで、tick と人間の merge 回答と同じ根の印を持つ —— その間に読まれた
         // 盤面自身の head を、盤面の push していない head と読ませない。取れなければ撃たず次の突きへ回す(回答の中の収束なら答え直させる)。
         // 決着の読み(上の `isMarked`)は印を取る前に読んだ
         const release = takeInFlightMark(task.id);
@@ -1962,9 +1959,10 @@ export function createLanding(deps: LandingDeps): Landing {
       await tail;
     },
     async observePullRequestOutcome(question) {
-      const { question_pending_merge_pr: prNumber, question_pending_merge_task_id: root } = question;
+      const kind = questionKindOf(question);
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-      if (prNumber === null || root === null || !resolve || !deps.github) return false;
+      if (kind.kind !== "pr_merge" || !resolve || !deps.github) return false;
+      const { pr: prNumber, task_id: root } = kind;
       // ADR 0265 決定4: 読めなければ回答を拒む(「観測しなかった」に倒すと merge 済みの PR への hold が残る)。
       // 決着の書き込みの失敗も呼び手(回答)へ投げる
       let read: PrStateRead;
@@ -1977,7 +1975,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
       if (read.state === "OPEN" || isMarked(root)) return false;
-      settleObserved({ id: question.id, workspace: question.workspace, pr_number: prNumber, root }, prOutcomeKind(read.state, read.mergedBy), deps.clock.now());
+      settleObserved({ id: question.id, pr_number: prNumber, root }, prOutcomeKind(read.state, read.mergedBy), deps.clock.now());
       return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測

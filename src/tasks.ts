@@ -3270,7 +3270,7 @@ interface AuthorityContext {
 }
 
 /** Options fixed by the server for a merge-decision question (issue #11) —
- *  answerQuestion recognizes this exact pair via question_pending_merge_pr,
+ *  answerQuestion recognizes this exact pair by the question's kind (`pr_merge`),
  *  same shape as the pending-child mechanism's fixed options. */
 export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
 

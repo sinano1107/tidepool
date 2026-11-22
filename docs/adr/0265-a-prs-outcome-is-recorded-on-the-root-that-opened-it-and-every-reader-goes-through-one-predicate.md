@@ -1,5 +1,7 @@
 # PR の決着は PR を開いた根に刻み、読み手は1本の述語を通る —— `external` の根は内容で終わり、読めなければ止まる
 
+**Status 追記: 決定1 の「workspace と PR 番号で引いた根」は、merge question が持つ根の id から辿る根になる —— PR 番号は根の属性で、別の行から根を引く鍵にしない([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定2、2026-11-22、issue #3596)。**
+
 **Status 追記: 決定3 の内容で終わる `landing_finished` は、同じ同期区間の頭で名前の場所の全 ref を基準と比べた後の読みから決める —— 動いていれば刻まず、その根はその回 workspace の Quarantine で止まる。決定6 の取り残された子の告知(decision log の判断行)は例外で、比べずに書く —— 1度きりでやり直しが無い([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 **Status 追記: 決定7 の着地の状態は8つになる —— 7つに、ブランチが失われて着地を終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)の「ブランチが失われて終了」(`branch_lost`)を足す。内容で終わった記録の次に導く。これで終えた根は、足さなければ行に何も出さない。ユーザーには問うていない(2026-11-21、issue #3298、spec #3273 group H)。**
