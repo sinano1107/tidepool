@@ -16,9 +16,9 @@ import {
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
-  type ListAgentTiers,
   loadExecutionSettingTable,
   pinnedTargetRowQuarantined,
+  type RegistryTiers,
   readExecutionSettings,
   selectable,
   windowMatchesSetting,
@@ -372,8 +372,8 @@ export function startScheduler(deps: {
   /** ADR 0377 決定4: 盤面の固定点(ADR 0040 の状態パスと registry clone)。pickup の述語が名前の場所との交差を拒む。
    *  Absent → 守る固定点を持たない盤面(テスト盤面の既定形)。 */
   boardState?: BoardStatePath[];
-  /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
-  agents?: ListAgentTiers;
+  /** registry の agent 一覧と承認の commit の探索(issue #920 / ADR 0401 決定6): routing の due 判定の直前に tier の提案を照合する。Absent → registry の無い盤面。 */
+  agents?: RegistryTiers;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
   retrospectiveCalls: RetrospectiveCallDeps;
   /** 着地の収束(ADR 0241 決定5): pickup の契機はまず収束を突き、pickup はその回が終わってから判定する ——

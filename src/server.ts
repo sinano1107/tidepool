@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import type { AgentAdmin } from "./agent-create.js";
+import { type AgentAdmin, registryTiersOf } from "./agent-create.js";
 import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
@@ -639,7 +639,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
     boardState: options.boardState?.paths,
-    agents: agentAdmin?.list,
+    agents: registryTiersOf(agentAdmin),
     retrospectiveCalls,
     translationClient: options.translationClient,
     converge: () => landing.converge(),

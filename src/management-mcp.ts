@@ -6,6 +6,7 @@ import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
+  registryTiersOf,
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
@@ -811,7 +812,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ subject }) =>
       domainResult(() => {
-        const { id } = startFirstMetaReview(deps.db, subject, "mcp", deps.clock.now(), deps.agentAdmin?.list);
+        const { id } = startFirstMetaReview(deps.db, subject, "mcp", deps.clock.now(), registryTiersOf(deps.agentAdmin));
         deps.pollNow();
         return { id };
       }),

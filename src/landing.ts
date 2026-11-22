@@ -609,6 +609,7 @@ const QUESTION_RECORDED_SQL = Object.keys({
   pr_promotion_observed: true,
   quarantine_released: true,
   routing_proposal_stale: true,
+  routing_proposal_applied: true,
   memory_proposal_stale: true,
 } satisfies Record<Exclude<SettledByObservation, RootSettledByObservation>, true>)
   .map((kind) => `'${kind}'`)

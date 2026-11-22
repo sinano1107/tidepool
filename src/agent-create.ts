@@ -2,7 +2,8 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { DomainError } from "./domain-error.js";
-import type { RenameAgentTiers, RenameAgentTiersInput } from "./execution-setting.js";
+import type { RegistryTiers, RenameAgentTiers, RenameAgentTiersInput } from "./execution-setting.js";
+import { git } from "./git.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
@@ -17,6 +18,7 @@ import {
   ownEntry,
   type Registry,
   type RegistrySource,
+  registryRef,
   UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
@@ -220,7 +222,7 @@ function sameSkills(existing: string[], input: string[]): boolean {
 /** tier の提案の承認が書く前に見た registry の tier が、提案の pin と違う(issue #920)。agent が消えた / 組み込みに戻った
  *  ときも同じ —— どれも「承認した前提がもう無い」で、回答の側は question を観測で決着させる。 */
 export class AgentTierMismatchError extends Error {
-  constructor(agentName: string, expected: string, actual: string | undefined) {
+  constructor(agentName: string, expected: string, public readonly actual: string | undefined) {
     super(`agent "${agentName}" no longer has tier ${expected} in the registry (it is ${actual ?? "unset or gone"})`);
     this.name = "AgentTierMismatchError";
   }
@@ -260,6 +262,58 @@ function rewriteAgentTier(worktreeDir: string, name: string, version: string, to
     file,
     text.replace(frontmatter, frontmatter.replace(/^tier:.*$/m, `tier: ${to}`).replace(/^version:.*$/m, `version: ${JSON.stringify(bumpVersion(version))}`)),
   );
+}
+
+/** tier の提案の approve が registry に打つ commit の message。書き込みと `findTierApproval` の探索が同じ綴りを読む。 */
+export function agentTierChangeMessage(agent: string, to: string, questionId: string): string {
+  return `lower agent ${agent}'s tier to ${to} (question ${questionId})`;
+}
+
+/** 段の改名が registry に打つ commit の message。書き込みと `renamedTierFrom` の探索が同じ綴りを読む。 */
+export function tierRenameMessage(from: string, to: string): string {
+  return `rename tier ${from} to ${to}`;
+}
+
+/** 改名の窓(ADR 0401 決定6)の出口: agent.md の tier が盤面の段の名前でないとき、段の改名が registry に着地し盤面で止まったなら
+ *  改名の再実行で畳む(合う agent が無く registry の commit は空で、盤面の名前だけが動く)。旧い名前は registry の log から引けたときだけ名指す。 */
+export function tierRenameExit(tier: string, from: string | undefined): string {
+  return from
+    ? `The registry commit "${tierRenameMessage(from, tier)}" renamed tier ${from} to ${tier} in the registry, but the board stopped before renaming its own tier; re-run the rename of tier ${from} to ${tier} to finish it`
+    : `If a tier rename to ${tier} reached the registry but the board stopped before renaming its own tier, re-run that rename (the board's tier to ${tier}) to finish it; otherwise declare one of the board's tiers`;
+}
+
+/** 盤面が registry に着地させた tier の承認(ADR 0401 決定6): commit と、message が名指す下げ先(修正値つきの approve では提案の `to` と違いうる)。 */
+export interface TierApproval {
+  commit: string;
+  to: Tier;
+}
+
+/** registry の ref の log で、`message(x)` の形の subject を最新から探して x を返す。x は段の名前なので空白を含まない。
+ *  git が読めなければ見つからない側へ落ちる —— 呼び手は今の挙動(stale・条件つきの文)に戻る。 */
+function findInRegistryLog(registry: RegistrySource, message: (x: string) => string): { commit: string; x: string } | undefined {
+  const [prefix, suffix] = message("\0").split("\0") as [string, string];
+  try {
+    const log = git(registry.dir, "log", "--format=%H %s", "--fixed-strings", `--grep=${suffix}`, registryRef(registry.mode));
+    for (const line of log.split("\n")) {
+      const [commit, subject] = [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)];
+      const x = subject.slice(prefix.length, subject.length - suffix.length);
+      if (subject.startsWith(prefix) && subject.endsWith(suffix) && /^\S+$/.test(x)) return { commit, x };
+    }
+  } catch {
+    // 下の undefined
+  }
+  return undefined;
+}
+
+/** その question を名指す盤面の tier の承認の commit(ADR 0401 決定6)。 */
+export function findTierApproval(registry: RegistrySource, agent: string, questionId: string): TierApproval | undefined {
+  const found = findInRegistryLog(registry, (to) => agentTierChangeMessage(agent, to, questionId));
+  return found && { commit: found.commit, to: found.x };
+}
+
+/** registry の log の最新の `rename tier <old> to <to>` の旧い名前(ADR 0401 決定6)。 */
+export function renamedTierFrom(registry: RegistrySource, to: string): string | undefined {
+  return findInRegistryLog(registry, (from) => tierRenameMessage(from, to))?.x;
 }
 
 /** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で
@@ -419,6 +473,13 @@ export interface AgentAdmin {
   changeTier: (input: ChangeAgentTierInput) => Promise<string>;
   /** 段の改名の registry 側(issue #1422)。 */
   renameTier: RenameAgentTiers;
+  /** registry の log の承認の commit(ADR 0401 決定6)。 */
+  tierApproval: (agent: string, questionId: string) => TierApproval | undefined;
+}
+
+/** registry の提案の照合が読む口(ADR 0401 決定6)を扉の agentAdmin から。一覧の無い盤面は照合しない。 */
+export function registryTiersOf(admin: Partial<AgentAdmin> | undefined): RegistryTiers | undefined {
+  return admin?.list && { list: admin.list, tierApproval: admin.tierApproval };
 }
 
 function assertKnownAuthority(registry: Registry, profileName: string): void {

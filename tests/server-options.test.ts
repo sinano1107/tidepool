@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
-import type { CreateAgentInput } from "../src/agent-create.js";
+import { type CreateAgentInput, tierRenameMessage } from "../src/agent-create.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -697,6 +697,29 @@ it("agentDefinitionFailure は schema に無いキーが残る定義を戻った
     cwd: registryDir,
   });
   expect(failure("typo")).toBeUndefined();
+});
+
+/** ADR 0401 決定6: 段の改名の registry の commit の後に盤面が死ぬと、agent.md の tier だけが新しい名前になる。改名の再実行を
+ *  名指す文は agent を解決するとき(pickup・解除検査が通る1本)だけに出し、作成・編集の扉の拒否には出さない。 */
+it("盤面の段でない tier の agent の解決は改名の再実行を名指し、旧い名前は registry の改名の commit から引けたときだけ —— 扉の拒否には出さない(ADR 0401 決定6)", async () => {
+  const tiered = (tier: string) => agentMd("anthropic").replace("skills: []\n", `tier: ${tier}\nskills: []\n`);
+  const registryDir = await makeRegistry({ "agents/crab.md": tiered("standard"), "agents/typo.md": tiered("nonexistent") });
+  writeFileSync(join(registryDir, "agents/crab.md"), tiered("mid"));
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", tierRenameMessage("standard", "mid")], { cwd: registryDir });
+  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
+  const failure = options.agentDefinitionFailure!;
+
+  expect(failure("crab")).toBe(
+    'unknown tier "mid" (expected one of the board\'s tiers: economy / standard / frontier). The registry commit "rename tier standard to mid" renamed tier standard to mid in the registry, but the board stopped before renaming its own tier; re-run the rename of tier standard to mid to finish it',
+  );
+  expect(failure("typo")).toBe(
+    'unknown tier "nonexistent" (expected one of the board\'s tiers: economy / standard / frontier). If a tier rename to nonexistent reached the registry but the board stopped before renaming its own tier, re-run that rename (the board\'s tier to nonexistent) to finish it; otherwise declare one of the board\'s tiers',
+  );
+  const input = { name: "shrimp", authority: "standard", provider: "anthropic", description: "d", skills: [], systemPrompt: "p", tier: "mid" };
+  for (const door of [() => options.agentAdmin!.create!(input), () => options.agentAdmin!.update!({ ...input, name: "crab" })]) {
+    await expect(door()).rejects.toThrow('unknown tier "mid"');
+    await expect(door()).rejects.not.toThrow(/re-run/);
+  }
 });
 
 // ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは

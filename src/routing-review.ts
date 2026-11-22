@@ -258,7 +258,7 @@ function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'routing_proposal_stale') AS stale,
          (SELECT payload FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = t.id) AS applied,
-         (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind IN ('question_answered', 'routing_proposal_stale')) AS settled_id
+         (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind IN ('question_answered', 'routing_proposal_stale', 'routing_proposal_applied')) AS settled_id
        FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') IN ('routing', 'registry') ORDER BY t.rowid`,
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null; settled_id: number | null }>;
@@ -410,7 +410,7 @@ function judgmentItems(
     if (row && !rows.has(rowName(row))) rows.set(rowName(row), { row: { provider: row.provider, model: row.model, effort: row.effort }, tier: row.tier });
   }
   const { groups } = parts.allocations;
-  const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
+  const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent)?.below !== undefined);
   const agents = new Set([...groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])), ...objected.flatMap((o) => ("agent" in o ? [o.agent] : []))].filter(lowerable));
   // 生きている段の行そのものを集めるので、集計(名前)と判断の行(id)の重なりは Set が畳む
   const live = liveTierRows(db);
@@ -500,12 +500,17 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
 export type RegistryAgent = { name: string; tier?: string; builtin?: boolean };
 
 /** agent の今の段(書いていなければ盤面既定)と、その1段下(ADR 0150 決定5)。「1段下」は盤面の一覧の順序(ADR 0200 決定4)で、
- *  一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。 */
-function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } {
+ *  一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。書いた段が盤面の段でなければ(改名の窓、
+ *  ADR 0401 決定6)段の位置が無いので undefined —— 最下位と読まない。 */
+function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } | undefined {
   const tiers = tierNames(db);
   const from = agent.tier ?? boardDefaultTier(db);
-  return { from, below: tiers[tiers.indexOf(from) - 1] };
+  const at = tiers.indexOf(from);
+  return at === -1 ? undefined : { from, below: tiers[at - 1] };
 }
+
+/** 盤面の段でない段を書いた agent の名指し(tier の提案の門と、agent の世代の理由)。 */
+const undeclaredTier = (agent: RegistryAgent) => `agent ${agent.name} declares tier ${agent.tier}, which is not one of the board's tiers`;
 
 /** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど
  *  1段下へ。下げ先に agent の entry の行が無ければ下げた agent は skipped になるので断る。根拠はその agent の worker_spawned で、
@@ -516,7 +521,9 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const agent = agents.find((a) => a.name === name);
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
   if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
-  const { from, below } = tierStep(db, agent);
+  const step = tierStep(db, agent);
+  if (!step) throw new DomainError(`${undeclaredTier(agent)} (${tierNames(db).join(", ")}), so it has no step to lower from`);
+  const { from, below } = step;
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   assertTierRunnableFor(db, name, agentViewProviders(agent), to);
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
@@ -773,7 +780,9 @@ function rowGeneration(db: Db, table: ExecutionSettingTable): Condition<RoutingE
 
 /** agent の世代(ADR 0307 決定2): agent の今の宣言の段で走ったか —— 出所が agent の session は宣言の段で走る(ADR 0210 決定1)。 */
 function agentGeneration(db: Db, agent: RegistryAgent): Condition<RoutingEpisode> {
-  const { from } = tierStep(db, agent);
+  const step = tierStep(db, agent);
+  if (!step) return [() => false, (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, but ${undeclaredTier(agent)}`];
+  const { from } = step;
   return [(e) => e.tier_id === tierIdOf(db, from), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${from}, the current declared tier of ${agent.name}`];
 }
 

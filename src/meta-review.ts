@@ -3,7 +3,7 @@ import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventKind, type EventOrigin, type EventPayload, type EventRowOf, getEvent, type Judgment, latestEventOfTask, parseEventRow } from "./events.js";
-import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
+import { type RegistryTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
@@ -385,8 +385,8 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
 
 /** 主題の初回の meta-review を人間が起こす扉(ADR 0300 決定2)。門は3つ —— 同主題の登録が無い(取り消された回も含む)・
  *  盤面の始まりからの材料が1件以上・同主題の未決着が無い。どれかに当たれば登録せず拒む —— routing の未決着を数える前の
- *  陳腐化の決着(settleStaleProposals)は周期の登録と同じく残る。`agents` は周期の登録と同じ registry の一覧。 */
-export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin: "webui" | "mcp", now: Date, agents?: ListAgentTiers): Task {
+ *  陳腐化の決着(settleStaleProposals)は周期の登録と同じく残る。`agents` は周期の登録と同じ registry の読み口。 */
+export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin: "webui" | "mcp", now: Date, agents?: RegistryTiers): Task {
   if (latestRegistration(db, subject)) {
     throw new DomainError(`the first ${subject} meta-review was already registered: every later one is registered by the period`);
   }
@@ -468,11 +468,11 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
   })();
 }
 
-/** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する(`agents` は registry の agent 一覧、無ければ registry の無い盤面)。due = 前回登録から周期が経ち
+/** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する(`agents` は registry の agent 一覧と承認の commit の探索、無ければ registry の無い盤面)。due = 前回登録から周期が経ち
  *  (取り消された登録も周期の起点、ADR 0193 決定2)、行の主題が同じ未決着の task(meta-review 自身・その系譜の子孫と提案 question)が無く、完了した前回の watermark より後に主題の材料がある
  *  (前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
  *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
-export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTiers): void {
+export function registerDueMetaReviews(db: Db, now: Date, agents?: RegistryTiers): void {
   const period = periodMs(db);
   for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
     const { material } = META_REVIEW_SUBJECTS[subject];
@@ -487,7 +487,7 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
 /** 陳腐化した routing の提案を決着してから(書き込みを伴う)、行の主題が同じ未決着の task があるか —— meta-review 自身と、その系譜の修理子・RCA とその子孫(孫の RCA も)、それらの下の提案
  *  question(親の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7 / ADR 0283 決定1)。周期の登録と初回の扉が共有する(ADR 0300 決定2)。
  *  提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)。 */
-function settleAndHasUnsettled(db: Db, subject: MetaReviewSubject, now: Date, agents?: ListAgentTiers): boolean {
+function settleAndHasUnsettled(db: Db, subject: MetaReviewSubject, now: Date, agents?: RegistryTiers): boolean {
   // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
   if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
   // shortcut: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に

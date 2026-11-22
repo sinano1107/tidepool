@@ -1,6 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
+import { type TierApproval, tierRenameMessage } from "./agent-create.js";
 import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
@@ -34,6 +35,7 @@ import {
   type Tier,
   type TierId,
   tierIdOf,
+  tierNameOf,
   tierNames,
 } from "./tier.js";
 
@@ -701,6 +703,12 @@ export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: s
   return tiers.some((t) => t.id === proposal.pin.tier && t.name === agent?.tier) ? [] : ["agent_tier"];
 }
 
+/** 改名の窓(ADR 0401 決定6): agent が tier を書いていて、それが盤面の生きた段の名前でない —— 段の改名が registry に着地し盤面で
+ *  止まった間で、registry の提案を照合しない。agent が消えた・tier を書いていないなら今どおり崩れている。 */
+export function inTierRenameWindow(tier: string | undefined, tiers: readonly Tier[]): tier is string {
+  return tier !== undefined && !tiers.includes(tier);
+}
+
 /** 段を足す提案の修正値(ADR 0200 決定8 / ADR 0150 決定2): 名前・説明・位置の少なくとも1つ。値の検査(名前の一意など)は
  *  回答時に段の挿入の扉がやり直す。 */
 const addTierAmendmentSchema = newTierSchema
@@ -891,7 +899,7 @@ export async function changeExecutionSettings(
     assertKnownTier(db, "tier", change.name);
     assertTierName(db, change.to);
     try {
-      await renameAgentTiers?.({ from: change.name, to: change.to, message: `rename tier ${change.name} to ${change.to}` });
+      await renameAgentTiers?.({ from: change.name, to: change.to, message: tierRenameMessage(change.name, change.to) });
     } catch (err) {
       if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
       throw err;
@@ -931,11 +939,38 @@ export function quarantineRowsOffClaudeEffortRules(db: Db, now: Date): void {
 /** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合と、段の削除の照合(`tierDeletionBlockers`)が読む。 */
 export type ListAgentTiers = () => readonly { name: string; tier?: string }[];
 
+/** registry の log から、提案 question を名指す盤面の tier の承認の commit を引く口(ADR 0401 決定6)。 */
+export type FindTierApproval = (agent: string, questionId: string) => TierApproval | undefined;
+
+/** registry の提案の照合が読む registry(issue #920 / ADR 0401 決定6): agent 一覧と承認の commit の探索。 */
+export interface RegistryTiers {
+  list: ListAgentTiers;
+  tierApproval?: FindTierApproval;
+}
+
+/** 承認の commit が registry にあり盤面の記録が無い registry の提案を、適用済みとして観測で閉じる(ADR 0401 決定6)。下げ先は commit から
+ *  取る(修正値つきの approve で提案の `to` と違いうる —— ADR 0150 決定2)。`agent_tier_changed` と決着は1つの transaction —— 間で死ねば
+ *  次の照合が event を二重に刻む。記録の後・回答の前に死んだ承認(ADR 0288 決定3 の event は残る)には刻み直さない。
+ *  回答した人間・経路は commit から引けないので、event は人間の名義で盤面の経路に置く。 */
+export function settleProposalAsApplied(db: Db, questionId: string, proposal: RegistryProposal, approval: TierApproval, at: Date): void {
+  db.transaction(() => {
+    if (!settleQuestionAsObserved(db, questionId, { kind: "routing_proposal_applied", question_id: questionId, registry_commit: approval.commit }, at)) return;
+    if (db.prepare("SELECT 1 FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = ?").get(questionId)) return;
+    appendEvent(db, {
+      taskId: null,
+      actorId: HUMAN_ACTOR_ID,
+      origin: "board",
+      payload: { kind: "agent_tier_changed", agent: proposal.agent, from: tierNameOf(db, proposal.pin.tier), to: approval.to, question_id: questionId, registry_commit: approval.commit },
+      at,
+    });
+  })();
+}
+
 /** 陳腐化の決着(ADR 0150 決定1): open な routing / registry の提案の pin を表・フラグの現在値と照合し、崩れた question を
- *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`listAgents` を渡せば registry の提案の
+ *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`registry` を渡せば registry の提案の
  *  (agent, tier) も照合する —— routing の due 判定の直前(issue #920)で、registry の変更は盤面の event ではないので
- *  observed_event_id は null。 */
-export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, listAgents?: ListAgentTiers): void {
+ *  observed_event_id は null。照合の前に承認の commit を探し、あれば適用済みとして閉じる(ADR 0401 決定6)。 */
+export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, registry?: RegistryTiers): void {
   const settings = { ...readExecutionSettings(db), tiers: liveTierRows(db) };
   // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合しない
   // —— due 判定は scheduler の poll の中なので、registry が読めないことで pickup を止めない
@@ -954,10 +989,17 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
   for (const { id, question_proposal } of open) {
     const proposal = JSON.parse(question_proposal) as RoutingProposal | RegistryProposal;
     let changed: ReturnType<typeof routingPinChanges> | ReturnType<typeof registryPinChanges>;
-    if (proposal.kind === "registry" && listAgents) {
-      agents = agents === undefined ? readAgents(listAgents) : agents;
+    if (proposal.kind === "registry" && registry) {
+      const approval = registry.tierApproval?.(proposal.agent, id);
+      if (approval) {
+        settleProposalAsApplied(db, id, proposal, approval, at);
+        continue;
+      }
+      agents = agents === undefined ? readAgents(registry.list) : agents;
       if (agents === null) continue;
-      changed = registryPinChanges(proposal, agents.find((agent) => agent.name === proposal.agent), settings.tiers);
+      const agent = agents.find((a) => a.name === proposal.agent);
+      if (inTierRenameWindow(agent?.tier, settings.tiers.map((t) => t.name))) continue;
+      changed = registryPinChanges(proposal, agent, settings.tiers);
     } else {
       changed = routingPinChanges(proposal, settings);
     }

@@ -7,6 +7,7 @@ import {
   changeAgentTier,
   createAgent,
   deleteAgent,
+  findTierApproval,
   listAgentViews,
   renameAgentTiers,
   updateAgent,
@@ -708,6 +709,7 @@ function agentAdmin(board: BoardComposition, db: Db, registry: RegistrySource | 
     delete: (input, refs) => deleteAgent(input, { ...deps, ...refs }),
     changeTier: (input) => changeAgentTier(input, deps),
     renameTier: (input) => renameAgentTiers(input, deps),
+    tierApproval: (agent, questionId) => findTierApproval(registry, agent, questionId),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
     authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),
