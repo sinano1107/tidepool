@@ -58,6 +58,7 @@ import {
   checkAcceptanceFirstHalf,
   clearRefusedOnce,
   compareRefsBeforeLanding,
+  DeclaredRepoMismatchError,
   declaredRepoDisagreement,
   endLostRootLanding,
   FirstCaptureRefusedError,
@@ -1548,6 +1549,18 @@ export function createLanding(deps: LandingDeps): Landing {
       // ADR 0399 決定3: この根の push・PR の作成・PR の読みは、行き先を読むたびに根の記録を今の宣言と比べる
       workspace = withDeclaredRepoCheck(deps.db, checked(workspace), task.id);
       const remoteBacked = isRemoteBacked(workspace);
+      if (!remoteBacked) {
+        // ADR 0399 決定3: purely-local の宣言は行き先を読まないので行き先の読みが比べない —— repo を記録した根は lineage も内容も
+        // 読む前に止める(登録し直した名前の checkout の ref で根を終えない)
+        const disagreement = declaredRepoDisagreement(deps.db, task.id, workspace);
+        if (disagreement) return failed(task, "promotion_failed", disagreement, ctx);
+      }
+      /** await の後の名前の場所の比較(ADR 0370 決定1)。ADR 0399 決定3・5: その前に根の記録を今の宣言と比べる —— await の間の
+       *  登録し直しを、古い宣言で名前の場所を比べた workspace の Quarantine にせず、その根の止まりにする。 */
+      const recheckAfterAwait = () => {
+        workspaceNetworkDestination(workspace);
+        stopRootIfRefsMoved(workspace);
+      };
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
       const afterPush = (landed: LandingVerdict, pushed: string): LandingVerdict => {
         stopRootIfRefsMoved(workspace);
@@ -1582,9 +1595,9 @@ export function createLanding(deps: LandingDeps): Landing {
         const predicates = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
         const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, predicates, true);
         ctx.outcome.kept.push(
-          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, () => stopRootIfRefsMoved(workspace))),
+          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, recheckAfterAwait)),
         );
-        stopRootIfRefsMoved(workspace);
+        recheckAfterAwait();
       }
       const outcome = rootPrOutcome(deps.db, task.id);
       const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
@@ -1611,9 +1624,6 @@ export function createLanding(deps: LandingDeps): Landing {
       if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
       if (mergedPr !== undefined) return alreadyMerged(task, mergedPr, ctx);
       if (!remoteBacked) {
-        // ADR 0399 決定3: ローカル着地は網に出ないので行き先の読みが比べない —— repo を記録した根を purely-local の名前へ運ばない
-        const disagreement = declaredRepoDisagreement(deps.db, task.id, workspace);
-        if (disagreement) return failed(task, "promotion_failed", disagreement, ctx);
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
         // 保護を先に読む(ADR 0374 決定13)—— purely-local の保護された workspace の人間の根は C5 でなく、profile を持たないので
@@ -1682,7 +1692,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const closed = closedMergeAnswer();
         if (closed) return closed;
         // head の読みと token の await の後、fetch が交渉用の ref を読む前・取り込み・追いつき・tip の読みの前(ADR 0370 決定1)
-        stopRootIfRefsMoved(workspace);
+        recheckAfterAwait();
         try {
           fetch?.();
         } catch (error) {
@@ -1765,12 +1775,10 @@ export function createLanding(deps: LandingDeps): Landing {
       const push = async (sha: string) => {
         const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
-          // ADR 0399 決定3: 準備の await の間の登録し直しは、古い宣言で名前の場所を比べる前に、根の記録と今の宣言の食い違いとして止める
-          workspaceNetworkDestination(workspace);
           const closed = closedMergeAnswer();
           if (closed) return closed;
           // ADR 0370 決定1: 準備の await の間に動いた ref があれば、確かめた sha も運ばない —— 比較と push を同じ同期区間に置く
-          stopRootIfRefsMoved(workspace);
+          recheckAfterAwait();
           const block = landingBlock(deps.db, task.id);
           if (block) {
             recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
@@ -1889,7 +1897,7 @@ export function createLanding(deps: LandingDeps): Landing {
       const inspectPr = dial !== "external" && (dial !== undefined || protectedWorkspace || humanRoot);
       // ADR 0395 決定4: Check the actual PR diff, including when an earlier PR creation was recovered.
       const unreadable = (error: unknown) => {
-        if (error instanceof WorkspaceRepoMismatchError) throw error;
+        if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError) throw error;
         return undefined;
       };
       const openedPr = inspectPr ? await readPrState(github, workspace, prNumber).catch(unreadable) : undefined;
@@ -1898,7 +1906,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const fetching = openedPr?.base?.branch === protectedBranch(workspace) && COMMIT_OID.test(openedPr.base.sha) && COMMIT_OID.test(openedPr.head)
           ? prepareFetchCommitIfMissing(deps.db, workspace, openedPr.head, deps.githubAuth) : undefined;
         const fetch = fetching && (await fetching.catch(unreadable));
-        stopRootIfRefsMoved(workspace);
+        recheckAfterAwait();
         try {
           fetch?.();
         } catch (error) {

@@ -233,6 +233,11 @@ export function networkDestination(source: string, base: string) {
   return { github, key, url, source };
 }
 
+/** ADR 0378 決定4: the one form two repos are compared in —— GitHub's `owner/name`, any other repo the URL the board reaches. */
+export function comparedRepo(destination: Pick<ReturnType<typeof networkDestination>, "key" | "url">): string {
+  return destination.key ?? destination.url;
+}
+
 /** ADR 0378 決定1: use the declaration even when Git runs from a task checkout, which has no origin of its own. */
 export function workspaceNetworkDestination(workspace: WorkspaceConfig & { namedPlace?: WorkspaceConfig }) {
   return declaredDestination(workspace, "repo");
@@ -251,7 +256,7 @@ function declaredDestination(workspace: WorkspaceConfig & { namedPlace?: Workspa
   const declaration = place.checkRememberedRepo?.(place) ?? place;
   const value = declaration[field];
   if (value === undefined) return undefined;
-  place.checkDestination?.({ ...declaration, name: place.name });
+  place.checkDeclaredRepo?.({ ...declaration, name: place.name });
   return networkDestination(value, declaration.path);
 }
 

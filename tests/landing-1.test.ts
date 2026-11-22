@@ -294,6 +294,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
     ...HUMAN_WEBUI,
   );
   git(workspace.path, "branch", `task/${task.id}`);
+  recordDeclaredRepo(db, task.id, workspace);
   finish(db, clock, task);
   registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
   registerPrPromotionFailureQuestion(db, task, "second failed attempt", clock.now());
@@ -1826,6 +1827,7 @@ it("運ぶ内容の無い根の nothing_to_land と、門で待った根の land
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
   const empty = landingWork(db, clock);
   git(workspace.path, "branch", `task/${empty.id}`);
+  recordDeclaredRepo(db, empty.id, workspace);
   finish(db, clock, empty);
   const waiting = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, waiting.id);

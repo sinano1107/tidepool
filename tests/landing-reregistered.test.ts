@@ -2,16 +2,11 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { createLanding, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
-import { loadRegistry } from "../src/registry.js";
-import { countUnsettledTasksReferencing, getTask, listBoard, registerMergeQuestion, type Task } from "../src/tasks.js";
-import { announceHeadRepo, assertRememberedHeadRepo, buildWorkspaceResolver, resolveExecutionWorkspace } from "../src/workspace.js";
-import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
+import { createLanding, rootPrOutcome, settledByObservation } from "../src/landing.js";
+import { getTask, listBoard, registerMergeQuestion, type Task } from "../src/tasks.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
-import { finish, landingWork, openBoard, pushPrHead, recordPrOpenedOutsideConvergence } from "./landing-fixture.js";
-import { makeRegistry, setWorkspaceEntry } from "./registry-fixture.js";
-import { tempDir } from "./temp-dir.js";
+import { finish, landingWork, openBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef, reRegister } from "./landing-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -24,29 +19,16 @@ async function reRegisteredWithSameNumber() {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
   const { workspace: moved } = await makeLandingWorkspace("reef-new");
-  const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${old.path}\n  repo: ${old.repo}\n` });
-  const admin = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-") };
-  const resolve = (name: string | null) => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), name ?? "reef", null, admin.workspacesBaseDir);
+  const reef = await registeredReef(old);
+  const { resolve } = reef;
   const github = new FakeGitHubClient();
 
   // `external` の根は merge question もキューの行も持たないので、削除の扉を止めずに生き残る(ADR 0370 決定1)
   const oldRoot = finish(db, clock, landingWork(db, clock, "reef"));
   recordPrOpenedOutsideConvergence(db, oldRoot, 1, clock.now(), { authority: { merge: "external" } });
 
-  await deleteWorkspace({ name: "reef", confirm: true }, {
-    ...admin,
-    db,
-    unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "reef"),
-    awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(resolve, undefined), "reef"),
-  });
-  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, admin);
-  expect(resolve("reef").repo).toBe(moved.repo);
-  // 盤面は出元 repo(head_repo)へ push する(ADR 0395 決定2)。設定の扉(updateWorkspace)は GitHub の owner/name しか受けないので、
-  // 扉が書くもの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)
-  const registered = resolve("reef");
-  announceHeadRepo(db, registered, moved.head_repo);
-  setWorkspaceEntry(registryDir, "reef", "head_repo", moved.head_repo);
-  assertRememberedHeadRepo(db, resolve("reef"), clock.now());
+  // 盤面は出元 repo(head_repo)へ push する(ADR 0395 決定2)—— 登録し直しは出元 repo も足す
+  await reRegister(db, reef, moved);
 
   const oldQuestion = registerMergeQuestion(
     db, getTask(db, oldRoot.id)!, { pr: 1, tip: null, outside: null, missingBranches: null, reason: "surface_changed" }, "merge the old root?", "merge", clock.now(),
@@ -62,7 +44,7 @@ async function reRegisteredWithSameNumber() {
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github });
   const answer = (questionId: string, option: "merge" | "hold") =>
     submitAnswer(
-      { db, pollNow: () => {}, landing, resolveWorkspace: resolve, github, workspacesDir: join(admin.workspacesBaseDir, "workbenches") },
+      { db, pollNow: () => {}, landing, resolveWorkspace: resolve, github, workspacesDir: join(reef.admin.workspacesBaseDir, "workbenches") },
       getTask(db, questionId)!, [option], undefined, () => clock.now(), "webui",
     );
   return { db, github, landing, answer, workspace, oldRoot, oldQuestion, newRoot: getTask(db, newRoot.id)! };

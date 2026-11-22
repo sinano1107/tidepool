@@ -234,7 +234,7 @@ it("PR を作る根の記録の repo が今の宣言と食い違えば、PR の�
   recordDeclaredRepo(db, root.id, { ...workspace, repo: "https://github.com/acme/old-widget.git" });
 
   await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(withDeclaredRepoCheck(db, workspace, root.id))))
-    .rejects.toThrow(/picked up for repo acme\/old-widget, but workspace widget now declares repo https:\/\/github\.com\/acme\/widget\.git/);
+    .rejects.toThrow(/picked up for repo acme\/old-widget, but workspace widget now declares repo acme\/widget,/);
   expect(api.requests).toEqual([]);
 });
 
