@@ -1,6 +1,6 @@
 # PR の決着は PR を開いた根に刻み、読み手は1本の述語を通る —— `external` の根は内容で終わり、読めなければ止まる
 
-**Status 追記: 決定7 の着地の状態は9つになる —— 8つに、人間が昇格失敗の question に「end landing」と答えて着地を終えた PR の根(`landing_ended_pr_left`)の「人間が着地を終えた」(`pr_left`)を足す。ブランチが失われて終えた記録の次に導く。同じ回答はキューの行を外し、開いた merge question を PR の観測を刻まずに閉じる —— 決定2 の観測で閉じた question の印は、根の決着が無いので出ない。決定6 の塞ぎと直接 cancel の範囲は、この根にも同じ1本で当たる([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定5・6、2026-11-23、issue #3604)。**
+**Status 追記: 決定7 の着地の状態は9つになる —— 8つに、人間が昇格失敗の question に「end landing」と答えて着地を終えた PR の根(`landing_ended_pr_left`)の「人間が着地を終えた」(`pr_left`)を足す。ブランチが失われて終えた記録の次に導く。同じ回答はキューの行を外し、開いた merge question を PR の観測を刻まずに閉じる —— 決定2 の観測で閉じた question の印は、根の決着が無いので出ない。決定6 の塞ぎと直接 cancel の範囲は、この根にも同じ1本で当たる —— 根のブランチを名前の場所で読めるときに限る。別の checkout で登録し直した名前のように読めなければ、閉じた根と同じく当たらない([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定5・6、2026-11-23、issue #3604)。**
 
 **Status 追記: 決定1 の「workspace と PR 番号で引いた根」は、merge question が持つ根の id から辿る根になる —— PR 番号は根の属性で、別の行から根を引く鍵にしない([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定2、2026-11-22、issue #3596)。**
 
