@@ -1337,7 +1337,7 @@ it("merge 回答の PR の読み取りの await の間に「hold」が通った 
   await expect(first).rejects.toThrow(new QuestionClosedError());
   expect(github.merged).toEqual([]);
   // 止まった回答は印を放している —— 次の執行が印を取れる
-  expect(landing.takeInFlightMark(question.workspace, 42)).not.toBeNull();
+  expect(landing.takeInFlightMark(work.id)).not.toBeNull();
   expect(listEvents(db, question.id).filter((event) => event.kind === "question_answered").map((event) => event.payload)).toEqual([
     expect.objectContaining({ answers: [expect.objectContaining({ answer: "hold" })] }),
   ]);

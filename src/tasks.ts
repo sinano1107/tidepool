@@ -161,6 +161,8 @@ export interface Task {
   /** System-internal only (issue #11): the PR number a merge-decision
    *  question is standing in for. Only the board sets this via registerMergeQuestion. */
   question_pending_merge_pr: number | null;
+  /** ADR 0399 決定2: the root a merge-decision question asks about —— 根は PR 番号でなくこの id で辿る。 */
+  question_pending_merge_task_id: string | null;
   /** System-internal only (ADR 0053): the completed work task whose
    *  purely-local task branch awaits a human merge/hold decision. */
   question_pending_local_merge_task_id: string | null;
@@ -1507,13 +1509,13 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision, question_broken_probe_reason,
-         question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
+         question_pending_child, question_proposal, question_pending_merge_pr, question_pending_merge_task_id, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
          question_landing_tip, question_pr_merge_outside_sha, question_pr_merge_outside_kind, question_pr_merge_missing_branches, question_pr_merge_reason,
          question_quarantine_value, question_intake_workspace, question_cli_auth_expiry, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision, @question_broken_probe_reason,
-         @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
+         @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_merge_task_id, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
          @question_landing_tip, @question_pr_merge_outside_sha, @question_pr_merge_outside_kind, @question_pr_merge_missing_branches, @question_pr_merge_reason,
          @question_quarantine_value, @question_intake_workspace, @question_cli_auth_expiry, @question_stop_reason_task_id, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
@@ -3268,7 +3270,7 @@ interface AuthorityContext {
 }
 
 /** Options fixed by the server for a merge-decision question (issue #11) —
- *  answerQuestion recognizes this exact pair via question_pending_merge_pr,
+ *  answerQuestion recognizes this exact pair by the question's kind (`pr_merge`),
  *  same shape as the pending-child mechanism's fixed options. */
 export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
 
@@ -3287,8 +3289,8 @@ export function registerMergeQuestion(
   return db.transaction(() => {
     const { pr, outside } = content;
     const open = db.prepare(`SELECT id, question_pr_merge_outside_sha, question_pr_merge_outside_kind FROM tasks
-      WHERE type = 'question' AND status = 'todo' AND workspace IS ? AND question_pending_merge_pr = ?`)
-      .get(task.workspace, pr) as Pick<Task, "id" | "question_pr_merge_outside_sha" | "question_pr_merge_outside_kind"> | undefined;
+      WHERE type = 'question' AND status = 'todo' AND question_pending_merge_task_id = ?`)
+      .get(task.id) as Pick<Task, "id" | "question_pr_merge_outside_sha" | "question_pr_merge_outside_kind"> | undefined;
     if (open?.question_pr_merge_outside_sha === (outside?.sha ?? null) && open.question_pr_merge_outside_kind === (outside?.kind ?? null)) {
       return open.id;
     }
@@ -3299,7 +3301,7 @@ export function registerMergeQuestion(
       purpose: mergePathReview === undefined ? purpose : `${purpose}\n\n${humanMergePathExplanation(mergePathReview)}`,
       completion_criteria: "a human decides whether to merge",
       question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation: outside === null ? recommendation : "hold" }],
-      question_kind: { kind: "pr_merge", ...content },
+      question_kind: { kind: "pr_merge", task_id: task.id, ...content },
       workspace: task.workspace ?? undefined,
     }, now, BOARD_ACTOR_ID, "board");
     if (open) {
@@ -3309,30 +3311,12 @@ export function registerMergeQuestion(
   })();
 }
 
-/** 着地するタスクは「同じ workspace で
- *  その PR を開いたタスク」で引く(PR 番号は repo 内でしか一意でない)。`recordPrOpened`
- *  が `pr_number` を書いてから question を立てるので、開いている question には必ず対応
- *  する行がある。 */
-export function taskIdForPr(db: Db, prNumber: number, workspace: string | null): string {
-  const id = rootOfPr(db, prNumber, workspace);
-  // 引けないなら門を素通りさせず止める(fail-closed — ADR 0092 決定5 は UI に依らず盤面が守る)
-  if (id === undefined) throw new DomainError(`cannot merge: no task in this workspace opened PR #${prNumber}`);
-  return id;
-}
-
-/** `taskIdForPr` の引けない場合を undefined で返す形。ADR 0394 決定5: hold は拒まないので、根が引けなくても回答は通る —— PR の記録は
- *  それを開いた根に刻む(ADR 0265 決定1)ので、根が無ければ刻む先が無く、断った記録は書かない。 */
-export function rootOfPr(db: Db, prNumber: number, workspace: string | null): string | undefined {
-  const row = db.prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?").get(prNumber, workspace) as { id: string } | undefined;
-  return row?.id;
-}
-
 /** ADR 0394 決定2: 立て直しで閉じた question を、PR が決着したために閉じた question と区別する。 */
-export function mergeQuestionWasReplaced(db: Db, question: Pick<Task, "id" | "workspace" | "question_pending_merge_pr">): boolean {
-  if (question.question_pending_merge_pr === null) return false;
-  const row = db.prepare(`SELECT 1 FROM events JOIN tasks AS root ON root.id = events.task_id
-    WHERE root.pr_number = ? AND root.workspace IS ? AND events.kind = 'pr_merge_question_replaced' AND json_extract(events.payload, '$.question_id') = ?`)
-    .get(question.question_pending_merge_pr, question.workspace, question.id);
+export function mergeQuestionWasReplaced(db: Db, question: Pick<Task, "id" | "question_pending_merge_task_id">): boolean {
+  if (question.question_pending_merge_task_id === null) return false;
+  const row = db.prepare(`SELECT 1 FROM events
+    WHERE task_id = ? AND kind = 'pr_merge_question_replaced' AND json_extract(payload, '$.question_id') = ?`)
+    .get(question.question_pending_merge_task_id, question.id);
   return row !== undefined;
 }
 

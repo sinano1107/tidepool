@@ -215,6 +215,8 @@ function initializeDb(db: Db): void {
       -- system-internal only (issue #11): the PR number a merge-decision
       -- question stands in for. Only the board sets this via registerMergeQuestion.
       question_pending_merge_pr INTEGER,
+      -- ADR 0399 決定2: the root a merge-decision question asks about. The PR number above is what it asked, never the key to the root.
+      question_pending_merge_task_id TEXT,
       -- system-internal only (ADR 0053): the completed work task whose
       -- purely-local task branch awaits a human merge/hold decision.
       question_pending_local_merge_task_id TEXT,

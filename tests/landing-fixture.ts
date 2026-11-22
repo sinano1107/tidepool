@@ -395,7 +395,7 @@ export function landingWork(db: Db, clock: FakeClock, workspace?: string) {
 export function mergeQuestion(
   db: Db,
   clock: FakeClock,
-  pending: { pending_local_merge_task_id: string } | { pending_merge_pr: number },
+  pending: { pending_local_merge_task_id: string } | { pending_merge_pr: number; root: string },
   workspace?: string,
 ) {
   return registerTask(
@@ -409,7 +409,7 @@ export function mergeQuestion(
       question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
       question_kind:
         "pending_merge_pr" in pending
-          ? { kind: "pr_merge", pr: pending.pending_merge_pr, tip: null, outside: null, missingBranches: null, reason: "pr_opened" }
+          ? { kind: "pr_merge", task_id: pending.root, pr: pending.pending_merge_pr, tip: null, outside: null, missingBranches: null, reason: "pr_opened" }
           : { kind: "local_merge", task_id: pending.pending_local_merge_task_id, tip: null },
     },
     clock.now(),

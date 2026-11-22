@@ -22,8 +22,8 @@ export type QuestionKind<T extends TierRef = TierId> =
   | { kind: "broken_probe"; reason: string }
   /** decomposeTask の承認 question(issue #11)。approve で pending_child を実体化する。 */
   | { kind: "approval"; pending_child: PendingChildSpec }
-  /** ADR 0394 決定1: PR 番号と、その merge question が立った時点で問うた内容。 */
-  | ({ kind: "pr_merge" } & PrMergeQuestionContent)
+  /** ADR 0394 決定1: PR 番号と、その merge question が立った時点で問うた内容。task_id は問うた根(ADR 0399 決定2)。 */
+  | ({ kind: "pr_merge"; task_id: string } & PrMergeQuestionContent)
   /** landing.ts(ADR 0053): task_id はローカルだけのブランチが merge / hold を待つ完了済みの task。 */
   | { kind: "local_merge"; task_id: string; tip: string | null }
   /** landing.ts(issue #66): task_id は PR 昇格に失敗した完了済みの task。 */
@@ -45,6 +45,7 @@ const COLUMNS = [
   "question_pending_child",
   "question_proposal",
   "question_pending_merge_pr",
+  "question_pending_merge_task_id",
   "question_pending_local_merge_task_id",
   "question_pending_pr_promotion_task_id",
   "question_landing_tip",
@@ -82,6 +83,7 @@ export function questionColumns<T extends TierRef>(kind: QuestionKind<T>): Quest
       return {
         ...none,
         question_pending_merge_pr: kind.pr,
+        question_pending_merge_task_id: kind.task_id,
         question_landing_tip: kind.tip,
         question_pr_merge_outside_sha: kind.outside?.sha ?? null,
         question_pr_merge_outside_kind: kind.outside?.kind ?? null,
@@ -122,14 +124,15 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
       return { kind: "approval", pending_child: q.question_pending_child! };
     case "question_proposal":
       return { kind: "proposal", proposal: q.question_proposal! };
-    case "question_pending_merge_pr + question_pr_merge_reason":
-    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_reason":
-    case "question_pending_merge_pr + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
-    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
-    case "question_pending_merge_pr + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason":
-    case "question_pending_merge_pr + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason": {
+    case "question_pending_merge_pr + question_pending_merge_task_id + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pending_merge_task_id + question_landing_tip + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pending_merge_task_id + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pending_merge_task_id + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pending_merge_task_id + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason":
+    case "question_pending_merge_pr + question_pending_merge_task_id + question_landing_tip + question_pr_merge_outside_sha + question_pr_merge_outside_kind + question_pr_merge_missing_branches + question_pr_merge_reason": {
       const base = {
         kind: "pr_merge" as const,
+        task_id: q.question_pending_merge_task_id!,
         pr: q.question_pending_merge_pr!,
         tip: q.question_landing_tip,
         reason: q.question_pr_merge_reason!,

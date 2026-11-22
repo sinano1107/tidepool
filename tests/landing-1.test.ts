@@ -771,7 +771,7 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
   const landing = autoMerging(db, clock, workspace, github);
   completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
   settleReviews(db, clock.now());
-  const release = landing.takeInFlightMark(getTask(db, work.id)!.workspace, 1)!;
+  const release = landing.takeInFlightMark(work.id)!;
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ reason: "pull_request_closed" });
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual([]);
