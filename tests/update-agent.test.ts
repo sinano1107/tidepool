@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentTierMismatchError, changeAgentTier, renameAgentTiers, updateAgent } from "../src/agent-create.js";
+import { AgentTierMismatchError, agentTierChangeMessage, changeAgentTier, findTierApproval, RegistryLogUnreadableError, renameAgentTiers, renamedTierFrom, tierRenameMessage, updateAgent } from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, loadRegistry, UnknownAgentError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";
@@ -427,5 +429,45 @@ You are ${name}.
       renameAgentTiers({ from: "standard", to: "mid", message: "m" }, { registry: { dir: registryDir, mode: "remote-backed" } }),
     ).rejects.toThrow(RegistryPushFailedError);
     expect(git(git(registryDir, "config", "remote.origin.url"), "rev-parse", "main")).toBe(before);
+  });
+});
+
+describe("registry の log の探索: 盤面の tier の書き込みの commit を同じ綴りで引き直す(ADR 0401 決定6)", () => {
+  const agentAt = (name: string, tier: string) =>
+    `---\ndescription: ${name}\nversion: "1"\nauthority: standard\ntier: ${tier}\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are ${name}.\n`;
+  const local = (dir: string) => ({ dir, mode: "purely-local" as const });
+
+  it("承認の commit は question id を名指すものだけが見つかり、下げ先と sha を返す —— (question 12) は (question 123) に当たらない", async () => {
+    const registryDir = await makeMainRegistry({ "agents/crab.md": agentAt("crab", "frontier") });
+    const deps = { registry: local(registryDir) };
+    const lower = (expectTier: string, to: string, questionId: string) =>
+      changeAgentTier({ name: "crab", expectTier, to, assertLandable: () => {}, message: agentTierChangeMessage("crab", to, questionId) }, deps);
+
+    const first = await lower("frontier", "standard", "123");
+    expect(findTierApproval(local(registryDir), "crab", "12")).toBeUndefined();
+    const second = await lower("standard", "economy", "12");
+
+    expect(findTierApproval(local(registryDir), "crab", "12")).toEqual({ commit: second, to: "economy" });
+    expect(findTierApproval(local(registryDir), "crab", "123")).toEqual({ commit: first, to: "standard" });
+    expect(findTierApproval(local(registryDir), "shrimp", "12")).toBeUndefined();
+  });
+
+  it("agent.md を最後に変えた commit が段の改名ならその旧い名前を引き、後の手編集があれば引かない", async () => {
+    const registryDir = await makeMainRegistry({ "agents/crab.md": agentAt("crab", "standard") });
+
+    await renameAgentTiers({ from: "standard", to: "mid", message: tierRenameMessage("standard", "mid") }, { registry: local(registryDir) });
+
+    expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBe("standard");
+    expect(renamedTierFrom(local(registryDir), "crab", "id")).toBeUndefined();
+    expect(renamedTierFrom(local(registryDir), "crab", "top")).toBeUndefined();
+    writeFileSync(join(registryDir, "agents/crab.md"), agentAt("crab", "mid").replace("You are", "Hand-edited, you are"));
+    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", "hand edit");
+    expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBeUndefined();
+  });
+
+  it("git が読めなければ、承認の探索は見つからないと区別して投げ、改名の探索は条件つきの文へ落ちる", () => {
+    const missing = local("/nonexistent/registry");
+    expect(() => findTierApproval(missing, "crab", "12")).toThrow(RegistryLogUnreadableError);
+    expect(renamedTierFrom(missing, "crab", "mid")).toBeUndefined();
   });
 });

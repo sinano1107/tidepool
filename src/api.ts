@@ -5,6 +5,7 @@ import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
+  registryTiersOf,
 } from "./agent-create.js";
 import { listTranslationUsage } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
@@ -1884,7 +1885,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post(
     "/settings/meta-review/first",
     validatedWrite(firstMetaReviewSchema, ({ subject }) => {
-      const { id } = startFirstMetaReview(db, subject, "webui", clock.now(), agentAdmin?.list);
+      const { id } = startFirstMetaReview(db, subject, "webui", clock.now(), registryTiersOf(agentAdmin));
       pollNow();
       return { id } satisfies WireContract["POST /api/settings/meta-review/first"];
     }),

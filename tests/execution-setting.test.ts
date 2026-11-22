@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { AgentView } from "../src/agent-create.js";
 import { type AdvisorCeiling, isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
@@ -27,6 +28,7 @@ import {
   type SelectorInput,
   selectable,
   selectExecutionSetting,
+  settleStaleProposals,
   tierFieldDescriptions,
 } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
@@ -1230,6 +1232,33 @@ it("tier の提案の approve の registry への commit の await の間に観�
   expect(listEventsOfKinds(db, ["agent_tier_changed"]).map((event) => event.payload)).toEqual([
     expect.objectContaining({ question_id, registry_commit: "c0ffee" }),
   ]);
+});
+
+// ADR 0401 決定6: 記録(ADR 0288 決定3 の agent_tier_changed)の後・回答の前に死んだ承認を適用済みとして閉じても、記録は二重にならない
+it("agent_tier_changed が残り question が開いたままの承認は、照合が適用済みとして閉じても agent_tier_changed を刻み直さない", () => {
+  const now = new Date();
+  const db = openDb(":memory:");
+  const review = routingReviewOf(db, now);
+  const evidence = appendEvent(db, {
+    taskId: registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI).id,
+    actorId: "deckhand",
+    origin: "board",
+    at: now,
+    payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", tier_id: tierIdOf(db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },
+  });
+  const deckhand = { name: "deckhand", provider: "openai", tier: "frontier" } as AgentView;
+  const { question_id } = proposeRoutingChange(db, review, { op: "agent_tier", agent: "deckhand", to: "standard", evidence: [evidence], rationale: "r" }, "auditor", now, () => [deckhand]);
+  const recorded = { kind: "agent_tier_changed" as const, agent: "deckhand", from: "frontier", to: "standard", question_id, registry_commit: "d00d" };
+  appendEvent(db, { taskId: null, actorId: HUMAN_ACTOR_ID, origin: "webui", at: now, payload: recorded });
+
+  settleStaleProposals(db, now, null, { list: () => [{ ...deckhand, tier: "standard" }], tierApproval: () => ({ commit: "d00d", to: "standard" }) });
+
+  expect(getTask(db, question_id)).toMatchObject({ status: "done" });
+  expect(listEvents(db, question_id).map((event) => event.payload)).toEqual([
+    expect.objectContaining({ kind: "task_registered" }),
+    { kind: "routing_proposal_applied", question_id, registry_commit: "d00d" },
+  ]);
+  expect(listEventsOfKinds(db, ["agent_tier_changed"]).map((event) => event.payload)).toEqual([recorded]);
 });
 
 it("行の Quarantine の鍵は (provider, model) で、effort 違いの行も候補から外れる", () => {

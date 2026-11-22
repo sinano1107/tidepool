@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
-import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
+import { type AgentAdmin, AgentTierMismatchError, agentTierChangeMessage, agentViewProviders, RegistryLogUnreadableError, type TierApproval } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import { recordedAnswer } from "./board-call-usage.js";
 import type { BoardStatePath } from "./board-state.js";
@@ -21,11 +21,13 @@ import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin, getEvent, latestEventId, listEventsOfKinds, type TaskScopedPayload } from "./events.js";
 import {
   type AddTierAmendment,
+  agentTierChangedPayload,
   applyExecutionSettingsChange,
   assertTierRunnableFor,
   composeRoutingRow,
   type ExecutionSettingsChange,
   type InterviewAmendment,
+  inTierRenameWindow,
   parseAddTierAmendment,
   parseAgentTierAmendment,
   parseInterviewAmendment,
@@ -33,6 +35,8 @@ import {
   parseTierDescriptionAmendment,
   type RoutingRowChange,
   registryPinChanges,
+  settleProposalAsApplied,
+  undeclaredTier,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
@@ -592,7 +596,7 @@ export interface SubmitAnswerDeps {
   reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
   quarantineChecks?: QuarantineChecks;
   /** registry の agent 一覧と tier の書き込み(issue #920): tier の提案への approve が使う。Absent → registry の無い盤面。 */
-  agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier">>;
+  agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier" | "tierApproval">>;
   /** memory の提案の approve が candidate の宛先を照合する(ADR 0173 決定2)。Absent → registry の無い盤面。 */
   agentRegistered?: (name: string) => boolean;
   defaultAgentName?: string;
@@ -1551,6 +1555,7 @@ function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
 
 /** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて
  *  いれば question を observed で決着させて null を返し、下げ先に行が無い・push できないなら question は open のまま回答を断る。
+ *  崩れた pin の読みは、承認の commit が registry にあれば適用済み、改名の窓なら open のまま断る、どちらでもなければ stale(ADR 0401 決定6)。
  *  返り値は着地した commit。 */
 async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposal: RegistryProposal, to: Tier, now: () => Date): Promise<string | null> {
   const { list, changeTier } = deps.agentAdmin ?? {};
@@ -1564,9 +1569,31 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
     );
     return null;
   };
+  // ADR 0401 決定6: 承認の commit が registry にあれば、記録の前に盤面が死んだ適用 —— stale でなく適用済みとして閉じる
+  // log が読めなければ承認の有無が分からないので、stale と読まずに question を開いたまま断る
+  const applied = () => {
+    let approval: TierApproval | undefined;
+    try {
+      approval = deps.agentAdmin?.tierApproval?.(proposal.agent, questionId);
+    } catch (err) {
+      if (err instanceof RegistryLogUnreadableError) throw new DomainError(err.message);
+      throw err;
+    }
+    if (approval) settleProposalAsApplied(deps.db, questionId, proposal, approval, now());
+    return approval !== undefined;
+  };
+  // ADR 0401 決定6: 改名の窓の間は照合せず、question を開いたまま断る —— stale と刻めば適用できる提案を決定が読む誤った記録で閉じる。
+  // 改名の再実行を名指す文は agent の解決にだけ出す
+  const refuseInRenameWindow = (tier: string | undefined) => {
+    if (tier !== undefined && inTierRenameWindow(tier, tierNames(deps.db))) throw new DomainError(undeclaredTier(proposal.agent, tier));
+  };
   // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
   const agent = list().find((a) => a.name === proposal.agent);
-  if (registryPinChanges(proposal, agent, liveTierRows(deps.db)).length) return stale();
+  if (registryPinChanges(proposal, agent, liveTierRows(deps.db)).length) {
+    if (applied()) return null;
+    refuseInRenameWindow(agent?.tier);
+    return stale();
+  }
   const assertLandable = (providers: string[]) => assertTierRunnableFor(deps.db, proposal.agent, providers, to);
   assertLandable(agentViewProviders(agent!));
   try {
@@ -1575,10 +1602,15 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
       expectTier: tierNameOf(deps.db, proposal.pin.tier),
       to,
       assertLandable,
-      message: `lower agent ${proposal.agent}'s tier to ${to} (question ${questionId})`,
+      message: agentTierChangeMessage(proposal.agent, to, questionId),
     });
   } catch (err) {
-    if (err instanceof AgentTierMismatchError) return stale();
+    // fetch の後の registry に着地済みの承認がありうるので探し直す
+    if (err instanceof AgentTierMismatchError) {
+      if (applied()) return null;
+      refuseInRenameWindow(err.actual);
+      return stale();
+    }
     if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
     throw err;
   }
@@ -1857,7 +1889,7 @@ export async function submitAnswer(
             taskId: null,
             actorId: HUMAN_ACTOR_ID,
             origin,
-            payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to, question_id: task.id, registry_commit: registryCommit },
+            payload: agentTierChangedPayload(proposal, to, task.id, registryCommit),
             at: now(),
           });
         }

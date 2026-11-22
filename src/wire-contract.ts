@@ -70,6 +70,7 @@ export type SettledByObservation =
   | "pr_promotion_observed"
   | "quarantine_released"
   | "routing_proposal_stale"
+  | "routing_proposal_applied"
   | "memory_proposal_stale";
 
 /** done の work の行の着地の状態(ADR 0265 決定7、src/landing.ts の landingState)。WebUI の札の文言表がこれで欠けを落とす。 */

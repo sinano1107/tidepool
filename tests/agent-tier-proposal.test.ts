@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput } from "../src/agent-create.js";
+import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput, RegistryLogUnreadableError, type TierApproval } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
@@ -36,11 +36,14 @@ function fakeRegistry() {
     ["fugu", agent("fugu", "anthropic", "frontier", { builtin: true })],
   ]);
   const changeTier = vi.fn(async (_input: ChangeAgentTierInput) => "c0ffee");
+  // registry の log の承認の commit(question id → 着地した commit と下げ先)。盤面が commit の後・記録の前に死んだ状態を表す
+  const approvals = new Map<string, TierApproval>();
   // 段の改名は agent.md の tier も新しい名前へ書き換える(ADR 0200 決定2)
   const renameTier = async ({ from, to }: { from: string; to: string }) => {
     for (const [name, view] of agents) if (view.tier === from) agents.set(name, { ...view, tier: to });
   };
-  return { agents, changeTier, agentAdmin: { list: () => [...agents.values()], changeTier, renameTier } };
+  const tierApproval = (name: string, questionId: string) => (name === "deckhand" ? approvals.get(questionId) : undefined);
+  return { agents, changeTier, approvals, agentAdmin: { list: () => [...agents.values()], changeTier, renameTier, tierApproval } };
 }
 
 /** routing の材料で poll させ、slot に入った routing meta-review の接続を返す。 */
@@ -369,6 +372,148 @@ it("registry の無い盤面では tier の提案は断られる", async () => {
     });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/no registry/);
+  } finally {
+    await client.close();
+  }
+});
+
+/** 承認の commit が registry に着地した後・盤面の記録の前に死んだ状態(ADR 0401 決定6): registry の agent は下げ先にいて、log に
+ *  question を名指す commit がある。`agent_tier_changed` は無く question は open のまま。 */
+function landedWithoutRecord(registry: ReturnType<typeof fakeRegistry>, questionId: string, to: string) {
+  registry.agents.set("deckhand", agent("deckhand", "openai", to));
+  registry.approvals.set(questionId, { commit: "d00d", to });
+}
+
+it("承認の commit が registry にあり記録が無い提案は、due 判定の直前に適用済みとして閉じ、下げ先と commit は commit から取る(修正値つき)", async () => {
+  const registry = fakeRegistry();
+  const { client, call } = await boardWithRoutingReview(registry);
+  try {
+    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
+    const questionId = await proposeDeckhand(call);
+    // 修正値 to: economy の approve が着地した —— 提案の to(standard)とは違う
+    landedWithoutRecord(registry, questionId, "economy");
+
+    // 周期が経てば、未決着を数える前の照合が走る(走っている review が未決着なので次の回は立たない)
+    await t.clock.advance(2 * DAY);
+
+    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null, settled_by_observation: "routing_proposal_applied" });
+    expect((await events(questionId)).filter((e) => e.kind !== "task_registered").map((e) => e.payload)).toEqual([
+      { kind: "routing_proposal_applied", question_id: questionId, registry_commit: "d00d" },
+    ]);
+    expect((await call("read_routing_settings")).proposals).toEqual([
+      {
+        question_id: questionId,
+        proposal: (await task(questionId)).question_proposal,
+        answer: null,
+        amendment: null,
+        comment: null,
+        observed: null,
+        applied: { registry_commit: "d00d", from: "frontier", to: "economy" },
+      },
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("承認の commit が registry にあり記録が無い提案への approve は、書き込まずに適用済みとして閉じる —— 照合の時点でも、fetch の後の不一致でも", async () => {
+  const registry = fakeRegistry();
+  const { client, call, changeTier } = await boardWithRoutingReview(registry);
+  try {
+    // 照合の時点で registry が下げ先にいる
+    const before = await proposeDeckhand(call);
+    landedWithoutRecord(registry, before, "standard");
+    expect(await answer(before, { answers: ["approve"] })).toMatchObject({ status: 200, json: { id: before, status: "done", settled_by_observation: "routing_proposal_applied" } });
+    expect(changeTier).not.toHaveBeenCalled();
+
+    // 一覧は fetch の前の registry で pin どおり、書き込みの fetch が着地済みの commit を読む
+    registry.agents.set("deckhand", agent("deckhand", "openai", "frontier"));
+    const after = await proposeDeckhand(call);
+    changeTier.mockImplementationOnce(async () => {
+      landedWithoutRecord(registry, after, "standard");
+      throw new AgentTierMismatchError("deckhand", "frontier", "standard");
+    });
+    expect(await answer(after, { answers: ["approve"] })).toMatchObject({ status: 200, json: { id: after, status: "done", settled_by_observation: "routing_proposal_applied" } });
+
+    const proposals = (await call("read_routing_settings")).proposals;
+    for (const id of [before, after]) {
+      expect(proposals.find((p: any) => p.question_id === id)).toMatchObject({ answer: null, observed: null, applied: { registry_commit: "d00d", from: "frontier", to: "standard" } });
+      expect((await events(id)).map((e) => e.kind)).toEqual(["task_registered", "routing_proposal_applied"]);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
+it("改名の窓(agent の tier が盤面の段の名前でない)の間、提案は due 判定で決着せず、approve はその段を名指して断られ何も残らない", async () => {
+  const registry = fakeRegistry();
+  const { client, call, changeTier } = await boardWithRoutingReview(registry);
+  try {
+    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
+    const questionId = await proposeDeckhand(call);
+    // 段 frontier を top へ改名する commit が registry に着地し、盤面の段の改名の前に死んだ
+    registry.agents.set("deckhand", agent("deckhand", "openai", "top"));
+
+    await t.clock.advance(2 * DAY);
+    expect(await task(questionId)).toMatchObject({ status: "todo" });
+
+    const refusedAt = async () => {
+      const res = await answer(questionId, { answers: ["approve"] });
+      expect(res.status).toBe(409);
+      expect(res.json.error).toMatch(/^agent deckhand declares tier top, which is not one of the board's tiers/);
+      // 改名の再実行を名指す文は agent の解決にだけ出す(ADR 0401 決定6)
+      expect(res.json.error).not.toMatch(/rename/);
+      expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+      expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
+    };
+    await refusedAt();
+    expect(changeTier).not.toHaveBeenCalled();
+
+    // 一覧は pin どおり、書き込みの fetch が改名を読む
+    registry.agents.set("deckhand", agent("deckhand", "openai", "frontier"));
+    changeTier.mockRejectedValueOnce(new AgentTierMismatchError("deckhand", "frontier", "top"));
+    await refusedAt();
+    expect((await call("read_routing_settings")).proposals[0].applied).toBeUndefined();
+  } finally {
+    await client.close();
+  }
+});
+
+it("agent の tier が盤面の段の名前でなければ、tier の提案は最下位と読まずにその段を名指して断られる", async () => {
+  const registry = fakeRegistry();
+  registry.agents.set("deckhand", agent("deckhand", "openai", "top"));
+  const { review, client, call } = await boardWithRoutingReview(registry);
+  try {
+    const evidence = [spawned(t, "deckhand", "openai", "gpt-6-astra")];
+    expect(await call("propose_routing_change", { op: "agent_tier", agent: "deckhand", to: "standard", evidence, rationale: "r" })).toEqual({
+      error: expect.stringMatching(/^agent deckhand declares tier top, which is not one of the board's tiers/),
+    });
+    expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === review.id)).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("registry の log が読めなければ、due 判定は崩れた pin の提案をこの回は決着させず、approve は断られ question は open のまま", async () => {
+  const registry = fakeRegistry();
+  registry.agentAdmin.tierApproval = () => {
+    throw new RegistryLogUnreadableError(new Error("fatal: bad object"));
+  };
+  const { client, call, changeTier } = await boardWithRoutingReview(registry);
+  try {
+    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
+    const questionId = await proposeDeckhand(call);
+    registry.agents.set("deckhand", agent("deckhand", "openai", "standard"));
+
+    await t.clock.advance(2 * DAY);
+    expect(await task(questionId)).toMatchObject({ status: "todo" });
+
+    const res = await answer(questionId, { answers: ["approve"] });
+    expect(res.status).toBe(409);
+    expect(res.json.error).toContain("fatal: bad object");
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+    expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
+    expect(changeTier).not.toHaveBeenCalled();
   } finally {
     await client.close();
   }

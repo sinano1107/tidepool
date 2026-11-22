@@ -707,6 +707,9 @@ export type EventPayload =
   // issue #920: agent の tier の提案への approve が registry の main へ commit した(盤面スコープ)。registry_commit = 着地した commit。
   // ADR 0150 決定1 が新設しないとした「registry 変更の event」ではない —— 盤面自身の書き込みの記録で、row の approve の execution_settings_changed と同じ位置。
   | { kind: "agent_tier_changed"; agent: string; from: Tier; to: Tier; question_id: string; registry_commit: string }
+  // ADR 0401 決定6: 承認の commit(`(question <id>)` を名指す盤面の commit)が registry にあり記録の無い registry の提案を、盤面が
+  // 適用済みとして観測で閉じた(閉じた question に帰属)。人間の回答・修正値は残らない。registry_commit = その commit。
+  | { kind: "routing_proposal_applied"; question_id: string; registry_commit: string }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // ヒットごとの落ちた理由(`hits`、null = 返した)、read は求めた id のうち本文を返さなかった無効化済みの理由と見える後継
   // (ADR 0167 決定4。returned_ids はたどった先の id)。event id は tool 結果に載り、Precedent の

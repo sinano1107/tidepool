@@ -1,5 +1,7 @@
+import { renamedTierFrom, tierRenameExit } from "./agent-create.js";
 import type { Db } from "./db.js";
 import type { ResourceStop } from "./events.js";
+import { inTierRenameWindow } from "./execution-setting.js";
 import { taskIdsAwaitingLanding } from "./landing.js";
 import { openQuarantineQuestion, quarantineAgent } from "./quarantine.js";
 import {
@@ -59,7 +61,15 @@ export function resolveExecutionAgent(
   const name = taskAssignee ?? defaultAgentName;
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
-  assertValidAgentDefinition(name, definition, tiers);
+  try {
+    assertValidAgentDefinition(name, definition, tiers);
+  } catch (err) {
+    const { tier } = definition;
+    if (!(err instanceof InvalidAgentDefinitionError) || tier === undefined || !inTierRenameWindow(tier, tiers) || !failedAtTierGate(name, definition, tiers, err)) throw err;
+    // 段の門で落ちた解決にだけ、その理由に改名の窓の出口を添える(ADR 0401 決定6)—— 作成・編集の扉は門を直に呼ぶので出さない
+    const from = registry.source && renamedTierFrom(registry.source, name, tier);
+    throw new InvalidAgentDefinitionError(name, `${err.reason}. ${tierRenameExit(tier, from && tiers.includes(from) ? from : undefined)}`);
+  }
   // 組み込みが走らせる type は assignee の門と同じ線(ADR 0275 決定1 / ADR 0228 決定4): 名前ではなく
   // 解決の結果を見るので、shadow している間の work はここを通らない。扉の外で work が組み込みに落ちたら
   // 解決の失敗として agent 名の quarantine に乗せる。
@@ -81,6 +91,17 @@ export function resolveExecutionAgent(
     : ownEntry(registry.authority, definition.authority);
   if (!profile) throw new InvalidAgentDefinitionError(name, `unknown authority profile "${definition.authority}"`);
   return { name, definition, profile };
+}
+
+/** 門の失敗が段の門のものか: 段を外して門をもう一度通し、同じ理由で落ちなければ段より先の門は通っている —— 外して後の門で落ちても、
+ *  元の失敗は段の門が先に投げたもの。 */
+function failedAtTierGate(name: string, definition: AgentDefinition, tiers: readonly Tier[], err: InvalidAgentDefinitionError): boolean {
+  try {
+    assertValidAgentDefinition(name, { ...definition, tier: undefined }, tiers);
+    return true;
+  } catch (again) {
+    return !(again instanceof InvalidAgentDefinitionError) || again.reason !== err.reason;
+  }
 }
 
 /** ADR 0137 決定3: the open Confirmation question is the only state. */

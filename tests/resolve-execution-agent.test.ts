@@ -208,4 +208,15 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
       resolveExecutionAgent(makeRegistry({ deckhand: { authority: "standard", tier: "frontier" } }), "deckhand", null, seedTierNames, "work"),
     ).not.toThrow();
   });
+
+  // ADR 0401 決定6: 段の門で落ちた解決にだけ改名の出口を添える —— 後の門も落ちる定義でも段の理由と出口は消えない
+  it("盤面の段でない tier は、後の門(advisor)も落ちる定義でも段の理由と改名の出口を返し、先の門で落ちれば出口を添えない", () => {
+    const later = makeRegistry({ deckhand: { authority: "standard", tier: "mid", entries: [{ name: "moonshot", advisor: true }] } });
+    expect(() => resolveExecutionAgent(later, "deckhand", null, seedTierNames, "work")).toThrow(
+      /unknown tier "mid".*If a tier rename to mid reached the registry/,
+    );
+    const earlier = makeRegistry({ deckhand: { authority: "standard", tier: "mid", retiredFields: ["model"] } });
+    expect(() => resolveExecutionAgent(earlier, "deckhand", null, seedTierNames, "work")).toThrow(/no longer carries the execution setting/);
+    expect(() => resolveExecutionAgent(earlier, "deckhand", null, seedTierNames, "work")).not.toThrow(/rename/);
+  });
 });

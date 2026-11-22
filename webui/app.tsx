@@ -20,6 +20,7 @@ const SETTLED_BY_OBSERVATION_COPY = {
   pr_promotion_observed: 'observed · PR promoted',
   quarantine_released: 'observed · quarantine lifted',
   routing_proposal_stale: 'observed · routing proposal stale',
+  routing_proposal_applied: 'observed · routing proposal applied',
   memory_proposal_stale: 'observed · memory proposal stale',
 } satisfies Record<import('../src/wire-contract').SettledByObservation, string>;
 /** done の work の行の着地の状態の札(ADR 0265 決定7)。状態を足して文言を足さないと typecheck が落ちる。 */
