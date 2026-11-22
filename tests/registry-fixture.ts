@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStatePaths } from "../src/board-state.js";
 import { loadRegistry, ownEntry } from "../src/registry.js";
 import { SKILL_WILDCARD } from "../src/skill-allowlist.js";
@@ -27,6 +28,16 @@ export function registryFixedPoints(registryDir?: string): BoardStatePath[] {
 /** spec #3273 text E1: `path` が registry clone に重なる拒否(登録・boot の一斉検査・pickup の述語で同じ文)。 */
 export const registryCloneOverlap = (path: string, registryDir: string) =>
   `${path} overlaps the registry clone (${registryDir}), which is not a workspace. To let agents edit the registry, clone the registry's repository to another path and register that.`;
+
+/** registry の workspaces.yaml で workspace `name` の欄 `key` を `value` に書き換えて commit する —— 設定の扉が受けない欄
+ *  (`branch`、GitHub の外の `head_repo`)を宣言する手。 */
+export function setWorkspaceEntry(registryDir: string, name: string, key: string, value: string): void {
+  const file = join(registryDir, "workspaces.yaml");
+  const entries = parseDocument(readFileSync(file, "utf8"));
+  entries.setIn([name, key], value);
+  writeFileSync(file, entries.toString());
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", `declare ${name}.${key}`], { cwd: registryDir, stdio: "pipe" });
+}
 
 /** registry clone の原本に受け取りを拒ませる(push を落とす)。盤面の push は clone の pushurl を読まない(ADR 0339 決定5)ので、
  *  落とすのは原本の側である。 */
