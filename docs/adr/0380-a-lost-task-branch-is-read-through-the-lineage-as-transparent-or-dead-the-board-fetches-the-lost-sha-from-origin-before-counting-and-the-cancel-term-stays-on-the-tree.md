@@ -1,6 +1,6 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
-**Status 追記: 帰結の「確かめていない」のうち、push 前の commit を持ったまま失われた PR の根の着地は決まった —— PR なしの死んだ根と同じく着地が終わる([ADR 0407](0407-a-root-whose-task-branch-was-lost-never-reaches-a-git-read-every-kind-ends-from-the-record-and-no-merge-door-passes-it.md) 決定2、2026-11-23、issue #3582)。**
+**Status 追記: 帰結の「確かめていない」のうち、push 前の commit を持ったまま失われた PR の根の着地は決まった —— 効いている失われた event を持つ task は PR の有無によらず着地が終わったと読む([ADR 0407](0407-a-task-whose-branch-is-lost-reads-as-landing-ended-no-ending-record-is-written-and-the-give-up-closes-its-landing-questions-with-the-lost-event.md) 決定1・3、2026-11-23、issue #3582)。**
 
 **Status 追記: 決定4 で失われたタスクブランチの sha を取りに行く先は、宣言の出元 repo になる。保護ブランチなど、他の ref は origin から取る([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・3、2026-11-22、issue #3562)。**
 

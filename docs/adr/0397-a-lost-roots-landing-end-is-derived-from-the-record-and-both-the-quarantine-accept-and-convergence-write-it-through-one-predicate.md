@@ -1,6 +1,6 @@
 # 失われた根の着地の終わりは記録から導き、Quarantine の受理と収束が同じ判定で書く
 
-**Status 追記: 決定1 の対象から「PR を開いておらず」が外れ、決定3 の「開いている昇格失敗の question があれば当てない」は無人の収束だけに当たる —— `retry` と `end landing` の回答は同じ判定で終わりを書く([ADR 0407](0407-a-root-whose-task-branch-was-lost-never-reaches-a-git-read-every-kind-ends-from-the-record-and-no-merge-door-passes-it.md) 決定2・6、2026-11-23、issue #3582)。**
+**Status 追記: この ADR は ADR 0407 が全部置き換えた —— 着地の終わりは書かず、効いている失われた event から読む。終わりを書く判定も、受理と収束の2人の書き手も、決定4 の順序も無くなる。開いている着地の question は、受理が失われた event と同じ transaction で閉じる([ADR 0407](0407-a-task-whose-branch-is-lost-reads-as-landing-ended-no-ending-record-is-written-and-the-give-up-closes-its-landing-questions-with-the-lost-event.md) 決定1・2、2026-11-23、issue #3582)。**
 
 2026-11-21 の grilling(issue #3492)で決定。ADR 0375 決定9 は、着地の終わり(決定7)と question を閉じる処理(決定8)を give-up の受理の書き戻しと一緒に書くとした。#3298 は根の判定を書き戻した後の ref で読むために(同 決定6)、終わりを別の transaction に移した。そのうえで、終わりを書く処理は、その回答が失った `task/<id>` の一覧(メモリ上の差分)だけを読んでいた。実測(#3492 のコメント)で、この形は2箇所で漏れると分かった。(1) 書き戻しが落ちるか盤面が落ちると差分が消え、失われた event は残るのに根を読み直す者がいなくなる。(2) 親が生きている間に失われた死んだ子は、受理の時点では根でない。しかし親が着地した後に根と読まれ、収束が失われたブランチを git で読み、生のエラーで昇格失敗の question を立てる。そのとき受理はもう来ない。根であることは受理の後からでも成り立つので、決まった時点で1回だけ書く形では、どこに置いても漏れる。
 
