@@ -664,6 +664,14 @@ export function failPrepareOnce(db: Db, fragment: string, message: string): void
   }) as typeof db.prepare);
 }
 
+/** `breakPackedRefs` の checkout に当たった着地の拒否文 —— 読めない ref を言い、workspace の Quarantine を名指す(ADR 0403 決定4)。 */
+export const unreadableRefsRefusal = (workspace: Pick<WorkspaceConfig, "name">) =>
+  new RegExp(
+    `^could not verify refs for workspace "${workspace.name}" before landing: .*git for-each-ref.*not a packed ref; ` +
+      `answer the quarantine question of workspace "${workspace.name}" before landing$`,
+    "s",
+  );
+
 /** ref を読む git が exit 128 で落ちる checkout にする —— `rev-parse --verify --quiet` も「無い」(exit 1)とは答えない。 */
 export const breakPackedRefs = (workspace: WorkspaceConfig) =>
   appendFileSync(join(workspace.path, ".git", "packed-refs"), "not a packed ref\n");
