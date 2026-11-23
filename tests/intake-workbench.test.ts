@@ -352,6 +352,23 @@ it("question が開いたまま作業台が disk から消えていれば、open
   expect(git(b.workbench(), "rev-parse", "main")).toBe(git(b.ws.path, "rev-parse", "main"));
 });
 
+// #3587: 判定が作業台に撃つ git が作業台の `.git` を読めなければ、開き直しでは直らない —— question が開いていてもいなくても手で消す文
+it.each(["開いて", "閉じて"])("intake question が%sいるとき、作業台の .git/config が壊れていれば、open_workbench は作業台を名指して手で消してから開き直すよう言う", async (state) => {
+  const b = await board();
+  await b.open();
+  if (state === "閉じて") await b.answer("close");
+  writeFileSync(join(b.workbench(), ".git", "config"), "not a config\n");
+
+  const refused = b.open();
+
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow(`the board cannot read the workbench at ${workbenchPath(b.base, { workspace: b.ws.name })} (`);
+  await expect(refused).rejects.toThrow("); remove it by hand, then open it again.");
+  // 括弧の中は git の失敗だけ —— 作業台の名指しを重ねない
+  await expect(refused).rejects.not.toThrow("(the workbench at ");
+  expect(existsSync(b.workbench())).toBe(true);
+});
+
 // pin A7 / pin A15: 人間しか書けない path も取り込み、作業台は残してその branch を包む commit へ進め、`board/main` も新しい値になる
 it("take in は人間しか書けない path を含む tip を包む commit で保護ブランチへ取り込み、作業台の branch を包む commit へ進めて clean のまま残す", async () => {
   const b = await board();

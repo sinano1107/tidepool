@@ -1,9 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import { openDb } from "../src/db.js";
+import { loadRegistry } from "../src/registry.js";
 import { workbenchPath } from "../src/workbench.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, quarantineQuestion } from "./harness.js";
+import { openHumanContentWorkbench } from "../src/workspace.js";
+import { deleteWorkspace } from "../src/workspace-create.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 import { answer, boardWithParent, completedChild, conflicted, resolveInWorkbench } from "./workbench-fixture.js";
 
 // 取り込みが作業台に撃つ git の上限超過(ADR 0357)は、人間には作業台の在り処で届く —— worker の tree とは言わない。
@@ -53,6 +60,33 @@ it("開く手が既にある作業台を読む git が上限で止まれば、�
     expect(purpose).toContain("answer again and it opens it again. ");
     expect(purpose).not.toContain("remove it by hand");
     expect(existsSync(fifo)).toBe(true);
+  } finally {
+    rmSync(fifo, { force: true });
+  }
+});
+
+// #3587: 削除の扉で作業台を読む git の上限超過は参照の拒否ではない —— そのまま投げ、文は作業台の在り処を名指す
+it("削除の扉が作業台を読む git が上限で止まれば、参照の拒否にせず作業台を名指して投げ、entry も作業台も残す", async () => {
+  const db = openDb(":memory:");
+  const ws = await makeWorkspace("intake");
+  const base = await tempDir("tidepool-workbenches-");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `${ws.name}:\n  path: ${ws.path}\n` });
+  git(registryDir, "branch", "-M", "main");
+  await openHumanContentWorkbench(db, ws, base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, () => new Date(), { resolveRegistered: undefined });
+  const workbench = realpathSync(workbenchPath(base, { workspace: ws.name }));
+  // 読み手の無い FIFO の .gitignore —— 未追跡の列挙がそこで止まる
+  const fifo = join(workbench, ".gitignore");
+  execFileSync("mkfifo", [fifo]);
+  try {
+    const deps = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: base, unsettledTaskCount: 0, awaitingLandingTaskIds: [], db };
+    const failed = await deleteWorkspace({ name: ws.name, confirm: true }, deps).catch((err: Error) => err);
+
+    expect(failed).toBeInstanceOf(Error);
+    expect((failed as Error).name).not.toBe("DeletionBlockedError");
+    expect((failed as Error).message).toContain(`on the workbench at ${workbench} did not finish within 1 s`);
+    expect((failed as Error).message).not.toContain("the worker's tree");
+    expect(loadRegistry(registryDir, "purely-local").workspaces[ws.name]).toBeDefined();
+    expect(existsSync(workbench)).toBe(true);
   } finally {
     rmSync(fifo, { force: true });
   }
