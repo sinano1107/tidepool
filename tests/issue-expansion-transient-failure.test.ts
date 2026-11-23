@@ -93,7 +93,7 @@ it("registry drift で門が止めた head はその head だけを外し、同�
   expect(await servedQuarantineQuestion(t, "workspace", "gone")).toBeDefined();
 });
 
-it("Registry reachability の検査は、門が head を外して次へ進んでも poll で1回だけ走る", async () => {
+it("Registry availability の検査は、門が head を外して次へ進んでも poll で1回だけ走る", async () => {
   let checks = 0;
   t = await bootTidepool({
     workspace: await makeWorkspace("tidepool"),

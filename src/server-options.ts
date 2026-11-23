@@ -453,7 +453,7 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
   return board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined;
 }
 
-/** ADR 0052 決定2 の**起動時**の refresh 点で、レジストリ到達性の検査を丸ごと撃つ。`buildServerOptions` の先頭で、
+/** ADR 0052 決定2 の**起動時**の refresh 点で、レジストリ可用性の検査を丸ごと撃つ。`buildServerOptions` の先頭で、
  *  registry を1文字も読む前に撃つ。
  *
  *  順序がこの関数の本体である。合成 root は `workspace`(workspaceConfig)と

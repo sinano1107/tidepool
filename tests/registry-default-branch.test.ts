@@ -5,7 +5,7 @@ import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 const check = (registryDir: string) => checkRegistryAvailability(registryDir, undefined);
 
-describe("registry clone の default branch はレジストリ到達性の検査に載る(ADR 0377 決定7)", () => {
+describe("registry clone の default branch はレジストリ可用性の検査に載る(ADR 0377 決定7)", () => {
   it("origin/HEAD が origin/main 以外を指すなら registry は使えず、理由は直す手を名指す", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");

@@ -355,7 +355,7 @@ export interface BootOptions {
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0184 決定5: 行の Quarantine への回答時の probe。 */
   modelProbes?: Partial<Record<Provider, ModelProbe>>;
-  /** ADR 0052: remote-backed registry reachability seam. */
+  /** ADR 0052: remote-backed registry availability seam. */
   registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0070: Claude CLI authentication probe. */
   cliAuth?: CliAuthCheck;

@@ -222,7 +222,7 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
 
   // ADR 0093 決定7: 仲介の不達も user token の失効も「GitHub が遠い」1つの症状に
   // 畳む —— 新しい語彙を盤面側に足さないための線であり、既存の fail-closed
-  // (registry reachability / workspace quarantine)がそのまま受ける。timeout は
+  // (registry availability / workspace quarantine)がそのまま受ける。timeout は
   // 接続断と同じ catch 節に落ちる(`AbortSignal.timeout`)ので個別には撃たない。
   it.each([
     ["失効した user token(401)", 401, { error: "invalid_user_token" }],

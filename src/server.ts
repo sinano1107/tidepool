@@ -243,7 +243,7 @@ export interface ServerOptions {
   /** ADR 0184 決定5: 行の Quarantine への回答を受理する前に、その model id で最小の1ターンを
    *  走らせる Provider ごとの probe。口の無い Provider の行への回答は拒まれる。 */
   modelProbes?: Partial<Record<Provider, ModelProbe>>;
-  /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
+  /** ADR 0052: remote-backed registry availability check for boot and pickup. */
   registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0402 決定3: このホストの `gh --version` の読み。「gh の版」の Quarantine の回答の受理が読み直す。Absent → その回答は拒まれる。 */
   readGhVersion?: () => Promise<string>;

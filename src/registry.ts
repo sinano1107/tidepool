@@ -761,7 +761,7 @@ export type RegistryAvailabilityCheck = () => Promise<RegistryAvailability>;
  *
  *  ADR 0339 決定2: `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、書き込み側の
  *  push(`registry-write.ts` の `commitToRegistry`)と同じく匿名でしか撃たない —— host の
- *  helper にも乗らない。private な remote ならそこで失敗し、レジストリ到達性の quarantine が
+ *  helper にも乗らない。private な remote ならそこで失敗し、レジストリ可用性の quarantine が
  *  人間を呼ぶ。
  *
  *  token の取得を try の**内側**に置くのがこの関数の要点である(ADR 0093 決定7):
@@ -806,7 +806,7 @@ function registryDefaultBranchCheck(dir: string): RegistryAvailability {
       };
 }
 
-/** 盤面のレジストリ到達性の検査(ADR 0052 決定2・5): pickup のゲート・quarantine の受理・起動時が撃つ。refresh の後に
+/** 盤面のレジストリ可用性の検査(ADR 0052 決定2・5): pickup のゲート・quarantine の受理・起動時が撃つ。refresh の後に
  *  default branch を見る(ADR 0377 決定7)。人間の registry 書き込み(`registry-write.ts`)は refresh だけを撃つ —— default branch
  *  の食い違いで人間の書き込みは拒まない。 */
 export async function checkRegistryAvailability(
