@@ -154,6 +154,7 @@ import {
   INTAKE_OPTIONS,
   type IntakeContext,
   KEPT_TASK_CHECKOUT,
+  keptValueNotice,
   localLandingCommit,
   lostBranchRefusal,
   mergeTaskToProtected,
@@ -865,7 +866,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseNamingKept(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
     // spec #3273 text B11: 外した値ごとに1行
-    const notices = [...kept.map(({ ref, sha }) => `${ref} was ${sha}, kept as refs/keep-around/${sha}`), ...keptWorkbenches, ...keptCheckouts];
+    const notices = [...kept.map(keptValueNotice), ...keptWorkbenches, ...keptCheckouts];
     const notice = notices.length > 0 ? notices.join("\n") : undefined;
     if (!unopened && !cancelRcas) return notice === undefined ? undefined : { notice };
     return {

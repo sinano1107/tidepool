@@ -16,6 +16,7 @@ import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates, resol
 import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type PrMergeQuestionContent, type PrMergeReason, type QuestionColumns, type QuestionKind, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, type MergeDial } from "./registry.js";
+import { registryUnreadableOpen } from "./registry-unreadable.js";
 import { repositoryLabel } from "./repo-access.js";
 import { treeDeltaEntries } from "./sandbox.js";
 import {
@@ -744,6 +745,8 @@ function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } |
   );
 }
 
+const REGISTRY_STOPPED_REFUSAL = "the registry is unavailable, so landing is stopped; answer the registry question first, then answer this one again";
+
 /** 回答が待つ根を回が候補にしなかった理由(ADR 0241 決定5 / ADR 0394 決定4)。error は回答の拒否文。 */
 function exclusionOf(db: Db, taskId: string): Extract<LandingVerdict, { kind: "excluded" }> {
   const outcome = rootPrOutcome(db, taskId);
@@ -1382,7 +1385,8 @@ export function createLanding(deps: LandingDeps): Landing {
   ): Extract<LandingVerdict, { kind: "failed" }> => {
     const message = error instanceof Error ? error.message : String(error);
     const verdict = { kind: "failed" as const, reason, error: message };
-    if (!ctx.intake) {
+    // ADR 0403 決定5: registry の止まりが開いていれば、根ごとの question を重ねない —— 信号は止まりが持つ
+    if (!ctx.intake && !registryUnreadableOpen(deps.db)) {
       // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と出元 repo の盤面の
       // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
       registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, readQuestionTip(task), error instanceof DeclaredRepoMismatchError);
@@ -2017,7 +2021,8 @@ export function createLanding(deps: LandingDeps): Landing {
    *  先回りして潰さない(ADR 0240 決定2)。閉じるのは受理だけ(ADR 0397 決定2)。終えなければ undefined。 */
   const endLostRoot = ({ task, workspace }: LandingRoot): LandingVerdict | undefined => {
     if (!workspace || !taskBranchLostInForce(deps.db, task.id) || openPrPromotionQuestionIds(deps.db, task.id).length > 0) return undefined;
-    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), { closeQuestions: false }) ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
+    // ADR 0397 決定3: `workspace` は landingRootOf が系譜を読めて根と判定した印 —— 読み直すと、落ちた2回目が失われたブランチを読む `landRoot` へ進む
+    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), "convergence") ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
   };
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
    *  候補の読み取りそのものの失敗はログに出して回を終え、次の突きで走り直す。 */
@@ -2028,6 +2033,13 @@ export function createLanding(deps: LandingDeps): Landing {
     } catch (error) {
       console.error("[landing] reading the landing roots failed; the next trigger runs the convergence again:", error);
       return [];
+    }
+    // ADR 0403 決定5: registry の止まりが開いていれば根を撃たずに終える —— どの根もどのみち registry を読めない。答えている回答は止まりを名指して拒む
+    if (registryUnreadableOpen(deps.db)) {
+      return [...answering.keys()].flatMap((question) => {
+        const taskId = answeredRootOf(deps.db, question);
+        return taskId ? [{ taskId, verdict: failedAnswer(REGISTRY_STOPPED_REFUSAL) }] : [];
+      });
     }
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     const verdicts: RootVerdict[] = [];
@@ -2060,7 +2072,7 @@ export function createLanding(deps: LandingDeps): Landing {
         try {
           const task = getTask(deps.db, id);
           const attended = [...answering.keys()].some((question) => answeredRootOf(deps.db, question) === id);
-          if (task && !attended && openPrPromotionQuestionIds(deps.db, id).length === 0) {
+          if (task && !attended && openPrPromotionQuestionIds(deps.db, id).length === 0 && !registryUnreadableOpen(deps.db)) {
             registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now());
           }
         } catch (questionError) {

@@ -1,4 +1,4 @@
-import { json, type RequestHandler, type Response, Router } from "express";
+import { type ErrorRequestHandler, json, type RequestHandler, type Response, Router } from "express";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import {
@@ -112,6 +112,7 @@ import {
   UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
+import { RegistryUnreadableError } from "./registry-unreadable.js";
 import {
   DeletionBlockedError,
   DeletionConfirmationRequiredError,
@@ -2305,6 +2306,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...(presented!.has_task_branch && humanWorkbenchDisplay(resolveWorkspacesBaseDir(workspacesDir), task)),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
+
+  // ADR 0403 決定5: 人間の要求が読めない registry に当たったら、止まりは読み込みの1点が立て済み —— 要求にはその場で理由を返す
+  router.use(((err, _req, res, next) => {
+    if (!(err instanceof RegistryUnreadableError)) return next(err);
+    sendJson(res.status(503), { error: err.message });
+  }) satisfies ErrorRequestHandler);
 
   return router;
 }

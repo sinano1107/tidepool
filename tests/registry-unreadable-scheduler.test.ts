@@ -1,14 +1,17 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, refreshRegistry } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
-import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import type { ServerOptions } from "../src/server.js";
+import { buildServerOptions, implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
+import { composition } from "./board-composition.js";
 import { FakeClock, fakeContainers, healthyUsageText, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
-import { makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { breakRegistry, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 // ここが測るのは**ゲートが spawn の手前で実際に fetch を撃つこと**である。worker は
 // fake なので、実 worker がどの ref を読むかはここでは測れない —— それは
@@ -118,9 +121,84 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
   const questions = listBoard(db).filter((task) => task.type === "question");
   expect({ started: worker.started, questionTitles: questions.map((task) => task.title) }).toEqual({
     started: [],
-    questionTitles: ["registry is unavailable — pickup is stopped"],
+    questionTitles: ["registry is unavailable — pickup and landing are stopped"],
   });
   // ADR 0093 決定7: user token の失効はまずここに出るので、再ログインのコマンドを名指しする
   expect(questions[0]?.purpose).toContain("npm run github-login");
+  scheduler.stop();
+});
+
+type SchedulerDeps = Parameters<typeof startScheduler>[0];
+
+/** registry を読めなくした盤面と、合成 root が組んだ読み口で動く scheduler。`remote` なら remote の main を壊し、無ければ
+ *  purely-local な registry の main を壊す。 */
+async function brokenRegistryBoard(readers: (options: ServerOptions) => Partial<SchedulerDeps>, { remote = false } = {}) {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const board = { ...composition(), clock, workspaceName: "tidepool", defaultAgentName: "deckhand" };
+  let options: ServerOptions;
+  if (remote) {
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
+    options = await buildServerOptions({ ...board, registryDir, registryMode: "remote-backed" }, db);
+    publish("workspaces.yaml", "tidepool: [unclosed\n", "break workspaces.yaml on remote main");
+  } else {
+    const registryDir = await makeRegistry();
+    options = await buildServerOptions({ ...board, registryDir }, db);
+    breakRegistry(registryDir);
+  }
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    ...readers(options),
+  });
+  registerTask(
+    db,
+    { type: "work", title: "queued while the registry is broken", purpose: "waits for the registry", completion_criteria: "runs after repair" },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  return { db, clock, worker, scheduler };
+}
+
+const gateOnly = (options: ServerOptions): Partial<SchedulerDeps> => ({ registryAvailability: options.registryAvailability });
+
+// ADR 0403 決定5: 判定は remote の到達に「読み込みと検査が通るか」を足し、registry を持つ盤面すべてに置く
+it.each([
+  ["remote の無い盤面で registry を壊すと", false],
+  ["remote に届いても remote の main の registry が読めなければ", true],
+])("%s、pickup の門が止まり registryUnreadable が1枚立つ", async (_, remote) => {
+  const { db, clock, worker, scheduler } = await brokenRegistryBoard(gateOnly, { remote });
+
+  await clock.advance(HOURLY * 2);
+
+  expect({ started: worker.started, stops: openQuarantineValues(db, "registryUnreadable") }).toEqual({ started: [], stops: [null] });
+  scheduler.stop();
+});
+
+// ADR 0403 決定5: 重複を避ける判定は poll の catch —— 開いていれば ADR 0294 の行にも計測にも数えない
+it("todo の候補を読む poll が registry の読み込みで投げても、registryUnreadable が開いていれば poll の失敗の行にも計測にも数えない", async () => {
+  const { db, clock, worker, scheduler } = await brokenRegistryBoard((options) => ({
+    registryAvailability: options.registryAvailability,
+    taskExecutionCandidates: options.taskExecutionCandidates,
+  }));
+
+  await clock.advance(HOURLY * 3);
+
+  expect({
+    started: worker.started,
+    lastPollFailure: scheduler.lastPollFailure(),
+    pollFailures: openQuarantineValues(db, "pollFailure"),
+    stops: openQuarantineValues(db, "registryUnreadable"),
+  }).toEqual({ started: [], lastPollFailure: undefined, pollFailures: [], stops: [null] });
   scheduler.stop();
 });
