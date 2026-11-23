@@ -318,8 +318,8 @@ export function gitWithInput(input: string, cwd: string, ...args: string[]): str
 }
 
 /** ADR 0409 決定2: git that exits 0 can still report something on stderr, so this runner returns both. A non-zero exit throws like `git`. */
-export function gitReporting(cwd: string, args: string[], input?: string, env?: NodeJS.ProcessEnv): { stdout: string; stderr: string } {
-  const result = spawnSync("git", args, { cwd, env: localGitEnv(env), input, maxBuffer: 64 * 1024 * 1024, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+export function gitReporting(cwd: string, args: string[], input: string, env: NodeJS.ProcessEnv): { stdout: string; stderr: string } {
+  const result = spawnSync("git", args, runOptions(cwd, env, input));
   if (result.error) rethrowNamingMissingCwd(result.error, cwd, args);
   const [stdout, stderr] = [result.stdout.toString(), result.stderr.toString()];
   if (result.status !== 0) throw Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr });
@@ -352,15 +352,20 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 const subcommandOf = (args: string[]): string => args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
 
+/** The spawn options `run` and `gitReporting` share. */
+const runOptions = (cwd: string, env: NodeJS.ProcessEnv | undefined, input: string | Buffer | undefined) => ({
+  cwd,
+  env: localGitEnv(env),
+  maxBuffer: 64 * 1024 * 1024,
+  input,
+  stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] as ("ignore" | "pipe")[],
+});
+
 /** `timeout` kills the call; `bound` is the limit its expiry names (the stage's, when the call ran on what remained of it). */
 function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, timeout?: number, bound = timeout): Buffer {
   try {
     return execFileSync("git", args, {
-      cwd,
-      env: localGitEnv(env),
-      maxBuffer: 64 * 1024 * 1024,
-      input,
-      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      ...runOptions(cwd, env, input),
       // ADR 0334: Node's timeout kills only the parent git, so it runs in its own process group and the kill below also
       // reaches a child (`upload-pack`, a git blocked in `open()`). SIGTERM so git removes its lock files
       ...(timeout !== undefined && { timeout, killSignal: "SIGTERM" as const, detached: true }),
@@ -398,7 +403,7 @@ export function workerRepoGitUntil(deadline: number, cwd: string, args: string[]
   return runOnWorkerTree(cwd, args, undefined, input, deadline).toString().trim();
 }
 
-/** `run` と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git
+/** `run`・`gitReporting` と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git
  *  そのもの(`runAuthedGit`)は盤面所有の repo か HOME を cwd にするので通らず、clone の置き場の不在は `authedClone` が
  *  同じ文で先に名指す。Node は cwd が無いときも git が
  *  PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを投げ、それが quarantine の理由にそのまま載る
