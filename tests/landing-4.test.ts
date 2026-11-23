@@ -2626,6 +2626,36 @@ it("着地の比較: 断念した根の最初の撮りの確認が registry を�
   expect(holdsBaseline(db, rowless.name)).toBe(false);
 });
 
+// ADR 0403 決定1: 問い直しに写す tip が読めなくても、tip 無しで問い直す
+it("断念した根の問い直しは、workspace を解決できず tip が読めなくても tip 無しの question を立てる", async () => {
+  const { db, clock, github, work } = await abandonedPromotion("abandon-reask-tip-unreadable");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const landing = createLanding({
+    defaultAgentName: "tako", db, clock, github,
+    resolveWorkspace: () => { throw new Error("the registry cannot be read"); },
+  });
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(reAsked(db, work.id)).toEqual([expect.objectContaining({ status: "todo", question_landing_tip: null })]);
+});
+
+// ADR 0403 決定2: 断念・hold の枝の失敗も、主経路と同じ境界で昇格失敗 question になる
+it("断念した根の門の読みが落ちれば、収束はその根に昇格失敗 question を立てる", async () => {
+  const { db, landing, work } = await abandonedPromotion("abandon-branch-gate-read-threw");
+  const prepare = db.prepare.bind(db);
+  // 門の読み(付帯子の数え)が1回だけ落ちる
+  const spy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+    if (!sql.includes("SELECT COUNT(*) AS n FROM tasks attached")) return prepare(sql);
+    spy.mockRestore();
+    throw new Error("the gate could not be read");
+  }) as typeof db.prepare);
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed", error: "the gate could not be read" });
+
+  expect(openPromotionQuestions(db, work.id)).toEqual([expect.objectContaining({ title: `PR promotion failed: ${work.title}` })]);
+});
+
 it("着地の比較: tip を読めずに立った question を断念した根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {
   const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-abandoned-no-head");
   registerPrPromotionFailureQuestion(db, work, "token expired", clock.now());

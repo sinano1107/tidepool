@@ -230,11 +230,7 @@ function declinedContentChanged(
   if (declined.tip === null || !resolve) return true;
   if (declined.outside?.sha !== current.outside?.sha || declined.outside?.kind !== current.outside?.kind) return true;
   if (branchSet(declined.missing_branches) !== branchSet(current.missing_branches)) return true;
-  try {
-    return questionTip(resolve(task.workspace), task.id) !== declined.tip;
-  } catch {
-    return true;
-  }
+  return questionTip(task.id, () => resolve(task.workspace)) !== declined.tip;
 }
 
 /** ADR 0394 決定6: 根の断る記録のうち、`kind` の question を断った最新のもの —— 効いている間だけ返す。種類は記録が指す question から
@@ -898,15 +894,22 @@ function registerPrPromotionQuestion(
   );
 }
 
-/** ADR 0394 決定1 / ADR 0370 決定1: 問う内容は基準と比べずに読む。完全修飾 ref の解決に他の ref の曖昧さは要らない。 */
-function questionTip(workspace: WorkspaceConfig, taskId: string): string | null {
+/** ADR 0394 決定1 / ADR 0370 決定1: 問う内容は基準と比べずに読む。完全修飾 ref の解決に他の ref の曖昧さは要らない。
+ *  ADR 0403 決定1: 問いに写す tip の読みはここだけで、投げない —— workspace を解決できない・`.git` が無い・git が exit 1 以外で落ちた
+ *  ときは理由をログに1行出して null(特定の sha を見せていない記録で、断る回答は効かない)。ブランチが無い(exit 1)のは読めた答え。 */
+function questionTip(taskId: string, resolveWorkspace: () => WorkspaceConfig | undefined): string | null {
+  const unread = (reason: unknown) => {
+    console.error(`[landing] could not read the question tip for root ${taskId}; the question carries no tip:`, reason);
+    return null;
+  };
   try {
-    if (lstatSync(join(workspace.path, ".git"), { throwIfNoEntry: false }) === undefined) return null;
+    const workspace = resolveWorkspace();
+    if (!workspace) return unread("no workspace is configured");
+    if (lstatSync(join(workspace.path, ".git"), { throwIfNoEntry: false }) === undefined) return unread(`${workspace.path} has no .git`);
     return git(workspace.path, "-c", "core.warnAmbiguousRefs=false", "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === "ENOTDIR") return null;
-    if ((error as { status?: number } | null)?.status !== 1) throw error;
-    return null;
+    if ((error as { status?: number } | null)?.status === 1) return null;
+    return unread(error);
   }
 }
 
@@ -1154,7 +1157,7 @@ function askMerge(
   // ADR 0394 決定1: 外の head を先に言い、CI や面の変化は後ろに添える。
   const purpose = outsideBody === undefined ? `${prompt!.detail} ${prompt!.question}`
     : prompt === undefined ? outsideBody : `${outsideBody}\n\n${prompt.detail}`;
-  const tip = questionTip(workspace, task.id);
+  const tip = questionTip(task.id, () => workspace);
   const base = { pr, tip, reason: prompt?.reason ?? "outside_head" as const };
   const content: PrMergeQuestionContent = origin.kind === "rewritten"
     ? { ...base, outside: { kind: "rewritten", sha: head }, missingBranches: missingBranchesOf(origin.outside) }
@@ -1359,15 +1362,7 @@ export function createLanding(deps: LandingDeps): Landing {
    *  (ADR 0106 決定5)失敗 question を立て直さず、答えている question を引退の対象から除く。`intake` はその回答の取り込みの束で、
    *  retry か、外の push が落とした内容の merge question への `merge`(entry `landing_merge`)が答えている途中であることを表す。 */
   type RootContext = { answering: ReadonlyMap<string, Answerer>; intake?: IntakeContext; outcome: IntakeOutcome };
-  const readQuestionTip = (task: Task) => {
-    let workspace: WorkspaceConfig | undefined;
-    try {
-      workspace = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
-    } catch (error) {
-      if (!(error instanceof UnknownWorkspaceError)) throw error;
-    }
-    return workspace === undefined ? null : questionTip(workspace, task.id);
-  };
+  const readQuestionTip = (task: Task) => questionTip(task.id, () => buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace));
   const retireFailures = (taskId: string, ctx: RootContext) =>
     settlePrPromotionQuestionsAsObserved(deps.db, taskId, deps.clock.now(), ctx.answering);
   const failed = (
@@ -1379,16 +1374,9 @@ export function createLanding(deps: LandingDeps): Landing {
     const message = error instanceof Error ? error.message : String(error);
     const verdict = { kind: "failed" as const, reason, error: message };
     if (!ctx.intake) {
-      let tip: string | null;
-      try {
-        tip = readQuestionTip(task);
-      } catch (tipError) {
-        console.error(`[landing] could not read the question tip for root ${task.id}:`, tipError);
-        return verdict;
-      }
       // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と出元 repo の盤面の
       // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
-      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, tip, error instanceof DeclaredRepoMismatchError);
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, readQuestionTip(task), error instanceof DeclaredRepoMismatchError);
     }
     return verdict;
   };
@@ -1525,21 +1513,14 @@ export function createLanding(deps: LandingDeps): Landing {
     if (closed) return closed;
     /** ADR 0370 決定1: 断念・hold が写した tip を今のブランチと比べる前の比較。tip が無いか workspace を解決できなければ ref を読まない
      *  (`declinedContentChanged` は読まずに「変わった」と読む、ADR 0225 決定1 / ADR 0234 決定3)。比較そのものが落ちれば、比べていない
-     *  ref で問い直さず根の失敗にする。 */
-    const compareBeforeChangedSince = (tip: string | null): LandingVerdict | undefined => {
-      if (tip === null) return undefined;
+     *  ref で問い直さず根の失敗にする(落ちた比較は失敗の境界へ投げる)。 */
+    const compareBeforeChangedSince = (tip: string | null) => {
+      if (tip === null) return;
       let workspace: WorkspaceConfig | undefined;
       try {
         workspace = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
       } catch {}
-      if (!workspace) return undefined;
-      try {
-        stopRootIfRefsMoved(workspace);
-      } catch (error) {
-        if (error instanceof RootStopped) throw error;
-        return failed(task, "promotion_failed", error, ctx);
-      }
-      return undefined;
+      if (workspace) stopRootIfRefsMoved(workspace);
     };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
     if (open.length > 0 && !ctx.intake) return undefined;
@@ -1553,43 +1534,42 @@ export function createLanding(deps: LandingDeps): Landing {
           }
         : undefined;
     }
-    // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、断念した内容から
-    // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
-    const abandoned = ctx.intake ? undefined : declineInForce(deps.db, task.id, "pr_promotion_retry");
-    if (abandoned) {
-      // 門が閉じていれば他の理由より先に待つ(GLOSSARY.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
-      const block = landingBlock(deps.db, task.id);
-      if (block) return { kind: "deferred", reason: block.kind, count: block.count };
-      const failure = compareBeforeChangedSince(abandoned.payload.tip);
-      if (failure) return failure;
-      if (!changedSince(task, abandoned.payload)) return undefined;
-      registerPrPromotionQuestion(
-        deps.db,
-        task,
-        `PR promotion re-asked: ${task.title}`,
-        `PR promotion for completed task "${task.title}" was abandoned, but ${taskBranch(task.id)} no longer matches ` +
-          "(or could not be compared with) the content that question asked about. Promote the current content?",
-        deps.clock.now(),
-        readQuestionTip(task),
-      );
-      return {
-        kind: "failed",
-        reason: "promotion_failed",
-        error: `the content of ${taskBranch(task.id)} differs from the content PR promotion abandoned`,
-      };
-    }
-    // ADR 0289 決定3: ローカル着地の hold は断念と同じ形で読む —— 門が閉じていれば待ち(記録は刻まない)、hold した内容のままなら
-    // 撃たず、変わっていれば通常の経路を進んで local merge question を立て直す。merge を執行した根は候補に入らない
-    const held = ctx.intake ? undefined : declineInForce(deps.db, task.id, "local_merge");
-    if (held) {
-      const block = landingBlock(deps.db, task.id);
-      if (block) return { kind: "deferred", reason: block.kind, count: block.count };
-      const failure = compareBeforeChangedSince(held.payload.tip);
-      if (failure) return failure;
-      if (!changedSince(task, held.payload)) return undefined;
-    }
     let resolvedWorkspace: string | undefined;
+    // ADR 0403 決定2: 断念・hold の枝も主経路と同じ失敗の境界の内側に置く —— 失敗の届き先は起きた位置で決まらない
     try {
+      // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、断念した内容から
+      // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
+      const abandoned = ctx.intake ? undefined : declineInForce(deps.db, task.id, "pr_promotion_retry");
+      if (abandoned) {
+        // 門が閉じていれば他の理由より先に待つ(GLOSSARY.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
+        const block = landingBlock(deps.db, task.id);
+        if (block) return { kind: "deferred", reason: block.kind, count: block.count };
+        compareBeforeChangedSince(abandoned.payload.tip);
+        if (!changedSince(task, abandoned.payload)) return undefined;
+        registerPrPromotionQuestion(
+          deps.db,
+          task,
+          `PR promotion re-asked: ${task.title}`,
+          `PR promotion for completed task "${task.title}" was abandoned, but ${taskBranch(task.id)} no longer matches ` +
+            "(or could not be compared with) the content that question asked about. Promote the current content?",
+          deps.clock.now(),
+          readQuestionTip(task),
+        );
+        return {
+          kind: "failed",
+          reason: "promotion_failed",
+          error: `the content of ${taskBranch(task.id)} differs from the content PR promotion abandoned`,
+        };
+      }
+      // ADR 0289 決定3: ローカル着地の hold は断念と同じ形で読む —— 門が閉じていれば待ち(記録は刻まない)、hold した内容のままなら
+      // 撃たず、変わっていれば通常の経路を進んで local merge question を立て直す。merge を執行した根は候補に入らない
+      const held = ctx.intake ? undefined : declineInForce(deps.db, task.id, "local_merge");
+      if (held) {
+        const block = landingBlock(deps.db, task.id);
+        if (block) return { kind: "deferred", reason: block.kind, count: block.count };
+        compareBeforeChangedSince(held.payload.tip);
+        if (!changedSince(task, held.payload)) return undefined;
+      }
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (!resolve) {
         return failed(task, "workspace_unavailable", "no workspace is configured for landing", ctx);
@@ -1631,7 +1611,7 @@ export function createLanding(deps: LandingDeps): Landing {
               `has not reached ${root}. Answer \`retry\` and the board re-fires those merge backs. If one conflicts, the answer is ` +
               "refused and the refusal says where to resolve it.",
             deps.clock.now(),
-            questionTip(workspace, task.id),
+            questionTip(task.id, () => workspace),
           );
         }
         return { kind: "failed", reason: "content_left_behind", error: `pushed ${root}, but the content of ${branches} has not reached it` };
@@ -1691,7 +1671,7 @@ export function createLanding(deps: LandingDeps): Landing {
               `protected branch now?`
             : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
               `for "${task.title}". Land its task branch on the protected branch now?`;
-        registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), questionTip(workspace, task.id));
+        registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), questionTip(task.id, () => workspace));
         retireFailures(task.id, ctx);
         return { kind: "landed", form: "local_merge_question" };
       }
@@ -2046,6 +2026,17 @@ export function createLanding(deps: LandingDeps): Landing {
         // ADR 0394 決定4: 例外で verdict を落とすと、回答の拒否文が「根でなくなった」と事実と違うことを言う
         const message = error instanceof Error ? error.message : String(error);
         record({ kind: "failed", reason: "landing_failed", error: `the board failed to land task ${id} (${message}); answer again` });
+        // ADR 0403 決定3: 想定外の例外でも、無人の回なら tip 無しの昇格失敗 question を立てる —— 開いた question がある根は撃たれないので重ねず、
+        // 答えている回答は拒否文で失敗を知る
+        try {
+          const task = getTask(deps.db, id);
+          const attended = [...answering.keys()].some((question) => answeredRootOf(deps.db, question) === id);
+          if (task && !attended && openPrPromotionQuestionIds(deps.db, id).length === 0) {
+            registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now());
+          }
+        } catch (questionError) {
+          console.error(`[landing] could not ask about the failed landing of root ${id}:`, questionError);
+        }
       }
     }
     // ADR 0394 決定4: 回答が待つ根をこの回が飛ばしたなら、なぜかを verdict にする —— 回答はそれで拒まれる
