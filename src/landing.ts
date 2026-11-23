@@ -1730,7 +1730,7 @@ export function createLanding(deps: LandingDeps): Landing {
        *  止まる(text D1)。PR が記録済みで head が最後に push した値を欠く(書き換え・巻き戻し)ときは
        *  決定7 が持つ(`outsidePushStep`)。決定7 で止まれば verdict を返し、押してよければ判断に使った head(「無い」なら `""`)を返す ——
        *  push はそれを lease に載せる(ADR 0376 Status 追記、#3605)。読めない head と text D1・D2 は今どおり投げる(昇格の失敗になる)。 */
-      const checkHeadBeforePush = async (
+      const judgeHeadBeforePush = async (
         pr: PrDiff | undefined,
         foundPr?: number,
         questionBeforeRead?: ReturnType<typeof latestMergeQuestion>,
@@ -1890,7 +1890,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const matching = await github.findPullRequestByHead({ workspace, branch, number: prNumber });
         if (matching?.state !== "OPEN") throw new Error(`PR #${prNumber} does not have an open head at head repo ${headRepoLabel}'s ${branch}, so the board did not push.`);
         // ADR 0376 決定1: the fork identity, head and base must come from the same observation.
-        const expected = await checkHeadBeforePush(matching, undefined, before);
+        const expected = await judgeHeadBeforePush(matching, undefined, before);
         if (typeof expected !== "string") return expected;
         const closed = closedMergeAnswer();
         if (closed) return closed;
@@ -1946,7 +1946,7 @@ export function createLanding(deps: LandingDeps): Landing {
             error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
           };
         }
-        const expected = await checkHeadBeforePush(found ?? undefined, found?.number);
+        const expected = await judgeHeadBeforePush(found ?? undefined, found?.number);
         if (typeof expected !== "string") return expected;
         catchUp();
         // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)

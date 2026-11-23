@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
+import type { PreparePushInput } from "../src/github.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
@@ -740,11 +741,11 @@ it("PR を記録していない根の出元 repo のタスクブランチが最�
 
 // ADR 0376 Status 追記(#3605): 収束の push は決定2 の判断に使った head を lease として載せる —— 読んだ後に動いた head には、fast-forward
 // になる祖先への巻き戻しでも、作られたブランチでも書かない。落ちた push は今どおり昇格の失敗で、retry が読み直す
-/** 収束が head を読んだ後・push の前(push の準備の中)に `move` を撃つ。 */
-function moveBeforePush(github: FakeGitHubClient, move: () => void) {
+/** 収束が head を読んだ後・push の前(次の push の準備の中)に、その準備の入力で `effect` を撃つ。 */
+function beforeNextPush(github: FakeGitHubClient, effect: (input: PreparePushInput) => void) {
   const prepare = github.preparePush.bind(github);
   vi.spyOn(github, "preparePush").mockImplementationOnce(async (input) => {
-    move();
+    effect(input);
     return prepare(input);
   });
 }
@@ -752,7 +753,7 @@ function moveBeforePush(github: FakeGitHubClient, move: () => void) {
 it("収束が出元 repo のタスクブランチを読んだ後・push の前に祖先へ戻されれば、push は落ちて昇格の失敗になり、出元 repo は戻されたままで、続く retry は text D2 で拒まれる", async () => {
   const c = await pushedRoot("lease-rewound-after-read", { commits: 2 });
   const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
-  moveBeforePush(c.github, () => git(c.workspace.head_repo!, "update-ref", `refs/heads/${c.target}`, head));
+  beforeNextPush(c.github, () => git(c.workspace.head_repo!, "update-ref", `refs/heads/${c.target}`, head));
 
   await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
 
@@ -776,7 +777,7 @@ it("収束が出元 repo のタスクブランチを「無い」と読んだ後�
   git(workspace.path, "checkout", "main");
   finish(db, clock, work);
   const created = git(workspace.path, "rev-parse", "main");
-  moveBeforePush(github, () => git(workspace.head_repo!, "update-ref", `refs/heads/${target}`, created));
+  beforeNextPush(github, () => git(workspace.head_repo!, "update-ref", `refs/heads/${target}`, created));
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
 
@@ -784,21 +785,20 @@ it("収束が出元 repo のタスクブランチを「無い」と読んだ後�
   expect(github.requests).toEqual([]);
 });
 
-it("PR がある根の収束の push は、出元 repo のブランチでなく PR の読みの head を期待値に載せる", async () => {
+it("PR がある根の収束の push は、push する sha でも出元 repo のブランチでもなく、PR の読みの head を期待値に載せる", async () => {
   const c = await pushedRoot("lease-on-pr-head", { pr: "recorded" });
+  // GitHub の PR の読みが出元 repo のブランチ(最後に push した値)と食い違い、1つ目の修理の commit を head と報告する。push する sha は2つ目の修理
+  const prHead = git(c.workspace.path, "rev-parse", c.target);
+  c.github.scriptHead(1, prHead);
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, getTask(c.db, c.work.id)!, "repair-2.txt", "more\n");
   const tip = git(c.workspace.path, "rev-parse", c.target);
-  // GitHub の PR の読みが出元 repo のブランチと食い違う(修理の commit を head と報告する)
-  c.github.scriptHead(1, tip);
+  expect(new Set([prHead, tip, c.pushed]).size).toBe(3);
   const expectations: string[] = [];
-  const prepare = c.github.preparePush.bind(c.github);
-  vi.spyOn(c.github, "preparePush").mockImplementation(async (input) => {
-    expectations.push(input.expected);
-    return prepare(input);
-  });
+  beforeNextPush(c.github, (input) => expectations.push(input.expected));
 
   await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
 
-  expect(expectations).toEqual([tip]);
+  expect(expectations).toEqual([prHead]);
   expect(forkHead(c.workspace, c.work.id)).toBe(c.pushed);
 });
 

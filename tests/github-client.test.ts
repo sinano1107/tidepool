@@ -690,6 +690,25 @@ it("preparePush の push は成功したときだけ、写し refs/remotes/head-
   expect({ rejectedCopy, copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({ rejectedCopy: "", copy: sha });
 });
 
+// ADR 0376 Status 追記(#3605): preparePush の push は判断した head を lease に載せる —— 出元 repo のブランチがそこから動いていれば、
+// fast-forward になる push でも撃ち落とされ、出元 repo も写しも動かない
+it.each([
+  ["absent", () => ""],
+  ["stale", (sha: string) => sha],
+] as const)("preparePush の push は、出元 repo のブランチが期待値(%s)と違えば fast-forward でも拒まれ、出元 repo も写しも動かない", async (_, expectedFor) => {
+  repoPath = await tempDir("tidepool-repo-");
+  remotePath = await tempDir("tidepool-remote-");
+  repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
+  const base = git(repoPath, "rev-parse", "main");
+  git(repoPath, "push", remotePath, "main:refs/heads/task/abc");
+  const tip = git(repoPath, "rev-parse", "task/abc");
+  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: expectedFor(tip) });
+
+  expect(() => push(tip)).toThrow(/`git push` failed/);
+
+  expect({ remote: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "for-each-ref", "refs/remotes/head-repo/task/abc") }).toEqual({ remote: base, copy: "" });
+});
+
 // ADR 0378 決定1: gh には宣言から解いた GitHub repo が要る。
 it("宣言が GitHub の repo に解けなければ、gh を起こさずに workspace を名指して止まる", async () => {
   const dir = await tempDir("tidepool-fakebin-");

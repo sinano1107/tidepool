@@ -265,10 +265,10 @@ done
 assert_not_contains "re-run: does not wait for the App installation" "installations/new" "$output"
 assert_not_contains "re-run: does not wait for the organization" "organizations/new" "$output"
 assert_not_contains "re-run: does not ask anything" "Press Enter" "$output"
-assert_contains "re-run: reports the head repo as declared" "every task branch is on it" "$output"
+assert_contains "re-run: reports the head repo as declared" "every task branch has been sent to it" "$output"
 
-# A task branch that moved on after the board sent it still has a copy: the board does not send it again (#3605), so
-# the re-run does not declare again.
+# A task branch that moved on after the board sent it still has a copy: the board does not send it again (ADR 0395
+# Status 追記, #3605), so the re-run does not declare again.
 reset_case
 EXISTING_FORK="reef/widget"
 DECLARED="reef/widget"
@@ -277,7 +277,7 @@ make_checkout advanced
 run_setup
 assert_eq "re-run, advanced branch: exits 0" "0" "$rc"
 assert_not_contains "re-run, advanced branch: does not declare again" "curl PATCH" "$log"
-assert_contains "re-run, advanced branch: reports the head repo as declared" "every task branch is on it" "$output"
+assert_contains "re-run, advanced branch: reports the head repo as declared" "every task branch has been sent to it" "$output"
 
 # --- resume after an interruption -------------------------------------------
 
@@ -292,7 +292,7 @@ assert_contains "resume after fork: disables Actions" "gh api -X PUT repos/reef/
 assert_contains "resume after fork: declares" '{"head_repo":"reef/widget","confirm":true}' "$log"
 
 # Stopped at a 502: the declaration is saved, but a task branch was not sent — the copy is missing, so the
-# re-run declares the same value again (the board sends only the task branches without a copy).
+# re-run declares the same value again (the board sends only the task branches without a copy, ADR 0395 Status 追記).
 reset_case
 EXISTING_FORK="reef/widget"
 DECLARED="reef/widget"

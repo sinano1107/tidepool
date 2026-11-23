@@ -523,7 +523,7 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", { tim
       [`${sha}:refs/heads/task/bbb`, "token-for-acme/fork"],
     ]);
 
-    // task/bbb は写しがあるので送らない —— 送るのは写しの無い task/aaa だけ
+    // ADR 0395 Status 追記: task/bbb は写しがあるので送らない —— 送るのは写しの無い task/aaa だけ
     git(fork, "update-ref", "-d", "refs/heads/task/aaa");
     await set();
 
@@ -553,6 +553,17 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", { tim
     expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sent}`);
   });
 
+  // ADR 0395 Status 追記(#3605): 送った後に出元 repo で消されたタスクブランチは人間が消したもの —— 扉は作り直さない
+  it("送れたタスクブランチを出元 repo で消してから同じ値で宣言し直しても、扉はそれを作り直さない", async () => {
+    const { fork, set, forkBranches, diverged } = await headRepoBoard();
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    git(fork, "update-ref", "-d", "refs/heads/task/bbb");
+
+    await expect(set()).rejects.toThrow(/these task branches were not sent to it: task\/aaa \(.+\)\. Set/s);
+
+    expect(forkBranches()).toBe(`task/aaa ${diverged}`);
+  });
+
   // ADR 0243: 写しは口を通る —— 基準の行は送れたタスクブランチの写しだけを持ち、次の比較は Quarantine を立てない
   it("基準があっても、送れたタスクブランチの写しだけが基準に入り、次の比較は違反にならない", async () => {
     const { deps, workspace, sha, set } = await headRepoBoard();
@@ -577,13 +588,15 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", { tim
     expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sha}\nrefs/remotes/origin/main ${sha}`);
 
     git(workspace.path, "symbolic-ref", "refs/remotes/head-repo/HEAD", "refs/remotes/origin/main");
-    git(workspace.path, "update-ref", "-d", "refs/remotes/head-repo/task/bbb");
     const replacement = await tempDir("tidepool-replacement-fork-");
     git(replacement, "init", "--bare", "-b", "main");
     git(replacement, "fetch", fork, "refs/heads/task/aaa:refs/heads/task/bbb");
     await shimGit({ route: ["https://github.com/another/fork.git", replacement] });
     deps.github.scriptRepositoryParent("another/fork", "acme/lagoon");
-    await expect(updateWorkspace({ name: "lagoon", head_repo: "another/fork", confirm: true }, deps)).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    // 差し替えが前の出元 repo の写しを捨てるので、扉は task/bbb も新しい出元 repo へ送る(そこでは分岐していて拒まれる)
+    await expect(updateWorkspace({ name: "lagoon", head_repo: "another/fork", confirm: true }, deps)).rejects.toThrow(
+      /these task branches were not sent to it: task\/bbb \(.+\)\. Set/s,
+    );
 
     expect(entry().head_repo).toBe("another/fork");
     expect(copies()).toBe(`refs/remotes/head-repo/task/aaa ${sha}\nrefs/remotes/origin/main ${sha}`);
