@@ -1,6 +1,6 @@
 # Quarantine の受理は全 ref が基準と同じであることだけを確かめる —— 動いた ref は盤面が「基準へ戻す」で戻し、失われた ref だけが名指しの選択肢で基準に入る
 
-**Status 追記: 決定5 の「戻す先の object が無い」は、「無い」と積極的に分かったことを指す。手元では、git が object を引けず、ほかに何も報告しないとき。remote-backed では、それに加えて取りに行った先も無いと答えたとき。在るか無いか分からなければ、どちらの選択肢も何も書かずに拒む。壊れた loose へ戻す決定3 の書き戻しも、拒む側に変わる([ADR 0409](0409-a-ref-counts-as-lost-only-when-its-object-is-known-absent-and-an-answer-that-cannot-tell-is-refused.md) 決定1・2・4、2026-11-24、issue #3607)。**
+**Status 追記: 決定5 の「戻す先の object が無い」は、「無い」と積極的に分かったことを指す。手元では、git が object を引けず、ほかに何も報告しないとき。remote-backed では、それに加えて取りに行った先も無いと答えたとき。在るか無いか分からなければ、どちらの選択肢も何も書かずに拒む。header の読めない loose へ戻す決定3 の書き戻しも、拒む側に変わる([ADR 0409](0409-a-ref-counts-as-lost-only-when-its-object-is-known-absent-and-an-answer-that-cannot-tell-is-refused.md) 決定1・2・4、2026-11-24、issue #3607)。**
 
 **Status 追記: 決定2 の「選択肢は常設で、場面ごとに出し分けない」は、面接室の名前の選択肢「項が落ちた RCA を cancel する」には当たらない —— この選択肢は question に保存せず、面接室を開く未決着の RCA が居るときだけ表示のたびに記録から導いて添える。決定2 の理由(本文と選択肢は最初の登録で固定される)は、保存しない選択肢には効かない([ADR 0385](0385-a-room-quarantine-names-each-openers-reachable-exit-and-cancels-an-rca-that-cannot-read-its-head-through-an-answer-derived-at-display.md) 決定5、2026-11-20、issue #3159)。**
 
