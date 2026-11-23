@@ -73,6 +73,8 @@ describe("carriesCredential(ADR 0406: 宣言の repo は資格情報を持たな
     "https://github.com/a/b#ghp_secret",
     "ssh://git:ghp_secret@host/a/b",
     "git:ghp_secret@host:a/b",
+    "git:x@ghp_secret@host:a/b",
+    "https://user:ghp_secret@github.com:abc/a/b",
     "x-access-token:ghp_secret@github.com/a/b.git",
     "git@github.com:a/b?token=ghp_secret",
   ])("%s は資格情報を持ち、拒否の文に出す表示は判定が拒まない値になる", (repo) => {
@@ -81,6 +83,12 @@ describe("carriesCredential(ADR 0406: 宣言の repo は資格情報を持たな
       expect(label).not.toContain("ghp_secret");
       expect(carriesCredential(label)).toBe(false);
     }
+  });
+
+  // new URL が読めない値の表示は、どの扉の文に出ても名指しを誤らない中立の文言
+  it("読めない URL の表示は中立の文言になる", () => {
+    expect(repositoryLabel("https://user:ghp_secret@github.com:abc/a/b")).toBe("an unparseable repository URL");
+    expect(repositoryLabel("https://user:ghp_secret@github.com:abc/a/b", { preserveSshUser: true })).toBe("an unparseable repository URL");
   });
 
   it.each(["ssh://git@github.com/a/b.git", "git@github.com:a/b.git", "https://github.com/a/b.git", "/abs/path", "file:///abs", "host:team/repo@x.git"])(

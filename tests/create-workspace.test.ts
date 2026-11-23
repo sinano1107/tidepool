@@ -278,8 +278,6 @@ describe("createWorkspace: register モード(issue #57)", () => {
     });
   });
 
-  // 逆向き。remote を持たない checkout に `repo` を書けば、その宣言と実態のずれが
-  // pickup で quarantine に落ちる —— 登録がその状態を自分で作ってはならない。
   // ADR 0406 決定2: origin の観測が資格情報を持てば宣言にしない —— 直すのは checkout の origin
   it("資格情報を持つ origin の checkout の登録は、origin の直し方を言って拒否され、文に秘密を出さず、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
@@ -291,11 +289,15 @@ describe("createWorkspace: register モード(issue #57)", () => {
     const err = (await createWorkspace({ mode: "register", name: "sandbox", path: checkout }, deps).catch((e: unknown) => e)) as Error;
 
     expect(err).toBeInstanceOf(RepoCredentialError);
-    expect(err.message).toContain(`In ${checkout}, run \`git remote set-url origin <URL without credentials>\``);
+    expect(err.message).toContain(
+      `In ${checkout}, run \`git remote set-url origin https://git.example.com/acme/sandbox.git\`, or remove the \`url.*.insteadOf\` rule in its git config that adds the credential`,
+    );
     expect(err.message).not.toContain("ghp_secret");
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
+  // 逆向き。remote を持たない checkout に `repo` を書けば、その宣言と実態のずれが
+  // pickup で quarantine に落ちる —— 登録がその状態を自分で作ってはならない。
   it("origin を持たない既存 checkout の登録では repo を書かない", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);

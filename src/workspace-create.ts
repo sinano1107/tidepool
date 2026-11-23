@@ -735,10 +735,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Works
   if (!deps.githubAuth) throw new GitHubIdentityMissingError();
   const existing = originUrl(path);
   if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing, path);
+  // ADR 0406 決定2: 宛先の判定は最初の副作用(到達性の probe・remote add)の手前 —— 後で落ちると `.git/config` に token が残る
+  assertNoCredential(input.repo);
   // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが App を
   // install し忘れた」を、push が落ちる**前に**名指しする。位置は `remote add` の手前で
   // なければならない —— 拒んだとき、巻き戻す痕跡がそもそも作られない側に立つ。
-  assertNoCredential(input.repo);
   await assertRepoAccess(input.repo, deps.github);
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
   // `authedPush` は温まったキャッシュから同期に注入するだけなので、下の「await は
@@ -1096,7 +1097,8 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
   const repo = originUrl(path);
   if (repo !== undefined && carriesCredential(repo)) {
     throw new RepoCredentialError(
-      `the 'origin' of ${path} (${repositoryLabel(repo)}) carries a credential in its URL. In ${path}, run \`git remote set-url origin <URL without credentials>\`, then register it again.`,
+      // `git remote get-url` は insteadOf を当てた値を返すので、設定の origin は既に clean で、資格情報は insteadOf の規則が足しているかもしれない
+      `the 'origin' of ${path} (${repositoryLabel(repo)}) carries a credential in its URL. In ${path}, run \`git remote set-url origin ${repositoryLabel(repo, { preserveSshUser: true })}\`, or remove the \`url.*.insteadOf\` rule in its git config that adds the credential, then register it again.`,
     );
   }
   return repo === undefined ? { path } : { path, repo };
