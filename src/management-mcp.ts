@@ -44,7 +44,7 @@ import {
   submitAnswer,
   takeInWorkThroughHumanDoor,
 } from "./human-verbs.js";
-import { closedRootOf, type Landing } from "./landing.js";
+import { blockingRootOf, type Landing } from "./landing.js";
 import {
   JUDGED_AFTER_THE_EDIT,
   MEMORY_BRANCHES_DESCRIPTION,
@@ -360,9 +360,9 @@ const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status, assignee and 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const tierDescriptions = tierFieldDescriptions(deps.db);
   // 閉じた根に塞がれた子(ADR 0265 決定6)—— scheduler と同じ1本
-  const closedRoot = closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
+  const blockingRoot = blockingRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
   /** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定5)。閉じた根の述語は cancel の門と同じ1本。 */
-  const discardsOf = (taskId: string) => directCancelDiscards(deps.db, getTask(deps.db, taskId)!, closedRoot);
+  const discardsOf = (taskId: string) => directCancelDiscards(deps.db, getTask(deps.db, taskId)!, blockingRoot);
   const server = wrapEveryVerb(
     new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
     { db: deps.db, clock: deps.clock, surface: "management" },
@@ -420,7 +420,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           deps.auditorName,
           quarantineStops(deps.db),
           skippedByEntries(deps),
-          closedRoot,
+          blockingRoot,
           deps.interviewerName,
           failures.lastIssueExpansionFailure !== undefined,
         );
@@ -1064,7 +1064,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. A running task refuses with its id; after the human explicitly approves stopping it, call again with that id as stop_approval. ${TASK_ACK_DESCRIPTION} The ack also carries \`discarded\`: the done work (\`id\`, \`title\`) whose artifact on its task branch this cancel discarded — relay it to the human.`,
+      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board or whose landing a human ended. A running task refuses with its id; after the human explicitly approves stopping it, call again with that id as stop_approval. ${TASK_ACK_DESCRIPTION} The ack also carries \`discarded\`: the done work (\`id\`, \`title\`) whose artifact on its task branch this cancel discarded — relay it to the human.`,
       inputSchema: { task_id: z.string(), reason: requiredTextSchema.optional(), stop_approval: requiredTextSchema.optional() },
     },
     async ({ task_id, reason, stop_approval }) => {

@@ -1,5 +1,7 @@
 # 回答は書き込みの時点で question が開いているときだけ書く —— 盤面が merge 中の merge question はどの回答も拒む
 
+**Status 追記: 決定2 の「merge question を閉じうる経路は、観測のほかは `hold` 回答だけ」に3つ目が足される —— 昇格失敗の question への「end landing」回答が、同じ根の開いた merge question を PR の観測を刻まずに引退させる。印の付いた根ではこの回答を拒むので、印の後に merge question を閉じる経路は増えない([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定6、2026-11-23、issue #3604)。**
+
 **Status 追記: 決定2「印の前」の同期の区間で読み直すのは question の status だけでなく着地の門(`landingBlock`、ADR 0092 決定5)も —— gh が非同期になって窓が毎回開き(ADR 0330 決定1)、await 中に出た異議を越えて merge した(#2734)**
 
 **Status 追記: 決定2 の「印の前の読み直しが要るのは merge question だけ」は撤回 —— 執行が書き込みより先に commit する回答は書き込み直前の同期区間で条件を読み直し、印もそこまで持つ。落ちた後始末の受理が2例目([ADR 0343](0343-an-answer-whose-execution-commits-before-the-write-rereads-its-condition-in-the-synchronous-span-before-the-write-and-a-failed-teardown-acceptance-certifies-the-rerun-of-the-thrown-steps.md) 決定1、2026-11-01、issue #2891)。**

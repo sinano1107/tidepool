@@ -46,7 +46,7 @@ import {
   takeInWorkThroughHumanDoor,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { closedRootOf, type Landing, landingState, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "./landing.js";
+import { blockingRootOf, type Landing, landingState, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -765,7 +765,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
    *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
   const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates, workspace?.name);
   // 閉じた根に塞がれた子(ADR 0265 決定6): Pickable head とキューの skipped が scheduler と同じ1本を通る
-  const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
+  const blockingRoot = blockingRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
   // issue 展開の一時的失敗が続く間(ADR 0328 決定7): GitHub を読む task を Pickable head とキューの skipped から外す —— poll の除外は
   // poll 内の memory なので近似(次の poll は1度は試す)だが、scheduler と同じ引数を通る
   const gitHubUnreadable = () => deps.queueFailuresJson().lastIssueExpansionFailure !== undefined;
@@ -1376,7 +1376,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         auditorName,
         quarantineStops(db),
         skipped,
-        closedRoot,
+        blockingRoot,
         interviewerName,
         gitHubUnreadable(),
       );
@@ -2270,7 +2270,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           auditorName,
           quarantineStops(db),
           entriesAllExcluded(),
-          closedRoot,
+          blockingRoot,
           interviewerName,
           gitHubUnreadable(),
         ),
@@ -2295,7 +2295,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       human_stops: taskHistoryRows(db, task.id).flatMap(({ id, entry }) => "stopped_by_human" in entry ? [{ id, ...entry.stopped_by_human }] : []),
       ...(task.type === "question"
         ? questionAnnotations(db, task)
-        : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, closedRoot) }),
+        : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, blockingRoot) }),
       // 見えないことだけが穴(ADR 0082 の線): Interview の root の面接室のホスト上の在り処と、受験者が分岐する出題の head(ADR 0273 決定1・3)
       ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
       // 受験者の答案の在り処 —— 自分の checkout(ADR 0276 決定4)

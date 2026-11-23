@@ -1239,7 +1239,7 @@ export async function squashTaskIntoOrigin(
 /** done の根(内容はタスクブランチにだけある)の下に、異議由来の修理と RCA review(盤面名義の付帯子)が未決着で残る木。
  *  `closed` なら根の PR #1 が盤面の外で閉じられたと観測されている(ADR 0265 決定6)。`decomposed` なら根は分解子を1つ持ち
  *  (内容は根のブランチへ merge 済み)、異議はその分解子に出る。 */
-export async function closedRootTree(
+export async function blockingRootTree(
   name: string,
   { decomposed = false, closed = true } = {},
 ): Promise<{ workspace: WorkspaceConfig; db: Db; root: Task; repairs: Task[] }> {

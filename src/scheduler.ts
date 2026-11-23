@@ -26,7 +26,7 @@ import {
 import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
-import { closedRootOf } from "./landing.js";
+import { blockingRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
@@ -973,10 +973,10 @@ export function startScheduler(deps: {
       let entryExcluded = pickupExclusions(db, false);
       const pairFiltered = withoutStopped(db, taskExecutionCandidates, workspace?.name);
       // 閉じた根に塞がれた子は、走っても閉じた根のブランチへ帰るだけなので飛ばす(ADR 0265 決定6)
-      const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
+      const blockingRoot = blockingRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の3つだけである。 */
       const nextHead = () =>
-        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot, interviewerName, gitHubUnreadable);
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, blockingRoot, interviewerName, gitHubUnreadable);
       let head = nextHead();
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       // Registry reachability は盤面全体の資源なので poll で1回だけ検査する(ADR 0328 決定5)

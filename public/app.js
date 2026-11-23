@@ -4092,7 +4092,8 @@ const LANDING_STATE_COPY = {
   close_observed: "landing \xB7 PR closed",
   withdrawn: "landing \xB7 withdrawn from auto-merge",
   landed: "landing \xB7 landed",
-  branch_lost: "landing \xB7 ended \u2014 the task branch was lost"
+  branch_lost: "landing \xB7 ended \u2014 the task branch was lost",
+  pr_left: "landing \xB7 ended by a human \u2014 the PR was left as it is"
 };
 class ApiError extends Error {
   status;

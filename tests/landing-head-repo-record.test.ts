@@ -4,17 +4,17 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { DomainError } from "../src/domain-error.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { createLanding, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, createLanding, landingState, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import type { MergeDial } from "../src/registry.js";
 import { loadRegistry } from "../src/registry.js";
-import { countUnsettledTasksReferencing, getTask, listBoard, recordPrOpened } from "../src/tasks.js";
+import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, recordPrOpened } from "../src/tasks.js";
 import { buildWorkspaceResolver, resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, publishWorkspace, updateWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace, makeWorkspace, shimGit } from "./harness.js";
-import { boardEvents, commitThroughTaskCheckout, convergeOn, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -233,6 +233,51 @@ it("PR の作成に落ちても出元 repo へ push した根は記録を持ち�
   expect((refusal as Error).message).toContain("pushed to head repo acme/fork");
   expect((refusal as Error).message).toContain("now declares head repo third/fork");
   expect(github.requests).toHaveLength(1);
+});
+
+// ADR 0399 決定5・6: 出元 repo の食い違いで止まった PR のある根にも「この根の着地を終える」を出す(#3604 のコメント)
+it("出元 repo の食い違いで止まった PR のある根は「end landing」で着地を終え、下の子は閉じた根の子と同じく塞がれる(ADR 0265 決定6)", async () => {
+  const { db, clock, github, landing, resolve, root } = await prOnReplacedFork("escalate");
+  const child = attachUnsettledChild(db, clock, root.id);
+  await landing.tick("outside_merge", clock.now());
+  const [failure] = promotionFailures(db, root.id);
+  expect(failure?.question_items?.[0]?.options).toEqual(["retry", "end landing"]);
+  expect(blockingRootOf(db, resolve)(child)).toBeNull();
+
+  await submitAnswer({ db, pollNow: () => {}, landing, resolveWorkspace: resolve, github }, getTask(db, failure!.id)!, ["end landing"], undefined, () => clock.now(), "webui");
+
+  expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
+  expect(blockingRootOf(db, resolve)(child)).toEqual({ task_id: root.id, pr_number: 1 });
+  expect(nextSlotTask(db, "lagoon", undefined, undefined, undefined, undefined, blockingRootOf(db, resolve))).toBeUndefined();
+});
+
+it("収束が出元 repo の食い違いで止めた PR の根の question も、断念を出さず retry と「end landing」だけを出す(ADR 0399 決定5)", async () => {
+  const { db, clock, landing, resolve, root, setHeadRepo } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ prNumber: 1 });
+  await commitThroughTaskCheckout(db, clock, resolve(), root, "repair.txt", "repair\n");
+  await setHeadRepo("another/fork");
+
+  await landing.converge();
+
+  expectStoppedNamingBoth(db, root.id);
+  expect(promotionFailures(db, root.id)[0]?.question_items?.[0]?.options).toEqual(["retry", "end landing"]);
+});
+
+it("PR の無い根の昇格失敗の question は今どおり retry と断念だけを出し、「end landing」を受けない(ADR 0399 決定5)", async () => {
+  const { db, clock, github, landing, resolve, root, setHeadRepo } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  github.scriptFailure(new Error("PR creation unavailable"));
+  await landing.converge();
+  const [failure] = promotionFailures(db, root.id);
+  expect(failure?.question_items?.[0]?.options).toEqual(["retry", "abandon promotion"]);
+
+  await expect(
+    submitAnswer({ db, pollNow: () => {}, landing, resolveWorkspace: resolve, github }, getTask(db, failure!.id)!, ["end landing"], undefined, () => clock.now(), "webui"),
+  ).rejects.toThrow(DomainError);
+
+  expect(boardEvents(db, root.id, "landing_ended_pr_left")).toEqual([]);
+  expect(getTask(db, failure!.id)?.status).toBe("todo");
 });
 
 async function lagoonWithPurelyLocalDoneRoot() {
