@@ -3449,20 +3449,19 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた sha だけ —— symref の行(HEAD を含む)は名前なので
  *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
- *  `giveUpQuestion`(give-up に答えている workspace の Quarantine、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
+ *  `giveUpAnswer`(give-up に答えている workspace の Quarantine の `question`、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
  *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒し、
  *  失われた task を指す開いた着地の question とキューの行を引退させる(ADR 0375 決定1・4・9、ADR 0407 決定2 —— 着地の終わりは失われた event から読み、
- *  記録は書かない)。give-up で失われた ref が無ければ、
+ *  記録は書かない)。その transaction の直前の同じ同期区間で `refuseIfMarked` を失われる task に当て、処理中の印があれば何も書かずに拒む
+ *  (ADR 0407 決定2、ADR 0288 決定2 と同じ形)。give-up で失われた ref が無ければ、
  *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(
   db: Db,
   workspace: WorkspaceConfig,
   now: Date,
-  giveUpQuestion?: string,
-  /** ADR 0407 決定2: 失われる task のどれかに盤面が執行の印を持てば投げる —— 失われた event を書く transaction と同じ同期区間で読む(ADR 0288 決定2)。 */
-  refuseIfMarked?: (lostTaskIds: string[]) => void,
+  giveUpAnswer?: { question: string; refuseIfMarked: (lostTaskIds: string[]) => void },
 ): KeptValue[] {
-  const giveUp = giveUpQuestion !== undefined;
+  const giveUp = giveUpAnswer !== undefined;
   const { current, targets } = restoreTargets(db, workspace);
   const lost = lostTargets(workspace, targets);
   const lostTask = (ref: string) => (ref.startsWith("refs/heads/task/") ? getTask(db, taskIdOfBranch(ref.slice("refs/heads/".length))) : undefined);
@@ -3494,7 +3493,7 @@ export function restoreBaseline(
   }
   if (targets.size > 0) verifyWorkspaceClean(workspace);
   if (giveUp) {
-    refuseIfMarked?.(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
+    giveUpAnswer.refuseIfMarked(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
     db.transaction(() => {
       updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, lostTask(ref) ? "" : (current.get(ref) ?? ""))));
       appendEvent(db, {
@@ -3512,9 +3511,9 @@ export function restoreBaseline(
         return [task.id];
       });
       // ADR 0407 決定2: ブランチの無い task の着地の question には答えようが無い —— 根かどうかによらず閉じ、閉じた理由を question 自身に刻む
-      for (const id of lostTasks) retireLandingDecisions(db, id, { kind: "task_branch_lost_observed" }, now);
+      for (const id of lostTasks) retireLandingDecisions(db, id, now, { stampBranchLost: true });
       // 透明か死んだかは同じ回答の兄弟の event も読むので、倒すのは全部を刻んだ後(ADR 0375 決定4・9)
-      fellLostBranchAttachments(db, lostTasks, giveUpQuestion, now);
+      fellLostBranchAttachments(db, lostTasks, giveUpAnswer.question, now);
     })();
   }
   if (targets.size === 0) return [];

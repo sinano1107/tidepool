@@ -30,6 +30,7 @@ import {
   getTask,
   hasTaskBranchSql,
   isHumanAssigned,
+  landingEnded,
   landingEndedSql,
   landingSurface,
   localLandingOpenOrExecutedSql,
@@ -444,6 +445,15 @@ function lacksContentOf({ lastPushed, droppedBranches, unpushedBranches }: Outsi
 /** 盤面がその PR に in-flight 印を持つ(merge しているか、push して記録するまでの)間の回答の拒否文(ADR 0236 決定3 / ADR 0387 決定4)。 */
 export const prInFlightRefusal = (prNumber: number) => `PR #${prNumber} is being merged or pushed to by the board right now — answer again in a moment`;
 
+/** 処理中の印を持つ task への回答の拒否文(ADR 0236 決定3・ADR 0399 決定6・ADR 0407 決定2)、印が無ければ undefined。PR をまだ記録して
+ *  いない根(収束が作っている途中)は task を名指す。 */
+export function inFlightRefusalOf(db: Db, landing: Pick<Landing, "isMarked"> | undefined, taskIds: string[]): string | undefined {
+  const marked = taskIds.find((id) => landing?.isMarked(id));
+  if (marked === undefined) return undefined;
+  const prNumber = getTask(db, marked)!.pr_number;
+  return prNumber === null ? `the board is opening the PR of task ${marked} right now — answer again in a moment` : prInFlightRefusal(prNumber);
+}
+
 const headBranchLabel = (head: PrHeadRef) => `${head.branch} on head repo ${repositoryLabel(head.repo)}`;
 const headLocation = (head: PrHeadRef | undefined) => head === undefined ? "" : ` (${headBranchLabel(head)})`;
 
@@ -547,13 +557,11 @@ export function landingAnnotation(
 export type RootVerdict = { taskId: string; verdict: LandingVerdict; notice?: string; takenIn?: true; reraised?: true };
 
 /** 盤面がまだ着地を運ぶ根(GLOSSARY.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
- *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。`workspace` は
- *  lineage を読めた根の解決した workspace。 */
+ *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。 */
 interface LandingRoot {
   task: Task;
   outlivedForkSource: boolean;
   lineageError?: unknown;
-  workspace?: WorkspaceConfig;
 }
 
 /** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
@@ -656,7 +664,7 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "questi
  *  終わった(`landing_finished`)→ ブランチを失って死んだ(効いている失われた event、ADR 0407 帰結)→ 人間が着地を終えた(`landing_ended_pr_left`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
  *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
  *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
-export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "parent_id"> & { status: string }): LandingState | null {
+export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "parent_id" | "interview_target_id"> & { status: string }): LandingState | null {
   if (task.type !== "work" || task.status !== "done") return null;
   const outcome = rootPrOutcome(db, task.id);
   if (outcome) return outcome.state === "CLOSED" ? "close_observed" : outcome.observed ? "merge_observed" : "merged";
@@ -709,7 +717,8 @@ function landingRootOf(
   readBase = declaredProtectedBranchRef,
   compareBeforeLineage?: (workspace: WorkspaceConfig) => void,
 ): LandingRoot | undefined {
-  if (rootPrOutcome(db, id)?.state === "CLOSED" || openPrRootAbove(db, id)) return undefined;
+  // ADR 0407 決定1: 候補は回の始めに読んだ一覧なので、回の途中で着地が終わった根(失われた ref の give-up を含む)を撃つ直前に読み直す
+  if (landingEnded(db, id) || rootPrOutcome(db, id)?.state === "CLOSED" || openPrRootAbove(db, id)) return undefined;
   const task = getTask(db, id)!;
   let workspace: WorkspaceConfig | undefined;
   try {
@@ -721,7 +730,7 @@ function landingRootOf(
     const resolved = workspace;
     const lineage = resolveTaskBranchLineage(db, resolved, task, readBase(resolved), compareBeforeLineage && (() => compareBeforeLineage(resolved)));
     // ADR 0380 決定3: 帰り先なしは「自分が根」と別の答え —— 着地の根に数えない
-    return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource, workspace: resolved };
+    return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
   } catch (lineageError) {
     if (lineageError instanceof RootStopped) throw lineageError;
     return { task, outlivedForkSource: false, lineageError };
@@ -1910,88 +1919,97 @@ export function createLanding(deps: LandingDeps): Landing {
         clearRefusedOnce(workspace, workbenchBase, task.id);
         return afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
       }
-      // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
-      const found = await deps.github.findPullRequestByHead({ workspace, branch: taskBranch(task.id) });
-      if (found && found.state !== "OPEN") {
-        // 名義を見ない —— 盤面は記録した PR 番号にしか merge を撃たないので、番号の記録が無い PR は盤面の merge ではない
-        const observed = { kind: OBSERVED[found.state], pr_number: found.number };
-        // ADR 0399 決定1(Status 追記): 見つけた PR の出元 repo を記録する。読みは Quarantine を立てて投げうるので transaction の外で
-        const headRepo = landingHeadRepo(workspace);
-        deps.db.transaction(() => {
-          recordHeadRepo(deps.db, task.id, headRepo);
-          recordPrNumber(deps.db, task.id, found.number);
-          retire(task.id, observed, deps.clock.now());
-        })();
-        if (found.state === "MERGED") return await settleMerged(task, workspace, found.number, ctx);
-        return {
-          kind: "failed",
-          reason: "pull_request_closed",
-          error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
-        };
-      }
-      const stopped = await checkHeadBeforePush(found ?? undefined, found?.number);
-      if (stopped) return stopped;
-      catchUp();
-      // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
-      const resolved = readAuthority(task, deps.clock.now());
-      if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
-      const sha = taskBranchTip(workspace, task.id);
-      let prNumber: number;
-      if (found) {
-        // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
-        const refusal = await push(sha);
-        if (refusal) return refusal;
-        prNumber = found.number;
-      } else {
-        const { title } = await contentSourceFor(task, deps.github, () => workspace).expand();
-        // PR の作成は push 済みのブランチに作成の要求だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
-        const refusal = await push(sha);
-        if (refusal) return refusal;
-        landingHeadRepo(workspace);
-        const created = await deps.github.createPullRequest({
-          workspace,
-          branch: taskBranch(task.id),
-          base: protectedBranch(workspace),
-          title,
-          body: prBody(task.handoff_doc, task.github_issue_number),
-        });
-        prNumber = created.number;
-      }
-      const dial = authority?.merge;
-      const humanRoot = isHumanAssigned(task);
-      let protectedWorkspace = deps.isProtectedWorkspace?.(workspace.name);
-      const inspectPr = dial !== "external" && (dial !== undefined || protectedWorkspace || humanRoot);
-      // ADR 0395 決定4: Check the actual PR diff, including when an earlier PR creation was recovered.
-      // ADR 0402 決定3: 版の門の拒否は読めなかった PR ではない —— 根は待ち、次の回の探索が作った PR を見つける(ADR 0241 決定4)
-      const unreadable = (error: unknown) => {
-        if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof GhVersionError) throw error;
-        return undefined;
-      };
-      const openedPr = inspectPr ? await readPrState(github, workspace, prNumber).catch(unreadable) : undefined;
-      if (inspectPr) {
-        // ADR 0370 決定1 / ADR 0395 決定4: the new or recovered PR may already have a head absent from the checkout.
-        const fetching = openedPr?.base?.branch === protectedBranch(workspace) && COMMIT_OID.test(openedPr.base.sha) && COMMIT_OID.test(openedPr.head)
-          ? prepareFetchCommitIfMissing(deps.db, workspace, openedPr.head, deps.githubAuth, now) : undefined;
-        const fetch = fetching && (await fetching.catch(unreadable));
-        recheckAfterAwait();
-        try {
-          fetch?.();
-        } catch (error) {
-          unreadable(error);
+      // ADR 0407 決定2 / ADR 0236: 探索から PR の作成・見つけた PR への push、記録まで処理中の印を持つ —— その間に根を失わせる give-up は、
+      // キューの行と question の片づけがこの行為と競るので拒まれる。収束の回は盤面全体で1つなので、取れないのは PR の無い根に印を持つ
+      // 別の経路だけで、撃たずに次の突きへ回す
+      const release = takeInFlightMark(task.id);
+      if (!release) return undefined;
+      try {
+        // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
+        const found = await deps.github.findPullRequestByHead({ workspace, branch: taskBranch(task.id) });
+        if (found && found.state !== "OPEN") {
+          // 名義を見ない —— 盤面は記録した PR 番号にしか merge を撃たないので、番号の記録が無い PR は盤面の merge ではない
+          const observed = { kind: OBSERVED[found.state], pr_number: found.number };
+          // ADR 0399 決定1(Status 追記): 見つけた PR の出元 repo を記録する。読みは Quarantine を立てて投げうるので transaction の外で
+          const headRepo = landingHeadRepo(workspace);
+          deps.db.transaction(() => {
+            recordHeadRepo(deps.db, task.id, headRepo);
+            recordPrNumber(deps.db, task.id, found.number);
+            retire(task.id, observed, deps.clock.now());
+          })();
+          if (found.state === "MERGED") return await settleMerged(task, workspace, found.number, ctx);
+          return {
+            kind: "failed",
+            reason: "pull_request_closed",
+            error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
+          };
         }
-        protectedWorkspace = deps.isProtectedWorkspace?.(workspace.name);
+        const stopped = await checkHeadBeforePush(found ?? undefined, found?.number);
+        if (stopped) return stopped;
+        catchUp();
+        // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
+        const resolved = readAuthority(task, deps.clock.now());
+        if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
+        const sha = taskBranchTip(workspace, task.id);
+        let prNumber: number;
+        if (found) {
+          // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
+          const refusal = await push(sha);
+          if (refusal) return refusal;
+          prNumber = found.number;
+        } else {
+          const { title } = await contentSourceFor(task, deps.github, () => workspace).expand();
+          // PR の作成は push 済みのブランチに作成の要求だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
+          const refusal = await push(sha);
+          if (refusal) return refusal;
+          landingHeadRepo(workspace);
+          const created = await deps.github.createPullRequest({
+            workspace,
+            branch: taskBranch(task.id),
+            base: protectedBranch(workspace),
+            title,
+            body: prBody(task.handoff_doc, task.github_issue_number),
+          });
+          prNumber = created.number;
+        }
+        const dial = authority?.merge;
+        const humanRoot = isHumanAssigned(task);
+        let protectedWorkspace = deps.isProtectedWorkspace?.(workspace.name);
+        const inspectPr = dial !== "external" && (dial !== undefined || protectedWorkspace || humanRoot);
+        // ADR 0395 決定4: Check the actual PR diff, including when an earlier PR creation was recovered.
+        // ADR 0402 決定3: 版の門の拒否は読めなかった PR ではない —— 根は待ち、次の回の探索が作った PR を見つける(ADR 0241 決定4)
+        const unreadable = (error: unknown) => {
+          if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof GhVersionError) throw error;
+          return undefined;
+        };
+        const openedPr = inspectPr ? await readPrState(github, workspace, prNumber).catch(unreadable) : undefined;
+        if (inspectPr) {
+          // ADR 0370 決定1 / ADR 0395 決定4: the new or recovered PR may already have a head absent from the checkout.
+          const fetching = openedPr?.base?.branch === protectedBranch(workspace) && COMMIT_OID.test(openedPr.base.sha) && COMMIT_OID.test(openedPr.head)
+            ? prepareFetchCommitIfMissing(deps.db, workspace, openedPr.head, deps.githubAuth, now) : undefined;
+          const fetch = fetching && (await fetching.catch(unreadable));
+          recheckAfterAwait();
+          try {
+            fetch?.();
+          } catch (error) {
+            unreadable(error);
+          }
+          protectedWorkspace = deps.isProtectedWorkspace?.(workspace.name);
+        }
+        recordPrOpened(
+          deps.db,
+          task,
+          prNumber,
+          sha,
+          deps.clock.now(),
+          authority,
+          protectedWorkspace,
+          inspectPr ? mergePathReview(workspace, openedPr, dial) : undefined,
+        );
+        return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
+      } finally {
+        release();
       }
-      recordPrOpened(
-        deps.db,
-        task,
-        prNumber,
-        sha,
-        deps.clock.now(),
-        authority,
-        protectedWorkspace,
-        inspectPr ? mergePathReview(workspace, openedPr, dial) : undefined,
-      );
-      return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
       if (error instanceof RootStopped) throw error;
       // ADR 0402 決定3: 版の門が止めた根は昇格失敗の question を立てずに待ち、次の収束が撃ち直す。答えている回答は版の不一致を名指して拒まれる

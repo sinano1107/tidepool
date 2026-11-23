@@ -262,7 +262,8 @@ export type EventPayload =
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
   // ADR 0399 決定5・6: 人間が PR の根の昇格失敗の question に「end landing」と答えた —— 以後この根は収束の候補に入らず、PR は記録の repo に
-  // 残る(merge も close も刻まない)。question_ids は同じ回答が PR の観測を刻まずに閉じた根の着地の question(merge・他の昇格失敗)
+  // 残る(merge も close も刻まない)。question_ids は同じ回答が PR の観測を刻まずに閉じた根の着地の question(merge・他の昇格失敗・local 着地 ——
+  // 失われた ref の give-up と同じ片づけ `retireLandingDecisions` を通るので local 着地の question も閉じる)
   | { kind: "landing_ended_pr_left"; question_ids: string[] }
   // ADR 0241 決定1 / ADR 0265 決定3: PR の根に、保護ブランチへ運ぶ内容がもう無いと収束が確かめた —— 着地が終わった
   // 事実で、以後この根は収束の候補に入らない。`basis` は根拠: merge を記録した根は `merge`、記録の無い根(`external` の
