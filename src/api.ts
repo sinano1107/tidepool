@@ -117,7 +117,7 @@ import {
   DeletionBlockedError,
   DeletionConfirmationRequiredError,
 } from "./registry-write.js";
-import { RepoAccessMissingError } from "./repo-access.js";
+import { RepoAccessMissingError, RepoCredentialError } from "./repo-access.js";
 import { whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { listFloorRows } from "./response-budget.js";
@@ -912,6 +912,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof InvalidWorkspaceNameError ||
         err instanceof BoardStateOverlapError ||
         err instanceof RepoAccessMissingError ||
+        // ADR 0406: 資格情報を外した URL で出し直せば通る
+        err instanceof RepoCredentialError ||
         err instanceof NotAGitRepositoryError ||
         // ADR 0146: linked worktree・submodule・部分ディレクトリは workspace にならない
         err instanceof GitDirNotADirectoryError ||
@@ -1026,7 +1028,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof WorkspaceRepoMismatchError ||
         err instanceof CheckoutHasOriginError ||
         err instanceof ProtectedBranchMissingError ||
-        err instanceof RepoAccessMissingError
+        err instanceof RepoAccessMissingError ||
+        err instanceof RepoCredentialError
       ) {
         sendJson(res.status(400), { error: err.message });
       } else if (err instanceof GitHubIdentityMissingError) {

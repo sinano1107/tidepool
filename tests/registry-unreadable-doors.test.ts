@@ -13,7 +13,7 @@ import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { createWorkspace, listWorkspaceViews } from "../src/workspace-create.js";
 import { FakeClock, seedTierNames } from "./fakes.js";
-import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { HUMAN_WEBUI, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { breakRegistry, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -53,6 +53,23 @@ it.each([
   const deps = await doorDeps(await makeRegistry(files));
 
   await expect((async () => doors[door]!(deps))()).rejects.toThrow(RegistryUnreadableError);
+});
+
+// ADR 0406 決定4: 扉を通らずに入った資格情報入りの宣言の repo も、registry の読み込みの失敗として止まる
+it.each([
+  ["repo", "https://user:ghp_secret@git.example.com/a/b.git", "https://git.example.com/a/b.git"],
+  ["head_repo", "x-access-token:ghp_secret@github.com/a/b.git", "github.com/a/b.git"],
+])("registry の %s が資格情報を持つと、扉は registryUnreadable を1枚立て、文は欄と workspace を名指して秘密を出さない", async (field, value, label) => {
+  const deps = await doorDeps(await makeRegistry({ "workspaces.yaml": `lagoon:\n  path: /nonexistent/lagoon\n  ${field}: ${value}\n` }));
+
+  const err = (await (async () => doors["workspace list"]!(deps))().catch((e: unknown) => e)) as Error;
+
+  expect(err).toBeInstanceOf(RegistryUnreadableError);
+  expect(err.message).toContain(`workspace "lagoon" declares ${field}: ${label}, which carries a credential`);
+  expect(err.message).toContain("revoke");
+  expect(err.message).not.toContain("ghp_secret");
+  expect(openQuarantineValues(deps.db, "registryUnreadable")).toEqual([null]);
+  expect(quarantineQuestion(deps.db, "registryUnreadable", null)?.purpose).not.toContain("ghp_secret");
 });
 
 // #3682 の最初のコメント: meta-review の registry の照合(registry の提案が開いているときの agent 一覧)も、扉の一覧を通って1点に行き着く

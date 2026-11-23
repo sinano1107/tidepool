@@ -7,7 +7,7 @@ import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { RepoAccessMissingError } from "../src/repo-access.js";
+import { RepoAccessMissingError, RepoCredentialError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
 import { assertRememberedRepo, pickupGate, refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
 import {
@@ -635,6 +635,37 @@ describe("publishWorkspace: 3つの拒否(ADR 0066 決定5 / issue #285)", () =>
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+  });
+
+  // ADR 0406 決定2: 宛先の判定は最初の副作用(到達性の probe・remote add)の手前 —— 後で落ちると checkout の `.git/config` に token が残る
+  it("資格情報を持つ宛先は probe も remote add も撃たずに拒否され、文に秘密を出さず、痕跡を残さない", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    const github = new FakeGitHubClient();
+    github.scriptUnreachable("sinano1107/sandbox");
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    const err = (await publishWorkspace(
+      { name: "sandbox", repo: "https://x-access-token:ghp_secret@github.com/sinano1107/sandbox.git" },
+      { ...deps, github },
+    ).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(RepoCredentialError);
+    expect(err.message).toContain("https://github.com/sinano1107/sandbox.git carries a credential");
+    expect(err.message).not.toContain("ghp_secret");
+    expect(github.repoAccessCalls).toBe(0);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+  });
+
+  it("checkout の origin が資格情報を持っても、origin の在る拒否の文に秘密を出さない(ADR 0406 帰結)", async () => {
+    const { deps, checkout } = await makeBoard();
+    git(checkout, "remote", "add", "origin", "https://x-access-token:ghp_secret@github.com/sinano1107/out-of-band.git");
+
+    const err = (await publishWorkspace({ name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" }, deps).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(CheckoutHasOriginError);
+    expect(err.message).toContain("(https://github.com/sinano1107/out-of-band.git)");
+    expect(err.message).not.toContain("ghp_secret");
   });
 
   it("GitHub 身元を持たない盤面では拒否される(push できない)", async () => {

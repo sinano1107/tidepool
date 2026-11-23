@@ -111,7 +111,7 @@ import {
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import { RegistryUnreadableError } from "./registry-unreadable.js";
-import { RepoAccessMissingError } from "./repo-access.js";
+import { RepoAccessMissingError, RepoCredentialError } from "./repo-access.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
@@ -245,6 +245,7 @@ function registryToolError(err: unknown) {
     err instanceof InvalidWorkspaceNameError ||
     err instanceof BoardStateOverlapError ||
     err instanceof RepoAccessMissingError ||
+    err instanceof RepoCredentialError ||
     err instanceof NotAGitRepositoryError ||
     err instanceof RelativeClonePathError ||
     err instanceof BoardNamedProtectedBranchError ||

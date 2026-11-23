@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGitHubRepo, repairRepoAccess, sameRepository } from "../src/repo-access.js";
+import { carriesCredential, parseGitHubRepo, repairRepoAccess, repositoryLabel, sameRepository } from "../src/repo-access.js";
 import { FakeGitHubClient } from "./fakes.js";
 
 describe("parseGitHubRepo(ADR 0067 決定1: これは github.com か、の門)", () => {
@@ -61,4 +61,40 @@ describe("repairRepoAccess(ADR 0093 決定8: 修復は「App を install する�
     expect(guidance).toMatch(/cannot push/i);
     expect(guidance).toContain("HTTP 404: repo_unreachable");
   });
+});
+
+// ADR 0406 決定3: 宣言の repo の秘密は password・query・fragment と、ssh 以外の user 部分。ssh のログイン名は通す
+describe("carriesCredential(ADR 0406: 宣言の repo は資格情報を持たない)", () => {
+  it.each([
+    "https://user:ghp_secret@github.com/a/b.git",
+    "https://ghp_secret@github.com/a/b",
+    "https://u:ghp_secret@gitlab.com/a/b.git",
+    "https://github.com/a/b?access_token=ghp_secret",
+    "https://github.com/a/b#ghp_secret",
+    "ssh://git:ghp_secret@host/a/b",
+    "git:ghp_secret@host:a/b",
+    "git:x@ghp_secret@host:a/b",
+    "https://user:ghp_secret@github.com:abc/a/b",
+    "x-access-token:ghp_secret@github.com/a/b.git",
+    "git@github.com:a/b?token=ghp_secret",
+  ])("%s は資格情報を持ち、拒否の文に出す表示は判定が拒まない値になる", (repo) => {
+    expect(carriesCredential(repo)).toBe(true);
+    for (const label of [repositoryLabel(repo), repositoryLabel(repo, { preserveSshUser: true })]) {
+      expect(label).not.toContain("ghp_secret");
+      expect(carriesCredential(label)).toBe(false);
+    }
+  });
+
+  // new URL が読めない値の表示は、どの扉の文に出ても名指しを誤らない中立の文言
+  it("読めない URL の表示は中立の文言になる", () => {
+    expect(repositoryLabel("https://user:ghp_secret@github.com:abc/a/b")).toBe("an unparseable repository URL");
+    expect(repositoryLabel("https://user:ghp_secret@github.com:abc/a/b", { preserveSshUser: true })).toBe("an unparseable repository URL");
+  });
+
+  it.each(["ssh://git@github.com/a/b.git", "git@github.com:a/b.git", "https://github.com/a/b.git", "/abs/path", "file:///abs", "host:team/repo@x.git"])(
+    "%s は資格情報を持たない",
+    (repo) => {
+      expect(carriesCredential(repo)).toBe(false);
+    },
+  );
 });

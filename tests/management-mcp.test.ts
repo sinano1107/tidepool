@@ -5,7 +5,7 @@ import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-crea
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { RepoAccessMissingError } from "../src/repo-access.js";
+import { RepoAccessMissingError, RepoCredentialError } from "../src/repo-access.js";
 import { HANDOFF_FIELDS, logDecision, registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
@@ -510,6 +510,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
         if (input.name === "missing-identity") throw new GitHubIdentityMissingError();
         if (input.name === "no-repo-access") throw new RepoAccessMissingError("grant it with: gh api -X PUT ...");
         if (input.name === "leftover") throw new LeftoverWorkspaceStateError(input.name, "Put the entry back");
+        if (input.name === "credential") throw new RepoCredentialError("the repository https://github.com/a/b carries a credential in its URL.");
         throw new Error("registry remote unavailable");
       },
       update: async () => {
@@ -575,6 +576,15 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
     expect(leftover.isError).toBe(true);
     expect(leftover.content[0].text).toContain('workspace "leftover" cannot be registered');
     expect(leftover.content[0].text).not.toContain("registry upstream error");
+
+    // ADR 0406: 資格情報の拒否は入力の誤りで、盤面の故障に畳まない
+    const credential: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "credential", mode: "clone", repo: "https://github.com/a/b" },
+    });
+    expect(credential.isError).toBe(true);
+    expect(credential.content[0].text).toContain("carries a credential");
+    expect(credential.content[0].text).not.toContain("registry upstream error");
 
     const upstream: any = await client.callTool({
       name: "create_workspace",
