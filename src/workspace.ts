@@ -1003,16 +1003,18 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
     initBoardCopy(reader, format, [objects]);
     initBoardCopy(blankOf(own), format);
     initBoardCopy(probe, format);
-    for (const dir of new Set(ids.filter((id) => existsSync(looseOf(objects, id))).map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
+    for (const dir of new Set(looseIds(objects, ids).map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
   });
   // ADR 0408 決定1: 最初の確かめと確かめ直しの1つの判定 —— 名前の場所に loose を持つ集合の id はその loose を全部、loose だけを見せる repo で
   // 読み(git 2.53 以降の blob の stream の読み手は loose を pack より先に開く)、集合の全部を pack を先に読む repo で読む。ADR 0364 決定2:
   // どちらも名前の場所の byte だけを読む手 —— 上限超過も中身の照合の失敗も名前の場所の側。読めなければ失敗を返す
+  const misnamedIn = (repo: string, asked: string[]) => misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, repo, join(repo, "read"), asked, blankOf(own));
   const unreadable = (): unknown => {
     try {
-      const loose = ids.filter((id) => existsSync(looseOf(objects, id)));
-      let misnamed = loose.length === 0 ? [] : misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, join(probe, "read"), loose, blankOf(own));
-      if (misnamed.length === 0) misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, join(reader, "read"), ids, blankOf(own));
+      // 退避で移した loose は数え直しで落ちる
+      const loose = looseIds(objects, ids);
+      let misnamed = loose.length === 0 ? [] : misnamedIn(probe, loose);
+      if (misnamed.length === 0) misnamed = misnamedIn(reader, ids);
       return misnamed.length === 0 ? undefined : new MisnamedObjects(misnamed);
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(reader, cause)) throw copyHostError(from.noun, cause);
@@ -1032,7 +1034,7 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   }
   if (reinsertFailure === undefined) {
     try {
-      moveAsideDamagedLoose(objects, probe, own, ids);
+      moveAsideDamagedLoose(objects, (asked) => misnamedIn(probe, asked), ids);
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
       // 名前の場所の loose だけを読む手 —— 上限超過も名前の場所の側
@@ -1095,13 +1097,17 @@ const DAMAGED_PREFIX = "tidepool-damaged-";
 /** 名前の場所の `objects` での `id` の loose の path。 */
 const looseOf = (objects: string, id: string) => join(objects, id.slice(0, 2), id.slice(2));
 
+/** `ids` のうち、名前の場所の `objects` に今 loose の file を持つもの。 */
+const looseIds = (objects: string, ids: string[]) => ids.filter((id) => existsSync(looseOf(objects, id)));
+
 /** ADR 0388 決定2 / ADR 0398 決定1: 入れ直しの後、集合の id の名前の場所の loose のうち、loose として読めないものと中身が名前と合わない
  *  ものを、objects の下の残す dir へ移す(消さない —— 人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
  *  object の pack の stream を断り、header の読める loose の stream を開くので、body を切り詰めた loose が入れ直した pack を覆う(source の
- *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ)。名前の場所の loose の dir だけを見せる確かめの `probe` で pack に組み、
- *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。組めたら、中身が名前と合わない object を移す。 */
-function moveAsideDamagedLoose(objects: string, probe: string, own: string, ids: string[]): void {
-  let pending = ids.filter((id) => existsSync(looseOf(objects, id)));
+ *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ。git 2.53.0 でも観測した、ADR 0408)。`readLoose` —— 名前の場所の loose の
+ *  dir だけを見せる確かめの repo で pack に組み、中身が名前と合わない id を返す —— が落ちれば、落ちた object を stderr の id で移して組み直す ——
+ *  移すたびに1つ以上減るので終わる。組めたら、中身が名前と合わない object を移す。 */
+function moveAsideDamagedLoose(objects: string, readLoose: (asked: string[]) => string[], ids: string[]): void {
+  let pending = looseIds(objects, ids);
   let damaged: string | undefined;
   const moveAside = (bad: string[]) => {
     if (bad.length === 0) return;
@@ -1112,7 +1118,7 @@ function moveAsideDamagedLoose(objects: string, probe: string, own: string, ids:
   while (pending.length > 0) {
     let misnamed: string[];
     try {
-      misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, join(probe, "read"), pending, blankOf(own));
+      misnamed = readLoose(pending);
     } catch (cause) {
       const stderr = String((cause as { stderr?: unknown } | null)?.stderr ?? "");
       const bad = pending.filter((id) => stderr.includes(id));

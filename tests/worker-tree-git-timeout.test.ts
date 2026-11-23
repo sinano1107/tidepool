@@ -361,35 +361,20 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
-it("運んだ後の確かめが名前の場所の byte を読む手で上限を越えれば、worker の repo の故障にせず名前の場所の側で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
-  const { db, task, place } = await pickedUp("carried-timeout");
-  commitWork(place.path, "work.txt", "work\n");
-  const shim = await tempDir("tidepool-slow-git-");
-  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  // 確かめの pack-objects は名前の場所の objects だけを借りる使い捨ての repo で撃つ
-  writeFileSync(
-    join(shim, "git"),
-    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */carried/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
-    { mode: 0o755 },
-  );
-  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
-  try {
-    expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(NamedPlaceFetchError);
-  } finally {
-    vi.unstubAllEnvs();
-  }
-});
-
-it("運んだ後の確かめが名前の場所の loose だけを読む手で上限を越えれば、worker の repo の故障にせず名前の場所の側で拒む(ADR 0408 決定1 / ADR 0364 決定2)", async () => {
-  const { db, task, place } = await pickedUp("carried-loose-timeout");
+// ADR 0408 決定1: 確かめは名前の場所の objects だけを借りる使い捨ての repo(pack を先に読む `carried`)と、名前の場所の loose の dir だけを
+// 見せる使い捨ての repo(`loose`)で pack-objects を撃つ —— どちらも名前の場所の byte を読む手
+it.each([
+  { reader: "pack を先に読む", repo: "carried" },
+  { reader: "loose だけを読む", repo: "loose" },
+])("運んだ後の確かめが名前の場所の byte を $reader 手で上限を越えれば、worker の repo の故障にせず名前の場所の側で拒む(ADR 0388 決定1 / ADR 0408 決定1 / ADR 0364 決定2)", async ({ repo }) => {
+  const { db, task, place } = await pickedUp(`carried-${repo}-timeout`);
   // 小さい fetch は名前の場所で loose に展開される(transfer.unpackLimit) —— 集合の id が loose を持つ
   commitWork(place.path, "work.txt", "work\n");
   const shim = await tempDir("tidepool-slow-git-");
   const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  // 確かめの loose の側は名前の場所の loose の dir だけを見せる使い捨ての repo で撃つ
   writeFileSync(
     join(shim, "git"),
-    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */loose/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
+    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */${repo}/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
     { mode: 0o755 },
   );
   vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
