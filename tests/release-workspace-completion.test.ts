@@ -715,22 +715,26 @@ const damagedLoose = (ws: WorkspaceConfig): string[] => {
 };
 
 /** 名前の場所での blob の損傷: 消す・同じ id の loose を zlib でない byte にする・loose の body を切り詰める(header は読めるので
- *  `cat-file --batch-check` は在ると言い、中身を読む手だけが落ちる)。 */
+ *  `cat-file --batch-check` は在ると言い、中身を読む手だけが落ちる)・別の blob の loose の byte にする(zlib として正しい)・そのまま残す。 */
 const damages = {
   missing: () => undefined,
   corrupt: () => Buffer.from("not zlib"),
   truncated: (loose: Buffer) => loose.subarray(0, 15),
+  renamed: (_loose: Buffer, ws: WorkspaceConfig) => readFileSync(looseObject(ws.path, git(ws.path, "rev-parse", "HEAD:README.md"))),
+  intact: (loose: Buffer) => loose,
 } as const;
 
 /** 門で一度運んだ `sub/kept.txt` の blob を名前の場所で `damage` の形に外し、worker は自前の store に持ったまま root に1 commit 積む ——
- *  次の門の pack は除外(`--not --alternate-refs`)で blob も `sub` の tree も入れず、fetch も送らない。blob の id を返す。 */
-function damagedHeldByWorker(db: Db, place: RunPlace, task: Task, ws: WorkspaceConfig, damage: keyof typeof damages = "missing"): string {
+ *  次の門の pack は除外(`--not --alternate-refs`)で blob も `sub` の tree も入れず、fetch も送らない。`behindPack` なら外す前に名前の場所で
+ *  `repack -a` を `-d` 無しに撃ち、正しい pack の写しを足して loose も残す。blob の id を返す。 */
+function damagedHeldByWorker(db: Db, place: RunPlace, task: Task, ws: WorkspaceConfig, damage: keyof typeof damages = "missing", { behindPack = false } = {}): string {
   mkdirSync(join(place.path, "sub"));
   commitWork(place.path, "sub/kept.txt", "kept by the worker\n");
   gateFetch(db, place, task);
+  if (behindPack) git(ws.path, "repack", "-a", "--quiet");
   const blob = git(place.path, "rev-parse", "HEAD:sub/kept.txt");
   const loose = looseObject(ws.path, blob);
-  const damaged = damages[damage](readFileSync(loose));
+  const damaged = damages[damage](readFileSync(loose), ws);
   rmSync(loose);
   if (damaged) writeFileSync(loose, damaged);
   commitWork(place.path, "more.txt", "more\n");
@@ -746,7 +750,7 @@ it.each(["missing", "corrupt", "truncated"] as const)("名前の場所で %s の
 
     expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
     expect(git(ws.path, "cat-file", "-p", blob)).toBe("kept by the worker");
-    // loose を pack より先に開く読み手(git 2.56 の cat-file -p の stream)に、壊れた loose が入れ直した pack を覆わない —— 消さずに残す dir へ移す
+    // loose を pack より先に開く読み手(git 2.53 / 2.56 の cat-file -p の stream)に、壊れた loose が入れ直した pack を覆わない —— 消さずに残す dir へ移す
     expect(existsSync(looseObject(ws.path, blob))).toBe(false);
     expect(damagedLoose(ws).map((path) => path.endsWith(`/${blob}`))).toEqual(damage === "missing" ? [] : [true]);
   } finally {
@@ -1012,14 +1016,47 @@ it("退避の WIP が名前の場所に欠けた blob を持てば、staging rep
 it("集合の blob の名前の場所の loose が別の blob の中身なら、完了の門の確かめが破損に数えて入れ直し、差し替えた loose を残す dir へ移す(ADR 0398 決定1)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
-    const blob = damagedHeldByWorker(db, place, task, ws);
     // zlib として正しい別の object —— pack-objects は loose の中身を hash し直さない
-    writeFileSync(looseObject(ws.path, blob), readFileSync(looseObject(ws.path, git(ws.path, "rev-parse", "HEAD:README.md"))));
+    const blob = damagedHeldByWorker(db, place, task, ws, "renamed");
 
     gateFetch(db, place, task);
 
     expect(git(ws.path, "cat-file", "-p", blob)).toBe("kept by the worker");
     expect(damagedLoose(ws).map((path) => path.endsWith(`/${blob}`))).toEqual([true]);
+  } finally {
+    db.close();
+  }
+});
+
+const packCount = (ws: WorkspaceConfig) => readdirSync(join(ws.path, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack")).length;
+
+// git 2.53 以降の blob の stream の読み手は loose を pack より先に開く —— 釘は `cat-file -p` の中身でなく退避で打つ(git 2.47 は直す前から正しい中身を返す)
+it.each(["renamed", "truncated", "corrupt"] as const)("集合の blob が名前の場所で正しい pack の写しと %s の loose を両方持てば、完了の門の確かめが loose を読めないに数えて入れ直し、その loose を残す dir へ移す(ADR 0408 決定1 / ADR 0398 決定1)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const blob = damagedHeldByWorker(db, place, task, ws, damage, { behindPack: true });
+
+    const tip = gateFetch(db, place, task);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(existsSync(looseObject(ws.path, blob))).toBe(false);
+    expect(damagedIds(ws)).toEqual([blob]);
+  } finally {
+    db.close();
+  }
+});
+
+it("集合の blob が名前の場所で正しい pack の写しと健全な loose を両方持てば、完了の門は何も移さず、名前の場所に pack を足さない(ADR 0408 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const blob = damagedHeldByWorker(db, place, task, ws, "intact", { behindPack: true });
+    const packs = packCount(ws);
+
+    gateFetch(db, place, task);
+
+    expect(existsSync(looseObject(ws.path, blob))).toBe(true);
+    expect(damagedLoose(ws)).toEqual([]);
+    expect(packCount(ws)).toBe(packs);
   } finally {
     db.close();
   }
