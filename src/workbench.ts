@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { boardViewStatus, git, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
+import { boardViewStatus, CheckoutUnreadableError, git, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
 
 // 作業台(Workbench)の鍵・持ち主・寿命の判定を1か所に置く(ADR 0382、#3352 の追記 1〜3)。入口は判定を自分で書かず、これを呼ぶ。
 
@@ -81,18 +81,18 @@ export function workbenchOwner(
 export function humanWorkLeft(read: WorkbenchRead): string[] {
   const { at, target, tip } = read;
   const left: string[] = [];
-  if (gitAnswers(() => workerRepoGit(at, "rev-parse", "--quiet", "--verify", "MERGE_HEAD"))) left.push(`a merge is in progress — commit it on ${target} or run \`git merge --abort\``);
+  if (onWorkbench(at, () => gitAnswers(() => workerRepoGit(at, "rev-parse", "--quiet", "--verify", "MERGE_HEAD")))) left.push(`a merge is in progress — commit it on ${target} or run \`git merge --abort\``);
   if (tip !== undefined) {
     if (boardViewStatus(at, tip, read.verified).length > 0) left.push(`it has uncommitted changes — commit them on ${target} or discard them`);
     if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
   }
-  const strays = workerRepoGit(at, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/stash")
+  const strays = onWorkbench(at, () => workerRepoGit(at, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/stash"))
     .split("\n")
     .filter(Boolean)
     .map((line) => line.split(" ") as [string, string])
     .filter(([, ref]) => ref !== `refs/heads/${target}` && !ref.startsWith(`refs/heads/${BOARD_BRANCHES}/`))
     // stash は reflog の段ごとに1つ —— `refs/stash` は一番上の段しか指さない
-    .filter(([sha, ref]) => (ref === "refs/stash" ? workerRepoGit(at, "reflog", "show", "--format=%H", "refs/stash").split("\n") : [sha]).some((commit) => !inTarget(read, commit)))
+    .filter(([sha, ref]) => (ref === "refs/stash" ? onWorkbench(at, () => workerRepoGit(at, "reflog", "show", "--format=%H", "refs/stash")).split("\n") : [sha]).some((commit) => !inTarget(read, commit)))
     .map(([, ref]) => (ref === "refs/stash" ? "the stash" : ref.slice("refs/heads/".length)));
   if (strays.length > 0) left.push(`${strays.join(", ")} ${strays.length > 1 ? "hold" : "holds"} commits that ${target} does not have — merge them into ${target}, or delete them`);
   return left;
@@ -120,5 +120,16 @@ const inTarget = ({ verified, targetSha }: WorkbenchRead, sha: string): boolean 
 /** HEAD が書く先の branch を指す symref か —— `symbolic-ref -q` の 1 は detached。 */
 function headOn(at: string, target: string): boolean {
   let head = "";
-  return gitAnswers(() => (head = workerRepoGit(at, "symbolic-ref", "-q", "HEAD"))) && head === `refs/heads/${target}`;
+  return onWorkbench(at, () => gitAnswers(() => (head = workerRepoGit(at, "symbolic-ref", "-q", "HEAD")))) && head === `refs/heads/${target}`;
+}
+
+/** #3587: 判定が作業台そのものに撃つ git が落ちれば、作業台の読みの失敗(`CheckoutUnreadableError`)—— 開く扉と削除の扉が
+ *  同じ手で作業台を名指す。git が終了コードを返さない失敗(上限超過、起こせない git)は型のまま。述語の「no」は内側の `gitAnswers` が答えにする。 */
+export function onWorkbench<T>(at: string, read: () => T): T {
+  try {
+    return read();
+  } catch (cause) {
+    if (typeof (cause as { status?: unknown } | null)?.status !== "number") throw cause;
+    throw new CheckoutUnreadableError(`the workbench at ${at} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
 }

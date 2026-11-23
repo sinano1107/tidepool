@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { CheckoutHostError } from "../src/git.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
@@ -14,7 +15,7 @@ import { workbenchPath } from "../src/workbench.js";
 import { completionTreePaths, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
 import { unusedLanding } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -396,6 +397,69 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
       `the board cannot read the workspace's checkout at ${o.ws.path} (`,
     );
     await expect(refused).rejects.toThrow(`so it cannot tell whether the workbench at ${o.workbench} holds work that main does not have — repair the checkout first`);
+    expect(existsSync(o.workbench)).toBe(true);
+  });
+
+  it.each(["missing", "corrupt"] as const)("作業台の未取り込みの commit が名前の場所で読めない blob を指せば、作業台を消せとは言わず名前の場所を名指して拒み、作業台を残す —— %s", async (damage) => {
+    const o = await openedWorkbench();
+    await o.close();
+    newTreePointsAtDamagedNamedBlob(o.ws.path, o.workbench, damage);
+
+    const refused = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+    await expect(refused).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "human_content_workbench", workbench: o.workbench, branch: "main", unreadable: { place: o.ws.path } }],
+    });
+    await expect(refused).rejects.toThrow(`so it cannot tell whether the workbench at ${o.workbench} holds work that main does not have — repair the checkout first`);
+    await expect(refused).rejects.not.toThrow("remove it by hand");
+    expect(existsSync(o.workbench)).toBe(true);
+  });
+
+  /** 作業台そのものが読めない削除の拒否: 作業台を名指して手で消すよう言い、作業台を残す。 */
+  async function expectWorkbenchUnreadable(o: Awaited<ReturnType<typeof openedWorkbench>>) {
+    const refused = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+    await expect(refused).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "human_content_workbench", workbench: o.workbench, branch: "main", unreadable: { place: o.workbench } }],
+    });
+    await expect(refused).rejects.toThrow(`the board cannot read the workbench at ${o.workbench} (`);
+    await expect(refused).rejects.toThrow("); remove it by hand first");
+    expect(existsSync(o.workbench)).toBe(true);
+  }
+
+  it("検証の段で作業台が読めなければ、作業台を名指して手で消すよう言い、作業台を残す", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    const ref = join(o.workbench, ".git", "refs", "heads", "main");
+    rmSync(ref);
+    mkdirSync(ref);
+
+    await expectWorkbenchUnreadable(o);
+  });
+
+  it("判定が作業台に撃つ git で作業台が読めなければ、作業台を名指して手で消すよう言い、作業台を残す", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    writeFileSync(join(o.workbench, ".git", "config"), "not a config\n");
+
+    await expectWorkbenchUnreadable(o);
+  });
+
+  it("作業台でも名前の場所でもない失敗(盤面の写しの host)は参照の拒否にせずそのまま投げ、entry も作業台も残す", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    vi.stubEnv("TMPDIR", join(o.workbench, "no-such-tmp"));
+    try {
+      const failed = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+      await expect(failed).rejects.toThrow(CheckoutHostError);
+      await expect(failed).rejects.not.toMatchObject({ name: "DeletionBlockedError" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(loadRegistry(o.registryDir, "purely-local").workspaces[o.ws.name]).toBeDefined();
     expect(existsSync(o.workbench)).toBe(true);
   });
 });

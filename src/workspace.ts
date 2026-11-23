@@ -160,7 +160,7 @@ import {
   tasksReleasedOn,
   teardownUnfinishedUnder,
 } from "./tasks.js";
-import { BOARD_BRANCHES, foreignTaskBranches, humanWorkLeft, type WorkbenchOwner, type WorkbenchRead, workbenchCommands, workbenchOwner, workbenchPath } from "./workbench.js";
+import { BOARD_BRANCHES, foreignTaskBranches, humanWorkLeft, onWorkbench, type WorkbenchOwner, type WorkbenchRead, workbenchCommands, workbenchOwner, workbenchPath } from "./workbench.js";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerGitCopyTimeoutError, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
 
 
@@ -1213,8 +1213,13 @@ function openWorkbench(named: WorkspaceConfig, base: string, target: string, car
 /** disk にある作業台を盤面の手のある入口として判定する。作業台そのものの読みの失敗だけを `WorkbenchUnreadableError` にする —— 上限超過・
  *  host・名前の場所の側の失敗は、開き直しで直りうるので素のまま。 */
 function judgeOnDisk(named: WorkspaceConfig, at: string, target: string, carried?: Carried, inKey = true): WorkbenchOwner {
+  return readingWorkbench(at, () => judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, { carried, boardMove: true, inKey }, (judged) => judged));
+}
+
+/** 盤面の手のある入口が disk の作業台を読む手の帰責 —— 作業台そのものの読みの失敗だけを `WorkbenchUnreadableError` にし、ほかは素のまま。 */
+function readingWorkbench<T>(at: string, read: () => T): T {
   try {
-    return judgeWorkbench(named, workbenchPlace(named, realpathSync(at)), target, { carried, boardMove: true, inKey }, (judged) => judged);
+    return read();
   } catch (cause) {
     if (cause instanceof CheckoutUnreadableError || cause instanceof WorktreeStatusError) throw new WorkbenchUnreadableError(at, cause);
     throw cause;
@@ -1619,7 +1624,7 @@ const openWorkbenchExit = (branch: string) => `open it with \`open_workbench\`, 
 
 /** 人間自身の内容の作業台が書く先の branch とともに disk にある。 */
 const holdsTargetBranch = (at: string, branch: string) =>
-  placeHasRepository(at) && gitAnswers(() => workerRepoGit(at, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`));
+  placeHasRepository(at) && readingWorkbench(at, () => onWorkbench(at, () => gitAnswers(() => workerRepoGit(at, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`))));
 
 /** ADR 0373 決定9: 組の停止が開く作業台 —— 開くのは鍵ごとに冪等で、書く先の branch のある作業台は作り直さない(無視された file も人間のもの)。
  *  作りかけは開く手の規則で作り直す。返すのは修理の道の文(text B8、ADR 0382 決定4 の句)。開けなければそう言う(fail-closed)。 */
@@ -1668,10 +1673,10 @@ export async function openHumanContentWorkbench(
   if (!holdsBaseline(db, workspace.name)) await captureFirstBaseline(db, workspace, { ...board, now });
   const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
   let question = openIntakeQuestionId(db, workspace.name);
-  const leaveAlone = question !== undefined && holdsTargetBranch(at, branch);
   let opened: { path: string; owner: WorkbenchOwner };
   try {
-    opened = leaveAlone ? { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) } : openWorkbench(workspace, base, branch);
+    // 書く先の branch の確かめも作業台に撃つ git —— 読めなければ question が閉じているときと同じ文(#3587)
+    opened = question !== undefined && holdsTargetBranch(at, branch) ? { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) } : openWorkbench(workspace, base, branch);
   } catch (err) {
     if (err instanceof WorkbenchUnreadableError) throw new DomainError(`the board cannot read the workbench at ${err.at} (${err.message}); remove it by hand, then open it again.`);
     throw new DomainError(`the board could not open the workbench (${err instanceof Error ? err.message : String(err)}); open it again.`);
@@ -2229,9 +2234,12 @@ export function humanContentWorkbenchLeft(named: WorkspaceConfig, base: string):
   let owner: WorkbenchOwner;
   try {
     // 消すのは盤面の手 —— 作りかけは取り込むものが無い(ADR 0382 決定6)
-    owner = judgeWorkbench(named, workbenchPlace(named, workbench), branch, { boardMove: true }, (judged) => judged);
+    owner = judgeOnDisk(named, workbench, branch);
   } catch (err) {
-    return unreadable(workbench, err);
+    // 帰責は開く扉と同じ手で分ける —— ほか(上限超過・host・名前の場所への素の git)は出し直しで通りうるので、参照の拒否(409)にしない
+    if (err instanceof WorkbenchUnreadableError) return unreadable(err.at, err);
+    if (err instanceof NamedPlaceFetchError) return unreadable(named.path, err);
+    throw err;
   }
   return owner.kind === "nothing" ? undefined : { workbench, branch };
 }
