@@ -1,6 +1,8 @@
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
+import type { Clock } from "./clock.js";
+import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { RegistryTiers, RenameAgentTiers, RenameAgentTiersInput } from "./execution-setting.js";
 import { git } from "./git.js";
@@ -13,7 +15,6 @@ import {
   assertValidSkillAllowlist,
   isBuiltInAgentName,
   isSingleTwemojiGrapheme,
-  loadRegistry,
   normalizeProviderEntries,
   ownEntry,
   type Registry,
@@ -22,6 +23,7 @@ import {
   UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
+import { loadRegistryOrStop } from "./registry-unreadable.js";
 import {
   commitToRegistry,
   DeletionBlockedError,
@@ -97,6 +99,9 @@ export interface AgentAdminDeps {
    *  対して行われ、その直後に切る worktree も同じ ref から fork するので、
    *  両者が食い違うことはない。 */
   registry: RegistrySource;
+  /** 読み込みの1点が読めない registry の止まりを立てる盤面の db と時計(ADR 0403 決定5)。 */
+  db: Db;
+  clock?: Clock;
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
    *  same shape as WorkspaceAdminDeps. */
@@ -114,7 +119,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps 
   // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
   // ず、その編集は最初から成立していない — workspace-create と同じ二段検査
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   assertValidAgentName(registry, input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
@@ -138,7 +143,7 @@ export type UpdateAgentInput = CreateAgentInput;
 
 export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps & BoardTiers): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
   if (existing.builtin) throw new BuiltInAgentNotEditableError(input.name);
@@ -242,7 +247,7 @@ export interface ChangeAgentTierInput {
  *  `tier:` と `version:` の行だけを書き換えて着地させる。返り値は着地した commit。 */
 export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAdminDeps): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const existing = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).agents, input.name);
+  const existing = ownEntry(loadRegistryOrStop(deps.db, deps.registry, deps.clock).agents, input.name);
   if (!existing || existing.builtin || existing.tier !== input.expectTier) {
     throw new AgentTierMismatchError(input.name, input.expectTier, existing?.tier);
   }
@@ -340,7 +345,7 @@ export function renamedTierFrom(registry: RegistrySource, agent: string, to: str
  *  書き換えて着地させる。書き換える agent が無ければ何も着地しない。 */
 export async function renameAgentTiers(input: RenameAgentTiersInput, deps: AgentAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const agents = Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents).filter((agent) => !agent.builtin && agent.tier === input.from);
+  const agents = Object.values(loadRegistryOrStop(deps.db, deps.registry, deps.clock).agents).filter((agent) => !agent.builtin && agent.tier === input.from);
   commitToRegistry(
     deps.registry,
     deps.githubAuth,
@@ -375,7 +380,7 @@ export function agentViewProviders(view: Pick<AgentView, "provider">): string[] 
 }
 
 export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
-  return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents).map(
+  return Object.values(loadRegistryOrStop(deps.db, deps.registry, deps.clock).agents).map(
     (definition) => ({
       ...definition,
       provider: definition.provider.map((entry) => entry.name).join(", "),
@@ -425,7 +430,7 @@ export async function deleteAgent(
   deps: AgentAdminDeps & AgentDeletionReferences,
 ): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
   // 組み込みは registry のエントリではないので、参照の検査に進まない(ADR 0117

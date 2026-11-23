@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import { deleteProfile } from "../src/profile-create.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { makeRegistry } from "./registry-fixture.js";
+
+// 管理の扉は読めない registry の止まりを盤面の db に立てる(ADR 0403 決定5)—— ここの registry はどれも読めるので、何も書かれない
+const db = openDb(":memory:");
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -28,7 +32,7 @@ describe("deleteProfile: 正常系(issue #205 / ADR 0087 決定1)", () => {
 
     await deleteProfile(
       { name: "unused", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").authority.unused).toBeUndefined();
@@ -44,7 +48,7 @@ describe("deleteProfile: 確認の門(issue #205 / ADR 0087)", () => {
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      deleteProfile({ name: "unused" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+      deleteProfile({ name: "unused" }, { db, registry: { dir: registryDir, mode: "purely-local" } }),
     ).rejects.toThrow(DeletionConfirmationRequiredError);
 
     expect(loadRegistry(registryDir, "purely-local").authority.unused).toBeDefined();
@@ -59,7 +63,7 @@ describe("deleteProfile: 確認で買えない拒否(ADR 0087 決定2)", () => {
     await expect(
       deleteProfile(
         { name: "standard", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" } },
+        { db, registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",

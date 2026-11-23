@@ -2,16 +2,18 @@ import { unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { z } from "zod";
+import type { Clock } from "./clock.js";
+import type { Db } from "./db.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AuthorityProfile,
   assertValidAuthorityProfileName,
   authorityProfileSchema,
-  loadRegistry,
   ownEntry,
   type RegistrySource,
   UnknownAuthorityProfileError,
 } from "./registry.js";
+import { loadRegistryOrStop } from "./registry-unreadable.js";
 import {
   commitToRegistry,
   DeletionBlockedError,
@@ -97,6 +99,9 @@ export interface ProfileAdminDeps {
    *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
    *  (issue #210 レビュー — AgentAdminDeps と共有する Data Clumps だった)。 */
   registry: RegistrySource;
+  /** 読み込みの1点が読めない registry の止まりを立てる盤面の db と時計(ADR 0403 決定5)。 */
+  db: Db;
+  clock?: Clock;
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
    *  same shape as AgentAdminDeps. */
@@ -108,7 +113,7 @@ export interface ProfileAdminDeps {
 export async function createProfile(input: CreateProfileInput, deps: ProfileAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4) — agent-create.ts と同じ二段検査
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   assertValidAuthorityProfileName(registry, input.name);
   // 名前の綴りは confirm では買えないので、確認より前に弾く(ADR 0061 根拠5)
   assertConfirmed(input);
@@ -128,7 +133,7 @@ export type UpdateProfileInput = Partial<CreateProfileInput> & { name: string };
 
 export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const existing = ownEntry(registry.authority, input.name);
   if (!existing) throw new UnknownAuthorityProfileError(input.name);
   // 存在しない名前が confirm より先に出る理由は create 側の名前検査と同じ —
@@ -161,7 +166,7 @@ function mergePatch(existing: AuthorityProfile, patch: UpdateProfileInput): Crea
 export type ProfileView = AuthorityProfile;
 
 export function listProfileViews(deps: ProfileAdminDeps): ProfileView[] {
-  return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).authority);
+  return Object.values(loadRegistryOrStop(deps.db, deps.registry, deps.clock).authority);
 }
 
 /** ADR 0087 決定1 の profile 半分: `authority/<name>.yaml` を committed main から
@@ -175,7 +180,7 @@ export interface DeleteProfileInput {
 
 export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   if (!ownEntry(registry.authority, input.name)) throw new UnknownAuthorityProfileError(input.name);
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序): 参照中の profile を
   // 消せば、その agent の spawn は quarantine ではなく素の失敗に落ちる(ADR 0087

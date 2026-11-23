@@ -110,6 +110,7 @@ import {
   UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
+import { RegistryUnreadableError } from "./registry-unreadable.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
@@ -268,7 +269,9 @@ function registryToolError(err: unknown) {
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
     err instanceof HeadRepoRejectedError ||
-    err instanceof InvalidAuthorityProfileNameError
+    err instanceof InvalidAuthorityProfileNameError ||
+    // ADR 0403 決定5: 読めない registry は盤面の止まり(文が名指す)で、上流の失敗ではない
+    err instanceof RegistryUnreadableError
   ) {
     return toolError(err.message);
   }

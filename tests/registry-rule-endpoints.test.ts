@@ -26,8 +26,8 @@ it.each([
   const workspacesBaseDir = await tempDir("tidepool-name-rule-");
   t = await bootTidepool({
     workspaceAdmin: { create: (input) => createWorkspace(input, { registry, workspacesBaseDir, db: t.db }) },
-    agentAdmin: { create: (input) => createAgent(input, deps), update: (input) => updateAgent(input, deps) },
-    profileAdmin: { create: (input) => createProfile(input, { registry }) },
+    agentAdmin: { create: (input) => createAgent(input, { ...deps, db: t.db }), update: (input) => updateAgent(input, { ...deps, db: t.db }) },
+    profileAdmin: { create: (input) => createProfile(input, { registry, db: t.db }) },
   });
   const res = await api(t.baseUrl, method, path, body);
   expect(res.status).toBe(400);

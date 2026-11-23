@@ -699,9 +699,16 @@ export interface ApiRouterDeps {
   retrospectiveCalls: RetrospectiveCallDeps;
 }
 
+/** 外部の一手(fetch / push)の失敗の 502(ADR 0052 決定1)。読めない registry は外部の一手ではなく盤面の止まりなので、`/api` の
+ *  503 の handler へ投げ直す(ADR 0403 決定5)。 */
+function sendExternalStepFailure(res: Response, err: unknown): void {
+  if (err instanceof RegistryUnreadableError) throw err;
+  sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+}
+
 /** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 は
- *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」3つだけ:
- *  確認不足、確認では買えない拒否、そして外部の一手(fetch / push)の失敗。 */
+ *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」4つだけ:
+ *  確認不足、確認では買えない拒否、外部の一手(fetch / push)の失敗、読めない registry(503 の handler へ投げ直す)。 */
 function respondToDeletionFailure(res: Response, err: unknown): void {
   if (err instanceof DeletionConfirmationRequiredError) {
     // 危険な値の 409 と同じ `confirm_required` の往復に乗る(WebUI 側の
@@ -718,8 +725,8 @@ function respondToDeletionFailure(res: Response, err: unknown): void {
     // 状況が変わらない限り出し直しても通らない
     sendJson(res.status(409), { error: err.message, blocked: true, reasons: err.reasons });
   } else {
-    // ADR 0052 決定1: 着地しなかった削除は起きなかった削除である
-    sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+    // ADR 0052 決定1: 着地しなかった削除は起きなかった削除である(読めない registry は 503、ADR 0403 決定5)
+    sendExternalStepFailure(res, err);
   }
 }
 
@@ -933,7 +940,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           ...(err.settingsWarning ? { claude_settings_unhideable_warning: err.settingsWarning } : {}),
         } satisfies WireContract["POST /api/workspaces 409"]);
       } else {
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });
@@ -988,7 +995,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // issue #3563: the push failed after the declaration was saved, so the client reloads instead of reading "not saved"
         sendJson(res.status(502), { error: err.message, saved: true } satisfies WireContract["PATCH /api/workspaces/:name 502"]);
       } else {
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });
@@ -1027,7 +1034,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         sendJson(res.status(503), { error: err.message });
       } else {
         // push が落ちた、registry がランドしなかった(ADR 0052 決定1)—— 外部の一手
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });
@@ -1077,7 +1084,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ) {
         sendJson(res.status(400), { error: err.message });
       } else {
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });
@@ -1142,7 +1149,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ) {
         sendJson(res.status(400), { error: err.message });
       } else {
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });
@@ -1276,7 +1283,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof ProfileConfirmationRequiredError) {
         sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["POST /api/profiles 409"]);
       } else {
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });
@@ -1311,7 +1318,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof ProfileConfirmationRequiredError) {
         sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/profiles/:name 409"]);
       } else {
-        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
+        sendExternalStepFailure(res, err);
       }
     }
   });

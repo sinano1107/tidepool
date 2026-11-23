@@ -45,19 +45,19 @@ export async function bootPreview(): Promise<Preview> {
     const board = await bootTidepool({
       workspaceAdmin: {
         create: (input) => createWorkspace(input, { ...workspaceDeps, db: board.db }),
-        list: () => listWorkspaceViews(workspaceDeps, "configured"),
+        list: () => listWorkspaceViews({ ...workspaceDeps, db: board.db }, "configured"),
         update: (input) => updateWorkspace(input, { ...workspaceDeps, db: board.db }),
       },
       agentAdmin: {
-        create: (input) => createAgent(input, agentDeps),
-        list: () => listAgentViews(agentDeps),
-        update: (input) => updateAgent(input, agentDeps),
+        create: (input) => createAgent(input, { ...agentDeps, db: board.db }),
+        list: () => listAgentViews({ ...agentDeps, db: board.db }),
+        update: (input) => updateAgent(input, { ...agentDeps, db: board.db }),
         authorityProfiles: () => Object.keys(loadRegistry(registryDir, "purely-local").authority),
       },
       profileAdmin: {
-        create: (input) => createProfile(input, profileDeps),
-        list: () => listProfileViews(profileDeps),
-        update: (input) => updateProfile(input, profileDeps),
+        create: (input) => createProfile(input, { ...profileDeps, db: board.db }),
+        list: () => listProfileViews({ ...profileDeps, db: board.db }),
+        update: (input) => updateProfile(input, { ...profileDeps, db: board.db }),
       },
       hostSkills: async () => ["tdd", "review", "design-sync"],
     });
