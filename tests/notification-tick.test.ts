@@ -103,8 +103,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
-    const now = NOON; // 起動時点で既に quiet hours 外
-    const tick = createNotificationTick(db, push, () => now);
+    const tick = createNotificationTick(db, push, () => NOON); // 起動時点で既に quiet hours 外
 
     const task = registerQuestion(db, "日中の質問", NOON);
     await tick.run();
@@ -140,8 +139,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
     // 既定 tz(Asia/Tokyo)では MIDNIGHT(JST 0:00)は quiet hours 内
-    const now = MIDNIGHT;
-    const tick = createNotificationTick(db, push, () => now);
+    const tick = createNotificationTick(db, push, () => MIDNIGHT);
     registerQuestion(db, "深夜の質問", MIDNIGHT);
 
     await tick.run(); // still quiet: nothing sent
