@@ -1,5 +1,7 @@
 # merge question は問うた内容を持ち、回答はその内容にだけ執行し、hold と abandon は1つの記録でその内容を断る
 
+**Status 追記: 決定1 の盤面の部分の tip は、読めなければ(workspace を解決できない・git が落ちた)無しになり、question は立つ([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定1、2026-11-23、issue #3554)。**
+
 **Status 追記: 決定5 の「hold は一致しなくても拒まない」に例外が1つ入る —— タスクブランチがもう保護ブランチに履歴で含まれていれば、hold は断られ `merge` が名指される([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定4、2026-11-22、issue #3515)。**
 
 2026-11-21 の grilling(issue #3402、族の根として #3485・#3407・#3408 を寄せた)で決定。`pr_merge` の question は PR 番号しか持たず、

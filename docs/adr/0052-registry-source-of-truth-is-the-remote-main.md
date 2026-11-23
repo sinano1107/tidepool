@@ -1,5 +1,7 @@
 # 盤面が読む正本はリモートの保護ブランチであり、ホスト上の clone はキャッシュである
 
+**Status 追記: registry の到達性の Quarantine は「読めるか」(到達に読み込みと検査を足す)へ広がり、kind は `registryUnreadable` になる。remote の無い盤面にも置き、収束も止める。立てるのは registry の読み込みの1点である([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定5、2026-11-23、issue #3554)。**
+
 **Status 追記: 決定3 の「registry clone は…2つの宣言を持ち、その食い違いも…quarantine する」は消える —— registry clone は workspace にならず、宣言は1つである([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1)。同じ決定3 の「宣言と実態のずれ」には、checkout の origin が宣言と別の repo を指すことと、宣言が基準の行を作ったときに覚えた repo と違うことが足され、workspace の網の行き先は宣言 `repo` から決まる([ADR 0378](0378-the-boards-network-destination-for-a-workspace-comes-from-the-declared-repo-and-an-origin-or-a-declaration-that-points-elsewhere-is-a-workspace-quarantine.md) 決定1・3・6)。決定5 のレジストリ到達性の検査には、registry の default branch の検査が加わる(ADR 0377 決定7、2026-11-15、issue #3178)。**
 
 **Status 追記: 下の ADR 0339 由来の追記の「写しは push の成功を見て盤面が書く」に、タスクブランチの写しの読み手が足される —— PR が無いか未記録の根では、収束がその写しを「盤面が最後に push した値」として読む。remote-backed の workspace で人間しか書けない path を入れる道は origin の保護ブランチのままで、扉も記録も足さない(決定1 の「origin が正本」に乗る)([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定3・10、2026-11-15、issue #3178)。**

@@ -1,5 +1,7 @@
 # 着地は運ぶ前と記録を書く前に名前の場所の全 ref を基準と比べる —— 受理が見せていない移動を受け入れる穴は、人間の内容の扉の設計に渡す
 
+**Status 追記: 決定1 の比較が git の失敗で読めないときも、根ごとの失敗ではなく、その workspace の Quarantine で止まる。立てるのは ref 検査そのもので、2つの merge の tick も同じである([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定4、2026-11-23、issue #3554)。**
+
 **Status 追記: 決定1 の例外「hold・断念の head の記録は比べずに書く」は、回答の時点から question を立てる時点へ移る —— 断った内容は question を立てた時点の tip で、それは着地で運ぶ値ではなく人間に見せたものの記録なので、基準と比べずにタスクブランチの値を読む(昇格失敗の question は ref 検査の失敗からも立つので、比べると読めない)([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) Consequences、2026-11-21、issue #3402)。**
 
 **Status 追記: 決定1 の「基準の行そのものが無い workspace では、着地が pickup と同じ手続きで最初の撮りをする」には確認が掛かる —— 基準の行を持つ workspace が全部、引けて基準どおりであるときだけ撮る。止まったときに Quarantine が立つのは欠けた名前の側で、出口はそこにある。「残る穴と根」の受理の穴は閉じる —— 受理は全 ref が基準と同じであることを確かめ、全撮りをしない([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定1・7・13、2026-11-15、issue #3178)。**
