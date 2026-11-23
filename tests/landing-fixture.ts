@@ -654,6 +654,16 @@ export async function droppedRepair(name: string) {
   return { c, repair };
 }
 
+/** 盤面 DB の文のうち `fragment` を含むものを1回だけ落とす —— 着地の想定外の例外の題材。落ちたら元に戻す。 */
+export function failPrepareOnce(db: Db, fragment: string, message: string): void {
+  const prepare = db.prepare.bind(db);
+  const spy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+    if (!sql.includes(fragment)) return prepare(sql);
+    spy.mockRestore();
+    throw new Error(message);
+  }) as typeof db.prepare);
+}
+
 /** ref を読む git が exit 128 で落ちる checkout にする —— `rev-parse --verify --quiet` も「無い」(exit 1)とは答えない。 */
 export const breakPackedRefs = (workspace: WorkspaceConfig) =>
   appendFileSync(join(workspace.path, ".git", "packed-refs"), "not a packed ref\n");

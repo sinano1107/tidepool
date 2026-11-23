@@ -124,7 +124,7 @@ export type LandingVerdict =
         | "pull_request_closed"
         | "content_left_behind"
         | "promotion_failed"
-        // 根の着地が回の中で例外に落ちた —— 失敗 question は立てず、ログと回答の拒否文だけに出る
+        // 根の着地が回の中で例外に落ちた —— 無人の回は tip 無しの昇格失敗 question を立て、答えている回は回答を拒むだけ(ADR 0403 決定3)
         | "landing_failed";
       error: string;
     };
@@ -895,21 +895,27 @@ function registerPrPromotionQuestion(
 }
 
 /** ADR 0394 決定1 / ADR 0370 決定1: 問う内容は基準と比べずに読む。完全修飾 ref の解決に他の ref の曖昧さは要らない。
- *  ADR 0403 決定1: 問いに写す tip の読みはここだけで、投げない —— workspace を解決できない・`.git` が無い・git が exit 1 以外で落ちた
- *  ときは理由をログに1行出して null(特定の sha を見せていない記録で、断る回答は効かない)。ブランチが無い(exit 1)のは読めた答え。 */
-function questionTip(taskId: string, resolveWorkspace: () => WorkspaceConfig | undefined): string | null {
-  const unread = (reason: unknown) => {
-    console.error(`[landing] could not read the question tip for root ${taskId}; the question carries no tip:`, reason);
+ *  ADR 0403 決定1: 問いに写す tip の読み(と、断った記録の tip との比較)はこれ1つで、投げない —— workspace を解決できない・`.git` が無い・
+ *  git が exit 1 以外で落ちたときは理由をログに1行出して null(問いには特定の sha を見せていない記録になり、断る回答は効かない)。
+ *  ブランチが無い(git の exit 1)のは読めた答え。 */
+function questionTip(taskId: string, workspaceOf: () => WorkspaceConfig | undefined): string | null {
+  const noTip = (reason: unknown) => {
+    console.error(`[landing] could not read the tip of ${taskBranch(taskId)}:`, reason);
     return null;
   };
+  let workspace: WorkspaceConfig | undefined;
   try {
-    const workspace = resolveWorkspace();
-    if (!workspace) return unread("no workspace is configured");
-    if (lstatSync(join(workspace.path, ".git"), { throwIfNoEntry: false }) === undefined) return unread(`${workspace.path} has no .git`);
+    workspace = workspaceOf();
+  } catch (error) {
+    return noTip(error);
+  }
+  if (!workspace) return noTip("no workspace is configured");
+  try {
+    if (lstatSync(join(workspace.path, ".git"), { throwIfNoEntry: false }) === undefined) return noTip(`${workspace.path} has no .git`);
     return git(workspace.path, "-c", "core.warnAmbiguousRefs=false", "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
   } catch (error) {
     if ((error as { status?: number } | null)?.status === 1) return null;
-    return unread(error);
+    return noTip(error);
   }
 }
 
@@ -1511,15 +1517,20 @@ export function createLanding(deps: LandingDeps): Landing {
       ? failedAnswer(new QuestionClosedError().message) : undefined;
     const closed = closedMergeAnswer();
     if (closed) return closed;
+    /** 解決できなければ undefined —— 解決の失敗は主経路の解決が扱う。 */
+    const quietlyResolved = () => {
+      try {
+        return buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
+      } catch {
+        return undefined;
+      }
+    };
     /** ADR 0370 決定1: 断念・hold が写した tip を今のブランチと比べる前の比較。tip が無いか workspace を解決できなければ ref を読まない
      *  (`declinedContentChanged` は読まずに「変わった」と読む、ADR 0225 決定1 / ADR 0234 決定3)。比較そのものが落ちれば、比べていない
-     *  ref で問い直さず根の失敗にする(落ちた比較は失敗の境界へ投げる)。 */
+     *  ref で問い直さず根の失敗にする —— 落ちた比較は失敗の境界へ投げる(ADR 0403 決定2)。 */
     const compareBeforeChangedSince = (tip: string | null) => {
       if (tip === null) return;
-      let workspace: WorkspaceConfig | undefined;
-      try {
-        workspace = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)?.(task.workspace);
-      } catch {}
+      const workspace = quietlyResolved();
       if (workspace) stopRootIfRefsMoved(workspace);
     };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
@@ -1976,10 +1987,10 @@ export function createLanding(deps: LandingDeps): Landing {
       if (error instanceof RootStopped) throw error;
       // ADR 0402 決定3: 版の門が止めた根は昇格失敗の question を立てずに待ち、次の収束が撃ち直す。答えている回答は版の不一致を名指して拒まれる
       if (error instanceof GhVersionError) throw new RootStopped({ kind: "quarantined", error: error.message });
-      // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
-      if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
-        return quarantined("workspace", resolvedWorkspace);
-      }
+      // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)。主経路の解決より前の
+      // 断念・hold の枝で落ちた根も同じ(ADR 0403 決定2)
+      const name = resolvedWorkspace ?? quietlyResolved()?.name;
+      if (name !== undefined && workspaceNeedsHuman(deps.db, name)) return quarantined("workspace", name);
       return failed(task, "promotion_failed", error, ctx);
     }
   };

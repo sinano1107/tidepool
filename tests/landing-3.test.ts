@@ -72,6 +72,7 @@ import {
   commitThroughTaskCheckout,
   convergeOn,
   droppedRepair,
+  failPrepareOnce,
   fetchHeldAtToken,
   finish,
   forkHead,
@@ -1618,23 +1619,18 @@ it("workspace を解決できず昇格失敗の question に写す tip が読め
   expect(promotionFailures(c.db, c.work.id)).toEqual([expect.objectContaining({ question_landing_tip: null })]);
 });
 
-/** 根の PR の決着の読み(回が根ごとに `landRoot` の境界の外で最初に読む記録)を1回だけ落とす。 */
-function failFirstRootRead(db: Db) {
+/** 根の導出の最初の読み(根の PR の決着)を1回だけ落とす —— 回の根ごとの catch に届く想定外の例外。 */
+function failRootDerivationRead(db: Db) {
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const prepare = db.prepare.bind(db);
-  const spy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
-    if (!sql.includes("pr_merge_observed")) return prepare(sql);
-    spy.mockRestore();
-    throw new Error("the board hit a bug");
-  }) as typeof db.prepare);
+  failPrepareOnce(db, "pr_merge_observed", "the board hit a bug");
 }
 
 const LANDING_FAILED = { kind: "failed", reason: "landing_failed" };
 
 // ADR 0403 決定3: 根ごとの catch に落ちた想定外の例外でも、無人の回なら tip 無しの昇格失敗 question を1枚立てる
-it("根の着地が境界の外で例外に落ちた無人の回は、その根に tip が無い昇格失敗 question を1枚立てる", async () => {
-  const c = await pushedRoot("landing-floor-raises");
-  failFirstRootRead(c.db);
+it("根の導出の読みが例外に落ちた無人の回は、その根に tip が無い昇格失敗 question を1枚立てる", async () => {
+  const c = await pushedRoot("landing-per-root-catch-raises");
+  failRootDerivationRead(c.db);
 
   expect(await convergeOn(c.landing, c.work.id)).toMatchObject(LANDING_FAILED);
   expect(promotionFailures(c.db, c.work.id)).toEqual([
@@ -1642,20 +1638,20 @@ it("根の着地が境界の外で例外に落ちた無人の回は、その根�
   ]);
 });
 
-it("根の着地が境界の外で例外に落ちても、その根に昇格失敗 question が開いていれば重ねない", async () => {
-  const c = await pushedRoot("landing-floor-open-question", { openFailure: true });
+it("根の導出の読みが例外に落ちても、その根に昇格失敗 question が開いていれば重ねない", async () => {
+  const c = await pushedRoot("landing-per-root-catch-open-question", { openFailure: true });
   const before = promotionFailures(c.db, c.work.id);
-  failFirstRootRead(c.db);
+  failRootDerivationRead(c.db);
 
   expect(await convergeOn(c.landing, c.work.id)).toMatchObject(LANDING_FAILED);
   expect(promotionFailures(c.db, c.work.id)).toEqual(before);
 });
 
-it("根の着地が境界の外で例外に落ちても、その根に答えている回答がある回は question を立てない", async () => {
-  const pr = await openPushedPr("landing-floor-answering", "escalate");
+it("根の導出の読みが例外に落ちても、その根に答えている回答がある回は question を立てない", async () => {
+  const pr = await openPushedPr("landing-per-root-catch-answering", "escalate");
   finish(pr.db, pr.clock, pr.work);
   const question = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
-  failFirstRootRead(pr.db);
+  failRootDerivationRead(pr.db);
 
   expect(await convergeOn(pr.landing, pr.work.id, question.id)).toMatchObject(LANDING_FAILED);
   expect(promotionFailures(pr.db, pr.work.id)).toEqual([]);
