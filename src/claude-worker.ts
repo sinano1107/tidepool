@@ -1538,16 +1538,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: misconfigured defaults must refuse
     // to start the board rather than wedge the first task
-    let registry: Registry;
+    let registry: Registry | undefined;
     try {
       registry = loadRegistryOrStop(options.db, options.registry, options.clock);
     } catch (err) {
       // ADR 0052 決定4: 読めない registry は騒ぐだけで起動を拒まない —— 止まりは読み込みの1点が立て済み(ADR 0403 決定5)
       if (!(err instanceof RegistryUnreadableError)) throw err;
       console.error(`[registry] the worker's defaults could not be checked at startup; the board is starting anyway: ${err.reason}`);
-      return;
     }
-    this.validateDefaults(registry);
+    if (registry) this.validateDefaults(registry);
   }
 
   /** Boot-time validation only: the configured default workspace/agent/

@@ -707,8 +707,8 @@ function sendExternalStepFailure(res: Response, err: unknown): void {
 }
 
 /** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 は
- *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」3つだけ:
- *  確認不足、確認では買えない拒否、そして外部の一手(fetch / push)の失敗。 */
+ *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」4つだけ:
+ *  確認不足、確認では買えない拒否、外部の一手(fetch / push)の失敗、読めない registry(503 の handler へ投げ直す)。 */
 function respondToDeletionFailure(res: Response, err: unknown): void {
   if (err instanceof DeletionConfirmationRequiredError) {
     // 危険な値の 409 と同じ `confirm_required` の往復に乗る(WebUI 側の
@@ -725,7 +725,7 @@ function respondToDeletionFailure(res: Response, err: unknown): void {
     // 状況が変わらない限り出し直しても通らない
     sendJson(res.status(409), { error: err.message, blocked: true, reasons: err.reasons });
   } else {
-    // ADR 0052 決定1: 着地しなかった削除は起きなかった削除である
+    // ADR 0052 決定1: 着地しなかった削除は起きなかった削除である(読めない registry は 503、ADR 0403 決定5)
     sendExternalStepFailure(res, err);
   }
 }

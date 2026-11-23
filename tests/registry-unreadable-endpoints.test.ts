@@ -1,11 +1,11 @@
 import { afterEach, expect, it } from "vitest";
-import { createAgent } from "../src/agent-create.js";
-import { createProfile } from "../src/profile-create.js";
+import { createAgent, listAgentViews } from "../src/agent-create.js";
+import { createProfile, listProfileViews } from "../src/profile-create.js";
 import { RegistryUnreadableError } from "../src/registry-unreadable.js";
-import { createWorkspace } from "../src/workspace-create.js";
+import { createWorkspace, listWorkspaceViews } from "../src/workspace-create.js";
 import { seedTierNames } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { breakRegistry, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
@@ -54,4 +54,19 @@ it.each([
   });
 
   expect((await api(t.baseUrl, "POST", path, body)).status).toBe(503);
+});
+
+// 一覧の GET は catch を持たないので、読めない registry はそのまま 503 の handler に届く —— 本物の扉の読みで確かめる
+it.each(["/api/agents", "/api/workspaces", "/api/profiles"])("registry が読めないと、GET %s は 503 を返す", async (path) => {
+  const registryDir = await makeRegistry();
+  breakRegistry(registryDir);
+  const registry = { dir: registryDir, mode: "purely-local" as const };
+  const workspacesBaseDir = await tempDir("tidepool-unreadable-");
+  t = await bootTidepool({
+    workspaceAdmin: { list: () => listWorkspaceViews({ registry, workspacesBaseDir, db: t.db }, "configured") },
+    agentAdmin: { list: () => listAgentViews({ registry, db: t.db }) },
+    profileAdmin: { list: () => listProfileViews({ registry, db: t.db }) },
+  });
+
+  expect((await api(t.baseUrl, "GET", path)).status).toBe(503);
 });

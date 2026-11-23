@@ -974,8 +974,8 @@ export function agentTierChangedPayload(proposal: RegistryProposal<Tier>, to: Ti
  *  (ADR 0401 決定6 —— `landAgentTier` と同じ順)。registry の log が読めなければその提案はこの回は照合しない。 */
 export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, registryTiers?: RegistryTiers): void {
   const settings = { ...readExecutionSettings(db), tiers: liveTierRows(db) };
-  // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合しない
-  // —— due 判定は scheduler の poll の中なので、registry が読めないことで pickup を止めない
+  // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合せず、投げない
+  // —— pickup を止めるのは、読みが通る読み込みの1点が立てる registryUnreadable(ADR 0403 決定5)
   let agents: readonly { name: string; tier?: string }[] | null | undefined;
   const readAgents = (list: ListAgentTiers) => {
     try {

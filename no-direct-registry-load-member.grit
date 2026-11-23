@@ -1,0 +1,6 @@
+language js
+
+// no-direct-registry-load.grit の namespace 越しの読み(`import * as r` → `r.loadRegistry`)。対象と除外はそちらと同じ。
+`$_.loadRegistry` as $m where {
+  register_diagnostic(span=$m, message="Read the board's registry through loadRegistryOrStop (ADR 0403 decision 5): a direct loadRegistry throws on an unreadable registry without raising the registryUnreadable stop.", severity="error")
+}

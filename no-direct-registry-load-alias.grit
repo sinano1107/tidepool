@@ -1,0 +1,7 @@
+language js
+
+// no-direct-registry-load.grit の別名の取り込み(`import { loadRegistry as x }`)。対象と除外はそちらと同じ。
+JsNamedImportSpecifier(name=$n) as $s where {
+  $n <: r"loadRegistry",
+  register_diagnostic(span=$s, message="Read the board's registry through loadRegistryOrStop (ADR 0403 decision 5): a direct loadRegistry throws on an unreadable registry without raising the registryUnreadable stop.", severity="error")
+}

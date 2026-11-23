@@ -40,8 +40,8 @@
 			"plugins": ["./no-raw-res-json.grit"]
 		},
 		{
-			"includes": ["**", "!tests/**", "!src/registry.ts", "!src/registry-unreadable.ts"],
-			"plugins": ["./no-direct-registry-load.grit"]
+			"includes": ["**", "!tests/**", "!src/registry-unreadable.ts"],
+			"plugins": ["./no-direct-registry-load.grit", "./no-direct-registry-load-alias.grit", "./no-direct-registry-load-member.grit"]
 		},
 		{
 			"includes": ["src/mcp.ts", "src/management-mcp.ts"],

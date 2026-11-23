@@ -1,9 +1,11 @@
 language js
 
 // ADR 0403 決定5: 盤面の registry は読み込みの1点(loadRegistryOrStop)だけが読む —— 迂回した読みは、読めない registry の止まりを立てずに投げる。
-// 当てない場所は biome.json の override の `includes` が外す。src/registry.ts は loadRegistry の定義、src/registry-unreadable.ts は
-// 読み込みの1点そのもの。tests/ は盤面の DB を持たない fixture と検証が registry を直接読み、止まりを立てる相手がいない。
-// 起動前の seeding のコマンド(ADR 0089)は今 loadRegistry を呼ばないので外さない —— 呼ぶようになったら、そのとき理由を書いて外す。
-`loadRegistry($args)` as $call where {
-  register_diagnostic(span=$call, message="Read the board's registry through loadRegistryOrStop (ADR 0403 decision 5): a direct loadRegistry throws on an unreadable registry without raising the registryUnreadable stop.", severity="error")
+// 呼び出しでなく取り込みを落とす(別名・namespace の迂回は no-direct-registry-load-alias.grit / -member.grit)。当てない場所は biome.json の
+// override の `includes` が外す。src/registry-unreadable.ts は読み込みの1点そのもの。tests/ は盤面の DB を持たない fixture と検証が
+// registry を直接読み、止まりを立てる相手がいない。起動前の seeding のコマンド(ADR 0089)は今 loadRegistry を呼ばないので外さない ——
+// 呼ぶようになったら、そのとき理由を書いて外す。
+JsShorthandNamedImportSpecifier() as $s where {
+  $s <: contains `loadRegistry`,
+  register_diagnostic(span=$s, message="Read the board's registry through loadRegistryOrStop (ADR 0403 decision 5): a direct loadRegistry throws on an unreadable registry without raising the registryUnreadable stop.", severity="error")
 }
