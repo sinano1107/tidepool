@@ -18,6 +18,7 @@ const SETTLED_BY_OBSERVATION_COPY = {
   pr_merge_observed: 'observed · PR merged',
   pr_close_observed: 'observed · PR closed',
   pr_promotion_observed: 'observed · PR promoted',
+  task_branch_lost_observed: 'observed · task branch lost',
   quarantine_released: 'observed · quarantine lifted',
   routing_proposal_stale: 'observed · routing proposal stale',
   routing_proposal_applied: 'observed · routing proposal applied',

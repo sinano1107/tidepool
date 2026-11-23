@@ -46,7 +46,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, endPrRootLanding, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -120,6 +120,7 @@ import {
   type RegisterTaskInput,
   type RegistryProposal,
   registerTask,
+  retireLandingDecisions,
   retryInterviewRoot,
   settleQuestionAsObserved,
   type Task,
@@ -147,7 +148,6 @@ import {
   containmentRepairRoute,
   containmentWorkbenchNotTakenIn,
   DeclaredRepoMismatchError,
-  endLostRootLandings,
   fetchLostTargets,
   firePickupPredicates,
   type HumanWorkPreparation,
@@ -625,8 +625,9 @@ export interface QuarantineCheckDeps {
   /** merge back のやり直し(ADR 0240 決定4)の fetch が使う盤面の GitHub 身元(ADR 0093)。 */
   githubAuth?: GitHubAuth;
   /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
-   *  盤面の外での merge を観測する。Absent → 観測せず、キューの PR は着地待ちに数えられる。 */
-  landing?: Pick<Landing, "observeAutoMergeOutcomes">;
+   *  盤面の外での merge を観測する。ADR 0407 決定2: 失われた ref の give-up は、失われる task のどれかに処理中の印(`isMarked`)が
+   *  付いていれば何も書かずに拒む。Absent → 観測せず(キューの PR は着地待ちに数えられる)、印も読まない。 */
+  landing?: Pick<Landing, "observeAutoMergeOutcomes" | "isMarked">;
   /** 盤面の固定点(ADR 0040 の状態パスと ADR 0377 決定3 の registry clone)。workspace の受理が撃つ pickup の述語が名前の場所との
    *  交差を拒む。Absent → 守る固定点を持たない盤面で、項は並ぶが何も拒まない。 */
   boardState?: BoardStatePath[];
@@ -759,8 +760,6 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       } catch (err) {
         if (!restore || !(err instanceof RefsMovedError)) throw err;
       }
-      // ADR 0397 決定2: 戻さない選択肢は、ref が基準と一致した比較の直後の同じ同期区間で根の着地の終わりを導く —— 戻す選択肢は書き戻しの後に導く
-      if (!restore && !room) endLostRootLandings(deps.db, target, clock.now());
     });
     const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     // ADR 0386 決定4: 項は pickup の門・本文と同じ並び
@@ -826,7 +825,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0380 決定4 / ADR 0395 決定1・3: 失われたと数える前に、タスクブランチの sha は出元 repo、それ以外は origin から取る
     if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
-    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), giveUp ? openQuarantineQuestion(deps.db, "workspace", value)!.id : undefined)) : [];
+    // ADR 0407 決定2: 処理中の印を持つ task のキューの行と question を片づけると印の行為と競る —— `end landing` と同じ形で拒む
+    const giveUpAnswer = giveUp && {
+      question: openQuarantineQuestion(deps.db, "workspace", value)!.id,
+      refuseIfMarked: (lostTaskIds: string[]) => {
+        const refusal = inFlightRefusalOf(deps.db, deps.landing, lostTaskIds);
+        if (refusal) throw new Error(refusal);
+      },
+    };
+    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), giveUpAnswer || undefined)) : [];
     await fire(all, "after-open");
     // ADR 0393 決定3: この回答が刻んだ残した checkout だけを、通っても拒まれても1回告げる —— 同期の手の前後で読むので、ほかの場所の後始末が
     // 刻んだ分は混ざらない
@@ -1702,10 +1709,11 @@ export async function submitAnswer(
         } else if (answers[0] === END_LANDING_OPTION) {
           const root = kind.task_id;
           // 無人 merge の tick は await をまたいで処理中の印を持つ。印がある間に終えると、キューの行の取り下げ(ADR 0399 決定6)が執行中の merge と競る
-          if (deps.landing.isMarked(root)) throw new DomainError(prInFlightRefusal(getTask(deps.db, root)!.pr_number!));
+          const refusal = inFlightRefusalOf(deps.db, deps.landing, [root]);
+          if (refusal) throw new DomainError(refusal);
           // ADR 0399 決定6: キューの行と開いた着地の question の後始末は、回答と同じ transaction で
           withAnswer = (questionId) => {
-            rootRecord = { root, payload: { kind: "landing_ended_pr_left", question_ids: endPrRootLanding(deps.db, root, questionId, now()) } };
+            rootRecord = { root, payload: { kind: "landing_ended_pr_left", question_ids: retireLandingDecisions(deps.db, root, now(), { answering: questionId }) } };
           };
         } else {
           rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };

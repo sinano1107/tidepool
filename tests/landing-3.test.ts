@@ -11,6 +11,7 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   contentLeftBehindLocally,
   createLanding,
+  landingState,
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
@@ -22,7 +23,6 @@ import {
   completeTask,
   getTask,
   listBoard,
-  lostTaskIsTransparent,
   pickupTask,
   registerTask,
   type Task,
@@ -2078,8 +2078,9 @@ it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠けた loc
   expect(boardEvents(db, work.id, "local_merge_executed").map(({ payload }) => payload)).toEqual([{ kind: "local_merge_executed", sha: landed }]);
   expect(getTask(db, question.id)!.status).toBe("done");
   const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
-  const lost = appendEvent(db, { taskId: work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: tip }, at: clock.now() });
-  expect(lostTaskIsTransparent(db, work.id, { id: lost, payload: { sha: tip } }, [])).toBe(true);
+  appendEvent(db, { taskId: work.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: tip }, at: clock.now() });
+  // 透明な失われた work は成果を失っていないので、行は「ブランチが失われて終了」を出さない(死んだなら `branch_lost`、ADR 0407 帰結)
+  expect(landingState(db, getTask(db, work.id)!)).toBeNull();
 });
 
 // ADR 0401 決定4: 載った内容に断念を刻まない —— 出口は merge

@@ -1051,17 +1051,33 @@ export function localLandingOpenOrExecutedSql(taskRef: string): string {
            OR EXISTS (SELECT 1 FROM events e WHERE e.task_id = ${taskRef} AND e.kind = 'local_merge_executed'))`;
 }
 
-/** 着地が終わった根の記録の kind —— merge の記録か内容で終わった PR の根(`landing_finished`、ADR 0265 決定3)、運ぶ内容が無かった根
- *  (`nothing_to_land`)、ブランチを失って終えた根(`landing_ended_branch_lost`、ADR 0375 決定7)、人間が着地を終えた PR の根
- *  (`landing_ended_pr_left`、ADR 0399 決定6)。収束の候補・着地を待つ数え・削除の扉・
- *  失われた根の着地の終わりの判定(ADR 0397 決定1)が読む1つの列(landing.ts は import の向きでここから読む)。 */
-export const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_branch_lost', 'landing_ended_pr_left')";
+/** 着地の終わりの記録の kind —— merge の記録か内容で終わった PR の根(`landing_finished`、ADR 0265 決定3)、運ぶ内容が無かった根
+ *  (`nothing_to_land`)、人間が着地を終えた PR の根(`landing_ended_pr_left`、ADR 0399 決定6)。`landingEndedSql` だけが読む。 */
+const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_pr_left')";
+
+/** `taskBranchLostInForce` の SQL の対(ADR 0375 決定2): 失われた event の後に `task_branch_created` が無い。 */
+function taskBranchLostInForceSql(taskRef: string): string {
+  return `EXISTS (SELECT 1 FROM events lost WHERE lost.task_id = ${taskRef} AND lost.kind = 'task_branch_lost'
+            AND NOT EXISTS (SELECT 1 FROM events made WHERE made.task_id = ${taskRef} AND made.kind = 'task_branch_created' AND made.id > lost.id))`;
+}
+
+/** 着地が終わった task の唯一の SQL 述語: 着地の終わりの記録か、効いている失われた event(ADR 0407 決定1 —— 終わりの記録は書かず、根か・
+ *  種類・PR の有無を問わない)。収束の候補・PR の根が子孫を外す読み・着地を待つ数え・削除の扉が読む(landing.ts は import の向きでここから読む)。 */
+export function landingEndedSql(taskRef: string): string {
+  return `(EXISTS (SELECT 1 FROM events ended WHERE ended.task_id = ${taskRef} AND ended.kind IN ${LANDING_ENDED_KINDS_SQL})
+           OR ${taskBranchLostInForceSql(taskRef)})`;
+}
+
+/** `landingEndedSql` の1件の読み —— 収束の回の途中で終わった根(give-up・「end landing」)を、撃つ直前に読み直す口。 */
+export function landingEnded(db: Db, taskId: string): boolean {
+  return db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${landingEndedSql("t.id")}`).get(taskId) !== undefined;
+}
 
 /** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地が終わった)SQL 述語。
  *  workspace の削除の扉が数える線はこれを読む。 */
 function taskHasLandedSql(taskRef: string): string {
-  return `(EXISTS (SELECT 1 FROM events
-                    WHERE task_id = ${taskRef} AND (kind = 'pr_opened' OR kind IN ${LANDING_ENDED_KINDS_SQL}))
+  return `(EXISTS (SELECT 1 FROM events WHERE task_id = ${taskRef} AND kind = 'pr_opened')
+           OR ${landingEndedSql(taskRef)}
            OR ${localLandingOpenOrExecutedSql(taskRef)})`;
 }
 
@@ -1176,7 +1192,7 @@ const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr
 
 /** ADR 0380 決定1 / ADR 0375 決定2: handoff だけ —— 失われた sha が、失われた event の直前の `task_branch_created` の作成時の sha と同じ。
  *  作成時の sha を持たない `task_branch_created` は編集があった側。 */
-export function lostAsCreated(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }): boolean {
+function lostAsCreated(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }): boolean {
   return latestEventOfTask(db, taskId, "task_branch_created", lost.id)?.payload.sha === lost.payload.sha;
 }
 
@@ -1186,7 +1202,7 @@ export function lostAsCreated(db: Db, taskId: string, lost: { id: number; payloa
  *  ADR 0380 Status 追記(#3297): 数える記録は失われた event より前のもの —— 失われた後の記録は失われた内容を運べない(届いた merge back は
  *  tip の object を残す、ADR 0375 決定1)ので、透明か死んだかは失われた時点で決まり、生きている根が後で着地しても変わらない(同 決定6)。
  *  `asOf` を渡せば完了もその event より前で読む(当時版の Authority、ADR 0380 帰結)。 */
-export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[], asOf?: number): boolean {
+function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number; payload: { sha: string } }, counted: string[], asOf?: number): boolean {
   if (lostAsCreated(db, taskId, lost)) return true;
   const completed = latestEventOfTask(db, taskId, "task_completed", asOf);
   if (!completed) return false;
@@ -1199,6 +1215,15 @@ export function lostTaskIsTransparent(db: Db, taskId: string, lost: { id: number
       )
       .get(...holders, ...REACHED_PROTECTED_BRANCH_KINDS, completed.id, lost.id) !== undefined
   );
+}
+
+/** ADR 0380 決定1 / ADR 0407 帰結: 効いている失われた event を持ち、透明でない(死んだ)done の work —— 行の「ブランチが失われて終了」。
+ *  受験者は着地しない(ADR 0199)ので数えない。 */
+export function lostWorkIsDead(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "parent_id" | "interview_target_id"> & { status: string }): boolean {
+  const lost = task.type === "work" && task.status === "done" && task.interview_target_id === null ? taskBranchLostInForce(db, task.id) : undefined;
+  if (!lost) return false;
+  const workspace = derivedWorkspace(db, task);
+  return !lostTaskIsTransparent(db, task.id, lost, workspace === null ? [] : countedAncestors(db, workspace, task).map(({ id }) => id));
 }
 
 /** 人間担当の work か —— 着地の根では「人間の根」(ADR 0374 決定13): profile を引かず、常に merge question で着地する。 */
@@ -1237,7 +1262,8 @@ function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
       `WITH RECURSIVE under_relanding(id) AS (
          SELECT p.id FROM tasks p
           WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done' AND p.interview_target_id IS NULL
-            AND (p.pr_number IS NOT NULL OR NOT ${taskHasLandedSql("p.id")})
+            -- ADR 0407 決定1: PR の根も、失われた event が効いていれば着地し直さない
+            AND NOT ${taskBranchLostInForceSql("p.id")} AND (p.pr_number IS NOT NULL OR NOT ${taskHasLandedSql("p.id")})
          UNION
          SELECT c.id FROM tasks c JOIN under_relanding r ON c.parent_id = r.id)
        SELECT COUNT(*) AS n FROM tasks
@@ -3329,8 +3355,9 @@ export function mergeQuestionWasReplaced(db: Db, question: Pick<Task, "id" | "qu
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
  *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻み(ADR 0265 決定1)、根が既に
- *  決着を持っていれば null で刻まない —— question だけを閉じる。`payload` が null でも question だけを閉じる(give-up が終えた根の着地の
- *  question —— 理由は根の記録が持つ、ADR 0375 決定8)。観測 event を刻んだら true。 */
+ *  決着を持っていれば null で刻まない —— question だけを閉じる。`payload` が null でも question だけを閉じる(「end landing」の回答が閉じる
+ *  根の着地の question —— 理由は根の `landing_ended_pr_left` が持つ、ADR 0399 決定6。失われた ref の give-up は理由を question に刻む、ADR 0407 決定2)。
+ *  観測 event を刻んだら true。 */
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
@@ -3356,12 +3383,35 @@ export function settleQuestionAsObserved(
 
 /** Queues a completed low-risk task's PR for the auto_if_ci_green poll (issue
  *  #11) — recordPrOpened's low-risk branch is the only writer; the landing
- *  module (landing.ts) is the only reader/deleter. */
+ *  module (landing.ts) is the only reader. Rows leave only through `clearPendingAutoMerge`. */
 function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
   db.prepare("INSERT INTO pending_auto_merges (task_id, pr_number) VALUES (?, ?)").run(
     taskId,
     prNumber,
   );
+}
+
+/** task を無人 merge キューから外す。 */
+export function clearPendingAutoMerge(db: Db, taskId: string): void {
+  db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
+}
+
+/** task `taskId` の着地の決裁を引退させる: 無人 merge キューから外し、その task を指す開いた着地の question(merge・昇格失敗・local 着地)を
+ *  回答なしで閉じる。「end landing」の回答(ADR 0399 決定6 —— 答えている `answering` は除き、何も刻まない)と、失われた ref を諦める受理
+ *  (ADR 0407 決定2 —— 根でない失われた task にも当て、`stampBranchLost` で閉じた理由を閉じた question 自身に刻む)が共有する。呼び手の
+ *  transaction の中で呼ぶ。閉じた question の id を返す。 */
+export function retireLandingDecisions(db: Db, taskId: string, now: Date, { answering, stampBranchLost = false }: { answering?: string; stampBranchLost?: boolean }): string[] {
+  clearPendingAutoMerge(db, taskId);
+  const open = db
+    .prepare(
+      `SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND id IS NOT @answering
+          AND @task IN (question_pending_merge_task_id, question_pending_pr_promotion_task_id, question_pending_local_merge_task_id)
+        ORDER BY rowid`,
+    )
+    .pluck()
+    .all({ task: taskId, answering: answering ?? null }) as string[];
+  for (const id of open) settleQuestionAsObserved(db, id, stampBranchLost ? { kind: "task_branch_lost_observed" } : null, now);
+  return open;
 }
 
 /** The task's PR number — set when the board opens its PR, and when landing finds one already on the

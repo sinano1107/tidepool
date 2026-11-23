@@ -6,44 +6,40 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { completeThroughHumanDoor, quarantineChecks, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
-import { blockingRootOf, contentLeftBehindLocally, createLanding, landingState, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, contentLeftBehindLocally, createLanding, type Landing, landingState, prInFlightRefusal, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listBoard, listChildren, type RegisterTaskInput, recordPrNumber, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
+import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listBoard, listChildren, type RegisterTaskInput, recordPrOpened, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import { boardRefWriter, LostTaskBranchPresentError, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, removeReleasedTaskCheckoutsOn, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
-import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, settleReviews, WORKER_SPAWNED } from "./harness.js";
+import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
+import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, settleReviews, WORKER_SPAWNED } from "./harness.js";
+import { attachUnsettledChild, commitThroughTaskCheckout, completeThroughTaskCheckout, finish, landingWork, openBoard, promotionFailures } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 // 失われたタスクブランチを系譜が記録で読む(ADR 0375 決定1・2、ADR 0380 決定1・3、spec #3273 group H、#3297)。domain 層の釘(ADR 0107)。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-/** 系譜の読み(決着した祖先 `task/<id>` への `rev-list --count`)を、`skip` 回通した次の1回だけ落とす注入 —— 既定は素通し。 */
-const lineageReadFault = vi.hoisted(() => ({ armed: undefined as { ancestor: string; skip: number } | undefined }));
+/** git の呼び出しの引数の記録 —— 失われた `task/<id>` を git で読む経路が無いことの釘(ADR 0407 決定1)。既定は素通し。 */
+const gitCalls = vi.hoisted(() => [] as string[][]);
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
   return {
     ...actual,
     git: (cwd: string, ...args: string[]) => {
-      const armed = lineageReadFault.armed;
-      if (armed && args[0] === "rev-list" && args.at(-1)?.endsWith(`..task/${armed.ancestor}`) && armed.skip-- === 0) {
-        lineageReadFault.armed = undefined;
-        throw new Error(`injected lineage read failure on task/${armed.ancestor}`);
-      }
+      gitCalls.push(args);
       return actual.git(cwd, ...args);
     },
   };
 });
-/** 決着した祖先 `ancestor` を読む系譜の読みを、`skip` 回通した次の1回だけ落とす。テストの終わりに外す。 */
-function failLineageRead(ancestor: Task, skip = 0): void {
-  lineageReadFault.armed = { ancestor: ancestor.id, skip };
-  onTestFinished(() => {
-    lineageReadFault.armed = undefined;
-  });
+/** `run` の間に、`taskIds` のどれかの `task/<id>` を名指した git の呼び出し。 */
+async function gitReadsOf<T>(taskIds: string[], run: () => T | Promise<T>): Promise<{ result: T; reads: string[][] }> {
+  gitCalls.length = 0;
+  const result = await run();
+  return { result, reads: gitCalls.filter((args) => args.some((arg) => taskIds.some((id) => arg.includes(`task/${id}`)))) };
 }
 
 const GIVE_UP = "give up the lost refs and restore the baseline";
@@ -601,15 +597,20 @@ it("give-up は死んだ task と、死んだ祖先を系譜に数える task �
 const landingFor = (b: Board) => createLanding({ defaultAgentName: "deckhand", db: b.db, clock: b.clock, workspace: b.ws, github: null });
 const answer = (b: Board, questionId: string, option: string) =>
   submitAnswer({ db: b.db, pollNow: () => {}, landing: unusedLanding, workspace: b.ws, workspacesDir: b.base }, getTask(b.db, questionId)!, [option], undefined, () => b.clock.now(), "webui");
-/** 盤面に見える、根を名指す開いた着地の question(local 着地・昇格失敗)。 */
+/** 盤面に見える、根を名指す開いた着地の question(local 着地・昇格失敗・merge)。 */
 const openLandingQuestions = (b: Board, root: Task) =>
   listBoard(b.db)
-    .filter((q) => q.status === "todo" && (q.question_pending_local_merge_task_id === root.id || q.question_pending_pr_promotion_task_id === root.id))
+    .filter(
+      (q) =>
+        q.status === "todo" &&
+        (q.question_pending_local_merge_task_id === root.id || q.question_pending_pr_promotion_task_id === root.id || q.question_pending_merge_task_id === root.id),
+    )
     .map(({ id }) => id);
-const ended = (b: Board, root: Task) =>
-  listEventsOfKinds(b.db, ["landing_ended_branch_lost", "nothing_to_land"]).filter(({ task_id }) => task_id === root.id).map(({ payload }) => payload);
+/** 観測で閉じた question の印(ADR 0265 決定7)—— give-up が閉じた着地の question は「ブランチが失われた」と読まれる(#3490)。 */
+const settledMarks = (b: Board, ids: string[]) => ids.map((id) => settledByObservation(b.db, getTask(b.db, id)!));
+const closedByLostBranch = (ids: string[]) => ids.map(() => "task_branch_lost_observed");
 
-/** 着地がどこまで進んでいたか(ADR 0375 決定7)—— どの形でも、死んだ根の着地は give-up で終わる。 */
+/** 着地がどこまで進んでいたか —— どの形でも、死んだ根の着地は give-up で終わる。 */
 const LANDING_SO_FAR: Array<[string, (b: Board, root: Task) => Promise<void>]> = [
   ["着地の前", async () => {}],
   ["local 着地の question が開いている", async (b) => void (await landingFor(b).converge())],
@@ -630,7 +631,7 @@ const LANDING_SO_FAR: Array<[string, (b: Board, root: Task) => Promise<void>]> =
   ],
 ];
 
-it.each(LANDING_SO_FAR)("PR の無い死んだ根の着地は give-up で終わる(%s)—— 開いた着地の question は閉じて記録が名指し、着地を待たず、削除の扉を塞がず、後の収束も問い直さず、行は `branch_lost` を出す(ADR 0375 決定7・8、pin H1・H11・H13)", async (_, before) => {
+it.each(LANDING_SO_FAR)("PR の無い死んだ根の着地は give-up で終わる(%s)—— 開いた着地の question はブランチが失われたので閉じたと読まれ、着地を待たず、削除の扉を塞がず、後の収束も問い直さず、行は `branch_lost` を出す(ADR 0407 決定1・2、#3490)", async (_, before) => {
   const b = await board("dead-root-landing-ends");
   const root = await completeThrough(b, work(b, "root"), "root.txt");
   await before(b, root);
@@ -640,8 +641,7 @@ it.each(LANDING_SO_FAR)("PR の無い死んだ根の着地は give-up で終わ�
 
   expect(accepted(b)).toBe(true);
   expect(openLandingQuestions(b, root)).toEqual([]);
-  expect(open.map((id) => getTask(b.db, id)!.status)).toEqual(open.map(() => "done"));
-  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(settledMarks(b, open)).toEqual(closedByLostBranch(open));
   expect(landingState(b.db, getTask(b.db, root.id)!)).toBe("branch_lost");
   expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
   expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
@@ -649,7 +649,7 @@ it.each(LANDING_SO_FAR)("PR の無い死んだ根の着地は give-up で終わ�
   expect(openLandingQuestions(b, root)).toEqual([]);
 });
 
-it("handoff だけの根(失われた sha = 作成時の sha)はレビューを残し、着地は受理が刻む `nothing_to_land` で終わり、開いた着地の question は閉じる(ADR 0375 決定7・8、ADR 0380 決定1、pin H4)", async () => {
+it("handoff だけの根(失われた sha = 作成時の sha)はレビューを残し、着地は終わりの記録なしに終わり、開いた着地の question は閉じ、行は何も出さない(ADR 0407 決定1・4、ADR 0380 決定1、pin H4)", async () => {
   const b = await seededBoard("handoff-only-root");
   const root = work(b, "root");
   seedThroughBoard(b, root.id, git(b.ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "created here, never edited"));
@@ -657,14 +657,91 @@ it("handoff だけの根(失われた sha = 作成時の sha)はレビューを�
   const review = humanTask(b, { type: "review", title: "human review", parent_id: root.id });
   registerLocalMergeQuestion(b.db, getTask(b.db, root.id)!, "land it?", b.clock.now());
   registerPrPromotionFailureQuestion(b.db, getTask(b.db, root.id)!, "gh failed", b.clock.now());
+  const open = openLandingQuestions(b, root);
 
   await giveUp(b, root.id);
 
   expect(accepted(b)).toBe(true);
   expect(statusOf(b, review)).toBe("todo");
-  expect(ended(b, root)).toEqual([{ kind: "nothing_to_land", base: "main" }]);
-  expect(openLandingQuestions(b, root)).toEqual([]);
+  expect(listEventsOfKinds(b.db, ["nothing_to_land"])).toEqual([]);
+  expect(settledMarks(b, open)).toEqual(closedByLostBranch(open));
+  expect(landingState(b.db, getTask(b.db, root.id)!)).toBeNull();
   expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
+});
+
+/** PR を開いた done の根 —— `merge` が `escalate` なら merge question が立ち、`auto_if_ci_green` なら無人 merge キューに入る。 */
+async function prRoot(b: Board, title: string, merge: "escalate" | "auto_if_ci_green", prNumber: number): Promise<Task> {
+  const root = await completeThrough(b, work(b, title), `${title}.txt`);
+  recordPrOpened(b.db, root, prNumber, git(b.ws.path, "rev-parse", `task/${root.id}`), b.clock.now(), { merge }, false);
+  return getTask(b.db, root.id)!;
+}
+
+it("give-up は失われた PR の根の merge question・昇格失敗の question・local 着地の question を閉じ、無人 merge キューから外す —— どれもブランチが失われたので閉じたと読まれ、行は `branch_lost` を出し、PR は GitHub に残す(ADR 0407 決定2・3、#3490)", async () => {
+  const b = await board("lost-pr-roots");
+  const asked = await prRoot(b, "asked", "escalate", 1);
+  registerPrPromotionFailureQuestion(b.db, asked, "gh failed", b.clock.now());
+  registerLocalMergeQuestion(b.db, asked, "land it?", b.clock.now());
+  const queued = await prRoot(b, "queued", "auto_if_ci_green", 2);
+  const open = openLandingQuestions(b, asked);
+  expect(open).toHaveLength(3);
+  expect([asked, queued].map((root) => landingState(b.db, root))).toEqual(["merge_question", "auto_merge_queue"]);
+
+  await giveUp(b, asked.id, queued.id);
+
+  expect(accepted(b)).toBe(true);
+  expect(openLandingQuestions(b, asked)).toEqual([]);
+  expect(settledMarks(b, open)).toEqual(closedByLostBranch(open));
+  expect([asked, queued].map((root) => landingState(b.db, getTask(b.db, root.id)!))).toEqual(["branch_lost", "branch_lost"]);
+  expect([asked, queued].map((root) => getTask(b.db, root.id)!.pr_number)).toEqual([1, 2]);
+  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
+  expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
+});
+
+it("workspace の削除の扉は、失われた PR の根を着地し直す根に数えず、その下の別の workspace の未決着の子孫で塞がない(ADR 0407 決定1、ADR 0234 決定1)", async () => {
+  const b = await board("lost-pr-root-delete-door");
+  const root = await prRoot(b, "asked", "escalate", 1);
+  const elsewhere = work(b, "elsewhere", { parent_id: root.id });
+  fillEmptyWorkspace(b.db, elsewhere.id, "elsewhere");
+
+  await giveUp(b, root.id);
+
+  expect(statusOf(b, elsewhere)).toBe("todo");
+  expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
+});
+
+it("盤面が失われる task に執行の印を持つ間の give-up は、何も書かずに `prInFlightRefusal` の形で拒み、Quarantine は開いたまま —— 印が放れた後の give-up は通る(ADR 0407 決定2、ADR 0399 決定6)", async () => {
+  const b = await board("lost-root-marked");
+  const root = await prRoot(b, "asked", "escalate", 1);
+  const open = openLandingQuestions(b, root);
+  const landing = landingFor(b);
+  const release = landing.takeInFlightMark(root.id)!;
+  const giveUpWith = () =>
+    submitAnswer(
+      { db: b.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db: b.db, workspace: b.ws, workspacesDir: b.base, landing }) },
+      quarantineQuestion(b.db, "workspace", b.ws.name)!,
+      [GIVE_UP],
+      undefined,
+      () => b.clock.now(),
+      "webui",
+    );
+  git(b.ws.path, "update-ref", "-d", `refs/heads/task/${root.id}`);
+  git(b.ws.path, "reflog", "expire", "--expire=now", "--all");
+  git(b.ws.path, "gc", "--quiet", "--prune=now");
+  quarantineWorkspace(b.db, b.ws.name, new Error("a human deleted task branches"), b.clock.now());
+
+  const refused = giveUpWith();
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow(prInFlightRefusal(1));
+
+  expect(accepted(b)).toBe(false);
+  expect(lostEvents(b.db)).toEqual([]);
+  expect(openLandingQuestions(b, root)).toEqual(open);
+
+  release();
+  await giveUpWith();
+
+  expect(accepted(b)).toBe(true);
+  expect(openLandingQuestions(b, root)).toEqual([]);
 });
 
 /** 子のブランチと同じ出来事で、親のブランチに起きたこと —— どれも object は残り、書き戻しが基準の値へ戻す。 */
@@ -674,7 +751,7 @@ const PARENT_INCIDENT: Array<[string, (b: Board, parent: Task) => void]> = [
   ["消えたが戻せる", (b, parent) => git(b.ws.path, "update-ref", "-d", `refs/heads/task/${parent.id}`)],
 ];
 
-it.each(PARENT_INCIDENT)("親のブランチが残り子のブランチだけが失われたら(親のブランチは%s)、親の着地は止めない —— event は子が持ち、子は着地の記録も状態も持たない(ADR 0375 決定6、pin H5)", async (_, incident) => {
+it.each(PARENT_INCIDENT)("親のブランチが残り子のブランチだけが失われたら(親のブランチは%s)、親の着地は止めない —— event は子が持ち、merge back が届かないまま失われた子の行は根でなくても `branch_lost` を出す(ADR 0375 決定6、ADR 0407 帰結、pin H5)", async (_, incident) => {
   const b = await board("lost-child-living-parent");
   const parent = work(b, "parent");
   const child = await completeUndelivered(b, work(b, "child", { parent_id: parent.id }), "child.txt");
@@ -687,14 +764,13 @@ it.each(PARENT_INCIDENT)("親のブランチが残り子のブランチだけが
   expect(accepted(b)).toBe(true);
   expect(git(b.ws.path, "rev-parse", `task/${parent.id}`)).toBe(parentTip);
   expect(lostEvents(b.db).map(({ task_id }) => task_id)).toEqual([child.id]);
-  expect([ended(b, parent), ended(b, child)]).toEqual([[], []]);
-  expect(landingState(b.db, getTask(b.db, child.id)!)).toBeNull();
+  expect(landingState(b.db, getTask(b.db, child.id)!)).toBe("branch_lost");
   expect(statusOf(b, parentReview)).toBe("todo");
   settleReviews(b.db, b.clock.now());
   expect((await landingFor(b).converge()).find(({ taskId }) => taskId === parent.id)?.verdict).toEqual({ kind: "landed", form: "local_merge_question" });
 });
 
-it("event・倒したもの・閉じた question は書き戻しと一緒に書かれ、後の段(merge back のやり直しの conflict)で回答が拒まれても残る(ADR 0375 決定9、pin H6)", async () => {
+it("event・倒したもの・閉じた question は書き戻しと一緒に書かれ、後の段(merge back のやり直しの conflict)で回答が拒まれても残る(ADR 0375 決定9、ADR 0407 決定2、pin H6)", async () => {
   const b = await board("lost-records-survive-refusal");
   // 届いていない子の merge back が親と conflict する —— spec #3273 受理の 11 が拒む
   const parent = work(b, "parent");
@@ -704,7 +780,7 @@ it("event・倒したもの・閉じた question は書き戻しと一緒に書�
   releaseWorkspace(b.db, place, getTask(b.db, parent.id)!, b.clock.now());
   const dead = await completeThrough(b, work(b, "dead"), "dead.txt");
   await landingFor(b).converge();
-  const [question] = openLandingQuestions(b, dead);
+  const open = openLandingQuestions(b, dead);
   const review = humanTask(b, { type: "review", title: "human review", parent_id: dead.id });
 
   await expect(giveUp(b, dead.id)).rejects.toThrow(/does not merge cleanly/);
@@ -713,7 +789,7 @@ it("event・倒したもの・閉じた question は書き戻しと一緒に書�
   expect(lostEvents(b.db).map(({ task_id }) => task_id)).toEqual([dead.id]);
   expect(statusOf(b, review)).toBe("cancelled");
   expect(openLandingQuestions(b, dead)).toEqual([]);
-  expect(ended(b, dead)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: [question] }]);
+  expect(settledMarks(b, open)).toEqual(closedByLostBranch(open));
 });
 
 /** PR の無い死んだ根に `openLanding` で着地の question を開かせ(既定は収束が立てる local 着地の question)、その `task/<id>` を失わせ、
@@ -752,153 +828,51 @@ const lockStray = (b: Board) => {
 /** 書いて畳む前に盤面が落ちる —— give-up の transaction の1値への UPDATE を通すので、2値の行を畳むときだけ落とす。 */
 const dropBeforeFold = (b: Board) => dropBoardBeforeFold(b.db, { foldOnly: true });
 
-it("書き戻しが落ちた give-up の後も Quarantine は開いたまま残り、次の `restore the baseline` の受理が記録から根の着地を終え、local 着地の question を閉じる —— 収束は問い直さず、削除の扉を塞がない(ADR 0397 決定1・2・4)", async () => {
-  const { b, root, open, refusal, repair } = await giveUpWithFailedWriteBack("write-back-fails-then-restore", lockStray);
-  expect(String(refusal)).toContain("stray.lock");
+/** 着地の question を3種類とも開く: PR #1 の merge question(`escalate`)・昇格失敗・local 着地。 */
+const openEveryLandingQuestion = (b: Board, root: Task) => {
+  recordPrOpened(b.db, root, 1, git(b.ws.path, "rev-parse", `task/${root.id}`), b.clock.now(), { merge: "escalate" }, false);
+  registerPrPromotionFailureQuestion(b.db, getTask(b.db, root.id)!, "gh failed", b.clock.now());
+  registerLocalMergeQuestion(b.db, getTask(b.db, root.id)!, "land it?", b.clock.now());
+};
+
+it.each([
+  ["stray の `.lock` で書き戻しが落ちる", "write-back-fails-on-lock", lockStray, "stray.lock"],
+  ["書いて畳む前に盤面が落ちる", "write-back-fails-board-drops", dropBeforeFold, "the board dropped"],
+] as const)("give-up の書き戻しが落ちても(%s)、失われた event と同じ transaction で閉じた着地の question(merge・昇格失敗・local 着地)はブランチが失われたので閉じたと読まれ、収束は問い直さず、Quarantine は開いたまま次の受理が通る(ADR 0407 決定2)", async (_, name, breakWriteBack, message) => {
+  const { b, root, open, refusal, repair } = await giveUpWithFailedWriteBack(name, breakWriteBack, openEveryLandingQuestion);
+  expect(String(refusal)).toContain(message);
   expect(accepted(b)).toBe(false);
   expect(taskBranchLostInForce(b.db, root.id)).toBeDefined();
-  expect(ended(b, root)).toEqual([]);
-  repair();
-
-  await answerQuarantine(b, "restore the baseline");
-
-  expect(accepted(b)).toBe(true);
-  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(open).toHaveLength(3);
   expect(openLandingQuestions(b, root)).toEqual([]);
+  expect(settledMarks(b, open)).toEqual(closedByLostBranch(open));
   expect((await landingFor(b).converge()).map(({ taskId }) => taskId)).not.toContain(root.id);
-  expect(openLandingQuestions(b, root)).toEqual([]);
   expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
-});
-
-it("書き戻しを書いて畳む前に盤面が落ちた give-up の後、ref が基準どおりになった `repaired by hand` の受理も根の着地を終える(ADR 0397 決定1・2・4)", async () => {
-  const { b, root, open, refusal, repair } = await giveUpWithFailedWriteBack("board-drops-then-repaired-by-hand", dropBeforeFold);
-  expect(String(refusal)).toContain("the board dropped");
-  expect(accepted(b)).toBe(false);
-  expect(taskBranchLostInForce(b.db, root.id)).toBeDefined();
-  expect(git(b.ws.path, "for-each-ref", "refs/heads/stray")).toBe("");
   repair();
-
-  await answerQuarantine(b, "repaired by hand");
-
-  expect(accepted(b)).toBe(true);
-  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
-  expect(openLandingQuestions(b, root)).toEqual([]);
-});
-
-it("昇格失敗の question が開いた失われた根は、収束が着地を終えず question も閉じない —— 終えて閉じるのは次の受理(ADR 0240 決定2、ADR 0397 決定2・3、ADR 0375 決定8)", async () => {
-  const { b, root, open, refusal, repair } = await giveUpWithFailedWriteBack("convergence-leaves-open-promotion-question", dropBeforeFold, (b, root) =>
-    registerPrPromotionFailureQuestion(b.db, root, "gh failed", b.clock.now()),
-  );
-  expect(String(refusal)).toContain("the board dropped");
-  expect(open).toHaveLength(1);
-  repair();
-
-  await landingFor(b).converge();
-
-  expect(ended(b, root)).toEqual([]);
-  expect(openLandingQuestions(b, root)).toEqual(open);
-
-  await answerQuarantine(b, "repaired by hand");
-
-  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
-  expect(openLandingQuestions(b, root)).toEqual([]);
-});
-
-it("親が生きている間に失われた死んだ子は、親の local 着地の後に根と読まれると、収束が失われたブランチを git で読まずに着地を終える —— 昇格失敗の question を立てず、着地を待つ完了タスクに数えない(ADR 0397 決定3)", async () => {
-  const b = await board("dead-child-becomes-root");
-  const parent = work(b, "parent");
-  const child = await completeUndelivered(b, work(b, "child", { parent_id: parent.id }), "child.txt");
-  await giveUp(b, child.id);
-  expect(accepted(b)).toBe(true);
-  expect(ended(b, child)).toEqual([]);
-  await completeThrough(b, parent, "parent.txt");
-  await landingFor(b).converge();
-  const [question] = openLandingQuestions(b, getTask(b.db, parent.id)!);
-  await answer(b, question!, "merge");
-  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([child.id]);
-
-  const verdicts = await landingFor(b).converge();
-
-  expect(verdicts.filter(({ verdict }) => verdict.kind === "failed")).toEqual([]);
-  expect(ended(b, child)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: [] }]);
-  expect(openLandingQuestions(b, child)).toEqual([]);
-  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
-  expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
-});
-
-/** 着地済みの親の下に後から作った work の根を完了し、収束に local 着地の question を開かせる —— 根の判定の系譜が決着した親を git で読む形。 */
-async function rootUnderLandedParent(name: string) {
-  const b = await board(name);
-  const parent = await completeThrough(b, work(b, "parent"), "parent.txt");
-  await landingFor(b).converge();
-  await answer(b, openLandingQuestions(b, parent)[0]!, "merge");
-  const root = await completeThrough(b, work(b, "root", { parent_id: parent.id }), "root.txt");
-  await landingFor(b).converge();
-  const open = openLandingQuestions(b, root);
-  expect(open).toHaveLength(1);
-  return { b, parent, root, open };
-}
-
-/** 拒まれた受理は Quarantine を閉じず、着地の終わりを書かず、開いた着地の question を閉じない(ADR 0397 決定4)。 */
-function expectRefusedAcceptanceLeftOpen(b: Board, root: Task, open: string[]) {
-  expect(accepted(b)).toBe(false);
-  expect(ended(b, root)).toEqual([]);
-  expect(openLandingQuestions(b, root)).toEqual(open);
-}
-
-it.each(["restore the baseline", "repaired by hand"])("受理の根の判定で系譜の読みが落ちたら give-up も次の `%s` も拒まれ、Quarantine・local 着地の question は開いたまま、着地の終わりも書かれず —— 読みが通る受理が終えて question を閉じる(ADR 0397 決定1・2・4)", async (option) => {
-  const { b, parent, root, open } = await rootUnderLandedParent("lineage-read-fails-at-accept");
-
-  failLineageRead(parent);
-  await expect(giveUp(b, root.id)).rejects.toThrow(`injected lineage read failure on task/${parent.id}`);
-
-  expect(taskBranchLostInForce(b.db, root.id)).toBeDefined();
-  expectRefusedAcceptanceLeftOpen(b, root, open);
-
-  failLineageRead(parent);
-  await expect(answerQuarantine(b, option)).rejects.toThrow(`injected lineage read failure on task/${parent.id}`);
-
-  expectRefusedAcceptanceLeftOpen(b, root, open);
-
-  await answerQuarantine(b, option);
-
-  expect(accepted(b)).toBe(true);
-  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
-  expect(openLandingQuestions(b, root)).toEqual([]);
-});
-
-it("書き戻しを書いた後に根の判定で系譜の読みが落ちた give-up は、拒否の文が外して keep-around に残した値を名指す —— 次の受理は外す値を持たず、着地を終える(ADR 0397 決定4、spec #3273 text B11)", async () => {
-  const { b, parent, root, open } = await rootUnderLandedParent("lineage-read-fails-after-write-back");
-  const stray = git(b.ws.path, "rev-parse", "main");
-
-  failLineageRead(parent);
-  await expect(giveUpAfter(b, () => git(b.ws.path, "update-ref", "refs/heads/stray", stray), root.id)).rejects.toThrow(`refs/heads/stray was ${stray}, kept as refs/keep-around/${stray}`);
-
-  expect(git(b.ws.path, "for-each-ref", "refs/heads/stray")).toBe("");
-  expectRefusedAcceptanceLeftOpen(b, root, open);
 
   await answerQuarantine(b, "restore the baseline");
 
   expect(accepted(b)).toBe(true);
-  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
-  expect(openLandingQuestions(b, root)).toEqual([]);
+  expect(landingState(b.db, getTask(b.db, root.id)!)).toBe("branch_lost");
 });
 
-it("収束は着地の根と読んだ系譜で失われた根の着地を終え、系譜を読み直さない —— 終わりの判定の時点で読みを落としても昇格失敗の question を立てない(ADR 0397 決定3)", async () => {
-  const b = await board("convergence-reuses-root-lineage");
+it("親が生きている間に失われた死んだ子は、親の local 着地の後も着地の根にならない —— 昇格失敗の question を立てず、着地を待つ完了タスクに数えず、行は `branch_lost` を出す(ADR 0407 決定1、#3492)", async () => {
+  const b = await board("dead-child-after-parent-lands");
   const parent = work(b, "parent");
   const child = await completeUndelivered(b, work(b, "child", { parent_id: parent.id }), "child.txt");
   await giveUp(b, child.id);
+  expect(accepted(b)).toBe(true);
   await completeThrough(b, parent, "parent.txt");
   await landingFor(b).converge();
   await answer(b, openLandingQuestions(b, getTask(b.db, parent.id)!)[0]!, "merge");
 
-  failLineageRead(getTask(b.db, parent.id)!, 1);
   const verdicts = await landingFor(b).converge();
 
-  expect(verdicts.filter(({ verdict }) => verdict.kind === "failed")).toEqual([]);
+  expect(verdicts.map(({ taskId }) => taskId)).not.toContain(child.id);
   expect(openLandingQuestions(b, child)).toEqual([]);
-  expect(ended(b, child)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: [] }]);
+  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
+  expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
+  expect(landingState(b.db, getTask(b.db, child.id)!)).toBe("branch_lost");
 });
 
 it("review の権限の文の当時版は spawn の時点の失われた event・`task_branch_created` で読む —— 失われる前の spawn は帰り先あり、失われた後は無し、作り直した後はまたあり(ADR 0380 帰結、pin H16)", async () => {
@@ -915,18 +889,6 @@ it("review の権限の文の当時版は spawn の時点の失われた event�
   expect(whyNoReturnDestination(b.db, rca.id, beforeLost)).toBeUndefined();
   expect(whyNoReturnDestination(b.db, rca.id, afterLost)).toMatch(new RegExp(`^the work of "dead" \\(${dead.id}\\) was lost with its task branch`));
   expect(whyNoReturnDestination(b.db, rca.id, afterRecreated)).toBeUndefined();
-});
-
-it("PR を開いた死んだ根の着地は give-up で終えない —— 内容は GitHub の head に在る(ADR 0375 決定7、pin H1)", async () => {
-  const b = await board("dead-root-with-pr");
-  const root = await completeThrough(b, work(b, "root"), "root.txt");
-  recordPrNumber(b.db, root.id, 7);
-
-  await giveUp(b, root.id);
-
-  expect(accepted(b)).toBe(true);
-  expect(ended(b, root)).toEqual([]);
-  expect(landingState(b.db, getTask(b.db, root.id)!)).not.toBe("branch_lost");
 });
 
 it("spawn の時点で未決着のまま失われていた祖先は、後で作り直して完了しても、その spawn の当時版では死んだと読まない(ADR 0380 帰結、pin H16)", async () => {
@@ -1330,4 +1292,232 @@ it("失われた event の無い解放済みの checkout は今どおり消え�
 
   expect(existsSync(place.path)).toBe(false);
   expect(keptEvents(b.db)).toEqual([]);
+});
+
+// ADR 0407 決定1: 効いている失われた event を持つ task は着地が終わったと読む —— 種類によらず収束の候補に入らず、失われたブランチを git で読まない。
+// 形は #3582 の読み手の表の行。remote-backed の盤面で、失わせるのは盤面の口(基準も一緒に動く)で、event は give-up が書く形を手で刻む。
+
+type RemoteBoard = { db: Db; clock: FakeClock; workspace: WorkspaceConfig; github: FakeGitHubClient; landing: Landing };
+
+async function remoteBoard(name: string): Promise<RemoteBoard> {
+  const { workspace } = await makeLandingWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  return { db, clock, workspace, github, landing: createLanding({ defaultAgentName: "tako", db, clock, workspace, github }) };
+}
+
+/** setup のみ: 盤面の口で `task/<id>` を消し、give-up と同じ `task_branch_lost` を消した tip で刻む。 */
+function loseThroughBoard(c: RemoteBoard, task: Task): void {
+  const ref = `refs/heads/task/${task.id}`;
+  const sha = git(c.workspace.path, "rev-parse", ref);
+  boardRefWriter(c.db, c.workspace)(ref, "", () => git(c.workspace.path, "update-ref", "-d", ref));
+  appendEvent(c.db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: c.clock.now() });
+}
+
+/** 収束が PR #1 を開き、その後に盤面の経路で根に commit を載せた(まだ push していない)根。 */
+async function prRootWithUnpushedCommit(c: RemoteBoard): Promise<Task> {
+  const root = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "feature.txt", "ready\n");
+  await c.landing.converge();
+  expect(getTask(c.db, root.id)!.pr_number).toBe(1);
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, root, "late.txt", "not pushed yet\n");
+  return root;
+}
+
+type LoseOnRemote = (c: RemoteBoard) => Promise<void>;
+
+const loseHandoffOnly: LoseOnRemote = async (c) => {
+  const task = landingWork(c.db, c.clock);
+  const place = await prepareAtPickup(c.db, c.workspace, task);
+  recordTaskCheckoutTip(c.db, place, task.id);
+  releaseWorkspace(c.db, place, finish(c.db, c.clock, task), c.clock.now(), true, undefined, undefined, true);
+  loseThroughBoard(c, task);
+};
+const loseDead: LoseOnRemote = async (c) =>
+  loseThroughBoard(c, await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "dead.txt", "lost\n"));
+const loseTransparentByAncestor: LoseOnRemote = async (c) => {
+  const parent = landingWork(c.db, c.clock);
+  const child = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, attachUnsettledChild(c.db, c.clock, parent.id), "child.txt", "child\n");
+  await completeThroughTaskCheckout(c.db, c.clock, c.workspace, getTask(c.db, parent.id)!, "parent.txt", "parent\n");
+  // fixture の dial は `external` で外の merge を観測しないので、親の内容が届いた記録は手で書く(#3582 の実測)
+  appendEvent(c.db, { taskId: parent.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "content" }, at: c.clock.now() });
+  loseThroughBoard(c, child);
+  loseThroughBoard(c, getTask(c.db, parent.id)!);
+};
+
+/** [形の名前, 盤面の名前, 失わせ方] —— #3582 の読み手の表の行。 */
+const LOST_SHAPES: Array<[string, string, LoseOnRemote]> = [
+  ["handoff だけ", "handoff-only", loseHandoffOnly],
+  ["死んだ", "dead", loseDead],
+  ["祖先の記録で透明", "transparent-by-ancestor", loseTransparentByAncestor],
+  ["PR open で push 前の commit あり", "pr-open-unpushed", async (c) => loseThroughBoard(c, await prRootWithUnpushedCommit(c))],
+  [
+    "PR merged",
+    "pr-merged",
+    async (c) => {
+      loseThroughBoard(c, await prRootWithUnpushedCommit(c));
+      c.github.scriptMergedOutside(1);
+    },
+  ],
+  [
+    "PR closed",
+    "pr-closed",
+    async (c) => {
+      loseThroughBoard(c, await prRootWithUnpushedCommit(c));
+      c.github.scriptClosedOutside(1);
+    },
+  ],
+];
+
+it.each(LOST_SHAPES)("失われた event が効いている done の work(%s)は収束の候補に入らず、昇格失敗の question も `unknown revision` も出ない(ADR 0407 決定1)", async (_, slug, lose) => {
+  const c = await remoteBoard(`lost-not-a-candidate-${slug}`);
+  await lose(c);
+  const lost = listEventsOfKinds(c.db, ["task_branch_lost"]).map(({ task_id }) => task_id!);
+
+  const { result: verdicts, reads } = await gitReadsOf(lost, async () => [...(await c.landing.converge()), ...(await c.landing.converge())]);
+
+  expect(reads).toEqual([]);
+  expect(verdicts.filter(({ taskId }) => lost.includes(taskId))).toEqual([]);
+  expect(lost.flatMap((id) => promotionFailures(c.db, id))).toEqual([]);
+  expect(JSON.stringify([verdicts, listBoard(c.db)])).not.toContain("unknown revision");
+});
+
+it.each([
+  ["handoff だけ", "handoff-only", loseHandoffOnly, null],
+  ["死んだ", "dead", loseDead, "branch_lost"],
+  ["祖先の記録で透明", "transparent-by-ancestor", loseTransparentByAncestor, null],
+] as const)("行の着地の状態: 失われた event が効いている done の work は、死んだときだけ `branch_lost` を出す(%s)(ADR 0407 帰結、ADR 0265 Status 追記)", async (_, slug, lose, expected) => {
+  const c = await remoteBoard(`lost-landing-state-${slug}`);
+  await lose(c);
+  const lost = listEventsOfKinds(c.db, ["task_branch_lost"]).map(({ task_id }) => getTask(c.db, task_id!)!);
+  // 祖先の記録で透明な形の親は自分の `landing_finished` を先に出す
+  const own = lost.filter((task) => listEventsOfKinds(c.db, ["landing_finished"]).every(({ task_id }) => task_id !== task.id));
+
+  expect(own.map((task) => landingState(c.db, task))).toEqual(own.map(() => expected));
+});
+
+it("死んだ PR の根の下の完了した子は帰り先なしで、着地の根にも着地を待つ完了タスクにもならず、昇格失敗の question も立たない(ADR 0407 決定1・3、ADR 0380 決定3)", async () => {
+  const b = await board("dead-pr-root-no-return-child");
+  const root = work(b, "root");
+  const child = await completeThrough(b, work(b, "child", { parent_id: root.id }), "child.txt");
+  // 子の merge back の後に根が自分の commit を積む —— 子のブランチからは根の tip が届かず、根は give-up で失われて死ぬ
+  const done = await completeThrough(b, root, "root.txt");
+  recordPrOpened(b.db, done, 1, git(b.ws.path, "rev-parse", `task/${root.id}`), b.clock.now(), { merge: "escalate" }, false);
+  await giveUp(b, root.id);
+  expect(accepted(b)).toBe(true);
+
+  const { result: verdicts, reads } = await gitReadsOf([root.id], () => landingFor(b).converge());
+
+  expect(lineageOf(b, child)).toEqual(NO_RETURN);
+  expect(reads).toEqual([]);
+  expect(verdicts.map(({ taskId }) => taskId)).not.toContain(child.id);
+  expect(openLandingQuestions(b, child)).toEqual([]);
+  expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
+  expect(landingState(b.db, getTask(b.db, child.id)!)).toBeNull();
+});
+
+it("PR の閉じた根が失われても、その下の子を塞ぐ根の読み(`blockingRootOf`)は失われたブランチを git で読まない —— 系譜が失われた根へ帰らない(ADR 0407 決定1、ADR 0380 決定3、ADR 0265 決定6)", async () => {
+  const b = await board("closed-lost-root-blocks");
+  const root = await prRoot(b, "closed", "escalate", 1);
+  appendEvent(b.db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: b.clock.now() });
+  const child = work(b, "child", { parent_id: root.id });
+  await giveUp(b, root.id);
+
+  const { result, reads } = await gitReadsOf([root.id], () => blockingRootOf(b.db, () => b.ws)(getTask(b.db, child.id)!));
+
+  expect(reads).toEqual([]);
+  expect(result).toBeNull();
+});
+
+it("失われた PR の根の下の子孫は、開いた PR の根に外されずに系譜の読みへ渡る —— 透明な根を飛ばして保護ブランチへ帰る子は自分で根になって着地する(ADR 0407 決定1・3、ADR 0380 決定3)", async () => {
+  const b = await seededBoard("lost-pr-root-descendant");
+  const root = work(b, "root");
+  seedThroughBoard(b, root.id, git(b.ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "created here, never edited"));
+  completeTask(b.db, root, FULL_HANDOFF, "worker", b.clock.now(), "worker");
+  recordPrOpened(b.db, getTask(b.db, root.id)!, 1, git(b.ws.path, "rev-parse", `task/${root.id}`), b.clock.now(), { merge: "escalate" }, false);
+  const child = await completeUndelivered(b, work(b, "child", { parent_id: root.id }), "child.txt");
+  await giveUp(b, root.id);
+  expect(accepted(b)).toBe(true);
+
+  const verdicts = await landingFor(b).converge();
+
+  expect(verdicts.find(({ taskId }) => taskId === child.id)?.verdict).toEqual({ kind: "landed", form: "local_merge_question" });
+});
+
+/** 人間が `task/<id>` を消し、届かなくなった commit を gc で失わせる。`alsoOnFork` なら push 済みの出元 repo のブランチとその写しも消す —— 取り戻せない。 */
+function loseByHand(c: RemoteBoard, task: Task, alsoOnFork = false): void {
+  const ref = `refs/heads/task/${task.id}`;
+  if (alsoOnFork) git(c.workspace.path, "update-ref", "-d", `refs/remotes/head-repo/task/${task.id}`);
+  for (const repo of alsoOnFork ? [c.workspace.path, c.workspace.head_repo!] : [c.workspace.path]) {
+    git(repo, "update-ref", "-d", ref);
+    git(repo, "reflog", "expire", "--expire=now", "--all");
+    git(repo, "gc", "--quiet", "--prune=now");
+  }
+}
+
+/** workspace の Quarantine を立て、盤面の印を読む受理(`c.landing` を渡す)で give-up と答える。 */
+function giveUpOnRemote(c: RemoteBoard) {
+  if (!quarantineQuestion(c.db, "workspace", c.workspace.name)) quarantineWorkspace(c.db, c.workspace.name, new Error("a human deleted task branches"), c.clock.now());
+  return submitAnswer(
+    { db: c.db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db: c.db, workspace: c.workspace, landing: c.landing }) },
+    quarantineQuestion(c.db, "workspace", c.workspace.name)!,
+    [GIVE_UP],
+    undefined,
+    () => c.clock.now(),
+    "webui",
+  );
+}
+
+/** 収束が次に PR を作る要求の最中(作成を返す前)に `during` を1度走らせ、その結果(通れば undefined、拒まれればその error)を返す口。 */
+function duringNextPrCreation(c: RemoteBoard, during: () => Promise<unknown>): () => unknown {
+  const create = c.github.createPullRequest.bind(c.github);
+  let outcome: unknown = "not run";
+  let pending: (() => Promise<unknown>) | undefined = during;
+  c.github.createPullRequest = async (input) => {
+    const act = pending;
+    pending = undefined;
+    if (act) outcome = await act().then(() => undefined, (err: unknown) => err);
+    return create(input);
+  };
+  return () => outcome;
+}
+
+it("収束の回の途中で give-up が通った根は、同じ回で撃たれない —— 根ごとに着地の終わりの述語を読み直す(ADR 0407 決定1)", async () => {
+  const c = await remoteBoard("given-up-mid-pass");
+  const first = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "first.txt", "first\n");
+  const lost = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "lost.txt", "lost\n");
+  const outcome = duringNextPrCreation(c, () => {
+    loseByHand(c, lost);
+    return giveUpOnRemote(c);
+  });
+
+  const { result: verdicts, reads } = await gitReadsOf([lost.id], () => c.landing.converge());
+
+  expect(outcome()).toBeUndefined();
+  expect(taskBranchLostInForce(c.db, lost.id)).toBeDefined();
+  expect(verdicts.find(({ taskId }) => taskId === first.id)?.verdict).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(verdicts.map(({ taskId }) => taskId)).not.toContain(lost.id);
+  expect(reads).toEqual([]);
+  expect(promotionFailures(c.db, lost.id)).toEqual([]);
+  expect(JSON.stringify([verdicts, listBoard(c.db)])).not.toContain("unknown revision");
+});
+
+it("収束が根の PR を作っている間(push から記録まで)は処理中の印を持ち、その根を失わせる give-up は何も書かずに拒まれる —— 作り終えた後の give-up は通る(ADR 0407 決定2、ADR 0236)", async () => {
+  const c = await remoteBoard("give-up-during-pr-creation");
+  const root = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "root.txt", "root\n");
+  const outcome = duringNextPrCreation(c, () => {
+    loseByHand(c, root, true);
+    return giveUpOnRemote(c);
+  });
+
+  await c.landing.converge();
+
+  expect(outcome()).toBeInstanceOf(DomainError);
+  expect(String(outcome())).toContain(`the board is opening the PR of task ${root.id} right now — answer again in a moment`);
+  expect(lostEvents(c.db)).toEqual([]);
+  expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeDefined();
+
+  await giveUpOnRemote(c);
+
+  expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeUndefined();
+  expect(taskBranchLostInForce(c.db, root.id)).toBeDefined();
 });

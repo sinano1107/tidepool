@@ -4079,6 +4079,7 @@ const SETTLED_BY_OBSERVATION_COPY = {
   pr_merge_observed: "observed \xB7 PR merged",
   pr_close_observed: "observed \xB7 PR closed",
   pr_promotion_observed: "observed \xB7 PR promoted",
+  task_branch_lost_observed: "observed \xB7 task branch lost",
   quarantine_released: "observed \xB7 quarantine lifted",
   routing_proposal_stale: "observed \xB7 routing proposal stale",
   routing_proposal_applied: "observed \xB7 routing proposal applied",
