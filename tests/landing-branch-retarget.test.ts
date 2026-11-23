@@ -48,19 +48,19 @@ async function queuedRoot({ opened = true } = {}) {
 }
 
 it("宣言の branch が変わらなければ、キューの PR は tick で merge される(対照)", async () => {
-  const { db, clock, github, landing, workspace } = await queuedRoot();
+  const { db, github, landing, workspace } = await queuedRoot();
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
   expect(mergeQuestions(db)).toEqual([]);
 });
 
 it("開いた PR を持つ根を残して宣言の branch を変えると、tick は merge せず retargeted の merge question を立てる", async () => {
-  const { db, clock, github, landing, declareBranch } = await queuedRoot();
+  const { db, github, landing, declareBranch } = await queuedRoot();
   declareBranch("release");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toMatchObject([
@@ -71,12 +71,12 @@ it("開いた PR を持つ根を残して宣言の branch を変えると、tick
 });
 
 it("GitHub で保護ブランチを改名して PR の base が付け替わり、宣言も新しい名前に直れば、tick は止まらず merge する", async () => {
-  const { db, clock, github, landing, workspace, declareBranch } = await queuedRoot();
+  const { db, github, landing, workspace, declareBranch } = await queuedRoot();
   git(workspace.repo!, "branch", "-m", "main", "trunk");
   github.scriptPullRequestBase(1, "trunk");
   declareBranch("trunk");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
   expect(mergeQuestions(db)).toEqual([]);
@@ -94,13 +94,13 @@ it("まだ PR の無い根は、宣言の branch を変えた後、新しい宣�
 
 // 作成の後・記録の前に落ちた盤面の PR は、収束が head で探して拾い直す(ADR 0241 決定4)。拾った PR の base も PR を開く所の読みで比べる
 it("head で探して拾い直した PR の base が古い branch なら、retargeted の merge question を立て、作らず merge もしない", async () => {
-  const { db, clock, github, landing, root, workspace, declareBranch, pickUpAnother } = await queuedRoot({ opened: false });
+  const { db, github, landing, root, workspace, declareBranch, pickUpAnother } = await queuedRoot({ opened: false });
   pushPrHead(github, workspace, root.id, 1);
   declareBranch("release");
   await pickUpAnother();
 
   expect(await convergeOn(landing, root.id)).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.requests).toEqual([]);
   expect(github.merged).toEqual([]);
@@ -110,12 +110,12 @@ it("head で探して拾い直した PR の base が古い branch なら、retar
 });
 
 it("head で探して拾い直した PR の base が読めなければ、既存の読めない扱いで merge question を立てる", async () => {
-  const { db, clock, github, landing, root, workspace } = await queuedRoot({ opened: false });
+  const { db, github, landing, root, workspace } = await queuedRoot({ opened: false });
   pushPrHead(github, workspace, root.id, 1);
   github.scriptPullRequestBase(1, "gone");
 
   expect(await convergeOn(landing, root.id)).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toMatchObject([

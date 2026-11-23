@@ -177,7 +177,6 @@ describe("the current-time Date guard over src", () => {
   const permanent = new Map([["cliAuthExpiresAt", "a recorded expiry, not the current time"]]);
   // 今の違反と、それを直す ticket。直した ticket が自分の行を消す
   const pending: Record<string, string[]> = {
-    "#3686": ["src/landing.ts tick(now)"],
     "#3687": [
       "src/push.ts pollNotifications(now)",
       "src/push.ts fireMorningDigest(now)",

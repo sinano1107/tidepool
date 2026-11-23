@@ -151,14 +151,14 @@ it("shadow が消えて組み込みに落ちた work のキューの PR は、�
     resolveAuthority: (assignee, taskType) => resolveAuthority(assignee, taskType),
   });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
   expect(agentQuarantines(db).map((q) => q.question_quarantine_value)).toEqual(["fugu"]);
 
   resolveAuthority = () => profile("auto_if_ci_green");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
@@ -1619,7 +1619,7 @@ it("既定 workspace a で pickup した workspace 未指定の完了タスク�
   expect(taskIdsAwaitingLandingInWorkspace(db, undefined, b.name)).toHaveLength(0);
 
   await landing.observeAutoMergeOutcomes("tako");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.stateChecks).toEqual([
     { path: a.path, number: 7 },
@@ -1672,7 +1672,7 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
   expect(taskIdsAwaitingLanding(db, undefined, "a", "b")).toHaveLength(1);
   expect(taskIdsAwaitingLanding(db, undefined, "b", "b")).toHaveLength(0);
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([{ path: workspace.path, number: 7 }]);
   expect(mergeQuestions(db)).toEqual([]);
@@ -1739,9 +1739,9 @@ it.each(QUEUE_WINDOWS)("無人 merge の tick の $window に$interruptが割り
   install(github, gate.hold);
   const landing = autoMerging(db, clock, workspace, github);
 
-  const tick = landing.tick("auto_merge", clock.now());
+  const tick = landing.tick("auto_merge");
   await gate.entered;
-  await (interrupt === "観測" ? landing.observeAutoMergeOutcomes("tako") : landing.tick("auto_merge", clock.now()));
+  await (interrupt === "観測" ? landing.observeAutoMergeOutcomes("tako") : landing.tick("auto_merge"));
   gate.open();
   await tick;
 
@@ -1761,9 +1761,9 @@ it("重なった tick が先に決着させた PR に、止まっていた tick 
   afterCiRead(github, gate.hold);
   const landing = autoMerging(db, clock, workspace, github);
 
-  const stalled = landing.tick("auto_merge", clock.now()); // #1 の読み取りで止まる
+  const stalled = landing.tick("auto_merge"); // #1 の読み取りで止まる
   await gate.entered;
-  await landing.tick("auto_merge", clock.now()); // #1 を飛ばし、#2 を merge して印を放す
+  await landing.tick("auto_merge"); // #1 を飛ばし、#2 を merge して印を放す
   gate.open();
   await stalled;
 
@@ -1807,13 +1807,13 @@ it.each(TICK_EXITS.flatMap(([exit, script]) => (["観測", "tick"] as const).map
     vi.spyOn(console, "error").mockImplementation(() => {});
     const landing = autoMerging(db, clock, workspace, github);
 
-    await landing.tick("auto_merge", clock.now());
+    await landing.tick("auto_merge");
     if (next === "観測") {
       github.scriptMergedOutside(1);
       await landing.observeAutoMergeOutcomes("tako");
     } else {
       restore();
-      await landing.tick("auto_merge", clock.now());
+      await landing.tick("auto_merge");
     }
 
     expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
@@ -1919,7 +1919,7 @@ it("auto_if_ci_green で PR を開いた根は auto_merge_queue で、無人 mer
   finish(db, clock, work);
   expect(stateOf(db, work.id)).toBe("auto_merge_queue");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(stateOf(db, work.id)).toBe("merged");
 });
@@ -1932,7 +1932,7 @@ it.each([
   finish(db, clock, work);
   settleOutside(github);
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(stateOf(db, work.id)).toBe(state);
 });
@@ -1961,7 +1961,7 @@ it("キューから取り下げられた PR の根は withdrawn になる", asyn
   const { workspace, db, clock, github, work } = await openPushedPr("landing-state-withdrawn", "auto_if_ci_green");
   finish(db, clock, work);
 
-  await autoMerging(db, clock, workspace, github, () => profile("external")).tick("auto_merge", clock.now());
+  await autoMerging(db, clock, workspace, github, () => profile("external")).tick("auto_merge");
 
   expect(stateOf(db, work.id)).toBe("withdrawn");
 });

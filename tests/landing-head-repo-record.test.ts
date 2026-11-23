@@ -149,9 +149,9 @@ async function prOnReplacedFork(merge: MergeDial) {
 
 // ADR 0399 決定3: 比べる所は根を運ぶ所だけでなく PR を読む所・merge する所の全部(#3600 と同じ場所)
 it("無人 merge の tick は、出元 repo を差し替えた後の PR を読まずに、記録と今の宣言を名指して根を止める", async () => {
-  const { db, clock, github, landing, root } = await prOnReplacedFork("auto_if_ci_green");
+  const { db, github, landing, root } = await prOnReplacedFork("auto_if_ci_green");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect([github.ciChecks, github.merged]).toEqual([[], []]);
   expect(rootPrOutcome(db, root.id)).toBeNull();
@@ -159,10 +159,10 @@ it("無人 merge の tick は、出元 repo を差し替えた後の PR を読�
 });
 
 it("外の merge の tick は、出元 repo を差し替えた後の PR を読まずに、記録と今の宣言を名指して根を止める", async () => {
-  const { db, clock, github, landing, root } = await prOnReplacedFork("escalate");
+  const { db, github, landing, root } = await prOnReplacedFork("escalate");
   const before = github.stateChecks.length;
 
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   expect(github.stateChecks).toHaveLength(before);
   expect(rootPrOutcome(db, root.id)).toBeNull();
@@ -239,7 +239,7 @@ it("PR の作成に落ちても出元 repo へ push した根は記録を持ち�
 it("出元 repo の食い違いで止まった PR のある根は「end landing」で着地を終え、下の子は閉じた根の子と同じく塞がれる(ADR 0265 決定6)", async () => {
   const { db, clock, github, landing, resolve, root } = await prOnReplacedFork("escalate");
   const child = attachUnsettledChild(db, clock, root.id);
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
   const [failure] = promotionFailures(db, root.id);
   expect(failure?.question_items?.[0]?.options).toEqual(["retry", "end landing"]);
   expect(blockingRootOf(db, resolve)(child)).toBeNull();

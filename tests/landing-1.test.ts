@@ -572,7 +572,7 @@ it.each(["rewritten", "removed"] as const)("quarantines a workspace when its ope
   current = { ...workspace, repo: drift === "rewritten" ? "https://dummy-user:dummy-password@github.com/other/project.git?token=dummy-token" : undefined };
   const converge = () => expect(convergeOn(landing, task.id)).resolves.toMatchObject({ kind: "quarantined" });
   // The outside-merge tick normally ignores an unreadable PR. The destination refusal must still raise Quarantine.
-  if (drift === "rewritten") await landing.tick("outside_merge", clock.now());
+  if (drift === "rewritten") await landing.tick("outside_merge");
   else await converge();
 
   const question = quarantineQuestion(db, "workspace", workspace.name);
@@ -582,7 +582,7 @@ it.each(["rewritten", "removed"] as const)("quarantines a workspace when its ope
   expect(question?.purpose).toContain(`workspace ${workspace.name} was registered for repo ${workspace.repo}, but ${summary}`);
   expect(question?.purpose).not.toMatch(/dummy-user|dummy-password|dummy-token/);
   await converge();
-  await landing.tick(drift === "rewritten" ? "outside_merge" : "auto_merge", clock.now());
+  await landing.tick(drift === "rewritten" ? "outside_merge" : "auto_merge");
 
   expect(readState).not.toHaveBeenCalled();
   expect(readCi).not.toHaveBeenCalled();
@@ -759,7 +759,7 @@ it("無人 merge キューにいる閉じた PR は、収束が閉じた観測�
   settleReviews(db, clock.now());
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ reason: "pull_request_closed" });
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
@@ -781,7 +781,7 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual([]);
 
   release();
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
@@ -1738,7 +1738,7 @@ it.each([
   expect(openMergeQuestions()).toHaveLength(openQuestions);
 
   github.scriptMergedOutside(1);
-  await landing.tick(tick, clock.now());
+  await landing.tick(tick);
   expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
   ]);

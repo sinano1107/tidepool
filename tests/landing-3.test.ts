@@ -114,9 +114,9 @@ it("merge に失敗した開いたままの PR も、question を立てる直前
   };
 
   const landing = autoMerging(db, clock, workspace, github, () => profile(dial));
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
-  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(await readOnNextTick(landing, github)).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "auto_merge_withdrawn")).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" } },
@@ -148,7 +148,7 @@ it.each([
   if (kind === "pr_close_observed") github.scriptClosedOutside(1);
   else github.scriptMergedOutside(1);
 
-  await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
+  await autoMerging(db, clock, workspace, github).tick("outside_merge");
 
   expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
@@ -166,7 +166,7 @@ it("遅い走査は、盤面の名義で merge 済みの PR の open な merge q
   const { root, question } = escalatedRoot(db, clock, 1);
   github.scriptMergedByBoard(1);
 
-  await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
+  await autoMerging(db, clock, workspace, github).tick("outside_merge");
 
   expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
@@ -185,7 +185,7 @@ it("別の workspace の同じ番号の PR の観測は、それぞれの worksp
   github.scriptClosedOutside(1);
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: () => workspace, github });
 
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   expect(boardEvents(db, here.root.id, "pr_close_observed")).toEqual(closeObserved(1));
   expect(boardEvents(db, there.root.id, "pr_close_observed")).toEqual(closeObserved(1));
@@ -193,12 +193,12 @@ it("別の workspace の同じ番号の PR の観測は、それぞれの worksp
 
 // #2026: 外で閉じた escalate の根の閉じた記録が question の側にあり、収束が読めずに撃ち続けていた
 it("遅い走査が外で閉じたと観測した escalate の根は、次の収束で候補から外れ、git も読まれず verdict にも出ない", async () => {
-  const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-root");
+  const { workspace, db, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-root");
   expect(listBoard(db).filter((q) => q.question_pending_merge_pr === 1)).toHaveLength(1);
   github.scriptClosedOutside(1);
   const pushes = github.pushes.length;
 
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
   // 読めば壊れていると分かる checkout でも、閉じた根は読まれない
   git(workspace.path, "checkout", "main");
   git(workspace.path, "branch", "-D", `task/${root.id}`);
@@ -232,7 +232,7 @@ it("収束が先に閉じた PR を観測した根の merge question は、遅�
 
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ reason: "pull_request_closed" });
   expect(getTask(db, question.id)!.status).toBe("todo");
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
@@ -252,7 +252,7 @@ it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測
 
   const converging = convergeOn(landing, root.id);
   await gate.entered;
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
   gate.open();
 
   await expect(converging).resolves.toMatchObject({ reason: "pull_request_closed" });
@@ -265,8 +265,8 @@ it("遅い走査が外で閉じたと観測した根の下に走らない子が�
   const child = attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
 
-  await landing.tick("outside_merge", clock.now());
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
+  await landing.tick("outside_merge");
   await landing.converge();
 
   const lines = boardEvents(db, root.id, "decision_logged");
@@ -289,7 +289,7 @@ it("ref が動いていても、回答時に閉じた PR を観測すれば、�
     () => clock.now(),
     "webui",
   )).resolves.toMatchObject({ status: "done", question_answer: null });
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
@@ -298,10 +298,10 @@ it("ref が動いていても、回答時に閉じた PR を観測すれば、�
 });
 
 it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {
-  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
+  const { db, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
   github.scriptClosedOutside(1);
 
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
   expect(boardEvents(db, root.id, "decision_logged")).toEqual([]);
@@ -313,7 +313,7 @@ it("遅い走査が外で閉じたと観測した根への retry は、閉じた
   const [failure] = promotionFailures(db, root.id);
   github.scriptClosedOutside(1);
 
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   await expect(convergeOn(landing, root.id, failure!.id)).resolves.toEqual({
     kind: "excluded",
@@ -323,10 +323,10 @@ it("遅い走査が外で閉じたと観測した根への retry は、閉じた
 });
 
 it("遅い走査が外で merge されたと観測した根は、収束が GitHub を読まず観測を重ねずに着地が終わったと刻む", async () => {
-  const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-merged-finish");
+  const { workspace, db, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-merged-finish");
   await mergeOnGitHub(workspace, root.id);
   github.scriptMergedOutside(1);
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
   const stateChecks = github.stateChecks.length;
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
@@ -356,7 +356,7 @@ it("遅い走査は、workspace の解決が分類できない失敗で落ちた
     github,
   });
 
-  await expect(landing.tick("outside_merge", clock.now())).resolves.toBeUndefined();
+  await expect(landing.tick("outside_merge")).resolves.toBeUndefined();
 
   expect(getTask(db, broken.id)!.status).toBe("todo");
   expect(getTask(db, closed.id)!.status).toBe("done");
@@ -379,7 +379,7 @@ it("遅い走査で UnknownWorkspaceError を投げる workspace は quarantine 
     github: new FakeGitHubClient(),
   });
 
-  await expect(landing.tick("outside_merge", clock.now())).resolves.toBeUndefined();
+  await expect(landing.tick("outside_merge")).resolves.toBeUndefined();
 
   expect(quarantineQuestion(db, "workspace", "gone")).toBeDefined();
   expect(getTask(db, question.id)!.status).toBe("todo");
@@ -400,8 +400,8 @@ it.each(["auto_merge", "outside_merge"] as const)("%s の poll は drift した 
     github: new FakeGitHubClient(),
   });
 
-  await landing.tick(poll, clock.now());
-  await landing.tick(poll, clock.now());
+  await landing.tick(poll);
+  await landing.tick(poll);
 
   const drifted = listBoard(db).filter((q) => q.question_quarantine_kind === "workspace");
   expect(drifted).toHaveLength(1);
@@ -427,14 +427,14 @@ it("check 未報告の PR は、盤面がその head を知ってから5分の�
   });
 
   await clock.advance(FIVE_MINUTES - 1);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
 
   // キューに残っている —— check が緑で報告されれば次の tick で merge される
   github.scriptCiStatus("success");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
@@ -458,8 +458,8 @@ it("猶予の5分を過ぎても check 未報告の PR は、キューを外れ�
   });
 
   await clock.advance(FIVE_MINUTES);
-  await landing.tick("auto_merge", clock.now());
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(github.ciChecks).toHaveLength(1);
@@ -492,7 +492,7 @@ it("開いている PR への修理の push は盤面の名義の event に残�
 
   // PR を開いてから6分、修理の push からは2分
   await clock.advance(2 * 60_000);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_branch_pushed")).toEqual([
     {
@@ -503,7 +503,7 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   ]);
 
   await clock.advance(3 * 60_000);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([
     { pr: 1, purpose: UNREPORTED_PURPOSE },
   ]);
@@ -526,7 +526,7 @@ it("書き換えられた head は check 未報告でもすぐにキューを外
   github.scriptCiStatus("unreported");
 
   await clock.advance(6 * 60_000);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(mergeQuestions(db)).toEqual([
     { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(`task/${work.id}`, `task/${work.id} on head repo ${workspace.head_repo}`) },
@@ -536,7 +536,7 @@ it("書き換えられた head は check 未報告でもすぐにキューを外
   ]);
 
   await clock.advance(FIVE_MINUTES);
-  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(await readOnNextTick(landing, github)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toHaveLength(1);
 });
 
@@ -554,7 +554,7 @@ it("check が報告中(pending)の盤面の外の head も、読んだ時点で�
   const outside = await pushOutsideBoard(workspace, work.id);
   github.scriptCiStatus("pending");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
@@ -599,8 +599,8 @@ it("猶予を過ぎた check 未報告を読んでいる間にダイヤルが ex
   });
 
   await clock.advance(FIVE_MINUTES);
-  await landing.tick("auto_merge", clock.now());
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
+  await landing.tick("auto_merge");
 
   expect(github.ciChecks).toHaveLength(1);
   expect(mergeQuestions(db)).toEqual([]);
@@ -626,13 +626,13 @@ it("門に当たった PR は面が変わっていなければキューに残り
     resolveAuthority: () => profile("auto_if_ci_green"),
   });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
 
   completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
@@ -646,15 +646,15 @@ it("門が閉じている間にダイヤルが escalate へ変わった PR は�
   const child = attachUnsettledChild(db, clock, work.id);
   const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.ciChecks).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
 
   completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   // 外れた後の tick で何も重ならない
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([
     expect.objectContaining({ pr: 1, recommendation: "merge", purpose: expect.stringMatching(/landing surface changed.*escalate/) }),
@@ -680,16 +680,16 @@ it.each([
   });
   const landing = autoMerging(db, clock, workspace, github, () => profile(dial));
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.ciChecks).toHaveLength(1);
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
 
   completeTask(db, child!, FULL_HANDOFF, "worker", clock.now(), "worker");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   // 外れた後の tick で何も重ならない
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.ciChecks).toHaveLength(2);
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, ...question })]);
@@ -703,13 +703,13 @@ it("門が閉じている間にダイヤルが external へ変わった PR は�
   const child = attachUnsettledChild(db, clock, work.id);
   const landing = autoMerging(db, clock, workspace, github, () => profile("external"));
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(boardEvents(db, work.id, "auto_merge_withdrawn")).toEqual([]);
 
   completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   // 外れた後の tick で何も重ならない
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.ciChecks).toHaveLength(1);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "auto_merge_withdrawn").map((e) => e.payload)).toEqual([
@@ -739,13 +739,13 @@ async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
 }
 
 it("merge back が conflict して後始末が閉じても、修理の内容が merge される head に無ければ積み残しで、CI 緑でも無人 merge されない", async () => {
-  const { clock, github, repair, question, landing } = await quarantinedByMergeBackConflict(
+  const { github, repair, question, landing } = await quarantinedByMergeBackConflict(
     "left-behind-merge-back-conflict",
     "auto_if_ci_green",
   );
   expect(question.purpose).toContain(`task/${repair.id} does not merge cleanly`);
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
 });
@@ -983,7 +983,7 @@ it("done の子孫のブランチに merge される head に無い内容があ�
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   const events = listEvents(db, work.id).length;
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
@@ -993,7 +993,7 @@ it("done の子孫のブランチに merge される head に無い内容があ�
   tearDownRepair(db, clock, workspace, repair);
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
@@ -1006,7 +1006,7 @@ it("cancelled の祖先の下に残った done の work の内容は積み残し
   cancelTaskDirectly(db, getTask(db, abandoned.id)!, null, clock.now(), {}, "webui");
   expect(getTask(db, inner.id)!.status).toBe("done");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
@@ -1020,7 +1020,7 @@ it("修理の内容がローカルの着地するタスクのブランチに無�
   git(clone, "clone", workspace.head_repo!, ".");
   git(clone, "fetch", workspace.path, `task/${repair.id}`);
   git(clone, "push", "origin", `FETCH_HEAD:refs/heads/task/${work.id}`);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   await expect(answerMergeQuestion({ db, clock, github, workspace, landing })).resolves.toMatchObject({ status: "done" });
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
@@ -1040,7 +1040,7 @@ it("PR の head に修理を `merge -s ours` で捨てた記録があれば、�
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-discarded", "auto_if_ci_green");
   const repair = await settleRepairNotMergedBack(db, clock, workspace, work.id);
   await pushDiscardedRepair(workspace, work.id, repair.id);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   await expect(answerMergeQuestion({ db, clock, github, workspace, landing })).resolves.toMatchObject({ status: "done" });
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
@@ -1050,13 +1050,13 @@ it("merge back 済み・push 前でタスクブランチが出元 repo に無い
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unpushed", "auto_if_ci_green");
   commitWork(workspace.path, "repair.txt", "fixed\n");
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
 
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
@@ -1066,7 +1066,7 @@ it("盤面の外の push で出元 repo だけが先へ進んでいるのは積�
   commitWork(workspace.path, "outside.txt", "pushed by a human\n");
   git(workspace.path, "push", "head-repo", `outside:task/${work.id}`);
   git(workspace.path, "checkout", `task/${work.id}`);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   await expect(answerMergeQuestion({ db, clock, github, workspace, landing })).resolves.toMatchObject({ status: "done" });
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
@@ -1104,12 +1104,32 @@ it("CI を待つ間に修理のブランチが巻き戻されたら、無人 mer
     return result;
   });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${recorded} ${ref}`);
-  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+  expect(await readOnNextTick(landing, github)).toEqual([1]);
+});
+
+// ADR 0404 決定1: tick が await の後に立てる Quarantine は、tick を撃った時刻でなく書いた時刻を持つ
+it("PR を読む間に時が進めば、帯域外で動いたタスクブランチに無人 merge が立てる workspace の Quarantine は読んだ後の時刻を持つ", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("auto-merge-quarantine-time", "auto_if_ci_green");
+  await leaveBaseline(db, workspace);
+  const moved = commitOutOfBand(workspace, `task/${work.id}`);
+  const window = awaitWindow();
+  afterCiRead(github, window.hold);
+
+  const ticking = landing.tick("auto_merge");
+  await window.entered;
+  await clock.advance(60_000);
+  const afterTheRead = clock.now().toISOString();
+  window.open();
+  await ticking;
+
+  const quarantine = quarantineQuestion(db, "workspace", workspace.name);
+  expect(quarantine?.purpose).toContain(`now: ${moved} refs/heads/task/${work.id}`);
+  expect(quarantine?.created_at).toBe(afterTheRead);
 });
 
 it("PR の head の fetch を待つ間に修理が巻き戻されたら、merge 回答は積み残しの比較をせず Quarantine で止まる", async () => {
@@ -1152,7 +1172,7 @@ it.each(["CI", "fetch token"] as const)("%s を待つ間に merge question が�
   await window.entered;
   git(workspace.path, "tag", "intruder");
   github.scriptClosedOutside(1);
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
   window.open();
 
   await expect(answering).resolves.toMatchObject({
@@ -1176,19 +1196,19 @@ it("基準どおりの ref を持つ workspace の Quarantine は PR への merg
 });
 
 it.each(["pr_close_observed", "pr_merge_observed"] as const)("ref が動いていても、無人 merge の tick は GitHub の決着を %s として記録する", async (kind) => {
-  const { workspace, db, clock, github, work, landing } = await openPushedPr("auto-merge-observed-with-moved-ref", "auto_if_ci_green");
+  const { workspace, db, github, work, landing } = await openPushedPr("auto-merge-observed-with-moved-ref", "auto_if_ci_green");
   await leaveBaseline(db, workspace);
   git(workspace.path, "tag", "intruder");
   if (kind === "pr_close_observed") github.scriptClosedOutside(1);
   else github.scriptMergedOutside(1);
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(boardEvents(db, work.id, kind)).toEqual([
     { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind, pr_number: 1 } },
   ]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
-  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(await readOnNextTick(landing, github)).toEqual([]);
 });
 
 /** #1831 の形: 修理を merge back して収束が push した後、別の clone が PR のブランチを修理より前の commit の上へ
@@ -1209,10 +1229,10 @@ it("別の clone からの force-push で修理が消えた PR は、CI 緑で�
   const pr = await openPushedPr("left-behind-dropped-outside", "auto_if_ci_green");
   const repair = await dropRepairOutsideBoard(pr);
 
-  await pr.landing.tick("auto_merge", pr.clock.now());
+  await pr.landing.tick("auto_merge");
 
   expect(pr.github.merged).toEqual([]);
-  expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
+  expect(await readOnNextTick(pr.landing, pr.github)).toEqual([]);
   expect(mergeQuestions(pr.db)).toEqual([
     { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(`task/${repair.id}`) },
   ]);
@@ -1221,7 +1241,7 @@ it("別の clone からの force-push で修理が消えた PR は、CI 緑で�
 // ADR 0376 決定7(#3250): 外の push が落とした内容への `merge` は、積み残しの拒否で昇格失敗 question を名指さず、作業台を開いて拒まれる
 it("別の clone からの force-push で修理が消えた PR への人間の「merge」は、text A4a で修理を名指して拒まれて作業台を開き、merge されず question は開いたまま", async () => {
   const { c, repair } = await droppedRepair("left-behind-dropped-outside-answer");
-  await c.landing.tick("auto_merge", c.clock.now());
+  await c.landing.tick("auto_merge");
   const [question] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
 
   expect(await c.answerMerge()).toBe(textA4a(c, c.pushed, `task/${repair.id}`));
@@ -1233,7 +1253,7 @@ it("別の clone からの force-push で修理が消えた PR への人間の�
 it("外の push が落とした内容をブランチに戻して push すれば、その merge question への「merge」の回答は通る", async () => {
   const pr = await openPushedPr("left-behind-dropped-outside-restored", "auto_if_ci_green");
   await dropRepairOutsideBoard(pr);
-  await pr.landing.tick("auto_merge", pr.clock.now());
+  await pr.landing.tick("auto_merge");
   git(pr.workspace.path, "push", "--force", "head-repo", `task/${pr.work.id}`);
 
   await expect(answerMergeQuestion(pr)).resolves.toMatchObject({ status: "done" });
@@ -1244,7 +1264,7 @@ it("外の push が落とした内容をブランチに戻して push すれば�
 // ADR 0371 決定3・10: 落とされた内容を捨てるのも作業台の merge —— 3つのコマンドの後の `merge` が取り込み、push し、merge する
 it("外の push が落とした修理を作業台で捨てた次の「merge」は、修理の内容を戻さずに取り込んで push し merge する", async () => {
   const { c } = await droppedRepair("left-behind-dropped-outside-discarded");
-  await c.landing.tick("auto_merge", c.clock.now());
+  await c.landing.tick("auto_merge");
   await c.answerMerge();
   git(c.workbench(), "merge", "--quiet", "-s", "ours", "--no-commit", `board/origin/${c.target}`);
   git(c.workbench(), "read-tree", "-u", "--reset", `board/origin/${c.target}`);
@@ -1275,11 +1295,11 @@ async function openPrByConvergence(name: string, merge: MergeDial, { narrowRefsp
 }
 
 it("refspec を保護ブランチだけに絞った checkout でも、収束が PR を開いて push した後の tick で無人 merge される", async () => {
-  const { github, landing, clock } = await openPrByConvergence("left-behind-narrow-refspec", "auto_if_ci_green", {
+  const { github, landing } = await openPrByConvergence("left-behind-narrow-refspec", "auto_if_ci_green", {
     narrowRefspec: true,
   });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
@@ -1294,13 +1314,13 @@ it("refspec を絞った checkout の PR への人間の merge 回答は通り�
 });
 
 it("盤面自身が push した head は手元にあるので、origin に届かなくても fetch を撃たずに無人 merge される", async () => {
-  const { workspace, github, work, landing, clock } = await openPrByConvergence("left-behind-no-fetch", "auto_if_ci_green");
+  const { workspace, github, work, landing } = await openPrByConvergence("left-behind-no-fetch", "auto_if_ci_green");
   github.scriptHead(1, forkHead(workspace, work.id));
   const observed = await github.readPullRequest({ workspace, number: 1 });
   vi.spyOn(github, "readPullRequest").mockResolvedValue(observed);
   rmSync(workspace.head_repo!, { recursive: true });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
@@ -1353,15 +1373,15 @@ it("読めない PR への人間の merge 回答は、head を比べられなか
 });
 
 it("壊れた packed-refs で基準との比較ができなければ、無人 merge をせず PR をキューに残す", async () => {
-  const { workspace, db, github, landing, clock } = await openPushedPr("auto-merge-unreadable-refs", "auto_if_ci_green");
+  const { workspace, db, github, landing } = await openPushedPr("auto-merge-unreadable-refs", "auto_if_ci_green");
   await leaveBaseline(db, workspace);
   breakPackedRefs(workspace);
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
-  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+  expect(await readOnNextTick(landing, github)).toEqual([1]);
 });
 
 it("基準と ref が比べられない workspace では、PR の内容を比べる前に merge の回答を拒む", async () => {
@@ -2012,7 +2032,7 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
     workspace,
     github,
     resolveAuthority: () => profile("auto_if_ci_green"),
-  }).tick("auto_merge", clock.now());
+  }).tick("auto_merge");
 
   expect(github.ciChecks).toEqual([]);
   expect(github.merged).toEqual([]);
@@ -2043,12 +2063,12 @@ it("門が閉じている間も profile は読まれ、解決できなければ�
     resolveAuthority: () => resolveAuthority(),
   });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
 
   resolveAuthority = () => profile("auto_if_ci_green");
   completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
@@ -2085,7 +2105,7 @@ it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できな�
     form: "pull_request_opened",
   });
   expect(github.requests).toHaveLength(1);
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toHaveLength(1);
 });
 
@@ -2131,8 +2151,8 @@ it.each(UNRESOLVABLE)("無人 merge の瞬間に profile が %s で解決でき�
     resolveAuthority: () => resolveAuthority(),
   });
 
-  await landing.tick("auto_merge", clock.now());
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
@@ -2140,7 +2160,7 @@ it.each(UNRESOLVABLE)("無人 merge の瞬間に profile が %s で解決でき�
   expect(agentQuarantines(db).map((q) => q.question_quarantine_value)).toEqual(["tako"]);
 
   resolveAuthority = () => profile("auto_if_ci_green");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
@@ -2158,10 +2178,10 @@ it("直した registry でダイヤルが escalate に変わっていれば、�
     github,
     resolveAuthority: () => resolveAuthority(),
   });
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   resolveAuthority = () => profile("escalate");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, registrant: [BOARD_ACTOR_ID, "board"] })]);
@@ -2184,7 +2204,7 @@ it("CI を読んでいる間に profile が解決できなくなっても merge 
     workspace,
     github,
     resolveAuthority: () => resolveAuthority(),
-  }).tick("auto_merge", clock.now());
+  }).tick("auto_merge");
 
   expect(github.ciChecks).toHaveLength(1);
   expect(github.merged).toEqual([]);
@@ -2211,11 +2231,11 @@ it("CI 赤を読んでいる間に profile が解決できなくなった PR は
     resolveAuthority: () => resolveAuthority(),
   });
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(mergeQuestions(db)).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
 
   resolveAuthority = () => profile("auto_if_ci_green");
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });

@@ -502,9 +502,9 @@ export const CI_RED_PURPOSE = '"ship"\'s auto_if_ci_green auto-merge found CI re
 
 // ADR 0229: merge できない PR は状態で分けてキューから外す。tick は reject せず、1件の失敗は後ろの PR を巻き込まない
 // キューに残った行は次の tick で CI を読み直される —— 行の有無は行の直読みでなく振る舞いで見る(ADR 0107 決定2)
-export async function readOnNextTick(landing: Landing, github: FakeGitHubClient, now: Date): Promise<number[]> {
+export async function readOnNextTick(landing: Landing, github: FakeGitHubClient): Promise<number[]> {
   const before = github.ciChecks.length;
-  await landing.tick("auto_merge", now);
+  await landing.tick("auto_merge");
   return github.ciChecks.slice(before).map((ref) => ref.number);
 }
 
