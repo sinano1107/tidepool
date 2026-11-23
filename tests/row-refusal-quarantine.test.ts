@@ -253,7 +253,7 @@ const MEASURED_OPENAI_MODELS = new Map([
 ]);
 
 /** openai だけを喋る agent の盤面。`probe` は観測のたびに呼ばれ、回答時の読み直しも同じ口を通る。 */
-async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResult>) {
+async function bootOpenai(probe: (now: () => Date) => Promise<CodexAppServerProbeResult>) {
   t = await bootTidepool({
     workspace: await makeWorkspace("tidepool"),
     taskExecutionCandidates: (task) =>
@@ -264,7 +264,7 @@ async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResul
   applyExecutionSettingsChange(t.db, { setting: "judgement_tier", value: "economy" }, "webui", t.clock.now());
 }
 
-const listingProbe = (models: Map<string, string[]>) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
+const listingProbe = (models: Map<string, string[]>) => async (now: () => Date) => ({ ...(await healthyOpenai(now)), models });
 
 it("一覧に無い openai の行は選ばれていてもいなくても Quarantine され、1行に1枚の question が立ち、同じ poll の task は一覧にある行で走る", async () => {
   await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));

@@ -37,14 +37,14 @@ export class IssueContentCache {
     task: T,
     github: GitHubClient | undefined,
     resolveWorkspace: () => WorkspaceConfig | undefined,
-    now: Date,
+    now: () => Date,
   ): Promise<Live<T>> {
     if (task.github_issue_number == null) return task;
     const workspace = resolveWorkspace();
     if (workspace === undefined || !github) return { ...task, issue_live_state: "unavailable" };
     const key = JSON.stringify([workspace.path, workspace.repo, task.github_issue_number]);
     const cached = this.entries.get(key);
-    if (cached && now.getTime() - cached.fetchedAt < TTL_MS) {
+    if (cached && now().getTime() - cached.fetchedAt < TTL_MS) {
       return { ...task, ...cached.content, issue_live_state: "live" };
     }
     try {
@@ -54,7 +54,7 @@ export class IssueContentCache {
         this.inFlight.set(key, fetch);
       }
       const content = await fetch;
-      this.entries.set(key, { content, fetchedAt: now.getTime() });
+      this.entries.set(key, { content, fetchedAt: now().getTime() });
       return { ...task, ...content, issue_live_state: "live" };
     } catch {
       // a failed refresh keeps the entry's fetchedAt, so every later poll

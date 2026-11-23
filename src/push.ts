@@ -136,24 +136,25 @@ export function markHumanTaskNotified(db: Db, taskId: string, now: Date): void {
  *  Quiet hours), and the poll shape is exactly why this is a poll and not a
  *  registerTask hook — a human task can enter through the API, MCP decompose,
  *  or an approve materialization, and none of them needs to know about push. */
-export async function pollNotifications(deps: { db: Db; push?: PushClient }, now: Date): Promise<void> {
+export async function pollNotifications(deps: { db: Db; push?: PushClient }, now: () => Date): Promise<void> {
   const { db, push } = deps;
   if (!push) return;
-  if (isQuietHours(db, now)) return;
+  if (isQuietHours(db, now())) return;
   const subscriptions = listPushSubscriptions(db);
   for (const task of listUnnotifiedQuestions(db)) {
     const payload = buildQuestionPushPayload(task);
     for (const subscription of subscriptions) {
       await sendOrLog(push, subscription, payload);
     }
-    markQuestionNotified(db, task.id, now);
+    // ADR 0404 決定1: 通知済みの印は push を送った後に読む
+    markQuestionNotified(db, task.id, now());
   }
   for (const task of listUnnotifiedHumanTasks(db)) {
     const payload = buildHumanTaskPushPayload(task);
     for (const subscription of subscriptions) {
       await sendOrLog(push, subscription, payload);
     }
-    markHumanTaskNotified(db, task.id, now);
+    markHumanTaskNotified(db, task.id, now());
   }
 }
 
@@ -233,16 +234,16 @@ export function recordDigestSent(db: Db, now: Date): void {
 /** Fires the one summary push a quiet-hours-end transition folds everything
  *  into (issue #14) — a no-op if nothing accumulated (a quiet morning stays
  *  quiet, no empty "0 questions, 0 log entries" push). */
-async function fireMorningDigest(db: Db, push: PushClient, now: Date): Promise<void> {
+async function fireMorningDigest(db: Db, push: PushClient, now: () => Date): Promise<void> {
   const digest = buildMorningDigest(db);
   if (digest.questionCount === 0 && digest.yourTaskCount === 0 && digest.logCount === 0) return;
   const payload: PushPayload = { title: "Good morning", body: digest.text, url: "/" };
   for (const subscription of listPushSubscriptions(db)) await sendOrLog(push, subscription, payload);
-  recordDigestSent(db, now);
+  recordDigestSent(db, now());
 }
 
 export interface NotificationTick {
-  run(now: Date): Promise<void>;
+  run(): Promise<void>;
 }
 
 /** The quiet-hours-aware notification poll (issue #14): tracks whether the
@@ -251,18 +252,18 @@ export interface NotificationTick {
  *  an individual push per question. Any other outside-quiet-hours tick just
  *  runs the ordinary per-question poll, which also catches anything the
  *  digest transition itself didn't (a question registered between ticks). */
-export function createNotificationTick(db: Db, push: PushClient | undefined, initialNow: Date): NotificationTick {
-  let wasQuietHours = isQuietHours(db, initialNow);
+export function createNotificationTick(db: Db, push: PushClient | undefined, now: () => Date): NotificationTick {
+  let wasQuietHours = isQuietHours(db, now());
   // guards against two ticks overlapping (scheduler.ts's own `inFlight` shape)
   // — a slow tick (many subscriptions/questions) must not race the next timer
   // fire into double-sending or double-observing the quiet-hours transition
   let inFlight = false;
   return {
-    async run(now: Date): Promise<void> {
+    async run(): Promise<void> {
       if (inFlight) return;
       inFlight = true;
       try {
-        const nowQuiet = isQuietHours(db, now);
+        const nowQuiet = isQuietHours(db, now());
         if (push && wasQuietHours && !nowQuiet) {
           await fireMorningDigest(db, push, now);
         } else if (!nowQuiet) {

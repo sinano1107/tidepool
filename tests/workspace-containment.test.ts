@@ -113,7 +113,7 @@ it.each([
       onSpawnFailed: () => {},
       onRecordContainerFailed: () => {},
       onPickupStopped: () => {},
-      openaiUsage: () => healthyOpenai(clock.now()),
+      openaiUsage: healthyOpenai,
       taskExecutionCandidates: (task) =>
         executionSettingsFor(
           db,
@@ -175,7 +175,7 @@ it.each([
       onSpawnFailed: () => {},
       onRecordContainerFailed: () => {},
       onPickupStopped,
-      openaiUsage: () => healthyOpenai(clock.now()),
+      openaiUsage: healthyOpenai,
       taskExecutionCandidates: (task) =>
         executionSettingsFor(
           db,
@@ -1148,7 +1148,7 @@ describe("封じ込めの修理の作業台(ADR 0373 決定7〜10 / ADR 0382 決
       const codex = await codexReadingTheDisk();
       const b = await stoppedCodexPair("codex-two-steps", codex.check);
       const caller = { actorId: "human", origin: "webui" } as const;
-      await openHumanContentWorkbench(b.db, b.ws, b.base, caller, b.clock.now(), { resolveRegistered: undefined });
+      await openHumanContentWorkbench(b.db, b.ws, b.base, caller, () => b.clock.now(), { resolveRegistered: undefined });
       const tip = removeSkill(b.workbench());
       takeInHumanContentWorkbench(b.db, b.ws, { workbenchBase: b.base, answerer: caller, now: () => b.clock.now() });
       const id = b.question("codex").id;

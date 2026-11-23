@@ -177,24 +177,6 @@ describe("the current-time Date guard over src", () => {
   const permanent = new Map([["cliAuthExpiresAt", "a recorded expiry, not the current time"]]);
   // 今の違反と、それを直す ticket。直した ticket が自分の行を消す
   const pending: Record<string, string[]> = {
-    "#3687": [
-      "src/push.ts pollNotifications(now)",
-      "src/push.ts fireMorningDigest(now)",
-      "src/push.ts run(now)",
-      "src/quarantine.ts quarantineUnlessClear(now)",
-      "src/containment.ts containmentPickupBlocked(now)",
-      "src/harness-containment.ts harnessContainmentPickupBlocked(now)",
-      "src/registry-unreadable.ts registryUnreadablePickupBlocked(now)",
-      "src/scheduler.ts observeProviderUsage: now",
-      "src/codex-worker.ts recheckUsage(now)",
-      "src/codex-app-server.ts createCodexAppServerProbe(now)",
-      "src/claude-cli-conformance.ts SURFACES(now)",
-      "src/claude-cli-conformance.ts judgeConformance(now)",
-      "src/workspace.ts openHumanContentWorkbench(now)",
-      "src/workspace.ts captureFirstBaseline(board.now)",
-      "src/execution-setting.ts changeExecutionSettings(at)",
-      "src/issue-view.ts present(now)",
-    ],
     "#3688": [
       "src/board-call-usage.ts recordedAnswer(now)",
       "src/retrospective.ts fireSpan(now)",

@@ -491,7 +491,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     ...options.providerCliAuth,
     ...(options.openaiUsage && {
       openai: async () => {
-        const result = await options.openaiUsage!(options.clock.now());
+        const result = await options.openaiUsage!(() => options.clock.now());
         if (result.status === "observed") return { status: "authenticated" as const };
         return {
           status: codexProbeStop(result) ? ("unauthorized" as const) : ("unknown" as const),
@@ -505,7 +505,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const modelProbes: Partial<Record<Provider, ModelProbe>> | undefined = openaiUsage
     ? {
         openai: async (model, effort) => {
-          const result = await openaiUsage(options.clock.now());
+          const result = await openaiUsage(() => options.clock.now());
           if (result.status !== "observed") {
             return { status: codexProbeStop(result) ? "unauthorized" : "unknown", reason: result.reason };
           }
@@ -736,9 +736,9 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // the quiet-hours boundary itself so crossing it folds everything
   // accumulated overnight into one morning digest instead of a push per
   // question (createNotificationTick).
-  const notificationTick = createNotificationTick(db, options.push, options.clock.now());
+  const notificationTick = createNotificationTick(db, options.push, () => options.clock.now());
   const stopNotificationPoll = options.clock.setInterval(() => {
-    void notificationTick.run(options.clock.now());
+    void notificationTick.run();
   }, 60 * 1000);
   // ADR 0294 決定1: 最後の poll の失敗は queue の2つの読み口(`GET /api/queue`・`list_queue`)へ同じ1つを配る。
   // 兄弟の issue 展開の失敗(ADR 0328 決定7)も同じ口で —— 載っている間は GitHub を読む task が skipped に見える
@@ -884,7 +884,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   if (harnessContainment) {
     for (const harness of ["claude-code", "codex"] as const) {
       if (harnessUnused(harness)) continue;
-      await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());
+      await harnessContainmentPickupBlocked(db, harness, harnessContainment, () => options.clock.now());
     }
   }
   const cliAuthExpiresAt = options.cliAuthExpiresAt;

@@ -17,7 +17,7 @@ export function harnessContainmentPickupBlocked(
   db: Db,
   harness: Harness,
   check: HarnessContainmentCheck,
-  now: Date,
+  now: () => Date,
 ): Promise<boolean> {
   return quarantineUnlessClear(db, "harnessContainment", harness, () => check(harness), now);
 }

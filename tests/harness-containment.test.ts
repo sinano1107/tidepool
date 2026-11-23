@@ -19,7 +19,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     ? { available: true as const }
     : { available: false as const, reason: "permission canary failed" };
 
-  expect(await harnessContainmentPickupBlocked(db, "codex", check, clock.now())).toBe(true);
+  expect(await harnessContainmentPickupBlocked(db, "codex", check, () => clock.now())).toBe(true);
   const questionId = quarantineQuestion(db, "harnessContainment", "codex")?.id;
   expect(questionId).toBeDefined();
   const question = getTask(db, questionId!);

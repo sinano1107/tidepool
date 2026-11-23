@@ -638,13 +638,13 @@ it.each(REPAIR_TYPES)("昇格中の %s は work と同じく学習器の選択�
 });
 
 it("昇格中も学習器の選択は Throttle の除外を通る —— 選んだ Provider が throttle 中なら除外を当てた残りから選び直し、shadow 行の候補数は除外後の行の数", async () => {
-  const throttledOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
+  const throttledOpenai = async (now: () => Date): Promise<CodexAppServerProbeResult> => ({
     status: "observed",
     provider: "openai",
     cliVersion: "codex-cli 0.147.0",
     plan: "plus",
     models: listedOpenaiModels,
-    windows: [{ name: "primary", model: null, usedPercent: 100, durationMs: 5 * HOUR, resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString() }],
+    windows: [{ name: "primary", model: null, usedPercent: 100, durationMs: 5 * HOUR, resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString() }],
   });
   const b = scheduledBoard({ openaiUsage: throttledOpenai, candidates: () => [opus, sol] });
   promote(b);

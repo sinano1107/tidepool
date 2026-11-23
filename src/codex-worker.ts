@@ -1459,7 +1459,7 @@ function workerEnv(
 }
 
 /** ADR 0261 決定2 / ADR 0348 決定1・4: 1度の読みから満杯の窓と資源の停止を導き、Throttle には書かない。 */
-async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<{ usage_recheck: NonNullable<WorkerExit["usage_recheck"]>; stop?: ResourceStop }> {
+async function recheckUsage(probe: CodexAppServerProbe, now: () => Date): Promise<{ usage_recheck: NonNullable<WorkerExit["usage_recheck"]>; stop?: ResourceStop }> {
   try {
     const observed = await probe(now);
     const stop = codexProbeStop(observed);
@@ -1819,7 +1819,7 @@ export class CodexWorker implements WorkerAdapter {
         if (!mcpStop) writes.push(() => {
           if (probeStop) registerResourceStop(this.options.db, probeStop.quarantine, probeStop.value, probeStop.reason, this.options.clock.now());
         });
-        const classification = recheckUsage(probe, this.options.clock.now()).then(({ usage_recheck, stop }) => {
+        const classification = recheckUsage(probe, () => this.options.clock.now()).then(({ usage_recheck, stop }) => {
           exit.usage_recheck = usage_recheck;
           exitedAt = this.options.clock.now();
           // shortcut: MCP と probe の停止が同じ session に重なる形は未実測で、MCP を残す。観測されたら束に2つ載せる(ADR 0348 決定4)

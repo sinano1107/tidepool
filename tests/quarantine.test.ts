@@ -85,11 +85,11 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
     const passing = async () => (fired++, { available: true as const });
     const failing = async () => (fired++, { available: false as const, reason: "broken" });
 
-    expect(await quarantineUnlessClear(db, kind, value, passing, NOW)).toBe(false);
+    expect(await quarantineUnlessClear(db, kind, value, passing, () => NOW)).toBe(false);
     expect(questions(db)).toEqual([]);
-    expect(await quarantineUnlessClear(db, kind, value, failing, NOW)).toBe(true);
+    expect(await quarantineUnlessClear(db, kind, value, failing, () => NOW)).toBe(true);
     expect(questions(db)).toHaveLength(1);
-    expect(await quarantineUnlessClear(db, kind, value, passing, NOW)).toBe(true);
+    expect(await quarantineUnlessClear(db, kind, value, passing, () => NOW)).toBe(true);
     expect(fired).toBe(2);
   });
 });

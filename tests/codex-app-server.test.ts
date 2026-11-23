@@ -188,7 +188,7 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
     executable: "/opt/tidepool/bin/codex",
     codexHome: root,
     command,
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
   expect(result).toEqual({
     status: "observed",
@@ -251,7 +251,7 @@ it("a rate-limits request whose params no longer admits null reads as schema dri
   });
 
   const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
-    new Date(1_000),
+    () => new Date(1_000),
   );
 
   expect(result).toMatchObject({ status: "unobservable", reason: "required App Server method or response schema drifted" });
@@ -282,7 +282,7 @@ it("version or generated response-schema drift fails closed before App Server us
       executable: "/opt/tidepool/bin/codex",
       codexHome: root,
       command,
-    })(new Date(1_000));
+    })(() => new Date(1_000));
     const appServerCalls = callsTo(calls, "appServer");
 
     expect(result).toMatchObject({ status: "unobservable", provider: "openai" });
@@ -325,7 +325,7 @@ it.each([
   const { command, calls } = fakeCodex({ drift, rows: [] });
 
   const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
-    new Date(1_000),
+    () => new Date(1_000),
   );
   const appServerCalls = callsTo(calls, "appServer");
 
@@ -377,7 +377,7 @@ const probe = (rows: unknown[]) =>
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/tmp/codex",
     command: fakeCodex({ rows }).command,
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
 it.each([
   [
@@ -615,7 +615,7 @@ it("accepts the validated codex indexed view but does not guess that unknown lim
     executable: "/opt/tidepool/bin/codex",
     codexHome: root,
     command,
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
   expect(result.status === "observed" && result.windows.map(({ name, model, usedPercent }) => ({
     name,
@@ -643,7 +643,7 @@ it("accepts the validated codex indexed view but does not guess that unknown lim
       executable: "/opt/tidepool/bin/codex",
       codexHome: root,
       command: unknownLimit,
-    })(new Date(1_000)),
+    })(() => new Date(1_000)),
   ).resolves.toMatchObject({ status: "unobservable", provider: "openai" });
 });
 
@@ -710,7 +710,7 @@ it("app-server の stdin は応答が揃うまで開いたままで、上限を�
       "Codex App Server probe",
       CODEX_APP_SERVER_LIMIT_MS,
     ),
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
   expect(result).toMatchObject({ status: "observed", provider: "openai", plan: "plus" });
   expect(Date.now() - startedAt).toBeLessThan(10_000);
@@ -725,7 +725,7 @@ it("口が答えを返さなかった App Server probe は観測不能に倒れ�
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
     command: codexCommandThrough(boardCall, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
   expect(result).toMatchObject({ status: "unobservable", provider: "openai", cliVersion: null });
 });
@@ -753,7 +753,7 @@ function switchableCodex(initial: FakeCodexOptions = {}) {
   };
   const { command, calls } = fakeCodex(state);
   const probe = createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command });
-  return { state, probe: () => probe(new Date(1_000)) };
+  return { state, probe: () => probe(() => new Date(1_000)) };
 }
 
 it("版の不一致で観測不能になった互換性検査は保持されず、版が直れば次の呼び出しで observed に戻る", async () => {
@@ -789,7 +789,7 @@ it("版上げの適合試験が渡す固定の版は版の照合だけを差し�
     codexHome: "/tmp/codex",
     command,
     pinnedVersion: "codex-cli 0.151.0",
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
   expect(result).toMatchObject({ status: "observed", cliVersion: "codex-cli 0.151.0" });
 });
@@ -804,7 +804,7 @@ it("差し替えた固定の版の下でも、生成 schema のずれは App Ser
     codexHome: "/tmp/codex",
     command,
     pinnedVersion: "codex-cli 0.151.0",
-  })(new Date(1_000));
+  })(() => new Date(1_000));
 
   // 版の不一致の理由(`expected …, observed …`)でなく schema の理由で倒れる —— 版の照合は差し替え済み
   expect(result).toMatchObject({

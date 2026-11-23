@@ -116,7 +116,7 @@ export function quarantineContainment(db: Db, reason: string, now: Date): Resour
 export function containmentPickupBlocked(
   db: Db,
   capability: ContainmentCheck,
-  now: Date,
+  now: () => Date,
 ): Promise<boolean> {
   return quarantineUnlessClear(db, "containment", null, capability, now);
 }
