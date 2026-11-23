@@ -1025,6 +1025,60 @@ it("集合の blob の名前の場所の loose が別の blob の中身なら、
   }
 });
 
+/** 門で一度運んだ `sub/kept.txt` の blob に、名前の場所で正しい pack の写しを足して loose も残し(`repack -a` に `-d` を付けない)、worker は
+ *  root に1 commit 積む。blob の id を返す。 */
+function packedAndLooseInNamedPlace(db: Db, place: RunPlace, task: Task, ws: WorkspaceConfig): string {
+  mkdirSync(join(place.path, "sub"));
+  commitWork(place.path, "sub/kept.txt", "kept by the worker\n");
+  gateFetch(db, place, task);
+  git(ws.path, "repack", "-a", "--quiet");
+  commitWork(place.path, "more.txt", "more\n");
+  return git(place.path, "rev-parse", "HEAD:sub/kept.txt");
+}
+
+/** 正しい pack の写しの陰の loose の損傷: 別の blob の中身(zlib として正しい)と、body の切り詰め(header は読める)。 */
+const looseBehindPackDamages = {
+  renamed: (ws: WorkspaceConfig) => readFileSync(looseObject(ws.path, git(ws.path, "rev-parse", "HEAD:README.md"))),
+  truncated: (ws: WorkspaceConfig, blob: string) => readFileSync(looseObject(ws.path, blob)).subarray(0, 15),
+} as const;
+
+const packCount = (ws: WorkspaceConfig) => readdirSync(join(ws.path, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack")).length;
+
+// git 2.53 以降の blob の stream の読み手は loose を pack より先に開く —— 釘は `cat-file -p` の中身でなく退避で打つ(git 2.47 は直す前から正しい中身を返す)
+it.each(["renamed", "truncated"] as const)("集合の blob が名前の場所で正しい pack の写しと %s の loose を両方持てば、完了の門の確かめが loose を読めないに数えて入れ直し、その loose を残す dir へ移す(ADR 0408 決定1 / ADR 0398 決定1)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const blob = packedAndLooseInNamedPlace(db, place, task, ws);
+    const bytes = looseBehindPackDamages[damage](ws, blob);
+    rmSync(looseObject(ws.path, blob));
+    writeFileSync(looseObject(ws.path, blob), bytes);
+
+    const tip = gateFetch(db, place, task);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(existsSync(looseObject(ws.path, blob))).toBe(false);
+    expect(damagedIds(ws)).toEqual([blob]);
+  } finally {
+    db.close();
+  }
+});
+
+it("集合の blob が名前の場所で正しい pack の写しと健全な loose を両方持てば、完了の門は何も移さず、名前の場所に pack を足さない(ADR 0408 決定1)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const blob = packedAndLooseInNamedPlace(db, place, task, ws);
+    const packs = packCount(ws);
+
+    gateFetch(db, place, task);
+
+    expect(existsSync(looseObject(ws.path, blob))).toBe(true);
+    expect(damagedLoose(ws)).toEqual([]);
+    expect(packCount(ws)).toBe(packs);
+  } finally {
+    db.close();
+  }
+});
+
 /** worker が `sub/a.txt` と `sub/b.txt` を自前で持って門で一度運び、root に1 commit 積む。2つの blob の id を返す。 */
 function twoHeldByWorker(db: Db, place: RunPlace, task: Task): [string, string] {
   mkdirSync(join(place.path, "sub"));

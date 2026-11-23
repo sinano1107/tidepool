@@ -380,6 +380,26 @@ it("運んだ後の確かめが名前の場所の byte を読む手で上限を�
   }
 });
 
+it("運んだ後の確かめが名前の場所の loose だけを読む手で上限を越えれば、worker の repo の故障にせず名前の場所の側で拒む(ADR 0408 決定1 / ADR 0364 決定2)", async () => {
+  const { db, task, place } = await pickedUp("carried-loose-timeout");
+  // 小さい fetch は名前の場所で loose に展開される(transfer.unpackLimit) —— 集合の id が loose を持つ
+  commitWork(place.path, "work.txt", "work\n");
+  const shim = await tempDir("tidepool-slow-git-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  // 確かめの loose の側は名前の場所の loose の dir だけを見せる使い捨ての repo で撃つ
+  writeFileSync(
+    join(shim, "git"),
+    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */loose/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+  try {
+    expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(NamedPlaceFetchError);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 it("特別でない tracked な path の FIFO では git は即座に落ち、worker の repo の故障を投げる(ADR 0357 決定3 / ADR 0367 決定1)", async () => {
   const ws = await makeWorkspace("worker-tree-fifo-plain");
   const head = git(ws.path, "rev-parse", "HEAD");

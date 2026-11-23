@@ -968,9 +968,9 @@ function fetchUntrustedTip(place: UntrustedCheckout, branch: string): string {
  *  借りる先)で、確かめはその借りを外して数える —— 写しは使い捨てで、`own` の dir には書いてよい。 */
 type CarriedCopy = { own: string; tip: string; description: string; borrowing?: string };
 
-/** ADR 0388 決定1・2 / ADR 0398 決定1: 名前の場所へ運んだ直後に、`tip` から自前の object だけをたどって届く、運んだ場所の自前の object
- *  —— `own` を名前の場所の objects を借りずに辿り、`?` の付かないもの —— が名前の場所で欠けも破損も無く読めることを、pack に組み、object
- *  ごとに中身の名前を照合して確かめる(`rev-list` は zlib の破損を、pack-objects は別の中身の loose を素通しする)。walk が借りている tree で
+/** ADR 0388 決定1・2 / ADR 0398 決定1 / ADR 0408 決定1: 名前の場所へ運んだ直後に、`tip` から自前の object だけをたどって届く、運んだ場所の自前の object
+ *  —— `own` を名前の場所の objects を借りずに辿り、`?` の付かないもの —— が名前の場所で読めることを、名前の場所の loose を全部と git が選ぶ
+ *  pack 側の写しを pack に組み、object ごとに中身の名前を照合して確かめる(`rev-list` は zlib の破損を、pack-objects は別の中身の loose を素通しする)。walk が借りている tree で
  *  止まるのは定義どおりで、その下の object は守らない(ADR 0398 決定2・3)。読めなければ `own` から入れ直して確かめ直す —— fetch は commit を
  *  既に持つ場所へ何も送らない。揃わなければ運ぶ段の失敗で、読めない object を名指す。段ごとに帰責する(ADR 0364 決定2): 写しを数える手の失敗は `from` の故障、写しの tmp の失敗は host の失敗。 */
 function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { own, tip, description, borrowing = own }: CarriedCopy): void {
@@ -997,14 +997,22 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   }
   // pack-objects は一時 file を撃った repo の objects/pack に書く —— 名前の場所には書かず、その objects だけを借りる使い捨ての repo で読む
   const reader = join(own, "carried");
+  // 名前の場所の loose の dir だけを見せる使い捨ての repo —— 確かめと退避が使い回す。dir への symlink なので、退避で移した loose は次の読みに見えない
+  const probe = join(own, "loose");
   hostStep(from.noun, () => {
     initBoardCopy(reader, format, [objects]);
     initBoardCopy(blankOf(own), format);
+    initBoardCopy(probe, format);
+    for (const dir of new Set(ids.filter((id) => existsSync(looseOf(objects, id))).map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
   });
-  // ADR 0364 決定2: 名前の場所の byte だけを読む手 —— 上限超過も中身の照合の失敗も名前の場所の側。読めなければ失敗を返す
+  // ADR 0408 決定1: 最初の確かめと確かめ直しの1つの判定 —— 名前の場所に loose を持つ集合の id はその loose を全部、loose だけを見せる repo で
+  // 読み(git 2.53 以降の blob の stream の読み手は loose を pack より先に開く)、集合の全部を pack を先に読む repo で読む。ADR 0364 決定2:
+  // どちらも名前の場所の byte だけを読む手 —— 上限超過も中身の照合の失敗も名前の場所の側。読めなければ失敗を返す
   const unreadable = (): unknown => {
     try {
-      const misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, join(reader, "read"), ids, blankOf(own));
+      const loose = ids.filter((id) => existsSync(looseOf(objects, id)));
+      let misnamed = loose.length === 0 ? [] : misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, probe, join(probe, "read"), loose, blankOf(own));
+      if (misnamed.length === 0) misnamed = misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, reader, join(reader, "read"), ids, blankOf(own));
       return misnamed.length === 0 ? undefined : new MisnamedObjects(misnamed);
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(reader, cause)) throw copyHostError(from.noun, cause);
@@ -1024,7 +1032,7 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   }
   if (reinsertFailure === undefined) {
     try {
-      moveAsideDamagedLoose(objects, format, own, ids);
+      moveAsideDamagedLoose(objects, probe, own, ids);
     } catch (cause) {
       if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
       // 名前の場所の loose だけを読む手 —— 上限超過も名前の場所の側
@@ -1084,23 +1092,21 @@ function misnamedObjects(deadline: number, repo: string, base: string, ids: stri
 
 const DAMAGED_PREFIX = "tidepool-damaged-";
 
+/** 名前の場所の `objects` での `id` の loose の path。 */
+const looseOf = (objects: string, id: string) => join(objects, id.slice(0, 2), id.slice(2));
+
 /** ADR 0388 決定2 / ADR 0398 決定1: 入れ直しの後、集合の id の名前の場所の loose のうち、loose として読めないものと中身が名前と合わない
  *  ものを、objects の下の残す dir へ移す(消さない —— 人間が調べられる。入れ直しの残りの掃除は触らない)。読み手には loose を pack より先に開くものがある —— git 2.56 の `cat-file -p` は小さい
  *  object の pack の stream を断り、header の読める loose の stream を開くので、body を切り詰めた loose が入れ直した pack を覆う(source の
- *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ)。名前の場所の loose の dir だけを見せる使い捨ての repo で pack に組み、
+ *  `odb/streaming.c` / `packfile.c` / `odb/source-loose.c` を読んだ)。名前の場所の loose の dir だけを見せる確かめの `probe` で pack に組み、
  *  落ちた object を stderr の id で移して組み直す —— 移すたびに1つ以上減るので終わる。組めたら、中身が名前と合わない object を移す。 */
-function moveAsideDamagedLoose(objects: string, format: string, own: string, ids: string[]): void {
-  const looseOf = (id: string) => join(objects, id.slice(0, 2), id.slice(2));
-  let pending = ids.filter((id) => existsSync(looseOf(id)));
-  if (pending.length === 0) return;
-  const probe = join(own, "loose");
-  initBoardCopy(probe, format);
-  for (const dir of new Set(pending.map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
+function moveAsideDamagedLoose(objects: string, probe: string, own: string, ids: string[]): void {
+  let pending = ids.filter((id) => existsSync(looseOf(objects, id)));
   let damaged: string | undefined;
   const moveAside = (bad: string[]) => {
     if (bad.length === 0) return;
     damaged ??= mkdtempSync(join(objects, DAMAGED_PREFIX));
-    for (const id of bad) renameSync(looseOf(id), join(damaged, id));
+    for (const id of bad) renameSync(looseOf(objects, id), join(damaged, id));
     pending = pending.filter((id) => !bad.includes(id));
   };
   while (pending.length > 0) {
