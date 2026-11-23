@@ -1,5 +1,7 @@
 # 「失われた ref を諦めて基準へ戻す」は失われたタスクブランチの後始末も持つ —— git の成果が実際に失われた task は「成果が捨てられた」に数え、その根の着地はそこで終わる
 
+**Status 追記: 決定7 の末尾「PR を開いている根は対象にしない」は ADR 0407 が置き換えた —— PR を開いた失われた根も着地が終わり(merge の記録があれば `landing_finished`、無ければ `landing_ended_branch_lost`)、祖先の着地の記録で透明な根は `nothing_to_land` で終わる。失われた event が効いている根は merge の扉を通らない([ADR 0407](0407-a-root-whose-task-branch-was-lost-never-reaches-a-git-read-every-kind-ends-from-the-record-and-no-merge-door-passes-it.md) 決定2・3・5、2026-11-23、issue #3582)。**
+
 **Status 追記: 決定3・5 は ADR 0380 が置き換えた —— 失われた側の「成果が捨てられた」は `parent_id` の祖先でなく task 自身の系譜で読み、失われた task は記録で「透明」(作成時から動いていない、または内容が着地済み)か「死んだ」と読む。「根なら PR を開いていない」の条件は消え、盤面は数える前に origin から失われた sha を取りに行く。決定4 が倒すのは `parent_id` の子孫でなく数えられた task の付帯子で、決定5 の「飛ばす」は死んだ祖先を数える task だけに当たる。決定7 の「編集があった根」は「死んだ根」と読む。帰結の「問われていない」の最初の2件は決まった([ADR 0380](0380-a-lost-task-branch-is-read-through-the-lineage-as-transparent-or-dead-the-board-fetches-the-lost-sha-from-origin-before-counting-and-the-cancel-term-stays-on-the-tree.md) 決定1〜5、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定9 のうち決定8(question を閉じる)を書き戻しと一緒に書く部分は ADR 0397 が置き換えた —— 着地の終わりは記録から導き、Quarantine の受理と収束が同じ判定で書く([ADR 0397](0397-a-lost-roots-landing-end-is-derived-from-the-record-and-both-the-quarantine-accept-and-convergence-write-it-through-one-predicate.md)、2026-11-21、issue #3492)。**

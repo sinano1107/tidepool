@@ -1,5 +1,7 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
+**Status 追記: 帰結の「確かめていない」のうち、push 前の commit を持ったまま失われた PR の根の着地は決まった —— PR なしの死んだ根と同じく着地が終わる([ADR 0407](0407-a-root-whose-task-branch-was-lost-never-reaches-a-git-read-every-kind-ends-from-the-record-and-no-merge-door-passes-it.md) 決定2、2026-11-23、issue #3582)。**
+
 **Status 追記: 決定4 で失われたタスクブランチの sha を取りに行く先は、宣言の出元 repo になる。保護ブランチなど、他の ref は origin から取る([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・3、2026-11-22、issue #3562)。**
 
 **Status 追記: 退けた形の最後の項が送った場面(別の workspace の完了済みの子がレビューを倒されたまま着地する、#3270)と、決定5 の「子が親と違う workspace の列を明示したとき」は起きなくなる —— 別の workspace への分解は子でなく分解元つきの根になる。決定6 の cancel の項は木のまま変わらない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定1〜3、2026-11-19、issue #1796)。**

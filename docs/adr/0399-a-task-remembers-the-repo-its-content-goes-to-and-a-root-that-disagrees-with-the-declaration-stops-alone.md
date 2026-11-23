@@ -1,5 +1,7 @@
 # task は自分の中身が向かう repo を覚え、根を指す記録は根の id で持ち、食い違った根だけを止める
 
+**Status 追記: 決定5・6 の `end landing` は、失われた event が効いている根では `landing_ended_pr_left` を書かず、失われた根の判定が終わりの種類を決める。失われていない根では変わらない([ADR 0407](0407-a-root-whose-task-branch-was-lost-never-reaches-a-git-read-every-kind-ends-from-the-record-and-no-merge-door-passes-it.md) 決定6、2026-11-23、issue #3582)。**
+
 **Status 追記: #3601 の追記の末尾の例を更新する。purely-local で拾われた根は、publish 後の着地で最初にタスクブランチを push する直前に、宣言の repo を記録する(決定1)。出元 repo 設定時のタスクブランチの写しは、この記録を変えない。その根を後で purely-local へ登録し直すと、宣言の repo の記録が先に食い違い、根が止まる(2026-11-23、issue #3602)。**
 
 **Status 追記: 決定3 の「出元 repo の記録が無いのは、PR を記録した根に限り食い違い」は、今の宣言が `repo` を持つときに限る。宣言の repo が無ければ盤面は GitHub に届かない(GitHub client は宣言の GitHub repo が無いと PR の操作を撃たずに投げる)ので、記録の無い PR の根をそこで止めても守るものが無い。記録があれば、今どおり宣言の出元 repo と比べる —— 記録は上書きされないので、purely-local で始まり publish の後に push した根を purely-local へ登録し直したときは、出元 repo の記録がその根を止める(2026-11-22、issue #3601)。**
