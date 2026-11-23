@@ -81,7 +81,7 @@ export function workbenchOwner(
 export function humanWorkLeft(read: WorkbenchRead): string[] {
   const { at, target, tip } = read;
   const left: string[] = [];
-  if (onWorkbench(at, () => gitAnswers(() => workerRepoGit(at, "rev-parse", "--quiet", "--verify", "MERGE_HEAD")))) left.push(`a merge is in progress — commit it on ${target} or run \`git merge --abort\``);
+  if (workbenchAnswer(at, "rev-parse", "--quiet", "--verify", "MERGE_HEAD") !== undefined) left.push(`a merge is in progress — commit it on ${target} or run \`git merge --abort\``);
   if (tip !== undefined) {
     if (boardViewStatus(at, tip, read.verified).length > 0) left.push(`it has uncommitted changes — commit them on ${target} or discard them`);
     if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
@@ -119,17 +119,30 @@ const inTarget = ({ verified, targetSha }: WorkbenchRead, sha: string): boolean 
 
 /** HEAD が書く先の branch を指す symref か —— `symbolic-ref -q` の 1 は detached。 */
 function headOn(at: string, target: string): boolean {
-  let head = "";
-  return onWorkbench(at, () => gitAnswers(() => (head = workerRepoGit(at, "symbolic-ref", "-q", "HEAD")))) && head === `refs/heads/${target}`;
+  return workbenchAnswer(at, "symbolic-ref", "-q", "HEAD") === `refs/heads/${target}`;
 }
 
-/** #3587: 判定が作業台そのものに撃つ git が落ちれば、作業台の読みの失敗(`CheckoutUnreadableError`)—— 開く扉と削除の扉が
- *  同じ手で作業台を名指す。git が終了コードを返さない失敗(上限超過、起こせない git)は型のまま。述語の「no」は内側の `gitAnswers` が答えにする。 */
-export function onWorkbench<T>(at: string, read: () => T): T {
+/** 作業台に撃つ述語の git の答え: 出力、「no」(終了コード 1)なら undefined。 */
+export function workbenchAnswer(at: string, ...args: string[]): string | undefined {
+  let out: string | undefined;
+  return onWorkbench(at, () => gitAnswers(() => (out = workerRepoGit(at, ...args)))) ? out : undefined;
+}
+
+/** ADR 0382 決定2: 読めない作業台はどの入口でも拒む —— 判定が作業台そのものに撃つ git の失敗を作業台の読みの失敗(`WorkbenchGitError`)にし、
+ *  開く扉と削除の扉が同じ手で作業台を名指す。git が終了コードを返さない失敗(上限超過、起こせない git)は型のまま。述語の「no」は内側の
+ *  `gitAnswers` が答えにする。 */
+function onWorkbench<T>(at: string, read: () => T): T {
   try {
     return read();
   } catch (cause) {
     if (typeof (cause as { status?: unknown } | null)?.status !== "number") throw cause;
-    throw new CheckoutUnreadableError(`the workbench at ${at} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new WorkbenchGitError(at, cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+/** 作業台に撃った git の失敗。文は作業台を名指し(素のまま届く入口のため)、`gitMessage` は git の文だけ(作業台を名指す扉が括弧に入れる)。 */
+export class WorkbenchGitError extends CheckoutUnreadableError {
+  constructor(at: string, readonly gitMessage: string, options: ErrorOptions) {
+    super(`the workbench at ${at} cannot be read: ${gitMessage}`, options);
   }
 }

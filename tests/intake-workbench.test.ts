@@ -364,6 +364,8 @@ it.each(["開いて", "閉じて"])("intake question が%sいるとき、作業�
   await expect(refused).rejects.toThrow(DomainError);
   await expect(refused).rejects.toThrow(`the board cannot read the workbench at ${workbenchPath(b.base, { workspace: b.ws.name })} (`);
   await expect(refused).rejects.toThrow("); remove it by hand, then open it again.");
+  // 括弧の中は git の失敗だけ —— 作業台の名指しを重ねない
+  await expect(refused).rejects.not.toThrow("(the workbench at ");
   expect(existsSync(b.workbench())).toBe(true);
 });
 

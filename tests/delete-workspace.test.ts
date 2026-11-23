@@ -445,6 +445,8 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     writeFileSync(join(o.workbench, ".git", "config"), "not a config\n");
 
     await expectWorkbenchUnreadable(o);
+    // 括弧の中は git の失敗だけ —— 作業台の名指しを重ねない
+    await expect(deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps())).rejects.not.toThrow(`(the workbench at ${o.workbench} cannot be read`);
   });
 
   it("作業台でも名前の場所でもない失敗(盤面の写しの host)は参照の拒否にせずそのまま投げ、entry も作業台も残す", async () => {
