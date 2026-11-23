@@ -12,14 +12,14 @@ const libFiles = new Map<string, ts.SourceFile | undefined>();
 function detect(source: string, permanent: string[] = []) {
   const host = ts.createCompilerHost(options);
   const fixture = "/fixture/a.ts";
-  const libSourceFile = host.getSourceFile;
+  const defaultGetSourceFile = host.getSourceFile;
   host.getSourceFile = (fileName, languageVersion) => {
     if (fileName === fixture) return ts.createSourceFile(fileName, source, languageVersion);
-    if (!libFiles.has(fileName)) libFiles.set(fileName, libSourceFile(fileName, languageVersion));
+    if (!libFiles.has(fileName)) libFiles.set(fileName, defaultGetSourceFile(fileName, languageVersion));
     return libFiles.get(fileName);
   };
-  const libExists = host.fileExists;
-  host.fileExists = (fileName) => fileName === fixture || libExists(fileName);
+  const defaultFileExists = host.fileExists;
+  host.fileExists = (fileName) => fileName === fixture || defaultFileExists(fileName);
   return findCurrentTimeDates(ts.createProgram([fixture], options, host), "/fixture", new Set(permanent));
 }
 
@@ -35,6 +35,11 @@ describe("the current-time Date detector", () => {
 
   it("reports a Date member of an object parameter, naming the member", () => {
     const source = `export async function capture(board: { id: string; now?: Date }) { void board; }`;
+    expect(detect(source)).toEqual({ reports: ["a.ts capture(board.now)"], exempted: [] });
+  });
+
+  it("reports a Date member of an optional object parameter", () => {
+    const source = `export async function capture(board?: { now: Date }) { void board; }`;
     expect(detect(source)).toEqual({ reports: ["a.ts capture(board.now)"], exempted: [] });
   });
 
@@ -68,7 +73,8 @@ describe("the current-time Date detector", () => {
   const clocked = `
     declare const clock: { now(): Date };
     declare function probe(...args: unknown[]): Promise<void>;
-    declare function record(at: unknown): void;`;
+    declare function record(...args: unknown[]): void;
+    declare function read(...args: unknown[]): AsyncIterable<number>;`;
 
   it("reports a clock.now() local referenced after an await", () => {
     const source = `${clocked}
@@ -91,10 +97,40 @@ describe("the current-time Date detector", () => {
     expect(detect(source)).toEqual({ reports: [], exempted: [] });
   });
 
+  it("reports a clock.now() local referenced in the body of a for await", () => {
+    const source = `${clocked}
+      export async function drain() { const now = clock.now(); for await (const item of read()) record(now, item); }`;
+    expect(detect(source)).toEqual({ reports: ["a.ts drain: now"], exempted: [] });
+  });
+
+  it("does not report a clock.now() local referenced only in the header of a for await", () => {
+    const source = `${clocked}
+      export async function drain() { const now = clock.now(); for await (const item of read(now)) record(item); }`;
+    expect(detect(source)).toEqual({ reports: [], exempted: [] });
+  });
+
+  it("reports a clock.now() local referenced in a loop before the loop's await, which the next pass runs after it", () => {
+    const source = `${clocked}
+      export async function sweep(xs: number[]) { const now = clock.now(); for (const x of xs) { record(now); await probe(x); } }`;
+    expect(detect(source)).toEqual({ reports: ["a.ts sweep: now"], exempted: [] });
+  });
+
+  it("does not report a clock.now() local read afresh in each pass of a loop with an await", () => {
+    const source = `${clocked}
+      export async function sweep(xs: number[]) { for (const x of xs) { const now = clock.now(); record(now); await probe(x); } }`;
+    expect(detect(source)).toEqual({ reports: [], exempted: [] });
+  });
+
   it("does not report Date.now(), a number read for a deadline", () => {
     const source = `${clocked}
       export async function wait() { const started = Date.now(); await probe(); record(Date.now() - started); }`;
     expect(detect(source)).toEqual({ reports: [], exempted: [] });
+  });
+
+  it("reports a clock.now() local referenced in a synchronous callback written after an await", () => {
+    const source = `${clocked}
+      export async function f(rows: number[]) { const now = clock.now(); await probe(); rows.forEach(() => record(now)); }`;
+    expect(detect(source)).toEqual({ reports: ["a.ts f: now"], exempted: [] });
   });
 
   it("reports a clock.now() local captured by an async function that references it after its own await", () => {
@@ -120,12 +156,24 @@ describe("the current-time Date detector", () => {
       }`;
     expect(detect(source)).toEqual({ reports: ["a.ts settle: ms", "a.ts settle: iso"], exempted: [] });
   });
+
+  it("reports the toISOString() of a current-time local, converted in a second step", () => {
+    const source = `${clocked}
+      export async function settle() { const now = clock.now(); const iso = now.toISOString(); record(now); await probe(); record(iso); }`;
+    expect(detect(source)).toEqual({ reports: ["a.ts settle: iso"], exempted: [] });
+  });
+
+  it("does not report the toISOString() of a Date parameter on a synchronous function", () => {
+    const source = `${clocked}
+      export function stamp(now: Date) { const iso = now.toISOString(); return async () => { await probe(); record(iso); }; }`;
+    expect(detect(source)).toEqual({ reports: [], exempted: [] });
+  });
 });
 
 // ADR 0404 決定5: Promise を返す関数に現在時刻を Date で渡す形を、型検査器で src から拒む。
 // 振る舞いを assert しない静的な検査で、ADR 0107 決定1 の seam ではない。
 describe("the current-time Date guard over src", () => {
-  // 現在時刻でない事実の時刻。引数か欄の名で当て、理由を添える
+  // ADR 0404 決定4: 現在時刻でない事実の時刻。型では区別できないので、引数か欄の名で当て、理由を添える
   const permanent = new Map([["cliAuthExpiresAt", "a recorded expiry, not the current time"]]);
   // 今の違反と、それを直す ticket。直した ticket が自分の行を消す
   const pending: Record<string, string[]> = {
