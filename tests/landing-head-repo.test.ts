@@ -140,7 +140,7 @@ it("the merge path floor reads a recorded head that is only available from the f
   recordPrOpenedOutsideConvergence(db, finish(db, clock, work), 1, clock.now(), { head, authority: { merge: "auto_if_ci_green" }, workspace });
   expect(() => git(workspace.path, "cat-file", "-e", head)).toThrow();
 
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
 
   expect(mergeQuestions(db)).toMatchObject([{ pr: 1, purpose: expect.stringContaining("CODEOWNERS") }]);
   expect(github.merged).toEqual([]);
