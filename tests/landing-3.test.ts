@@ -29,6 +29,7 @@ import { markTeardown } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
   boardRefWriter,
+  holdsBaseline,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
@@ -1370,8 +1371,8 @@ it("壊れた packed-refs で基準との比較ができなければ、無人 me
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
 });
 
-// 外の merge の走査は PR の状態だけを読み、名前の場所の ref を読まない —— 読めない checkout でも止まらず、Quarantine も立てない
-it.each([false, true])("壊れた packed-refs の workspace でも、外の merge の走査は ref を読まずに PR を観測する(外で閉じた: %s)", async (closed) => {
+// 遅い走査は PR の状態だけを読み、名前の場所の ref を読まない —— 読めない checkout でも止まらず、Quarantine も立てない
+it.each([false, true])("壊れた packed-refs の workspace でも、遅い走査は ref を読まずに PR を観測する(外で閉じた: %s)", async (closed) => {
   const { workspace, db, github, landing, clock, work } = await openPushedPr("outside-merge-unreadable-refs", "escalate");
   await leaveBaseline(db, workspace);
   breakPackedRefs(workspace);
@@ -1586,6 +1587,36 @@ it("push の後に積み残しが残っても、workspace の quarantine が抱�
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
+// ADR 0241 決定6: push の後に積み残しを比べられなくても、workspace の quarantine が抱えていれば失敗 question を重ねない。
+// 抱えていなければ失敗 question を立てる(fail-closed)。比較を落とすのは積み残しの対象の読み —— ref 検査は通る
+it.each([
+  ["workspace の quarantine が抱えていれば、失敗 question を立てずその quarantine を名乗る", true],
+  ["quarantine が抱えていなければ、失敗 question を1枚立てる", false],
+])("push の後に積み残しを比べられないとき、%s", async (_, quarantine) => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unreadable-after-push", "escalate");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  finish(db, clock, work);
+  const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
+  afterEachPush(github, () => {
+    failPrepareOnce(db, "id = @root OR", "the left-behind targets could not be read");
+    if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  });
+
+  const verdict = await convergeOn(landing, work.id);
+
+  expect(github.pushes).toHaveLength(1);
+  if (quarantine) {
+    expect(verdict).toEqual({
+      kind: "quarantined",
+      error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+    });
+    expect(promotionFailures(db, work.id)).toEqual([]);
+  } else {
+    expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed", error: expect.stringContaining("the left-behind targets could not be read") });
+    expect(promotionFailures(db, work.id)).toEqual([expect.objectContaining({ question_landing_tip: tip })]);
+  }
+});
+
 // 旧: push の後に読めなくなった checkout は積み残しの比較の失敗になり、Quarantine が抱えていなければ失敗 question を立てた(ADR 0241 決定6)。
 // ADR 0403 決定4 の後は、積み残しを比べる前の ref 検査が workspace の Quarantine で止める
 it.each([
@@ -1622,6 +1653,16 @@ it("workspace の Git リポジトリが無ければ、収束は workspace の Q
 
   expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
   expect(quarantineQuestion(c.db, "workspace", c.workspace.name)?.purpose).toContain("could not verify refs");
+  expect(promotionFailures(c.db, c.work.id)).toEqual([]);
+});
+
+it("基準の行が無い名前でも、checkout の ref が読めなければ、収束は最初の撮りをせず workspace の Quarantine 1つで止まる", async () => {
+  const c = await pushedRoot("unreadable-refs-without-baseline");
+  breakPackedRefs(c.workspace);
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
+  expect(listBoard(c.db).filter((q) => q.question_quarantine_kind === "workspace" && q.status === "todo")).toHaveLength(1);
+  expect(holdsBaseline(c.db, c.workspace.name)).toBe(false);
   expect(promotionFailures(c.db, c.work.id)).toEqual([]);
 });
 

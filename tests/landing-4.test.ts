@@ -2209,6 +2209,17 @@ it("着地の比較: lineage が ref を読む子も、checkout の ref が読�
   expect([...promotionFailures(db, work.id), ...promotionFailures(db, child.id)]).toEqual([]);
 });
 
+it("着地の比較: checkout の ref が読めなければ、ローカル着地の merge の回答は拒まれ、workspace の Quarantine が立つ", async () => {
+  const local = await landLocally("landing-compare-local-merge-unreadable-refs");
+  const { workspace, db, question } = local;
+  breakPackedRefs(workspace);
+
+  await expect(answerLocalMerge(local)).rejects.toThrow(/^could not verify refs .* before landing: .*git for-each-ref/s);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("could not verify refs");
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
 it("着地の比較: ref が読めない checkout の Quarantine の回答は、壊れたままなら拒まれ、直してから答えると受理され、次の収束が着地する", async () => {
   const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-unreadable-refs-answer");
   const packedRefs = join(workspace.path, ".git", "packed-refs");
