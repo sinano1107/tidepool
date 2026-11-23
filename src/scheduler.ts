@@ -528,7 +528,7 @@ export function startScheduler(deps: {
     // run at all. Unlike the workspace/agent quarantines below this halts the
     // whole board — containment belongs to the host and to the board's own
     // wiring, so no narrower resource can be halted.
-    if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return "worker containment is not established";
+    if (containment && (await containmentPickupBlocked(db, containment, () => clock.now()))) return "worker containment is not established";
     // ADR 0347 決定3: 後始末と同じ「停止ではないが pickup を待たせているもの」で、question を立てない。
     // 最後に読むのは、停止と封じ込めの理由を隠さず、上の await の後の容器の今を読むため
     const unreclaimed = pendingReclaim?.();
@@ -836,7 +836,6 @@ export function startScheduler(deps: {
   }
 
   async function observeProviderUsage(provider: Provider): Promise<ProviderUsageObservation> {
-    const now = clock.now();
     // 不在は question を立てず、observed 以外の除外にそのまま畳まれる(ADR 0116 決定4)。
     // openai では probe より手前 —— 未ログインの盤面で App Server を起動しない。
     // moonshot は読めて空でない鍵の有無のほかに観測するものが無い。どちらも保存する —— queue の skipped
@@ -849,7 +848,7 @@ export function startScheduler(deps: {
         plan: null,
         cliVersion: null,
         ...(absence !== undefined && { reason: absence }),
-        observedAt: now,
+        observedAt: clock.now(),
         windows: [],
       };
       reportProviderUsage(db, observation);
@@ -857,13 +856,15 @@ export function startScheduler(deps: {
     }
     if (provider === "openai") {
       const result: CodexAppServerProbeResult = openaiUsage
-        ? await openaiUsage(now)
+        ? await openaiUsage(() => clock.now())
         : {
             status: "unobservable",
             provider: "openai",
             cliVersion: null,
             reason: "no OpenAI App Server probe is configured",
           };
+      // ADR 0404 決定1・2: 観測の時刻と資源の停止は probe が答えた後に1回読み、この同期区間の記録が共有する
+      const now = clock.now();
       if (result.status !== "observed") {
         const observation: ProviderUsageObservation = {
           provider,
@@ -925,7 +926,7 @@ export function startScheduler(deps: {
     return evaluateAndReportProviderUsage(
       db,
       { provider, plan: null, cliVersion: null, ...claudeUsageObservation(snapshot) },
-      now,
+      clock.now(),
     );
   }
 
@@ -1050,7 +1051,7 @@ export function startScheduler(deps: {
               db,
               canonicalHarness(setting.provider),
               harnessContainment,
-              clock.now(),
+              () => clock.now(),
             ))
           ) {
             entryExcluded = withExclusion(entryExcluded, setting.provider, null);
@@ -1114,7 +1115,7 @@ export function startScheduler(deps: {
         // 順序は Throttle の観測 → registry → issue のまま(GLOSSARY.md「Registry availability」)
         if (!registryChecked) {
           registryChecked = true;
-          if (registryAvailability && (await registryUnreadablePickupBlocked(db, registryAvailability, clock.now()))) return SUCCEEDED;
+          if (registryAvailability && (await registryUnreadablePickupBlocked(db, registryAvailability, () => clock.now()))) return SUCCEEDED;
         }
         const verdict = await taskGates(head);
         if ("pass" in verdict) {

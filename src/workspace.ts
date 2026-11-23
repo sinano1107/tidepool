@@ -1662,11 +1662,11 @@ export async function openHumanContentWorkbench(
   workspace: WorkspaceConfig,
   base: string,
   caller: Answerer,
-  now: Date,
+  now: () => Date,
   board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[] },
 ): Promise<string> {
   const branch = protectedBranch(workspace);
-  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, () => now))) {
+  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, now))) {
     throw new DomainError(`workspace ${workspace.name} is remote-backed, so ${branch} is changed on origin.${originRoute(workspace)}`);
   }
   if (!holdsBaseline(db, workspace.name)) await captureFirstBaseline(db, workspace, { ...board, now });
@@ -1698,7 +1698,7 @@ export async function openHumanContentWorkbench(
         question_kind: { kind: "intake", workspace: workspace.name },
         workspace: workspace.name,
       },
-      now,
+      now(),
       caller.actorId,
       caller.origin,
     ).id;
@@ -1734,10 +1734,10 @@ function firstCaptureHold(db: Db, name: string): FirstCaptureHold | undefined {
 async function captureFirstBaseline(
   db: Db,
   workspace: WorkspaceConfig,
-  board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: Date },
+  board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: () => Date },
 ): Promise<void> {
   refuseWhileHeld(db, workspace.name, "open a workbench");
-  const now = () => board.now;
+  const { now } = board;
   const named = withRememberedRepoCheck(db, workspace, now);
   await preparedOrRefused(db, workspace, "open a workbench", { now }, async () => {
     await firePickupPredicates(db, named, checkoutPickupPredicates(named, board.fixedPoints), "before-open");

@@ -77,7 +77,7 @@ function passingObservations(): ConformanceObservations {
 }
 
 it("9つの面がどれも盤面の読み取り関数で読めれば、全行が合格で試験は通る", async () => {
-  const { rows, ok } = await judgeConformance(passingObservations(), PI_CAPTURED_AT);
+  const { rows, ok } = await judgeConformance(passingObservations(), () => PI_CAPTURED_AT);
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
     ["init line", true],
@@ -98,7 +98,7 @@ it("1つの面が崩れたら、その面の行だけが不合格になり試験
   // 上限到達で止まった session の result 行は is_error で、盤面は usage として読まない
   const { rows, ok } = await judgeConformance(
     { ...passingObservations(), resultLine: async () => CAP_429_STREAM },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   expect(rows.filter((row) => !row.pass).map((row) => row.surface)).toEqual(["result line usage"]);
@@ -108,7 +108,7 @@ it("1つの面が崩れたら、その面の行だけが不合格になり試験
 it("Board call の init 行が無ければ、auto-memory が閉じているとはみなさない", async () => {
   const { rows, ok } = await judgeConformance(
     { ...passingObservations(), resultLine: async () => WORKER_STREAM.split("\n").slice(1).join("\n") },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   const failed = rows.filter((row) => !row.pass);
@@ -130,7 +130,7 @@ it.each([
   const stdout = [JSON.stringify({ ...JSON.parse(init!), memory_paths: memoryPaths }), ...rest].join("\n");
   const { rows, ok } = await judgeConformance(
     { ...passingObservations(), resultLine: async () => stdout },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   const failed = rows.filter((row) => !row.pass);
@@ -153,7 +153,7 @@ it.each([
   ["worker の形で server が起動した", { ...live, workerShaped: initWith([]), workerShapedStarted: true }, "started"],
   ["worker の形の init 行が無い", { ...live, workerShaped: "", workerShapedStarted: false }, "worker-shaped"],
 ])("workspace .mcp.json の面は%sとき不合格になる", async (_, observed, detail) => {
-  const { rows } = await judgeConformance({ ...passingObservations(), mcpJson: async () => observed }, PI_CAPTURED_AT);
+  const { rows } = await judgeConformance({ ...passingObservations(), mcpJson: async () => observed }, () => PI_CAPTURED_AT);
 
   const failed = rows.filter((row) => !row.pass);
   expect(failed.map((row) => row.surface)).toEqual(["workspace .mcp.json"]);
@@ -178,7 +178,7 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
         throw new Error("spawn claude ENOENT");
       },
     },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   expect(rows).toHaveLength(9);
@@ -230,7 +230,7 @@ it("output style の面は init 行の output_style が既定でなければ、�
     [withStyle("Explanatory"), "Explanatory"],
     [withStyle(undefined), "output_style"],
   ] as const) {
-    const { rows, ok } = await judgeConformance({ ...passingObservations(), outputStyleLine: async () => stdout }, PI_CAPTURED_AT);
+    const { rows, ok } = await judgeConformance({ ...passingObservations(), outputStyleLine: async () => stdout }, () => PI_CAPTURED_AT);
     const failed = rows.filter((row) => !row.pass);
     expect(failed.map((row) => row.surface)).toEqual(["output style"]);
     expect(failed[0]!.detail).toContain(detail);
@@ -249,7 +249,7 @@ it("language の面は形ごとに3回撃ち、1回でも答えに japanese(大�
         return answered(shape === "board call" && nth === 3 ? "Always respond in Japanese." : "NONE");
       },
     },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   expect(shots.filter((s) => s === "worker")).toHaveLength(3);
@@ -264,7 +264,7 @@ it("language の面は形ごとに3回撃ち、1回でも答えに japanese(大�
 it("language の面は result 行の答えが読めなければ不合格になる —— 答えの無い1回を合格に読まない", async () => {
   const { rows, ok } = await judgeConformance(
     { ...passingObservations(), languageShot: async () => WORKER_STREAM.split("\n")[0]! },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   expect(rows.filter((row) => !row.pass).map((row) => row.surface)).toEqual(["language"]);
@@ -277,7 +277,7 @@ it.each([
 ])("language の面は答え %j を、日本語の指示の引用でなければ合格に読む(worker の形は盤面の english を引用しうる)", async (answer, pass) => {
   const { rows } = await judgeConformance(
     { ...passingObservations(), languageShot: async () => answered(answer) },
-    PI_CAPTURED_AT,
+    () => PI_CAPTURED_AT,
   );
 
   expect(rows.find((row) => row.surface === "language")!.pass).toBe(pass);

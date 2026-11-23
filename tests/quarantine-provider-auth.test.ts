@@ -122,7 +122,7 @@ it("moonshot の確認回答は provider の再検証が通るまで受理され
 
 it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時に App Server を再probeし、他 Provider は流し続ける", async () => {
   let authenticated = false;
-  const openaiUsage = async (now: Date): Promise<CodexAppServerProbeResult> =>
+  const openaiUsage = async (now: () => Date): Promise<CodexAppServerProbeResult> =>
     authenticated
       ? {
           status: "observed",
@@ -136,14 +136,14 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
               model: null,
               usedPercent: 0,
               durationMs: 5 * HOUR,
-              resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+              resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
             },
             {
               name: "secondary",
               model: null,
               usedPercent: 0,
               durationMs: 7 * 24 * HOUR,
-              resetsAt: new Date(now.getTime() + 6 * 24 * HOUR).toISOString(),
+              resetsAt: new Date(now().getTime() + 6 * 24 * HOUR).toISOString(),
             },
           ],
         }

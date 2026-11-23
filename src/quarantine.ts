@@ -712,12 +712,13 @@ export async function quarantineUnlessClear(
   kind: QuarantineKind,
   value: string | null,
   check: () => Promise<{ available: true } | { available: false; reason: string }>,
-  now: Date,
+  now: () => Date,
 ): Promise<boolean> {
   if (openQuarantineQuestion(db, kind, value)) return true;
   const result = await check();
   if (result.available) return false;
-  registerQuarantine(db, kind, value, result.reason, now);
+  // ADR 0404 決定1: Quarantine は検査が答えた後に読んだ時刻を持つ
+  registerQuarantine(db, kind, value, result.reason, now());
   return true;
 }
 

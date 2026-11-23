@@ -28,7 +28,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
     const push = new FakePushClient();
 
     const noon = new Date(Date.UTC(2026, 0, 1, 12, 0));
-    await pollNotifications({ db, push }, noon);
+    await pollNotifications({ db, push }, () => noon);
 
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
@@ -38,7 +38,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
     });
 
     // 2回目のポーリングでは既に通知済みなので再送しない
-    await pollNotifications({ db, push }, noon);
+    await pollNotifications({ db, push }, () => noon);
     expect(push.sent).toHaveLength(1);
   });
 
@@ -50,7 +50,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
 
     // 既定 quiet hours (23:00–07:00, Asia/Tokyo) 内 — JST 0:00 は UTC 前日 15:00
     const midnight = new Date(Date.UTC(2025, 11, 31, 15, 0));
-    await pollNotifications({ db, push }, midnight);
+    await pollNotifications({ db, push }, () => midnight);
 
     expect(push.sent).toEqual([]);
   });
@@ -58,7 +58,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
   it("push が未設定(構成なし)なら何もしない", async () => {
     const db = openDb(":memory:");
     registerQuestion(db, "push 未設定");
-    await expect(pollNotifications({ db, push: undefined }, new Date(Date.UTC(2026, 0, 1, 12, 0)))).resolves.toBeUndefined();
+    await expect(pollNotifications({ db, push: undefined }, () => new Date(Date.UTC(2026, 0, 1, 12, 0)))).resolves.toBeUndefined();
   });
 
   it("push が届く前にボードで直接回答済みの question は通知しない(code review 指摘: status フィルタ漏れ)", async () => {
@@ -69,7 +69,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
     answerQuestionViaWebui(db, task, ["yes"], noon);
 
     const push = new FakePushClient();
-    await pollNotifications({ db, push }, noon);
+    await pollNotifications({ db, push }, () => noon);
 
     expect(push.sent).toEqual([]);
   });
@@ -84,7 +84,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
     push.scriptFailure("https://push.example/dead");
 
     const noon = new Date(Date.UTC(2026, 0, 1, 12, 0));
-    await expect(pollNotifications({ db, push }, noon)).resolves.toBeUndefined();
+    await expect(pollNotifications({ db, push }, () => noon)).resolves.toBeUndefined();
 
     // 生きている購読先へは両方の question が届き、死んでいる方の失敗は他へ波及しない
     expect(push.sent.filter((s) => s.subscription.endpoint === "https://push.example/alive")).toHaveLength(2);

@@ -756,7 +756,7 @@ it("intake question が開いていれば、local 着地の merge の人間し�
   await expect(c.answer()).rejects.toThrow(c.refused());
   c.resolve();
   commitWork(c.workbench(), ".mcp.json", "{}\n");
-  await openHumanContentWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, c.clock.now(), { resolveRegistered: undefined });
+  await openHumanContentWorkbench(c.db, c.workspace, c.base, HUMAN_ANSWERER, () => c.clock.now(), { resolveRegistered: undefined });
   const intake = openIntakeQuestionId(c.db, c.workspace.name)!;
   const nothingWritten = c.unchanged();
 

@@ -45,7 +45,7 @@ async function board(name = "intake") {
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
   seedTaskBranch(db, ws, parent.id, "main");
   const pending = await taskWithCommit(db, clock, ws, "pending.txt");
-  const open = () => openHumanContentWorkbench(db, ws, base, CALLER, clock.now(), { resolveRegistered: undefined });
+  const open = () => openHumanContentWorkbench(db, ws, base, CALLER, () => clock.now(), { resolveRegistered: undefined });
   const workbench = () => realpathSync(workbenchPath(base, { workspace: ws.name }));
   const question = () => getTask(db, openIntakeQuestionId(db, ws.name)!)!;
   const answer = (option: string, workspace: WorkspaceConfig = ws, q: Task = question()) =>
@@ -166,7 +166,7 @@ it("open_workbench は remote-backed の workspace を text A9 で拒み、作�
   const db = openDb(":memory:");
   const base = await tempDir("tidepool-workbenches-");
 
-  await expect(openHumanContentWorkbench(db, workspace, base, CALLER, new Date(), { resolveRegistered: undefined })).rejects.toThrow(
+  await expect(openHumanContentWorkbench(db, workspace, base, CALLER, () => new Date(), { resolveRegistered: undefined })).rejects.toThrow(
     new DomainError(
       `workspace ${workspace.name} is remote-backed, so main is changed on origin. Put the change into origin's main — a fast-forward push from your own clone, ` +
         `or a merge of your own PR. Never push from ${workspace.path}. Tasks that have already forked do not get it; it takes effect from the next fork.`,
@@ -209,7 +209,7 @@ async function untouched() {
   const other = await makeWorkspace("intake-other");
   const base = await tempDir("tidepool-workbenches-");
   const open = (resolveRegistered: (name: string | null) => WorkspaceConfig = registryOf(ws, other)) =>
-    openHumanContentWorkbench(db, ws, base, CALLER, clock.now(), { resolveRegistered });
+    openHumanContentWorkbench(db, ws, base, CALLER, () => clock.now(), { resolveRegistered });
   /** `other` を pickup して基準の行を撮る。 */
   const captureOther = async () => {
     const task = registerTask(db, { type: "work", title: "other", purpose: "why", completion_criteria: "done", workspace: other.name }, clock.now(), ...HUMAN_WEBUI);

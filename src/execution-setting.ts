@@ -894,7 +894,7 @@ export async function changeExecutionSettings(
   db: Db,
   change: ExecutionSettingsChange,
   origin: EventOrigin,
-  at: Date,
+  now: () => Date,
   renameAgentTiers?: RenameAgentTiers,
   listAgents?: ListAgentTiers,
 ): Promise<void> {
@@ -908,7 +908,7 @@ export async function changeExecutionSettings(
       throw err;
     }
   }
-  applyExecutionSettingsChange(db, change, origin, at, undefined, listAgents);
+  applyExecutionSettingsChange(db, change, origin, now(), undefined, listAgents);
 }
 
 /** 行の Quarantine の解除の門1(ADR 0184 決定5 / ADR 0218 決定2): その (provider, model)、effort の Quarantine なら

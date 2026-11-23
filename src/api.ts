@@ -1340,7 +1340,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           presentTask(db, parent, defaultAgentName, auditorName, interviewerName),
           github,
           displayWorkspace(parent.workspace),
-          clock.now(),
+          () => clock.now(),
         );
         context = {
           parentTitle: live.title,
@@ -1829,7 +1829,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post(
     "/settings/execution",
     validatedWrite(executionSettingsChangeSchema, async (change) => {
-      await changeExecutionSettings(db, change, "webui", clock.now(), agentAdmin?.renameTier, agentAdmin?.list);
+      await changeExecutionSettings(db, change, "webui", () => clock.now(), agentAdmin?.renameTier, agentAdmin?.list);
       pollNow();
       return readExecutionSettingsWithQuarantine(db);
     }),
@@ -2224,7 +2224,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   const presentLive = <T extends BoardTask>(tasks: T[]): Promise<Array<Live<T>>> =>
     Promise.all(
       tasks.map((task) =>
-        issueContent.present(task, github, displayWorkspace(task.workspace), clock.now()),
+        issueContent.present(task, github, displayWorkspace(task.workspace), () => clock.now()),
       ),
     );
 

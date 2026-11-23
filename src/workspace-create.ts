@@ -194,7 +194,7 @@ export async function openWorkspaceWorkbench(input: { name: string }, origin: Ev
   // ADR 0373 決定13 の確認は名前を引くたびに registry を読み直す —— pickup の口と同じ
   const resolveRegistered = (name: string | null) =>
     resolveExecutionWorkspace(loadRegistry(deps.registry.dir, deps.registry.mode), input.name, name, deps.workspacesBaseDir);
-  return openHumanContentWorkbench(deps.db, resolveRegistered(input.name), deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, (deps.clock ?? new SystemClock()).now(), {
+  return openHumanContentWorkbench(deps.db, resolveRegistered(input.name), deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, () => (deps.clock ?? new SystemClock()).now(), {
     resolveRegistered,
     fixedPoints: deps.boardState,
   });

@@ -1267,7 +1267,7 @@ export const listedOpenaiModels = new Map(
  *  除外されるので、実物の selector を通して openai entry を走らせたいテストが渡す。
  *  使用率は 0% にしない —— 0% は未開始(Idle)で観測の窓から落ちるので(ADR 0128 決定2)、
  *  「健全」が「窓がそもそも無い」に化けて窓の経路を踏まなくなる。ペース線の内側を走る窓。 */
-export const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
+export const healthyOpenai = async (now: () => Date): Promise<CodexAppServerProbeResult> => ({
   status: "observed",
   provider: "openai",
   cliVersion: "codex-cli 0.147.0",
@@ -1279,7 +1279,7 @@ export const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResul
       model: null,
       usedPercent: 10,
       durationMs: 5 * 3_600_000,
-      resetsAt: new Date(now.getTime() + 3_600_000).toISOString(),
+      resetsAt: new Date(now().getTime() + 3_600_000).toISOString(),
     },
   ],
 });

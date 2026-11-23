@@ -117,7 +117,7 @@ async function replay<T>(stdout: string, project: (parsed: Record<string, unknow
 export type Verdict = { pass: boolean; detail: string };
 export type Row = Verdict & { surface: string };
 
-const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Promise<Verdict>]> = [
+const SURFACES: Array<[string, (obs: ConformanceObservations, now: () => Date) => Promise<Verdict>]> = [
   [
     "init line",
     async (obs) => {
@@ -219,7 +219,7 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
     async (obs, now) => {
       const screen = await obs.usageScreen();
       if (screen === null) return { pass: false, detail: "the usage TUI produced no panel" };
-      const observation = claudeUsageObservation(parseUsage(screen, now));
+      const observation = claudeUsageObservation(parseUsage(screen, now()));
       return {
         pass: observation.status !== "unobservable",
         detail: observation.reason ?? `${observation.windows.length} windows read`,
@@ -242,7 +242,7 @@ export async function rowOf(surface: string, judge: () => Promise<Verdict>): Pro
 /** 面ごとの合否。面は順に1つずつ観測する —— 実物の `claude` を同時に起こさない。 */
 export async function judgeConformance(
   obs: ConformanceObservations,
-  now: Date,
+  now: () => Date,
 ): Promise<{ rows: Row[]; ok: boolean }> {
   const rows: Row[] = [];
   for (const [surface, judge] of SURFACES) rows.push(await rowOf(surface, () => judge(obs, now)));

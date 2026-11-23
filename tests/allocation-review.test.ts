@@ -119,9 +119,9 @@ it.each([
 
 it("対象 session の段を論理削除しても、入力は消したときの名前を持つ", async () => {
   t = await bootTidepool();
-  await changeExecutionSettings(t.db, { setting: "insert_tier", name: "retired", description: "A former quality floor.", position: 1 }, "webui", t.clock.now());
+  await changeExecutionSettings(t.db, { setting: "insert_tier", name: "retired", description: "A former quality floor.", position: 1 }, "webui", () => t.clock.now());
   const target = recordedAllocation(t, { ...spawned, tier_id: tierIdOf(t.db, "retired"), source: { ...spawned.source, tier: "agent" } });
-  await changeExecutionSettings(t.db, { setting: "delete_tier", name: "retired" }, "webui", t.clock.now());
+  await changeExecutionSettings(t.db, { setting: "delete_tier", name: "retired" }, "webui", () => t.clock.now());
 
   const input = allocationInput(t.db, target);
 

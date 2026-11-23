@@ -144,7 +144,7 @@ const { rows } = await judgeConformance(
         "Japanese",
       ),
   },
-  new Date(),
+  () => new Date(),
 );
 
 // 種の anthropic 行は、盤面が回答時の再検査に使うのと同じ probe で撃つ(ADR 0187 決定4)

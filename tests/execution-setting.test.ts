@@ -1347,14 +1347,14 @@ it("registry の agent.md が名指す段は、その agent 名を添えて削�
   const db = openDb(":memory:");
   change(db, { setting: "insert_tier", ...premium, position: 3 });
   const agents = () => [{ name: "kimi", tier: "premium" }, { name: "opus", tier: "premium" }, { name: "plain" }];
-  await expect(changeExecutionSettings(db, deletePremium, "webui", at, undefined, agents)).rejects.toThrow(/agents name it in agent\.md: kimi, opus/);
+  await expect(changeExecutionSettings(db, deletePremium, "webui", () => at, undefined, agents)).rejects.toThrow(/agents name it in agent\.md: kimi, opus/);
   expect(tierNames(db)).toContain("premium");
 });
 
 it("agent.md が別の段を名指すか段を名指さなければ、その段は消せる", async () => {
   const db = openDb(":memory:");
   change(db, { setting: "insert_tier", ...premium, position: 3 });
-  await changeExecutionSettings(db, deletePremium, "webui", at, undefined, () => [{ name: "kimi", tier: "economy" }, { name: "plain" }]);
+  await changeExecutionSettings(db, deletePremium, "webui", () => at, undefined, () => [{ name: "kimi", tier: "economy" }, { name: "plain" }]);
   expect(tierNames(db)).not.toContain("premium");
 });
 
@@ -1364,7 +1364,7 @@ it("registry の一覧が読めなければ、段の削除は拒まれる", asyn
   const unreadable = () => {
     throw new Error("registry clone is broken");
   };
-  await expect(changeExecutionSettings(db, deletePremium, "webui", at, undefined, unreadable)).rejects.toThrow(DomainError);
+  await expect(changeExecutionSettings(db, deletePremium, "webui", () => at, undefined, unreadable)).rejects.toThrow(DomainError);
   expect(tierNames(db)).toContain("premium");
 });
 
@@ -1453,7 +1453,7 @@ it("段を改名しても、その段の行・task の要求・盤面設定は�
   const rows = readExecutionSettings(db).table.filter((row) => row.tier === "standard");
   const rewrite = vi.fn(async () => {});
 
-  await changeExecutionSettings(db, renameStandard("mid"), "webui", at, rewrite);
+  await changeExecutionSettings(db, renameStandard("mid"), "webui", () => at, rewrite);
 
   expect(rewrite).toHaveBeenCalledWith(expect.objectContaining({ from: "standard", to: "mid" }));
   expect(tierNames(db)).toEqual(["economy", "mid", "frontier"]);
@@ -1466,7 +1466,7 @@ it("段を改名しても、その段の行・task の要求・盤面設定は�
 
 it("改名のあとに旧い名前を書いた要求は未知の段として拒まれ、エラーがいまの一覧を返す", async () => {
   const db = openDb(":memory:");
-  await changeExecutionSettings(db, renameStandard("mid"), "webui", at);
+  await changeExecutionSettings(db, renameStandard("mid"), "webui", () => at);
   expect(() => registerTask(db, { type: "work", ...tierRequest, tier: "standard" }, at, ...HUMAN_WEBUI)).toThrow(
     'unknown tier "standard" — one of economy, mid, frontier',
   );
@@ -1477,7 +1477,7 @@ it("agent.md の書き換えが投げたら改名は成立せず、段の名前�
   const failing = async () => {
     throw new RegistryPushFailedError("remote rejected");
   };
-  await expect(changeExecutionSettings(db, renameStandard("mid"), "webui", at, failing)).rejects.toThrow(DomainError);
+  await expect(changeExecutionSettings(db, renameStandard("mid"), "webui", () => at, failing)).rejects.toThrow(DomainError);
   expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
   expect(listEventsOfKinds(db, ["execution_settings_changed"])).toEqual([]);
 });
@@ -1492,7 +1492,7 @@ it("新しい名前は挿入と同じ検査を通り、無い段・重複・agen
     { name: "standard", to: "Has Space" },
     { name: "standard", to: "true" },
   ]) {
-    await expect(changeExecutionSettings(db, { setting: "rename_tier", ...bad }, "webui", at, rewrite)).rejects.toThrow(DomainError);
+    await expect(changeExecutionSettings(db, { setting: "rename_tier", ...bad }, "webui", () => at, rewrite)).rejects.toThrow(DomainError);
   }
   expect(rewrite).not.toHaveBeenCalled();
   expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);

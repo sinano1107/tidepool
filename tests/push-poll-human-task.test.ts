@@ -42,7 +42,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     const push = new FakePushClient();
 
     const noon = new Date(Date.UTC(2026, 0, 1, 12, 0));
-    await pollNotifications({ db, push }, noon);
+    await pollNotifications({ db, push }, () => noon);
 
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
@@ -56,7 +56,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     void task;
 
     // 2回目のポーリングでは既に通知済みなので再送しない
-    await pollNotifications({ db, push }, noon);
+    await pollNotifications({ db, push }, () => noon);
     expect(push.sent).toHaveLength(1);
   });
 
@@ -66,7 +66,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     registerHumanTask(db, "自分でメモした用事", "human");
     const push = new FakePushClient();
 
-    await pollNotifications({ db, push }, new Date(Date.UTC(2026, 0, 1, 12, 0)));
+    await pollNotifications({ db, push }, () => new Date(Date.UTC(2026, 0, 1, 12, 0)));
 
     expect(push.sent).toEqual([]);
   });
@@ -112,7 +112,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     answerQuestionViaWebui(db, question, ["approve"], at);
 
     const push = new FakePushClient();
-    await pollNotifications({ db, push }, at);
+    await pollNotifications({ db, push }, () => at);
 
     // the question itself is now answered (done), so it is not re-pushed; the
     // materialized human child is human-registered, so it is not pushed either
@@ -138,7 +138,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     registerHumanTask(db, "水やりして", "planner");
     const push = new FakePushClient();
 
-    await pollNotifications({ db, push }, new Date(Date.UTC(2026, 0, 1, 12, 0)));
+    await pollNotifications({ db, push }, () => new Date(Date.UTC(2026, 0, 1, 12, 0)));
 
     expect(push.sent.map((s) => s.payload.title).sort()).toEqual(["merge していい?", "水やりして"]);
   });
@@ -151,7 +151,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
 
     // 既定 quiet hours (23:00–07:00, Asia/Tokyo) 内 — JST 0:00 は UTC 前日 15:00
     const midnight = new Date(Date.UTC(2025, 11, 31, 15, 0));
-    await pollNotifications({ db, push }, midnight);
+    await pollNotifications({ db, push }, () => midnight);
 
     expect(push.sent).toEqual([]);
   });

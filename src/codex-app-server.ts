@@ -58,7 +58,7 @@ export function codexProbeStop(result: CodexAppServerProbeResult): ResourceStop 
   return result.status === "unauthorized" ? cliAuthStop("openai", result.reason) : undefined;
 }
 
-export type CodexAppServerProbe = (now: Date) => Promise<CodexAppServerProbeResult>;
+export type CodexAppServerProbe = (now: () => Date) => Promise<CodexAppServerProbeResult>;
 
 /** 一覧に無い行の理由(ADR 0184 決定3・5)。登録と回答の拒否が同じ観測を同じ文で言う。原因は断言しない(決定1)。 */
 const unlistedModelReason = (cliVersion: string) =>
@@ -529,8 +529,8 @@ export function createCodexAppServerProbe(options: {
         cliVersion: compatible.cliVersion,
         plan: account.account.planType,
         windows: [
-          normalizeWindow("primary", null, limits.rateLimits.primary, now),
-          normalizeWindow("secondary", null, limits.rateLimits.secondary, now),
+          normalizeWindow("primary", null, limits.rateLimits.primary, now()),
+          normalizeWindow("secondary", null, limits.rateLimits.secondary, now()),
         ],
         // 一覧は最後に読む —— 失敗・ずれ・続きのページは observed を観測不能に倒すだけで、手前の分類を奪わない
         models: new Map(

@@ -8,7 +8,7 @@ import type { RegistryAvailabilityCheck } from "./registry.js";
 export function registryUnreadablePickupBlocked(
   db: Db,
   reachability: RegistryAvailabilityCheck,
-  now: Date,
+  now: () => Date,
 ): Promise<boolean> {
   return quarantineUnlessClear(
     db,

@@ -239,7 +239,7 @@ let appServer: Promise<CodexAppServerProbeResult> | undefined;
 const { rows } = await judgeConformance({
   compatibility: () => compatibilityCheck(appServerOptions),
   // 使用量・認証・model/list は同じ1回の probe を読む
-  appServer: () => (appServer ??= probe(new Date())),
+  appServer: () => (appServer ??= probe(() => new Date())),
   preflight: createCodexCapabilityCheck({ executable, onPath, codexHome, call, pinnedVersion }),
   visibleModels: async () =>
     (await callAppServer(command, executable, env, [], [{ method: "model/list", params: { includeHidden: false } }]))[0],

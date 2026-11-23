@@ -55,7 +55,8 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
-    const tick = createNotificationTick(db, push, MIDNIGHT);
+    let now = MIDNIGHT;
+    const tick = createNotificationTick(db, push, () => now);
 
     const q1 = registerQuestion(db, "深夜の質問1", MIDNIGHT);
     const q2 = registerQuestion(db, "深夜の質問2", MIDNIGHT);
@@ -67,10 +68,11 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
       at: MIDNIGHT,
     });
 
-    await tick.run(MIDNIGHT); // still quiet hours: nothing sent
+    await tick.run(); // still quiet hours: nothing sent
     expect(push.sent).toEqual([]);
 
-    await tick.run(SEVEN_AM); // quiet hours just ended: one digest push
+    now = SEVEN_AM;
+    await tick.run(); // quiet hours just ended: one digest push
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
       title: "Good morning",
@@ -84,13 +86,16 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
-    const tick = createNotificationTick(db, push, MIDNIGHT);
+    let now = MIDNIGHT;
+    const tick = createNotificationTick(db, push, () => now);
     registerQuestion(db, "深夜の質問", MIDNIGHT);
 
-    await tick.run(SEVEN_AM);
+    now = SEVEN_AM;
+    await tick.run();
     expect(push.sent).toHaveLength(1);
 
-    await tick.run(NOON); // still daytime, no new questions
+    now = NOON;
+    await tick.run(); // still daytime, no new questions
     expect(push.sent).toHaveLength(1);
   });
 
@@ -98,10 +103,11 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
-    const tick = createNotificationTick(db, push, NOON); // 起動時点で既に quiet hours 外
+    const now = NOON; // 起動時点で既に quiet hours 外
+    const tick = createNotificationTick(db, push, () => now);
 
     const task = registerQuestion(db, "日中の質問", NOON);
-    await tick.run(NOON);
+    await tick.run();
 
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload.title).toBe("日中の質問");
@@ -112,11 +118,13 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new GatedPushClient();
-    const tick = createNotificationTick(db, push, MIDNIGHT);
+    let now = MIDNIGHT;
+    const tick = createNotificationTick(db, push, () => now);
     registerQuestion(db, "深夜の質問", MIDNIGHT);
 
-    const firstRun = tick.run(SEVEN_AM); // quiet hours 明け — digest 送信中、まだ gate で止まっている
-    const secondRun = tick.run(SEVEN_AM); // 重なって発火した2回目の poll tick
+    now = SEVEN_AM;
+    const firstRun = tick.run(); // quiet hours 明け — digest 送信中、まだ gate で止まっている
+    const secondRun = tick.run(); // 重なって発火した2回目の poll tick
 
     await secondRun; // inFlight ガードにより即座に no-op で戻る
     expect(push.sent).toEqual([]); // 1回目はまだ gate 待ち
@@ -132,10 +140,11 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
     // 既定 tz(Asia/Tokyo)では MIDNIGHT(JST 0:00)は quiet hours 内
-    const tick = createNotificationTick(db, push, MIDNIGHT);
+    const now = MIDNIGHT;
+    const tick = createNotificationTick(db, push, () => now);
     registerQuestion(db, "深夜の質問", MIDNIGHT);
 
-    await tick.run(MIDNIGHT); // still quiet: nothing sent
+    await tick.run(); // still quiet: nothing sent
     expect(push.sent).toEqual([]);
 
     // 時刻はそのまま、tz だけ変える — MIDNIGHT の UTC 瞬間は Etc/UTC の壁時計では
@@ -143,7 +152,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     // 覚えている一方、次の isQuietHours 呼び出しは新しい tz で評価されるので、
     // 「時計が進んだのではなく tz が変わった」だけの遷移でも正しく検出されるはず。
     setBoardTimezone(db, "Etc/UTC");
-    await tick.run(MIDNIGHT);
+    await tick.run();
 
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
@@ -157,7 +166,8 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const push = new FakePushClient();
-    const tick = createNotificationTick(db, push, MIDNIGHT);
+    let now = MIDNIGHT;
+    const tick = createNotificationTick(db, push, () => now);
 
     // agent の decompose 直接登録(actor_id != 'human')— question と同格の通知対象
     registerTask(
@@ -174,10 +184,11 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
       "webui",
     );
 
-    await tick.run(MIDNIGHT); // still quiet hours: nothing sent
+    await tick.run(); // still quiet hours: nothing sent
     expect(push.sent).toEqual([]);
 
-    await tick.run(SEVEN_AM); // quiet hours just ended: one digest push
+    now = SEVEN_AM;
+    await tick.run(); // quiet hours just ended: one digest push
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
       title: "Good morning",

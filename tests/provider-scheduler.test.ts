@@ -28,7 +28,7 @@ afterEach(() => t?.stop());
 
 it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復後は元の順序へ戻り、実行中 worker を止めない", async () => {
   let openaiThrottled = true;
-  const openaiUsage = async (now: Date): Promise<CodexAppServerProbeResult> => ({
+  const openaiUsage = async (now: () => Date): Promise<CodexAppServerProbeResult> => ({
     status: "observed",
     provider: "openai",
     cliVersion: "codex-cli 0.147.0",
@@ -40,14 +40,14 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
         model: null,
         usedPercent: openaiThrottled ? 50 : 0,
         durationMs: 5 * HOUR,
-        resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+        resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
       },
       {
         name: "secondary",
         model: null,
         usedPercent: 0,
         durationMs: 7 * 24 * HOUR,
-        resetsAt: new Date(now.getTime() + 6 * 24 * HOUR).toISOString(),
+        resetsAt: new Date(now().getTime() + 6 * 24 * HOUR).toISOString(),
       },
     ],
   });
@@ -89,7 +89,7 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
 
 /** idle の窓の実物の形 —— backend は自分の時計で「今 + 窓幅」の絶対時刻を返すので、reset は
  *  観測のたびに滑り、ペース線から見た elapsed はいつも ≈ 0 になる(ADR 0128)。 */
-const slidingWindows = (usedPercent: number) => async (now: Date): Promise<CodexAppServerProbeResult> => ({
+const slidingWindows = (usedPercent: number) => async (now: () => Date): Promise<CodexAppServerProbeResult> => ({
   status: "observed",
   provider: "openai",
   cliVersion: "codex-cli 0.147.0",
@@ -101,14 +101,14 @@ const slidingWindows = (usedPercent: number) => async (now: Date): Promise<Codex
       model: null,
       usedPercent,
       durationMs: 5 * HOUR,
-      resetsAt: new Date(now.getTime() + 5 * HOUR).toISOString(),
+      resetsAt: new Date(now().getTime() + 5 * HOUR).toISOString(),
     },
     {
       name: "secondary",
       model: null,
       usedPercent,
       durationMs: 7 * 24 * HOUR,
-      resetsAt: new Date(now.getTime() + 7 * 24 * HOUR).toISOString(),
+      resetsAt: new Date(now().getTime() + 7 * 24 * HOUR).toISOString(),
     },
   ],
 });
@@ -159,21 +159,21 @@ it("model-specific window は同じ OpenAI Provider の対象 model だけを sk
           model: null,
           usedPercent: 0,
           durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
         },
         {
           name: "secondary",
           model: null,
           usedPercent: 0,
           durationMs: 7 * 24 * HOUR,
-          resetsAt: new Date(now.getTime() + 6 * 24 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 6 * 24 * HOUR).toISOString(),
         },
         {
           name: "primary",
           model: "gpt-limited",
           usedPercent: 50,
           durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
         },
       ],
     }),
@@ -278,14 +278,14 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
           model: null,
           usedPercent: 0,
           durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
         },
         {
           name: "secondary",
           model: null,
           usedPercent: 0,
           durationMs: 7 * 24 * HOUR,
-          resetsAt: new Date(now.getTime() + 6 * 24 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 6 * 24 * HOUR).toISOString(),
         },
       ],
     }),
@@ -329,14 +329,14 @@ it("model-specific window が外すのは当たった task だけ —— 同じ 
           model: null,
           usedPercent: 0,
           durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
         },
         {
           name: "primary",
           model: "gpt-frontier",
           usedPercent: 50,
           durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+          resetsAt: new Date(now().getTime() + 4 * HOUR).toISOString(),
         },
       ],
     }),
