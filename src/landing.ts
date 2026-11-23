@@ -2016,8 +2016,8 @@ export function createLanding(deps: LandingDeps): Landing {
    *  先回りして潰さない(ADR 0240 決定2)。閉じるのは受理だけ(ADR 0397 決定2)。終えなければ undefined。 */
   const endLostRoot = ({ task, workspace }: LandingRoot): LandingVerdict | undefined => {
     if (!workspace || !taskBranchLostInForce(deps.db, task.id) || openPrPromotionQuestionIds(deps.db, task.id).length > 0) return undefined;
-    // `workspace` は landingRootOf が系譜を読めて根と判定した印 —— 読み直すと、落ちた2回目が失われたブランチを読む `landRoot` へ進む
-    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), { closeQuestions: false, knownRoot: true }) ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
+    // ADR 0397 決定3: `workspace` は landingRootOf が系譜を読めて根と判定した印 —— 読み直すと、落ちた2回目が失われたブランチを読む `landRoot` へ進む
+    return endLostRootLanding(deps.db, workspace, task, deps.clock.now(), "convergence") ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : undefined;
   };
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
    *  候補の読み取りそのものの失敗はログに出して回を終え、次の突きで走り直す。 */

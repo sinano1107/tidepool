@@ -3570,9 +3570,18 @@ export function restoreBaseline(db: Db, workspace: WorkspaceConfig, now: Date, g
     }
   }
   // ADR 0375 決定6: 根かどうかは祖先のブランチを読むので、書き戻しの後に読む —— 動かされた祖先の ref で読むと、生きている親の子を根と読む
-  endLostRootLandings(db, workspace, now);
+  try {
+    endLostRootLandings(db, workspace, now);
+  } catch (err) {
+    // ADR 0397 決定4: 拒まれても書き戻しは済んでいる —— 次の受理は外す値を持たないので、外した値はこの拒否の文だけが言う
+    if (kept.length === 0) throw err;
+    throw new Error(`${err instanceof Error ? err.message : String(err)}\n\n${kept.map(keptValueNotice).join("\n")}`, { cause: err });
+  }
   return kept;
 }
+
+/** spec #3273 text B11: 書き戻しが外して keep-around に残した値の1行。 */
+export const keptValueNotice = ({ ref, sha }: KeptValue): string => `${ref} was ${sha}, kept as refs/keep-around/${sha}`;
 
 /** ADR 0397 決定1・2: workspace の Quarantine の受理が、その workspace の対象(効いている失われた event を持ち、done で PR の無い、
  *  着地の終わりの記録の無い work)全部に根の着地の終わりの判定を当てる —— その回答が失った分(メモリ上の差分)でなく記録から集めるので、
@@ -3588,26 +3597,20 @@ export function endLostRootLandings(db: Db, workspace: WorkspaceConfig, now: Dat
     )
     .pluck()
     .all(workspace.name) as string[];
-  db.transaction(() => ids.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now, { closeQuestions: true })))();
+  db.transaction(() => ids.forEach((id) => endLostRootLanding(db, workspace, getTask(db, id)!, now, "acceptance")))();
 }
 
 /** ADR 0375 決定7・8 / ADR 0397 決定1: 根の着地の終わりの唯一の判定。効いている失われた event を持つ done の根(帰り先が保護ブランチ)で PR を
  *  開いていないものの着地を終える —— 死んだ根は `landing_ended_branch_lost`、handoff だけの根(失われた sha = 作成時の sha)は `nothing_to_land`
  *  で、どちらも失われたブランチを git で読まない。内容が保護ブランチに届いて透明な根と、PR を開いた根(内容は GitHub の head に在る)は終えない。
- *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。根かどうかは系譜で読み、
- *  読めなければ投げる。`knownRoot` は呼び出し元が系譜を読み終えて根と判定したこと(収束)で、読み直さない。`closeQuestions`(受理だけ)なら開いている
- *  着地の question(local 着地・昇格失敗)を回答なしで閉じ、`landing_ended_branch_lost` がその id を運ぶ。書いた終わりを返す。 */
-export function endLostRootLanding(
-  db: Db,
-  workspace: WorkspaceConfig,
-  task: Task,
-  now: Date,
-  { closeQuestions, knownRoot = false }: { closeQuestions: boolean; knownRoot?: boolean },
-): TaskScopedPayload | undefined {
+ *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。`by` は呼び出し元:
+ *  受理は根かどうかを系譜で読み(読めなければ投げる)、開いている着地の question(local 着地・昇格失敗)を回答なしで閉じて、
+ *  `landing_ended_branch_lost` がその id を運ぶ。収束は系譜を読み終えて根と判定した候補だけを渡し、読み直さず、question も閉じない。書いた終わりを返す。 */
+export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, by: "acceptance" | "convergence"): TaskScopedPayload | undefined {
   if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return undefined;
   const lost = taskBranchLostInForce(db, task.id);
   if (!lost || db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return undefined;
-  if (!knownRoot) {
+  if (by === "acceptance") {
     // ADR 0397 決定4: 読みの失敗は握らずに投げる —— 受理は Quarantine を閉じる前に拒まれ、次の受理が記録から読み直す
     const lineage = resolveTaskBranchLineage(db, workspace, task);
     if (lineage.branch || lineage.noReturn) return undefined;
@@ -3615,7 +3618,7 @@ export function endLostRootLanding(
   const handoffOnly = lostAsCreated(db, task.id, lost);
   if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return undefined;
   // ADR 0397 決定2 / ADR 0375 決定8: 閉じるのは受理だけ —— 人間自身の回答の帰結だから。収束が閉じれば、まだ答えていない失敗 question を先回りして潰す(ADR 0240 決定2)
-  const questions = closeQuestions ? [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)] : [];
+  const questions = by === "acceptance" ? [...openLocalMergeQuestionIds(db, task.id), ...openPrPromotionQuestionIds(db, task.id)] : [];
   // ADR 0375 決定8: 閉じた理由は根の記録に1回だけ残す —— question 自身には観測の event を刻まない
   for (const id of questions) settleQuestionAsObserved(db, id, null, now);
   const ending: TaskScopedPayload = handoffOnly ? { kind: "nothing_to_land", base: protectedBranchRef(workspace) } : { kind: "landing_ended_branch_lost", question_ids: questions };
