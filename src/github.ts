@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { DomainError } from "./domain-error.js";
+import { assertGhVersion, GH_CLI_VERSION, GhVersionError } from "./gh-cli-version.js";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, githubKey, HEAD_REPO_REMOTE, landingHeadRepo, workspaceNetworkDestination } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
 import { parseGitHubRepo, repositoryLabel } from "./repo-access.js";
@@ -110,7 +111,7 @@ export interface FoundPr extends Pick<PrStateRead, "state" | "head" | "base" | "
 /** One read of a PR, CI, state, merger and head together (ADR 0229 決定2 / ADR 0231
  *  決定1 / ADR 0265 決定5): `head` is the commit the CI was read on, the one a merge pins to. A
  *  read that failed is CI "pending" and state "unreadable" with no head —
- *  never a state the caller would act on. */
+ *  never a state the caller would act on. The gh version gate's refusal is thrown instead (ADR 0402 決定3). */
 export type PrStatus =
   | (PrStateRead & { ci: CiStatus })
   | { ci: "pending"; state: "unreadable" };
@@ -336,15 +337,32 @@ function ciStatusOf(checks: RollupEntry[]): CiStatus {
 export class GhCliClient implements GitHubClient {
   private readonly timeoutMs: number;
   private readonly apiUrl: string;
+  private readonly readGhVersion: () => Promise<string>;
+  private readonly ghVersion: string;
 
   /** `timeoutMs` はテストが上限を短くするためだけにある —— 本番の呼び手は既定のまま(#2726 の完了基準、釘は ADR 0107 の domain 層)。
-   *  `apiUrl` もテストだけのもので、PR の作成の REST を loopback の GitHub の代役へ向ける。 */
+   *  `apiUrl` もテストだけのもので、PR の作成の REST を loopback の GitHub の代役へ向ける。
+   *  `readGhVersion` と `ghVersion` は版の門(ADR 0402 決定2)の読みと宣言。既定は本体と同じ PATH の `gh --version` と `gh-cli-version`。 */
   constructor(
     private readonly auth: GitHubAuth,
-    { timeoutMs = GIT_NETWORK_TIMEOUT_MS, apiUrl = "https://api.github.com" }: { timeoutMs?: number; apiUrl?: string } = {},
+    { timeoutMs = GIT_NETWORK_TIMEOUT_MS, apiUrl = "https://api.github.com", readGhVersion, ghVersion = GH_CLI_VERSION }: {
+      timeoutMs?: number;
+      apiUrl?: string;
+      readGhVersion?: () => Promise<string>;
+      ghVersion?: string;
+    } = {},
   ) {
     this.timeoutMs = timeoutMs;
     this.apiUrl = apiUrl;
+    this.ghVersion = ghVersion;
+    this.readGhVersion = readGhVersion ?? (async () => {
+      try {
+        return (await execFileAsync("gh", ["--version"], { env: this.auth.env(undefined), timeout: this.timeoutMs })).stdout;
+      } catch (err) {
+        if ((err as { killed?: boolean }).killed) throw new Error(`\`gh --version\` timed out after ${this.timeoutMs} ms`, { cause: err });
+        throw err;
+      }
+    });
   }
 
   /** 宣言の repo への `-R` を取る `gh`(`gh pr`・`gh issue`)はここを通る。`-R` を取らない `gh api` は `warmDeclaredRepo` と `run` を
@@ -364,8 +382,10 @@ export class GhCliClient implements GitHubClient {
     return repo;
   }
 
-  /** ADR 0330 決定1・4 / ADR 0399 決定3: recheck the destination and the caller's guard in the same synchronous section as spawning `gh`. */
+  /** ADR 0330 決定1・4 / ADR 0399 決定3: recheck the destination and the caller's guard in the same synchronous section as spawning `gh`.
+   *  ADR 0402 決定2: every call reads gh's version first; the read awaits, so it sits before that section. */
   private async run(args: string[], repo: string, workspace?: WorkspaceConfig, beforeSpawn?: () => void): Promise<string> {
+    await assertGhVersion(this.readGhVersion, this.ghVersion);
     if (workspace && workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
     beforeSpawn?.();
     const cwd = workspace?.path;
@@ -464,7 +484,9 @@ export class GhCliClient implements GitHubClient {
       parsed = JSON.parse(
         await this.gh(ref.workspace, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy,baseRefName,baseRefOid,headRefName,headRepository"]),
       );
-    } catch {
+    } catch (err) {
+      // ADR 0402 決定3: 版の門の拒否は読めなかったのではなく止まった —— 呼び手が待つか拒むかを決める
+      if (err instanceof GhVersionError) throw err;
       return { ci: "pending", state: "unreadable" };
     }
     return {

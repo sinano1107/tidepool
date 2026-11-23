@@ -38,6 +38,7 @@ import {
   settleProposalAsApplied,
   undeclaredTier,
 } from "./execution-setting.js";
+import { assertGhVersion, GhVersionError } from "./gh-cli-version.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import {
@@ -331,10 +332,11 @@ export async function addIssueCommentThroughHumanDoor(
       input.body,
     );
     return { ok: true };
-  } catch {
+  } catch (err) {
     return {
       ok: false,
-      failure: { kind: "github_failed", error: "could not post the comment to the issue" },
+      // ADR 0402 決定3: 版の門の拒否は版の不一致を名指す
+      failure: { kind: "github_failed", error: err instanceof GhVersionError ? err.message : "could not post the comment to the issue" },
     };
   }
 }
@@ -534,7 +536,8 @@ export async function registerThroughHumanDoor(
             ok: false,
             failure: {
               kind: "issue_unavailable",
-              error: "could not fetch the referenced issue",
+              // ADR 0402 決定3: 版の門の拒否は版の不一致を名指す
+              error: err instanceof GhVersionError ? err.message : "could not fetch the referenced issue",
             },
           };
         }
@@ -651,6 +654,8 @@ export interface QuarantineCheckDeps {
   rerunPoll?: () => Promise<PollOutcome>;
   /** ADR 0328 決定3: 続く issue 展開の失敗の受理の検査は、最後に失敗した参照の読み直し。Absent → その確認への回答は拒まれる。 */
   recheckIssueExpansion?: () => Promise<void>;
+  /** ADR 0402 決定3: 「gh の版」の受理の検査は `gh --version` の読み直し。Absent → その確認への回答は拒まれる。 */
+  readGhVersion?: () => Promise<string>;
   /** ADR 0097 決定2 / issue #446: provider ごとの probe。その provider の口が無ければ拒む。 */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0184 決定5: 行の Quarantine の probe。その Provider の口が無い行への回答は拒む。
@@ -676,7 +681,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, closeUnclosedSession, rerunPoll, recheckIssueExpansion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
+  const { containment, registryReachability, teardownQuarantine, closeUnclosedSession, rerunPoll, recheckIssueExpansion, readGhVersion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -1015,6 +1020,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         }
       },
     }),
+    // ADR 0402 決定3: 版の門と同じ比較で読み直す —— 不一致は版の不一致を名指す拒否。通った gh の呼び出しは開いた question を観測で決着させる
+    ...(readGhVersion && { ghVersion: () => assertGhVersion(readGhVersion) }),
     // ADR 0266 決定3: 解放の門は同じ器への書き込みそのもの
     ...(recordDir !== undefined && {
       recordContainer: async () => {

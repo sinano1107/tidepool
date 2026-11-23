@@ -25,6 +25,7 @@ import { DomainError } from "./domain-error.js";
 import { type ChildDraftContext, type DraftClient, draftHandoff, draftTask } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
 import { changeExecutionSettings, executionSettingsChangeSchema, interviewTargetSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
+import { GhVersionError } from "./gh-cli-version.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { type GitHubAuth, githubLoggedIn } from "./github-auth.js";
 import {
@@ -870,7 +871,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res, { issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
     } catch (err) {
       if (err instanceof WorkspaceRepoMismatchError) sendJson(res.status(400), { error: err.message });
-      else sendJson(res.status(502), { error: "could not fetch open issues" });
+      // ADR 0402 決定3: 版の門の拒否は版の不一致を名指す
+      else sendJson(res.status(502), { error: err instanceof GhVersionError ? err.message : "could not fetch open issues" });
     }
   });
 

@@ -19,6 +19,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  MATCHING_GH,
   makeLandingWorkspace,
   makeRemoteBackedWorkspace,
   mcpClient,
@@ -216,7 +217,7 @@ it("the board updates an old task branch on the head repo before opening its PR 
   });
   servers.push(rest);
   const auth = new GitHubAuth(tokenFile, broker.url);
-  t = await bootTidepool({ workspace, githubAuth: auth, github: new GhCliClient(auth, { apiUrl: rest.url }) });
+  t = await bootTidepool({ workspace, githubAuth: auth, github: new GhCliClient(auth, { ...MATCHING_GH, apiUrl: rest.url }) });
   announceHeadRepo(t.db, local, workspace.head_repo);
   const task = await registerWork(t, "land the worker branch from its fork");
   const branch = `task/${task.id}`;

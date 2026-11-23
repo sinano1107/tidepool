@@ -27,6 +27,7 @@ import type {
 } from "../src/draft.js";
 import { EFFORT_LEVELS } from "../src/effort.js";
 import { type ExecutionSetting, type ExecutionSettingRow, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+import { assertGhVersion, GH_CLI_VERSION } from "../src/gh-cli-version.js";
 import type {
   CiStatus,
   CreatePrInput,
@@ -514,6 +515,21 @@ export class FakeGitHubClient implements GitHubClient {
   readonly issueListFetches: CheckoutObservation<RepoRef>[] = [];
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
+  private ghVersionAnswer: string | Error = `gh version ${GH_CLI_VERSION} (2026-11-18)`;
+
+  /** このホストの `gh --version` の読み —— 盤面の回答の受理も同じ読みを使う(harness の既定)。 */
+  readonly readGhVersion = async (): Promise<string> => {
+    if (this.ghVersionAnswer instanceof Error) throw this.ghVersionAnswer;
+    return this.ghVersionAnswer;
+  };
+
+  /** 版の門の代役(ADR 0402 決定2): 本物と同じ比較で、gh を撃つ呼び出しの本体より前に拒む。 */
+  private ghGate = () => assertGhVersion(this.readGhVersion);
+
+  /** `gh --version` の答え(既定は固定の版)、または読めない失敗(gh が無い・`--version` の失敗)。 */
+  scriptGhVersion(answer: string | Error): void {
+    this.ghVersionAnswer = answer;
+  }
 
   /** The entry of PR `number` scripted on `repo` (every repo when none is named), made on first use. */
   private scripted(number: number, repo?: string): FakePr {
@@ -594,12 +610,14 @@ export class FakeGitHubClient implements GitHubClient {
     } catch {
       return { ci: "pending", state: "unreadable" };
     }
+    await this.ghGate();
     this.ciChecks.push({ path: ref.workspace.path, number: ref.number });
     if (unreadable) return { ci: "pending", state: "unreadable" };
     return { ci: this.ciStatus, ...this.stateRead(ref) };
   }
 
   async mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void> {
+    await this.ghGate();
     beforeMerge?.();
     // GitHub refuses a merge on an already-merged or closed PR; the fake must
     // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
@@ -627,6 +645,7 @@ export class FakeGitHubClient implements GitHubClient {
   async findPullRequestByHead(input: PushBranchInput & { number?: number }): Promise<FoundPr | null> {
     const { workspace, branch, number } = input;
     workspaceNetworkDestination(workspace);
+    await this.ghGate();
     if (this.findFailure) throw this.findFailure;
     const numbers = [...new Set(this.prs.map((pr) => pr.number))].filter((candidate) => number === undefined || candidate === number);
     for (const candidate of numbers) {
@@ -669,6 +688,7 @@ export class FakeGitHubClient implements GitHubClient {
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
     workspaceNetworkDestination(ref.workspace);
+    await this.ghGate();
     this.stateChecks.push({ path: ref.workspace.path, number: ref.number });
     const failure = this.field(ref.workspace, ref.number, "stateReadFailure");
     if (failure) throw failure;
@@ -733,6 +753,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }> {
+    await this.ghGate();
     this.issueFetches.push({ path: ref.workspace.path, number: ref.number });
     if (this.issueGate) await this.issueGate;
     const perNumberFailure = this.issueFailures.get(ref.number);
@@ -748,6 +769,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
+    await this.ghGate();
     this.issueListFetches.push({ path: ref.workspace.path });
     if (this.issueListFailure) throw this.issueListFailure;
     return this.issueList ?? [];
@@ -770,6 +792,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {
+    await this.ghGate();
     this.issueComments.push({ ref: { path: ref.workspace.path, number: ref.number }, body });
   }
 
@@ -815,6 +838,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async repositoryParent(ref: RepoSlug): Promise<RepoSlug | null> {
+    await this.ghGate();
     const key = `${ref.owner}/${ref.name}`.toLowerCase();
     if (!this.parents.has(key)) throw new Error(`gh: Not Found (HTTP 404) for repos/${key}`);
     const [owner, name] = this.parents.get(key)?.split("/") ?? [];
@@ -830,6 +854,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async forkPrCredentialSettings(_ref: RepoRef): Promise<ForkPrCredentialSetting[]> {
+    await this.ghGate();
     if (this.forkPrCredentials instanceof Error) throw this.forkPrCredentials;
     return this.forkPrCredentials;
   }

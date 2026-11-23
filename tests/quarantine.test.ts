@@ -45,6 +45,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   recordContainer: [null],
   pollFailure: [null],
   issueExpansion: [null],
+  ghVersion: [null],
   tableRow: ["anthropic/claude-opus-5", "moonshot/kimi-k3[1m]"],
   tableRowEffort: ["openai/gpt-5.5/max", "openai/gpt-5.5/xhigh"],
   interviewTarget: ["anthropic/claude-opus-4-6", "openai/gpt-5.4-mini"],

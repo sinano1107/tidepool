@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { GH_CLI_VERSION } from "../src/gh-cli-version.js";
 import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
@@ -322,5 +323,17 @@ describe("出元 repo の宣言(ADR 0395 決定2)", () => {
     expect(res.json).toEqual({ error });
     expect(entry().head_repo).toBeUndefined();
     expect(git(checkout.path, "remote")).toBe("");
+  });
+
+  // ADR 0402 決定3: gh を撃つ人間の verb は版の不一致を名指して拒む —— App の不足と読ませない
+  it("gh の版が不一致なら、出元 repo の親の読みは版の不一致を名指して 400 で拒まれる", async () => {
+    const { github, entry } = await headRepoBoard();
+    github.scriptGhVersion("gh version 2.46.0 (Ubuntu 2.46.0-4)");
+
+    const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { head_repo: "acme/fork", confirm: true });
+
+    expect(res.status).toBe(400);
+    expect(res.json).toEqual({ error: `gh version mismatch: the board runs only gh ${GH_CLI_VERSION} (pinned in gh-cli-version) and found gh 2.46.0` });
+    expect(entry().head_repo).toBeUndefined();
   });
 });

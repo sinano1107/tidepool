@@ -7,14 +7,17 @@
  *  module であり、逆は張らない。 */
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
+import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { EventOrigin, ListedRefusal, ResourceStop, RowRefusalCause } from "./events.js";
+import { GH_CLI_VERSION, GhVersionError } from "./gh-cli-version.js";
+import type { GitHubClient } from "./github.js";
 import type { HaltKind } from "./halt-kind.js";
 import { CANCEL_THE_RCAS, discardUncommitted, IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { cancelDiscards, DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, isRca, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task, unsettledOpenersOf } from "./tasks.js";
+import { cancelDiscards, DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, isRca, type QuestionItem, type ResourceStops, registerTask, settleQuestionAsObserved, type TargetKey, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { RoomRcaChoice } from "./wire-contract.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -282,6 +285,24 @@ export const QUARANTINES = [
     }),
   },
   {
+    // gh の版(ADR 0402 決定3): 機構だけを借り、何も止めない —— 止めるのは gh を撃つたびの版の門で、question は信号。
+    // 断言するのは宣言の版と観測した版(または読めなかった理由)で、呼び出し側が門の拒否の文を reason に渡す
+    kind: "ghVersion",
+    scope: "none",
+    prose: (_value: string | null, reason: string): QuarantineProse => ({
+      title: "the board's gh is not the pinned version",
+      purpose:
+        `${endSentence(reason)}\n\n` +
+        "The board does not run gh while this stands: tasks that read GitHub at pickup sit out each poll (other tasks are " +
+        "still picked up), landing and the auto-merge queue wait without asking about any PR, and human actions that run gh " +
+        `are refused. To repair, restart the Lima VM so its provision installs gh ${GH_CLI_VERSION} from \`gh-cli-version\`, ` +
+        `or put gh ${GH_CLI_VERSION} on the board's PATH by hand.\n\n` +
+        "Answering re-reads `gh --version`: if it still does not match, the answer is refused and this question stays open. " +
+        "A gh call that succeeds settles this question without an answer.",
+      completion_criteria: `the board's gh is ${GH_CLI_VERSION}`,
+    }),
+  },
+  {
     kind: "workspace",
     scope: "workspace",
     // 解除の門が撃つ pickup の述語の一覧をそのまま予告し、解除だけの上乗せを名前の場所に添える(ADR 0329 決定4・5・追記 決定6)
@@ -497,7 +518,7 @@ export const QUARANTINES = [
    *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)/
    *  (Harness, workspace) の組(その workspace の task の候補から、その Harness の行だけを外す)/
    *  行でない Interview の対象(鍵に当たる pin の子の候補を外す。資源ではない)/ 何も止めない(続く poll の失敗、ADR 0294 決定2 ・
-   *  続く issue 展開の一時的失敗、ADR 0328 決定3)。 */
+   *  続く issue 展開の一時的失敗、ADR 0328 決定3・gh の版、ADR 0402 決定3)。 */
   scope: "board" | "workspace" | "assignees" | "row" | "pair" | "target" | "none";
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
@@ -683,6 +704,35 @@ export function registerQuarantine(
     BOARD_ACTOR_ID,
     "board",
   );
+}
+
+/** gh を撃つ GitHubClient の呼び出し —— PR の作成(REST)・push の準備・token の問い合わせは撃たない。 */
+const GH_CALLS = new Set<string | symbol>([
+  "readPullRequest", "mergePullRequest", "getPullRequestState", "findPullRequestByHead", "getIssue", "getIssueWithState",
+  "listIssues", "addIssueComment", "repositoryParent", "forkPrCredentialSettings",
+] satisfies Array<keyof GitHubClient>);
+
+/** ADR 0402 決定3: 止めるのは client の版の門で、これは信号だけ —— 門の拒否を観測すれば「gh の版」の question を1枚立て、gh の呼び出しが
+ *  通れば回答なしで決着させる(ADR 0184 決定5 の形)。読めなかった PR(`unreadable`)は通った証拠に数えない。 */
+export function withGhVersionQuarantine(github: GitHubClient, db: Db, clock: Clock): GitHubClient {
+  return new Proxy(github, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key);
+      if (typeof value !== "function" || !GH_CALLS.has(key)) return value;
+      return async (...args: unknown[]) => {
+        let result: unknown;
+        try {
+          result = await value.apply(target, args);
+        } catch (err) {
+          if (err instanceof GhVersionError) registerQuarantine(db, "ghVersion", null, err.message, clock.now());
+          throw err;
+        }
+        const open = (result as { state?: unknown } | null)?.state !== "unreadable" && openQuarantineQuestion(db, "ghVersion", null);
+        if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "ghVersion", value: null }, clock.now());
+        return result;
+      };
+    },
+  });
 }
 
 /** 検査を撃って立てる種類の共有の手続き: 開いていれば検査を撃たずに止まったと答え

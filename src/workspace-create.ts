@@ -6,6 +6,7 @@ import { BoardStateOverlapError, type BoardStatePath, boardStateOverlap } from "
 import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { EventOrigin } from "./events.js";
+import { GhVersionError } from "./gh-cli-version.js";
 import { git, readCheckoutRemote } from "./git.js";
 import { forkPrCredentialRefusal, type GitHubClient, type RepoSlug } from "./github.js";
 import {
@@ -364,6 +365,8 @@ async function readHeadRepoParent(value: string, github: GitHubClient | undefine
   try {
     return { head, parent: await github.repositoryParent(head) };
   } catch (err) {
+    // ADR 0402 決定3: 版の不一致は App の不足ではない —— 名指して拒む
+    if (err instanceof GhVersionError) throw new HeadRepoRejectedError(err.message);
     throw unreadable(err instanceof Error ? err.message : String(err));
   }
 }

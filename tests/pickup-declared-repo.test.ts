@@ -15,7 +15,7 @@ import { listChildren, pickupTask, registerFailureQuestion, registerTask, type T
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, prepareAtPickup, restedInterviewRoom, shimGit } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, MATCHING_GH, makeRemoteBackedWorkspace, prepareAtPickup, restedInterviewRoom, shimGit } from "./harness.js";
 import { commitThroughTaskCheckout, fetchHeldAtToken, landingWork, openBoard, type RegisteredReef, registeredReef, reRegister } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -161,7 +161,7 @@ it("issue の token を待つ間に別の repo へ登録し直すと、gh を撃
   writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\n`, { mode: 0o755 });
   const { window, githubAuth } = fetchHeldAtToken();
   githubAuth.env = () => ({ ...process.env, PATH: `${bin}:${process.env.PATH}` });
-  const github = new GhCliClient(githubAuth);
+  const github = new GhCliClient(githubAuth, MATCHING_GH);
   const { scheduler, worker } = schedulerOn(db, clock, reef.resolve("reef"), reef.resolve, reef.admin.workspacesBaseDir, { github });
 
   const picking = scheduler.rerunPoll();
