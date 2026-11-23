@@ -3594,18 +3594,23 @@ export function endLostRootLandings(db: Db, workspace: WorkspaceConfig, now: Dat
 /** ADR 0375 決定7・8 / ADR 0397 決定1: 根の着地の終わりの唯一の判定。効いている失われた event を持つ done の根(帰り先が保護ブランチ)で PR を
  *  開いていないものの着地を終える —— 死んだ根は `landing_ended_branch_lost`、handoff だけの根(失われた sha = 作成時の sha)は `nothing_to_land`
  *  で、どちらも失われたブランチを git で読まない。内容が保護ブランチに届いて透明な根と、PR を開いた根(内容は GitHub の head に在る)は終えない。
- *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。`closeQuestions`(受理だけ)なら開いている
+ *  根でない task(帰り先が祖先のブランチ・帰り先なし)は記録を持たない —— 親の着地は止めない(ADR 0375 決定6)。根かどうかは系譜で読み、
+ *  読めなければ投げる。`knownRoot` は呼び出し元が系譜を読み終えて根と判定したこと(収束)で、読み直さない。`closeQuestions`(受理だけ)なら開いている
  *  着地の question(local 着地・昇格失敗)を回答なしで閉じ、`landing_ended_branch_lost` がその id を運ぶ。書いた終わりを返す。 */
-export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { closeQuestions }: { closeQuestions: boolean }): TaskScopedPayload | undefined {
+export function endLostRootLanding(
+  db: Db,
+  workspace: WorkspaceConfig,
+  task: Task,
+  now: Date,
+  { closeQuestions, knownRoot = false }: { closeQuestions: boolean; knownRoot?: boolean },
+): TaskScopedPayload | undefined {
   if (task.type !== "work" || task.status !== "done" || task.pr_number !== null || task.interview_target_id !== null) return undefined;
   const lost = taskBranchLostInForce(db, task.id);
   if (!lost || db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return undefined;
-  try {
+  if (!knownRoot) {
+    // ADR 0397 決定4: 読みの失敗は握らずに投げる —— 受理は Quarantine を閉じる前に拒まれ、次の受理が記録から読み直す
     const lineage = resolveTaskBranchLineage(db, workspace, task);
     if (lineage.branch || lineage.noReturn) return undefined;
-  } catch {
-    // 根か分からない task に恒久の終わりの記録は書かない —— 収束が自分の経路で根の失敗として見せる(`landingRootOf`)
-    return undefined;
   }
   const handoffOnly = lostAsCreated(db, task.id, lost);
   if (!handoffOnly && lostTaskIsTransparent(db, task.id, lost, countedAncestors(db, workspace.name, task).map(({ id }) => id))) return undefined;
