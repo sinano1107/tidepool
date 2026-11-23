@@ -337,12 +337,14 @@ function ciStatusOf(checks: RollupEntry[]): CiStatus {
 export class GhCliClient implements GitHubClient {
   private readonly timeoutMs: number;
   private readonly apiUrl: string;
-  private readonly readGhVersion: () => Promise<string>;
+  /** 版の門(ADR 0402 決定2)の `gh --version` の読み。「gh の版」の回答の受理も同じこれを読む(合成 root が渡す)。 */
+  readonly readGhVersion: () => Promise<string>;
   private readonly ghVersion: string;
 
   /** `timeoutMs` はテストが上限を短くするためだけにある —— 本番の呼び手は既定のまま(#2726 の完了基準、釘は ADR 0107 の domain 層)。
    *  `apiUrl` もテストだけのもので、PR の作成の REST を loopback の GitHub の代役へ向ける。
-   *  `readGhVersion` と `ghVersion` は版の門(ADR 0402 決定2)の読みと宣言。既定は本体と同じ PATH の `gh --version` と `gh-cli-version`。 */
+   *  `readGhVersion` と `ghVersion` もテストだけのもので、版の門の読みと宣言を差し替える —— 本番は既定(本体と同じ PATH の
+   *  `gh --version` と `gh-cli-version`)。 */
   constructor(
     private readonly auth: GitHubAuth,
     { timeoutMs = GIT_NETWORK_TIMEOUT_MS, apiUrl = "https://api.github.com", readGhVersion, ghVersion = GH_CLI_VERSION }: {

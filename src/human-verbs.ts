@@ -38,7 +38,7 @@ import {
   settleProposalAsApplied,
   undeclaredTier,
 } from "./execution-setting.js";
-import { assertGhVersion, GhVersionError } from "./gh-cli-version.js";
+import { assertGhVersion, GhVersionError, ghRefusalText } from "./gh-cli-version.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import {
@@ -335,8 +335,7 @@ export async function addIssueCommentThroughHumanDoor(
   } catch (err) {
     return {
       ok: false,
-      // ADR 0402 決定3: 版の門の拒否は版の不一致を名指す
-      failure: { kind: "github_failed", error: err instanceof GhVersionError ? err.message : "could not post the comment to the issue" },
+      failure: { kind: "github_failed", error: ghRefusalText(err, "could not post the comment to the issue") },
     };
   }
 }
@@ -536,8 +535,7 @@ export async function registerThroughHumanDoor(
             ok: false,
             failure: {
               kind: "issue_unavailable",
-              // ADR 0402 決定3: 版の門の拒否は版の不一致を名指す
-              error: err instanceof GhVersionError ? err.message : "could not fetch the referenced issue",
+              error: ghRefusalText(err, "could not fetch the referenced issue"),
             },
           };
         }
@@ -1894,7 +1892,8 @@ export async function submitAnswer(
             try {
               await github.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head, assertMergeRepo);
             } catch (err) {
-              if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError) throw err;
+              // ADR 0402 決定3: 版の門の拒否は merge の失敗ではない —— 版の不一致だけを名指して拒む
+              if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError || err instanceof GhVersionError) throw err;
               assertMergeRepo();
               const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
               throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, pr.headRef)}`);

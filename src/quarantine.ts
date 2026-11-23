@@ -7,17 +7,15 @@
  *  module であり、逆は張らない。 */
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
-import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { EventOrigin, ListedRefusal, ResourceStop, RowRefusalCause } from "./events.js";
-import { GH_CLI_VERSION, GhVersionError } from "./gh-cli-version.js";
-import type { GitHubClient } from "./github.js";
+import { GH_CLI_VERSION } from "./gh-cli-version.js";
 import type { HaltKind } from "./halt-kind.js";
 import { CANCEL_THE_RCAS, discardUncommitted, IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { cancelDiscards, DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, isRca, type QuestionItem, type ResourceStops, registerTask, settleQuestionAsObserved, type TargetKey, type Task, unsettledOpenersOf } from "./tasks.js";
+import { cancelDiscards, DROP_TARGET_OPTION, getTask, holdsFirstCaptures, interviewRootIdOf, isRca, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task, unsettledOpenersOf } from "./tasks.js";
 import type { RoomRcaChoice } from "./wire-contract.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -704,47 +702,6 @@ export function registerQuarantine(
     BOARD_ACTOR_ID,
     "board",
   );
-}
-
-/** gh を撃つ GitHubClient の呼び出し —— PR の作成(REST)・push の準備・token の問い合わせは撃たない。 */
-const GH_CALLS = new Set<string | symbol>([
-  "readPullRequest", "mergePullRequest", "getPullRequestState", "findPullRequestByHead", "getIssue", "getIssueWithState",
-  "listIssues", "addIssueComment", "repositoryParent", "forkPrCredentialSettings",
-] satisfies Array<keyof GitHubClient>);
-
-/** ADR 0402 決定3: 止めるのは client の版の門で、これは信号だけ —— 門の拒否を観測すれば「gh の版」の question を1枚立て、gh の呼び出しが
- *  通れば回答なしで決着させる(ADR 0184 決定5 の形)。読めなかった PR(`unreadable`)は通った証拠に数えない。 */
-export function withGhVersionQuarantine(github: GitHubClient, db: Db, clock: Clock): GitHubClient {
-  return new Proxy(github, {
-    get(target, key) {
-      const value: unknown = Reflect.get(target, key);
-      if (typeof value !== "function" || !GH_CALLS.has(key)) return value;
-      return async (...args: unknown[]) => {
-        // 信号の書き込みが投げても、gh の呼び出しの結末(merge 済みなど)は差し替えない —— log に留める
-        const signal = (write: () => void) => {
-          try {
-            write();
-          } catch (signalErr) {
-            console.error("[github] could not record the gh version signal:", signalErr);
-          }
-        };
-        let result: unknown;
-        try {
-          result = await value.apply(target, args);
-        } catch (err) {
-          if (err instanceof GhVersionError) signal(() => registerQuarantine(db, "ghVersion", null, err.message, clock.now()));
-          throw err;
-        }
-        if ((result as { state?: unknown } | null)?.state !== "unreadable") {
-          signal(() => {
-            const open = openQuarantineQuestion(db, "ghVersion", null);
-            if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "ghVersion", value: null }, clock.now());
-          });
-        }
-        return result;
-      };
-    },
-  });
 }
 
 /** 検査を撃って立てる種類の共有の手続き: 開いていれば検査を撃たずに止まったと答え

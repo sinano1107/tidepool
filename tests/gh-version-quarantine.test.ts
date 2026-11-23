@@ -43,13 +43,11 @@ const issueBacked = (number: number) =>
 const ghVersionQuestions = async () => (await questions(t)).filter((q: any) => q.question_quarantine_kind === "ghVersion");
 const otherQuestions = async () => (await questions(t)).filter((q: any) => q.question_quarantine_kind !== "ghVersion" && q.status === "todo");
 
-it.each([
-  ["宣言と違う版を答える gh", OLD_GH, "found gh 2.46.0"],
-  ["無い gh", new Error("spawn gh ENOENT"), "found no readable `gh --version` (spawn gh ENOENT)"],
-])("%sでは gh 本体を撃たず「gh の版」の question を1枚だけ立て、10分を越えて繰り返しても1枚のまま issueExpansion も立てない", async (_, answer, found) => {
+// 読めない版も同じ型付きの失敗であることは domain 層(tests/github-client.test.ts)が釘を打つ —— ここは不一致の1形だけ
+it("宣言と違う版を答える gh では gh 本体を撃たず「gh の版」の question を1枚だけ立て、10分を越えて繰り返しても1枚のまま issueExpansion も立てない", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   issueBacked(49);
-  t.github.scriptGhVersion(answer);
+  t.github.scriptGhVersion(OLD_GH);
 
   await t.clock.advance(HOUR);
   await t.clock.advance(9 * MINUTE);
@@ -60,7 +58,7 @@ it.each([
   expect(t.github.issueFetches).toEqual([]);
   const [question, ...rest] = await ghVersionQuestions();
   expect(rest).toEqual([]);
-  expect(question.purpose).toContain(found);
+  expect(question.purpose).toContain("found gh 2.46.0");
   expect(question.purpose).toContain(`the board runs only gh ${GH_CLI_VERSION} (pinned in gh-cli-version)`);
   expect(question.purpose).toContain(`restart the Lima VM so its provision installs gh ${GH_CLI_VERSION}`);
   expect(await servedQuarantineQuestion(t, "issueExpansion", null)).toBeUndefined();
@@ -196,6 +194,62 @@ it("版が不一致の間、merge の回答は版の不一致を名指して拒�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${mergeQuestion.id}`)).json.status).toBe("todo");
   expect((await otherQuestions()).map((q: any) => q.id)).toEqual([mergeQuestion.id]);
   expect(await ghVersionQuestions()).toHaveLength(1);
+});
+
+it("PR の作成の直後に版がずれても、PR head を比べられなかった merge question を立てず、版が戻った後の収束が作った PR を記録する", async () => {
+  const { workspace } = await makeLandingWorkspace("sandbox");
+  t = await bootTidepool({ workspace, resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }) });
+  const create = t.github.createPullRequest.bind(t.github);
+  t.github.createPullRequest = async (input) => {
+    const created = await create(input);
+    t.github.scriptGhVersion(OLD_GH);
+    return created;
+  };
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  await completeIntegrationReviews(t, task.id);
+
+  expect(t.github.requests).toHaveLength(1);
+  expect(await otherQuestions()).toEqual([]);
+  expect(await ghVersionQuestions()).toHaveLength(1);
+
+  t.github.scriptGhVersion(`gh version ${GH_CLI_VERSION} (2026-11-18)`);
+  await t.clock.advance(HOUR);
+
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).toBe(1);
+  const [mergeQuestion, ...rest] = await otherQuestions();
+  expect(rest).toEqual([]);
+  expect(mergeQuestion.purpose).not.toContain("could not compare this PR head");
+});
+
+it("CI を読んだ後の merge で版がずれれば、merge の回答の拒否は版の不一致だけを名指す", async () => {
+  const { workspace } = await makeLandingWorkspace("sandbox");
+  t = await bootTidepool({ workspace, resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }) });
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  addTaskChange(checkoutOf(t.db, task.id), task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  await completeIntegrationReviews(t, task.id);
+  const [mergeQuestion] = await otherQuestions();
+  const read = t.github.readPullRequest.bind(t.github);
+  t.github.readPullRequest = async (ref) => {
+    const pr = await read(ref);
+    t.github.scriptGhVersion(OLD_GH);
+    return pr;
+  };
+
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${mergeQuestion.id}/answer`, { answers: ["merge"] });
+
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toBe(MISMATCH);
+  expect(t.github.merged).toEqual([]);
 });
 
 it("版が不一致の間、issue の取り込み・issue への comment・WebUI の open issue 一覧の読みは版の不一致を名指して拒まれる", async () => {

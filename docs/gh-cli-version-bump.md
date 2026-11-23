@@ -33,8 +33,11 @@ linux_arm64=<sha256 of gh_<version>_linux_arm64.tar.gz>
 linux_amd64=<sha256 of gh_<version>_linux_amd64.tar.gz>
 ```
 
-Keep the change until step 4's PR merges, then put the file back with
-`git -C ~/tidepool checkout gh-cli-version` before pulling.
+Keep the change until step 4's PR merges, then put the file back before pulling:
+
+```bash
+limactl shell tidepool -- bash -lc 'git -C ~/tidepool checkout gh-cli-version'
+```
 
 ## 2. Install the new version in the VM
 

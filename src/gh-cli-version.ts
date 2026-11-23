@@ -8,8 +8,11 @@ export const GH_CLI_VERSION = /^version=(\S+)$/m.exec(readFileSync(new URL("../g
 /** gh を撃つ前の版の読みが宣言と一致しなかった(読めなかったことも含む)—— 「gh の版」の Quarantine の契機(ADR 0402 決定2・3)。 */
 export class GhVersionError extends DomainError {}
 
+/** 人間の verb と読みの拒否の文: 版の門の拒否なら版の不一致を名指し(ADR 0402 決定3)、それ以外は呼び手の一般の文。 */
+export const ghRefusalText = (err: unknown, generic: string): string => (err instanceof GhVersionError ? err.message : generic);
+
 /** `gh --version` の1行目 `gh version X (date)` の X を宣言と完全一致で比べ、違えば投げる。版の門と回答の受理が同じこれを撃つ。
- *  ADR 0402 決定2: 読めないこと(gh が無い・`--version` の失敗・時間切れ)も一致と読まない。 */
+ *  ADR 0402 決定2: 読めないこと(gh が無い・`--version` の失敗・時間切れ)も一致と読まない。`declared` はテストだけが渡す。 */
 export async function assertGhVersion(read: () => Promise<string>, declared = GH_CLI_VERSION): Promise<void> {
   let found: string;
   try {

@@ -30,6 +30,7 @@ import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { latestEventId } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
+import { withGhVersionQuarantine } from "./gh-version-signal.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -46,7 +47,7 @@ import { type ContainerRuntime, ProcessContainers } from "./process-container.js
 import type { ProfileAdmin } from "./profile-create.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import { type QuarantineResolvers, registerQuarantine, withGhVersionQuarantine } from "./quarantine.js";
+import { type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import { 
   type AuthorityProfile,canonicalHarness, type Harness, 
   type RegistryCandidates,
