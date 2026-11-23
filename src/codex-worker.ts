@@ -1679,36 +1679,40 @@ export class CodexWorker implements WorkerAdapter {
         return;
       }
       // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
-      const spawned = appendEvent(this.options.db, {
-        taskId: task.id,
-        actorId: agent.name,
-        origin: "board",
-        payload: {
-          kind: "worker_spawned",
-          registry_commit: registry.commit,
-          definition_version: agent.definition.version,
-          // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
-          // 実行設定に advisor は決して載らない
-          advisor: null,
-          provider: setting.provider,
-          model: setting.model,
-          effort: setting.effort,
-          tier_id: setting.tier_id,
-          source: setting.source,
-          harness: "codex",
-          cli_version: this.options.cliVersion,
-          // ADR 0337 決定2: 3列は観測後の翻訳から。Codex だけ許した名前 → path の表を足す(Episode の投影が path で結ぶ)
-          skills: {
-            workspace: checked.translation.workspace,
-            host: checked.translation.host,
-            permitted: checked.translation.permitted,
-            paths: checked.translation.paths,
+      // ADR 0405 決定2: 注入の記録は `worker_spawned` の id を指すので同じ transaction で書き、id は transaction の戻り値から取る
+      const spawned = this.options.db.transaction(() => {
+        const id = appendEvent(this.options.db, {
+          taskId: task.id,
+          actorId: agent.name,
+          origin: "board",
+          payload: {
+            kind: "worker_spawned",
+            registry_commit: registry.commit,
+            definition_version: agent.definition.version,
+            // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
+            // 実行設定に advisor は決して載らない
+            advisor: null,
+            provider: setting.provider,
+            model: setting.model,
+            effort: setting.effort,
+            tier_id: setting.tier_id,
+            source: setting.source,
+            harness: "codex",
+            cli_version: this.options.cliVersion,
+            // ADR 0337 決定2: 3列は観測後の翻訳から。Codex だけ許した名前 → path の表を足す(Episode の投影が path で結ぶ)
+            skills: {
+              workspace: checked.translation.workspace,
+              host: checked.translation.host,
+              permitted: checked.translation.permitted,
+              paths: checked.translation.paths,
+            },
           },
-        },
-        at: this.options.clock.now(),
-      });
-      recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
-      if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
+          at: this.options.clock.now(),
+        });
+        recordMemoryInjection(this.options.db, task.id, agent.name, id, memory, this.options.clock.now());
+        if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, id, material, this.options.clock.now());
+        return id;
+      })();
       // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から、この spawn の id で組む(ADR 0295 決定4)。
       const parts = boardProse({
         db: this.options.db,

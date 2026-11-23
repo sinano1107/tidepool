@@ -64,7 +64,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
+import { failEventInsert, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -827,6 +827,24 @@ describe("ClaudeCodeWorker", () => {
     const events = listEvents(db, task.id);
     const spawned = events.findIndex((e) => e.kind === "worker_spawned");
     expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
+  });
+
+  // ADR 0405 決定2: 注入の記録は worker_spawned の id を指す —— 書けなければ worker_spawned も残らず、spawn の前の失敗と同じ経路
+  it("memory_injected が書けなければ worker_spawned も残らず、process は起きずに spawn_failed へ落ちる", async () => {
+    const spawnFailures: Array<{ error_code: string | null; message: string }> = [];
+    const { start, calls, db } = await makeWorker({}, {
+      onSpawnFailed: (_taskId, _sessionId, failure, record) => {
+        record();
+        spawnFailures.push(failure);
+      },
+    });
+    failEventInsert(db, "memory_injected");
+
+    const task = start("task-injection-fails");
+    await vi.waitFor(() => expect(spawnFailures).toMatchObject([{ message: "memory_injected write failed" }]));
+
+    expect(calls).toEqual([]);
+    expect(listEvents(db, task.id).filter((e) => e.kind === "worker_spawned" || e.kind === "spawn_failed").map((e) => e.kind)).toEqual(["spawn_failed"]);
   });
 
   it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(view で引くことは memory-injection.test.ts —— ADR 0175)", async () => {

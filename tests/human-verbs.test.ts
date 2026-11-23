@@ -37,6 +37,7 @@ import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock,
 import {
   decomposeTaskViaWorker,
   defaultingTo,
+  failEventInsert,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   initWorkspaceCheckout,
@@ -721,6 +722,28 @@ it("PR promotion の abandon を decision log に残す", async () => {
       line: `PR promotion abandoned for task ${completedTask.id} — this content stays on its task branch; a change from the content this question asked about asks again`,
     },
   });
+});
+
+it("PR promotion の abandon は判断ログが書けなければ回答ごと巻き戻る(ADR 0405 決定2)", async () => {
+  db = openDb(":memory:");
+  const completedTask = registerTask(
+    db,
+    { type: "work", title: "ship the feature", purpose: "deliver the requested change", completion_criteria: "the change is available as a PR" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
+  const question = onlyQuestion(db);
+  failEventInsert(db, "decision_logged");
+
+  await expect(
+    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["abandon promotion"], undefined, () => NOW, "webui"),
+  ).rejects.toThrow("decision_logged write failed");
+
+  expect({
+    status: getTask(db, question.id)?.status,
+    declined: listEvents(db, completedTask.id).some((event) => event.kind === "landing_declined"),
+  }).toEqual({ status: "todo", declined: false });
 });
 
 it("merge 回答は question の workspace で live CI を確認してから実 merge する", async () => {

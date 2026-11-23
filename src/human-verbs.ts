@@ -1973,7 +1973,7 @@ export async function submitAnswer(
     // 提案 question(ADR 0120 決定3・spec #615 F / ADR 0150)は回答と適用を1 transaction にする。memory の approve は承認の
     // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export、defer は何もしない(ADR 0165)。routing の approve は表の書き口で
     // 行を書く —— 回答が先に question を done にするので、書き口の陳腐化の hook はこの question 自身を決着させない
-    const question = deps.db.transaction(() => {
+    deps.db.transaction(() => {
       withAnswer?.(task.id);
       const answered = answerQuestion(
         deps.db,
@@ -2016,20 +2016,19 @@ export async function submitAnswer(
           applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
         }
       }
-      return answered;
+      // The decision log line on the question states why promotion was given up (the root holds only `landing_declined`).
+      // ADR 0405 決定2: 回答が commit されなければ偽になる行なので、回答と同じ transaction で
+      if (kind.kind === "pr_promotion_retry" && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
+        logDecision(
+          deps.db,
+          answered,
+          `PR promotion abandoned for task ${kind.task_id} — this content stays on its task branch; a change from the content this question asked about asks again`,
+          HUMAN_ACTOR_ID,
+          now(),
+          origin,
+        );
+      }
     })();
-    // Giving up promotion otherwise leaves no trace beyond a settled question;
-    // preserve the reason on the immutable decision log of that question.
-    if (kind.kind === "pr_promotion_retry" && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
-      logDecision(
-        deps.db,
-        question,
-        `PR promotion abandoned for task ${kind.task_id} — this content stays on its task branch; a change from the content this question asked about asks again`,
-        HUMAN_ACTOR_ID,
-        now(),
-        origin,
-      );
-    }
     // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
     // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
     // 解放と対で走る。再起動を越えて後始末の印だけが残っていれば、その後始末を走らせる
