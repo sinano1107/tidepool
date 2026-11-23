@@ -460,7 +460,7 @@ describe("updateWorkspace: 出元 repo の書き込みの巻き戻し", () => {
 
     expect(git(checkout.path, "remote")).toBe("");
     expect(declared().head_repo).toBeUndefined();
-    expect(workspaceHeadRepoDestination(withRememberedRepoCheck(deps.db, declared()))).toBeUndefined();
+    expect(workspaceHeadRepoDestination(withRememberedRepoCheck(deps.db, declared(), () => new Date(0)))).toBeUndefined();
     expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeUndefined();
   });
 });

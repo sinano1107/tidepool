@@ -189,7 +189,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     const clock = new FakeClock();
     const now = () => clock.now();
     const resolve = () => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
-    const refresh = () => refreshProtectedBranch(deps.db, resolve(), deps.githubAuth);
+    const refresh = () => refreshProtectedBranch(deps.db, resolve(), deps.githubAuth, now);
     const declare = async (repo?: string) => {
       await writeFile(join(registryDir, "workspaces.yaml"), `sandbox:\n  path: ${checkout}\n${repo ? `  repo: ${repo}\n` : ""}`);
       git(registryDir, "add", "workspaces.yaml");
@@ -298,7 +298,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     session.release();
     const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
-    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, () => new Date(0));
 
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
@@ -331,7 +331,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     session.release();
     const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
-    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, () => new Date(0));
 
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
@@ -358,7 +358,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(git(checkout, "rev-parse", copy)).toBe(earlier);
     session.release();
     const workspace = resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
-    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, () => new Date(0));
 
     expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
@@ -427,7 +427,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
     const resolve = () => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), "sandbox", null, deps.workspacesBaseDir);
     const task = registerTask(deps.db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: "sandbox" }, new Date(), ...HUMAN_WEBUI);
-    const gate = () => pickupGate(deps.db, resolve(), task, deps.workspacesBaseDir);
+    const gate = () => pickupGate(deps.db, resolve(), task, deps.workspacesBaseDir, () => new Date(0));
     // 覚えた repo の検査は「宣言無し」を通し(行が宛先の1値なら「`repo:` を戻せ」で止まる)、次の origin の検査が止める
     await expect(gate()).rejects.toThrow(`workspace sandbox declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${checkout}, run \`git config --remove-section remote.origin\`.`);
 

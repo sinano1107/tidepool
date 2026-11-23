@@ -662,7 +662,7 @@ it("checks the repo before convergence can mistake a descendant's open PR for wo
   finish(db, clock, child);
   // Refresh sees the published parent result while the checkout's local main is still behind.
   await squashTaskIntoOrigin(workspace, parent.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
   await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ form: "pull_request_opened" });
   expect(github.stateChecks).toEqual([]);
 
@@ -997,7 +997,7 @@ it("収束前の保護ブランチの fetch は写しを原本の sha へ進め�
   const refsBesidesCopy = () => git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname)").split("\n").filter((line) => !line.endsWith(` ${copy}`));
   const before = refsBesidesCopy();
 
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
 
   const original = git(workspace.path, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
   expect(git(workspace.path, "rev-parse", copy)).toBe(original);
@@ -1358,7 +1358,7 @@ it("retry の時点で運ぶ内容が無ければ回答を受理し、着地対�
   github.scriptFailure(null);
   // 内容は盤面の外で保護ブランチに届き、盤面の fetch が写しを進める
   await squashTaskIntoOrigin(workspace, task.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
 
   await answerPromotion(db, clock, landing, workspace, failures[0]!, "retry");
 
@@ -1659,7 +1659,7 @@ function boardMerged(db: Db, clock: FakeClock, taskId: string, prNumber: number)
 it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった事実を1回刻み、次の回からは git も読まない", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-finished");
   await squashTaskIntoOrigin(workspace, root.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
   boardMerged(db, clock, root.id, 1);
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
@@ -1723,7 +1723,7 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   releaseWorkspace(db, reopened, getTask(db, child.id)!, clock.now());
 
   await squashTaskIntoOrigin(workspace, work.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
   const repair = attachUnsettledChild(db, clock, work.id);
   await completeThroughTaskCheckout(db, clock, workspace, repair, "repair.txt", "after the merge\n");
 
@@ -1834,7 +1834,7 @@ it("merge の後に根のブランチへ帰った修理は、失敗 question を
 it("merge の後に完了して自分で根になった子孫は自分の PR を開き、merge 済みの根には偽の失敗 question が立たない", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-descendant");
   await squashTaskIntoOrigin(workspace, root.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
   boardMerged(db, clock, root.id, 1);
   const repair = attachUnsettledChild(db, clock, root.id);
   await completeThroughTaskCheckout(db, clock, workspace, repair, "repair.txt", "after the merge\n");
@@ -1911,7 +1911,7 @@ it.each(["closed", "abandoned"] as const)("%s の根の内容が保護ブラン�
     await answerPromotion(db, clock, landing, workspace, promotionFailures(db, root.id)[0]!, "abandon promotion");
   }
   await squashTaskIntoOrigin(workspace, root.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
   const child = attachUnsettledChild(db, clock, root.id);
   await completeThroughTaskCheckout(db, clock, workspace, child, "child.txt", "the child's own change\n");
 

@@ -446,7 +446,7 @@ async function fireSpan<C, I, A, R>(
   { client, setting }: { client: C; setting: ExecutionSettingRow },
   use: QuarantinableBoardCallUse,
   taskId: string,
-  now: Date,
+  now: () => Date,
   steps: { build: () => I; judge: (client: C, input: I, setting: ExecutionSettingRow) => Promise<BoardCallAnswer<A>>; record: (answer: A, input: I) => R; failed: (reason: string) => void },
 ): Promise<R | undefined> {
   let stage = "Input could not be built: ";
@@ -457,7 +457,7 @@ async function fireSpan<C, I, A, R>(
     stage = "Result could not be recorded: ";
     return steps.record(answer, input);
   } catch (err) {
-    if (!quarantineBoardCallRefusal(db, err, use, taskId, now)) steps.failed(`${stage}${message(err)}`);
+    if (!quarantineBoardCallRefusal(db, err, use, taskId, now())) steps.failed(`${stage}${message(err)}`);
     return undefined;
   }
 }
@@ -473,7 +473,7 @@ export async function attributeObjections(
   db: Db,
   deps: RetrospectiveCallDeps,
   sessionId: number,
-  now: Date,
+  now: () => Date,
 ): Promise<Map<number, InitialJudgment>> {
   const objected = listObjectedEntries(db, sessionId);
   const judgments = new Map<number, InitialJudgment>();
@@ -500,7 +500,7 @@ export async function attributeObjections(
         record: (judgment, { input, through }) => void judgments.set(o.entry.id, { ...gate(judgment, input), decision_log_through: through }),
         failed: (reason) => {
           const payload = { kind: "objection_attribution_failed" as const, entry_id: o.entry.id, objection_event_id: bundleName(o), round: "initial" as const, reason };
-          appendEvent(db, { taskId: o.entry.task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+          appendEvent(db, { taskId: o.entry.task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now() });
         },
       }),
     ),
@@ -555,13 +555,13 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
 /** 帰責の第2回を1異議群ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  その異議群を名指す新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6。行の拒否と 401 は除く、ADR 0202・0205)。 */
-async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
+async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objectedId: string, source: SecondRoundSource, now: () => Date): Promise<void> {
   await singleFlight(db, `after_rca:${bundleName(source)}`, async () => {
-    if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now)) return;
+    if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now())) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
     const append = (payload: Extract<EventPayload, { kind: "objection_attributed" | "objection_attribution_failed" }>) =>
-      appendEvent(db, { taskId: objectedId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+      appendEvent(db, { taskId: objectedId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now() });
     const judged = await fireSpan(db, call, "attribution", objectedId, now, {
       build: () => secondRoundInput(db, deps.recordDir, objectedId, source),
       judge: (client, input, setting) => client.judge(input, setting),
@@ -596,13 +596,13 @@ const fireAndForget = (fired: Promise<void>, target: string) =>
 
 /** 配分評価を1 review ぶん撃つ(ADR 0172): 判断が返れば注釈を被レビュー task に載せ、撃てなかったら何も書かず、
  *  撃って失敗したら `allocation_review_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。入力の組み立ても撃つ区間の中で、組めなければ撃って失敗した(ADR 0336 決定1)。 */
-async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: AllocationTarget, now: Date): Promise<void> {
+async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: AllocationTarget, now: () => Date): Promise<void> {
   await singleFlight(db, `allocation:${target.completed_event_id}`, async () => {
-    if (!refireDue(db, { refire: "allocation", target: target.completed_event_id }, now)) return;
+    if (!refireDue(db, { refire: "allocation", target: target.completed_event_id }, now())) return;
     const call = boardCallSetting(db, deps.allocationClient, deps.containers);
     if ("unavailable" in call) return;
     const { review_task_id, reviewed_task_id } = target;
-    const append = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+    const append = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now() });
     const { provider, model, effort } = call.setting;
     await fireSpan(db, call, "allocation_review", reviewed_task_id, now, {
       build: () => allocationInput(db, target),
@@ -616,23 +616,25 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
 /** 停止の帰責を1停止ぶん撃つ(ADR 0310 決定1〜4): 判断(`uncertain` も判断として)を門に通して `stop_attributed` として止められた
  *  task に追記し、起草へ進む。判定が既にある停止(初回の uncertain)には第2回として RCA の所見つきで撃ち、`round: "after_rca"` で書く(RCA は立てない)。
  *  撃てなかったら何も書かず、撃って失敗したら `stop_attribution_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。 */
-async function attributeStop(db: Db, deps: RetrospectiveCallDeps, target: StopTarget, now: Date): Promise<void> {
+async function attributeStop(db: Db, deps: RetrospectiveCallDeps, target: StopTarget, now: () => Date): Promise<void> {
   const { task_id, stop, session } = target;
   const round: AttributionRound = target.judged ? "after_rca" : "initial";
   await singleFlight(db, `stop:${stop.id}`, async () => {
-    if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
+    if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now())) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const append = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
-      appendEvent(db, { taskId: task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+    const append = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>, at = now()) =>
+      appendEvent(db, { taskId: task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at });
     const judged = await fireSpan(db, call, "attribution", task_id, now, {
       build: () => stopInput(db, deps.recordDir, target, round),
       judge: (client, input, setting) => client.judgeStop(input, setting),
       record: (answer, input) => {
         const judgment = gate(answer, input);
         return db.transaction(() => {
-          const id = append({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, round });
-          if (round === "initial" && RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.actor_id, input.human_stop.reason, now);
+          // ADR 0404 決定2: 判定と RCA は同じ区間で読んだ1つの時刻を持つ
+          const at = now();
+          const id = append({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, round }, at);
+          if (round === "initial" && RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.actor_id, input.human_stop.reason, at);
           return getEvent(db, id) as EventRowOf<"stop_attributed">;
         })();
       },
@@ -768,7 +770,7 @@ function refireTargets(db: Db): RefireTarget[] {
  *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
  *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `draftStopBehaviorCandidate` / `attributeSecondRound` / `attributeStop` / `reviewAllocation`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
-export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, now: Date): void {
+export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, now: () => Date): void {
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), `entry ${target.source.entry_id}`);
@@ -928,7 +930,7 @@ function memoryBodies(db: Db, ids: number[]): AttributionInput["memory_read"] {
 }
 
 /** 異議の帰責から起草する(issue #617): 学ぶのは異議されたエントリの書き手、入力は帰責と同じ材料(第2回なら RCA の findings つき)。 */
-async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attribution: Attribution, now: Date): Promise<void> {
+async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attribution: Attribution, now: () => Date): Promise<void> {
   const entry = requireLogEntry(db, attribution.entry_id);
   await draftCandidate(db, deps, {
     attribution,
@@ -943,7 +945,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
 }
 
 /** 停止の帰責から起草する(ADR 0310 決定4): 学ぶのは止められた session の worker、入力は停止の判事と同じ欄(第2回なら RCA の所見つき)、失敗 event は停止を `stop_event_id` で指す。 */
-async function draftStopBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, target: StopTarget, judgment: EventRowOf<"stop_attributed">, now: Date): Promise<void> {
+async function draftStopBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, target: StopTarget, judgment: EventRowOf<"stop_attributed">, now: () => Date): Promise<void> {
   const { cause, round } = judgment.payload;
   await draftCandidate(db, deps, {
     attribution: { id: judgment.id, cause, round },
@@ -974,7 +976,7 @@ type DraftSource = {
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
  *  撃って失敗したら —— 入力が組めないときも、書き込みが一木の門(ADR 0178)に当たったときも(ADR 0336 決定1)—— `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否と 401 は除く、ADR 0202・0205)。poll の sweep が fire-and-forget で撃つ
  *  (第2回と停止の帰責は判定の追記の直後、ADR 0169)ので poll を止めない。 */
-async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution, taskId, worker, material, prepare }: DraftSource, now: Date): Promise<void> {
+async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution, taskId, worker, material, prepare }: DraftSource, now: () => Date): Promise<void> {
   const { cause, round } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
   if (!deps.behaviorDraftClient || !drafts || worker === HUMAN_ACTOR_ID) return;
@@ -989,7 +991,7 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
   const scope = decidedSkip(() => learnedScope(db, deps, task));
   if (scope === undefined) return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
   await singleFlight(db, `draft:${attribution.id}`, async () => {
-    if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
+    if (!refireDue(db, { refire: "draft", target: attribution.id }, now())) return;
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
     if ("unavailable" in call) return;
     await fireSpan(db, call, "behavior_draft", taskId, now, {
@@ -1011,7 +1013,7 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
             author: { activity: "board", name: BOARD_ACTOR_ID },
           },
           "board",
-          now,
+          now(),
         );
       },
       failed: (reason) =>
@@ -1020,7 +1022,7 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
           actorId: BOARD_ACTOR_ID,
           origin: "board",
           payload: { kind: "memory_draft_failed", ...material, round, attribution_event_id: attribution.id, reason },
-          at: now,
+          at: now(),
         }),
     });
   });

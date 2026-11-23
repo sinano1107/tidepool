@@ -291,7 +291,7 @@ it("受験者の fork 元は出題の head で、pickup が受験者のタスク
 
   await pickUp(db, first, room, base);
 
-  expect(taskForkSource(db, room, first)).toBe(head);
+  expect(taskForkSource(db, room, first, () => NOW)).toBe(head);
   expect(git(room.path, "rev-parse", `task/${first.id}`)).toBe(head);
   db.close();
 });
@@ -802,7 +802,7 @@ it("門を通った後に面接室から出題の head を fetch できなけれ
   const { workspace, root, room, base, head, audit } = await auditStanding(db);
   // 門を通った後に中身の blob が欠けた面接室 —— 準備は門の前半を撃ち直さない(後半だけ)ので、fetch が落ちる
   // 旧: 門の前に blob を消していた。ADR 0329 決定4 の Status 追記の後は門の項が閉包まで見て門で止まる
-  await pickupGate(db, workspace, audit, base);
+  await pickupGate(db, workspace, audit, base, () => NOW);
   dropObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
 
   const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
@@ -843,7 +843,7 @@ it.each([
   const { workspace, root, room, base, audit } = await auditStanding(db);
   breakRoom(room);
 
-  const failed = await pickupGate(db, workspace, audit, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, audit, base, () => NOW).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
@@ -884,7 +884,7 @@ it("RCA が読む却下した監査の出題の head が面接室から消える
   const { workspace, root, room, base, rejected, latest, rca } = await rcaOnRejectedAudit(db);
   const restore = dropFromRoom(room, rejected);
 
-  const failed = await pickupGate(db, workspace, rca, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, rca, base, () => NOW).catch((err: unknown) => err);
 
   expect(latest).not.toBe(rejected);
   expect(failed).toBeInstanceOf(PickupGateError);
@@ -894,7 +894,7 @@ it("RCA が読む却下した監査の出題の head が面接室から消える
 
   restore();
   await expect(quarantineChecks({ quarantineResolvers: {}, db }).workspace!(root.id, undefined, "webui")).resolves.toBeUndefined();
-  const place = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base, reads: await pickupGate(db, workspace, rca, base) });
+  const place = await prepareAtPickup(db, workspace, rca, { workspacesBaseDir: base, reads: await pickupGate(db, workspace, rca, base, () => NOW) });
   expect(git(place.reads[0]!.path, "for-each-ref", "--format=%(objectname)")).toBe(rejected);
   db.close();
 });
@@ -915,7 +915,7 @@ it("同じ姿で面接室の名前の Quarantine に `cancel the RCAs that need 
   expect(openQuarantineQuestion(db, "workspace", root.id)).toBeUndefined();
   expect(standing()).toEqual(before);
   for (const rca of rcas) expect(listEvents(db, rca.id).at(-1)!.payload).toEqual({ kind: "task_cancelled", origin_question_id: question.id, missing_head: rejected });
-  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, NOW);
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, () => NOW);
   await new Promise((resolve) => setImmediate(resolve));
   expect(listEvents(db, audit.id).filter((e) => e.payload.kind === "objection_attributed" && e.payload.round === "after_rca")).toHaveLength(1);
   db.close();
@@ -930,7 +930,7 @@ it.each([
   const oid = missing(room, head);
   dropObject(room, oid);
 
-  const failed = await pickupGate(db, workspace, audit, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, audit, base, () => NOW).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
@@ -945,7 +945,7 @@ it("出題の head の commit が残り blob が欠けた面接室では、未�
   const blob = git(room.path, "rev-parse", `${head}:probe.txt`);
   dropObject(room, blob);
 
-  const failed = await pickupGate(db, workspace, examinees[0]!, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, examinees[0]!, base, () => NOW).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
@@ -975,7 +975,7 @@ it("面接室が記録に無い受験者の pickup の門は、受験者の (tas
   const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", "0123456789abcdef0123456789abcdef01234567") as [Task];
   const base = dirname(workspace.path);
 
-  const failed = await pickupGate(db, workspace, examinee, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, examinee, base, () => NOW).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
@@ -1005,7 +1005,7 @@ it.each([
   const tip = git(room.path, "rev-parse", `task/${task.id}`);
   dropObject(room, tip);
 
-  const failed = await pickupGate(db, workspace, getTask(db, task.id)!, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, getTask(db, task.id)!, base, () => NOW).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
@@ -1039,7 +1039,7 @@ it.each([
   await expect(refused).rejects.toThrow(head);
   const readerItem = namePickupPredicates(db, root.id, room, base).find((p) => p.describe.includes(`the posed head ${head} that ${reader.id} reads`))!;
   expect(() => { if (readerItem.phase === "before-open") readerItem.check(); }).toThrow(head);
-  const failed = await pickupGate(db, workspace, getTask(db, reader.id)!, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, getTask(db, reader.id)!, base, () => NOW).catch((err: unknown) => err);
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
   expect((failed as PickupGateError).message).toContain(head);
@@ -1403,7 +1403,7 @@ it.each([
   const { room, task } = await picked(db);
 
   expect(git(room.path, "rev-parse", `task/${task.id}`)).not.toBe(forkedAt(db, task.id));
-  expect(taskForkSource(db, room, getTask(db, task.id)!)).toBe(forkedAt(db, task.id));
+  expect(taskForkSource(db, room, getTask(db, task.id)!, () => NOW)).toBe(forkedAt(db, task.id));
   db.close();
 });
 
@@ -1429,7 +1429,7 @@ it("記録された面接室で root のブランチが無く保護ブランチ�
   const blob = git(room.path, "rev-parse", "main:seed.txt");
   dropObject(room, blob);
 
-  const failed = await pickupGate(db, workspace, root, base).catch((err: unknown) => err);
+  const failed = await pickupGate(db, workspace, root, base, () => NOW).catch((err: unknown) => err);
 
   expect(failed).toBeInstanceOf(PickupGateError);
   expect((failed as PickupGateError).place.name).toBe(root.id);
@@ -1445,7 +1445,7 @@ it("面接室が記録に無い root は (task, 面接室) の項を持たず、
   const base = await tempDir("tidepool-rooms-");
 
   expect(taskRoomPickupPredicates(db, [root], root.id, base)).toEqual([]);
-  const reads = await pickupGate(db, workspace, root, base);
+  const reads = await pickupGate(db, workspace, root, base, () => NOW);
   openInterviewRoom(db, root, base, NOW);
   const room = recordedInterviewRoom(db, root.id)!;
   await prepareAtPickup(db, room, root, { workspacesBaseDir: base, reads, real: workspace });
@@ -1516,7 +1516,7 @@ it.each([
 it("門を通った後に受験者のブランチの閉包の object が面接室から欠けると、準備の fetch は面接室の名前(root id)で受験者の項の文つきで止まり、checkout の番地を作れないのは今どおり host 側の失敗(issue #3161 / ADR 0386 決定3 / ADR 0356 決定2)", async () => {
   const db = openDb(":memory:");
   const { workspace, root, room, base, examinee, examinees } = await examineeAnswered(db);
-  const reads = await pickupGate(db, workspace, examinee, base);
+  const reads = await pickupGate(db, workspace, examinee, base, () => NOW);
   dropObject(room, git(room.path, "rev-parse", `task/${examinee.id}:answer.txt`));
   const item = taskRoomPickupPredicates(db, [examinee], root.id, base)[0]!;
 
@@ -1553,7 +1553,7 @@ it("面接室の項は 受験者を含む項 → 面接室そのものの項 →
 
   const ordered = namePickupPredicates(db, root.id, room, base);
   const own = ordered.filter((p) => p.own).map((p) => p.describe);
-  const gated = async (task: Task) => (await pickupGate(db, workspace, task, base)).find((check) => check.place.name === root.id)!.predicates.map((p) => p.describe);
+  const gated = async (task: Task) => (await pickupGate(db, workspace, task, base, () => NOW)).find((check) => check.place.name === root.id)!.predicates.map((p) => p.describe);
 
   expect(ordered.map((p) => p.describe)).toEqual([
     expect.stringMatching(new RegExp(`task/${root.id}.*task/${examinee.id}.*task/${examinees[1]!.id}`)),

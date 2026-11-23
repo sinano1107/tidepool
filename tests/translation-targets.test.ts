@@ -48,7 +48,7 @@ it("decision_logged イベントの line を解決して翻訳する", async () 
   const client = new FakeTranslationClient();
   client.scriptTranslation("アプローチAを採用することにした");
 
-  const outcome = await translateLogEntry(db, client, eventId, "Japanese", NOW);
+  const outcome = await translateLogEntry(db, client, eventId, "Japanese", () => NOW);
 
   expect(outcome).toEqual({
     status: "translated",
@@ -88,7 +88,7 @@ it("task_completed イベントの result を解決して翻訳する", async ()
   const client = new FakeTranslationClient();
   client.scriptTranslation("センサーは5分ごとに湿度を報告する");
 
-  const outcome = await translateLogEntry(db, client, event!.id, "Japanese", NOW);
+  const outcome = await translateLogEntry(db, client, event!.id, "Japanese", () => NOW);
 
   expect(outcome).toEqual({
     status: "translated",
@@ -107,7 +107,7 @@ it("premise_breached イベントの宣言の理由を解決して翻訳する",
   const client = new FakeTranslationClient();
   client.scriptTranslation("モジュールMが壊れている");
 
-  const outcome = await translateLogEntry(db, client, event!.id, "Japanese", NOW);
+  const outcome = await translateLogEntry(db, client, event!.id, "Japanese", () => NOW);
 
   expect(outcome).toEqual({ status: "translated", text: "モジュールMが壊れている", cached: false });
   expect(client.calls).toEqual([{ fragments: ["module M is broken"], language: "Japanese" }]);
@@ -118,9 +118,9 @@ it("複数の event id は cache に無い断片だけを1回の呼び出しに�
   const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const ids = ["line a", "line b", "line c"].map((line) => logDecision(db, task, line, "tako", NOW, "worker"));
   const client = new FakeTranslationClient();
-  await translateLogEntry(db, client, ids[1]!, "Japanese", NOW);
+  await translateLogEntry(db, client, ids[1]!, "Japanese", () => NOW);
 
-  const outcome = await translateLogEntries(db, client, ids, "Japanese", NOW);
+  const outcome = await translateLogEntries(db, client, ids, "Japanese", () => NOW);
 
   expect(client.calls.at(-1)).toEqual({ fragments: ["line a", "line c"], language: "Japanese" });
   expect(outcome).toEqual({
@@ -139,7 +139,7 @@ it("複数の event id に解決できない id が1つでもあれば Translati
   const id = logDecision(db, task, "line a", "tako", NOW, "worker");
   const client = new FakeTranslationClient();
 
-  await expect(translateLogEntries(db, client, [id, 999], "Japanese", NOW)).rejects.toThrow(TranslationTargetError);
+  await expect(translateLogEntries(db, client, [id, 999], "Japanese", () => NOW)).rejects.toThrow(TranslationTargetError);
   expect(client.calls).toEqual([]);
   expect(getCachedTranslation(db, hashSource("line a"), "Japanese")).toBeUndefined();
 });
@@ -148,7 +148,7 @@ it("存在しない event id は TranslationTargetError を投げる", async () 
   const db = await freshDb();
   const client = new FakeTranslationClient();
 
-  await expect(translateLogEntry(db, client, 999, "Japanese", NOW)).rejects.toThrow(
+  await expect(translateLogEntry(db, client, 999, "Japanese", () => NOW)).rejects.toThrow(
     TranslationTargetError,
   );
 });
@@ -221,7 +221,7 @@ it("handoff doc の見出し行はモデルに渡さず英語のまま保持し�
       : "src/sensor.ts(訳文)",
   );
 
-  const outcome = await translateHandoff(db, client, completed.id, "Japanese", NOW);
+  const outcome = await translateHandoff(db, client, completed.id, "Japanese", () => NOW);
 
   expect(outcome).toEqual({
     status: "translated",
@@ -254,7 +254,7 @@ it("handoff_doc を持たないタスクは TranslationTargetError を投げる"
   );
   const client = new FakeTranslationClient();
 
-  await expect(translateHandoff(db, client, task.id, "Japanese", NOW)).rejects.toThrow(
+  await expect(translateHandoff(db, client, task.id, "Japanese", () => NOW)).rejects.toThrow(
     TranslationTargetError,
   );
 });
@@ -291,7 +291,7 @@ it("question の purpose と各 item の title/detail を1回の呼び出しで�
   };
   client.scriptTranslation((source) => JA[source] ?? `[??] ${source}`);
 
-  const outcome = await translateQuestion(db, client, task.id, "Japanese", NOW);
+  const outcome = await translateQuestion(db, client, task.id, "Japanese", () => NOW);
 
   expect(outcome).toEqual({
     status: "translated",
@@ -330,9 +330,9 @@ function registerQuestionWith(db: Db, purpose: string, titles: string[]) {
 it("キャッシュ済みの断片は呼び出しに載らず、未訳の断片だけが1回で撃たれる", async () => {
   const db = await freshDb();
   const client = new FakeTranslationClient();
-  await translateQuestion(db, client, registerQuestionWith(db, "shared purpose", ["first?"]).id, "Japanese", NOW);
+  await translateQuestion(db, client, registerQuestionWith(db, "shared purpose", ["first?"]).id, "Japanese", () => NOW);
 
-  const outcome = await translateQuestion(db, client, registerQuestionWith(db, "shared purpose", ["first?", "second?"]).id, "Japanese", NOW);
+  const outcome = await translateQuestion(db, client, registerQuestionWith(db, "shared purpose", ["first?", "second?"]).id, "Japanese", () => NOW);
 
   expect(client.calls.at(-1)).toEqual({ fragments: ["second?"], language: "Japanese" });
   expect(outcome).toMatchObject({ purpose: "[translated] shared purpose", cached: false });
@@ -353,7 +353,7 @@ it("断片が上限 20 を超える対象は上限ごとの呼び出しに分け
   );
   const client = new FakeTranslationClient();
 
-  const outcome = await translateHandoff(db, client, completed.id, "Japanese", NOW);
+  const outcome = await translateHandoff(db, client, completed.id, "Japanese", () => NOW);
 
   expect(client.calls.map((call) => call.fragments.length)).toEqual([20, 5]);
   expect(listTranslationUsage(db).map((record) => record.fragments)).toEqual([20, 5]);
@@ -366,7 +366,7 @@ it("呼び出しが失敗した対象は、どの断片もキャッシュせず�
   const client = new FakeTranslationClient();
   client.scriptFailure(new Error("translation answer ids do not match the request"));
 
-  await expect(translateQuestion(db, client, task.id, "Japanese", NOW)).rejects.toThrow("ids");
+  await expect(translateQuestion(db, client, task.id, "Japanese", () => NOW)).rejects.toThrow("ids");
   expect(getCachedTranslation(db, hashSource("purpose"), "Japanese")).toBeUndefined();
   expect(listTranslationUsage(db)).toEqual([]);
 });
@@ -381,7 +381,7 @@ it("work タスク(question ではない)の翻訳は TranslationTargetError を
   );
   const client = new FakeTranslationClient();
 
-  await expect(translateQuestion(db, client, task.id, "Japanese", NOW)).rejects.toThrow(
+  await expect(translateQuestion(db, client, task.id, "Japanese", () => NOW)).rejects.toThrow(
     TranslationTargetError,
   );
 });
@@ -399,7 +399,7 @@ it("記憶のエントリは title と text の両方を1回の呼び出しで�
 
   const client = new FakeTranslationClient();
 
-  expect(await translateMemoryEntry(db, client, entry_id, "Japanese", NOW)).toEqual({
+  expect(await translateMemoryEntry(db, client, entry_id, "Japanese", () => NOW)).toEqual({
     status: "translated",
     title: "[translated] Use Node 22",
     text: "[translated] Run tests on Node 22.",

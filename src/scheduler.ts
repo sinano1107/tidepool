@@ -631,7 +631,7 @@ export function startScheduler(deps: {
         const base = resolveWorkspacesBaseDir(workspacesDir);
         let checks: Awaited<ReturnType<typeof pickupGate>>;
         try {
-          checks = await pickupGate(db, resolved, picked, base, boardState, live);
+          checks = await pickupGate(db, resolved, picked, base, () => clock.now(), boardState, live);
         } catch (err) {
           if (!(err instanceof PickupGateError)) throw err;
           return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
@@ -708,7 +708,7 @@ export function startScheduler(deps: {
     if (!carriesHumanWords(db, task.id) || getDisplayLanguage(db) === "English") return undefined;
     if (!translationClient) return { reason: "throttled" };
     try {
-      const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", clock.now());
+      const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", () => clock.now());
       return outcome.status === "translated" ? { view: outcome.text } : { reason: "throttled" };
     } catch (err) {
       return { reason: "failed", message: err instanceof Error ? err.message : String(err) };
@@ -950,7 +950,7 @@ export function startScheduler(deps: {
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now(), registryTiers);
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
-      refireRetrospectiveCalls(db, retrospectiveCalls, clock.now());
+      refireRetrospectiveCalls(db, retrospectiveCalls, () => clock.now());
       // ADR 0369 決定4 / ADR 0119 決定5: 次の pickup で済んでいない解放が受理から見えなくなる。slot 占有・halt で返る前に同期で Quarantine を戻す。
       for (const { task, place } of owedReleases(db, workspace?.name)) {
         quarantineWorkspace(db, place, `The release of task ${task.id} is unfinished and answering this question retries it`, clock.now());

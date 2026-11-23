@@ -152,7 +152,7 @@ async function reviewAllocationOnBoard(allocationClient: FakeAllocationClient) {
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
   const review = listChildren(db, work.id).find((child) => child.type === "review")!;
   completeIntegrationReview(db, review, { findings: "the deliverable holds up", nothing_to_repair: true }, "fugu", at, "worker");
-  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, allocationClient }, at);
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, allocationClient }, () => at);
   await new Promise((resolve) => setImmediate(resolve));
   return { db, work, at };
 }

@@ -1464,7 +1464,7 @@ it("帰責の入力の読んだ記憶は、異議された decision と同じ wo
   b.read(later);
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), () => at);
 
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([
     [{ id: mine, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
@@ -1494,7 +1494,7 @@ it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の�
   const decision = logDecision(b.db, review, "kept candidate 12", "deckhand", at, "worker");
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), () => at);
 
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([[{ id: guidance, kind: "behavior", title: "Fold duplicates first", text: "Fold duplicates first." }]]);
 });
@@ -1513,7 +1513,7 @@ it.each([
   const decision = logDecision(b.db, repair, "kept the note", "deckhand", at, "worker");
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), () => at);
 
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([[{ id: guidance, kind: "behavior", title: "Fold duplicates first", text: "Fold duplicates first." }]]);
 });
@@ -1535,7 +1535,7 @@ const ATTRIBUTION_ROW = { use: "attribution", provider: "anthropic", model: "cla
 it("初回の帰責は、撃った行の Provider / model / effort で attribution の行を1つ残す(ADR 0299 決定1)", async () => {
   const b = objectedAfterReading();
 
-  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, b.sessionId, at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, b.sessionId, () => at);
 
   expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
 });
@@ -1548,7 +1548,7 @@ it("初回の帰責の答えが schema に合わなくても attribution の行�
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, schemaMismatch());
 
-  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, () => at);
 
   expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
   expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "objection_attribution_failed").map((e) => e.payload)).toEqual([
@@ -1567,7 +1567,7 @@ function awaitingSecondRound() {
 it("帰責の第2回は、撃った行の Provider / model / effort で attribution の行を1つ残す(ADR 0299 決定1)", async () => {
   const b = awaitingSecondRound();
 
-  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, at);
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
@@ -1578,7 +1578,7 @@ it("帰責の第2回の答えが schema に合わなくても attribution の行
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, schemaMismatch());
 
-  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
@@ -1602,8 +1602,8 @@ async function draftAfterPreference(draft: Parameters<FakeBehaviorDraftClient["s
       return workspace();
     },
   };
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
-  refireRetrospectiveCalls(b.db, deps, at);
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, () => at));
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
   return b;
 }
@@ -1634,7 +1634,7 @@ async function draftAfterTaskAmbiguity(danglingBasedOn?: number) {
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
   const drafter = new FakeBehaviorDraftClient();
-  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, () => at);
   await new Promise((resolve) => setImmediate(resolve));
   expect(attributed(b.db, b.task.id).map((p) => p.cause)).toEqual(["task_ambiguity"]);
   expect(drafter.calls).toEqual([]);
@@ -1684,7 +1684,7 @@ it.each(["capability", "environment", "uncertain"] as const)("初回: %s に空�
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause, evidence: "the judge's observations", wrong_memory_entries: [] });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, () => at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     expect.objectContaining({ cause, evidence: "the judge's observations", wrong_memory_entries: null, round: "initial" }),
@@ -1702,7 +1702,7 @@ it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; wron
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { ...judgment(b), evidence: "followed the note" });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, () => at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), wrong_memory_entries: null }),
@@ -1714,7 +1714,7 @@ it("初回: 読んだ集合の中の entry を名指す memory は entries ご�
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", wrong_memory_entries: [b.read] });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, () => at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", wrong_memory_entries: [b.read], round: "initial" },
@@ -1728,13 +1728,13 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
 ])("第2回: %s", async (_, entries, expected) => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, () => at));
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", wrong_memory_entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
   for (const r of rca) settleReview(b.db, r, "auditor", at);
 
-  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, () => at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1748,7 +1748,7 @@ it.each(["capability", "environment", "uncertain"] as const)("第2回: %s に空
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause, evidence: "the RCA's observations", wrong_memory_entries: [] });
 
-  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(attributed(b.db, b.task.id)).toEqual([
@@ -1774,8 +1774,8 @@ async function draftOnMetaReviewRow(draftPath: string, onRepair = false) {
   const drafter = new FakeBehaviorDraftClient();
   drafter.scriptDraft(entry, { path: draftPath, title: "Fold near-duplicates", text: "Fold near-duplicate candidates.", addressee: "worker" });
   const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
-  commitTriage(db, at, [], await attributeObjections(db, deps, session.id, at));
-  refireRetrospectiveCalls(db, deps, at);
+  commitTriage(db, at, [], await attributeObjections(db, deps, session.id, () => at));
+  refireRetrospectiveCalls(db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
   return { db, review, drafter };
 }
@@ -1823,7 +1823,7 @@ it("2人の actor の行が同じ session で異議されると、第2回の rca
     for (const rca of rcas) completeRca(db, rca, rcaFindings(db, rca.id, `finding from ${rca.assignee ?? "auditor"}`), "auditor", at, "worker");
     const [deckhandsRca, bosunsRca, auditor] = rcas.map((r) => ({ task_id: r.id, rows: taskDecisionLog(db, r.id).map((e) => ({ id: e.id, line: expect.any(String) })) }));
 
-    refireRetrospectiveCalls(db, deps, at);
+    refireRetrospectiveCalls(db, deps, () => at);
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(client.calls.map((c) => [c.input.entry, c.input.actor, c.input.rca_findings])).toEqual([
@@ -1866,7 +1866,7 @@ it.each([
     const client = new FakeAttributionClient();
     const drafter = new FakeBehaviorDraftClient();
     const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
-    commitTriage(db, at, [], initial ? await attributeObjections(db, deps, session.id, at) : new Map());
+    commitTriage(db, at, [], initial ? await attributeObjections(db, deps, session.id, () => at) : new Map());
     logDecision(db, task, "decided after the commit", "deckhand", at, "worker");
     completeTask(db, task, { ...FULL_HANDOFF, outcome: "done as specified" }, "deckhand", at, "worker");
     for (const rca of listChildren(db, task.id).filter((c) => c.type === "review" && listEvents(db, c.id).some((e) => e.payload.kind === "task_registered" && e.payload.opened_on_event_ids?.includes(objection)))) {
@@ -1876,7 +1876,7 @@ it.each([
     const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };
     drafter.scriptDraft(entry, retry ? new Error("temporary draft failure") : draft);
 
-    refireRetrospectiveCalls(db, deps, at);
+    refireRetrospectiveCalls(db, deps, () => at);
     await new Promise((resolve) => setImmediate(resolve));
 
     const material = {
@@ -1892,7 +1892,7 @@ it.each([
       logDecision(db, task, "decided before the retry", "deckhand", at, "worker");
       drafter.scriptDraft(entry, draft);
       // 起草だけを撃ち直す sweep は after_rca の帰責 event を手がかりに出所を復元する。
-      refireRetrospectiveCalls(db, { ...deps, attributionClient: undefined }, new Date(at.getTime() + HOUR));
+      refireRetrospectiveCalls(db, { ...deps, attributionClient: undefined }, () => new Date(at.getTime() + HOUR));
       await new Promise((resolve) => setImmediate(resolve));
       expect(drafter.calls.map((c) => c.input)).toEqual([expect.objectContaining(material), expect.objectContaining(material)]);
     }
@@ -1921,7 +1921,7 @@ it.each([
     const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
     let release!: () => void;
     client.scriptJudgment(entry, new Promise((resolve) => (release = () => resolve({ cause, evidence: "taste" }))));
-    const attributing = attributeObjections(db, deps, session.id, at);
+    const attributing = attributeObjections(db, deps, session.id, () => at);
     const decideLater = () => logDecision(db, task, "decided after the judgment read the log", "deckhand", at, "worker");
     if (when === "await") decideLater();
     release();
@@ -1933,11 +1933,11 @@ it.each([
     const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };
     drafter.scriptDraft(entry, retry ? new Error("temporary draft failure") : draft);
 
-    refireRetrospectiveCalls(db, deps, at);
+    refireRetrospectiveCalls(db, deps, () => at);
     await new Promise((resolve) => setImmediate(resolve));
     if (retry) {
       drafter.scriptDraft(entry, draft);
-      refireRetrospectiveCalls(db, deps, new Date(at.getTime() + HOUR));
+      refireRetrospectiveCalls(db, deps, () => new Date(at.getTime() + HOUR));
       await new Promise((resolve) => setImmediate(resolve));
     }
 
@@ -1965,7 +1965,7 @@ it("修理子の無い未帰責の異議群(cancelled の task への異議)も�
     const client = new FakeAttributionClient();
     client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
 
-    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, () => at);
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(client.calls.map((c) => c.input.decision_log)).toEqual([rows("skipped the fixtures")]);
@@ -1997,7 +1997,7 @@ it("判断の行と記憶の行が混在した task の未帰責の異議群は�
     const client = new FakeAttributionClient();
     for (const entry of [decision, wrote]) client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
 
-    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, () => at);
     await new Promise((resolve) => setImmediate(resolve));
 
     const atCommit = [{ id: decision, line: "skipped the fixtures" }, { id: wrote, line: expect.stringContaining('"Skip fixtures"') }];
@@ -2036,7 +2036,7 @@ function twoBundles(same: boolean) {
   };
   const client = new FakeAttributionClient();
   const sweep = async (now = at) => {
-    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, now);
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, () => now);
     // sweep は fire-and-forget: fake の返答が着地するまで回す
     await new Promise((resolve) => setImmediate(resolve));
   };
@@ -2135,7 +2135,7 @@ it.each(["claude-code", "codex"] as const)("%s: 帰責の当時版とboard_text�
   const b = await definitionBoard({ harness });
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, () => at);
 
   expect(client.calls.map((c) => [c.input.agent_definition, c.input.board_text])).toEqual([
     [DECKHAND_THEN, ["\n\n## Board doctrine\n\nStay on the board.", "\n\n## Rules of the road\n\nLog every decision."]],
@@ -2150,8 +2150,8 @@ it.each(["claude-code", "codex"] as const)("%s: 異議の帰責のtaskは記録�
   rmSync(join(lost.recordDir, `${lost.task.id}.${lost.spawned}.prompt.json`));
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
-  await attributeObjections(lost.db, { ...lost.deps, attributionClient: client }, lost.sessionId, at);
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, () => at);
+  await attributeObjections(lost.db, { ...lost.deps, attributionClient: client }, lost.sessionId, () => at);
 
   expect(client.calls.map((c) => c.input.task)).toEqual([user, null]);
 });
@@ -2162,8 +2162,8 @@ it("記録が読めない session(記録の器を持たない呼び手・記録�
   const noRecordDir = await definitionBoard();
   const client = new FakeAttributionClient();
 
-  await attributeObjections(lost.db, { ...lost.deps, attributionClient: client }, lost.sessionId, at);
-  await attributeObjections(noRecordDir.db, { ...noRetrospectiveCalls, attributionClient: client }, noRecordDir.sessionId, at);
+  await attributeObjections(lost.db, { ...lost.deps, attributionClient: client }, lost.sessionId, () => at);
+  await attributeObjections(noRecordDir.db, { ...noRetrospectiveCalls, attributionClient: client }, noRecordDir.sessionId, () => at);
 
   expect(client.calls.map((c) => [c.input.agent_definition, c.input.board_text])).toEqual([
     [null, []],
@@ -2176,7 +2176,7 @@ it.each(["reviewer", "repair"] as const)("Authority の部分が盤面の文(%s)
   const b = await definitionBoard({ system: DECKHAND_RECORD.map((part) => (part.part === "authority" ? authority : part)) });
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, () => at);
 
   expect(client.calls.map((c) => c.input.agent_definition?.authority)).toEqual([{ source, text: authority.text }]);
 });
@@ -2185,7 +2185,7 @@ it("組み込みの agent の spawn の記録なら、帰責の入力の当時�
   const b = await definitionBoard({ system: [definitionPart("", true)] });
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, () => at);
 
   expect(client.calls.map((c) => c.input.agent_definition?.builtin)).toEqual([true]);
 });
@@ -2195,7 +2195,7 @@ it("異議された entry の後で同じ task が再 spawn されても、帰�
   b.spawn(DECKHAND_RECORD);
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, () => at);
 
   expect(client.calls.map((c) => c.input.agent_definition?.roster)).toEqual([null]);
 });
@@ -2212,7 +2212,7 @@ it("帰責の入力の読んだ記憶に、同じ spawn で注入された Defin
   const decision = b.decide("squashed the branch");
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), () => at);
 
   expect(client.calls.map((c) => c.input.memory_read.map((m) => [m.id, m.kind, m.text]))).toEqual([
     [
@@ -2230,7 +2230,7 @@ it("初回: memory で注入された Definition を名指すと門を通って 
   const client = new FakeAttributionClient();
   client.scriptJudgment(decision, { cause: "memory", evidence: "followed the build notes", wrong_memory_entries: [definition] });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), () => at));
 
   expect(attributed(b.db, b.task.id)).toEqual([expect.objectContaining({ cause: "memory", wrong_memory_entries: [definition] })]);
 });
@@ -2241,8 +2241,8 @@ it("初回: agent_definition は当時版の欄が null なら uncertain に倒�
   const client = new FakeAttributionClient();
   for (const decision of [resolved.decision, unresolved.decision]) client.scriptJudgment(decision, { cause: "agent_definition", evidence: "the body said to keep v1" });
 
-  commitTriage(resolved.db, at, [], await attributeObjections(resolved.db, { ...resolved.deps, attributionClient: client }, resolved.sessionId, at));
-  commitTriage(unresolved.db, at, [], await attributeObjections(unresolved.db, { ...noRetrospectiveCalls, attributionClient: client }, unresolved.sessionId, at));
+  commitTriage(resolved.db, at, [], await attributeObjections(resolved.db, { ...resolved.deps, attributionClient: client }, resolved.sessionId, () => at));
+  commitTriage(unresolved.db, at, [], await attributeObjections(unresolved.db, { ...noRetrospectiveCalls, attributionClient: client }, unresolved.sessionId, () => at));
 
   expect(attributed(resolved.db, resolved.task.id)).toEqual([expect.objectContaining({ cause: "agent_definition", evidence: "the body said to keep v1", wrong_memory_entries: null })]);
   expect(attributed(unresolved.db, unresolved.task.id)).toEqual([
@@ -2260,8 +2260,8 @@ it("agent_definition / workspace_document だけの異議群の commit では修
   const drafter = new FakeBehaviorDraftClient();
   const deps = { ...b.deps, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
-  refireRetrospectiveCalls(b.db, deps, at);
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, () => at));
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(attributed(b.db, b.task.id).map((p) => p.cause)).toEqual(["agent_definition", "workspace_document"]);
@@ -2273,10 +2273,10 @@ it("第2回の入力にも当時版の欄が組まれる", async () => {
   const b = await definitionBoard();
   const client = new FakeAttributionClient();
   const deps = { ...b.deps, attributionClient: client };
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, () => at));
   for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
 
-  refireRetrospectiveCalls(b.db, deps, at);
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(client.calls.map((c) => [c.input.rca_findings !== undefined, c.input.agent_definition])).toEqual([
@@ -2289,11 +2289,11 @@ it.each(["agent_definition", "workspace_document"] as const)("第2回: 初回 un
   const b = await definitionBoard();
   const client = new FakeAttributionClient();
   const deps = { ...b.deps, attributionClient: client };
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, () => at));
   client.scriptJudgment(b.decision, { cause, evidence: "the RCA traced it" });
   for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
 
-  refireRetrospectiveCalls(b.db, deps, at);
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(attributed(b.db, b.task.id).map((p) => [p.round, p.cause])).toEqual([
@@ -2319,7 +2319,7 @@ async function skillBoard({
   const deps = { ...noRetrospectiveCalls, recordDir };
   const judged = async () => {
     const client = new FakeAttributionClient();
-    await attributeObjections(b.db, { ...deps, attributionClient: client }, b.objectTo(decision), at);
+    await attributeObjections(b.db, { ...deps, attributionClient: client }, b.objectTo(decision), () => at);
     return client.calls.map((c) => c.input);
   };
   return { ...b, recordDir, spawned, decision, transcript, unreadable, deps, judged };
@@ -2380,7 +2380,7 @@ it("transcript の読み出しが ENOENT 以外で落ちても commit の帰責�
   b.unreadable();
   const client = new FakeAttributionClient();
 
-  await expect(attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), at)).resolves.toEqual(new Map());
+  await expect(attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), () => at)).resolves.toEqual(new Map());
 
   expect(client.calls).toEqual([]);
   expect(listEvents(b.db, b.task.id).flatMap((e) => (e.payload.kind === "objection_attribution_failed" ? [[e.payload.round, e.payload.reason]] : []))).toEqual([
@@ -2391,7 +2391,7 @@ it("transcript の読み出しが ENOENT 以外で落ちても commit の帰責�
 /** 撃ち直しの sweep を +0h / +1h / +2h / +3h で撃つ。 */
 const sweepHours = async (db: Db, deps: RetrospectiveCallDeps) => {
   for (const hour of [0, 1, 2, 3]) {
-    refireRetrospectiveCalls(db, deps, new Date(at.getTime() + hour * HOUR));
+    refireRetrospectiveCalls(db, deps, () => new Date(at.getTime() + hour * HOUR));
     await new Promise((resolve) => setImmediate(resolve));
   }
 };
@@ -2400,7 +2400,7 @@ it("第2回の入力の transcript が ENOENT 以外で読めないと、判事�
   const b = await skillBoard();
   const client = new FakeAttributionClient();
   const deps = { ...b.deps, attributionClient: client };
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.objectTo(b.decision), at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.objectTo(b.decision), () => at));
   b.unreadable();
   for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
 
@@ -2419,7 +2419,7 @@ it("異議の帰責からの起草の入力の transcript が ENOENT 以外で�
   const b = await skillBoard();
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "preference", evidence: "taste" });
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), () => at));
   const [judged] = listEvents(b.db, b.task.id).filter((e) => e.kind === "objection_attributed");
   b.unreadable();
   const drafter = new FakeBehaviorDraftClient();
@@ -2463,13 +2463,13 @@ it("第2回の帰責と Behavior candidate の起草の入力も、初回と同�
   const client = new FakeAttributionClient();
   const drafter = new FakeBehaviorDraftClient();
   const deps = { ...b.deps, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.objectTo(b.decision), at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.objectTo(b.decision), () => at));
   client.scriptJudgment(b.decision, { cause: "capability", evidence: "misread the deploy skill" });
   for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
 
-  refireRetrospectiveCalls(b.db, deps, at);
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
-  refireRetrospectiveCalls(b.db, deps, at);
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   const fields = { skills: { workspace: [], host: ["deploy"] }, skills_followed: [{ name: "deploy", position: 0, text: "Run make deploy." }] };

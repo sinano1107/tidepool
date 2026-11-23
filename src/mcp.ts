@@ -371,7 +371,7 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
     // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
     // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
     const { namedPlace } = workspace;
-    const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task), tip);
+    const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task, () => deps.clock.now()), tip);
     const humanOnly = humanOnlyPathChanges(delta);
     if (humanOnly.length > 0) {
       // spec #3273 text A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない —— worker の出口は今の文のまま

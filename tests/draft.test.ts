@@ -10,9 +10,9 @@ const CHILD: ChildDraftContext = { parentTitle: "build the toolchain", parentPur
 
 /** 用途ごとの下書きを1回撃つ(`client` が下書きの Board call)。 */
 const fire = {
-  task_draft: (db: ReturnType<typeof openDb>, client: FakeDraftClient) => draftTask(db, client, { dump: "d", language: "English" }, now),
-  child_draft: (db: ReturnType<typeof openDb>, client: FakeDraftClient) => draftTask(db, client, { dump: "d", language: "English", context: CHILD }, now),
-  handoff_draft: (db: ReturnType<typeof openDb>, client: FakeDraftClient) => draftHandoff(db, client, { dump: "d", language: "English", taskId: "T-1" }, now),
+  task_draft: (db: ReturnType<typeof openDb>, client: FakeDraftClient) => draftTask(db, client, { dump: "d", language: "English" }, () => now),
+  child_draft: (db: ReturnType<typeof openDb>, client: FakeDraftClient) => draftTask(db, client, { dump: "d", language: "English", context: CHILD }, () => now),
+  handoff_draft: (db: ReturnType<typeof openDb>, client: FakeDraftClient) => draftHandoff(db, client, { dump: "d", language: "English", taskId: "T-1" }, () => now),
 };
 
 it.each(Object.keys(fire) as (keyof typeof fire)[])("%s の下書きは、撃った行でその用途の行を1つ残す(ADR 0299 決定1)", async (use) => {

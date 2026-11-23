@@ -1317,7 +1317,7 @@ it("人間が登録した root の review(独立監査)の判断の行と、そ�
   for (const objected of [audit, rca]) {
     const repairs = listChildren(db, objected.id).filter((child) => child.type === "work");
     expect(repairs.map((repair) => repair.title)).toEqual([`repair: ${objected.title}`]);
-    expect(resolveTaskBranchLineage(db, workspace, repairs[0]!).branch).toBeUndefined();
+    expect(resolveTaskBranchLineage(db, workspace, repairs[0]!, () => at).branch).toBeUndefined();
   }
 });
 

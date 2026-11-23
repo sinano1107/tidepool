@@ -791,7 +791,7 @@ async function objectedInTwoCommittedSessions() {
     const session = startTriage(db, at);
     raiseObjection(db, 6, comment, at);
     attributionClient.scriptJudgment(6, { cause, evidence: "e" });
-    commitTriage(db, at, [], await attributeObjections(db, { ...noRetrospectiveCalls, attributionClient }, session.id, at));
+    commitTriage(db, at, [], await attributeObjections(db, { ...noRetrospectiveCalls, attributionClient }, session.id, () => at));
   };
   await settle("three bullets is too few", "requirement_change");
   await settle("cover the tide cycle too", "preference");
@@ -801,7 +801,7 @@ async function objectedInTwoCommittedSessions() {
 it("2つ目の session の帰責を出所に持つ Behavior の case の steering は、その session の異議だけで、同じ帰責の AttributionInput.steering と一致する", async () => {
   const { db, reader } = await objectedInTwoCommittedSessions();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, at);
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, () => at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
   await new Promise((resolve) => setImmediate(resolve));
   const preference = listEvents(db, FIXTURE_TASK).find((e) => e.payload.kind === "objection_attributed" && e.payload.cause === "preference");

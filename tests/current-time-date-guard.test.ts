@@ -175,29 +175,6 @@ describe("the current-time Date detector", () => {
 describe("the current-time Date guard over src", () => {
   // ADR 0404 決定4: 現在時刻でない事実の時刻。型では区別できないので、引数か欄の名で当て、理由を添える
   const permanent = new Map([["cliAuthExpiresAt", "a recorded expiry, not the current time"]]);
-  // 今の違反と、それを直す ticket。直した ticket が自分の行を消す
-  const pending: Record<string, string[]> = {
-    "#3688": [
-      "src/board-call-usage.ts recordedAnswer(now)",
-      "src/retrospective.ts fireSpan(now)",
-      "src/retrospective.ts attributeObjections(now)",
-      "src/retrospective.ts attributeSecondRound(now)",
-      "src/retrospective.ts reviewAllocation(now)",
-      "src/retrospective.ts attributeStop(now)",
-      "src/retrospective.ts draftBehaviorCandidate(now)",
-      "src/retrospective.ts draftStopBehaviorCandidate(now)",
-      "src/retrospective.ts draftCandidate(now)",
-      "src/translation.ts translateFragments(now)",
-      "src/translation.ts translateSource(now)",
-      "src/translation.ts translateLogEntry(now)",
-      "src/translation.ts translateLogEntries(now)",
-      "src/translation.ts translateMemoryEntry(now)",
-      "src/translation.ts translateHandoff(now)",
-      "src/translation.ts translateQuestion(now)",
-      "src/draft.ts draftTask(now)",
-      "src/draft.ts draftHandoff(now)",
-    ],
-  };
 
   // src の型検査は数秒かかり、vitest の既定 5 s に近い
   it("reports exactly the allowlist", { timeout: 60_000 }, () => {
@@ -208,7 +185,7 @@ describe("the current-time Date guard over src", () => {
       .filter((name) => name.endsWith(".ts"))
       .map((name) => join(root, "src", name));
     const found = findCurrentTimeDates(ts.createProgram(sources, config.options), root, new Set(permanent.keys()));
-    expect(found.reports.sort()).toEqual(Object.values(pending).flat().sort());
+    expect(found.reports).toEqual([]);
     expect(found.exempted.sort()).toEqual([...permanent.keys()].sort());
   });
 });

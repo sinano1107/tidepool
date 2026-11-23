@@ -137,7 +137,7 @@ function seedThroughBoard(b: Board, taskId: string, sha: string): void {
   recordTaskBranchCreated(b.db, taskId, sha, b.ws.name);
 }
 
-const lineageOf = (b: Board, task: Task) => resolveTaskBranchLineage(b.db, b.ws, getTask(b.db, task.id)!);
+const lineageOf = (b: Board, task: Task) => resolveTaskBranchLineage(b.db, b.ws, getTask(b.db, task.id)!, () => b.clock.now());
 const accepted = (b: Board) => quarantineQuestion(b.db, "workspace", b.ws.name) === undefined;
 const NO_RETURN = { branch: undefined, outlivedForkSource: false, noReturn: true };
 
@@ -224,7 +224,7 @@ it("別の workspace に固定された子孫は死んだ祖先を数えず、�
   const { b } = await deadTaskUnderLivingRoot("dead-ancestor-other-workspace", elsewhereUnder);
   const elsewhere = getTask(b.db, titled(b, "elsewhere"))!;
 
-  expect(resolveTaskBranchLineage(b.db, { ...b.ws, name: "elsewhere" }, elsewhere)).toEqual({ branch: undefined, outlivedForkSource: false });
+  expect(resolveTaskBranchLineage(b.db, { ...b.ws, name: "elsewhere" }, elsewhere, () => b.clock.now())).toEqual({ branch: undefined, outlivedForkSource: false });
   expect(elsewhere.status).toBe("todo");
 });
 

@@ -387,7 +387,7 @@ it("面接室の名前への受理の後半は面接室だけを撃ち、受験�
   const predicates = namePickupPredicates(db, root.id, room, dirname(room.path));
   const openers = predicates.filter((p) => !p.own);
 
-  await firePickupPredicates(db, room, predicates, "after-open");
+  await firePickupPredicates(db, room, predicates, "after-open", { now: () => NOW });
 
   expect(openers.filter((p) => p.phase === "after-open")).toEqual([]);
   expect(examineeRow()).toBeUndefined();
