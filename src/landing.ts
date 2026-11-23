@@ -1056,7 +1056,7 @@ function retireAutoMerge(
   payload: { kind: "pr_merged" | (typeof OBSERVED)[keyof typeof OBSERVED]; pr_number: number },
   now: Date,
 ): void {
-  // 外すことと記録を1つにする —— 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
+  // ADR 0405 決定1: 外すことと記録を1つにする —— 片方だけで無言で消える経路を残さない
   db.transaction(() => {
     clearPendingAutoMerge(db, taskId);
     appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
@@ -1144,7 +1144,7 @@ function missingBranchesOf({ droppedBranches, unpushedBranches }: OutsidePush): 
   return missing.length === 0 ? null : missing;
 }
 
-/** ADR 0217 決定2: キューの行を外すことと問うことを1つにする。 */
+/** ADR 0405 決定1: キューの行を外すことと問うことを1つにする。 */
 function askMerge(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1439,16 +1439,19 @@ export function createLanding(deps: LandingDeps): Landing {
       "board",
     );
   };
+  // ADR 0405 決定1: 判断行は閉じた観測が commit されなければ偽になるので、観測と同じ transaction で書く。告知の読みも観測の後の状態を読む
   /** キューの行を外して決着を根に刻む(`retireAutoMerge`)。閉じた観測なら判断行も流す。 */
-  const retire = (taskId: string, payload: Parameters<typeof retireAutoMerge>[2], now: Date) => {
-    retireAutoMerge(deps.db, taskId, payload, now);
-    if (payload.kind === OBSERVED.CLOSED) announceClosed(taskId, payload.pr_number, now);
-  };
+  const retire = (taskId: string, payload: Parameters<typeof retireAutoMerge>[2], now: Date) =>
+    deps.db.transaction(() => {
+      retireAutoMerge(deps.db, taskId, payload, now);
+      if (payload.kind === OBSERVED.CLOSED) announceClosed(taskId, payload.pr_number, now);
+    })();
   /** merge question を観測で閉じる(`settleMergeQuestionAsObserved`)。閉じた観測を根に刻んだなら判断行も流す。 */
-  const settleObserved = (question: Pick<OpenMergeQuestion, "id" | "root" | "pr_number">, kind: ReturnType<typeof prOutcomeKind>, now: Date) => {
-    const root = settleMergeQuestionAsObserved(deps.db, question, kind, now);
-    if (root !== null && kind === OBSERVED.CLOSED) announceClosed(root, question.pr_number, now);
-  };
+  const settleObserved = (question: Pick<OpenMergeQuestion, "id" | "root" | "pr_number">, kind: ReturnType<typeof prOutcomeKind>, now: Date) =>
+    deps.db.transaction(() => {
+      const root = settleMergeQuestionAsObserved(deps.db, question, kind, now);
+      if (root !== null && kind === OBSERVED.CLOSED) announceClosed(root, question.pr_number, now);
+    })();
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: deps.clock.now() });
   /** PR の根の着地は終わった —— 事実を根拠つきで1回刻み、以後この根は候補に入らない(ADR 0241 決定1 / ADR 0265 決定3)。 */
@@ -1459,8 +1462,11 @@ export function createLanding(deps: LandingDeps): Landing {
     basis: Extract<TaskScopedPayload, { kind: "landing_finished" }>["basis"],
     ctx: RootContext,
   ): LandingVerdict => {
-    recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber, basis });
-    retireFailures(task.id, ctx);
+    // ADR 0405 決定5: 記録の後、根は候補から外れる —— 割れると閉じ直す機会の無い失敗 question が残るので、同じ transaction で
+    deps.db.transaction(() => {
+      recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber, basis });
+      retireFailures(task.id, ctx);
+    })();
     return { kind: "nothing_to_land", base: protectedBranchRef(workspace) };
   };
   const alreadyMerged = (task: Task, prNumber: number, ctx: RootContext) =>
@@ -1608,6 +1614,8 @@ export function createLanding(deps: LandingDeps): Landing {
         stopRootIfRefsMoved(workspace);
         const left = contentLeftBehindLocally(deps.db, workspace, task.id, pushed);
         if (left.length === 0) {
+          // ADR 0405 決定3 (a) / ADR 0401 決定3: push の記録とは包まない —— 包むと後の throw で外への書き込みの記録が巻き戻り、
+          // 盤面自身の push を記録に無い head と読む
           retireFailures(task.id, ctx);
           return landed;
         }
@@ -1653,8 +1661,11 @@ export function createLanding(deps: LandingDeps): Landing {
         // ADR 0265 決定3: merge の記録が無い PR の根は内容で終わる。キューの行と merge question は PR の状態の読み取りが閉じる
         if (task.pr_number !== null) return finishLanding(task, workspace, task.pr_number, "content", ctx);
         const base = protectedBranchRef(workspace);
-        recordBoardFact(task.id, { kind: "nothing_to_land", base });
-        retireFailures(task.id, ctx);
+        // ADR 0405 決定5: 着地の終わりの記録と、それで閉じる失敗 question を1つの transaction で
+        deps.db.transaction(() => {
+          recordBoardFact(task.id, { kind: "nothing_to_land", base });
+          retireFailures(task.id, ctx);
+        })();
         return { kind: "nothing_to_land", base };
       }
       const block = landingBlock(deps.db, task.id);
@@ -1682,8 +1693,11 @@ export function createLanding(deps: LandingDeps): Landing {
               `protected branch now?`
             : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
               `for "${task.title}". Land its task branch on the protected branch now?`;
-        registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), questionTip(task.id, () => workspace));
-        retireFailures(task.id, ctx);
+        // ADR 0405 決定5: 問うことと、それで閉じる失敗 question を1つの transaction で
+        deps.db.transaction(() => {
+          registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), questionTip(task.id, () => workspace));
+          retireFailures(task.id, ctx);
+        })();
         return { kind: "landed", form: "local_merge_question" };
       }
       // ADR 0241: 開いている PR の根は、積み残しがあるときだけ push する —— 無ければ GitHub を呼ばない

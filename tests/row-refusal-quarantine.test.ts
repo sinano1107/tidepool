@@ -8,13 +8,16 @@ import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
-import { listExaminees } from "../src/tasks.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { Slot } from "../src/slot.js";
+import { listBoard, listExaminees, registerTask } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
-import { FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, initWithMcpServers, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
+import { FakeClock, FakeContainerRuntime, fakeContainers, healthyOpenai, noRetrospectiveCalls, noSkillPings, recordingSpawn, ScriptedWorker, withHealthyUsage } from "./fakes.js";
+import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, initWithMcpServers, makeWorkspace, POSED_HEAD, poseAccepted, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -679,6 +682,42 @@ it("openai の行でない対象が一覧に無い / effort が広告されな�
   expect((await api(t.baseUrl, "POST", `/api/tasks/${opened[1].id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
   const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
   expect([await status(max!), await status(mini!)]).toEqual(["cancelled", "todo"]);
+});
+
+// ADR 0405 決定1: 対象の question と target_refused は1つの transaction —— 記録が書けなければ question も立たず、次の poll が照合し直す
+it("一覧に無い openai の対象の target_refused が書けなければ対象の question も立たず、次の poll が照合し直して両方を書く", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker: new ScriptedWorker(clock),
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: (task) => executionSettingsFor(db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
+    openaiUsage: listingProbe(MEASURED_OPENAI_MODELS),
+  });
+  onTestFinished(() => {
+    scheduler.stop();
+    db.close();
+  });
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "economy", interview_targets: [MINI_UNLISTED] }, clock.now(), ...HUMAN_WEBUI);
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", clock.now(), "worker", POSED_HEAD);
+  const targetQuestions = () => listBoard(db).filter((q) => q.question_quarantine_kind === "interviewTarget").map((q) => q.question_quarantine_value);
+  const refused = () => listEvents(db, examinee!.id).filter((e) => e.kind === "target_refused").length;
+  db.exec("CREATE TRIGGER fail_refused BEFORE INSERT ON events WHEN NEW.kind = 'target_refused' BEGIN SELECT RAISE(ABORT, 'target_refused write failed'); END");
+
+  await clock.advance(HOURLY);
+  expect({ questions: targetQuestions(), refused: refused() }).toEqual({ questions: [], refused: 0 });
+
+  db.exec("DROP TRIGGER fail_refused");
+  await clock.advance(HOURLY);
+  expect({ questions: targetQuestions(), refused: refused() }).toEqual({ questions: ["openai/gpt-5.4-mini"], refused: 1 });
 });
 
 it("一覧が読めない観測は、一覧に無い対象があっても対象の question を立てない", async () => {

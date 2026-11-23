@@ -1467,6 +1467,22 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
   });
 
+  // ADR 0405 決定2: 注入の記録は worker_spawned の id を指す —— 書けなければ worker_spawned も残らず、spawn の前の失敗と同じ経路
+  it("memory_injected が書けなければ worker_spawned も残らず、process は起きずに spawn_failed へ落ちる", async () => {
+    const calls: string[] = [];
+    const f = await fixture((taskId) => calls.push(taskId));
+    const value = task(f.db);
+    f.db.exec("CREATE TRIGGER fail_injection BEFORE INSERT ON events WHEN NEW.kind = 'memory_injected' BEGIN SELECT RAISE(ABORT, 'memory_injected write failed'); END");
+
+    await f.start(value);
+
+    expect(calls).toEqual([value.id]);
+    expect(f.process.calls).toEqual([]);
+    expect(listEvents(f.db, value.id).filter((e) => e.kind === "worker_spawned" || e.kind === "spawn_failed").map((e) => e.payload)).toMatchObject([
+      { kind: "spawn_failed", message: "memory_injected write failed" },
+    ]);
+  });
+
   it("meta-review の spawn は主題の材料の節を記憶の節の枠(user turn の盤面部分の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 主題 memory には routing の節が入らず、普通の task には節も記録も無い(Claude と同じ —— ADR 0180 決定2・追記 #1239)", async () => {
     const f = await fixture();
     // setup のみ: 窓の上限は登録 event が運ぶので盤面名義で登録し、codex-agent に割り当てる

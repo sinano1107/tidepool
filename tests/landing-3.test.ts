@@ -210,12 +210,12 @@ it("遅い走査が外で閉じたと観測した escalate の根は、次の収
   expect(github.pushes).toHaveLength(pushes);
 });
 
-/** escalate のダイヤルで PR #1 を開き、merge question が開いている根。 */
-async function escalatedRootWithOpenedPr(name: string) {
+/** escalate のダイヤルで PR #1 を開き、merge question が開いている根(`dial` が auto_if_ci_green なら、キューに入った根)。 */
+async function escalatedRootWithOpenedPr(name: string, dial: MergeDial = "escalate") {
   const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+  const landing = autoMerging(db, clock, workspace, github, () => profile(dial));
   const root = landingWork(db, clock);
   checkoutTaskBranch(db, workspace, root.id);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -296,6 +296,45 @@ it("ref が動いていても、回答時に閉じた PR を観測すれば、�
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   const lines = boardEvents(db, root.id, "decision_logged");
   expect(lines).toEqual([{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
+});
+
+const FAIL_DECISION = "CREATE TRIGGER fail_decision BEFORE INSERT ON events WHEN NEW.kind = 'decision_logged' BEGIN SELECT RAISE(ABORT, 'decision write failed'); END";
+
+// ADR 0405 決定1: 閉じた観測と告知の判断行は1つの transaction —— 判断行が書けなければ観測も刻まれず、次の tick が通り直す
+it("quarantine 回答前の観測が閉じた PR を読んでも、取り残された子の判断行が書けなければキューの行を外さず、次の観測が通り直す", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-observe-closed-announce-rollback", "auto_if_ci_green");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+  db.exec(FAIL_DECISION);
+
+  await expect(landing.observeAutoMergeOutcomes("tako")).rejects.toThrow("decision write failed");
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual([]);
+
+  db.exec("DROP TRIGGER fail_decision");
+  await landing.observeAutoMergeOutcomes("tako");
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual([
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } },
+  ]);
+});
+
+it("遅い走査が閉じた PR を観測しても、取り残された子の判断行が書けなければ merge question を開いたまま残し、次の tick が通り直す", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce-rollback");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+  const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+  db.exec(FAIL_DECISION);
+
+  await landing.tick("outside_merge");
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual([]);
+
+  db.exec("DROP TRIGGER fail_decision");
+  await landing.tick("outside_merge");
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual([
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } },
+  ]);
 });
 
 it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {

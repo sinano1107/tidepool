@@ -1869,43 +1869,48 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // transcript / stderr のファイル名をセッションごとに一意にする。イベント
       // は監査ログの正本として元々書いていたもの — ファイル名を確定できる位置
       // まで先に書く(ADR 0149 決定2: transcript の open と spawn より先)。
-      spawnedEventId = appendEvent(this.options.db, {
-        taskId: task.id,
-        // attributed to whichever agent actually got spawned (ADR 0012 / issue
-        // #36) — not this worker's configured default, which a pre-set
-        // delegation may override
-        actorId: agent.name,
-        origin: "board",
-        // issue #127: this records the *attempt* to spawn, not a successful
-        // session — it is written before the transcript open and spawn()
-        // (ADR 0149), and either can still fail after this write so that the
-        // process never comes into being. That is not a false
-        // record: every fact this event carries (the resolved definition, the
-        // registry commit read) is true regardless of whether the process
-        // starts. spawn_failed, when it follows, closes the pair honestly
-        // rather than this event needing to be walked back.
-        payload: {
-          kind: "worker_spawned",
-          registry_commit: registry.commit,
-          definition_version: definition.version,
-          // issue #33 判断6: what the board pinned, not what the frontmatter said
-          // — the two differ under the board's advisor ceiling, and only the
-          // frontmatter is recoverable from registry_commit above.
-          advisor: routing.advisor ?? null,
-          // ADR 0110 決定3: 選んだ実行設定とその出所(advisor の出所も —— ADR 0208 決定6)。
-          provider: routing.provider,
-          model: routing.model,
-          effort: routing.effort,
-          tier_id: routing.tier_id,
-          source: routing.source,
-          harness: "claude-code",
-          cli_version: cliVersion,
-          skills: enforcement.skills,
-        },
-        at: this.options.clock.now(),
-      });
-      recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
-      if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
+      // ADR 0405 決定2: 注入の記録は `worker_spawned` の id を指すので同じ transaction で書く。id は transaction の戻り値から取る ——
+      // callback の中で外の変数に入れると、巻き戻った後に存在しない id が残る
+      spawnedEventId = this.options.db.transaction(() => {
+        const id = appendEvent(this.options.db, {
+          taskId: task.id,
+          // attributed to whichever agent actually got spawned (ADR 0012 / issue
+          // #36) — not this worker's configured default, which a pre-set
+          // delegation may override
+          actorId: agent.name,
+          origin: "board",
+          // issue #127: this records the *attempt* to spawn, not a successful
+          // session — it is written before the transcript open and spawn()
+          // (ADR 0149), and either can still fail after this write so that the
+          // process never comes into being. That is not a false
+          // record: every fact this event carries (the resolved definition, the
+          // registry commit read) is true regardless of whether the process
+          // starts. spawn_failed, when it follows, closes the pair honestly
+          // rather than this event needing to be walked back.
+          payload: {
+            kind: "worker_spawned",
+            registry_commit: registry.commit,
+            definition_version: definition.version,
+            // issue #33 判断6: what the board pinned, not what the frontmatter said
+            // — the two differ under the board's advisor ceiling, and only the
+            // frontmatter is recoverable from registry_commit above.
+            advisor: routing.advisor ?? null,
+            // ADR 0110 決定3: 選んだ実行設定とその出所(advisor の出所も —— ADR 0208 決定6)。
+            provider: routing.provider,
+            model: routing.model,
+            effort: routing.effort,
+            tier_id: routing.tier_id,
+            source: routing.source,
+            harness: "claude-code",
+            cli_version: cliVersion,
+            skills: enforcement.skills,
+          },
+          at: this.options.clock.now(),
+        });
+        recordMemoryInjection(this.options.db, task.id, agent.name, id, memory, this.options.clock.now());
+        if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, id, material, this.options.clock.now());
+        return id;
+      })();
       // who the agent is (registry definition body) and what this task type's
       // authority sounds like (ADR 0056: review overrides the registry profile),
       // stitched at spawn time. A party review (self RCA) additionally carries

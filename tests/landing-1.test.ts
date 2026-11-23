@@ -21,6 +21,7 @@ import {
   listBoard,
   recordPrOpened,
   registerTask,
+  type Task,
 } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import {
@@ -318,6 +319,62 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
   expect(listEvents(db, failures[1]!.id)).toContainEqual(
     expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
   );
+});
+
+// ADR 0405 決定5: 着地の終わりの記録と、それで閉じる兄弟の PR 昇格失敗 question は1つの transaction —— 閉じられなければ記録も残らず、
+// 次の収束が同じ根を通り直す
+const FAIL_PROMOTION_OBSERVED = "CREATE TRIGGER fail_observed BEFORE INSERT ON events WHEN NEW.kind = 'pr_promotion_observed' BEGIN SELECT RAISE(ABORT, 'pr_promotion_observed write failed'); END";
+
+/** purely-local の workspace の根(`pr` があれば、その PR を記録した根)。 */
+async function rootWithStackedFailures(name: string, pr?: number) {
+  const workspace = await makeWorkspace(name);
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
+  const task = registerTask(db, { type: "work", title: "inspect", purpose: "inspect the current state", completion_criteria: "the result is reported" }, clock.now(), ...HUMAN_WEBUI);
+  recordDeclaredRepo(db, task.id, workspace);
+  if (pr !== undefined) recordPrOpenedOutsideConvergence(db, task, pr, clock.now(), { authority: { merge: "escalate" }, workspace });
+  return { workspace, db, clock, landing, task };
+}
+
+function stackFailures(db: Db, clock: FakeClock, task: Task) {
+  registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
+  registerPrPromotionFailureQuestion(db, task, "second failed attempt", clock.now());
+  return promotionFailures(db, task.id);
+}
+
+it.each([
+  ["nothing_to_land", undefined],
+  ["landing_finished", 1],
+] as const)("兄弟の失敗 question を閉じられなければ %s も刻まれず、次の収束が通り直して両方を書く", async (kind, pr) => {
+  const { workspace, db, clock, landing, task } = await rootWithStackedFailures(`landing-${kind}-rollback`, pr);
+  git(workspace.path, "branch", `task/${task.id}`);
+  finish(db, clock, task);
+  const failures = stackFailures(db, clock, task);
+  db.exec(FAIL_PROMOTION_OBSERVED);
+
+  await convergeOn(landing, task.id, failures[0]!.id);
+  expect({ recorded: listEvents(db, task.id).filter((e) => e.kind === kind).length, sibling: getTask(db, failures[1]!.id)!.status }).toEqual({ recorded: 0, sibling: "todo" });
+
+  db.exec("DROP TRIGGER fail_observed");
+  await expect(convergeOn(landing, task.id, failures[0]!.id)).resolves.toMatchObject({ kind: "nothing_to_land" });
+  expect({ recorded: listEvents(db, task.id).filter((e) => e.kind === kind).length, sibling: getTask(db, failures[1]!.id)!.status }).toEqual({ recorded: 1, sibling: "done" });
+});
+
+it("兄弟の失敗 question を閉じられなければ local merge question も立たず、次の収束が通り直して両方を書く", async () => {
+  const { workspace, db, clock, landing, task } = await rootWithStackedFailures("landing-local-merge-question-rollback");
+  checkoutTaskBranch(db, workspace, task.id);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, task);
+  const failures = stackFailures(db, clock, task);
+  const localMergeQuestions = () => listBoard(db).filter((q) => q.question_pending_local_merge_task_id === task.id).length;
+  db.exec(FAIL_PROMOTION_OBSERVED);
+
+  await convergeOn(landing, task.id, failures[0]!.id);
+  expect({ asked: localMergeQuestions(), sibling: getTask(db, failures[1]!.id)!.status }).toEqual({ asked: 0, sibling: "todo" });
+
+  db.exec("DROP TRIGGER fail_observed");
+  await expect(convergeOn(landing, task.id, failures[0]!.id)).resolves.toEqual({ kind: "landed", form: "local_merge_question" });
+  expect({ asked: localMergeQuestions(), sibling: getTask(db, failures[1]!.id)!.status }).toEqual({ asked: 1, sibling: "done" });
 });
 
 it("squash 済みで内容差が無い work は commit 差が残っていても着地しない", async () => {

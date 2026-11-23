@@ -723,6 +723,28 @@ it("PR promotion の abandon を decision log に残す", async () => {
   });
 });
 
+it("PR promotion の abandon は決定ログが書けなければ回答ごと巻き戻る(ADR 0405 決定1)", async () => {
+  db = openDb(":memory:");
+  const completedTask = registerTask(
+    db,
+    { type: "work", title: "ship the feature", purpose: "deliver the requested change", completion_criteria: "the change is available as a PR" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
+  const question = onlyQuestion(db);
+  db.exec("CREATE TRIGGER fail_decision BEFORE INSERT ON events WHEN NEW.kind = 'decision_logged' BEGIN SELECT RAISE(ABORT, 'decision write failed'); END");
+
+  await expect(
+    submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["abandon promotion"], undefined, () => NOW, "webui"),
+  ).rejects.toThrow("decision write failed");
+
+  expect({
+    status: getTask(db, question.id)?.status,
+    declined: listEvents(db, completedTask.id).some((event) => event.kind === "landing_declined"),
+  }).toEqual({ status: "todo", declined: false });
+});
+
 it("merge 回答は question の workspace で live CI を確認してから実 merge する", async () => {
   db = openDb(":memory:");
   const work = registerTask(
