@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
+import type { PreparePushInput } from "../src/github.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
@@ -736,6 +737,69 @@ it("PR を記録していない根の出元 repo のタスクブランチが最�
   expect(landed).toBe(git(c.workspace.path, "rev-parse", c.target));
   expect(git(c.workspace.path, "ls-tree", "--name-only", landed).split("\n")).toEqual(expect.arrayContaining(["feature-2.txt", "outside.txt"]));
   expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
+});
+
+// ADR 0376 Status 追記(#3605): 収束の push は決定2 の判断に使った head を lease として載せる —— 読んだ後に動いた head には、fast-forward
+// になる祖先への巻き戻しでも、作られたブランチでも書かない。落ちた push は今どおり昇格の失敗で、retry が読み直す
+/** 収束が head を読んだ後・push の前(次の push の準備の中)に、その準備の入力で `effect` を撃つ。 */
+function beforeNextPush(github: FakeGitHubClient, effect: (input: PreparePushInput) => void) {
+  const prepare = github.preparePush.bind(github);
+  vi.spyOn(github, "preparePush").mockImplementationOnce(async (input) => {
+    effect(input);
+    return prepare(input);
+  });
+}
+
+it("収束が出元 repo のタスクブランチを読んだ後・push の前に祖先へ戻されれば、push は落ちて昇格の失敗になり、出元 repo は戻されたままで、続く retry は text D2 で拒まれる", async () => {
+  const c = await pushedRoot("lease-rewound-after-read", { commits: 2 });
+  const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
+  beforeNextPush(c.github, () => git(c.workspace.head_repo!, "update-ref", `refs/heads/${c.target}`, head));
+
+  await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(forkHead(c.workspace, c.work.id)).toBe(head);
+  expect(c.github.requests).toEqual([]);
+  const [failure] = promotionFailures(c.db, c.work.id);
+  expect(await c.retry(failure!)).toBe(c.d2(head));
+  expect(forkHead(c.workspace, c.work.id)).toBe(head);
+});
+
+it("収束が出元 repo のタスクブランチを「無い」と読んだ後・push の前にブランチが作られれば、push は落ちて昇格の失敗になり、PR を開かない", async () => {
+  const { workspace } = await makeLandingWorkspace("lease-created-after-read");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  const target = `task/${work.id}`;
+  git(workspace.path, "checkout", "-b", target);
+  recordDeclaredRepo(db, work.id, workspace);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "checkout", "main");
+  finish(db, clock, work);
+  const created = git(workspace.path, "rev-parse", "main");
+  beforeNextPush(github, () => git(workspace.head_repo!, "update-ref", `refs/heads/${target}`, created));
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(forkHead(workspace, work.id)).toBe(created);
+  expect(github.requests).toEqual([]);
+});
+
+it("PR がある根の収束の push は、push する sha でも出元 repo のブランチでもなく、PR の読みの head を期待値に載せる", async () => {
+  const c = await pushedRoot("lease-on-pr-head", { pr: "recorded" });
+  // GitHub の PR の読みが出元 repo のブランチ(最後に push した値)と食い違い、1つ目の修理の commit を head と報告する。push する sha は2つ目の修理
+  const prHead = git(c.workspace.path, "rev-parse", c.target);
+  c.github.scriptHead(1, prHead);
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, getTask(c.db, c.work.id)!, "repair-2.txt", "more\n");
+  const tip = git(c.workspace.path, "rev-parse", c.target);
+  expect(new Set([prHead, tip, c.pushed]).size).toBe(3);
+  const expectations: string[] = [];
+  beforeNextPush(c.github, (input) => expectations.push(input.expected));
+
+  await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(expectations).toEqual([prHead]);
+  expect(forkHead(c.workspace, c.work.id)).toBe(c.pushed);
 });
 
 /** 盤面の外で記録済みの PR の head を動かす: `rewound` は最後に push した値の1つ前へ戻し、`rewritten` はその上に別の commit を作る

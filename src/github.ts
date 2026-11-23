@@ -14,6 +14,12 @@ export interface PushBranchInput extends RepoRef {
   branch: string;
 }
 
+/** ADR 0376 Status 追記(#3605): the convergence push carries the head ADR 0376 決定2 judged as its lease —— `""` when the read
+ *  found no branch. */
+export interface PreparePushInput extends PushBranchInput {
+  expected: string;
+}
+
 /** Everything a PR needs to exist, independent of how it's actually opened
  *  (issue #19): which task branch, onto which base, with what title/body. */
 export interface CreatePrInput extends PushBranchInput {
@@ -174,8 +180,9 @@ export interface GitHubClient {
    *
    *  token の取得(仲介への往復)だけをここで済ませ、push そのものは返した同期の関数が撃つ —— 盤面は push を
    *  基準への予告と畳みの同期区間の中で撃つ(ADR 0243)。返した関数は予告した sha を受け、その sha を押して写しに書く ——
-   *  予告の後にブランチが進んでも、口が知らない値は書かない(ADR 0243 決定1)。 */
-  preparePush(input: PushBranchInput): Promise<(sha: string) => void>;
+   *  予告の後にブランチが進んでも、口が知らない値は書かない(ADR 0243 決定1)。push は `expected` を lease として載せ、出元 repo の
+   *  ブランチが判断した値から動いていれば落ちる(ADR 0376 Status 追記、#3605)。 */
+  preparePush(input: PreparePushInput): Promise<(sha: string) => void>;
   readPullRequest(ref: PrRef): Promise<PrStatus>;
   /** Merges only while the PR's head is still `head` — the one whose CI was
    *  read (ADR 0231 決定1); GitHub refuses it once the head has moved.
@@ -424,9 +431,9 @@ export class GhCliClient implements GitHubClient {
     return FORK_PR_CREDENTIAL_SETTINGS.filter((key) => settings![key]);
   }
 
-  async preparePush(input: PushBranchInput): Promise<(sha: string) => void> {
+  async preparePush(input: PreparePushInput): Promise<(sha: string) => void> {
     await this.auth.ensureToken(landingHeadRepo(input.workspace).key);
-    return (sha) => authedPush(this.auth, input.workspace, this.timeoutMs, [[input.branch, sha]], HEAD_REPO_REMOTE);
+    return (sha) => authedPush(this.auth, input.workspace, this.timeoutMs, [[input.branch, sha, input.expected]], HEAD_REPO_REMOTE);
   }
 
   /** ADR 0396 決定3: the user token reaches only this in-process request, never a `gh` or git child's env (ADR 0093 決定4).

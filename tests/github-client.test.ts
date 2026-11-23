@@ -196,7 +196,7 @@ it("user token は PR の作成の要求にだけ載り、gh と git の子の e
   const client = ghClient(await makeAuth(), { apiUrl: api.url });
   const workspace = workspaceAt(repoPath);
 
-  (await client.preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await client.preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" }))(git(repoPath, "rev-parse", "task/abc"));
   expect(await client.findPullRequestByHead({ workspace, branch: "task/abc" })).toBeNull();
   const { number } = await client.createPullRequest(createInput(workspace));
   expect((await client.readPullRequest({ workspace, number })).state).toBe("OPEN");
@@ -650,7 +650,7 @@ it("preparePush が返す push はタスクブランチを出元 repo へ push �
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
 
-  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" }))(git(repoPath, "rev-parse", "task/abc"));
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });
@@ -663,7 +663,7 @@ it("preparePush の push は渡された sha を押して写しに書き、予�
   const announced = git(repoPath, "rev-parse", "task/abc");
   git(repoPath, "commit", "--allow-empty", "-m", "after the announcement");
 
-  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(announced);
+  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" }))(announced);
 
   expect({ pushed: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({
     pushed: announced,
@@ -677,7 +677,7 @@ it("preparePush の push は成功したときだけ、写し refs/remotes/head-
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
   const sha = git(repoPath, "rev-parse", "task/abc");
-  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" });
+  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" });
   const hook = join(remotePath, "hooks", "pre-receive");
   writeFileSync(hook, "#!/bin/sh\nexit 1\n");
   chmodSync(hook, 0o755);
@@ -688,6 +688,25 @@ it("preparePush の push は成功したときだけ、写し refs/remotes/head-
   push(sha);
 
   expect({ rejectedCopy, copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({ rejectedCopy: "", copy: sha });
+});
+
+// ADR 0376 Status 追記(#3605): preparePush の push は判断した head を lease に載せる —— 出元 repo のブランチがそこから動いていれば、
+// fast-forward になる push でも撃ち落とされ、出元 repo も写しも動かない
+it.each([
+  ["absent", () => ""],
+  ["stale", (sha: string) => sha],
+] as const)("preparePush の push は、出元 repo のブランチが期待値(%s)と違えば fast-forward でも拒まれ、出元 repo も写しも動かない", async (_, expectedFor) => {
+  repoPath = await tempDir("tidepool-repo-");
+  remotePath = await tempDir("tidepool-remote-");
+  repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
+  const base = git(repoPath, "rev-parse", "main");
+  git(repoPath, "push", remotePath, "main:refs/heads/task/abc");
+  const tip = git(repoPath, "rev-parse", "task/abc");
+  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: expectedFor(tip) });
+
+  expect(() => push(tip)).toThrow(/`git push` failed/);
+
+  expect({ remote: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "for-each-ref", "refs/remotes/head-repo/task/abc") }).toEqual({ remote: base, copy: "" });
 });
 
 // ADR 0378 決定1: gh には宣言から解いた GitHub repo が要る。

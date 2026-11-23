@@ -473,6 +473,58 @@ describe("盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339
     expect(readdirSync(boardHome())).toEqual([]);
   });
 
+  // ADR 0376 Status 追記(#3605): 収束の push は判断に使った head を lease として載せる —— 読んだ後に動いた head には書かない
+  describe("lease つきの push", () => {
+    async function leased() {
+      const { remote, repo, sha } = await checkoutOfBareRemote();
+      git(repo, "commit", "--allow-empty", "-m", "next");
+      const next = git(repo, "rev-parse", "HEAD");
+      return { remote, repo, sha, next, copy: () => git(repo, "rev-parse", "refs/remotes/origin/main") };
+    }
+
+    it("期待値が出元の head と一致すれば push し、写しを書く", async () => {
+      const { remote, repo, sha, next, copy } = await leased();
+
+      authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["main", next, sha]]);
+
+      expect([git(remote, "rev-parse", "main"), copy()]).toEqual([next, next]);
+    });
+
+    it("期待値が古ければ(読んだ後に head が祖先へ戻された)拒まれ、出元も写しも動かない", async () => {
+      const { remote, repo, sha, next, copy } = await leased();
+      git(repo, "commit", "--allow-empty", "-m", "after");
+      const after = git(repo, "rev-parse", "HEAD");
+
+      expect(() => authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["main", after, next]])).toThrow(/`git push` failed/);
+
+      expect([git(remote, "rev-parse", "main"), copy()]).toEqual([sha, sha]);
+    });
+
+    it("空の期待値は、既にあるブランチでは拒まれ、無いブランチは作る", async () => {
+      const { remote, repo, sha, next } = await leased();
+
+      expect(() => authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["main", next, ""]])).toThrow(/`git push` failed/);
+      authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["topic", next, ""]]);
+
+      expect([git(remote, "rev-parse", "main"), git(remote, "rev-parse", "topic")]).toEqual([sha, next]);
+    });
+
+    // lease は一致すれば non-fast-forward も通す —— 期待値が push する sha の祖先でなければ撃たない。手元に無い object は祖先でない
+    it("期待値が push する sha の祖先でなければ、出元の head と一致していても撃たない", async () => {
+      const { remote, repo, next } = await leased();
+      const outside = await commitOnRemote(remote);
+      const calls = await shimGit();
+      const pushes = () => calls().filter(({ args }) => args.includes("push"));
+
+      expect(() => authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["main", next, outside]])).toThrow(`is ${outside}, which is not an ancestor of ${next}`);
+      git(repo, "fetch", "origin", "main");
+      expect(() => authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["main", next, outside]])).toThrow(`is ${outside}, which is not an ancestor of ${next}`);
+
+      expect(pushes()).toEqual([]);
+      expect(git(remote, "rev-parse", "main")).toBe(outside);
+    });
+  });
+
   // ADR 0339 決定1・5: GIT_OBJECT_DIRECTORY で借りると盤面 repo の gc が checkout の objects を消す。fetch が起こす auto maintenance は上限の外に出る
   it("盤面所有の repo は alternates で checkout の objects を借り、GIT_OBJECT_DIRECTORY を使わず、hop1 の fetch は写しの sha を交渉の tip に渡し auto maintenance と gc を止める", async () => {
     const { repo, sha } = await checkoutOfBareRemote();

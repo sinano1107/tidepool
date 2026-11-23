@@ -576,10 +576,13 @@ export class HeadRepoTaskBranchesNotSentError extends Error {
 
 /** ADR 0395 決定3: 出元 repo が宣言されたとき `task/*` を出元 repo へ送る。1本ずつ送る —— 分岐したタスクブランチが1本あっても、
  *  他のタスクブランチの送り直しを毎回塞がないよう atomic にしない。写しは送れたタスクブランチの `refs/remotes/head-repo/task/*` だけで、
- *  巻き戻しは出元 repo の写しを読む(ADR 0376 決定3)。issue #3563: 失敗しても宣言は残る。同じ sha が既に
- *  あるタスクブランチは up-to-date で通るので、同じ値をもう一度通す撃ち直しは冪等。 */
+ *  巻き戻しは出元 repo の写しを読む(ADR 0376 決定3)。issue #3563: 失敗しても宣言は残る。ADR 0395 Status 追記(#3605): 送るのは写しの
+ *  まだ無いタスクブランチだけ —— 写しのあるものは盤面が一度送ったもので、その後の push は収束が持つ。扉は出元 repo の head を読まないので、
+ *  送り直すと人間が祖先へ戻したブランチを fast-forward で元へ戻す。同じ値をもう一度通す撃ち直しは、送れなかったものだけを送る。 */
 function sendTaskBranches(db: Db, workspace: WorkspaceConfig, headRepo: string, auth: GitHubAuth | undefined): void {
-  const branches = [...refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads/task/"))];
+  const sent = new Set(git(workspace.path, "for-each-ref", "--format=%(refname:lstrip=3)", remoteTrackingRef("task/", HEAD_REPO_REMOTE)).split("\n"));
+  const branches = [...refValues(git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=2)", "refs/heads/task/"))]
+    .filter(([branch]) => !sent.has(branch));
   const writes = branches.map(([branch, sha]) => [remoteTrackingRef(branch, HEAD_REPO_REMOTE), sha] as const);
   const failures: string[] = [];
   writeBoardRefs(db, workspace, writes, () => {
