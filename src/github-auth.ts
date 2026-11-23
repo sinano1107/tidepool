@@ -427,6 +427,14 @@ const SSH_OUTSIDE_GITHUB_REPAIR =
   " To declare it over https or as a local path instead, delete the workspace, point its checkout's `origin` at that value " +
   "and register it again with that value as `repo:` — the board refuses an edited `repo:` of a registered workspace.";
 
+/** ADR 0409 決定3: the remote answered that it does not serve `sha` (`upload-pack: not our ref <sha>`) —— the one network failure
+ *  that reads as absent. It carries the sha the remote named; the caller compares it with the sha it asked for. */
+export class RemoteLacksObjectError extends Error {
+  constructor(readonly sha: string, message: string, options: ErrorOptions) {
+    super(message, options);
+  }
+}
+
 /** The one network child (ADR 0339 決定1): the board's own `-c` only — the injected helper, ADR 0334's stall
  *  detection, and no auto maintenance or gc (the `--detach` child they spawn would outlive the stall bound). */
 function runAuthedGit(call: AuthedCall, args: string[]): string {
@@ -462,7 +470,11 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
       );
     }
     // 理由は argv でなく stderr で言う —— argv は呼び出しごとに変わる盤面 repo の path と交渉の tip を持ち、同じ失敗を別の文にする
-    throw new Error(`\`git ${args[0]}\` failed (in ${where})${target}: ${stderr?.trim() || String(err)}`, { cause: err });
+    const message = `\`git ${args[0]}\` failed (in ${where})${target}: ${stderr?.trim() || String(err)}`;
+    // ADR 0409 決定3: 手元の git が前に付ける部分(`fatal: remote error:`)は翻訳されうるので、相手の文だけを照合する
+    const lacking = stderr?.match(/upload-pack: not our ref ([0-9a-f]+)/)?.[1];
+    if (lacking !== undefined) throw new RemoteLacksObjectError(lacking, message, { cause: err });
+    throw new Error(message, { cause: err });
   }
 }
 

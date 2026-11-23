@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -315,6 +315,15 @@ export function boardViewStatus(cwd: string, head: string, objectsFrom: string, 
 /** `git` に stdin を渡したもの(`--stdin` を取る subcommand 用)。 */
 export function gitWithInput(input: string, cwd: string, ...args: string[]): string {
   return run(cwd, args, undefined, input).toString().trim();
+}
+
+/** ADR 0409 決定2: git that exits 0 can still report something on stderr, so this runner returns both. A non-zero exit throws like `git`. */
+export function gitReporting(cwd: string, args: string[], input?: string, env?: NodeJS.ProcessEnv): { stdout: string; stderr: string } {
+  const result = spawnSync("git", args, { cwd, env: localGitEnv(env), input, maxBuffer: 64 * 1024 * 1024, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+  if (result.error) rethrowNamingMissingCwd(result.error, cwd, args);
+  const [stdout, stderr] = [result.stdout.toString(), result.stderr.toString()];
+  if (result.status !== 0) throw Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr });
+  return { stdout, stderr };
 }
 
 /** ADR 0356 決定5 / ADR 0339 決定1: build the local environment and keep transport restricted to file. */

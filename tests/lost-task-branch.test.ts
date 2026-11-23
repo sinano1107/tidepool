@@ -33,6 +33,11 @@ vi.mock("../src/git.js", async (importOriginal) => {
       gitCalls.push(args);
       return actual.git(cwd, ...args);
     },
+    // ADR 0409 決定2: 手元の object の読みは stderr を取る runner を通る
+    gitReporting: (cwd: string, args: string[], input?: string, env?: NodeJS.ProcessEnv) => {
+      gitCalls.push(args);
+      return actual.gitReporting(cwd, args, input, env);
+    },
   };
 });
 /** `run` の間に、`taskIds` のどれかの `task/<id>` を名指した git の呼び出し。 */

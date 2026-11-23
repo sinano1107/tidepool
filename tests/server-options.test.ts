@@ -836,7 +836,7 @@ it("registry の fetch と push は、registry clone を名指す entry の基�
 
   expect(git(registryDir, "show", "origin/main:agents/tako.md")).toContain("You are Tako.");
   const written = git(registryDir, "rev-parse", "refs/remotes/origin/main");
-  expect(restoreBaseline(db, entry, new Date())).toEqual([{ ref: "refs/remotes/origin/main", sha: written }]);
+  expect(restoreBaseline(db, entry, new Date(), new Set())).toEqual([{ ref: "refs/remotes/origin/main", sha: written }]);
   db.close();
 });
 

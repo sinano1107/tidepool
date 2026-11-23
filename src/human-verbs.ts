@@ -822,8 +822,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     });
     if (nothingToCancel) throw new DomainError(`${nothingToCancel}.`);
     assertNoSessionRunning();
-    // ADR 0380 決定4 / ADR 0395 決定1・3: 失われたと数える前に、タスクブランチの sha は出元 repo、それ以外は origin から取る
-    if (restore) await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth));
+    // ADR 0380 決定4 / ADR 0395 決定1・3: 失われたと数える前に、タスクブランチの sha は出元 repo、それ以外は origin から取る。
+    // ADR 0409 決定4: 書き戻しは、相手が無いと答えた sha(`absent`)だけを失われたと数える
+    const absent = restore ? await refuseOnError(() => fetchLostTargets(deps.db, checked, deps.githubAuth)) : undefined;
     // ADR 0373 決定3: 書き戻しは走行中の session の検査の後、後半の fetch の前 —— 比べ直しから書くまでは1つの同期区間(spec #3273 の受理の 7b)
     // ADR 0407 決定2: 処理中の印を持つ task のキューの行と question を片づけると印の行為と競る —— `end landing` と同じ形で拒む
     const giveUpAnswer = giveUp && {
@@ -833,7 +834,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         if (refusal) throw new Error(refusal);
       },
     };
-    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), giveUpAnswer || undefined)) : [];
+    const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), absent, giveUpAnswer || undefined)) : [];
     await fire(all, "after-open");
     // ADR 0393 決定3: この回答が刻んだ残した checkout だけを、通っても拒まれても1回告げる —— 同期の手の前後で読むので、ほかの場所の後始末が
     // 刻んだ分は混ざらない
