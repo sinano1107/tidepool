@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { quarantineUnlessClear, registerQuarantine } from "./quarantine.js";
+import { openQuarantineQuestion, quarantineUnlessClear, registerQuarantine } from "./quarantine.js";
 import { loadRegistry, type Registry, type RegistryAvailabilityCheck, type RegistrySource } from "./registry.js";
 
 /** Candidate-time fail-closed gate. The open Confirmation question is the durable
@@ -24,6 +24,11 @@ export function registryUnreadablePickupBlocked(
   );
 }
 
+/** 盤面全体の registry の止まりが開いているか —— 収束と poll の catch が、自分の question・計測・行を足さない判定(ADR 0403 決定5)。 */
+export function registryUnreadableOpen(db: Db): boolean {
+  return openQuarantineQuestion(db, "registryUnreadable", null) !== undefined;
+}
+
 /** 盤面の registry の読み込み(YAML・schema・git)の失敗の1つの型。文は止まりを名指し、`reason` は読み込みの失敗そのもの。 */
 export class RegistryUnreadableError extends Error {
   readonly reason: string;
@@ -35,7 +40,8 @@ export class RegistryUnreadableError extends Error {
 }
 
 /** 盤面の registry を読む1点(ADR 0403 決定5): 読めなければ `registryUnreadable` を立ててから投げる —— 呼び手は何もしない。
- *  開いていれば重ねない(`registerQuarantine` は冪等)。名前ごとの解決の失敗はここを通らない。 */
+ *  開いていれば重ねない(`registerQuarantine` は冪等)。名前ごとの解決の失敗はここを通らない。止まりは拒否の前に書く記録で、
+ *  呼び手の状態の変化が起きても起きなくても真なので、呼び手の transaction の外に置く(ADR 0405 決定3(a))。 */
 export function loadRegistryOrStop(db: Db, source: RegistrySource, now: () => Date): Registry {
   try {
     return loadRegistry(source.dir, source.mode);

@@ -128,14 +128,25 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
   scheduler.stop();
 });
 
-/** registry が読めなくなった purely-local の盤面と、合成 root が組んだ読み口で動く scheduler。 */
-async function brokenLocalRegistryBoard(readers: (options: ServerOptions) => Partial<Parameters<typeof startScheduler>[0]>) {
-  const registryDir = await makeRegistry();
+type SchedulerDeps = Parameters<typeof startScheduler>[0];
+
+/** registry を読めなくした盤面と、合成 root が組んだ読み口で動く scheduler。`remote` なら remote の main を壊し、無ければ
+ *  purely-local な registry の main を壊す。 */
+async function brokenRegistryBoard(readers: (options: ServerOptions) => Partial<SchedulerDeps>, { remote = false } = {}) {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
-  const options = await buildServerOptions({ ...composition(), clock, registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
-  breakRegistry(registryDir);
+  const board = { ...composition(), clock, workspaceName: "tidepool", defaultAgentName: "deckhand" };
+  let options: ServerOptions;
+  if (remote) {
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
+    options = await buildServerOptions({ ...board, registryDir, registryMode: "remote-backed" }, db);
+    publish("workspaces.yaml", "tidepool: [unclosed\n", "break workspaces.yaml on remote main");
+  } else {
+    const registryDir = await makeRegistry();
+    options = await buildServerOptions({ ...board, registryDir }, db);
+    breakRegistry(registryDir);
+  }
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
     converge: async () => [],
@@ -159,38 +170,14 @@ async function brokenLocalRegistryBoard(readers: (options: ServerOptions) => Par
   return { db, clock, worker, scheduler };
 }
 
+const gateOnly = (options: ServerOptions): Partial<SchedulerDeps> => ({ registryAvailability: options.registryAvailability });
+
 // ADR 0403 決定5: 判定は remote の到達に「読み込みと検査が通るか」を足し、registry を持つ盤面すべてに置く
-it("remote の無い盤面で registry を壊すと、pickup の門が止まり registryUnreadable が1枚立つ", async () => {
-  const { db, clock, worker, scheduler } = await brokenLocalRegistryBoard((options) => ({ registryAvailability: options.registryAvailability }));
-
-  await clock.advance(HOURLY * 2);
-
-  expect({ started: worker.started, stops: openQuarantineValues(db, "registryUnreadable") }).toEqual({ started: [], stops: [null] });
-  scheduler.stop();
-});
-
-it("remote に届いても、remote の main の registry が読めなければ、pickup の門が止まり registryUnreadable が1枚立つ", async () => {
-  const { registryDir, publish } = await makeRemoteBackedRegistry();
-  const db = openDb(":memory:");
-  const clock = new FakeClock();
-  const worker = new ScriptedWorker(clock);
-  const options = await buildServerOptions({ ...composition(), clock, registryDir, registryMode: "remote-backed", workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
-  publish("workspaces.yaml", "tidepool: [unclosed\n", "break workspaces.yaml on remote main");
-  const scheduler = startScheduler({
-    retrospectiveCalls: noRetrospectiveCalls,
-    converge: async () => [],
-    db,
-    clock,
-    slot: new Slot(),
-    worker,
-    containers: fakeContainers(),
-    onSpawnFailed: () => {},
-    onRecordContainerFailed: () => {},
-    onPickupStopped: () => {},
-    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
-    registryAvailability: options.registryAvailability,
-  });
-  registerTask(db, { type: "work", title: "queued behind a broken remote registry", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+it.each([
+  ["remote の無い盤面で registry を壊すと", false],
+  ["remote に届いても remote の main の registry が読めなければ", true],
+])("%s、pickup の門が止まり registryUnreadable が1枚立つ", async (_, remote) => {
+  const { db, clock, worker, scheduler } = await brokenRegistryBoard(gateOnly, { remote });
 
   await clock.advance(HOURLY * 2);
 
@@ -200,7 +187,7 @@ it("remote に届いても、remote の main の registry が読めなければ�
 
 // ADR 0403 決定5: 重複を避ける判定は poll の catch —— 開いていれば ADR 0294 の行にも計測にも数えない
 it("todo の候補を読む poll が registry の読み込みで投げても、registryUnreadable が開いていれば poll の失敗の行にも計測にも数えない", async () => {
-  const { db, clock, worker, scheduler } = await brokenLocalRegistryBoard((options) => ({
+  const { db, clock, worker, scheduler } = await brokenRegistryBoard((options) => ({
     registryAvailability: options.registryAvailability,
     taskExecutionCandidates: options.taskExecutionCandidates,
   }));

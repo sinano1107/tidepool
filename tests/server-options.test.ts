@@ -13,6 +13,7 @@ import { GitHubAuth } from "../src/github-auth.js";
 import { openQuarantineValues, QUARANTINES } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import { RegistryUnreadableError } from "../src/registry-unreadable.js";
+import type { ServerOptions } from "../src/server.js";
 import {
   type BoardComposition,
   buildCodexWorkerOptions,
@@ -237,27 +238,36 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
 // ADR 0403 決定5: 止まりを立てるのは registry の読み込みの1点で、読み手の数や経路に依らない
 it("registry が読めなくなると、組み立てた読み口のどれから読んでも registryUnreadable が1枚だけ立つ —— remote の無い盤面でも", async () => {
   const registryDir = await makeRegistry();
-  const db = openDb(":memory:");
-  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
-  breakRegistry(registryDir);
   const task = { assignee: null, interview_target_id: null, type: "work" } as unknown as Task;
-  const readers: Array<() => unknown> = [
-    () => options.resolveWorkspace!(null),
-    () => options.resolveAuthority!(null, "work"),
-    () => options.agentRegistered!("deckhand"),
-    () => options.agentDefinitionFailure!("deckhand"),
-    () => options.resolvesToBuiltIn!("fugu"),
-    () => options.isProtectedWorkspace!("tidepool"),
-    () => options.listAgents!(),
-    () => options.registryCandidates!(),
-    () => options.agentAdmin!.authorityProfiles!(),
-    () => options.taskExecutionCandidates(task),
-    () => options.quarantineResolvers!.providerAuth!(["anthropic"]),
-    () => options.quarantineResolvers!.harnessContainment!(["claude-code"]),
+  const readers: Array<(options: ServerOptions) => unknown> = [
+    (options) => options.resolveWorkspace!(null),
+    (options) => options.resolveAuthority!(null, "work"),
+    (options) => options.agentRegistered!("deckhand"),
+    (options) => options.agentDefinitionFailure!("deckhand"),
+    (options) => options.resolvesToBuiltIn!("fugu"),
+    (options) => options.isProtectedWorkspace!("tidepool"),
+    (options) => options.listAgents!(),
+    (options) => options.registryCandidates!(),
+    (options) => options.agentAdmin!.authorityProfiles!(),
+    (options) => options.taskExecutionCandidates(task),
+    (options) => options.quarantineResolvers!.providerAuth!(["anthropic"]),
+    (options) => options.quarantineResolvers!.harnessContainment!(["claude-code"]),
   ];
+  // 読み口ごとに盤面の DB を分ける —— DB を持たずに配線された読み口は、ほかの読み口の止まりに隠れない
+  const boards = await Promise.all(readers.map(async () => {
+    const db = openDb(":memory:");
+    return { db, options: await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db) };
+  }));
+  breakRegistry(registryDir);
 
-  for (const read of readers) expect(read).toThrow(RegistryUnreadableError);
-  expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
+  const raised = readers.map((read, i) => {
+    const { db, options } = boards[i]!;
+    expect(() => read(options)).toThrow(RegistryUnreadableError);
+    expect(() => read(options)).toThrow(RegistryUnreadableError);
+    return openQuarantineValues(db, "registryUnreadable");
+  });
+
+  expect(raised).toEqual(readers.map(() => [null]));
 });
 
 // 同じ接続しか無いので、止まりは transaction を抜けた後に立て直される —— 観測は1 tick 後
@@ -274,7 +284,7 @@ it("registry の読み込みを transaction の中で呼んで rollback して�
 });
 
 // 起動時の読み(盤面自身の workspace・draft の候補の写し・boot の一斉検査)は騒ぐだけ(ADR 0052 決定4)—— 床は pickup の門
-it("registry が読めない盤面の起動は騒ぐだけで、組み立てを拒まず、止まりも立てない", async () => {
+it("registry が読めない盤面の起動は組み立てを拒まず、騒いで registryUnreadable を1枚立てる", async () => {
   const registryDir = await makeRegistry();
   breakRegistry(registryDir);
   const db = openDb(":memory:");
@@ -292,9 +302,23 @@ it("registry が読めない盤面の起動は騒ぐだけで、組み立てを�
   }).toEqual({
     workspace: undefined,
     warned: expect.stringMatching(/own workspace could not be read at startup[\s\S]*registry candidates could not be read at startup/),
-    stops: [],
+    stops: [null],
   });
   error.mockRestore();
+});
+
+// 盤面自身の workspace を持たずに起動した盤面は、既定の workspace 名を持たない —— 直しても再起動までは再開しない
+it("起動時に盤面自身の workspace を読めなかった盤面は、registry を直しても判定が再起動を求めて不成立のまま", async () => {
+  const registryDir = await makeRegistry();
+  const repair = breakRegistry(registryDir);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, openDb(":memory:"));
+  repair();
+
+  expect(await options.registryAvailability!()).toEqual({
+    available: false,
+    reason: "the board started without its own workspace because the registry could not be read at startup; restart the board, then answer",
+  });
 });
 
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");

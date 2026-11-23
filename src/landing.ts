@@ -16,6 +16,7 @@ import { declaredProtectedBranchRef, isRemoteBacked, namePickupPredicates, resol
 import { openQuarantineQuestion, parseWorkspaceContainmentValue, type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type PrMergeQuestionContent, type PrMergeReason, type QuestionColumns, type QuestionKind, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, type MergeDial } from "./registry.js";
+import { registryUnreadableOpen } from "./registry-unreadable.js";
 import { repositoryLabel } from "./repo-access.js";
 import { treeDeltaEntries } from "./sandbox.js";
 import {
@@ -1384,7 +1385,7 @@ export function createLanding(deps: LandingDeps): Landing {
     const message = error instanceof Error ? error.message : String(error);
     const verdict = { kind: "failed" as const, reason, error: message };
     // ADR 0403 決定5: registry の止まりが開いていれば、根ごとの question を重ねない —— 信号は止まりが持つ
-    if (!ctx.intake && !registryStopped()) {
+    if (!ctx.intake && !registryUnreadableOpen(deps.db)) {
       // ADR 0371 決定11: 作業台を開いた時点で question が立つ場面は、本文がその在り処を言う —— 追いつきの conflict(text A2)と出元 repo の盤面の
       // 知らない commit(text D1)の文そのもの。巻き戻しの文(text D2)も本文になる(ADR 0376 決定6)
       registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now(), error instanceof PromotionStopError ? message : undefined, readQuestionTip(task), error instanceof DeclaredRepoMismatchError);
@@ -1401,7 +1402,6 @@ export function createLanding(deps: LandingDeps): Landing {
       console.error(`[landing] could not ask about the repo mismatch for root ${root}:`, questionError);
     }
   };
-  const registryStopped = () => openQuarantineQuestion(deps.db, "registryUnreadable", null) !== undefined;
   /** 答えている回答だけを拒む止まり —— 昇格失敗 question を立てない。 */
   const failedAnswer = (error: string): LandingVerdict => ({ kind: "failed", reason: "promotion_failed", error });
   const quarantined = (quarantine: Extract<QuarantineKind, "workspace" | "agent">, name: string): Extract<LandingVerdict, { kind: "quarantined" }> => ({
@@ -2033,7 +2033,7 @@ export function createLanding(deps: LandingDeps): Landing {
       return [];
     }
     // ADR 0403 決定5: registry の止まりが開いていれば根を撃たずに終える —— どの根もどのみち registry を読めない。答えている回答は止まりを名指して拒む
-    if (registryStopped()) {
+    if (registryUnreadableOpen(deps.db)) {
       return [...answering.keys()].flatMap((question) => {
         const taskId = answeredRootOf(deps.db, question);
         return taskId ? [{ taskId, verdict: failedAnswer(REGISTRY_STOPPED_REFUSAL) }] : [];
@@ -2070,7 +2070,7 @@ export function createLanding(deps: LandingDeps): Landing {
         try {
           const task = getTask(deps.db, id);
           const attended = [...answering.keys()].some((question) => answeredRootOf(deps.db, question) === id);
-          if (task && !attended && openPrPromotionQuestionIds(deps.db, id).length === 0 && !registryStopped()) {
+          if (task && !attended && openPrPromotionQuestionIds(deps.db, id).length === 0 && !registryUnreadableOpen(deps.db)) {
             registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now());
           }
         } catch (questionError) {

@@ -72,23 +72,17 @@ async function bootOnBrokenRegistry(): Promise<() => void> {
   return breakRegistry(registryDir);
 }
 
-// ADR 0403 決定5: 人間の要求も読み込みの1点を通る —— 要求はその場で理由を受け取り、止まりは盤面に立つ
-it("registry が読めない盤面への人間の登録の要求は理由つきで失敗し、registry の止まりが1枚立つ", async () => {
+// ADR 0403 決定5: 人間の要求も読み込みの1点を通る —— 要求はその場で理由を受け取る(止まりが立つことは合成の読み口のテストが言う)
+it("registry が読めない盤面への人間の登録の要求は、registry の止まりを名指す理由つきの 503 で失敗する", async () => {
   await bootOnBrokenRegistry();
 
   const response = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work", title: "assigned while the registry is broken", purpose: "p", completion_criteria: "c", assignee: "deckhand",
   });
-  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
 
-  expect({
-    status: response.status,
-    error: response.json.error,
-    questions: tasks.filter((task) => task.type === "question").map((task) => task.title),
-  }).toEqual({
+  expect({ status: response.status, error: response.json.error }).toEqual({
     status: 503,
     error: expect.stringMatching(/^the board could not read the registry: .*; pickup and landing are stopped until the registry question is answered$/s),
-    questions: [STOP_TITLE],
   });
 });
 

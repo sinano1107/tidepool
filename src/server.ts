@@ -887,7 +887,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       try {
         if (harnessUnused(harness)) continue;
       } catch (err) {
-        // ADR 0403 決定5: 読めない registry で起動を拒まない —— 止まりは読み込みの1点が立て、pickup の検査がこの検査を撃ち直す
+        // 読めない registry で起動を拒まない(ADR 0052 決定4)—— 止まりは読み込みの1点が立て(ADR 0403 決定5)、pickup の検査がこの検査を撃ち直す
         if (!(err instanceof RegistryUnreadableError)) throw err;
         console.error(`[registry] the startup containment check of ${harness} was skipped because the registry cannot be read: ${err.reason}`);
         continue;

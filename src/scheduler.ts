@@ -53,7 +53,7 @@ import {
   isUnresolvableAgentError,
   type RegistryAvailabilityCheck,
 } from "./registry.js";
-import { registryUnreadablePickupBlocked } from "./registry-unreadable.js";
+import { registryUnreadableOpen, registryUnreadablePickupBlocked } from "./registry-unreadable.js";
 import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
 import type { ParentBriefing, Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
@@ -429,7 +429,7 @@ export function startScheduler(deps: {
   const pollFailed = (err: unknown) => {
     console.error("[scheduler] poll failed; the next poll retries:", err);
     // ADR 0403 決定5: registry の止まりが開いていれば、その故障を行にも計測にも数えない —— question は止まりが持つ
-    if (openQuarantineQuestion(db, "registryUnreadable", null)) return;
+    if (registryUnreadableOpen(db)) return;
     const now = clock.now();
     lastPollFailure = { at: now.toISOString(), message: err instanceof Error ? err.message : String(err) };
     streak = { first: streak?.first ?? lastPollFailure, count: (streak?.count ?? 0) + 1 };
