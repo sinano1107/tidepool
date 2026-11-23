@@ -30,6 +30,7 @@ import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { latestEventId } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
+import { withGhVersionQuarantine } from "./gh-version-signal.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -244,6 +245,8 @@ export interface ServerOptions {
   modelProbes?: Partial<Record<Provider, ModelProbe>>;
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0402 決定3: このホストの `gh --version` の読み。「gh の版」の Quarantine の回答の受理が読み直す。Absent → その回答は拒まれる。 */
+  readGhVersion?: () => Promise<string>;
   /** ADR 0070: live Claude authentication probe. */
   cliAuth?: CliAuthCheck;
   /** ADR 0075: optional configured expiry used only for advance warning. */
@@ -381,7 +384,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       registerQuarantine(db, "harnessContainment", harness, reason, given.clock.now());
     },
   });
-  const options: ServerOptions = { ...given, ...given.boardCallers?.(boardCalls.call) };
+  // ADR 0402 決定3: 盤面が撃つ gh の版の門の拒否と通過を、「gh の版」の question の信号にする
+  const options: ServerOptions = { ...given, ...given.boardCallers?.(boardCalls.call), github: given.github && withGhVersionQuarantine(given.github, db, given.clock) };
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
   // 同じ検査は封じ込め能力の合成(下)にも入り、pickup と quarantine 回答時に
@@ -688,6 +692,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     closeUnclosedSession,
     rerunPoll: () => scheduler.rerunPoll(),
     recheckIssueExpansion: () => scheduler.recheckIssueExpansion(),
+    readGhVersion: options.readGhVersion,
     providerCliAuth,
     modelProbes,
     clock: options.clock,

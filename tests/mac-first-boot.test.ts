@@ -31,6 +31,15 @@ describe("Lima テンプレート", () => {
       expect(entry.script ?? "").not.toContain("git pull");
     }
   });
+
+  // ADR 0402 決定1: apt の gh は版を指定できない(Ubuntu では 2.46.0)。固定の版は checkout の gh-cli-version を読む導入スクリプトが入れる
+  it("gh を apt で入れず、checkout を作った後に固定の版の導入スクリプトで入れる", () => {
+    const scripts = (template.provision ?? []).map((entry) => entry.script ?? "");
+    for (const script of scripts) expect(script).not.toMatch(/apt-get install[^\n]*\bgh\b/);
+    const user = (template.provision ?? []).find((entry) => entry.mode === "user")?.script ?? "";
+    const install = user.indexOf('sudo "$HOME/tidepool/scripts/install-gh.sh"');
+    expect(install).toBeGreaterThan(user.indexOf("git clone"));
+  });
 });
 
 describe("Mac の初回起動手順書", () => {

@@ -25,6 +25,7 @@ import { DomainError } from "./domain-error.js";
 import { type ChildDraftContext, type DraftClient, draftHandoff, draftTask } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
 import { changeExecutionSettings, executionSettingsChangeSchema, interviewTargetSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
+import { ghRefusalText } from "./gh-cli-version.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { type GitHubAuth, githubLoggedIn } from "./github-auth.js";
 import {
@@ -870,7 +871,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res, { issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
     } catch (err) {
       if (err instanceof WorkspaceRepoMismatchError) sendJson(res.status(400), { error: err.message });
-      else sendJson(res.status(502), { error: "could not fetch open issues" });
+      else sendJson(res.status(502), { error: ghRefusalText(err, "could not fetch open issues") });
     }
   });
 

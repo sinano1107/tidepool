@@ -1,8 +1,9 @@
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
+import { GhVersionError } from "../src/gh-cli-version.js";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { registerTask } from "../src/tasks.js";
@@ -13,7 +14,7 @@ import {
   issuedToken,
   startFakeBroker,
 } from "./fake-broker.js";
-import { git, HUMAN_WEBUI } from "./harness.js";
+import { git, HUMAN_WEBUI, MATCHING_GH } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 let repoPath: string | undefined;
@@ -55,6 +56,9 @@ async function makeAuth(answer: BrokerAnswer | (() => BrokerAnswer) = issuedToke
   brokers.push(broker);
   return new GitHubAuth(file, broker.url);
 }
+
+/** 版の門(ADR 0402 決定2)を一致で通す client —— 門そのものは下の describe が測る。 */
+const ghClient = (auth: GitHubAuth, options: ConstructorParameters<typeof GhCliClient>[1] = {}) => new GhCliClient(auth, { ...MATCHING_GH, ...options });
 
 /** GitHub の repo を宣言した workspace (ADR 0378 決定1). */
 async function githubCheckout(): Promise<WorkspaceConfig> {
@@ -109,7 +113,7 @@ it.each([
   ["宣言した出元 repo", "Reef-Org/widget", "reef-org:task/abc"],
 ])("PR の作成は user token で POST pulls を1回だけ撃ち、head は%sの owner:branch にする", async (_, head_repo, head) => {
   const api = await fakeGitHubApi();
-  const client = new GhCliClient(await makeAuth(), { apiUrl: api.url });
+  const client = ghClient(await makeAuth(), { apiUrl: api.url });
 
   const result = await client.createPullRequest({
     workspace: { ...workspaceAt(await tempDir("tidepool-repo-")), head_repo },
@@ -148,7 +152,7 @@ it.each([
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const found = await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: { ...(await githubCheckout()), head_repo }, branch: "task/abc" });
+  const found = await ghClient(await makeAuth()).findPullRequestByHead({ workspace: { ...(await githubCheckout()), head_repo }, branch: "task/abc" });
 
   expect(found).toEqual({ number: 3, state: "MERGED", head: "sha3", headRef: { branch: "task/abc", repo: ours } });
   expect((await readFile(logPath, "utf8")).trim()).toBe(`installation-token api repos/acme/widget/pulls --method GET -f head=${owner}:task/abc -f state=all`);
@@ -165,7 +169,7 @@ it("自分の PR の探索は、開いている自分の PR を merged と close
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  expect(await new GhCliClient(await makeAuth()).findPullRequestByHead({ workspace: await githubCheckout(), branch: "task/abc" }))
+  expect(await ghClient(await makeAuth()).findPullRequestByHead({ workspace: await githubCheckout(), branch: "task/abc" }))
     .toEqual({ number: 2, state: "OPEN", head: "o2", headRef: { branch: "task/abc", repo: "reef-org/widget" }, base: { branch: "main", sha: "b2" } });
 });
 
@@ -189,7 +193,7 @@ it("user token は PR の作成の要求にだけ載り、gh と git の子の e
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
   const api = await fakeGitHubApi();
-  const client = new GhCliClient(await makeAuth(), { apiUrl: api.url });
+  const client = ghClient(await makeAuth(), { apiUrl: api.url });
   const workspace = workspaceAt(repoPath);
 
   (await client.preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
@@ -220,7 +224,7 @@ it("PR の作成が断られたら、HTTP status と GitHub の理由を書き�
     body: { message: "Validation Failed", errors: [{ resource: "PullRequest", code: "custom", message: "not all refs are readable" }] },
   });
 
-  await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
+  await expect(ghClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
     new Error("`POST pulls` on acme/widget was refused for head reef-org:task/abc (HTTP 422: Validation Failed; not all refs are readable)"),
   );
 });
@@ -233,7 +237,7 @@ it("PR を作る根の記録の repo が今の宣言と食い違えば、PR の�
   const workspace = await githubCheckout();
   recordDeclaredRepo(db, root.id, { ...workspace, repo: "https://github.com/acme/old-widget.git" });
 
-  await expect(new GhCliClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(withDeclaredRepoCheck(db, workspace, root.id))))
+  await expect(ghClient(await makeAuth(), { apiUrl: api.url }).createPullRequest(createInput(withDeclaredRepoCheck(db, workspace, root.id))))
     .rejects.toThrow(/recorded repo acme\/old-widget for it, but workspace widget now declares repo acme\/widget,/);
   expect(api.requests).toEqual([]);
 });
@@ -241,7 +245,7 @@ it("PR を作る根の記録の repo が今の宣言と食い違えば、PR の�
 // ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗。どの呼び出しが何 ms で切れたかを書く
 it("PR の作成は GitHub が返らなくても上限で、何 ms で切れたかを書いた一時的失敗として返る(ADR 0330)", async () => {
   const api = await fakeGitHubApi({ hang: true });
-  const client = new GhCliClient(await makeAuth(), { apiUrl: api.url, timeoutMs: 200 });
+  const client = ghClient(await makeAuth(), { apiUrl: api.url, timeoutMs: 200 });
 
   const started = Date.now();
   await expect(client.createPullRequest(createInput(await githubCheckout()))).rejects.toThrow(
@@ -261,7 +265,7 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
 
   // gh 側(子プロセス)が見るのは**仲介が発行した installation token**であって
   // ファイルの中身(user token)ではない。worker が丸ごと継承する側の process.env
@@ -283,7 +287,7 @@ it("gh の子プロセス env は process.env の GH_HOST を運ばない", asyn
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
 
   expect(await readFile(logPath, "utf8")).toBe("host=unset\n");
 });
@@ -307,7 +311,7 @@ it("readPullRequest の CI は全チェック pass で success を返す", async
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
+  const { ci: status } = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
   expect(status).toBe("success");
 });
 
@@ -319,7 +323,7 @@ it("readPullRequest の CI は未完了のチェックが残っていれば pend
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
+  const { ci: status } = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
   expect(status).toBe("pending");
 });
 
@@ -329,7 +333,7 @@ it("readPullRequest の CI はチェックが1つも無い PR を unreported(che
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
+  const { ci: status } = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
   expect(status).toBe("unreported");
 });
 
@@ -341,7 +345,7 @@ it("readPullRequest の CI は cancel されたチェックを failure として
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
+  const { ci: status } = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
   expect(status).toBe("failure");
 });
 
@@ -357,7 +361,7 @@ it("readPullRequest の CI は token を取れなければ(仲介に届かない
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  const pr = await new GhCliClient(await makeAuth({ destroy: true })).readPullRequest({
+  const pr = await ghClient(await makeAuth({ destroy: true })).readPullRequest({
     workspace: workspaceAt(repoPath),
     number: 1,
   });
@@ -372,7 +376,7 @@ it("readPullRequest の CI は失敗したチェックがあれば failure を�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
+  const { ci: status } = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
   expect(status).toBe("failure");
 });
 
@@ -381,7 +385,7 @@ it("readPullRequest は gh が非ゼロ終了したら(到達不能)CI を pendi
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const pr = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
+  const pr = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 1 });
   expect(pr).toEqual({ ci: "pending", state: "unreadable" });
 });
 
@@ -397,7 +401,7 @@ it("readPullRequest reads CI, state, merge author, head and base in one GitHub c
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const pr = await new GhCliClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 7 });
+  const pr = await ghClient(await makeAuth()).readPullRequest({ workspace: await githubCheckout(), number: 7 });
 
   expect(pr).toEqual({ ci: "success", state: "MERGED", head: "abc123", mergedBy: "app/tidepool-board", base: { branch: "main", sha: "abc456" } });
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
@@ -427,7 +431,7 @@ it("getIssue は title / body / 全コメントを返す", async () => {
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const issue = await new GhCliClient(await makeAuth()).getIssue({ workspace: await githubCheckout(), number: 49 });
+  const issue = await ghClient(await makeAuth()).getIssue({ workspace: await githubCheckout(), number: 49 });
 
   expect(issue).toEqual({
     title: "ログイン画面のバグ",
@@ -448,7 +452,7 @@ it("getIssue は close 済み issue に対して IssueGoneError(closed) を投�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const err = await new GhCliClient(await makeAuth())
+  const err = await ghClient(await makeAuth())
     .getIssue({ workspace: await githubCheckout(), number: 49 })
     .then(() => null)
     .catch((e: unknown) => e);
@@ -463,7 +467,7 @@ it("getIssueWithState は closed の親の title / body / 全コメントと状�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  expect(await new GhCliClient(await makeAuth()).getIssueWithState({ workspace: await githubCheckout(), number: 49 })).toEqual({
+  expect(await ghClient(await makeAuth()).getIssueWithState({ workspace: await githubCheckout(), number: 49 })).toEqual({
     title: "closed parent", body: "original request", comments: ["final comment"], state: "closed",
   });
 });
@@ -486,7 +490,7 @@ it("getIssue は存在しない issue に対して IssueGoneError(not_found) を
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const notFound = await new GhCliClient(await makeAuth())
+  const notFound = await ghClient(await makeAuth())
     .getIssue({ workspace: await githubCheckout(), number: 9999 })
     .then(() => null)
     .catch((e: unknown) => e);
@@ -495,7 +499,7 @@ it("getIssue は存在しない issue に対して IssueGoneError(not_found) を
 
   // ネットワーク断など、それ以外の失敗は分類せずそのまま伝播する(一時的失敗)
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho 'error connecting to api.github.com' >&2\nexit 1\n`);
-  const outage = await new GhCliClient(await makeAuth())
+  const outage = await ghClient(await makeAuth())
     .getIssue({ workspace: await githubCheckout(), number: 49 })
     .then(() => null)
     .catch((e: unknown) => e);
@@ -517,7 +521,7 @@ it("listIssues は gh issue list --state open --limit 100 --json number,title �
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const issues = await new GhCliClient(await makeAuth()).listIssues({ workspace: await githubCheckout() });
+  const issues = await ghClient(await makeAuth()).listIssues({ workspace: await githubCheckout() });
 
   expect(issues).toEqual([
     { number: 12, title: "ログイン画面のバグ" },
@@ -536,7 +540,7 @@ it("mergePullRequest は CI を読んだ head を --match-head-commit に渡し�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ workspace: await githubCheckout(), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).mergePullRequest({ workspace: await githubCheckout(), number: 7 }, "abc123");
 
   const invocations = await readFile(logPath, "utf8");
   expect(invocations.trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
@@ -548,7 +552,7 @@ it("a final unattended merge guard can stop gh after the token request", async (
   originalPath = process.env.PATH;
   process.env.PATH = `${fakeBinDir}:${originalPath}`;
   let tokenRequested = false;
-  const client = new GhCliClient(await makeAuth(() => {
+  const client = ghClient(await makeAuth(() => {
     tokenRequested = true;
     return issuedToken("installation-token");
   }));
@@ -575,7 +579,7 @@ it("getPullRequestState reads state, merge author, head and base in one GitHub c
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const client = new GhCliClient(await makeAuth());
+  const client = ghClient(await makeAuth());
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board", head: "abc7" });
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 8 })).toEqual({ state: "CLOSED", mergedBy: null, head: "abc8" });
   expect(await client.getPullRequestState({ workspace: await githubCheckout(), number: 9 })).toEqual({ state: "OPEN", mergedBy: null, head: "abc9", headRef: { branch: "task/abc", repo: "old-fork/widget" }, base: { branch: "main", sha: "base9" } });
@@ -592,7 +596,7 @@ it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  await new GhCliClient(await makeAuth()).addIssueComment(
+  await ghClient(await makeAuth()).addIssueComment(
     { workspace: await githubCheckout(), number: 49 },
     "## Completion criteria\n- the login form submits cleanly",
   );
@@ -613,7 +617,7 @@ it("tokenRefusal は仲介が token を出せれば null、断られたら statu
       : { status: 404, body: { error: "repo_unreachable" } },
   );
   brokers.push(broker);
-  const client = new GhCliClient(new GitHubAuth(file, broker.url));
+  const client = ghClient(new GitHubAuth(file, broker.url));
 
   expect(await client.tokenRefusal({ owner: "sinano1107", name: "tidepool" })).toBeNull();
   const reason = await client.tokenRefusal({ owner: "sinano1107", name: "nope" });
@@ -632,7 +636,7 @@ it("tokenRefusal は持っている token を答えにせず、扉のたびに�
     installed ? issuedToken("installation-token") : { status: 404, body: { error: "repo_unreachable" } },
   );
   brokers.push(broker);
-  const client = new GhCliClient(new GitHubAuth(file, broker.url));
+  const client = ghClient(new GitHubAuth(file, broker.url));
   const ref = { owner: "sinano1107", name: "tidepool" };
 
   expect(await client.tokenRefusal(ref)).toBeNull();
@@ -646,7 +650,7 @@ it("preparePush が返す push はタスクブランチを出元 repo へ push �
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
 
-  (await new GhCliClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });
@@ -659,7 +663,7 @@ it("preparePush の push は渡された sha を押して写しに書き、予�
   const announced = git(repoPath, "rev-parse", "task/abc");
   git(repoPath, "commit", "--allow-empty", "-m", "after the announcement");
 
-  (await new GhCliClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(announced);
+  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(announced);
 
   expect({ pushed: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({
     pushed: announced,
@@ -673,7 +677,7 @@ it("preparePush の push は成功したときだけ、写し refs/remotes/head-
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
   const sha = git(repoPath, "rev-parse", "task/abc");
-  const push = await new GhCliClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" });
+  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" });
   const hook = join(remotePath, "hooks", "pre-receive");
   writeFileSync(hook, "#!/bin/sh\nexit 1\n");
   chmodSync(hook, 0o755);
@@ -699,7 +703,7 @@ it("宣言が GitHub の repo に解けなければ、gh を起こさずに work
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "/srv/mirrors/widget.git");
 
-  await expect(new GhCliClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath, "/srv/mirrors/widget.git"), number: 7 }, "abc123")).rejects.toThrow(
+  await expect(ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath, "/srv/mirrors/widget.git"), number: 7 }, "abc123")).rejects.toThrow(
     `\`gh pr merge\` cannot run: workspace widget has no declared GitHub repo`,
   );
   expect(await readFile(logPath, "utf8")).toBe("");
@@ -718,7 +722,7 @@ it("gh は宣言から解いた repo を -R で受け、checkout の insteadOf �
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/raw-origin.git");
   git(repoPath, "config", "url.https://github.com/evil/elsewhere.git.insteadOf", "https://github.com/acme/raw-origin.git");
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
 
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
 });
@@ -758,7 +762,7 @@ it("repositoryParent は出元 repo の token で gh api を撃ち、親を owne
   writeFileSync(tokenFile, "gho_user\n", { mode: 0o600 });
   const broker = await startFakeBroker((request) => issuedToken(`token-for-${request.repo}`));
   brokers.push(broker);
-  const client = new GhCliClient(new GitHubAuth(tokenFile, broker.url));
+  const client = ghClient(new GitHubAuth(tokenFile, broker.url));
 
   writeFileSync(parentPath, "Acme/Lagoon\n");
   expect(await client.repositoryParent({ owner: "acme", name: "fork" })).toEqual({ owner: "acme", name: "lagoon" });
@@ -785,7 +789,7 @@ it("forkPrCredentialSettings は public なら設定を読まず、private な�
   );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
-  const client = new GhCliClient(await makeAuth());
+  const client = ghClient(await makeAuth());
   const workspace = await githubCheckout();
   const read = (value: string, fields: Record<string, unknown> = {}) => {
     writeFileSync(visibility, `${value}\n`);
@@ -812,7 +816,7 @@ it("forkPrCredentialSettings は public なら設定を読まず、private な�
 // ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗(untyped)。not_found に誤判定しない
 it.each(unansweredCalls)("%s は gh が返らなくても上限で、どの呼び出しが何 ms で切れたかを書いた一時的失敗として返る(ADR 0330)", async (_, call) => {
   await withSleepingGh();
-  const client = new GhCliClient(await makeAuth(), { timeoutMs: 200 });
+  const client = ghClient(await makeAuth(), { timeoutMs: 200 });
   const workspace = await githubCheckout();
 
   const started = Date.now();
@@ -827,7 +831,7 @@ it.each(unansweredCalls)("%s は gh が返らなくても上限で、どの呼�
 // ADR 0330 決定1: 同期の gh は待つ間、盤面の唯一の実行の糸(人間面・poll・着地)ごと止める
 it("gh が返らない間も、同じ process の別の Promise は進む(ADR 0330)", async () => {
   await withSleepingGh();
-  const client = new GhCliClient(await makeAuth(), { timeoutMs: 1_000 });
+  const client = ghClient(await makeAuth(), { timeoutMs: 1_000 });
   const workspace = await githubCheckout();
   const order: string[] = [];
 
@@ -841,7 +845,7 @@ it("gh が返らない間も、同じ process の別の Promise は進む(ADR 03
 
 it("readPullRequest は gh が返らなくても上限で CI を pending、状態を unreadable と読む(ADR 0330)", async () => {
   await withSleepingGh();
-  const client = new GhCliClient(await makeAuth(), { timeoutMs: 200 });
+  const client = ghClient(await makeAuth(), { timeoutMs: 200 });
   const workspace = await githubCheckout();
 
   const started = Date.now();
@@ -849,4 +853,62 @@ it("readPullRequest は gh が返らなくても上限で CI を pending、状�
 
   expect(Date.now() - started).toBeLessThan(2_000);
   expect(pr).toEqual({ ci: "pending", state: "unreadable" });
+});
+
+/** `--version` には `version` の本文で答え、それ以外の呼び出しは log に1行残す gh —— 版の門の後ろで本体が撃たれたかを測る。 */
+async function ghAnsweringVersion(version: string): Promise<string> {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\nif [ "$1" = "--version" ]; then ${version}; fi\necho "$@" >> "${logPath}"\n`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
+  return logPath;
+}
+
+// ADR 0402 決定2: 撃つたびに撃つ前に版を読み、宣言と完全一致しなければ gh 本体を撃たずに版の不一致を名指す型付きの失敗で返す
+describe("gh の版の門(ADR 0402 決定2)", () => {
+  const MISMATCH = "gh version mismatch: the board runs only gh 9.9.9 (pinned in gh-cli-version) and found ";
+  /** PATH を差し替える前に checkout と token の代役を用意し、PATH を差し替えた後で merge を撃つ。 */
+  const mergeAfter = async (swapPath: () => Promise<void>, options: { timeoutMs?: number } = {}) => {
+    const client = new GhCliClient(await makeAuth(), { ghVersion: "9.9.9", ...options });
+    const workspace = await githubCheckout();
+    await swapPath();
+    return client.mergePullRequest({ workspace, number: 7 }, "abc123");
+  };
+
+  it.each([
+    ["宣言と違う版", `echo "gh version 2.46.0 (Ubuntu 2.46.0-4)"; exit 0`, "gh 2.46.0", {}],
+    ["--version の失敗", "echo broken >&2; exit 1", "no readable `gh --version` (Command failed: gh --version\nbroken)", {}],
+    ["--version が上限までに返らない", "exec sleep 5", "no readable `gh --version` (`gh --version` timed out after 1000 ms)", { timeoutMs: 1_000 }],
+  ])("%sなら gh 本体を撃たず、版の不一致を名指して返す", async (_, version, found, options) => {
+    let logPath = "";
+
+    const err = await mergeAfter(async () => void (logPath = await ghAnsweringVersion(version)), options).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GhVersionError);
+    expect((err as Error).message).toBe(MISMATCH + found);
+    expect(existsSync(logPath)).toBe(false);
+  });
+
+  it("gh が無ければ版の不一致として返る", async () => {
+    const empty = await tempDir("tidepool-empty-bin-");
+
+    const err = await mergeAfter(async () => void vi.stubEnv("PATH", empty)).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GhVersionError);
+    expect((err as Error).message).toMatch(new RegExp(`^${MISMATCH.replace(/[.()]/g, "\\$&")}no readable \`gh --version\` \\(.*ENOENT`));
+  });
+
+  it("宣言と完全一致する版なら gh 本体を撃つ", async () => {
+    let logPath = "";
+
+    await mergeAfter(async () => void (logPath = await ghAnsweringVersion(`echo "gh version 9.9.9 (2026-11-18)"; exit 0`)));
+
+    expect(await readFile(logPath, "utf8")).toBe("pr merge 7 --merge --match-head-commit abc123 -R acme/widget\n");
+  });
+
+  it("readPullRequest は版の不一致を unreadable に畳まずに返す", async () => {
+    await ghAnsweringVersion(`echo "gh version 2.46.0"; exit 0`);
+
+    await expect(new GhCliClient(await makeAuth(), { ghVersion: "9.9.9" }).readPullRequest({ workspace: await githubCheckout(), number: 1 })).rejects.toThrow(GhVersionError);
+  });
 });

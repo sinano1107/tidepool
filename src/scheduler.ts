@@ -23,6 +23,7 @@ import {
   selectable,
   windowMatchesSetting,
 } from "./execution-setting.js";
+import { GhVersionError } from "./gh-cli-version.js";
 import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked, UnhideableTaskSettingsError } from "./harness-containment.js";
@@ -1126,7 +1127,8 @@ export function startScheduler(deps: {
         excludedTasks.push(head.id);
         if (verdict.skip === "gitHub") {
           gitHubUnreadable = true;
-          issueExpansionFailed(head.id, verdict.ref, verdict.error);
+          // ADR 0402 決定4: 版の不一致は天候ではない —— 展開失敗の streak に数えず、question は「gh の版」が持つ
+          if (!(verdict.error instanceof GhVersionError)) issueExpansionFailed(head.id, verdict.ref, verdict.error);
         } else if (verdict.skip === "repo") {
           const candidate = head;
           db.transaction(() => {

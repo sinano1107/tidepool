@@ -102,7 +102,8 @@ limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'
 
 Then run `limactl restart tidepool`. Each VM start installs the `claude` CLI version that
 `~/tidepool/claude-cli-version` names; on any other version the board stops picking up tasks for
-agents that run on `claude`.
+agents that run on `claude`. It also installs the `gh` version that `~/tidepool/gh-cli-version` names;
+on any other version the board does not run `gh`.
 
 ## Checklist
 

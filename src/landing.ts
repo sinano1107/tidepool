@@ -6,6 +6,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventRowOf, latestEventOfTask, parseEventRow, type TaskScopedPayload } from "./events.js";
+import { GhVersionError } from "./gh-cli-version.js";
 import { git, isAncestor } from "./git.js";
 import { forkPrCredentialRefusal, type GitHubClient, type PrHeadRef, type PrStateRead } from "./github.js";
 import { type GitHubAuth, HEAD_REPO_REMOTE, landingHeadRepo, remoteTrackingRef, workspaceNetworkDestination } from "./github-auth.js";
@@ -1961,8 +1962,9 @@ export function createLanding(deps: LandingDeps): Landing {
       let protectedWorkspace = deps.isProtectedWorkspace?.(workspace.name);
       const inspectPr = dial !== "external" && (dial !== undefined || protectedWorkspace || humanRoot);
       // ADR 0395 決定4: Check the actual PR diff, including when an earlier PR creation was recovered.
+      // ADR 0402 決定3: 版の門の拒否は読めなかった PR ではない —— 根は待ち、次の回の探索が作った PR を見つける(ADR 0241 決定4)
       const unreadable = (error: unknown) => {
-        if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError) throw error;
+        if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof GhVersionError) throw error;
         return undefined;
       };
       const openedPr = inspectPr ? await readPrState(github, workspace, prNumber).catch(unreadable) : undefined;
@@ -1992,6 +1994,8 @@ export function createLanding(deps: LandingDeps): Landing {
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
       if (error instanceof RootStopped) throw error;
+      // ADR 0402 決定3: 版の門が止めた根は昇格失敗の question を立てずに待ち、次の収束が撃ち直す。答えている回答は版の不一致を名指して拒まれる
+      if (error instanceof GhVersionError) throw new RootStopped({ kind: "quarantined", error: error.message });
       // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
       if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
         return quarantined("workspace", resolvedWorkspace);
@@ -2272,7 +2276,7 @@ export function createLanding(deps: LandingDeps): Landing {
             }).then(
               () => null,
               (error: unknown) => {
-                if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError) throw error;
+                if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError || error instanceof GhVersionError) throw error;
                 if (error === stoppedBeforeMerge) return stoppedBeforeMerge;
                 return error instanceof Error ? error.message : String(error);
               },
@@ -2311,7 +2315,8 @@ export function createLanding(deps: LandingDeps): Landing {
             if (isQueuedForAutoMerge(deps.db, task_id)) stopForRepoMismatch(task_id, error, now);
             continue;
           }
-          if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefsRefusedError) continue;
+          // ADR 0402 決定3: 版の門が止めた PR はキューに残って次の tick を待つ —— 信号は「gh の版」の question が持つ
+          if (error instanceof WorkspaceRepoMismatchError || error instanceof LandingRefsRefusedError || error instanceof GhVersionError) continue;
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         } finally {
           release?.();

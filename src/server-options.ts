@@ -58,6 +58,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { executionSettingsFor } from "./execution-setting.js";
+import { withGhVersionQuarantine } from "./gh-version-signal.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -818,7 +819,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     resolveWorkspace,
     workspacesDir: board.workspacesDir,
     github,
-    workspaceAdmin: workspaceAdmin(board, github, db, registry),
+    // ADR 0402 決定3: 設定の扉の gh も「gh の版」の信号を通す(scheduler・着地・人間の verb の分は startServer が包む)
+    workspaceAdmin: workspaceAdmin(board, github && withGhVersionQuarantine(github, db, board.clock), db, registry),
     agentAdmin: agentAdmin(board, db, registry),
     profileAdmin: profileAdmin(board, registry),
     resolveAuthority: authorityResolver(board, db),
@@ -861,6 +863,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // ADR 0331 決定8: Worker MCP の probe の帰属の扉が引く、開いている probe の id
     probeIds: new Set(),
     registryReachability: registryReachabilityCheck(board),
+    // ADR 0402 決定3: 「gh の版」の回答の受理は版の門と同じ読み(本体と同じ env と上限)で読み直す
+    readGhVersion: github?.readGhVersion,
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
     // `tidepool-board[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って

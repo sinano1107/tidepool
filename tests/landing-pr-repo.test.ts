@@ -10,7 +10,7 @@ import { openQuarantineQuestion } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, holdAfterMerge } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
 import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -296,7 +296,7 @@ it("無人 merge の PR 読み取りが token を待つ間に登録し直すと�
   const { db, clock, reef, moved, root, move } = await reefWithPr("auto_if_ci_green", "https://github.com/acme/reef-old.git");
   const { window, githubAuth } = fetchHeldAtToken();
   const ghCommands = await recordGhCommands();
-  const github = new GhCliClient(githubAuth);
+  const github = new GhCliClient(githubAuth, MATCHING_GH);
   const landing = createLanding({ db, clock, resolveWorkspace: reef.resolve, defaultAgentName: "tako", github });
 
   const ticking = landing.tick("auto_merge", clock.now());
@@ -321,7 +321,7 @@ it("merge の回答が執行用 token を待つ間に登録し直すと、取得
     throw new Error("token unavailable");
   };
   const ghCommands = await recordGhCommands();
-  const client = new GhCliClient(githubAuth);
+  const client = new GhCliClient(githubAuth, MATCHING_GH);
   github.mergePullRequest = client.mergePullRequest.bind(client);
 
   const answering = answer("merge").catch((error: Error) => error);

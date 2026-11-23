@@ -17,7 +17,7 @@ import { announceHeadRepo, announcePublishedRepo, assertRememberedRepo, boardRef
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, settleReviews, shimGit } from "./harness.js";
+import { commitWork, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, MATCHING_GH, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, settleReviews, shimGit } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -565,7 +565,7 @@ esac
   const auth = new GitHubAuth(tokenFile, broker.url);
   const beforeTeardown = gitCalls().length;
   await runTeardown({ db, clock, slot, resolve: () => workspace, pollNow() {}, githubAuth: auth }, task.id, { completion: true });
-  const landing = createLanding({ db, clock, workspace, github: new GhCliClient(auth, { apiUrl: api.url }), githubAuth: auth, defaultAgentName: "deckhand" });
+  const landing = createLanding({ db, clock, workspace, github: new GhCliClient(auth, { ...MATCHING_GH, apiUrl: api.url }), githubAuth: auth, defaultAgentName: "deckhand" });
 
   const verdicts = await landing.converge();
 

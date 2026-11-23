@@ -30,6 +30,7 @@ import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents, type ReadCheckout } from "../src/events.js";
 import { type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
+import { GH_CLI_VERSION } from "../src/gh-cli-version.js";
 import type { GitHubClient } from "../src/github.js";
 import { type GitHubAuth, HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
@@ -162,6 +163,9 @@ export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 
 /** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
 export const HUMAN_WEBUI = [HUMAN_ACTOR_ID, "webui"] as const;
+
+/** 固定の版を答える `gh --version` の読み —— `GhCliClient` の版の門(ADR 0402 決定2)を測らないテストの setup。 */
+export const MATCHING_GH = { readGhVersion: async () => `gh version ${GH_CLI_VERSION} (2026-11-18)\n` } as const;
 
 /** conflict しない local 着地(`mergeTaskToProtected` を直に呼ぶ試験)の取り込みの束。作業台の基点は作れない path なので、試験の間で
  *  共有される dir も、実 HOME の既定の基点も読まない。 */
@@ -427,6 +431,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
     github: options.github ?? github,
+    readGhVersion: github.readGhVersion,
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,
