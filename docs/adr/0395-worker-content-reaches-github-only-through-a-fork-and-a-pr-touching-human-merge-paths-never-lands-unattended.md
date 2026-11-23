@@ -8,6 +8,8 @@
 
 **Status 追記: 射程の境界の「CI の緑を head の内容で偽れること(#3473)」は、盤面が塞ぐものではないと決めた(2026-11-23、issue #3473)。CI の緑は head が自ら定めた検査に通ったという事実でしかなく、人間の書いた PR でも同じである。worker の内容の検査は、着地の前に必ず決着する完了時レビュー(ADR 0092 決定1 —— 付帯子が決着するまで PR も開かない。レビューの後に入る修理子の内容は、それを生んだレビューが見届けてから受理する —— ADR 0111 決定2)と、installer が宣言する人間が merge する path(決定4)が担う。テストや scripts の書き換えで作った緑を見逃すのは、Auditor の定義か path の宣言という installer の選択である。帰結の「CI の緑(#3473 で偽れる)」もこの意味で読む。workflow 定義の書き換えは決定4 の外せない既定が塞ぐ。**
 
+**Status 追記: 決定3 の宣言の扉が出元 repo へ送るのは、その出元 repo の写し `refs/remotes/head-repo/task/*` がまだ無いタスクブランチだけである。写しのあるタスクブランチは盤面が一度送ったもので、その後の push は収束が ADR 0376 決定2 の条件で行う。扉は出元 repo の head を読まないので人間の巻き戻しを見分けられず、全部を送り直すと、祖先へ戻されたブランチを fast-forward で元へ戻し、収束が止めた巻き戻し(ADR 0376 決定6)も上書きした。写しの無いタスクブランチは今どおり lease 無しで送る —— 最後に push した値が無いとき、git の fast-forward の規則は ADR 0376 決定2 と同じ判断で、サーバーが原子的に検査する(2026-11-24、issue #3605)。**
+
 2026-11-21 の grilling(issue #3482)で決定。盤面は人間が一度も見ていない worker の内容を origin と同じ repo の `task/<root>` に push していた。GitHub は同じ repo の branch を書き込み権のある協力者の内容として扱うので、PR の CI は head の workflow 定義と head の code を repo の資格情報で走らせる —— 使い捨ての repo で、repo の既定が `read` でも head の定義の `permissions: contents: write` が書ける token を得て、repo の secrets も渡ることを測った。fork からの PR では、fork の所有者が base の admin 本人でも token は read、secrets は渡らなかった。測ったのは public と private の両方で(どちらも個人 account の repo を同じ account の org へ fork、private は fork の PR の workflow を有効にして)、PR は人間の gh token で開いた。実測の表と、spec に運ぶ実装の制約(`file:line` 付き)は #3482 のコメントに置く。同じ repo か fork かは、これまで一度も決められていなかった。
 
 ## 決定

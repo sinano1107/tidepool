@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 決定1 の「読んだ後に head が動いて push が落ちれば」は、祖先への巻き戻しでは成り立たない —— 盤面の push は force 無しで、git が拒むのは non-fast-forward だけなので、読んだ後に祖先へ戻された head への push は fast-forward として通り、巻き戻しを黙って上書きする。収束の push は、決定2 の判断に使った head を lease(`--force-with-lease=<ref>:<head>`、「無い」と読んだなら空)として載せる。読んだ後に head が動けば push が落ち、今どおり昇格の失敗になって `retry` が読み直す(拒否文は解析しないまま)。lease は値が一致すれば non-fast-forward も通すので、push の直前に head が push する sha の祖先であることを手元で確かめ、そうでなければ撃たない。merge が `--match-head-commit` で head を固定するのと同じ線で、push の側でも盤面は自分が判断した値の上にしか書かない(2026-11-24、issue #3605 / #3606。実測は #3605 のコメント)。**
+
 **Status 追記: 決定3 の最後に push した値は、出元 repo の写し `refs/remotes/head-repo/task/<root>` から読む。着地と publish の push が書き、出元 repo の差し替え・削除で前の repo の写しを消す。保護ブランチの写しは origin のまま([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1〜3、2026-11-22、issue #3562)。**
 
 **Status 追記: 決定3 の「event を残さない publish の push も書く」は外れる —— publish は `task/*` を origin へ送らないので、写し `refs/remotes/origin/task/<root>` を書くのは着地の push だけになる。出元 repo へ送ったタスクブランチの写しは `refs/remotes/head-repo/task/*` に書く([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定3、2026-11-22、issue #3563)。**
