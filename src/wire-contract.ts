@@ -68,6 +68,7 @@ export type RootSettledByObservation = "pr_merged" | "pr_merge_observed" | "pr_c
 export type SettledByObservation =
   | RootSettledByObservation
   | "pr_promotion_observed"
+  | "task_branch_lost_observed"
   | "quarantine_released"
   | "routing_proposal_stale"
   | "routing_proposal_applied"

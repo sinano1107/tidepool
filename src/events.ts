@@ -261,9 +261,6 @@ export type EventPayload =
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
-  // ADR 0375 決定7・8 / spec #3273 group H: give-up がブランチを失った死んだ根(PR を開いていない)の着地を終えた —— 以後この根は収束の候補に
-  // 入らない。question_ids はこの受理が閉じた根の着地の question(local 着地・昇格失敗)。保護ブランチに届いた記録には数えない(ADR 0380 決定1)
-  | { kind: "landing_ended_branch_lost"; question_ids: string[] }
   // ADR 0399 決定5・6: 人間が PR の根の昇格失敗の question に「end landing」と答えた —— 以後この根は収束の候補に入らず、PR は記録の repo に
   // 残る(merge も close も刻まない)。question_ids は同じ回答が PR の観測を刻まずに閉じた根の着地の question(merge・他の昇格失敗)
   | { kind: "landing_ended_pr_left"; question_ids: string[] }
@@ -317,6 +314,9 @@ export type EventPayload =
   // 着地そのもの(`pr_opened` / `nothing_to_land`)は question が指すタスクの側に
   // 残っているので、この行は payload を持たない
   | { kind: "pr_promotion_observed" }
+  // ADR 0407 決定2: 失われた ref を諦める受理が、ブランチを失った task を指すこの着地の question(local 着地・昇格失敗・merge)を回答なしで閉じた ——
+  // ブランチが無ければ答えようが無い。task_id は閉じた question で、閉じた理由を question 自身に刻む(#3490)
+  | { kind: "task_branch_lost_observed" }
   // ADR 0394 決定5: 断る回答(`pr_merge` と local_merge の hold、abandon promotion)が断った question と、その question が問うた
   // 内容の写し —— 盤面の部分(tip、書き換えの question では欠けたブランチも)と、`pr_merge` では外の部分。判断は question の decision log に、
   // 断った内容はこの事実として根に残る(ADR 0073 決定2)。何を止め、いつ効かなくなるかは question の種類で読む(決定6)。tip が null は「変わった」
