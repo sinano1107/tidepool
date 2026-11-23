@@ -64,7 +64,7 @@ import {
   ScriptedWorker,
   specRecordingCall,
 } from "./fakes.js";
-import { failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
+import { failEventInsert, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -838,7 +838,7 @@ describe("ClaudeCodeWorker", () => {
         spawnFailures.push(failure);
       },
     });
-    db.exec("CREATE TRIGGER fail_injection BEFORE INSERT ON events WHEN NEW.kind = 'memory_injected' BEGIN SELECT RAISE(ABORT, 'memory_injected write failed'); END");
+    failEventInsert(db, "memory_injected");
 
     const task = start("task-injection-fails");
     await vi.waitFor(() => expect(spawnFailures).toMatchObject([{ message: "memory_injected write failed" }]));

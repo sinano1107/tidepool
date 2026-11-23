@@ -705,6 +705,12 @@ export function failWorkerExited(db: Db): () => void {
   return () => db.exec("DROP TRIGGER fail_exited");
 }
 
+/** `kind` の event の INSERT を `RAISE(ABORT, '<kind> write failed')` で落とす。返り値は trigger を外す関数。 */
+export function failEventInsert(db: Db, kind: string): () => void {
+  db.exec(`CREATE TRIGGER fail_${kind} BEFORE INSERT ON events WHEN NEW.kind = '${kind}' BEGIN SELECT RAISE(ABORT, '${kind} write failed'); END`);
+  return () => db.exec(`DROP TRIGGER fail_${kind}`);
+}
+
 /** quarantine の question の登録(`registerTask` の INSERT)を `RAISE(ABORT)` で落とす。返り値は trigger を外す関数。 */
 export function failQuarantineQuestion(db: Db): () => void {
   db.exec(

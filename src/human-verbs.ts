@@ -2017,7 +2017,7 @@ export async function submitAnswer(
         }
       }
       // The decision log line on the question states why promotion was given up (the root holds only `landing_declined`).
-      // ADR 0405 決定1: 回答が commit されなければ偽になる行なので、回答と同じ transaction で
+      // ADR 0405 決定2: 回答が commit されなければ偽になる行なので、回答と同じ transaction で
       if (kind.kind === "pr_promotion_retry" && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
         logDecision(
           deps.db,

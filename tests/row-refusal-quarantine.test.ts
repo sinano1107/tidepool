@@ -17,7 +17,7 @@ import { Slot } from "../src/slot.js";
 import { listBoard, listExaminees, registerTask } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, fakeContainers, healthyOpenai, noRetrospectiveCalls, noSkillPings, recordingSpawn, ScriptedWorker, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, initWithMcpServers, makeWorkspace, POSED_HEAD, poseAccepted, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, failEventInsert, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, initWithMcpServers, makeWorkspace, POSED_HEAD, poseAccepted, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -710,12 +710,12 @@ it("一覧に無い openai の対象の target_refused が書けなければ対�
   const [examinee] = poseAccepted(db, root, POSE, "auditor", clock.now(), "worker", POSED_HEAD);
   const targetQuestions = () => listBoard(db).filter((q) => q.question_quarantine_kind === "interviewTarget").map((q) => q.question_quarantine_value);
   const refused = () => listEvents(db, examinee!.id).filter((e) => e.kind === "target_refused").length;
-  db.exec("CREATE TRIGGER fail_refused BEFORE INSERT ON events WHEN NEW.kind = 'target_refused' BEGIN SELECT RAISE(ABORT, 'target_refused write failed'); END");
+  const repair = failEventInsert(db, "target_refused");
 
   await clock.advance(HOURLY);
   expect({ questions: targetQuestions(), refused: refused() }).toEqual({ questions: [], refused: 0 });
 
-  db.exec("DROP TRIGGER fail_refused");
+  repair();
   await clock.advance(HOURLY);
   expect({ questions: targetQuestions(), refused: refused() }).toEqual({ questions: ["openai/gpt-5.4-mini"], refused: 1 });
 });

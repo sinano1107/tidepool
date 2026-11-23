@@ -53,6 +53,7 @@ import {
   decomposeTaskViaWorker,
   examineeRootId,
   FULL_HANDOFF,
+  failEventInsert,
   failTeardownMark,
   failWorkerExited,
   fireWrites,
@@ -1469,14 +1470,14 @@ describe("CodexWorker (ADR 0098)", () => {
 
   // ADR 0405 決定2: 注入の記録は worker_spawned の id を指す —— 書けなければ worker_spawned も残らず、spawn の前の失敗と同じ経路
   it("memory_injected が書けなければ worker_spawned も残らず、process は起きずに spawn_failed へ落ちる", async () => {
-    const calls: string[] = [];
-    const f = await fixture((taskId) => calls.push(taskId));
+    const spawnFailedTaskIds: string[] = [];
+    const f = await fixture((taskId) => spawnFailedTaskIds.push(taskId));
     const value = task(f.db);
-    f.db.exec("CREATE TRIGGER fail_injection BEFORE INSERT ON events WHEN NEW.kind = 'memory_injected' BEGIN SELECT RAISE(ABORT, 'memory_injected write failed'); END");
+    failEventInsert(f.db, "memory_injected");
 
     await f.start(value);
 
-    expect(calls).toEqual([value.id]);
+    expect(spawnFailedTaskIds).toEqual([value.id]);
     expect(f.process.calls).toEqual([]);
     expect(listEvents(f.db, value.id).filter((e) => e.kind === "worker_spawned" || e.kind === "spawn_failed").map((e) => e.payload)).toMatchObject([
       { kind: "spawn_failed", message: "memory_injected write failed" },

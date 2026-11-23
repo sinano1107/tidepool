@@ -37,6 +37,7 @@ import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock,
 import {
   decomposeTaskViaWorker,
   defaultingTo,
+  failEventInsert,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   initWorkspaceCheckout,
@@ -723,7 +724,7 @@ it("PR promotion の abandon を decision log に残す", async () => {
   });
 });
 
-it("PR promotion の abandon は決定ログが書けなければ回答ごと巻き戻る(ADR 0405 決定1)", async () => {
+it("PR promotion の abandon は判断ログが書けなければ回答ごと巻き戻る(ADR 0405 決定2)", async () => {
   db = openDb(":memory:");
   const completedTask = registerTask(
     db,
@@ -733,11 +734,11 @@ it("PR promotion の abandon は決定ログが書けなければ回答ごと巻
   );
   registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
   const question = onlyQuestion(db);
-  db.exec("CREATE TRIGGER fail_decision BEFORE INSERT ON events WHEN NEW.kind = 'decision_logged' BEGIN SELECT RAISE(ABORT, 'decision write failed'); END");
+  failEventInsert(db, "decision_logged");
 
   await expect(
     submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["abandon promotion"], undefined, () => NOW, "webui"),
-  ).rejects.toThrow("decision write failed");
+  ).rejects.toThrow("decision_logged write failed");
 
   expect({
     status: getTask(db, question.id)?.status,

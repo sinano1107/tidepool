@@ -1144,7 +1144,7 @@ function missingBranchesOf({ droppedBranches, unpushedBranches }: OutsidePush): 
   return missing.length === 0 ? null : missing;
 }
 
-/** ADR 0405 決定1: キューの行を外すことと問うことを1つにする。 */
+/** ADR 0217 決定2: キューの行を外して merge question を立てる。外すことと問うことは1つの transaction で(ADR 0405 決定1)。 */
 function askMerge(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1439,7 +1439,7 @@ export function createLanding(deps: LandingDeps): Landing {
       "board",
     );
   };
-  // ADR 0405 決定1: 判断行は閉じた観測が commit されなければ偽になるので、観測と同じ transaction で書く。告知の読みも観測の後の状態を読む
+  // ADR 0405 決定2: 判断行は閉じた観測が commit されなければ偽になるので、観測と同じ transaction で書く。告知の読みも観測の後の状態を読む
   /** キューの行を外して決着を根に刻む(`retireAutoMerge`)。閉じた観測なら判断行も流す。 */
   const retire = (taskId: string, payload: Parameters<typeof retireAutoMerge>[2], now: Date) =>
     deps.db.transaction(() => {
@@ -1693,9 +1693,10 @@ export function createLanding(deps: LandingDeps): Landing {
               `protected branch now?`
             : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
               `for "${task.title}". Land its task branch on the protected branch now?`;
-        // ADR 0405 決定5: 問うことと、それで閉じる失敗 question を1つの transaction で
+        // ADR 0405 決定5: 問うことと、それで閉じる失敗 question を1つの transaction で。tip は git を読むので transaction の前に
+        const tip = questionTip(task.id, () => workspace);
         deps.db.transaction(() => {
-          registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), questionTip(task.id, () => workspace));
+          registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now(), tip);
           retireFailures(task.id, ctx);
         })();
         return { kind: "landed", form: "local_merge_question" };
