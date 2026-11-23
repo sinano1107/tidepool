@@ -46,7 +46,15 @@ import {
   DeletionConfirmationRequiredError,
   refreshRegistryForWrite,
 } from "./registry-write.js";
-import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess, repositoryLabel, sameRepository } from "./repo-access.js";
+import {
+  carriesCredential,
+  parseGitHubRepo,
+  RepoAccessMissingError,
+  RepoCredentialError,
+  repairRepoAccess,
+  repositoryLabel,
+  sameRepository,
+} from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
 import { settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
@@ -696,7 +704,7 @@ export class CheckoutHasOriginError extends Error {
   constructor(name: string, origin: string, path: string) {
     // ADR 0373 決定16 / spec #3273 text A12(H12 → F4): ref を動かさない直し方を言う
     super(
-      `workspace "${name}" declares no remote source of truth but its checkout already has an 'origin' (${origin}). In ${path}, run \`git config --remove-section remote.origin\`.`,
+      `workspace "${name}" declares no remote source of truth but its checkout already has an 'origin' (${repositoryLabel(origin)}). In ${path}, run \`git config --remove-section remote.origin\`.`,
     );
     this.name = "CheckoutHasOriginError";
   }
@@ -730,6 +738,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Works
   // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが App を
   // install し忘れた」を、push が落ちる**前に**名指しする。位置は `remote add` の手前で
   // なければならない —— 拒んだとき、巻き戻す痕跡がそもそも作られない側に立つ。
+  assertNoCredential(input.repo);
   await assertRepoAccess(input.repo, deps.github);
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
   // `authedPush` は温まったキャッシュから同期に注入するだけなので、下の「await は
@@ -832,6 +841,7 @@ async function buildEntry(
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") {
+    assertNoCredential(input.repo);
     await assertRepoAccess(input.repo, deps.github);
     await deps.githubAuth?.ensureToken(repoKey(input.repo));
     return cloneAndDescribe(input.name, input.repo, deps);
@@ -871,7 +881,7 @@ function assertReusableOrphan(dir: string, wanted: string | undefined): void {
   if (sameRepository(origin, wanted)) return;
   throw new OrphanCheckoutMismatchError(
     dir,
-    `its 'origin' is ${origin ?? "absent"}, expected ${wanted ?? "none"}`,
+    `its 'origin' is ${origin === undefined ? "absent" : repositoryLabel(origin)}, expected ${wanted === undefined ? "none" : repositoryLabel(wanted)}`,
   );
 }
 
@@ -896,6 +906,13 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
     git(dir, "commit", "--allow-empty", "-m", "initial commit");
   }
   return {};
+}
+
+/** ADR 0406 決定2: publish・clone の宛先の判定は、扉の最初の副作用(到達性の probe)の手前に置く。 */
+function assertNoCredential(repo: string): void {
+  if (carriesCredential(repo)) {
+    throw new RepoCredentialError(`the repository ${repositoryLabel(repo)} carries a credential in its URL. Give the URL without the credential.`);
+  }
 }
 
 /** 盤面がこれから git でその repo へ出ていく直前に、その repo の installation token を
@@ -1077,6 +1094,11 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
     throw new NotAGitRepositoryError(path);
   }
   const repo = originUrl(path);
+  if (repo !== undefined && carriesCredential(repo)) {
+    throw new RepoCredentialError(
+      `the 'origin' of ${path} (${repositoryLabel(repo)}) carries a credential in its URL. In ${path}, run \`git remote set-url origin <URL without credentials>\`, then register it again.`,
+    );
+  }
   return repo === undefined ? { path } : { path, repo };
 }
 

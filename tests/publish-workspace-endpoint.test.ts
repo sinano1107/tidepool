@@ -62,6 +62,20 @@ it("POST /api/workspaces/:name/publish は送った範囲と次の手順を返�
   });
 });
 
+// ADR 0406: 資格情報を持つ宛先は呼び出し側の入力の誤り —— 外部の一手の失敗(502)に畳まない
+it("資格情報を持つ宛先への publish は 400 を返す", async () => {
+  const ws = await makeWorkspace("sandbox");
+  const registryDir = await makeRegistry({ "workspaces.yaml": `sandbox:\n  path: ${ws.path}\n` });
+  const token = join(await tempDir("tidepool-token-"), "token");
+  writeFileSync(token, "ghp_test\n");
+  const deps = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-"), githubAuth: new GitHubAuth(token) };
+  t = await bootTidepool({ workspaceAdmin: { publish: (input) => publishWorkspace(input, { ...deps, db: t.db }) } });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: "https://user:ghp_secret@git.example.com/acme/sandbox.git" });
+
+  expect(res.status).toBe(400);
+});
+
 it("publish が未設定(registry なしの盤面)なら 503 を返す", async () => {
   t = await bootTidepool();
 

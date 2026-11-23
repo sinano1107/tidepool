@@ -21,6 +21,7 @@ import {
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
+import { carriesCredential, RepoCredentialError, repositoryLabel } from "./repo-access.js";
 import { findSkillAllowlistError, whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 import type { Tier } from "./tier.js";
 
@@ -954,6 +955,15 @@ function assertValidWorkspaces(workspaces: z.infer<typeof workspacesSchema>): vo
     assertNameRule(name, InvalidWorkspaceNameError);
     assertValidReviewAllowedCommands(entry.review_allowed_commands ?? []);
     assertValidAllowedDomains(entry.allowed_domains ?? []);
+    for (const field of ["repo", "head_repo"] as const) {
+      const value = entry[field];
+      // ADR 0406 決定4: 扉を通らない値(手編集・既にある値)もここで止まる —— 止め方は読み込みの1点(ADR 0403 決定5)が持つ
+      if (value !== undefined && carriesCredential(value)) {
+        throw new RepoCredentialError(
+          `workspace "${name}" declares ${field}: ${repositoryLabel(value)}, which carries a credential in its URL. Remove the credential from workspaces.yaml, and revoke it: it stays in the registry's history.`,
+        );
+      }
+    }
   }
 }
 

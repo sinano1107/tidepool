@@ -69,7 +69,33 @@ export function repositoryLabel(repo: string, { preserveSshUser = false } = {}):
       return preserveSshUser ? "configured repository" : "origin configured in the registry clone";
     }
   }
-  return preserveSshUser ? repo : origin.replace(/^[^:/@]+@(?=(?:\[[^\]]+\]|[^:/]+):)/, "");
+  // scp 形の `user:password@` は password ごと外す(ADR 0406 決定3)。修理の命令に要る ssh のログイン名だけは残す
+  if (preserveSshUser && !/^[^/@]*:[^/@]*@/.test(origin)) return repo;
+  return origin.replace(/^([^:/@]*)[^/@]*@(?=(?:\[[^\]]+\]|[^:/]+):)/, preserveSshUser ? "$1@" : "");
+}
+
+/** ADR 0406 決定3: 宣言の repo(`repo` / `head_repo`)の値が資格情報を持つか —— registry の読み込みと publish・clone・register の
+ *  扉が使う1つの判定。どの scheme でも password・query・fragment、ssh 以外の scheme の user 部分を秘密と読む(GitHub は
+ *  `https://<token>@github.com/…` を user 部分だけで token として受ける)。ssh のログイン名とローカル path は通す。 */
+export function carriesCredential(repo: string): boolean {
+  const value = repo.trim();
+  const url = value.match(/^([a-z][a-z\d+.-]*):\/\/([^/?#]*)/i);
+  if (url) {
+    const userinfo = url[2]!.slice(0, Math.max(url[2]!.lastIndexOf("@"), 0));
+    return /[?#]/.test(value) || userinfo.includes(":") || (userinfo !== "" && url[1]!.toLowerCase() !== "ssh");
+  }
+  // scheme の無い値は、最初の `/` より前に `:` があれば scp 形 `[user@]host:path`(git がローカル path と分ける読み)。`@` の前の `:` は password
+  if (!/^[^/]*:/.test(value)) return false;
+  const at = value.indexOf("@");
+  return /[?#]/.test(value) || (at > 0 && value.slice(0, at).includes(":"));
+}
+
+/** ADR 0406 決定1: 宣言の repo になる値が資格情報を持つので拒んだ。文は扉ごとに組み、値は `repositoryLabel` を通したものだけを出す。 */
+export class RepoCredentialError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepoCredentialError";
+  }
 }
 
 /** github.com の repo を指す URL から `owner/name` を取り出す。**github.com 以外は

@@ -5,11 +5,14 @@ import { RepoAccessMissingError } from "../src/repo-access.js";
 import {
   BoardStateOverlapError,
   type CreateWorkspaceInput,
+  createWorkspace,
   LeftoverWorkspaceStateError,
   LiveCheckoutSignalsError,
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -150,6 +153,17 @@ it("repo アクセスが足りない登録(RepoAccessMissingError)は 400 で案
   // 400: 案内の一行を実行して出し直せば通る — 盤面が壊れている(502)のではない
   expect(res.status).toBe(400);
   expect(res.json.error).toContain("-f permission=push");
+});
+
+// ADR 0406: 資格情報を持つ入力は呼び出し側の入力の誤り —— 外部の一手の失敗(502)に畳まない
+it("資格情報を持つ repo の clone は 400 を返す", async () => {
+  const registry = { dir: await makeRegistry(), mode: "purely-local" as const };
+  const workspacesBaseDir = await tempDir("tidepool-ws-base-");
+  t = await bootTidepool({ workspaceAdmin: { create: (input) => createWorkspace(input, { registry, workspacesBaseDir, db: t.db }) } });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces", { mode: "clone", name: "lagoon", repo: "https://ghp_secret@github.com/sinano1107/tidepool" });
+
+  expect(res.status).toBe(400);
 });
 
 it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 決定1)", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGitHubRepo, repairRepoAccess, sameRepository } from "../src/repo-access.js";
+import { carriesCredential, parseGitHubRepo, repairRepoAccess, repositoryLabel, sameRepository } from "../src/repo-access.js";
 import { FakeGitHubClient } from "./fakes.js";
 
 describe("parseGitHubRepo(ADR 0067 決定1: これは github.com か、の門)", () => {
@@ -61,4 +61,28 @@ describe("repairRepoAccess(ADR 0093 決定8: 修復は「App を install する�
     expect(guidance).toMatch(/cannot push/i);
     expect(guidance).toContain("HTTP 404: repo_unreachable");
   });
+});
+
+// ADR 0406 決定3: 宣言の repo の秘密は password・query・fragment と、ssh 以外の user 部分。ssh のログイン名は通す
+describe("carriesCredential(ADR 0406: 宣言の repo は資格情報を持たない)", () => {
+  it.each([
+    "https://user:ghp_secret@github.com/a/b.git",
+    "https://ghp_secret@github.com/a/b",
+    "https://u:ghp_secret@gitlab.com/a/b.git",
+    "https://github.com/a/b?access_token=ghp_secret",
+    "https://github.com/a/b#ghp_secret",
+    "ssh://git:ghp_secret@host/a/b",
+    "git:ghp_secret@host:a/b",
+  ])("%s は資格情報を持ち、拒否の文に出す表示には秘密が残らない", (repo) => {
+    expect(carriesCredential(repo)).toBe(true);
+    expect(repositoryLabel(repo)).not.toContain("ghp_secret");
+    expect(repositoryLabel(repo, { preserveSshUser: true })).not.toContain("ghp_secret");
+  });
+
+  it.each(["ssh://git@github.com/a/b.git", "git@github.com:a/b.git", "https://github.com/a/b.git", "/abs/path", "file:///abs"])(
+    "%s は資格情報を持たない",
+    (repo) => {
+      expect(carriesCredential(repo)).toBe(false);
+    },
+  );
 });

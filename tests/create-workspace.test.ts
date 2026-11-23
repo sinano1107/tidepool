@@ -9,7 +9,7 @@ import { openDb } from "../src/db.js";
 import { NoOwnGitDirError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
-import { RepoAccessMissingError } from "../src/repo-access.js";
+import { RepoAccessMissingError, RepoCredentialError } from "../src/repo-access.js";
 import { announceHeadRepo } from "../src/workspace.js";
 import {
   BoardNamedProtectedBranchError,
@@ -280,6 +280,22 @@ describe("createWorkspace: register モード(issue #57)", () => {
 
   // 逆向き。remote を持たない checkout に `repo` を書けば、その宣言と実態のずれが
   // pickup で quarantine に落ちる —— 登録がその状態を自分で作ってはならない。
+  // ADR 0406 決定2: origin の観測が資格情報を持てば宣言にしない —— 直すのは checkout の origin
+  it("資格情報を持つ origin の checkout の登録は、origin の直し方を言って拒否され、文に秘密を出さず、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const checkout = await makeLocalOnlyCheckout();
+    git(checkout, "remote", "add", "origin", "https://user:ghp_secret@git.example.com/acme/sandbox.git");
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    const err = (await createWorkspace({ mode: "register", name: "sandbox", path: checkout }, deps).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(RepoCredentialError);
+    expect(err.message).toContain(`In ${checkout}, run \`git remote set-url origin <URL without credentials>\``);
+    expect(err.message).not.toContain("ghp_secret");
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
   it("origin を持たない既存 checkout の登録では repo を書かない", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
@@ -762,6 +778,25 @@ describe("createWorkspace: clone モード(issue #57)", () => {
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toBeUndefined();
   });
 
+  // ADR 0406 決定2: 入力の判定は最初の副作用(到達性の probe・clone)の手前
+  it("資格情報を持つ repo は probe も clone も撃たずに拒否され、文に秘密を出さず、何も残さない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    deps.github.scriptUnreachable("sinano1107/tidepool");
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    const err = (await createWorkspace(
+      { mode: "clone", name: "lagoon", repo: "https://ghp_secret@github.com/sinano1107/tidepool" },
+      deps,
+    ).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(RepoCredentialError);
+    expect(err.message).not.toContain("ghp_secret");
+    expect(deps.github.repoAccessCalls).toBe(0);
+    expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
   it("仲介が token を出せる repo は門を通って登録される", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
@@ -1124,6 +1159,18 @@ describe("createWorkspace: 孤児流用の門(ADR 0087 決定5 / issue #205)", (
       createWorkspace({ mode: "clone", name: "lagoon", repo: wanted }, deps),
     ).rejects.toThrow(join(deps.workspacesBaseDir, "lagoon"));
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toBeUndefined();
+  });
+
+  it("clone モード: 孤児の origin が資格情報を持っても、拒否の文に秘密を出さない(ADR 0406 帰結)", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", await makeUpstream(), "https://user:ghp_secret@git.example.com/acme/stale.git");
+
+    const err = (await createWorkspace({ mode: "clone", name: "lagoon", repo: await makeUpstream() }, deps).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(OrphanCheckoutMismatchError);
+    expect(err.message).toContain("its 'origin' is https://git.example.com/acme/stale.git");
+    expect(err.message).not.toContain("ghp_secret");
   });
 
   it("新規作成モード: 規約パスの既存 checkout が origin を持てば流用せず拒否する", async () => {
