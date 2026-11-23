@@ -35,7 +35,10 @@ export type PlaceFire = {
 
 /** 一覧の1項: 後半を撃つ呼び手は操作の context を必ず渡す。 */
 export type PickupPredicate = { describe: string } & (
-  | { phase: "before-open"; check: () => void }
+  // 開く前の項は同期(#3524): 戻り型を `undefined | void` にして async の項を型で拒む —— `() => void` は async 関数を受けてしまい、
+  // `fireBeforeOpenPredicates` は await しないので reject が拾われず門を素通りする。同期の呼び手(着地の最初の撮り、ADR 0399 決定7)も、
+  // `open_workbench` が扉の先頭で読んだ時刻で `intake` question を登録するまで他の書き込みが割り込まないことも、これに乗る。
+  | { phase: "before-open"; check: () => undefined | void }
   | { phase: "after-open"; place: WorkspaceConfig; check: (fire: PlaceFire) => void | Promise<void> }
 );
 
