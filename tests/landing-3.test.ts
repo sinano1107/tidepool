@@ -1786,7 +1786,7 @@ async function brokenRegistryRead(db: Db, clock: FakeClock): Promise<() => void>
   const dir = await makeRegistry();
   breakRegistry(dir);
   return () => {
-    loadRegistryOrStop(db, { dir, mode: "purely-local" }, () => clock.now());
+    loadRegistryOrStop(db, { dir, mode: "purely-local" }, clock);
   };
 }
 

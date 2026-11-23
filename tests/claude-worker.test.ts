@@ -33,7 +33,7 @@ import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type In
 import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes, projectionPending } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
-import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
 import {
   loadRegistry,
   REVIEWER_AUTHORITY_PROFILE,
@@ -42,6 +42,7 @@ import {
   refreshRegistry,
   registryRef,
 } from "../src/registry.js";
+import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import { Slot } from "../src/slot.js";
 import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, sessionReadCheckoutOf, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js";
@@ -65,7 +66,7 @@ import {
   specRecordingCall,
 } from "./fakes.js";
 import { failEventInsert, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
-import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { breakRegistry, FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -2771,6 +2772,43 @@ describe("ClaudeCodeWorker", () => {
           ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown workspace/);
+  });
+
+  // ADR 0052 決定4: 起動時の読みは騒ぐだけで、起動を拒まない —— 止まりは読み込みの1点が立てる(ADR 0403 決定5)
+  it("registry が読めなくても boot 時のコンストラクタは投げず、registryUnreadable を1枚立てる", async () => {
+    const registryDir = await makeRegistry();
+    breakRegistry(registryDir);
+    const logDir = await tempDir("tidepool-worker-logs-");
+    const db = openDb(":memory:");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => error.mockRestore());
+
+    expect(
+      () =>
+        new ClaudeCodeWorker({
+          db,
+          clock: new FakeClock(),
+          registry: { dir: registryDir, mode: "purely-local" },
+          agent: "deckhand",
+          workspace: "tidepool",
+          mcpUrl: "http://127.0.0.1:4589/mcp",
+          logDir,
+          transcripts: new TranscriptStore(logDir),
+          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
+        }),
+    ).not.toThrow();
+    expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
+  });
+
+  it("registry が読めないと、start() は RegistryUnreadableError を投げて registryUnreadable を1枚立てる(ADR 0403 決定5)", async () => {
+    const { worker, setting, db, registryDir } = await makeWorker();
+    const task = makeTask("t-unreadable");
+    insertTask(db, task);
+    const picked = setting(task);
+    breakRegistry(registryDir);
+
+    expect(() => worker.start(task, sessionId(db, task.id), picked)).toThrow(RegistryUnreadableError);
+    expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
   });
 
   it("checkUsage はプロンプト到達パターンを待ち、さらに入力ボックスが落ち着いてから /usage を送る(盲送りしない・描画直後の取りこぼしも避ける・ADR 0028)", async () => {

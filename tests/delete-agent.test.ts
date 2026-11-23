@@ -8,6 +8,9 @@ import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerT
 import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
+// 管理の扉は読めない registry の止まりを盤面の db に立てる(ADR 0403 決定5)—— ここの registry はどれも読めるので、何も書かれない
+const db = openDb(":memory:");
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
     .toString()
@@ -29,7 +32,7 @@ describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
 
     await deleteAgent(
       { name: "deckhand", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+      { db, registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeUndefined();
@@ -45,7 +48,7 @@ describe("deleteAgent: 確認の門(issue #205 / ADR 0087)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand" },
-        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+        { db, registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
       ),
     ).rejects.toThrow(DeletionConfirmationRequiredError);
 
@@ -61,7 +64,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, unsettledTaskCount: 2 },
+        { db, registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, unsettledTaskCount: 2 },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -77,7 +80,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, awaitingLandingTaskIds: ["t1", "t2"] },
+        { db, registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, awaitingLandingTaskIds: ["t1", "t2"] },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -100,7 +103,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "fugu", confirm: true },
-        { registry, ...NO_REFERENCES, unsettledTaskCount: 3, unsettledWorkTaskCount: 1, awaitingLandingTaskIds: ["t1", "t2"] },
+        { db, registry, ...NO_REFERENCES, unsettledTaskCount: 3, unsettledWorkTaskCount: 1, awaitingLandingTaskIds: ["t1", "t2"] },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -110,7 +113,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       ],
     });
 
-    await deleteAgent({ name: "fugu", confirm: true }, { registry, ...NO_REFERENCES, unsettledTaskCount: 2 });
+    await deleteAgent({ name: "fugu", confirm: true }, { db, registry, ...NO_REFERENCES, unsettledTaskCount: 2 });
 
     expect(loadRegistry(registryDir, "purely-local").agents.fugu).toMatchObject({ builtin: true });
   });
@@ -122,6 +125,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
+          db,
           registry: { dir: registryDir, mode: "purely-local" },
           ...NO_REFERENCES,
           defaultAgentName: "deckhand",
@@ -140,6 +144,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
+          db,
           registry: { dir: registryDir, mode: "purely-local" },
           ...NO_REFERENCES,
           auditorName: "deckhand",
@@ -158,6 +163,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
+          db,
           registry: { dir: registryDir, mode: "purely-local" },
           ...NO_REFERENCES,
           interviewerName: "deckhand",
@@ -176,6 +182,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
+          db,
           registry: { dir: registryDir, mode: "purely-local" },
           ...NO_REFERENCES,
           defaultAgentName: "deckhand",
@@ -202,7 +209,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
 
     await deleteAgent(
       { name: "deckhand", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+      { db, registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeUndefined();

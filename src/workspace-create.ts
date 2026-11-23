@@ -34,11 +34,11 @@ import {
   assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
   assertValidWorkspaceName,
-  loadRegistry,
   ownEntry,
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
+import { loadRegistryOrStop } from "./registry-unreadable.js";
 import {
   commitToRegistry,
   DeletionBlockedError,
@@ -122,6 +122,9 @@ export interface WorkspaceAdminDeps {
    *  (issue #210 レビュー — AgentAdminDeps / ProfileAdminDeps と共有する
    *  Data Clumps だった)。 */
   registry: RegistrySource;
+  /** 読み込みの1点が読めない registry の止まりを立てる盤面の db と時計(ADR 0403 決定5)。 */
+  db: Db;
+  clock?: Clock;
   workspacesBaseDir: string;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
    *  process), threaded in by the composition root. The creation gate refuses
@@ -146,13 +149,6 @@ export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
    *  だけになる。`create` は GitHub に一切出ないので、そもそもこれを読まない
    *  (ADR 0066 決定1)。 */
   github?: GitHubClient;
-}
-
-/** publish の dep: push が写しを動かすので、走っている session の基準へ写しを予告する盤面の db を足す(ADR 0243 /
- *  ADR 0066 決定4)。 */
-export interface PublishWorkspaceDeps extends WorkspaceGitHubDeps {
-  db: Db;
-  clock?: Clock;
 }
 
 /** 返すのは着地した checkout のパス(ADR 0082 決定1)。MCP の `create_workspace`
@@ -190,10 +186,10 @@ type OpenWorkbenchFn = (input: { name: string }, origin: EventOrigin) => Promise
 
 /** `open_workbench` の扉(ADR 0371 決定6): registry に登録された workspace の名前だけを受ける —— 面接室も登録されていないので通らない
  *  (spec #3273 group A、#3184)。判定と執行は `openHumanContentWorkbench` が持ち、呼んだ人間が question の登録者になる。 */
-export async function openWorkspaceWorkbench(input: { name: string }, origin: EventOrigin, deps: WorkspaceAdminDeps & { db: Db; clock?: Clock }): Promise<string> {
+export async function openWorkspaceWorkbench(input: { name: string }, origin: EventOrigin, deps: WorkspaceAdminDeps): Promise<string> {
   // ADR 0373 決定13 の確認は名前を引くたびに registry を読み直す —— pickup の口と同じ
   const resolveRegistered = (name: string | null) =>
-    resolveExecutionWorkspace(loadRegistry(deps.registry.dir, deps.registry.mode), input.name, name, deps.workspacesBaseDir);
+    resolveExecutionWorkspace(loadRegistryOrStop(deps.db, deps.registry, deps.clock), input.name, name, deps.workspacesBaseDir);
   return openHumanContentWorkbench(deps.db, resolveRegistered(input.name), deps.workspacesBaseDir, { actorId: HUMAN_ACTOR_ID, origin }, () => (deps.clock ?? new SystemClock()).now(), {
     resolveRegistered,
     fixedPoints: deps.boardState,
@@ -229,9 +225,9 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps & { db: Db }): Promise<string> {
+export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   assertValidWorkspaceName(registry, input.name);
   // ADR 0401 決定5: 削除の途中で残った行の上に登録すると、次の pickup がその行を新しい checkout の基準として比べる
   if (holdsWorkspaceState(deps.db, input.name)) throw new LeftoverWorkspaceStateError(input.name, leftoverStateExit(input.name, deps.registry));
@@ -480,9 +476,7 @@ export class WorkspaceRegistryUnprotectError extends Error {
 
 /** The update door's deps: the board db remembers the head repo, and `github` reads its parent (ADR 0395 決定2). */
 export interface UpdateWorkspaceDeps extends WorkspaceAdminDeps {
-  db: Db;
   github?: GitHubClient;
-  clock?: Clock;
 }
 
 export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateWorkspaceDeps): Promise<void> {
@@ -496,7 +490,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: UpdateW
     : null;
   // ADR 0093: the head repo's token for the task branch push (sendTaskBranches) is warmed here too, before the registry read
   if (head) await deps.githubAuth?.ensureToken(githubKey(head.head));
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   // ADR 0395 決定4: a confirmation covers only the paths in the declaration the human reviewed.
@@ -615,10 +609,10 @@ export interface WorkspaceDeletionReferences {
 
 export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
-  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences & { db: Db; clock?: Clock },
+  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences,
 ): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const reasons: DeletionBlockedReason[] = [];
@@ -720,9 +714,9 @@ export class ProtectedBranchMissingError extends Error {
  *  `git remote add origin` → 盤面が組んだ URL へ `git push <sha>:<保護ブランチ>` → 写しの `update-ref` → registry エントリへ `repo`。
  *  `task/*` は送らない —— 出元 repo の宣言が出元 repo へ送る(ADR 0395 決定3 の段2)。返すのは送った範囲と次の手順の文。
  *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
-export async function publishWorkspace(input: PublishWorkspaceInput, deps: PublishWorkspaceDeps): Promise<string> {
+export async function publishWorkspace(input: PublishWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const { name } = input;
@@ -749,7 +743,7 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // 上で読んだ写しは既に古い —— そのまま書くと相手の編集を黙って巻き戻す。publish の
   // 対象は**既に登録済み**の workspace なので、`createWorkspace` の「途中失敗が残すのは
   // registry が知らない孤児だけ」という根拠はここでは引き継げない(ADR 0066 決定5)。
-  const fresh = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).workspaces, input.name);
+  const fresh = ownEntry(loadRegistryOrStop(deps.db, deps.registry, deps.clock).workspaces, input.name);
   if (!fresh) throw new UnknownWorkspaceError(input.name);
   const dir = entryCheckoutPath(fresh, name, deps.workspacesBaseDir);
   assertRememberedRepo(deps.db, { name, path: dir, repo: fresh.repo }, now());
@@ -1131,7 +1125,7 @@ export function listWorkspaceViews(
   deps: WorkspaceAdminDeps,
   source: WorkspacesBaseDirSource,
 ): WorkspaceListView {
-  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const readProtection = workspaceProtectionReader(deps.registry.dir);
   return {
     workspaces: Object.entries(registry.workspaces).map(([name, entry]) => {

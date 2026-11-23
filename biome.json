@@ -40,6 +40,10 @@
 			"plugins": ["./no-raw-res-json.grit"]
 		},
 		{
+			"includes": ["**", "!tests/**", "!src/registry.ts", "!src/registry-unreadable.ts"],
+			"plugins": ["./no-direct-registry-load.grit"]
+		},
+		{
 			"includes": ["src/mcp.ts", "src/management-mcp.ts"],
 			"plugins": ["./no-raw-tool-content.grit"]
 		},

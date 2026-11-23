@@ -31,10 +31,10 @@ async function bootWithRegistry(files: Record<string, string> = {}): Promise<Tid
   return bootTidepool({
     workerId: "deckhand",
     agentAdmin: {
-      create: (input) => createAgent(input, deps),
-      list: () => listAgentViews(deps),
-      update: (input) => updateAgent(input, deps),
-      delete: (input, refs) => deleteAgent(input, { ...deps, ...refs }),
+      create: (input) => createAgent(input, { ...deps, db: t.db }),
+      list: () => listAgentViews({ ...deps, db: t.db }),
+      update: (input) => updateAgent(input, { ...deps, db: t.db }),
+      delete: (input, refs) => deleteAgent(input, { ...deps, ...refs, db: t.db }),
       authorityProfiles: () => Object.keys(load().authority),
     },
     agentRegistered: (name) => ownEntry(load().agents, name) !== undefined,

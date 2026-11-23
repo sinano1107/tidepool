@@ -1,3 +1,4 @@
+import { type Clock, SystemClock } from "./clock.js";
 import type { Db } from "./db.js";
 import { openQuarantineQuestion, quarantineUnlessClear, registerQuarantine } from "./quarantine.js";
 import { loadRegistry, type Registry, type RegistryAvailabilityCheck, type RegistrySource } from "./registry.js";
@@ -42,12 +43,12 @@ export class RegistryUnreadableError extends Error {
 /** 盤面の registry を読む1点(ADR 0403 決定5): 読めなければ `registryUnreadable` を立ててから投げる —— 呼び手は何もしない。
  *  開いていれば重ねない(`registerQuarantine` は冪等)。名前ごとの解決の失敗はここを通らない。止まりは拒否の前に書く記録で、
  *  呼び手の状態の変化が起きても起きなくても真なので、呼び手の transaction の外に置く(ADR 0405 決定3(a))。 */
-export function loadRegistryOrStop(db: Db, source: RegistrySource, now: () => Date): Registry {
+export function loadRegistryOrStop(db: Db, source: RegistrySource, clock: Pick<Clock, "now"> = new SystemClock()): Registry {
   try {
     return loadRegistry(source.dir, source.mode);
   } catch (err) {
     const error = new RegistryUnreadableError(err);
-    const stop = () => registerQuarantine(db, "registryUnreadable", null, error.reason, now());
+    const stop = () => registerQuarantine(db, "registryUnreadable", null, error.reason, clock.now());
     stop();
     // ADR 0403 決定5: 止まりは呼び手の transaction の rollback で消えない —— 同じ接続しか無い(:memory: も、書き込み中の transaction の
     // 下の2本目の接続も使えない)ので、transaction の中なら抜けた後にもう一度立てる。commit されていれば2度目は何もしない

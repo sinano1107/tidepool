@@ -24,11 +24,11 @@ import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, registerResourceStop } from "./quarantine.js";
 import {
-  loadRegistry,
   type Registry,
   type RegistrySource,
   splitFrontmatter,
 } from "./registry.js";
+import { loadRegistryOrStop, RegistryUnreadableError } from "./registry-unreadable.js";
 import {
   AUTO_MEMORY_CLOSED,
   buildSandboxSettings,
@@ -1536,9 +1536,18 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.enumerateHostSkills = options.enumerateHostSkills ?? (() => enumerateBundledSet(options.boardCall));
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
-    // fail at boot, not at first pickup: a misconfigured registry must refuse
+    // fail at boot, not at first pickup: misconfigured defaults must refuse
     // to start the board rather than wedge the first task
-    this.validateDefaults(loadRegistry(options.registry.dir, options.registry.mode));
+    let registry: Registry;
+    try {
+      registry = loadRegistryOrStop(options.db, options.registry, options.clock);
+    } catch (err) {
+      // ADR 0052 決定4: 読めない registry は騒ぐだけで起動を拒まない —— 止まりは読み込みの1点が立て済み(ADR 0403 決定5)
+      if (!(err instanceof RegistryUnreadableError)) throw err;
+      console.error(`[registry] the worker's defaults could not be checked at startup; the board is starting anyway: ${err.reason}`);
+      return;
+    }
+    this.validateDefaults(registry);
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1557,7 +1566,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // loaded per pickup so a registry update takes effect on the next task —
     // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
     // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
-    const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
+    const registry = loadRegistryOrStop(this.options.db, this.options.registry, this.options.clock);
     // task.workspace (issue #26 / ADR 0009) and task.assignee (ADR 0012 /
     // issue #36) both take precedence over this worker's configured
     // defaults. Pickup has already written the defaults' names onto empty

@@ -18,6 +18,7 @@ import { EXTRACTOR_VERSION, listEpisodes, projectionPending } from "../src/prece
 import { type ContainerSpawn, ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_QUESTION_TITLE } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
+import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, sessionReadCheckoutOf, type Task, taskCheckoutPath } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
@@ -80,7 +81,7 @@ import {
   unhandledRejectionsDuring,
   WORKER_SPAWNED,
 } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { breakRegistry, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
@@ -456,6 +457,16 @@ You are the Codex worker.`,
 }
 
 describe("CodexWorker (ADR 0098)", () => {
+  it("registry が読めないと、start() は RegistryUnreadableError を投げて registryUnreadable を1枚立てる(ADR 0403 決定5)", async () => {
+    const f = await fixture();
+    const value = task(f.db);
+    const setting = executionSettingsFor(f.db, loadRegistry(f.registry, "purely-local").agents["codex-agent"]!, value)[0]!;
+    breakRegistry(f.registry);
+
+    expect(() => f.worker.start(value, sessionId(f.db, value.id), setting)).toThrow(RegistryUnreadableError);
+    expect(openQuarantineValues(f.db, "registryUnreadable")).toEqual([null]);
+  });
+
   it.each([
     { type: "item.started", item: { type: "command_execution", command: "ls" } },
     { type: "item.updated", item: { type: "agent_message", text: "working" } },

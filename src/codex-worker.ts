@@ -47,7 +47,8 @@ import { META_REVIEW_SUBJECTS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerResourceStop } from "./quarantine.js";
-import { loadRegistry, type RegistrySource } from "./registry.js";
+import type { RegistrySource } from "./registry.js";
+import { loadRegistryOrStop } from "./registry-unreadable.js";
 import { routingRepairVerbs } from "./routing-review.js";
 import { closeSessionActions, taskTempPrefix } from "./session-close.js";
 import { resolveSkillAllowlist } from "./skill-allowlist.js";
@@ -1491,7 +1492,7 @@ export class CodexWorker implements WorkerAdapter {
   }
 
   start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): Promise<void> | undefined {
-    const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
+    const registry = loadRegistryOrStop(this.options.db, this.options.registry, this.options.clock);
     // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が `todo` へ戻す
     const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, sessionId, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
@@ -1644,7 +1645,7 @@ export class CodexWorker implements WorkerAdapter {
         let protectedTip: ContainmentCapability | undefined;
         // ADR 0378 決定7: 1段目を待つ間の公開を宣言の食い違いと読まない —— 宣言は今の registry で確かめる
         const named = withRememberedRepoCheck(this.options.db, place.namedPlace, () => this.options.clock.now(), (name) =>
-          resolveExecutionWorkspace(loadRegistry(this.options.registry.dir, this.options.registry.mode), this.options.workspace, name, this.workspacesDir));
+          resolveExecutionWorkspace(loadRegistryOrStop(this.options.db, this.options.registry, this.options.clock), this.options.workspace, name, this.workspacesDir));
         if (rereadsProtectedTip(task)) {
           let opened = false;
           try {

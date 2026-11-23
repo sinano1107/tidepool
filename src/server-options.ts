@@ -425,7 +425,7 @@ function agentsUsingHarnessesResolver(
  *  呼び手が騒ぐだけにして起動は拒まない(ADR 0052 決定4)。 */
 function loadBoardRegistry(board: BoardComposition, db: Db) {
   if (!board.registryDir) throw new Error("no registry configured");
-  return loadRegistryOrStop(db, { dir: board.registryDir, mode: board.registryMode }, () => board.clock.now());
+  return loadRegistryOrStop(db, { dir: board.registryDir, mode: board.registryMode }, board.clock);
 }
 
 /** ADR 0052 決定3 の宣言そのもの: `TIDEPOOL_REGISTRY` を設定した盤面は remote
@@ -529,7 +529,7 @@ function workspaceResolver(
 
 /** 盤面自身の workspace は起動時に1度だけ読む。registry が読めなければ騒ぐだけで起動を拒まない(ADR 0052 決定4)。
  *  shortcut: 読めなかった起動は registry を直しても盤面自身の workspace を持たないので、判定が再起動まで不成立を返す
- *  (`withoutBootWorkspace`)、起動の読みを遅延にするのは registry の直接の読み手が1点を通った後(#3682)。 */
+ *  (`withoutBootWorkspace`)、起動の読みを遅延にするのは `ServerOptions.workspace` を値で受ける server.ts の口を読み直す形に替えるとき。 */
 function bootWorkspace(resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined): WorkspaceConfig | undefined {
   try {
     return resolve?.(null);
@@ -756,7 +756,7 @@ function workspaceAdmin(
  *  agents at all. */
 function agentAdmin(board: BoardComposition, db: Db, registry: RegistrySource | undefined): AgentAdmin | undefined {
   if (!registry) return undefined;
-  const deps = { registry, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
+  const deps = { registry, db, clock: board.clock, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -775,9 +775,9 @@ function agentAdmin(board: BoardComposition, db: Db, registry: RegistrySource | 
  *  to this board's registry clone. The API layer runs the confirmation gate;
  *  these verbs only persist. Without a registry there is nowhere to administer
  *  profiles at all. */
-function profileAdmin(board: BoardComposition, registry: RegistrySource | undefined): ProfileAdmin | undefined {
+function profileAdmin(board: BoardComposition, db: Db, registry: RegistrySource | undefined): ProfileAdmin | undefined {
   if (!registry) return undefined;
-  const deps = { registry, githubAuth: board.githubAuth };
+  const deps = { registry, db, clock: board.clock, githubAuth: board.githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
@@ -876,7 +876,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // ADR 0402 決定3: 設定の扉の gh も「gh の版」の信号を通す(scheduler・着地・人間の verb の分は startServer が包む)
     workspaceAdmin: workspaceAdmin(board, github && withGhVersionQuarantine(github, db, board.clock), db, registry),
     agentAdmin: agentAdmin(board, db, registry),
-    profileAdmin: profileAdmin(board, registry),
+    profileAdmin: profileAdmin(board, db, registry),
     resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board, db),
     agentDefinitionFailure: agentDefinitionFailureChecker(board, db),
