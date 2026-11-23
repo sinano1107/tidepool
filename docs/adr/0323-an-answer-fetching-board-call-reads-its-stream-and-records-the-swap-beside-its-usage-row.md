@@ -1,5 +1,7 @@
 # 答えを取りに行く Board call は stream を読み、差し替えと拒否を usage の行の隣に逐語で残し、差し替えは止めない
 
+**Status 追記: 帰結の「`use` と `created_at` で寄せる」は近い時刻で寄せる**(2026-11-23、issue #3525)。`board_calls.created_at` は応答を受けて行を書く瞬間の時刻になり、帰責の event の時刻と一致しなくなった(ADR 0404 決定7)。
+
 2026-10-28 の triage → grilling(issue #2661、#2658 の副産物)で決定。#2551 の stop 8 の帰責 Board call は、Provider が内容を拒み CLI が
 `claude-fable-5-1` を `claude-opus-4-8` に替えて答えていた(CLI 自身の session transcript で観測)。`board_calls` の行は pin の model と
 2つの model の合計の usage を持ち、差し替えの事実をどこにも言えなかった。固定版 2.1.286 の headless の loop を binary で読むと、
