@@ -16,7 +16,7 @@ import {
 } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
 import { answerPromotion, convergeOn, finish, landingWork, promotionFailures } from "./landing-fixture.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -467,7 +467,7 @@ describe("updateWorkspace: 出元 repo の書き込みの巻き戻し", () => {
 
 // ADR 0395 決定3: 出元 repo が宣言されたとき、扉が `task/*` を出元 repo へ送る(送るのは1本ずつ)。issue #3563: 失敗しても宣言は残り、同じ値をもう一度
 // 通せば送り直す。出元 repo は GitHub の名前なので、盤面が組んだ網の行き先を shim で手元の bare へ回す
-describe("updateWorkspace: タスクブランチを出元 repo へ送る", () => {
+describe("updateWorkspace: タスクブランチを出元 repo へ送る", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, () => {
   async function headRepoBoard() {
     const checkout = await makeWorkspace("lagoon");
     const registryDir = await makeMainRegistry({ "workspaces.yaml": `lagoon:\n  path: ${JSON.stringify(checkout.path)}\n  repo: https://github.com/acme/lagoon.git\n` });
@@ -523,7 +523,7 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
       [`${sha}:refs/heads/task/bbb`, "token-for-acme/fork"],
     ]);
 
-    // task/bbb は同じ sha で出元 repo に既にある
+    // task/bbb は写しがあるので送らない —— 送るのは写しの無い task/aaa だけ
     git(fork, "update-ref", "-d", "refs/heads/task/aaa");
     await set();
 
