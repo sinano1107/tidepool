@@ -10,8 +10,9 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import { QUARANTINES } from "../src/quarantine.js";
+import { openQuarantineValues, QUARANTINES } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
+import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import {
   type BoardComposition,
   buildCodexWorkerOptions,
@@ -24,9 +25,10 @@ import {
 import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { restoreBaseline } from "../src/workspace.js";
-import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
-import { commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { composition } from "./board-composition.js";
+import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion } from "./harness.js";
+import { breakRegistry, commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -48,35 +50,6 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
  *  この suite が観測するのは口の一覧であって行ではないので、in-memory で足りる。 */
 function buildOptions(board: BoardComposition) {
   return buildServerOptions(board, openDb(":memory:"));
-}
-
-function composition(): BoardComposition {
-  const clock = new FakeClock();
-  return {
-    port: 0,
-    mcpPort: 0,
-    credential: TEST_CREDENTIAL,
-    clock,
-    registryDir: undefined,
-    registryMode: "purely-local",
-    logDir: "/nonexistent/worker-logs",
-    workspaceName: "sandbox",
-    workspacesDir: "/nonexistent/workspaces",
-    workspacesDirSource: "configured",
-    defaultAgentName: "tako",
-    auditorName: "shako",
-    interviewerName: "suzumedai",
-    boardState: [],
-    moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
-    codexHome: "/nonexistent/codex-home",
-    codexExecutable: "/nonexistent/bin/codex",
-    codexOnPath: false,
-    githubAuth: undefined,
-    githubTokenFile: undefined,
-    vapid: undefined,
-    translationClient: () => new FakeTranslationClient(),
-    cliAuthExpiresAt: undefined,
-  };
 }
 
 it("Codex の実測した required MCP 起動失敗は合成された口を通り、到達性の確認1枚だけで todo へ戻る(ADR 0331)", async () => {
@@ -259,6 +232,69 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
   });
 
   expect(options.listAgents?.()[0]?.description).toBe("Definition from remote main");
+});
+
+// ADR 0403 決定5: 止まりを立てるのは registry の読み込みの1点で、読み手の数や経路に依らない
+it("registry が読めなくなると、組み立てた読み口のどれから読んでも registryUnreadable が1枚だけ立つ —— remote の無い盤面でも", async () => {
+  const registryDir = await makeRegistry();
+  const db = openDb(":memory:");
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
+  breakRegistry(registryDir);
+  const task = { assignee: null, interview_target_id: null, type: "work" } as unknown as Task;
+  const readers: Array<() => unknown> = [
+    () => options.resolveWorkspace!(null),
+    () => options.resolveAuthority!(null, "work"),
+    () => options.agentRegistered!("deckhand"),
+    () => options.agentDefinitionFailure!("deckhand"),
+    () => options.resolvesToBuiltIn!("fugu"),
+    () => options.isProtectedWorkspace!("tidepool"),
+    () => options.listAgents!(),
+    () => options.registryCandidates!(),
+    () => options.agentAdmin!.authorityProfiles!(),
+    () => options.taskExecutionCandidates(task),
+    () => options.quarantineResolvers!.providerAuth!(["anthropic"]),
+    () => options.quarantineResolvers!.harnessContainment!(["claude-code"]),
+  ];
+
+  for (const read of readers) expect(read).toThrow(RegistryUnreadableError);
+  expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
+});
+
+// 同じ接続しか無いので、止まりは transaction を抜けた後に立て直される —— 観測は1 tick 後
+it("registry の読み込みを transaction の中で呼んで rollback しても、registryUnreadable は残る", async () => {
+  const registryDir = await makeRegistry();
+  const db = openDb(":memory:");
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
+  breakRegistry(registryDir);
+
+  expect(db.transaction(() => options.listAgents!())).toThrow(RegistryUnreadableError);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
+});
+
+// 起動時の読み(盤面自身の workspace・draft の候補の写し・boot の一斉検査)は騒ぐだけ(ADR 0052 決定4)—— 床は pickup の門
+it("registry が読めない盤面の起動は騒ぐだけで、組み立てを拒まず、止まりも立てない", async () => {
+  const registryDir = await makeRegistry();
+  breakRegistry(registryDir);
+  const db = openDb(":memory:");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
+  options.boardCallers?.(async () => null);
+  // boot の一斉検査は列挙の失敗を握ってログに落とす(sweepBoardStateOverlap)
+  expect(() => options.boardState!.listWorkspaces()).toThrow(RegistryUnreadableError);
+
+  expect({
+    workspace: options.workspace,
+    warned: error.mock.calls.flat().join(" "),
+    stops: openQuarantineValues(db, "registryUnreadable"),
+  }).toEqual({
+    workspace: undefined,
+    warned: expect.stringMatching(/own workspace could not be read at startup[\s\S]*registry candidates could not be read at startup/),
+    stops: [],
+  });
+  error.mockRestore();
 });
 
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");

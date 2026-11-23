@@ -86,6 +86,7 @@ import {
   type RegistrySource,
   type RosterAgent,
 } from "./registry.js";
+import { loadRegistryOrStop, RegistryUnreadableError } from "./registry-unreadable.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
@@ -379,7 +380,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
 function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskExecutionCandidates {
   if (!board.registryDir) return implicitTaskExecutionCandidates(db);
   return (task) => {
-    const registry = loadBoardRegistry(board);
+    const registry = loadBoardRegistry(board, db);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName, board.interviewerName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db), task.type);
     return executionSettingsFor(db, agent.definition, task);
@@ -400,7 +401,7 @@ function agentsUsingHarnessesResolver(
 ): ((harnesses: readonly string[]) => string[]) | undefined {
   if (!board.registryDir) return undefined;
   return (harnesses) =>
-    Object.values(loadBoardRegistry(board).agents)
+    Object.values(loadBoardRegistry(board, db).agents)
       .filter((agent) => {
         try {
           assertValidAgentDefinition(agent.name, agent, tierNames(db));
@@ -419,10 +420,20 @@ function agentsUsingHarnessesResolver(
 /** One spelling for every registry-derived composition seam: mode is resolved
  *  once at the root and no resolver is allowed to fall back to local main.
  *  呼び出し側はどれも先に `registryDir` を検査しているが、その絞り込みはここまで
- *  流れてこないので、型を閉じるためだけの throw を置く。 */
-function loadBoardRegistry(board: BoardComposition) {
+ *  流れてこないので、型を閉じるためだけの throw を置く。
+ *
+ *  読めなければ `registryUnreadable` を立ててから `RegistryUnreadableError` を投げる(ADR 0403 決定5)。`db` を渡さないのは
+ *  起動時の組み立ての読み(盤面自身の workspace・draft の候補の写し・boot の一斉検査)だけで、そこは騒ぐだけで止まりを立てない
+ *  —— 起動時は fail-open(ADR 0052 決定4)、床は pickup の門。 */
+function loadBoardRegistry(board: BoardComposition, db: Db | undefined) {
   if (!board.registryDir) throw new Error("no registry configured");
-  return loadRegistry(board.registryDir, board.registryMode);
+  const source = { dir: board.registryDir, mode: board.registryMode };
+  if (db) return loadRegistryOrStop(db, source, () => board.clock.now());
+  try {
+    return loadRegistry(source.dir, source.mode);
+  } catch (err) {
+    throw new RegistryUnreadableError(err);
+  }
 }
 
 /** ADR 0052 決定3 の宣言そのもの: `TIDEPOOL_REGISTRY` を設定した盤面は remote
@@ -465,10 +476,9 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
  *  ADR 0036 が復旧経路と定めた人間面ごと開かなくなる。
  *
  *  決定4 の fail-open: 失敗しても騒ぐだけで、起動は拒まず quarantine も立てない
- *  (床は pickup ゲートの1枚)。fetch が失敗し**かつ** ref も無ければ直後の読みが
- *  throw するが、それは「registry が読めない盤面は起動しない」という ADR 0052
- *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
- *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
+ *  (床は pickup ゲートの1枚)。fetch が失敗し**かつ** ref も無ければ直後の起動時の読みも
+ *  落ちるが、そこも騒ぐだけで止まりを立てない(`bootWorkspace` / `bootCandidates`、ADR 0403 決定5)
+ *  —— この関数が変えるのは「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
  *  出ることである。registry clone の default branch の食い違い(ADR 0377 決定7)も同じ検査なので、ここでは騒ぐだけ。 */
 async function bootRegistryCheck(board: BoardComposition): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
@@ -488,12 +498,25 @@ function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
   return board.registryMode === "remote-backed" ? board.registryDir : undefined;
 }
 
-/** ADR 0052 決定2 の pickup / 回答時の refresh 点(ADR 0377 決定7 の default branch の検査も載る)。remote 正本を宣言していない
- *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
-function registryAvailabilityCheck(board: BoardComposition): (() => Promise<RegistryAvailability>) | undefined {
-  const registryDir = remoteBackedRegistryDir(board);
-  if (!registryDir) return undefined;
-  return () => checkRegistryAvailability(registryDir, board.githubAuth);
+/** `registryUnreadable` の判定 —— pickup の門と回答の受理が撃つ(ADR 0403 決定5)。remote 正本を宣言した盤面は先に ADR 0052 決定2 の
+ *  refresh 点(ADR 0377 決定7 の default branch の検査も載る)を撃ち、どの盤面でも読み込みの1点で読み込みと検査が通るかを見る。
+ *  registry の無い盤面には読むものが無いので、口ごと不在になる(ADR 0041)。 */
+function registryAvailabilityCheck(board: BoardComposition, db: Db): (() => Promise<RegistryAvailability>) | undefined {
+  if (!board.registryDir) return undefined;
+  const remote = remoteBackedRegistryDir(board);
+  return async () => {
+    if (remote) {
+      const reachability = await checkRegistryAvailability(remote, board.githubAuth);
+      if (!reachability.available) return reachability;
+    }
+    try {
+      loadBoardRegistry(board, db);
+      return { available: true };
+    } catch (err) {
+      if (!(err instanceof RegistryUnreadableError)) throw err;
+      return { available: false, reason: err.reason };
+    }
+  };
 }
 
 /** Resolves any task's execution workspace against the registry (issue #26 /
@@ -504,12 +527,37 @@ function registryAvailabilityCheck(board: BoardComposition): (() => Promise<Regi
 function workspaceResolver(
   board: BoardComposition,
   db: Db,
+  { stops = true } = {},
 ): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
   const { registryDir, workspaceName, workspacesDir } = board;
   if (!registryDir) return undefined;
   const resolve = (taskWorkspace: string | null) =>
-    resolveExecutionWorkspace(loadBoardRegistry(board), workspaceName, taskWorkspace, workspacesDir);
+    resolveExecutionWorkspace(loadBoardRegistry(board, stops ? db : undefined), workspaceName, taskWorkspace, workspacesDir);
   return (taskWorkspace) => withRememberedRepoCheck(db, resolve(taskWorkspace), () => board.clock.now(), resolve);
+}
+
+/** 盤面自身の workspace は起動時に1度だけ読む。registry が読めなければ騒ぐだけで起動を拒まない(ADR 0052 決定4)。
+ *  shortcut: 読めなかった起動は registry を直しても盤面自身の workspace を持たない(既定の workspace 名を読む面が名前を失う)、
+ *  起動の読みを遅延にするのは registry の直接の読み手が1点を通った後(#3682)。 */
+function bootWorkspace(resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined): WorkspaceConfig | undefined {
+  try {
+    return resolve?.(null);
+  } catch (err) {
+    if (!(err instanceof RegistryUnreadableError)) throw err;
+    console.error(`[registry] the board's own workspace could not be read at startup; the board is starting without it, so restart it after repairing the registry: ${err.reason}`);
+    return undefined;
+  }
+}
+
+/** draft の候補は Board call の口を組んだときの写し(起動時の読み)。読めなければ騒ぐだけで、候補なしで起草する(ADR 0052 決定4)。 */
+function bootCandidates(board: BoardComposition): RegistryCandidates | undefined {
+  try {
+    return registryCandidates(board, undefined);
+  } catch (err) {
+    if (!(err instanceof RegistryUnreadableError)) throw err;
+    console.error(`[registry] the task draft's registry candidates could not be read at startup; drafts go without them: ${err.reason}`);
+    return undefined;
+  }
 }
 
 /** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
@@ -517,7 +565,7 @@ function workspaceResolver(
  *  いう概念自体が無い。 */
 function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
   if (!board.registryDir) return [];
-  return listRegisteredWorkspaces(loadBoardRegistry(board), board.workspacesDir);
+  return listRegisteredWorkspaces(loadBoardRegistry(board, undefined), board.workspacesDir);
 }
 
 /** 指定された provider を喋ると宣言された agent 名の集合 (ADR 0097 決定2 /
@@ -528,11 +576,12 @@ function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
  *  なし。 */
 function agentsSpeakingProvidersResolver(
   board: BoardComposition,
+  db: Db,
 ): ((providers: readonly string[]) => string[]) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return (providers) =>
-    Object.values(loadBoardRegistry(board).agents)
+    Object.values(loadBoardRegistry(board, db).agents)
       // registry 側の provider は自由文字列のまま(ADR 0097 決定3 — 読み込みを
       // 倒さない)なので、ここでは文字列として突き合わせる。entry のどれか1つでも
       // その Provider を喋れば該当する(ADR 0110 決定1)
@@ -560,19 +609,19 @@ function authorityResolver(
   const { registryDir, defaultAgentName } = board;
   if (!registryDir) return undefined;
   return (assignee, taskType) =>
-    resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee, tierNames(db), taskType).profile;
+    resolveExecutionAgent(loadBoardRegistry(board, db), defaultAgentName, assignee, tierNames(db), taskType).profile;
 }
 
 /** Whether an agent name is currently registered (ADR 0012 / issue #36), read
  *  fresh against the registry — one half of an agent quarantine Confirmation
  *  question's clearance check (api.ts). Without a registry, no name is ever
  *  "back" — only "no more unsettled tasks depend on it" can clear it. */
-function agentRegisteredChecker(board: BoardComposition): ((name: string) => boolean) | undefined {
+function agentRegisteredChecker(board: BoardComposition, db: Db): ((name: string) => boolean) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   // ownEntry, not `in`: `in` walks the prototype chain, so a name like
   // "toString" would clear an agent quarantine without any repair (issue #69)
-  return (name) => ownEntry(loadBoardRegistry(board).agents, name) !== undefined;
+  return (name) => ownEntry(loadBoardRegistry(board, db).agents, name) !== undefined;
 }
 
 /** Why a name fails pickup's resolution right now (the same resolution as
@@ -598,9 +647,9 @@ function agentDefinitionFailureChecker(
 
 /** Whether a name resolves to the built-in agent right now — no registry entry
  *  shadows it (ADR 0228). Without a registry there is no built-in. */
-function builtInResolutionChecker(board: BoardComposition): ((name: string) => boolean) | undefined {
+function builtInResolutionChecker(board: BoardComposition, db: Db): ((name: string) => boolean) | undefined {
   if (!board.registryDir) return undefined;
-  return (name) => ownEntry(loadBoardRegistry(board).agents, name)?.builtin === true;
+  return (name) => ownEntry(loadBoardRegistry(board, db).agents, name)?.builtin === true;
 }
 
 /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
@@ -612,11 +661,12 @@ function builtInResolutionChecker(board: BoardComposition): ((name: string) => b
  *  protected. */
 function protectedWorkspaceChecker(
   board: BoardComposition,
+  db: Db,
 ): ((name: string) => boolean) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return (name) => {
-    const entry = ownEntry(loadBoardRegistry(board).workspaces, name);
+    const entry = ownEntry(loadBoardRegistry(board, db).workspaces, name);
     if (!entry) return false;
     const path = entryCheckoutPath(entry, name, board.workspacesDir);
     return workspaceProtectionReader(registryDir)(entry, path) !== undefined;
@@ -627,20 +677,20 @@ function protectedWorkspaceChecker(
  *  registry — same pattern as agentRegisteredChecker. Names resolving to the
  *  built-in agent are left out, as in the push half (ADR 0235). Without a registry
  *  there's nothing to list beyond list_agents's own fixed `human` line. */
-function listAgentsResolver(board: BoardComposition): (() => RosterAgent[]) | undefined {
+function listAgentsResolver(board: BoardComposition, db: Db): (() => RosterAgent[]) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
-    Object.values(loadBoardRegistry(board).agents)
+    Object.values(loadBoardRegistry(board, db).agents)
       .filter((agent) => agent.builtin !== true)
       .map((agent) => ({ name: agent.name, description: agent.description }));
 }
 
 /** Assignee/workspace candidates for the registration screen (issue #12).
  *  Without a registry there's nothing to suggest from. */
-function registryCandidates(board: BoardComposition): RegistryCandidates | undefined {
+function registryCandidates(board: BoardComposition, db: Db | undefined): RegistryCandidates | undefined {
   if (!board.registryDir) return undefined;
-  const registry = loadBoardRegistry(board);
+  const registry = loadBoardRegistry(board, db);
   const icons: Record<string, string> = {};
   for (const agent of Object.values(registry.agents)) {
     if (agent.icon !== undefined) icons[agent.name] = agent.icon;
@@ -659,7 +709,7 @@ function registryCandidates(board: BoardComposition): RegistryCandidates | undef
  *  either, so the board runs the LoggingWorker with drafting off too. */
 function draftClientFactory(board: BoardComposition, call: BoardCall, db: Db): DraftClient | undefined {
   if (!board.registryDir) return undefined;
-  return new ClaudeDraftClient({ candidates: registryCandidates(board), db, exec: execThrough(call, "task draft") });
+  return new ClaudeDraftClient({ candidates: bootCandidates(board), db, exec: execThrough(call, "task draft") });
 }
 
 /** The settings surface's workspace verbs (issue #57), bound to this board's
@@ -713,7 +763,7 @@ function agentAdmin(board: BoardComposition, db: Db, registry: RegistrySource | 
     tierApproval: (agent, questionId) => findTierApproval(registry, agent, questionId),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
-    authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),
+    authorityProfiles: () => Object.keys(loadBoardRegistry(board, db).authority),
   };
 }
 
@@ -807,7 +857,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
   const resolveWorkspace = workspaceResolver(board, db);
-  const workspace = resolveWorkspace?.(null);
+  const workspace = bootWorkspace(workspaceResolver(board, db, { stops: false }));
   return {
     db,
     credential: board.credential,
@@ -824,14 +874,14 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     agentAdmin: agentAdmin(board, db, registry),
     profileAdmin: profileAdmin(board, registry),
     resolveAuthority: authorityResolver(board, db),
-    agentRegistered: agentRegisteredChecker(board),
+    agentRegistered: agentRegisteredChecker(board, db),
     agentDefinitionFailure: agentDefinitionFailureChecker(board, db),
-    resolvesToBuiltIn: builtInResolutionChecker(board),
-    isProtectedWorkspace: protectedWorkspaceChecker(board),
-    listAgents: listAgentsResolver(board),
+    resolvesToBuiltIn: builtInResolutionChecker(board, db),
+    isProtectedWorkspace: protectedWorkspaceChecker(board, db),
+    listAgents: listAgentsResolver(board, db),
     // pass the provider itself, not a boot-time snapshot: the register screen's
     // candidates must reflect agents/workspaces created live through settings
-    registryCandidates: () => registryCandidates(board),
+    registryCandidates: () => registryCandidates(board, db),
     // ADR 0136 決定2: Board call を撃つ口はどれも Board call の口から組む
     boardCallers: (call) => boardCallers(board, call, db),
     // ADR 0186 決定3: 口が呼び出しのたびに読む版の検査。Codex は App Server の互換性検査と同じ固定の版と比べる
@@ -851,7 +901,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(直接 cancel の門が読む)。
     // registry を読む写像を要るのは provider / Harness の行だけ(agent 名の行は表が自分で持つ)
     quarantineResolvers: {
-      providerAuth: agentsSpeakingProvidersResolver(board),
+      providerAuth: agentsSpeakingProvidersResolver(board, db),
       harnessContainment: agentsUsingHarnessesResolver(board, db),
       workerMcpReachability: agentsUsingHarnessesResolver(board, db),
     },
@@ -862,7 +912,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
     // ADR 0331 決定8: Worker MCP の probe の帰属の扉が引く、開いている probe の id
     probeIds: new Set(),
-    registryAvailability: registryAvailabilityCheck(board),
+    registryAvailability: registryAvailabilityCheck(board, db),
     // ADR 0402 決定3: 「gh の版」の回答の受理は版の門と同じ読み(本体と同じ env と上限)で読み直す
     readGhVersion: github?.readGhVersion,
     cliAuthExpiresAt: board.cliAuthExpiresAt,

@@ -16,6 +16,7 @@ import {
 } from "../src/landing.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { type AuthorityProfile, type MergeDial, } from "../src/registry.js";
+import { loadRegistryOrStop, RegistryUnreadableError } from "../src/registry-unreadable.js";
 import {
   cancelTaskDirectly,
   completeTask,
@@ -103,6 +104,7 @@ import {
   unreadableRefsRefusal,
   unresolvable,
 } from "./landing-fixture.js";
+import { breakRegistry, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -1775,6 +1777,72 @@ it("根の導出の読みが例外に落ちても、その根に答えている�
 
   expect(await convergeOn(pr.landing, pr.work.id, question.id)).toMatchObject(LANDING_FAILED);
   expect(promotionFailures(pr.db, pr.work.id)).toEqual([]);
+});
+
+const REGISTRY_STOPPED = "the registry is unavailable, so landing is stopped; answer the registry question first, then answer this one again";
+
+/** 読めない registry を読む盤面の1点 —— 呼ぶたびに registryUnreadable を立て(開いていれば重ねず)、読み込みの例外を投げる。 */
+async function brokenRegistryRead(db: Db, clock: FakeClock): Promise<() => void> {
+  const dir = await makeRegistry();
+  breakRegistry(dir);
+  return () => {
+    loadRegistryOrStop(db, { dir, mode: "purely-local" }, () => clock.now());
+  };
+}
+
+/** profile を読むたびに `read` を撃つ —— 盤面の resolver と同じく、registry を読んでから解決する。 */
+async function rootReadingRegistry(name: string, options: { openFailure?: boolean } = {}) {
+  let read = () => {};
+  const c = await pushedRoot(name, { ...options, resolveAuthority: () => {
+    read();
+    return profile("escalate");
+  } });
+  const broken = await brokenRegistryRead(c.db, c.clock);
+  read = broken;
+  return { ...c, broken, setRead: (next: () => void) => { read = next; } };
+}
+
+// ADR 0403 決定5: 収束は回の最初に registryUnreadable を読み、開いていれば根を撃たずに終える
+it("registryUnreadable が開いている間、収束は根を撃たず、根ごとの question を立てない", async () => {
+  const c = await rootReadingRegistry("registry-stop-waits");
+  expect(c.broken).toThrow(RegistryUnreadableError);
+
+  expect(await convergeOn(c.landing, c.work.id)).toBeUndefined();
+  expect({ failures: promotionFailures(c.db, c.work.id), pushes: c.github.pushes, stops: openQuarantineValues(c.db, "registryUnreadable") })
+    .toEqual({ failures: [], pushes: [], stops: [null] });
+});
+
+it("registryUnreadable が開いている間、答えている回答は止まりを名指して拒まれ、その question は開いたまま", async () => {
+  const c = await rootReadingRegistry("registry-stop-refuses-answer", { openFailure: true });
+  expect(c.broken).toThrow(RegistryUnreadableError);
+  const [failure] = promotionFailures(c.db, c.work.id);
+
+  expect(await c.retry(failure!)).toBe(REGISTRY_STOPPED);
+  expect(promotionFailures(c.db, c.work.id)).toEqual([expect.objectContaining({ id: failure!.id, status: "todo" })]);
+});
+
+// ADR 0403 決定5: 重複を避ける判定は収束の失敗の境界 —— 回の途中で止まりが立っても、根ごとの question を足さない
+it("回の途中で registry の読み込みが止まりを立てた根は、昇格失敗 question を立てずに失敗の verdict だけを返す", async () => {
+  const c = await rootReadingRegistry("registry-stop-mid-pass");
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "failed", reason: "promotion_failed", error: expect.stringContaining("could not read the registry") });
+  expect({ failures: promotionFailures(c.db, c.work.id), stops: openQuarantineValues(c.db, "registryUnreadable") }).toEqual({ failures: [], stops: [null] });
+});
+
+it("同じ回で先の根が registry の止まりを立てた後、想定外の例外で根ごとの catch に落ちた根にも question を立てない", async () => {
+  const c = await rootReadingRegistry("registry-stop-per-root-catch");
+  const second = finish(c.db, c.clock, landingWork(c.db, c.clock)).id;
+  // 先の根の profile の読みが止まりを立て、後の根の導出の読みを落とす仕掛けを置く
+  c.setRead(() => {
+    try {
+      c.broken();
+    } finally {
+      failRootDerivationRead(c.db);
+    }
+  });
+
+  expect(await convergeOn(c.landing, second)).toMatchObject({ ...LANDING_FAILED, error: expect.stringContaining("the board hit a bug") });
+  expect({ failures: promotionFailures(c.db, second), stops: openQuarantineValues(c.db, "registryUnreadable") }).toEqual({ failures: [], stops: [null] });
 });
 
 // ADR 0240 決定5: 拒否文は積み残しを運ぶ面を名指しする。どちらも無ければ、盤面が運んでいる途中である
