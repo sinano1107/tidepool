@@ -28,7 +28,7 @@ async function reader(workspace: WorkspaceConfig) {
     interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }],
   }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("read-place-baseline-rooms-");
-  const reads = await pickupGate(db, workspace, root, base);
+  const reads = await pickupGate(db, workspace, root, base, () => NOW);
   openInterviewRoom(db, root, base, NOW);
   const room = recordedInterviewRoom(db, root.id)!;
   return { root, room, reads, base };
@@ -107,7 +107,7 @@ it("root 配下の監査 review が読む面接室の変更も、面接室の名
   const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", commitRoomCopy(db, rootPlace, root.id));
   releaseWorkspace(db, rootPlace, root, NOW);
   git(room.path, "tag", "unexpected-room-tag");
-  const auditReads = await pickupGate(db, workspace, audit, base);
+  const auditReads = await pickupGate(db, workspace, audit, base, () => NOW);
   
   // ADR 0356 決定1: 監査 review も task の checkout で走るので、準備するのは名前の場所
   await expect(prepareAtPickup(db, workspace, audit, { reads: auditReads })).rejects.toMatchObject({
@@ -179,7 +179,7 @@ it("symlink の基点で初めて開く受験者の task の checkout は、読�
   const [examinee] = listExaminees(db, root.id);
   const alias = join(await tempDir("read-examinee-alias-"), "rooms");
   symlinkSync(base, alias);
-  const checks = await pickupGate(db, workspace, examinee!, alias);
+  const checks = await pickupGate(db, workspace, examinee!, alias, () => NOW);
   const checkout = await prepareAtPickup(db, room, examinee!, { reads: checks, workspacesBaseDir: alias });
 
   expect(git(checkout.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${examinee!.id}`);

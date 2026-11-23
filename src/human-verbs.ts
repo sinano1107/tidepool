@@ -543,7 +543,7 @@ export async function registerThroughHumanDoor(
         if (deps.draftClient) {
           let inspection;
           try {
-            inspection = await recordedAnswer(deps.db, "issue_inspection", now(), deps.draftClient.inspectIssue(issue));
+            inspection = await recordedAnswer(deps.db, "issue_inspection", now, deps.draftClient.inspectIssue(issue));
           } catch (err) {
             quarantineBoardCallRefusal(deps.db, err, "issue_inspection", undefined, now());
             const fullError = err instanceof Error ? err.message : String(err);
@@ -788,7 +788,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     assertRcasUngated();
     const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
       try {
-        await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true });
+        await firePickupPredicates(deps.db, target, predicates, phase, { githubAuth: deps.githubAuth, fresh: true, now: () => clock.now() });
       } catch (err) {
         let message = err instanceof Error ? err.message : String(err);
         if (phase === "after-open" && deps.github && !(err instanceof PickupGateError && err.cause instanceof WorkspaceRepoMismatchError)) {
@@ -804,7 +804,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。clean は repo があるときだけ
     await refuseOnError(async () => {
       try {
-        await checkAcceptanceFirstHalf(deps.db, target, all, repoPresent);
+        await checkAcceptanceFirstHalf(target, all, repoPresent);
       } catch (err) {
         if (!cancelRcas) throw err;
         const message = err instanceof Error ? err.message : String(err);
@@ -930,7 +930,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         return local.notice === undefined ? undefined : { notice: local.notice };
       }
       // remote-backed なら人間の push を origin から引いてから読み、fetch の間に動いた ref も比べる
-      await refuseOnError(() => refreshProtectedBranch(deps.db, target, deps.githubAuth));
+      await refuseOnError(() => refreshProtectedBranch(deps.db, target, deps.githubAuth, () => clock.now()));
       await refuseOnError(() => compareContainmentRefs(deps.db, target, clock.now()));
       assertEstablished(await recheck());
       return undefined;
@@ -1818,6 +1818,7 @@ export async function submitAnswer(
               deps.db, mergeWorkspace, kind.task_id, { number: mergePr, head: pr.head, lastPushed },
               {
                 auth: deps.githubAuth,
+                now,
                 compareRefs: () => {
                   // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
                   assertQuestionOpen();

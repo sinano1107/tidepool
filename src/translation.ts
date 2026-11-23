@@ -40,7 +40,7 @@ async function translateFragments(
   client: TranslationClient,
   sources: string[],
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<{ status: "translated"; texts: string[]; cached: boolean } | { status: "throttled" }> {
   const translated = new Map<string, string>();
   for (const source of sources) {
@@ -52,15 +52,17 @@ async function translateFragments(
     if (isAnthropicBoardCallBlocked(db)) return { status: "throttled" };
     const chunk = misses.slice(at, at + TRANSLATION_FRAGMENTS_PER_CALL);
     const answer = await client.translate(chunk, language).catch((err: unknown) => {
-      if (err instanceof BoardCallUsageError) recordBoardCall(db, "translation", err.setting, err.usage, now, chunk.length, err);
+      if (err instanceof BoardCallUsageError) recordBoardCall(db, "translation", err.setting, err.usage, now(), chunk.length, err);
       throw err;
     });
     const { texts, usage, setting } = answer;
+    // ADR 0404 決定7: 答えが届いてから読む —— 重なったリクエストの行が答えの順に並ぶ(#1006)
+    const answeredAt = now();
     chunk.forEach((source, i) => {
-      saveTranslation(db, hashSource(source), language, texts[i]!, now);
+      saveTranslation(db, hashSource(source), language, texts[i]!, answeredAt);
       translated.set(source, texts[i]!);
     });
-    recordBoardCall(db, "translation", setting, usage, now, chunk.length, answer);
+    recordBoardCall(db, "translation", setting, usage, answeredAt, chunk.length, answer);
   }
   return { status: "translated", texts: sources.map((source) => translated.get(source)!), cached: misses.length === 0 };
 }
@@ -71,7 +73,7 @@ export async function translateSource(
   client: TranslationClient,
   source: string,
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<TranslationOutcome> {
   const outcome = await translateFragments(db, client, [source], language, now);
   return outcome.status === "throttled" ? outcome : { status: "translated", text: outcome.texts[0]!, cached: outcome.cached };
@@ -100,7 +102,7 @@ export async function translateLogEntry(
   client: TranslationClient,
   eventId: number,
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<TranslationOutcome> {
   const source = resolveLogEntrySource(db, eventId);
   return translateSource(db, client, source, language, now);
@@ -114,7 +116,7 @@ export async function translateLogEntries(
   client: TranslationClient,
   eventIds: number[],
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<{ status: "translated"; entries: { event_id: number; text: string }[] } | { status: "throttled" }> {
   const sources = eventIds.map((eventId) => resolveLogEntrySource(db, eventId));
   const outcome = await translateFragments(db, client, sources, language, now);
@@ -128,7 +130,7 @@ export async function translateMemoryEntry(
   client: TranslationClient,
   entryId: number,
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<{ status: "translated"; title: string; text: string; cached: boolean } | { status: "throttled" }> {
   // shortcut: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
   const entry = listMemoryEntries(db, {}).find((e) => e.id === entryId);
@@ -152,7 +154,7 @@ export async function translateHandoff(
   client: TranslationClient,
   taskId: string,
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<TranslateHandoffOutcome> {
   const task = getTask(db, taskId);
   if (!task) throw new TranslationTargetError(`no task with id ${taskId}`);
@@ -182,7 +184,7 @@ export async function translateQuestion(
   client: TranslationClient,
   taskId: string,
   language: string,
-  now: Date,
+  now: () => Date,
 ): Promise<TranslateQuestionOutcome> {
   const task = getTask(db, taskId);
   if (!task) throw new TranslationTargetError(`no task with id ${taskId}`);

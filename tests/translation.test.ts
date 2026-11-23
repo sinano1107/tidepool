@@ -46,7 +46,7 @@ it("キャッシュミス時は断片1つのまとめとして TranslationClient
   const client = new FakeTranslationClient();
   client.scriptTranslation("盤面は決着したツリーを退ける");
 
-  const outcome = await translateSource(db, client, "the board retires a settled tree", "Japanese", NOW);
+  const outcome = await translateSource(db, client, "the board retires a settled tree", "Japanese", () => NOW);
 
   expect(outcome).toEqual({ status: "translated", text: "盤面は決着したツリーを退ける", cached: false });
   expect(client.calls).toEqual([{ fragments: ["the board retires a settled tree"], language: "Japanese" }]);
@@ -60,8 +60,8 @@ it("同じソース+言語の2回目の呼び出しはキャッシュから返�
   const client = new FakeTranslationClient();
   client.scriptTranslation("訳文");
 
-  await translateSource(db, client, "same text", "Japanese", NOW);
-  const second = await translateSource(db, client, "same text", "Japanese", NOW);
+  await translateSource(db, client, "same text", "Japanese", () => NOW);
+  const second = await translateSource(db, client, "same text", "Japanese", () => NOW);
 
   expect(second).toEqual({ status: "translated", text: "訳文", cached: true });
   expect(client.calls).toHaveLength(1);
@@ -72,7 +72,7 @@ it("Anthropic window が throttled のとき、translateSource は throttled を
   throttleAnthropic(db);
   const client = new FakeTranslationClient();
 
-  expect(await translateSource(db, client, "never called", "Japanese", NOW)).toEqual({
+  expect(await translateSource(db, client, "never called", "Japanese", () => NOW)).toEqual({
     status: "throttled",
   });
   expect(client.calls).toHaveLength(0);
@@ -82,8 +82,8 @@ it("呼び出し1回が用途 translation の1行になり、Provider・pin の�
   const db = await freshDb();
   const client = new FakeTranslationClient();
 
-  await translateSource(db, client, "the board retires a settled tree", "Japanese", NOW);
-  await translateSource(db, client, "the board retires a settled tree", "Japanese", NOW);
+  await translateSource(db, client, "the board retires a settled tree", "Japanese", () => NOW);
+  await translateSource(db, client, "the board retires a settled tree", "Japanese", () => NOW);
 
   expect(listTranslationUsage(db)).toEqual([
     {
@@ -106,10 +106,10 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   const db = await freshDb();
   const client = new FakeTranslationClient();
   client.scriptTranslation("訳文");
-  await translateSource(db, client, "same text", "Japanese", NOW);
+  await translateSource(db, client, "same text", "Japanese", () => NOW);
 
   throttleAnthropic(db);
-  const outcome = await translateSource(db, client, "same text", "Japanese", NOW);
+  const outcome = await translateSource(db, client, "same text", "Japanese", () => NOW);
 
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });
 });
@@ -127,7 +127,7 @@ it.each([
     },
   });
 
-  await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow();
+  await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", () => NOW)).rejects.toThrow();
   expect(getCachedTranslation(db, hashSource("the board retires a settled tree"), "Japanese")).toBeUndefined();
   expect(listTranslationUsage(db)).toEqual([
     {
@@ -148,7 +148,7 @@ it.each([0, 7])("翻訳の答えと id 不一致の失敗も stream の観測を
     boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ items: [{ id, text: "訳文" }] }) }),
   ].join("\n");
   const client = new ClaudeTranslationClient({ exec: async () => stdout });
-  const translated = translateSource(db, client, "source", "Japanese", NOW);
+  const translated = translateSource(db, client, "source", "Japanese", () => NOW);
   if (id === 0) await expect(translated).resolves.toMatchObject({ text: "訳文" });
   else await expect(translated).rejects.toThrow("ids do not match");
   expect(listBoardCalls(db)).toEqual([{

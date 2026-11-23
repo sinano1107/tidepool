@@ -1351,7 +1351,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           decomposeReason: parsed.data.decompose_reason,
         };
       }
-      const draft = await draftTask(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), context }, clock.now());
+      const draft = await draftTask(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), context }, () => clock.now());
       // ADR 0384 決定1: 子は workspace を持たない —— model が返しても子の下書きから外し、そのまま登録できる形で返す
       sendJson(res, (context ? { ...draft, workspace: undefined } : draft) satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
@@ -1633,7 +1633,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const draft = await draftHandoff(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), taskId: task.id }, clock.now());
+      const draft = await draftHandoff(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), taskId: task.id }, () => clock.now());
       const missing = HANDOFF_FIELDS.filter((f) => draft[f] === undefined || whyBlank(draft[f]));
       sendJson(res, { ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
@@ -1666,19 +1666,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const target = parsed.data;
       let outcome;
       if (target.type === "log_entry") {
-        outcome = await translateLogEntry(db, translationClient, target.event_id, language, clock.now());
+        outcome = await translateLogEntry(db, translationClient, target.event_id, language, () => clock.now());
       } else if (target.type === "log_entries") {
-        outcome = await translateLogEntries(db, translationClient, target.event_ids, language, clock.now());
+        outcome = await translateLogEntries(db, translationClient, target.event_ids, language, () => clock.now());
       } else if (target.type === "memory_entry") {
-        outcome = await translateMemoryEntry(db, translationClient, target.entry_id, language, clock.now());
+        outcome = await translateMemoryEntry(db, translationClient, target.entry_id, language, () => clock.now());
       } else if (target.type === "to_english") {
-        outcome = await translateSource(db, translationClient, target.text, "English", clock.now());
+        outcome = await translateSource(db, translationClient, target.text, "English", () => clock.now());
       } else if (target.type === "back_translation") {
-        outcome = await translateSource(db, translationClient, target.text, language, clock.now());
+        outcome = await translateSource(db, translationClient, target.text, language, () => clock.now());
       } else if (target.type === "question") {
-        outcome = await translateQuestion(db, translationClient, target.task_id, language, clock.now());
+        outcome = await translateQuestion(db, translationClient, target.task_id, language, () => clock.now());
       } else {
-        outcome = await translateHandoff(db, translationClient, target.task_id, language, clock.now());
+        outcome = await translateHandoff(db, translationClient, target.task_id, language, () => clock.now());
       }
       sendJson(res, outcome satisfies WireContract["POST /api/translate"]);
     } catch (err) {
@@ -2169,7 +2169,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // the same await the draft endpoint does), then enters the one
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
-        const judgments = open && (await attributeObjections(db, retrospectiveCalls, open.id, clock.now()));
+        const judgments = open && (await attributeObjections(db, retrospectiveCalls, open.id, () => clock.now()));
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments, { agentRegistered, resolvesToBuiltIn });
       }
       // Closing an open session re-opens pickup. A sessionless triage never

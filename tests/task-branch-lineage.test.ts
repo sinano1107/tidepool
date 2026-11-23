@@ -75,7 +75,7 @@ it("memory_repair は review と同じ lineage —— ブランチを持たず�
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: workspace.name }, new Date(0), ...HUMAN_WEBUI);
   const lineage = (type: "work" | "review" | "memory_repair") =>
-    resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), BOARD_ACTOR_ID, "board")).branch;
+    resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), BOARD_ACTOR_ID, "board"), () => new Date(0)).branch;
   expect(lineage("memory_repair")).toBeUndefined();
 
   checkoutTaskBranch(db, workspace, parent.id, "main");

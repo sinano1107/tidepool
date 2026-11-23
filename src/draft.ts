@@ -72,13 +72,13 @@ export async function draftTask(
   db: Db,
   client: DraftClient,
   { dump, language, context }: { dump: string; language: string; context?: ChildDraftContext },
-  now: Date,
+  now: () => Date,
 ): Promise<TaskDraft> {
   const use = context === undefined ? "task_draft" : "child_draft";
   try {
     return await recordedAnswer(db, use, now, client.draftTask(dump, language, context));
   } catch (err) {
-    quarantineBoardCallRefusal(db, err, use, undefined, now);
+    quarantineBoardCallRefusal(db, err, use, undefined, now());
     throw err;
   }
 }
@@ -88,12 +88,12 @@ export async function draftHandoff(
   db: Db,
   client: DraftClient,
   { dump, language, taskId }: { dump: string; language: string; taskId: string },
-  now: Date,
+  now: () => Date,
 ): Promise<HandoffDraft> {
   try {
     return await recordedAnswer(db, "handoff_draft", now, client.draftHandoff(dump, language));
   } catch (err) {
-    quarantineBoardCallRefusal(db, err, "handoff_draft", taskId, now);
+    quarantineBoardCallRefusal(db, err, "handoff_draft", taskId, now());
     throw err;
   }
 }

@@ -347,8 +347,8 @@ export class PickupGateError extends Error {
  *  読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
  *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
  *  最初に落ちた場所で `PickupGateError` を投げる。 */
-export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, fixedPoints?: BoardStatePath[], live?: () => boolean) {
-  workspace = withRememberedRepoCheck(db, workspace);
+export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: () => Date, fixedPoints?: BoardStatePath[], live?: () => boolean) {
+  workspace = withRememberedRepoCheck(db, workspace, now);
   // ADR 0386 決定4: 面接室の項は解除の門・本文と同じ並び —— 受験者の (task, 面接室) の項だけは場所の項より先
   const room = (rootId: string) => ({
     ...roomPlace(db, rootId, workspacesBaseDir),
@@ -368,7 +368,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
     if (live?.() === false) return checks;
     try {
       const list = predicates();
-      await firePickupPredicates(db, place, list, "before-open", { live });
+      fireBeforeOpenPredicates(place, list, live);
       checks.push({ place, predicates: list });
     } catch (err) {
       if (err instanceof PickupGateError) throw err;
@@ -382,8 +382,8 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
  *  鍵は項の場所の名前。 */
 /** spec #3273 の受理の順の前半(ADR 0329 決定14): 名前に掛かる前半の項 → 名前の場所の clean(`clean` のとき)。workspace の Quarantine の
  *  受理と、同じ条件で merge back を撃ち直す積み残しの retry(ADR 0371 決定10)が掛ける。 */
-export async function checkAcceptanceFirstHalf(db: Db, place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
-  await firePickupPredicates(db, place, predicates, "before-open");
+export async function checkAcceptanceFirstHalf(place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
+  fireBeforeOpenPredicates(place, predicates);
   if (clean) verifyWorkspaceClean(place);
 }
 
@@ -405,17 +405,17 @@ export async function firePickupPredicates(
   place: WorkspaceConfig,
   predicates: PickupPredicate[],
   phase: PickupPredicate["phase"],
-  board: PickupPrep & { fresh?: boolean } = {},
+  board: PickupPrep & { fresh?: boolean; now: () => Date },
 ): Promise<void> {
   if (phase === "before-open") return fireBeforeOpenPredicates(place, predicates, board.live);
   const fire: PlaceFire = {
     fetch: async (target) => {
-      target = withRememberedRepoCheck(db, target);
+      target = withRememberedRepoCheck(db, target, board.now);
       await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
       if (board.live?.() === false) return;
       if (isRemoteBacked(target)) fetchBranchCopy(target, board.githubAuth, protectedBranch(target), boardRefWriter(db, target));
     },
-    park: (target) => parkOnProtectedBranch(db, withRememberedRepoCheck(db, target)),
+    park: (target) => parkOnProtectedBranch(db, withRememberedRepoCheck(db, target, board.now)),
   };
   for (const predicate of predicates) {
     if (board.live?.() === false) return;
@@ -1740,7 +1740,7 @@ async function captureFirstBaseline(
   const { now } = board;
   const named = withRememberedRepoCheck(db, workspace, now);
   await preparedOrRefused(db, workspace, "open a workbench", { now }, async () => {
-    await firePickupPredicates(db, named, checkoutPickupPredicates(named, board.fixedPoints), "before-open");
+    fireBeforeOpenPredicates(named, checkoutPickupPredicates(named, board.fixedPoints));
     prepareRefBaseline(db, named, { resolveRegistered: board.resolveRegistered, now });
   });
 }
@@ -1830,7 +1830,7 @@ export type HumanWorkPreparation = Omit<PickupPreparation, "reads" | "live"> & {
 export async function prepareHumanWork(db: Db, workspace: WorkspaceConfig, task: Task, verb: string, board: HumanWorkPreparation): Promise<void> {
   refuseWhileHeld(db, workspace.name, verb);
   await preparedOrRefused(db, workspace, verb, board, async () => {
-    const reads = await pickupGate(db, workspace, task, board.workspacesBaseDir, board.fixedPoints);
+    const reads = await pickupGate(db, workspace, task, board.workspacesBaseDir, board.now, board.fixedPoints);
     await preparePickupPlace(db, workspace, task, { ...board, reads });
   });
 }
@@ -1856,7 +1856,7 @@ export async function startHumanWork(
   let refusal: DomainError | undefined;
   await preparedOrRefused(db, workspace, verb, board, async () => {
     // ADR 0390 決定2: createTaskBranch まで await は無い。系譜を読む git の失敗は Quarantine に畳み、拒否はこの外で投げる(中で投げても畳まれる)
-    refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task), verb);
+    refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task, board.now), verb);
     if (refusal) return;
     const now = board.now();
     try {
@@ -1903,7 +1903,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   const target = taskBranch(task.id);
   const ref = `refs/heads/${target}`;
   const at = workbenchAt(named, base, target);
-  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task, "complete");
+  const { lineage, ref: returnRef, name: returnName, sha: returnSha } = returnBranchOf(db, named, task, "complete", now);
   const refusal = returnOwnerRefusal(db, named, lineage, "complete");
   if (refusal) throw refusal;
   const unfinished = teardownUnfinishedUnder(db, task.id);
@@ -1972,11 +1972,11 @@ function returnOwnerRefusal(db: Db, named: WorkspaceConfig, lineage: string | un
 
 /** ADR 0374 決定8: H の帰り先 —— `parent_id` でなく系譜で決まり、非根は系譜の `task/<P>`、根は保護ブランチ —— の ref・名前・今の値。
  *  ADR 0374 決定6: その値は取り込みと完了の内容の検査の入力の tip でもある。 */
-function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task, verb: "take in" | "complete"): { lineage: string | undefined; ref: string; name: string; sha: string } {
+function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task, verb: "take in" | "complete", now: Date): { lineage: string | undefined; ref: string; name: string; sha: string } {
   // ADR 0380 決定3: 帰り先なしを保護ブランチと読まない
   const lost = noReturnAncestor(db, named, task);
   if (lost) throw new DomainError(lostBranchRefusal(verb, `${taskBranch(lost.id)}, the branch this task returns into,`, !isSettled(lost.status)));
-  const lineage = lineageTaskBranch(db, named, task);
+  const lineage = lineageTaskBranch(db, named, task, () => now);
   const ref = lineage ? `refs/heads/${lineage}` : exactProtectedBranchRef(named);
   return { lineage, ref, name: lineage ?? protectedBranch(named), sha: git(named.path, "rev-parse", "--verify", ref) };
 }
@@ -2006,7 +2006,7 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
       const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now: () => now }, {
         humanWork: { again: "take in again", gone },
         // ADR 0374 決定6: 人間が merge した帰り先の値も入力の tip —— 完了と同じ
-        returnValue: returnBranchOf(db, named, task, "take in").sha,
+        returnValue: returnBranchOf(db, named, task, "take in", now).sha,
       });
       if (!intaken) throw new DomainError(nothingToTakeIn(target, place.path));
       return intaken;
@@ -2449,7 +2449,8 @@ export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
-  protectedRef?: string,
+  /** 保護ブランチの ref か、ref を読むときに覚えた repo を確かめる clock(ADR 0404 決定6)。 */
+  protectedRefOrClock: string | (() => Date),
   /** 最初の ref の読みの直前に1度だけ呼ぶ(着地の比較、ADR 0370 決定1)。ref を読まない lineage では呼ばない。 */
   beforeRefRead?: () => void,
 ): { branch: string | undefined; outlivedForkSource: boolean; noReturn?: true } {
@@ -2457,6 +2458,9 @@ export function resolveTaskBranchLineage(
     beforeRefRead?.();
     beforeRefRead = undefined;
   };
+  let protectedRef: string | undefined;
+  const readProtectedRef = () =>
+    (protectedRef ??= typeof protectedRefOrClock === "string" ? protectedRefOrClock : protectedBranchRef(withRememberedRepoCheck(db, workspace, protectedRefOrClock)));
   if (transparentToLineage(task.type)) {
     // ADR 0380 決定3: 失われた親のブランチは git で読まない —— 死んだ task に残る RCA は保護ブランチを読む
     if (task.parent_id && taskBranchLostInForce(db, task.parent_id)) return { branch: undefined, outlivedForkSource: false };
@@ -2481,7 +2485,7 @@ export function resolveTaskBranchLineage(
       candidate = branch;
       continue;
     }
-    const base = candidate ?? (protectedRef ??= protectedBranchRef(withRememberedRepoCheck(db, workspace)));
+    const base = candidate ?? readProtectedRef();
     readingRefs();
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
@@ -2497,9 +2501,9 @@ export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
-  protectedRef?: string,
+  protectedRefOrClock: string | (() => Date),
 ): string | undefined {
-  return resolveTaskBranchLineage(db, workspace, task, protectedRef).branch;
+  return resolveTaskBranchLineage(db, workspace, task, protectedRefOrClock).branch;
 }
 
 /** 名前の場所の HEAD を保護ブランチへ戻す1手。ADR 0345 決定2: HEAD の行に予告して畳む。ADR 0356 決定5: 人間の checkout で
@@ -2568,9 +2572,9 @@ export class LostTaskBranchPresentError extends Error {
 
 /** タスクブランチを切る sha(ADR 0053)。面接室で走る受験者と root は、面接室が提供する切る元から切る(ADR 0386 決定1 / ADR 0276 決定1)。
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
-export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): string {
+export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task, now: () => Date): string {
   if (interviewRole(db, task) !== undefined) return roomForkSource(db, workspace, task);
-  const base = exactProtectedBranchRef(withRememberedRepoCheck(db, workspace));
+  const base = exactProtectedBranchRef(withRememberedRepoCheck(db, workspace, now));
   const lineage = resolveTaskBranchLineage(db, workspace, task, base);
   // ADR 0380 決定3: 帰り先なしの task の fork 元は問われない(spec #3273 group H)—— 保護ブランチから切らない
   if (lineage.noReturn) throw new Error(`task ${task.id} has no branch to return to: a task branch in its lineage was lost`);
@@ -2584,7 +2588,7 @@ export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task): 
 function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, filledFrom?: string): void {
   const ref = `refs/heads/${taskBranch(task.id)}`;
   if (!taskBranchExists(workspace, task.id)) {
-    const source = taskForkSource(db, workspace, task);
+    const source = taskForkSource(db, workspace, task, () => now);
     boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
   } else if (hasTaskBranchInForce(db, task.id)) return;
   // ADR 0392 決定2: 失われた event が効いているのに在る ref は、クラッシュ後の回復と読まず採らずに止まる(give-up の後は届かない状態)
@@ -2675,8 +2679,8 @@ export async function ensureWorkspaceToken(
 /** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを進める —— 写しは pickup と
  *  後始末の fetch でしか動かず、merge の直後はまだ merge された内容を持たない。走っている session の基準の下で写しを
  *  動かすので、原本の sha を先に知ってから口を通して書く(ADR 0243 決定3)。失敗は投げる(呼び手の根の失敗になる)。 */
-export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
-  workspace = withRememberedRepoCheck(db, workspace);
+export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined, now: () => Date): Promise<void> {
+  workspace = withRememberedRepoCheck(db, workspace, now);
   if (!isRemoteBacked(workspace)) return;
   await ensureWorkspaceToken(workspace, auth);
   fetchBranchCopy(workspace, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
@@ -2689,20 +2693,20 @@ async function ensureHeadRepoToken(workspace: WorkspaceConfig, auth: GitHubAuth 
 /** ADR 0376 決定1 / ADR 0395 決定1: PR の無いタスクブランチの出元 repo の head を、上限つき・認証つきの `ls-remote` 1回で読む。exit 0 で行が無ければ
  *  「読めて、無い」で undefined、非ゼロは「読めなかった」で投げる。写しを進める fetch(`fetchBranchCopy`)は使わない —— 無いブランチを
  *  失敗にし、最後に push した値として読む写し(決定3)を書き換える。 */
-export async function readTaskBranchHead(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined, branch: string): Promise<string | undefined> {
-  workspace = withRememberedRepoCheck(db, workspace);
+export async function readTaskBranchHead(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined, branch: string, now: () => Date): Promise<string | undefined> {
+  workspace = withRememberedRepoCheck(db, workspace, now);
   await ensureHeadRepoToken(workspace, auth);
   return remoteBranchSha(workspace, auth, branch, HEAD_REPO_REMOTE);
 }
 
 /** ADR 0242 決定1: GitHub の head が手元に無ければ sha で取る。token の取得と、交渉用に ref を読む同期の fetch を分ける
  *  (ADR 0370 決定1)。ADR 0395 決定1: 出元 repo から取り、fetch は `refs/` に何も書かない(FETCH_HEAD だけ)。 */
-export function prepareFetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<() => void> | undefined {
+export function prepareFetchCommitIfMissing(db: Db, workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined, now: () => Date): Promise<() => void> | undefined {
   try {
     git(workspace.path, "cat-file", "-e", `${sha}^{commit}`);
     return;
   } catch {}
-  const checked = withRememberedRepoCheck(db, workspace);
+  const checked = withRememberedRepoCheck(db, workspace, now);
   return ensureHeadRepoToken(checked, auth).then(() => () => fetchCommit(checked, auth, sha, HEAD_REPO_REMOTE));
 }
 
@@ -3058,7 +3062,7 @@ export function assertRememberedHeadRepo(db: Db, workspace: WorkspaceConfig, now
 export function withRememberedRepoCheck<T extends WorkspaceConfig>(
   db: Db,
   workspace: T,
-  now = () => new Date(),
+  now: () => Date,
   resolveCurrent?: (name: string) => WorkspaceConfig,
 ): T & Required<Pick<WorkspaceConfig, "checkRememberedRepo">> {
   return {
@@ -3612,7 +3616,7 @@ export function endLostRootLanding(db: Db, workspace: WorkspaceConfig, task: Tas
   if (!lost || db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN ${LANDING_ENDED_KINDS_SQL}`).get(task.id)) return undefined;
   if (by === "acceptance") {
     // ADR 0397 決定4: 読みの失敗は握らずに投げる —— 受理は Quarantine を閉じる前に拒まれ、次の受理が記録から読み直す
-    const lineage = resolveTaskBranchLineage(db, workspace, task);
+    const lineage = resolveTaskBranchLineage(db, workspace, task, () => now);
     if (lineage.branch || lineage.noReturn) return undefined;
   }
   const handoffOnly = lostAsCreated(db, task.id, lost);
@@ -3865,8 +3869,8 @@ export function releaseWorkspace(
 }
 
 /** 完了なら帰り先へ merge back し、名前の場所を休止位置へ戻す。 */
-function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBack: boolean, githubAuth: GitHubAuth | undefined, tokenFailure: unknown, workbenchBase: string, recordedTip?: string): void {
-  workspace = withRememberedRepoCheck(db, workspace);
+function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, now: () => Date, mergeBack: boolean, githubAuth: GitHubAuth | undefined, tokenFailure: unknown, workbenchBase: string, recordedTip?: string): void {
+  workspace = withRememberedRepoCheck(db, workspace, now);
   // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
   // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
   // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
@@ -3876,7 +3880,7 @@ function settleBranches(db: Db, workspace: WorkspaceConfig, task: Task, mergeBac
     // ADR 0351 決定3: 基準は切れないので、後始末の fetch も口を通す
     if (isRemoteBacked(workspace)) fetchBranchCopy(workspace, githubAuth, protectedBranch(workspace), boardRefWriter(db, workspace));
   }
-  const target = mergeBack && lineageTaskBranch(db, workspace, task);
+  const target = mergeBack && lineageTaskBranch(db, workspace, task, now);
   if (target) mergeBackInto(db, workspace, workbenchBase, target, task.id, "release", recordedTip);
   parkOnProtectedBranch(db, workspace);
 }
@@ -3916,7 +3920,7 @@ function releaseTaskCheckout(
     const verifiedTip = gated ? verifiedRefs.get(taskRef) : undefined;
     if (gated && !verifiedTip) throw new Error(`workspace ${namedPlace.name}: the recorded task ref ${taskRef} is missing`);
     // 作業台は task の checkout と同じ基点の下(spec #3273 の番地)
-    settleBranches(db, namedPlace, task, mergeBack, githubAuth, tokenFailure, CHECKOUT_LAYOUT.task.base(checkout), verifiedTip);
+    settleBranches(db, namedPlace, task, () => now, mergeBack, githubAuth, tokenFailure, CHECKOUT_LAYOUT.task.base(checkout), verifiedTip);
   } catch (err) {
     quarantineWorkspace(db, namedPlace.name, err, now);
   }
@@ -4322,6 +4326,7 @@ function undeliveredMergeBacks(
   workspace: WorkspaceConfig,
   defaultWorkspaceName: string | undefined,
   root: string | undefined,
+  now: () => Date,
 ): Array<{ taskId: string; target: string }> {
   const rows = db
     .prepare(
@@ -4334,7 +4339,7 @@ function undeliveredMergeBacks(
   return rows.flatMap(({ id }) => {
     // ADR 0380 決定3: 失われた ref は git で読まない —— give-up が消す(ADR 0392 決定1)ので、在っても task の成果ではない
     if (taskBranchLostInForce(db, id) || !taskBranchExists(workspace, id)) return [];
-    const target = lineageTaskBranch(db, workspace, getTask(db, id)!);
+    const target = lineageTaskBranch(db, workspace, getTask(db, id)!, now);
     return target && branchMergeEffect(workspace, target, taskBranch(id)).changesCandidate ? [{ taskId: id, target }] : [];
   });
 }
@@ -4358,7 +4363,7 @@ export async function redoMergeBacks(
   compareRefs?: () => void,
 ): Promise<string[]> {
   const root = retry?.root;
-  if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root).length === 0) return [];
+  if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root, intake.now).length === 0) return [];
   await retry?.firstHalf();
   const running = db
     .prepare(
@@ -4368,7 +4373,7 @@ export async function redoMergeBacks(
   if (running) {
     throw new Error(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`);
   }
-  await refreshProtectedBranch(db, workspace, auth);
+  await refreshProtectedBranch(db, workspace, auth, intake.now);
   compareRefs?.();
   // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
   let failure: { error: unknown } | undefined;
@@ -4378,7 +4383,7 @@ export async function redoMergeBacks(
     // 1つ運ぶたびに読み直す —— 子孫を運んだ子は、親へ運ぶ内容を新しく持つ。ADR 0382 決定2: 人間の tip を持つ作業台を盤面の手の merge より
     // 先に取り込む —— 盤面が先に書く先を進めると、その tip は書く先の今の値を欠いて拒まれる
     next: for (;;) {
-      const pending = undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root);
+      const pending = undeliveredMergeBacks(db, workspace, defaultWorkspaceName, root, intake.now);
       if (pending.length === 0) break;
       for (const candidate of pending) {
         const taken = takeInMergeBack(db, workspace, candidate, intake);
@@ -4504,7 +4509,7 @@ function settleLandedWorkbench(named: WorkspaceConfig, base: string, target: str
  *
  *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。作業台を残した取り込みなら、その text C6 も返す。 */
 export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string, intake: Omit<IntakeContext, "entry">): { landed: string; kept: string | undefined } {
-  if (isRemoteBacked(withRememberedRepoCheck(db, workspace))) {
+  if (isRemoteBacked(withRememberedRepoCheck(db, workspace, intake.now))) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
   const branch = protectedBranch(workspace);

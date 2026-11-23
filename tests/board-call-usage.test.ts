@@ -1,11 +1,11 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
-import { BoardCallUsageError, listBoardCalls, listTranslationUsage, recordBoardCall, recordedAnswer } from "../src/board-call-usage.js";
+import { type BoardCallAnswer, BoardCallUsageError, listBoardCalls, listTranslationUsage, recordBoardCall, recordedAnswer } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
-import { BOARD_CALL_USAGE as USAGE } from "./fakes.js";
+import { FakeClock, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -68,7 +68,7 @@ it("答えが返った Board call は行を書き、答えを返す(ADR 0299 決
   const db = await freshDb();
   const now = new Date("2026-10-22T00:00:00Z");
 
-  const output = await recordedAnswer(db, "attribution", now, Promise.resolve({ output: { ok: true }, model_swaps: [], refusals: [], usage: USAGE, setting: SETTING }));
+  const output = await recordedAnswer(db, "attribution", () => now, Promise.resolve({ output: { ok: true }, model_swaps: [], refusals: [], usage: USAGE, setting: SETTING }));
 
   expect(output).toEqual({ ok: true });
   expect(listBoardCalls(db)).toEqual([{ use: "attribution", ...SETTING, fragments: null, model_swaps: [], refusals: [], usage: USAGE, createdAt: now.toISOString() }]);
@@ -79,9 +79,22 @@ it("usage を報告して失敗した Board call は行を書き、失敗をそ�
   const now = new Date("2026-10-22T00:00:00Z");
   const failed = new BoardCallUsageError("answer did not match the schema", SETTING, USAGE);
 
-  await expect(recordedAnswer(db, "attribution", now, Promise.reject(failed))).rejects.toBe(failed);
+  await expect(recordedAnswer(db, "attribution", () => now, Promise.reject(failed))).rejects.toBe(failed);
 
   expect(listBoardCalls(db)).toEqual([{ use: "attribution", ...SETTING, fragments: null, model_swaps: [], refusals: [], usage: USAGE, createdAt: now.toISOString() }]);
+});
+
+it("行は答えが届いた時刻を持つ(ADR 0404 決定7)", async () => {
+  const db = await freshDb();
+  const clock = new FakeClock();
+  let answer!: (a: BoardCallAnswer<string>) => void;
+  const recorded = recordedAnswer(db, "attribution", () => clock.now(), new Promise<BoardCallAnswer<string>>((resolve) => (answer = resolve)));
+
+  await clock.advance(60_000);
+  answer({ output: "answer", model_swaps: [], refusals: [], usage: USAGE, setting: SETTING });
+  await recorded;
+
+  expect(listBoardCalls(db).map((row) => row.createdAt)).toEqual([new Date(60_000).toISOString()]);
 });
 
 it.each([
@@ -91,7 +104,7 @@ it.each([
 ])("%s で終わった Board call は行を書かず、失敗をそのまま投げる(ADR 0299 決定3)", async (_, refusal) => {
   const db = await freshDb();
 
-  await expect(recordedAnswer(db, "attribution", new Date("2026-10-22T00:00:00Z"), Promise.reject(refusal))).rejects.toBe(refusal);
+  await expect(recordedAnswer(db, "attribution", () => new Date("2026-10-22T00:00:00Z"), Promise.reject(refusal))).rejects.toBe(refusal);
 
   expect(listBoardCalls(db)).toEqual([]);
 });
@@ -102,9 +115,9 @@ it("答えと usage つきの失敗の観測を同じ行に逐語で残し、pro
   const model_swaps = [{ from: "pin", to: "raw target", scope: null, category: "raw category" }];
   const refusals = ["raw category", null];
   const answer = { output: "answer", usage: USAGE, setting: SETTING, model_swaps, refusals };
-  await expect(recordedAnswer(db, "attribution", now, Promise.resolve(answer))).resolves.toBe("answer");
+  await expect(recordedAnswer(db, "attribution", () => now, Promise.resolve(answer))).resolves.toBe("answer");
   const failed = new BoardCallUsageError("failed", SETTING, USAGE, model_swaps, refusals);
-  await expect(recordedAnswer(db, "attribution", now, Promise.reject(failed))).rejects.toBe(failed);
+  await expect(recordedAnswer(db, "attribution", () => now, Promise.reject(failed))).rejects.toBe(failed);
   recordBoardCall(db, "model_probe", SETTING, USAGE, now);
   expect(listBoardCalls(db).map(({ model_swaps, refusals, model }) => ({ model_swaps, refusals, model }))).toEqual([
     { model: "haiku", model_swaps, refusals },
@@ -117,6 +130,6 @@ it("差し替えだけで result の無い stream は失敗し、usage の行も
   const db = await freshDb();
   const stdout = JSON.stringify({ type: "system", subtype: "model_refusal_fallback", original_model: "haiku", fallback_model: "raw target" });
   const call = runClaudeBoardCallJson({ exec: async () => stdout, label: "test", prompt: "p", setting: SETTING, reasoning: true }, z.object({ ok: z.boolean() }));
-  await expect(recordedAnswer(db, "attribution", new Date("2026-10-28T00:00:00Z"), call)).rejects.toThrow();
+  await expect(recordedAnswer(db, "attribution", () => new Date("2026-10-28T00:00:00Z"), call)).rejects.toThrow();
   expect(listBoardCalls(db)).toEqual([]);
 });

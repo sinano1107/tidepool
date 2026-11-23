@@ -92,7 +92,7 @@ it("remote-backed の解放が休止位置の ff でローカルの保護ブラ�
   const pickedUp = git(workspace.path, "rev-parse", "main");
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
   // 写しは口を通して進める(後始末の fetch の代わり)
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => now);
   commitWork(place.path, "notes.txt", "work\n");
   releaseWorkspace(db, place, task, now);
   const parked = git(workspace.path, "rev-parse", "main");

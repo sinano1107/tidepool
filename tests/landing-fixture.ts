@@ -266,7 +266,7 @@ export async function catchUpConflictRoot(name: string, { openFailure = false, u
   const advanceOrigin = async () => {
     commitWork(publisher, "later.txt", "after the human's merge\n");
     git(publisher, "push", "origin", "main");
-    await refreshProtectedBranch(db, workspace, undefined);
+    await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
   };
   /** 人間が作業台で origin の保護ブランチを merge し、conflict を保護ブランチの側で解いて commit する。 */
   const resolve = () => {

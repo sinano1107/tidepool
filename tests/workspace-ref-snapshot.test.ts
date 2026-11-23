@@ -322,7 +322,7 @@ it("盤面が origin/main を書いても、連動する origin/HEAD で quarant
   publish("merged.txt", "merged on GitHub\n", "merged while the session runs");
 
   // 収束が保護ブランチの写しを進める書き込み(ADR 0241 決定1)—— 口は origin/main の1行だけを予告して畳む
-  await refreshProtectedBranch(t.db, workspace, undefined);
+  await refreshProtectedBranch(t.db, workspace, undefined, () => t.clock.now());
   expect(git(workspace.path, "rev-parse", "refs/remotes/origin/main")).not.toBe(before);
 
   await complete(t, task.id);

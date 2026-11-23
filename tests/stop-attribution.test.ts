@@ -37,7 +37,7 @@ function fixture({ task = work, spawn = {}, worker = "deckhand" }: { task?: (db:
   const exit = (session = spawned) =>
     appendEvent(db, { taskId: picked.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
   const sweep = async (now = at, with_ = deps) => {
-    refireRetrospectiveCalls(db, with_, now);
+    refireRetrospectiveCalls(db, with_, () => now);
     await new Promise((resolve) => setImmediate(resolve));
   };
   const stopEvent = () => listEvents(db, picked.id).find((e) => e.kind === "session_stopped_by_human")!;

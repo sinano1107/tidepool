@@ -87,7 +87,7 @@ describe("spawn の無い session の停止の決着(ADR 0118 決定1 / ADR 0274
     const client = new FakeAttributionClient();
     client.scriptStopJudgment({ cause: "capability", evidence: "deleted files outside the workspace" });
 
-    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, () => at);
     await settle();
 
     expect(client.stopCalls).toEqual([]);

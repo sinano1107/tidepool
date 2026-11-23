@@ -41,7 +41,7 @@ it.each(["no baseline", "unlearned baseline", "purely-local baseline"] as const)
   const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
   let declared = { ...workspace, repo: remote.repo };
   git(workspace.path, "remote", "add", "origin", remote.repo!);
-  const gate = () => pickupGate(db, declared, task, base);
+  const gate = () => pickupGate(db, declared, task, base, () => NOW);
 
   if (history !== "purely-local baseline") {
     await expect(gate()).resolves.toBeDefined();
@@ -148,7 +148,7 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     const reason = `workspace ${workspace.name} declares head repo acme/fork, but the board never recorded one for it. Clear the head repo in the workspace settings, or remove \`head_repo:\` by hand, and answer; then set it there to use it.`;
 
     expect(() => workspaceNetworkDestination(withRememberedRepoCheck(db, declared, () => NOW))).toThrow(new WorkspaceRepoMismatchError(reason));
-    await expect(pickupGate(db, declared, task, base)).rejects.toThrow(reason);
+    await expect(pickupGate(db, declared, task, base, () => NOW)).rejects.toThrow(reason);
 
     expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(reason.slice(0, -1));
     expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
@@ -185,21 +185,21 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     announceHeadRepo(db, workspace, "acme/fork");
     const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
     const base = await tempDir("tidepool-destination-checkouts-");
-    await expect(pickupGate(db, declared, task, base)).resolves.toBeDefined();
+    await expect(pickupGate(db, declared, task, base, () => NOW)).resolves.toBeDefined();
     git(workspace.path, "remote", "set-url", "head-repo", "https://github.com/acme/elsewhere.git");
     const calls = await shimGit();
     const reason = `workspace ${workspace.name} declares head repo acme/fork, but its checkout's 'head-repo' remote is https://github.com/acme/elsewhere.git. In ${workspace.path}, run \`git remote set-url head-repo https://github.com/acme/fork.git\`.`;
 
-    await expect(pickupGate(db, declared, task, base)).rejects.toThrow(reason);
+    await expect(pickupGate(db, declared, task, base, () => NOW)).rejects.toThrow(reason);
     const accept = quarantineChecks({ quarantineResolvers: {}, db, workspace: declared }).workspace!;
     await expect(accept(workspace.name, "repaired by hand", "webui")).rejects.toThrow(reason);
     expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
 
     git(workspace.path, "config", "--remove-section", "remote.head-repo");
-    await expect(pickupGate(db, declared, task, base)).rejects.toThrow(
+    await expect(pickupGate(db, declared, task, base, () => NOW)).rejects.toThrow(
       `workspace ${workspace.name} declares head repo acme/fork but its checkout has no 'head-repo' remote. In ${workspace.path}, run \`git remote add head-repo https://github.com/acme/fork.git\`.`,
     );
-    await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(`workspace ${workspace.name} was given head repo acme/fork, but its registry entry no longer declares one.`);
+    await expect(pickupGate(db, workspace, task, base, () => NOW)).rejects.toThrow(`workspace ${workspace.name} was given head repo acme/fork, but its registry entry no longer declares one.`);
   });
 
   // ADR 0378 決定1 / ADR 0395 決定1・2: 網の行き先は宣言 `repo` と宣言の出元 repo だけで、checkout の remote の綴りは使わない
@@ -229,7 +229,7 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     const declared = { ...workspace, head_repo: "acme/fork" };
     const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
 
-    await expect(pickupGate(db, declared, task, await tempDir("tidepool-destination-checkouts-"))).resolves.toBeDefined();
+    await expect(pickupGate(db, declared, task, await tempDir("tidepool-destination-checkouts-"), () => NOW)).resolves.toBeDefined();
     await leaveBaseline(db, declared);
     await leaveBaseline(db, declared);
 
@@ -286,7 +286,7 @@ it("remembers where a relative repo declaration resolved when the baseline was c
   const path = join(moved, "checkout");
   renameSync(workspace.path, path);
 
-  await expect(refreshProtectedBranch(db, { ...workspace, path, repo }, undefined)).rejects.toThrow(
+  await expect(refreshProtectedBranch(db, { ...workspace, path, repo }, undefined, () => NOW)).rejects.toThrow(
     `was registered for repo ${workspace.repo}, but its registry entry now says ${repo}.`,
   );
 });
@@ -301,7 +301,7 @@ it("rechecks origin before a first pickup can capture a repo edited after the pi
   const workspace = withRememberedRepoCheck(db, current, () => NOW, () => current);
   const task = registerTask(db, { type: "work", title: "first pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-destination-checkouts-");
-  const reads = await pickupGate(db, workspace, task, base);
+  const reads = await pickupGate(db, workspace, task, base, () => NOW);
   const calls = await shimGit();
   current = { ...original.workspace, repo: changed.workspace.repo };
 
@@ -335,7 +335,7 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   const calls = await shimGit();
   const reason = `workspace declared declares repo ${workspace.repo}, but its checkout's origin is ${other.workspace.repo}. In ${workspace.path}, run \`git remote set-url origin ${workspace.repo}\`. To move the workspace to another repository, delete it and register it again.`;
 
-  await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(reason);
+  await expect(pickupGate(db, workspace, task, base, () => NOW)).rejects.toThrow(reason);
   const accept = quarantineChecks({ quarantineResolvers: {}, db, workspace }).workspace!;
   await expect(accept(workspace.name, "repaired by hand", "webui")).rejects.toThrow(reason);
   expect(calls().filter(({ args }) => args.includes("ls-remote") || args.includes("fetch"))).toEqual([]);
@@ -344,7 +344,7 @@ it("refuses pickup and Quarantine acceptance before contacting a re-pointed orig
   git(workspace.path, "remote", "set-url", "origin", workspace.repo!);
   // 旧: 次の比較が予告の値をまだ受け入れた。spec #3273 の受理の順の後は、受理の1回目の比較が通った時点で2値行を ref の持つ側へ畳む
   // —— 後の項で拒まれても畳みは残る(pin B1)ので、予告の値への移動はもう受け入れられない
-  const reads = await pickupGate(db, workspace, task, base);
+  const reads = await pickupGate(db, workspace, task, base, () => NOW);
   await expect(prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir: base })).resolves.toBeDefined();
   await expect(accept(workspace.name, "repaired by hand", "webui")).resolves.toBeUndefined();
 });
@@ -363,10 +363,10 @@ it("compares raw origin URLs and accepts equivalent spellings of the same GitHub
   git(workspace.path, "config", `url.${declared}.insteadOf`, different);
   expect(git(workspace.path, "remote", "get-url", "origin")).toBe(declared);
 
-  await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(`its checkout's origin is ${different}`);
+  await expect(pickupGate(db, workspace, task, base, () => NOW)).rejects.toThrow(`its checkout's origin is ${different}`);
 
   git(workspace.path, "config", "--replace-all", "remote.origin.url", "git@GitHub.com:Acme/PROJECT");
-  await expect(pickupGate(db, workspace, task, base)).resolves.toBeDefined();
+  await expect(pickupGate(db, workspace, task, base, () => NOW)).resolves.toBeDefined();
 });
 
 it.each([
@@ -382,7 +382,7 @@ it.each([
   onTestFinished(() => { db.close(); });
   const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
 
-  await expect(pickupGate(db, workspace, task, await tempDir("tidepool-destination-checkouts-"))).rejects.toThrow(
+  await expect(pickupGate(db, workspace, task, await tempDir("tidepool-destination-checkouts-"), () => NOW)).rejects.toThrow(
     `workspace ${workspace.name}: could not read its checkout's origin in ${workspace.path}`,
   );
 });
@@ -436,7 +436,7 @@ it("keeps HTTP credentials out of origin mismatch diagnostics and repair command
   onTestFinished(() => { db.close(); });
   const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-destination-checkouts-");
-  const refusal = () => pickupGate(db, workspace, task, base).then(() => "", (err: Error) => err.message);
+  const refusal = () => pickupGate(db, workspace, task, base, () => NOW).then(() => "", (err: Error) => err.message);
 
   const mismatch = await refusal();
   expect(mismatch).toContain(`declares repo ${declared}, but its checkout's origin is ${origin}.`);
@@ -458,7 +458,7 @@ it("directs repairs to the exact private declaration when redaction changes a no
   onTestFinished(() => { db.close(); });
   const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-destination-checkouts-");
-  const refusal = () => pickupGate(db, workspace, task, base).then(() => "", (err: Error) => err.message);
+  const refusal = () => pickupGate(db, workspace, task, base, () => NOW).then(() => "", (err: Error) => err.message);
 
   const mismatch = await refusal();
   expect(mismatch).toContain(`declares repo ${displayRepo}`);
@@ -479,7 +479,7 @@ it("quotes a literal repository path in the origin repair command", async ({ onT
   const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-destination-checkouts-");
 
-  await expect(pickupGate(db, workspace, task, base)).rejects.toThrow(
+  await expect(pickupGate(db, workspace, task, base, () => NOW)).rejects.toThrow(
     "run `git remote set-url origin '../owner'\\''s repository; $(false)'`",
   );
 });
@@ -498,14 +498,14 @@ it("refuses first pickup when registration observed a rewritten non-GitHub origi
   const registered = resolveExecutionWorkspace(loadRegistry(registry.dir, registry.mode), "rewritten", "rewritten", base);
   expect(registered.repo).toBe(workspace.repo);
   const task = registerTask(db, { type: "work", title: "first pickup", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const gate = () => pickupGate(db, registered, task, base);
+  const gate = () => pickupGate(db, registered, task, base, () => NOW);
   await expect(gate()).rejects.toThrow(`declares repo ${workspace.repo}, but its checkout's origin is ${origin}`);
   git(path, "remote", "set-url", "origin", workspace.repo!);
   await expect(gate()).resolves.toBeDefined();
   await expect(quarantineChecks({ quarantineResolvers: {}, db, workspace: registered }).workspace!(registered.name, undefined, "webui")).resolves.toBeUndefined();
 
   const locallyDeclared = { ...registered, repo: undefined };
-  await expect(pickupGate(db, locallyDeclared, task, base)).rejects.toThrow(
+  await expect(pickupGate(db, locallyDeclared, task, base, () => NOW)).rejects.toThrow(
     `workspace rewritten declares no remote source of truth (no repo) but its checkout has an 'origin' remote. In ${path}, run \`git config --remove-section remote.origin\`.`,
   );
   git(path, "config", "--remove-section", "remote.origin");
@@ -533,7 +533,7 @@ it("teardown uses the declared repository and landing uses its fork after origin
   const registered = registerTask(db, { type: "work", title: "work to land", purpose: "p", completion_criteria: "c", workspace: workspace.name }, clock.now(), ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   const workspacesBaseDir = await tempDir("tidepool-destination-checkouts-");
-  const reads = await pickupGate(db, workspace, task, workspacesBaseDir);
+  const reads = await pickupGate(db, workspace, task, workspacesBaseDir, () => clock.now());
   const place = await prepareAtPickup(db, workspace, task, { reads, workspacesBaseDir, now: clock.now() });
   slot.occupy(task.id, 1);
   commitWork(place.path, "work.txt", "work\n");

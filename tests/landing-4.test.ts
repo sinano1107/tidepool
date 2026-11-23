@@ -1401,7 +1401,7 @@ it("立て直した question への retry の時点で運ぶ内容が無けれ�
   const [reasked] = openPromotionQuestions(db, work.id);
   // 内容は盤面の外で保護ブランチに届き、盤面の fetch が写しを進める
   await squashTaskIntoOrigin(workspace, work.id);
-  await refreshProtectedBranch(db, workspace, undefined);
+  await refreshProtectedBranch(db, workspace, undefined, () => clock.now());
 
   await answerPromotion(db, clock, landing, workspace, reasked!, "retry");
 

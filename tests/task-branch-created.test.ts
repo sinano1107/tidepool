@@ -132,7 +132,7 @@ it("決着した人間の task の下の work は系譜に飛ばされて保護�
   expect(getTask(db, human.id)!.workspace).toBeNull();
   expect(branchEvents(db, human.id)).toEqual([]);
   expect(git(ws.path, "for-each-ref", "--format=%(refname)", `refs/heads/task/${human.id}`)).toBe("");
-  expect(resolveTaskBranchLineage(db, ws, child)).toEqual({ branch: undefined, outlivedForkSource: false });
+  expect(resolveTaskBranchLineage(db, ws, child, () => NOW)).toEqual({ branch: undefined, outlivedForkSource: false });
   db.close();
 });
 
@@ -163,7 +163,7 @@ it("別の workspace の列を持つ祖先は、task_branch_created を持って
   await prepareAtPickup(db, b, child, { defaultWorkspaceName: b.name });
 
   expect(git(b.path, "rev-parse", `task/${child.id}`)).toBe(git(b.path, "rev-parse", "main"));
-  expect(resolveTaskBranchLineage(db, b, child)).toEqual({ branch: undefined, outlivedForkSource: false });
+  expect(resolveTaskBranchLineage(db, b, child, () => NOW)).toEqual({ branch: undefined, outlivedForkSource: false });
   db.close();
 });
 
@@ -197,7 +197,7 @@ it("既定の差し替え: 子の pickup で固定された親は差し替え後
 
   expect([getTask(db, root.id)!.workspace, getTask(db, second.id)!.workspace, picked.workspace]).toEqual([a.name, a.name, a.name]);
   expect(branchEvents(db, second.id)).toEqual([{ kind: "task_branch_created", sha: git(a.path, "rev-parse", "main"), workspace: a.name, column_filled_from: root.id }]);
-  expect(resolveTaskBranchLineage(db, a, picked).branch).toBe(`task/${second.id}`);
+  expect(resolveTaskBranchLineage(db, a, picked, () => NOW).branch).toBe(`task/${second.id}`);
   db.close();
 });
 

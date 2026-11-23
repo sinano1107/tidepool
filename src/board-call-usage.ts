@@ -57,14 +57,15 @@ export class BoardCallUsageError extends Error {
 
 /** The answer of one answer-fetching Board call, its row written whether the answer came back or the call failed
  *  after its CLI reported usage (ADR 0299 決定3). A failure without usage (row refusal, 401) writes nothing and is rethrown as is. */
-export async function recordedAnswer<T>(db: Db, use: BoardCallUse, now: Date, call: Promise<BoardCallAnswer<T>>): Promise<T> {
+export async function recordedAnswer<T>(db: Db, use: BoardCallUse, now: () => Date, call: Promise<BoardCallAnswer<T>>): Promise<T> {
   try {
     const answer = await call;
     const { output, usage, setting } = answer;
-    recordBoardCall(db, use, setting, usage, now, null, answer);
+    // ADR 0404 決定7: 答えが届いてから読む —— 重なったリクエストの行が答えの順に並ぶ(#1006)
+    recordBoardCall(db, use, setting, usage, now(), null, answer);
     return output;
   } catch (err) {
-    if (err instanceof BoardCallUsageError) recordBoardCall(db, use, err.setting, err.usage, now, null, err);
+    if (err instanceof BoardCallUsageError) recordBoardCall(db, use, err.setting, err.usage, now(), null, err);
     throw err;
   }
 }
@@ -99,9 +100,8 @@ export interface BoardCallRecord extends BoardCallSetting {
 
 type BoardCallRow = Omit<BoardCallRecord, "usage" | "createdAt" | "model_swaps" | "refusals"> & BoardCallUsage & { created_at: string; model_swaps: string; refusals: string };
 
-/** Oldest `created_at` first; rows sharing one (one request's `now` covers each chunk of one
- *  translation target, issue #688) come back in insertion order. `created_at` is the request's
- *  start, so two overlapping requests can land out of that order (#1006). */
+/** Oldest `created_at` first, rows sharing one in insertion order. `created_at` is stamped when the
+ *  answer is recorded (ADR 0404 決定7), so overlapping requests list in the order they finished (#1006). */
 export function listBoardCalls(db: Db): BoardCallRecord[] {
   const rows = db
     .prepare(

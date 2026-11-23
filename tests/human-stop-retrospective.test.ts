@@ -28,7 +28,7 @@ it.each(["deleting unrelated files", undefined])("attribution receives the same 
   const b = fixture();
   recordHumanStop(b.db, b.task.id, reason, at, "webui");
 
-  await attributeObjections(b.db, b.deps, b.session.id, at);
+  await attributeObjections(b.db, b.deps, b.session.id, () => at);
 
   expect(b.client.calls[0]!.input).toMatchObject({
     human_stop: { reason: reason ?? "not yet answered" },
@@ -44,7 +44,7 @@ it("a stop in a later retry session does not enter the first session's attributi
   appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordHumanStop(b.db, b.task.id, "retry went wrong", at, "webui");
 
-  await attributeObjections(b.db, b.deps, b.session.id, at);
+  await attributeObjections(b.db, b.deps, b.session.id, () => at);
 
   expect(b.client.calls[0]!.input).not.toHaveProperty("human_stop");
 });
@@ -59,9 +59,9 @@ it("stop-approved cancel supplies the human stop to attribution and initial draf
   b.client.scriptJudgment(b.entry, { cause: "preference", evidence: "human preference" });
   const drafter = new FakeBehaviorDraftClient();
   const deps = { ...b.deps, behaviorDraftClient: drafter };
-  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.session.id, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.session.id, () => at));
 
-  refireRetrospectiveCalls(b.db, deps, at);
+  refireRetrospectiveCalls(b.db, deps, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect([b.client.calls[0]!.input, drafter.calls[0]!.input].map((i) => i.human_stop)).toEqual([{ reason }, { reason }]);
@@ -70,7 +70,7 @@ it("stop-approved cancel supplies the human stop to attribution and initial draf
 it("second-round attribution and drafting resolve the later answer without changing the historical decision log", async () => {
   const b = fixture();
   recordHumanStop(b.db, b.task.id, undefined, at, "webui");
-  commitTriage(b.db, at, [], await attributeObjections(b.db, b.deps, b.session.id, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, b.deps, b.session.id, () => at));
   const reason = listBoard(b.db).find((q) => q.question_stop_reason_task_id === b.task.id)!;
   answerQuestion(b.db, getTask(b.db, reason.id)!, ["deleting unrelated files"], at, undefined, undefined, undefined, "webui");
   for (const rca of listChildren(b.db, b.task.id).filter((c) => c.type === "review")) {
@@ -79,7 +79,7 @@ it("second-round attribution and drafting resolve the later answer without chang
   b.client.scriptJudgment(b.entry, { cause: "capability", evidence: "RCA explained the mistake" });
   const drafter = new FakeBehaviorDraftClient();
 
-  refireRetrospectiveCalls(b.db, { ...b.deps, behaviorDraftClient: drafter }, at);
+  refireRetrospectiveCalls(b.db, { ...b.deps, behaviorDraftClient: drafter }, () => at);
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(b.client.calls[0]!.input.human_stop).toEqual({ reason: "not yet answered" });
@@ -94,7 +94,7 @@ it.each(["deleting unrelated files", undefined, null])("memory cases from attrib
   const b = fixture();
   if (reason !== null) recordHumanStop(b.db, b.task.id, reason, at, "webui");
   b.client.scriptJudgment(b.entry, { cause: "preference", evidence: "human preference" });
-  commitTriage(b.db, at, [], await attributeObjections(b.db, b.deps, b.session.id, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, b.deps, b.session.id, () => at));
   const attributed = listEvents(b.db, b.task.id).find((e) => e.kind === "objection_attributed")!;
   const candidate = createBehaviorCandidate(b.db, {
     scope: null, path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "deckhand",

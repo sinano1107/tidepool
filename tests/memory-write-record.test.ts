@@ -153,7 +153,7 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
   raiseObjection(db, drop, "that note was right", at);
   const client = new FakeAttributionClient();
 
-  await attributeObjections(db, { ...noRetrospectiveCalls, attributionClient: client }, session.id, at);
+  await attributeObjections(db, { ...noRetrospectiveCalls, attributionClient: client }, session.id, () => at);
 
   expect(client.calls.map(({ input }) => input)).toEqual([
     {

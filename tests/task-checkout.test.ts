@@ -204,10 +204,10 @@ it("fork 元は根なら保護ブランチ、子なら親の work branch の sha
   await prepareAtPickup(db, named, child);
   await prepareAtPickup(db, named, root);
 
-  expect(taskForkSource(db, named, child)).toBe(git(named.path, "rev-parse", `task/${parent.id}`));
-  expect(git(named.path, "rev-parse", `task/${child.id}`)).toBe(taskForkSource(db, named, child));
-  expect(taskForkSource(db, named, root)).toBe(git(named.path, "rev-parse", "main"));
-  expect(git(named.path, "rev-parse", `task/${root.id}`)).toBe(taskForkSource(db, named, root));
+  expect(taskForkSource(db, named, child, () => NOW)).toBe(git(named.path, "rev-parse", `task/${parent.id}`));
+  expect(git(named.path, "rev-parse", `task/${child.id}`)).toBe(taskForkSource(db, named, child, () => NOW));
+  expect(taskForkSource(db, named, root, () => NOW)).toBe(git(named.path, "rev-parse", "main"));
+  expect(git(named.path, "rev-parse", `task/${root.id}`)).toBe(taskForkSource(db, named, root, () => NOW));
 });
 
 it("完了の門をやり直すと、先に引いた commit ではなく現在の worker tip を記録する(ADR 0359 決定1)", async () => {
