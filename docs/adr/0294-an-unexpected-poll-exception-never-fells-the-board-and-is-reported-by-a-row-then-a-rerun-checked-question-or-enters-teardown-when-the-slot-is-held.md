@@ -1,5 +1,7 @@
 # poll の想定外の例外は盤面を落とさない —— 何も握っていなければ行で報せて次の poll に任せ、続けば撃ち直しで確かめる question を立て、slot を握っていれば worker が走らなかった pickup として後始末へ入る
 
+**Status 追記: registry が読めずに投げた poll は、registry の Quarantine(`registryUnreadable`)が開いていれば決定1 の行にも決定2 の計測にも数えない —— 止まりは registry の読み込みの1点が立て、人間には盤面全体の停止として届く([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定5、2026-11-23、issue #3554)。**
+
 **Status 追記: 決定4 の床の (A) の枝は消え、床は「log して続ける」に戻る —— 盤面 DB の拒否は `openDb` が返す handle が投げた所で同期に process を終えるので、床に届かない([ADR 0389](./0389-the-board-db-handle-classifies-a-refusal-where-it-is-thrown-and-ends-the-process-synchronously-reads-included.md)、2026-11-21、issue #2868)。**
 
 **Status 追記: 決定4 の床は盤面 DB が書きを拒んだ署名(SQLite の `FULL` / `IOERR` / `READONLY` / `CANTOPEN` / `CORRUPT` / `NOTADB`)を読んで process を終え、それ以外は log のまま。同期の底(`uncaughtException`)にも必ず終える受け手を置く —— 続行しないので「状態が壊れうる」の理由は当たらない。決定5 の未決は閉じた —— 一撃そのものが投げたら、器の拒否なら終了、盤面のバグなら後始末の runner が落ちた後始末(ADR 0112)を立てる([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定2・3・6、2026-11-01、issue #2837)。**

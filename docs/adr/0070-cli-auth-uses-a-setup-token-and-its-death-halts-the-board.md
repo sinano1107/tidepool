@@ -1,5 +1,7 @@
 # 動力の認証は長寿命トークンへ移し、その失効は cliAuth として盤面を止める
 
+**Status 追記: 列挙の `registryReachability` は `registryUnreadable` に改まり、到達に加えて registry の読み込みと検査を見る([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定5、2026-11-23、issue #3554)。**
+
 **Status 追記: 決定3 の「失効は盤面全体を止める `cliAuth`」は ADR-0097 決定2 と ADR-0098 決定6 で撤回** —— 停止範囲は provider 単位の quarantine へ移り、board call が依存する anthropic だけは盤面全体停止に残すという 0097 決定2 の但し書きも 0098 決定6 で畳まれた。盤面全体停止の種 `cliAuth`・`question_quarantine_cli_auth` 列・その書き手と読み手は退役済み(実装は #565)。決定1・2(setup-token への移行と秘匿の非対称)、決定4 の機械判定、決定6 は不変(決定5 と決定7 は本 ADR とは別に ADR 0075 / ADR 0077 で改訂済み —— 各決定の追記を参照) —— 失効を検出し確認つきで解除する形もそのままで、変わったのは**止まる範囲**だけである。
 
 **Status 追記(2026-10-15、ADR-0262): 実測の1行目「有効な setup-token でも対話 TUI の使用率%パネルは出る」は今の CLI では成り立たない** —— 長期 token は `user:inference` しか持たず、`/usage` は refresh の後で窓の行を消す。長期 token の盤面では Claude の使用量は観測不能のままとし、門の盤面は VM 内 `/login` を保つ(ADR-0262)。

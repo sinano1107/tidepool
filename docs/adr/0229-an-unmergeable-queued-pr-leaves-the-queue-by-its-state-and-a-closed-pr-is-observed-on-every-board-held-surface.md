@@ -1,5 +1,7 @@
 # 無人 merge で merge できない PR は状態で分けてキューから外し、閉じた PR は盤面が決裁を持つ面すべてで観測する
 
+**Status 追記: 決定1 の「分類できない失敗」から、ref 検査が git の失敗で読めないことが外れる —— その workspace の Quarantine で止まる([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定4、2026-11-23、issue #3554)。**
+
 **Status 追記: 決定1 の無人 merge の tick は、積み残しを読む同期区間の頭で名前の場所の全 ref を基準と比べる(fetch の await の後は比べ直す)。比較が落ちた PR は workspace の Quarantine を登録してキューに残す —— 「分類できない失敗はログに出してその PR をキューに残す」と同じ残し方で、理由は question が持つ([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1、2026-11-12、issue #3151)。**
 
 2026-10-10 の grilling(issue #1624、発端は #1392 / ADR 0217 の帰結)で決定。無人 merge キューの PR の merge が失敗し、
