@@ -1,5 +1,7 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
+**Status 追記: 決定4 の「origin に届かない(通信・認証の失敗)ときは失われたと決めず、回答を拒む」は、「origin が無いと答えたときだけ失われたと数え、在るか無いか分からなければ拒む」と読む。fetch が失敗した後に GitHub の object を照会し、照会が「在る」と答えるか、照会自体が失敗すれば拒む。照会できない origin(GitHub でない origin、身元の無い盤面)では、取れなければ常に拒む。spec #3273 の2回の probe は外す。その近似では、probe が通る間に fetch だけが落ちる失敗が、取り消せない失われた記録になっていた([ADR 0409](0409-a-ref-counts-as-lost-only-when-its-object-is-known-absent-and-an-answer-that-cannot-tell-is-refused.md) 決定1・3〜5、2026-11-24、issue #3607)。**
+
 **Status 追記: 帰結の「確かめていない」のうち、push 前の commit を持ったまま失われた PR の根の着地は決まった —— 効いている失われた event を持つ task は PR の有無によらず着地が終わったと読む([ADR 0407](0407-a-task-whose-branch-is-lost-reads-as-landing-ended-no-ending-record-is-written-and-the-give-up-closes-its-landing-questions-with-the-lost-event.md) 決定1・3、2026-11-23、issue #3582)。**
 
 **Status 追記: 決定4 で失われたタスクブランチの sha を取りに行く先は、宣言の出元 repo になる。保護ブランチなど、他の ref は origin から取る([ADR 0395](0395-worker-content-reaches-github-only-through-a-fork-and-a-pr-touching-human-merge-paths-never-lands-unattended.md) 決定1・3、2026-11-22、issue #3562)。**
