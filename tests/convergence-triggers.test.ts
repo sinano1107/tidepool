@@ -132,7 +132,7 @@ it("poll が走っている間に届いた契機の収束は、その poll が�
   let holdPoll = false;
   t = await bootTidepool({
     workspace,
-    registryReachability: async () => {
+    registryAvailability: async () => {
       if (holdPoll) await poll.hold();
       return { available: true };
     },

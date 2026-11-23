@@ -170,7 +170,7 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
 const providersOnHarnesses = (harnesses: string[]) => PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider)));
 
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown → unclosedSession →
- *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
+ *  registryUnreadable → recordContainer)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
   {
     kind: "containment" satisfies HaltKind,
@@ -221,7 +221,7 @@ export const QUARANTINES = [
     }),
   },
   {
-    kind: "registryReachability" satisfies HaltKind,
+    kind: "registryUnreadable" satisfies HaltKind,
     scope: "board",
     // 答えの本文を修理メモに残すのは ADR 0052、github-login は ADR 0093。原因は remote への到達と registry clone の
     // default branch の2つなので、文はどちらにも真に書く(ADR 0377 決定7)

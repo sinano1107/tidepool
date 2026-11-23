@@ -6,7 +6,7 @@ afterEach(() => t?.stop());
 
 it("registry がまだ到達不能なら確認回答を拒否し、question を開いたまま保つ(ADR 0052)", async () => {
   t = await bootTidepool({
-    registryReachability: async () => ({
+    registryAvailability: async () => ({
       available: false,
       reason: "origin remains unreachable",
     }),
@@ -33,7 +33,7 @@ it("registry がまだ到達不能なら確認回答を拒否し、question を�
 it("registry 到達性を直して回答すると確認が解除され、pickup が即時再開する(ADR 0052)", async () => {
   let available = false;
   t = await bootTidepool({
-    registryReachability: async () =>
+    registryAvailability: async () =>
       available
         ? { available: true }
         : { available: false, reason: "origin remains unreachable" },

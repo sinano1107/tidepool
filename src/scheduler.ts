@@ -51,9 +51,9 @@ import {
 import {
   canonicalHarness,
   isUnresolvableAgentError,
-  type RegistryReachabilityCheck,
+  type RegistryAvailabilityCheck,
 } from "./registry.js";
-import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
+import { registryUnreadablePickupBlocked } from "./registry-unreadable.js";
 import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
 import type { ParentBriefing, Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
@@ -368,7 +368,7 @@ export function startScheduler(deps: {
   /** ADR 0347 決定3: まだ空を観測できていない容器を名乗る一句。停止の列挙の外で pickup を待たせる。 */
   pendingReclaim?: () => string | undefined;
   /** ADR 0052: refreshes remote main only when a pickup candidate exists. */
-  registryReachability?: RegistryReachabilityCheck;
+  registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0070: disambiguates a failed usage observation with a live auth probe. */
   cliAuth?: CliAuthCheck;
   /** ADR 0024 / issue #211: 盤面の GitHub 身元。remote 正本を宣言した workspace の
@@ -411,7 +411,7 @@ export function startScheduler(deps: {
     harnessContainment,
     containment,
     pendingReclaim,
-    registryReachability,
+    registryAvailability,
     cliAuth,
     githubAuth,
     boardState,
@@ -520,7 +520,7 @@ export function startScheduler(deps: {
     // `pollNow` の判定が収束の後ろにあり、収束が走っている poll の終わり(`idle`)を待つから(ADR 0241 決定5)。
     if (slot.currentTaskId !== null) return `the slot is held by task ${slot.currentTaskId}`;
     // ADR 0068 決定5: 同期の短絡は列挙から導出する — triage セッション (issue #6)・
-    // Pause (issue #34)・封じ込め能力とレジストリ到達性の**開いている確認
+    // Pause (issue #34)・封じ込め能力とレジストリ可用性の**開いている確認
     // question**。停止が1つ増えたとき、増えるのは配線ではなく列挙の1行になる。
     const halts = boardHalts(db);
     if (halts.length > 0) return `pickup is stopped: ${halts.map((halt) => halt.kind).join(", ")}`;
@@ -980,7 +980,7 @@ export function startScheduler(deps: {
         nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, blockingRoot, interviewerName, gitHubUnreadable);
       let head = nextHead();
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
-      // Registry reachability は盤面全体の資源なので poll で1回だけ検査する(ADR 0328 決定5)
+      // Registry availability は盤面全体の資源なので poll で1回だけ検査する(ADR 0328 決定5)
       let registryChecked = false;
       let gated: TaskGated | undefined;
       let chosen: ExecutionSetting | undefined;
@@ -1111,10 +1111,10 @@ export function startScheduler(deps: {
           continue;
         }
         // 盤面全体の資源の門だけが poll 全体で返り、task の性質の門はこの head だけを外す(ADR 0328 決定5)。
-        // 順序は Throttle の観測 → registry → issue のまま(GLOSSARY.md「Registry reachability」)
+        // 順序は Throttle の観測 → registry → issue のまま(GLOSSARY.md「Registry availability」)
         if (!registryChecked) {
           registryChecked = true;
-          if (registryReachability && (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))) return SUCCEEDED;
+          if (registryAvailability && (await registryUnreadablePickupBlocked(db, registryAvailability, clock.now()))) return SUCCEEDED;
         }
         const verdict = await taskGates(head);
         if ("pass" in verdict) {

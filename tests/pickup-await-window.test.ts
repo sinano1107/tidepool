@@ -20,7 +20,7 @@ it("a root workspace Edit during candidate checks defers its unstarted child's p
   t = await bootTidepool({
     workspace: a,
     resolveWorkspace: defaultingTo(a, b),
-    registryReachability: async () => {
+    registryAvailability: async () => {
       if (holdPick) await window.hold();
       return { available: true };
     },
