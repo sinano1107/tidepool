@@ -148,12 +148,12 @@ it("GET /api/pause は容器機構の不成立を盤面全体の停止として�
 
 it("GET /api/pause は registry 到達性の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
   t = await bootTidepool({
-    registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
+    registryAvailability: async () => ({ available: false, reason: "origin is unreachable" }),
   });
   queueWork(t, "waits for the registry");
   await t.clock.advance(HOUR);
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([
-    { kind: "registryReachability" },
+    { kind: "registryUnreadable" },
   ]);
 });

@@ -4365,7 +4365,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       "moved to front \u2014 pickup blocked",
       "the board could not close a worker session"
     ),
-    registryReachability: () => halt(
+    registryUnreadable: () => halt(
       { color: "var(--coral-4)", line: "registry unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
       "warn",
       "moved to front \u2014 pickup blocked",

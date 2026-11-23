@@ -22,7 +22,7 @@ const examples: { [K in QuestionKind["kind"]]: Extract<QuestionKind, { kind: K }
   proposal: [{ kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }],
   quarantine: [
     { kind: "quarantine", quarantine: "agent", value: "navigator" },
-    { kind: "quarantine", quarantine: "registryReachability", value: null },
+    { kind: "quarantine", quarantine: "registryUnreadable", value: null },
   ],
   intake: [{ kind: "intake", workspace: "sandbox" }],
   cli_auth_expiry_warning: [{ kind: "cli_auth_expiry_warning", expiry: 1_800_000_000_000 }],

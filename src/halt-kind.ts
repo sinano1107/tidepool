@@ -14,7 +14,7 @@ export const HALT_KINDS = [
   "containment",
   "failedTeardown",
   "unclosedSession",
-  "registryReachability",
+  "registryUnreadable",
   "recordContainer",
 ] as const;
 export type HaltKind = (typeof HALT_KINDS)[number];

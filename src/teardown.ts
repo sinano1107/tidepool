@@ -265,7 +265,7 @@ export function resumeUnfinishedTeardown(deps: TeardownDeps, answeredSpawn?: num
 }
 
 /** 落ちた後始末の受理の門(ADR 0112 決定3)。隣の門(`ContainmentCheck` /
- *  `RegistryReachabilityCheck`)と違い可否を返さない —— 検査が後始末の再実行そのもの
+ *  `RegistryAvailabilityCheck`)と違い可否を返さない —— 検査が後始末の再実行そのもの
  *  なので、答えは「通った」か「投げた」しかない。通れば確認を返し、回答の書き込みと同じ
  *  同期区間で呼ばれる(ADR 0343 決定1)。 */
 export type FailedTeardownCheck = (taskId: string) => Promise<() => void>;

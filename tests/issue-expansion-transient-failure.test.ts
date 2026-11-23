@@ -97,7 +97,7 @@ it("Registry reachability の検査は、門が head を外して次へ進んで
   let checks = 0;
   t = await bootTidepool({
     workspace: await makeWorkspace("tidepool"),
-    registryReachability: async () => {
+    registryAvailability: async () => {
       checks++;
       return { available: true };
     },

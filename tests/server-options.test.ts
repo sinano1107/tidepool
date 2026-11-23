@@ -184,7 +184,7 @@ it("remote-backed registry を宣言した盤面は到達性検査を持ち、re
     workspaceName: "tidepool",
   });
 
-  expect(await options.registryReachability!()).toEqual({
+  expect(await options.registryAvailability!()).toEqual({
     available: false,
     reason: `the registry clone's origin/HEAD does not point at origin/main. In ${registryDir}, run \`git remote set-head origin main\`.`,
   });
@@ -771,7 +771,7 @@ it("registry の fetch と push は、registry clone を名指す entry の基�
 
   const options = await buildServerOptions({ ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "registry", defaultAgentName: "deckhand" }, db);
   publish("more.md", "merged again\n", "merged before the reachability check");
-  expect(await options.registryReachability!()).toEqual({ available: true });
+  expect(await options.registryAvailability!()).toEqual({ available: true });
   await options.agentAdmin!.create!(AGENT_INPUT);
 
   expect(git(registryDir, "show", "origin/main:agents/tako.md")).toContain("You are Tako.");

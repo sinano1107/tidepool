@@ -9,7 +9,7 @@ afterEach(() => t?.stop());
 // (pickup しないという結果は同一 — 消えるのは無駄な観測だけ)。
 it("registry 質問が開いている間、poll は /usage を観測しない(ADR 0068 決定5)", async () => {
   t = await bootTidepool({
-    registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
+    registryAvailability: async () => ({ available: false, reason: "origin is unreachable" }),
   });
   await registerWork(t, "waits for the registry");
   const observedAt = async () =>

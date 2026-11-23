@@ -49,7 +49,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     onPickupStopped: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
-    registryReachability: async () => refreshRegistry(registryDir, undefined),
+    registryAvailability: async () => refreshRegistry(registryDir, undefined),
   });
   registerTask(
     db,
@@ -85,7 +85,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     onRecordContainerFailed: () => {},
     onPickupStopped: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
-    registryReachability: async () => ({
+    registryAvailability: async () => ({
       available: false,
       reason: "origin is unreachable",
     }),

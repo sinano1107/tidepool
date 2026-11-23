@@ -51,9 +51,9 @@ import {
 import {
   canonicalHarness,
   isUnresolvableAgentError,
-  type RegistryReachabilityCheck,
+  type RegistryAvailabilityCheck,
 } from "./registry.js";
-import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
+import { registryUnreadablePickupBlocked } from "./registry-unreadable.js";
 import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
 import type { ParentBriefing, Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
@@ -368,7 +368,7 @@ export function startScheduler(deps: {
   /** ADR 0347 決定3: まだ空を観測できていない容器を名乗る一句。停止の列挙の外で pickup を待たせる。 */
   pendingReclaim?: () => string | undefined;
   /** ADR 0052: refreshes remote main only when a pickup candidate exists. */
-  registryReachability?: RegistryReachabilityCheck;
+  registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0070: disambiguates a failed usage observation with a live auth probe. */
   cliAuth?: CliAuthCheck;
   /** ADR 0024 / issue #211: 盤面の GitHub 身元。remote 正本を宣言した workspace の
@@ -411,7 +411,7 @@ export function startScheduler(deps: {
     harnessContainment,
     containment,
     pendingReclaim,
-    registryReachability,
+    registryAvailability,
     cliAuth,
     githubAuth,
     boardState,
@@ -1114,7 +1114,7 @@ export function startScheduler(deps: {
         // 順序は Throttle の観測 → registry → issue のまま(GLOSSARY.md「Registry reachability」)
         if (!registryChecked) {
           registryChecked = true;
-          if (registryReachability && (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))) return SUCCEEDED;
+          if (registryAvailability && (await registryUnreadablePickupBlocked(db, registryAvailability, clock.now()))) return SUCCEEDED;
         }
         const verdict = await taskGates(head);
         if ("pass" in verdict) {

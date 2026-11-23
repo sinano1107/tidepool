@@ -40,7 +40,7 @@ test("registry remote に到達できなければ slot と queue ↑ の toast �
   page,
 }) => {
   const t = await boot({
-    registryReachability: async () => ({ available: false, reason: "origin unreachable" }),
+    registryAvailability: async () => ({ available: false, reason: "origin unreachable" }),
   });
   await registerWork(t, "waits for registry repair");
   await t.clock.advance(HOUR);

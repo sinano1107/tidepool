@@ -75,14 +75,14 @@ import {
   type AuthorityProfile,
   assertValidAgentDefinition,
   canonicalHarness,
-  checkRegistryReachability,
+  checkRegistryAvailability,
   type Harness,
   InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
+  type RegistryAvailability,
   type RegistryCandidates,
   type RegistryMode,
-  type RegistryReachability,
   type RegistrySource,
   type RosterAgent,
 } from "./registry.js";
@@ -473,7 +473,7 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
 async function bootRegistryCheck(board: BoardComposition): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return;
-  const reachability = await checkRegistryReachability(registryDir, board.githubAuth);
+  const reachability = await checkRegistryAvailability(registryDir, board.githubAuth);
   if (reachability.available) return;
   console.error(
     "[registry] startup registry check failed; the board is starting anyway and the next pickup " +
@@ -490,10 +490,10 @@ function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
 
 /** ADR 0052 決定2 の pickup / 回答時の refresh 点(ADR 0377 決定7 の default branch の検査も載る)。remote 正本を宣言していない
  *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
-function registryReachabilityCheck(board: BoardComposition): (() => Promise<RegistryReachability>) | undefined {
+function registryAvailabilityCheck(board: BoardComposition): (() => Promise<RegistryAvailability>) | undefined {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return undefined;
-  return () => checkRegistryReachability(registryDir, board.githubAuth);
+  return () => checkRegistryAvailability(registryDir, board.githubAuth);
 }
 
 /** Resolves any task's execution workspace against the registry (issue #26 /
@@ -862,7 +862,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
     // ADR 0331 決定8: Worker MCP の probe の帰属の扉が引く、開いている probe の id
     probeIds: new Set(),
-    registryReachability: registryReachabilityCheck(board),
+    registryAvailability: registryAvailabilityCheck(board),
     // ADR 0402 決定3: 「gh の版」の回答の受理は版の門と同じ読み(本体と同じ env と上限)で読み直す
     readGhVersion: github?.readGhVersion,
     cliAuthExpiresAt: board.cliAuthExpiresAt,

@@ -50,8 +50,8 @@ import { createNotificationTick, type PushClient } from "./push.js";
 import { type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import { 
   type AuthorityProfile,canonicalHarness, type Harness, 
+  type RegistryAvailabilityCheck,
   type RegistryCandidates,
-  type RegistryReachabilityCheck,
   type RosterAgent,} from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
@@ -244,7 +244,7 @@ export interface ServerOptions {
    *  走らせる Provider ごとの probe。口の無い Provider の行への回答は拒まれる。 */
   modelProbes?: Partial<Record<Provider, ModelProbe>>;
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
-  registryReachability?: RegistryReachabilityCheck;
+  registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0402 決定3: このホストの `gh --version` の読み。「gh の版」の Quarantine の回答の受理が読み直す。Absent → その回答は拒まれる。 */
   readGhVersion?: () => Promise<string>;
   /** ADR 0070: live Claude authentication probe. */
@@ -398,11 +398,11 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   if (!runtimePreflight.available && !options.harnessContainment) {
     quarantineContainment(db, runtimePreflight.reason, options.clock.now());
   }
-  const { workspaceAdmin, agentAdmin, profileAdmin, registryReachability } = options;
+  const { workspaceAdmin, agentAdmin, profileAdmin, registryAvailability } = options;
   // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
   // (`buildServerOptions`)が registry を読む前に撃つ —— そこより後ろに置くと、
   // remote-tracking ref が欠けた盤面では合成側の読みが先に落ち、fail-open が
-  // 働く前に起動が終わってしまう。`registryReachability` はこの下の pickup
+  // 働く前に起動が終わってしまう。`registryAvailability` はこの下の pickup
   // ゲートと、回答時の検証つき解除のために運ばれる。
   // a restart interrupts any running task (ADR 0001): it drops into the same
   // failure-escalation path as a watchdog kill, so the slot never wedges past
@@ -586,7 +586,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const reachabilityProbe = options.workerMcpReachability;
   const workerMcpReachability = reachabilityProbe && ((harness: Harness) => probeWorkerMcpReachability(probeIds, workerMcpUrl, harness, reachabilityProbe));
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
-  // (`containment` / `registryReachability` と同じ配線)。
+  // (`containment` / `registryAvailability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => {
     // ADR 0112 決定3 Status 追記: 残りの撃ち直しも再起動を跨いだ後始末も、前の盤面の process が残っていないという前提の後に走る
     const preflight = containers.preflight();
@@ -639,7 +639,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     taskExecutionCandidates: options.taskExecutionCandidates,
     harnessContainment,
     pendingReclaim: reclaim.pendingReclaim,
-    registryReachability,
+    registryAvailability,
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
     boardState: options.boardState?.paths,
@@ -687,7 +687,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     agentDefinitionFailure: options.agentDefinitionFailure,
     containment,
     reclaim,
-    registryReachability,
+    registryAvailability,
     teardownQuarantine,
     closeUnclosedSession,
     rerunPoll: () => scheduler.rerunPoll(),

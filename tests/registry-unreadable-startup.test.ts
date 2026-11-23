@@ -10,7 +10,7 @@ afterEach(() => t?.stop());
 // ADR 0036 の線で、pickup を止めるのはあくまで下のゲートだけ、という非対称である。
 it("registry remote に到達できなくても、人間面は開いたまま起動する(ADR 0052 / ADR 0036)", async () => {
   t = await bootTidepool({
-    registryReachability: async () => ({
+    registryAvailability: async () => ({
       available: false,
       reason: "origin is unavailable",
     }),
@@ -32,7 +32,7 @@ it("registry remote に到達できなくても、人間面は開いたまま起
 it("起動直後だけ届かず回復した registry は、question を1枚も残さず pickup が走る(ADR 0052)", async () => {
   let reachable = false;
   t = await bootTidepool({
-    registryReachability: async () =>
+    registryAvailability: async () =>
       reachable ? { available: true } : { available: false, reason: "network was not up yet" },
   });
   reachable = true;

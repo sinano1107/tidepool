@@ -69,7 +69,7 @@ import {
 } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
 import { placeHasRepository } from "./recorded-place.js";
-import type { Harness, RegistryReachabilityCheck } from "./registry.js";
+import type { Harness, RegistryAvailabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -643,7 +643,7 @@ export interface QuarantineCheckDeps {
   containment?: ContainmentCheck;
   /** ADR 0099 決定3: 回収済み観測を待って止まっている容器の帳簿。 */
   reclaim?: Pick<PendingReclaim, "pendingReclaim">;
-  registryReachability?: RegistryReachabilityCheck;
+  registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0112 決定3: 後始末を**投げる版で**もう一度走らせる —— 検査が解放の門そのもの。 */
   teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0344 決定3: その session を閉じ直す —— 検査が解放の門そのもの。 */
@@ -679,7 +679,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, closeUnclosedSession, rerunPoll, recheckIssueExpansion, readGhVersion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
+  const { containment, registryAvailability, teardownQuarantine, closeUnclosedSession, rerunPoll, recheckIssueExpansion, readGhVersion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -1030,9 +1030,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         }
       },
     }),
-    ...(registryReachability && {
-      registryReachability: async () => {
-        const reachability = await registryReachability();
+    ...(registryAvailability && {
+      registryUnreadable: async () => {
+        const reachability = await registryAvailability();
         if (!reachability.available) {
           throw new DomainError(
             `registry is still unavailable: ${reachability.reason ?? "registry check failed"}`,

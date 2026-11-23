@@ -23,7 +23,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     quarantineContainment(db, "no sandbox", NOW);
     // ADR 0112 決定1: 両方立ったときに先に直すべきはホスト全体の側である
     quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
-    registerQuarantine(db, "registryReachability", null, "origin is unreachable", NOW);
+    registerQuarantine(db, "registryUnreadable", null, "origin is unreachable", NOW);
     registerQuarantine(db, "recordContainer", null, "worker-logs is gone", NOW);
 
     expect(boardHalts(db).map((h: { kind: string }) => h.kind)).toEqual([
@@ -31,18 +31,18 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "pause",
       "containment",
       "failedTeardown",
-      "registryReachability",
+      "registryUnreadable",
       "recordContainer",
     ]);
   });
 
   it("閉じ切らなかった session は落ちた後始末の直後に並ぶ —— 先に直すべきは枠が刺さっている側(ADR 0344 決定1)", () => {
     const db = openDb(":memory:");
-    registerQuarantine(db, "registryReachability", null, "origin is unreachable", NOW);
+    registerQuarantine(db, "registryUnreadable", null, "origin is unreachable", NOW);
     quarantineUnclosedSession(db, 7, "task-1", new Error("exit write failed"), NOW);
     quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
 
-    expect(boardHalts(db).map((h: { kind: string }) => h.kind)).toEqual(["failedTeardown", "unclosedSession", "registryReachability"]);
+    expect(boardHalts(db).map((h: { kind: string }) => h.kind)).toEqual(["failedTeardown", "unclosedSession", "registryUnreadable"]);
   });
 
   it("落ちた後始末が2件なら確認型 question は2枚立ち、片方に答えても残りが開いている間は停止のまま(ADR 0112 決定2)", () => {

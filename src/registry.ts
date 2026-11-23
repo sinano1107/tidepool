@@ -740,11 +740,11 @@ export function registryRef(mode: RegistryMode): string {
   return mode === "remote-backed" ? remoteTrackingRef(REGISTRY_BRANCH) : REGISTRY_BRANCH;
 }
 
-export interface RegistryReachability {
+export interface RegistryAvailability {
   available: boolean;
   reason?: string;
 }
-export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
+export type RegistryAvailabilityCheck = () => Promise<RegistryAvailability>;
 
 /** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
  *  **非同期である**: 仲介から installation token を取る往復が中に入る(ADR 0093
@@ -774,7 +774,7 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 export async function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
-): Promise<RegistryReachability> {
+): Promise<RegistryAvailability> {
   try {
     await auth?.ensureToken(originRepo(dir));
     // ADR 0377 決定8: registry clone は基準を持たないので予告せずに書く —— 値を先に知る形は残す(spec #3273 group E: the registry fetch keeps its current shape)
@@ -791,7 +791,7 @@ export async function refreshRegistry(
 /** ADR 0377 決定7: 盤面は registry を code 定数の `main` から読むので、registry clone の `origin/HEAD`(git の default branch)が
  *  別の branch を指せば default でない branch を黙って読む —— 到達できないのと同じ盤面全体の停止にする。読むのは clone の local
  *  symref。symref が無ければ通すのは spec #3273 の読み(今日どおり、ユーザー未確認)。 */
-function registryDefaultBranchCheck(dir: string): RegistryReachability {
+function registryDefaultBranchCheck(dir: string): RegistryAvailability {
   let target: string;
   try {
     target = git(dir, "symbolic-ref", "refs/remotes/origin/HEAD");
@@ -809,10 +809,10 @@ function registryDefaultBranchCheck(dir: string): RegistryReachability {
 /** 盤面のレジストリ到達性の検査(ADR 0052 決定2・5): pickup のゲート・quarantine の受理・起動時が撃つ。refresh の後に
  *  default branch を見る(ADR 0377 決定7)。人間の registry 書き込み(`registry-write.ts`)は refresh だけを撃つ —— default branch
  *  の食い違いで人間の書き込みは拒まない。 */
-export async function checkRegistryReachability(
+export async function checkRegistryAvailability(
   dir: string,
   auth: GitHubAuth | undefined,
-): Promise<RegistryReachability> {
+): Promise<RegistryAvailability> {
   const refreshed = await refreshRegistry(dir, auth);
   return refreshed.available ? registryDefaultBranchCheck(dir) : refreshed;
 }

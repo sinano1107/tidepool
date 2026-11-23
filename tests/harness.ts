@@ -45,9 +45,9 @@ import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, 
 import {
   type AuthorityProfile,
   loadRegistry,
+  type RegistryAvailabilityCheck,
   type RegistryCandidates,
   type RegistryMode,
-  type RegistryReachabilityCheck,
   type RosterAgent,
 } from "../src/registry.js";
 import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
@@ -356,7 +356,7 @@ export interface BootOptions {
   /** ADR 0184 決定5: 行の Quarantine への回答時の probe。 */
   modelProbes?: Partial<Record<Provider, ModelProbe>>;
   /** ADR 0052: remote-backed registry reachability seam. */
-  registryReachability?: RegistryReachabilityCheck;
+  registryAvailability?: RegistryAvailabilityCheck;
   /** ADR 0070: Claude CLI authentication probe. */
   cliAuth?: CliAuthCheck;
   /** ADR 0075: optional token expiry used only for advance warning. */
@@ -467,7 +467,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     workerMcpReachability: options.workerMcpReachability,
     providerCliAuth: options.providerCliAuth,
     modelProbes: options.modelProbes,
-    registryReachability: options.registryReachability,
+    registryAvailability: options.registryAvailability,
     cliAuth: options.cliAuth,
     cliAuthExpiresAt: options.cliAuthExpiresAt,
     githubAuth: options.githubAuth,

@@ -41,7 +41,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   containment: [null],
   failedTeardown: ["task-1", "task-2"],
   unclosedSession: ["7", "8"],
-  registryReachability: [null],
+  registryUnreadable: [null],
   recordContainer: [null],
   pollFailure: [null],
   issueExpansion: [null],
