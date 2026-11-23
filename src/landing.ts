@@ -300,11 +300,11 @@ export function assertLandingRefs(
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(workspace.name));
     }
     if (error instanceof WorkspaceRepoMismatchError) throw error;
-    const unverified = `could not verify refs for workspace "${workspace.name}" before landing: ${error instanceof Error ? error.message : String(error)}`;
+    const unverifiedMessage = `could not verify refs for workspace "${workspace.name}" before landing: ${(error instanceof Error ? error.message : String(error)).trim()}`;
     // 最初の撮りの確認が registry を読めなかったのは checkout の故障ではない —— どの名前の Quarantine でもなく根の失敗にする(ADR 0373 決定13)
-    if (error instanceof FirstCaptureRegistryReadError) throw new LandingRefCheckError(unverified);
+    if (error instanceof FirstCaptureRegistryReadError) throw new LandingRefCheckError(unverifiedMessage);
     // ADR 0403 決定4: git の失敗で読めない checkout も、根ごとの question でなくその workspace の Quarantine で1回止める
-    const cause = error instanceof RefsMovedError ? error : new Error(unverified);
+    const cause = error instanceof RefsMovedError ? error : new Error(unverifiedMessage);
     quarantineWorkspace(db, workspace.name, cause, now);
     throw new LandingRefsRefusedError(`${cause.message}; answer the quarantine question of workspace "${workspace.name}" before landing`);
   }

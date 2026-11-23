@@ -19,7 +19,7 @@ import {
   taskIdsAwaitingLanding,
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
-import { openQuarantineQuestion, registerResourceStop, workspaceContainmentValue } from "../src/quarantine.js";
+import { openQuarantineQuestion, openQuarantineValues, registerResourceStop, workspaceContainmentValue } from "../src/quarantine.js";
 import { type AuthorityProfile, loadRegistry, UnknownAgentError } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -115,6 +115,7 @@ import {
   queueAutoMerge,
   recordPrOpenedOutsideConvergence,
   settleRepairNotMergedBack,
+  unreadableRefsRefusal,
 } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -2178,9 +2179,6 @@ it("着地の比較: lineage が ref を読む子は、動いていれば根か�
   await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining("refs/tags/intruder") });
 });
 
-/** 開いている workspace の Quarantine の question。 */
-const openWorkspaceQuarantines = (db: Db) => listBoard(db).filter((q) => q.question_quarantine_kind === "workspace" && q.status === "todo");
-
 // ADR 0403 決定4: 着地の ref 検査が git の失敗で読めなければ、根ごとの昇格失敗 question でなく workspace の Quarantine で1回止まる
 it("着地の比較: checkout の ref が読めなければ、根は workspace の Quarantine 1つで止まり、次の収束も重ねず、昇格失敗 question は立たない", async () => {
   const { workspace, db, landing, work } = await doneRootWithBaseline("landing-compare-unreadable-refs");
@@ -2188,13 +2186,12 @@ it("着地の比較: checkout の ref が読めなければ、根は workspace �
 
   await expect(convergeOn(landing, work.id)).resolves.toEqual({
     kind: "quarantined",
-    error: expect.stringMatching(new RegExp(`^could not verify refs for workspace "${workspace.name}" before landing: .*git for-each-ref.*; answer the quarantine question of workspace "${workspace.name}" before landing$`, "s")),
+    error: expect.stringMatching(unreadableRefsRefusal(workspace)),
   });
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined" });
 
-  const quarantines = openWorkspaceQuarantines(db);
-  expect(quarantines).toHaveLength(1);
-  expect(quarantines[0]!.purpose).toContain(`could not verify refs for workspace "${workspace.name}" before landing`);
+  expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)!.purpose).toContain(`could not verify refs for workspace "${workspace.name}" before landing`);
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
@@ -2205,7 +2202,7 @@ it("着地の比較: lineage が ref を読む子も、checkout の ref が読�
 
   await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
 
-  expect(openWorkspaceQuarantines(db)).toHaveLength(1);
+  expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
   expect([...promotionFailures(db, work.id), ...promotionFailures(db, child.id)]).toEqual([]);
 });
 
@@ -2666,8 +2663,8 @@ function holdAfter(github: FakeGitHubClient, method: "getPullRequestState" | "fi
 
 const reAsked = (db: Db, taskId: string) => promotionFailures(db, taskId).filter((q) => q.title.startsWith("PR promotion re-asked"));
 
-// ADR 0370 決定1: 比較の失敗は内容の変化の読みに吸わせない —— 比べていない ref で問い直さない。
-// 旧: 根の失敗になった —— ADR 0403 決定4 の後は workspace の Quarantine で止まる
+// ADR 0370 決定1: 比較の失敗は内容の変化の読みに吸わせない —— 比べていない ref で問い直さない。読めない checkout は workspace の
+// Quarantine で止まる(ADR 0403 決定4)
 it("着地の比較: 断念した根の比較が checkout を読めなければ、問い直さず workspace の Quarantine で止まる", async () => {
   const { workspace, db, landing, work } = await abandonedPromotion("landing-compare-abandoned-unreadable");
   breakPackedRefs(workspace);
@@ -2675,7 +2672,7 @@ it("着地の比較: 断念した根の比較が checkout を読めなければ�
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
 
   expect(reAsked(db, work.id)).toEqual([]);
-  expect(openWorkspaceQuarantines(db)).toHaveLength(1);
+  expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
 });
 
 it("着地の比較: 断念した根の最初の撮りの確認が registry を読めなければ、問い直さず根の失敗になる", async () => {

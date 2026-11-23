@@ -14,6 +14,7 @@ import {
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
+import { openQuarantineValues } from "../src/quarantine.js";
 import { type AuthorityProfile, type MergeDial, } from "../src/registry.js";
 import {
   cancelTaskDirectly,
@@ -98,6 +99,7 @@ import {
   tearDownRepair,
   textA4a,
   textA4c,
+  unreadableRefsRefusal,
   unresolvable,
 } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -1365,7 +1367,7 @@ it("壊れた packed-refs で基準との比較ができなければ、無人 me
 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
-  expect(listBoard(db).filter((q) => q.question_quarantine_kind === "workspace" && q.status === "todo")).toHaveLength(1);
+  expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
   expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toMatch(/^could not verify refs .* before landing: .*git for-each-ref/s);
   expect(promotionFailures(db, work.id)).toEqual([]);
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
@@ -1617,8 +1619,7 @@ it.each([
   }
 });
 
-// 旧: push の後に読めなくなった checkout は積み残しの比較の失敗になり、Quarantine が抱えていなければ失敗 question を立てた(ADR 0241 決定6)。
-// ADR 0403 決定4 の後は、積み残しを比べる前の ref 検査が workspace の Quarantine で止める
+// ADR 0403 決定4: push の後に読めなくなった checkout は、積み残しを比べる前の ref 検査が workspace の Quarantine で止める
 it.each([
   ["workspace の Quarantine が開いていれば2つ目を立てず、拒否文が読めない ref を言う", true],
   ["Quarantine が開いていなければ workspace の Quarantine を1つ立て、昇格失敗 question は立てない", false],
@@ -1636,15 +1637,14 @@ it.each([
   expect(github.pushes).toHaveLength(1);
   expect(verdict).toEqual({
     kind: "quarantined",
-    error: expect.stringMatching(new RegExp(`^could not verify refs for workspace "${workspace.name}" before landing: .*git for-each-ref.*; answer the quarantine question of workspace "${workspace.name}" before landing$`, "s")),
+    error: expect.stringMatching(unreadableRefsRefusal(workspace)),
   });
-  expect(listBoard(db).filter((q) => q.question_quarantine_kind === "workspace" && q.status === "todo")).toHaveLength(1);
+  expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
   expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(quarantine ? "repair the checkout" : "could not verify refs");
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
-// 旧: 基準の行を持つ名前の `.git` が無ければ、tip が無い昇格失敗 question を立てた。ADR 0403 決定4 の後は ref 検査が git の失敗で読めず、
-// workspace の Quarantine で止まる
+// ADR 0403 決定4: 基準の行を持つ名前の `.git` が無ければ、ref 検査が git の失敗で読めず workspace の Quarantine で止まる
 it("workspace の Git リポジトリが無ければ、収束は workspace の Quarantine で止まり、昇格失敗 question は立てない", async () => {
   const c = await pushedRoot("promotion-failed-without-repository");
   // 基準の行が無い名前なら、着地の最初の撮りの開く前の項(`.git` がディレクトリ)が Quarantine で止める(ADR 0399 決定7)
@@ -1661,7 +1661,7 @@ it("基準の行が無い名前でも、checkout の ref が読めなければ�
   breakPackedRefs(c.workspace);
 
   expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
-  expect(listBoard(c.db).filter((q) => q.question_quarantine_kind === "workspace" && q.status === "todo")).toHaveLength(1);
+  expect(openQuarantineValues(c.db, "workspace")).toEqual([c.workspace.name]);
   expect(holdsBaseline(c.db, c.workspace.name)).toBe(false);
   expect(promotionFailures(c.db, c.work.id)).toEqual([]);
 });
