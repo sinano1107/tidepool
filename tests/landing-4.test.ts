@@ -2178,6 +2178,56 @@ it("着地の比較: lineage が ref を読む子は、動いていれば根か�
   await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining("refs/tags/intruder") });
 });
 
+/** 開いている workspace の Quarantine の question。 */
+const openWorkspaceQuarantines = (db: Db) => listBoard(db).filter((q) => q.question_quarantine_kind === "workspace" && q.status === "todo");
+
+// ADR 0403 決定4: 着地の ref 検査が git の失敗で読めなければ、根ごとの昇格失敗 question でなく workspace の Quarantine で1回止まる
+it("着地の比較: checkout の ref が読めなければ、根は workspace の Quarantine 1つで止まり、次の収束も重ねず、昇格失敗 question は立たない", async () => {
+  const { workspace, db, landing, work } = await doneRootWithBaseline("landing-compare-unreadable-refs");
+  breakPackedRefs(workspace);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: expect.stringMatching(new RegExp(`^could not verify refs for workspace "${workspace.name}" before landing: .*git for-each-ref.*; answer the quarantine question of workspace "${workspace.name}" before landing$`, "s")),
+  });
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined" });
+
+  const quarantines = openWorkspaceQuarantines(db);
+  expect(quarantines).toHaveLength(1);
+  expect(quarantines[0]!.purpose).toContain(`could not verify refs for workspace "${workspace.name}" before landing`);
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+it("着地の比較: lineage が ref を読む子も、checkout の ref が読めなければ根かどうかを読む前に workspace の Quarantine 1つで止まる", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-child-unreadable-refs");
+  const child = await completeThroughTaskCheckout(db, clock, workspace, attachUnsettledChild(db, clock, work.id), "child.txt", "child\n");
+  breakPackedRefs(workspace);
+
+  await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
+
+  expect(openWorkspaceQuarantines(db)).toHaveLength(1);
+  expect([...promotionFailures(db, work.id), ...promotionFailures(db, child.id)]).toEqual([]);
+});
+
+it("着地の比較: ref が読めない checkout の Quarantine の回答は、壊れたままなら拒まれ、直してから答えると受理され、次の収束が着地する", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootWithBaseline("landing-compare-unreadable-refs-answer");
+  const packedRefs = join(workspace.path, ".git", "packed-refs");
+  const intact = existsSync(packedRefs) ? readFileSync(packedRefs, "utf8") : undefined;
+  breakPackedRefs(workspace);
+  await convergeOn(landing, work.id);
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+
+  await expect(answerWorkspaceQuarantine({ db, clock, workspace, landing }, question)).rejects.toThrow("not a packed ref");
+  expect(getTask(db, question.id)!.status).toBe("todo");
+
+  if (intact === undefined) rmSync(packedRefs);
+  else writeFileSync(packedRefs, intact);
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing }, question);
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+});
+
 it("着地の比較: PR の状態の読みを待つ間に動いた ref は運ばない", async () => {
   const { workspace, db, clock, github, landing, work } = await pushedRootWithBaseline("landing-compare-pr-state-wait");
   await commitThroughTaskCheckout(db, clock, workspace, work, "repair.txt", "fixed\n");
@@ -2605,14 +2655,16 @@ function holdAfter(github: FakeGitHubClient, method: "getPullRequestState" | "fi
 
 const reAsked = (db: Db, taskId: string) => promotionFailures(db, taskId).filter((q) => q.title.startsWith("PR promotion re-asked"));
 
-// ADR 0370 決定1: 比較の失敗は内容の変化の読みに吸わせない —— 比べていない ref で問い直さない
-it("着地の比較: 断念した根の比較が checkout を読めなければ、問い直さず根の失敗になる", async () => {
+// ADR 0370 決定1: 比較の失敗は内容の変化の読みに吸わせない —— 比べていない ref で問い直さない。
+// 旧: 根の失敗になった —— ADR 0403 決定4 の後は workspace の Quarantine で止まる
+it("着地の比較: 断念した根の比較が checkout を読めなければ、問い直さず workspace の Quarantine で止まる", async () => {
   const { workspace, db, landing, work } = await abandonedPromotion("landing-compare-abandoned-unreadable");
   breakPackedRefs(workspace);
 
-  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining("could not verify refs") });
 
   expect(reAsked(db, work.id)).toEqual([]);
+  expect(openWorkspaceQuarantines(db)).toHaveLength(1);
 });
 
 it("着地の比較: 断念した根の最初の撮りの確認が registry を読めなければ、問い直さず根の失敗になる", async () => {

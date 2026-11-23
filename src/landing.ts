@@ -63,6 +63,7 @@ import {
   DeclaredRepoMismatchError,
   endLostRootLanding,
   FirstCaptureRefusedError,
+  FirstCaptureRegistryReadError,
   type IntakeContext,
   lineageTaskBranch,
   noReturnAncestor,
@@ -272,7 +273,7 @@ function workspaceQuarantinedMessage(name: string): string {
 
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
  *  Quarantine の question を名指す(ADR 0373 決定13 追記)。最初の撮りの前の開く前の項(`fixedPoints` との交差を含む)に落ちた名前も
- *  workspace の Quarantine を立てる(ADR 0399 決定7)。 */
+ *  workspace の Quarantine を立てる(ADR 0399 決定7)。git の失敗で ref が読めない checkout も同じ(ADR 0403 決定4)。 */
 export function assertLandingRefs(
   db: Db,
   workspace: WorkspaceConfig,
@@ -298,13 +299,14 @@ export function assertLandingRefs(
       quarantineWorkspace(db, workspace.name, error, now);
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(workspace.name));
     }
-    if (!(error instanceof RefsMovedError)) {
-      if (error instanceof WorkspaceRepoMismatchError) throw error;
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new LandingRefCheckError(`could not verify refs for workspace "${workspace.name}" before landing: ${reason}`);
-    }
-    quarantineWorkspace(db, workspace.name, error, now);
-    throw new LandingRefsRefusedError(`${error.message}; answer the quarantine question of workspace "${workspace.name}" before landing`);
+    if (error instanceof WorkspaceRepoMismatchError) throw error;
+    const unverified = `could not verify refs for workspace "${workspace.name}" before landing: ${error instanceof Error ? error.message : String(error)}`;
+    // 最初の撮りの確認が registry を読めなかったのは checkout の故障ではない —— どの名前の Quarantine でもなく根の失敗にする(ADR 0373 決定13)
+    if (error instanceof FirstCaptureRegistryReadError) throw new LandingRefCheckError(unverified);
+    // ADR 0403 決定4: git の失敗で読めない checkout も、根ごとの question でなくその workspace の Quarantine で1回止める
+    const cause = error instanceof RefsMovedError ? error : new Error(unverified);
+    quarantineWorkspace(db, workspace.name, cause, now);
+    throw new LandingRefsRefusedError(`${cause.message}; answer the quarantine question of workspace "${workspace.name}" before landing`);
   }
 }
 
