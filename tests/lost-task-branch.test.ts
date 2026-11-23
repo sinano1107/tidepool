@@ -22,6 +22,30 @@ import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
+/** 系譜の読み(決着した祖先 `task/<id>` への `rev-list --count`)を、`skip` 回通した次の1回だけ落とす注入 —— 既定は素通し。 */
+const lineageReadFault = vi.hoisted(() => ({ armed: undefined as { ancestor: string; skip: number } | undefined }));
+vi.mock("../src/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/git.js")>();
+  return {
+    ...actual,
+    git: (cwd: string, ...args: string[]) => {
+      const armed = lineageReadFault.armed;
+      if (armed && args[0] === "rev-list" && args.at(-1)?.endsWith(`..task/${armed.ancestor}`) && armed.skip-- === 0) {
+        lineageReadFault.armed = undefined;
+        throw new Error(`injected lineage read failure on task/${armed.ancestor}`);
+      }
+      return actual.git(cwd, ...args);
+    },
+  };
+});
+/** 決着した祖先 `ancestor` を読む系譜の読みを、`skip` 回通した次の1回だけ落とす。テストの終わりに外す。 */
+function failLineageRead(ancestor: Task, skip = 0): void {
+  lineageReadFault.armed = { ancestor: ancestor.id, skip };
+  onTestFinished(() => {
+    lineageReadFault.armed = undefined;
+  });
+}
+
 const GIVE_UP = "give up the lost refs and restore the baseline";
 
 type Board = { db: Db; clock: FakeClock; ws: WorkspaceConfig; base: string };
@@ -800,6 +824,81 @@ it("親が生きている間に失われた死んだ子は、親の local 着地
   expect(openLandingQuestions(b, child)).toEqual([]);
   expect(taskIdsAwaitingLandingInWorkspace(b.db, () => b.ws, b.ws.name)).toEqual([]);
   expect(countUnsettledTasksReferencing(b.db, "workspace", b.ws.name)).toBe(0);
+});
+
+/** 着地済みの親の下に後から作った work の根を完了し、収束に local 着地の question を開かせる —— 根の判定の系譜が決着した親を git で読む形。 */
+async function rootUnderLandedParent(name: string) {
+  const b = await board(name);
+  const parent = await completeThrough(b, work(b, "parent"), "parent.txt");
+  await landingFor(b).converge();
+  await answer(b, openLandingQuestions(b, parent)[0]!, "merge");
+  const root = await completeThrough(b, work(b, "root", { parent_id: parent.id }), "root.txt");
+  await landingFor(b).converge();
+  const open = openLandingQuestions(b, root);
+  expect(open).toHaveLength(1);
+  return { b, parent, root, open };
+}
+
+/** 拒まれた受理は Quarantine を閉じず、着地の終わりを書かず、開いた着地の question を閉じない(ADR 0397 決定4)。 */
+function expectRefusedAcceptanceLeftOpen(b: Board, root: Task, open: string[]) {
+  expect(accepted(b)).toBe(false);
+  expect(ended(b, root)).toEqual([]);
+  expect(openLandingQuestions(b, root)).toEqual(open);
+}
+
+it.each(["restore the baseline", "repaired by hand"])("受理の根の判定で系譜の読みが落ちたら give-up も次の `%s` も拒まれ、Quarantine・local 着地の question は開いたまま、着地の終わりも書かれず —— 読みが通る受理が終えて question を閉じる(ADR 0397 決定1・2・4)", async (option) => {
+  const { b, parent, root, open } = await rootUnderLandedParent("lineage-read-fails-at-accept");
+
+  failLineageRead(parent);
+  await expect(giveUp(b, root.id)).rejects.toThrow(`injected lineage read failure on task/${parent.id}`);
+
+  expect(taskBranchLostInForce(b.db, root.id)).toBeDefined();
+  expectRefusedAcceptanceLeftOpen(b, root, open);
+
+  failLineageRead(parent);
+  await expect(answerQuarantine(b, option)).rejects.toThrow(`injected lineage read failure on task/${parent.id}`);
+
+  expectRefusedAcceptanceLeftOpen(b, root, open);
+
+  await answerQuarantine(b, option);
+
+  expect(accepted(b)).toBe(true);
+  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(openLandingQuestions(b, root)).toEqual([]);
+});
+
+it("書き戻しを書いた後に根の判定で系譜の読みが落ちた give-up は、拒否の文が外して keep-around に残した値を名指す —— 次の受理は外す値を持たず、着地を終える(ADR 0397 決定4、spec #3273 text B11)", async () => {
+  const { b, parent, root, open } = await rootUnderLandedParent("lineage-read-fails-after-write-back");
+  const stray = git(b.ws.path, "rev-parse", "main");
+
+  failLineageRead(parent);
+  await expect(giveUpAfter(b, () => git(b.ws.path, "update-ref", "refs/heads/stray", stray), root.id)).rejects.toThrow(`refs/heads/stray was ${stray}, kept as refs/keep-around/${stray}`);
+
+  expect(git(b.ws.path, "for-each-ref", "refs/heads/stray")).toBe("");
+  expectRefusedAcceptanceLeftOpen(b, root, open);
+
+  await answerQuarantine(b, "restore the baseline");
+
+  expect(accepted(b)).toBe(true);
+  expect(ended(b, root)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: open }]);
+  expect(openLandingQuestions(b, root)).toEqual([]);
+});
+
+it("収束は着地の根と読んだ系譜で失われた根の着地を終え、系譜を読み直さない —— 終わりの判定の時点で読みを落としても昇格失敗の question を立てない(ADR 0397 決定3)", async () => {
+  const b = await board("convergence-reuses-root-lineage");
+  const parent = work(b, "parent");
+  const child = await completeUndelivered(b, work(b, "child", { parent_id: parent.id }), "child.txt");
+  await giveUp(b, child.id);
+  await completeThrough(b, parent, "parent.txt");
+  await landingFor(b).converge();
+  await answer(b, openLandingQuestions(b, getTask(b.db, parent.id)!)[0]!, "merge");
+
+  failLineageRead(getTask(b.db, parent.id)!, 1);
+  const verdicts = await landingFor(b).converge();
+
+  expect(verdicts.filter(({ verdict }) => verdict.kind === "failed")).toEqual([]);
+  expect(openLandingQuestions(b, child)).toEqual([]);
+  expect(ended(b, child)).toEqual([{ kind: "landing_ended_branch_lost", question_ids: [] }]);
 });
 
 it("review の権限の文の当時版は spawn の時点の失われた event・`task_branch_created` で読む —— 失われる前の spawn は帰り先あり、失われた後は無し、作り直した後はまたあり(ADR 0380 帰結、pin H16)", async () => {
