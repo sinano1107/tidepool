@@ -61,7 +61,7 @@ export async function recordedAnswer<T>(db: Db, use: BoardCallUse, now: () => Da
   try {
     const answer = await call;
     const { output, usage, setting } = answer;
-    // ADR 0404 決定7: 行は答えが届いた時刻を持つ
+    // ADR 0404 決定7: 答えが届いてから読む —— 重なったリクエストの行が答えの順に並ぶ(#1006)
     recordBoardCall(db, use, setting, usage, now(), null, answer);
     return output;
   } catch (err) {

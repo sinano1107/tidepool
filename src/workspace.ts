@@ -368,7 +368,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
     if (live?.() === false) return checks;
     try {
       const list = predicates();
-      await firePickupPredicates(db, place, list, "before-open", { live, now });
+      fireBeforeOpenPredicates(place, list, live);
       checks.push({ place, predicates: list });
     } catch (err) {
       if (err instanceof PickupGateError) throw err;
@@ -2449,8 +2449,8 @@ export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
-  /** 保護ブランチの ref か、読むときに覚えた repo を確かめる clock(ADR 0404 決定6)。 */
-  protectedRef: string | (() => Date),
+  /** 保護ブランチの ref か、ref を読むときに覚えた repo を確かめる clock(ADR 0404 決定6)。 */
+  protectedRefOrClock: string | (() => Date),
   /** 最初の ref の読みの直前に1度だけ呼ぶ(着地の比較、ADR 0370 決定1)。ref を読まない lineage では呼ばない。 */
   beforeRefRead?: () => void,
 ): { branch: string | undefined; outlivedForkSource: boolean; noReturn?: true } {
@@ -2458,6 +2458,9 @@ export function resolveTaskBranchLineage(
     beforeRefRead?.();
     beforeRefRead = undefined;
   };
+  let protectedRef: string | undefined;
+  const readProtectedRef = () =>
+    (protectedRef ??= typeof protectedRefOrClock === "string" ? protectedRefOrClock : protectedBranchRef(withRememberedRepoCheck(db, workspace, protectedRefOrClock)));
   if (transparentToLineage(task.type)) {
     // ADR 0380 決定3: 失われた親のブランチは git で読まない —— 死んだ task に残る RCA は保護ブランチを読む
     if (task.parent_id && taskBranchLostInForce(db, task.parent_id)) return { branch: undefined, outlivedForkSource: false };
@@ -2482,7 +2485,7 @@ export function resolveTaskBranchLineage(
       candidate = branch;
       continue;
     }
-    const base = candidate ?? (typeof protectedRef === "string" ? protectedRef : (protectedRef = protectedBranchRef(withRememberedRepoCheck(db, workspace, protectedRef))));
+    const base = candidate ?? readProtectedRef();
     readingRefs();
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
@@ -2498,9 +2501,9 @@ export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
-  protectedRef: string | (() => Date),
+  protectedRefOrClock: string | (() => Date),
 ): string | undefined {
-  return resolveTaskBranchLineage(db, workspace, task, protectedRef).branch;
+  return resolveTaskBranchLineage(db, workspace, task, protectedRefOrClock).branch;
 }
 
 /** 名前の場所の HEAD を保護ブランチへ戻す1手。ADR 0345 決定2: HEAD の行に予告して畳む。ADR 0356 決定5: 人間の checkout で

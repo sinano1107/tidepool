@@ -56,7 +56,7 @@ async function translateFragments(
       throw err;
     });
     const { texts, usage, setting } = answer;
-    // ADR 0404 決定7: 訳と行は答えが届いた時刻を持つ
+    // ADR 0404 決定7: 答えが届いてから読む —— 重なったリクエストの行が答えの順に並ぶ(#1006)
     const answeredAt = now();
     chunk.forEach((source, i) => {
       saveTranslation(db, hashSource(source), language, texts[i]!, answeredAt);

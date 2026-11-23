@@ -1261,7 +1261,8 @@ function recordLandingDeferred(
 }
 
 export function createLanding(deps: LandingDeps): Landing {
-  const checked = (workspace: WorkspaceConfig) => withRememberedRepoCheck(deps.db, workspace, () => deps.clock.now(), deps.resolveWorkspace);
+  const now = () => deps.clock.now();
+  const checked = (workspace: WorkspaceConfig) => withRememberedRepoCheck(deps.db, workspace, now, deps.resolveWorkspace);
   const checkedRoot = (workspace: WorkspaceConfig, taskId: string) => withDeclaredRepoCheck(deps.db, checked(workspace), taskId);
   const workbenchBase = resolveWorkspacesBaseDir(deps.workspacesDir);
   const mergePathReview = (workspace: WorkspaceConfig, pr: PrDiff | undefined, dial: MergeDial | undefined) => {
@@ -1481,7 +1482,7 @@ export function createLanding(deps: LandingDeps): Landing {
   /** merge 済みの PR の根(ADR 0241 決定1): 保護ブランチの写しを読み直してから、根自身のブランチと比べる。子孫の積み残しは
    *  読まない —— merge の後に完了した子孫は、自分で根になる。 */
   const settleMerged = async (task: Task, workspace: WorkspaceConfig, prNumber: number, ctx: RootContext) => {
-    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, () => deps.clock.now());
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, now);
     stopRootIfRefsMoved(workspace);
     return taskHasContentToLand(workspace, task.id)
       ? alreadyMerged(task, prNumber, ctx)
@@ -1517,7 +1518,7 @@ export function createLanding(deps: LandingDeps): Landing {
     const entry = retrying === undefined ? "landing_merge" : "promotion_retry";
     const ctx: RootContext = {
       answering,
-      intake: question === undefined ? undefined : { workbenchBase, entry, answerer: answering.get(question)!, now: () => deps.clock.now() },
+      intake: question === undefined ? undefined : { workbenchBase, entry, answerer: answering.get(question)!, now },
       outcome,
     };
     // ADR 0394 決定2: 収束の列で待つ間に取り替えられた回答では作業台に触れない。
@@ -1655,7 +1656,7 @@ export function createLanding(deps: LandingDeps): Landing {
       const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
       // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
       if (mergedPr !== undefined) {
-        await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, () => deps.clock.now());
+        await refreshProtectedBranch(deps.db, workspace, deps.githubAuth, now);
         stopRootIfRefsMoved(workspace);
       }
       if (!taskHasContentToLand(workspace, task.id)) {
@@ -1742,8 +1743,8 @@ export function createLanding(deps: LandingDeps): Landing {
         let head: string | undefined;
         let fetch: (() => void) | undefined;
         try {
-          head = pr?.head ?? (await readTaskBranchHead(deps.db, workspace, deps.githubAuth, branch, () => deps.clock.now()));
-          const fetching = head === undefined ? undefined : prepareFetchCommitIfMissing(deps.db, workspace, head, deps.githubAuth, () => deps.clock.now());
+          head = pr?.head ?? (await readTaskBranchHead(deps.db, workspace, deps.githubAuth, branch, now));
+          const fetching = head === undefined ? undefined : prepareFetchCommitIfMissing(deps.db, workspace, head, deps.githubAuth, now);
           fetch = fetching && (await fetching);
         } catch (error) {
           throw unread(error);
@@ -1907,7 +1908,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // 転送の後に失敗と報告された push(ADR 0243 決定2 の形)も、出元 repo に載っていれば盤面の push —— 印を持ったまま1度だけ読んで刻む。
           // 刻まなければ、次の tick と回答は盤面自身の commit を盤面の push していない head と読む(ADR 0387 決定1)。読めなければ刻まない
           if (!(error instanceof RootStopped)) {
-            const landed = await readTaskBranchHead(deps.db, workspace, deps.githubAuth, taskBranch(task.id), () => deps.clock.now()).catch(() => undefined);
+            const landed = await readTaskBranchHead(deps.db, workspace, deps.githubAuth, taskBranch(task.id), now).catch(() => undefined);
             if (landed === sha) recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
           }
           throw error;
@@ -1979,7 +1980,7 @@ export function createLanding(deps: LandingDeps): Landing {
       if (inspectPr) {
         // ADR 0370 決定1 / ADR 0395 決定4: the new or recovered PR may already have a head absent from the checkout.
         const fetching = openedPr?.base?.branch === protectedBranch(workspace) && COMMIT_OID.test(openedPr.base.sha) && COMMIT_OID.test(openedPr.head)
-          ? prepareFetchCommitIfMissing(deps.db, workspace, openedPr.head, deps.githubAuth, () => deps.clock.now()) : undefined;
+          ? prepareFetchCommitIfMissing(deps.db, workspace, openedPr.head, deps.githubAuth, now) : undefined;
         const fetch = fetching && (await fetching.catch(unreadable));
         recheckAfterAwait();
         try {
@@ -2251,7 +2252,7 @@ export function createLanding(deps: LandingDeps): Landing {
             ci === "success" || head !== lastPushed
               ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, base: pr.base, lastPushed }, {
                 auth: deps.githubAuth,
-                now: () => deps.clock.now(),
+                now,
                 compareRefs: () => {
                   workspaceNetworkDestination(workspace);
                   assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
