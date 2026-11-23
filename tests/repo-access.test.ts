@@ -73,13 +73,17 @@ describe("carriesCredential(ADR 0406: 宣言の repo は資格情報を持たな
     "https://github.com/a/b#ghp_secret",
     "ssh://git:ghp_secret@host/a/b",
     "git:ghp_secret@host:a/b",
-  ])("%s は資格情報を持ち、拒否の文に出す表示には秘密が残らない", (repo) => {
+    "x-access-token:ghp_secret@github.com/a/b.git",
+    "git@github.com:a/b?token=ghp_secret",
+  ])("%s は資格情報を持ち、拒否の文に出す表示は判定が拒まない値になる", (repo) => {
     expect(carriesCredential(repo)).toBe(true);
-    expect(repositoryLabel(repo)).not.toContain("ghp_secret");
-    expect(repositoryLabel(repo, { preserveSshUser: true })).not.toContain("ghp_secret");
+    for (const label of [repositoryLabel(repo), repositoryLabel(repo, { preserveSshUser: true })]) {
+      expect(label).not.toContain("ghp_secret");
+      expect(carriesCredential(label)).toBe(false);
+    }
   });
 
-  it.each(["ssh://git@github.com/a/b.git", "git@github.com:a/b.git", "https://github.com/a/b.git", "/abs/path", "file:///abs"])(
+  it.each(["ssh://git@github.com/a/b.git", "git@github.com:a/b.git", "https://github.com/a/b.git", "/abs/path", "file:///abs", "host:team/repo@x.git"])(
     "%s は資格情報を持たない",
     (repo) => {
       expect(carriesCredential(repo)).toBe(false);

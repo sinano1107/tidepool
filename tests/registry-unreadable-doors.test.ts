@@ -56,13 +56,16 @@ it.each([
 });
 
 // ADR 0406 決定4: 扉を通らずに入った資格情報入りの宣言の repo も、registry の読み込みの失敗として止まる
-it.each(["repo", "head_repo"])("registry の %s が資格情報を持つと、扉は registryUnreadable を1枚立て、文は欄と workspace を名指して秘密を出さない", async (field) => {
-  const deps = await doorDeps(await makeRegistry({ "workspaces.yaml": `lagoon:\n  path: /nonexistent/lagoon\n  ${field}: https://user:ghp_secret@git.example.com/a/b.git\n` }));
+it.each([
+  ["repo", "https://user:ghp_secret@git.example.com/a/b.git", "https://git.example.com/a/b.git"],
+  ["head_repo", "x-access-token:ghp_secret@github.com/a/b.git", "github.com/a/b.git"],
+])("registry の %s が資格情報を持つと、扉は registryUnreadable を1枚立て、文は欄と workspace を名指して秘密を出さない", async (field, value, label) => {
+  const deps = await doorDeps(await makeRegistry({ "workspaces.yaml": `lagoon:\n  path: /nonexistent/lagoon\n  ${field}: ${value}\n` }));
 
   const err = (await (async () => doors["workspace list"]!(deps))().catch((e: unknown) => e)) as Error;
 
   expect(err).toBeInstanceOf(RegistryUnreadableError);
-  expect(err.message).toContain(`workspace "lagoon" declares ${field}: https://git.example.com/a/b.git, which carries a credential`);
+  expect(err.message).toContain(`workspace "lagoon" declares ${field}: ${label}, which carries a credential`);
   expect(err.message).toContain("revoke");
   expect(err.message).not.toContain("ghp_secret");
   expect(openQuarantineValues(deps.db, "registryUnreadable")).toEqual([null]);

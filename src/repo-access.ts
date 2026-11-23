@@ -69,10 +69,15 @@ export function repositoryLabel(repo: string, { preserveSshUser = false } = {}):
       return preserveSshUser ? "configured repository" : "origin configured in the registry clone";
     }
   }
-  // scp 形の `user:password@` は password ごと外す(ADR 0406 決定3)。修理の命令に要る ssh のログイン名だけは残す
-  if (preserveSshUser && !/^[^/@]*:[^/@]*@/.test(origin)) return repo;
-  return origin.replace(/^([^:/@]*)[^/@]*@(?=(?:\[[^\]]+\]|[^:/]+):)/, preserveSshUser ? "$1@" : "");
+  if (!SCP_FORM.test(origin)) return preserveSshUser ? repo : origin;
+  if (preserveSshUser && !carriesCredential(origin)) return repo;
+  // ADR 0406 決定3: 表示は判定が拒む部分(`@` の前の password・query・fragment)を持たない。修理の命令に要る ssh のログイン名は残す
+  const [, user, rest] = origin.match(/^(?:([^:/@]*)(?::[^/@]*)?@)?([^?#]*)/)!;
+  return preserveSshUser && user ? `${user}@${rest}` : rest!;
 }
+
+// scheme の無い値は、最初の `/` より前に `:` があれば scp 形 `[user@]host:path`(git がローカル path と分ける読み)
+const SCP_FORM = /^[^/]*:/;
 
 /** ADR 0406 決定3: 宣言の repo(`repo` / `head_repo`)の値が資格情報を持つか —— registry の読み込みと publish・clone・register の
  *  扉が使う1つの判定。どの scheme でも password・query・fragment、ssh 以外の scheme の user 部分を秘密と読む(GitHub は
@@ -84,10 +89,8 @@ export function carriesCredential(repo: string): boolean {
     const userinfo = url[2]!.slice(0, Math.max(url[2]!.lastIndexOf("@"), 0));
     return /[?#]/.test(value) || userinfo.includes(":") || (userinfo !== "" && url[1]!.toLowerCase() !== "ssh");
   }
-  // scheme の無い値は、最初の `/` より前に `:` があれば scp 形 `[user@]host:path`(git がローカル path と分ける読み)。`@` の前の `:` は password
-  if (!/^[^/]*:/.test(value)) return false;
-  const at = value.indexOf("@");
-  return /[?#]/.test(value) || (at > 0 && value.slice(0, at).includes(":"));
+  // scp 形では、最初の `/` より前の `@` の手前の `:` が password
+  return SCP_FORM.test(value) && (/[?#]/.test(value) || /^[^/]*:[^/]*@/.test(value));
 }
 
 /** ADR 0406 決定1: 宣言の repo になる値が資格情報を持つので拒んだ。文は扉ごとに組み、値は `repositoryLabel` を通したものだけを出す。 */
