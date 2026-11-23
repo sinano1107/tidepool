@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -12,6 +12,7 @@ import { submitAnswer } from "../src/human-verbs.js";
 import {
   blockingRootOf,
   createLanding,
+  type Landing,
   landingState,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
@@ -96,6 +97,7 @@ import {
   commitThroughTaskCheckout,
   completeThroughTaskCheckout,
   convergeOn,
+  failPrepareOnce,
   fetchHeldAtToken,
   finish,
   HUMAN_ANSWERER,
@@ -2624,6 +2626,75 @@ it("着地の比較: 断念した根の最初の撮りの確認が registry を�
 
   expect(reAsked(db, work.id)).toEqual([]);
   expect(holdsBaseline(db, rowless.name)).toBe(false);
+});
+
+// ADR 0403 決定1: 問い直しに写す tip が読めなくても、tip 無しで問い直す
+it("断念した根の問い直しは、workspace を解決できず tip が読めなくても tip 無しの question を立てる", async () => {
+  const { db, clock, github, work } = await abandonedPromotion("abandon-reask-tip-unreadable");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const landing = createLanding({
+    defaultAgentName: "tako", db, clock, github,
+    resolveWorkspace: () => { throw new Error("the registry cannot be read"); },
+  });
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(reAsked(db, work.id)).toEqual([expect.objectContaining({ status: "todo", question_landing_tip: null })]);
+});
+
+// ADR 0403 決定1: git が exit 1 以外で落ちても、問い直しは tip 無しで立つ
+it("tip 無しの question を断念した根の問い直しは、`.git` がリポジトリでなく git が tip を読めなくても tip 無しで立つ", async () => {
+  const { db, workspace, landing, work } = await abandonedPromotion("abandon-reask-git-fails", { askedTip: false });
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  rmSync(join(workspace.path, ".git"), { recursive: true });
+  mkdirSync(join(workspace.path, ".git"));
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(reAsked(db, work.id)).toEqual([expect.objectContaining({ status: "todo", question_landing_tip: null })]);
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining(`could not read the tip of task/${work.id}`), expect.objectContaining({ status: 128 }));
+});
+
+const GATE_READ = "SELECT COUNT(*) AS n FROM tasks attached";
+
+/** 断る記録の枝を通る根 —— PR 昇格を断念した根と、ローカル着地を hold した根。 */
+const declinedRoots: Array<[string, string, (name: string) => Promise<{ db: Db; clock: FakeClock; landing: Landing; work: Task; workspace: WorkspaceConfig }>]> = [
+  ["断念した根", "abandoned", (name) => abandonedPromotion(name)],
+  [
+    "ローカル着地を hold した根",
+    "held",
+    async (name) => {
+      const local = await landLocally(name);
+      await answerLocalMerge(local, "hold");
+      return local;
+    },
+  ],
+];
+
+// ADR 0403 決定2: 断念・hold の枝の失敗も、主経路と同じ境界で昇格失敗 question になる
+it.each(declinedRoots)("%sの門の読みが落ちれば、収束はその根に昇格失敗 question を立てる", async (_, slug, declinedRoot) => {
+  const { db, landing, work } = await declinedRoot(`declined-branch-gate-read-threw-${slug}`);
+  failPrepareOnce(db, GATE_READ, "the gate could not be read");
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed", error: "the gate could not be read" });
+
+  expect(openPromotionQuestions(db, work.id)).toEqual([expect.objectContaining({ title: `PR promotion failed: ${work.title}` })]);
+});
+
+// ADR 0241 決定6 / ADR 0403 決定2: 主経路の解決より前の枝で落ちた根も、workspace の Quarantine が抱えていれば失敗 question を重ねない
+it.each(declinedRoots)("%sの門の読みが落ちても、workspace の Quarantine が開いていればその Quarantine を名乗り、昇格失敗 question を立てない", async (_, slug, declinedRoot) => {
+  const { db, clock, landing, work, workspace } = await declinedRoot(`declined-branch-gate-read-quarantined-${slug}`);
+  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  failPrepareOnce(db, GATE_READ, "the gate could not be read");
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
+
+  // 門の読みは落ちた(落ちると元に戻る)—— Quarantine で手前に止まった根ではない
+  expect(vi.isMockFunction(db.prepare)).toBe(false);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
 });
 
 it("着地の比較: tip を読めずに立った question を断念した根は ref を読まずに問い直すので、ref が動いていても止まらない", async () => {

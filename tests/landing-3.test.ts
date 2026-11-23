@@ -72,6 +72,7 @@ import {
   commitThroughTaskCheckout,
   convergeOn,
   droppedRepair,
+  failPrepareOnce,
   fetchHeldAtToken,
   finish,
   forkHead,
@@ -1603,15 +1604,57 @@ it("workspace の Git リポジトリが無ければ、収束は tip が無い�
   expect(promotionFailures(c.db, c.work.id)).toEqual([expect.objectContaining({ question_landing_tip: null })]);
 });
 
-it("昇格失敗の question に写す ref が読めないときも、収束は元の失敗の verdict を返す", async () => {
+// ADR 0403 決定1: 問いに写す tip が読めなくても、昇格失敗 question は tip 無しで立つ
+it("workspace を解決できず昇格失敗の question に写す tip が読めないときも、収束は tip が無い昇格失敗 question を立てる", async () => {
   const c = await pushedRoot("unreadable-promotion-question-tip");
-  git(c.workspace.path, "pack-refs", "--all");
-  breakPackedRefs(c.workspace);
-
-  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({
-    kind: "failed", reason: "promotion_failed", error: expect.stringContaining("git for-each-ref"),
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const landing = createLanding({
+    defaultAgentName: "tako", db: c.db, clock: c.clock, github: c.github,
+    resolveWorkspace: () => { throw new Error("the registry cannot be read"); },
   });
-  expect(promotionFailures(c.db, c.work.id)).toEqual([]);
+
+  expect(await convergeOn(landing, c.work.id)).toMatchObject({
+    kind: "failed", reason: "promotion_failed", error: expect.stringContaining("the registry cannot be read"),
+  });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([expect.objectContaining({ question_landing_tip: null })]);
+});
+
+/** 根の導出の最初の読み(根の PR の決着)を1回だけ落とす —— 回の根ごとの catch に届く想定外の例外。 */
+function failRootDerivationRead(db: Db) {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  failPrepareOnce(db, "pr_merge_observed", "the board hit a bug");
+}
+
+const LANDING_FAILED = { kind: "failed", reason: "landing_failed" };
+
+// ADR 0403 決定3: 根ごとの catch に落ちた想定外の例外でも、無人の回なら tip 無しの昇格失敗 question を1枚立てる
+it("根の導出の読みが例外に落ちた無人の回は、その根に tip が無い昇格失敗 question を1枚立てる", async () => {
+  const c = await pushedRoot("landing-per-root-catch-raises");
+  failRootDerivationRead(c.db);
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject(LANDING_FAILED);
+  expect(promotionFailures(c.db, c.work.id)).toEqual([
+    expect.objectContaining({ status: "todo", question_landing_tip: null, purpose: expect.stringContaining("the board hit a bug") }),
+  ]);
+});
+
+it("根の導出の読みが例外に落ちても、その根に昇格失敗 question が開いていれば重ねない", async () => {
+  const c = await pushedRoot("landing-per-root-catch-open-question", { openFailure: true });
+  const before = promotionFailures(c.db, c.work.id);
+  failRootDerivationRead(c.db);
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject(LANDING_FAILED);
+  expect(promotionFailures(c.db, c.work.id)).toEqual(before);
+});
+
+it("根の導出の読みが例外に落ちても、その根に答えている回答がある回は question を立てない", async () => {
+  const pr = await openPushedPr("landing-per-root-catch-answering", "escalate");
+  finish(pr.db, pr.clock, pr.work);
+  const question = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
+  failRootDerivationRead(pr.db);
+
+  expect(await convergeOn(pr.landing, pr.work.id, question.id)).toMatchObject(LANDING_FAILED);
+  expect(promotionFailures(pr.db, pr.work.id)).toEqual([]);
 });
 
 // ADR 0240 決定5: 拒否文は積み残しを運ぶ面を名指しする。どちらも無ければ、盤面が運んでいる途中である
