@@ -858,7 +858,7 @@ it.each([
 
 // 失われたと数えるのは基準の sha の object が無いことで、ref の今の値は読まない —— 記録は git の書き込みの前に落ちても偽にならない。
 // 守っているのは、失われた `task/<id>` の基準の行を記録と同じ transaction で消すこと: 人間の値で残った ref は違反のままで、次に通る回答は
-// `restore the baseline` だけになる。行を残すと `repaired by hand` が人間の値を基準に入れ、失われた event と並んで pickup が止まり続ける(#3624)
+// `restore the baseline` だけになる。行に今の値を入れると `repaired by hand` が人間の値を基準に入れ、失われた event と並んで pickup が止まり続ける(#3624)
 it.each([
   ["完了した根", "基準の予告の前", true, false],
   ["完了した根", "基準の予告の後", true, true],
