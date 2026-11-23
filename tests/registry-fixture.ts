@@ -50,6 +50,18 @@ export function setWorkspaceEntry(registryDir: string, name: string, key: string
   execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", `declare ${name}.${key}`], { cwd: registryDir, stdio: "pipe" });
 }
 
+/** registry の `main` に YAML として読めない workspaces.yaml を commit する。返すのは、元の内容を commit し直して直す手。 */
+export function breakRegistry(registryDir: string): () => void {
+  const file = join(registryDir, "workspaces.yaml");
+  const original = readFileSync(file, "utf8");
+  const commit = (body: string, message: string) => {
+    writeFileSync(file, body);
+    execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", message], { cwd: registryDir, stdio: "pipe" });
+  };
+  commit("tidepool: [unclosed\n", "break workspaces.yaml");
+  return () => commit(original, "repair workspaces.yaml");
+}
+
 /** registry clone の原本に受け取りを拒ませる(push を落とす)。盤面の push は clone の pushurl を読まない(ADR 0339 決定5)ので、
  *  落とすのは原本の側である。 */
 export function rejectRegistryPushes(registryDir: string): void {

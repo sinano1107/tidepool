@@ -223,18 +223,20 @@ export const QUARANTINES = [
   {
     kind: "registryUnreadable" satisfies HaltKind,
     scope: "board",
-    // 答えの本文を修理メモに残すのは ADR 0052、github-login は ADR 0093。原因は remote への到達と registry clone の
-    // default branch の2つなので、文はどちらにも真に書く(ADR 0377 決定7)
+    // 答えの本文を修理メモに残すのは ADR 0052、github-login は ADR 0093。原因は remote への到達・registry clone の default branch
+    // (ADR 0377 決定7)・読み込みと検査(ADR 0403 決定5)の3つなので、文はどれにも真に書く。remote の無い盤面にも立つ
     prose: (_value: string | null, reason: string): QuarantineProse => ({
-      title: "registry is unavailable — pickup is stopped",
+      title: "registry is unavailable — pickup and landing are stopped",
       purpose:
-        `${reason}\n\nNo agent task is picked up while this stands because every spawn depends ` +
-        "on the registry source of truth. Repair access to the registry remote or the registry clone's " +
-        "default branch, then answer — the board checks the registry again before accepting the answer, " +
-        "and keeps any answer text as a repair note. If the board's GitHub login was revoked or is missing, " +
-        "run `npm run github-login` on the board host first.",
+        `${reason}\n\nNo agent task is picked up and no completed task is landed while this stands, because both ` +
+        "read the registry. Repair what the reason above names — the registry's files (they must parse and pass the " +
+        "registry's checks), or, on a board with a registry remote, access to that remote or the registry clone's " +
+        "default branch — then answer. The board reads the registry again (and, with a remote, fetches it) before " +
+        "accepting the answer, and keeps any answer text as a repair note. If the board's GitHub login was revoked " +
+        "or is missing, run `npm run github-login` on the board host first.",
       completion_criteria:
-        "the registry remote main is reachable, and the registry clone's origin/HEAD points at origin/main or is absent",
+        "the registry can be read and passes its checks, and with a registry remote, the remote main is reachable and " +
+        "the registry clone's origin/HEAD points at origin/main or is absent",
     }),
   },
   {

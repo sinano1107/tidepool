@@ -10,8 +10,10 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import { QUARANTINES } from "../src/quarantine.js";
+import { openQuarantineValues, QUARANTINES } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
+import { RegistryUnreadableError } from "../src/registry-unreadable.js";
+import type { ServerOptions } from "../src/server.js";
 import {
   type BoardComposition,
   buildCodexWorkerOptions,
@@ -24,9 +26,10 @@ import {
 import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { restoreBaseline } from "../src/workspace.js";
-import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
-import { commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { composition } from "./board-composition.js";
+import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion } from "./harness.js";
+import { breakRegistry, commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -48,35 +51,6 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
  *  この suite が観測するのは口の一覧であって行ではないので、in-memory で足りる。 */
 function buildOptions(board: BoardComposition) {
   return buildServerOptions(board, openDb(":memory:"));
-}
-
-function composition(): BoardComposition {
-  const clock = new FakeClock();
-  return {
-    port: 0,
-    mcpPort: 0,
-    credential: TEST_CREDENTIAL,
-    clock,
-    registryDir: undefined,
-    registryMode: "purely-local",
-    logDir: "/nonexistent/worker-logs",
-    workspaceName: "sandbox",
-    workspacesDir: "/nonexistent/workspaces",
-    workspacesDirSource: "configured",
-    defaultAgentName: "tako",
-    auditorName: "shako",
-    interviewerName: "suzumedai",
-    boardState: [],
-    moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
-    codexHome: "/nonexistent/codex-home",
-    codexExecutable: "/nonexistent/bin/codex",
-    codexOnPath: false,
-    githubAuth: undefined,
-    githubTokenFile: undefined,
-    vapid: undefined,
-    translationClient: () => new FakeTranslationClient(),
-    cliAuthExpiresAt: undefined,
-  };
 }
 
 it("Codex の実測した required MCP 起動失敗は合成された口を通り、到達性の確認1枚だけで todo へ戻る(ADR 0331)", async () => {
@@ -259,6 +233,92 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
   });
 
   expect(options.listAgents?.()[0]?.description).toBe("Definition from remote main");
+});
+
+// ADR 0403 決定5: 止まりを立てるのは registry の読み込みの1点で、読み手の数や経路に依らない
+it("registry が読めなくなると、組み立てた読み口のどれから読んでも registryUnreadable が1枚だけ立つ —— remote の無い盤面でも", async () => {
+  const registryDir = await makeRegistry();
+  const task = { assignee: null, interview_target_id: null, type: "work" } as unknown as Task;
+  const readers: Array<(options: ServerOptions) => unknown> = [
+    (options) => options.resolveWorkspace!(null),
+    (options) => options.resolveAuthority!(null, "work"),
+    (options) => options.agentRegistered!("deckhand"),
+    (options) => options.agentDefinitionFailure!("deckhand"),
+    (options) => options.resolvesToBuiltIn!("fugu"),
+    (options) => options.isProtectedWorkspace!("tidepool"),
+    (options) => options.listAgents!(),
+    (options) => options.registryCandidates!(),
+    (options) => options.agentAdmin!.authorityProfiles!(),
+    (options) => options.taskExecutionCandidates(task),
+    (options) => options.quarantineResolvers!.providerAuth!(["anthropic"]),
+    (options) => options.quarantineResolvers!.harnessContainment!(["claude-code"]),
+  ];
+  // 読み口ごとに盤面の DB を分ける —— DB を持たずに配線された読み口は、ほかの読み口の止まりに隠れない
+  const boards = await Promise.all(readers.map(async () => {
+    const db = openDb(":memory:");
+    return { db, options: await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db) };
+  }));
+  breakRegistry(registryDir);
+
+  const raised = readers.map((read, i) => {
+    const { db, options } = boards[i]!;
+    expect(() => read(options)).toThrow(RegistryUnreadableError);
+    expect(() => read(options)).toThrow(RegistryUnreadableError);
+    return openQuarantineValues(db, "registryUnreadable");
+  });
+
+  expect(raised).toEqual(readers.map(() => [null]));
+});
+
+// 同じ接続しか無いので、止まりは transaction を抜けた後に立て直される —— 観測は1 tick 後
+it("registry の読み込みを transaction の中で呼んで rollback しても、registryUnreadable は残る", async () => {
+  const registryDir = await makeRegistry();
+  const db = openDb(":memory:");
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
+  breakRegistry(registryDir);
+
+  expect(db.transaction(() => options.listAgents!())).toThrow(RegistryUnreadableError);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
+});
+
+// 起動時の読み(盤面自身の workspace・draft の候補の写し・boot の一斉検査)は騒ぐだけ(ADR 0052 決定4)—— 床は pickup の門
+it("registry が読めない盤面の起動は組み立てを拒まず、騒いで registryUnreadable を1枚立てる", async () => {
+  const registryDir = await makeRegistry();
+  breakRegistry(registryDir);
+  const db = openDb(":memory:");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
+  options.boardCallers?.(async () => null);
+  // boot の一斉検査は列挙の失敗を握ってログに落とす(sweepBoardStateOverlap)
+  expect(() => options.boardState!.listWorkspaces()).toThrow(RegistryUnreadableError);
+
+  expect({
+    workspace: options.workspace,
+    warned: error.mock.calls.flat().join(" "),
+    stops: openQuarantineValues(db, "registryUnreadable"),
+  }).toEqual({
+    workspace: undefined,
+    warned: expect.stringMatching(/own workspace could not be read at startup[\s\S]*registry candidates could not be read at startup/),
+    stops: [null],
+  });
+  error.mockRestore();
+});
+
+// 盤面自身の workspace を持たずに起動した盤面は、既定の workspace 名を持たない —— 直しても再起動までは再開しない
+it("起動時に盤面自身の workspace を読めなかった盤面は、registry を直しても判定が再起動を求めて不成立のまま", async () => {
+  const registryDir = await makeRegistry();
+  const repair = breakRegistry(registryDir);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const options = await buildServerOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" }, openDb(":memory:"));
+  repair();
+
+  expect(await options.registryAvailability!()).toEqual({
+    available: false,
+    reason: "the board started without its own workspace because the registry could not be read at startup; restart the board, then answer",
+  });
 });
 
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
