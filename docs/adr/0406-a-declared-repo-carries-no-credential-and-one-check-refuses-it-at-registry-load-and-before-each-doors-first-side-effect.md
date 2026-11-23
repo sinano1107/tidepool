@@ -9,8 +9,8 @@ registry に commit する穴の報告から始まった。調べると clone(�
 ## 決定
 
 1. **宣言の repo(`repo` / `head_repo`)は資格情報を持たない。** 網に出る資格情報は盤面が注入する身元だけである(ADR 0339)。
-   GitHub の repo では行き先を宣言の repo key から組むので URL の token は元から使われず、GitHub 以外の repo は匿名で撃つ
-   (ADR 0339 決定2)。拒んで失う使い方は無い。
+   GitHub の repo では行き先を宣言の repo key から組むので URL の token は元から使われない。拒んで失うのは、GitHub 以外の
+   repo へ URL の資格情報で通っていた経路だけで、それは「非 GitHub の remote は匿名でしか到達しない」(ADR 0339 決定2)に反していた。
 2. **判定は1つで、2か所で使う。** registry の schema(読み込み)と、publish・clone・register の各扉の**最初の副作用の
    手前**である。扉の手前にも置くのは、push や clone の後に schema で落ちると checkout の `.git/config` に token が残るからである。
    出元 repo の扉は値を `owner/name` に直して保存する(ADR 0395 決定2)ので、schema の側だけで足りる。
