@@ -1728,13 +1728,13 @@ export function createLanding(deps: LandingDeps): Landing {
        *  (text D2)—— retry の取り込みより前に決めるので、前の text D1 の作業台に tip が残っていても印も event も足さない(決定6)。
        *  それ以外は retry が人間の tip を先に取り込み、head が push する sha の祖先でなければ、盤面は merge も push もせず作業台を開いて
        *  止まる(text D1)。PR が記録済みで head が最後に push した値を欠く(書き換え・巻き戻し)ときは
-       *  決定7 が持つ(`outsidePushStep`)。決定7 で止まれば verdict を返し、押してよければ undefined を返す。読めない head と text D1・D2 は
-       *  今どおり投げる(昇格の失敗になる)。 */
+       *  決定7 が持つ(`outsidePushStep`)。決定7 で止まれば verdict を返し、押してよければ判断に使った head(「無い」なら `""`)を返す ——
+       *  push はそれを lease に載せる(ADR 0376 Status 追記、#3605)。読めない head と text D1・D2 は今どおり投げる(昇格の失敗になる)。 */
       const checkHeadBeforePush = async (
         pr: PrDiff | undefined,
         foundPr?: number,
         questionBeforeRead?: ReturnType<typeof latestMergeQuestion>,
-      ): Promise<LandingVerdict | undefined> => {
+      ): Promise<LandingVerdict | string> => {
         const branch = taskBranch(task.id);
         // ADR 0376 決定2: 読めなかった head には push を撃たない(text D4)
         const unread = (error: unknown) => {
@@ -1758,7 +1758,7 @@ export function createLanding(deps: LandingDeps): Landing {
         } catch (error) {
           throw unread(error);
         }
-        if (head === undefined) return undefined;
+        if (head === undefined) return "";
         const prNumber = task.pr_number;
         const outside = prNumber === null ? undefined : outsidePushOf(workspace, task.id, head, leftBehindTargets(deps.db, workspace, task.id), lastPushedHead(deps.db, task.id));
         const answeringMerge = ctx.intake?.entry === "landing_merge";
@@ -1808,7 +1808,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (outside && !isAncestor(workspace, head, `refs/heads/${taskBranch(task.id)}`)) return refuse(outside);
         const outsideStop = outsideCommitsStop(workspace, workbenchBase, task.id, head);
         if (outsideStop) throw outsideStop;
-        return undefined;
+        return head;
       };
       /** ADR 0376 決定7 / ADR 0394 決定2: 収束はキューの行を外して外の部分を問い、別の失敗で開いていた昇格失敗
        *  question への retry はその question を id で名指して拒む(text D3b)。 */
@@ -1832,10 +1832,10 @@ export function createLanding(deps: LandingDeps): Landing {
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
-      const push = async (sha: string) => {
+      const push = async (sha: string, expected: string) => {
         const withheld = await forkPrCredentialRefusal(github, workspace, headRepoLabel);
         if (withheld) throw new Error(`${withheld} Then retry.`);
-        const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id) });
+        const pushBranch = await github.preparePush({ workspace, branch: taskBranch(task.id), expected });
         return actIfGateOpen<null, LandingVerdict>(() => {
           const closed = closedMergeAnswer();
           if (closed) return closed;
@@ -1890,8 +1890,10 @@ export function createLanding(deps: LandingDeps): Landing {
         const matching = await github.findPullRequestByHead({ workspace, branch, number: prNumber });
         if (matching?.state !== "OPEN") throw new Error(`PR #${prNumber} does not have an open head at head repo ${headRepoLabel}'s ${branch}, so the board did not push.`);
         // ADR 0376 決定1: the fork identity, head and base must come from the same observation.
-        const stopped = await checkHeadBeforePush(matching, undefined, before) ?? closedMergeAnswer();
-        if (stopped) return stopped;
+        const expected = await checkHeadBeforePush(matching, undefined, before);
+        if (typeof expected !== "string") return expected;
+        const closed = closedMergeAnswer();
+        if (closed) return closed;
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
         // ADR 0387 決定4: push の前から最後に push した値を書くまで、tick と人間の merge 回答と同じ根の印を持つ —— その間に読まれた
@@ -1900,7 +1902,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const release = takeInFlightMark(task.id);
         if (!release) return ctx.intake ? failedAnswer(prInFlightRefusal(task.pr_number)) : undefined;
         try {
-          const refusal = await push(sha);
+          const refusal = await push(sha, expected);
           if (refusal) return refusal;
           // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
           recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
@@ -1944,8 +1946,8 @@ export function createLanding(deps: LandingDeps): Landing {
             error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
           };
         }
-        const stopped = await checkHeadBeforePush(found ?? undefined, found?.number);
-        if (stopped) return stopped;
+        const expected = await checkHeadBeforePush(found ?? undefined, found?.number);
+        if (typeof expected !== "string") return expected;
         catchUp();
         // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
         const resolved = readAuthority(task, deps.clock.now());
@@ -1954,13 +1956,13 @@ export function createLanding(deps: LandingDeps): Landing {
         let prNumber: number;
         if (found) {
           // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
-          const refusal = await push(sha);
+          const refusal = await push(sha, expected);
           if (refusal) return refusal;
           prNumber = found.number;
         } else {
           const { title } = await contentSourceFor(task, deps.github, () => workspace).expand();
           // PR の作成は push 済みのブランチに作成の要求だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
-          const refusal = await push(sha);
+          const refusal = await push(sha, expected);
           if (refusal) return refusal;
           landingHeadRepo(workspace);
           const created = await deps.github.createPullRequest({

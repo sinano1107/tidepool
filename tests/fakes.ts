@@ -37,6 +37,7 @@ import type {
   Issue,
   IssueRef,
   OpenIssue,
+  PreparePushInput,
   PrRef,
   PrResult,
   PrState,
@@ -47,7 +48,7 @@ import type {
   RepoSlug,
 } from "../src/github.js";
 import { IssueGoneError } from "../src/github.js";
-import { comparedRepo, HEAD_REPO_REMOTE, landingHeadRepo, networkDestination, remoteTrackingRef, workspaceHeadRepoDestination, workspaceNetworkDestination } from "../src/github-auth.js";
+import { comparedRepo, HEAD_REPO_REMOTE, landingHeadRepo, networkDestination, pushArgs, remoteTrackingRef, workspaceHeadRepoDestination, workspaceNetworkDestination } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { Landing } from "../src/landing.js";
 import type { InjectionQuery } from "../src/memory.js";
@@ -568,11 +569,12 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   /** 実際に出元 repo へ push し、写しを書く。盤面が書き込みを基準に畳んだかを測る(ADR 0243 / ADR 0395 決定1)。 */
-  async preparePush({ workspace, branch }: PushBranchInput): Promise<(sha: string) => void> {
+  async preparePush({ workspace, branch, expected }: PreparePushInput): Promise<(sha: string) => void> {
     return (sha) => {
       this.pushes.push({ branch, path: workspace.path });
       const cwd = workspace.path;
-      execFileSync("git", ["push", "--", landingHeadRepo(workspace).url, `${sha}:refs/heads/${branch}`], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      // 本物と同じ lease と祖先の確かめを通る(ADR 0376 Status 追記、#3605)—— 写しを持てば、テストは写しを検査する
+      execFileSync("git", pushArgs(cwd, landingHeadRepo(workspace).url, [[branch, sha, expected]]), { cwd, stdio: ["ignore", "pipe", "pipe"] });
       execFileSync("git", ["update-ref", remoteTrackingRef(branch, HEAD_REPO_REMOTE), sha], { cwd });
       // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形 —— 畳みが失敗の
       // 報告ではなく ref の読み返しで決まること(ADR 0243 決定2)を測る

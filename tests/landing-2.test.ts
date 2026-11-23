@@ -738,6 +738,70 @@ it("PR を記録していない根の出元 repo のタスクブランチが最�
   expect(c.github.requests).toEqual([expect.objectContaining({ branch: c.target, base: "main" })]);
 });
 
+// ADR 0376 Status 追記(#3605): 収束の push は決定2 の判断に使った head を lease として載せる —— 読んだ後に動いた head には、fast-forward
+// になる祖先への巻き戻しでも、作られたブランチでも書かない。落ちた push は今どおり昇格の失敗で、retry が読み直す
+/** 収束が head を読んだ後・push の前(push の準備の中)に `move` を撃つ。 */
+function moveBeforePush(github: FakeGitHubClient, move: () => void) {
+  const prepare = github.preparePush.bind(github);
+  vi.spyOn(github, "preparePush").mockImplementationOnce(async (input) => {
+    move();
+    return prepare(input);
+  });
+}
+
+it("収束が出元 repo のタスクブランチを読んだ後・push の前に祖先へ戻されれば、push は落ちて昇格の失敗になり、出元 repo は戻されたままで、続く retry は text D2 で拒まれる", async () => {
+  const c = await pushedRoot("lease-rewound-after-read", { commits: 2 });
+  const head = git(c.workspace.path, "rev-parse", `${c.pushed}~1`);
+  moveBeforePush(c.github, () => git(c.workspace.head_repo!, "update-ref", `refs/heads/${c.target}`, head));
+
+  await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(forkHead(c.workspace, c.work.id)).toBe(head);
+  expect(c.github.requests).toEqual([]);
+  const [failure] = promotionFailures(c.db, c.work.id);
+  expect(await c.retry(failure!)).toBe(c.d2(head));
+  expect(forkHead(c.workspace, c.work.id)).toBe(head);
+});
+
+it("収束が出元 repo のタスクブランチを「無い」と読んだ後・push の前にブランチが作られれば、push は落ちて昇格の失敗になり、PR を開かない", async () => {
+  const { workspace } = await makeLandingWorkspace("lease-created-after-read");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  const target = `task/${work.id}`;
+  git(workspace.path, "checkout", "-b", target);
+  recordDeclaredRepo(db, work.id, workspace);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "checkout", "main");
+  finish(db, clock, work);
+  const created = git(workspace.path, "rev-parse", "main");
+  moveBeforePush(github, () => git(workspace.head_repo!, "update-ref", `refs/heads/${target}`, created));
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(forkHead(workspace, work.id)).toBe(created);
+  expect(github.requests).toEqual([]);
+});
+
+it("PR がある根の収束の push は、出元 repo のブランチでなく PR の読みの head を期待値に載せる", async () => {
+  const c = await pushedRoot("lease-on-pr-head", { pr: "recorded" });
+  const tip = git(c.workspace.path, "rev-parse", c.target);
+  // GitHub の PR の読みが出元 repo のブランチと食い違う(修理の commit を head と報告する)
+  c.github.scriptHead(1, tip);
+  const expectations: string[] = [];
+  const prepare = c.github.preparePush.bind(c.github);
+  vi.spyOn(c.github, "preparePush").mockImplementation(async (input) => {
+    expectations.push(input.expected);
+    return prepare(input);
+  });
+
+  await expect(convergeOn(c.landing, c.work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+
+  expect(expectations).toEqual([tip]);
+  expect(forkHead(c.workspace, c.work.id)).toBe(c.pushed);
+});
+
 /** 盤面の外で記録済みの PR の head を動かす: `rewound` は最後に push した値の1つ前へ戻し、`rewritten` はその上に別の commit を作る
  *  (最後に push した値から分かれる)。動かした head を返す。 */
 async function moveRecordedHead(c: Awaited<ReturnType<typeof pushedRoot>>, form: "rewound" | "rewritten"): Promise<string> {

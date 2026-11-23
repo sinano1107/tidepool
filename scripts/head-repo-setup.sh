@@ -228,16 +228,17 @@ warn_runners_at() {
   fi
 }
 
-# 盤面は送れたタスクブランチだけを refs/remotes/head-repo/task/* に写す(issue #3563)。checkout は読むだけ
-# shortcut: a task branch made or advanced after the declaration has no copy until its task lands, so a re-run on a board
-# in use asks to declare again (an idempotent resend); compare with the head repo's own refs if that prompt gets in the way.
+# 盤面は送れたタスクブランチだけを refs/remotes/head-repo/task/* に写し(issue #3563)、写しのあるタスクブランチは送り直さない
+# (ADR 0395 Status 追記, #3605)。写しが tip と違っても送り済み。checkout は読むだけ
+# shortcut: a task branch made after the declaration has no copy until its task lands, so a re-run on a board in use asks
+# to declare again (which sends only the task branches without a copy); compare with the head repo's own refs if that prompt gets in the way.
 all_task_branches_sent() {
   [[ -n "$CHECKOUT" ]] || return 1
-  local sha branch
-  while read -r sha branch; do
-    [[ -z "$sha" ]] && continue
-    [[ "$(git -C "$CHECKOUT" rev-parse -q --verify "refs/remotes/head-repo/$branch" || true)" == "$sha" ]] || return 1
-  done <<< "$(git -C "$CHECKOUT" for-each-ref --format='%(objectname) %(refname:lstrip=2)' refs/heads/task/)"
+  local branch
+  while read -r branch; do
+    [[ -z "$branch" ]] && continue
+    git -C "$CHECKOUT" rev-parse -q --verify "refs/remotes/head-repo/$branch" > /dev/null || return 1
+  done <<< "$(git -C "$CHECKOUT" for-each-ref --format='%(refname:lstrip=2)' refs/heads/task/)"
 }
 
 # Stages 7 and 8: the declaration goes through the board's dangerous-value gate, and saving it sends the task branches.

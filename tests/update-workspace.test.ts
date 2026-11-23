@@ -17,7 +17,7 @@ import {
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
-import { convergeOn, finish, landingWork } from "./landing-fixture.js";
+import { answerPromotion, convergeOn, finish, landingWork, promotionFailures } from "./landing-fixture.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -532,6 +532,27 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
     expect(copies()).toBe(`refs/remotes/head-repo/task/aaa ${sha}\nrefs/remotes/head-repo/task/bbb ${sha}`);
   });
 
+  // ADR 0395 Status 追記(#3605): 写しのあるタスクブランチは盤面が一度送ったもので、扉は送り直さない —— 人間の巻き戻しを fast-forward で戻さない
+  it.each([false, true])("送れたタスクブランチを出元 repo で祖先へ戻してから同じ値で宣言し直しても、扉は写しの無いタスクブランチだけを送り、戻したブランチは動かない(送った後に local が進んだ = %s)", async (advanced) => {
+    const { workspace, sha, fork, calls, set, copies } = await headRepoBoard();
+    const commitOn = (parent: string, message: string) =>
+      git(workspace.path, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit-tree", "-p", parent, "-m", message, `${parent}^{tree}`);
+    const sent = commitOn(sha, "sent");
+    git(workspace.path, "update-ref", "refs/heads/task/bbb", sent);
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    expect(git(fork, "rev-parse", "task/bbb")).toBe(sent);
+    if (advanced) git(workspace.path, "update-ref", "refs/heads/task/bbb", commitOn(sent, "after the send"));
+    git(fork, "update-ref", "refs/heads/task/bbb", sha);
+    const before = calls().length;
+
+    const again = await set().then(() => undefined, (e: Error) => e);
+
+    expect(again?.message).toMatch(/these task branches were not sent to it: task\/aaa \(.+\)\. Set the same head repo again/s);
+    expect(calls().slice(before).filter(({ args }) => args.includes("push")).map(({ args }) => args.at(-1))).toEqual([`${sha}:refs/heads/task/aaa`]);
+    expect(git(fork, "rev-parse", "task/bbb")).toBe(sha);
+    expect(copies()).toBe(`refs/remotes/head-repo/task/bbb ${sent}`);
+  });
+
   // ADR 0243: 写しは口を通る —— 基準の行は送れたタスクブランチの写しだけを持ち、次の比較は Quarantine を立てない
   it("基準があっても、送れたタスクブランチの写しだけが基準に入り、次の比較は違反にならない", async () => {
     const { deps, workspace, sha, set } = await headRepoBoard();
@@ -575,7 +596,8 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
     compareRefsBeforeLanding(deps.db, workspace, { resolveRegistered: undefined, now: now() });
   });
 
-  it("convergence refuses to overwrite a rewind of a task branch sent only by publish", async () => {
+  // ADR 0376 決定6 / ADR 0395 Status 追記(#3605): 扉は写しのあるタスクブランチを送らないので、収束が text D2 で止めた巻き戻しを上書きしない
+  it("convergence refuses to overwrite a rewind of a task branch sent only by publish, and declaring the same head repo again leaves the rewind for retry to keep refusing", async () => {
     const { deps, workspace, sha, fork, set } = await headRepoBoard();
     const clock = new FakeClock();
     git(workspace.path, "update-ref", "refs/remotes/origin/main", sha);
@@ -595,6 +617,15 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", () =>
       kind: "failed", reason: "promotion_failed", error: expect.stringContaining(`head repo acme/fork's task/${work.id} was rewound`),
     });
 
+    expect(git(fork, "rev-parse", branch)).toBe(sha);
+    expect(deps.github.requests).toEqual([]);
+
+    await expect(set()).rejects.toThrow(/these task branches were not sent to it: task\/aaa \(.+\)\. Set/s);
+
+    expect(git(fork, "rev-parse", branch)).toBe(sha);
+    const [failure] = promotionFailures(deps.db, work.id);
+    await expect(answerPromotion(deps.db, clock, landing, { ...workspace, head_repo: "acme/fork" }, failure!, "retry"))
+      .rejects.toThrow(`head repo acme/fork's task/${work.id} was rewound`);
     expect(git(fork, "rev-parse", branch)).toBe(sha);
     expect(deps.github.requests).toEqual([]);
   });

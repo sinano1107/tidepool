@@ -196,7 +196,7 @@ it("user token は PR の作成の要求にだけ載り、gh と git の子の e
   const client = ghClient(await makeAuth(), { apiUrl: api.url });
   const workspace = workspaceAt(repoPath);
 
-  (await client.preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await client.preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" }))(git(repoPath, "rev-parse", "task/abc"));
   expect(await client.findPullRequestByHead({ workspace, branch: "task/abc" })).toBeNull();
   const { number } = await client.createPullRequest(createInput(workspace));
   expect((await client.readPullRequest({ workspace, number })).state).toBe("OPEN");
@@ -650,7 +650,7 @@ it("preparePush が返す push はタスクブランチを出元 repo へ push �
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
 
-  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(git(repoPath, "rev-parse", "task/abc"));
+  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" }))(git(repoPath, "rev-parse", "task/abc"));
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });
@@ -663,7 +663,7 @@ it("preparePush の push は渡された sha を押して写しに書き、予�
   const announced = git(repoPath, "rev-parse", "task/abc");
   git(repoPath, "commit", "--allow-empty", "-m", "after the announcement");
 
-  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" }))(announced);
+  (await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" }))(announced);
 
   expect({ pushed: git(remotePath, "rev-parse", "task/abc"), copy: git(repoPath, "rev-parse", "refs/remotes/head-repo/task/abc") }).toEqual({
     pushed: announced,
@@ -677,7 +677,7 @@ it("preparePush の push は成功したときだけ、写し refs/remotes/head-
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
   const sha = git(repoPath, "rev-parse", "task/abc");
-  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc" });
+  const push = await ghClient(await makeAuth()).preparePush({ workspace: { ...workspaceAt(repoPath), head_repo: remotePath }, branch: "task/abc", expected: "" });
   const hook = join(remotePath, "hooks", "pre-receive");
   writeFileSync(hook, "#!/bin/sh\nexit 1\n");
   chmodSync(hook, 0o755);

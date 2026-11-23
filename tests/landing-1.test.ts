@@ -931,7 +931,7 @@ it("出元 repo が返らない push は何秒の無音で切れたかを書い�
   const client = new GhCliClient(new GitHubAuth(join(workspace.path, "no-token")), { timeoutMs: 1000 });
 
   await straddle(db, clock, workspace, async () => {
-    const push = await client.preparePush({ workspace: { ...workspace, head_repo: remote }, branch: "task/pushed" });
+    const push = await client.preparePush({ workspace: { ...workspace, head_repo: remote }, branch: "task/pushed", expected: "" });
     expect(() => boardRefWriter(db, workspace)(ref, pushed, () => push(pushed))).toThrow(/^`git push` stalled: no bytes for 1 s/);
     process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL");
     // 畳みの後に写しが3つ目の値へ動く —— 予告の行が2値のまま残っていれば `was: |<押した値>` が載る

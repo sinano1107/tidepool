@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { git, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
+import { git, gitAnswers, isAncestor, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
 import type { RepoSlug } from "./github.js";
 import { parseGitHubRepo, repositoryLabel, sameRepository } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -378,21 +378,38 @@ export function authedFetch(auth: GitHubAuth | undefined, source: GitSource, tim
   }, remote);
 }
 
-/** Pushes each `[branch, sha]` to `remote`'s declared repo — atomically when there is more than one — and, once the push
- *  succeeded, writes each copy `refs/remotes/<remote>/<branch>` to its sha. ADR 0052 Status 追記(#2827): a push from the
- *  board repo does not move the checkout's copies, so the board writes them, inside the caller's ADR 0243 口. The sha is
- *  the caller's — the value it announced — never re-read here. */
+/** A branch the board pushes, and the head it judged there when the push is leased (ADR 0376 Status 追記, #3605): `""` expects
+ *  no branch; absent, no lease. */
+export type PushedBranch = readonly [branch: string, sha: string, expected?: string];
+
+/** The `git push` arguments for `branches` to `url`. ADR 0376 Status 追記(#3605): a lease that matches also lets a non-fast-forward
+ *  through, so a leased push is not fired unless its expected head is an ancestor of the pushed sha in `checkout` — an object the
+ *  checkout lacks is not. The real `authedPush` and the test fake both build their push here, so the check is the one under test. */
+export function pushArgs(checkout: string, url: string, branches: ReadonlyArray<PushedBranch>): string[] {
+  const leases = branches.flatMap(([branch, sha, expected]) => {
+    if (expected === undefined) return [];
+    if (expected !== "" && !(gitAnswers(() => git(checkout, "cat-file", "-e", expected)) && isAncestor({ path: checkout }, expected, sha))) {
+      throw new Error(`\`git push\` was not fired for ${branch}: the head the board judged there is ${expected}, which is not an ancestor of ${sha} (in ${checkout})`);
+    }
+    return [`--force-with-lease=refs/heads/${branch}:${expected}`];
+  });
+  const flags = branches.length > 1 ? ["--atomic"] : [];
+  return ["push", ...flags, ...leases, "--", url, ...branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`)];
+}
+
+/** Pushes each `[branch, sha]` to `remote`'s declared repo — atomically when there is more than one, leased where it carries an
+ *  expected head (`pushArgs`) — and, once the push succeeded, writes each copy `refs/remotes/<remote>/<branch>` to its sha.
+ *  ADR 0052 Status 追記(#2827): a push from the board repo does not move the checkout's copies, so the board writes them, inside
+ *  the caller's ADR 0243 口. The sha is the caller's — the value it announced — never re-read here. */
 export function authedPush(
   auth: GitHubAuth | undefined,
   source: GitSource,
   timeoutMs: number,
-  branches: ReadonlyArray<readonly [branch: string, sha: string]>,
+  branches: ReadonlyArray<PushedBranch>,
   remote: GitRemote = "origin",
 ): void {
-  const refspecs = branches.map(([branch, sha]) => `${sha}:refs/heads/${branch}`);
-  const flags = branches.length > 1 ? ["--atomic"] : [];
-  inBoardRepo(auth, source, timeoutMs, "push", (call, url) => runAuthedGit(call, ["push", ...flags, "--", url, ...refspecs]), remote);
   const checkout = sourceCheckout(source);
+  inBoardRepo(auth, source, timeoutMs, "push", (call, url) => runAuthedGit(call, pushArgs(checkout, url, branches)), remote);
   for (const [branch, sha] of branches) git(checkout, "update-ref", remoteTrackingRef(branch, remote), sha);
 }
 
