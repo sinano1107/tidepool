@@ -88,8 +88,8 @@ it("無人 merge の tick は登録し直した repo の同じ番号の PR を�
   recordPrOpenedOutsideConvergence(db, newRoot, 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, workspace: reef.resolve("reef") });
   github.scriptClosedOutside(1, moved.repo);
 
-  await landing.tick("auto_merge", clock.now());
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
+  await landing.tick("auto_merge");
 
   expect(github.ciChecks).toEqual([{ path: moved.path, number: 1 }]);
   expect(rootPrOutcome(db, newRoot.id)).toEqual({ state: "CLOSED", observed: true, prNumber: 1 });
@@ -98,11 +98,11 @@ it("無人 merge の tick は登録し直した repo の同じ番号の PR を�
 
 it("外の merge の tick は登録し直した repo の同じ番号の PR を読まず、旧い根を止める", async () => {
   const fixture = await reefWithPr("escalate");
-  const { clock, moved, github, landing, move } = fixture;
+  const { moved, github, landing, move } = fixture;
   await move();
   github.scriptClosedOutside(1, moved.repo);
 
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   expect(github.stateChecks).toEqual([]);
   expectStopped(fixture);
@@ -149,12 +149,12 @@ it("登録し直した名前で旧い根への hold は、PR を読まずに受�
 
 it("無人 merge の tick が PR の読みを待つ間に登録し直すと、読みから決着を刻まず旧い根を止める", async () => {
   const fixture = await reefWithPr("auto_if_ci_green");
-  const { clock, old, github, landing, move } = fixture;
+  const { old, github, landing, move } = fixture;
   github.scriptClosedOutside(1, old.repo);
   const window = awaitWindow();
   afterCiRead(github, window.hold);
 
-  const ticking = landing.tick("auto_merge", clock.now());
+  const ticking = landing.tick("auto_merge");
   await window.entered;
   await move();
   window.open();
@@ -166,7 +166,7 @@ it("無人 merge の tick が PR の読みを待つ間に登録し直すと、�
 
 it.each(["outside_merge", "observe"] as const)("%s が PR の状態を待つ間に登録し直すと、観測を刻まず旧い根を止める", async (action) => {
   const fixture = await reefWithPr(action === "observe" ? "auto_if_ci_green" : "escalate");
-  const { clock, old, github, landing, move } = fixture;
+  const { old, github, landing, move } = fixture;
   github.scriptClosedOutside(1, old.repo);
   const window = awaitWindow();
   const read = github.getPullRequestState.bind(github);
@@ -176,7 +176,7 @@ it.each(["outside_merge", "observe"] as const)("%s が PR の状態を待つ間�
     return result;
   });
 
-  const observing = action === "observe" ? landing.observeAutoMergeOutcomes("tako") : landing.tick(action, clock.now());
+  const observing = action === "observe" ? landing.observeAutoMergeOutcomes("tako") : landing.tick(action);
   await window.entered;
   await move();
   window.open();
@@ -187,14 +187,14 @@ it.each(["outside_merge", "observe"] as const)("%s が PR の状態を待つ間�
 });
 
 it.each(["outside_merge", "observe"] as const)("%s は旧い repo への merge の結果を待つ根に昇格失敗 question を立てない", async (action) => {
-  const { db, clock, old, root, github, landing, move, answer } = await reefWithPr(action === "observe" ? "auto_if_ci_green" : "escalate");
+  const { db, old, root, github, landing, move, answer } = await reefWithPr(action === "observe" ? "auto_if_ci_green" : "escalate");
   const window = awaitWindow();
   holdAfterMerge(github, window.hold);
 
-  const merging = action === "observe" ? landing.tick("auto_merge", clock.now()) : answer("merge");
+  const merging = action === "observe" ? landing.tick("auto_merge") : answer("merge");
   await window.entered;
   await move();
-  await (action === "observe" ? landing.observeAutoMergeOutcomes("tako") : landing.tick(action, clock.now()));
+  await (action === "observe" ? landing.observeAutoMergeOutcomes("tako") : landing.tick(action));
   window.open();
   await merging;
 
@@ -254,7 +254,7 @@ it("書き換えられた head への merge 回答の寄り道で登録し直す
 
 it("無人 merge の執行が token を待つ間に登録し直すと、最後の確認で旧い根を止める", async () => {
   const fixture = await reefWithPr("auto_if_ci_green");
-  const { clock, old, github, landing, move } = fixture;
+  const { old, github, landing, move } = fixture;
   const window = awaitWindow();
   const merge = github.mergePullRequest.bind(github);
   github.mergePullRequest = async (ref, head, beforeMerge) => {
@@ -262,7 +262,7 @@ it("無人 merge の執行が token を待つ間に登録し直すと、最後�
     return merge(ref, head, beforeMerge);
   };
 
-  const ticking = landing.tick("auto_merge", clock.now());
+  const ticking = landing.tick("auto_merge");
   await window.entered;
   await move();
   window.open();
@@ -275,14 +275,14 @@ it("無人 merge の執行が token を待つ間に登録し直すと、最後�
 
 it("無人 merge の失敗を待つ間に登録し直すと、PR を読み直す前に旧い根を止める", async () => {
   const fixture = await reefWithPr("auto_if_ci_green");
-  const { clock, old, github, landing, move } = fixture;
+  const { old, github, landing, move } = fixture;
   const window = awaitWindow();
   github.mergePullRequest = async () => {
     await window.hold();
     throw new Error("merge unavailable");
   };
 
-  const ticking = landing.tick("auto_merge", clock.now());
+  const ticking = landing.tick("auto_merge");
   await window.entered;
   await move();
   window.open();
@@ -299,7 +299,7 @@ it("無人 merge の PR 読み取りが token を待つ間に登録し直すと�
   const github = new GhCliClient(githubAuth, MATCHING_GH);
   const landing = createLanding({ db, clock, resolveWorkspace: reef.resolve, defaultAgentName: "tako", github });
 
-  const ticking = landing.tick("auto_merge", clock.now());
+  const ticking = landing.tick("auto_merge");
   await window.entered;
   await move();
   window.open();
@@ -339,12 +339,12 @@ it("merge の回答が執行用 token を待つ間に登録し直すと、取得
 
 // ADR 0399 決定5・6: 止まった PR のある根の出口「この根の着地を終える」(spec #3595 の振る舞い 4)
 /** 着地を終えた根に、収束・両方の tick・無人 merge の観測をもう一度流す —— どれも問い直さず GitHub を撃たない(#3604 のコメント)。 */
-async function expectNothingReasked({ db, clock, root, github, landing }: Awaited<ReturnType<typeof reefWithPr>>) {
+async function expectNothingReasked({ db, root, github, landing }: Awaited<ReturnType<typeof reefWithPr>>) {
   const calls = () => [github.stateChecks.length, github.ciChecks.length, github.merged.length, github.pushes.length, github.requests.length];
   const before = calls();
   await landing.converge();
-  await landing.tick("auto_merge", clock.now());
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("auto_merge");
+  await landing.tick("outside_merge");
   await landing.observeAutoMergeOutcomes("tako");
   expect(calls()).toEqual(before);
   expect(promotionFailures(db, root.id).filter((task) => task.status === "todo")).toEqual([]);
@@ -353,9 +353,9 @@ async function expectNothingReasked({ db, clock, root, github, landing }: Awaite
 
 it("無人 merge キューで止まった PR のある根は「end landing」で着地を終え、キューから外れ、収束も tick も問い直さない", async () => {
   const fixture = await reefWithPr("auto_if_ci_green");
-  const { db, clock, root, landing, move, answerFailure } = fixture;
+  const { db, root, landing, move, answerFailure } = fixture;
   await move();
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   // ADR 0399 決定5: 食い違いで止まった PR の根には断念を出さない —— 断念はキューの行を残し、次の tick が同じ食い違いを問い直す
   expect(promotionFailures(db, root.id).map((task) => task.question_items?.[0]?.options)).toEqual([["retry", "end landing"]]);
 
@@ -372,9 +372,9 @@ it("無人 merge キューで止まった PR のある根は「end landing」で
 
 it("merge question で止まった PR のある根は「end landing」で、merge question を PR の観測を刻まずに引退させる", async () => {
   const fixture = await reefWithPr("escalate");
-  const { db, clock, root, landing, move, answerFailure } = fixture;
+  const { db, root, landing, move, answerFailure } = fixture;
   await move();
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
   const merge = listBoard(db).find((task) => task.status === "todo" && task.question_pending_merge_task_id === root.id)!;
 
   await answerFailure("end landing");
@@ -414,7 +414,7 @@ it("食い違い以外で止まった PR の根(修理の push が拒まれた)�
 it("同じ根に開いた別の昇格失敗の question も「end landing」の回答が閉じ、記録が名指す", async () => {
   const { db, clock, root, landing, move, answerFailure } = await reefWithPr("auto_if_ci_green");
   await move();
-  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge");
   registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
   const [answering, second] = promotionFailures(db, root.id);
 
@@ -429,7 +429,7 @@ it("別の checkout で登録し直した名前でも、着地を終えた根の
   const { db, clock, reef, root, landing, move, answerFailure } = await reefWithPr("escalate");
   const child = attachUnsettledChild(db, clock, root.id);
   await move();
-  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge");
 
   await answerFailure("end landing");
 

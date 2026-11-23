@@ -1259,7 +1259,7 @@ async function mergeAnswerInFlight() {
 it("merge 回答の merge の await 中に遅い走査が割り込んでも、決着の event は根に刻んだ盤面の merge の pr_merged の1件だけ残る", async () => {
   const { work, landing, first, open } = await mergeAnswerInFlight();
 
-  await landing.tick("outside_merge", NOW);
+  await landing.tick("outside_merge");
   open();
 
   await expect(first).resolves.toMatchObject({ status: "done" });

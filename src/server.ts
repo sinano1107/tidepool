@@ -716,7 +716,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const stopAutoMergePoll =
     landingPollingEnabled
       ? options.clock.setInterval(() => {
-          void landing.tick("auto_merge", options.clock.now());
+          void landing.tick("auto_merge");
         }, 60 * 1000)
       : undefined;
   // the outside-merge scan (ADR 0079 決定3): its own, slower interval — the
@@ -728,7 +728,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const stopOutsideMergeScan =
     landingPollingEnabled
       ? options.clock.setInterval(() => {
-          void landing.tick("outside_merge", options.clock.now());
+          void landing.tick("outside_merge");
         }, 10 * 60 * 1000)
       : undefined;
   // question push notifications (issue #14): a poll rather than a hook at
