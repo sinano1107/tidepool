@@ -424,7 +424,8 @@ function agentsUsingHarnessesResolver(
  *
  *  読めなければ `registryUnreadable` を立ててから `RegistryUnreadableError` を投げる(ADR 0403 決定5)。`db` を渡さないのは
  *  起動時の組み立ての読み(盤面自身の workspace・draft の候補の写し・boot の一斉検査)だけで、そこは騒ぐだけで止まりを立てない
- *  —— 起動時は fail-open(ADR 0052 決定4)、床は pickup の門。 */
+ *  —— 起動時は fail-open(ADR 0052 決定4)、床は pickup の門。`startServer` の起動時の Harness の検査は合成された読み口を
+ *  通るので止まりを立てるが、起動は拒まない。 */
 function loadBoardRegistry(board: BoardComposition, db: Db | undefined) {
   if (!board.registryDir) throw new Error("no registry configured");
   const source = { dir: board.registryDir, mode: board.registryMode };
@@ -531,9 +532,11 @@ function workspaceResolver(
 ): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
   const { registryDir, workspaceName, workspacesDir } = board;
   if (!registryDir) return undefined;
-  const resolve = (taskWorkspace: string | null) =>
-    resolveExecutionWorkspace(loadBoardRegistry(board, stops ? db : undefined), workspaceName, taskWorkspace, workspacesDir);
-  return (taskWorkspace) => withRememberedRepoCheck(db, resolve(taskWorkspace), () => board.clock.now(), resolve);
+  const read = (stopDb: Db | undefined) => (taskWorkspace: string | null) =>
+    resolveExecutionWorkspace(loadBoardRegistry(board, stopDb), workspaceName, taskWorkspace, workspacesDir);
+  const resolve = read(db);
+  // `stops: false` は最初の読みだけを騒ぐだけにする —— 後で撃つ宣言の読み直しは止まりを立てる
+  return (taskWorkspace) => withRememberedRepoCheck(db, read(stops ? db : undefined)(taskWorkspace), () => board.clock.now(), resolve);
 }
 
 /** 盤面自身の workspace は起動時に1度だけ読む。registry が読めなければ騒ぐだけで起動を拒まない(ADR 0052 決定4)。

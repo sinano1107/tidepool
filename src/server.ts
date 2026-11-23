@@ -53,6 +53,7 @@ import {
   type RegistryAvailabilityCheck,
   type RegistryCandidates,
   type RosterAgent,} from "./registry.js";
+import { RegistryUnreadableError } from "./registry-unreadable.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { closeSessionFromRecord, closeUnclosedSessions } from "./session-close.js";
@@ -883,7 +884,14 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // four-question check again.
   if (harnessContainment) {
     for (const harness of ["claude-code", "codex"] as const) {
-      if (harnessUnused(harness)) continue;
+      try {
+        if (harnessUnused(harness)) continue;
+      } catch (err) {
+        // ADR 0403 決定5: 読めない registry で起動を拒まない —— 止まりは読み込みの1点が立て、pickup の検査がこの検査を撃ち直す
+        if (!(err instanceof RegistryUnreadableError)) throw err;
+        console.error(`[registry] the startup containment check of ${harness} was skipped because the registry cannot be read: ${err.reason}`);
+        continue;
+      }
       await harnessContainmentPickupBlocked(db, harness, harnessContainment, () => options.clock.now());
     }
   }

@@ -1,4 +1,5 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -45,4 +46,23 @@ it("起動直後だけ届かず回復した registry は、question を1枚も�
     started: t.worker.started.map((started) => started.id),
     questions: tasks.filter((candidate) => candidate.type === "question").map((q) => q.title),
   }).toEqual({ started: [task.id], questions: [] });
+});
+
+// ADR 0403 決定5: 起動時の Harness の検査も registry を読む —— 読めなければ騒ぐだけで、起動は拒まない(止まりは読み込みの1点が立てる)
+it("起動時の Harness の検査が registry を読めなくても、人間面は開いたまま起動する", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  t = await bootTidepool({
+    harnessContainment: async () => ({ available: true }),
+    quarantineResolvers: {
+      harnessContainment: () => {
+        throw new RegistryUnreadableError(new Error("workspaces.yaml does not parse"));
+      },
+    },
+  });
+
+  expect({
+    status: (await api(t.baseUrl, "GET", "/api/tasks")).status,
+    warned: error.mock.calls.flat().join(" "),
+  }).toEqual({ status: 200, warned: expect.stringContaining("workspaces.yaml does not parse") });
+  error.mockRestore();
 });
