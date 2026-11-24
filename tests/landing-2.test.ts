@@ -499,6 +499,30 @@ it("追いつきの作業台の tip が人間しか書けない path を変え�
   expect(getTask(c.db, failure!.id)?.status).toBe("todo");
 });
 
+// ADR 0382 追記(#3769): 追いつきの作業台も、他の task のブランチの commit を持つ tip を拒む —— 運ばれる側だけを merge し直す手を言う
+it("追いつきの作業台で別の task のブランチを merge した tip は、retry が `board/origin/main` だけを merge し直す手を言って拒み何も書かない", async () => {
+  const c = await catchUpConflictRoot("catch-up-carries-other-task");
+  const other = landingWork(c.db, c.clock);
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, other, "other.txt", "other\n");
+  await convergeOn(c.landing, c.repair.id);
+  const [failure] = promotionFailures(c.db, c.repair.id);
+  c.resolve();
+  git(c.workbench(), "merge", "--quiet", "--no-edit", `board/task/${other.id}`);
+  const before = git(c.workspace.path, "rev-parse", c.target);
+
+  const refusal = await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "retry").then(() => undefined, (err: unknown) => err);
+
+  expect(refusal).toBeInstanceOf(DomainError);
+  expect((refusal as Error).message).toContain(
+    `the tip of the workbench at ${c.workbench()} contains commits of task/${other.id}, and the board carries a task's work itself — a child's by its merge back, a root's by its landing. ` +
+      `Start ${c.target} in the workbench over with \`git reset --hard board/${c.target}\` — this drops your merge there too — then merge only \`board/origin/main\`, resolve its conflict again and answer again.`,
+  );
+  expect(git(c.workspace.path, "rev-parse", c.target)).toBe(before);
+  expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toEqual([]);
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+  expect(c.github.requests).toEqual([]);
+});
+
 // ADR 0382 決定1・2(#3347): 追いつきの作業台と子の merge back の作業台は別の鍵 —— 子は盤面が運び、人間の追いつきの tip はその後の
 // 書く先を欠いて A7a で1回増える
 it("追いつきの作業台に人間の `board/origin/main` の merge があり子の merge back が根に届いていなければ、retry は子を盤面が運び、追いつきの取り込みを `board/task/<root>` を名指して拒み、それを merge した次の retry が通る", async () => {

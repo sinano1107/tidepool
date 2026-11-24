@@ -26,6 +26,7 @@ import {
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   recordTaskCheckoutTip,
+  refreshProtectedBranch,
   takeWorkspaceInFlightKey,
   type WorkspaceConfig,
 } from "../src/workspace.js";
@@ -1120,6 +1121,198 @@ it("書き始めた H の task/<H> への子の merge back の conflict は H �
   expect(existsSync(path)).toBe(false);
 });
 
+// ADR 0382 追記(#3769): `task/*` へ書く入口は、作業台の tip が他の task のブランチの commit を持てば拒む —— 範囲はすべての task
+// (決着済み・cancel 済みを含む)。数えないのは書く先・帰り先・保護ブランチの今の値にある commit
+
+/** registry と同じく、名前 tako だけが解決する —— `human` は agent として引かれない。 */
+const takoOnly = (assignee: string | null) => {
+  if (assignee !== "tako") throw new UnknownAgentError(String(assignee));
+  return { name: "standard", guidance: "", merge: "auto_if_ci_green" as const };
+};
+
+const localLanding = (b: Board) => createLanding({ defaultAgentName: "tako", db: b.db, clock: b.clock, workspace: b.ws, github: null, resolveAuthority: takoOnly });
+
+/** local merge question `questionId` への `merge` の回答。 */
+const answerLocalMerge = (b: Board, questionId: string) =>
+  submitAnswer({ db: b.db, pollNow: () => {}, landing: unusedLanding, workspace: b.ws, workspacesDir: b.base }, getTask(b.db, questionId)!, ["merge"], undefined, () => b.clock.now(), "webui");
+
+/** 人間担当の根を書き始めて commit し、完了させる —— そのブランチは着地を待つ(未着地)。 */
+async function completedHumanRoot(b: Board, title: string): Promise<Task> {
+  const root = work(b, title, { assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, root, `${title}.txt`, `${title}\n`);
+  expect((await complete(b, root)).ok).toBe(true);
+  return root;
+}
+
+/** 人間担当の根を書き始めて commit し、take_in_work で task/<X> へ取り込んでから cancel する。 */
+async function cancelledHumanRoot(b: Board, title: string): Promise<Task> {
+  const root = work(b, title, { assignee: HUMAN_ACTOR_ID });
+  await startedWithCommit(b, root, `${title}.txt`, `${title}\n`);
+  expect((await takeIn(b, root)).ok).toBe(true);
+  cancelTaskDirectly(b.db, getTask(b.db, root.id)!, null, b.clock.now(), {}, "webui");
+  return root;
+}
+
+const carriesWork = (path: string, branch: string) =>
+  `the tip of the workbench at ${path} contains commits of ${branch}, and the board carries a task's work itself — a child's by its merge back, a root's by its landing.`;
+const cancelledWork = (path: string, branch: string) => `the tip of the workbench at ${path} contains commits of ${branch}, which was cancelled, so the board does not carry its work.`;
+const keepOwnCommits = (h: Task, again: string) =>
+  ` To keep only your own commits, start task/${h.id} in the workbench over with \`git reset --hard board/task/${h.id}\` and commit them again — \`git cherry-pick\` copies a change you still want without its history — then ${again}.`;
+
+/** 拒まれた取り込みが何も書いていないことの観測: task、名前の場所の ref と作業ツリー、取り込みの event。 */
+const nothingWritten = (b: Board, h: Task) => [untouched(b, h), namedPlace(b.ws), takenIn(b.db)];
+
+const intakeDoors = [
+  ["完了", complete, "complete again", "complete"],
+  ["take_in_work", takeIn, "take in again", "take-in"],
+] as const;
+
+it.each(intakeDoors)("人間担当の work の%sは、未着地の別の根の board/task/<A> を merge した作業台の tip を拒み何も書かない(ADR 0382 追記、#3769)", async (_, door, again, slug) => {
+  const b = await board(`carry-unlanded-root-${slug}`);
+  const a = await completedHumanRoot(b, "a");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  git(path, "merge", "--no-edit", `board/task/${a.id}`);
+  const before = nothingWritten(b, h);
+
+  expect(await door(b, h)).toEqual(refused(carriesWork(path, `task/${a.id}`) + keepOwnCommits(h, again)));
+  expect(nothingWritten(b, h)).toEqual(before);
+});
+
+it.each(intakeDoors)("人間担当の work の%sは、cancel 済みの根の board/task/<X> を merge した作業台の tip を、cancel 済みと言って拒み何も書かない(ADR 0382 追記、#3769)", async (_, door, again, slug) => {
+  const b = await board(`carry-cancelled-root-${slug}`);
+  const x = await cancelledHumanRoot(b, "x");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  git(path, "merge", "--no-edit", `board/task/${x.id}`);
+  const before = nothingWritten(b, h);
+
+  expect(await door(b, h)).toEqual(refused(cancelledWork(path, `task/${x.id}`) + keepOwnCommits(h, again)));
+  expect(nothingWritten(b, h)).toEqual(before);
+});
+
+it("人間担当の work の take_in_work は、運ばれる側でない自分の子の board/task/<C> を merge した作業台の tip を拒み何も書かない —— 子の成果は merge back でだけ届く(ADR 0382 追記、#3769)", async () => {
+  const b = await board("carry-own-child");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const { task: child, place } = await pickedAgentChild(b, h);
+  commitWork(place.path, "child.txt", "child\n");
+  recordTaskCheckoutTip(b.db, place, child.id);
+  await startWork(b, h);
+  git(path, "merge", "--no-edit", `board/task/${child.id}`);
+  const before = nothingWritten(b, h);
+
+  expect(await takeIn(b, h)).toEqual(refused(carriesWork(path, `task/${child.id}`) + keepOwnCommits(h, "take in again")));
+  expect(nothingWritten(b, h)).toEqual(before);
+});
+
+it("人間担当の work の完了は、帰り先に merge back の届いた兄弟のブランチの merge、着地済みの根のブランチの merge、未着地の根の commit の cherry-pick を持つ作業台の tip を取り込む(ADR 0382 追記、#3769)", async () => {
+  const b = await board("carry-allowed-forms");
+  const root = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const sibling = await completedAgentChild(b, root, "sibling.txt", "sibling\n");
+  // 帰り先は次の兄弟の後の値 —— tip が帰り先の今の値を丸ごと含まなくても、届いた兄弟の commit は数えない
+  await completedAgentChild(b, root, "later.txt", "later\n");
+  const landed = await completedHumanRoot(b, "landed");
+  await localLanding(b).converge();
+  const question = listBoard(b.db).find((q) => q.question_pending_local_merge_task_id === landed.id)!;
+  expect((await answerLocalMerge(b, question.id)).status).toBe("done");
+  const unlanded = await completedHumanRoot(b, "unlanded");
+  await startWork(b, h);
+  git(path, "merge", "--no-edit", `board/task/${sibling.id}`);
+  git(path, "merge", "--no-edit", `board/task/${landed.id}`);
+  // 第2親が人間の commit(第1親は包む commit の前の値)。`-x` で写しの message を変える —— 同じ親・同じ秒の cherry-pick は元と同じ commit になる
+  git(path, "cherry-pick", "-x", `board/task/${unlanded.id}^2`);
+
+  expect((await complete(b, h)).ok).toBe(true);
+  expect(["sibling.txt", "landed.txt", "unlanded.txt", "mine.txt"].map((file) => git(b.ws.path, "show", `task/${root.id}:${file}`))).toEqual(["sibling", "landed", "unlanded", "mine"]);
+});
+
+it("祖先が cancel された done の task のブランチの merge も、cancel 済みと言って拒まれる(ADR 0382 追記、#3769)", async () => {
+  const b = await board("carry-under-cancelled-root");
+  const root = work(b, "plan");
+  const child = await completedAgentChild(b, root, "child.txt", "child\n");
+  cancelTaskDirectly(b.db, getTask(b.db, root.id)!, null, b.clock.now(), {}, "webui");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  git(path, "merge", "--no-edit", `board/task/${child.id}`);
+  const before = nothingWritten(b, h);
+
+  const sentences = [root, child].map(({ id }) => `task/${id}`).sort().map((branch) => cancelledWork(path, branch));
+  expect(await takeIn(b, h)).toEqual(refused(sentences.join(" ") + keepOwnCommits(h, "take in again")));
+  expect(nothingWritten(b, h)).toEqual(before);
+});
+
+it("remote-backed では、盤面が読んだ origin の保護ブランチに載った task のブランチの merge を持つ作業台の tip を完了が取り込む(ADR 0382 追記、#3769)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("carry-landed-remote");
+  const b = { ...(await board("carry-landed-remote-board")), ws: workspace };
+  const root = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const { task: landed, place } = await picked(b, work(b, "landed on GitHub"));
+  commitWork(place.path, "landed.txt", "landed\n");
+  recordTaskCheckoutTip(b.db, place, landed.id);
+  // GitHub が merge commit で着地させる —— task のブランチの commit がそのまま origin の保護ブランチに載る
+  const merger = await tempDir("tidepool-github-merge-");
+  git(merger, "clone", "--quiet", workspace.repo!, ".");
+  git(merger, "fetch", "--quiet", workspace.path, `task/${landed.id}`);
+  git(merger, "merge", "--no-ff", "--no-edit", "FETCH_HEAD");
+  git(merger, "push", "--quiet", "origin", "main");
+  await refreshProtectedBranch(b.db, workspace, undefined, () => b.clock.now());
+  await startWork(b, h);
+  git(path, "merge", "--no-edit", `board/task/${landed.id}`);
+
+  expect((await complete(b, h)).ok).toBe(true);
+  expect(git(workspace.path, "show", `task/${root.id}:landed.txt`)).toBe("landed");
+});
+
+it("H 自身の作業台で子の merge back の conflict を受けた tip が別の根のブランチも merge していれば、回答は書きかけの commit も落ちると言って拒まれ何も書かない(ADR 0382 追記、#3769)", async () => {
+  const b = await board("child-conflict-carries-other-root");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const a = await completedHumanRoot(b, "a");
+  const first = await pickedAgentChild(b, h);
+  const second = await pickedAgentChild(b, h);
+  await finishAgentChild(b, first, "work.txt", "first\n");
+  await finishAgentChild(b, second, "work.txt", "second\n");
+  git(path, "merge", "--no-edit", `board/task/${h.id}`);
+  git(path, "merge", "--no-edit", `board/task/${a.id}`);
+  expect(() => git(path, "merge", `board/task/${second.task.id}`)).toThrow();
+  writeFileSync(join(path, "work.txt"), "first\nsecond\n");
+  git(path, "commit", "-am", "resolve");
+  const before = nothingWritten(b, h);
+
+  await expect(answer(b)).rejects.toThrow(
+    `${carriesWork(path, `task/${a.id}`)} Start task/${h.id} in the workbench over with \`git reset --hard board/task/${h.id}\` — this drops your merge and your own commits ` +
+      `not taken in yet there too — then merge only \`board/task/${second.task.id}\`, resolve its conflict again and answer again.`,
+  );
+  expect(nothingWritten(b, h)).toEqual(before);
+});
+
+it("非根の H が帰り先 task/<P> を merge した書きかけを持つ作業台で、子の merge back の conflict を受けて答えた回答は通る —— H の帰り先の commit を数えない(ADR 0382 追記、#3769)", async () => {
+  const b = await board("child-conflict-over-return-merge");
+  const root = work(b, "plan");
+  const h = work(b, "write it myself", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  await completedAgentChild(b, root, "sibling.txt", "sibling\n");
+  await startWork(b, h);
+  git(path, "merge", "--no-edit", `board/task/${root.id}`);
+  const first = await pickedAgentChild(b, h);
+  const second = await pickedAgentChild(b, h);
+  await finishAgentChild(b, first, "work.txt", "first\n");
+  await finishAgentChild(b, second, "work.txt", "second\n");
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)?.purpose).toContain(`The board opened the workbench at ${path} for it`);
+
+  git(path, "merge", "--no-edit", `board/task/${h.id}`);
+  expect(() => git(path, "merge", `board/task/${second.task.id}`)).toThrow();
+  writeFileSync(join(path, "work.txt"), "first\nsecond\n");
+  git(path, "commit", "-am", "resolve");
+  expect((await answer(b)).status).toBe("done");
+
+  expect(["mine.txt", "sibling.txt", "work.txt"].map((file) => git(b.ws.path, "show", `task/${h.id}:${file}`))).toEqual(["mine", "sibling", "first\nsecond"]);
+});
+
 it("done の後に落ちた H の merge back は積み残しになり、workspace の Quarantine の受理のやり直しが運ぶ", async () => {
   const b = await board("complete-leftover");
   const root = work(b, "plan");
@@ -1179,18 +1372,13 @@ it("子が走った後に assignee を human に替えた根は、タスクブ�
   const review = listChildren(b.db, root.id).find((task) => task.type === "review");
   expect(review).toMatchObject({ status: "todo" });
 
-  // registry と同じく、名前 tako だけが解決する —— `human` は agent として引かれない
-  const resolveAuthority = (assignee: string | null) => {
-    if (assignee !== "tako") throw new UnknownAgentError(String(assignee));
-    return { name: "standard", guidance: "", merge: "auto_if_ci_green" as const };
-  };
-  const landing = createLanding({ defaultAgentName: "tako", db: b.db, clock: b.clock, workspace: b.ws, github: null, resolveAuthority });
+  const landing = localLanding(b);
   expect((await landing.converge()).find((r) => r.taskId === root.id)?.verdict).toEqual({ kind: "landed", form: "local_merge_question" });
   const question = listBoard(b.db).find((q) => q.question_pending_local_merge_task_id === root.id)!;
   expect(question.purpose).toBe('"plan" was completed by a human. A human-completed root is merged only on your answer. Merge it into main, or hold?');
   expect(listBoard(b.db).filter((q) => q.question_quarantine_kind === "agent")).toEqual([]);
 
-  expect((await submitAnswer({ db: b.db, pollNow: () => {}, landing: unusedLanding, workspace: b.ws, workspacesDir: b.base }, getTask(b.db, question.id)!, ["merge"], undefined, () => b.clock.now(), "webui")).status).toBe("done");
+  expect((await answerLocalMerge(b, question.id)).status).toBe("done");
   expect(git(b.ws.path, "show", "main:child.txt")).toBe("child");
   await expectReviewPickedUp(b, review!.id);
 });

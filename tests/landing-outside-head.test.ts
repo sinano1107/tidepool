@@ -551,3 +551,23 @@ it("収束が push して最後に push した値を書く前に tick が回っ�
   await c.landing.tick("auto_merge");
   expect(c.github.mergedHeads).toEqual([forkHead(c.workspace, c.work.id)]);
 });
+
+// ADR 0382 追記(#3769): 外の head の作業台も、他の task のブランチの commit を持つ tip を拒む —— 外の head そのものは検査しない(ADR 0376 決定11)
+it("外の head の作業台で別の task のブランチも merge した tip は、retry が `board/origin/task/<root>` だけを merge し直す手を言って拒み何も書かない", async () => {
+  const c = await pushedRoot("outside-head-carries-other-task");
+  const head = await pushOutsideBoard(c.workspace, c.work.id);
+  const other = landingWork(c.db, c.clock);
+  await commitThroughTaskCheckout(c.db, c.clock, c.workspace, other, "other.txt", "other\n");
+  await convergeOn(c.landing, c.work.id);
+  const [failure] = promotionFailures(c.db, c.work.id);
+  expect(failure!.purpose).toBe(c.d1(head));
+  c.mergeInWorkbench();
+  git(c.workbench(), "merge", "--quiet", "--no-edit", `board/task/${other.id}`);
+
+  expect(await c.retry(failure!)).toContain(
+    `the tip of the workbench at ${c.workbench()} contains commits of task/${other.id}, and the board carries a task's work itself — a child's by its merge back, a root's by its landing. ` +
+      `Start ${c.target} in the workbench over with \`git reset --hard board/${c.target}\` — this drops your merge there too — then merge only \`board/origin/${c.target}\`, resolve its conflict again and answer again.`,
+  );
+  c.expectNothingCarried();
+  expect(getTask(c.db, failure!.id)?.status).toBe("todo");
+});
