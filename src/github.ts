@@ -376,7 +376,7 @@ export class GhCliClient implements GitHubClient {
   }
 
   /** 宣言の repo への `-R` を取る `gh`(`gh pr`・`gh issue`)はここを通る。`-R` を取らない `gh api` は `warmDeclaredRepo` と `run` を
-   *  直に使う(`findPullRequestByHead`)。どちらも上限は `run` の1箇所で効く(ADR 0330 決定4)。宣言の repo の token を温め(ADR 0378 決定1)、
+   *  直に使う(`findPullRequestByHead`)。どちらも上限は `spawn` の1箇所で効く(ADR 0330 決定4)。宣言の repo の token を温め(ADR 0378 決定1)、
    *  `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(ADR 0330 決定1)。
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
@@ -470,7 +470,7 @@ export class GhCliClient implements GitHubClient {
           // ADR 0396 決定4: 宣言の repo の maintainer に PR の head への push を開かない
           maintainer_can_modify: false,
         }),
-        // fetch cannot go through `run`: the same bound value as `run`'s, ADR 0330 決定4's single limit
+        // fetch cannot go through `spawn`: the same bound value as `spawn`'s, ADR 0330 決定4's single limit
         signal: AbortSignal.timeout(this.timeoutMs),
       });
       status = response.status;
