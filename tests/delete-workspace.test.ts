@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
@@ -12,7 +12,7 @@ import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
-import { completionTreePaths, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
+import { completionTreePaths, holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
 import { unusedLanding } from "./fakes.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion } from "./harness.js";
@@ -382,6 +382,25 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     expect(loadRegistry(o.registryDir, "purely-local").workspaces[o.ws.name]).toBeUndefined();
     expect(existsSync(o.workbench)).toBe(false);
   });
+
+  it("作業台を消せなければ参照の拒否にせずそのまま投げ、entry も基準の行も残す(issue #3625)", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    expect(holdsBaseline(o.db, o.ws.name)).toBe(true);
+    const parent = dirname(o.workbench);
+    chmodSync(parent, 0o555);
+    try {
+      const failed = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+      await expect(failed).rejects.toThrow();
+      await expect(failed).rejects.not.toMatchObject({ name: "DeletionBlockedError" });
+    } finally {
+      chmodSync(parent, 0o755);
+    }
+    expect(loadRegistry(o.registryDir, "purely-local").workspaces[o.ws.name]).toBeDefined();
+    expect(holdsBaseline(o.db, o.ws.name)).toBe(true);
+  });
+
   it("名前の場所の checkout が読めなければ、作業台を消せとは言わず checkout を名指して拒み、作業台を残す", async () => {
     const o = await openedWorkbench();
     await o.close();

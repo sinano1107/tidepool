@@ -645,6 +645,8 @@ export async function deleteWorkspace(
   if (workbenchLeft !== undefined) reasons.push({ code: "human_content_workbench", ...workbenchLeft });
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
+  // 作業台は entry と行より先に消す —— 行が先に消えて作業台が残ると、登録の扉(ADR 0401 決定5)は同じ名前の登録し直しを止めず、残った作業台が使い続けられる
+  removeHumanContentWorkbench(named, deps.workspacesBaseDir);
   commitToRegistry(
     deps.registry,
     deps.githubAuth,
@@ -665,7 +667,6 @@ export async function deleteWorkspace(
       settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
     }
   })();
-  removeHumanContentWorkbench(named, deps.workspacesBaseDir);
   return checkout;
 }
 

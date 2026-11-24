@@ -2260,7 +2260,8 @@ export function humanContentWorkbenchLeft(named: WorkspaceConfig, base: string):
   return owner.kind === "nothing" ? undefined : { workbench, branch };
 }
 
-/** ADR 0382 決定5: 削除が成立した workspace の、人間自身の内容の作業台を消す(取り込まれていない作業が無いことは `humanContentWorkbenchLeft` が確かめた)。 */
+/** ADR 0382 決定5: 削除の門と確認を通った workspace の、人間自身の内容の作業台を registry の commit より前に消す(取り込まれていない作業が無いことは
+ *  `humanContentWorkbenchLeft` が確かめた)。失敗は投げる —— entry も行もまだ消えていない。 */
 export function removeHumanContentWorkbench(named: WorkspaceConfig, base: string): void {
   const at = CHECKOUT_LAYOUT.workbench.at(base, named, protectedBranch(named));
   if (existsSync(at)) removeBoardCheckout(at, CHECKOUT_LAYOUT.workbench.parents);
