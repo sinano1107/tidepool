@@ -59,7 +59,7 @@ function expectHooksAndSigningInactive(hooks: string): void {
 }
 
 // 旧: タスクブランチが名前の場所で checkout されていて、catch-up は worktree をその tip に追従させた
-it.each([false, true])("catch-up advances the task branch ref in the named place without moving its HEAD or worktree (shallow: %s, ADR 0356 決定1・5)", async (shallow) => {
+it.each([false, true])("catch-up advances the task branch ref in the named place without moving its HEAD or worktree (shallow: %s, ADR 0356 決定1・5 / ADR 0411 決定5)", async (shallow) => {
   const source = await makeWorkspace("gate-catch-up");
   const ws = { ...source };
   if (shallow) {
@@ -73,9 +73,17 @@ it.each([false, true])("catch-up advances the task branch ref in the named place
     const task = work(db, "catch up");
     git(ws.path, "branch", `task/${task.id}`);
     commitWork(ws.path, "upstream.txt", "from main\n");
-    const place = await prepareAtPickup(db, ws, task);
-    commitWork(place.path, "task.txt", "from the task\n");
-    releaseWorkspace(db, place, task, NOW);
+    if (shallow) {
+      // ADR 0411 決定5: shallow な名前の場所は pickup で止まる。登録済みの shallow な workspace には pickup を通らない人間の扉が届くので、
+      // merge-tree の隔離 view は shallow の境界を引き継ぐ —— task の commit は名前の場所で直に積む
+      git(ws.path, "checkout", "--quiet", `task/${task.id}`);
+      commitWork(ws.path, "task.txt", "from the task\n");
+      git(ws.path, "checkout", "--quiet", "main");
+    } else {
+      const place = await prepareAtPickup(db, ws, task);
+      commitWork(place.path, "task.txt", "from the task\n");
+      releaseWorkspace(db, place, task, NOW);
+    }
     const head = git(ws.path, "rev-parse", "HEAD");
 
     catchUpTaskBranch(db, ws, task.id, await tempDir("tidepool-task-checkouts-"));

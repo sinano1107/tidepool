@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
@@ -802,39 +803,6 @@ it.each(["missing", "truncated"] as const)("%s の blob の入れ直しが落ち
   }
 });
 
-/** 名前の場所の main に `sub/kept.txt` を、mode を 0 で詰めた tree(読めるが `index-pack --strict` の fsck が落とす)で置く。blob の id を返す。 */
-function seedZeroPaddedTree(ws: WorkspaceConfig): string {
-  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws.path, input: "kept by the worker\n" }).toString().trim();
-  const entry = Buffer.concat([Buffer.from("0100644 kept.txt\0"), Buffer.from(blob, "hex")]);
-  const sub = execFileSync("git", ["hash-object", "-t", "tree", "--literally", "-w", "--stdin"], { cwd: ws.path, input: entry }).toString().trim();
-  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${git(ws.path, "ls-tree", "HEAD")}\n040000 tree ${sub}\tsub\n` }).toString().trim();
-  git(ws.path, "update-ref", "refs/heads/main", git(ws.path, "commit-tree", root, "-p", "HEAD", "-m", "zero-padded sub"));
-  git(ws.path, "reset", "--hard", "--quiet");
-  return blob;
-}
-
-it("入れ直しの pack を index-pack --strict が落とせば完了の門は名前の場所の側で拒み、task/<id> を書かず、理由が欠けた object を名指す(ADR 0388 決定2 / ADR 0359 決定1)", async () => {
-  let blob = "";
-  const { db, task, ws, place } = await pickedUpSession("work", (named) => {
-    blob = seedZeroPaddedTree(named);
-  });
-  try {
-    // `-l` の無い repack は借りている object を自前の pack に写す —— 名前の場所の tree も blob も worker の store に入る
-    git(place.path, "repack", "-a", "-d", "--quiet");
-    rmSync(looseObject(ws.path, blob));
-    commitWork(place.path, "more.txt", "more\n");
-    const before = git(ws.path, "rev-parse", `task/${task.id}`);
-
-    expect(() => gateFetch(db, place, task)).toThrow(
-      expect.objectContaining({ constructor: NamedPlaceFetchError, message: expect.stringMatching(new RegExp(`${blob}[\\s\\S]*zeroPaddedFilemode`)) }),
-    );
-
-    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
-  } finally {
-    db.close();
-  }
-});
-
 /** worker の自前の store の blob を壊す: zlib でない byte にするか、別の object の中身をその名で置く。 */
 const workerCopyDamages = {
   corrupt: () => Buffer.from("not zlib"),
@@ -859,33 +827,32 @@ it.each(["corrupt", "renamed"] as const)("入れ直しに要る blob の worker 
   }
 });
 
-// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
-it("未決着の work の commit が名前の場所で欠けた blob を直に指せば、解放は名前の場所の quarantine で、task を失敗にせず checkout を残す(ADR 0364 決定2 / ADR 0367 決定4)", async () => {
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— task の checkout は閉包を全部持つ(ADR 0411 決定1・4)
+it("未決着の work の commit が名前の場所で欠けた blob を直に指し worker が自前で持てば、解放は入れ直して運び、名前の場所でその blob が読め、quarantine しない(ADR 0398 決定1 / ADR 0411 決定4)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
     const { blob } = newTreePointsAtDamagedNamedBlob(ws.path, place.path);
 
     releaseWorkspace(db, place, task, NOW);
 
-    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(blob);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
-    expect(listChildren(db, task.id)).toEqual([]);
-    expect(readFileSync(join(place.path, "copy.txt"), "utf8")).toBe("workspace\n");
+    expect(git(ws.path, "rev-parse", `task/${task.id}:copy.txt`)).toBe(blob);
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("workspace");
   } finally {
     db.close();
   }
 });
 
-// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
-it("work の commit が名前の場所で欠けた blob を直に指せば、完了の門は名前の場所の側で拒み、task/<id> を書かない(ADR 0364 決定2 / ADR 0359 決定1)", async () => {
+it("work の commit が名前の場所で欠けた blob を直に指し worker が自前で持てば、完了の門は入れ直して通り、名前の場所でその blob が読める(ADR 0398 決定1 / ADR 0411 決定4、#3501)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
     const { blob } = newTreePointsAtDamagedNamedBlob(ws.path, place.path);
-    const before = git(ws.path, "rev-parse", `task/${task.id}`);
 
-    expect(() => gateFetch(db, place, task)).toThrow(namedPlaceRefusal(blob));
+    const tip = gateFetch(db, place, task);
 
-    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("workspace");
   } finally {
     db.close();
   }
@@ -957,27 +924,56 @@ it("完了済み review の worker が作った tree の mode を 0 で詰めて
   }
 });
 
-it("worker が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、完了の門は worker の repo の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
-  const { db, task, ws, place } = await pickedUpSession("work", (named) => {
-    mkdirSync(join(named.path, "sub"));
-    commitWork(named.path, "sub/a.txt", "a\n");
-    // 名前の場所は tree を pack に持つ —— 門の検証は pack を先に引いて worker の loose を読まない
-    git(named.path, "repack", "-a", "-d", "--quiet");
-  });
-  try {
-    const tree = git(ws.path, "rev-parse", "HEAD:sub");
-    mkdirSync(join(place.path, ".git", "objects", tree.slice(0, 2)), { recursive: true });
-    writeFileSync(looseObject(place.path, tree), "not zlib");
-    commitWork(place.path, "more.txt", "more\n");
+/** #3588 の形: 名前の場所が loose で持つ `sub` の tree の id に、worker がどこにも無い id を entry に持つ偽の loose を書き、新しい root tree も
+ *  その id を直に指す。どこにも無い id を返す。 */
+function forgedLooseAtNamedTree(ws: WorkspaceConfig, checkout: string): string {
+  const tree = git(ws.path, "rev-parse", "HEAD:sub");
+  expect(existsSync(looseObject(ws.path, tree))).toBe(true);
+  const nowhere = "1".repeat(40);
+  const forged = treeEntry("100644", "a.txt", nowhere);
+  rmSync(looseObject(checkout, tree), { force: true });
+  writeFileSync(looseObject(checkout, tree), deflateSync(Buffer.concat([Buffer.from(`tree ${forged.length}\0`), forged])));
+  commitLiteralRoot(checkout, [treeEntry("100644", "README.md", git(checkout, "rev-parse", "HEAD:README.md")), treeEntry("40000", "sub", tree), treeEntry("100644", "z.txt", nowhere)]);
+  return nowhere;
+}
 
-    expect(() => gateFetch(db, place, task)).toThrow(CheckoutUnreadableError);
+const withLooseSub = (named: WorkspaceConfig) => {
+  mkdirSync(join(named.path, "sub"));
+  commitWork(named.path, "sub/a.txt", "a\n");
+};
+
+// #3588: 借りない写しの中の検証が落ちれば checkout の故障 —— 名前の場所の object と混ざらない(ADR 0411 決定3)
+it("worker が名前の場所の tree の id に偽の loose を書き新しい root tree がどこにも無い id を直に指せば、完了の門は task の checkout の故障で拒み、名前の場所の側にしない(ADR 0411 決定1・3、#3588)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("work", withLooseSub);
+  try {
+    forgedLooseAtNamedTree(ws, place.path);
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+
+    expect(() => gateFetch(db, place, task)).toThrow(expect.objectContaining({ constructor: CheckoutUnreadableError, message: expect.stringContaining(place.path) }));
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
   } finally {
     db.close();
   }
 });
 
-// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
-it.each(["missing", "corrupt"] as const)("完了済み review の commit が名前の場所で %s の blob を直に指せば、worker が自前で持っていても検証の段は名前の場所の失敗で、名前の場所を quarantine して checkout と commit を残す(ADR 0364 決定2 / ADR 0367 決定3)", async (damage) => {
+it("同じ #3588 の形で、未決着の解放は task の失敗にし、名前の場所の Quarantine を立てない(ADR 0411 決定1・3)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("work", withLooseSub);
+  try {
+    forgedLooseAtNamedTree(ws, place.path);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({ path: place.path, reason: expect.stringContaining("cannot be read") });
+    expect(quarantineQuestion(db, "workspace", ws.name)).toBeUndefined();
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— task の checkout は閉包を全部持つ(ADR 0411 決定1・4)
+it.each(["missing", "corrupt"] as const)("完了済み review の commit が名前の場所で %s の blob を直に指し worker が自前で持てば、解放は入れ直して commit を運び、名前の場所でその blob が読め、quarantine しない(ADR 0398 決定1 / ADR 0411 決定4)", async (damage) => {
   const { db, task, ws, place } = await pickedUpSession("review");
   try {
     completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
@@ -986,10 +982,10 @@ it.each(["missing", "corrupt"] as const)("完了済み review の commit が名�
 
     releaseAfterCompletion(db, place, getTask(db, task.id)!);
 
-    expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(blob);
-    expect(writeObservations(db, task)).toEqual([]);
-    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(false);
-    expect(git(place.path, "rev-parse", `task/${task.id}`)).toBe(commit);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(true);
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(commit);
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("workspace");
   } finally {
     db.close();
   }
@@ -1114,9 +1110,46 @@ it("集合の blob の名前の場所の loose が集合の別の blob の中身
   }
 });
 
-// 受け入れた限界(ADR 0398 決定2・3): 借りている tree の下の object は守らない —— 集合の walk は借りている `sub` で止まり、staging repo が
-// 自前の store に書いた blob を数えない。名前の場所で先に欠けた blob は、最後の写しごと checkout が消える
-it("借りている tree の下の object は守らない: その blob が名前の場所で欠けていても、root に WIP を足した未決着の解放は今どおり運んで checkout を消す(ADR 0398 決定2・3)", async () => {
+/** pickup の前に名前の場所の履歴にだけ `old.txt` を残す(足して消す)。 */
+const withHistoryOnlyBlob = (named: WorkspaceConfig) => {
+  commitWork(named.path, "old.txt", "only in the history\n");
+  git(named.path, "rm", "--quiet", "old.txt");
+  git(named.path, "commit", "--quiet", "-m", "drop old.txt");
+};
+
+// #3589: 名前の場所の履歴にだけある blob を worker が復元する形 —— 検証は借りない写しの中で済み、運んだ後の確かめが閉包の全部を入れ直す(ADR 0411 決定1・4)
+it.each([
+  { stage: "完了の門", damage: "missing" },
+  { stage: "完了の門", damage: "corrupt" },
+  { stage: "未決着の解放", damage: "missing" },
+  { stage: "未決着の解放", damage: "corrupt" },
+] as const)("名前の場所の履歴にだけある blob が名前の場所で $damage でも、worker がそれを復元すれば $stage は通り、名前の場所でその blob が読める(ADR 0411 決定1・4、#3589)", async ({ stage, damage }) => {
+  const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
+  try {
+    const blob = git(ws.path, "rev-parse", "HEAD~1:old.txt");
+    rmSync(looseObject(ws.path, blob));
+    if (damage === "corrupt") writeFileSync(looseObject(ws.path, blob), "not zlib");
+
+    if (stage === "完了の門") {
+      commitWork(place.path, "old.txt", "only in the history\n");
+      const tip = gateFetch(db, place, task);
+      expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    } else {
+      writeFileSync(join(place.path, "old.txt"), "only in the history\n");
+      releaseWorkspace(db, place, task, NOW);
+      expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
+      expect(existsSync(place.path)).toBe(false);
+    }
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("only in the history");
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0411 決定4: tip の閉包の中は守る —— task の checkout は閉包を全部持つので、集合の walk は `sub` の下まで届く(ADR 0398 決定2・3 を置き換え)
+it("tip の閉包の中の object は守る: `sub` の下の blob が名前の場所で欠けていても、root に WIP を足した未決着の解放は入れ直して運び、checkout を消す(ADR 0411 決定4)", async () => {
   const { db, task, ws, place } = await pickedUpSession("work", (named) => {
     mkdirSync(join(named.path, "sub"));
     commitWork(named.path, "sub/kept.txt", "kept by the named place\n");
@@ -1131,15 +1164,14 @@ it("借りている tree の下の object は守らない: その blob が名前
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(git(ws.path, "show", `task/${task.id}:more.txt`)).toBe("more");
     expect(existsSync(place.path)).toBe(false);
-    expect(() => git(ws.path, "cat-file", "-e", blob)).toThrow();
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("kept by the named place");
   } finally {
     db.close();
   }
 });
 
-// 受け入れた限界(ADR 0398 決定3): 名前の場所で先に壊れた借りている object は守らない —— staging repo の `git add` は同じ id の壊れた loose を
-// 在ると見て自前の store に書かず、確かめの集合に入らない
-it("名前の場所で先に壊れた借りている object は守らない: 同じ中身の WIP を積んでも、未決着の解放は今どおり運んで checkout を消す(ADR 0398 決定3)", async () => {
+// ADR 0411 決定4: 運ぶ前に名前の場所で壊れた object も、tip の閉包の中なら守る(ADR 0398 決定3 を置き換え)
+it("運ぶ前に名前の場所で壊れた tip の閉包の object は守る: 同じ中身の WIP を積んだ未決着の解放は入れ直して運び、checkout を消す(ADR 0411 決定4)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
     const blob = git(ws.path, "rev-parse", "HEAD:README.md");
@@ -1152,7 +1184,7 @@ it("名前の場所で先に壊れた借りている object は守らない: 同
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(git(ws.path, "rev-parse", `task/${task.id}:copy.txt`)).toBe(blob);
     expect(existsSync(place.path)).toBe(false);
-    expect(() => git(ws.path, "cat-file", "-p", blob)).toThrow();
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("workspace");
   } finally {
     db.close();
   }

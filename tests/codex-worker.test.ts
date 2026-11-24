@@ -715,7 +715,6 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(join(f.workspace, ".git"))}="write"`,
       `${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`,
       `${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`,
-      `${JSON.stringify(join(f.workspace, ".git", "objects"))}="read"`,
     ]);
     const listed = { method: "skills/list", params: { cwds: [f.workspace], forceReload: true } };
     expect(f.appServer.flatMap(({ requests }) => requests)).toEqual([{ id: 2, ...listed }, { id: 2, ...listed }]);

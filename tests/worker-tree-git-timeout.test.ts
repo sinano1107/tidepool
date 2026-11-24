@@ -366,8 +366,10 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
 it.each([
   { reader: "pack を先に読む", repo: "carried" },
   { reader: "loose だけを読む", repo: "loose" },
-])("運んだ後の確かめが名前の場所の byte を $reader 手で上限を越えれば、worker の repo の故障にせず名前の場所の側で拒む(ADR 0388 決定1 / ADR 0408 決定1 / ADR 0364 決定2)", async ({ repo }) => {
-  const { db, task, place } = await pickedUp(`carried-${repo}-timeout`);
+])("運んだ後の確かめが名前の場所の byte を $reader 手で上限を越えれば、入れ直しに進まず、worker の repo の故障にせず名前の場所の側で拒み、名前の場所に pack を足さない(ADR 0388 決定1 / ADR 0408 決定1 / ADR 0364 決定2 / ADR 0411 決定4、#3735)", async ({ repo }) => {
+  const { db, named, task, place } = await pickedUp(`carried-${repo}-timeout`);
+  const packs = () => readdirSync(join(named.path, ".git", "objects", "pack")).filter((file) => file.endsWith(".pack")).length;
+  const before = packs();
   // 小さい fetch は名前の場所で loose に展開される(transfer.unpackLimit) —— 集合の id が loose を持つ
   commitWork(place.path, "work.txt", "work\n");
   const shim = await tempDir("tidepool-slow-git-");
@@ -383,6 +385,7 @@ it.each([
   } finally {
     vi.unstubAllEnvs();
   }
+  expect(packs()).toBe(before);
 });
 
 it("特別でない tracked な path の FIFO では git は即座に落ち、worker の repo の故障を投げる(ADR 0357 決定3 / ADR 0367 決定1)", async () => {

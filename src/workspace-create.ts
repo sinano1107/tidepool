@@ -23,6 +23,7 @@ import {
   repoKey,
 } from "./github-auth.js";
 import {
+  assertNotShallow,
   assertOwnGitDirectory,
   conventionCheckoutPath,
   exactProtectedBranchRef,
@@ -1098,6 +1099,7 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
   } catch {
     throw new NotAGitRepositoryError(path);
   }
+  assertNotShallow(path);
   const repo = originUrl(path);
   if (repo !== undefined && carriesCredential(repo)) {
     throw new RepoCredentialError(

@@ -90,7 +90,7 @@ import {
   setProviderPaceOffset,
 } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
-import { GitDirNotADirectoryError, NoOwnGitDirError } from "./pickup-predicates.js";
+import { GitDirNotADirectoryError, NoOwnGitDirError, ShallowRepositoryError } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { PROVIDER_VALUES } from "./provider.js";
@@ -918,6 +918,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // ADR 0146: linked worktree・submodule・部分ディレクトリは workspace にならない
         err instanceof GitDirNotADirectoryError ||
         err instanceof NoOwnGitDirError ||
+        // ADR 0411 決定5: `git fetch --unshallow` の後に出し直せば通る
+        err instanceof ShallowRepositoryError ||
         // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
         // register モードで拾えば通る、呼び出し側の状態の問題である
         err instanceof OrphanCheckoutMismatchError ||
