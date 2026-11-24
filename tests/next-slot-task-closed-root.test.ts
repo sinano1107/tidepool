@@ -30,9 +30,22 @@ it("キューでは、閉じた根に塞がれた子は skipped で、理由に�
   const rows = listQueue(db, undefined, undefined, undefined, undefined, undefined, blockingRootOf(db, () => tree.workspace));
 
   for (const repair of tree.repairs) {
-    expect(rows.find((row) => row.id === repair.id)).toMatchObject({ status: "skipped", blocking_root: { task_id: tree.root.id, pr_number: 1 } });
+    expect(rows.find((row) => row.id === repair.id)).toMatchObject({ status: "skipped", blocking_root: { task_id: tree.root.id, pr_number: 1, kind: "pr_closed" } });
   }
   expect(rows.find((row) => row.id === tree.root.id)?.blocking_root).toBeUndefined();
+});
+
+// ADR 0413 決定3: 資源を直してもその子は走らない —— 資源単位で既に skipped の行も塞ぐ根の理由を持つ
+it("workspace の停止で既に skipped の行も、閉じた根に塞がれていれば理由に閉じた根と PR を持つ", async () => {
+  const tree = await blockingRootTree("closed-root-stopped");
+  db = tree.db;
+  const name = tree.workspace.name;
+
+  const rows = listQueue(db, name, undefined, undefined, { workspaces: [name], assignees: [] }, undefined, blockingRootOf(db, () => tree.workspace));
+
+  for (const repair of tree.repairs) {
+    expect(rows.find((row) => row.id === repair.id)).toMatchObject({ status: "skipped", blocking_root: { task_id: tree.root.id, pr_number: 1, kind: "pr_closed" } });
+  }
 });
 
 it("根の内容が保護ブランチに届いた後(reopen して merge された)は、同じ子が拾われ、キューでも todo に戻る", async () => {
@@ -59,7 +72,7 @@ it("閉じた根の分解子に出た異議の修理と RCA review も、分解�
 
   expect(head).toBeUndefined();
   for (const repair of tree.repairs) {
-    expect(rows.find((row) => row.id === repair.id)).toMatchObject({ status: "skipped", blocking_root: { task_id: tree.root.id, pr_number: 1 } });
+    expect(rows.find((row) => row.id === repair.id)).toMatchObject({ status: "skipped", blocking_root: { task_id: tree.root.id, pr_number: 1, kind: "pr_closed" } });
   }
 });
 

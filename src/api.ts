@@ -2307,6 +2307,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...(task.type === "question"
         ? questionAnnotations(db, task)
         : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, blockingRoot) }),
+      // ADR 0413 決定3: 塞ぐ根の理由は、保存された status が todo の task に返す(キューは todo / skipped と見える行に当てる)。キューに載らない
+      // 人間担当の task は走らせる側が盤面でないので返さない(`listQueue` と同じ線)。question には述語が当たらない
+      ...(task.status === "todo" && task.assignee !== HUMAN_ACTOR_ID && { blocking_root: blockingRoot(task) ?? undefined }),
       // 見えないことだけが穴(ADR 0082 の線): Interview の root の面接室のホスト上の在り処と、受験者が分岐する出題の head(ADR 0273 決定1・3)
       ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
       // 受験者の答案の在り処 —— 自分の checkout(ADR 0276 決定4)

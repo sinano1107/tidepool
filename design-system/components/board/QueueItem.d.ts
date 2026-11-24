@@ -8,11 +8,11 @@ export interface QueueItemProps {
   /** 1-based queue position. */
   position?: number;
   task?: { id?: string; title?: string; assignee?: string; assigneeIcon?: string; risk?: boolean };
-  /** This row's own resource cannot take it right now — dashed. */
+  /** This row's own resource cannot take it right now — dashed, with the skip label on a second line. */
   skipped?: boolean;
-  /** Optional reason appended after `skipped ·`. Omit it when the reason
-   *  already lives elsewhere on the screen; the row then just says `skipped`
-   *  rather than claiming a cause it doesn't know. */
+  /** Optional reason appended after `skipped ·` on the skip label's own second
+   *  line. Omit it when the reason already lives elsewhere on the screen; the
+   *  row then just says `skipped` rather than claiming a cause it doesn't know. */
   skipReason?: string;
   /** Highlighted: placed at front by this triage session. */
   frontInserted?: boolean;

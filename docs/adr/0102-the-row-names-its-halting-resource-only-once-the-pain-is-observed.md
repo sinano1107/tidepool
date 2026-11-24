@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の「今は足さない」は資源単位の原因のまま。閉じた根に塞がれた行の理由だけは先に足す —— 修理 question が無く、行が唯一の説明の面になる。決定6 の「同じ SQL の式」には揃えない(git を読む原因)([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定4、2026-11-24、issue #3703)。**
 
+**Status 追記: Considered options の最後の「#396 と同じ2段化で理由を全文出す」を、skipped の行に採った —— 375px の実測で、行の1段目に残る幅は ~16px で、塞ぐ根の理由(`skipped · PR closed` 125px / `skipped · landing ended` 152px)も素の `skipped`(46px)も収まらなかった。skipped の行は `skipped`(理由があれば `skipped · 理由`)を2段目に落とし、skipped でない行は1段のまま(ADR 0413 決定3・4、2026-11-25、issue #3703)。**
+
 2026-08-25 の grilling(issue #398)で決定。`listQueue` は資源単位の停止を1本の SQL CASE で `skipped` の一語に
 潰しており、原因(workspace / agent 名 / provider 認証の quarantine と fable 線)は読み口に届く前に消えている。
 Design System の `QueueItem` には `skipReason` の口が先にあり、盤面側が一度も埋めていない。**ADR 0068 決定4 は

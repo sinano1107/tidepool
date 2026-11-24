@@ -43,7 +43,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, announceBlockingRoot, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -1969,6 +1969,8 @@ export async function submitAnswer(
           payload: rootRecord.payload,
           at: now(),
         });
+        // ADR 0413 決定2: 着地を終えた根の下に未決着の子があれば、盤面名義の告知を同じ transaction で(ADR 0405 決定2)。応答の notice には足さない
+        if (rootRecord.payload.kind === "landing_ended_pr_left") announceBlockingRoot(deps.db, rootRecord.root, now());
       }
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);

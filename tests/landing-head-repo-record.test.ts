@@ -247,7 +247,7 @@ it("出元 repo の食い違いで止まった PR のある根は「end landing�
   await submitAnswer({ db, pollNow: () => {}, landing, resolveWorkspace: resolve, github }, getTask(db, failure!.id)!, ["end landing"], undefined, () => clock.now(), "webui");
 
   expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
-  expect(blockingRootOf(db, resolve)(child)).toEqual({ task_id: root.id, pr_number: 1 });
+  expect(blockingRootOf(db, resolve)(child)).toEqual({ task_id: root.id, pr_number: 1, kind: "landing_ended" });
   expect(nextSlotTask(db, "lagoon", undefined, undefined, undefined, undefined, blockingRootOf(db, resolve))).toBeUndefined();
 });
 
