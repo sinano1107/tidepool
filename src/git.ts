@@ -101,11 +101,12 @@ export function gitStatus(cwd: string): string {
   return git(cwd, "status", "--porcelain", "--untracked-files=all");
 }
 
-type View = (args: string[], overrides?: NodeJS.ProcessEnv) => string;
-type Runner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Buffer;
+type View = (args: string[], overrides?: NodeJS.ProcessEnv, input?: string) => string;
+type Runner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string) => Buffer;
 
 /** ADR 0356 決定3: borrow the checkout's objects while keeping its config, index, and ignore metadata out of the board's view.
- *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the named place's.
+ *  `objectsFrom` is the repo whose objects the view reads and writes — a task checkout's view uses the board-owned verified copy of the
+ *  worker's tip (ADR 0412 決定1).
  *  This is the unbounded view for the board's own side, including the Interview room (ADR 0356 決定1).
  *  Worker status and staging use bounded Git (ADR 0357 決定1). */
 export function withBoardGit<T>(cwd: string, use: (view: View, gitDir: string) => T, objectsFrom = cwd): T {
@@ -131,7 +132,7 @@ function viewWith<T>(runner: Runner, cwd: string, use: (view: View, gitDir: stri
     if (stage) stagingHostStep(init);
     else init();
     const env = { GIT_DIR: dir, GIT_WORK_TREE: resolve(cwd), GIT_INDEX_FILE: join(dir, "index"), ...(!stage && { GIT_OBJECT_DIRECTORY: objects }) };
-    return use((args, overrides) => runner(dir, args, { ...env, ...overrides }).toString(), dir);
+    return use((args, overrides, input) => runner(dir, args, { ...env, ...overrides }, input).toString(), dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -225,21 +226,23 @@ export function outOfSpace(dir: string, cause: unknown): boolean {
   }
 }
 
+/** ADR 0412 決定3: 名前の場所 `at` の、種の tip より先にある ref。 */
+export type RecordedAhead = { ref: string; at: string };
+
 /** ADR 0367 決定1: stage in a temporary board-owned repo, where the gitlink check can reject the tree before it travels.
- *  The tree is available for `use` while that repo is open. */
-export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string, use: (tree: string, gitDir: string) => T, exclude: string[] = []): T {
+ *  The tree is available for `use` while that repo is open. ADR 0412 決定2・3: `head` is the worker's tip in `objectsFrom`; with
+ *  `ahead`, the paths the view excludes take the ref's entries. */
+export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string, use: (tree: string, gitDir: string) => T, exclude: string[] = [], ahead?: RecordedAhead): T {
+  // ADR 0412 決定3: ref の entry は名前の場所の側の段で読む(tree だけ、blob は読まない)—— 失敗は型の無いまま投げる
+  const recorded = ahead ? git(ahead.at, "--no-replace-objects", "ls-tree", "-r", "-z", ahead.ref).split("\0").filter(Boolean) : [];
+  const recordedGitlinks = recorded.filter((line) => line.startsWith(`${GITLINK_MODE} `)).map((line) => line.slice(line.indexOf("\t") + 1));
   return viewWith(runOnWorkerTree, cwd, (view, gitDir) => {
-    try {
-      // ADR 0367 決定1: 盤面の記録から index を作る失敗は、worker の worktree を読む失敗と分ける。
-      seedViewIndex(view, head);
-    } catch (cause) {
-      if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(gitDir, cause)) throw stagingHostError(cause);
-      throw cause;
-    }
-    const gitlinks = seededGitlinks(view, head);
     let tree: string;
+    let excluded: string[];
     try {
-      const paths = viewPathspecs([...exclude, ...nestedRepos(view, cwd, gitlinks)]);
+      seedViewIndex(view, head);
+      excluded = [...exclude, ...nestedRepos(view, cwd, [...seededGitlinks(view, head), ...recordedGitlinks])];
+      const paths = viewPathspecs(excluded);
       // 入れ子の repo は worker が幾つでも作れる —— argv でなく file で渡す(E2BIG)
       const pathspecs = join(gitDir, "pathspecs");
       stagingHostStep(() => writeFileSync(pathspecs, paths.join("\0")));
@@ -255,8 +258,19 @@ export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string
       if (outOfSpace(gitDir, cause)) throw stagingHostError(cause);
       throw new CheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     }
+    if (ahead) tree = overlayRecorded(view, excluded, recorded, tree.length);
     return use(tree, gitDir);
   }, objectsFrom, "stage");
+}
+
+/** ADR 0412 決定3: view が外した path(worktree が供給しない path)の index の entry を、名前の場所の ref の `recorded`(`ls-tree -r -z` の行)の
+ *  entry に置き換え —— ref に無い path は落とす —— object を持たない entry を許して tree を書く。entry の object は名前の場所にある。 */
+function overlayRecorded(view: View, excluded: string[], recorded: string[], oidLength: number): string {
+  const inside = (path: string) => excluded.some((dir) => path === dir || path.startsWith(`${dir}/`));
+  const dropped = view(["ls-files", "-z", "--cached"]).split("\0").filter((path) => path && inside(path)).map((path) => `0 ${"0".repeat(oidLength)}\t${path}\0`);
+  const kept = recorded.filter((line) => inside(line.slice(line.indexOf("\t") + 1))).map((line) => `${line}\0`);
+  if (dropped.length + kept.length > 0) view(["update-index", "--add", "--replace", "-z", "--index-info"], undefined, [...dropped, ...kept].join(""));
+  return view(["write-tree", "--missing-ok"]).trim();
 }
 
 export interface TreeDeltaEntry {
