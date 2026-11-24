@@ -1374,3 +1374,48 @@ it.each([
     db.close();
   }
 });
+
+const blobX = (repo: string) => execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: "x\n" }).toString().trim();
+
+// ADR 0412 の追記(#3139): 外す path に入れ子の repo が絡む形では、種を ref にしていたときの WIP は ref の blob の中身に依る —— 決定2 はその読みを
+// 禁じるので、外す path は ref の entry のまま WIP に入り、worktree の中身は運ばない(決定3 の原則)
+it.each([
+  {
+    shape: "the tip's gitlink became a plain dir on the ref",
+    seed: gitlinkAt("a".repeat(40)),
+    ahead: (repo: string) => ({ mod: null, "mod/file.txt": { mode: "100644", sha: blobX(repo) } }),
+    worktree: (_checkout: string) => {},
+    tree: ["100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob 587be6b4c3f93f93c489c0111bba5596147a26cb\tmod/file.txt", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"],
+  },
+  {
+    shape: "the ref added a dir the worktree holds as a nested repo",
+    seed: undefined,
+    ahead: (repo: string) => ({ "D/x.txt": { mode: "100644", sha: blobX(repo) } }),
+    worktree: (checkout: string) => {
+      execFileSync("git", ["init", "-q", join(checkout, "D")]);
+      writeFileSync(join(checkout, "D", "y.txt"), "inner\n");
+    },
+    tree: ["100644 blob 587be6b4c3f93f93c489c0111bba5596147a26cb\tD/x.txt", "100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"],
+  },
+])("名前の場所の ref が worker の tip より先にあり、$shape なら、未決着の解放の WIP はその path に ref の entry を持つ(ADR 0412 決定3 の追記)", async ({ seed, ahead, worktree, tree }) => {
+  const { db, task, ws, place } = await pickedUpSession("work", seed && ((named) => {
+    git(named.path, "reset", "--quiet", "--soft", commitEdits(named.path, "HEAD", seed()));
+    git(named.path, "reset", "--quiet", "--hard");
+  }));
+  try {
+    const ref = `refs/heads/task/${task.id}`;
+    const old = git(ws.path, "rev-parse", ref);
+    const moved = commitEdits(ws.path, old, ahead(ws.path));
+    boardRefWriter(db, ws)(ref, moved, () => git(ws.path, "update-ref", ref, moved, old));
+    worktree(place.path);
+    writeFileSync(join(place.path, "wip.txt"), "wip\n");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(git(ws.path, "rev-parse", `${ref}^`)).toBe(moved);
+    expect(git(ws.path, "ls-tree", "-r", ref)).toBe(tree.join("\n"));
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
