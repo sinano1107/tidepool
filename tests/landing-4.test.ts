@@ -1515,12 +1515,9 @@ it("tip を読めずに立った question への abandon は、内容を変え�
 });
 
 // ADR 0241 決定6: 問い直しも根の question —— workspace の Quarantine が抱えている間は重ねず、答えて閉じた後に1つ立てる(ADR 0225 決定1)
-it("tip を読めずに立った question への abandon の根は、workspace の Quarantine が開いている間は問い直さずその Quarantine で止まり、答えて閉じた後に1つ問い直す", async () => {
-  const c = await abandonedPromotion("landing-abandon-no-head-quarantined", { askedTip: false });
-  const { db, clock, workspace, landing, work } = c;
-  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
-  await settleAttachedChild(db, clock, workspace, work.id);
-
+/** Quarantine が開いた断念の根の収束: 問い直さずその Quarantine を名乗り、記録を新しく刻まず、Quarantine に答えて閉じた後の収束で1つ問い直す。 */
+async function expectReaskWaitsForQuarantine(c: Awaited<ReturnType<typeof abandonedPromotion>>) {
+  const { db, workspace, landing, work } = c;
   await expect(convergeOn(landing, work.id)).resolves.toEqual({
     kind: "quarantined",
     error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
@@ -1532,23 +1529,23 @@ it("tip を読めずに立った question への abandon の根は、workspace �
   await answerWorkspaceQuarantine(c, quarantineQuestion(db, "workspace", workspace.name)!);
   await landing.converge();
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+}
+
+it("tip を読めずに立った question への abandon の根は、workspace の Quarantine が開いている間は問い直さずその Quarantine で止まり、答えて閉じた後に1つ問い直す", async () => {
+  const c = await abandonedPromotion("landing-abandon-no-head-quarantined", { askedTip: false });
+  quarantineWorkspace(c.db, c.workspace.name, new Error("repair the checkout"), c.clock.now());
+  await settleAttachedChild(c.db, c.clock, c.workspace, c.work.id);
+
+  await expectReaskWaitsForQuarantine(c);
 });
 
 it("tip のある abandon の根は、修理が内容を変えた後に workspace の Quarantine が開けば問い直さず、答えて閉じた後に1つ問い直す", async () => {
   const c = await abandonedPromotion("landing-abandon-changed-quarantined");
-  const { db, clock, workspace, landing, work } = c;
-  expect(latestEventOfTask(db, work.id, "landing_declined")?.payload.tip).toEqual(expect.any(String));
-  await settleAttachedChild(db, clock, workspace, work.id, "repair");
-  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  expect(latestEventOfTask(c.db, c.work.id, "landing_declined")?.payload.tip).toEqual(expect.any(String));
+  await settleAttachedChild(c.db, c.clock, c.workspace, c.work.id, "repair");
+  quarantineWorkspace(c.db, c.workspace.name, new Error("repair the checkout"), c.clock.now());
 
-  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined" });
-  expect(openPromotionQuestions(db, work.id)).toEqual([]);
-  expect(boardEvents(db, work.id, "landing_deferred")).toEqual([]);
-  expect(boardEvents(db, work.id, "landing_declined")).toHaveLength(1);
-
-  await answerWorkspaceQuarantine(c, quarantineQuestion(db, "workspace", workspace.name)!);
-  await landing.converge();
-  expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+  await expectReaskWaitsForQuarantine(c);
 });
 
 it("門が閉じていれば、workspace の Quarantine も開いている abandon の根は門で待つ", async () => {
