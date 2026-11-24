@@ -428,8 +428,15 @@ export function startScheduler(deps: {
    *  する(ADR 0342 決定6)。門の前・門の中の throw も数える —— 門の前で投げ続ける poll も pickup を同じく止めている。 */
   const pollFailed = (err: unknown) => {
     console.error("[scheduler] poll failed; the next poll retries:", err);
-    // ADR 0403 決定5: registry の止まりが開いていれば、その故障を行にも計測にも数えない —— question は止まりが持つ
-    if (registryUnreadableOpen(db)) return;
+    // ADR 0403 決定5: registry の止まりが開いていれば、その故障を行にも計測にも数えない —— question は止まりが持つ。
+    // 判定の読みが投げたら開いていない側に倒して数える(ADR 0294 決定1): 数えなければ行も question も無く止まる。重複の question は人間に見える(#3711)
+    let stopOpen = false;
+    try {
+      stopOpen = registryUnreadableOpen(db);
+    } catch (checkErr) {
+      console.error("[scheduler] could not read whether the registry stop is open; counting this poll failure:", checkErr);
+    }
+    if (stopOpen) return;
     const now = clock.now();
     lastPollFailure = { at: now.toISOString(), message: err instanceof Error ? err.message : String(err) };
     streak = { first: streak?.first ?? lastPollFailure, count: (streak?.count ?? 0) + 1 };
@@ -1180,14 +1187,20 @@ export function startScheduler(deps: {
   }
 
   let stopped = false;
-  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)
-  let polling: Promise<unknown> = Promise.resolve();
+  // 走っている poll の終わり。収束の回はこれを待つ(`idle`)。ADR 0241 決定5 が待つのは終わりで結果ではない —— reject は log に出して
+  // 飲む。飲まなければ一度の reject を以後の `idle` がすべて受け取り、収束と pickup が再起動まで止まる(#3711)
+  let polling: Promise<void> = Promise.resolve();
+  const ended = (run: Promise<unknown>): Promise<void> =>
+    run.then(
+      () => undefined,
+      (err: unknown) => console.error("[scheduler] poll rejected; the next trigger polls again:", err),
+    );
   function pollNow(): void {
     // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。
     // 収束を待つ間に盤面が止まれば、閉じた DB を読まない
     void converge().then(() => {
       if (stopped || inFlight) return;
-      polling = poll();
+      polling = ended(poll());
       return polling;
     }).catch((err) => {
       console.error("[scheduler] pickup trigger failed:", err);
@@ -1211,7 +1224,7 @@ export function startScheduler(deps: {
       // 待つ間に契機の poll が走り出していれば、その promise を置き換えない —— `idle` が走っている poll を見失う(`pollNow` と同じ判定)
       if (inFlight) return IN_FLIGHT;
       const rerun = poll();
-      polling = rerun;
+      polling = ended(rerun);
       return rerun;
     },
     lastIssueExpansionFailure: () => issueStreak?.latest,
