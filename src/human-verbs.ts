@@ -864,7 +864,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       answerer: { actorId: HUMAN_ACTOR_ID, origin },
       now: () => clock.now(),
     };
-    // spec #3273 text C6: 作業台を残した取り込みごとに1行
+    // spec #3273 text C6: 作業台を残した(か消せなかった)取り込みごとに1行
     const keptWorkbenches = placeHasRepository(target.path) ? await refuseNamingKept(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake, undefined, compare)) : [];
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseNamingKept(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
@@ -1211,8 +1211,8 @@ function convergenceRefusal(verdict: LandingVerdict | undefined): string | undef
   }
 }
 
-/** 回答を収束に通し、その根の verdict を返す —— 拒否なら投げる。spec #3273 text C6: 作業台を残した取り込みは、回答が後で拒まれても
- *  書いた後なので、拒否にも添える。 */
+/** 回答を収束に通し、その根の verdict を返す —— 拒否なら投げる。spec #3273 text C6: 作業台を残した(か消せなかった)取り込みは、回答が
+ *  後で拒まれても書いた後なので、拒否にも添える。 */
 async function answerThroughConvergence(landing: Landing, question: string, origin: EventOrigin, taskId: string): Promise<RootVerdict | undefined> {
   const verdicts = await landing.converge({ answering: { question, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
   const root = verdicts.find((verdict) => verdict.taskId === taskId);
@@ -1397,7 +1397,7 @@ export type HumanCompletionInput = z.infer<typeof humanCompletionInputSchema>;
 
 /** Shared human-surface completion for human-assignee tasks. ADR 0374 決定1: 動作は「タスクブランチを持つか」で分ける —— 持たなければ
  *  今どおり記録だけを閉じ、持てば in-flight の鍵を取って準備を通し、作業台の取り込み・`done`・H の merge back を `completeHumanWork` に
- *  任せ、収束を突く。作業台を残した完了は text C7 を `notice` に添える。 */
+ *  任せ、収束を突く。作業台を残した完了は text C7 を、作業台を消せなかった完了はそう言う文を `notice` に添える。 */
 export async function completeThroughHumanDoor(
   deps: HumanWorkDeps,
   taskId: string,
