@@ -122,6 +122,58 @@ it("registry の止まりの判定の読みが投げ続けても、poll の失�
   scheduler.stop();
 });
 
+/** poll の try の外で投げる盤面 —— 注入した依存(時計)が、poll の本体の失敗の後に1回だけ投げる。poll の try は時計を包んで
+ *  いないので poll は reject する。`flaky` が false になれば候補の読みも時計も通る。 */
+function rejectingPollBoard() {
+  const clock = new FakeClock();
+  const state = { flaky: true };
+  const board = wiredBoard(
+    () => {
+      if (!state.flaky) return;
+      vi.spyOn(clock, "now").mockImplementationOnce(() => {
+        throw new Error("clock broke");
+      });
+      throw new Error("candidates read broke");
+    },
+    { clock },
+  );
+  return { ...board, state };
+}
+
+// #3711: poll がどこで投げても(ここでは try の外の注入した依存)、終わりを待つ読み手は reject を受け取らない —— log に出して飲む
+it("契機の poll が reject しても log に出し、終わりを待つ idle は止まらず、次の契機で収束の回と pickup が走る", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { worker, scheduler, runs, state } = rejectingPollBoard();
+
+  scheduler.pollNow();
+  await runs[0];
+  await settle();
+  expect(logged).toHaveBeenCalledWith("[scheduler] poll rejected; the next trigger polls again:", expect.objectContaining({ message: "clock broke" }));
+  await expect(scheduler.idle()).resolves.toBeUndefined();
+  state.flaky = false;
+  scheduler.pollNow();
+
+  await expect(runs[1]).resolves.toEqual([]);
+  await settle();
+  expect(worker.started.map((t) => t.title)).toEqual(["head"]);
+  scheduler.stop();
+});
+
+// #3711: 撃ち直しの呼び手だけが自分の回の reject を受け取る。poll がどこで投げても(ここでは try の外の注入した依存)、終わりを待つ読み手には届かない
+it("撃ち直しの poll が reject すれば呼び手はその reject を受け取り、log に出て、終わりを待つ idle と次の撃ち直しは止まらない", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { worker, scheduler, state } = rejectingPollBoard();
+
+  await expect(scheduler.rerunPoll()).rejects.toThrow("clock broke");
+  expect(logged).toHaveBeenCalledWith("[scheduler] poll rejected; the next trigger polls again:", expect.objectContaining({ message: "clock broke" }));
+  await expect(scheduler.idle()).resolves.toBeUndefined();
+  state.flaky = false;
+
+  expect(await scheduler.rerunPoll()).toEqual({ outcome: "succeeded" });
+  expect(worker.started.map((t) => t.title)).toEqual(["head"]);
+  scheduler.stop();
+});
+
 // #3711: `pass` の registry の判定が投げたら、止まりは開いていないとみなして根へ進む —— 根ごとの失敗は根ごとの catch が人間に届ける(ADR 0403 決定3)
 it("収束の回の registry の止まりの判定の読みが投げても、回は reject せず根を撃ち、同じ契機の pickup も走る", async () => {
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
