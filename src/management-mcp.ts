@@ -6,7 +6,6 @@ import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
-  registryTiersOf,
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
@@ -17,12 +16,13 @@ import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents } from "./events.js";
 import {
-  changeExecutionSettings,
+  applyExecutionSettingsChange,
   executionSettingsChangeSchema,
   interviewTargetSchema,
   PRIORITY_FIELD_DESCRIPTION,
   readExecutionSettingsWithQuarantine,
   tierFieldDescriptions,
+  withAgentTiers,
 } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -225,7 +225,6 @@ const agentFieldsSchema = z.object({
   description: requiredTextSchema,
   provider: requiredTextSchema,
   icon: z.string().optional(),
-  tier: z.string().optional(),
   advisor: z.boolean().optional(),
   skills: z.array(z.string()),
   system_prompt: z.string(),
@@ -630,12 +629,19 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   server.registerTool(
     "list_agents",
-    { description: "List agents and available authority profiles in the human-managed registry." },
+    {
+      description:
+        "List agents and available authority profiles in the human-managed registry. Each agent's tier is its default tier on the board " +
+        "(absent: it runs on the board's default tier); orphan_tiers are default tiers the board still holds for names no longer in the registry, " +
+        "removable with change_execution_settings (`agent_tier` with tier null).",
+    },
     async () => {
       if (!deps.agentAdmin?.list) return toolError("agent administration is not configured");
       try {
+        const { agents, orphanTiers } = withAgentTiers(deps.db, deps.agentAdmin.list());
         return toolResult({
-          agents: deps.agentAdmin.list(),
+          agents,
+          orphan_tiers: orphanTiers,
           authority_profiles: deps.agentAdmin.authorityProfiles?.() ?? [],
         });
       } catch (err) {
@@ -715,9 +721,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
         "and quarantine_question_id — the id of the open question that keeps the row out of pickup and Board calls, or null), " +
         "the advisor ceiling (off / sonnet / opus / fable / fable_then_opus), the Provider rank, the default priorities (quality / cost) — `priority` for work tasks that request none and `reviewPriority` for every review task — whether the learner is promoted, " +
-        "the default tier (tasks requesting no tier whose agent declares none, and the board's drafts run on it), " +
+        "the default tier (tasks requesting no tier whose agent has no default tier, and the board's drafts run on it), " +
         "the judgement tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews — " +
-        "and the board's tiers in order (lowest first), each with its one-line description.",
+        "the board's tiers in order (lowest first), each with its one-line description, " +
+        "and agentTiers — each agent's default tier, including names no longer in the registry.",
     },
     async () => toolResult(readExecutionSettingsWithQuarantine(deps.db)),
   );
@@ -731,14 +738,15 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "the provider + model + effort of the row to replace), delete one (`delete_row`, named by provider + model + effort — deleting " +
         "every row of a provider × tier just excludes that provider for tasks of that tier), " +
         "insert a tier (`insert_tier`: name — a lowercase letter, then a-z / 0-9 / - / _ — a one-line description, and position, an index into the tier list, 0 = lowest), " +
-        "edit one (`edit_tier`, named by name: a new description and/or position), rename one (`rename_tier`: name, and to — the new name, checked like insert_tier's; " +
-        "the board first rewrites every registry agent.md whose tier is the old name and commits it to the registry's remote main, and the rename is refused if that push fails), " +
+        "edit one (`edit_tier`, named by name: a new description and/or position), rename one (`rename_tier`: name, and to — the new name, checked like insert_tier's), " +
         "delete one (`delete_tier`; refused with the reasons while the tier has table rows, " +
-        "is the default or judgement tier, an unsettled task requests it, or a registry agent.md names it as its tier — and also refused if the registry cannot be read), " +
+        "is the default or judgement tier, an unsettled task requests it, or it is an agent's default tier, including the default tier of an agent no longer in the registry), " +
+        "set or unset an agent's default tier (`agent_tier`: agent, and tier — a tier name from the board's list, or null to unset it so the agent runs on the board's default tier; " +
+        "setting it is refused unless the agent is a non-built-in agent of the registry and the registry can be read; unsetting works for an agent no longer in the registry), " +
         "or set `advisor_ceiling` (`off` / `sonnet` / `opus` / `fable` / `fable_then_opus` — the highest model family an agent's advisor may climb to: " +
         "a main below it gets the ceiling's alias, a main in its family gets main's own id, a main above it runs without an advisor; " +
         "`off` runs every agent without one; `fable_then_opus` is `fable` that drops to `opus` while the Fable window is throttled), `provider_rank` (every provider exactly once, first = preferred), the default `priority` (quality / cost, for work tasks that request none), `review_priority` (quality / cost, how every review task orders its models), `default_tier` " +
-        "(a tier name from the board's list — the tier of tasks that request none and whose agent declares none, and of the board's drafts), or `judgement_tier` " +
+        "(a tier name from the board's list — the tier of tasks that request none and whose agent has no default tier, and of the board's drafts), or `judgement_tier` " +
         "(a tier name from the board's list — the tier the board's own judgement runs on: retrospective Board calls resolve on its anthropic row, and periodic meta-reviews request it), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
         "Takes effect at the next pickup or Board call.",
@@ -746,7 +754,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ change }) => {
       try {
-        await changeExecutionSettings(deps.db, change, "mcp", () => deps.clock.now(), deps.agentAdmin?.renameTier, deps.agentAdmin?.list);
+        applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now(), { listAgents: deps.agentAdmin?.list });
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
         throw err;
@@ -816,7 +824,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ subject }) =>
       domainResult(() => {
-        const { id } = startFirstMetaReview(deps.db, subject, "mcp", deps.clock.now(), registryTiersOf(deps.agentAdmin));
+        const { id } = startFirstMetaReview(deps.db, subject, "mcp", deps.clock.now(), deps.agentAdmin?.list);
         deps.pollNow();
         return { id };
       }),

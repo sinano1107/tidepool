@@ -4,7 +4,6 @@ import { createProfile } from "../src/profile-create.js";
 import { whyInvalidRegistryName } from "../src/registry-name.js";
 import { whyInvalidSkillAllowlist } from "../src/skill-allowlist.js";
 import { createWorkspace } from "../src/workspace-create.js";
-import { seedTierNames } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -22,7 +21,7 @@ it.each([
   ["agent skills update", "PATCH", "/api/agents/deckhand", { ...agent, skills: ["foo*"] }, whyInvalidSkillAllowlist(["foo*"])],
 ] as const)("%s HTTP refusal includes the shared leaf reason", async (_name, method, path, body, reason) => {
   const registry = { dir: await makeRegistry(), mode: "purely-local" as const };
-  const deps = { registry, tiers: () => seedTierNames };
+  const deps = { registry };
   const workspacesBaseDir = await tempDir("tidepool-name-rule-");
   t = await bootTidepool({
     workspaceAdmin: { create: (input) => createWorkspace(input, { registry, workspacesBaseDir, db: t.db }) },

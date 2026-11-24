@@ -150,6 +150,13 @@ function initializeDb(db: Db): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS tiers_live_name ON tiers (name) WHERE position IS NOT NULL;
 
+    -- ADR 0410 決定1・5: agent の既定ティア。agent 名で引き、解除は行を消す。registry から消えた agent の行は孤児として残る
+    -- (同じ名前で作り直した agent が引き継ぐ)。段の削除は、孤児を含めてここに指されている段を断る。
+    CREATE TABLE IF NOT EXISTS agent_tiers (
+      agent   TEXT PRIMARY KEY,
+      tier_id INTEGER NOT NULL REFERENCES tiers(id)
+    );
+
     CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
       type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review', 'memory_repair', 'routing_repair', 'interview')),

@@ -1,7 +1,5 @@
-import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
-import { type FindTierApproval, RegistryLogUnreadableError, type TierApproval, tierRenameMessage } from "./agent-create.js";
 import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
@@ -11,14 +9,13 @@ import { whyInvalidPrice } from "./price.js";
 import { PROVIDER_VALUES, type Provider, whyInvalidProviderRank } from "./provider.js";
 import { openQuarantineQuestions, registerQuarantine, tableRowEffortTrigger, tableRowEffortValue, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
-import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { unsettledSql } from "./task-status.js";
 import {
+  type AgentTierProposal,
   type InterviewProposal,
   interviewRootForTier,
-  type RegistryProposal,
   type RoutingProposal,
   type RoutingRowProposal,
   settleQuestionAsObserved,
@@ -31,13 +28,13 @@ import {
   liveTierRows,
   PRIORITIES,
   type Priority,
-  proposalTierNames,
   readTiers,
   type Tier,
   type TierId,
   tierIdOf,
   tierNames,
 } from "./tier.js";
+import type { AgentTierRow } from "./wire-contract.js";
 
 /** 要求2列を受け取る入口(管理MCP の `register_task` / `decompose_task`、worker MCP の `decompose`)が
  *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い段や古い意味を喋り続ける。
@@ -49,7 +46,7 @@ export function tierFieldDescriptions(db: Db): { tier: string; review_tier: stri
     "Overrides each reviewer's tier, then the board default.";
   return {
     tier: `Required quality tier for this task, one of the board's tiers (lowest first):\n${tiers}\n` +
-      "Omit to fall back to the agent's own tier, then the board default.",
+      "Omit to fall back to the agent's default tier on the board, then the board default.",
     review_tier: `Quality tier for completion reviews. ${reviewTierChoices}`,
     review_tier_choices: reviewTierChoices,
   };
@@ -107,11 +104,10 @@ export function boardDefaultTier(db: Db): Tier {
   return loadExecutionDefaults(db).defaultTier;
 }
 
-/** 段の名前の線(ADR 0200 決定2): agent.md の `tier` に書ける文字列 —— 英小文字で始まり英小文字・数字・`-`・`_` だけで、
- *  YAML が同じ文字列として読み戻すもの(`true` / `null` は YAML では文字列でない)。 */
+/** 段の名前の線(ADR 0200 決定2): 英小文字で始まり英小文字・数字・`-`・`_` だけ。 */
 export function assertTierName(db: Db, name: string): void {
-  if (!/^[a-z][a-z0-9_-]*$/.test(name) || parseYaml(name) !== name) {
-    throw new DomainError(`tier name "${name}" must start with a lowercase letter and use only a-z, 0-9, - and _ (and not be a YAML keyword such as true / null), so agent.md can write it as its tier`);
+  if (!/^[a-z][a-z0-9_-]*$/.test(name)) {
+    throw new DomainError(`tier name "${name}" must start with a lowercase letter and use only a-z, 0-9, - and _`);
   }
   if (tierNames(db).includes(name)) throw new DomainError(`the board already has a tier named "${name}"`);
 }
@@ -135,10 +131,8 @@ function placeTier(db: Db, others: readonly number[], id: number, position: numb
 }
 
 /** 段を消せない理由(ADR 0200 決定2 / 追記 2026-10-06): 行がある・盤面設定が指す・未決着の task が要求している・未決着の
- *  Interview の測る段である(ADR 0199 / ADR 0273 決定6)・registry の
- *  agent.md が名指している。空 = 消せる。`listAgents` は手元の clone を同期で読む(fetch しない)。無い = registry の無い盤面で、
- *  照合しない。読めなければ「名指していない」と見なさず削除ごと拒む。 */
-function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListAgentTiers): string[] {
+ *  Interview の測る段である(ADR 0199 / ADR 0273 決定6)・agent の既定ティアである(孤児の行も、ADR 0410 決定5)。空 = 消せる。 */
+function tierDeletionBlockers(db: Db, id: number, name: Tier): string[] {
   const reasons: string[] = [];
   const rows = loadExecutionSettingTable(db).filter((row) => row.tier === name);
   if (rows.length > 0) reasons.push(`it has execution-setting rows: ${rows.map(rowName).join(", ")}`);
@@ -153,16 +147,8 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
     )
     .all({ id }) as { id: string }[];
   if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
-  if (listAgents) {
-    let agents: ReturnType<ListAgentTiers>;
-    try {
-      agents = listAgents();
-    } catch (err) {
-      throw new DomainError(`tier "${name}" cannot be deleted: the registry could not be read to check its agent.md tiers: ${String(err)}`);
-    }
-    const naming = agents.filter((agent) => agent.tier === name);
-    if (naming.length > 0) reasons.push(`agents name it in agent.md: ${naming.map((agent) => agent.name).join(", ")}`);
-  }
+  const agents = loadAgentTiers(db).filter((row) => row.tier === name);
+  if (agents.length > 0) reasons.push(`agents have it as their default tier: ${agents.map((row) => row.agent).join(", ")}`);
   return reasons;
 }
 
@@ -170,7 +156,6 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
 function applyTierChange(
   db: Db,
   change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "rename_tier" | "delete_tier" }>,
-  listAgents?: ListAgentTiers,
 ): boolean {
   const tiers = liveTierRows(db);
   const ids = tiers.map((tier) => tier.id);
@@ -190,7 +175,7 @@ function applyTierChange(
     return true;
   }
   if (change.setting === "delete_tier") {
-    const reasons = tierDeletionBlockers(db, id, change.name, listAgents);
+    const reasons = tierDeletionBlockers(db, id, change.name);
     if (reasons.length > 0) throw new DomainError(`tier "${change.name}" cannot be deleted: ${reasons.join("; ")}`);
     db.prepare("UPDATE tiers SET position = NULL WHERE id = ?").run(id);
     return true;
@@ -239,8 +224,8 @@ export interface ExecutionSetting {
   /** 解決した段(ADR 0210 決定1)。候補は要求ティアの行だけなので、走った段 = pickup が解決した段。 */
   tier_id: TierId;
   /** ADR 0110 決定3: 選んだ値だけでなく**なぜその値になったか**を刻む。今は
-   *  ティアの出所1つ —— `"task"` は task の要求列、`"agent"` は agent.md の
-   *  `tier`、`"review_tier"` はレビュー専用の要求、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
+   *  ティアの出所1つ —— `"task"` は task の要求列、`"agent"` は agent の既定ティア(盤面、ADR 0410 決定1)、
+   *  `"review_tier"` はレビュー専用の要求、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
    *  記録上区別されるのはこの1値による。`advisor` は advisor を有効にした entry の候補だけが持つ advisor の出所
    *  (ADR 0208 決定6)—— pin の綴りだけでは、上限から下がった理由を記録から区別できない。 */
   source: { tier: TierSource; provider: ProviderSource; advisor?: AdvisorSource };
@@ -301,7 +286,7 @@ export interface SelectorInput {
    *  あること(`whyInvalidProviderRank`)は書く口が保証する —— 欠けた Provider は
    *  `indexOf` が -1 になって**先頭**に並んでしまう。 */
   providerRank: readonly Provider[];
-  /** task の要求ティア(GLOSSARY.md「要求」)。省略 → agent の `tier`。 */
+  /** task の要求ティア(GLOSSARY.md「要求」)。省略 → agent の既定ティア。 */
   taskTier: Tier | undefined;
   /** 候補を並べる鍵(GLOSSARY.md「要求」/ ADR 0114 決定1)。selector はこの欄だけを読み、task の type を見ない ——
    *  埋めるのは `selectorInputFor` で、work は task の優先順位 → 盤面設定の work 用の既定、review は盤面設定の
@@ -310,7 +295,7 @@ export interface SelectorInput {
   priority: Priority | undefined;
   /** ADR 0111: review tasks use this request instead of the work tier. */
   reviewTier?: Tier;
-  /** agent.md の `tier`。省略 → 盤面既定。 */
+  /** agent の既定ティア(盤面が agent 名で持つ、ADR 0410 決定1)。省略 → 盤面既定。 */
   agentTier: Tier | undefined;
   /** 盤面既定の段(盤面設定、ADR 0200 決定4)。 */
   boardTier: Tier;
@@ -503,7 +488,42 @@ interface ExecutionDefaults {
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と段の一覧(説明つき、順序どおり —— ADR 0200 決定3)と盤面設定を1往復で。
  *  表は (provider, model, effort) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
 export function readExecutionSettings(db: Db) {
-  return { table: loadExecutionSettingTable(db), tiers: readTiers(db), ...loadExecutionDefaults(db) };
+  return { table: loadExecutionSettingTable(db), tiers: readTiers(db), agentTiers: loadAgentTiers(db), ...loadExecutionDefaults(db) };
+}
+
+/** agent の既定ティアの行、agent 名の順。孤児の行(registry に無い agent)も載る —— 盤面は registry を読まない。 */
+function loadAgentTiers(db: Db): AgentTierRow[] {
+  return db.prepare("SELECT a.agent, t.name AS tier FROM agent_tiers a JOIN tiers t ON t.id = a.tier_id ORDER BY a.agent").all() as AgentTierRow[];
+}
+
+/** 行の一覧から agent の既定ティアを引く —— 組み込みの印のついた agent は持たない(ADR 0410 決定6)。読み手はどれもこの1本を通る。 */
+function defaultTierOf(rows: readonly AgentTierRow[], agent: { name: string; builtin?: boolean }): Tier | undefined {
+  return agent.builtin ? undefined : rows.find((row) => row.agent === agent.name)?.tier;
+}
+
+/** agent が実際に走る段(ADR 0410 決定2・4): 既定ティアがあればそれ、無ければ盤面既定。pin の照合は同じ式を設定の断面に当てる。 */
+const runningTierOf = (rows: readonly AgentTierRow[], defaultTier: Tier, agent: { name: string; builtin?: boolean }): Tier => defaultTierOf(rows, agent) ?? defaultTier;
+
+export function agentRunningTier(db: Db, agent: { name: string; builtin?: boolean }): Tier {
+  return runningTierOf(loadAgentTiers(db), boardDefaultTier(db), agent);
+}
+
+/** registry の agent 一覧の、その名前の組み込みでない entry(ADR 0410 決定3・6)。無ければ undefined —— registry に「在る」の判定はこの1本。 */
+export function registryAgentOf<A extends { name: string; builtin?: boolean }>(agents: readonly A[], name: string): A | undefined {
+  return agents.find((agent) => agent.name === name && !agent.builtin);
+}
+
+/** agent の一覧に盤面の既定ティアを添え、registry に無い agent(組み込みの名前を含む)の行を孤児として分ける(ADR 0410 決定5・6)。
+ *  HTTP と MCP の agent 一覧が共有する。 */
+export function withAgentTiers<A extends { name: string; builtin?: boolean }>(db: Db, agents: readonly A[]): { agents: Array<A & { tier?: Tier }>; orphanTiers: AgentTierRow[] } {
+  const rows = loadAgentTiers(db);
+  return {
+    agents: agents.map((agent) => {
+      const tier = defaultTierOf(rows, agent);
+      return tier === undefined ? agent : { ...agent, tier };
+    }),
+    orphanTiers: rows.filter((row) => !registryAgentOf(agents, row.agent)),
+  };
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
@@ -566,7 +586,7 @@ const newTierSchema = z.object({ name: requiredTextSchema, description: required
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
  *  `key` の無い `row` は追加、`key` つきの `row` はその行の編集、`delete_row` は削除。段は `insert_tier`(一覧の添字の位置へ)・
- *  `edit_tier`(名前で名指し、説明と位置)・`rename_tier`(`changeExecutionSettings` が agent.md を書き換えてから)・`delete_tier`(論理削除)。 */
+ *  `edit_tier`(名前で名指し、説明と位置)・`rename_tier`・`delete_tier`(論理削除)。`agent_tier` は agent の既定ティアの設定と解除。 */
 export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({
     setting: z.literal("row"),
@@ -609,6 +629,8 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({ setting: z.literal("rename_tier"), name: requiredTextSchema, to: requiredTextSchema }),
   z.object({ setting: z.literal("delete_tier"), name: requiredTextSchema }),
   z.object({ setting: z.literal("default_tier"), value: requiredTextSchema }),
+  // agent の既定ティア(ADR 0410 決定3)。null は解除
+  z.object({ setting: z.literal("agent_tier"), agent: requiredTextSchema, tier: requiredTextSchema.nullable() }),
   z.object({ setting: z.literal("judgement_tier"), value: requiredTextSchema }),
   // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く(ADR 0150 決定4)。
   // 拒否文は盤面のコードが発する文なので、ADR の引用は文でなくここに置く(ADR 0207)
@@ -642,23 +664,33 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
  *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。変更の行き先の段が消えていれば `target_tier`(issue #1458)。昇格 / 降格の提案の pin はフラグの現在値。
- *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。
- *  `to` が pin の段のいまの1段下でなくなれば(挿入・並べ替え・削除)`tier_order`(ADR 0200 決定4 / issue #1438)。
+ *  agent の段の提案は、agent が実際に走る段(既定ティア、無ければ盤面既定)が pin の段でなくなれば `agent_tier`、根拠の行が崩れれば(消えた行も)
+ *  `rows`、`to` が pin の段のいまの1段下でなくなれば(挿入・並べ替え・削除)`tier_order`(ADR 0410 決定4 / ADR 0200 決定4 / issue #1438)。
+ *  agent が registry から消えたことは表からは見えないので、承認と周期の照合が言う(`settleStaleProposals`)。
  *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。
  *  段の説明の提案は id で引いた生きている段の説明を比べ、段が消えていれば null(ADR 0200 決定7)。
  *  Interview の提案は根拠の行を全欄で比べ(崩れれば `rows`)、対象と一致する行が測る段に足されれば `target_row`、測る段が消えれば null。
  *  段は id で比べる(issue #1436)—— 改名はどの pin も崩さない。消した段の id は生きている段に引けないので崩れる。 */
 export function routingPinChanges(
-  proposal: RoutingProposal | RegistryProposal,
-  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { id: TierId; name: Tier; description: string }[] },
-): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours" | "target_tier" | "target_row"> | null {
+  proposal: RoutingProposal,
+  settings: Pick<ReturnType<typeof readExecutionSettings>, "table" | "learnerPromoted" | "agentTiers" | "defaultTier"> & {
+    tiers: readonly { id: TierId; name: Tier; description: string }[];
+  },
+): Array<
+  "tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours" | "target_tier" | "target_row" | "agent_tier"
+> | null {
   const liveName = (id: TierId) => settings.tiers.find((t) => t.id === id)?.name;
-  if (proposal.kind === "registry") {
+  if (proposal.op === "agent_tier") {
+    const running = runningTierOf(settings.agentTiers, settings.defaultTier, { name: proposal.agent });
     const held = proposal.pin.rows.every((pinned) =>
       settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === liveName(pinned.tier)),
     );
     const adjacent = settings.tiers[settings.tiers.findIndex((t) => t.id === proposal.pin.tier) - 1]?.id === proposal.to;
-    return [...(held ? [] : (["rows"] as const)), ...(adjacent ? [] : (["tier_order"] as const))];
+    return [
+      ...(running === liveName(proposal.pin.tier) ? [] : (["agent_tier"] as const)),
+      ...(held ? [] : (["rows"] as const)),
+      ...(adjacent ? [] : (["tier_order"] as const)),
+    ];
   }
   if (proposal.op === "tier_description") {
     const tier = settings.tiers.find((t) => t.id === proposal.tier);
@@ -696,21 +728,6 @@ export function routingPinChanges(
 export function composeRoutingRow(proposal: RoutingRowProposal<Tier>, amendment?: RoutingRowChange): ExecutionSettingRow {
   return { ...proposal.pin, ...proposal.change, ...amendment };
 }
-
-/** tier の提案の agent 側の pin(issue #920): registry の agent の tier が焼いた段のままか。agent.md は段を名前で書くので、
- *  生きている段の名前から id に引いて比べる(issue #1436)。agent が消えていても崩れている。 */
-export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: string } | undefined, tiers: readonly { id: TierId; name: Tier }[]): Array<"agent_tier"> {
-  return tiers.some((t) => t.id === proposal.pin.tier && t.name === agent?.tier) ? [] : ["agent_tier"];
-}
-
-/** 改名の窓(ADR 0401 決定6): agent が tier を書いていて、それが盤面の生きた段の名前でない —— 段の改名が registry に着地し盤面で
- *  止まった間で、registry の提案を照合しない。agent が消えた・tier を書いていないなら今どおり崩れている。 */
-export function inTierRenameWindow(tier: string | undefined, tiers: readonly Tier[]): boolean {
-  return tier !== undefined && !tiers.includes(tier);
-}
-
-/** 盤面の段でない段を書いた agent の名指し(tier の提案の門と、改名の窓の承認の拒否)。 */
-export const undeclaredTier = (agent: string, tier: string) => `agent ${agent} declares tier ${tier}, which is not one of the board's tiers`;
 
 /** 段を足す提案の修正値(ADR 0200 決定8 / ADR 0150 決定2): 名前・説明・位置の少なくとも1つ。値の検査(名前の一意など)は
  *  回答時に段の挿入の扉がやり直す。 */
@@ -764,8 +781,8 @@ export function assertTierRunnableFor(db: Db, agent: string, providers: readonly
   throw new DomainError(`the execution-setting table has ${why}, so the agent would be skipped`);
 }
 
-/** tier の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の tier より下の任意のティア(段の順序は盤面の一覧)。 */
-export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: RegistryProposal<Tier>, amendment: unknown): Tier {
+/** agent の段の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の段より下の任意の段(段の順序は盤面の一覧)。 */
+export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: AgentTierProposal<Tier>, amendment: unknown): Tier {
   const parsed = z.object({ to: requiredTextSchema }).strict().safeParse(amendment);
   if (!parsed.success || !tiers.includes(parsed.data.to) || tiers.indexOf(parsed.data.to) >= tiers.indexOf(proposal.pin.tier)) {
     throw new DomainError(`an agent tier amendment takes only to, a tier below ${proposal.pin.tier}`);
@@ -784,14 +801,14 @@ export function parseTierDescriptionAmendment(amendment: unknown): string {
 /** 変更を書き、操作イベントとして経路つきで残す(GLOSSARY.md「管理MCP」)。task を
  *  持たない盤面イベントなので task_id は NULL、帰属は人間。表を書くのはこの1本なので、routing の提案の陳腐化の hook
  *  (ADR 0150 決定1)もここに置く。`questionId` は提案 question への回答で適用したときの印で、meta-review の材料と「人間が変えた行」から外れる(ADR 0151)。
- *  返り値は execution_settings_changed の event id(何も変わらなければ null)。`listAgents` は段の削除の照合が読む(`tierDeletionBlockers`)。 */
+ *  返り値は execution_settings_changed の event id(何も変わらなければ null)。`listAgents` は registry の agent 一覧で、既定ティアの
+ *  設定が agent の存在を確かめる(registry の無い盤面では無い)。 */
 export function applyExecutionSettingsChange(
   db: Db,
   change: ExecutionSettingsChange,
   origin: EventOrigin,
   at: Date,
-  questionId?: string,
-  listAgents?: ListAgentTiers,
+  { questionId, listAgents }: { questionId?: string; listAgents?: ListAgents } = {},
 ): number | null {
   if ((change.setting === "insert_tier" || change.setting === "edit_tier") && change.description !== undefined) {
     change = { ...change, description: normalizeText(change.description) };
@@ -801,6 +818,8 @@ export function applyExecutionSettingsChange(
     const { description, ...rest } = change;
     if (description === liveTierRows(db).find((tier) => tier.name === rest.name)?.description) change = rest;
   }
+  // registry は transaction の外で読む —— 読めない registry の止まり(ADR 0403 決定5)を巻き戻さない。解除は孤児も消せるよう読まない(ADR 0410 決定5)
+  if (change.setting === "agent_tier" && change.tier !== null) assertRegistryAgent(change.agent, listAgents);
   return db.transaction(() => {
     switch (change.setting) {
       case "row": {
@@ -840,7 +859,19 @@ export function applyExecutionSettingsChange(
       case "edit_tier":
       case "rename_tier":
       case "delete_tier":
-        if (!applyTierChange(db, change, listAgents)) return null;
+        if (!applyTierChange(db, change)) return null;
+        break;
+      case "agent_tier":
+        if (change.tier !== null) assertKnownTier(db, "tier", change.tier);
+        // 組み込みの名前に残った孤児の行も消せるよう、印を付けずに引く
+        if ((defaultTierOf(loadAgentTiers(db), { name: change.agent }) ?? null) === change.tier) return null;
+        if (change.tier === null) db.prepare("DELETE FROM agent_tiers WHERE agent = ?").run(change.agent);
+        else {
+          db.prepare(`INSERT INTO agent_tiers (agent, tier_id) VALUES (?, ${liveTierId("?")}) ON CONFLICT (agent) DO UPDATE SET tier_id = excluded.tier_id`).run(
+            change.agent,
+            change.tier,
+          );
+        }
         break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
@@ -864,7 +895,8 @@ export function applyExecutionSettingsChange(
       origin,
       payload: {
         kind: "execution_settings_changed",
-        ...change,
+        // 既定ティアは段の id で焼く —— 段は改名されうる(ADR 0410 決定3)
+        ...(change.setting === "agent_tier" ? { setting: change.setting, agent: change.agent, tier_id: change.tier === null ? null : tierIdOf(db, change.tier) } : change),
         ...(questionId && { question_id: questionId }),
         // 種の段は id で焼く —— 段は改名されうる(issue #1436)
         ...(change.setting === "row" && change.seed && { tier_id: tierIdOf(db, change.row.tier) }),
@@ -878,38 +910,22 @@ export function applyExecutionSettingsChange(
   })();
 }
 
-/** registry の agent.md の `tier` を旧い名前から新しい名前へ書き換えて着地させる口(registry の無い盤面では無い)。 */
-export interface RenameAgentTiersInput {
-  from: Tier;
-  to: Tier;
-  message: string;
-}
-export type RenameAgentTiers = (input: RenameAgentTiersInput) => Promise<void>;
-
-/** 扉(settings タブ / 管理MCP)が撃つ1つの変更。段の改名だけは、agent.md の `tier` が名前で書かれているので、先に registry へ
- *  書き換えを着地させてから盤面の名前を変える(ADR 0200 決定2)。push は DB transaction の外なので、着地できなければ改名ごと
- *  拒む(ADR 0150 決定5 と同じ扉)。書き換えの前に名前を検査する —— 拒む改名で registry を動かさない。
- *  shortcut: 着地と transaction の間に別の変更が名前を取ると、registry だけ新しい名前になる。扉が増えて競合が見えたら直す。 */
-export async function changeExecutionSettings(
-  db: Db,
-  change: ExecutionSettingsChange,
-  origin: EventOrigin,
-  now: () => Date,
-  renameAgentTiers?: RenameAgentTiers,
-  listAgents?: ListAgentTiers,
-): Promise<void> {
-  if (change.setting === "rename_tier") {
-    assertKnownTier(db, "tier", change.name);
-    assertTierName(db, change.to);
-    try {
-      await renameAgentTiers?.({ from: change.name, to: change.to, message: tierRenameMessage(change.name, change.to) });
-    } catch (err) {
-      if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
-      throw err;
-    }
+/** 既定ティアを書く前の registry の照合(ADR 0410 決定3・6): 組み込みでない agent として在ること。読めなければ断る。 */
+function assertRegistryAgent(agent: string, listAgents?: ListAgents): void {
+  if (!listAgents) throw new DomainError(`this board has no registry, so agent ${agent} cannot have a default tier; it runs on the board's default tier`);
+  let agents: ReturnType<ListAgents>;
+  try {
+    agents = listAgents();
+  } catch (err) {
+    throw new DomainError(`the registry could not be read to check that agent ${agent} exists: ${err instanceof Error ? err.message : String(err)}`);
   }
-  applyExecutionSettingsChange(db, change, origin, now(), undefined, listAgents);
+  if (registryAgentOf(agents, agent)) return;
+  throw new DomainError(agents.some((a) => a.name === agent) ? builtInAgentHasNoTier(agent) : `agent ${agent} is not in the registry`);
 }
+
+/** 組み込みの agent は既定ティアを持たない理由(ADR 0410 決定6)。既定ティアの設定と段を下げる提案の門が同じ文で断る。 */
+export const builtInAgentHasNoTier = (agent: string) =>
+  `agent ${agent} is built-in: the tier its reviews and Interviews run on is decided by the review tier and the Interview rules, not by an agent default tier`;
 
 /** 行の Quarantine の解除の門1(ADR 0184 決定5 / ADR 0218 決定2): その (provider, model)、effort の Quarantine なら
  *  (provider, model, effort) の行が表から無くなった Quarantine の question を、回答なしで盤面名義に決着させる。誰も判断して
@@ -939,82 +955,39 @@ export function quarantineRowsOffClaudeEffortRules(db: Db, now: Date): void {
   }
 }
 
-/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合と、段の削除の照合(`tierDeletionBlockers`)が読む。 */
-type ListAgentTiers = () => readonly { name: string; tier?: string }[];
+/** registry の agent 一覧を読む口(registry の無い盤面では無い)。既定ティアの設定と、段を下げる提案の承認・周期の照合が agent の存在を読む。 */
+export type ListAgents = () => readonly { name: string; builtin?: boolean }[];
 
-/** registry の提案の照合が読む registry(issue #920 / ADR 0401 決定6): agent 一覧と承認の commit の探索。 */
-export interface RegistryTiers {
-  list: ListAgentTiers;
-  tierApproval?: FindTierApproval;
-}
-
-/** 承認の commit が registry にあり盤面の記録が無い registry の提案を、適用済みとして観測で閉じる(ADR 0401 決定6)。下げ先は commit から
- *  取る(修正値つきの approve で提案の `to` と違いうる —— ADR 0150 決定2)。`agent_tier_changed` と決着は1つの transaction —— 間で死ねば
- *  次の照合が event を二重に刻む。記録の後・回答の前に死んだ承認(ADR 0288 決定3 の event は残る)には刻み直さない。
- *  回答した人間・経路は commit から引けないので、event は人間の名義で盤面の経路に置く。 */
-export function settleProposalAsApplied(db: Db, questionId: string, proposal: RegistryProposal, approval: TierApproval, at: Date): void {
-  db.transaction(() => {
-    if (!settleQuestionAsObserved(db, questionId, { kind: "routing_proposal_applied", question_id: questionId, registry_commit: approval.commit }, at)) return;
-    if (db.prepare("SELECT 1 FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = ?").get(questionId)) return;
-    const named = proposalTierNames(db, proposal) as RegistryProposal<Tier>;
-    appendEvent(db, { taskId: null, actorId: HUMAN_ACTOR_ID, origin: "board", payload: agentTierChangedPayload(named, approval.to, questionId, approval.commit), at });
-  })();
-}
-
-/** tier の提案の approve が registry に着地した記録(issue #920)。回答の書き込みと適用済みの決着(ADR 0401 決定6)が同じこの1本で組む ——
- *  `from` は段を名前に引いた提案の pin の段。 */
-export function agentTierChangedPayload(proposal: RegistryProposal<Tier>, to: Tier, questionId: string, registryCommit: string) {
-  return { kind: "agent_tier_changed" as const, agent: proposal.agent, from: proposal.pin.tier, to, question_id: questionId, registry_commit: registryCommit };
-}
-
-/** 陳腐化の決着(ADR 0150 決定1): open な routing / registry の提案の pin を表・フラグの現在値と照合し、崩れた question を
- *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`registry` を渡せば registry の提案の
- *  (agent, tier) も照合する —— routing の due 判定の直前(issue #920)で、registry の変更は盤面の event ではないので
- *  observed_event_id は null。崩れた pin は、承認の commit があれば適用済み、改名の窓なら照合しない、どちらでもなければ stale
- *  (ADR 0401 決定6 —— `landAgentTier` と同じ順)。registry の log が読めなければその提案はこの回は照合しない。 */
-export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, registryTiers?: RegistryTiers): void {
+/** 陳腐化の決着(ADR 0150 決定1): open な routing の提案の pin を表・フラグ・段・agent の既定ティアの現在値と照合し、崩れた question を
+ *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`listAgents`(registry の agent 一覧)を渡せば、agent が
+ *  registry から消えた agent の段の提案も `changed: null`(pin が名指したものが無い)で決着させる —— routing の due 判定の直前で
+ *  (ADR 0410 決定4)、registry の変更は盤面の event ではないので observed_event_id は null。読めなければその回は agent を照合しない。 */
+export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, listAgents?: ListAgents): void {
   const settings = { ...readExecutionSettings(db), tiers: liveTierRows(db) };
-  // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合せず、投げない
-  // —— pickup を止めるのは、読みが通る読み込みの1点が立てる registryUnreadable(ADR 0403 決定5)
-  let agents: readonly { name: string; tier?: string }[] | null | undefined;
-  const readAgents = (list: ListAgentTiers) => {
-    try {
-      return list();
-    } catch (err) {
-      console.warn(`[execution-setting] registry pins not checked: ${String(err)}`);
-      return null;
-    }
-  };
   const open = db
-    .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') IN ('routing', 'registry')")
+    .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'routing'")
     .all() as Array<{ id: string; question_proposal: string }>;
-  for (const { id, question_proposal } of open) {
-    const proposal = JSON.parse(question_proposal) as RoutingProposal | RegistryProposal;
-    let changed: ReturnType<typeof routingPinChanges> | ReturnType<typeof registryPinChanges>;
-    if (proposal.kind === "registry" && registryTiers) {
-      agents = agents === undefined ? readAgents(registryTiers.list) : agents;
-      if (agents === null) continue;
-      const agent = agents.find((a) => a.name === proposal.agent);
-      changed = registryPinChanges(proposal, agent, settings.tiers);
-      if (changed.length === 0) continue;
-      let approval: TierApproval | undefined;
+  // registry を読むのは agent の段の提案が open なときだけ(poll ごとに registry を読まない)。読めなくても投げない —— pickup を止めるのは、
+  // 読みが通る読み込みの1点が立てる registryUnreadable(ADR 0403 決定5)
+  let agents: ReturnType<ListAgents> | null | undefined;
+  // registry の無い盤面・読めない回は「消えた」と見えないので true
+  const notSeenGone = (agent: string) => {
+    if (!listAgents) return true;
+    if (agents === undefined) {
       try {
-        approval = registryTiers.tierApproval?.(proposal.agent, id);
+        agents = listAgents();
       } catch (err) {
-        if (!(err instanceof RegistryLogUnreadableError)) throw err;
-        console.warn(`[execution-setting] question ${id} not checked: ${err.message}`);
-        continue;
+        console.warn(`[execution-setting] agent tier proposals not checked against the registry: ${String(err)}`);
+        agents = null;
       }
-      if (approval) {
-        settleProposalAsApplied(db, id, proposal, approval, at);
-        continue;
-      }
-      if (inTierRenameWindow(agent?.tier, settings.tiers.map((t) => t.name))) continue;
-    } else {
-      changed = routingPinChanges(proposal, settings);
     }
+    return agents === null || registryAgentOf(agents, agent) !== undefined;
+  };
+  for (const { id, question_proposal } of open) {
+    const proposal = JSON.parse(question_proposal) as RoutingProposal;
+    const changed = proposal.op === "agent_tier" && !notSeenGone(proposal.agent) ? null : routingPinChanges(proposal, settings);
     if (changed?.length === 0) continue;
-    settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: proposal.kind, changed, observed_event_id: observedEventId }, at);
+    settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: "routing", changed, observed_event_id: observedEventId }, at);
   }
 }
 
@@ -1044,6 +1017,9 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
   };
 }
 
+/** selector が読む agent の断面: entry と、既定ティアを引く名前。 */
+type SelectorAgent = Pick<AgentDefinition, "provider"> & Partial<Pick<AgentDefinition, "name" | "builtin">>;
+
 /** selector が読む task の断面(要求の列と、review か否か)。 */
 type SelectorTask = Pick<Task, "id" | "type" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 
@@ -1056,11 +1032,12 @@ type SelectorTask = Pick<Task, "id" | "type" | "tier" | "priority" | "review_tie
  *  settings タブと管理MCP が書く —— ADR 0110 決定5)。pickup ごとに読み直すので、
  *  書いた値は次の pickup / skipped 表示から効く。
  *
- *  `provider` / `tier` の文字列が列挙・盤面の段の一覧に収まっていることは、定義を受け入れる門
- *  (`assertValidAgentDefinition`)が既に保証している。 */
+ *  `provider` の文字列が列挙に収まっていることは、定義を受け入れる門(`assertValidAgentDefinition`)が既に保証している。
+ *  agent の既定ティアは盤面から名前で引く —— 名前の無い定義(registry の無い盤面の暗黙の agent、ADR 0140 決定3)と組み込み
+ *  (ADR 0410 決定6)は持たない。 */
 function selectorInputFor(
   db: Db,
-  definition: Pick<AgentDefinition, "provider" | "tier">,
+  definition: SelectorAgent,
   task: SelectorTask | undefined,
 ): SelectorInput {
   const defaults = loadExecutionDefaults(db);
@@ -1078,7 +1055,7 @@ function selectorInputFor(
     taskTier: review ? undefined : task?.tier ?? undefined,
     priority: review ? defaults.reviewPriority : task?.priority ?? defaults.priority,
     reviewTier: interviewTier ?? (review ? task.review_tier ?? undefined : undefined),
-    agentTier: definition.tier,
+    agentTier: definition.name === undefined ? undefined : defaultTierOf(loadAgentTiers(db), { name: definition.name, builtin: definition.builtin }),
     boardTier: defaults.defaultTier,
     tiers,
     advisorCeiling: defaults.advisorCeiling,
@@ -1089,7 +1066,7 @@ function selectorInputFor(
  *  queue の skipped 表示が、観測で育つ除外集合に対して selector を引き直すための口。 */
 export function executionSettingsFor(
   db: Db,
-  definition: Pick<AgentDefinition, "provider" | "tier">,
+  definition: SelectorAgent,
   task: SelectorTask | undefined,
 ): ExecutionSetting[] {
   const input = selectorInputFor(db, definition, task);

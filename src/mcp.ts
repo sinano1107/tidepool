@@ -1581,11 +1581,11 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "Read the current execution-setting table, the board's tiers with their descriptions in order, the advisor ceiling (off / sonnet / opus / fable / fable_then_opus), the provider rank, the default priorities (`priority` for work tasks that request none, `reviewPriority` for every review task), " +
-        "whether the learner is promoted, the board's default tier (`defaultTier` — the tier of tasks that request none and whose agent declares none, " +
+        "whether the learner is promoted, each agent's default tier (`agentTiers`), the board's default tier (`defaultTier` — the tier of tasks that request none and whose agent has no default tier, " +
         "and of the board's drafts) and judgement tier (`judgementTier` — the tier the board's own judgement runs on: retrospective Board calls resolve " +
         "on its anthropic row, and periodic meta-reviews request it), and every past routing proposal (agent tier proposals included) with its answer, the " +
         "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag, agent tier or tier description " +
-        "changed, an Interview proposal's evidence row changed or a table row now matches its target, or what it pinned is gone: the row deleted or its effort changed, or the tier deleted). An applied agent tier proposal carries the registry commit it landed as applied. One whose approval reached the registry before the board recorded the answer is settled as observed and still carries that commit, but its answer, amendment and comment are null: the human's answer is not recovered. " +
+        "changed, an Interview proposal's evidence row changed or a table row now matches its target, or what it pinned is gone: the row deleted or its effort changed, the tier deleted, or the agent no longer in the registry). " +
         "Proposals come oldest first. " +
         nextDescription("read_routing_settings", "proposals", "The table and settings come"),
       inputSchema: { next },
@@ -1605,10 +1605,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "event ids of sessions of diverged shadow rows (the shadow rows' worker_spawned_event_id) — for promote rows from before promotion, for " +
         "demote rows where the promoted learner's choice ran. The board shows the human, for each tier, workspace, learner cell and table cell " +
         "you cite, the count and both cells' track records, and the diverged pickups since the learner flag last changed that you did not cite. op agent_tier lowers a non-built-in " +
-        "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
+        "agent's default tier by exactly one step (an agent with no default tier runs on the board's default tier): agent names it, " +
         "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's production sessions whose tier came " +
         "from its default tier; it is refused when the execution-setting table has no runnable row (one not under a row quarantine) at the target tier for any of the agent's providers. The " +
-        "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. op tier_description rewrites " +
+        "human may amend to with any lower tier when approving, and approval sets it as the agent's default tier on the board. op tier_description rewrites " +
         "the description of one of the board's tiers (tier) to description, one line: a tier's description defines it for everyone who requests it, " +
         "so propose it when requests for that tier across workspaces or writers show its definition is off. evidence lists the worker_spawned event ids " +
         "of production sessions of tasks that requested that tier, whose tier source is task, since its description last changed (rows of " +

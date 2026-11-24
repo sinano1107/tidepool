@@ -47,7 +47,6 @@ import {
   taskVerbSwap,
 } from "./tasks.js";
 import { liveSession, type TeardownAction } from "./teardown.js";
-import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type Transcript, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
@@ -1558,7 +1557,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   private validateDefaults(registry: Registry): void {
     resolveExecutionWorkspace(registry, this.options.workspace, null, this.workspacesDir);
     // 既定 agent は work を走らせる —— 組み込みに解決されるなら起動しない(ADR 0228 決定1)
-    resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db), "work");
+    resolveExecutionAgent(registry, this.options.agent, null, "work");
   }
 
   start(task: Task, sessionId: number, setting: ExecutionSetting, query?: InjectionQuery): void {
@@ -1659,7 +1658,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const agent = resolveAgentOrQuarantine(
       this.options.db,
       (taskAssignee) =>
-        resolveExecutionAgent(registry, this.options.agent, taskAssignee, tierNames(this.options.db), task.type),
+        resolveExecutionAgent(registry, this.options.agent, taskAssignee, task.type),
       taskAgent,
       this.options.clock.now(),
       stopped,

@@ -7,7 +7,6 @@ import {
   loadRegistry,
   normalizeProviderEntries,
 } from "../src/registry.js";
-import { seedTierNames } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 it("Provider は1つの正準 Harness に解決され、agent 定義に harness を持たない(ADR 0098)", () => {
@@ -20,13 +19,13 @@ it("Provider は1つの正準 Harness に解決され、agent 定義に harness 
 });
 
 it("OpenAI / Codex の正準経路に無い advisor は登録時と pickup 時の共有検査で拒否される(ADR 0098)", () => {
-  expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: true }] }, seedTierNames)).toThrow(
+  expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: true }] })).toThrow(
     new InvalidAgentDefinitionError(
       "deckhand",
       'canonical route "openai -> codex" does not offer an advisor — a definition declaring one does not stand',
     ),
   );
-  expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }] }, seedTierNames)).not.toThrow();
+  expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }] })).not.toThrow();
 });
 
 // ADR 0337 決定1: skill の提供は経路の能力ではない —— 非空の allowlist を持つ agent も openai で、省略なら Provider 全部に
@@ -40,7 +39,7 @@ it.each([
   });
   const registry = loadRegistry(dir, "purely-local");
   expect(registry.agents.deckhand!.provider).toEqual(entries);
-  expect(() => assertValidAgentDefinition("deckhand", registry.agents.deckhand!, seedTierNames)).not.toThrow();
+  expect(() => assertValidAgentDefinition("deckhand", registry.agents.deckhand!)).not.toThrow();
 });
 
 it("単一文字列の provider は advisor なしの長さ1 entry(ADR 0116 決定2)", () => {
@@ -48,7 +47,7 @@ it("単一文字列の provider は advisor なしの長さ1 entry(ADR 0116 決�
 });
 
 it("走れる経路が1つも無い provider の集合は宣言を満たす経路が無いとして拒否される(ADR 0116 決定1)", () => {
-  expect(() => assertValidAgentDefinition("deckhand", { provider: [] }, seedTierNames)).toThrow(
+  expect(() => assertValidAgentDefinition("deckhand", { provider: [] })).toThrow(
     /no provider entry is left/,
   );
 });

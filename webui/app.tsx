@@ -21,7 +21,6 @@ const SETTLED_BY_OBSERVATION_COPY = {
   task_branch_lost_observed: 'observed · task branch lost',
   quarantine_released: 'observed · quarantine lifted',
   routing_proposal_stale: 'observed · routing proposal stale',
-  routing_proposal_applied: 'observed · routing proposal applied',
   memory_proposal_stale: 'observed · memory proposal stale',
 } satisfies Record<import('../src/wire-contract').SettledByObservation, string>;
 /** done の work の行の着地の状態の札(ADR 0265 決定7)。状態を足して文言を足さないと typecheck が落ちる。 */
@@ -259,7 +258,7 @@ function toQuestionCardShape(
         targets: q.question_proposal.targets!, workspace: q.question_proposal.workspace!,
       },
     }),
-    ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const, amendBelow: q.question_proposal.pin && 'tier' in q.question_proposal.pin ? q.question_proposal.pin.tier : undefined }),
+    ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'agent_tier' && { amendable: 'agent_tier' as const, amendBelow: q.question_proposal.pin && 'tier' in q.question_proposal.pin ? q.question_proposal.pin.tier : undefined }),
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...(candidateId !== undefined && { amendable: 'memory' as const, candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId }),
     // 理由必須の選択肢は盤面の `needs_comment` 注釈が答える(ADR 0179 決定4)

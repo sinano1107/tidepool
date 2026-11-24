@@ -16,9 +16,9 @@ import {
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
+  type ListAgents,
   loadExecutionSettingTable,
   pinnedTargetRowQuarantined,
-  type RegistryTiers,
   readExecutionSettings,
   selectable,
   windowMatchesSetting,
@@ -379,8 +379,8 @@ export function startScheduler(deps: {
   /** ADR 0377 決定4: 盤面の固定点(ADR 0040 の状態パスと registry clone)。pickup の述語が名前の場所との交差を拒む。
    *  Absent → 守る固定点を持たない盤面(テスト盤面の既定形)。 */
   boardState?: BoardStatePath[];
-  /** registry の agent 一覧と承認の commit の探索(issue #920 / ADR 0401 決定6): routing の due 判定の直前に tier の提案を照合する。Absent → registry の無い盤面。 */
-  registryTiers?: RegistryTiers;
+  /** registry の agent 一覧(ADR 0410 決定4): routing の due 判定の直前に、agent の段の提案の agent が registry に在るかを照合する。Absent → registry の無い盤面。 */
+  listAgents?: ListAgents;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
   retrospectiveCalls: RetrospectiveCallDeps;
   /** 着地の収束(ADR 0241 決定5): pickup の契機はまず収束を突き、pickup はその回が終わってから判定する ——
@@ -415,7 +415,7 @@ export function startScheduler(deps: {
     cliAuth,
     githubAuth,
     boardState,
-    registryTiers,
+    listAgents,
     retrospectiveCalls,
     translationClient,
     converge,
@@ -950,7 +950,7 @@ export function startScheduler(deps: {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前。主題の初回は登録しない —— 人間が扉で起こす(ADR 0300 決定2)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
-      registerDueMetaReviews(db, clock.now(), registryTiers);
+      registerDueMetaReviews(db, clock.now(), listAgents);
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
       refireRetrospectiveCalls(db, retrospectiveCalls, () => clock.now());
       // ADR 0369 決定4 / ADR 0119 決定5: 次の pickup で済んでいない解放が受理から見えなくなる。slot 占有・halt で返る前に同期で Quarantine を戻す。

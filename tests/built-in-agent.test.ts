@@ -11,7 +11,6 @@ import {
   REVIEWER_AUTHORITY_PROFILE,
 } from "../src/registry.js";
 import { listQueue, nextSlotTask, registerTask, resolveTaskAgent } from "../src/tasks.js";
-import { seedTierNames } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -74,7 +73,7 @@ it("組み込みの fugu は authority/auditor.yaml の無い registry でも re
   const dir = await makeRegistry();
   const registry = loadRegistry(dir, "purely-local");
 
-  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", seedTierNames, "review");
+  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", "review");
 
   expect(resolved.name).toBe("fugu");
   expect(resolved.profile).toEqual(REVIEWER_AUTHORITY_PROFILE);
@@ -87,7 +86,7 @@ it("組み込みに解決される work の実行解決は失敗し、agent 名�
 
   const resolved = resolveAgentOrQuarantine(
     db,
-    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, "work"),
+    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, "work"),
     "fugu",
     new Date(0),
   );
@@ -104,7 +103,7 @@ it("shadow している間は、その名前の work は registry のエント�
     "purely-local",
   );
 
-  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", seedTierNames, "work");
+  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", "work");
 
   expect(resolved.definition.builtin).toBeUndefined();
   expect(resolved.profile.name).toBe("standard");
@@ -124,7 +123,7 @@ it("組み込みの Interviewer suzumedai も、ファイルが無ければ印�
   expect(builtIn.agents.suzumedai).toMatchObject({ name: "suzumedai", builtin: true, skills: ["@workspace"], icon: "🐠" });
   // ADR 0275 決定3: 規律は盤面が運ぶので本文は空
   expect(builtIn.agents.suzumedai!.systemPrompt).toBe("");
-  expect(resolveExecutionAgent(builtIn, "deckhand", "suzumedai", seedTierNames, "review").profile).toEqual(REVIEWER_AUTHORITY_PROFILE);
+  expect(resolveExecutionAgent(builtIn, "deckhand", "suzumedai", "review").profile).toEqual(REVIEWER_AUTHORITY_PROFILE);
 
   const shadowed = loadRegistry(
     await makeRegistry({
@@ -142,7 +141,7 @@ it("suzumedai に解決される work の実行解決も失敗し、agent 名の
 
   const resolved = resolveAgentOrQuarantine(
     db,
-    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, "work"),
+    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, "work"),
     "suzumedai",
     new Date(0),
   );
@@ -150,7 +149,7 @@ it("suzumedai に解決される work の実行解決も失敗し、agent 名の
   expect(resolved).toBeUndefined();
   expect(agentNeedsHuman(db, "suzumedai")).toBe(true);
   // 未知の名前としてではなく、組み込みの検査で落ちる
-  expect(() => resolveExecutionAgent(registry, "deckhand", "suzumedai", seedTierNames, "work")).toThrow(
+  expect(() => resolveExecutionAgent(registry, "deckhand", "suzumedai", "work")).toThrow(
     /runs only reviews, Interviews, memory repairs and routing repairs/,
   );
 });
@@ -161,7 +160,7 @@ it.each(["memory_repair", "routing_repair"] as const)("suzumedai に解決され
 
   const resolved = resolveAgentOrQuarantine(
     db,
-    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, type),
+    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, type),
     "suzumedai",
     new Date(0),
   );

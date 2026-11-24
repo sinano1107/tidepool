@@ -18,7 +18,6 @@ import {
   type Registry,
   refreshRegistry,
 } from "../src/registry.js";
-import { seedTierNames } from "./fakes.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeMinimalRegistry(workspaceNames: string[]): Registry {
@@ -181,39 +180,19 @@ describe("loadRegistry", () => {
     expect(registry.agents.tako!.icon).toBe("\u{1F419}");
   });
 
-  // ADR 0110 決定1: 実行設定は agent.md から出ていった。読み込みは倒れず(退役
-  // フィールドを名前で覚えるだけ)、拒否するのは登録と pickup の門である。
-  it("退役した model / effort は読み込みを倒さず、その名前が retiredFields に残る", async () => {
+  // ADR 0410 決定1・7: 段は盤面が持ち、実行設定の退役欄にも専用の拒否文は無い —— どれも schema に無いキーとして、読み込みは名前を
+  // 拾うだけで倒れず、門が名指して拒む(issue #2694)。値の空の1行もキーとして数える。
+  it("tier / model / effort / トップレベルの advisor は未知キーとして読み込みを倒さず、門が名指して拒む", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\neffort: high\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: d\ntier: frontier\nmodel: opus\neffort: high\nadvisor: true\n---\nYou are Deckhand.\n`,
+      "agents/crab.md": `---\nversion: 1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: d\ntier:\n---\np\n`,
     });
-    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
-    expect(agent.retiredFields).toEqual(["model", "effort"]);
-    const clean = await makeRegistry();
-    expect(loadRegistry(clean, "purely-local").agents.deckhand!.retiredFields).toEqual([]);
-  });
-
-  it("値の無い tier: / advisor: の1行は registry 読み取り全体を倒さない(書かれていないと同じ)", async () => {
-    const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier:\nadvisor:\n---\nYou are Deckhand.\n`,
-    });
-    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
-    expect(agent.tier).toBeUndefined();
+    const registry = loadRegistry(dir, "purely-local");
+    const agent = registry.agents.deckhand!;
+    expect(agent.unknownFields).toEqual(["tier", "model", "effort", "advisor"]);
     expect(agent.provider).toEqual([{ name: "anthropic", advisor: false }]);
-    expect(agent.retiredFields).toEqual([]);
-  });
-
-  it("frontmatter の tier は optional の自由文字列: 列挙の検査は門(provider と同じ形)", async () => {
-    const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier: frontier\n---\nYou are Deckhand.\n`,
-    });
-    expect(loadRegistry(dir, "purely-local").agents.deckhand!.tier).toBe("frontier");
-    const unknown = await makeRegistry({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier: luxury\n---\nYou are Deckhand.\n`,
-    });
-    expect(loadRegistry(unknown, "purely-local").agents.deckhand!.tier).toBe("luxury");
-    const without = await makeRegistry();
-    expect(loadRegistry(without, "purely-local").agents.deckhand!.tier).toBeUndefined();
+    expect(() => assertValidAgentDefinition("deckhand", agent)).toThrow("agent deckhand: agent.md has keys it does not accept: tier / model / effort / advisor.");
+    expect(() => assertValidAgentDefinition("crab", registry.agents.crab!)).toThrow("agent.md has keys it does not accept: tier.");
   });
 
   it("frontmatter の description は必須: 欠落は登録時にエラーになる(roster の1行を担う散文 — issue #43 / ADR 0014)", async () => {
@@ -240,8 +219,7 @@ describe("loadRegistry", () => {
     });
     const registry = loadRegistry(dir, "purely-local");
     const agent = registry.agents.deckhand!;
-    expect(agent.unknownFields).toEqual(["providers", "mcp_servers"]);
-    expect(agent.retiredFields).toEqual(["model"]);
+    expect(agent.unknownFields).toEqual(["providers", "mcp_servers", "model"]);
     expect(agent.provider).toEqual([
       { name: "anthropic", advisor: false },
       { name: "moonshot", advisor: false },
@@ -257,27 +235,13 @@ describe("loadRegistry", () => {
       "agents/crab.md": `---\nversion: 1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisors: true\nskills:\n  - "*"\ndescription: d\n---\np\n`,
     });
     const registry = loadRegistry(dir, "purely-local");
-    const check = (name: string) => () => assertValidAgentDefinition(name, registry.agents[name]!, seedTierNames);
+    const check = (name: string) => () => assertValidAgentDefinition(name, registry.agents[name]!);
     expect(check("deckhand")).toThrow(InvalidAgentDefinitionError);
     expect(check("deckhand")).toThrow(
       "agent deckhand: agent.md has keys it does not accept: providers / mcp_servers. Accepted keys: " +
-        "version / authority / description / provider / tier / icon / skills (and name / advisor inside a provider entry)",
+        "version / authority / description / provider / icon / skills (and name / advisor inside a provider entry)",
     );
     expect(check("crab")).toThrow("agent.md has keys it does not accept: provider.advisors.");
-  });
-
-  // ADR 0116 決定2: advisor は entry の性質だけ。トップレベルの `advisor` は真偽値でも
-  // 退役フィールドで、読み込みは倒さず門が entry の綴りを案内して拒む。
-  it("トップレベルの advisor は真偽値でも退役フィールドとして残り、門が entry の綴りを案内して拒否する(ADR 0116 決定2)", async () => {
-    const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: true\n---\nYou are Deckhand.\n`,
-    });
-    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
-    expect(agent.provider).toEqual([{ name: "anthropic", advisor: false }]);
-    expect(agent.retiredFields).toEqual(["advisor"]);
-    expect(() => assertValidAgentDefinition("deckhand", agent, seedTierNames)).toThrow(
-      "provider: [{ name: anthropic, advisor: true }]",
-    );
   });
 
   it("frontmatter の provider を読み込む(ADR 0097 決定1: 推論の向き先・課金元の宣言 — harness とは独立した概念)", async () => {
@@ -305,7 +269,7 @@ describe("loadRegistry", () => {
     });
     const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
     expect(agent.provider).toEqual([{ name: "moonshto", advisor: false }]);
-    expect(agent.retiredFields).toEqual(["advisor"]);
+    expect(agent.unknownFields).toEqual(["advisor"]);
   });
 
   it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {

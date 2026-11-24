@@ -4,12 +4,9 @@ import { promisify } from "node:util";
 import { resolveExecutionAgent } from "./agent.js";
 import {
   type AgentAdmin,
-  changeAgentTier,
   createAgent,
   deleteAgent,
-  findTierApproval,
   listAgentViews,
-  renameAgentTiers,
   updateAgent,
 } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
@@ -90,7 +87,6 @@ import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
 import { type PickupStopped, resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
-import { tierNames } from "./tier.js";
 import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
@@ -381,7 +377,7 @@ function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskE
   return (task) => {
     const registry = loadBoardRegistry(board, db);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName, board.interviewerName);
-    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db), task.type);
+    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, task.type);
     return executionSettingsFor(db, agent.definition, task);
   };
 }
@@ -391,7 +387,7 @@ function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskE
  *  `executionSettingsFor` に通す —— ティアは盤面既定、モデルは Selector の表から決まる。 */
 export function implicitTaskExecutionCandidates(db: Db): TaskExecutionCandidates {
   return (task) =>
-    executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task);
+    executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }] }, task);
 }
 
 function agentsUsingHarnessesResolver(
@@ -403,7 +399,7 @@ function agentsUsingHarnessesResolver(
     Object.values(loadBoardRegistry(board, db).agents)
       .filter((agent) => {
         try {
-          assertValidAgentDefinition(agent.name, agent, tierNames(db));
+          assertValidAgentDefinition(agent.name, agent);
           // entry のどれか1つでもその Harness なら該当する(ADR 0110 決定1)
           return agent.provider.some((entry) =>
             harnesses.includes(canonicalHarness(entry.name as Provider)),
@@ -613,7 +609,7 @@ function authorityResolver(
   const { registryDir, defaultAgentName } = board;
   if (!registryDir) return undefined;
   return (assignee, taskType) =>
-    resolveExecutionAgent(loadBoardRegistry(board, db), defaultAgentName, assignee, tierNames(db), taskType).profile;
+    resolveExecutionAgent(loadBoardRegistry(board, db), defaultAgentName, assignee, taskType).profile;
 }
 
 /** Whether an agent name is currently registered (ADR 0012 / issue #36), read
@@ -756,15 +752,12 @@ function workspaceAdmin(
  *  agents at all. */
 function agentAdmin(board: BoardComposition, db: Db, registry: RegistrySource | undefined): AgentAdmin | undefined {
   if (!registry) return undefined;
-  const deps = { registry, db, clock: board.clock, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
+  const deps = { registry, db, clock: board.clock, githubAuth: board.githubAuth };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
     update: (input) => updateAgent(input, deps),
     delete: (input, refs) => deleteAgent(input, { ...deps, ...refs }),
-    changeTier: (input) => changeAgentTier(input, deps),
-    renameTier: (input) => renameAgentTiers(input, deps),
-    tierApproval: (agent, questionId) => findTierApproval(registry, agent, questionId),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
     authorityProfiles: () => Object.keys(loadBoardRegistry(board, db).authority),

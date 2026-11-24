@@ -29,7 +29,7 @@ import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-se
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents, type ReadCheckout } from "../src/events.js";
-import { type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
 import { GH_CLI_VERSION } from "../src/gh-cli-version.js";
 import type { GitHubClient } from "../src/github.js";
 import { type GitHubAuth, HEAD_REPO_REMOTE } from "../src/github-auth.js";
@@ -1740,15 +1740,22 @@ export function auditorRcaOn(db: Db, task: Task, at: Date, worker = "auditor"): 
 
 /** routing の材料の setup で走る行(段 standard)。 */
 export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high" };
-/** registry の agent deckhand(組み込みでなく段 standard —— agent_tier で1段下げられる)。 */
-export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], unknownFields: [], systemPrompt: "p" };
+/** registry の agent deckhand(組み込みでない)。`deckhandOnTier` が盤面の既定ティアを書く。 */
+export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, skills: ["*"], unknownFields: [], systemPrompt: "p" };
+
+/** setup のみ: deckhand の既定ティアを盤面に書く(既定 standard —— agent_tier で1段下げられる、ADR 0410 決定1)。設定の event は
+ *  「材料の記録の後に対象を変えた event」に載る(ADR 0410 決定8 / ADR 0278 追記4)ので、routing meta-review の材料を注入する前に呼ぶ。 */
+export function deckhandOnTier(db: Db, at: Date, tier = "standard"): void {
+  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier }, "webui", at, { listAgents: () => [DECKHAND_AGENT] });
+}
 
 export const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
-/** setup のみ: standard を求めた task の opus の行の session が2つ走る —— 1つは乖離した shadow 行の pickup で段の出所が agent、もう1つは
- *  段の出所が task で、どちらにも配分評価が付く。routing meta-review の窓の中なら項目は opus の行・agent deckhand・段 standard・学習器。
- *  返り値は2つの worker_spawned の id(出所 agent、task の順)。 */
+/** setup のみ: deckhand の既定ティアを standard にし、standard を求めた task の opus の行の session が2つ走る —— 1つは乖離した shadow 行の
+ *  pickup で段の出所が agent、もう1つは段の出所が task で、どちらにも配分評価が付く。routing meta-review の窓の中なら項目は opus の行・
+ *  agent deckhand・段 standard・学習器。返り値は2つの worker_spawned の id(出所 agent、task の順)。 */
 export function routedOpusSessions(db: Db, at: Date): number[] {
+  deckhandOnTier(db, at);
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace: "reef" }, at, ...HUMAN_WEBUI).id;
   recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at, markPickedUp(db, work, at));
   const spawn = (tier: "agent" | "task") =>

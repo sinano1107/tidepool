@@ -1,11 +1,8 @@
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { DomainError } from "./domain-error.js";
-import type { RegistryTiers, RenameAgentTiers, RenameAgentTiersInput } from "./execution-setting.js";
-import { git } from "./git.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
@@ -19,7 +16,6 @@ import {
   ownEntry,
   type Registry,
   type RegistrySource,
-  registryRef,
   UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
@@ -31,7 +27,6 @@ import {
   DeletionConfirmationRequiredError,
   refreshRegistryForWrite,
 } from "./registry-write.js";
-import type { Tier } from "./tier.js";
 
 /** The WebUI's agent-creation verb (issue #70, #54 phase 1): every field an
  *  agent definition carries except `version` — that one is machine-stamped
@@ -42,13 +37,11 @@ export interface CreateAgentInput {
   authority: string;
   description: string;
   /** The provider declaration (ADR 0097 決定1) — required like the registry
-   *  field it lands in; the enum, the tier and the advisor combination are all
-   *  checked against `assertValidAgentDefinition` before anything is written. */
+   *  field it lands in; the enum and the advisor combination are both
+   *  checked against `assertValidAgentDefinition` before anything is written.
+   *  The agent's default tier is not here: the board holds it (ADR 0410 決定3). */
   provider: string;
   icon?: string;
-  /** 既定の要求ティア(ADR 0110 決定1)。省略 → 盤面既定。model / effort は
-   *  もう受け取らない —— 実行設定は pickup 時に盤面の表から選ばれる。 */
-  tier?: string;
   /** advisor を持つか(ADR 0110 決定1: 真偽値であって model 名ではない)。 */
   advisor?: boolean;
   /** The skill allowlist (issue #56 / ADR 0025), threaded through wholesale
@@ -108,14 +101,9 @@ export interface AgentAdminDeps {
   githubAuth?: GitHubAuth;
 }
 
-/** 定義を検査する verb が読む盤面の段の名前(ADR 0200 決定2)。呼び出しごとに読む —— deps は起動時に1度組まれる。 */
-export interface BoardTiers {
-  tiers: () => readonly Tier[];
-}
-
 /** ADR 0020's agent half: write `agents/<name>.md` to the registry — a
  *  WebUI-initiated registry change is the human's explicit act. */
-export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps & BoardTiers): Promise<void> {
+export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
   // ず、その編集は最初から成立していない — workspace-create と同じ二段検査
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
@@ -125,10 +113,10 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps 
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
   const definition = normalizedDefinition(input);
-  assertValidAgentDefinition(input.name, definition, deps.tiers());
+  assertValidAgentDefinition(input.name, definition);
   commitAgentFile(
     deps,
-    { ...definition, retiredFields: [], unknownFields: [], version: "1" },
+    { ...definition, unknownFields: [], version: "1" },
     `create agent ${input.name} via WebUI`,
   );
 }
@@ -141,7 +129,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps 
  *  numeric segment of the stored version + 1. */
 export type UpdateAgentInput = CreateAgentInput;
 
-export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps & BoardTiers): Promise<void> {
+export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const existing = ownEntry(registry.agents, input.name);
@@ -152,21 +140,21 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps 
   assertValidSkillAllowlist(input.skills);
   // no-change 編集はコミットなしの成功(workspace-create.ts の porcelain
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
-  // 存在せず、実効フィールドが同じ再送で刻印だけ進めない。ただし保存側に退役
-  // フィールドや schema に無いキーが残るなら、同じ再送も書き直しである(issue #2694)
-  // 検査するのは**提出された定義**だけで、保存されている側の退役フィールドや
+  // 存在せず、実効フィールドが同じ再送で刻印だけ進めない。ただし保存側に
+  // schema に無いキーが残るなら、同じ再送も書き直しである(issue #2694)
+  // 検査するのは**提出された定義**だけで、保存されている側の
   // schema に無いキーは通行止めにしない(ADR 0110 決定1 が拒むのは「登録される値」であって、既に
-  // git にある行ではない)。手で commit された旧い agent.md はこの門を通した
-  // 編集で `retiredFields: []` として書き直され、盤面から直せる —— 塞ぐと、
+  // git にある行ではない)。手で commit された旧い agent.md(残った `tier:` 行も、ADR 0410)はこの門を通した
+  // 編集で `unknownFields: []` として書き直され、盤面から直せる —— 塞ぐと、
   // pickup で quarantine される定義の唯一の修復経路が registry repo の手編集
   // だけになる。人間面の credential(ADR 0036)を通った編集であり、フォームは
   // 定義を丸ごと提出するので、黙って直したことにはならない。
   const definition = normalizedDefinition(input);
-  assertValidAgentDefinition(input.name, definition, deps.tiers());
+  assertValidAgentDefinition(input.name, definition);
   if (!sameEffectiveFields(existing, definition)) {
     commitAgentFile(
       deps,
-      { ...definition, retiredFields: [], unknownFields: [], version: bumpVersion(existing.version) },
+      { ...definition, unknownFields: [], version: bumpVersion(existing.version) },
       `update agent ${input.name} via WebUI`,
     );
   }
@@ -178,7 +166,7 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps 
  *  書かれた entry にだけ畳む —— 省略の展開は常に advisor なし(ADR 0116 決定1/2)。 */
 function normalizedDefinition(
   input: CreateAgentInput,
-): Omit<AgentDefinition, "version" | "retiredFields" | "unknownFields"> {
+): Omit<AgentDefinition, "version" | "unknownFields"> {
   return {
     ...input,
     provider: normalizeProviderEntries(input.advisor === true ? [{ name: input.provider, advisor: true }] : input.provider),
@@ -187,19 +175,17 @@ function normalizedDefinition(
 
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt
  *  は保存される正規形(trim 済み — serializeAgentFile 参照)で比較する。保存側に
- *  書き直しで消える行(退役フィールド / schema に無いキー)があれば一致としない。 */
+ *  書き直しで消える行(schema に無いキー)があれば一致としない。 */
 function sameEffectiveFields(
   existing: AgentDefinition,
-  input: Omit<AgentDefinition, "version" | "retiredFields" | "unknownFields">,
+  input: Omit<AgentDefinition, "version" | "unknownFields">,
 ): boolean {
   return (
-    existing.retiredFields.length === 0 &&
     existing.unknownFields.length === 0 &&
     existing.authority === input.authority &&
     existing.description === input.description &&
     sameProviderEntries(existing.provider, input.provider) &&
     existing.icon === input.icon &&
-    existing.tier === input.tier &&
     sameSkills(existing.skills, input.skills) &&
     existing.systemPrompt === input.systemPrompt.trim()
   );
@@ -222,138 +208,6 @@ function sameProviderEntries(
  *  (nothing downstream treats the allowlist as an unordered set). */
 function sameSkills(existing: string[], input: string[]): boolean {
   return existing.length === input.length && existing.every((s, i) => s === input[i]);
-}
-
-/** tier の提案の承認が書く前に見た registry の tier が、提案の pin と違う(issue #920)。agent が消えた / 組み込みに戻った
- *  ときも同じ —— どれも「承認した前提がもう無い」で、回答の側は question を観測で決着させる。 */
-export class AgentTierMismatchError extends Error {
-  constructor(agentName: string, expected: string, public readonly actual: string | undefined) {
-    super(`agent "${agentName}" no longer has tier ${expected} in the registry (it is ${actual ?? "unset or gone"})`);
-    this.name = "AgentTierMismatchError";
-  }
-}
-
-export interface ChangeAgentTierInput {
-  name: string;
-  /** 提案が pin した tier。書き込み前の fetch の後の registry がこの値でなければ書かない。 */
-  expectTier: string;
-  to: string;
-  /** 下げ先の検査(spec #916 B)。fetch の後の定義の provider で呼ぶ —— 提案後に entry が変わっていても skipped へ落とさない。 */
-  assertLandable: (providers: string[]) => void;
-  message: string;
-}
-
-/** tier の提案への approve の書き込み(issue #920 / ADR 0150 決定5): 入口で fetch し、tier が pin のままなら
- *  `tier:` と `version:` の行だけを書き換えて着地させる。返り値は着地した commit。 */
-export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAdminDeps): Promise<string> {
-  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const existing = ownEntry(loadRegistryOrStop(deps.db, deps.registry, deps.clock).agents, input.name);
-  if (!existing || existing.builtin || existing.tier !== input.expectTier) {
-    throw new AgentTierMismatchError(input.name, input.expectTier, existing?.tier);
-  }
-  input.assertLandable(existing.provider.map((entry) => entry.name));
-  return commitToRegistry(deps.registry, deps.githubAuth, (worktreeDir) => rewriteAgentTier(worktreeDir, input.name, existing.version, input.to), input.message);
-}
-
-/** frontmatter の `tier:` と `version:` の行だけを書き換える。フォームの編集と違いファイルを丸ごと書き直さない —— 手書きの行や
- *  コメントは対象ではない。 */
-function rewriteAgentTier(worktreeDir: string, name: string, version: string, to: string): void {
-  const file = join(worktreeDir, "agents", `${name}.md`);
-  const text = readFileSync(file, "utf8");
-  const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/)?.[0];
-  // tier を行で書いていない frontmatter(flow 形式・字下げ)は書き換えられない —— 変わらないまま着地を成功と数えない
-  if (!frontmatter || !/^tier:/m.test(frontmatter)) throw new DomainError(`agents/${name}.md has no top-level tier: line to rewrite`);
-  writeFileSync(
-    file,
-    text.replace(frontmatter, frontmatter.replace(/^tier:.*$/m, `tier: ${to}`).replace(/^version:.*$/m, `version: ${JSON.stringify(bumpVersion(version))}`)),
-  );
-}
-
-/** tier の提案の approve が registry に打つ commit の message。書き込みと `findTierApproval` の探索が同じ綴りを読む。 */
-export function agentTierChangeMessage(agent: string, to: string, questionId: string): string {
-  return `lower agent ${agent}'s tier to ${to} (question ${questionId})`;
-}
-
-/** 段の改名が registry に打つ commit の message。書き込みと `renamedTierFrom` の探索が同じ綴りを読む。 */
-export function tierRenameMessage(from: string, to: string): string {
-  return `rename tier ${from} to ${to}`;
-}
-
-/** 改名の窓(ADR 0401 決定6)の出口: agent.md の tier が盤面の段の名前でないとき、段の改名が registry に着地し盤面で止まったなら
- *  改名の再実行で畳む(合う agent が無く registry の commit は空で、盤面の名前だけが動く)。旧い名前は registry の log から引けたときだけ名指す。 */
-export function tierRenameExit(tier: string, from: string | undefined): string {
-  return from
-    ? `The registry commit "${tierRenameMessage(from, tier)}" renamed tier ${from} to ${tier} in the registry, but the board stopped before renaming its own tier; re-run the rename of tier ${from} to ${tier} to finish it`
-    : `If a tier rename to ${tier} reached the registry but the board stopped before renaming its own tier, re-run that rename (the board's tier to ${tier}) to finish it; otherwise declare one of the board's tiers`;
-}
-
-/** 盤面が registry に着地させた tier の承認(ADR 0401 決定6): commit と、message が名指す下げ先(修正値つきの approve では提案の `to` と違いうる)。 */
-export interface TierApproval {
-  commit: string;
-  to: Tier;
-}
-
-/** registry の log から、提案 question を名指す盤面の tier の承認の commit を引く口(ADR 0401 決定6)。log が読めなければ
- *  `RegistryLogUnreadableError` —— 見つからないと区別する。 */
-export type FindTierApproval = (agent: string, questionId: string) => TierApproval | undefined;
-
-/** registry の log が読めない(ADR 0401 決定6)。承認の有無が分からないので、呼び手は stale と読まずに止まる。 */
-export class RegistryLogUnreadableError extends Error {
-  constructor(cause: unknown) {
-    super(`the registry log could not be read to check whether this approval already landed: ${cause instanceof Error ? cause.message : String(cause)}`);
-    this.name = "RegistryLogUnreadableError";
-  }
-}
-
-/** registry の ref の log で、`message(tier)` の形の subject を最新から探してその段の名前を返す(段の名前は空白を含まない)。`lastTouching` を
- *  渡せば、そのファイルを最後に変えた commit がその形のときだけ。git が読めなければ投げる。 */
-function findInRegistryLog(registry: RegistrySource, message: (tier: string) => string, lastTouching?: string): { commit: string; tier: Tier } | undefined {
-  const [prefix, suffix] = message("\0").split("\0") as [string, string];
-  const ref = registryRef(registry.mode);
-  const log = lastTouching
-    ? git(registry.dir, "log", "-1", "--format=%H %s", ref, "--", lastTouching)
-    : git(registry.dir, "log", "--format=%H %s", "--fixed-strings", `--grep=${suffix}`, ref);
-  for (const line of log.split("\n")) {
-    const [commit, subject] = [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)];
-    const tier = subject.slice(prefix.length, subject.length - suffix.length);
-    if (subject.startsWith(prefix) && subject.endsWith(suffix) && /^\S+$/.test(tier)) return { commit, tier };
-  }
-  return undefined;
-}
-
-/** その question を名指す盤面の tier の承認の commit(ADR 0401 決定6)。 */
-export function findTierApproval(registry: RegistrySource, agent: string, questionId: string): TierApproval | undefined {
-  try {
-    const found = findInRegistryLog(registry, (to) => agentTierChangeMessage(agent, to, questionId));
-    return found && { commit: found.commit, to: found.tier };
-  } catch (err) {
-    throw new RegistryLogUnreadableError(err);
-  }
-}
-
-/** agent.md を最後に変えた commit が `rename tier <old> to <to>` ならその旧い名前(ADR 0401 決定6)。後の手編集・改名し直しがあれば
- *  古い改名を名指さない。git が読めなければ undefined —— 出口の文が条件つきになるだけ。 */
-export function renamedTierFrom(registry: RegistrySource, agent: string, to: string): string | undefined {
-  try {
-    return findInRegistryLog(registry, (from) => tierRenameMessage(from, to), `agents/${agent}.md`)?.tier;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で
- *  書き換えて着地させる。書き換える agent が無ければ何も着地しない。 */
-export async function renameAgentTiers(input: RenameAgentTiersInput, deps: AgentAdminDeps): Promise<void> {
-  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
-  const agents = Object.values(loadRegistryOrStop(deps.db, deps.registry, deps.clock).agents).filter((agent) => !agent.builtin && agent.tier === input.from);
-  commitToRegistry(
-    deps.registry,
-    deps.githubAuth,
-    (worktreeDir) => {
-      for (const agent of agents) rewriteAgentTier(worktreeDir, agent.name, agent.version, input.to);
-    },
-    input.message,
-  );
 }
 
 /** One agent as the settings surface's edit form needs it (issue #70):
@@ -494,17 +348,6 @@ export interface AgentAdmin {
    *  `list` itself keeps phase 1's shape (issue #70) since nothing about
    *  exposing it over HTTP requires changing what it returns. */
   authorityProfiles: () => string[];
-  /** tier の提案への approve の書き込み(issue #920)。着地した commit を返す。 */
-  changeTier: (input: ChangeAgentTierInput) => Promise<string>;
-  /** 段の改名の registry 側(issue #1422)。 */
-  renameTier: RenameAgentTiers;
-  /** registry の log の承認の commit(ADR 0401 決定6)。 */
-  tierApproval: FindTierApproval;
-}
-
-/** registry の提案の照合が読む口(ADR 0401 決定6)を扉の agentAdmin から。一覧の無い盤面は照合しない。 */
-export function registryTiersOf(admin: Partial<AgentAdmin> | undefined): RegistryTiers | undefined {
-  return admin?.list && { list: admin.list, tierApproval: admin.tierApproval };
 }
 
 function assertKnownAuthority(registry: Registry, profileName: string): void {
@@ -545,7 +388,6 @@ function serializeAgentFile(definition: AgentDefinition): string {
     skills: definition.skills,
   };
   if (definition.icon !== undefined) meta.icon = definition.icon;
-  if (definition.tier !== undefined) meta.tier = definition.tier;
   // 外側の空白は trim して書く: parseAgentFile が body.trim() で読む以上、
   // 保存できるのは trim 済みの正規形だけ — 書き込み側も同じ正規形に揃える
   // ことでラウンドトリップと no-change 判定(sameEffectiveFields)が一致する

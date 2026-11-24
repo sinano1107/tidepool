@@ -3,7 +3,6 @@ import { createAgent, listAgentViews } from "../src/agent-create.js";
 import { createProfile, listProfileViews } from "../src/profile-create.js";
 import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import { createWorkspace, listWorkspaceViews } from "../src/workspace-create.js";
-import { seedTierNames } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 import { breakRegistry, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -49,7 +48,7 @@ it.each([
   const workspacesBaseDir = await tempDir("tidepool-unreadable-");
   t = await bootTidepool({
     workspaceAdmin: { create: (input) => createWorkspace(input, { registry, workspacesBaseDir, db: t.db }) },
-    agentAdmin: { create: (input) => createAgent(input, { registry, db: t.db, tiers: () => seedTierNames }) },
+    agentAdmin: { create: (input) => createAgent(input, { registry, db: t.db }) },
     profileAdmin: { create: (input) => createProfile(input, { registry, db: t.db }) },
   });
 

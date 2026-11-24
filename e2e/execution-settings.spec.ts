@@ -1,9 +1,15 @@
 import { api } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
-// Issue #545 の恒久 smoke: settings タブ → Board の実行設定2カード(盤面既定 / 表)を
+// Issue #545 の恒久 smoke: settings タブ → Board の実行設定のカード(盤面既定 / 表 / agent の既定ティア)を
 // 実ブラウザで編集し、保存が /api/settings/execution に着地することを確かめる。
 // 選択・削除・行追加の配線は JSX にしか無く、vitest では測れない層(ADR 0029)。
+
+/** registry の agent 一覧(可変 —— 人間が registry から agent を消した、を表す)。agent の既定ティアのカードは一覧が読めるときだけ出る。 */
+const registryAgents = () => {
+  const names = ["anemone", "deckhand", "ghost"];
+  return { names, seams: { agentAdmin: { list: () => [...names.map((name) => ({ name })), { name: "fugu", builtin: true }] as any } } };
+};
 
 async function openBoardSettings(page: import("@playwright/test").Page, baseUrl: string) {
   await page.goto(baseUrl);
@@ -12,7 +18,7 @@ async function openBoardSettings(page: import("@playwright/test").Page, baseUrl:
 }
 
 test("Provider 順位・優先順位の既定・advisor の上限を1カードで編集して保存できる", async ({ boot, page }) => {
-  const t = await boot();
+  const t = await boot(registryAgents().seams);
   await openBoardSettings(page, t.baseUrl);
 
   const card = page.getByTestId("execution-defaults");
@@ -39,7 +45,7 @@ test("Provider 順位・優先順位の既定・advisor の上限を1カード�
 });
 
 test("表の行を消す・価格を直す・行を足すのが1回の保存で反映される", async ({ boot, page }) => {
-  const t = await boot();
+  const t = await boot(registryAgents().seams);
   await openBoardSettings(page, t.baseUrl);
 
   const card = page.getByTestId("execution-table");
@@ -78,7 +84,7 @@ test("表の行ごとに Remove の aria-label が一意で、model が空の新
   boot,
   page,
 }) => {
-  const t = await boot();
+  const t = await boot(registryAgents().seams);
   await openBoardSettings(page, t.baseUrl);
 
   const card = page.getByTestId("execution-table");
@@ -103,4 +109,34 @@ test("表の行ごとに Remove の aria-label が一意で、model が空の新
   await expect(card.getByTestId("execution-row-new")).toHaveCount(0);
   await expect(removeSonnet).toHaveCount(1);
   await expect(removeKimi).toHaveCount(1);
+});
+
+test("agent の既定ティアのカードで設定・解除を1回の保存で送り、registry に無い名前の行を Remove で消せる(ADR 0410 決定3・5)", async ({ boot, page }) => {
+  const registry = registryAgents();
+  const t = await boot(registry.seams);
+  for (const [agent, tier] of [["anemone", "frontier"], ["ghost", "economy"]]) {
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "agent_tier", agent, tier })).status).toBe(200);
+  }
+  registry.names.splice(registry.names.indexOf("ghost"), 1);
+  await openBoardSettings(page, t.baseUrl);
+
+  const card = page.getByTestId("agent-tiers");
+  await expect(card.getByTestId("agent-tier-orphan")).toContainText("ghost");
+  await expect(card).not.toContainText("fugu");
+  await card.getByRole("button", { name: "Edit" }).click();
+  const save = card.getByRole("button", { name: "Save default tiers" });
+  await expect(save).toBeDisabled();
+  await card.getByLabel("deckhand").selectOption("standard");
+  await card.getByLabel("anemone").selectOption("");
+  await save.click();
+
+  await expect(card.getByRole("button", { name: "Edit" })).toBeVisible();
+  expect((await api(t.baseUrl, "GET", "/api/settings/execution")).json.agentTiers).toEqual([
+    { agent: "deckhand", tier: "standard" },
+    { agent: "ghost", tier: "economy" },
+  ]);
+
+  await card.getByRole("button", { name: "remove ghost's default tier" }).click();
+  await expect(card.getByTestId("agent-tier-orphan")).toHaveCount(0);
+  expect((await api(t.baseUrl, "GET", "/api/settings/execution")).json.agentTiers).toEqual([{ agent: "deckhand", tier: "standard" }]);
 });

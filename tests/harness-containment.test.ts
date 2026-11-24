@@ -101,7 +101,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     onRecordContainerFailed: () => {},
     onPickupStopped: () => {},
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }] }, task),
     harnessContainment: async (harness) =>
       harness === "codex"
         ? { available: false, reason: "Codex containment preflight: hook drift" }

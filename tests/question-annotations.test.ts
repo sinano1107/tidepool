@@ -62,17 +62,17 @@ it("assignee だけが理由の子(risk_flag なし)の承認 question は、親
   expect(approvalAnnotation(db, approval("tune", { assignee: "dba-specialist" }))).toEqual({ raises_parent_risk: false });
 });
 
-it("理由必須の選択肢 needs_comment は memory 提案で reject と defer、routing / registry 提案と承認 question で reject、ほかは空", () => {
+it("理由必須の選択肢 needs_comment は memory 提案で reject と defer、routing 提案(agent の段の提案も)と承認 question で reject、ほかは空", () => {
   const { question, approval } = board();
   const memory = question({ question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } } });
   const routing = question({ question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", evidence: [1], pin: { promoted: false } } } });
-  const registry = question({
-    question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)
+  const agentTier = question({
+    question_kind: { kind: "proposal", proposal: { kind: "routing", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)
   });
 
   expect(needsComment(memory)).toEqual(["reject", "defer"]);
   expect(needsComment(routing)).toEqual(["reject"]);
-  expect(needsComment(registry)).toEqual(["reject"]);
+  expect(needsComment(agentTier)).toEqual(["reject"]);
   expect(needsComment(approval("migrate", { risk_flag: true }))).toEqual(["reject"]);
   expect(needsComment(question({}))).toEqual([]);
 });

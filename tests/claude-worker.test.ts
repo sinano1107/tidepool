@@ -250,6 +250,11 @@ async function makeUsageWorker(pty: PtyFn) {
   return { worker, runtime, clock };
 }
 
+/** setup のみ: 盤面に deckhand の既定ティア frontier を書く(ADR 0410 決定1)。 */
+function deckhandOnFrontier(db: Db): void {
+  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", new Date(), { listAgents: () => [{ name: "deckhand" }] });
+}
+
 async function makeWorker(
   registryFiles: Record<string, string> = {},
   extraOptions: Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]> = {},
@@ -2646,20 +2651,19 @@ describe("ClaudeCodeWorker", () => {
 
   // ADR 0110 決定3: fallback の出所が adapter 定数から盤面の表へ移った。明示
   // ピン留めの要求(ADR 0005)は不変で、変わったのは**どこから値が来るか**だけ。
-  it("model は常に明示的に渡す: agent が tier を書かなければ盤面既定のティアの行(ホストのモデル設定を漏らさない)", async () => {
+  it("model は常に明示的に渡す: agent が既定ティアを持たなければ盤面既定のティアの行(ホストのモデル設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
   });
 
-  it("agent が tier を書けばその行の model を使う", async () => {
-    const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: economy\n---\nYou are Deckhand.\n`,
-    });
+  it("agent の既定ティアが盤面にあればその段の行の model を使う(ADR 0410 決定1)", async () => {
+    const { start, calls, db } = await makeWorker();
+    deckhandOnFrontier(db);
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
+    expect(calls[0]!.args.join(" ")).toContain("--model claude-fable-5-1");
   });
 
   it("effort は明示的に渡す: 値は表の行から来る(ホストの effort 設定を漏らさない)", async () => {
@@ -2693,9 +2697,8 @@ describe("ClaudeCodeWorker", () => {
       source: { tier: "board", provider: "only" },
     });
 
-    const agent = await makeWorker({
-      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: frontier\n---\nYou are Deckhand.\n`,
-    });
+    const agent = await makeWorker();
+    deckhandOnFrontier(agent.db);
     agent.start("task-setting-agent");
     await vi.waitFor(() => expect(agent.calls).toHaveLength(1));
     expect(
@@ -2772,6 +2775,28 @@ describe("ClaudeCodeWorker", () => {
           ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown workspace/);
+  });
+
+  // ADR 0410 帰結(配備): 既定 agent に `tier:` 行が残れば、pickup の Quarantine でなく盤面の起動が止まる
+  it("既定 agent の agent.md に `tier:` 行が残っていれば boot 時のコンストラクタが段を名指して失敗する", async () => {
+    const registryDir = await makeRegistry({
+      "agents/deckhand.md": `---\ndescription: d\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ntier: frontier\n---\nYou are Deckhand.\n`,
+    });
+    const logDir = await tempDir("tidepool-worker-logs-");
+    expect(
+      () =>
+        new ClaudeCodeWorker({
+          db: openDb(":memory:"),
+          clock: new FakeClock(),
+          registry: { dir: registryDir, mode: "purely-local" },
+          agent: "deckhand",
+          workspace: "tidepool",
+          mcpUrl: "http://127.0.0.1:4589/mcp",
+          logDir,
+          transcripts: new TranscriptStore(logDir),
+          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
+        }),
+    ).toThrow(/does not accept: tier/);
   });
 
   // ADR 0052 決定4: 起動時の読みは騒ぐだけで、起動を拒まない —— 止まりは読み込みの1点が立てる(ADR 0403 決定5)

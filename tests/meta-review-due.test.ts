@@ -40,8 +40,8 @@ it("routing の行の提案への approve(修正値つきも)の適用だけで�
   const db = openDb(":memory:");
   previousReview(db, "routing");
   const proposal = { kind: "routing" as const, op: "row" as const, row: { provider: row.provider, model: row.model, effort: row.effort }, pin: row, change: { tier: "frontier" as const }, evidence: [1] };
-  applyExecutionSettingsChange(db, { setting: "row", row: composeRoutingRow(proposal) }, "webui", at, "question-1");
-  applyExecutionSettingsChange(db, { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, { effort: "max" }) }, "webui", at, "question-2");
+  applyExecutionSettingsChange(db, { setting: "row", row: composeRoutingRow(proposal) }, "webui", at, { questionId: "question-1" });
+  applyExecutionSettingsChange(db, { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, { effort: "max" }) }, "webui", at, { questionId: "question-2" });
 
   registerDueMetaReviews(db, afterPeriod);
 

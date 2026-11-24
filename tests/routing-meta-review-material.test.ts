@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, attributedObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, markPickedUp, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, attributedObjection, deckhandOnTier, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, markPickedUp, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -21,11 +21,11 @@ function register(db: Db, done = false, subject: "routing" | "memory" = "routing
   return taskId;
 }
 
-/** registry の agent(setup): deckhand は standard で、1段下げる先がある。 */
-const AGENTS = [{ name: "deckhand", tier: "standard" }];
+/** registry の agent(setup): deckhand の既定ティアは board() が standard にする —— 1段下げる先がある。 */
+const AGENTS = [{ name: "deckhand" }];
 
 /** 主題 routing の材料の節(型を routing の部分に絞る)。 */
-function routingMaterialOf(db: Db, taskId: string, agents: readonly { name: string; tier?: string }[] = AGENTS) {
+function routingMaterialOf(db: Db, taskId: string, agents: readonly { name: string }[] = AGENTS) {
   const material = buildMetaReviewMaterial(db, taskId, agents);
   if (material?.subject !== "routing") throw new Error(`no routing material for ${taskId}`);
   return material;
@@ -80,6 +80,7 @@ const judge = { provider: "anthropic" as const, model: "fable", effort: "high" }
 /** setup の口(tests/routing-meta-review-reads.test.ts と同じ形)。 */
 function board() {
   const db = openDb(":memory:");
+  deckhandOnTier(db, at);
   const work = (title: string) => registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   const spawn = (taskId: string, agent: string, run: ExecutionSetting) =>
     appendEvent(db, {
@@ -189,7 +190,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   const seen = exit(task, spawn(task, "deckhand", sol));
   const key = (effort: string) => ({ provider: row.provider, model: row.model, effort });
   const edited = applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "max" } }, "mcp", at)!;
-  applyExecutionSettingsChange(db, { setting: "row", key: key("max"), row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
+  applyExecutionSettingsChange(db, { setting: "row", key: key("max"), row: { ...row, tier: "frontier" } }, "webui", at, { questionId: "question-1" });
   const review = register(db);
   exit(task, spawn(task, "deckhand", executionSetting("moonshot", "kimi-k3")));
   applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "low" } }, "mcp", at);
@@ -202,7 +203,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   for (const shown of [verb.cells[0], verb.rows![0]]) expect(section).toContain(JSON.stringify(shown));
 });
 
-it("決着した提案は回答か陳腐化が窓の中にあるものだけを read_routing_settings の提案の行で、回答・修正値・comment・observed の理由とともに載せる —— registry 種別も含み、前回より前・この task の登録より後に決着した提案と open な提案は出ない", () => {
+it("決着した提案は回答か陳腐化が窓の中にあるものだけを read_routing_settings の提案の行で、回答・修正値・comment・observed の理由とともに載せる —— agent の段の提案も含み、前回より前・この task の登録より後に決着した提案と open な提案は出ない", () => {
   const { db } = board();
   const parent = register(db, true);
   // fable は種で frontier —— 同じ段への提案は拒まれる(issue #1666)ので、別の段を名指す
@@ -218,16 +219,16 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const early = propose("claude-sonnet-5-5");
   answer(early, ["reject"], "Too early.");
   const [rejected, stale, open, late] = ["claude-opus-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"].map(propose) as [string, string, string, string];
-  const registry = registerTask(
+  const agentTier = registerTask(
     db,
     {
       type: "question",
-      title: "Lower agent reef-crab's tier",
+      title: "Lower agent deckhand's tier",
       purpose: "p",
       completion_criteria: "a human answer is recorded",
       parent_id: parent,
       question: [{ title: "t", detail: "d", options: ["approve", "reject"], recommendation: "approve" }],
-      question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: tierIdOf(db, "economy"), pin: { tier: tierIdOf(db, "standard"), rows: [] }, evidence: [1] } },
+      question_kind: { kind: "proposal", proposal: { kind: "routing", op: "agent_tier", agent: "deckhand", to: tierIdOf(db, "economy"), pin: { tier: tierIdOf(db, "standard"), rows: [] }, evidence: [1] } },
     },
     at,
     "auditor",
@@ -241,20 +242,20 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
     "webui",
     at,
   );
-  answer(registry, ["reject"], "Keep it.");
+  answer(agentTier, ["reject"], "Keep it.");
   const review = register(db);
   answer(late, ["reject"], "Too late.");
 
   const { parts } = routingMaterialOf(db, review);
 
-  expect(parts.proposals.map((p) => p.question_id)).toEqual([rejected, stale, registry]);
-  expect(parts.proposals).toEqual(readRoutingSettings(db, {}).proposals.filter((p) => [rejected, stale, registry].includes(p.question_id)));
+  expect(parts.proposals.map((p) => p.question_id)).toEqual([rejected, stale, agentTier]);
+  expect(parts.proposals).toEqual(readRoutingSettings(db, {}).proposals.filter((p) => [rejected, stale, agentTier].includes(p.question_id)));
   expect(parts.proposals).toMatchObject([
     { answer: "approve", amendment: { tier: "economy" }, comment: "Amended.", observed: null },
     { answer: null, observed: { changed: expect.anything(), observed_event_id: expect.any(Number) } },
-    { proposal: { kind: "registry" }, answer: "reject", comment: "Keep it." },
+    { proposal: { kind: "routing", op: "agent_tier" }, answer: "reject", comment: "Keep it." },
   ]);
-  expect(readRoutingSettings(db, {}).proposals.map((p) => p.question_id)).toEqual([early, rejected, stale, open, late, registry]);
+  expect(readRoutingSettings(db, {}).proposals.map((p) => p.question_id)).toEqual([early, rejected, stale, open, late, agentTier]);
 });
 
 it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数と候補が2行以上あった行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、注入した Items to judge、両端の watermark とトークン数を運ぶ", () => {
@@ -346,7 +347,7 @@ it("段の出所が agent の集計の agent は、agent_tier が届くときだ
   for (const agent of ["deckhand", "reef-crab", "gone"]) allocate(task, spawn(task, agent, opus), "overpowered");
   const review = register(db);
 
-  const { parts } = routingMaterialOf(db, review, [...AGENTS, { name: "reef-crab", tier: "economy" }]);
+  const { parts } = routingMaterialOf(db, review, [...AGENTS, { name: "reef-crab" }]);
 
   expect(parts.allocations.groups.map((g) => g.agent)).toEqual(["deckhand", "reef-crab", "gone"]);
   expect(parts.items).toEqual([{ agent: "deckhand" }, { learner: true }]);

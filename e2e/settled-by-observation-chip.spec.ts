@@ -1,4 +1,3 @@
-import type { AgentView } from "../src/agent-create.js";
 import { settleQuestionAsObserved } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { api, registerQuestion, registerWork } from "../tests/harness.js";
@@ -34,10 +33,10 @@ test("観測で閉じた question の行と question 面にだけ観測の札が
   await expect(page.getByText("This question is no longer available")).toBeVisible();
 });
 
-// 回答の直前に前提が崩れた tier の提案は 200 + 印で返る —— question 面は盤面へ戻らず、回答が記録されていないことを札で言う
+// 回答の直前に前提が崩れた agent の段の提案は 200 + 印で返る —— question 面は盤面へ戻らず、回答が記録されていないことを札で言う
 test("question 面で答えた提案が観測で閉じたら、面に留まり観測の札を出す", async ({ boot, page }) => {
-  // registry の deckhand は既に standard —— 提案の pin(frontier)が崩れている
-  const t = await boot({ agentAdmin: { list: () => [{ name: "deckhand", tier: "standard", provider: "openai" } as AgentView], changeTier: async () => "c0ffee" } });
+  // deckhand はもう registry に居ない —— 提案の pin(agent が registry に在ること、ADR 0410 決定4)が崩れている
+  const t = await boot({ agentAdmin: { list: () => [] } });
   const title = "lower deckhand to standard";
   const proposal = registerQuestion(t, {
     title,
@@ -46,7 +45,7 @@ test("question 面で答えた提案が観測で閉じたら、面に留まり�
     question: [{ title, options: ["approve", "reject"], recommendation: "approve" }],
     question_kind: {
       kind: "proposal",
-      proposal: { kind: "registry", op: "agent_tier", agent: "deckhand", to: tierIdOf(t.db, "standard"), pin: { tier: tierIdOf(t.db, "frontier"), rows: [] }, evidence: [] },
+      proposal: { kind: "routing", op: "agent_tier", agent: "deckhand", to: tierIdOf(t.db, "standard"), pin: { tier: tierIdOf(t.db, "frontier"), rows: [] }, evidence: [] },
     },
   });
 

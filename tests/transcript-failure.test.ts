@@ -70,7 +70,7 @@ async function bootWithAdapter(
   t = await bootTidepool({
     watchdog: WATCHDOG,
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }] }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts,

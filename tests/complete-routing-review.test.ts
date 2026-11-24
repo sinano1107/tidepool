@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { completeRoutingReview, proposeRoutingChange } from "../src/routing-review.js";
 import { completeTask, escalateTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { DECKHAND_AGENT, divergedSession, FULL_HANDOFF, HUMAN_WEBUI, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, deckhandOnTier, divergedSession, FULL_HANDOFF, HUMAN_WEBUI, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review は complete_routing_review で終わる(ADR 0278 決定1〜5・追記4・追記5 の routing、issue #2284)。 */
 
@@ -77,6 +77,7 @@ it("値も提案も無い対象があれば unjudged で名指して拒まれ、
 
 it("窓で異議された前の判断の行が名指す行・agent・段は項目で、値も提案も無ければ unjudged で拒まれ、no_change を渡せば完了する(ADR 0279 決定5)", () => {
   const db = openDb(":memory:");
+  deckhandOnTier(db, at);
   const previous = register(db, true);
   const sonnet = { provider: "anthropic" as const, model: "claude-sonnet-5-5", effort: "high" };
   for (const object of [{ row: sonnet }, { agent: "deckhand" }, { tier_id: tierIdOf(db, "frontier") }]) objectedJudgment(db, previous.id, { kind: "routing", value: "no_change", ...object }, at);
@@ -144,11 +145,7 @@ it.each(proposals)("op %s の提案 question は %j を覆い、その対象に�
 
 it.each([
   ["人間が行を編集した", (db: Db) => applyExecutionSettingsChange(db, { setting: "row", key: OPUS_ROW, row: { ...OPUS_ROW, tier: "frontier", price_in: 5, price_out: 25 } }, "webui", at)],
-  [
-    "registry に agent の段が書かれた",
-    (db: Db) =>
-      appendEvent(db, { taskId: null, actorId: "human", origin: "webui", at, payload: { kind: "agent_tier_changed", agent: "deckhand", from: "standard", to: "economy", question_id: "q", registry_commit: "c0ffee" } }),
-  ],
+  ["人間が agent の既定ティアを変えた", (db: Db) => deckhandOnTier(db, at, "frontier")],
   ["人間が段の説明を書き換えた", (db: Db) => applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: "Rewritten." }, "webui", at)],
   [
     "人間が学習器を降格した",

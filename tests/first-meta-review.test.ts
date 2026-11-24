@@ -24,7 +24,7 @@ const days = (n: number) => new Date(at.getTime() + n * 24 * 60 * 60 * 1000);
 /** 表の先頭の行の価格を1つ上げる人間の行の編集(routing の材料、ADR 0319 決定3)。`questionId` を渡せば提案 question への回答の適用。 */
 function editRow(db: Db, now: Date, origin: "webui" | "mcp", questionId?: string) {
   const [row] = readExecutionSettings(db).table;
-  applyExecutionSettingsChange(db, { setting: "row", key: { provider: row!.provider, model: row!.model, effort: row!.effort }, row: { ...row!, price_in: row!.price_in + 1 } }, origin, now, questionId);
+  applyExecutionSettingsChange(db, { setting: "row", key: { provider: row!.provider, model: row!.model, effort: row!.effort }, row: { ...row!, price_in: row!.price_in + 1 } }, origin, now, { questionId });
 }
 
 /** 主題の材料を1つ(memory は worker の Knowledge、routing は人間の行の編集)。 */

@@ -3,7 +3,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
-import { executionSettingsFor } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -396,7 +396,7 @@ it.each([
   async ({ reviewTier, agentTier, model, source }) => {
     const workspace = await makeWorkspace("integration-review-tier");
     const registryDir = await makeRegistry({
-      "agents/tako.md": `---\ndescription: Reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\n${agentTier ? `tier: ${agentTier}\n` : ""}skills: ["*"]\n---\nReview carefully.\n`,
+      "agents/tako.md": `---\ndescription: Reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills: ["*"]\n---\nReview carefully.\n`,
       "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n`,
     });
     const logDir = await tempDir("review-tier-logs-");
@@ -405,7 +405,7 @@ it.each([
     t = await bootTidepool({
       // ADR 0356 決定2: adapter は盤面が pickup で開いた task の checkout で走る —— 盤面がその名前の場所を準備する
       workspace: { name: "tidepool", path: workspace.path },
-      // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
+      // agent の既定ティアを読むのは盤面の選択(ADR 0110 決定3 / ADR 0410 決定1)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>
         executionSettingsFor(t.db, loadRegistry(registryDir, "purely-local").agents.tako!, task),
       containerRuntime: new FakeContainerRuntime(proc.spawn),
@@ -426,6 +426,7 @@ it.each([
         return withHealthyUsage(worker, clock);
       },
     });
+    if (agentTier) applyExecutionSettingsChange(t.db, { setting: "agent_tier", agent: "tako", tier: agentTier }, "webui", t.clock.now(), { listAgents: () => [{ name: "tako" }] });
     const task = (
       await api(t.baseUrl, "POST", "/api/tasks", {
         type: "review",

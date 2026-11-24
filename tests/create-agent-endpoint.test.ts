@@ -25,7 +25,6 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
     skills: ["*"],
     description: "General agent",
     icon: "🐙",
-    tier: "economy",
     advisor: true,
     systemPrompt: "You are Tako.",
   });
@@ -40,7 +39,6 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
       skills: ["*"],
       description: "General agent",
       icon: "🐙",
-      tier: "economy",
       advisor: true,
       systemPrompt: "You are Tako.",
     },

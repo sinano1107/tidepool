@@ -83,7 +83,7 @@ it("issue 本文の取得中に assignee を別の agent へ付け替えた task
     workspace: await makeWorkspace("tidepool"),
     openaiUsage: healthyOpenai,
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: providers[task.assignee!]!, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: providers[task.assignee!]!, advisor: false }] }, task),
   });
   const head = registerTask(
     t.db,

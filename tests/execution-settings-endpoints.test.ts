@@ -1,11 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
-import { RegistryPushFailedError } from "../src/registry-write.js";
 import { SEED_TIERS } from "../src/tier.js";
 import { healthyOpenai } from "./fakes.js";
 import {
@@ -50,6 +49,7 @@ it("GET /api/settings/execution は種の表と盤面既定(advisor の上限 of
       { value: "openai", label: "openai — Codex models, OpenAI billing" },
     ],
     tiers: SEED_TIERS,
+    agentTiers: [],
     priorities: ["quality", "cost"],
     advisorCeilings: ["off", "sonnet", "opus", "fable", "fable_then_opus"],
   });
@@ -230,7 +230,7 @@ const settingsOf = (taskId: string) => t.worker.startedSettings[t.worker.started
 const boardWith = (entries: string[]): Parameters<typeof bootTidepool>[0] => ({
   openaiUsage: healthyOpenai,
   taskExecutionCandidates: (task) =>
-    executionSettingsFor(t.db, { provider: entries.map((name) => ({ name, advisor: false })), tier: undefined }, task),
+    executionSettingsFor(t.db, { provider: entries.map((name) => ({ name, advisor: false })) }, task),
 });
 
 it("Provider 順位の変更は次の pickup から効く —— 「今週は Claude を残して Codex 優先」(ADR 0110 決定5)", async () => {
@@ -566,52 +566,32 @@ it("挿入した段は、人間の Register・register_task・decompose が受�
   expect(tasks.filter((task) => task.tier === "premium").map((task) => task.title).sort()).toEqual(["c", "m", "w"]);
 });
 
-it("段の改名は両方の扉に乗り、registry の書き換えを通ってから盤面の名前を変える —— push の失敗は 400 / toolError で名前は変わらない(ADR 0200 決定2)", async () => {
-  const renameTier = vi.fn(async (_input: { from: string; to: string; message: string }) => {});
-  t = await bootTidepool({ agentAdmin: { renameTier } });
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
-  expect(renameTier).toHaveBeenLastCalledWith(expect.objectContaining({ from: "standard", to: "mid" }));
-
-  renameTier.mockRejectedValueOnce(new RegistryPushFailedError("remote rejected"));
-  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "mid", to: "middle" });
+it("agent の既定ティアの設定と解除は両方の扉に乗り、経路つきで残る —— registry に無い agent は 400 / toolError で断られる(ADR 0410 決定3)", async () => {
+  t = await bootTidepool({ agentAdmin: { list: () => [{ name: "deckhand" }] as AgentView[] } });
+  const set = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "agent_tier", agent: "deckhand", tier: "standard" });
+  expect(set.status).toBe(200);
+  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "agent_tier", agent: "ghost", tier: "standard" });
   expect(refused.status).toBe(400);
-  expect(refused.json.error).toContain("remote rejected");
+  expect(refused.json.error).toContain("agent ghost is not in the registry");
 
   const client = await managementMcpClient(t.baseUrl);
   try {
     const call = async (change: object) => (await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any;
-    renameTier.mockRejectedValueOnce(new RegistryPushFailedError("remote rejected"));
-    const viaMcp = await call({ setting: "rename_tier", name: "mid", to: "middle" });
+    const viaMcp = await call({ setting: "agent_tier", agent: "ghost", tier: "standard" });
     expect(viaMcp.isError).toBe(true);
-    expect(viaMcp.content[0].text).toContain("remote rejected");
-    expect((await call({ setting: "rename_tier", name: "frontier", to: "top" })).isError).not.toBe(true);
+    expect(viaMcp.content[0].text).toContain("agent ghost is not in the registry");
+    expect((await call({ setting: "agent_tier", agent: "deckhand", tier: null })).isError).not.toBe(true);
   } finally {
     await client.close();
   }
-
-  expect(renameTier).toHaveBeenLastCalledWith(expect.objectContaining({ from: "frontier", to: "top" }));
-  expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toEqual(["economy", "mid", "top"]);
+  const events = listEventsOfKinds(t.db, ["execution_settings_changed"]);
+  expect(events.map((e) => [e.origin, e.payload.setting])).toEqual([
+    ["webui", "agent_tier"],
+    ["mcp", "agent_tier"],
+  ]);
 });
 
-it("agent.md が名指す段の削除は両方の扉で agent 名を添えて断られる(ADR 0200 追記 2026-10-06)", async () => {
-  t = await bootTidepool({ agentAdmin: { list: () => [{ name: "kimi", tier: "premium" }] as AgentView[] } });
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "insert_tier", ...premium, position: 3 });
-  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_tier", name: "premium" });
-  expect(refused.status).toBe(400);
-  expect(refused.json.error).toContain("agents name it in agent.md: kimi");
-
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    const viaMcp = (await client.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_tier", name: "premium" } } })) as any;
-    expect(viaMcp.isError).toBe(true);
-    expect(viaMcp.content[0].text).toContain("agents name it in agent.md: kimi");
-  } finally {
-    await client.close();
-  }
-  expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toContain("premium");
-});
-
-it("registry の無い盤面では段の改名は盤面の名前だけを変える", async () => {
+it("段の改名は盤面の名前だけを変える", async () => {
   t = await bootTidepool();
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
   expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toEqual(["economy", "mid", "frontier"]);

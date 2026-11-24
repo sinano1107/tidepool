@@ -106,7 +106,7 @@ it.each(["completion", "WIP"] as const)("Codex %s sees changes to tracked Claude
     workspace,
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
-    taskExecutionCandidates: (value) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, value),
+    taskExecutionCandidates: (value) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }] }, value),
     workerAdapter: (deps) => withHealthyUsage(new CodexWorker({
       ...deps,
       registry: { dir: registryDir, mode: "purely-local" },

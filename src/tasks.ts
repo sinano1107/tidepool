@@ -210,7 +210,7 @@ export interface TaskContent {
 }
 
 /** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。 */
-export type QuestionProposal<T extends TierRef = TierId> = MemoryProposal | RoutingProposal<T> | RegistryProposal<T>;
+export type QuestionProposal<T extends TierRef = TierId> = MemoryProposal | RoutingProposal<T>;
 
 /** memory の提案。pin = replaces / target / 既存の後継の版と candidate の状態。 */
 export type MemoryProposal = {
@@ -279,19 +279,21 @@ export interface InterviewProposal<T extends TierRef = TierId> {
   pin: { rows: RowAt<T>[] };
 }
 
-/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、Interview、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値で、
- *  根拠(乖離した shadow 行の session の `worker_spawned` の event id)は pin の外(ADR 0181 追記 #2438)。 */
+/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、Interview、agent の既定ティア、または学習器の昇格 / 降格。昇格 / 降格の pin は
+ *  フラグの現在値で、根拠(乖離した shadow 行の session の `worker_spawned` の event id)は pin の外(ADR 0181 追記 #2438)。 */
 export type RoutingProposal<T extends TierRef = TierId> =
   | RoutingRowProposal<T>
   | RoutingAddTierProposal<T>
   | TierDescriptionProposal<T>
   | InterviewProposal<T>
+  | AgentTierProposal<T>
   | { kind: "routing"; op: "promote" | "demote"; evidence: number[]; pin: { promoted: boolean } };
 
-/** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
- *  現在値と、根拠(`worker_spawned` の event id)の episode が走った表の行。 */
-export interface RegistryProposal<T extends TierRef = TierId> {
-  kind: "registry";
+/** agent の既定ティアを1段下げる提案(issue #920 / ADR 0410 決定4)。承認は盤面の agent の既定ティアを書く。pin = agent が実際に走る段
+ *  (既定ティアが無ければ盤面既定)と、根拠(`worker_spawned` の event id)の episode が走った表の行。下げ先がその1段下にいることは
+ *  pin の段と `to` からいまの一覧で照合し、agent が registry に在ることは承認と周期の照合が読む。 */
+export interface AgentTierProposal<T extends TierRef = TierId> {
+  kind: "routing";
   op: "agent_tier";
   agent: string;
   to: T;
