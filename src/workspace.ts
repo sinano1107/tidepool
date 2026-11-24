@@ -1357,6 +1357,9 @@ function repointingOnRefusal<T>(named: WorkspaceConfig, workbench: string, intak
   }
 }
 
+/** 取り込んだと言う文の頭(text C6 と、取り込みの後に作業台を消せなかった文)。 */
+const tookIn = (target: string, { tip, commit }: { tip: string; commit: string }) => `took ${tip} in as ${commit} on ${target}.`;
+
 /** spec #3273 の入口の表の後 / text C6: 作業台を残す取り込みの後、作業台の書く先の branch を読んだ tip からの CAS で包む commit へ進め、
  *  `board/*` を引き直して text C6 を返す。包む commit は人間の tip の tree を持つので作業ツリーは clean のまま。間に push が着いていれば
  *  進めずにそう言う。すでに包む commit に居れば(答え直しの前に進めていた、ADR 0401 決定4)進めずに進んだと読む。ref も event も書いた後
@@ -1372,7 +1375,7 @@ function advanceKeptWorkbench(named: WorkspaceConfig, workbench: string, target:
     repointBoardRefs(named, workbench, carried);
   } catch {}
   return (
-    `took ${tip} in as ${commit} on ${target}. In a clone, fetch the workbench and fast-forward to \`${boardBranch(target)}\` before you write on.` +
+    `${tookIn(target, { tip, commit })} In a clone, fetch the workbench and fast-forward to \`${boardBranch(target)}\` before you write on.` +
     (advanced ? "" : ` Merge \`${boardBranch(target)}\` into your branch before the next take-in.`)
   );
 }
@@ -1586,7 +1589,7 @@ function takeInExistingWorkbench(
 }
 
 /** ADR 0382 決定5 / ADR 0401 決定4: 鍵の作業台の取り込みの後の片付け —— 取り込みの直後(`taken` は取り込んだ tip と包む commit)と、
- *  取り込みで着地した後・記録の前に死んだ盤面の答え直し(`again`。`taken` は着地の commit の第2親とその commit で、第2親の無い着地(ff)は
+ *  取り込みで着地した後・記録の前に死んだ盤面の答え直し(`reanswer`。`taken` は着地の commit の第2親とその commit で、第2親の無い着地(ff)は
  *  取り込みではないので無い)が共有する。tip が取り込んだまま(取り込んだ tip か、答え直しでは進めた後の包む commit)で人間の作業が残っていなければ消し、
  *  残っていれば残してその branch を包む commit へ進め、text C6 を返す。読めなければ、最初の回答は残して進める。答え直しは、死の後に人間が
  *  commit していれば(持ち主 `mine`)残してそう言い、ff の着地・ほかへ動いた tip・読めない作業台は何もせず残す。投げない —— ref も event
@@ -1597,21 +1600,21 @@ function settleTakenInWorkbench(
   target: string,
   carried: Carried,
   taken: { tip: string; commit: string } | undefined,
-  again: boolean,
+  reanswer: boolean,
 ): string | undefined {
   let judged: { owner: WorkbenchOwner; tip: string | undefined };
   try {
     judged = judgeWorkbench(named, place, target, { carried, boardMove: true }, (owner, read) => ({ owner, tip: read?.tip }));
   } catch {
-    return again || taken === undefined ? undefined : advanceKeptWorkbench(named, place.path, target, taken, carried);
+    return reanswer || taken === undefined ? undefined : advanceKeptWorkbench(named, place.path, target, taken, carried);
   }
   const { owner, tip } = judged;
-  if (again && owner.kind === "mine") return notTakenInKept(place.path);
+  if (reanswer && owner.kind === "mine") return notTakenInKept(place.path);
   if (taken === undefined) return undefined;
-  const takenIn = tip === taken.tip || (again && tip === taken.commit);
-  if (again && !takenIn) return undefined;
+  const takenIn = tip === taken.tip || (reanswer && tip === taken.commit);
+  if (reanswer && !takenIn) return undefined;
   if (owner.kind !== "nothing" || !takenIn) return advanceKeptWorkbench(named, place.path, target, taken, carried);
-  return removeWrittenWorkbench(place.path, `took ${taken.tip} in as ${taken.commit} on ${target}.`);
+  return removeWrittenWorkbench(place.path, tookIn(target, taken));
 }
 
 /** `intake` question の選択肢(spec #3273 の識別子の表)。 */
@@ -3998,14 +4001,14 @@ export function releaseReadCheckouts(db: Db, taskId: string): void {
 }
 
 /** 外への書き込み(ref・event・`done`)の後に作業台を消す —— 投げない(ADR 0401 決定1 の (3): 書いた後の拒否は出口を名指せない)。
- *  消せなければ(作業台自身でも、空になった親の rmdir でも)残ったものはそのままに、済んだこと `done` に在り処と原因を足した文を返す。
+ *  消せなければ(作業台自身でも、空になった親の rmdir でも)残ったものはそのままに、済んだことを言う文 `settled` に在り処と原因を足した文を返す。
  *  削除は途中で止まりうるので、人間の作業を残したとは言わない。 */
-function removeWrittenWorkbench(path: string, done: string): string | undefined {
+function removeWrittenWorkbench(path: string, settled: string): string | undefined {
   try {
     removeBoardCheckout(path, CHECKOUT_LAYOUT.workbench.parents);
     return undefined;
   } catch (err) {
-    return `${done} The board could not remove the workbench at ${path} (${err instanceof Error ? err.message : String(err)}); remove what is left of it by hand.`;
+    return `${settled} The board could not remove the workbench at ${path} (${err instanceof Error ? err.message : String(err)}); remove what is left of it by hand.`;
   }
 }
 
@@ -4435,7 +4438,7 @@ export async function redoMergeBacks(
   compareRefs?.();
   // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
   let failure: { error: unknown } | undefined;
-  // 作業台を残した取り込みの text C6
+  // 作業台を残した取り込みの text C6 と、作業台を消せなかった取り込みの文
   const kept: string[] = [];
   try {
     // 1つ運ぶたびに読み直す —— 子孫を運んだ子は、親へ運ぶ内容を新しく持つ。ADR 0382 決定2: 人間の tip を持つ作業台を盤面の手の merge より

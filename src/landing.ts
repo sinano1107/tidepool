@@ -552,7 +552,7 @@ export function landingAnnotation(
   return { blocked_by: landingBlock(db, landingTaskId)?.kind ?? null };
 }
 
-/** `reraised` は回答の寄り道の中で question を立て直して拒んだこと(ADR 0394 決定3)。`notice` は retry の回答の取り込みが作業台を残したときの text C6(1つの作業台に1行)。`takenIn` は回答の取り込みが作業台の tip を
+/** `reraised` は回答の寄り道の中で question を立て直して拒んだこと(ADR 0394 決定3)。`notice` は retry の回答の取り込みが作業台を残したときの text C6 か、消せなかったと言う文(1つの作業台に1行)。`takenIn` は回答の取り込みが作業台の tip を
  *  取り込んだこと(spec #3273 text A10)。 */
 export type RootVerdict = { taskId: string; verdict: LandingVerdict; notice?: string; takenIn?: true; reraised?: true };
 
@@ -1363,7 +1363,7 @@ export function createLanding(deps: LandingDeps): Landing {
     if (block) return { kind: "deferred", reason: block.kind, count: block.count };
     return { question: askMerge(deps.db, workspace, task, prNumber, now, { head: outside.head, headRef: pr?.headRef }, { kind: "rewritten", outside }, undefined, mergePathReview(workspace, pr, resolved.profile?.merge)) };
   };
-  /** 回答の取り込みが根の verdict に添えるもの: 作業台を残したときの text C6(`kept`)と、取り込んだこと(`takenIn`、text A10)。 */
+  /** 回答の取り込みが根の verdict に添えるもの: 作業台を残したときの text C6 か消せなかったと言う文(`kept`)と、取り込んだこと(`takenIn`、text A10)。 */
   type IntakeOutcome = { kept: string[]; takenIn: boolean; reraised?: true };
   /** 収束の1回の、根ごとの文脈。`answering` は答えている question —— その根の PR 昇格失敗 question に retry が答えている途中なら
    *  (ADR 0106 決定5)失敗 question を立て直さず、答えている question を引退の対象から除く。`intake` はその回答の取り込みの束で、

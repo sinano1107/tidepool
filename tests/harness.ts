@@ -796,15 +796,19 @@ export function commitWork(path: string, file: string, body: string): void {
   git(path, "commit", "-m", `add ${file}`);
 }
 
-/** 作業台 `workbench` の中に書けない subdir を commit して置き、権限を戻す手を返す —— 盤面の削除はその中の file で EACCES に止まる。
- *  作業台の親を 0555 にしても macOS では作業台が無傷で残り、途中で止まる形にならない(#3625)。 */
-export function lockDirInside(workbench: string): () => void {
+/** 作業台 `workbench` の中に書けない subdir を commit して置く —— 盤面の削除はその中の file で EACCES に止まる。作業台の親を 0555 に
+ *  しても macOS では作業台が無傷で残り、途中で止まる形にならない(#3625)。権限はテストの終わりに戻す —— `onTestFinished` は登録の逆順に
+ *  走るので、先に登録した `tempDir` の削除より先。 */
+export function lockDirInside(workbench: string): void {
   const dir = join(workbench, "locked");
   mkdirSync(dir);
   commitWork(workbench, "locked/file.txt", "cannot be unlinked\n");
   chmodSync(dir, 0o555);
-  return () => chmodSync(dir, 0o755);
+  onTestFinished(() => chmodSync(dir, 0o755));
 }
+
+/** 作業台を消せなかったと言う文の、原因の前と後(原因の綴りは OS と Node で違う)。`settled` は済んだことを言う文。 */
+export const notRemoved = (settled: string, at: string) => [`${settled} The board could not remove the workbench at ${at} (`, "); remove what is left of it by hand."] as const;
 
 /** 名前の場所 `named` の README.md の blob の loose を外し(`corrupt` なら zlib でない byte に置く)、worker が同じ中身の `copy.txt` を
  *  `checkout` で commit する —— 新しい root tree が blob を直に指し、worker の `git add` は名前の場所に無い blob を自前の store に書く。
