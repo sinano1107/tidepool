@@ -124,6 +124,27 @@ it("poll が reject すれば log に出し、撃ち直しの呼び手はその 
   scheduler.stop();
 });
 
+it("契機の poll が reject しても log に出し、終わりを待つ idle は止まらず、次の契機で収束の回と pickup が走る", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  let unprintable = true;
+  const { worker, scheduler, runs } = wiredBoard(() => {
+    if (unprintable) throw Object.create(null);
+  });
+
+  scheduler.pollNow();
+  await runs[0];
+  await settle();
+  expect(logged).toHaveBeenCalledWith("[scheduler] poll rejected; the next trigger polls again:", expect.any(TypeError));
+  await expect(scheduler.idle()).resolves.toBeUndefined();
+  unprintable = false;
+  scheduler.pollNow();
+
+  await expect(runs[1]).resolves.toEqual([]);
+  await settle();
+  expect(worker.started.map((t) => t.title)).toEqual(["head"]);
+  scheduler.stop();
+});
+
 // #3711: `pass` の registry の判定が投げたら、止まりは開いていないとみなして根へ進む —— 根ごとの失敗は根ごとの catch が人間に届ける(ADR 0403 決定3)
 it("収束の回の registry の止まりの判定の読みが投げても、回は reject せず根を撃ち、同じ契機の pickup も走る", async () => {
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
