@@ -12,7 +12,7 @@ import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, recor
 import { buildWorkspaceResolver, resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, publishWorkspace, updateWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeGitHubClient } from "./fakes.js";
+import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace, makeWorkspace, shimGit } from "./harness.js";
 import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -381,4 +381,52 @@ it("publish の後に PR を開いた根は、名前を別の repo に登録し�
   expect(failure?.purpose).toContain("now declares repo other/lagoon");
   expect(github.stateChecks).toHaveLength(previousReads);
   expect(openQuarantineQuestion(db, "workspace", "lagoon")).toBeUndefined();
+});
+
+/** `findPullRequestByHead` を、本来の結果を得た後で窓が開くまで待たせる —— その間に扉で名前を登録し直す題材。 */
+function holdFind(github: FakeGitHubClient) {
+  const window = awaitWindow();
+  const find = github.findPullRequestByHead.bind(github);
+  github.findPullRequestByHead = async (input) => {
+    const found = await find(input);
+    await window.hold();
+    return found;
+  };
+  return window;
+}
+
+// #3643: 収束が PR 番号の記録が無い根の PR を探す await の間、名前を別の repo へ移す扉は削除の扉だけで、その扉はこの根を
+// 着地待ちに数えて拒む(ADR 0241 決定6)。足し替えられる出元 repo は、記録の前に今の宣言と比べて刻まない(ADR 0399 決定3)
+it("PR 番号の記録が無い根は、作る前の探索を待つ間に削除の扉で名前を移せず、見つけた決着した PR を刻んで着地を終える", async () => {
+  const { addFork, db, doors, github, landing, registerAgain, root } = await lagoonWithPurelyLocalDoneRoot();
+  await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
+  await addFork();
+  github.scriptMergedOutside(github.scriptPullRequestOnBranch(`task/${root.id}`, 7, "acme/fork"));
+  const window = holdFind(github);
+  const { workspace: replacement } = await makeRemoteBackedWorkspace("lagoon-replacement");
+
+  const converging = convergeOn(landing, root.id);
+  await window.entered;
+  await expect(registerAgain(replacement.path)).rejects.toThrow(/still await landing through it/);
+  window.open();
+  await converging;
+
+  expect(getTask(db, root.id)?.pr_number).toBe(7);
+  expect(rootPrOutcome(db, root.id)).toMatchObject({ state: "MERGED", prNumber: 7 });
+});
+
+it("PR 番号の記録が無い根は、作る前の探索を待つ間に設定の扉で出元 repo を差し替えると、旧い出元 repo で見つけた決着した PR を刻まない", async () => {
+  const { db, github, landing, root, setHeadRepo } = await lagoonWithDoneRoot();
+  await setHeadRepo("acme/fork");
+  github.scriptMergedOutside(github.scriptPullRequestOnBranch(`task/${root.id}`, 7, "acme/fork"));
+  const window = holdFind(github);
+
+  const converging = convergeOn(landing, root.id);
+  await window.entered;
+  await setHeadRepo("another/fork");
+  window.open();
+  await expect(converging).resolves.toMatchObject({ kind: "failed", error: expect.stringContaining("head repo changed to another/fork during landing") });
+
+  expect(getTask(db, root.id)?.pr_number).toBeNull();
+  expect(rootPrOutcome(db, root.id)).toBeNull();
 });
