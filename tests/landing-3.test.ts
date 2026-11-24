@@ -15,7 +15,7 @@ import {
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
-import { openQuarantineValues } from "../src/quarantine.js";
+import { openQuarantineValues, RESTORE_THE_BASELINE } from "../src/quarantine.js";
 import { type AuthorityProfile, type MergeDial, } from "../src/registry.js";
 import { loadRegistryOrStop, RegistryUnreadableError } from "../src/registry-unreadable.js";
 import {
@@ -2195,6 +2195,53 @@ it("task のブランチが無ければ、着地の後に記録だけ欠けた l
   await answerLocalMerge(local, "hold");
 
   expect(boardEvents(db, work.id, "landing_declined")).toHaveLength(1);
+});
+
+// ADR 0401 追記(#3647): hold は今のタスクブランチでなく question が問うた tip で判定する —— 死の後にタスクブランチだけが保護ブランチより
+// 先へ進んでも、載った tip に断念を刻まない
+it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠け、タスクブランチが盤面の外の commit で進んだ local merge question への hold は、問うた tip の着地を言い merge を名指して断り何も刻まない", async (_form, land) => {
+  const local = await landLocally("local-hold-asked-tip-landed");
+  const { workspace, db, work, question } = local;
+  await land(local);
+  commitOutOfBand(workspace, `task/${work.id}`);
+
+  const refused = answerLocalMerge(local, "hold");
+
+  await expect(refused).rejects.toThrow(DomainError);
+  await expect(refused).rejects.toThrow(question.question_landing_tip!);
+  await expect(refused).rejects.toThrow("answer `merge`");
+  await expect(refused).rejects.toThrow("after the question");
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
+// ADR 0401 追記(#3647): merge の答え直しは今のタスクブランチで判定するまま —— 盤面の外の commit は workspace の Quarantine が先に抱える
+it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠け、タスクブランチが盤面の外の commit で進んだ local merge question は、Quarantine を基準へ戻して受理した後の merge で今のタスクブランチの着地を local_merge_executed として1件刻む", async (_form, land) => {
+  const local = await landLocally("local-merge-asked-tip-landed");
+  const { workspace, db, clock, work } = local;
+  const landed = await land(local);
+  commitOutOfBand(workspace, `task/${work.id}`);
+  await expect(answerLocalMerge(local)).rejects.toThrow("answer the quarantine question");
+  const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace }) }, quarantine, [RESTORE_THE_BASELINE], undefined, () => clock.now(), "webui");
+
+  await answerLocalMerge(local);
+
+  expect(git(workspace.path, "rev-parse", "main")).toBe(landed);
+  expect(boardEvents(db, work.id, "local_merge_executed").map(({ payload }) => payload)).toEqual([{ kind: "local_merge_executed", sha: landed }]);
+});
+
+// ADR 0401 追記(#3647) / ADR 0403 決定1: 問うた tip が無い question は今のタスクブランチで判定する —— 無いことを「判定しない」と読まない
+it("問うた tip を持たない local merge question でも、タスクブランチが着地の後に記録だけ欠けていれば hold は merge を名指して断る", async () => {
+  const local = await landLocally("local-hold-without-asked-tip");
+  const { db, work, question } = local;
+  await landFfWithoutRecord(local);
+  // 読めずに立った question(ADR 0403 決定1)の形を直接作る
+  db.prepare("UPDATE tasks SET question_landing_tip = NULL WHERE id = ?").run(question.id);
+
+  await expect(answerLocalMerge(local, "hold")).rejects.toThrow("answer `merge`");
+
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
 });
 
 // ADR 0289 Status 追記 / ADR 0370 決定1: 履歴で載ったと分かるとき以外の hold は拒まない —— 含まれているかを読めなくても断念を刻む

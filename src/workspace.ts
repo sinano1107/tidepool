@@ -4483,12 +4483,17 @@ function protectedValueAsRecorded(db: Db, workspace: WorkspaceConfig): string {
 /** ADR 0401 決定4: `task/<id>` が保護ブランチ(`protectedSha`、省略時は今の値)に含まれていれば、この根を持ち込んだ commit —— first-parent の鎖の上で
  *  task を含み、first parent が含まない commit(ff なら task の tip)。含まれていなければ undefined。含まれるかは内容(ADR 0105)でなく履歴で読む
  *  —— 別の根が同じ変更を運んでもこの根の着地ではない(ADR 0289 決定3)。鎖の先頭は他の根の commit でありうる(ADR 0289 決定1)。
- *  ADR 0401 帰結: `task/<id>` が無ければ含まれていると読まない。git が読めなければ投げる。 */
-export function localLandingCommit(workspace: WorkspaceConfig, taskId: string, protectedSha = git(workspace.path, "rev-parse", `refs/heads/${protectedBranch(workspace)}`)): string | undefined {
+ *  ADR 0401 帰結: `task/<id>` が無ければ含まれていると読まない。git が読めなければ投げる。ADR 0401 追記(#3647): 判定する値は `judged`(省略時は
+ *  今の `task/<id>`)—— hold は question が問うた tip を渡す。 */
+export function localLandingCommit(
+  workspace: WorkspaceConfig,
+  taskId: string,
+  protectedSha = git(workspace.path, "rev-parse", `refs/heads/${protectedBranch(workspace)}`),
+  judged = `refs/heads/${taskBranch(taskId)}`,
+): string | undefined {
   if (!taskBranchExists(workspace, taskId)) return undefined;
-  const task = `refs/heads/${taskBranch(taskId)}`;
-  if (!isAncestor(workspace, task, protectedSha)) return undefined;
-  const tip = git(workspace.path, "rev-parse", task);
+  if (!isAncestor(workspace, judged, protectedSha)) return undefined;
+  const tip = git(workspace.path, "rev-parse", judged);
   const revList = (...args: string[]) => git(workspace.path, "rev-list", ...args, `${tip}..${protectedSha}`).split("\n").filter(Boolean);
   // `--first-parent` と `--ancestry-path` を併せると、task の tip が第2親の先にある取り込みの commit を落とす —— 子孫を別に引いて鎖と突き合わせる
   const descendants = new Set(revList("--ancestry-path"));
