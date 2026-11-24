@@ -5,9 +5,10 @@ import type { GitHubClient } from "./github.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import { settleQuestionAsObserved } from "./tasks.js";
 
-/** gh を撃つ GitHubClient の呼び出し —— PR の作成(REST)・push の準備・token の問い合わせは撃たない。 */
+/** gh を撃つ GitHubClient の呼び出し —— PR の作成(REST)・push の準備・token の問い合わせは撃たない。merge の版の門は prepare にあるので、
+ *  prepare が通れば版が通った(ADR 0402 決定2)。 */
 const GH_CALLS = new Set<string | symbol>([
-  "readPullRequest", "mergePullRequest", "getPullRequestState", "findPullRequestByHead", "getIssue", "getIssueWithState",
+  "readPullRequest", "prepareMerge", "getPullRequestState", "findPullRequestByHead", "getIssue", "getIssueWithState",
   "listIssues", "addIssueComment", "repositoryParent", "forkPrCredentialSettings",
 ] satisfies Array<keyof GitHubClient>);
 

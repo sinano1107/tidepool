@@ -13,7 +13,7 @@ it("信号の書き込みが投げても、通った merge は merge 済みの�
   const clock = { now: () => new Date(0) } as Clock;
   const workspace = { name: "widget", path: "/fake/path" };
 
-  await withGhVersionQuarantine(github, db, clock).mergePullRequest({ workspace, number: 7 }, "abc123");
+  await withGhVersionQuarantine(github, db, clock).prepareMerge({ workspace, number: 7 }).then((merge) => merge("abc123"));
 
   expect(github.merged).toEqual([{ path: "/fake/path", number: 7 }]);
 });

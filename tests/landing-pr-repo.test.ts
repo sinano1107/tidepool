@@ -256,10 +256,10 @@ it("無人 merge の執行が token を待つ間に登録し直すと、最後�
   const fixture = await reefWithPr("auto_if_ci_green");
   const { old, github, landing, move } = fixture;
   const window = awaitWindow();
-  const merge = github.mergePullRequest.bind(github);
-  github.mergePullRequest = async (ref, head, beforeMerge) => {
+  const prepareMerge = github.prepareMerge.bind(github);
+  github.prepareMerge = async (ref) => {
     await window.hold();
-    return merge(ref, head, beforeMerge);
+    return prepareMerge(ref);
   };
 
   const ticking = landing.tick("auto_merge");
@@ -277,7 +277,7 @@ it("無人 merge の失敗を待つ間に登録し直すと、PR を読み直す
   const fixture = await reefWithPr("auto_if_ci_green");
   const { old, github, landing, move } = fixture;
   const window = awaitWindow();
-  github.mergePullRequest = async () => {
+  github.prepareMerge = async () => async () => {
     await window.hold();
     throw new Error("merge unavailable");
   };
@@ -322,7 +322,7 @@ it("merge の回答が執行用 token を待つ間に登録し直すと、取得
   };
   const ghCommands = await recordGhCommands();
   const client = new GhCliClient(githubAuth, MATCHING_GH);
-  github.mergePullRequest = client.mergePullRequest.bind(client);
+  github.prepareMerge = client.prepareMerge.bind(client);
 
   const answering = answer("merge").catch((error: Error) => error);
   await window.entered;

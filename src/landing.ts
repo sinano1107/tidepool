@@ -2289,31 +2289,30 @@ export function createLanding(deps: LandingDeps): Landing {
               recommendation: "merge",
             });
           };
-          await actIfGateOpen(() => stop(askSurface) ? true : null, async () => {
+          const merging = origin.kind === "pushed" && ciPrompt === undefined && ci === "success" && content !== null && content.left.length === 0;
+          // merge する回の縛りの読みは prepare の後の同期区間の1箇所だけ —— ここで重ねて読まない(ADR 0330 決定4)
+          await actIfGateOpen(() => !merging && stop(askSurface) ? true : null, async () => {
             // ADR 0394 決定1 / ADR 0387 決定1: 外の head は CI の色を待たずに問う。
             if (origin.kind !== "pushed" || ciPrompt !== undefined) {
               ask(ciPrompt);
               return;
             }
-            if (ci !== "success" || !content || content.left.length > 0) return;
+            if (!merging) return;
             // ADR 0394 決定2 / ADR 0288 決定2: 読みの間と違い、merge の執行中は収束が question を立てない。
             inFlight.set(task_id, "write");
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
-            const stoppedBeforeMerge = Symbol();
-            const failure = await github.mergePullRequest(ref, head, () => {
-              // ADR 0330 決定1: Registry changes during token acquisition must reach the final guard.
-              workspaceNetworkDestination(workspace);
-              assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
-              if (stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head)) throw stoppedBeforeMerge;
-            }).then(
-              () => null,
-              (error: unknown) => {
-                if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError || error instanceof GhVersionError) throw error;
-                if (error === stoppedBeforeMerge) return stoppedBeforeMerge;
-                return error instanceof Error ? error.message : String(error);
-              },
-            );
-            if (failure === stoppedBeforeMerge) return;
+            const failure = await github.prepareMerge(ref).then(
+              (merge) => actIfGateOpen(() => {
+                // ADR 0330 決定1・4: token と版を待つ間の変化は、gh の起動と同じ同期区間のこの1箇所で読む
+                workspaceNetworkDestination(workspace);
+                assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
+                return stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head) ? true : null;
+              }, () => merge(head).then(() => null)),
+            ).catch((error: unknown) => {
+              if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError || error instanceof GhVersionError) throw error;
+              return error instanceof Error ? error.message : String(error);
+            });
+            if (failure === true) return;
             if (failure === null) {
               retire(task_id, { kind: "pr_merged", pr_number }, deps.clock.now());
               return;

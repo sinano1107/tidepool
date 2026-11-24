@@ -619,23 +619,24 @@ export class FakeGitHubClient implements GitHubClient {
     return { ci: this.ciStatus, ...this.stateRead(ref) };
   }
 
-  async mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void> {
+  async prepareMerge(ref: PrRef): Promise<(head: string) => Promise<void>> {
     await this.ghGate();
-    beforeMerge?.();
-    // GitHub refuses a merge on an already-merged or closed PR; the fake must
-    // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
-    const state = this.stateOf(ref.workspace, ref.number);
-    if (state !== "OPEN") {
-      throw new Error(`PR #${ref.number} is ${state.toLowerCase()}`);
-    }
-    // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
-    if (head !== this.headOf(ref.workspace, ref.number)) {
-      throw new Error("Head branch was modified. Review and try the merge again.");
-    }
-    const failure = this.field(ref.workspace, ref.number, "mergeFailure");
-    if (failure) throw failure;
-    this.merged.push({ path: ref.workspace.path, number: ref.number });
-    this.mergedHeads.push(head);
+    return async (head) => {
+      // GitHub refuses a merge on an already-merged or closed PR; the fake must
+      // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
+      const state = this.stateOf(ref.workspace, ref.number);
+      if (state !== "OPEN") {
+        throw new Error(`PR #${ref.number} is ${state.toLowerCase()}`);
+      }
+      // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
+      if (head !== this.headOf(ref.workspace, ref.number)) {
+        throw new Error("Head branch was modified. Review and try the merge again.");
+      }
+      const failure = this.field(ref.workspace, ref.number, "mergeFailure");
+      if (failure) throw failure;
+      this.merged.push({ path: ref.workspace.path, number: ref.number });
+      this.mergedHeads.push(head);
+    };
   }
 
   /** Pins one PR's head, over its branch's tip on origin — a push the fixture cannot make, or a sha that exists
@@ -911,11 +912,14 @@ export function afterCiRead(github: FakeGitHubClient, change: () => void | Promi
 
 /** GitHub が merge を受け付けた後、応答が盤面に返る前で hold に止める。止まっている間、PR はもう MERGED を返す。 */
 export function holdAfterMerge(github: FakeGitHubClient, hold: () => Promise<void>): void {
-  const mergePullRequest = github.mergePullRequest.bind(github);
-  github.mergePullRequest = async (ref, head) => {
-    await mergePullRequest(ref, head);
-    github.scriptMergedOutside(ref.number);
-    await hold();
+  const prepareMerge = github.prepareMerge.bind(github);
+  github.prepareMerge = async (ref) => {
+    const merge = await prepareMerge(ref);
+    return async (head) => {
+      await merge(head);
+      github.scriptMergedOutside(ref.number);
+      await hold();
+    };
   };
 }
 

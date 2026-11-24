@@ -1888,28 +1888,36 @@ export async function submitAnswer(
           if (pr.ci !== "success" && pr.ci !== "unreported") {
             throw refuse(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
           }
-          // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
-          // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
+          // ADR 0236 決定2・3 / ADR 0394 決定2: 印は merge の準備の待ちの前に同期で取り、取れなければ拒む(question は開いたまま)。
+          // 印はこの関数が返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い。印は finally が放す
+          mark.release = deps.landing.takeInFlightMark(kind.task_id);
+          if (!mark.release) throw new DomainError(beingMerged);
+          // External merge precedes the persisted answer. Failure leaves the question open.
+          // CI を読んだ head に固定する(ADR 0231 決定1)。失敗は文面で分けず DomainError に包む
+          const mergeFailed = (err: unknown): never => {
+            // ADR 0402 決定3: 版の門の拒否は merge の失敗ではない —— 版の不一致だけを名指して拒む
+            if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError || err instanceof GhVersionError) throw err;
+            assertMergeRepo();
+            const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
+            throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, pr.headRef)}`);
+          };
+          const merge = await github.prepareMerge({ workspace: mergeWorkspace, number: mergePr }).catch(mergeFailed);
+          // ADR 0288 決定2 / ADR 0330 決定1・4: 上の await の間の変化は、gh を撃つ同期区間のこの1箇所で読む —— question・
+          // 着地の門・出元 repo・ref(ADR 0370 決定1)・積み残し(ADR 0231 決定3 / ADR 0242 決定3、比べられなければ積み残し)
           await actIfGateOpen(() => {
-            mark.release = deps.landing.takeInFlightMark(kind.task_id);
-            if (!mark.release) throw new DomainError(beingMerged);
-            // ADR 0288 決定2: 上の await の間に閉じた question と門を、印と同じ同期の区間で読み直す。印は finally が放す
             assertQuestionOpen();
             assertLandingAllowed(deps.db, kind.task_id);
-            return null;
-          }, async () => {
-            // External merge precedes the persisted answer. Failure leaves the question open.
-            // CI を読んだ head に固定する(ADR 0231 決定1)。失敗は文面で分けず DomainError に包む
+            assertMergeRepo();
+            assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, deps.boardState, now());
+            let leftNow: string[];
             try {
-              await github.mergePullRequest({ workspace: mergeWorkspace, number: mergePr }, pr.head, assertMergeRepo);
+              leftNow = contentLeftBehindLocally(deps.db, mergeWorkspace, kind.task_id, pr.head);
             } catch (err) {
-              // ADR 0402 決定3: 版の門の拒否は merge の失敗ではない —— 版の不一致だけを名指して拒む
-              if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError || err instanceof GhVersionError) throw err;
-              assertMergeRepo();
-              const failure = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
-              throw refuse(`merging PR #${mergePr} failed: ${failure}.${conflictedPrRoute(mergePr, mergeWorkspace, pr.headRef)}`);
+              throw refuse(`cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ${err instanceof Error ? err.message : String(err)}`);
             }
-          });
+            if (leftNow.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `PR #${mergePr}`));
+            return null;
+          }, () => merge(pr.head).catch(mergeFailed));
           rootRecord = { root: kind.task_id, payload: { kind: "pr_merged", pr_number: mergePr } };
         } else {
           // ADR 0394 決定5: 外の部分が今と違っても拒まない —— 断るのは人間が見た question の内容

@@ -28,6 +28,7 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
+import { raiseObjection } from "../src/triage.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
   boardRefWriter,
@@ -88,6 +89,7 @@ import {
   mergeQuestions,
   openBoard,
   openLocalMergeQuestions,
+  openPrMergeQuestion,
   openPushedPr,
   profile,
   promotionFailures,
@@ -115,7 +117,7 @@ it("merge に失敗した開いたままの PR も、question を立てる直前
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
   let dial: MergeDial = "auto_if_ci_green";
-  github.mergePullRequest = async () => {
+  github.prepareMerge = async () => async () => {
     dial = "external";
     throw new Error(CONFLICT);
   };
@@ -1194,6 +1196,72 @@ it("PR の head の fetch を待つ間に修理が巻き戻されたら、merge 
   expect(() => git(pr.workspace.path, "cat-file", "-e", `${prHead}^{commit}`)).toThrow();
   expect(quarantineQuestion(pr.db, "workspace", pr.workspace.name)?.purpose).toContain(`was: ${recorded} ${ref}`);
   expect(mergeQuestions(pr.db)).toHaveLength(1);
+  expect(pr.github.merged).toEqual([]);
+});
+
+/** merge の準備(token と gh の版)の await で止める窓 —— 止まっている間に門・ref・内容を動かす題材。 */
+function heldInPrepareMerge(github: FakeGitHubClient) {
+  const window = awaitWindow();
+  const prepareMerge = github.prepareMerge.bind(github);
+  github.prepareMerge = async (ref) => {
+    await window.hold();
+    return prepareMerge(ref);
+  };
+  return window;
+}
+
+// ADR 0330 決定1・4: 縛りの読みは prepare の待ちの後の、gh を撃つ同期区間の1箇所 —— 待ちの間に閉じた門を越えて merge しない
+it.each(["異議", "付帯子"] as const)("無人 merge の準備の await 中に%sが出たら、merge せず pr_merged を刻まない", async (block) => {
+  const { db, clock, github, work, landing } = await openPushedPr(`auto-merge-gate-closes-in-prepare-${block === "異議" ? "objection" : "child"}`, "auto_if_ci_green");
+  const window = heldInPrepareMerge(github);
+
+  const ticking = landing.tick("auto_merge");
+  await window.entered;
+  if (block === "異議") {
+    const entry = appendEvent(db, {
+      taskId: work.id, actorId: "worker", origin: "worker",
+      payload: { kind: "decision_logged", line: "ship this implementation" }, at: clock.now(),
+    });
+    raiseObjection(db, entry, "repair the edge case first", clock.now());
+  } else {
+    attachUnsettledChild(db, clock, work.id);
+  }
+  window.open();
+  await ticking;
+
+  expect(github.merged).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([]);
+});
+
+it("merge 回答の準備の await 中に別の ref が動いたら、merge せず workspace の Quarantine で止まる", async () => {
+  const pr = await openPushedPr("merge-answer-ref-moves-in-prepare", "escalate");
+  await leaveBaseline(pr.db, pr.workspace);
+  const window = heldInPrepareMerge(pr.github);
+
+  const answering = answerMergeQuestion(pr);
+  await window.entered;
+  const tagged = git(pr.workspace.path, "rev-parse", "HEAD");
+  git(pr.workspace.path, "tag", "intruder");
+  window.open();
+
+  await expect(answering).rejects.toThrow(`now: ${tagged} refs/tags/intruder`);
+  expect(quarantineQuestion(pr.db, "workspace", pr.workspace.name)?.purpose).toContain(`now: ${tagged} refs/tags/intruder`);
+  expect(openPrMergeQuestion(pr.db)).toBeDefined();
+  expect(pr.github.merged).toEqual([]);
+});
+
+// ADR 0231 決定3 / ADR 0242: 待ちの間に付帯子が立って決着し修理が merge back されると、門は開いたまま PR の head が内容を落とす
+it("merge 回答の準備の await 中に修理が決着してタスクブランチへ merge back されたら、積み残しで拒み merge しない", async () => {
+  const pr = await openPushedPr("merge-answer-left-behind-in-prepare", "escalate");
+  const window = heldInPrepareMerge(pr.github);
+
+  const answering = answerMergeQuestion(pr);
+  await window.entered;
+  tearDownRepair(pr.db, pr.clock, pr.workspace, await settleRepairNotMergedBack(pr.db, pr.clock, pr.workspace, pr.work.id));
+  window.open();
+
+  await expect(answering).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${STILL_CARRYING}`));
+  expect(openPrMergeQuestion(pr.db)).toBeDefined();
   expect(pr.github.merged).toEqual([]);
 });
 

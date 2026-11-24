@@ -163,7 +163,7 @@ export class IssueGoneError extends Error {
  *  is never entrusted to the worker, only to tidepool itself — this is what
  *  it calls through. An external API is a system boundary (mocking.md):
  *  faked in tests, shelled out to `gh` for real. `readPullRequest`/
- *  `mergePullRequest` (issue #11) back the merge dial: the actual merge is
+ *  `prepareMerge` (issue #11) back the merge dial: the actual merge is
  *  never performed until a live CI check reports "success" immediately
  *  beforehand — or, on a human's merge answer only, still reports
  *  "unreported" past ADR 0227's grace — and only on the head that read was
@@ -184,10 +184,11 @@ export interface GitHubClient {
    *  ブランチが判断した値から動いていれば落ちる(ADR 0376 Status 追記、#3605)。 */
   preparePush(input: PreparePushInput): Promise<(sha: string) => void>;
   readPullRequest(ref: PrRef): Promise<PrStatus>;
-  /** Merges only while the PR's head is still `head` — the one whose CI was
-   *  read (ADR 0231 決定1); GitHub refuses it once the head has moved.
-   *  `beforeMerge` may refuse in the same synchronous section as spawn, after token acquisition (ADR 0330 決定1). */
-  mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void>;
+  /** Awaits gh's version read and the token, then returns the merge: it merges only while the PR's head is still `head` —
+   *  the one whose CI was read (ADR 0231 決定1); GitHub refuses it once the head has moved. The returned function awaits
+   *  nothing before spawning `gh`, so the caller's binding reads sit in the same synchronous section (ADR 0330 決定1・4,
+   *  the shape of `preparePush`). */
+  prepareMerge(ref: PrRef): Promise<(head: string) => Promise<void>>;
   /** The PR's state and who merged it (ADR 0079 決定3 / ADR 0229 / ADR 0265 決定5) — the read the board needs to
    *  tell "the merge is still mine to make" from "someone merged or closed it
    *  outside the board". Only asked on the two surfaces the board holds a
@@ -379,9 +380,9 @@ export class GhCliClient implements GitHubClient {
    *  `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(ADR 0330 決定1)。
    *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
    *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
-  private async gh(workspace: WorkspaceConfig, args: string[], beforeSpawn?: () => void): Promise<string> {
+  private async gh(workspace: WorkspaceConfig, args: string[]): Promise<string> {
     const repo = await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`);
-    return this.run([...args, "-R", repo], repo, workspace, beforeSpawn);
+    return this.run([...args, "-R", repo], repo, workspace);
   }
 
   /** The declared repo, with its token warmed. */
@@ -391,22 +392,27 @@ export class GhCliClient implements GitHubClient {
     return repo;
   }
 
-  /** ADR 0330 決定1・4 / ADR 0399 決定3: recheck the destination and the caller's guard in the same synchronous section as spawning `gh`.
-   *  ADR 0402 決定2: every call reads gh's version first; the read awaits, so it sits before that section. */
-  private async run(args: string[], repo: string, workspace?: WorkspaceConfig, beforeSpawn?: () => void): Promise<string> {
+  /** ADR 0402 決定2: every call reads gh's version first; the read awaits, so it sits before the spawn's synchronous section. */
+  private async run(args: string[], repo: string, workspace?: WorkspaceConfig): Promise<string> {
     await assertGhVersion(this.readGhVersion, this.ghVersion);
+    return this.spawn(args, repo, workspace);
+  }
+
+  /** ADR 0330 決定1・4 / ADR 0399 決定3: recheck the destination in the same synchronous section as spawning `gh` — nothing
+   *  here awaits before the spawn. */
+  private spawn(args: string[], repo: string, workspace?: WorkspaceConfig): Promise<string> {
     if (workspace && workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
-    beforeSpawn?.();
     const cwd = workspace?.path;
-    try {
-      return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
-    } catch (err) {
-      // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
-      if ((err as { killed?: boolean }).killed) {
-        throw new Error(`\`gh ${args[0]} ${args[1]}\` timed out after ${this.timeoutMs} ms${cwd === undefined ? "" : ` (in ${cwd})`}`, { cause: err });
-      }
-      throw err;
-    }
+    return execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs }).then(
+      ({ stdout }) => stdout,
+      (err: unknown) => {
+        // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
+        if ((err as { killed?: boolean }).killed) {
+          throw new Error(`\`gh ${args[0]} ${args[1]}\` timed out after ${this.timeoutMs} ms${cwd === undefined ? "" : ` (in ${cwd})`}`, { cause: err });
+        }
+        throw err;
+      },
+    );
   }
 
   async repositoryParent(ref: RepoSlug): Promise<RepoSlug | null> {
@@ -504,8 +510,10 @@ export class GhCliClient implements GitHubClient {
     };
   }
 
-  async mergePullRequest(ref: PrRef, head: string, beforeMerge?: () => void): Promise<void> {
-    await this.gh(ref.workspace, ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head], beforeMerge);
+  async prepareMerge({ workspace, number }: PrRef): Promise<(head: string) => Promise<void>> {
+    const repo = await this.warmDeclaredRepo(workspace, "gh pr merge");
+    await assertGhVersion(this.readGhVersion, this.ghVersion);
+    return async (head) => void (await this.spawn(["pr", "merge", String(number), "--merge", "--match-head-commit", head, "-R", repo], repo, workspace));
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {

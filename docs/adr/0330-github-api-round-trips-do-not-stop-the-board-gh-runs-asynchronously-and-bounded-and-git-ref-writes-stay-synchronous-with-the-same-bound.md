@@ -1,5 +1,7 @@
 # GitHub API 面の往復は盤面の実行を止めない —— `gh` は非同期で有界に撃ち、git の ref 書き込みは ADR 0243 どおり同期のまま同じ上限だけ掛ける
 
+**Status 追記: gh を介す行為は token と版を済ませた同期の口で撃つ(`preparePush` と同じ形 —— merge は `prepareMerge`)。これが決定4 の helper の門が spawn と隣り合う条件で、新しい決定ではなく決定4 の姿(2026-11-24、issue #3641)。**
+
 **Status 追記: 有界の面が1つ増えた —— ADR 0356 決定3 の盤面所有 view で worker の tree / repo に撃つ local の git は、専用の定数で有界(決定4 の「1箇所」は view の runner にもう1つ)。退けた形「git も非同期」は view にも当たり、view は同期のまま([ADR 0357](0357-the-boards-git-on-a-workers-tree-is-bounded-and-expiry-is-a-worker-repo-failure.md)、2026-11-07、issue #2966)。**
 
 **Status 追記: 決定2・3 の上限の読みは ADR 0334 で「総時間」から「転送が止まった時間」(git 自身の stall 検出)に変わり、「決めないこと」の clone・publish の push・registry の push の無界は閉じた —— 無界の面は無い(2026-11-01、issue #2731)。**
