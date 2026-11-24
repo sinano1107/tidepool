@@ -14,6 +14,7 @@ import {
   githubLoggedIn,
   loadGitHubAuth,
   originRepo,
+  RemoteLacksObjectError,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { startDenyingHttpRemote, startRecordingHttpRemote, tripwire } from "./git-http-remote.js";
@@ -456,6 +457,33 @@ describe("盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339
     const [whole, incremental] = [packBytes(0) - packBytes(seen), packBytes(seen)];
     expect({ whole: whole > 200 * 1024, ratio: incremental / whole < 0.1 }).toEqual({ whole: true, ratio: true });
   }, 20_000);
+
+  // ADR 0409 決定3: 「無い」と読むのは相手の `upload-pack: not our ref <sha>` だけ —— 手元の git が前に付ける部分は翻訳されうるので見ず、
+  // 求めた sha との照合は呼び手がする(答えた sha を運ぶ)
+  const LACKING = "1".repeat(40);
+  const OTHER = "2".repeat(40);
+  it.each([
+    ["local の bare 自身の答え", undefined, LACKING],
+    ["翻訳された前置き", `fatal: erreur distante : upload-pack: not our ref ${LACKING}`, LACKING],
+    ["sha の後に続く文", `fatal: remote error: upload-pack: not our ref ${LACKING} (and more)`, LACKING],
+    ["別の sha を名指す答え", `fatal: remote error: upload-pack: not our ref ${OTHER}`, OTHER],
+    ["stall", "error: RPC failed; curl 28 Operation too slow. Less than 1 bytes/sec transferred the last 30 seconds", undefined],
+    ["not our ref を言わない失敗", "fatal: remote error: upload-pack: not a git repository", undefined],
+  ])("fetch の失敗は、相手の `upload-pack: not our ref <sha>` だけを答えた sha を持つ型に分け、文は変えない(%s)", async (_, stderr, answered) => {
+    const { repo } = await checkoutOfBareRemote();
+    if (stderr !== undefined) await shimGit({ fails: [`${LACKING}:refs/board/fetched`, stderr] });
+
+    const err = (() => {
+      try {
+        authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, LACKING);
+      } catch (thrown) {
+        return thrown as Error;
+      }
+    })();
+
+    expect(err instanceof RemoteLacksObjectError ? err.sha : undefined).toBe(answered);
+    if (answered !== undefined) expect(err!.message).toMatch(new RegExp(`^\`git fetch\` failed \\(in ${repo}\\): .*not our ref ${answered}`, "s"));
+  });
 
   it("fetch / ls-remote / push は成功でも失敗でも盤面所有の repo を残さない", async () => {
     const { repo, sha } = await checkoutOfBareRemote();

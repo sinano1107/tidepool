@@ -42,6 +42,7 @@ import {
   git,
   gitAnswers,
   gitlinkChanges,
+  gitReporting,
   gitWithInput,
   gitWithoutHistoryOverrides,
   isAncestor,
@@ -58,14 +59,14 @@ import {
 } from "./git.js";
 import type { GitHubClient, RepoSlug } from "./github.js";
 import {
-  authedLsRemote,
   comparedRepo,
-  GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
+  type GitRemote,
   HEAD_REPO_REMOTE,
   isRelativeLocalPath,
   landingHeadRepo,
   networkDestination,
+  RemoteLacksObjectError,
   remoteTrackingRef,
   workspaceNetworkDestination,
 } from "./github-auth.js";
@@ -2705,8 +2706,10 @@ export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig,
   fetchBranchCopy(workspace, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
 }
 
-async function ensureHeadRepoToken(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
-  await auth?.ensureToken(landingHeadRepo(workspace).key);
+async function ensureHeadRepoToken(workspace: WorkspaceConfig, auth: GitHubAuth | undefined, options: { fresh?: boolean } = {}): Promise<void> {
+  // 宣言の無い出元 repo は token が無くても名指して止める —— `auth?.` は引数を評価しない
+  const key = landingHeadRepo(workspace).key;
+  await auth?.ensureToken(key, options);
 }
 
 /** ADR 0376 決定1 / ADR 0395 決定1: PR の無いタスクブランチの出元 repo の head を、上限つき・認証つきの `ls-remote` 1回で読む。exit 0 で行が無ければ
@@ -3413,58 +3416,92 @@ function isSha(value: string): boolean {
   return value !== "" && symrefTarget(value) === undefined;
 }
 
-/** 戻す先の object が無い ref(ADR 0373 決定5)。 */
-function lostTargets(workspace: WorkspaceConfig, targets: ReadonlyMap<string, string>): [ref: string, sha: string][] {
-  return [...targets].filter(([, value]) => isSha(value) && !objectExists(workspace, value));
+/** ADR 0373 決定4: 書き戻しが `ref` の今の値 `value` から keep-around に持ちうる sha —— symref の行(HEAD を含む)は名前なので持たず、`refs/stash` は reflog の各件。 */
+function keepAroundCandidates(workspace: WorkspaceConfig, ref: string, value: string): string[] {
+  if (!isSha(value)) return [];
+  // reflog の無い refs/stash(update-ref で作った)でも今の値は持つ
+  return [...new Set([value, ...(ref === "refs/stash" ? git(workspace.path, "log", "-g", "--format=%H", ref).split("\n").filter(Boolean) : [])])];
 }
 
-/** ADR 0380 決定4 / ADR 0395 決定1・3: fetch missing task objects from their fork, and other objects from origin.
- *  Probe before fetching and again after a failed fetch, so transport failures do not count as lost objects. */
-export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
-  if (!isRemoteBacked(place)) return;
-  const lost = lostTargets(place, restoreTargets(db, place).targets);
+/** ADR 0409 決定4: 戻す先と keep-around に持ちうる値のすべてを手元で読む。1つでも在るか無いか分からなければ、何も書かずに拒む(text T3)。
+ *  `present` は sha ごとの答え、`missing` は戻す先の object が手元に無い ref —— 失われたか(ADR 0409 決定1)はまだ決めていない。 */
+function readRestore(db: Db, workspace: WorkspaceConfig) {
+  const { current, targets } = restoreTargets(db, workspace);
+  const keepable = new Map([...targets.keys()].map((ref) => [ref, keepAroundCandidates(workspace, ref, current.get(ref) ?? "")]));
+  const shas = new Set([...[...targets.values()].filter(isSha), ...[...keepable.values()].flat()]);
+  const present = new Map([...shas].map((sha) => [sha, knownPresence(workspace, sha)]));
+  const missing = [...targets].filter(([, value]) => isSha(value) && !present.get(value));
+  return { current, targets, keepable, present, missing };
+}
+
+/** ADR 0380 決定4 / ADR 0395 決定1・3 / ADR 0409 決定3: 手元に無い戻す先の sha を取りに行き、相手が `not our ref` と答えた sha(lacking)の集合を返す
+ *  (purely-local では undefined)。タスクブランチの sha は出元 repo から、取れなければ答えを問わず origin から取り、両方が無いと答えたときだけ集合に入る。
+ *  ほかの sha は origin から取る。それ以外の失敗はすべて「分からない」として何も書かずに拒む(text T2)。 */
+export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<ReadonlySet<string> | undefined> {
+  if (!isRemoteBacked(place)) return undefined;
+  // ADR 0409 決定4: token を待つ前に全部を読み、分からなければその場で拒む —— この読みは早く拒むためだけで、失われたかはまだ決めない
+  const { missing } = readRestore(db, place);
   const protectedName = protectedBranch(place);
   const taskRef = (ref: string) => ref !== `refs/heads/${protectedName}` && ref !== remoteTrackingRef(protectedName) &&
     (ref.startsWith("refs/heads/task/") || ref.startsWith(remoteTrackingRef("task/")) || ref.startsWith(remoteTrackingRef("", HEAD_REPO_REMOTE)));
-  // 記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさに包まない
+  // 記憶した repo の食い違い(ADR 0378 決定6〜8: 食い違いは workspace の停止)は届かなさにも取れなさにも包まない
   const passThrough = (err: unknown) => err instanceof WorkspaceRepoMismatchError || err instanceof RemoteRepositoryMismatchError;
+  const reason = (err: unknown) => (err instanceof Error ? err.message : String(err));
+  const locationOf = (remote: GitRemote) => remote === HEAD_REPO_REMOTE
+    ? place.head_repo === undefined ? "the head repo" : `head repo ${repositoryLabel(place.head_repo)}`
+    : "origin";
+  const warmed = new Set<GitRemote>();
+  const warm = async (remote: GitRemote, shas: string[]) => {
+    if (warmed.has(remote)) return;
+    try {
+      await (remote === HEAD_REPO_REMOTE ? ensureHeadRepoToken : ensureWorkspaceToken)(place, auth, { fresh: true });
+    } catch (err) {
+      if (passThrough(err)) throw err;
+      const location = locationOf(remote);
+      throw new Error(`could not reach ${location} to look for ${shas.join(", ")} (${reason(err)}). Nothing was written; answer again once ${location} is reachable.`);
+    }
+    warmed.add(remote);
+  };
+  // 取れれば undefined、落ちればその失敗
+  const fetchFrom = (remote: GitRemote, sha: string): unknown => {
+    try {
+      fetchCommit(place, auth, sha, remote);
+      return undefined;
+    } catch (err) {
+      if (passThrough(err)) throw err;
+      return err;
+    }
+  };
+  const saysLacking = (err: unknown, sha: string) => err instanceof RemoteLacksObjectError && err.sha === sha;
+  const notSaidLackingError = (remote: GitRemote, sha: string, err: unknown) => {
+    const location = locationOf(remote);
+    // ADR 0409 決定5 / ADR 0395 決定2: 出元 repo が答えないままなら、出口は出元 repo の差し替え
+    const exit = remote === HEAD_REPO_REMOTE ? ", or change the workspace's head repo." : ".";
+    return new Error(`fetching ${sha} from ${location} failed (${reason(err)}), and ${location} did not say it lacks it. Nothing was written; answer again once the fetch can succeed${exit}`);
+  };
+  const lacking = new Set<string>();
   for (const remote of ["origin", HEAD_REPO_REMOTE] as const) {
     const headRepo = remote === HEAD_REPO_REMOTE;
-    const missing = [...new Set(lost.filter(([ref]) => taskRef(ref) === headRepo).map(([, sha]) => sha))]
-      .filter((sha) => !objectExists(place, sha));
-    if (missing.length === 0) continue;
-    const location = headRepo
-      ? place.head_repo === undefined ? "the head repo" : `head repo ${repositoryLabel(place.head_repo)}`
-      : "origin";
-    const unreachable = (shas: string[], err: unknown) => {
-      if (passThrough(err)) return err;
-      return new Error(`could not reach ${location} to look for ${shas.join(", ")} (${err instanceof Error ? err.message : String(err)}). Nothing was written; answer again once ${location} is reachable.`);
-    };
-    try {
-      const destination = headRepo ? landingHeadRepo(place) : workspaceNetworkDestination(place);
-      await auth?.ensureToken(destination?.key, { fresh: true });
-    } catch (err) {
-      throw unreachable(missing, err);
-    }
-    const probe = (shas: string[]) => {
-      try {
-        authedLsRemote(auth, place, GIT_NETWORK_TIMEOUT_MS, "HEAD", remote);
-      } catch (err) {
-        throw unreachable(shas, err);
+    // ADR 0409 決定4 の読み (2): 前の段で届いた sha(origin から取った同じ sha、根の head が運んできた子の tip)は取り直さず、そのための token も待たない
+    const wanted = [...new Set(missing.filter(([ref]) => taskRef(ref) === headRepo).map(([, sha]) => sha))].filter((sha) => !knownPresence(place, sha));
+    if (wanted.length === 0) continue;
+    await warm(remote, wanted);
+    for (const sha of wanted) {
+      if (knownPresence(place, sha)) continue;
+      const failure = fetchFrom(remote, sha);
+      if (failure === undefined) continue;
+      if (headRepo) {
+        // ADR 0409 決定3: 出元 repo は差し替えうる(ADR 0395 決定2)—— 取れなければ答えを問わず origin にも聞く
+        await warm("origin", [sha]);
+        const fromOrigin = fetchFrom("origin", sha);
+        if (fromOrigin === undefined) continue;
+        if (!saysLacking(fromOrigin, sha)) throw notSaidLackingError("origin", sha, fromOrigin);
       }
-    };
-    probe(missing);
-    for (const sha of missing) {
-      // 先に届いた根の head が運んできた子の tip は取り直さない
-      if (objectExists(place, sha)) continue;
-      try {
-        fetchCommit(place, auth, sha, remote);
-      } catch (err) {
-        if (passThrough(err)) throw err;
-        probe([sha]);
-      }
+      if (!saysLacking(failure, sha)) throw notSaidLackingError(remote, sha, failure);
+      lacking.add(sha);
     }
   }
+  return lacking;
 }
 
 /** ADR 0373 決定3・4: 基準と違う ref を全部基準の値へ書き戻し(基準に無い ref は消す)、外す値を `refs/keep-around/<sha>` に持ち続ける。
@@ -3472,6 +3509,7 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  戻す先の object が1つでも無ければ何も書かずに拒む。持ち続けるのは ref が持っていた sha だけ —— symref の行(HEAD を含む)は名前なので
  *  戻すだけ、object の無い値は持てない、`refs/stash` は reflog の各件。clean だった tree は書いた後の HEAD に揃え、dirty なら拒む。
  *  `baseline_restored` は書けた分を残す —— 途中で落ちても書き戻しと一緒に残る。外した値を返し、違いが無ければ何も書かずに空を返す。
+ *  `lacking`(remote-backed、`fetchLostTargets` の答え): 相手が無いと答えた sha。省略は purely-local で、手元に無い sha をそのまま失われたと数える。
  *  `giveUpAnswer`(give-up に答えている workspace の Quarantine の `question`、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
  *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒し、
  *  失われた task を指す開いた着地の question とキューの行を引退させる(ADR 0375 決定1・4・9、ADR 0407 決定2 —— 着地の終わりは失われた event から読み、
@@ -3482,11 +3520,19 @@ export function restoreBaseline(
   db: Db,
   workspace: WorkspaceConfig,
   now: Date,
+  lacking?: ReadonlySet<string>,
   giveUpAnswer?: { question: string; refuseIfMarked: (lostTaskIds: string[]) => void },
 ): KeptValue[] {
   const giveUp = giveUpAnswer !== undefined;
-  const { current, targets } = restoreTargets(db, workspace);
-  const lost = lostTargets(workspace, targets);
+  // ADR 0409 決定4: 読みは最初の書き込みと B4a・B3・B4b のどの拒否よりも前に全部済ませる —— 分からない sha が残る間は取り消せない側へ案内しない
+  const { current, targets, keepable, present, missing } = readRestore(db, workspace);
+  // ADR 0409 決定4: remote-backed では、非同期の段で「無い」と分かった sha だけを失われたと数える —— ほかが手元に無いのは await の間に消えた
+  const vanished = lacking && missing.find(([, sha]) => !lacking.has(sha));
+  if (vanished) {
+    throw new Error(`the restore target ${vanished[1]} of ${vanished[0]} went missing in ${workspace.path} while the board was answering. Nothing was written; answer again.`);
+  }
+  // 残った手元に無い ref は、どれも無いと分かっている(ADR 0409 決定1)
+  const lost = missing;
   const lostTask = (ref: string) => (ref.startsWith("refs/heads/task/") ? getTask(db, taskIdOfBranch(ref.slice("refs/heads/".length))) : undefined);
   // ADR 0393 決定3: give-up は開きの後に失われた event を刻むので、disk に在る最後の session の checkout は消されずに残る
   const keptOnGiveUp = (ref: string) => {
@@ -3515,6 +3561,7 @@ export function restoreBaseline(
     );
   }
   if (targets.size > 0) verifyWorkspaceClean(workspace);
+  const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => keepable.get(ref)!.filter((sha) => present.get(sha)).map((sha) => ({ ref, sha })));
   if (giveUp) {
     giveUpAnswer.refuseIfMarked(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
     db.transaction(() => {
@@ -3543,13 +3590,6 @@ export function restoreBaseline(
     })();
   }
   if (targets.size === 0) return [];
-  const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => {
-    const value = current.get(ref) ?? "";
-    if (!isSha(value)) return [];
-    // reflog の無い refs/stash(update-ref で作った)でも今の値は持つ
-    const shas = new Set([value, ...(ref === "refs/stash" ? git(workspace.path, "log", "-g", "--format=%H", ref).split("\n").filter(Boolean) : [])]);
-    return [...shas].filter((sha) => objectExists(workspace, sha)).map((sha) => ({ ref, sha }));
-  });
   // 終わりの状態で書く: 人間が作った `refs/keep-around/<その sha>` は消さずに残る。持ち続ける ref が先、削除は書き込みより先(人間が作った
   // `refs/heads/a/b` を消してからでないと基準の `refs/heads/a` を書けない)、HEAD とその指し先は最後 —— 途中で落ちても HEAD は元の tip に居て、
   // tree の巻き戻しが合う。HEAD が指していた branch の削除は HEAD を書いた後
@@ -3607,13 +3647,21 @@ export function restoreBaseline(
 /** spec #3273 text B11: 書き戻しが外して keep-around に残した値の1行。 */
 export const keptValueNotice = ({ ref, sha }: KeptValue): string => `${ref} was ${sha}, kept as refs/keep-around/${sha}`;
 
-function objectExists(workspace: WorkspaceConfig, sha: string): boolean {
+/** ADR 0409 決定2: 手元の「無い」は git が `missing` と答えて何も報告しないことだけ。型を答えれば、何か報告していても在る。replace ref は在る object を
+ *  黙って `missing` と見せ、lazy fetch は読みを網に出すので、どちらも切って読む。T3 が sha を名指せるよう sha ごとに読み、分からなければ拒む(text T3)。 */
+function knownPresence(workspace: WorkspaceConfig, sha: string): boolean {
+  let line: string;
+  let stderr: string;
   try {
-    git(workspace.path, "cat-file", "-e", sha);
-    return true;
-  } catch {
-    return false;
+    ({ stdout: line, stderr } = gitReporting(workspace.path, ["cat-file", "--batch-check"], `${sha}\n`, { GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }));
+    line = line.trim();
+    stderr = stderr.trim();
+  } catch (err) {
+    [line, stderr] = ["", ((err as { stderr?: string }).stderr ?? String(err)).trim()];
   }
+  if (line === `${sha} missing` && stderr === "") return false;
+  if (line.startsWith(`${sha} `) && line !== `${sha} missing`) return true;
+  throw new Error(`could not tell whether ${sha} is in ${workspace.path} (${stderr || line}). Nothing was written; fix what git reports there, then answer again.`);
 }
 
 /** 1つの workspace の基準に束ねた1本の口(`writeBoardRefs` の1本の形)。 */
