@@ -7,7 +7,6 @@ import { appendEvent, listEvents } from "../src/events.js";
 import { completeTask, getTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import {
   commitRoomCopy,
-  completionTreePaths,
   excludeWorkspaceProjectSettings,
   type RunPlace,
   recordedInterviewRoom,
@@ -23,6 +22,7 @@ import {
   checkoutOf,
   claudeSpawnOf,
   commitWork,
+  completionTreePaths,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,

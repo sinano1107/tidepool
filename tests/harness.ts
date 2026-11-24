@@ -103,6 +103,7 @@ import {
   type RunPlace,
   recordDeclaredRepo,
   recordedInterviewRoom,
+  recordTaskCheckoutTip,
   releaseWorkspace,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
@@ -996,6 +997,11 @@ export async function prepareAtPickup(
   await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now: () => now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
+
+/** 完了の門の記録と view(ADR 0412 決定4): worker の tip を記録し、同じ写しで未コミットの path を読む —— `complete_task` の門が名前の場所の
+ *  検査の後に読むもの。 */
+export const completionTreePaths = (db: Db, place: RunPlace, taskId: string): string[] =>
+  recordTaskCheckoutTip(db, place, taskId, (_tip, changedPaths) => changedPaths());
 
 /** setup のみ: `workspace` に盤面の基準の行を残す —— 基準の行を持つ workspace が引けないか違反している間、行の無い名前の最初の撮りは
  *  止まる(ADR 0373 決定13)。拾う task は scheduler が拾わないよう登録と同じ同期区間で取り消してから、準備と解放だけを通す。 */

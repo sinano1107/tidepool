@@ -9,9 +9,9 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { completionTreePaths, holdsBaseline, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
+import { holdsBaseline, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
+import { checkoutTaskBranch, commitWork, completionTreePaths, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // task の checkout(ADR 0356): work / review の worker は名前の場所でなく、pickup ごとに作って解放で消す自分の repo で走る。

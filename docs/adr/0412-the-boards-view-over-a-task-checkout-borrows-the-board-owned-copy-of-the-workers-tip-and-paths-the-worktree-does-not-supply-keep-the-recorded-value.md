@@ -21,3 +21,7 @@
 - Status 追記: ADR 0356 決定3、ADR 0359 決定3、ADR 0360 の Status 追記(#3111)、ADR 0365 決定3、ADR 0367 決定1。GLOSSARY.md: 「退避は worker の `.git` を読まずに撃つ」の行を直す。
 - 完了の門が view の失敗を名指さず拒むだけなのは ADR 0359 決定4 のままで、ここでは変えない。
 - 実装は #3139。作業台と使い捨ての checkout の側(#3763)の後に入れる —— 同じ view の呼び手と、写しに名前の場所を借りさせる機構を触る。
+
+## 追記(2026-11-25 の実装、issue #3139)
+
+決定3 の「WIP の tree は、種を ref にしていたときと同じになる」は、外す path に入れ子の repo が絡む形では成り立たない。(i) tip の gitlink を ref が普通の dir に置き換えた形と、(ii) ref が足した dir を worker の worktree が入れ子の repo にした形である。種を ref にしていたときの WIP は、`add -A` がその dir を ref の entry に対して stage するので、`text=auto` の判定を通じて ref の blob の中身に依る。同じ tree を作るには ref の blob を読む必要があり、決定2 がそれを禁じる。これらの形でも決定3 の原則(worktree が供給しない path は記録の値のまま)を取り、外す path には ref の entry を重ねる。実測は #3139。

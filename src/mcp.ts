@@ -113,7 +113,6 @@ import {
   buildWorkspaceResolver,
   commitRoomCopy,
   completionTreeGateApplies,
-  completionTreePaths,
   KEPT_TASK_CHECKOUT,
   RefsMovedError,
   RoomCopyGitlinkError,
@@ -346,19 +345,10 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
     );
   }
   if (!workspace) return undefined;
-  // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
-  let tip: string;
-  try {
-    tip = recordTaskCheckoutTip(deps.db, workspace, task.id);
-  } catch (err) {
-    if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
-    if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
-    // ADR 0373 決定12: 動いた ref は retry では直らない —— 人間へは session の終わりの解放の比較が知らせる
-    if (err instanceof RefsMovedError) throw new DomainError(`${taskBranch(task.id)} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
-    throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
-  }
-  let paths: string[];
-  try {
+  // 記録した tip の検査と、同じ写しの view(ADR 0412 決定4)。名前の場所の検査が view より先
+  let checking = false;
+  const checkRecordedTip = (tip: string, changedPaths: () => string[]): string[] => {
+    checking = true;
     // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
     const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
     if (unhideable) {
@@ -391,11 +381,20 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
         gitlinks,
       );
     }
-    paths = completionTreePaths(deps.db, workspace, task.id, tip);
+    return changedPaths();
+  };
+  // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
+  let paths: string[];
+  try {
+    paths = recordTaskCheckoutTip(deps.db, workspace, task.id, checkRecordedTip);
   } catch (err) {
     if (err instanceof DomainError) throw err;
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
-    throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
+    if (checking) throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
+    if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
+    // ADR 0373 決定12: 動いた ref は retry では直らない —— 人間へは session の終わりの解放の比較が知らせる
+    if (err instanceof RefsMovedError) throw new DomainError(`${taskBranch(task.id)} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
+    throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
   }
   if (paths.length === 0) return workspace;
   throw refusalNamingPaths(

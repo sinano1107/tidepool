@@ -7,13 +7,14 @@ import { listEvents } from "../src/events.js";
 import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, completionTreePaths, NamedPlaceFetchError, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { commitRoomCopy, NamedPlaceFetchError, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
   callAsTask,
   checkoutOf,
   commitWork,
+  completionTreePaths,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -236,7 +237,7 @@ it("task の checkout でない場所の完了経路の検査は worker の tree
   const ws = await makeWorkspace("worker-tree-room");
   const fifo = mkfifo(join(ws.path, ".gitignore"));
 
-  const failure = thrown(() => completionTreePaths(board, ws, "t1"));
+  const failure = thrown(() => completionTreePaths(board, { ...ws, reads: [] }, "t1"));
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
   expect(failure).toMatchObject({ message: `task t1 does not run in a task checkout (${ws.path})` });
   await expectNoReader(fifo);

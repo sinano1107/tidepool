@@ -11,7 +11,6 @@ import { completeTask, finishTask, getTask, listChildren, pickupTask, registerTa
 import {
   boardRefWriter,
   completionTreeGateApplies,
-  completionTreePaths,
   NamedPlaceFetchError,
   quarantineWorkspace,
   type RunPlace,
@@ -23,6 +22,7 @@ import {
 import {
   breakCheckoutStaging,
   commitWork,
+  completionTreePaths,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -65,7 +65,7 @@ async function pickedUpSession(type: TaskType = "work", seed?: (ws: WorkspaceCon
   return { db, task, ws, place };
 }
 
-/** 完了の門の前半(`completionGatedPlace`): worker の tip を名前の場所のタスクブランチにする。 */
+/** 完了の門の記録の手(`recordTaskCheckoutTip`): worker の tip を名前の場所のタスクブランチにする。 */
 const gateFetch = (db: Db, place: RunPlace, task: Task) => recordTaskCheckoutTip(db, place, task.id);
 
 /** 完了経路の後始末そのもの(`runTeardown` が組み立てる引数と同じ形)—— work タスクの
@@ -429,7 +429,9 @@ it("完了した Interview root の退避の基準にある nested tree が読�
 
     releaseAfterCompletion(db, place, completed);
 
-    expect(quarantineQuestion(db, "workspace", room.name)).toMatchObject({ purpose: expect.stringContaining("read-tree") });
+    // ADR 0412 決定3・5: view は記録の tree を種にしなくなった(旧: read-tree で落ちた)が、ref の gitlink を導く手が名前の場所の ref の tree を
+    // 全部読む —— 名前の場所の側の段で見つかる
+    expect(quarantineQuestion(db, "workspace", room.name)).toMatchObject({ purpose: expect.stringContaining("ls-tree") });
     expect(writeObservations(db, root)).toEqual([]);
     expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("only worker copy\n");
   } finally {
@@ -573,16 +575,18 @@ it("汚れが shadow 残骸の3条件だけを満たすなら、task の checkou
   expect(existsSync(place.path)).toBe(false);
 });
 
-it("名前の場所の記録の tree が壊れたら、完了の門で拒む (ADR 0359 決定1)", async () => {
+// 旧: 門の view は名前の場所の記録の tree を種にし、壊れた tree で落ちた(`completionTreePaths` が投げた)。ADR 0412 決定1・4 の後、view は tip を
+// 記録した写しを読む。実際の門はこの状態に届かない —— 門の前の損傷は記録の手の入れ直し(ADR 0411 決定4)が直すので、記録と view の間に壊して測る
+it("門の view は tip を記録した写しを読み、記録の後に壊れた名前の場所の記録の tree を読まない(ADR 0412 決定1・4)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
     mkdirSync(join(place.path, "nested"));
     commitWork(place.path, "nested/deliverable.txt", "the real work\n");
-    gateFetch(db, place, task);
-    const tree = git(ws.path, "rev-parse", `task/${task.id}^{tree}`);
-    rmSync(join(ws.path, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
 
-    expect(() => completionTreePaths(db, place, task.id)).toThrow();
+    recordTaskCheckoutTip(db, place, task.id, (tip, changedPaths) => {
+      rmSync(looseObject(ws.path, git(ws.path, "rev-parse", `${tip}^{tree}`)));
+      expect(changedPaths()).toEqual([]);
+    });
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
   } finally {
     db.close();
@@ -1243,6 +1247,173 @@ it("運び終えた後の外からの損傷は守らない: 門の後に名前�
 
     expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_released")).toBe(true);
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0412 決定1: task の checkout を読む view は worker の tip を写して検証した盤面所有の写しを借り、名前の場所の blob を読まない ——
+// 名前の場所の損傷は worker の故障として刻まれない。`* text=auto` の file を CRLF に編集すると、view の add / status は index の blob を読む
+const seedCrlf = (named: WorkspaceConfig) => {
+  commitWork(named.path, ".gitattributes", "* text=auto\n");
+  commitWork(named.path, "a.txt", "one\ntwo\n");
+};
+const corruptLoose = (ws: WorkspaceConfig, rev: string) => {
+  const loose = looseObject(ws.path, git(ws.path, "rev-parse", rev));
+  rmSync(loose);
+  writeFileSync(loose, "not zlib");
+};
+const crlfEdit = (place: RunPlace) => writeFileSync(join(place.path, "a.txt"), "one\r\ntwo\r\nthree\r\n");
+
+it("完了の後に名前の場所の text=auto の file の blob が壊れても、門付きの完了解放は CRLF に編集した worktree を uncommitted と path で観測し、名前の場所を quarantine しない(ADR 0412 決定1・5)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("work", seedCrlf);
+  try {
+    commitWork(place.path, "w.txt", "work\n");
+    gateFetch(db, place, task);
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    corruptLoose(ws, "HEAD:a.txt");
+    crlfEdit(place);
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(writeObservations(db, task)).toEqual([{ kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["a.txt"] }]);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了の後に worker が自分の記録の tip の blob を壊せば、門付きの完了解放は「読めない」観測を1つ残し、名前の場所を quarantine しない(ADR 0412 決定5)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    commitWork(place.path, "w.txt", "work\n");
+    gateFetch(db, place, task);
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const loose = looseObject(place.path, git(place.path, "rev-parse", "HEAD:w.txt"));
+    rmSync(loose);
+    writeFileSync(loose, "not zlib");
+    writeFileSync(join(place.path, "after.txt"), "written after completion\n");
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(writeObservations(db, task)).toEqual([{ kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.any(String) }]);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("記録の後に worker が巻き戻し、巻き戻した commit の blob が名前の場所で壊れていても、未決着の解放は WIP を退避して checkout を消す(ADR 0412 決定2)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("work", seedCrlf);
+  try {
+    const first = git(place.path, "rev-parse", "HEAD");
+    commitWork(place.path, "a.txt", "one\ntwo\nrecorded\n");
+    const recorded = gateFetch(db, place, task);
+    git(place.path, "reset", "--hard", first);
+    corruptLoose(ws, `task/${task.id}:a.txt`);
+    crlfEdit(place);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(listEvents(db, task.id).filter(({ kind }) => kind === "task_checkout_release_failed")).toEqual([]);
+    expect(git(ws.path, "rev-parse", `task/${task.id}^`)).toBe(recorded);
+    expect(git(ws.path, "show", `task/${task.id}:a.txt`)).toBe("one\ntwo\nthree");
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+const SETTINGS = ".claude/settings.json";
+/** 名前の場所の index を使わずに `parent` の tree を `edits` で書き換えた commit を作る。null は消す。 */
+function commitEdits(repo: string, parent: string, edits: Record<string, { mode: string; sha: string } | null>): string {
+  const env = { ...process.env, GIT_INDEX_FILE: join(repo, ".git", "edits-index") };
+  const run = (args: string[]) => execFileSync("git", args, { cwd: repo, env }).toString().trim();
+  run(["read-tree", parent]);
+  for (const [path, entry] of Object.entries(edits)) {
+    run(entry ? ["update-index", "--add", "--cacheinfo", `${entry.mode},${entry.sha},${path}`] : ["update-index", "--force-remove", "--", path]);
+  }
+  const commit = run(["-c", "user.name=test", "-c", "user.email=test@example.com", "commit-tree", run(["write-tree"]), "-p", parent, "-m", "edits"]);
+  rmSync(env.GIT_INDEX_FILE);
+  return commit;
+}
+const settingsAt = (body: string) => (repo: string) => ({
+  [SETTINGS]: { mode: "100644", sha: execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: body }).toString().trim() },
+});
+// gitlink の値は別 repo の commit —— 盤面は辿らないので、時刻で変わらない固定の id を使う
+const gitlinkAt = (sha: string) => () => ({ mod: { mode: "160000", sha } });
+
+// ADR 0412 決定3: 期待値は、種を名前の場所の ref にしていた ADR 0412 の前の main(3d6bae67)で取った WIP の tree
+// —— spawn を通らないので worktree は settings を隠さず持つ: ref が消した settings は worktree の値で WIP に入る
+it.each([
+  { shape: "settings changed", seed: settingsAt("{}\n"), ahead: settingsAt('{"ahead":true}\n'), tree: ["100644 blob d533f8fba7a4302d96bdd2a94725dffa48e0a339\t.claude/settings.json", "100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"] },
+  { shape: "settings added", seed: undefined, ahead: settingsAt('{"ahead":true}\n'), tree: ["100644 blob d533f8fba7a4302d96bdd2a94725dffa48e0a339\t.claude/settings.json", "100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"] },
+  { shape: "settings removed", seed: settingsAt("{}\n"), ahead: () => ({ [SETTINGS]: null }), tree: ["100644 blob 0967ef424bce6791893e9a57bb952f80fd536e93\t.claude/settings.json", "100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"] },
+  { shape: "gitlink moved", seed: gitlinkAt("a".repeat(40)), ahead: gitlinkAt("b".repeat(40)), tree: ["100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "160000 commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\tmod", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"] },
+  { shape: "gitlink removed", seed: gitlinkAt("a".repeat(40)), ahead: () => ({ mod: null }), tree: ["100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"] },
+])("名前の場所の ref が worker の tip より先にあり、間の commit が $shape なら、未決着の解放の WIP の tree は種を ref にしていたときと同じ(ADR 0412 決定3)", async ({ seed, ahead, tree }) => {
+  const { db, task, ws, place } = await pickedUpSession("work", seed && ((named) => {
+    git(named.path, "reset", "--quiet", "--soft", commitEdits(named.path, "HEAD", seed(named.path)));
+    git(named.path, "reset", "--quiet", "--hard");
+  }));
+  try {
+    const ref = `refs/heads/task/${task.id}`;
+    const old = git(ws.path, "rev-parse", ref);
+    const moved = commitEdits(ws.path, old, ahead(ws.path));
+    boardRefWriter(db, ws)(ref, moved, () => git(ws.path, "update-ref", ref, moved, old));
+    writeFileSync(join(place.path, "wip.txt"), "wip\n");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(git(ws.path, "rev-parse", `${ref}^`)).toBe(moved);
+    expect(git(ws.path, "ls-tree", "-r", ref)).toBe(tree.join("\n"));
+    expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+const blobX = (repo: string) => execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: repo, input: "x\n" }).toString().trim();
+
+// ADR 0412 の追記(#3139): 外す path に入れ子の repo が絡む形では、種を ref にしていたときの WIP は ref の blob の中身に依る —— 決定2 はその読みを
+// 禁じるので、外す path は ref の entry のまま WIP に入り、worktree の中身は運ばない(決定3 の原則)
+it.each([
+  {
+    shape: "the tip's gitlink became a plain dir on the ref",
+    seed: gitlinkAt("a".repeat(40)),
+    ahead: (repo: string) => ({ mod: null, "mod/file.txt": { mode: "100644", sha: blobX(repo) } }),
+    worktree: (_checkout: string) => {},
+    tree: ["100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob 587be6b4c3f93f93c489c0111bba5596147a26cb\tmod/file.txt", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"],
+  },
+  {
+    shape: "the ref added a dir the worktree holds as a nested repo",
+    seed: undefined,
+    ahead: (repo: string) => ({ "D/x.txt": { mode: "100644", sha: blobX(repo) } }),
+    worktree: (checkout: string) => {
+      execFileSync("git", ["init", "-q", join(checkout, "D")]);
+      writeFileSync(join(checkout, "D", "y.txt"), "inner\n");
+    },
+    tree: ["100644 blob 587be6b4c3f93f93c489c0111bba5596147a26cb\tD/x.txt", "100644 blob 9e6bf7cd693d8a666eeaefcdfb1e2354131edd0c\tREADME.md", "100644 blob e7123041ee0458f44072ab4c5f267fd370f831f0\twip.txt"],
+  },
+])("名前の場所の ref が worker の tip より先にあり、$shape なら、未決着の解放の WIP はその path に ref の entry を持つ(ADR 0412 決定3 の追記)", async ({ seed, ahead, worktree, tree }) => {
+  const { db, task, ws, place } = await pickedUpSession("work", seed && ((named) => {
+    git(named.path, "reset", "--quiet", "--soft", commitEdits(named.path, "HEAD", seed()));
+    git(named.path, "reset", "--quiet", "--hard");
+  }));
+  try {
+    const ref = `refs/heads/task/${task.id}`;
+    const old = git(ws.path, "rev-parse", ref);
+    const moved = commitEdits(ws.path, old, ahead(ws.path));
+    boardRefWriter(db, ws)(ref, moved, () => git(ws.path, "update-ref", ref, moved, old));
+    worktree(place.path);
+    writeFileSync(join(place.path, "wip.txt"), "wip\n");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(git(ws.path, "rev-parse", `${ref}^`)).toBe(moved);
+    expect(git(ws.path, "ls-tree", "-r", ref)).toBe(tree.join("\n"));
     expect(existsSync(place.path)).toBe(false);
   } finally {
     db.close();

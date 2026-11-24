@@ -12,10 +12,10 @@ import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
-import { completionTreePaths, holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
 import { unusedLanding } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, withHistoryOnlyBlob } from "./harness.js";
+import { commitWork, completionTreePaths, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, withHistoryOnlyBlob } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
