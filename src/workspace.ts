@@ -2008,8 +2008,8 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   if (refusal) throw refusal;
   const unfinished = teardownUnfinishedUnder(db, task.id);
   if (unfinished) throw new DomainError(`task ${unfinished.id} "${unfinished.title}" under this task is still being torn down — complete again once it has finished.`);
-  const hasWorkbench = placeHasRepository(at);
-  if (!hasWorkbench && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
+  const place = workbenchOnDisk(named, at);
+  if (!place && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
   const assertMerges = (tip: string, repo: WorkspaceConfig) => {
     if (isAncestor(repo, returnSha, tip) || writeMergeTree(repo, returnSha, tip) !== undefined) return;
     const conflict = `${target} does not merge cleanly into '${returnName}'.`;
@@ -2025,8 +2025,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   };
   let taken: { tip: string; commit: string } | undefined;
   try {
-    if (hasWorkbench) {
-      const place = workbenchPlace(named, realpathSync(at));
+    if (place) {
       taken = repointingOnRefusal(named, place.path, () =>
         takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now: () => now }, {
           humanWork: { again: "complete again", gone: workbenchGone(at, target, "complete") },
@@ -2048,8 +2047,9 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
       quarantineWorkspace(db, named.name, err, now);
     }
   }
-  if (!hasWorkbench) return undefined;
-  return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
+  // ADR 0401 決定1 の (3): `done` の後は在り処を読み直さない —— 取り込みの前に読んだ作業台を使い回す
+  if (!place) return undefined;
+  return removeDoneWorkbench(named, place, target, taken?.tip);
 }
 
 /** ADR 0390 決定1〜3: 系譜の帰り先 `lineage`(`lineageTaskBranch` の値)のタスクブランチの持ち主が解放を負う間の拒否 —— 根(帰り先が
@@ -2125,6 +2125,8 @@ const notTakenInKept = (path: string) => `Commits reached the workbench at ${pat
  *  (stash、書く先に無い commit を持つ branch、HEAD の位置、未 commit の変更)や読めない作業台も残して、それを言う。消せない作業台も
  *  そう言う(`removeWrittenWorkbench`)。`done` の後なので拒まない。 */
 function removeDoneWorkbench(named: WorkspaceConfig, place: UntrustedCheckout, target: string, takenTip: string | undefined): string | undefined {
+  // ADR 0401 決定1 の (3): 消えた作業台は消せたのと同じに終える。`.git` だけ消えてディレクトリが残れば、判定に進んで読めずに残したと言う
+  if (!existsSync(place.path)) return undefined;
   let judged: { moved: boolean; left: string[] };
   try {
     judged = judgeWorkbench(named, place, target, { boardMove: true }, (owner, read, workbench) => ({
