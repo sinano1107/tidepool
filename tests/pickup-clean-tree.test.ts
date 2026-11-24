@@ -200,7 +200,73 @@ it("出口が名指す捨てる操作は、sparse の pin の下で cone の外�
   expect(commands).toHaveLength(2);
   for (const command of commands) git(workspace.path, ...command.split(" ").slice(1));
 
-  expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).not.toThrow();
   // --ignore-skip-worktree-bits なら pin が隠す file を書き出す —— 捨てる操作は pin の外を木に戻さない
   expect(existsSync(join(workspace.path, "d", "hidden"))).toBe(false);
+});
+
+/** 休止中の名前の場所に、盤面自身の checkout の移動が `read-tree -u -m` を済ませ ref を書く前に落ちた痕を作る —— 基準の `ref` の行は
+ *  予告(`<old>|<new>`)のまま、ref は書かれず、index と木は新しい tree(ADR 0356 決定5 / ADR 0243 決定5)。`retried` は予告を
+ *  先に1つ足した前の試み —— 行は `<old>|<retried>|<new>` の3値になる(`writeBoardRefs` の再予告)。 */
+async function stalledCheckoutMove(name: string, ref = "refs/heads/main", retried = false) {
+  const workspace = await makeWorkspace(name);
+  db = openDb(":memory:");
+  const earlier = work("earlier");
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, earlier), earlier, NOW);
+  const from = git(workspace.path, "rev-parse", "HEAD");
+  let candidates = from;
+  if (retried) {
+    commitWork(workspace.path, "first-try.txt", "first try\n");
+    candidates += `|${git(workspace.path, "rev-parse", "HEAD")}`;
+    git(workspace.path, "reset", "-q", "--hard", from);
+  }
+  commitWork(workspace.path, "moved.txt", "moved\n");
+  const to = git(workspace.path, "rev-parse", "HEAD");
+  git(workspace.path, "reset", "-q", "--hard", from);
+  const baseline = db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").pluck().get(workspace.name) as string;
+  const announced = baseline.includes(` ${ref}\n`) || baseline.endsWith(` ${ref}`)
+    ? baseline.replace(`${from} ${ref}`, `${candidates}|${to} ${ref}`)
+    : `${baseline}\n|${to} ${ref}`;
+  db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(announced, workspace.name);
+  boardReadTree(workspace.path, from, to);
+  return { workspace, to };
+}
+
+it("盤面自身の checkout の移動が ref を書く前に落ちた痕では、pickup の拒否文が目標 sha・木と目標の比べ方・捨てる操作を名指す(ADR 0401 決定7, #3199)", async () => {
+  const { workspace, to } = await stalledCheckoutMove("pickup-stalled-move");
+  // 文が名指す比べ方がこの痕で本当に何も出さない —— read-tree が足した file は index に載り `??` にならない
+  expect(git(workspace.path, "diff", to)).toBe("");
+  expect(git(workspace.path, "status", "--porcelain")).not.toContain("??");
+
+  const failure = await prepareAtPickup(db, workspace, work("next")).catch((err: unknown) => err);
+  expect(failure).toBeInstanceOf(PickupGateError);
+  const message = (failure as Error).message;
+  expect(message).toContain(`its target is ${to}`);
+  expect(message).toContain(`\`git diff ${to}\``);
+  expect(message).toContain("`git status --porcelain` shows no `??` line");
+  expect(message).toContain(discardUncommitted());
+  expect(message).not.toContain("a process wrote them");
+});
+
+it("再予告で3値になった行では、最後の値を目標として名指す(ADR 0243 決定1, #3199)", async () => {
+  const { workspace, to } = await stalledCheckoutMove("pickup-stalled-retried-move", "refs/heads/main", true);
+
+  await expect(prepareAtPickup(db, workspace, work("next"))).rejects.toMatchObject({
+    message: expect.stringContaining(`its target is ${to}`),
+  });
+});
+
+it("checkout されていない ref の予告(`task/<id>` の作成)は木を動かさないので、dirty な休止の拒否文に注記を足さない(#3199)", async () => {
+  const { workspace } = await stalledCheckoutMove("pickup-unchecked-announcement", "refs/heads/task/other");
+
+  const failure = await prepareAtPickup(db, workspace, work("next")).catch((err: unknown) => err);
+  expect(failure).toBeInstanceOf(PickupGateError);
+  expect((failure as Error).message).toContain("a process wrote them after the board moved the checkout");
+  expect((failure as Error).message).not.toContain("stopped part-way");
+});
+
+it("Quarantine の受理の clean の検査も、予告を読めるときは同じ注記を出す(ADR 0401 決定7, #3199)", async () => {
+  const { workspace, to } = await stalledCheckoutMove("verify-stalled-move");
+
+  expect(() => verifyWorkspaceClean(db, workspace)).toThrow(`\`git diff ${to}\``);
 });

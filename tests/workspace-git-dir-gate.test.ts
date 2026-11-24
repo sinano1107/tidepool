@@ -81,21 +81,21 @@ it("checkout のディレクトリが消えた実環境の work の pickup は�
 it("修理確認の検証は親 repo の部分ディレクトリを拒否する", async () => {
   const { workspace } = await subdirectoryOfRepository("subdir-verify");
 
-  expect(() => verifyWorkspaceClean(workspace)).toThrow("has no .git of its own");
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).toThrow("has no .git of its own");
 });
 
 it("修理確認の検証は `.git` がファイルのままなら拒否し、ディレクトリに戻せば通す", async () => {
   const workspace = await gitFileCheckout("git-file-verify");
 
-  expect(() => verifyWorkspaceClean(workspace)).toThrow("linked worktrees and submodules cannot be workspaces");
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).toThrow("linked worktrees and submodules cannot be workspaces");
 
   await rm(join(workspace.path, ".git"));
   await rename(join(workspace.path, ".git.real"), join(workspace.path, ".git"));
-  expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).not.toThrow();
 });
 
 it("修理確認の検証は、git として使えない path を使えない git リポジトリとして拒否する", () => {
-  expect(() => verifyWorkspaceClean({ name: "no-repo", path: "/workspace/does-not-exist" })).toThrow(
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), { name: "no-repo", path: "/workspace/does-not-exist" })).toThrow(
     "workspace no-repo is not a usable git repository",
   );
 });
@@ -104,7 +104,7 @@ it("修理確認の検証は、未 commit の変更が残る checkout を拒否�
   const workspace = await makeWorkspace("verify-dirty");
   await writeFile(join(workspace.path, "uncommitted.txt"), "not committed\n");
 
-  expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
 });
 
 it("修理確認の検証は status.showUntrackedFiles=no でも untracked を拒否する", async () => {
@@ -112,7 +112,7 @@ it("修理確認の検証は status.showUntrackedFiles=no でも untracked を�
   git(workspace.path, "config", "status.showUntrackedFiles", "no");
   await writeFile(join(workspace.path, "late.txt"), "written after repair\n");
 
-  expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
 });
 
 // 旧: 名前の場所でも info/exclude で隠したファイルを拒んだ —— 名前の場所の info/exclude は人間の宣言で、worker はそこで走らない。
@@ -123,5 +123,5 @@ it("修理確認の検証は名前の場所(面接室を含む)を自分の git 
   await writeFile(join(workspace.path, "late.txt"), "written after repair\n");
 
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
+  expect(() => verifyWorkspaceClean(openDb(":memory:"), workspace)).not.toThrow();
 });
