@@ -3183,12 +3183,12 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }) {
   const [busy, setBusy] = React.useState(false);
   const changes = own.filter((agent) => draft[agent.name] !== current[agent.name]).map((agent) => ({ setting: "agent_tier", agent: agent.name, tier: draft[agent.name] || null }));
   useDirtySignal(edit, open, changes.length > 0);
-  const send = async (list, title) => {
+  const send = async (list, title, saving = false) => {
     setBusy(true);
     try {
       for (const change of list) await api("/api/settings/execution", change);
       say("success", title, `${list.length} agent${list.length === 1 ? "" : "s"} updated`);
-      edit.close();
+      if (saving) edit.close();
       await onSaved();
     } catch (err) {
       say("danger", "agent default tier refused", String(err.message || err));
@@ -3211,7 +3211,7 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }) {
       ok: true,
       busy,
       saveLabel: "Save default tiers",
-      onSave: () => send(changes, "default tiers saved"),
+      onSave: () => send(changes, "default tiers saved", true),
       onCancel: () => edit.close()
     }
   )), orphans.map((row) => /* @__PURE__ */ React.createElement("div", { key: row.agent, "data-testid": "agent-tier-orphan", style: { display: "flex", gap: 12, alignItems: "baseline", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, row.agent), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flex: 1 } }, row.tier, " \u2014 not in the registry"), /* @__PURE__ */ React.createElement(

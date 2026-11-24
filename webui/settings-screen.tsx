@@ -2452,12 +2452,13 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }: {
     .map((agent) => ({ setting: 'agent_tier', agent: agent.name, tier: draft[agent.name] || null }));
   useDirtySignal(edit, open, changes.length > 0);
 
-  const send = async (list: readonly object[], title: string) => {
+  // `saving` = the edit form's Save; Remove of an orphan sits outside the edit slot and leaves any open form alone
+  const send = async (list: readonly object[], title: string, saving = false) => {
     setBusy(true);
     try {
       for (const change of list) await api('/api/settings/execution', change);
       say('success', title, `${list.length} agent${list.length === 1 ? '' : 's'} updated`);
-      edit.close();
+      if (saving) edit.close();
       await onSaved();
     } catch (err) {
       say('danger', 'agent default tier refused', String((err as Error).message || err));
@@ -2484,7 +2485,7 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }: {
               the tier an agent runs on when its task requests none. board default runs it on the board's default tier.
             </p>
             <EditActions dirty={changes.length > 0} ok busy={busy} saveLabel="Save default tiers"
-              onSave={() => send(changes, 'default tiers saved')} onCancel={() => edit.close()} />
+              onSave={() => send(changes, 'default tiers saved', true)} onCancel={() => edit.close()} />
           </React.Fragment>
         )}
         {orphans.map((row) => (
