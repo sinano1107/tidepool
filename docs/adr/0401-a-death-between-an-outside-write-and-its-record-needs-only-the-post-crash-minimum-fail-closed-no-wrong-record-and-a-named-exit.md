@@ -1,6 +1,6 @@
 # 盤面の外への書き込みと記録の間の死は、落ちた後の最低線だけを満たす —— fail-closed・決定が読む誤った記録を残さない・出口を名指す
 
-**Status 追記: 決定6 と追記(2026-11-24)は段について対象を失う —— agent の既定ティアは盤面が持ち、段を下げる承認と段の改名は registry に書かない([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md)、2026-11-24、issue #3758)。**
+**Status 追記: 決定6 と追記(2026-11-24、issue #3635)は段について対象を失う —— agent の既定ティアは盤面が持ち、段を下げる承認と段の改名は registry に書かない([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md)、2026-11-24、issue #3758)。**
 
 2026-11-22 の grilling(族の根 issue #3515)で決定。盤面は、外への書き込み(checkout の git、出元 repo への push、registry の commit)と盤面
 DB の記録を1つの同期区間で書く。await を挟まない区間が防ぐのは交差であって、process の死ではない。この grilling は、死の後で盤面が
@@ -71,14 +71,19 @@ reject の回答(#3636)、祖先の cancel の3つを落としていた。経路
 ## 追記(2026-11-24 の triage、issue #3647)
 
 決定4 の `hold` が判定する値を、今のタスクブランチから question が問うた tip(ADR 0394 決定1・5 の盤面の部分)に改める。question が
-開いている間も修理は根のタスクブランチへ merge back しうる(ADR 0394 決定1 は盤面の修理で内容が進んでも回答を拒まない)。着地の後・記録の
-前に死んだ根で修理が merge back すると、今のタスクブランチは保護ブランチに含まれなくなり、`hold` は保護ブランチに載った tip に断念を刻んでいた。
+開いている間もタスクブランチは進みうる(ADR 0394 決定1 は内容が進んでも回答を拒まない)。この窓で進めるのは修理の merge back ではない ——
+履歴で保護ブランチに含まれた完了済みの祖先は帰り先から外れるので、修理の帰り先は保護ブランチになる(#3647 の実装の repo の fixture のテストで、ff・非 ff とも確かめた)。
+進めるのは盤面の外の commit である。着地の後・記録の前に死んだ根でタスクブランチへ盤面の外から commit すると、今のタスクブランチは保護
+ブランチに含まれなくなり、`hold` は保護ブランチに載った tip に断念を刻んでいた(同じく fixture のテストで確かめた)。
 
 - **`hold` は、question が問うた tip が履歴で保護ブランチに含まれていれば断り、`merge` を名指す。** 断る値と判定する値を同じにする ——
-  `hold` が断るのはその tip だけである(ADR 0394 決定5)。断る文は、その tip がもう着地していることと、`merge` が question の後にタスク
-  ブランチへ届いた commit も載せることを言う。タスクブランチが無ければ含まれていると読まない(帰結)のは変えない。問うた tip が無い question
+  `hold` が断るのはその tip だけである(ADR 0394 決定5)。断る文は、その tip がもう着地していることを言い、`merge` を名指す。
+  タスクブランチが無ければ含まれていると読まない(帰結)のは変えない。問うた tip が無い question
   (読めずに立った、ADR 0403 決定1)では今のタスクブランチで判定する —— 無いことを「判定しない」と読めば守りが外れる。
-- **`merge` の答え直しは今のタスクブランチで判定するまま。** `merge` は今の内容を執行する —— 問うた tip で判定すると、merge back の内容を
-  載せずに着地を記録し、内容を置き去りにする。
+- **`merge` の答え直しは今のタスクブランチで判定するまま。** `merge` は今の内容を執行する(ADR 0394 決定1)。盤面の外の commit で ref が
+  動いているので、`merge` は workspace の Quarantine を受理してから通る(ADR 0370 決定1)。その出口はどれも後の commit を残さない ——
+  `restore the baseline` はタスクブランチを基準へ戻し、`repaired by hand` は動いた ref を拒む(ADR 0373 決定2・16)。問うた tip で
+  判定しないのは、question の後・着地の前に盤面の修理が merge back して `merge` が着地した場合に、問うた tip で判定すると修理の内容を
+  持ち込んでいない commit を着地として記録するからである(#3647 のレビューの fixture のテストで確かめた)。
 - 窓の中で記録の「未着地」を読んで書く他の経路(根と祖先の cancel、failure の abandon、失われた ref の諦め、収束、publish)は、誤った記録を
   書かないことを確かめた(#3647 のコメント)。窓の中の publish で question の出口が塞がる件は #3659 が持つ。

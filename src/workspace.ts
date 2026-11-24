@@ -4523,20 +4523,24 @@ function protectedValueAsRecorded(db: Db, workspace: WorkspaceConfig): string {
   return protectedSha;
 }
 
-/** ADR 0401 決定4: `task/<id>` が保護ブランチ(`protectedSha`、省略時は今の値)に含まれていれば、この根を持ち込んだ commit —— first-parent の鎖の上で
- *  task を含み、first parent が含まない commit(ff なら task の tip)。含まれていなければ undefined。含まれるかは内容(ADR 0105)でなく履歴で読む
+/** ADR 0401 決定4: task の tip(`tip`、省略時は今の `task/<id>`)が保護ブランチ(`protectedSha`、省略時は今の値)に含まれていれば、この根を持ち込んだ
+ *  commit —— first-parent の鎖の上で tip を含み、first parent が含まない commit(ff なら tip)。含まれていなければ undefined。含まれるかは内容(ADR 0105)でなく履歴で読む
  *  —— 別の根が同じ変更を運んでもこの根の着地ではない(ADR 0289 決定3)。鎖の先頭は他の根の commit でありうる(ADR 0289 決定1)。
- *  ADR 0401 帰結: `task/<id>` が無ければ含まれていると読まない。git が読めなければ投げる。 */
-export function localLandingCommit(workspace: WorkspaceConfig, taskId: string, protectedSha = git(workspace.path, "rev-parse", `refs/heads/${protectedBranch(workspace)}`)): string | undefined {
+ *  ADR 0401 帰結: `task/<id>` が無ければ含まれていると読まない。git が読めなければ投げる。ADR 0401 追記(#3647): hold は question が問うた tip を渡す。 */
+export function localLandingCommit(
+  workspace: WorkspaceConfig,
+  taskId: string,
+  tip = `refs/heads/${taskBranch(taskId)}`,
+  protectedSha = git(workspace.path, "rev-parse", `refs/heads/${protectedBranch(workspace)}`),
+): string | undefined {
   if (!taskBranchExists(workspace, taskId)) return undefined;
-  const task = `refs/heads/${taskBranch(taskId)}`;
-  if (!isAncestor(workspace, task, protectedSha)) return undefined;
-  const tip = git(workspace.path, "rev-parse", task);
-  const revList = (...args: string[]) => git(workspace.path, "rev-list", ...args, `${tip}..${protectedSha}`).split("\n").filter(Boolean);
+  if (!isAncestor(workspace, tip, protectedSha)) return undefined;
+  const tipSha = git(workspace.path, "rev-parse", tip);
+  const revList = (...args: string[]) => git(workspace.path, "rev-list", ...args, `${tipSha}..${protectedSha}`).split("\n").filter(Boolean);
   // `--first-parent` と `--ancestry-path` を併せると、task の tip が第2親の先にある取り込みの commit を落とす —— 子孫を別に引いて鎖と突き合わせる
   const descendants = new Set(revList("--ancestry-path"));
   const oldest = revList("--first-parent").filter((commit) => descendants.has(commit)).at(-1);
-  return oldest === undefined || git(workspace.path, "rev-parse", `${oldest}^1`) === tip ? tip : oldest;
+  return oldest === undefined || git(workspace.path, "rev-parse", `${oldest}^1`) === tipSha ? tipSha : oldest;
 }
 
 /** ADR 0401 決定4: 取り込みで着地した後に残った鍵の作業台を、取り込みの後と同じ手(`settleTakenInWorkbench`)で片付ける。読めない作業台は
@@ -4577,7 +4581,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   const task = taskBranch(taskId);
   // ADR 0401 決定4: 保護ブランチを動かした後・記録の前に死んだ着地の答え直しは ref も event も書かず、この根を持ち込んだ commit を返す
   // (取り込みの後に残った作業台は片付けうる)
-  const included = localLandingCommit(workspace, taskId, protectedSha);
+  const included = localLandingCommit(workspace, taskId, `refs/heads/${task}`, protectedSha);
   if (included !== undefined) return { landed: included, kept: settleLandedWorkbench(workspace, intake.workbenchBase, branch, `refs/heads/${task}`, included) };
   // ADR 0382 決定4: 決着済み・cancel 済みを含むすべての task のブランチの commit を作業台の tip に許さない —— 答えている task の tip にある
   // commit は数えない。ADR 0371 決定2・4: 作業台に人間の merge があれば、この回答がそれを取り込み、包む commit が着地
