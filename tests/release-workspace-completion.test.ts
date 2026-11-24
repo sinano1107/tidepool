@@ -7,24 +7,22 @@ import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { CheckoutUnreadableError } from "../src/git.js";
-import { treeDeltaEntries } from "../src/sandbox.js";
 import { completeTask, finishTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   boardRefWriter,
   completionTreeGateApplies,
-  completionTreePaths,
   NamedPlaceFetchError,
   quarantineWorkspace,
   type RunPlace,
   recordTaskCheckoutTip,
   releaseWorkspace,
-  taskForkSource,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import {
   breakCheckoutStaging,
   commitWork,
+  completionTreePaths,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -67,7 +65,7 @@ async function pickedUpSession(type: TaskType = "work", seed?: (ws: WorkspaceCon
   return { db, task, ws, place };
 }
 
-/** 完了の門の前半(`completionGatedPlace`): worker の tip を名前の場所のタスクブランチにする。 */
+/** 完了の門の記録の手(`recordTaskCheckoutTip`): worker の tip を名前の場所のタスクブランチにする。 */
 const gateFetch = (db: Db, place: RunPlace, task: Task) => recordTaskCheckoutTip(db, place, task.id);
 
 /** 完了経路の後始末そのもの(`runTeardown` が組み立てる引数と同じ形)—— work タスクの
@@ -578,8 +576,8 @@ it("汚れが shadow 残骸の3条件だけを満たすなら、task の checkou
 });
 
 // 旧: 門の view は名前の場所の記録の tree を種にし、壊れた tree で落ちた(`completionTreePaths` が投げた)。ADR 0412 決定1・4 の後、view は tip を
-// 記録した写しを読む —— 記録の後に壊れた tree は、門がその前に撃つ fork 元との差分の読みが落とす
-it("記録の後に名前の場所の記録の tree が壊れたら、完了の門は fork 元との差分の読みで拒み、view は tip を記録した写しを読む(ADR 0359 決定1 / ADR 0412 決定1・4)", async () => {
+// 記録した写しを読む。実際の門はこの状態に届かない —— 門の前の損傷は記録の手の入れ直し(ADR 0411 決定4)が直すので、記録と view の間に壊して測る
+it("門の view は tip を記録した写しを読み、記録の後に壊れた名前の場所の記録の tree を読まない(ADR 0412 決定1・4)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   try {
     mkdirSync(join(place.path, "nested"));
@@ -587,7 +585,6 @@ it("記録の後に名前の場所の記録の tree が壊れたら、完了の�
 
     recordTaskCheckoutTip(db, place, task.id, (tip, changedPaths) => {
       rmSync(looseObject(ws.path, git(ws.path, "rev-parse", `${tip}^{tree}`)));
-      expect(() => treeDeltaEntries(ws.path, taskForkSource(db, ws, task, () => NOW), tip)).toThrow();
       expect(changedPaths()).toEqual([]);
     });
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
@@ -1281,6 +1278,26 @@ it("完了の後に名前の場所の text=auto の file の blob が壊れて�
     releaseAfterCompletion(db, place, getTask(db, task.id)!);
 
     expect(writeObservations(db, task)).toEqual([{ kind: "task_checkout_written_after_completion", path: place.path, observation: "uncommitted", paths: ["a.txt"] }]);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+it("完了の後に worker が自分の記録の tip の blob を壊せば、門付きの完了解放は「読めない」観測を1つ残し、名前の場所を quarantine しない(ADR 0412 決定5)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    commitWork(place.path, "w.txt", "work\n");
+    gateFetch(db, place, task);
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    const loose = looseObject(place.path, git(place.path, "rev-parse", "HEAD:w.txt"));
+    rmSync(loose);
+    writeFileSync(loose, "not zlib");
+    writeFileSync(join(place.path, "after.txt"), "written after completion\n");
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(writeObservations(db, task)).toEqual([{ kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason: expect.any(String) }]);
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
   } finally {
     db.close();

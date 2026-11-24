@@ -346,46 +346,42 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
   }
   if (!workspace) return undefined;
   // 記録した tip の検査と、同じ写しの view(ADR 0412 決定4)。名前の場所の検査が view より先
+  let checking = false;
   const checkRecordedTip = (tip: string, changedPaths: () => string[]): string[] => {
-    try {
-      // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
-      const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
-      if (unhideable) {
-        const { path, type } = unhideable;
-        throw new DomainError(
-          `the task branch tip has ${path} as a ${type}, so the board cannot hide the Claude settings behind it — ` +
-            `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
-        );
-      }
-      // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
-      // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
-      const { namedPlace } = workspace;
-      const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task, () => deps.clock.now()), tip);
-      const humanOnly = humanOnlyPathChanges(delta);
-      if (humanOnly.length > 0) {
-        // spec #3273 text A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない —— worker の出口は今の文のまま
-        throw refusalNamingPaths(
-          "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
-            "take the change out of the task branch and commit",
-          humanOnly,
-          { after: " That change is put in by a human." },
-        );
-      }
-      // ADR 0365 決定2: 同じ delta で、記録が持てない entry(gitlink の参照先は別 repo の commit)を足した・進めた tip を拒む
-      const gitlinks = gitlinkChanges(delta);
-      if (gitlinks.length > 0) {
-        throw refusalNamingPaths(
-          "the task branch tip adds or advances a submodule (gitlink) from its fork source; the record carries only this repository and " +
-            "cannot hold a submodule's commits — reset the gitlink to the fork source's value or remove the submodule, and commit",
-          gitlinks,
-        );
-      }
-      return changedPaths();
-    } catch (err) {
-      if (err instanceof DomainError) throw err;
-      if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
-      throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
+    checking = true;
+    // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
+    const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
+    if (unhideable) {
+      const { path, type } = unhideable;
+      throw new DomainError(
+        `the task branch tip has ${path} as a ${type}, so the board cannot hide the Claude settings behind it — ` +
+          `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
+      );
     }
+    // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
+    // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
+    const { namedPlace } = workspace;
+    const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task, () => deps.clock.now()), tip);
+    const humanOnly = humanOnlyPathChanges(delta);
+    if (humanOnly.length > 0) {
+      // spec #3273 text A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない —— worker の出口は今の文のまま
+      throw refusalNamingPaths(
+        "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
+          "take the change out of the task branch and commit",
+        humanOnly,
+        { after: " That change is put in by a human." },
+      );
+    }
+    // ADR 0365 決定2: 同じ delta で、記録が持てない entry(gitlink の参照先は別 repo の commit)を足した・進めた tip を拒む
+    const gitlinks = gitlinkChanges(delta);
+    if (gitlinks.length > 0) {
+      throw refusalNamingPaths(
+        "the task branch tip adds or advances a submodule (gitlink) from its fork source; the record carries only this repository and " +
+          "cannot hold a submodule's commits — reset the gitlink to the fork source's value or remove the submodule, and commit",
+        gitlinks,
+      );
+    }
+    return changedPaths();
   };
   // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
   let paths: string[];
@@ -394,6 +390,7 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
   } catch (err) {
     if (err instanceof DomainError) throw err;
     if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
+    if (checking) throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
     if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
     // ADR 0373 決定12: 動いた ref は retry では直らない —— 人間へは session の終わりの解放の比較が知らせる
     if (err instanceof RefsMovedError) throw new DomainError(`${taskBranch(task.id)} was moved outside the board. Retrying complete_task will not fix this — escalate.`);

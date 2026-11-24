@@ -1162,14 +1162,11 @@ function fetchStagedTree(namedPlace: WorkspaceConfig, repo: string, tree: string
   return sha;
 }
 
-/** ADR 0359 決定1: worker の tip が名前の場所のタスクブランチになるまで完了の門を通さない。ADR 0412 決定4: `check` は記録した tip と、
+/** ADR 0359 決定1: worker の tip が名前の場所のタスクブランチになるまで完了の門を通さない。ADR 0412 決定4: 門の `check` は記録した tip と、
  *  同じ写しで worktree を読む view(`changedPaths`)を受ける —— 検証は1回で、view が比べる相手は記録した tip。 */
-export function recordTaskCheckoutTip<T = string>(
-  db: Db,
-  place: WorkspaceConfig,
-  taskId: string,
-  check: (tip: string, changedPaths: () => string[]) => T = (tip) => tip as T,
-): T {
+export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string): string;
+export function recordTaskCheckoutTip<T>(db: Db, place: RunPlace, taskId: string, check: (tip: string, changedPaths: () => string[]) => T): T;
+export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string, check?: (tip: string, changedPaths: () => string[]) => unknown): unknown {
   assertTaskCheckout(place, taskId);
   const { namedPlace } = place;
   const branch = taskBranch(taskId);
@@ -1180,7 +1177,7 @@ export function recordTaskCheckoutTip<T = string>(
   return fetchUntrustedTip(untrustedTaskCheckout(place), branch, (read) => {
     const { tip } = read;
     if (old !== tip) boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
-    return check(tip, () => taskCheckoutChanges(db, place, taskId, read).map(({ path }) => path));
+    return check ? check(tip, () => taskCheckoutChanges(db, place, taskId, read).map(({ path }) => path)) : tip;
   });
 }
 
@@ -3791,10 +3788,6 @@ function taskCheckoutChanges(db: Db, place: TaskCheckoutPlace, taskId: string, {
   return boardViewStatus(place.path, tip, verified, boardViewExcludes(db, place, taskId, tip, verified));
 }
 
-/** ADR 0359 決定1: 完了の門の記録と view —— worker の tip を記録し、同じ写しで未コミットの path を読む(ADR 0412 決定4)。 */
-export const completionTreePaths = (db: Db, workspace: WorkspaceConfig, taskId: string): string[] =>
-  recordTaskCheckoutTip(db, workspace, taskId, (_tip, changedPaths) => changedPaths());
-
 /** ADR 0084: 退避コミットの subject にタスクの title を添える —— 完了の門が入った後に
  *  WIP が残るのは完了**以外**の解放だけなので、履歴を読む人間には「どのタスクの
  *  途中なのか」が id だけでは足りない。本文の起草はしない(盤面は LLM を焚かない)。
@@ -3822,8 +3815,12 @@ function observeCheckoutAfterCompletion(db: Db, place: TaskCheckoutPlace, taskId
     if (!recorded) return;
     if (workerTip !== recorded) return { observation: "committed", worker_tip: workerTip };
     // ADR 0412 決定5: 写しを作る —— 完了の後に worker が壊した repo と写しの上限超過は「読めない」観測
-    const paths = withVerifiedUntrustedTip(untrustedTaskCheckout(place), taskBranch(taskId), (read) => taskCheckoutChanges(db, place, taskId, read)).map(({ path }) => path);
-    if (paths.length > 0) return { observation: "uncommitted", paths };
+    return withVerifiedUntrustedTip(untrustedTaskCheckout(place), taskBranch(taskId), (read): TaskCheckoutWriteObservation | undefined => {
+      // 2つの読みの間に動いた tip を、記録との差分として読まない
+      if (read.tip !== recorded) return { observation: "committed", worker_tip: read.tip };
+      const paths = taskCheckoutChanges(db, place, taskId, read).map(({ path }) => path);
+      return paths.length > 0 ? { observation: "uncommitted", paths } : undefined;
+    });
   } catch (err) {
     // ADR 0359 決定5: view の上限超過も、完了済みの解放では「読めない」観測
     if (!(err instanceof CheckoutUnreadableError || err instanceof WorktreeStatusError || err instanceof WorkerTreeGitTimeoutError)) throw err;
@@ -4186,16 +4183,19 @@ function bringTaskCheckout(
       // 比べてから worker の repo を読む —— 動いた ref を worker の repo の故障の陰に隠さない
       wipTip = fetchUntrustedTip(untrustedTaskCheckout(place), taskBranch(task.id), ({ tip, verified }) => {
         // ADR 0412 決定2・3: 種は worker の tip、ref は WIP の親。ref が先にあれば、外す path は ref から導き、その entry は ref の値
-        const base = evacuationBaseRef !== "" && isAncestor(namedPlace, tip, evacuationBaseRef) ? evacuationBaseRef : tip;
-        const exclude = boardViewExcludes(db, place, task.id, base, base === tip ? verified : undefined);
+        const ahead = evacuationBaseRef !== "" && evacuationBaseRef !== tip && isAncestor(namedPlace, tip, evacuationBaseRef);
+        const base = ahead ? evacuationBaseRef : tip;
+        const exclude = boardViewExcludes(db, place, task.id, base, ahead ? undefined : verified);
         const baseTree = git(namedPlace.path, "rev-parse", `${base}^{tree}`);
         return boardWriteTree(checkout, tip, verified, (tree, repo) => {
           if (tree === baseTree) return base;
-          // ADR 0412 決定2: 親は名前の場所で読む —— add と write-tree の後に写しに借りさせ、確かめは写しの借りを外して数える(出題の写しと同じ)
-          const objects = namedObjects(namedPlace);
-          stagingHostStep(() => borrowObjects(verified, [objects]));
-          return fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit", { checkout, noun: TASK_CHECKOUT }, verified);
-        }, exclude, base === tip ? undefined : { ref: base, at: namedPlace.path });
+          if (ahead) {
+            // ADR 0412 決定2: 親の ref は名前の場所にだけある —— add と write-tree の後に写しに借りさせる(commit-tree と fetch が読む)
+            const objects = namedObjects(namedPlace);
+            stagingHostStep(() => borrowObjects(verified, [objects]));
+          }
+          return fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit", { checkout, noun: TASK_CHECKOUT });
+        }, exclude, ahead ? { ref: base, at: namedPlace.path } : undefined);
       });
     }
   } catch (err) {

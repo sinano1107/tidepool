@@ -172,9 +172,15 @@ const viewPathspecs = (exclude: string[]) => [".", ...exclude.map((path) => `:(e
 
 const GITLINK_MODE = "160000";
 
+/** `ls-tree -z` の1行の path。 */
+const entryPath = (line: string) => line.slice(line.indexOf("\t") + 1);
+
+/** `ls-tree -r -z` の行のうち gitlink の path。 */
+const gitlinkPaths = (lines: string[]) => lines.filter((line) => line.startsWith(`${GITLINK_MODE} `)).map(entryPath);
+
 /** ADR 0365 決定3: 記録の gitlink —— view の index の種 `head` の gitlink の path。 */
 function seededGitlinks(view: View, head: string): string[] {
-  return view(["ls-tree", "-r", "-z", head]).split("\0").filter((line) => line.startsWith(`${GITLINK_MODE} `)).map((line) => line.slice(line.indexOf("\t") + 1));
+  return gitlinkPaths(view(["ls-tree", "-r", "-z", head]).split("\0"));
 }
 
 /** ADR 0365 決定3: worktree は gitlink の値を供給しない —— view は入れ子の repo を外す。worktree で祖先まで symlink でない dir の記録の
@@ -227,7 +233,7 @@ export function outOfSpace(dir: string, cause: unknown): boolean {
 }
 
 /** ADR 0412 決定3: 名前の場所 `at` の、種の tip より先にある ref。 */
-export type RecordedAhead = { ref: string; at: string };
+type RecordedAhead = { ref: string; at: string };
 
 /** ADR 0367 決定1: stage in a temporary board-owned repo, where the gitlink check can reject the tree before it travels.
  *  The tree is available for `use` while that repo is open. ADR 0412 決定2・3: `head` is the worker's tip in `objectsFrom`; with
@@ -235,13 +241,12 @@ export type RecordedAhead = { ref: string; at: string };
 export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string, use: (tree: string, gitDir: string) => T, exclude: string[] = [], ahead?: RecordedAhead): T {
   // ADR 0412 決定3: ref の entry は名前の場所の側の段で読む(tree だけ、blob は読まない)—— 失敗は型の無いまま投げる
   const recorded = ahead ? git(ahead.at, "--no-replace-objects", "ls-tree", "-r", "-z", ahead.ref).split("\0").filter(Boolean) : [];
-  const recordedGitlinks = recorded.filter((line) => line.startsWith(`${GITLINK_MODE} `)).map((line) => line.slice(line.indexOf("\t") + 1));
+  const recordedGitlinks = gitlinkPaths(recorded);
   return viewWith(runOnWorkerTree, cwd, (view, gitDir) => {
     let tree: string;
-    let excluded: string[];
     try {
       seedViewIndex(view, head);
-      excluded = [...exclude, ...nestedRepos(view, cwd, [...seededGitlinks(view, head), ...recordedGitlinks])];
+      const excluded = [...exclude, ...nestedRepos(view, cwd, [...seededGitlinks(view, head), ...recordedGitlinks])];
       const paths = viewPathspecs(excluded);
       // 入れ子の repo は worker が幾つでも作れる —— argv でなく file で渡す(E2BIG)
       const pathspecs = join(gitDir, "pathspecs");
@@ -253,12 +258,12 @@ export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string
       if (added.length > 0) {
         throw new CheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: the worktree has a nested repository the board does not carry: ${added.join(", ")}`);
       }
+      if (ahead) tree = overlayRecorded(view, excluded, recorded, tree.length);
     } catch (cause) {
       if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof CheckoutUnreadableError || cause instanceof CheckoutHostError) throw cause;
       if (outOfSpace(gitDir, cause)) throw stagingHostError(cause);
       throw new CheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     }
-    if (ahead) tree = overlayRecorded(view, excluded, recorded, tree.length);
     return use(tree, gitDir);
   }, objectsFrom, "stage");
 }
@@ -268,7 +273,7 @@ export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string
 function overlayRecorded(view: View, excluded: string[], recorded: string[], oidLength: number): string {
   const inside = (path: string) => excluded.some((dir) => path === dir || path.startsWith(`${dir}/`));
   const dropped = view(["ls-files", "-z", "--cached"]).split("\0").filter((path) => path && inside(path)).map((path) => `0 ${"0".repeat(oidLength)}\t${path}\0`);
-  const kept = recorded.filter((line) => inside(line.slice(line.indexOf("\t") + 1))).map((line) => `${line}\0`);
+  const kept = recorded.filter((line) => inside(entryPath(line))).map((line) => `${line}\0`);
   if (dropped.length + kept.length > 0) view(["update-index", "--add", "--replace", "-z", "--index-info"], undefined, [...dropped, ...kept].join(""));
   return view(["write-tree", "--missing-ok"]).trim();
 }
