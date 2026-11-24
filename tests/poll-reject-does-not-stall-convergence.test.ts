@@ -8,10 +8,28 @@ import { Slot } from "../src/slot.js";
 import { listBoard, registerTask } from "../src/tasks.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
-import { failPrepareOnce, pushedRoot, settle } from "./landing-fixture.js";
+import { convergeOn, failPrepareOnce, promotionFailures, pushedRoot, settle } from "./landing-fixture.js";
 
-/** registry の止まりの判定(`registryUnreadableOpen`)の読みだけが当たる文の断片。 */
+/** 開いた Quarantine の question の読み(`openQuarantineQuestion`)の文の断片 —— どの kind の読みにも当たる。registry の止まりの判定に
+ *  当たるのは、落とす仕掛けを置いた直後の読みがその判定になる順で置くからである。 */
 const REGISTRY_STOP_READ = "question_quarantine_value IS ?";
+
+/** registry の止まりの判定の読みを、kind で選んで落とし続ける —— 同じ文の他の kind(workspace の Quarantine など)の読みは通す。
+ *  spy でなく差し替えで置く —— 後から置く `failPrepareOnce` の spy が外れても残る。 */
+function failRegistryStopReads(db: Db): void {
+  const prepare = db.prepare.bind(db);
+  db.prepare = ((sql: string) => {
+    const statement = prepare(sql);
+    if (!sql.includes(REGISTRY_STOP_READ)) return statement;
+    const get = statement.get.bind(statement);
+    return Object.assign(statement, {
+      get: (...params: unknown[]) => {
+        if (params[0] === "registryUnreadable") throw new Error("registry stop read broke");
+        return get(...params);
+      },
+    });
+  }) as typeof db.prepare;
+}
 
 /** scheduler の `idle` を landing の `pickupIdle` につなぐ盤面(`src/server.ts` と同じ配線)。`converge` の回を `runs` に残す。
  *  候補の読みは毎回まず `readCandidates` を撃つ —— 投げれば poll の本体が投げる。 */
@@ -90,7 +108,7 @@ async function trigger(scheduler: ReturnType<typeof startScheduler>) {
   await scheduler.idle();
 }
 
-// #3711: 判定が投げたら止まりは開いていない側に倒す —— 数えなければ、行も question も無いまま pickup が止まる(ADR 0294 決定1・2)
+// #3711: 判定が投げたら止まりは開いていない側に倒して数える —— 数えなければ、行も question も無いまま pickup が止まる
 it("registry の止まりの判定の読みが投げ続けても、poll の失敗は行に残り、最初の失敗から10分で pollFailure の question が1枚立つ", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const { db, clock, scheduler } = wiredBoard(breakCandidatesAndStopRead);
@@ -101,47 +119,6 @@ it("registry の止まりの判定の読みが投げ続けても、poll の失�
   await trigger(scheduler);
 
   expect(listBoard(db).filter((t) => t.type === "question").map((q) => q.title)).toEqual([POLL_FAILURE_QUESTION_TITLE]);
-  scheduler.stop();
-});
-
-
-// #3711: どこで投げた poll でも、終わりを待つ読み手は reject を受け取らない。撃ち直しの呼び手だけが自分の回の reject を受け取る
-it("poll が reject すれば log に出し、撃ち直しの呼び手はその reject を受け取り、終わりを待つ idle と次の撃ち直しは止まらない", async () => {
-  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-  let unprintable = true;
-  const { worker, scheduler } = wiredBoard(() => {
-    // String() で文字にできない値 —— pollFailed の本文の写しが投げ、poll が reject する
-    if (unprintable) throw Object.create(null);
-  });
-
-  await expect(scheduler.rerunPoll()).rejects.toThrow(TypeError);
-  expect(logged).toHaveBeenCalledWith("[scheduler] poll rejected; the next trigger polls again:", expect.any(TypeError));
-  await expect(scheduler.idle()).resolves.toBeUndefined();
-  unprintable = false;
-
-  expect(await scheduler.rerunPoll()).toEqual({ outcome: "succeeded" });
-  expect(worker.started.map((t) => t.title)).toEqual(["head"]);
-  scheduler.stop();
-});
-
-it("契機の poll が reject しても log に出し、終わりを待つ idle は止まらず、次の契機で収束の回と pickup が走る", async () => {
-  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-  let unprintable = true;
-  const { worker, scheduler, runs } = wiredBoard(() => {
-    if (unprintable) throw Object.create(null);
-  });
-
-  scheduler.pollNow();
-  await runs[0];
-  await settle();
-  expect(logged).toHaveBeenCalledWith("[scheduler] poll rejected; the next trigger polls again:", expect.any(TypeError));
-  await expect(scheduler.idle()).resolves.toBeUndefined();
-  unprintable = false;
-  scheduler.pollNow();
-
-  await expect(runs[1]).resolves.toEqual([]);
-  await settle();
-  expect(worker.started.map((t) => t.title)).toEqual(["head"]);
   scheduler.stop();
 });
 
@@ -158,6 +135,31 @@ it("収束の回の registry の止まりの判定の読みが投げても、回
   await settle();
   await scheduler.idle();
   expect(worker.started.map((t) => t.title)).toEqual(["head"]);
-  expect(logged).toHaveBeenCalledWith(expect.stringContaining("[landing]"), expect.objectContaining({ message: "registry stop read broke" }));
+  expect(logged).toHaveBeenCalledWith("[registry] could not read whether the registry stop is open; treating it as not open:", expect.objectContaining({ message: "registry stop read broke" }));
+  scheduler.stop();
+});
+
+// #3711: 判定が投げ続けても、根ごとの catch に落ちた無人の根には昇格失敗 question が立つ(ADR 0403 決定3)
+it("収束の回で registry の止まりの判定の読みが投げ続けても、根ごとの catch に落ちた無人の根には tip 無しの昇格失敗 question が1枚立つ", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const c = await pushedRoot("registry-stop-read-keeps-throwing");
+  failRegistryStopReads(c.db);
+  failPrepareOnce(c.db, "pr_merge_observed", "the board hit a bug");
+
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ kind: "failed", reason: "landing_failed" });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([
+    expect.objectContaining({ status: "todo", question_landing_tip: null, purpose: expect.stringContaining("the board hit a bug") }),
+  ]);
+});
+
+// ADR 0294 決定1: poll の失敗の後始末は投げない —— 文字にできない値が投げられても、失敗は行に残る
+it("poll の本体が String() で文字にできない値を投げても、撃ち直しは本文付きの失敗を返し、poll の失敗は行に残る", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const { clock, scheduler } = wiredBoard(() => {
+    throw Object.create(null);
+  });
+
+  expect(await scheduler.rerunPoll()).toEqual({ outcome: "threw", message: "[object Object]" });
+  expect(scheduler.lastPollFailure()).toEqual({ at: clock.now().toISOString(), message: "[object Object]" });
   scheduler.stop();
 });

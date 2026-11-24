@@ -2053,15 +2053,8 @@ export function createLanding(deps: LandingDeps): Landing {
       console.error("[landing] reading the landing roots failed; the next trigger runs the convergence again:", error);
       return [];
     }
-    // ADR 0403 決定5: registry の止まりが開いていれば根を撃たずに終える —— どの根もどのみち registry を読めない。答えている回答は止まりを名指して拒む。
-    // 判定の読みが投げたら開いていないとみなして根へ進む —— 根ごとの失敗は根ごとの catch が人間に届ける(ADR 0403 決定3)。回を終えると黙って止まる(#3711)
-    let stopOpen = false;
-    try {
-      stopOpen = registryUnreadableOpen(deps.db);
-    } catch (error) {
-      console.error("[landing] could not read whether the registry stop is open; the pass goes on to the roots:", error);
-    }
-    if (stopOpen) {
+    // ADR 0403 決定5: registry の止まりが開いていれば根を撃たずに終える —— どの根もどのみち registry を読めない。答えている回答は止まりを名指して拒む
+    if (registryUnreadableOpen(deps.db)) {
       return [...answering.keys()].flatMap((question) => {
         const taskId = answeredRootOf(deps.db, question);
         return taskId ? [{ taskId, verdict: failedAnswer(REGISTRY_STOPPED_REFUSAL) }] : [];
