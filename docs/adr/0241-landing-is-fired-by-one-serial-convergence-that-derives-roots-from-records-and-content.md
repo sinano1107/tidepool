@@ -1,5 +1,7 @@
 # 着地は入口が撃たず、記録と内容から根を導く1本の収束が撃つ
 
+**Status 追記: 決定6 の「失敗 question を重ねない」は、無人 merge の tick・外の merge の走査・無人 merge の観測が立てる、宣言した repo の食い違いの question には掛からない —— tick は workspace の Quarantine 単独では止まらないので、その根を止めている原因は食い違いで、別の question としてまだ出ていない。収束が立てる question は今どおり決定6 に従う([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定5 の Status 追記、2026-11-25、issue #3791)。**
+
 **Status 追記: 決定4 の「作る前に PR を探す」に段が足される —— 見つからなければ、push の前に origin のブランチの head を読む。決定5 の `retry` の verdict に拒む場面が足され(PR が無いか未記録の巻き戻しは毎回拒む、書き換えられた PR の head は merge question を名指して拒む)、決定6 の「失敗 question を重ねない」相手に、収束が立てた merge question が加わる。Considered options の「push で積み残しが消えないと分かれば push しない」とは条件が違う([ADR 0376](0376-convergence-reads-the-github-head-before-it-pushes-the-board-never-merges-outside-commits-itself-and-on-a-remote-backed-workspace-human-only-paths-enter-through-origin.md) 決定1・2・6・7、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定6 の「着地を待つ完了タスクは収束が導く根から数える」はそのまま —— タスクブランチが失われて着地が終わった根は収束の候補から外れるので、数えにも入らず、agent 名の quarantine の解除と削除の扉を塞がない([ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定7、2026-11-15、issue #3178)。**
