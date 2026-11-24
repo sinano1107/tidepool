@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
@@ -23,7 +24,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withLooseSub, withPushDuringWrap } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withHistoryOnlyBlob, withLooseSub, withPushDuringWrap } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -435,30 +436,99 @@ it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も w
   expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
 });
 
-// 作業台は名前の場所の objects を借りる(ADR 0411 決定2 の実装 #3763 まで)—— task の checkout から移した形(#3734)
-it("作業台が自前の store に写した名前の場所の object の入れ直しの pack を index-pack --strict が落とせば、取り込みは名前の場所の側で拒み、理由が欠けた object を名指す(ADR 0388 決定2)", async () => {
+/** `b.open()` の拒否が名前の場所を名指し、開き直しも作業台を消すことも誘わないことを確かめる。 */
+async function expectNamedPlaceRefusal(opening: Promise<unknown>, ws: WorkspaceConfig, ...named: string[]) {
+  await expect(opening).rejects.toThrow(DomainError);
+  await expect(opening).rejects.toThrow(new RegExp(`^workspace ${ws.name}: `));
+  for (const text of named) await expect(opening).rejects.toThrow(text);
+  await expect(opening).rejects.not.toThrow("open it again");
+  await expect(opening).rejects.not.toThrow("by hand");
+}
+
+// ADR 0411 決定5: 閉包が読めない名前の場所からは作業台を作れない —— 開く扉は名前の場所を名指して拒み、作りかけを残さない
+it("shallow な名前の場所では作業台を作らず、open_workbench は名前の場所が shallow であることと `git fetch --unshallow` を言って拒む(ADR 0411 決定5)", async () => {
+  const source = await makeWorkspace("intake-shallow-source");
+  commitWork(source.path, "more.txt", "more\n");
+  const ws = { ...source, name: "intake-shallow", path: join(await tempDir("tidepool-shallow-"), "named") };
+  git(source.path, "clone", "--quiet", "--depth=1", `file://${source.path}`, ws.path);
+  git(ws.path, "remote", "remove", "origin");
+  const db = openDb(":memory:");
+  const base = await tempDir("tidepool-workbenches-");
+
+  await expectNamedPlaceRefusal(openHumanContentWorkbench(db, ws, base, CALLER, () => new Date(), { resolveRegistered: undefined }), ws, `${ws.path} is a shallow clone`, "git fetch --unshallow");
+  expect(existsSync(workbenchPath(base, { workspace: ws.name }))).toBe(false);
+});
+
+it("保護ブランチの閉包が読めない名前の場所では作業台を作らず、open_workbench は名前の場所と読めない object を名指して拒む(ADR 0411 決定5)", async () => {
   let blob = "";
-  // 保護ブランチの外の `side` に置く —— `board()` の task の pickup は保護ブランチの閉包だけを複製し、strict な検査に当たらない(ADR 0411 決定5)
-  const b = await board("intake-strict-reinsert", (ws) => {
-    blob = seedZeroPaddedTree(ws, "refs/heads/side");
+  const b = await board("intake-unreadable-closure", (ws) => {
+    withHistoryOnlyBlob(ws);
+    blob = git(ws.path, "rev-parse", "HEAD~1:old.txt");
   });
-  await b.open();
-  // 人間が作業台で `side` の tree をそのまま持つ merge commit を積む(`git merge` は tree を書き直して mode の詰めを消す)—— 作業台は名前の場所の
-  // objects を借りるので、取り込みの pack は名前の場所の ref から届く `side` の閉包を入れない
-  const side = git(b.ws.path, "rev-parse", "side");
-  git(b.workbench(), "update-ref", "refs/heads/main", git(b.workbench(), "commit-tree", `${side}^{tree}`, "-p", "HEAD", "-p", side, "-m", "take side"));
-  git(b.workbench(), "reset", "--hard", "--quiet");
-  // `-l` の無い repack は借りている object を自前の pack に写す —— 名前の場所の tree も blob も作業台の store に入る
-  git(b.workbench(), "repack", "-a", "-d", "--quiet");
   rmSync(join(b.ws.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+
+  await expectNamedPlaceRefusal(b.open(), b.ws, blob);
+  expect(existsSync(workbenchPath(b.base, { workspace: b.ws.name }))).toBe(false);
+});
+
+// ADR 0411 決定5 の延長(#3763): 作業台が `board/*` として受け取る名前の場所の branch も、作業台を作る fetch と同じ strict な検査を通す ——
+// 通らない object を作業台に入れると、人間が merge した tip の検証が作業台の故障になる
+it("名前の場所の branch が strict な検査を通らない object を持てば、書く先でなくても open_workbench は名前の場所とその object を名指して拒む", async () => {
+  const b = await board("intake-strict-board", (ws) => {
+    seedZeroPaddedTree(ws, "refs/heads/side");
+  });
+
+  await expectNamedPlaceRefusal(b.open(), b.ws, git(b.ws.path, "rev-parse", "side:sub"), "zeroPaddedFilemode");
+});
+
+it("取り込みの後の `board/*` の引き直しが strict な検査で落ちれば、作業台に古い `board/*` を残さず応答がそれを言い、次の open_workbench は名前の場所を名指して拒む", async () => {
+  const b = await board("intake-strict-later");
+  await b.open();
+  commitWork(b.workbench(), "notes.txt", "the human's\n");
+  const tip = git(b.workbench(), "rev-parse", "main");
+  seedZeroPaddedTree(b.ws, "refs/heads/side");
+  const bad = git(b.ws.path, "rev-parse", "side:sub");
+
+  const answered = await b.answer("take in");
+  expect(answered.notice).toMatch(new RegExp(`^took ${tip} in as ${git(b.ws.path, "rev-parse", "main")} on main\\. workspace ${b.ws.name}: [\\s\\S]*${bad}`));
+  expect(git(b.workbench(), "for-each-ref", "refs/heads/board/")).toBe("");
+
+  await expectNamedPlaceRefusal(b.open(), b.ws, bad);
+});
+
+it.each(["misnamed", "missing"] as const)("作業台の中だけの故障(%s の object)は今どおり作業台の故障として取り込みを拒み、名前の場所を名指さない(ADR 0411 決定2・3)", async (fault) => {
+  const b = await board(`intake-own-${fault}`);
+  await b.open();
+  commitWork(b.workbench(), "notes.txt", "the human's\n");
+  const blob = git(b.workbench(), "rev-parse", "HEAD:notes.txt");
+  const loose = join(b.workbench(), ".git", "objects", blob.slice(0, 2), blob.slice(2));
+  rmSync(loose);
+  // 中身が名前と合わない: 別の blob の正しい zlib を同じ名前に置く
+  if (fault === "misnamed") writeFileSync(loose, deflateSync(Buffer.from("blob 6\0other\n")));
   const unchanged = b.unchanged();
 
-  await expect(b.answer("take in")).rejects.toThrow(new RegExp(`workspace ${b.ws.name}:[\\s\\S]*${blob}[\\s\\S]*zeroPaddedFilemode`));
+  const refused = b.answer("take in");
+  await expect(refused).rejects.toThrow(`the workbench at ${b.workbench()} cannot be read`);
+  await expect(refused).rejects.not.toThrow(`workspace ${b.ws.name}:`);
   unchanged();
 });
 
-it("作業台が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、取り込みは名前の場所でなく作業台の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
-  const b = await board("intake-borrowed-tree", (ws) => {
+it("名前の場所の値との比較が名前の場所の欠けで落ちれば、取り込みは名前の場所を名指して拒み、何も書かない(ADR 0411 決定2・3)", async () => {
+  const b = await board("intake-named-gap");
+  await b.open();
+  commitWork(b.workbench(), "notes.txt", "the human's\n");
+  // 作業台の tip の閉包に無い、名前の場所の値(未決着の task のブランチの commit)を名前の場所で欠く —— どの commit が先にあるかを比べる手が読む
+  const pending = git(b.ws.path, "rev-parse", `task/${b.pending.id}`);
+  rmSync(join(b.ws.path, ".git", "objects", pending.slice(0, 2), pending.slice(2)));
+  const unchanged = b.unchanged();
+
+  const refused = b.answer("take in");
+  await expect(refused).rejects.toThrow(new RegExp(`^workspace ${b.ws.name}: the board cannot compare the workbench's tip with the named workspace: [\\s\\S]*${pending}`));
+  unchanged();
+});
+
+it("作業台が複製で受け取った tree の id に壊れた loose を書けば、自前の object を数える手が落ち、取り込みは名前の場所でなく作業台の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
+  const b = await board("intake-own-tree", (ws) => {
     withLooseSub(ws);
     // 名前の場所は tree を pack に持つ —— 取り込みの検証は pack を先に引いて作業台の loose を読まない
     git(ws.path, "repack", "-a", "-d", "--quiet");

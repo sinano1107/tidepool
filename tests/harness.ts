@@ -797,17 +797,14 @@ export function commitWork(path: string, file: string, body: string): void {
 }
 
 /** 名前の場所 `named` の README.md の blob の loose を外し(`corrupt` なら zlib でない byte に置く)、worker が同じ中身の `copy.txt` を
- *  `checkout` で commit する —— 新しい root tree が blob を直に指し、worker は名前の場所に無い blob を自前の store に持つ(task の checkout は
- *  複製で受け取った pack に、借りる作業台は `git add` が書く loose に)。
- *  借りる作業台では、門の pack は除外(名前の場所の ref から届く)で blob を入れない。blob の id を返す。 */
+ *  `checkout` で commit する —— 新しい root tree が blob を直に指す。checkout(task の checkout も作業台も)は閉包を全部持つ複製なので、
+ *  blob を複製で受け取った自前の store に持つ(ADR 0411 決定1・2)。blob の id を返す。 */
 export function newTreePointsAtDamagedNamedBlob(named: string, checkout: string, damage: "missing" | "corrupt" = "missing"): { blob: string } {
   const blob = git(named, "rev-parse", "HEAD:README.md");
   const loose = (repo: string) => join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2));
   rmSync(loose(named));
   commitWork(checkout, "copy.txt", "workspace\n");
-  // 借りる checkout では名前の場所に無いので loose を書き、借りない checkout では自分の store だけで読める
-  if (existsSync(join(checkout, ".git", "objects", "info", "alternates"))) expect(existsSync(loose(checkout))).toBe(true);
-  else git(checkout, "cat-file", "-e", blob);
+  git(checkout, "cat-file", "-e", blob);
   if (damage === "corrupt") writeFileSync(loose(named), "not zlib");
   return { blob };
 }

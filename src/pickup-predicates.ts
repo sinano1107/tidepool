@@ -403,15 +403,15 @@ export function assertOwnGitDirectory(path: string): void {
   throw new NoOwnGitDirError(path, toplevel);
 }
 
-/** ADR 0411 決定5: shallow な repo は branch の閉包を持たないので、task の checkout(閉包を全部持つ複製)を作れない。 */
+/** ADR 0411 決定2・5: shallow な repo は branch の閉包を持たないので、task の checkout と作業台(どちらも閉包を全部持つ複製)を作れない。 */
 export class ShallowRepositoryError extends Error {
   constructor(path: string) {
-    super(`${path} is a shallow clone — the board makes each task checkout as a copy holding the task branch's whole history, and a shallow clone does not hold it. In ${path}, run \`git fetch --unshallow\`.`);
+    super(`${path} is a shallow clone — the board makes each task checkout and workbench as a copy holding the branch's whole history, and a shallow clone does not hold it. In ${path}, run \`git fetch --unshallow\`.`);
     this.name = "ShallowRepositoryError";
   }
 }
 
-/** 登録の門と pickup が共有する shallow の拒否(ADR 0411 決定5)。 */
+/** 登録の門・pickup・作業台を作る手が共有する shallow の拒否(ADR 0411 決定5)。 */
 export function assertNotShallow(path: string): void {
   if (git(path, "rev-parse", "--is-shallow-repository") === "true") throw new ShallowRepositoryError(path);
 }

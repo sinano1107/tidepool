@@ -510,11 +510,17 @@ it("失われた event が効いている H の取り込みと完了は `start_w
   expect(listEvents(b.db, h.id)).toHaveLength(before);
   expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${h.id}`)).toBe("");
 
-  // 名前の場所の gc は作業台が借りていた object(取り込みの包む commit)も消した —— 開き直しは disk に無い作業台から(spec の範囲外)
-  rmSync(workbenchPath(b.base, { task: h.id }), { recursive: true, force: true });
+  // #3479 / ADR 0411 決定2: 名前の場所の gc が取り込みの包む commit を消しても、作業台は複製でそれを自前に持つ —— 開く手も取り込みも bad object で落ちない
+  // (give-up の後に作業台をどう扱うかは #3479)
+  const workbench = realpathSync(workbenchPath(b.base, { task: h.id }));
+  const wrapped = git(workbench, "rev-parse", `task/${h.id}`);
+  expect(() => git(b.ws.path, "cat-file", "-e", wrapped)).toThrow();
   expect(await startWorkThroughHumanDoor(doorDeps(b), h.id, at, "webui")).toMatchObject({ ok: true });
   expect(taskBranchLostInForce(b.db, h.id)).toBeUndefined();
   expect(git(b.ws.path, "rev-parse", `task/${h.id}`)).toBe(git(b.ws.path, "rev-parse", "main"));
+  expect(git(workbench, "rev-parse", `board/task/${h.id}`)).toBe(git(b.ws.path, "rev-parse", "main"));
+  expect(await takeInWorkThroughHumanDoor(doorDeps(b), h.id, at, "webui")).toEqual({ ok: true, value: { message: expect.stringContaining(`took ${wrapped} in as `) } });
+  expect(git(b.ws.path, "cat-file", "-e", wrapped)).toBe("");
 });
 
 /** H の取り込みと完了を順に呼び、拒否を返す —— どちらも名前の場所の ref と H の event を書かない。 */

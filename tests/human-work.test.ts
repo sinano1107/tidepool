@@ -1148,16 +1148,18 @@ it("take_in_work は作業台の tip を包む commit で task/<H> に取り込�
   expect(git(place.path, "show", "HEAD:ground.txt")).toBe("groundwork");
 });
 
-// ADR 0398 決定1 / #3501: worker が持ち、新しい tree が直に指す形は入れ直しへ進む —— 実装されればこのテストは変わる
-it("take_in_work は作業台の新しい tree が名前の場所で欠けた blob を直に指せば、名前の場所の側の失敗を名前の場所を名指す回答の拒否にし、task/<H> を書かない(ADR 0364 決定2)", async () => {
+// ADR 0411 決定2・4: 作業台は閉包を全部持つ複製 —— 運んだ後の確かめが閉包の全部を数え、名前の場所で欠けた blob を作業台の写しから入れ直す
+it("take_in_work は作業台の新しい tree が名前の場所で欠けた blob を直に指しても取り込み、名前の場所でその blob が読める(ADR 0411 決定2・4)", async () => {
   const b = await board("take-in-named-place");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   await startWork(b, h);
-  const before = untouched(b, h);
-  const { blob } = newTreePointsAtDamagedNamedBlob(b.ws.path, realpathSync(humanWorkbench(b, h)));
+  const workbench = realpathSync(humanWorkbench(b, h));
+  const { blob } = newTreePointsAtDamagedNamedBlob(b.ws.path, workbench);
+  const tip = git(workbench, "rev-parse", `task/${h.id}`);
 
-  expect(await takeIn(b, h)).toEqual({ ok: false, failure: { kind: "domain_error", error: expect.stringMatching(new RegExp(`workspace ${b.ws.name}:[\\s\\S]*${blob}`)) } });
-  expect(untouched(b, h)).toEqual(before);
+  expect(await takeIn(b, h)).toEqual({ ok: true, value: { message: expect.stringContaining(`took ${tip} in as `) } });
+  expect(git(b.ws.path, "rev-parse", `task/${h.id}^2`)).toBe(tip);
+  expect(git(b.ws.path, "cat-file", "-p", blob)).toBe("workspace");
 });
 
 it("take_in_work は tip が task/<H> と同じなら取り込むものが無いと拒み、タスクブランチがあって作業台の無い H は start_work を指して拒む —— どちらも何も書かない(pin C19)", async () => {
