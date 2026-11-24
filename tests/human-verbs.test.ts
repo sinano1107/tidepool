@@ -33,7 +33,7 @@ import {
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, recordDeclaredRepo, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, heldInPrepareMerge, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -768,15 +768,18 @@ it("merge 回答は question の workspace で live CI を確認してから実 
   let currentNow = NOW;
   const callOrder: string[] = [];
   const readPullRequest = github.readPullRequest.bind(github);
-  const mergePullRequest = github.mergePullRequest.bind(github);
+  const prepareMerge = github.prepareMerge.bind(github);
   github.readPullRequest = async (ref) => {
     callOrder.push("live CI");
     currentNow = afterCi;
     return readPullRequest(ref);
   };
-  github.mergePullRequest = async (ref, head) => {
-    callOrder.push("merge");
-    return mergePullRequest(ref, head);
+  github.prepareMerge = async (ref) => {
+    const merge = await prepareMerge(ref);
+    return (head) => {
+      callOrder.push("merge");
+      return merge(head);
+    };
   };
 
   const answered = await submitAnswer(
@@ -1267,10 +1270,13 @@ function escalatedMergeQuestion() {
 async function mergeAnswerInFlight() {
   const { work, question, github, landing, answer } = escalatedMergeQuestion();
   let mergeCalls = 0;
-  const merge = github.mergePullRequest.bind(github);
-  github.mergePullRequest = async (ref, head) => {
-    mergeCalls++;
-    return merge(ref, head);
+  const prepareMerge = github.prepareMerge.bind(github);
+  github.prepareMerge = async (ref) => {
+    const merge = await prepareMerge(ref);
+    return (head) => {
+      mergeCalls++;
+      return merge(head);
+    };
   };
   const gate = awaitWindow();
   holdAfterMerge(github, gate.hold);
@@ -1355,6 +1361,50 @@ it.each([
   await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
 });
 
+// ADR 0330 決定1・4: 印は待ちの前に取り、着地の門は prepare の待ちの後の、gh を撃つ同期区間で読み直す
+it.each([
+  ["異議", "1 objection(s) raised in this triage await commit"],
+  ["付帯子", "1 attached child task(s) unsettled"],
+])("merge 回答の merge の準備(token と gh の版)の await 中に%sが出たら、merge せず question は開いたままで印を放す", async (block, reason) => {
+  const { work, question, github, landing, answer } = escalatedMergeQuestion();
+  const gate = heldInPrepareMerge(github);
+  const first = answer();
+  await gate.entered;
+  if (block === "異議") {
+    const entry = appendEvent(db, {
+      taskId: work.id, actorId: "worker", origin: "worker",
+      payload: { kind: "decision_logged", line: "ship this implementation" }, at: NOW,
+    });
+    raiseObjection(db, entry, "repair the edge case first", NOW);
+  } else {
+    registerTask(db, { type: "work", parent_id: work.id, title: "repair", purpose: "repair the edge case", completion_criteria: "repaired" }, NOW, ...HUMAN_WEBUI);
+  }
+  gate.open();
+
+  await expect(first).rejects.toThrow(new DomainError(`cannot merge yet: ${reason}`));
+  expect(github.merged).toEqual([]);
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(listEvents(db, work.id).map((event) => event.kind)).not.toContain("pr_merged");
+  const release = landing.takeInFlightMark(work.id);
+  expect(release).not.toBeNull();
+  release!();
+  await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
+});
+
+// ADR 0394 決定2 / ADR 0288 決定2: 印は待ちの前に取る —— 準備を待つ間も他の執行・回答は印に当たる
+it("merge 回答は merge の準備(token と gh の版)を待つ間も印を持ち、待ちが明けると merge する", async () => {
+  const { work, github, landing, answer } = escalatedMergeQuestion();
+  const gate = heldInPrepareMerge(github);
+  const first = answer();
+  await gate.entered;
+
+  expect(landing.takeInFlightMark(work.id)).toBeNull();
+  gate.open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
+});
+
 it("merge 回答の PR の読み取りの await の間に「hold」が通った merge question への merge 回答は、merge せずに拒まれる", async () => {
   const { work, question, github, landing, answer, first, open } = await mergeAnswerBeforeMark();
 
@@ -1384,11 +1434,13 @@ it("merge 回答の PR の読み取りの await の間に走査が観測で閉�
 
 it("merge 回答の merge が失敗したら印は放され、次の merge 回答は merge まで進む", async () => {
   const { work, github, answer } = escalatedMergeQuestion();
-  const merge = github.mergePullRequest.bind(github);
+  const prepareMerge = github.prepareMerge.bind(github);
   // 最初の merge だけ失敗させ、次からは本物に戻す
-  github.mergePullRequest = async () => {
-    github.mergePullRequest = merge;
-    throw new Error("Pull request is not mergeable: merge conflict");
+  github.prepareMerge = async () => {
+    github.prepareMerge = prepareMerge;
+    return async () => {
+      throw new Error("Pull request is not mergeable: merge conflict");
+    };
   };
 
   // spec #3273 text A6

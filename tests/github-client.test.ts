@@ -201,7 +201,7 @@ it("user token は PR の作成の要求にだけ載り、gh と git の子の e
   const { number } = await client.createPullRequest(createInput(workspace));
   expect((await client.readPullRequest({ workspace, number })).state).toBe("OPEN");
   expect((await client.getPullRequestState({ workspace, number })).state).toBe("OPEN");
-  await client.mergePullRequest({ workspace, number }, "abc");
+  await client.prepareMerge({ workspace, number }).then((merge) => merge("abc"));
 
   expect(api.requests.map(({ bearer }) => bearer)).toEqual(["gho_user"]);
   expect((await readFile(calls, "utf8")).trim().split("\n")).toEqual([
@@ -265,7 +265,7 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  await ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).prepareMerge({ workspace: workspaceAt(repoPath), number: 7 }).then((merge) => merge("abc123"));
 
   // gh 側(子プロセス)が見るのは**仲介が発行した installation token**であって
   // ファイルの中身(user token)ではない。worker が丸ごと継承する側の process.env
@@ -287,7 +287,7 @@ it("gh の子プロセス env は process.env の GH_HOST を運ばない", asyn
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  await ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).prepareMerge({ workspace: workspaceAt(repoPath), number: 7 }).then((merge) => merge("abc123"));
 
   expect(await readFile(logPath, "utf8")).toBe("host=unset\n");
 });
@@ -532,7 +532,7 @@ it("listIssues は gh issue list --state open --limit 100 --json number,title �
 });
 
 // ADR 0231 決定1: merge は CI を読んだ head に固定する —— head を渡さない merge の経路は無い
-it("mergePullRequest は CI を読んだ head を --match-head-commit に渡して gh pr merge --merge を呼ぶ", async () => {
+it("prepareMerge が返す merge は CI を読んだ head を --match-head-commit に渡して gh pr merge --merge を呼ぶ", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
@@ -540,30 +540,43 @@ it("mergePullRequest は CI を読んだ head を --match-head-commit に渡し�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  await ghClient(await makeAuth()).mergePullRequest({ workspace: await githubCheckout(), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).prepareMerge({ workspace: await githubCheckout(), number: 7 }).then((merge) => merge("abc123"));
 
   const invocations = await readFile(logPath, "utf8");
   expect(invocations.trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
 });
 
-it("a final unattended merge guard can stop gh after the token request", async () => {
+// ADR 0330 決定1・4: prepareMerge が返す関数は await を挟まずに宛先を確かめて gh を撃つ —— 呼び手の門が gh の起動と隣り合う
+it("prepareMerge が返った後に宛先が変われば、返した関数は gh を撃たずに拒む", async () => {
   const logPath = join(await tempDir("tidepool-gh-log-"), "invocations");
-  const fakeBinDir = await fakeGh(logPath);
   originalPath = process.env.PATH;
-  process.env.PATH = `${fakeBinDir}:${originalPath}`;
-  let tokenRequested = false;
-  const client = ghClient(await makeAuth(() => {
-    tokenRequested = true;
-    return issuedToken("installation-token");
-  }));
-  const guard = () => {
-    expect(tokenRequested).toBe(true);
-    throw new Error("the merge now needs human review");
-  };
+  process.env.PATH = `${await fakeGh(logPath)}:${originalPath}`;
+  const workspace = await githubCheckout();
+  const merge = await ghClient(await makeAuth()).prepareMerge({ workspace, number: 7 });
 
-  await expect(client.mergePullRequest({ workspace: await githubCheckout(), number: 7 }, "abc123", guard))
-    .rejects.toThrow("the merge now needs human review");
+  workspace.repo = "https://github.com/acme/elsewhere.git";
+
+  await expect(merge("abc123")).rejects.toThrow("workspace widget's GitHub destination changed while acquiring its token");
   await expect(readFile(logPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("prepareMerge が返した関数は、呼んだ同期区間のうちに gh を撃つ", async () => {
+  const firstLog = join(await tempDir("tidepool-gh-log-"), "invocations");
+  const laterLog = join(await tempDir("tidepool-gh-log-"), "invocations");
+  originalPath = process.env.PATH;
+  process.env.PATH = `${await fakeGh(firstLog)}:${originalPath}`;
+  const laterPath = `${await fakeGh(laterLog)}:${originalPath}`;
+  const workspace = await githubCheckout();
+  const merge = await ghClient(await makeAuth()).prepareMerge({ workspace, number: 7 });
+
+  const merging = merge("abc123");
+  // microtask を進める前に、gh が読むもの(宛先と子の env の PATH)を変える —— 起動が後ろへずれれば変えた方を読む
+  workspace.repo = "https://github.com/acme/elsewhere.git";
+  process.env.PATH = laterPath;
+  await merging;
+
+  expect((await readFile(firstLog, "utf8")).trim()).toBe("pr merge 7 --merge --match-head-commit abc123 -R acme/widget");
+  await expect(readFile(laterLog, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 // ADR 0265 決定5: merge した名義は状態と同じ1回の読み取りで読む。7 の綴りは App が merge した PR の実測(#2079)。
@@ -722,7 +735,7 @@ it("宣言が GitHub の repo に解けなければ、gh を起こさずに work
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "/srv/mirrors/widget.git");
 
-  await expect(ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath, "/srv/mirrors/widget.git"), number: 7 }, "abc123")).rejects.toThrow(
+  await expect(ghClient(await makeAuth()).prepareMerge({ workspace: workspaceAt(repoPath, "/srv/mirrors/widget.git"), number: 7 }).then((merge) => merge("abc123"))).rejects.toThrow(
     `\`gh pr merge\` cannot run: workspace widget has no declared GitHub repo`,
   );
   expect(await readFile(logPath, "utf8")).toBe("");
@@ -741,7 +754,7 @@ it("gh は宣言から解いた repo を -R で受け、checkout の insteadOf �
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/raw-origin.git");
   git(repoPath, "config", "url.https://github.com/evil/elsewhere.git.insteadOf", "https://github.com/acme/raw-origin.git");
 
-  await ghClient(await makeAuth()).mergePullRequest({ workspace: workspaceAt(repoPath), number: 7 }, "abc123");
+  await ghClient(await makeAuth()).prepareMerge({ workspace: workspaceAt(repoPath), number: 7 }).then((merge) => merge("abc123"));
 
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123 -R acme/widget"]);
 });
@@ -757,7 +770,7 @@ async function withSleepingGh(): Promise<void> {
 }
 
 const unansweredCalls: Array<[string, (client: GhCliClient, workspace: WorkspaceConfig) => Promise<unknown>]> = [
-  ["mergePullRequest", (c, workspace) => c.mergePullRequest({ workspace, number: 7 }, "abc123")],
+  ["prepareMerge", (c, workspace) => c.prepareMerge({ workspace, number: 7 }).then((merge) => merge("abc123"))],
   ["getPullRequestState", (c, workspace) => c.getPullRequestState({ workspace, number: 7 })],
   ["findPullRequestByHead", (c, workspace) => c.findPullRequestByHead({ workspace, branch: "task/abc" })],
   ["getIssueWithState", (c, workspace) => c.getIssueWithState({ workspace, number: 49 })],
@@ -891,7 +904,7 @@ describe("gh の版の門(ADR 0402 決定2)", () => {
     const client = new GhCliClient(await makeAuth(), { ghVersion: "9.9.9", ...options });
     const workspace = await githubCheckout();
     await swapPath();
-    return client.mergePullRequest({ workspace, number: 7 }, "abc123");
+    return client.prepareMerge({ workspace, number: 7 }).then((merge) => merge("abc123"));
   };
 
   it.each([

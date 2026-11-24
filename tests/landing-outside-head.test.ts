@@ -5,7 +5,7 @@ import { DomainError } from "../src/domain-error.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { getTask, listBoard } from "../src/tasks.js";
-import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead, heldInPrepareMerge } from "./fakes.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace } from "./harness.js";
 import {
   afterEachPush,
@@ -216,10 +216,13 @@ it("人間の merge が執行中なら収束は question を取り替えず、�
   const original = openQuestion(pr);
   const fork = git(pr.workspace.path, "rev-parse", "HEAD~1");
   const executing = awaitWindow();
-  const merge = pr.github.mergePullRequest.bind(pr.github);
-  vi.spyOn(pr.github, "mergePullRequest").mockImplementationOnce(async (ref, head) => {
-    await executing.hold();
-    await merge(ref, head);
+  const prepareMerge = pr.github.prepareMerge.bind(pr.github);
+  vi.spyOn(pr.github, "prepareMerge").mockImplementationOnce(async (ref) => {
+    const merge = await prepareMerge(ref);
+    return async (head) => {
+      await executing.hold();
+      await merge(head);
+    };
   });
   const answer = answerMerge(pr);
   await executing.entered;
@@ -246,10 +249,13 @@ it("無人 merge の執行中に収束が書き換えを読んでも、merge が
   expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ form: "open_pull_request_updated" });
   const pushed = forkHead(c.workspace, c.work.id);
   const executing = awaitWindow();
-  const merge = c.github.mergePullRequest.bind(c.github);
-  vi.spyOn(c.github, "mergePullRequest").mockImplementationOnce(async (ref, head) => {
-    await executing.hold();
-    await merge(ref, head);
+  const prepareMerge = c.github.prepareMerge.bind(c.github);
+  vi.spyOn(c.github, "prepareMerge").mockImplementationOnce(async (ref) => {
+    const merge = await prepareMerge(ref);
+    return async (head) => {
+      await executing.hold();
+      await merge(head);
+    };
   });
   const tick = c.landing.tick("auto_merge");
   await executing.entered;
@@ -266,6 +272,26 @@ it("無人 merge の執行中に収束が書き換えを読んでも、merge が
   expect(c.github.mergedHeads).toEqual([pushed]);
   expect(boardEvents(c.db, c.work.id, "pr_merged")).toHaveLength(1);
   expect(mergeQuestions(c.db)).toEqual([]);
+});
+
+// ADR 0394 決定2 / ADR 0288 決定2: 執行の印("write")は merge の準備の待ちの前に取る —— 待ちの間に収束は問わない
+it("無人 merge の準備を待つ間に収束が書き換えを読んでも、question を立てない", async () => {
+  const c = await pushedRoot("rewrite-during-auto-merge-prepare", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ form: "open_pull_request_updated" });
+  const pushed = forkHead(c.workspace, c.work.id);
+  const window = heldInPrepareMerge(c.github);
+  const tick = c.landing.tick("auto_merge");
+  await window.entered;
+  try {
+    await commitThroughTaskCheckout(c.db, c.clock, c.workspace, c.work, "another-repair.txt", "fixed\n");
+    await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
+    await convergeOn(c.landing, c.work.id);
+
+    expect(mergeQuestions(c.db)).toEqual([]);
+  } finally {
+    window.open();
+    await tick;
+  }
 });
 
 it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、question が問うた head として拒まれずに merge する", async () => {
@@ -315,7 +341,7 @@ it("CI 赤の question が開いた後に外から進んだ head への「merge�
 it("merge 失敗の question が開いた後に人間が conflict を解いて push した head への「merge」は、push した commit を列挙し立て直した question を名指して拒まれ、その question への「merge」が merge する", async () => {
   const pr = await openPushedPr("outside-head-after-conflict", "auto_if_ci_green");
   const lastPushed = forkHead(pr.workspace, pr.work.id);
-  vi.spyOn(pr.github, "mergePullRequest").mockRejectedValueOnce(new Error(CONFLICT));
+  vi.spyOn(pr.github, "prepareMerge").mockResolvedValueOnce(() => Promise.reject(new Error(CONFLICT)));
   await pr.landing.tick("auto_merge");
   expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([expect.stringContaining(`could not merge PR #1: ${CONFLICT}.`)]);
   expect(openQuestion(pr).purpose).toContain("merge main into the PR's head in your own clone and push it");
@@ -335,7 +361,7 @@ it("conflict and outside-head questions name the branch GitHub reports for an ol
     const current = await read(ref);
     return current.state === "unreadable" ? current : { ...current, headRef };
   });
-  vi.spyOn(pr.github, "mergePullRequest").mockRejectedValueOnce(new Error(CONFLICT));
+  vi.spyOn(pr.github, "prepareMerge").mockResolvedValueOnce(() => Promise.reject(new Error(CONFLICT)));
   await pr.landing.tick("auto_merge");
 
   expect(openQuestion(pr).purpose).toContain(`merge main into ${headRef.branch} in your own clone and push it to head repo ${headRef.repo}`);

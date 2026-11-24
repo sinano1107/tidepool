@@ -430,10 +430,10 @@ it("a queued PR stays external if the dial changes during merge token acquisitio
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
 
-  const runMerge = t.github.mergePullRequest.bind(t.github);
-  t.github.mergePullRequest = async (ref, head, beforeMerge) => {
+  const prepareMerge = t.github.prepareMerge.bind(t.github);
+  t.github.prepareMerge = async (ref) => {
     merge = "external";
-    await runMerge(ref, head, beforeMerge);
+    return prepareMerge(ref);
   };
   await t.clock.advance(MINUTE);
 

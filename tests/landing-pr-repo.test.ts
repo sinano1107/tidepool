@@ -9,7 +9,7 @@ import { blockingRootOf, createLanding, landingState, registerPrPromotionFailure
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
-import { afterCiRead, awaitWindow, FakeGitHubClient, holdAfterMerge } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeGitHubClient, heldInPrepareMerge, holdAfterMerge } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
 import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -255,12 +255,7 @@ it("書き換えられた head への merge 回答の寄り道で登録し直す
 it("無人 merge の執行が token を待つ間に登録し直すと、最後の確認で旧い根を止める", async () => {
   const fixture = await reefWithPr("auto_if_ci_green");
   const { old, github, landing, move } = fixture;
-  const window = awaitWindow();
-  const merge = github.mergePullRequest.bind(github);
-  github.mergePullRequest = async (ref, head, beforeMerge) => {
-    await window.hold();
-    return merge(ref, head, beforeMerge);
-  };
+  const window = heldInPrepareMerge(github);
 
   const ticking = landing.tick("auto_merge");
   await window.entered;
@@ -277,7 +272,7 @@ it("無人 merge の失敗を待つ間に登録し直すと、PR を読み直す
   const fixture = await reefWithPr("auto_if_ci_green");
   const { old, github, landing, move } = fixture;
   const window = awaitWindow();
-  github.mergePullRequest = async () => {
+  github.prepareMerge = async () => async () => {
     await window.hold();
     throw new Error("merge unavailable");
   };
@@ -322,7 +317,7 @@ it("merge の回答が執行用 token を待つ間に登録し直すと、取得
   };
   const ghCommands = await recordGhCommands();
   const client = new GhCliClient(githubAuth, MATCHING_GH);
-  github.mergePullRequest = client.mergePullRequest.bind(client);
+  github.prepareMerge = client.prepareMerge.bind(client);
 
   const answering = answer("merge").catch((error: Error) => error);
   await window.entered;
