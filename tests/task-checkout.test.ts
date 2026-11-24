@@ -9,9 +9,9 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { completionTreePaths, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
+import { completionTreePaths, holdsBaseline, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch } from "./harness.js";
+import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // task の checkout(ADR 0356): work / review の worker は名前の場所でなく、pickup ごとに作って解放で消す自分の repo で走る。
@@ -21,14 +21,15 @@ const NOW = new Date("2026-11-07T00:00:00.000Z");
 let db: Db;
 afterEach(() => db?.close());
 
-function register(type: "work" | "review" = "work", parent_id?: string): Task {
+function register(type: "work" | "review" | "memory_repair" = "work", parent_id?: string): Task {
   return registerTask(db, { type, title: type, purpose: "why", completion_criteria: "done", parent_id }, NOW, ...HUMAN_WEBUI);
 }
 
-async function pickedUp(name: string, type: "work" | "review" = "work") {
+async function pickedUp(name: string, type: "work" | "review" | "memory_repair" = "work") {
   const named = await makeWorkspace(name);
   db = openDb(":memory:");
-  const task = register(type);
+  // 修理子は親の下にだけ登録できる
+  const task = type === "memory_repair" ? register(type, register().id) : register(type);
   const place = await prepareAtPickup(db, named, task);
   return { named, task, place, branch: `task/${task.id}` };
 }
@@ -47,7 +48,6 @@ it("pickup は規約の番地(基点 / task id / pickup の event id)に task �
 
   expect(place.path).toBe(realpathSync(join(base, task.id, String(pickup.id))));
   expect(realpathSync(place.path)).not.toBe(realpathSync(named.path));
-  expect(readFileSync(join(place.path, ".git", "objects", "info", "alternates"), "utf8").trim()).toBe(objectsOf(named));
   expect(git(place.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/${branch}`);
   expect(git(place.path, "rev-parse", "HEAD")).toBe(git(named.path, "rev-parse", "main"));
   expect(git(named.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
@@ -323,6 +323,56 @@ it("pickup の fetch が名前の場所の objects の破損で落ちれば名�
   expect(git(healthy.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
+// ADR 0411 決定5: 複製を作る fetch は閉包を全部読む —— 触らない履歴の欠けでも pickup は名前の場所の側で止まる
+it("古い履歴にだけある blob が欠けた名前の場所の pickup は、その blob を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定5)", async () => {
+  const named = await makeWorkspace("task-checkout-old-history-missing");
+  db = openDb(":memory:");
+  withHistoryOnlyBlob(named);
+  const blob = git(named.path, "rev-parse", "HEAD~1:old.txt");
+  rmSync(join(named.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  const task = register();
+
+  expect(await scheduledPickup(named, await tempDir("tidepool-task-checkouts-"))).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", named.name)?.purpose).toContain(blob);
+  expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
+});
+
+// ADR 0411 決定1・5: 完了の門は閉包の全部を `index-pack --strict` で読むので、同じ検査を pickup の複製に当てる —— 履歴に fsck の警告を持つ
+// 名前の場所は、どの task の門でも checkout の故障になる前に、名前の場所の側で止まる
+it("履歴に `index-pack --strict` が拒む object を持つ名前の場所の pickup は、その object を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定1・5)", async () => {
+  const named = await makeWorkspace("task-checkout-strict-history");
+  db = openDb(":memory:");
+  seedZeroPaddedTree(named);
+  const tree = git(named.path, "rev-parse", "HEAD:sub");
+  git(named.path, "rm", "-r", "--quiet", "sub");
+  git(named.path, "commit", "--quiet", "-m", "drop sub");
+  const task = register();
+
+  expect(await scheduledPickup(named, await tempDir("tidepool-task-checkouts-"))).toEqual([]);
+  const purpose = quarantineQuestion(db, "workspace", named.name)?.purpose;
+  expect(purpose).toContain(tree);
+  expect(purpose).toContain("zeroPaddedFilemode");
+  expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
+});
+
+it("shallow な名前の場所の pickup は、shallow であることと `git fetch --unshallow` を言う名前の場所の Quarantine で止まり、基準の撮りもタスクブランチも作らない(ADR 0411 決定5)", async () => {
+  const upstream = await makeWorkspace("task-checkout-shallow-upstream");
+  commitWork(upstream.path, "second.txt", "second\n");
+  const named: WorkspaceConfig = { name: "task-checkout-shallow", path: join(await tempDir("tidepool-shallow-"), "named") };
+  git(upstream.path, "clone", "--quiet", "--depth", "1", `file://${upstream.path}`, named.path);
+  git(named.path, "remote", "remove", "origin");
+  db = openDb(":memory:");
+  const task = register();
+
+  expect(await scheduledPickup(named, await tempDir("tidepool-task-checkouts-"))).toEqual([]);
+  const purpose = quarantineQuestion(db, "workspace", named.name)?.purpose;
+  expect(purpose).toContain("shallow");
+  expect(purpose).toContain("git fetch --unshallow");
+  expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
+  expect(() => git(named.path, "rev-parse", "--verify", `refs/heads/task/${task.id}`)).toThrow();
+  expect(holdsBaseline(db, named.name)).toBe(false);
+});
+
 it("登録前から名前の場所の info/exclude が隠す人間のファイルは、休止の clean 検査を落とさない —— 名前の場所は自分の git で読む(ADR 0356 決定3)", async () => {
   const named = await makeWorkspace("task-checkout-human-exclude");
   db = openDb(":memory:");
@@ -418,24 +468,22 @@ it("review は lineage の fork 元から名前の場所に作った task/<revie
   expect(git(named.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
-it.each(["work", "review"] as const)("%s の sandbox は alternates を消しても名前の場所の objects を読みだけ開く(ADR 0356 決定2 / ADR 0360 決定2)", async (type) => {
+it.each(["work", "review", "memory_repair"] as const)("%s の task の checkout は alternates を持たず tip の閉包を自分の store だけで解き、Claude と Codex の sandbox は名前の場所の objects を開かない(ADR 0411 決定1)", async (type) => {
   const { named, place } = await pickedUp(`task-checkout-posture-${type}`, type);
-  const alternates = join(place.path, ".git", "objects", "info", "alternates");
-  const objects = readFileSync(alternates, "utf8").trim();
-  expect(objects).toBe(objectsOf(named));
-  // alternates が解けること: 名前の場所の base commit を task の checkout の git が読める
-  git(place.path, "cat-file", "-e", `${git(named.path, "rev-parse", "main")}^{commit}`);
-  rmSync(alternates);
+  const objects = objectsOf(named);
+  expect(existsSync(join(place.path, ".git", "objects", "info", "alternates"))).toBe(false);
+  // 閉包が全部 checkout の store にある: fsck は欠けた object で落ちる
+  git(place.path, "fsck", "--no-progress", "--no-dangling");
   const reads = runPlaceReadPaths(place);
-  expect(reads).toEqual([objectsOf(named)]);
+  expect(reads).toEqual([]);
 
   const sandbox = buildSandboxSettings({ taskType: type, workspacePath: place.path, readPaths: reads, taskTemp: "/tmp/t", configDir: "/tmp/c", lib64: false });
-  expect(sandbox.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([place.path, objects]));
-  expect(sandbox.sandbox.filesystem.allowWrite).not.toContain(objects);
+  expect(sandbox.sandbox.filesystem.allowRead).toContain(place.path);
+  expect(sandbox.sandbox.filesystem.allowRead).not.toContain(objects);
   expect(sandbox.sandbox.filesystem.allowWrite).toEqual(type === "work" ? [place.path, "/tmp/t"] : ["/tmp/t"]);
 
   const filesystem = permissionConfig(type, place.path, "/tmp/t", "/usr/bin/codex", [], reads).find((line) => line.includes(".filesystem="))!;
-  expect(filesystem).toContain(`${JSON.stringify(objects)}="read"`);
+  expect(filesystem).not.toContain(objects);
   expect(filesystem).toContain(`${JSON.stringify(place.path)}=${JSON.stringify(type === "work" ? "write" : "read")}`);
   if (type === "work") expect(filesystem).toContain(`${JSON.stringify(join(place.path, ".git"))}="write"`);
 });

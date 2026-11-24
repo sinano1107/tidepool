@@ -123,6 +123,8 @@ it("名前の場所に replace ref があっても記録した commit の .claud
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "verify the project settings layout");
   await t.clock.advance(HOUR);
+  // ADR 0411 決定1: task の checkout は名前の場所の objects を借りない —— worker の閉包に同じ commit を持たせる
+  git(checkoutOf(t.db, task.id), "fetch", "--quiet", ws.path, "settings-layout");
   git(checkoutOf(t.db, task.id), "reset", "--hard", rejectedTip);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parseDocument } from "yaml";
 import { openDb } from "../src/db.js";
-import { NoOwnGitDirError } from "../src/pickup-predicates.js";
+import { NoOwnGitDirError, ShallowRepositoryError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError, RepoCredentialError } from "../src/repo-access.js";
@@ -320,6 +320,25 @@ describe("createWorkspace: register モード(issue #57)", () => {
     await expect(
       createWorkspace({ mode: "register", name: "sandbox", path: notAGitRepo }, deps),
     ).rejects.toThrow(NotAGitRepositoryError);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  // ADR 0411 決定5: task の checkout は branch の閉包を全部持つ複製 —— shallow な checkout からは作れない
+  it("shallow な checkout の登録は shallow であることと `git fetch --unshallow` を言って拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+    const deps = await makeDeps(registryDir);
+    const upstream = (await makeWorkspace("register-shallow-upstream")).path;
+    git(upstream, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "second");
+    const checkout = join(await tempDir("tidepool-shallow-"), "checkout");
+    git(upstream, "clone", "--quiet", "--depth", "1", `file://${upstream}`, checkout);
+
+    const err = (await createWorkspace({ mode: "register", name: "sandbox", path: checkout, confirm: true }, deps).catch((e: unknown) => e)) as Error;
+
+    expect(err).toBeInstanceOf(ShallowRepositoryError);
+    expect(err.message).toContain("shallow");
+    expect(err.message).toContain("git fetch --unshallow");
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });

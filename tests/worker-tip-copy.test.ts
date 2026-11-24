@@ -281,15 +281,15 @@ it("Interview の受験者が面接室にだけある兄弟の commit を親に�
   expect(quarantineQuestion(db, "workspace", root.id)).toBeUndefined();
 });
 
-it("work の tip は名前の場所にある commit を親にしてよい —— 名前の場所の objects を借りる役(ADR 0364 決定1)", async () => {
+it("work の tip が名前の場所にあるだけで自分の branch の閉包に無い commit を親にすれば、完了の門は task の checkout の故障で拒み、task/<id> を書かない(ADR 0411 決定1)", async () => {
   const { db, named, task, place } = await pickedUp();
   const elsewhere = git(named.path, "commit-tree", "-p", "HEAD", "-m", "elsewhere", "HEAD^{tree}");
   git(named.path, "update-ref", "refs/heads/elsewhere", elsewhere);
-  const tip = forgedCommit(place.path, elsewhere);
-  git(place.path, "update-ref", `refs/heads/task/${task.id}`, tip);
+  const before = git(named.path, "rev-parse", `task/${task.id}`);
+  git(place.path, "update-ref", `refs/heads/task/${task.id}`, forgedCommit(place.path, elsewhere));
 
-  expect(recordTaskCheckoutTip(db, place, task.id)).toBe(tip);
-  expect(git(named.path, "rev-parse", `task/${task.id}^`)).toBe(elsewhere);
+  expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(CheckoutUnreadableError);
+  expect(git(named.path, "rev-parse", `task/${task.id}`)).toBe(before);
 });
 
 it("出題の写しが面接室に欠けた blob を root の tip に持てば、写しの確かめが捕まえて入れ直し、面接室で読める(ADR 0388 決定1・2 / ADR 0273 決定3)", async () => {

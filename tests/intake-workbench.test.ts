@@ -23,7 +23,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withLooseSub, withPushDuringWrap } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -37,10 +37,11 @@ const CALLER = { actorId: HUMAN_ACTOR_ID, origin: "webui" } as const;
 /** purely-local の workspace と、基準を撮った pickup を1度済ませた盤面(`take in` は保護ブランチが基準と一致することを求める)。
  *  `pending` はその pickup の task —— 未決着で、タスクブランチに `pending.txt` の commit を持つ。`parent` は pickup されていない未決着の
  *  work で、`task/<parent>` を main に持つ(子の帰り先 —— 名前の場所の ref は最初の pickup の前に作る)。 */
-async function board(name = "intake") {
+async function board(name = "intake", seed?: (ws: WorkspaceConfig) => void) {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = await makeWorkspace(name);
+  seed?.(ws);
   const base = await tempDir("tidepool-workbenches-");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
   seedTaskBranch(db, ws, parent.id, "main");
@@ -432,6 +433,47 @@ it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も w
 
   expect(git(b.ws.path, "rev-parse", "main")).toBe(main);
   expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
+});
+
+// 作業台は名前の場所の objects を借りる(ADR 0411 決定2 の実装 #3763 まで)—— task の checkout から移した形(#3734)
+it("作業台が自前の store に写した名前の場所の object の入れ直しの pack を index-pack --strict が落とせば、取り込みは名前の場所の側で拒み、理由が欠けた object を名指す(ADR 0388 決定2)", async () => {
+  let blob = "";
+  // 保護ブランチの外の `side` に置く —— `board()` の task の pickup は保護ブランチの閉包だけを複製し、strict な検査に当たらない(ADR 0411 決定5)
+  const b = await board("intake-strict-reinsert", (ws) => {
+    blob = seedZeroPaddedTree(ws, "refs/heads/side");
+  });
+  await b.open();
+  // 人間が作業台で `side` の tree をそのまま持つ merge commit を積む(`git merge` は tree を書き直して mode の詰めを消す)—— 作業台は名前の場所の
+  // objects を借りるので、取り込みの pack は名前の場所の ref から届く `side` の閉包を入れない
+  const side = git(b.ws.path, "rev-parse", "side");
+  git(b.workbench(), "update-ref", "refs/heads/main", git(b.workbench(), "commit-tree", `${side}^{tree}`, "-p", "HEAD", "-p", side, "-m", "take side"));
+  git(b.workbench(), "reset", "--hard", "--quiet");
+  // `-l` の無い repack は借りている object を自前の pack に写す —— 名前の場所の tree も blob も作業台の store に入る
+  git(b.workbench(), "repack", "-a", "-d", "--quiet");
+  rmSync(join(b.ws.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  const unchanged = b.unchanged();
+
+  await expect(b.answer("take in")).rejects.toThrow(new RegExp(`workspace ${b.ws.name}:[\\s\\S]*${blob}[\\s\\S]*zeroPaddedFilemode`));
+  unchanged();
+});
+
+it("作業台が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、取り込みは名前の場所でなく作業台の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
+  const b = await board("intake-borrowed-tree", (ws) => {
+    withLooseSub(ws);
+    // 名前の場所は tree を pack に持つ —— 取り込みの検証は pack を先に引いて作業台の loose を読まない
+    git(ws.path, "repack", "-a", "-d", "--quiet");
+  });
+  await b.open();
+  const tree = git(b.ws.path, "rev-parse", "main:sub");
+  mkdirSync(join(b.workbench(), ".git", "objects", tree.slice(0, 2)), { recursive: true });
+  writeFileSync(join(b.workbench(), ".git", "objects", tree.slice(0, 2), tree.slice(2)), "not zlib");
+  commitWork(b.workbench(), "more.txt", "more\n");
+  const unchanged = b.unchanged();
+
+  const refused = b.answer("take in");
+  await expect(refused).rejects.toThrow(b.workbench());
+  await expect(refused).rejects.not.toThrow(`workspace ${b.ws.name}:`);
+  unchanged();
 });
 
 // pin A15: 読んだ tip からの CAS —— 間に push が着けば作業台の branch は人間のまま残し、`board/main` を merge するよう言う

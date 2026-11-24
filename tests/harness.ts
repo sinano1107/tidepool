@@ -797,17 +797,44 @@ export function commitWork(path: string, file: string, body: string): void {
 }
 
 /** 名前の場所 `named` の README.md の blob の loose を外し(`corrupt` なら zlib でない byte に置く)、worker が同じ中身の `copy.txt` を
- *  `checkout` で commit する —— 新しい root tree が blob を直に指し、worker の `git add` は名前の場所に無い blob を自前の store に書く。
- *  門の pack は除外(名前の場所の ref から届く)で blob を入れない。blob の id と、名前の場所の loose を元に戻す手を返す。 */
-export function newTreePointsAtDamagedNamedBlob(named: string, checkout: string, damage: "missing" | "corrupt" = "missing"): { blob: string; repair: () => void } {
+ *  `checkout` で commit する —— 新しい root tree が blob を直に指し、worker は名前の場所に無い blob を自前の store に持つ(task の checkout は
+ *  複製で受け取った pack に、借りる作業台は `git add` が書く loose に)。
+ *  借りる作業台では、門の pack は除外(名前の場所の ref から届く)で blob を入れない。blob の id を返す。 */
+export function newTreePointsAtDamagedNamedBlob(named: string, checkout: string, damage: "missing" | "corrupt" = "missing"): { blob: string } {
   const blob = git(named, "rev-parse", "HEAD:README.md");
   const loose = (repo: string) => join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2));
-  const original = readFileSync(loose(named));
   rmSync(loose(named));
   commitWork(checkout, "copy.txt", "workspace\n");
-  expect(existsSync(loose(checkout))).toBe(true);
+  // 借りる checkout では名前の場所に無いので loose を書き、借りない checkout では自分の store だけで読める
+  if (existsSync(join(checkout, ".git", "objects", "info", "alternates"))) expect(existsSync(loose(checkout))).toBe(true);
+  else git(checkout, "cat-file", "-e", blob);
   if (damage === "corrupt") writeFileSync(loose(named), "not zlib");
-  return { blob, repair: () => writeFileSync(loose(named), original) };
+  return { blob };
+}
+
+/** 名前の場所に `sub/kept.txt` を、mode を 0 で詰めた tree(読めるが `index-pack --strict` の fsck が落とす)で HEAD の上に1 commit 置く。
+ *  `ref` が既定の main なら作業ツリーも揃える。blob の id を返す。 */
+export function seedZeroPaddedTree(ws: WorkspaceConfig, ref = "refs/heads/main"): string {
+  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws.path, input: "kept\n" }).toString().trim();
+  const entry = Buffer.concat([Buffer.from("0100644 kept.txt\0"), Buffer.from(blob, "hex")]);
+  const sub = execFileSync("git", ["hash-object", "-t", "tree", "--literally", "-w", "--stdin"], { cwd: ws.path, input: entry }).toString().trim();
+  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${git(ws.path, "ls-tree", "HEAD")}\n040000 tree ${sub}\tsub\n` }).toString().trim();
+  git(ws.path, "update-ref", ref, git(ws.path, "commit-tree", root, "-p", "HEAD", "-m", "zero-padded sub"));
+  if (ref === "refs/heads/main") git(ws.path, "reset", "--hard", "--quiet");
+  return blob;
+}
+
+/** 名前の場所の履歴にだけ `old.txt` を残す(足して消す)。 */
+export function withHistoryOnlyBlob(named: WorkspaceConfig): void {
+  commitWork(named.path, "old.txt", "only in the history\n");
+  git(named.path, "rm", "--quiet", "old.txt");
+  git(named.path, "commit", "--quiet", "-m", "drop old.txt");
+}
+
+/** 名前の場所に `sub/a.txt` を1 commit 置く —— 新しい commit の object は loose。 */
+export function withLooseSub(named: WorkspaceConfig): void {
+  mkdirSync(join(named.path, "sub"));
+  commitWork(named.path, "sub/a.txt", "a\n");
 }
 
 /** 人間が `path` の `ref` に1 commit 積む(tree は動かさない)。積んだ sha を返す。 */

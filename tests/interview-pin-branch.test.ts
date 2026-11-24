@@ -585,9 +585,9 @@ it("走った後の root と受験者の走る場所は実環境を解かず、�
   const forExaminee = taskRunPlaceForBoard(db, examinee, resolve);
 
   expect(resolve).not.toHaveBeenCalled();
-  expect(forRoot).toMatchObject({ path: picked.place.path, namedPlace: picked.room, borrowsNamedObjects: false });
+  expect(forRoot).toMatchObject({ path: picked.place.path, namedPlace: picked.room });
   expect(forRoot!.reads.map((read) => read.path)).not.toContain(realpathSync(picked.workspace.path));
-  expect(forExaminee).toMatchObject({ path: examineePlace.path, namedPlace: room, reads: [], borrowsNamedObjects: false });
+  expect(forExaminee).toMatchObject({ path: examineePlace.path, namedPlace: room, reads: [] });
   // ADR 0363 決定1〜3 の Status 追記: Interview の役の門は workspace を追跡しない盤面でも掛かる —— 面接室は記録にある
   expect(taskRunPlaceForBoard(db, examinee, undefined)).toEqual(forExaminee);
   db.close();
@@ -645,7 +645,7 @@ async function auditPickedUp(db: Db) {
 
 it("監査の pickup は root の面接室の出題の head だけを fetch した読み専用の checkout を alternates なしで作り、走る場所の reads・開いた event・sandbox の読み path はそれを名指して面接室の path を持たない —— 作業ツリーは出題の head の tree で、root のブランチは引けない(ADR 0361 決定1)", async () => {
   const db = openDb(":memory:");
-  const { workspace, root, room, head, audit, place, read } = await auditPickedUp(db);
+  const { root, room, head, audit, place, read } = await auditPickedUp(db);
 
   expect(place.reads).toEqual([{ name: root.id, path: read }]);
   expect(read === room.path || read.startsWith(`${room.path}/`)).toBe(false);
@@ -655,7 +655,7 @@ it("監査の pickup は root の面接室の出題の head だけを fetch し�
   expect(git(read, "status", "--porcelain")).toBe("");
   expect(() => git(read, "cat-file", "-e", `task/${root.id}`)).toThrow();
   expect(existsSync(join(read, ".git", "objects", "info", "alternates"))).toBe(false);
-  expect(runPlaceReadPaths(place)).toEqual([read, realpathSync(join(workspace.path, ".git", "objects"))]);
+  expect(runPlaceReadPaths(place)).toEqual([read]);
   db.close();
 });
 

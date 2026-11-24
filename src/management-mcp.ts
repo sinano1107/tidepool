@@ -93,7 +93,7 @@ import {
   readMetaReviewStatus,
   startFirstMetaReview,
 } from "./meta-review.js";
-import { GitDirNotADirectoryError, NoOwnGitDirError } from "./pickup-predicates.js";
+import { GitDirNotADirectoryError, NoOwnGitDirError, ShallowRepositoryError } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
@@ -251,6 +251,8 @@ function registryToolError(err: unknown) {
     err instanceof LeftoverWorkspaceStateError ||
     err instanceof GitDirNotADirectoryError ||
     err instanceof NoOwnGitDirError ||
+    // ADR 0411 決定5: `git fetch --unshallow` の後に出し直せば通る
+    err instanceof ShallowRepositoryError ||
     err instanceof UnknownWorkspaceError ||
     err instanceof WorkspaceRegistryUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||
