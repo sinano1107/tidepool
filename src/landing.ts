@@ -1667,7 +1667,7 @@ export function createLanding(deps: LandingDeps): Landing {
       // conflict は作業台を開いて回答を拒む(text A1)
       if (ctx.intake?.entry === "promotion_retry" && !quarantinedRoot(workspace.name)) {
         const predicates = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
-        const firstHalf = () => checkAcceptanceFirstHalf(workspace, predicates, true);
+        const firstHalf = () => checkAcceptanceFirstHalf(deps.db, workspace, predicates, true);
         ctx.outcome.kept.push(
           ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, () => stopRootIfRefsMoved(workspace))),
         );

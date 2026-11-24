@@ -798,7 +798,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。clean は repo があるときだけ
     await refuseOnError(async () => {
       try {
-        await checkAcceptanceFirstHalf(target, all, repoPresent);
+        await checkAcceptanceFirstHalf(deps.db, target, all, repoPresent);
       } catch (err) {
         if (!cancelRcas) throw err;
         const message = err instanceof Error ? err.message : String(err);

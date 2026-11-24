@@ -383,9 +383,9 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
 
 /** spec #3273 の受理の順の前半(ADR 0329 決定14): 名前に掛かる前半の項 → 名前の場所の clean(`clean` のとき)。workspace の Quarantine の
  *  受理と、同じ条件で merge back を撃ち直す積み残しの retry(ADR 0371 決定10)が掛ける。 */
-export async function checkAcceptanceFirstHalf(place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
+export async function checkAcceptanceFirstHalf(db: Db, place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
   fireBeforeOpenPredicates(place, predicates);
-  if (clean) verifyWorkspaceClean(place);
+  if (clean) verifyWorkspaceClean(place, db);
 }
 
 /** 開く前の項は同期で撃てる —— 同期の呼び手(着地の最初の撮り、ADR 0399 決定7)も await を挟まずに pickup と同じ項を撃つ。 */
@@ -2857,6 +2857,8 @@ type PickupPreparation = PickupPrep & {
 /** pickup の準備のうちタスクブランチを作る前まで —— 基準の比較か最初の撮り、休止中の変更、読む場所、開いた後の項(remote-backed は
  *  origin の保護ブランチの fetch)。`start_work` と人間担当の work の完了も同じ準備を通す(ADR 0374 決定2・6)。 */
 async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task, board: PickupPreparation): Promise<void> {
+  // ADR 0401 決定7: 比較が予告中の行を畳む前に読む —— 畳んだ後は途中で止まった移動の証拠が残らない
+  const note = stalledCheckoutMoveNote(db, workspace);
   prepareRefBaseline(db, workspace, board);
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無い。
@@ -2865,7 +2867,7 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
   const changes = ownWorktreeStatus(workspace.path);
   if (changes.length > 0) {
     throw PickupGateError.of(workspace, new Error(
-      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout.${discardUncommitted()}`,
+      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process ${note ? "may have written" : "wrote"} them after the board moved the checkout.${note}${discardUncommitted()}`,
     ));
   }
   for (const read of board.reads ?? []) {
@@ -3646,7 +3648,7 @@ export function restoreBaseline(
         `If these are lost for good, answer \`${GIVE_UP_THE_LOST_REFS}\`.`,
     );
   }
-  if (targets.size > 0) verifyWorkspaceClean(workspace);
+  if (targets.size > 0) verifyWorkspaceClean(workspace, db);
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => keepable.get(ref)!.filter((sha) => present.get(sha)).map((sha) => ({ ref, sha })));
   if (giveUp) {
     giveUpAnswer.refuseIfMarked(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
@@ -3860,7 +3862,7 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
  *  a clean tree — dirty, or not even a usable git repository — is treated
  *  the same, fail-closed, same posture as the pickup's resting check on the
  *  named place (ADR 0351 決定5). */
-export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
+export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db): void {
   assertOwnGitDirectory(workspace.path);
   let status: WorktreeChange[];
   try {
@@ -3873,8 +3875,23 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
     );
   }
   if (status.length > 0) {
-    throw new Error(`workspace ${workspace.name} still has uncommitted changes.${discardUncommitted()}`);
+    throw new Error(`workspace ${workspace.name} still has uncommitted changes.${db ? stalledCheckoutMoveNote(db, workspace) : ""}${discardUncommitted()}`);
   }
+}
+
+/** ADR 0401 決定7 (#3199): 予告中の行が HEAD の tip を今の tip から動かすなら、盤面自身の checkout の移動が `read-tree` の後 ref を書く
+ *  前に止まったかもしれない —— その目標を名指す注記。tip は `restoreBaseline` の `tipAfter` と同じ計算で、checkout されていない ref の
+ *  予告(`task/<id>` の作成)は木を動かさないので注記しない。 */
+function stalledCheckoutMoveNote(db: Db, workspace: WorkspaceConfig): string {
+  const baseline = refValues(storedRefs(db, workspace.name));
+  if (![...baseline.values()].some((value) => baselineValues(value).length > 1)) return "";
+  const valueAfter = (ref: string) => baselineValues(baseline.get(ref))[1] ?? readCheckoutValue(workspace, ref);
+  const head = valueAfter("HEAD");
+  const headTarget = symrefTarget(head);
+  const target = headTarget === undefined ? head : valueAfter(headTarget);
+  if (!isSha(target) || target === readRef(workspace, "HEAD")) return "";
+  return ` The board's own checkout move may have stopped part-way: its target is ${target}. If \`git diff --cached ${target}\` prints nothing, ` +
+    "that is what happened — do not commit them.";
 }
 
 /** ADR 0137 決定3: the open Confirmation question is the only state. */
