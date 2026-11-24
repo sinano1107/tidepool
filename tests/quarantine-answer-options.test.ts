@@ -6,6 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { latestEventOfTask, listEventsOfKinds } from "../src/events.js";
 import { GitHubAuth, HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import { type QuarantineCheckDeps, quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { discardUncommitted } from "../src/pickup-predicates.js";
 import { repositoryLabel } from "../src/repo-access.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
@@ -325,7 +326,7 @@ it("`restore the baseline` は基準に無い refs/stash を消し、reflog の�
   db.close();
 });
 
-const DISCARD = "Discard them with `git restore --staged --worktree .` then `git clean -fd` until `git status --porcelain` is empty";
+const DISCARD = discardUncommitted();
 const FIX_BRANCH = "Fix `branch` in the registry entry.";
 const PUSH_COMMITS = "Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.";
 
@@ -333,7 +334,7 @@ it("ref を動かさない直し方(text A12): dirty な tree の拒否は捨て
   const { ws, db, question } = await quarantinedWorkspace("no-ref-move-repairs");
   writeFileSync(join(ws.path, "README.md"), "uncommitted\n");
 
-  await expect(answer(db, ws, "repaired by hand")).rejects.toThrow(`workspace ${ws.name} still has uncommitted changes. ${DISCARD}`);
+  await expect(answer(db, ws, "repaired by hand")).rejects.toThrow(`workspace ${ws.name} still has uncommitted changes.${DISCARD}`);
   git(ws.path, "checkout", "--", "README.md");
   await expect(answer(db, { ...ws, branch: "missing" }, "repaired by hand")).rejects.toThrow(`protected branch 'missing' cannot be checked out`);
   const missing = await refusal(answer(db, { ...ws, branch: "missing" }, "repaired by hand"));
@@ -341,7 +342,7 @@ it("ref を動かさない直し方(text A12): dirty な tree の拒否は捨て
   // 直し方は落ちた項の説明に1度だけ載る
   expect(missing.split(FIX_BRANCH)).toHaveLength(2);
 
-  expect(question.purpose).toContain(`Discard uncommitted changes with \`git restore --staged --worktree .\``);
+  expect(question.purpose).toContain(discardUncommitted("uncommitted changes"));
   expect(question.purpose).toContain(`If the branch is missing: ${FIX_BRANCH}`);
   expect(question.purpose).toContain(`If local commits are ahead of or diverged from origin: ${PUSH_COMMITS}`);
   db.close();

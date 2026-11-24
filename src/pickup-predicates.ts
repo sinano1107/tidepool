@@ -20,9 +20,11 @@ const cancelInterview = (rootId: string) => `cancel the Interview ${rootId}`;
 export const IF_REPOSITORY_PRESENT = "if a repository is already present, ";
 
 /** spec #3273 text A12: ref を動かさない直し方(ADR 0373 決定16)—— 条件を言う文(受理の拒否・pickup の理由・Quarantine の検査の一覧)の後に足す。
- *  どの文も人間に branch を作らせない。休止の2つ(H9・H10)は項の説明に載る —— 説明は検査の一覧と、落ちた項として拒否と理由に1度ずつ出る。 */
+ *  どの文も人間に branch を作らせない。休止の2つ(H9・H10)は項の説明に載る —— 説明は検査の一覧と、落ちた項として拒否と理由に1度ずつ出る。
+ *  ADR 0401 決定7(#3614): pin の下で boardReadTree は本物の index に skip-worktree の bit を書く —— restore は cone の外の add を staged に残し、
+ *  --ignore-skip-worktree-bits は checkout 自身の sparse が隠す file を書き出す。reset --hard はどちらも起こさず HEAD の木に戻す。 */
 export const discardUncommitted = (them = "them") =>
-  ` Discard ${them} with \`git restore --staged --worktree .\` then \`git clean -fd\` until \`git status --porcelain\` is empty ` +
+  ` Discard ${them} with \`git reset --hard\` then \`git clean -fd\` until \`git status --porcelain\` is empty ` +
   "(`git clean -ffd` for a nested repository, `git worktree remove --force <path>` for a linked worktree inside the tree).";
 const PUSH_LOCAL_COMMITS = " Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.";
 const FIX_BRANCH_IN_REGISTRY = " Fix `branch` in the registry entry.";
