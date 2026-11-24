@@ -264,7 +264,9 @@ it("内容の検査は入力の tip のどれとも違う entry にだけ当た�
   expect(takenIn(c.db)).toHaveLength(1);
 });
 
-it("祖先のほかに履歴は制限しない —— 兄弟の task/<S> の merge と cherry-pick を一緒に commit した tip も取り込まれる", async () => {
+/** 兄弟の task/<S>(保護ブランチから切り、sibling.txt と picked.txt の2つの commit を持つ —— 帰り先に届いていない)と、子の merge back の
+ *  conflict を作業台で解いた盤面。 */
+async function resolvedBesideSibling() {
   const b = await boardWithParent();
   const sibling = `task/${registerTask(b.db, { type: "work", title: "sibling", purpose: "why", completion_criteria: "done", parent_id: b.parent.id }, b.clock.now(), ...HUMAN_WEBUI).id}`;
   git(b.ws.path, "branch", sibling, "main");
@@ -273,15 +275,34 @@ it("祖先のほかに履歴は制限しない —— 兄弟の task/<S> の mer
   commitWork(b.ws.path, "picked.txt", "cherry-picked\n");
   git(b.ws.path, "checkout", "main");
   const child = await completedChild(b);
-  const workbench = realpathSync(workbenchPath(b.base, { task: b.parent.id }, `task/${child.id}`));
-  resolveInWorkbench(workbench, `task/${child.id}`);
+  const source = `task/${child.id}`;
+  const workbench = realpathSync(workbenchPath(b.base, { task: b.parent.id }, source));
+  resolveInWorkbench(workbench, source);
+  return { b, sibling, source, workbench };
+}
+
+it("祖先のほかの履歴は、他の task のブランチの commit だけを制限する —— 兄弟の task/<S> の commit を cherry-pick した tip は取り込まれる(ADR 0382 追記、#3769)", async () => {
+  const { b, sibling, workbench } = await resolvedBesideSibling();
   git(workbench, "cherry-pick", `board/${sibling}`);
-  git(workbench, "merge", "--no-edit", `board/${sibling}~1`);
 
   await answer(b);
 
-  expect(git(b.ws.path, "ls-tree", "--name-only", `task/${b.parent.id}`)).toBe("README.md\npicked.txt\nsibling.txt\nwork.txt");
+  expect(git(b.ws.path, "ls-tree", "--name-only", `task/${b.parent.id}`)).toBe("README.md\npicked.txt\nwork.txt");
   expect(takenIn(b.db)).toHaveLength(1);
+});
+
+it("子の merge back の作業台で、帰り先に届いていない兄弟の task/<S> を merge した tip は、運ばれる側だけを merge し直す手を言って拒まれ何も書かない(ADR 0382 追記、#3769)", async () => {
+  const { b, sibling, source, workbench } = await resolvedBesideSibling();
+  git(workbench, "merge", "--no-edit", `board/${sibling}~1`);
+  const refs = refsOf(b.ws);
+  const target = `task/${b.parent.id}`;
+
+  await expect(answer(b)).rejects.toThrow(
+    `the tip of the workbench at ${workbench} contains commits of ${sibling}, and the board carries a task's work itself — a child's by its merge back, a root's by its landing. ` +
+      `Start ${target} in the workbench over with \`git reset --hard board/${target}\` — this drops your merge there too — then merge only \`board/${source}\`, resolve its conflict again and answer again.`,
+  );
+  expect(refsOf(b.ws)).toBe(refs);
+  expect(takenIn(b.db)).toEqual([]);
 });
 
 it("拒否は作業台の `board/*` を名前の場所の値に引き直し、人間が書いた `board/*` は消え、人間の branch と作業ツリーは動かない", async () => {
