@@ -325,7 +325,7 @@ it("`restore the baseline` は基準に無い refs/stash を消し、reflog の�
   db.close();
 });
 
-const DISCARD = "Discard them with `git restore --staged --worktree .` then `git clean -fd` until `git status --porcelain` is empty";
+const DISCARD = "Discard them with `git reset --hard` then `git clean -fd` until `git status --porcelain` is empty";
 const FIX_BRANCH = "Fix `branch` in the registry entry.";
 const PUSH_COMMITS = "Push those commits to origin from your own clone. If the branches stay diverged, cancel the tasks, delete the workspace and register it again.";
 
@@ -341,7 +341,7 @@ it("ref を動かさない直し方(text A12): dirty な tree の拒否は捨て
   // 直し方は落ちた項の説明に1度だけ載る
   expect(missing.split(FIX_BRANCH)).toHaveLength(2);
 
-  expect(question.purpose).toContain(`Discard uncommitted changes with \`git restore --staged --worktree .\``);
+  expect(question.purpose).toContain(`Discard uncommitted changes with \`git reset --hard\``);
   expect(question.purpose).toContain(`If the branch is missing: ${FIX_BRANCH}`);
   expect(question.purpose).toContain(`If local commits are ahead of or diverged from origin: ${PUSH_COMMITS}`);
   db.close();

@@ -1596,7 +1596,7 @@ it("積み残しの retry は、名前の場所に未 commit の変更があれ�
 
   await expect(answerPromotion(db, clock, landing, workspace, leftover!, "retry")).rejects.toThrow(
     new DomainError(
-      `workspace ${workspace.name} still has uncommitted changes. Discard them with \`git restore --staged --worktree .\` then \`git clean -fd\` until ` +
+      `workspace ${workspace.name} still has uncommitted changes. Discard them with \`git reset --hard\` then \`git clean -fd\` until ` +
         "`git status --porcelain` is empty (`git clean -ffd` for a nested repository, `git worktree remove --force <path>` for a linked worktree inside the tree).",
     ),
   );
