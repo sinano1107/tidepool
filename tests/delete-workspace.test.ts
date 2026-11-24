@@ -447,6 +447,27 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     expect(existsSync(o.workbench)).toBe(false);
   });
 
+  it("名前の場所の値との比較が名前の場所の欠けで落ちれば、作業台を消せとは言わず名前の場所を名指して拒み、作業台を残す(ADR 0411 決定2・3)", async () => {
+    const o = await openedWorkbench();
+    await o.close();
+    commitWork(o.workbench, "notes.txt", "the human's\n");
+    // 名前の場所の main が作業台の tip の閉包に無い commit を2つ積み、古いほうを欠く —— 作業台の tip が main に含まれるかを比べる手が読む
+    commitWork(o.ws.path, "first.txt", "first\n");
+    const first = git(o.ws.path, "rev-parse", "HEAD");
+    commitWork(o.ws.path, "second.txt", "second\n");
+    rmSync(join(o.ws.path, ".git", "objects", first.slice(0, 2), first.slice(2)));
+
+    const refused = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+
+    await expect(refused).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "human_content_workbench", workbench: o.workbench, branch: "main", unreadable: { place: o.ws.path } }],
+    });
+    await expect(refused).rejects.toThrow(`so it cannot tell whether the workbench at ${o.workbench} holds work that main does not have — repair the checkout first`);
+    await expect(refused).rejects.not.toThrow("remove it by hand");
+    expect(existsSync(o.workbench)).toBe(true);
+  });
+
   /** 作業台そのものが読めない削除の拒否: 作業台を名指して手で消すよう言い、作業台を残す。 */
   async function expectWorkbenchUnreadable(o: Awaited<ReturnType<typeof openedWorkbench>>) {
     const refused = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());

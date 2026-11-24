@@ -1304,7 +1304,7 @@ function repointBoardRefs(named: WorkspaceConfig, workbench: string, carried?: C
   // (ADR 0376 決定3)。`board/origin/task/<root>` を持つのは、鍵が GitHub の head を運ぶ作業台だけ(下)
   const tracking = remoteTrackingRef(protectedBranch(named));
   const protectedFromOrigin = isRemoteBacked(named) ? [`+${tracking}:refs/heads/${boardBranch(shortRef(tracking))}`] : [];
-  // ADR 0411 決定2・5(#3763): `board/*` も作業台を作る fetch と同じ strict な検査で object ごと受け取る —— 通らない object が人間の merge で
+  // ADR 0411 決定5 と追記(#3763): `board/*` も作業台を作る fetch と同じ strict な検査で object ごと受け取る —— 通らない object が人間の merge で
   // tip に入ると、tip の検証が作業台の故障になる
   const fetch = (...refspecs: string[]) => git(workbench, "-c", "fetch.fsckObjects=true", "fetch", ...FETCH_FLAGS, ...refspecs);
   try {
@@ -1656,7 +1656,7 @@ export function stopContainmentPair(db: Db, harness: Harness, named: WorkspaceCo
 }
 
 /** ADR 0371 決定6 / ADR 0382 決定5: `open_workbench` —— purely-local の workspace の人間自身の内容の作業台 (workspace, 保護ブランチ) を開き、
- *  workspace に `intake` question を1つ立てる。question が開いていて作業台が書く先の branch とともに disk にあれば何も変えず(pin A13)、
+ *  workspace に `intake` question を1つ立てる。question が開いていて作業台が書く先の branch とともに disk にあれば `board/*` の引き直しのほかは何も変えず(pin A13)、
  *  同じ question を名指す。そうでなければ開く手の規則で開く —— question が開いていて作業台が disk に無いか作りかけなら作り直す。
  *  remote-backed の workspace は拒む(text A9)。基準の行が無ければ、開く前に最初の撮りをする(ADR 0383 決定2、`captureFirstBaseline`)。
  *  question の登録者は呼び手。返すのは text A14。`board` は pickup の最初の撮りと同じ確認が引く registry の口と盤面の固定点。 */
@@ -1678,7 +1678,11 @@ export async function openHumanContentWorkbench(
   let opened: { path: string; owner: WorkbenchOwner };
   try {
     // 書く先の branch の確かめも作業台に撃つ git —— 読めなければ question が閉じているときと同じ文(#3587)
-    opened = question !== undefined && holdsTargetBranch(at, branch) ? { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) } : openWorkbench(workspace, base, branch);
+    if (question !== undefined && holdsTargetBranch(at, branch)) {
+      opened = { path: realpathSync(at), owner: judgeOnDisk(workspace, at, branch) };
+      // 開くたびに `board/*` を引き直す —— 前の引き直しが名前の場所の側で落ちて消えた `board/*` を、名前の場所の拒否として言い直す(ADR 0411 決定5)
+      repointBoardRefs(workspace, opened.path);
+    } else opened = openWorkbench(workspace, base, branch);
   } catch (err) {
     if (err instanceof WorkbenchUnreadableError) throw new DomainError(`the board cannot read the workbench at ${err.at} (${err.message}); remove it by hand, then open it again.`);
     const refusal = namedPlaceRefusal(err);

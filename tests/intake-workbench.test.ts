@@ -471,7 +471,7 @@ it("保護ブランチの閉包が読めない名前の場所では作業台を�
   expect(existsSync(workbenchPath(b.base, { workspace: b.ws.name }))).toBe(false);
 });
 
-// ADR 0411 決定5 の延長(#3763): 作業台が `board/*` として受け取る名前の場所の branch も、作業台を作る fetch と同じ strict な検査を通す ——
+// ADR 0411 決定5 と追記(#3763): 作業台が `board/*` として受け取る名前の場所の branch も、作業台を作る fetch と同じ strict な検査を通す ——
 // 通らない object を作業台に入れると、人間が merge した tip の検証が作業台の故障になる
 it("名前の場所の branch が strict な検査を通らない object を持てば、書く先でなくても open_workbench は名前の場所とその object を名指して拒む", async () => {
   const b = await board("intake-strict-board", (ws) => {
@@ -494,6 +494,18 @@ it("取り込みの後の `board/*` の引き直しが strict な検査で落ち
   expect(git(b.workbench(), "for-each-ref", "refs/heads/board/")).toBe("");
 
   await expectNamedPlaceRefusal(b.open(), b.ws, bad);
+});
+
+it("拒否の後の `board/*` の引き直しが strict な検査で落ちれば、作業台に古い `board/*` を残さず、question が開いたままでも次の open_workbench は名前の場所を名指して拒む", async () => {
+  const b = await board("intake-strict-refused");
+  await b.open();
+  seedZeroPaddedTree(b.ws, "refs/heads/side");
+
+  await expect(b.answer("take in")).rejects.toThrow(`nothing to take in: main in the workbench at ${b.workbench()} is the value the board already has.`);
+  expect(git(b.workbench(), "for-each-ref", "refs/heads/board/")).toBe("");
+  expect(b.question().status).toBe("todo");
+
+  await expectNamedPlaceRefusal(b.open(), b.ws, git(b.ws.path, "rev-parse", "side:sub"));
 });
 
 it.each(["misnamed", "missing"] as const)("作業台の中だけの故障(%s の object)は今どおり作業台の故障として取り込みを拒み、名前の場所を名指さない(ADR 0411 決定2・3)", async (fault) => {
