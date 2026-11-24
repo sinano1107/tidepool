@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -794,6 +794,16 @@ export function commitWork(path: string, file: string, body: string): void {
   // 残している sandbox shadow まで巻き込んで測りたい差を消す
   git(path, "add", "--", file);
   git(path, "commit", "-m", `add ${file}`);
+}
+
+/** 作業台 `workbench` の中に書けない subdir を commit して置き、権限を戻す手を返す —— 盤面の削除はその中の file で EACCES に止まる。
+ *  作業台の親を 0555 にしても macOS では作業台が無傷で残り、途中で止まる形にならない(#3625)。 */
+export function lockDirInside(workbench: string): () => void {
+  const dir = join(workbench, "locked");
+  mkdirSync(dir);
+  commitWork(workbench, "locked/file.txt", "cannot be unlinked\n");
+  chmodSync(dir, 0o555);
+  return () => chmodSync(dir, 0o755);
 }
 
 /** 名前の場所 `named` の README.md の blob の loose を外し(`corrupt` なら zlib でない byte に置く)、worker が同じ中身の `copy.txt` を

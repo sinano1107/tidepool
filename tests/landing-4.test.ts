@@ -67,6 +67,7 @@ import {
   git,
   HUMAN_WEBUI,
   leaveBaseline,
+  lockDirInside,
   makeLandingWorkspace,
   makeWorkspace,
   prepareAtPickup,
@@ -658,13 +659,44 @@ it("local 着地の取り込みの後に作業台に人間の作業が残れば�
   expect(git(c.workbench(), "status", "--porcelain")).toBe("");
 });
 
+/** 作業台を消せなかったと言う文の、原因の前と後(原因の綴りは OS と Node で違う)。 */
+const notRemoved = (done: string, at: string) => [`${done} The board could not remove the workbench at ${at} (`, "); remove what is left of it by hand."] as const;
+
+// ADR 0401 決定1 の (3): 取り込みの ref と event を書いた後に作業台を消せなくても回答は拒まず、根に執行を刻み、作業台の在り処と原因を言う
+it("local 着地の取り込みの後に作業台を消せなければ、回答は通って根に執行を刻み、notice が作業台を消せなかったことと在り処を言う", async () => {
+  const c = await localLandingConflict("local-landing-unremovable-workbench");
+  const before = git(c.workspace.path, "rev-parse", "refs/heads/main");
+  await expect(c.answer()).rejects.toThrow(c.refused());
+  c.resolve();
+  const restore = lockDirInside(c.workbench());
+  const tip = git(c.workbench(), "rev-parse", "HEAD");
+  const at = c.workbench();
+
+  try {
+    const answered = await c.answer();
+
+    const landed = git(c.workspace.path, "rev-parse", "refs/heads/main");
+    expect(git(c.workspace.path, "rev-list", "--parents", "-n", "1", landed).split(" ").slice(1)).toEqual([before, tip]);
+    expect(boardEvents(c.db, c.work.id, "local_merge_executed")).toEqual([{ actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { kind: "local_merge_executed", sha: landed } }]);
+    expect(getTask(c.db, c.question.id)?.status).toBe("done");
+    const [said, exit] = notRemoved(`took ${tip} in as ${landed} on main.`, at);
+    expect(answered.notice).toContain(said);
+    expect(answered.notice?.endsWith(exit)).toBe(true);
+  } finally {
+    restore();
+  }
+});
+
 // ADR 0401 決定4: 取り込みで着地した後・記録の前に死んだ盤面の答え直しは、取り込みの後の片付けと同じに、人間の作業が残る作業台は残して
 // text C6 を言い、残っていなければ消す
-/** 作業台の取り込みで着地し、人間の別の branch が残るので作業台は残った盤面 —— 回答の記録は刻まない(question は開いたまま)。 */
-async function landedThroughKeptWorkbench(name: string) {
+/** 作業台の取り込みで着地し、人間の別の branch が残るので作業台は残った盤面 —— 回答の記録は刻まない(question は開いたまま)。
+ *  `beforeLanding` は解決の後・着地の前に作業台へ掛ける手。 */
+async function landedThroughKeptWorkbench(name: string, beforeLanding?: (workbench: string) => void) {
   const c = await localLandingConflict(name);
   await expect(c.answer()).rejects.toThrow(c.refused());
-  const tip = c.resolve();
+  c.resolve();
+  beforeLanding?.(c.workbench());
+  const tip = git(c.workbench(), "rev-parse", "HEAD");
   git(c.workbench(), "checkout", "--quiet", "-b", "side");
   commitWork(c.workbench(), "side.txt", "the human's other work\n");
   git(c.workbench(), "checkout", "--quiet", "main");
@@ -706,6 +738,27 @@ it("取り込みで着地した後に作業台へ人間の commit が届いて�
   expect(git(c.workbench(), "rev-parse", "main")).toBe(moved);
   expect(git(c.workspace.path, "rev-parse", "refs/heads/main")).toBe(c.landed);
   expect(listEventsOfKinds(c.db, ["workbench_taken_in"])).toHaveLength(1);
+});
+
+// ADR 0401 決定1 の (3) / 決定4: 答え直しの片付けも、作業台を消せなければ黙らずに在り処と原因を言う
+it("取り込みで着地した task をもう一度着地させるとき作業台を消せなければ、kept が作業台を消せなかったことと在り処を言う", async () => {
+  let restore = () => {};
+  const c = await landedThroughKeptWorkbench("local-landing-reanswer-unremovable", (workbench) => {
+    restore = lockDirInside(workbench);
+  });
+  git(c.workbench(), "branch", "--quiet", "-D", "side");
+  const at = c.workbench();
+
+  try {
+    const again = c.again();
+
+    expect(again.landed).toBe(c.landed);
+    const [said, exit] = notRemoved(`took ${c.tip} in as ${c.landed} on main.`, at);
+    expect(again.kept).toContain(said);
+    expect(again.kept?.endsWith(exit)).toBe(true);
+  } finally {
+    restore();
+  }
 });
 
 // ADR 0371 決定3・5 / spec #3273 pin A4: 受け取る条件は保護ブランチの今の値と task の tip を祖先に持つことで、人間しか書けない path は

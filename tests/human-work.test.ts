@@ -30,7 +30,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
+import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, lockDirInside, makeRemoteBackedWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
@@ -957,6 +957,27 @@ it("done の後に作業台の tip が読んだものから動いていれば、
   expect(notice).toBe(`completed. Commits reached the workbench at ${path} after the board read it and were not taken in; the workbench is kept. The task is done, so they do not enter through it.`);
   expect([getTask(b.db, h.id)!.status, existsSync(join(path, "late.txt"))]).toEqual(["done", true]);
   expect(() => git(b.ws.path, "show", `task/${h.id}:late.txt`)).toThrow();
+});
+
+// ADR 0401 決定1 の (3): `done` と merge back を書いた後に作業台を消せなくても完了は拒まず、作業台の在り処と原因を言う
+it("done の後に作業台を消せなければ、完了は通って task は done のまま、notice が作業台を消せなかったことと在り処を言う", async () => {
+  const b = await board("complete-unremovable");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const restore = lockDirInside(path);
+  await prepareHumanWork(b.db, b.ws, h, "complete", { workspacesBaseDir: b.base, now: () => b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name });
+
+  try {
+    const notice = completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {
+      completeTask(b.db, getTask(b.db, h.id)!, FULL_HANDOFF, HUMAN_ACTOR_ID, b.clock.now(), "webui");
+    });
+
+    expect(getTask(b.db, h.id)!.status).toBe("done");
+    expect(notice).toContain(`completed. The board could not remove the workbench at ${path} (`);
+    expect(notice?.endsWith("); remove what is left of it by hand.")).toBe(true);
+  } finally {
+    restore();
+  }
 });
 
 it("done の後に作業台に stash が残っていれば、作業台を残してそれを言う —— text C7 ではない(pin C11)", async () => {

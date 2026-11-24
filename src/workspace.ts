@@ -1565,9 +1565,8 @@ type EntryChecks = {
   beforeWrite?: (read: VerifiedTip) => void;
 };
 
-/** 鍵の作業台があれば取り込み、包む commit と、作業台を残したときの text C6 を返す(取り込むものが無ければ undefined)。拒否は `board/*` を
- *  引き直してから投げる。ADR 0382 決定5: 取り込んだ後、tip が取り込んだままで人間の作業が残っていなければ作業台を消し、残すなら
- *  その branch を包む commit へ進める(`advanceKeptWorkbench`)。 */
+/** 鍵の作業台があれば取り込み、包む commit と、作業台を残したか消せなかったときの文を返す(取り込むものが無ければ undefined)。拒否は
+ *  `board/*` を引き直してから投げる。取り込んだ後の片付けは `settleTakenInWorkbench`。 */
 function takeInExistingWorkbench(
   db: Db,
   named: WorkspaceConfig,
@@ -1583,15 +1582,36 @@ function takeInExistingWorkbench(
   const taken = repointingOnRefusal(named, place.path, () => takeInWorkbench(db, named, place, target, carried, intake, { ...checks, inKey: !humanWork }), carried);
   if (taken === undefined) return undefined;
   if (humanWork) return { commit: taken.commit, kept: advanceKeptWorkbench(named, place.path, target, taken, carried) };
-  let done = false;
+  return { commit: taken.commit, kept: settleTakenInWorkbench(named, place, target, carried, taken, false) };
+}
+
+/** ADR 0382 決定5 / ADR 0401 決定4: 鍵の作業台の取り込みの後の片付け —— 取り込みの直後(`taken` は取り込んだ tip と包む commit)と、
+ *  取り込みで着地した後・記録の前に死んだ盤面の答え直し(`again`。`taken` は着地の commit の第2親とその commit で、第2親の無い着地(ff)は
+ *  取り込みではないので無い)が共有する。tip が取り込んだまま(取り込んだ tip か、進めた後の包む commit)で人間の作業が残っていなければ消し、
+ *  残っていれば残してその branch を包む commit へ進め、text C6 を返す。読めなければ、最初の回答は残して進める。答え直しは、死の後に人間が
+ *  commit していれば(持ち主 `mine`)残してそう言い、ff の着地・ほかへ動いた tip・読めない作業台は何もせず残す。投げない —— ref も event
+ *  も書いた後なので拒まない(ADR 0401 決定1 の (3))。 */
+function settleTakenInWorkbench(
+  named: WorkspaceConfig,
+  place: UntrustedCheckout,
+  target: string,
+  carried: Carried,
+  taken: { tip: string; commit: string } | undefined,
+  again: boolean,
+): string | undefined {
+  let judged: { owner: WorkbenchOwner; tip: string | undefined };
   try {
-    done = judgeWorkbench(named, place, target, { carried, boardMove: true }, (owner, read) => owner.kind === "nothing" && read?.tip === taken.tip);
+    judged = judgeWorkbench(named, place, target, { carried, boardMove: true }, (owner, read) => ({ owner, tip: read?.tip }));
   } catch {
-    // 読めなければ残す —— ref も event も書いた後なので拒まない
+    return again || taken === undefined ? undefined : advanceKeptWorkbench(named, place.path, target, taken, carried);
   }
-  if (!done) return { commit: taken.commit, kept: advanceKeptWorkbench(named, place.path, target, taken, carried) };
-  removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
-  return { commit: taken.commit, kept: undefined };
+  const { owner, tip } = judged;
+  if (again && owner.kind === "mine") return notTakenInKept(place.path);
+  if (taken === undefined) return undefined;
+  const takenIn = tip === taken.tip || tip === taken.commit;
+  if (again && !takenIn) return undefined;
+  if (owner.kind !== "nothing" || !takenIn) return advanceKeptWorkbench(named, place.path, target, taken, carried);
+  return removeWrittenWorkbench(place.path, `took ${taken.tip} in as ${taken.commit} on ${target}.`);
 }
 
 /** `intake` question の選択肢(spec #3273 の識別子の表)。 */
@@ -2036,7 +2056,8 @@ const notTakenInKept = (path: string) => `Commits reached the workbench at ${pat
 
 /** spec #3273 group C: `done` の後に人間担当の work 自身の作業台を読み直し、取り込んだ tip のまま人間の作業が残っていなければ消す。
  *  tip が読んだものから動いていれば(取り込まなかったときは `task/<H>` に含まれなくなっていれば)残して text C7、ほかに残っているもの
- *  (stash、書く先に無い commit を持つ branch、HEAD の位置、未 commit の変更)や読めない作業台も残して、それを言う。`done` の後なので拒まない。 */
+ *  (stash、書く先に無い commit を持つ branch、HEAD の位置、未 commit の変更)や読めない作業台も残して、それを言う。消せない作業台も
+ *  そう言う(`removeWrittenWorkbench`)。`done` の後なので拒まない。 */
 function removeDoneWorkbench(named: WorkspaceConfig, place: UntrustedCheckout, target: string, takenTip: string | undefined): string | undefined {
   let judged: { moved: boolean; left: string[] };
   try {
@@ -2051,8 +2072,7 @@ function removeDoneWorkbench(named: WorkspaceConfig, place: UntrustedCheckout, t
     return `completed. ${notTakenInKept(place.path)} The task is done, so they do not enter through it.`;
   }
   if (judged.left.length > 0) return `completed. The workbench at ${place.path} is kept: ${judged.left.join("; ")}. The task is done, so nothing enters through it.`;
-  removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
-  return undefined;
+  return removeWrittenWorkbench(place.path, "completed.");
 }
 
 /** ADR 0371 決定2〜6 / ADR 0382 決定4〜6: `intake` question への `take in` —— 人間自身の内容の作業台の tip を保護ブランチへ取り込む。
@@ -3977,6 +3997,18 @@ export function releaseReadCheckouts(db: Db, taskId: string): void {
   for (const read of sessionReadCheckouts(db, taskId)) removeBoardCheckout(read.path, CHECKOUT_LAYOUT.read.parents);
 }
 
+/** 外への書き込み(ref・event・`done`)の後に作業台を消す —— 投げない(ADR 0401 決定1 の (3): 書いた後の拒否は出口を名指せない)。
+ *  消せなければ(作業台自身でも、空になった親の rmdir でも)残ったものはそのままに、済んだこと `done` に在り処と原因を足した文を返す。
+ *  削除は途中で止まりうるので、人間の作業を残したとは言わない。 */
+function removeWrittenWorkbench(path: string, done: string): string | undefined {
+  try {
+    removeBoardCheckout(path, CHECKOUT_LAYOUT.workbench.parents);
+    return undefined;
+  } catch (err) {
+    return `${done} The board could not remove the workbench at ${path} (${err instanceof Error ? err.message : String(err)}); remove what is left of it by hand.`;
+  }
+}
+
 /** 盤面が作った checkout を消し、`parents` 段までの空になった親も消す。同じ task の残した checkout が並ぶ親は残す。 */
 function removeBoardCheckout(path: string, parents: number): void {
   rmSync(path, { recursive: true, force: true, maxRetries: 3 });
@@ -4496,30 +4528,18 @@ export function localLandingCommit(workspace: WorkspaceConfig, taskId: string, p
   return oldest === undefined || git(workspace.path, "rev-parse", `${oldest}^1`) === tip ? tip : oldest;
 }
 
-/** ADR 0401 決定4: 取り込みで着地した後に残った鍵の作業台を、取り込みの後(`takeInExistingWorkbench`)と同じに片付ける。ADR 0382 決定5:
- *  tip が取り込んだまま(包む commit の第2親か、進めた後の包む commit)で人間の作業が残っていなければ消し、作業が残っていれば text C6 を返す。
- *  tip が保護ブランチに無い commit を持てば(死の後に人間が commit した)残してそう言う。取り込みでない着地の後の作業台は最初の回答と同じに
- *  残す。読めない・消せない作業台も残す —— 着地はもう保護ブランチにあるので拒まない。 */
+/** ADR 0401 決定4: 取り込みで着地した後に残った鍵の作業台を、取り込みの後と同じ手(`settleTakenInWorkbench`)で片付ける。読めない作業台は
+ *  残す —— 着地はもう保護ブランチにあるので拒まない。 */
 function settleLandedWorkbench(named: WorkspaceConfig, base: string, target: string, carried: string, landed: string): string | undefined {
-  const place = workbenchOnDisk(named, workbenchAt(named, base, target, carried));
-  if (place === undefined) return undefined;
-  let judged: { owner: WorkbenchOwner; tip: string | undefined };
-  let taken: string | undefined;
   try {
+    const place = workbenchOnDisk(named, workbenchAt(named, base, target, carried));
+    if (place === undefined) return undefined;
     // 包む commit は (書く先の旧値, 取り込んだ tip) —— 第2親の無い着地(ff)は取り込みではない
-    taken = gitAnswers(() => git(named.path, "rev-parse", "--verify", "--quiet", `${landed}^2`)) ? git(named.path, "rev-parse", `${landed}^2`) : undefined;
-    judged = judgeWorkbench(named, place, target, { carried, boardMove: true }, (owner, read) => ({ owner, tip: read?.tip }));
+    const tip = gitAnswers(() => git(named.path, "rev-parse", "--verify", "--quiet", `${landed}^2`)) ? git(named.path, "rev-parse", `${landed}^2`) : undefined;
+    return settleTakenInWorkbench(named, place, target, carried, tip === undefined ? undefined : { tip, commit: landed }, true);
   } catch {
     return undefined;
   }
-  const { owner, tip } = judged;
-  if (owner.kind === "mine") return notTakenInKept(place.path);
-  if (taken === undefined || (tip !== taken && tip !== landed)) return undefined;
-  if (owner.kind !== "nothing") return advanceKeptWorkbench(named, place.path, target, { tip: taken, commit: landed }, carried);
-  try {
-    removeBoardCheckout(place.path, CHECKOUT_LAYOUT.workbench.parents);
-  } catch {}
-  return undefined;
 }
 
 /** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
