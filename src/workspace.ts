@@ -645,11 +645,13 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
     path = makeCheckout({ at, named, source, branch, description: `the task checkout of ${task.id}` });
     if (role === undefined) fix(forkSource);
   } catch (err) {
-    // 作りかけと、固定が落ちた checkout を残さない(ADR 0414 決定2)
-    try {
-      removeBoardCheckout(at, CHECKOUT_LAYOUT.task.parents);
-    } catch {
-      // 作れなかった理由を消さない
+    // 作りかけと、固定が落ちた checkout を残さない(ADR 0414 決定2)。面接室で走る task は今のまま(#3834)
+    if (role === undefined) {
+      try {
+        removeBoardCheckout(at, CHECKOUT_LAYOUT.task.parents);
+      } catch {
+        // 作れなかった理由を消さない
+      }
     }
     // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
     if (role === undefined || err instanceof CheckoutHostError) throw err;
@@ -1273,7 +1275,11 @@ function makeWorkbench(named: WorkspaceConfig, at: string, target: string, sourc
   const unreadable = (cause: unknown) => namedClosureUnreadable(named, target, "the workbench", cause);
   try {
     // shallow な名前の場所からの fetch は境界の ref を黙って拒み(git 2.47 の実測)、作りかけが別の git の失敗で落ちる —— 先に名指す
-    assertWorkbenchSourceNotShallow(named, target);
+    try {
+      assertNotShallow(named.path);
+    } catch (cause) {
+      throw unreadable(cause);
+    }
     const config = { "receive.denyCurrentBranch": "updateInstead" };
     return makeCheckout({ at, named, source, branch: target, description: `the workbench for ${target}`, config, fetchFailure: unreadable });
   } catch (err) {
@@ -1283,13 +1289,13 @@ function makeWorkbench(named: WorkspaceConfig, at: string, target: string, sourc
   }
 }
 
-/** ADR 0411 決定5: shallow な名前の場所を、作業台を作る手と同じ名前の場所の側の拒否で名指す。ADR 0414 決定4: 1コマンドなので、作業台を開く扉は
- *  準備(基準の比較か最初の撮り)より前にも撃つ。 */
-function assertWorkbenchSourceNotShallow(named: WorkspaceConfig, target: string): void {
+/** ADR 0414 決定4: 作業台を開く扉が準備(基準の比較か最初の撮り)より前に撃つ shallow の確かめ —— 作業台を作る手と同じ名前の場所の側の拒否。
+ *  shallow だけを拒み、git が答えない名前の場所は今どおり準備が扱う(決定5)。 */
+function refuseShallowBeforePreparation(named: WorkspaceConfig, target: string): void {
   try {
     assertNotShallow(named.path);
   } catch (cause) {
-    throw namedClosureUnreadable(named, target, "the workbench", cause);
+    if (cause instanceof ShallowRepositoryError) throw namedClosureUnreadable(named, target, "the workbench", cause);
   }
 }
 
@@ -1786,7 +1792,7 @@ export async function openHumanContentWorkbench(
   }
   // ADR 0414 決定4: shallow の確かめは最初の撮りより前 —— 拒んだ扉は基準の行を残さない
   try {
-    assertWorkbenchSourceNotShallow(workspace, branch);
+    refuseShallowBeforePreparation(workspace, branch);
   } catch (err) {
     throw new DomainError(couldNotOpenWorkbench(err, "open it again", { subject: "the board" }));
   }
@@ -1981,7 +1987,7 @@ export async function startHumanWork(
   const couldNotOpen = (err: unknown) => new DomainError(`cannot ${verb}: ${couldNotOpenWorkbench(err, "start work again", { subject: "the board" })}`);
   // ADR 0414 決定4: shallow の確かめは準備(基準の比較か最初の撮り)より前 —— 完了と取り込みが共有する準備には入れない(ADR 0411 決定5 の merge back)
   try {
-    assertWorkbenchSourceNotShallow(workspace, target);
+    refuseShallowBeforePreparation(workspace, target);
   } catch (err) {
     throw couldNotOpen(err);
   }
