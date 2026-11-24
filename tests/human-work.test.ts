@@ -428,12 +428,13 @@ it("start_work・take_in_work・完了は workspace の in-flight の鍵を取�
 const branchEvents = (db: Db, taskId: string) => listEvents(db, taskId).filter((e) => e.kind === "task_branch_created").map((e) => e.payload);
 
 /** ADR 0414 決定1: 固定(列・ref・event)を、未固定の親 `parent` と H の両方について読む。 */
-const nothingFixed = (b: Board, parent: Task, h: Task) => [
-  [getTask(b.db, parent.id)!.workspace, getTask(b.db, h.id)!.workspace],
-  [branchEvents(b.db, parent.id), kinds(b.db, h.id)],
-  git(b.ws.path, "for-each-ref", `refs/heads/task/${parent.id}`, `refs/heads/task/${h.id}`),
-];
-const NOTHING_FIXED = [[null, null], [[], ["task_registered"]], ""];
+const fixing = (b: Board, parent: Task, h: Task) => ({
+  columns: [getTask(b.db, parent.id)!.workspace, getTask(b.db, h.id)!.workspace],
+  parentBranchEvents: branchEvents(b.db, parent.id),
+  hKinds: kinds(b.db, h.id),
+  refs: git(b.ws.path, "for-each-ref", `refs/heads/task/${parent.id}`, `refs/heads/task/${h.id}`),
+});
+const NOTHING_FIXED = { columns: [null, null], parentBranchEvents: [], hKinds: ["task_registered"], refs: "" };
 
 it("start_work は同じ固定の瞬間に、タスクブランチを持たない未着手の work の祖先を上から固定し、task/<H> をその系譜から切って自分の空の列を書く(pin C1)", async () => {
   const b = await board("start-work-fixes");
@@ -1248,11 +1249,7 @@ it("拒否の後の `board/*` の引き直しが名前の場所の側で落ち�
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   const path = await startedWithCommit(b, h);
   await completedAgentChild(b, h, "child.txt", "child\n");
-  // 盤面の口で `side` を置く —— 取り込みの準備の基準の比較には当たらない
-  seedZeroPaddedTree(b.ws, "refs/heads/side");
-  const side = git(b.ws.path, "rev-parse", "side");
-  git(b.ws.path, "update-ref", "-d", "refs/heads/side");
-  boardRefWriter(b.db, b.ws)("refs/heads/side", side, () => git(b.ws.path, "update-ref", "refs/heads/side", side));
+  seedStrictFailingSide(b);
   const before = untouched(b, h);
 
   const result = await takeIn(b, h);
@@ -1282,9 +1279,42 @@ it("shallow な名前の場所で拒んだ start_work は、task/<H> の ref・t
 
   expect((await startWork(b, h)).ok).toBe(false);
 
-  expect(nothingFixed(b, parent, h)).toEqual(NOTHING_FIXED);
+  expect(fixing(b, parent, h)).toEqual(NOTHING_FIXED);
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
   expect(holdsBaseline(b.db, ws.name)).toBe(false);
+});
+
+/** `task` の `task/<id>` を盤面の口で今の main に書き、event を残さない(ADR 0329 決定2 の、ref を書いて event の前に落ちた作成)。その後に
+ *  盤面の口で main を1つ進める。返すのは ref の値。 */
+function crashLeftBranch(b: Board, task: Task): string {
+  const old = git(b.ws.path, "rev-parse", "main");
+  const ref = `refs/heads/task/${task.id}`;
+  boardRefWriter(b.db, b.ws)(ref, old, () => git(b.ws.path, "update-ref", ref, old, ""));
+  const next = git(b.ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "landed");
+  boardRefWriter(b.db, b.ws)("refs/heads/main", next, () => git(b.ws.path, "update-ref", "refs/heads/main", next, old));
+  return old;
+}
+
+// ADR 0414 決定4 / ADR 0411 追記(#3763): 準備より前の shallow の拒否も、名前の場所の側で落ちた引き直しと同じく作業台の古い `board/*` を消す
+it("書き始めた後に名前の場所が shallow になれば、start_work は shallow を言って拒み、disk にある作業台の board/* を消し、人間の commit は残す(ADR 0414 決定4)", async () => {
+  const b = await board("start-work-became-shallow");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const tip = git(path, "rev-parse", "HEAD");
+  writeFileSync(join(b.ws.path, ".git", "shallow"), `${git(b.ws.path, "rev-parse", "main")}\n`);
+
+  expect(await startWork(b, h)).toEqual(refused(expect.stringMatching(new RegExp(`^cannot start work: workspace ${b.ws.name}: ${b.ws.path} is a shallow clone`))));
+  expect([git(path, "for-each-ref", "refs/heads/board/"), git(path, "rev-parse", "HEAD")]).toEqual(["", tip]);
+});
+
+// ADR 0414 決定4: shallow の確かめは Quarantine の待ちの後 —— pickup と同じ順
+it("Quarantine が開いている shallow な名前の場所の start_work は、shallow でなく Quarantine を名指して拒む(text C1a)", async () => {
+  const ws = await makeShallowWorkspace("start-work-shallow-held");
+  const b: Board = { db: openDb(":memory:"), clock: new FakeClock(), ws, base: await tempDir("tidepool-task-checkouts-") };
+  quarantineWorkspace(b.db, ws.name, new Error("a hand edit"), b.clock.now());
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+
+  expect(await startWork(b, h)).toEqual(refused(`cannot start work: workspace ${ws.name} is quarantined — answer question ${quarantineQuestion(b.db, "workspace", ws.name)!.id} first.`));
 });
 
 /** 未固定の親の下の H —— 親は列を持たず、H の列も空。 */
@@ -1303,13 +1333,29 @@ it("履歴の object を欠く名前の場所で拒んだ start_work は、未�
   rmSync(object);
   const { parent, h } = underUnfixedParent(b);
 
-  expect(await startWork(b, h)).toEqual(refused(expect.stringMatching(new RegExp(`^cannot start work: workspace ${b.ws.name}: [\\s\\S]*${blob}`))));
-  expect(nothingFixed(b, parent, h)).toEqual(NOTHING_FIXED);
+  // 名指すのは fork 元を読んだ branch —— `task/<H>` はまだ無い
+  expect(await startWork(b, h)).toEqual(refused(expect.stringMatching(new RegExp(`^cannot start work: workspace ${b.ws.name}: main in the named workspace does not read whole[\\s\\S]*${blob}`))));
+  expect(fixing(b, parent, h)).toEqual(NOTHING_FIXED);
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
 
   writeFileSync(object, content);
   expect((await startWork(b, h)).ok).toBe(true);
   expect(kinds(b.db, h.id)).toEqual(["task_registered", "task_branch_created", "task_work_started"]);
+});
+
+// ADR 0414 決定2 / ADR 0329 決定2: 固定より前に読む fork 元は、同じ瞬間の固定が採る(ref を書いて event の前に落ちた)祖先のブランチも数える ——
+// 作業台が受け取る commit と、固定が書く `task/<H>` が同じ
+it("ref だけ残って event の無い祖先の下の start_work は、その祖先の ref の値から task/<H> を切り、作業台も同じ commit を持つ —— 保護ブランチが進んでいても(ADR 0414 決定2)", async () => {
+  const b = await board("start-work-adopts-parent");
+  const parent = work(b, "plan");
+  const old = crashLeftBranch(b, parent);
+  const h = work(b, "write it myself", { parent_id: parent.id, assignee: HUMAN_ACTOR_ID });
+
+  const started = await startWork(b, h);
+
+  expect(started.ok).toBe(true);
+  expect([git(b.ws.path, "rev-parse", `task/${parent.id}`), git(b.ws.path, "rev-parse", `task/${h.id}`)]).toEqual([old, old]);
+  expect(git(realpathSync(humanWorkbench(b, h)), "rev-parse", "HEAD")).toBe(old);
 });
 
 /** 盤面の口で、strict な検査を通らない object を持つ branch `side` を名前の場所に置く —— 準備の基準の比較には当たらない。 */
@@ -1327,7 +1373,7 @@ it("書く先でない branch に strict な検査を通らない object を持�
   const { parent, h } = underUnfixedParent(b);
 
   expect(await startWork(b, h)).toEqual(refused(expect.stringMatching(new RegExp(`^cannot start work: workspace ${b.ws.name}: the board cannot give the named workspace's branches to the workbench`))));
-  expect(nothingFixed(b, parent, h)).toEqual(NOTHING_FIXED);
+  expect(fixing(b, parent, h)).toEqual(NOTHING_FIXED);
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
 });
 

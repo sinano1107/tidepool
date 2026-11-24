@@ -354,6 +354,22 @@ it("古い履歴にだけある blob が欠けた名前の場所の pickup は�
   expect(existsSync(join(base, task.id))).toBe(false);
 });
 
+// ADR 0414 決定2 / ADR 0329 決定2: 固定より前に読む fork 元は、同じ瞬間の固定が採る(ref を書いて event の前に落ちた)祖先のブランチも数える
+it("ref だけ残って event の無い祖先の下の pickup は、その祖先の ref の値から task/<id> を切り、task の checkout も同じ commit を持つ —— 保護ブランチが進んでいても(ADR 0414 決定2)", async () => {
+  const named = await makeWorkspace("task-checkout-adopts-parent");
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "plan", purpose: "why", completion_criteria: "done", workspace: named.name }, NOW, ...HUMAN_WEBUI);
+  const old = git(named.path, "rev-parse", "main");
+  // 最初の撮りより前 —— 基準に入る
+  git(named.path, "branch", `task/${parent.id}`, "main");
+  commitWork(named.path, "landed.txt", "landed\n");
+  const child = register("work", parent.id);
+
+  const place = await prepareAtPickup(db, named, child, { defaultWorkspaceName: named.name });
+
+  expect([git(named.path, "rev-parse", `task/${parent.id}`), git(named.path, "rev-parse", `task/${child.id}`), git(place.path, "rev-parse", "HEAD")]).toEqual([old, old, old]);
+});
+
 // ADR 0411 決定1・5: 完了の門は閉包の全部を `index-pack --strict` で読むので、同じ検査を pickup の複製に当てる —— 履歴に fsck の警告を持つ
 // 名前の場所は、どの task の門でも checkout の故障になる前に、名前の場所の側で止まる
 it("履歴に `index-pack --strict` が拒む object を持つ名前の場所の pickup は、その object を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定1・5)", async () => {

@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, listEvents, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
+import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { completeThroughHumanDoor, quarantineChecks, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
 import { blockingRootOf, contentLeftBehindLocally, createLanding, type Landing, landingInWorkspaceRefusal, landingState, prInFlightRefusal, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
@@ -1226,6 +1226,8 @@ it("失われた event が効いたまま `task/<id>` が在れば、pickup の�
     .rejects.toThrow(new LostTaskBranchPresentError(task.id, `refs/heads/task/${task.id}`, value));
 
   expect(createdShas(b, task)).toEqual(created);
+  // ADR 0414 決定2: 固定が checkout の後に拒めば、その pickup の checkout を残さない
+  expect(existsSync(join(b.base, task.id, String(latestEventOfTask(b.db, task.id, "task_picked_up")!.id)))).toBe(false);
   expect(taskBranchLostInForce(b.db, task.id)).toBeDefined();
 });
 
