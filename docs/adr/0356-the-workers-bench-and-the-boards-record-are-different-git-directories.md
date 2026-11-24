@@ -1,5 +1,7 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
+**Status 追記: 決定2 の「work / review は alternates で名前の場所の objects を借りる」は置き換わる —— task の checkout はどの type でも branch の閉包を全部持つ複製で作り、盤面で使う名前の場所は閉包が全部読めることを条件にする(shallow を含めて pickup で止まる)([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定1・5、2026-11-24、issue #3734)。**
+
 **Status 追記: 題と背景の「worker の作業台」は task の checkout を指し、作業台(Workbench —— 盤面が人間のために開く checkout)ではない。git ディレクトリの種類は、名前の場所と task の checkout に作業台が加わる([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定2 の「解放のどの失敗でも checkout は残して既存の失敗経路へ」は、成果が名前の場所の ref になる前の失敗に限る —— 着いた後の失敗(ref の比較・merge back・休止位置)は checkout を残さない —— 解放の event は成果が着いた時点で書き、削除は最後の step のまま後の段が落ちても撃つ。名前の場所の事情で運べなかった解放は、その workspace の Quarantine の受理がやり直し、済んでいない解放を持つ task は走らせない。worker の repo の故障で残した checkout は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定1・4・7、2026-11-11、issue #3147)。**

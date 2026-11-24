@@ -1,5 +1,7 @@
 # 盤面が運ぶときに守るのは運んだ場所が作った object —— 名前の場所に外から起きた損傷は、運ぶ前でも後でも守らない
 
+**Status 追記: 決定1〜3 の「借りている tree の下の object は守らない」「運ぶ前に名前の場所で起きた損傷は守らない」は、tip の閉包の中については守る側に置き換わる —— 複製は閉包を全部持ち、運んだ後の確かめが欠けを入れ直す。決定4(健全性を確かめない)は、pickup と運ぶ手が閉包を読む範囲で置き換わる([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定4・5、2026-11-24、issue #3734)。**
+
 2026-11-21 の grilling(issue #3494、#3222 の実装の派生。#3484・#3501 を畳んだ)で決定。ADR 0388 決定1 は、運ぶときの集合を「運ぶ tip の閉包のうち、運んだ場所の自前の store にある object」とし、借りている object を「消しても失われない」として外した。実装では、名前の場所の損傷を、確かめが3つの形で素通しした。
 
 - (a) 借りている tree の下にある自前の object を、集合の walk が数えない。

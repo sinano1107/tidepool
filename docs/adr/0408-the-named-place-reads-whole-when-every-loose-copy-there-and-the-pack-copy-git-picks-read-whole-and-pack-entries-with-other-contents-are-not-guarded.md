@@ -1,5 +1,7 @@
 # 名前の場所で読めるとは、集合の id の loose の写しが全部と、git が選ぶ pack の写しが読めること —— pack 同士で別の中身を持つ entry は守らない
 
+**Status 追記: 決定1 の「集合の id」は、複製では tip の閉包の全部になる。確かめが上限を越えたときは入れ直しに進まず拒む([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定4、2026-11-24、issue #3734 / #3735)。**
+
 2026-11-23 の triage(issue #3585、#3494 の実装のレビューの派生)で決定。ADR 0388 決定1 は運ぶときの確かめを、集合を pack に組む1本の git の読みで決め、その読みが選ぶ写しを読み手が読む写しと見なしていた。名前の場所が同じ id の写しを複数持つと、この見なしは崩れる。確かめの `pack-objects` は pack を先に読む。ところが git 2.53 以降の blob の stream の読み手は loose を先に開き、pack 同士では読み手ごとに引く pack が違った。正しい pack の写しの陰にある壊れた loose は確かめを通り、読み手には別の中身か読めない byte が届いた。決定2 は確かめ直しだけを2つの形にしていた。実測は #3585 に置く。
 
 1. **集合の id が名前の場所で読めるとは、次の2つが成り立つことである。**
