@@ -1,5 +1,7 @@
 # 人間担当の work もタスクブランチを持ち、完了の扉が作業台の tip を取り込んで merge back を撃ち、人間の根は常に merge question で着地する
 
+**Status 追記: 決定2 の順「固定 → 作業台を開く」は、作業台を先に開く順に置き換わる —— 名前の場所の側の理由(shallow・閉包が strict な検査で読めない・`board/*` として受け取る branch がその検査を通らない)で落ちる `start_work` は、固定を何も書かずに落ちる。固定の後に残る「開けない」拒否は、作業台と host の側だけ([ADR 0414](0414-the-fix-moment-of-start-work-and-pickup-is-written-only-after-the-copy-has-been-received-from-the-named-place.md) 決定1〜3、2026-11-25、issue #3788)。**
+
 **Status 追記: 決定9 の「走行中の session の有無は見ない」と決定3 の「`task/<親>` の今の値から切られる」に例外が1つ足される —— 系譜の帰り先の持ち主が解放を負う間(`in_progress`・後始末の印・解放待ち)は、完了の扉も「書き始める」も拒む。兄弟の session は今までどおり見ず、取り込みだけの操作も拒まない([ADR 0390](0390-a-human-door-on-a-lineage-waits-while-the-return-branch-owner-still-owes-its-release.md) 決定1〜3、2026-11-21、issue #3365)。**
 
 **Status 追記: 決定2 の拒否文「workspace を Edit で指定してから」は、子には当たらない —— 子は workspace を入力に持たず、Edit の欄も無い。子の場所が導出できないのは祖先の側も導出できないときで、拒否文は根の workspace を指定するよう案内する([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定1、2026-11-19、issue #1796)。**
