@@ -2446,10 +2446,12 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }: {
   const open = edit.isOpen(id);
   const own = agents.filter((agent) => !agent.builtin);
   const current: Record<string, string> = Object.fromEntries(own.map((agent) => [agent.name, agent.tier ?? '']));
+  // the values the form opened on: a reload mid-edit (another card's save) neither drops nor resends a choice
+  const [snapshot, setSnapshot] = React.useState(current);
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
-  const changes = own.filter((agent) => draft[agent.name] !== current[agent.name])
-    .map((agent) => ({ setting: 'agent_tier', agent: agent.name, tier: draft[agent.name] || null }));
+  const changes = Object.keys(snapshot).filter((name) => draft[name] !== snapshot[name])
+    .map((name) => ({ setting: 'agent_tier', agent: name, tier: draft[name] || null }));
   useDirtySignal(edit, open, changes.length > 0);
 
   // `saving` = the edit form's Save; Remove of an orphan sits outside the edit slot and leaves any open form alone
@@ -2459,17 +2461,19 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }: {
       for (const change of list) await api('/api/settings/execution', change);
       say('success', title, `${list.length} agent${list.length === 1 ? '' : 's'} updated`);
       if (saving) edit.close();
-      await onSaved();
     } catch (err) {
       say('danger', 'agent default tier refused', String((err as Error).message || err));
+    } finally {
+      // a refusal partway through the list still leaves the earlier changes written
+      await onSaved();
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   return (
     <div data-testid="agent-tiers">
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(current))}>
+        <RecordCardHead editing={open} onEdit={() => edit.open(id, () => { setSnapshot(current); setDraft(current); })}>
           <span style={settingsCardLabel}>agents' default tiers</span>
         </RecordCardHead>
         {!open && own.map((agent) => (
@@ -2477,9 +2481,9 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }: {
         ))}
         {open && (
           <React.Fragment>
-            {own.map((agent) => (
-              <Select key={agent.name} label={agent.name} options={tierOptions(settings.tiers)} value={draft[agent.name] ?? ''}
-                onChange={(e) => setDraft({ ...draft, [agent.name]: e.target.value })} />
+            {Object.keys(snapshot).map((name) => (
+              <Select key={name} label={name} options={tierOptions(settings.tiers)} value={draft[name] ?? ''}
+                onChange={(e) => setDraft({ ...draft, [name]: e.target.value })} />
             ))}
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               the tier an agent runs on when its task requests none. board default runs it on the board's default tier.
@@ -3418,7 +3422,9 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         {(responseFloors || responseFloorsFailed) && <ResponseFloorsCard rows={responseFloors} />}
         {!executionSettingsFailed && executionSettings && (
           <React.Fragment>
-            <TiersCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
+            {/* a rename changes the tier names the agent list carries */}
+            <TiersCard settings={executionSettings} say={say} edit={edit}
+              onSaved={async () => { await Promise.all([loadExecutionSettings(), loadAgents()]); }} />
             {agents && !agentsUnavailable && (
               <AgentTiersCard settings={executionSettings} agents={agents} orphans={orphanTiers} say={say} edit={edit}
                 onSaved={async () => { await Promise.all([loadExecutionSettings(), loadAgents()]); }} />

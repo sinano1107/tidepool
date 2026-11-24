@@ -3179,9 +3179,10 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }) {
   const open = edit.isOpen(id);
   const own = agents.filter((agent) => !agent.builtin);
   const current = Object.fromEntries(own.map((agent) => [agent.name, agent.tier ?? ""]));
+  const [snapshot, setSnapshot] = React.useState(current);
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
-  const changes = own.filter((agent) => draft[agent.name] !== current[agent.name]).map((agent) => ({ setting: "agent_tier", agent: agent.name, tier: draft[agent.name] || null }));
+  const changes = Object.keys(snapshot).filter((name) => draft[name] !== snapshot[name]).map((name) => ({ setting: "agent_tier", agent: name, tier: draft[name] || null }));
   useDirtySignal(edit, open, changes.length > 0);
   const send = async (list, title, saving = false) => {
     setBusy(true);
@@ -3189,20 +3190,24 @@ function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }) {
       for (const change of list) await api("/api/settings/execution", change);
       say("success", title, `${list.length} agent${list.length === 1 ? "" : "s"} updated`);
       if (saving) edit.close();
-      await onSaved();
     } catch (err) {
       say("danger", "agent default tier refused", String(err.message || err));
+    } finally {
+      await onSaved();
+      setBusy(false);
     }
-    setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "agent-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "agents' default tiers")), !open && own.map((agent) => /* @__PURE__ */ React.createElement(FieldRow, { key: agent.name, label: agent.name, kind: agent.tier ? "mono" : "unset", value: agent.tier ?? "", unsetLabel: "board default" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, own.map((agent) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "agent-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => {
+    setSnapshot(current);
+    setDraft(current);
+  }) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "agents' default tiers")), !open && own.map((agent) => /* @__PURE__ */ React.createElement(FieldRow, { key: agent.name, label: agent.name, kind: agent.tier ? "mono" : "unset", value: agent.tier ?? "", unsetLabel: "board default" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, Object.keys(snapshot).map((name) => /* @__PURE__ */ React.createElement(
     Select,
     {
-      key: agent.name,
-      label: agent.name,
+      key: name,
+      label: name,
       options: tierOptions(settings.tiers),
-      value: draft[agent.name] ?? "",
-      onChange: (e) => setDraft({ ...draft, [agent.name]: e.target.value })
+      value: draft[name] ?? "",
+      onChange: (e) => setDraft({ ...draft, [name]: e.target.value })
     }
   )), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the tier an agent runs on when its task requests none. board default runs it on the board's default tier."), /* @__PURE__ */ React.createElement(
     EditActions,
@@ -4037,7 +4042,17 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsetsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "provider pace offsets", says: paceOffsetsUnavailable }) : providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "execution settings", says: executionSettingsUnavailable }) : executionSettings && /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), (haltedRefires || haltedRefiresFailed) && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), (responseFloors || responseFloorsFailed) && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), !executionSettingsFailed && executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), agents && !agentsUnavailable && /* @__PURE__ */ React.createElement(
+    ), paceOffsetsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "provider pace offsets", says: paceOffsetsUnavailable }) : providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "execution settings", says: executionSettingsUnavailable }) : executionSettings && /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), (haltedRefires || haltedRefiresFailed) && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), (responseFloors || responseFloorsFailed) && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), !executionSettingsFailed && executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+      TiersCard,
+      {
+        settings: executionSettings,
+        say,
+        edit,
+        onSaved: async () => {
+          await Promise.all([loadExecutionSettings(), loadAgents()]);
+        }
+      }
+    ), agents && !agentsUnavailable && /* @__PURE__ */ React.createElement(
       AgentTiersCard,
       {
         settings: executionSettings,

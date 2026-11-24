@@ -135,7 +135,7 @@ it("routing agent-tier proposals normalize supplied agent and target tier names 
     const task = registerTask(db, { type: "work", title: "evidence", purpose: "purpose", completion_criteria: "criteria" }, new Date(0), ...HUMAN_WEBUI);
     const evidence = [appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at: new Date(0), payload: { ...WORKER_SPAWNED, model: "claude-opus-5-5", tier_id: tierIdOf(db, "frontier"), source: { tier: "agent", provider: "only" } } })];
     const agent: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, skills: ["*"], unknownFields: [], systemPrompt: "prompt" };
-    applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", new Date(0), undefined, () => [agent]);
+    applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", new Date(0), { listAgents: () => [agent] });
     const input = { op: "agent_tier" as const, agent: " deckhand ", to: " standard\n", evidence, rationale: "evidence" };
     const { question_id } = proposeRoutingChange(db, review.id, input, "worker", new Date(0), () => [agent]);
     expect(getTask(db, question_id)?.question_proposal).toMatchObject({ kind: "routing", agent: "deckhand" });

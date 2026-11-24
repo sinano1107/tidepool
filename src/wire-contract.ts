@@ -64,6 +64,9 @@ export interface ProviderUsage {
 /** merge question の印は根に刻まれた PR の決着から導く(ADR 0265 決定2)。`pr_merged` は盤面の名義の merge で、回答の記録が無いもの(決定5)。 */
 export type RootSettledByObservation = "pr_merged" | "pr_merge_observed" | "pr_close_observed";
 
+/** agent の既定ティアの1行(ADR 0410 決定1): agent 名と段の名前。盤面の読み口(src/execution-setting.ts)も同じ形を返す。 */
+export type AgentTierRow = { agent: string; tier: string };
+
 /** 観測で閉じた question の印(ADR 0265 決定7): 回答なしで盤面が閉じたときの種類。WebUI の札の文言表がこれで欠けを落とす。 */
 export type SettledByObservation =
   | RootSettledByObservation
@@ -430,7 +433,7 @@ export interface WireContract {
       shadowsBuiltIn?: true;
     }>;
     /** registry に無い名前の既定ティアの行(孤児、ADR 0410 決定5)。 */
-    orphanTiers: ReadonlyArray<{ agent: string; tier: string }>;
+    orphanTiers: readonly AgentTierRow[];
     authorityProfiles: string[];
     providers: readonly Option[];
   };
@@ -469,7 +472,7 @@ export interface WireContract {
     /** 盤面の段の一覧、順序どおり(ADR 0200 決定1・3)。 */
     tiers: ReadonlyArray<{ name: string; description: string }>;
     /** agent の既定ティアの行(ADR 0410 決定1)、registry から消えた agent の行も載る。 */
-    agentTiers: ReadonlyArray<{ agent: string; tier: string }>;
+    agentTiers: readonly AgentTierRow[];
     priorities: readonly string[];
     advisorCeilings: readonly AdvisorCeiling[];
   };

@@ -426,7 +426,7 @@ it.each([
         return withHealthyUsage(worker, clock);
       },
     });
-    if (agentTier) applyExecutionSettingsChange(t.db, { setting: "agent_tier", agent: "tako", tier: agentTier }, "webui", t.clock.now(), undefined, () => [{ name: "tako" }]);
+    if (agentTier) applyExecutionSettingsChange(t.db, { setting: "agent_tier", agent: "tako", tier: agentTier }, "webui", t.clock.now(), { listAgents: () => [{ name: "tako" }] });
     const task = (
       await api(t.baseUrl, "POST", "/api/tasks", {
         type: "review",

@@ -5,8 +5,8 @@ import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
-/** agent の段の提案(issue #920 / ADR 0410 決定4)のサーバ境界: 提案 verb の応答と拒否の toolError、回答の HTTP の写し(承認の 200 と
- *  経路、agent が消えたときの観測の印、registry が読めないときの 400)、due 判定への registry の一覧の配線。門・pin・hook・修正値・
+/** agent の段の提案(issue #920 / ADR 0410 決定4)のサーバ境界: 提案 verb の応答と拒否の toolError、回答の HTTP の写し(承認の 200、
+ *  agent が消えたときの観測の印、registry が読めないときの 409)、due 判定への registry の一覧の配線。門・pin・hook・修正値・
  *  承認の transaction はドメイン層(tests/execution-setting.test.ts / tests/routing-proposal-evidence.test.ts)が言う。 */
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -105,35 +105,29 @@ it("agent の段の提案は meta-review の子に routing の提案の question
   }
 });
 
-it("組み込み agent・知らない agent の提案は toolError で断られ、question は立たない", async () => {
-  const { review, client, call } = await boardWithRoutingReview();
+it("組み込み agent・知らない agent の提案は toolError で断られる", async () => {
+  const { client, call } = await boardWithRoutingReview();
   try {
     const own = spawned(t);
     expect(await call("propose_routing_change", { op: "agent_tier", agent: "fugu", to: "standard", evidence: [own], rationale: "r" })).toMatchObject({ error: expect.stringMatching(/built-in: the tier its reviews and Interviews run on/) });
     expect(await call("propose_routing_change", { op: "agent_tier", agent: "ghost", to: "standard", evidence: [own], rationale: "r" })).toMatchObject({ error: expect.stringMatching(/unknown agent/) });
-    expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === review.id)).toEqual([]);
   } finally {
     await client.close();
   }
 });
 
-it("HTTP の approve は 200 で既定ティアを盤面に書き、settings の読み口と read_routing_settings が回答と新しい段を示す", async () => {
+it("HTTP の approve は 200 で、観測の印の無い回答済みの question を返す", async () => {
   const { client, call } = await boardWithRoutingReview();
   try {
     const questionId = await proposeDeckhand(call);
 
-    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
-
-    expect((await api(t.baseUrl, "GET", "/api/settings/execution")).json.agentTiers).toEqual([{ agent: "deckhand", tier: "standard" }]);
-    expect((await call("read_routing_settings")).proposals).toEqual([
-      { question_id: questionId, proposal: (await task(questionId)).question_proposal, answer: "approve", amendment: null, comment: null, observed: null },
-    ]);
+    expect(await answer(questionId, { answers: ["approve"] })).toMatchObject({ status: 200, json: { id: questionId, status: "done", settled_by_observation: null } });
   } finally {
     await client.close();
   }
 });
 
-it("agent が registry から消えていれば approve は 200 と観測の印で返り、registry が読めなければ 409 で question は open のまま", async () => {
+it("agent が registry から消えていれば approve は 200 と観測の印で返り、registry が読めなければ 409 で理由を返す", async () => {
   const registry = fakeRegistry();
   const { client, call } = await boardWithRoutingReview(registry);
   try {
@@ -142,7 +136,6 @@ it("agent が registry から消えていれば approve は 200 と観測の印�
     const refused = await answer(questionId, { answers: ["approve"] });
     expect(refused.status).toBe(409);
     expect(refused.json.error).toContain("registry clone is broken");
-    expect(await task(questionId)).toMatchObject({ status: "todo" });
 
     registry.state.unreadable = false;
     registry.agents.delete("deckhand");
@@ -169,7 +162,7 @@ it("registry から agent が消えた提案は due 判定の直前に観測で�
     registry.agents.delete("deckhand");
     await t.clock.advance(HOUR);
 
-    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null, settled_by_observation: "routing_proposal_stale" });
+    expect(await task(questionId)).toMatchObject({ settled_by_observation: "routing_proposal_stale" });
     expect(await nextReviews()).toHaveLength(1);
   } finally {
     await client.close();

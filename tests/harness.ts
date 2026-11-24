@@ -1744,9 +1744,9 @@ export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-
 export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, skills: ["*"], unknownFields: [], systemPrompt: "p" };
 
 /** setup のみ: deckhand の既定ティアを盤面に書く(既定 standard —— agent_tier で1段下げられる、ADR 0410 決定1)。設定の event は
- *  「材料の記録の後に対象を変えた event」に載るので、routing meta-review の材料を注入する前に呼ぶ。 */
+ *  「材料の記録の後に対象を変えた event」に載る(ADR 0410 決定8 / ADR 0278 追記4)ので、routing meta-review の材料を注入する前に呼ぶ。 */
 export function deckhandOnTier(db: Db, at: Date, tier = "standard"): void {
-  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier }, "webui", at, undefined, () => [DECKHAND_AGENT]);
+  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier }, "webui", at, { listAgents: () => [DECKHAND_AGENT] });
 }
 
 export const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };

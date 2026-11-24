@@ -21,7 +21,7 @@ type Door = (deps: { db: ReturnType<typeof openDb>; clock: FakeClock; registry: 
 
 const doors: Record<string, Door> = {
   "agent create": (deps) =>
-    createAgent({ name: "tako", authority: "standard", provider: "anthropic", skills: ["*"], description: "d", systemPrompt: "p" }, { ...deps }),
+    createAgent({ name: "tako", authority: "standard", provider: "anthropic", skills: ["*"], description: "d", systemPrompt: "p" }, deps),
   "agent list": (deps) => listAgentViews(deps),
   "workspace create": (deps) => createWorkspace({ mode: "create", name: "lagoon" }, deps),
   "workspace list": (deps) => listWorkspaceViews(deps, "configured"),
@@ -86,7 +86,7 @@ it("agent の段の提案が開いたまま registry が読めないと、提案
     payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", tier_id: tierIdOf(deps.db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },
   });
   const deckhand = { name: "deckhand", provider: "openai" } as AgentView;
-  applyExecutionSettingsChange(deps.db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", now, undefined, () => [deckhand]);
+  applyExecutionSettingsChange(deps.db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", now, { listAgents: () => [deckhand] });
   proposeRoutingChange(deps.db, review, { op: "agent_tier", agent: "deckhand", to: "standard", evidence: [evidence], rationale: "r" }, "auditor", now, () => [deckhand]);
   breakRegistry(registryDir);
 

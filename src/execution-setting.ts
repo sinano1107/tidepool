@@ -1,4 +1,3 @@
-import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
@@ -35,6 +34,7 @@ import {
   tierIdOf,
   tierNames,
 } from "./tier.js";
+import type { AgentTierRow } from "./wire-contract.js";
 
 /** 要求2列を受け取る入口(管理MCP の `register_task` / `decompose_task`、worker MCP の `decompose`)が
  *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い段や古い意味を喋り続ける。
@@ -104,11 +104,10 @@ export function boardDefaultTier(db: Db): Tier {
   return loadExecutionDefaults(db).defaultTier;
 }
 
-/** 段の名前の線(ADR 0200 決定2): 英小文字で始まり英小文字・数字・`-`・`_` だけで、YAML が同じ文字列として読み戻すもの
- *  (`true` / `null` は YAML では文字列でない)。 */
+/** 段の名前の線(ADR 0200 決定2): 英小文字で始まり英小文字・数字・`-`・`_` だけ。 */
 export function assertTierName(db: Db, name: string): void {
-  if (!/^[a-z][a-z0-9_-]*$/.test(name) || parseYaml(name) !== name) {
-    throw new DomainError(`tier name "${name}" must start with a lowercase letter and use only a-z, 0-9, - and _ (and not be a YAML keyword such as true / null)`);
+  if (!/^[a-z][a-z0-9_-]*$/.test(name)) {
+    throw new DomainError(`tier name "${name}" must start with a lowercase letter and use only a-z, 0-9, - and _`);
   }
   if (tierNames(db).includes(name)) throw new DomainError(`the board already has a tier named "${name}"`);
 }
@@ -492,28 +491,39 @@ export function readExecutionSettings(db: Db) {
   return { table: loadExecutionSettingTable(db), tiers: readTiers(db), agentTiers: loadAgentTiers(db), ...loadExecutionDefaults(db) };
 }
 
-/** agent の既定ティアの行(ADR 0410 決定1)、agent 名の順。孤児の行(registry に無い agent)も載る —— 盤面は registry を読まない。 */
-export function loadAgentTiers(db: Db): { agent: string; tier: Tier }[] {
-  return db.prepare("SELECT a.agent, t.name AS tier FROM agent_tiers a JOIN tiers t ON t.id = a.tier_id ORDER BY a.agent").all() as { agent: string; tier: Tier }[];
+/** agent の既定ティアの行、agent 名の順。孤児の行(registry に無い agent)も載る —— 盤面は registry を読まない。 */
+function loadAgentTiers(db: Db): AgentTierRow[] {
+  return db.prepare("SELECT a.agent, t.name AS tier FROM agent_tiers a JOIN tiers t ON t.id = a.tier_id ORDER BY a.agent").all() as AgentTierRow[];
+}
+
+/** 行の一覧から agent の既定ティアを引く —— 組み込みの印のついた agent は持たない(ADR 0410 決定6)。読み手はどれもこの1本を通る。 */
+function defaultTierOf(rows: readonly AgentTierRow[], agent: { name: string; builtin?: boolean }): Tier | undefined {
+  return agent.builtin ? undefined : rows.find((row) => row.agent === agent.name)?.tier;
+}
+
+/** agent が実際に走る段(ADR 0410 決定2・4): 既定ティアがあればそれ、無ければ盤面既定。pin の照合は同じ式を設定の断面に当てる。 */
+const runningTierOf = (rows: readonly AgentTierRow[], defaultTier: Tier, agent: { name: string; builtin?: boolean }): Tier => defaultTierOf(rows, agent) ?? defaultTier;
+
+export function agentRunningTier(db: Db, agent: { name: string; builtin?: boolean }): Tier {
+  return runningTierOf(loadAgentTiers(db), boardDefaultTier(db), agent);
+}
+
+/** registry の agent 一覧の、その名前の組み込みでない entry(ADR 0410 決定3・6)。無ければ undefined —— registry に「在る」の判定はこの1本。 */
+export function registryAgentOf<A extends { name: string; builtin?: boolean }>(agents: readonly A[], name: string): A | undefined {
+  return agents.find((agent) => agent.name === name && !agent.builtin);
 }
 
 /** agent の一覧に盤面の既定ティアを添え、registry に無い agent(組み込みの名前を含む)の行を孤児として分ける(ADR 0410 決定5・6)。
  *  HTTP と MCP の agent 一覧が共有する。 */
-export function withAgentTiers<A extends { name: string; builtin?: boolean }>(db: Db, agents: readonly A[]): { agents: Array<A & { tier?: Tier }>; orphanTiers: { agent: string; tier: Tier }[] } {
+export function withAgentTiers<A extends { name: string; builtin?: boolean }>(db: Db, agents: readonly A[]): { agents: Array<A & { tier?: Tier }>; orphanTiers: AgentTierRow[] } {
   const rows = loadAgentTiers(db);
-  const tierOf = (agent: A) => (agent.builtin ? undefined : rows.find((row) => row.agent === agent.name)?.tier);
   return {
     agents: agents.map((agent) => {
-      const tier = tierOf(agent);
+      const tier = defaultTierOf(rows, agent);
       return tier === undefined ? agent : { ...agent, tier };
     }),
-    orphanTiers: rows.filter((row) => !agents.some((agent) => agent.name === row.agent && !agent.builtin)),
+    orphanTiers: rows.filter((row) => !registryAgentOf(agents, row.agent)),
   };
-}
-
-/** agent が実際に走る段(ADR 0410 決定2・4): 既定ティアがあればそれ、無ければ盤面既定。 */
-export function agentRunningTier(db: Db, agent: string): Tier {
-  return loadAgentTiers(db).find((row) => row.agent === agent)?.tier ?? boardDefaultTier(db);
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
@@ -671,7 +681,7 @@ export function routingPinChanges(
 > | null {
   const liveName = (id: TierId) => settings.tiers.find((t) => t.id === id)?.name;
   if (proposal.op === "agent_tier") {
-    const running = settings.agentTiers.find((row) => row.agent === proposal.agent)?.tier ?? settings.defaultTier;
+    const running = runningTierOf(settings.agentTiers, settings.defaultTier, { name: proposal.agent });
     const held = proposal.pin.rows.every((pinned) =>
       settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === liveName(pinned.tier)),
     );
@@ -798,8 +808,7 @@ export function applyExecutionSettingsChange(
   change: ExecutionSettingsChange,
   origin: EventOrigin,
   at: Date,
-  questionId?: string,
-  listAgents?: ListAgents,
+  { questionId, listAgents }: { questionId?: string; listAgents?: ListAgents } = {},
 ): number | null {
   if ((change.setting === "insert_tier" || change.setting === "edit_tier") && change.description !== undefined) {
     change = { ...change, description: normalizeText(change.description) };
@@ -809,7 +818,7 @@ export function applyExecutionSettingsChange(
     const { description, ...rest } = change;
     if (description === liveTierRows(db).find((tier) => tier.name === rest.name)?.description) change = rest;
   }
-  // registry は transaction の外で読む —— 読めない registry の止まり(ADR 0403 決定5)を巻き戻さない。解除は孤児も消せるよう読まない
+  // registry は transaction の外で読む —— 読めない registry の止まり(ADR 0403 決定5)を巻き戻さない。解除は孤児も消せるよう読まない(ADR 0410 決定5)
   if (change.setting === "agent_tier" && change.tier !== null) assertRegistryAgent(change.agent, listAgents);
   return db.transaction(() => {
     switch (change.setting) {
@@ -854,7 +863,8 @@ export function applyExecutionSettingsChange(
         break;
       case "agent_tier":
         if (change.tier !== null) assertKnownTier(db, "tier", change.tier);
-        if ((loadAgentTiers(db).find((row) => row.agent === change.agent)?.tier ?? null) === change.tier) return null;
+        // 組み込みの名前に残った孤児の行も消せるよう、印を付けずに引く
+        if ((defaultTierOf(loadAgentTiers(db), { name: change.agent }) ?? null) === change.tier) return null;
         if (change.tier === null) db.prepare("DELETE FROM agent_tiers WHERE agent = ?").run(change.agent);
         else {
           db.prepare(`INSERT INTO agent_tiers (agent, tier_id) VALUES (?, ${liveTierId("?")}) ON CONFLICT (agent) DO UPDATE SET tier_id = excluded.tier_id`).run(
@@ -909,9 +919,8 @@ function assertRegistryAgent(agent: string, listAgents?: ListAgents): void {
   } catch (err) {
     throw new DomainError(`the registry could not be read to check that agent ${agent} exists: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const found = agents.find((a) => a.name === agent);
-  if (!found) throw new DomainError(`agent ${agent} is not in the registry`);
-  if (found.builtin) throw new DomainError(builtInAgentHasNoTier(agent));
+  if (registryAgentOf(agents, agent)) return;
+  throw new DomainError(agents.some((a) => a.name === agent) ? builtInAgentHasNoTier(agent) : `agent ${agent} is not in the registry`);
 }
 
 /** 組み込みの agent は既定ティアを持たない理由(ADR 0410 決定6)。既定ティアの設定と段を下げる提案の門が同じ文で断る。 */
@@ -961,7 +970,8 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
   // registry を読むのは agent の段の提案が open なときだけ(poll ごとに registry を読まない)。読めなくても投げない —— pickup を止めるのは、
   // 読みが通る読み込みの1点が立てる registryUnreadable(ADR 0403 決定5)
   let agents: ReturnType<ListAgents> | null | undefined;
-  const registered = (agent: string) => {
+  // registry の無い盤面・読めない回は「消えた」と見えないので true
+  const notSeenGone = (agent: string) => {
     if (!listAgents) return true;
     if (agents === undefined) {
       try {
@@ -971,11 +981,11 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
         agents = null;
       }
     }
-    return agents === null || agents.some((a) => a.name === agent && !a.builtin);
+    return agents === null || registryAgentOf(agents, agent) !== undefined;
   };
   for (const { id, question_proposal } of open) {
     const proposal = JSON.parse(question_proposal) as RoutingProposal;
-    const changed = proposal.op === "agent_tier" && !registered(proposal.agent) ? null : routingPinChanges(proposal, settings);
+    const changed = proposal.op === "agent_tier" && !notSeenGone(proposal.agent) ? null : routingPinChanges(proposal, settings);
     if (changed?.length === 0) continue;
     settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: "routing", changed, observed_event_id: observedEventId }, at);
   }
@@ -1045,7 +1055,7 @@ function selectorInputFor(
     taskTier: review ? undefined : task?.tier ?? undefined,
     priority: review ? defaults.reviewPriority : task?.priority ?? defaults.priority,
     reviewTier: interviewTier ?? (review ? task.review_tier ?? undefined : undefined),
-    agentTier: definition.name === undefined || definition.builtin ? undefined : loadAgentTiers(db).find((row) => row.agent === definition.name)?.tier,
+    agentTier: definition.name === undefined ? undefined : defaultTierOf(loadAgentTiers(db), { name: definition.name, builtin: definition.builtin }),
     boardTier: defaults.defaultTier,
     tiers,
     advisorCeiling: defaults.advisorCeiling,

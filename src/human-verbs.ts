@@ -33,6 +33,7 @@ import {
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
   type RoutingRowChange,
+  registryAgentOf,
 } from "./execution-setting.js";
 import { assertGhVersion, GhVersionError, ghRefusalText } from "./gh-cli-version.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
@@ -1569,7 +1570,7 @@ function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
 /** agent の段の提案の approve の前の照合(ADR 0410 決定4): registry を読んで agent の存在だけを確かめる。消えていれば question を stale
  *  (changed null —— pin が名指したものが無い)で閉じて null、読めなければ回答を断る(question は開いたまま)。在れば下げ先の走れる行を
  *  確かめ(spec #916 B)、回答の transaction の書き込みが読む一覧を返す —— transaction の中で registry を読み直さない。 */
-function agentTierApproval(deps: SubmitAnswerDeps, questionId: string, agent: string, to: Tier, now: () => Date): ListAgents | null {
+function listAgentsOrSettleStale(deps: SubmitAnswerDeps, questionId: string, agent: string, to: Tier, now: () => Date): ListAgents | null {
   const list = deps.agentAdmin?.list;
   if (!list) throw new DomainError("no registry configured — cannot set the agent's default tier");
   let agents: AgentView[];
@@ -1578,7 +1579,7 @@ function agentTierApproval(deps: SubmitAnswerDeps, questionId: string, agent: st
   } catch (err) {
     throw new DomainError(`the registry could not be read to check that agent ${agent} still exists: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const found = agents.find((a) => a.name === agent && !a.builtin);
+  const found = registryAgentOf(agents, agent);
   if (!found) {
     settleQuestionAsObserved(deps.db, questionId, { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "routing", changed: null, observed_event_id: null }, now());
     return null;
@@ -1639,6 +1640,8 @@ export async function submitAnswer(
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
     else throw new DomainError("only an approve answer to a routing row, add-tier, tier description, Interview, agent tier, or memory proposal with a candidate takes an amendment");
   }
+  // agent の段の提案の下げ先(修正値があればそれ)—— 承認前の照合と回答の transaction の書き込みが同じ値を読む
+  const agentTierTo = proposal?.kind === "routing" && proposal.op === "agent_tier" ? ((amended as { to: Tier } | undefined)?.to ?? proposal.to) : undefined;
   // approve は「これを注入する」宣言 —— candidate の宛先(修正値があればそれ)と scope が解決できなければ、付け替えるか reject する(ADR 0173 決定2)。
   // 移された candidate は複製の scope で見る(ADR 0162 決定6)
   if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) {
@@ -1887,7 +1890,7 @@ export async function submitAnswer(
       }
       case "proposal":
         if (proposal?.kind === "routing" && proposal.op === "agent_tier" && answers[0] === "approve") {
-          const listed = agentTierApproval(deps, task.id, proposal.agent, (amended as { to: Tier } | undefined)?.to ?? proposal.to, now);
+          const listed = listAgentsOrSettleStale(deps, task.id, proposal.agent, agentTierTo!, now);
           // agent が消えていれば question は観測で閉じた —— merge の観測決着と同じ 200 + 印で返す(ADR 0265 決定7)
           if (listed === null) return presentAnswered(deps, task);
           approvedAgents = listed;
@@ -1960,8 +1963,8 @@ export async function submitAnswer(
         } else if (proposal.op === "add_tier") {
           // 段の挿入と行の移動を1つの transaction で(ADR 0200 決定8)。修正後の値の検査は挿入の扉がやり直し、拒めば回答ごと巻き戻る
           const tier = { ...proposal.tier, ...(amended as AddTierAmendment | undefined) };
-          applyExecutionSettingsChange(deps.db, { setting: "insert_tier", ...tier }, origin, now(), task.id);
-          applyExecutionSettingsChange(deps.db, { setting: "row", key: proposal.row, row: { ...proposal.pin.row, tier: tier.name } }, origin, now(), task.id);
+          applyExecutionSettingsChange(deps.db, { setting: "insert_tier", ...tier }, origin, now(), { questionId: task.id });
+          applyExecutionSettingsChange(deps.db, { setting: "row", key: proposal.row, row: { ...proposal.pin.row, tier: tier.name } }, origin, now(), { questionId: task.id });
         } else {
           const change: ExecutionSettingsChange =
             proposal.op === "row"
@@ -1969,10 +1972,10 @@ export async function submitAnswer(
               : proposal.op === "tier_description"
                 ? { setting: "edit_tier", name: proposal.tier, description: (amended as { description: string } | undefined)?.description ?? proposal.description }
                 : proposal.op === "agent_tier"
-                  ? { setting: "agent_tier", agent: proposal.agent, tier: (amended as { to: Tier } | undefined)?.to ?? proposal.to }
+                  ? { setting: "agent_tier", agent: proposal.agent, tier: agentTierTo! }
                   : { setting: "learner_promoted", value: proposal.op === "promote" };
           // ADR 0410 決定4: agent の既定ティアも回答と同じ transaction で書く
-          applyExecutionSettingsChange(deps.db, change, origin, now(), task.id, approvedAgents);
+          applyExecutionSettingsChange(deps.db, change, origin, now(), { questionId: task.id, listAgents: approvedAgents });
         }
       }
       // The decision log line on the question states why promotion was given up (the root holds only `landing_declined`).

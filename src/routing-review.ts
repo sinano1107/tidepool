@@ -503,7 +503,7 @@ export type RegistryAgent = { name: string; builtin?: boolean };
  *  (ADR 0200 決定4)で、一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。 */
 function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } {
   const tiers = tierNames(db);
-  const from = agentRunningTier(db, agent.name);
+  const from = agentRunningTier(db, agent);
   return { from, below: tiers[tiers.indexOf(from) - 1] };
 }
 

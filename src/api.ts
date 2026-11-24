@@ -1837,7 +1837,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post(
     "/settings/execution",
     validatedWrite(executionSettingsChangeSchema, async (change) => {
-      applyExecutionSettingsChange(db, change, "webui", clock.now(), undefined, agentAdmin?.list);
+      applyExecutionSettingsChange(db, change, "webui", clock.now(), { listAgents: agentAdmin?.list });
       pollNow();
       return readExecutionSettingsWithQuarantine(db);
     }),

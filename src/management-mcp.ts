@@ -754,7 +754,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ change }) => {
       try {
-        applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now(), undefined, deps.agentAdmin?.list);
+        applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now(), { listAgents: deps.agentAdmin?.list });
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
         throw err;

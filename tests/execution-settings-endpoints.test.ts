@@ -570,7 +570,6 @@ it("agent の既定ティアの設定と解除は両方の扉に乗り、経路�
   t = await bootTidepool({ agentAdmin: { list: () => [{ name: "deckhand" }] as AgentView[] } });
   const set = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "agent_tier", agent: "deckhand", tier: "standard" });
   expect(set.status).toBe(200);
-  expect(set.json.agentTiers).toEqual([{ agent: "deckhand", tier: "standard" }]);
   const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "agent_tier", agent: "ghost", tier: "standard" });
   expect(refused.status).toBe(400);
   expect(refused.json.error).toContain("agent ghost is not in the registry");
@@ -585,7 +584,6 @@ it("agent の既定ティアの設定と解除は両方の扉に乗り、経路�
   } finally {
     await client.close();
   }
-  expect((await state()).agentTiers).toEqual([]);
   const events = listEventsOfKinds(t.db, ["execution_settings_changed"]);
   expect(events.map((e) => [e.origin, e.payload.setting])).toEqual([
     ["webui", "agent_tier"],

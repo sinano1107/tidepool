@@ -252,7 +252,7 @@ async function makeUsageWorker(pty: PtyFn) {
 
 /** setup のみ: 盤面に deckhand の既定ティア frontier を書く(ADR 0410 決定1)。 */
 function deckhandOnFrontier(db: Db): void {
-  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", new Date(), undefined, () => [{ name: "deckhand" }]);
+  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", new Date(), { listAgents: () => [{ name: "deckhand" }] });
 }
 
 async function makeWorker(
@@ -2775,6 +2775,28 @@ describe("ClaudeCodeWorker", () => {
           ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown workspace/);
+  });
+
+  // ADR 0410 帰結(配備): 既定 agent に `tier:` 行が残れば、pickup の Quarantine でなく盤面の起動が止まる
+  it("既定 agent の agent.md に `tier:` 行が残っていれば boot 時のコンストラクタが段を名指して失敗する", async () => {
+    const registryDir = await makeRegistry({
+      "agents/deckhand.md": `---\ndescription: d\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ntier: frontier\n---\nYou are Deckhand.\n`,
+    });
+    const logDir = await tempDir("tidepool-worker-logs-");
+    expect(
+      () =>
+        new ClaudeCodeWorker({
+          db: openDb(":memory:"),
+          clock: new FakeClock(),
+          registry: { dir: registryDir, mode: "purely-local" },
+          agent: "deckhand",
+          workspace: "tidepool",
+          mcpUrl: "http://127.0.0.1:4589/mcp",
+          logDir,
+          transcripts: new TranscriptStore(logDir),
+          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
+        }),
+    ).toThrow(/does not accept: tier/);
   });
 
   // ADR 0052 決定4: 起動時の読みは騒ぐだけで、起動を拒まない —— 止まりは読み込みの1点が立てる(ADR 0403 決定5)

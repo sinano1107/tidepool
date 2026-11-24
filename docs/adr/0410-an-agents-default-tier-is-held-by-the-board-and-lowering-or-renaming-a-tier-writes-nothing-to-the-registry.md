@@ -43,6 +43,8 @@ registry に問うのはそのうち2つだけだった。段の読み手と書�
 - 定義の置き場が registry から動いても(#3759)段は動かない —— 段を定義の中に置いたまま定義を製品 repo へ移せば、段を下げる承認が
   製品 repo の保護ブランチへの書き込みになる。
 - 配備: registry に `tier:` 行が残る盤面では、その agent が pickup で Quarantine に入る。行を消し、settings で設定し直す。
+  既定 agent に残っていれば、Quarantine でなく盤面の起動が止まる(Claude の adapter の起動時の既定の検査)—— registry repo で
+  行を消してから起動し、settings で設定し直す。
 - #3635 と #3638 はこの実装に畳む。ADR 0401 決定6 とその追記(2026-11-24)は段について対象を失う。
 - Status 追記: ADR 0110 決定1、ADR 0111 追記2、ADR 0120、ADR 0150 決定5、ADR 0200 決定2 と追記、ADR 0271、ADR 0288 決定3、ADR 0307 決定2、
   ADR 0401 決定6 と追記、ADR 0405。

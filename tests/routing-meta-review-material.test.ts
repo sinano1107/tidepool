@@ -190,7 +190,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   const seen = exit(task, spawn(task, "deckhand", sol));
   const key = (effort: string) => ({ provider: row.provider, model: row.model, effort });
   const edited = applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "max" } }, "mcp", at)!;
-  applyExecutionSettingsChange(db, { setting: "row", key: key("max"), row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
+  applyExecutionSettingsChange(db, { setting: "row", key: key("max"), row: { ...row, tier: "frontier" } }, "webui", at, { questionId: "question-1" });
   const review = register(db);
   exit(task, spawn(task, "deckhand", executionSetting("moonshot", "kimi-k3")));
   applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "low" } }, "mcp", at);

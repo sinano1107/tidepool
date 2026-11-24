@@ -37,6 +37,7 @@ import { proposeRoutingChange } from "../src/routing-review.js";
 import { type AgentTierProposal, cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, metaReviewSubjectOf, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierIdOf, tierNames } from "../src/tier.js";
+import type { AgentTierRow } from "../src/wire-contract.js";
 import { unusedLanding } from "./fakes.js";
 import { DECKHAND_AGENT, HUMAN_WEBUI, rowSession, WORKER_SPAWNED } from "./harness.js";
 
@@ -600,7 +601,7 @@ const withNew = (name: string) => TIERS.map((tier) => (tier.name === name ? { ..
 const reusing = (from: string, to: string) => [...withNew(from), { ...TIERS.find((tier) => tier.name === from)!, name: to }];
 const renameRows = (from: string, to: string) => SEED_EXECUTION_SETTINGS.map((row) => (row.tier === from ? { ...row, tier: to } : row));
 /** pin の照合の設定の、agent の既定ティアの無い盤面(盤面既定 economy)。 */
-const UNSET_AGENTS: { agentTiers: { agent: string; tier: string }[]; defaultTier: string } = { agentTiers: [], defaultTier: "economy" };
+const UNSET_AGENTS: { agentTiers: AgentTierRow[]; defaultTier: string } = { agentTiers: [], defaultTier: "economy" };
 const withTiers = (tierList: readonly { id: number; name: string; description: string }[]) => ({ table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, agentTiers: [{ agent: "deckhand", tier: "frontier" }], defaultTier: "economy", tiers: tierList });
 
 /** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。段は id で焼く。 */
@@ -699,7 +700,7 @@ it("下げ先の検査は、対象ティアに agent の entry のいずれか�
 });
 
 it("agent の段の提案の pin: agent が実際に走る段が変われば agent_tier —— 既定ティアの変更でも、既定ティアの無い agent の盤面既定の変更でも。根拠の行は (provider, model) の段 / effort で照合する", () => {
-  const running = (agentTiers: { agent: string; tier: string }[], defaultTier = "economy", t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) =>
+  const running = (agentTiers: AgentTierRow[], defaultTier = "economy", t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) =>
     routingPinChanges(tierProposal, { table: t, learnerPromoted: false, agentTiers, defaultTier, tiers: TIERS });
   const onFrontier = [{ agent: "deckhand", tier: "frontier" }];
   expect(running(onFrontier)).toEqual([]);
@@ -1250,7 +1251,7 @@ it("段の説明と位置を名前で名指して直せる", () => {
   expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
 });
 
-it("空・複数行の説明、重複・agent.md に書けない名前、一覧の外の位置、無い段の編集は拒まれ、一覧は変わらない", () => {
+it("空・複数行の説明、重複・名前の線の外の名前、一覧の外の位置、無い段の編集は拒まれ、一覧は変わらない", () => {
   const db = openDb(":memory:");
   const before = readTiers(db);
   for (const bad of [
@@ -1258,7 +1259,6 @@ it("空・複数行の説明、重複・agent.md に書けない名前、一覧�
     { ...premium, description: "line one\nline two" },
     { ...premium, name: "standard" },
     { ...premium, name: "has space" },
-    { ...premium, name: "true" },
     { ...premium, name: "" },
   ]) {
     expect(() => change(db, { setting: "insert_tier", ...bad, position: 0 })).toThrow(DomainError);
@@ -1285,11 +1285,15 @@ it("行のある段・盤面設定が指す段・未決着の task が要求し�
 
 // ── agent の既定ティア(ADR 0410 決定1・3・5): 盤面が agent 名で持ち、段は id で残す ──
 
+/** 読めない registry の agent 一覧。 */
+const unreadableRegistry = () => {
+  throw new Error("registry clone is broken");
+};
 /** registry の agent 一覧(組み込みの fugu を含む)。 */
 const registryAgents = (...names: string[]) => () => [...names.map((name) => ({ name })), { name: "fugu", builtin: true }];
 /** `agents` の null は registry の無い盤面。 */
 const setTier = (db: Db, agent: string, tier: string | null, agents: ListAgents | null = registryAgents(agent)) =>
-  applyExecutionSettingsChange(db, { setting: "agent_tier", agent, tier }, "webui", at, undefined, agents ?? undefined);
+  applyExecutionSettingsChange(db, { setting: "agent_tier", agent, tier }, "webui", at, { listAgents: agents ?? undefined });
 
 it("agent の既定ティアは盤面に書かれ、読み口が名前で返し、改名に付いてきて、解除で消える —— 変更は execution_settings_changed に段の id で残る", () => {
   const db = openDb(":memory:");
@@ -1312,12 +1316,9 @@ it("agent の既定ティアは盤面に書かれ、読み口が名前で返し�
 
 it("既定ティアの設定は registry に無い agent・組み込みの agent・読めない registry・registry の無い盤面・生きていない段を断り、何も残さない", () => {
   const db = openDb(":memory:");
-  const unreadable = () => {
-    throw new Error("registry clone is broken");
-  };
   expect(() => setTier(db, "ghost", "standard", registryAgents("deckhand"))).toThrow(/agent ghost is not in the registry/);
   expect(() => setTier(db, "fugu", "standard", registryAgents("deckhand"))).toThrow(/fugu is built-in/);
-  expect(() => setTier(db, "deckhand", "standard", unreadable)).toThrow(/the registry could not be read.*registry clone is broken/);
+  expect(() => setTier(db, "deckhand", "standard", unreadableRegistry)).toThrow(/the registry could not be read.*registry clone is broken/);
   expect(() => setTier(db, "deckhand", "standard", null)).toThrow(/no registry/);
   expect(() => setTier(db, "deckhand", "premium")).toThrow(/unknown tier "premium"/);
   expect(readExecutionSettings(db).agentTiers).toEqual([]);
@@ -1473,7 +1474,6 @@ it("新しい名前は挿入と同じ検査を通り、無い段・重複・名�
     { name: "standard", to: "economy" },
     { name: "standard", to: "standard" },
     { name: "standard", to: "Has Space" },
-    { name: "standard", to: "true" },
   ]) {
     expect(() => change(db, { setting: "rename_tier", ...bad })).toThrow(DomainError);
   }
@@ -1490,9 +1490,6 @@ it("tier descriptions trim surrounding whitespace before the one-line rule and p
 
 /** registry の agent deckhand(openai の entry)。 */
 const DECKHAND_OPENAI: AgentView = { ...DECKHAND_AGENT, provider: "openai" };
-const unreadableRegistry = () => {
-  throw new Error("registry clone is broken");
-};
 
 /** deckhand の既定ティアを frontier にし、frontier で走った出所 agent の session を根拠に standard へ下げる提案を立てる。`answer` は registry の
  *  一覧(既定は deckhand だけ)を読む盤面として回答する。 */
@@ -1557,6 +1554,16 @@ it("承認は回答と同じ transaction で既定ティアを盤面に書き、
   expect(readExecutionSettings(db).agentTiers).toEqual([{ agent: "deckhand", tier: "economy" }]);
   expect(listEventsOfKinds(db, ["execution_settings_changed"]).at(-1)!.payload).toMatchObject({ setting: "agent_tier", agent: "deckhand", tier_id: tierIdOf(db, "economy"), question_id });
   expect(listEvents(db, question_id).map((event) => event.kind)).toContain("question_answered");
+});
+
+it("承認の既定ティアの書き込みが断られれば回答ごと巻き戻り、question は open のまま回答も残らない —— 書き込みは回答と同じ transaction(ADR 0410 決定4 / ADR 0405)", async () => {
+  const db = openDb(":memory:");
+  const { question_id, answer } = proposeLoweringDeckhand(db);
+  // setup のみ: 盤面の表の書き込みを断る(回答の transaction の中でだけ起きる失敗)
+  db.exec("CREATE TRIGGER refuse_agent_tiers BEFORE UPDATE ON agent_tiers BEGIN SELECT RAISE(ABORT, 'agent_tiers write refused'); END");
+  await expect(answer(["approve"])).rejects.toThrow("agent_tiers write refused");
+  expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
+  expect(listEvents(db, question_id).map((event) => event.kind)).not.toContain("question_answered");
 });
 
 it("承認は registry を読み、読めなければ回答を断り question は open のまま、agent が消えていれば stale(changed null)で閉じて既定ティアを書かない", async () => {
