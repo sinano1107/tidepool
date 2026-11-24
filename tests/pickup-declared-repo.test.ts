@@ -6,14 +6,15 @@ import type { Db } from "../src/db.js";
 import { GhCliClient, type GitHubClient, type IssueRef } from "../src/github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
+import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { questionKindOf } from "../src/question-kind.js";
 import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { listChildren, pickupTask, registerFailureQuestion, registerTask, type Task } from "../src/tasks.js";
+import { getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type Task } from "../src/tasks.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
-import { releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { DeclaredRepoMismatchError, fireBeforeOpenPredicates, firePickupPredicates, PickupGateError, pickupRepoCheck, releaseWorkspace, type WorkspaceConfig, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
 import { awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, MATCHING_GH, makeRemoteBackedWorkspace, prepareAtPickup, restedInterviewRoom, shimGit } from "./harness.js";
 import { commitThroughTaskCheckout, fetchHeldAtToken, landingWork, openBoard, type RegisteredReef, registeredReef, reRegister } from "./landing-fixture.js";
@@ -217,4 +218,54 @@ it("面接室の受験者は宣言の repo の記録を持たなくても、失�
 
   await vi.waitFor(() => expect(worker.started.map(({ id }) => id)).toEqual([task.id]));
   expect(openQuarantineQuestion(db, "workspace", root.id)).toBeUndefined();
+});
+
+// ADR 0399 決定5 / ADR 0329 決定10: 根の記録と宣言の食い違いは場所の失敗でないので包まない。覚えた repo の食い違いは落ちた場所を名指して包む
+it("開く前の項が登録し直しで根の比較に落ちると素の DeclaredRepoMismatchError が出て、覚えた repo の食い違いは落ちた場所の PickupGateError に包まれる", async () => {
+  const { db, clock } = await openBoard();
+  const declared = new DeclaredRepoMismatchError("task/t-1 cannot be carried: the board recorded repo acme/old for it, but workspace reef now declares repo acme/new.");
+  const place = withRememberedRepoCheck(db, { name: "reef", path: "/old/reef", checkDeclaredRepo: () => { throw declared; } }, () => clock.now(), () => ({ name: "reef", path: "/new/reef" }));
+  const thrown = (check: () => void) => {
+    try {
+      fireBeforeOpenPredicates(place, [{ phase: "before-open", describe: "the remembered repo", check }]);
+    } catch (err) {
+      return err;
+    }
+    throw new Error("no predicate failed");
+  };
+
+  expect(thrown(() => { place.checkRememberedRepo(place); })).toBe(declared);
+
+  const remembered = new WorkspaceRepoMismatchError("workspace reef was registered for repo acme/old.");
+  const failure = thrown(() => { throw remembered; });
+  expect(failure).toBeInstanceOf(PickupGateError);
+  expect((failure as PickupGateError).cause).toBe(remembered);
+  expect((failure as PickupGateError).place.name).toBe("reef");
+});
+
+it("開いた後の項の fetch が token を待つ間に、同じ名前を別の path・別の repo で登録し直すと、PickupGateError でなく素の DeclaredRepoMismatchError が出る (ADR 0399 決定3・5)", async () => {
+  const { db, clock } = await openBoard();
+  const { workspace: old } = await makeRemoteBackedWorkspace("after-open-old");
+  const { workspace: moved } = await makeRemoteBackedWorkspace("after-open-moved");
+  const reef = await registeredReef(old);
+  const task = landingWork(db, clock, "reef");
+  await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), task, "work.txt", "from the first pickup\n");
+  const place = pickupRepoCheck(db, getTask(db, task.id)!, () => clock.now(), reef.resolve)!(reef.resolve("reef"));
+  const { window, githubAuth } = fetchHeldAtToken();
+
+  const firing = firePickupPredicates(db, place, checkoutPickupPredicates(place), "after-open", { githubAuth, now: () => clock.now() }).then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  await window.entered;
+  try {
+    await reRegisterBeforeRequeue(db, reef, moved, [task]);
+  } finally {
+    window.open();
+  }
+  const failure = await firing;
+
+  expect(failure).toBeInstanceOf(DeclaredRepoMismatchError);
+  expect(failure).not.toBeInstanceOf(PickupGateError);
+  expect((failure as Error).message).toContain(`now declares repo ${moved.repo}`);
 });

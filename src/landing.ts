@@ -276,7 +276,8 @@ function workspaceQuarantinedMessage(name: string): string {
 
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
  *  Quarantine の question を名指す(ADR 0373 決定13 追記)。最初の撮りの前の開く前の項(`fixedPoints` との交差を含む)に落ちた名前も
- *  workspace の Quarantine を立てる(ADR 0399 決定7)。git の失敗で ref が読めない checkout も同じ(ADR 0403 決定4)。 */
+ *  workspace の Quarantine を立てる(ADR 0399 決定7)—— 項が根の記録と宣言の食い違いに落ちたときは立てず、`DeclaredRepoMismatchError`
+ *  のまま投げる(決定5)。git の失敗で ref が読めない checkout も同じ(ADR 0403 決定4)。 */
 export function assertLandingRefs(
   db: Db,
   workspace: WorkspaceConfig,
@@ -302,7 +303,8 @@ export function assertLandingRefs(
       quarantineWorkspace(db, workspace.name, error, now);
       throw new LandingRefsRefusedError(workspaceQuarantinedMessage(workspace.name));
     }
-    if (error instanceof WorkspaceRepoMismatchError) throw error;
+    // ADR 0399 決定5: 根の記録と宣言の食い違いは根の止まり —— その名前の Quarantine にせず、呼び手の根の止まりへ素で返す
+    if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError) throw error;
     const unverifiedMessage = `could not verify refs for workspace "${workspace.name}" before landing: ${(error instanceof Error ? error.message : String(error)).trim()}`;
     // 最初の撮りの確認が registry を読めなかったのは checkout の故障ではない —— どの名前の Quarantine でもなく根の失敗にする(ADR 0373 決定13)
     if (error instanceof FirstCaptureRegistryReadError) throw new LandingRefCheckError(unverifiedMessage);

@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
-import { createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
+import { assertLandingRefs, createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { registerTask, type Task } from "../src/tasks.js";
-import { declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig } from "../src/workspace.js";
+import { DeclaredRepoMismatchError, declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig, withRememberedRepoCheck } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
   commitWork,
@@ -100,8 +100,12 @@ it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ�
 });
 
 /** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に、同じ checkout の origin を別の repo へ向けて
- *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`hold` は収束に足す材料を返せる。 */
-async function reRegisteredDuringAwait(hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> }) {
+ *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`elsewhere` なら別の path の checkout(別の repo)へ登録し直す。
+ *  `hold` は収束に足す材料を返せる。 */
+async function reRegisteredDuringAwait(
+  hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> },
+  { elsewhere = false } = {},
+) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeLandingWorkspace("reef-old");
   const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
@@ -119,7 +123,8 @@ async function reRegisteredDuringAwait(hold: (github: FakeGitHubClient) => { ent
 
   const converging = landing.converge();
   await window.entered;
-  await reRegister(db, reef, { ...old, repo: other.repo }, () => git(old.path, "remote", "set-url", "origin", other.repo!));
+  if (elsewhere) await reRegister(db, reef, other);
+  else await reRegister(db, reef, { ...old, repo: other.repo }, () => git(old.path, "remote", "set-url", "origin", other.repo!));
   window.open();
   await converging;
   return { db, github, old, other, root: done, head };
@@ -164,6 +169,18 @@ it("PR の head を取る token の await の間に扉で別の repo へ登録�
 
   expect([github.pushes, github.requests]).toEqual([[], []]);
   expect(git(old.head_repo!, "rev-parse", `task/${root.id}`)).toBe(head);
+  stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
+});
+
+// #3700: 削除の扉は基準の行も消すので、別の path で登録し直した名前は await の後、行き先の読みでも最初の撮りの前の項でも path の変化を見て
+// 根の比較に落ちる —— どちらが先でも、その名前の Quarantine でなく根の止まりになる(ADR 0399 決定5・7)
+it.each([
+  ["PR の状態を読む前", "getPullRequestState"],
+  ["push の準備", "preparePush"],
+] as const)("%sの await の間に扉で名前を削除し、別の path の別の repo の checkout に登録し直しても、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async (_, method) => {
+  const { db, github, old, other, root } = await reRegisteredDuringAwait(holdBefore(method), { elsewhere: true });
+
+  expect([github.pushes, github.requests]).toEqual([[], []]);
   stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
 });
 
@@ -227,4 +244,21 @@ it("面接室の受験者は、面接室で拾われても宣言の repo を記�
   await prepareAtPickup(db, room, examinee!, { workspacesBaseDir: base });
 
   expect(declaredRepoDisagreement(db, examinee!.id, room)).toMatch(/no record/);
+});
+
+// ADR 0399 決定5・7: 基準の行の無い名前の最初の撮りの前の項が、登録し直しで根の比較に落ちたら、その名前の Quarantine でなく根の止まり
+it("基準の行の無い名前の着地の前の比較で、覚えた repo の項が path の変化を見て根の比較に落ちると、DeclaredRepoMismatchError がそのまま出て workspace の Quarantine は立たない", async () => {
+  const { db, clock } = await openBoard();
+  const reef = await makeWorkspace("reef");
+  const declared = new DeclaredRepoMismatchError("task/t-1 cannot be carried: the board recorded repo acme/old for it, but workspace reef now declares repo acme/new.");
+  const workspace = withRememberedRepoCheck(db, { ...reef, checkDeclaredRepo: () => { throw declared; } }, () => clock.now(), () => ({ ...reef, path: `${reef.path}-moved` }));
+
+  let thrown: unknown;
+  try {
+    assertLandingRefs(db, workspace, undefined, undefined, clock.now());
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBe(declared);
+  expect(openQuarantineQuestion(db, "workspace", reef.name)).toBeUndefined();
 });
