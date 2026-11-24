@@ -3518,6 +3518,9 @@ export function restoreBaseline(
   if (giveUp) {
     giveUpAnswer.refuseIfMarked(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
     db.transaction(() => {
+      // 記録が git の書き込みより先でよいのは、失われたと数えるのが基準の sha の object の不在で、ref の今の値を読まないから —— 書き戻しの前に
+      // 落ちても記録は偽にならない。失われた `task/<id>` の行をここで消すので、人間の値で残った ref は違反のまま、次に通る回答は
+      // `restore the baseline` だけで、それが落ちなかった give-up と同じ終わりへ書く(#3624)。行に今の値を入れると `repaired by hand` が通る
       updateBaseline(db, workspace, (values) => lost.forEach(([ref]) => values.set(ref, lostTask(ref) ? "" : (current.get(ref) ?? ""))));
       appendEvent(db, {
         taskId: null,

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -854,6 +854,54 @@ it.each([
 
   expect(accepted(b)).toBe(true);
   expect(landingState(b.db, getTask(b.db, root.id)!)).toBe("branch_lost");
+});
+
+// 失われたと数えるのは基準の sha の object が無いことで、ref の今の値は読まない —— 記録は git の書き込みの前に落ちても偽にならない。
+// 守っているのは、失われた `task/<id>` の基準の行を記録と同じ transaction で消すこと: 人間の値で残った ref は違反のままで、次に通る回答は
+// `restore the baseline` だけになる。行に今の値を入れると `repaired by hand` が人間の値を基準に入れ、失われた event と並んで pickup が止まり続ける(#3624)
+it.each([
+  ["完了した根", "基準の予告の前", true, false],
+  ["完了した根", "基準の予告の後", true, true],
+  ["未決着の根", "基準の予告の前", false, false],
+  ["未決着の根", "基準の予告の後", false, true],
+] as const)("人間が動かした `task/<id>` を失った give-up が記録の後・git の前に落ちても(%s・%s)、答え直しの give-up は記録を二重にせず、`repaired by hand` は人間の値を基準に入れず、`restore the baseline` が落ちなかった give-up と同じ終わりへ書く(ADR 0375 決定9、ADR 0392 決定1、#3624)", async (_, __, completed, afterAnnounce) => {
+  const b = await board(`lost-moved-dies-before-git-${completed ? "done" : "unsettled"}-${afterAnnounce ? "announced" : "unannounced"}`);
+  const root = completed ? await completeThrough(b, work(b, "root"), "root.txt") : await commitThrough(b, work(b, "root"), "root.txt");
+  if (completed) openEveryLandingQuestion(b, root);
+  const tip = git(b.ws.path, "rev-parse", `task/${root.id}`);
+  const human = humanMoves(b, root.id);
+  // 書き戻しの最初の書き込み(keep-around)を `.lock` で落とす —— 予告の前に落ちた盤面と同じく、git は何も書かれない
+  const keepAround = join(b.ws.path, ".git", "refs", "keep-around");
+  mkdirSync(keepAround, { recursive: true });
+  const lock = join(keepAround, `${human}.lock`);
+  let undrop = () => {};
+  await expect(
+    giveUpAfter(b, () => {
+      writeFileSync(lock, "");
+      if (afterAnnounce) undrop = dropBoardBeforeFold(b.db, { foldOnly: true });
+    }),
+  ).rejects.toThrow(`refs/keep-around/${human}`);
+  undrop();
+  rmSync(lock);
+  const branch = () => git(b.ws.path, "for-each-ref", "--format=%(objectname)", `refs/heads/task/${root.id}`);
+  expect(accepted(b)).toBe(false);
+  expect(branch()).toBe(human);
+  expect(lostEvents(b.db)).toEqual([{ task_id: root.id, payload: { kind: "task_branch_lost", sha: tip } }]);
+
+  await expect(answerQuarantine(b, "repaired by hand")).rejects.toThrow(`refs/heads/task/${root.id}`);
+  await expect(answerQuarantine(b, GIVE_UP)).rejects.toThrow(`no ref of workspace ${b.ws.name} is lost`);
+  await answerQuarantine(b, "restore the baseline");
+
+  expect(accepted(b)).toBe(true);
+  expect(branch()).toBe("");
+  expect(git(b.ws.path, "rev-parse", `refs/keep-around/${human}`)).toBe(human);
+  expect(lostEvents(b.db)).toHaveLength(1);
+  if (completed) {
+    expect(landingState(b.db, getTask(b.db, root.id)!)).toBe("branch_lost");
+  } else {
+    const place = await pickUp(b, getTask(b.db, root.id)!);
+    expect(git(place.path, "rev-parse", "HEAD")).toBe(git(b.ws.path, "rev-parse", "main"));
+  }
 });
 
 it("親が生きている間に失われた死んだ子は、親の local 着地の後も着地の根にならない —— 昇格失敗の question を立てず、着地を待つ完了タスクに数えず、行は `branch_lost` を出す(ADR 0407 決定1、#3492)", async () => {
