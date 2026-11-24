@@ -1504,7 +1504,7 @@ function inspectWorkbenchTip<T>(
         }
         throw new IntakeRefusedError(`the workbench at ${at} is not ready: ${target} there does not contain ${missing.label} (\`${merge}\`). Run \`git merge ${merge}\` there ${fromOwnClone(target, merge)}, then ${again}.`);
       }
-      const branches = withNamed(() => otherTaskBranches(db, named, verified, tip, [...inputs.map(({ sha }) => sha), ...(otherTasks.excluded?.() ?? [])], otherTasks.range));
+      const branches = withNamed(() => otherTaskBranches(db, named, verified, tip, [...inputs.map(({ sha }) => sha), ...(otherTasks.alsoExcluded?.() ?? [])], otherTasks.range));
       if (branches.length > 0) throw new IntakeRefusedError(otherTasks.refusalFor(branches, at));
       if (boardViewStatus(at, tip, verified).length > 0) {
         throw new IntakeRefusedError(`the workbench at ${at} has uncommitted changes — commit or discard them, then ${again}.`);
@@ -1567,8 +1567,9 @@ function takeInWorkbench(
  *  `take in` と封じ込めの回答は未決着か着地待ち(hold を含む)の task。 */
 type TaskRange = "every task" | "unsettled or landing-waiting";
 
-/** ADR 0382 決定4(#3352 の追記4): 作業台の tip が持つ、`excluded`(入口の入力の tip と、入口が足す帰り先・保護ブランチの今の値)のどれにも無い commit を含む
- *  task のブランチのうち、`range` の task のもの —— 入口は範囲だけを渡す。着地の済んだ task の commit は書く先にあるので、範囲に入っても拒まない。 */
+/** ADR 0382 決定4(#3352 の追記4)と追記(#3769): 作業台の tip が持つ、`excluded`(入口の入力の tip と、入口が足す帰り先・保護ブランチの今の値)の
+ *  どれにも無い commit を含む task のブランチのうち、`range` の task のもの —— 入口は範囲と足す値を渡す。着地の済んだ task の commit は保護ブランチの
+ *  今の値にある(保護ブランチへ書く入口では書く先、`task/*` へ書く入口では足す値)ので、範囲に入っても拒まない。 */
 function otherTaskBranches(db: Db, named: WorkspaceConfig, verified: string, tip: string, excluded: string[], range: TaskRange): string[] {
   const branches = refValues(git(named.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/"));
   if (range === "unsettled or landing-waiting") {
@@ -1590,21 +1591,25 @@ function unsettledOrLandingWaiting(db: Db, id: string): boolean {
 const underCancel = (db: Db, id: string) =>
   db.prepare(`${ancestorsSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM ancestors) AND status = 'cancelled'`).get(id) !== undefined;
 
-/** ADR 0382 追記(#3769): `task/*` へ書く入口の数える範囲 —— すべての task。入力の tip のほかに、保護ブランチの今の値(remote-backed では盤面が
- *  読んだ origin の値 —— 着地した task の commit はそこにある)と、`returnValue`(帰り先の今の値 —— 人間はそれを merge する、ADR 0374 決定6。tip が
- *  含むかに依らない)の commit も数えない。拒否文の結びは、運ばれる側の無い入口では自分の commit だけを残す手を、ある入口では `carried` だけを
+/** 他の task の commit を持つ tip の拒否文の結び: 運ばれる側 `carried` だけを merge し直す手(local 着地と、運ばれる側のある `task/*` へ書く入口)。
+ *  `drops` はやり直しが落とすもの。 */
+const mergeOnlyCarried = (target: string, carried: string, again: string, drops = "your merge") =>
+  `Start ${target} in the workbench over with \`git reset --hard ${boardBranch(target)}\` — this drops ${drops} there too — then merge only ` +
+  `\`${boardBranch(carried)}\`, resolve its conflict again and ${again}.`;
+
+/** ADR 0382 追記(#3769): `task/*` へ書く入口の他の task の検査 —— 範囲はすべての task。入力の tip のほかに、保護ブランチの今の値(remote-backed では
+ *  盤面が読んだ origin の値 —— 着地した task の commit はそこにある)と、`returnValue` が読む帰り先の今の値(人間はそれを merge する、ADR 0374 決定6。
+ *  tip が含むかに依らない)の commit も数えない。拒否文の結びは、運ばれる側の無い入口では自分の commit だけを残す手を、ある入口では `carried` だけを
  *  merge し直す手を言う(`dropsOwnWork` は人間担当の work 自身の作業台で子を受ける入口 —— 書きかけの commit も落ちる)。 */
-function taskWorkIntake(
+function taskWriteOtherTasks(
   db: Db,
   named: WorkspaceConfig,
-  { target, again, carried, dropsOwnWork = false, returnValue }: { target: string; again: string; carried?: string; dropsOwnWork?: boolean; returnValue?: string },
+  { target, again, carried, dropsOwnWork = false, returnValue }: { target: string; again: string; carried?: string; dropsOwnWork?: boolean; returnValue?: () => string | undefined },
 ): EntryChecks["otherTasks"] {
-  const reset = `\`git reset --hard ${boardBranch(target)}\``;
   const closing =
     carried === undefined
-      ? `To keep only your own commits, start ${target} in the workbench over with ${reset} and commit them again — \`git cherry-pick\` copies a change you still want without its history — then ${again}.`
-      : `Start ${target} in the workbench over with ${reset} — this drops your merge ${dropsOwnWork ? "and your own commits not taken in yet " : ""}there too — then merge only ` +
-        `\`${boardBranch(carried)}\`, resolve its conflict again and ${again}.`;
+      ? `To keep only your own commits, start ${target} in the workbench over with \`git reset --hard ${boardBranch(target)}\` and commit them again — \`git cherry-pick\` copies a change you still want without its history — then ${again}.`
+      : mergeOnlyCarried(target, carried, again, dropsOwnWork ? "your merge and your own commits not taken in yet" : undefined);
   const refusalFor = (branches: string[], at: string) =>
     branches
       .map((branch) => {
@@ -1613,18 +1618,23 @@ function taskWorkIntake(
         return `the tip of the workbench at ${at} contains commits of ${branch}, ${cancelled ? "which was cancelled, so the board does not carry its work." : "and the board carries a task's work itself — a child's by its merge back, a root's by its landing."}`;
       })
       .join(" ") + ` ${closing}`;
-  const excluded = () => [git(named.path, "rev-parse", "--verify", exactProtectedBranchRef(named)), ...(returnValue === undefined ? [] : [returnValue])];
-  return { range: "every task", refusalFor, excluded };
+  const alsoExcluded = () => [git(named.path, "rev-parse", "--verify", exactProtectedBranchRef(named)), returnValue?.()].filter((sha) => sha !== undefined);
+  return { range: "every task", refusalFor, alsoExcluded };
 }
 
 /** spec #3273 の受理の 11: merge back の前に、その子を運ぶ鍵の作業台が取り込める tip を持てば先に取り込む(ADR 0382 決定1)。 */
 function takeInMergeBack(db: Db, named: WorkspaceConfig, { taskId, target }: { taskId: string; target: string }, intake: IntakeContext) {
   const humanWork = humanWorkReceives(db, target);
-  // ADR 0382 追記(#3769): 人間担当の work 自身の作業台の tip は書きかけも運び、そこには帰り先の merge がありうる —— 根の帰り先(保護ブランチ)は
-  // もともと数えず、帰り先なしなら足さない
-  const lineage = humanWork ? lineageTaskBranch(db, named, getTask(db, taskIdOfBranch(target))!, intake.now) : undefined;
-  const returnValue = lineage && git(named.path, "rev-parse", "--verify", `refs/heads/${lineage}`);
-  const otherTasks = taskWorkIntake(db, named, { target, again: "answer again", carried: taskBranch(taskId), dropsOwnWork: humanWork, returnValue });
+  // ADR 0382 追記(#3769): 人間担当の work 自身の作業台の tip は書きかけも運び、そこには帰り先の merge がありうる。帰り先が読めなければ(帰り先なし、
+  // ref が無い)足さない —— 数える側に倒れて取り込みの拒否になり、merge back の受理を git の失敗で落とさない
+  const returnValue = () => {
+    try {
+      return returnBranchOf(db, named, getTask(db, taskIdOfBranch(target))!, "complete", intake.now()).sha;
+    } catch {
+      return undefined;
+    }
+  };
+  const otherTasks = taskWriteOtherTasks(db, named, { target, again: "answer again", carried: taskBranch(taskId), dropsOwnWork: humanWork, returnValue: humanWork ? returnValue : undefined });
   return takeInExistingWorkbench(db, named, target, `refs/heads/${taskBranch(taskId)}`, intake, { checks: { otherTasks }, humanWork });
 }
 
@@ -1632,7 +1642,7 @@ function takeInMergeBack(db: Db, named: WorkspaceConfig, { taskId, target }: { t
  *  作業台を残したならその text C6 を、消せなかったならそう言う文を返す。運ばれる側は origin の保護ブランチ(text A2)。 */
 export function takeInCatchUp(db: Db, workspace: WorkspaceConfig, taskId: string, intake: IntakeContext): string | undefined {
   const [target, carried] = [taskBranch(taskId), exactProtectedBranchRef(workspace)];
-  const otherTasks = taskWorkIntake(db, workspace, { target, again: "answer again", carried: shortRef(carried) });
+  const otherTasks = taskWriteOtherTasks(db, workspace, { target, again: "answer again", carried: shortRef(carried) });
   return takeInExistingWorkbench(db, workspace, target, carried, intake, { checks: { otherTasks } })?.kept;
 }
 
@@ -1645,7 +1655,7 @@ const outsideHead = (taskId: string, head: string, label?: string): Carried => (
  *  取り込んだなら、作業台を残したときの text C6 か消せなかったときの文を返す。tip が今読んだ head を欠けば、`board/origin/task/<root>` をその head へ引き直して拒む。 */
 export function takeInOutsideHead(db: Db, workspace: WorkspaceConfig, taskId: string, head: string, label: string, intake: IntakeContext): { kept: string | undefined } | undefined {
   const target = taskBranch(taskId);
-  const otherTasks = taskWorkIntake(db, workspace, { target, again: "answer again", carried: shortRef(outsideHeadRef(taskId)) });
+  const otherTasks = taskWriteOtherTasks(db, workspace, { target, again: "answer again", carried: shortRef(outsideHeadRef(taskId)) });
   return takeInExistingWorkbench(db, workspace, target, outsideHead(taskId, head, label), intake, { checks: { otherTasks } });
 }
 
@@ -1657,8 +1667,8 @@ export function takeInOutsideHead(db: Db, workspace: WorkspaceConfig, taskId: st
  *  読んだ tip がこれでなければ拒む(ADR 0371 決定6)。 */
 type EntryChecks = {
   approved?: string;
-  /** 省略できない(ADR 0382 追記、#3769)—— 入口を足せば範囲を書かなければ型で落ちる。`excluded` は入力の tip のほかに数えない値で、tip を数えるときだけ読む。 */
-  otherTasks: { range: TaskRange; refusalFor: (branches: string[], at: string) => string; excluded?: () => string[] };
+  /** 省略できない(ADR 0382 追記、#3769)—— 入口を足せば範囲を書かなければ型で落ちる。`alsoExcluded` は入力の tip のほかに数えない値で、tip を数えるときだけ読む。 */
+  otherTasks: { range: TaskRange; refusalFor: (branches: string[], at: string) => string; alsoExcluded?: () => string[] };
   humanContent?: boolean;
   admit?: () => void;
   checkedTip?: string;
@@ -2075,7 +2085,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
       taken = repointingOnRefusal(named, place.path, () =>
         takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now: () => now }, {
           humanWork: { again: "complete again", gone: workbenchGone(at, target, "complete") },
-          otherTasks: taskWorkIntake(db, named, { target, again: "complete again", returnValue: returnSha }),
+          otherTasks: taskWriteOtherTasks(db, named, { target, again: "complete again", returnValue: () => returnSha }),
           returnValue: returnSha,
           beforeWrite: ({ tip, verified }) => assertMerges(tip, { ...named, path: verified }),
         }),
@@ -2153,7 +2163,7 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
       const returnValue = returnBranchOf(db, named, task, "take in", now).sha;
       const intaken = takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "take_in_work", answerer: caller, now: () => now }, {
         humanWork: { again: "take in again", gone },
-        otherTasks: taskWorkIntake(db, named, { target, again: "take in again", returnValue }),
+        otherTasks: taskWriteOtherTasks(db, named, { target, again: "take in again", returnValue: () => returnValue }),
         returnValue,
       });
       if (!intaken) throw new DomainError(nothingToTakeIn(target, place.path));
@@ -4729,8 +4739,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // commit は数えない。ADR 0371 決定2・4: 作業台に人間の merge があれば、この回答がそれを取り込み、包む commit が着地
   const refusalFor = (branches: string[], at: string) =>
     `the tip of the workbench at ${at} contains commits of ${branches.join(", ")}, and a task's work enters ${branch} only through its own landing. ` +
-    `Start ${branch} in the workbench over with \`git reset --hard ${boardBranch(branch)}\` — this drops your merge there too — then merge only ` +
-    `\`${boardBranch(task)}\`, resolve its conflict again and answer again.`;
+    mergeOnlyCarried(branch, task, "answer again");
   const taken = takeInExistingWorkbench(db, workspace, branch, `refs/heads/${task}`, { ...intake, entry: "landing_merge" }, {
     checks: { approved: protectedSha, otherTasks: { range: "every task", refusalFor } },
   });
