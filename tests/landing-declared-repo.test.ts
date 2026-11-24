@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
 import { createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
@@ -100,11 +101,19 @@ it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ�
 });
 
 /** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に、同じ checkout の origin を別の repo へ向けて
- *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`hold` は収束に足す材料を返せる。 */
-async function reRegisteredDuringAwait(hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> }) {
+ *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`hold` は収束に足す材料を返せる。`target` は登録し直す先と
+ *  削除の後の人間の手を差し替える。 */
+async function reRegisteredDuringAwait(
+  hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> },
+  target?: (old: WorkspaceConfig) => Promise<{ workspace: WorkspaceConfig; between: () => void }>,
+) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeLandingWorkspace("reef-old");
   const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
+  const { workspace: declared, between } = (await target?.(old)) ?? {
+    workspace: { ...old, repo: other.repo },
+    between: () => git(old.path, "remote", "set-url", "origin", other.repo!),
+  };
   const reef = await registeredReef(old);
   giveHeadRepo(db, reef, old.head_repo!);
   const github = new FakeGitHubClient();
@@ -119,10 +128,10 @@ async function reRegisteredDuringAwait(hold: (github: FakeGitHubClient) => { ent
 
   const converging = landing.converge();
   await window.entered;
-  await reRegister(db, reef, { ...old, repo: other.repo }, () => git(old.path, "remote", "set-url", "origin", other.repo!));
+  await reRegister(db, reef, declared, between);
   window.open();
   await converging;
-  return { db, github, old, other, root: done, head };
+  return { db, github, old, other, declared, root: done, head };
 }
 
 /** `method` の呼び出しを、本物の token の await に当たる所で1回止める。 */
@@ -165,6 +174,23 @@ it("PR の head を取る token の await の間に扉で別の repo へ登録�
   expect([github.pushes, github.requests]).toEqual([[], []]);
   expect(git(old.head_repo!, "rev-parse", `task/${root.id}`)).toBe(head);
   stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
+});
+
+// 釘(#3699): 保護ブランチの写しの読み直し(`refreshProtectedBranch`)の token の await。窓に入らなければ `reRegisteredDuringAwait` は進まない
+it.each([
+  ["new path and repo, old checkout removed", async (old: WorkspaceConfig) => {
+    const { workspace } = await makeLandingWorkspace("reef-new");
+    return { workspace, between: () => rmSync(old.path, { recursive: true, force: true }) };
+  }],
+  ["same path, repo swapped", undefined],
+] as const)("merge 済みの根が保護ブランチの写しを読み直す token の await の間に扉で登録し直すと(%s)、根だけが記録と今の宣言を名指して止まる(ADR 0399 決定5)", async (_, target) => {
+  const { db, old, declared, root } = await reRegisteredDuringAwait((github) => {
+    github.scriptMergedOutside(1);
+    const { window, githubAuth } = fetchHeldAtToken();
+    return { ...window, deps: { githubAuth } };
+  }, target);
+
+  stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
 });
 
 /** 旧い repo で拾われ PR #1 を開いた done の根を残し、`reef` を扉で purely-local の checkout(`moved`)に登録し直した盤面。 */

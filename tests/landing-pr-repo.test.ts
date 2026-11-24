@@ -5,6 +5,7 @@ import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { GhCliClient } from "../src/github.js";
+import { HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { blockingRootOf, createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
@@ -12,7 +13,7 @@ import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, regis
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, heldInPrepareMerge, holdAfterMerge } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
 import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, type RegisteredReef, recordPrOpenedOutsideConvergence, registeredReef, reRegister } from "./landing-fixture.js";
 import { setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -465,15 +466,16 @@ async function heldAfterPrCreated(during: (fixture: { db: Db; reef: RegisteredRe
 }
 
 it("PR を作る応答を待つ間に registry の path: を同じ repo の clone へ手で書き換え古い checkout を消すと、根だけが path の変更で止まり、作った PR は記録されている(ADR 0399 決定3・5)", async () => {
-  const { db, root, verdict } = await heldAfterPrCreated(async ({ reef, old }) => {
+  const { db, root, verdict, door } = await heldAfterPrCreated(async ({ reef, old }) => {
     const clone = join(await tempDir("reef-clone-"), "reef");
     git(old.path, "clone", "--quiet", old.path, clone);
     git(clone, "remote", "set-url", "origin", old.repo!);
-    git(clone, "remote", "add", "head-repo", old.head_repo!);
+    git(clone, "remote", "add", HEAD_REPO_REMOTE, old.head_repo!);
     setWorkspaceEntry(reef.registryDir, "reef", "path", clone);
     rmSync(old.path, { recursive: true, force: true });
   });
 
+  expect(door).toBeUndefined();
   expect(verdict.kind).toBe("failed");
   const [failure, ...rest] = promotionFailures(db, root.id);
   expect(rest).toEqual([]);
@@ -484,12 +486,13 @@ it("PR を作る応答を待つ間に registry の path: を同じ repo の clon
 
 it("PR を作る応答を待つ間に registry の path: と repo: を別の checkout へ手で書き換えると、repo: の手編集として workspace で止まり、作った PR は記録されている(ADR 0378 決定6)", async () => {
   const { workspace: other } = await makeLandingWorkspace("reef-new");
-  const { db, root, verdict } = await heldAfterPrCreated(({ reef, old }) => {
+  const { db, root, verdict, door } = await heldAfterPrCreated(({ reef, old }) => {
     setWorkspaceEntry(reef.registryDir, "reef", "path", other.path);
     setWorkspaceEntry(reef.registryDir, "reef", "repo", other.repo!);
     rmSync(old.path, { recursive: true, force: true });
   });
 
+  expect(door).toBeUndefined();
   expect(verdict.kind).toBe("quarantined");
   expect(getTask(db, openQuarantineQuestion(db, "workspace", "reef")!.id)!.purpose).toContain(`its registry entry now says ${other.repo}`);
   expect(getTask(db, root.id)?.pr_number).toBe(1);
@@ -503,41 +506,3 @@ it("PR を作る応答を待つ間の削除の扉は、着地を待つ根を数�
   expect(verdict).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
   expect(getTask(db, root.id)?.pr_number).toBe(1);
 });
-
-it.each(["new path and repo, old checkout removed", "same path, repo swapped"] as const)(
-  "merge 済みの根が保護ブランチの写しを読み直す token の await の間に扉で登録し直すと(%s)、根だけが記録と今の宣言を名指して止まる(ADR 0399 決定5)",
-  async (variant) => {
-    const { db, clock } = await openBoard();
-    const { workspace: old } = await makeLandingWorkspace("reef-old");
-    const reef = await registeredReef(old);
-    giveHeadRepo(db, reef, old.head_repo!);
-    const github = new FakeGitHubClient();
-    const work = landingWork(db, clock, "reef");
-    await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), work, "feature.txt", "ready\n");
-    const root = finish(db, clock, work);
-    const head = pushPrHead(github, reef.resolve("reef"), root.id, 1);
-    recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge: "external" }, head, workspace: reef.resolve("reef") });
-    await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), root, "repair.txt", "repair\n");
-    github.scriptMergedOutside(1);
-    const { window, githubAuth } = fetchHeldAtToken();
-    const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github, githubAuth });
-
-    const converging = landing.converge();
-    expect(await Promise.race([window.entered.then(() => "held"), converging.then(() => "settled without the token await")])).toBe("held");
-    const declared = variant === "same path, repo swapped"
-      ? await makeRemoteBackedWorkspace("reef-other").then(({ workspace: other }) => ({ ...old, repo: other.repo }))
-      : (await makeLandingWorkspace("reef-new")).workspace;
-    await reRegister(db, reef, declared, () => {
-      if (declared.path === old.path) git(old.path, "remote", "set-url", "origin", declared.repo!);
-      else rmSync(old.path, { recursive: true, force: true });
-    });
-    window.open();
-    await converging;
-
-    const [failure, ...rest] = promotionFailures(db, root.id);
-    expect(rest).toEqual([]);
-    expect(failure?.purpose).toContain(`recorded repo ${old.repo}`);
-    expect(failure?.purpose).toContain(`now declares repo ${declared.repo}`);
-    expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
-  },
-);

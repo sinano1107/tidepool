@@ -277,7 +277,7 @@ function workspaceQuarantinedMessage(name: string): string {
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
  *  Quarantine の question を名指す(ADR 0373 決定13 追記)。最初の撮りの前の開く前の項(`fixedPoints` との交差を含む)に落ちた名前も
  *  workspace の Quarantine を立てる(ADR 0399 決定7)。git の失敗で ref が読めない checkout も同じ(ADR 0403 決定4)。
- *  ADR 0399 決定3・5: 比べる前に、渡された workspace の登録を確かめ直す(確かめを持たない workspace では何もしない)—— 呼び手が
+ *  ADR 0399 決定3・5: 比べる前に、渡された workspace が持つ確かめで登録を確かめ直す(素の workspace は確かめを持たない)—— 呼び手が
  *  await の後かを覚えなくても、その間の登録し直しを古い宣言で名前の場所を比べた workspace の Quarantine にせず、根の止まりにする。 */
 export function assertLandingRefs(
   db: Db,
@@ -286,7 +286,7 @@ export function assertLandingRefs(
   fixedPoints: BoardStatePath[] | undefined,
   now: Date,
 ): void {
-  // 下の catch の外 —— 中に置くと、根だけを止める食い違いが workspace の Quarantine になる
+  // ADR 0399 追記(#3699): 下の catch の外 —— 中に置くと、根だけを止める食い違いが workspace の Quarantine になる
   workspaceNetworkDestination(workspace);
   try {
     compareRefsBeforeLanding(db, workspace, { resolveRegistered, fixedPoints, now });
