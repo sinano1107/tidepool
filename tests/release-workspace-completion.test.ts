@@ -1335,7 +1335,7 @@ function commitEdits(repo: string, parent: string, edits: Record<string, { mode:
   for (const [path, entry] of Object.entries(edits)) {
     run(entry ? ["update-index", "--add", "--cacheinfo", `${entry.mode},${entry.sha},${path}`] : ["update-index", "--force-remove", "--", path]);
   }
-  const commit = run(["commit-tree", run(["write-tree"]), "-p", parent, "-m", "edits"]);
+  const commit = run(["-c", "user.name=test", "-c", "user.email=test@example.com", "commit-tree", run(["write-tree"]), "-p", parent, "-m", "edits"]);
   rmSync(env.GIT_INDEX_FILE);
   return commit;
 }
