@@ -7,8 +7,8 @@ import { DomainError } from "../src/domain-error.js";
 import { GhCliClient } from "../src/github.js";
 import { HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { blockingRootOf, createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
-import { openQuarantineQuestion } from "../src/quarantine.js";
+import { blockingRootOf, createLanding, type Landing, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { openQuarantineQuestion, registerQuarantine } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
@@ -126,12 +126,25 @@ it("無人 merge の観測は登録し直した repo の同じ番号の PR を�
 
 // ADR 0399 決定5 の追記(#3791): tick は workspace の Quarantine 単独では止まらない(ADR 0370 決定1)ので、その根を止めているのは食い違いで、
 // 信号はこの question しか持たない —— ADR 0241 決定6 の「重ねない」の対象ではない。伏せると tick はその根だけを黙って読まなくなる
-it.each(["auto_if_ci_green", "escalate"] as const)("workspace の Quarantine が開いていても、tick は食い違った %s の根を問い、「end landing」は受理される", async (merge) => {
+const openStops = {
+  "workspace の Quarantine": (db: Db, now: Date) => void quarantineWorkspace(db, "reef", new Error("a ref moved out of band"), now),
+  "registry の止まり": (db: Db, now: Date) => void registerQuarantine(db, "registryUnreadable", null, "the registry could not be read", now),
+};
+const repoReaders = {
+  "無人 merge の tick": { merge: "auto_if_ci_green", read: (landing: Landing) => landing.tick("auto_merge") },
+  "外の merge の走査": { merge: "escalate", read: (landing: Landing) => landing.tick("outside_merge") },
+  "無人 merge の観測": { merge: "auto_if_ci_green", read: (landing: Landing) => landing.observeAutoMergeOutcomes("tako") },
+} as const;
+const stoppedReads = Object.keys(openStops).flatMap((stop) => Object.keys(repoReaders).map((reader) => [stop, reader] as [keyof typeof openStops, keyof typeof repoReaders]));
+
+it.each(stoppedReads)("%s が開いていても、%s は食い違った根を問い、「end landing」は受理される", async (stop, reader) => {
+  const { merge, read } = repoReaders[reader];
   const { db, clock, old, moved, root, landing, move, answerFailure } = await reefWithPr(merge);
   await move();
-  quarantineWorkspace(db, "reef", new Error("a ref moved out of band"), clock.now());
+  openStops[stop](db, clock.now());
+  const stopQuestions = () => [openQuarantineQuestion(db, "workspace", "reef"), openQuarantineQuestion(db, "registryUnreadable", null)].filter(Boolean).length;
 
-  await landing.tick(merge === "escalate" ? "outside_merge" : "auto_merge");
+  await read(landing);
 
   const [failure, ...repeated] = promotionFailures(db, root.id);
   expect(repeated).toEqual([]);
@@ -141,7 +154,7 @@ it.each(["auto_if_ci_green", "escalate"] as const)("workspace の Quarantine が
   await answerFailure("end landing");
 
   expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
-  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeDefined();
+  expect(stopQuestions()).toBe(1);
 });
 
 // 別の昇格失敗 question が開いた根を収束は撃たない(ADR 0403 決定3)—— その根の食い違いを問うのは tick だけで、断念を出さない
