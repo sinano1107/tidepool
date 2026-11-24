@@ -1,6 +1,6 @@
 # ローカル着地も根に記録を持つ —— merge 回答は積み残しで拒み、hold が断るのはその時点の内容である
 
-**Status 追記: hold は、タスクブランチがもう保護ブランチに履歴で含まれていれば断られ、`merge` が名指される(merge の後・記録の前に盤面が落ちた場合)—— 載った内容に断念を刻まない。それ以外の hold を拒まない振る舞いは変わらない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定4、2026-11-22、issue #3515)。**
+**Status 追記: hold は、question が問うた tip がもう保護ブランチに履歴で含まれていれば断られ、`merge` が名指される(merge の後・記録の前に盤面が落ちた場合)—— 載った内容に断念を刻まない。それ以外の hold を拒まない振る舞いは変わらない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定4、2026-11-22、issue #3515。判定する値は追記(2026-11-24、issue #3647)で今のタスクブランチから問うた tip に改めた)。**
 
 **Status 追記: 決定3 の「hold が断るのはその時点の内容」の時点は、回答の時点から question が問うた時点に改める。記録は abandon promotion・PR の hold と同じ1種類になる。何を止め、いつ効かなくなるかは変わらない([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) 決定5・6、2026-11-21、issue #3402)。**
 

@@ -1,5 +1,7 @@
 # worker の作業台と盤面の記録は別の `.git` である —— task の checkout は session ごとに作って捨て、盤面は worker の `.git` を GIT_DIR にしない
 
+**Status 追記: 決定3 の「名前の場所の objects(`GIT_OBJECT_DIRECTORY`)で読み書きし」は、task の checkout を読む view について置き換わる —— view は worker の tip を写して検証した盤面所有の写しを借り、index の種は worker の tip にする。view の `add -A` / `write-tree` / `status` は名前の場所の object を読まない([ADR 0412](0412-the-boards-view-over-a-task-checkout-borrows-the-board-owned-copy-of-the-workers-tip-and-paths-the-worktree-does-not-supply-keep-the-recorded-value.md) 決定1・2、2026-11-24、issue #3139)。**
+
 **Status 追記: 決定2 の「work / review は alternates で名前の場所の objects を借りる」は置き換わる —— task の checkout はどの type でも branch の閉包を全部持つ複製で作り、盤面で使う名前の場所は閉包が全部読めることを条件にする(shallow を含めて pickup で止まる)([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定1・5、2026-11-24、issue #3734)。**
 
 **Status 追記: 題と背景の「worker の作業台」は task の checkout を指し、作業台(Workbench —— 盤面が人間のために開く checkout)ではない。git ディレクトリの種類は、名前の場所と task の checkout に作業台が加わる([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1、2026-11-15、issue #3178)。**

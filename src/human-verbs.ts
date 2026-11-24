@@ -864,7 +864,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       answerer: { actorId: HUMAN_ACTOR_ID, origin },
       now: () => clock.now(),
     };
-    // spec #3273 text C6: 作業台を残した取り込みごとに1行
+    // spec #3273 text C6: 作業台を残した(か消せなかった)取り込みごとに1行
     const keptWorkbenches = placeHasRepository(target.path) ? await refuseNamingKept(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth, intake, undefined, compare)) : [];
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseNamingKept(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
@@ -1211,8 +1211,8 @@ function convergenceRefusal(verdict: LandingVerdict | undefined): string | undef
   }
 }
 
-/** 回答を収束に通し、その根の verdict を返す —— 拒否なら投げる。spec #3273 text C6: 作業台を残した取り込みは、回答が後で拒まれても
- *  書いた後なので、拒否にも添える。 */
+/** 回答を収束に通し、その根の verdict を返す —— 拒否なら投げる。spec #3273 text C6: 作業台を残した(か消せなかった)取り込みは、回答が
+ *  後で拒まれても書いた後なので、拒否にも添える。 */
 async function answerThroughConvergence(landing: Landing, question: string, origin: EventOrigin, taskId: string): Promise<RootVerdict | undefined> {
   const verdicts = await landing.converge({ answering: { question, answerer: { actorId: HUMAN_ACTOR_ID, origin } } });
   const root = verdicts.find((verdict) => verdict.taskId === taskId);
@@ -1397,7 +1397,7 @@ export type HumanCompletionInput = z.infer<typeof humanCompletionInputSchema>;
 
 /** Shared human-surface completion for human-assignee tasks. ADR 0374 決定1: 動作は「タスクブランチを持つか」で分ける —— 持たなければ
  *  今どおり記録だけを閉じ、持てば in-flight の鍵を取って準備を通し、作業台の取り込み・`done`・H の merge back を `completeHumanWork` に
- *  任せ、収束を突く。作業台を残した完了は text C7 を `notice` に添える。 */
+ *  任せ、収束を突く。作業台を残した完了は text C7 を、作業台を消せなかった完了はそう言う文を `notice` に添える。 */
 export async function completeThroughHumanDoor(
   deps: HumanWorkDeps,
   taskId: string,
@@ -1713,15 +1713,21 @@ export async function submitAnswer(
           }
         } else {
           // ADR 0401 決定4: 履歴で保護ブランチに載ったと分かる内容にだけ断念を刻まない。ADR 0289 Status 追記 / ADR 0370 決定1: それ以外の
-          // hold は拒まない —— workspace が引けない・git が読めないときも刻む。ADR 0401 帰結: task のブランチが無ければ含まれていると読まない
-          let landed: { sha: string; branch: string } | undefined;
+          // hold は拒まない —— workspace が引けない・git が読めないときも刻む。ADR 0401 帰結: task のブランチが無ければ含まれていると読まない。
+          // ADR 0401 追記(#3647): 判定するのは断る値と同じ問うた tip —— 死の後にタスクブランチだけが先へ進みうる。tip の無い question
+          // (ADR 0403 決定1)は今のタスクブランチで判定する
+          const branch = taskBranch(kind.task_id);
+          const judged =
+            kind.tip === null
+              ? { tip: `refs/heads/${branch}`, subject: branch }
+              : { tip: kind.tip, subject: `${kind.tip}, the tip of ${branch} this question asked about,` };
+          let landedOn: string | undefined;
           try {
             const holdWorkspace = resolveWorkspaceForAnswer(deps, task.workspace, "cannot tell whether the task branch has landed");
-            const sha = localLandingCommit(holdWorkspace, kind.task_id);
-            if (sha !== undefined) landed = { sha, branch: protectedBranch(holdWorkspace) };
+            if (localLandingCommit(holdWorkspace, kind.task_id, judged.tip) !== undefined) landedOn = protectedBranch(holdWorkspace);
           } catch {}
-          if (landed !== undefined) {
-            throw new DomainError(`cannot hold: ${taskBranch(kind.task_id)} has already landed on ${landed.branch} as ${landed.sha} — answer \`merge\` to record the landing.`);
+          if (landedOn !== undefined) {
+            throw new DomainError(`cannot hold: ${judged.subject} has already landed on ${landedOn} — answer \`merge\` to record the landing.`);
           }
           // ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容
           rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };

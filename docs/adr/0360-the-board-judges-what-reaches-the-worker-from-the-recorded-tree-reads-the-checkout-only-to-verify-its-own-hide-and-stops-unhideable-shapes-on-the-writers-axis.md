@@ -1,5 +1,7 @@
 # 盤面は worker に届くものを記録(tip の tree)で判定し、checkout は自分の隠しの検証にだけ読む —— 隠せない形は書き手の軸で止める
 
+**Status 追記: #3111 の追記の「運ばない path を記録の tip から導く」の読む先は、盤面所有の写しの中の worker の tip になる。名前の場所の ref が worker の tip より先にあるときだけ、今どおり名前の場所の ref から導き、その entry を index に重ねる —— WIP には記録の値が残る([ADR 0412](0412-the-boards-view-over-a-task-checkout-borrows-the-board-owned-copy-of-the-workers-tip-and-paths-the-worktree-does-not-supply-keep-the-recorded-value.md) 決定2・3、2026-11-24、issue #3139)。**
+
 **Status 追記: 決定2 の「sandbox の読み path は Interview の役から導く」は、名前の場所の objects についてはどの役でも開かない形になる —— task の checkout は名前の場所を借りない([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定1、2026-11-24、issue #3734)。**
 
 **Status 追記: purely-local の封じ込めの回答は、取り込む tree を保護ブランチへ書く前に検査し、通った tip だけを取り込む。「取り込んでから検査する」は、ref を書いた後に検査するという意味ではない。Claude の組は取り込みの手順の中で隠せない形を読み、書く前に拒む。Codex の組は作業台の tip の使い捨ての checkout を検査し、検査の間に tip が動けば拒んで何も書かない(issue #3289)。**
