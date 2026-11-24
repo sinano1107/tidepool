@@ -270,8 +270,14 @@ it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
-// ADR 0265 決定6: 閉じた根の付帯子は cancel せず、観測の時点で走らない子と出口2つを判断行で言う
-it("遅い走査が外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行だけ流れ、PR・子・出口2つを言う", async () => {
+// ADR 0265 決定6 / ADR 0413 決定1: 閉じた根の付帯子は cancel せず、観測の時点で根の下に終わっていない子があれば、盤面名義の判断行が
+// 閉じた PR と出口2つを言う。子を数えず git を読まない —— どの子がなぜ走らないかはキューの行と子の詳細が言う
+const CLOSED_NOTICE =
+  "PR #1 was closed outside the board. Tasks under it that return to its branch will not run until its content reaches the protected branch " +
+  "— the queue marks them skipped. To go on, reopen the PR on GitHub and merge it. To stop, cancel them.";
+const closedNotice = [{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: CLOSED_NOTICE } }];
+
+it("遅い走査が外で閉じたと観測した根の下に終わっていない子があれば、盤面名義の判断行が1行だけ流れ、PR と出口2つを言い、子の id を言わない", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce");
   const child = attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
@@ -280,14 +286,39 @@ it("遅い走査が外で閉じたと観測した根の下に走らない子が�
   await landing.tick("outside_merge");
   await landing.converge();
 
-  const lines = boardEvents(db, root.id, "decision_logged");
-  expect(lines).toEqual([{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.any(String) } }]);
-  for (const part of ["PR #1", child.id, "reopen", "merge", "cancel"]) expect(lines[0]!.payload).toMatchObject({ line: expect.stringContaining(part) });
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
+  expect(CLOSED_NOTICE).not.toContain(child.id);
 });
 
-it("ref が動いていても、回答時に閉じた PR を観測すれば、取り残された子を名指す盤面名義の判断行が1行流れる", async () => {
+it("名前の場所の git が読めなくても、閉じた観測は根の下の終わっていない子の告知を書く", async () => {
+  const { db, clock, github, landing, root, workspace } = await escalatedRootWithOpenedPr("landing-scan-closed-announce-unreadable");
+  attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+  renameSync(join(workspace.path, ".git"), join(workspace.path, "saved-git"));
+
+  try {
+    await landing.tick("outside_merge");
+  } finally {
+    renameSync(join(workspace.path, "saved-git"), join(workspace.path, ".git"));
+  }
+
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
+});
+
+it("根の下の終わっていない子が走っている1件だけでも、閉じた観測は告知を書く", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce-running");
+  pickupTask(db, attachUnsettledChild(db, clock, root.id), "worker", clock.now());
+  github.scriptClosedOutside(1);
+
+  await landing.tick("outside_merge");
+
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
+});
+
+it("ref が動いていても、回答時に閉じた PR を観測すれば、盤面名義の告知が1行流れる", async () => {
   const { db, clock, github, landing, root, workspace } = await escalatedRootWithOpenedPr("landing-backstop-closed-announce");
-  const child = attachUnsettledChild(db, clock, root.id);
+  attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
   git(workspace.path, "tag", "intruder");
   const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
@@ -304,14 +335,13 @@ it("ref が動いていても、回答時に閉じた PR を観測すれば、�
 
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
-  const lines = boardEvents(db, root.id, "decision_logged");
-  expect(lines).toEqual([{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
 });
 
 // ADR 0405 決定2: 閉じた観測と告知の判断行は1つの transaction —— 判断行が書けなければ観測も刻まれず、次の tick が通り直す
-it("quarantine 回答前の観測が閉じた PR を読んでも、取り残された子の判断行が書けなければキューの行を外さず、次の観測が通り直す", async () => {
+it("quarantine 回答前の観測が閉じた PR を読んでも、告知の判断行が書けなければキューの行を外さず、次の観測が通り直す", async () => {
   const { db, clock, github, landing, work } = await openPrByConvergence("landing-observe-closed-announce-rollback", "auto_if_ci_green");
-  const child = attachUnsettledChild(db, clock, work.id);
+  attachUnsettledChild(db, clock, work.id);
   github.scriptClosedOutside(1);
   const repair = failEventInsert(db, "decision_logged");
 
@@ -321,14 +351,12 @@ it("quarantine 回答前の観測が閉じた PR を読んでも、取り残さ�
   repair();
   await landing.observeAutoMergeOutcomes("tako");
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
-  expect(boardEvents(db, work.id, "decision_logged")).toEqual([
-    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } },
-  ]);
+  expect(boardEvents(db, work.id, "decision_logged")).toEqual(closedNotice);
 });
 
-it("遅い走査が閉じた PR を観測しても、取り残された子の判断行が書けなければ merge question を開いたまま残し、次の tick が通り直す", async () => {
+it("遅い走査が閉じた PR を観測しても、告知の判断行が書けなければ merge question を開いたまま残し、次の tick が通り直す", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce-rollback");
-  const child = attachUnsettledChild(db, clock, root.id);
+  attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
   const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
   const repair = failEventInsert(db, "decision_logged");
@@ -340,13 +368,12 @@ it("遅い走査が閉じた PR を観測しても、取り残された子の判
   repair();
   await landing.tick("outside_merge");
   expect(getTask(db, question.id)!.status).toBe("done");
-  expect(boardEvents(db, root.id, "decision_logged")).toEqual([
-    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } },
-  ]);
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
 });
 
-it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {
-  const { db, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
+it("遅い走査が外で閉じたと観測した根の下に終わっていない子が無ければ —— 終わった子だけなら —— 判断行は流れない", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
+  cancelTaskDirectly(db, attachUnsettledChild(db, clock, root.id), null, clock.now(), {}, "webui");
   github.scriptClosedOutside(1);
 
   await landing.tick("outside_merge");

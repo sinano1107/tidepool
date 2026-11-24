@@ -21,6 +21,7 @@ import { repositoryLabel } from "./repo-access.js";
 import { treeDeltaEntries } from "./sandbox.js";
 import {
   ancestorsSql,
+  type BlockingRoot,
   type BlockingRootOf,
   clearPendingAutoMerge,
   contentSourceFor,
@@ -596,11 +597,32 @@ export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOS
   return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
 }
 
-/** ADR 0265 決定6 / ADR 0399 決定6: 子を塞ぐ根の PR —— 盤面の外で閉じた PR か、人間が着地を終えた根の PR。どちらでもなければ undefined。 */
-function blockingRootPr(db: Db, root: Pick<Task, "id" | "pr_number">): number | undefined {
+/** ADR 0265 決定6 / ADR 0399 決定6: 子を塞ぐ根の PR と塞ぎの種類(ADR 0413 決定3)—— 盤面の外で閉じた PR か、人間が着地を終えた根の PR。
+ *  閉じた決着が先。どちらでもなければ undefined。 */
+function blockingRootPr(db: Db, root: Pick<Task, "id" | "pr_number">): Omit<BlockingRoot, "task_id"> | undefined {
   const outcome = rootPrOutcome(db, root.id);
-  if (outcome?.state === "CLOSED") return outcome.prNumber;
-  return latestEventOfTask(db, root.id, "landing_ended_pr_left") ? (root.pr_number ?? undefined) : undefined;
+  if (outcome?.state === "CLOSED") return { pr_number: outcome.prNumber, kind: "pr_closed" };
+  return latestEventOfTask(db, root.id, "landing_ended_pr_left") && root.pr_number !== null ? { pr_number: root.pr_number, kind: "landing_ended" } : undefined;
+}
+
+const BLOCKING_ROOT_NOTICE: Record<BlockingRoot["kind"], (prNumber: number) => string> = {
+  pr_closed: (n) =>
+    `PR #${n} was closed outside the board. Tasks under it that return to its branch will not run until its content reaches the protected branch ` +
+    "— the queue marks them skipped. To go on, reopen the PR on GitHub and merge it. To stop, cancel them.",
+  // ADR 0413 決定2: 内容に依らず塞ぐ場合があり merge が宣言の保護ブランチに届くとも限らないので、出口は cancel だけ
+  landing_ended: (n) =>
+    `Landing of this task was ended with PR #${n} left as it was. Tasks under it that return to its branch will not run ` +
+    "— the queue marks them skipped. Cancel them; register the work again if it is still wanted.",
+};
+
+/** 塞ぐ根の告知(ADR 0265 決定6 / ADR 0413 決定1・2): 根の下に終わっていない子(question を除く、走っているものを含む)があれば、
+ *  盤面名義の判断行を根に1行。子を数えず git を読まない —— どの子がなぜ走らないかはキューの行と子の詳細が毎回導く。
+ *  呼び手は根の決着を刻む transaction の中で呼ぶ(ADR 0405 決定2)。 */
+export function announceBlockingRoot(db: Db, rootId: string, kind: BlockingRoot["kind"], prNumber: number, now: Date): void {
+  const unfinished = db
+    .prepare(`${subtreeSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND type <> 'question' AND status IN ('todo', 'in_progress') LIMIT 1`)
+    .get(rootId);
+  if (unfinished) logDecision(db, getTask(db, rootId)!, BLOCKING_ROOT_NOTICE[kind](prNumber), BOARD_ACTOR_ID, now, "board");
 }
 
 /** 根に塞がれた子(ADR 0265 決定6)の唯一の述語: lineage の帰り先を辿ると盤面の外で閉じた PR の根(人間が着地を終えた根も、ADR 0399 決定6)のブランチに行き着き、
@@ -619,7 +641,7 @@ export function blockingRootOf(db: Db, resolve: WorkspaceResolver | undefined): 
     }
     if (task.type === "question" || !resolve || !ancestors.some((a) => blockingRootPr(db, a) !== undefined)) return null;
     const ended = ancestors.find((a) => latestEventOfTask(db, a.id, "landing_ended_pr_left"));
-    const endedBlock = ended && { task_id: ended.id, pr_number: ended.pr_number! };
+    const endedBlock = ended && { task_id: ended.id, pr_number: ended.pr_number!, kind: "landing_ended" as const };
     try {
       const workspace = resolve(derivedWorkspace(db, task));
       if (endedBlock && !taskBranchExists(workspace, endedBlock.task_id)) return endedBlock;
@@ -628,10 +650,8 @@ export function blockingRootOf(db: Db, resolve: WorkspaceResolver | undefined): 
         const branch = lineageTaskBranch(db, workspace, current, base);
         const target = ancestors.find((a) => taskBranch(a.id) === branch);
         if (!target) return null;
-        const prNumber = blockingRootPr(db, target);
-        if (prNumber !== undefined) {
-          return taskHasContentToLand(workspace, target.id, base) ? { task_id: target.id, pr_number: prNumber } : null;
-        }
+        const blocking = blockingRootPr(db, target);
+        if (blocking !== undefined) return taskHasContentToLand(workspace, target.id, base) ? { task_id: target.id, ...blocking } : null;
         current = target;
       }
     } catch {
@@ -1448,41 +1468,18 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   const changedSince = (task: Task, declined: Declined, current?: DeclinedOutside) =>
     declinedContentChanged(buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace), task, declined, current);
-  /** 閉じた観測を根に刻んだ直後(ADR 0265 決定6): 閉じた根に塞がれて走らない子があれば、盤面名義の判断行を1行流す。
-   *  観測は根に1回だけ刻まれるので、行も1つの観測に1回。子が無ければ流さない。 */
-  const announceClosed = (rootId: string, prNumber: number, now: Date) => {
-    const blocking = blockingRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
-    const stranded = (
-      deps.db
-        .prepare(
-          `${subtreeSql("?")} SELECT id, type, parent_id, workspace FROM tasks WHERE id IN (SELECT id FROM subtree) AND status = 'todo' ORDER BY rowid`,
-        )
-        .all(rootId) as Array<Pick<Task, "id" | "type" | "parent_id" | "workspace">>
-    ).filter((task) => blocking(task)?.task_id === rootId);
-    if (stranded.length === 0) return;
-    logDecision(
-      deps.db,
-      getTask(deps.db, rootId)!,
-      `PR #${prNumber} was closed outside the board, so ${stranded.length} task(s) under it will not run: ` +
-        `${stranded.map(({ id }) => id).join(", ")}. To go on, reopen the PR on GitHub and merge it — once its content ` +
-        "reaches the protected branch, they run and land as roots of their own. To stop, cancel them.",
-      BOARD_ACTOR_ID,
-      now,
-      "board",
-    );
-  };
-  // ADR 0405 決定2: 判断行は閉じた観測が commit されなければ偽になるので、観測と同じ transaction で書く。告知の読みも観測の後の状態を読む
+  // ADR 0405 決定2: 判断行は閉じた観測が commit されなければ偽になるので、観測と同じ transaction で書く
   /** キューの行を外して決着を根に刻む(`retireAutoMerge`)。閉じた観測なら判断行も流す。 */
   const retire = (taskId: string, payload: Parameters<typeof retireAutoMerge>[2], now: Date) =>
     deps.db.transaction(() => {
       retireAutoMerge(deps.db, taskId, payload, now);
-      if (payload.kind === OBSERVED.CLOSED) announceClosed(taskId, payload.pr_number, now);
+      if (payload.kind === OBSERVED.CLOSED) announceBlockingRoot(deps.db, taskId, "pr_closed", payload.pr_number, now);
     })();
   /** merge question を観測で閉じる(`settleMergeQuestionAsObserved`)。閉じた観測を根に刻んだなら判断行も流す。 */
   const settleObserved = (question: Pick<OpenMergeQuestion, "id" | "root" | "pr_number">, kind: ReturnType<typeof prOutcomeKind>, now: Date) =>
     deps.db.transaction(() => {
       const root = settleMergeQuestionAsObserved(deps.db, question, kind, now);
-      if (root !== null && kind === OBSERVED.CLOSED) announceClosed(root, question.pr_number, now);
+      if (root !== null && kind === OBSERVED.CLOSED) announceBlockingRoot(deps.db, root, "pr_closed", question.pr_number, now);
     })();
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: deps.clock.now() });

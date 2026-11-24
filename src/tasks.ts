@@ -2055,6 +2055,8 @@ export interface ResourceStopDefaults {
 export interface BlockingRoot {
   task_id: string;
   pr_number: number;
+  /** 塞ぎの種類(ADR 0413 決定3): 盤面の外で閉じた PR か、人間が終えた着地か。 */
+  kind: "pr_closed" | "landing_ended";
 }
 
 /** 「根に塞がれた子」の唯一の述語の形(landing.ts の `blockingRootOf` が作る)。git を読むので呼び手が渡す ——
@@ -4538,7 +4540,7 @@ export type BoardTask = Omit<Task, "status" | "question_proposal" | typeof store
   registrant?: string;
   /** 受験者だけ: その Interview の root の id(ADR 0267 決定6)。親の無い受験者の行がどの Interview のものかを人間に言う。 */
   interview_root_id: string | null;
-  /** キューの読み口だけ: この行を skipped にしている根 —— 閉じた根(ADR 0265 決定6)か人間が着地を終えた根(ADR 0399 決定6)。 */
+  /** この行を skipped にしている根 —— 閉じた根(ADR 0265 決定6)か人間が着地を終えた根(ADR 0399 決定6)。キューの行と task 詳細が持つ(ADR 0413 決定3)。 */
   blocking_root?: BlockingRoot;
 };
 
@@ -4786,7 +4788,8 @@ export function listQueue(
     .filter((row) => row.assignee !== HUMAN_ACTOR_ID)
     .map((row) => toBoardTask(db, row))
     .map((task) => {
-      if (task.status !== "todo") return task;
+      // ADR 0413 決定3: 資源単位で既に skipped の行(保存された status は todo)も、塞ぐ根の理由を持つ
+      if (task.status !== "todo" && task.status !== "skipped") return task;
       const blocking_root = blockingRootOf?.(task);
       if (blocking_root) return { ...task, status: "skipped" as const, blocking_root };
       return isSkipped?.(task) ? { ...task, status: "skipped" as const } : task;

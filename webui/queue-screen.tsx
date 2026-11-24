@@ -9,6 +9,8 @@ type QueueScreenTask = NonNullable<import('../design-system/components/board/Que
   /** 子が open なので枠が飛ばす行(行の位置は保たれる)。 */
   blocked?: boolean;
   skipped?: boolean;
+  /** skipped の後に出す理由 —— 塞ぐ根の種類だけ(ADR 0413 決定3)。 */
+  skipReason?: string;
   frontInserted?: boolean;
   flash?: boolean;
 };
@@ -154,7 +156,7 @@ function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
              — every other row's button is pure reordering, color-coded distinctly so the two never look alike.
              isHead is an id match against the true queue head, not a position computation: the triage
              preview renders this same list without a headId, and a position match would crown its first row. */}
-          <QueueItem position={i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
+          <QueueItem position={i + 1} task={t} skipped={t.skipped} skipReason={t.skipReason} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>
