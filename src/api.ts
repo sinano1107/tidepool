@@ -5,7 +5,6 @@ import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
-  registryTiersOf,
 } from "./agent-create.js";
 import { listTranslationUsage } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
@@ -24,7 +23,7 @@ import {
 import { DomainError } from "./domain-error.js";
 import { type ChildDraftContext, type DraftClient, draftHandoff, draftTask } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
-import { changeExecutionSettings, executionSettingsChangeSchema, interviewTargetSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsChangeSchema, interviewTargetSchema, readExecutionSettingsWithQuarantine, withAgentTiers } from "./execution-setting.js";
 import { ghRefusalText } from "./gh-cli-version.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { type GitHubAuth, githubLoggedIn } from "./github-auth.js";
@@ -389,15 +388,12 @@ const createAgentSchema = z.object({
   name: requiredTextSchema,
   authority: requiredTextSchema,
   description: requiredTextSchema,
-  // provider (ADR 0097 決定1): required — the string shape only; the enum,
-  // the tier and the advisor combination (assertValidAgentDefinition) live in
+  // provider (ADR 0097 決定1): required — the string shape only; the enum
+  // and the advisor combination (assertValidAgentDefinition) live in
   // the domain, so callers get a domain error, same as name/authority/icon/
   // skills here.
   provider: requiredTextSchema,
   icon: z.string().optional(),
-  // 既定の要求ティア(ADR 0110 決定1)。列挙の検査は domain 側 —— model /
-  // effort はもうこの境界を通らない(実行設定は盤面の表が決める)。
-  tier: z.string().optional(),
   // advisor は真偽値(ADR 0110 決定1): 相談してよいか、だけ。相談先の model は
   // 表から導出されるので、この境界は model 名を運ばない。
   advisor: z.boolean().optional(),
@@ -410,7 +406,8 @@ const createAgentSchema = z.object({
   // no min(1): ADR 0017's empty-specialty default agent has an empty body,
   // and the empty string is that regular form, not a missing value (issue #75)
   systemPrompt: z.string(),
-});
+  // strict: 段は盤面の設定の扉だけが書く(ADR 0410 決定3)—— 送られた `tier` を黙って捨てず断る
+}).strict();
 
 // the edit form resubmits every field but `name`, which comes from the URL
 // (issue #71, same split as updateWorkspaceSchema)
@@ -1105,7 +1102,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     sendJson(res, {
-      agents: agentAdmin.list(),
+      ...withAgentTiers(db, agentAdmin.list()),
       authorityProfiles: agentAdmin.authorityProfiles?.() ?? [],
       providers: PROVIDER_OPTIONS,
     } satisfies WireContract["GET /api/agents"]);
@@ -1835,12 +1832,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     };
 
   // 1 リクエスト = 1 変更(行の upsert / 削除、段の挿入・編集・改名・削除、advisor の上限、Provider 順位、優先
-  // 順位の既定、盤面既定の段、判断の段)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
+  // 順位の既定、盤面既定の段、判断の段、agent の既定ティア)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
   // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post(
     "/settings/execution",
     validatedWrite(executionSettingsChangeSchema, async (change) => {
-      await changeExecutionSettings(db, change, "webui", () => clock.now(), agentAdmin?.renameTier, agentAdmin?.list);
+      applyExecutionSettingsChange(db, change, "webui", clock.now(), undefined, agentAdmin?.list);
       pollNow();
       return readExecutionSettingsWithQuarantine(db);
     }),
@@ -1897,7 +1894,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post(
     "/settings/meta-review/first",
     validatedWrite(firstMetaReviewSchema, ({ subject }) => {
-      const { id } = startFirstMetaReview(db, subject, "webui", clock.now(), registryTiersOf(agentAdmin));
+      const { id } = startFirstMetaReview(db, subject, "webui", clock.now(), agentAdmin?.list);
       pollNow();
       return { id } satisfies WireContract["POST /api/settings/meta-review/first"];
     }),

@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
-import { type AgentView, createAgent, listAgentViews, registryTiersOf } from "../src/agent-create.js";
+import { type AgentView, createAgent, listAgentViews } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
-import { settleStaleProposals } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, settleStaleProposals } from "../src/execution-setting.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { createProfile, listProfileViews } from "../src/profile-create.js";
 import { openQuarantineValues } from "../src/quarantine.js";
@@ -12,7 +12,7 @@ import { proposeRoutingChange } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { createWorkspace, listWorkspaceViews } from "../src/workspace-create.js";
-import { FakeClock, seedTierNames } from "./fakes.js";
+import { FakeClock } from "./fakes.js";
 import { HUMAN_WEBUI, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { breakRegistry, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -21,7 +21,7 @@ type Door = (deps: { db: ReturnType<typeof openDb>; clock: FakeClock; registry: 
 
 const doors: Record<string, Door> = {
   "agent create": (deps) =>
-    createAgent({ name: "tako", authority: "standard", provider: "anthropic", skills: ["*"], description: "d", systemPrompt: "p" }, { ...deps, tiers: () => seedTierNames }),
+    createAgent({ name: "tako", authority: "standard", provider: "anthropic", skills: ["*"], description: "d", systemPrompt: "p" }, { ...deps }),
   "agent list": (deps) => listAgentViews(deps),
   "workspace create": (deps) => createWorkspace({ mode: "create", name: "lagoon" }, deps),
   "workspace list": (deps) => listWorkspaceViews(deps, "configured"),
@@ -72,8 +72,8 @@ it.each([
   expect(quarantineQuestion(deps.db, "registryUnreadable", null)?.purpose).not.toContain("ghp_secret");
 });
 
-// #3682 の最初のコメント: meta-review の registry の照合(registry の提案が開いているときの agent 一覧)も、扉の一覧を通って1点に行き着く
-it("registry の提案が開いたまま registry が読めないと、提案の照合は registryUnreadable を1枚立てる", async () => {
+// #3682 の最初のコメント: meta-review の registry の照合(agent の段の提案が開いているときの agent 一覧)も、扉の一覧を通って1点に行き着く
+it("agent の段の提案が開いたまま registry が読めないと、提案の照合は registryUnreadable を1枚立てる", async () => {
   const registryDir = await makeRegistry();
   const deps = await doorDeps(registryDir);
   const now = deps.clock.now();
@@ -85,11 +85,12 @@ it("registry の提案が開いたまま registry が読めないと、提案の
     at: now,
     payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", tier_id: tierIdOf(deps.db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },
   });
-  const deckhand = { name: "deckhand", provider: "openai", tier: "frontier" } as AgentView;
+  const deckhand = { name: "deckhand", provider: "openai" } as AgentView;
+  applyExecutionSettingsChange(deps.db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", now, undefined, () => [deckhand]);
   proposeRoutingChange(deps.db, review, { op: "agent_tier", agent: "deckhand", to: "standard", evidence: [evidence], rationale: "r" }, "auditor", now, () => [deckhand]);
   breakRegistry(registryDir);
 
-  settleStaleProposals(deps.db, now, null, registryTiersOf({ list: () => listAgentViews(deps) }));
+  settleStaleProposals(deps.db, now, null, () => listAgentViews(deps));
 
   expect(openQuarantineValues(deps.db, "registryUnreadable")).toEqual([null]);
 });

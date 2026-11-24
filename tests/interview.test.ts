@@ -106,7 +106,7 @@ it("root の走る段は盤面の判断の段・測る段・root の段の名指
     const db = openDb(":memory:");
     applyExecutionSettingsChange(db, { setting: "judgement_tier", value: judgement }, "webui", new Date(0));
     const { root } = registerInterview(db, [opusHigh], fields);
-    const [setting] = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, getTask(db, root.id)!);
+    const [setting] = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }] }, getTask(db, root.id)!);
     return tierNameOf(db, setting!.tier_id);
   };
   expect(tierOf("economy", { tier: "standard" })).toBe("standard");
@@ -116,7 +116,7 @@ it("root の走る段は盤面の判断の段・測る段・root の段の名指
 
 /** 子が走る pin: anthropic の entry を持つ agent の候補の値と段。 */
 function pinOf(db: Db, taskId: string) {
-  const [setting] = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, getTask(db, taskId)!);
+  const [setting] = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }] }, getTask(db, taskId)!);
   return setting && { provider: setting.provider, model: setting.model, effort: setting.effort, tier_id: setting.tier_id, source: setting.source.tier };
 }
 
@@ -613,7 +613,7 @@ it("既定の実環境を数える受験者は workspace の停止で候補か�
   const { db, root } = registerInterview();
   const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   const isExcluded = () => entryExclusionPredicate(db, (task) =>
-    executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task), "reef")(examinee);
+    executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }] }, task), "reef")(examinee);
   expect(nextSlotTask(db, "reef")?.id).toBe(examinee.id);
   expect(isExcluded()).toBe(false);
 
@@ -696,7 +696,7 @@ function pinnedChild(target: Record<string, unknown>, ceiling: AdvisorCeiling = 
   const [child] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   return { db, child: child! };
 }
-const agent = (advisor: boolean, ...providers: Provider[]) => ({ provider: providers.map((name) => ({ name, advisor })), tier: undefined });
+const agent = (advisor: boolean, ...providers: Provider[]) => ({ provider: providers.map((name) => ({ name, advisor })) });
 const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high" };
 
 it("受験者は selector の並びを通らず、表に無い対象の (provider, model, effort) と対象の段の候補だけを持つ —— 出所は interview(ADR 0199 決定2 / ADR 0210 決定4)", () => {

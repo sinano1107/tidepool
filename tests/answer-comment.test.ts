@@ -133,9 +133,9 @@ const at = new Date("2026-10-01T00:00:00.000Z");
 const QUESTIONS = {
   memory: { options: ["approve", "reject", "defer"], question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } } },
   routing: { options: ["approve", "reject"], question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", evidence: [1], pin: { promoted: false } } } },
-  registry: {
+  agentTier: {
     options: ["approve", "reject"],
-    question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)
+    question_kind: { kind: "proposal", proposal: { kind: "routing", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)
   },
   approval: { options: ["approve", "reject"], question_kind: { kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c" } } },
   escalation: { options: ["a", "b"] },
@@ -169,7 +169,7 @@ it.each([
   ["memory", "reject"],
   ["memory", "defer"],
   ["routing", "reject"],
-  ["registry", "reject"],
+  ["agentTier", "reject"],
   ["approval", "reject"],
 ] as const)("%s の question への %s は comment が空・空白だけなら domain error で断り、comment があれば通る(ADR 0179 決定1・2・4)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
@@ -181,7 +181,7 @@ it.each([
 it.each([
   ["memory", "approve"],
   ["routing", "approve"],
-  ["registry", "approve"],
+  ["agentTier", "approve"],
   ["approval", "approve"],
   ["escalation", "b"],
   ["failure", "abandon"],

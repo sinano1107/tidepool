@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { readExecutionSettings } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, readExecutionSettings } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { normalizeText, whyBlank } from "../src/required-text.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
@@ -134,10 +134,11 @@ it("routing agent-tier proposals normalize supplied agent and target tier names 
     const review = registerTask(db, { type: "review", title: "routing review", purpose: "purpose", completion_criteria: "criteria", meta_review_subject: "routing" }, new Date(0), ...HUMAN_WEBUI);
     const task = registerTask(db, { type: "work", title: "evidence", purpose: "purpose", completion_criteria: "criteria" }, new Date(0), ...HUMAN_WEBUI);
     const evidence = [appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at: new Date(0), payload: { ...WORKER_SPAWNED, model: "claude-opus-5-5", tier_id: tierIdOf(db, "frontier"), source: { tier: "agent", provider: "only" } } })];
-    const agent: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "frontier", skills: ["*"], retiredFields: [], unknownFields: [], systemPrompt: "prompt" };
+    const agent: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, skills: ["*"], unknownFields: [], systemPrompt: "prompt" };
+    applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: "frontier" }, "webui", new Date(0), undefined, () => [agent]);
     const input = { op: "agent_tier" as const, agent: " deckhand ", to: " standard\n", evidence, rationale: "evidence" };
     const { question_id } = proposeRoutingChange(db, review.id, input, "worker", new Date(0), () => [agent]);
-    expect(getTask(db, question_id)?.question_proposal).toMatchObject({ kind: "registry", agent: "deckhand" });
+    expect(getTask(db, question_id)?.question_proposal).toMatchObject({ kind: "routing", agent: "deckhand" });
     expect(getTask(db, question_id)?.title).toBe("Lower agent deckhand's tier: frontier -> standard");
     for (const field of ["agent", "to"] as const) {
       expect(() => proposeRoutingChange(db, review.id, { ...input, [field]: " \t\n" }, "worker", new Date(0), () => [agent])).toThrow();

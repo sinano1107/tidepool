@@ -23,7 +23,6 @@ import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
 import { carriesCredential, RepoCredentialError, repositoryLabel } from "./repo-access.js";
 import { findSkillAllowlistError, whyInvalidSkillAllowlist } from "./skill-allowlist.js";
-import type { Tier } from "./tier.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -50,22 +49,10 @@ export interface AgentDefinition {
    *  (ADR 0005)。名前は自由文字列のまま持つ — 列挙・組み合わせの違反は読み込みを
    *  倒さず、登録と pickup の門が拒否/隔離する(ADR 0097 決定3)。 */
   provider: readonly AgentProviderEntry[];
-  /** 既定の要求ティア(GLOSSARY.md「要求」/ ADR 0110 決定1): この agent の
-   *  セッションが既定でどの品質ティアを要求するか。省略 → 盤面既定
-   *  (盤面設定、ADR 0200 決定4)。「常に上位で」と言いたい Auditor のような役割の
-   *  ための1行であり、model 名ではない —— 具体の model / effort は pickup 時に
-   *  selector が盤面の表から選ぶ。ここでは `provider` と同じく自由文字列のまま
-   *  持ち、盤面の段の一覧に対する検査は登録と pickup の門(`assertValidAgentDefinition`)が行う。 */
-  tier?: string;
-  /** ピン留めが退役した後も agent.md に残っている値の名前(ADR 0110 決定1)。
-   *  `model` / `effort`(実行設定へ移った)と、トップレベルの `advisor`(entry の
-   *  性質になった、ADR 0116 決定2)。**読み込みでは倒さない** —— 手で commit された違反が
-   *  registry 全体を煉瓦にしないよう、拒否するのは登録と pickup の門である
-   *  (`provider` の列挙違反と同じ扱い、ADR 0097 決定3)。 */
-  retiredFields: readonly string[];
   /** frontmatter に書かれているが schema に無いキー(issue #2694)。トップレベルと、object の
-   *  provider entry 内(`provider.<key>` の形で)を拾う。退役フィールドと同じく**読み込みでは
-   *  倒さず**、門が名前を挙げて拒む —— 綴り違いの欄が「省略」と読まれて黙って消えないように。 */
+   *  provider entry 内(`provider.<key>` の形で)を拾う。**読み込みでは倒さず**(手で commit された違反が registry 全体を
+   *  煉瓦にしないよう、ADR 0097 決定3)、門が名前を挙げて拒む —— 綴り違いの欄が「省略」と読まれて黙って消えないように。
+   *  agent の段(`tier`)と実行設定の退役欄(`model` / `effort` / トップレベルの `advisor`)もここに入る(ADR 0410 決定1・7)。 */
   unknownFields: readonly string[];
   /** Visual identity emoji for this agent (issue #52), shown by the board
    *  UI's AgentChip. Absent → the UI falls back to hashed initials. Loader
@@ -259,7 +246,6 @@ const BUILT_IN_AUDITOR: AgentDefinition = {
   authority: REVIEWER_AUTHORITY_PROFILE.name,
   description: "Reviews work independently against its completion criteria.",
   provider: normalizeProviderEntries(undefined),
-  retiredFields: [],
   unknownFields: [],
   icon: "🐡",
   skills: ["@workspace"],
@@ -295,8 +281,8 @@ export class UnknownAgentError extends Error {
 }
 
 /** 定義が成立していない(ADR 0097 決定3 / ADR 0110 決定1): provider が列挙の外、
- *  advisor を提供しない正準経路に advisor が宣言されている、ティアが列挙の外、
- *  あるいは退役したピン留めが残っている。定義を受け入れる門 —— 登録
+ *  advisor を提供しない正準経路に advisor が宣言されている、あるいは schema に無いキーが
+ *  ある(段と退役したピン留めも、ADR 0410 決定1・7)。定義を受け入れる門 —— 登録
  *  (agent-create.ts)と pickup 解決(agent.ts の resolveExecutionAgent)—— で
  *  投げ、**読み込みでは投げない**: 手で commit された違反は registry 全体を
  *  煉瓦にせず、その agent 1体を隔離する。registry に無い authority profile を
@@ -323,35 +309,16 @@ export interface AgentDefinitionCheck {
   /** 正規化済みの entry 配列(ADR 0110 決定1)。登録の verb は
    *  `normalizeProviderEntries` を通した値を渡す —— 門が綴りの分岐を持たない。 */
   provider: readonly AgentProviderEntry[];
-  tier?: string;
-  retiredFields?: readonly string[];
   unknownFields?: readonly string[];
 }
 
 /** 定義が成立しているかの検査(ADR 0097 決定1/3 / ADR 0110 決定1)—— 登録の verb
  *  と pickup 解決が**同じ1つの assertion** を通ることで、2つの門が別々の判定に
- *  ずれることがない。空白だけの値の正規化は parse 側(`isWritten`)に寄せてある
- *  ので、手で書かれたファイルと フォームから来た値が同じ判定に至る。 */
-export function assertValidAgentDefinition(
-  agentName: string,
-  definition: AgentDefinitionCheck,
-  /** 盤面の段の名前(ADR 0200 決定2): agent.md の `tier` はこの一覧に対して検査する。 */
-  tiers: readonly Tier[],
-): void {
-  const { provider: entries, tier, retiredFields = [], unknownFields = [] } = definition;
+ *  ずれることがない。 */
+export function assertValidAgentDefinition(agentName: string, definition: AgentDefinitionCheck): void {
+  const { provider: entries, unknownFields = [] } = definition;
   // 拒否文は盤面のコードが発する文なので、ADR の引用は文でなくここに置く(ADR 0207)
-  if (retiredFields.length > 0) {
-    // ADR 0110 決定1(実行設定は表へ)/ ADR 0116 決定2(advisor は entry の性質)
-    throw new InvalidAgentDefinitionError(
-      agentName,
-      `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")}. ` +
-        "model and effort are chosen at pickup from the board's provider × tier table, and advisor is a " +
-        "property of a provider entry whose model is derived from that same table — " +
-        `declare a tier (${tiers.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
-        "`provider: [{ name: anthropic, advisor: true }]`, instead",
-    );
-  }
-  // issue #2694
+  // issue #2694 / ADR 0410 決定7: 段と実行設定の退役欄も、専用の文を持たずここで拒む
   if (unknownFields.length > 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
@@ -363,13 +330,6 @@ export function assertValidAgentDefinition(
   // ADR 0116 決定1(省略は Provider 全部に展開されるので、空になるのは書かれた空の列だけ —— ADR 0337 決定1)
   if (entries.length === 0) {
     throw new InvalidAgentDefinitionError(agentName, "no provider entry is left — a written empty list leaves no route this agent could ever run on");
-  }
-  // ADR 0110 決定1 / ADR 0200 決定2
-  if (tier !== undefined && !tiers.includes(tier)) {
-    throw new InvalidAgentDefinitionError(
-      agentName,
-      `unknown tier "${tier}" (expected one of the board's tiers: ${tiers.join(" / ")})`,
-    );
   }
   // entry 単位(ADR 0110 決定1): advisor も skill も**その経路**の性質なので、
   // 1つの entry が成立しないなら定義全体が成立しない —— 成立しない entry を
@@ -660,11 +620,6 @@ const agentFrontmatterSchema = z.looseObject({
       z.array(z.union([z.string(), providerEntrySchema])),
     ])
     .nullish(),
-  // 自由文字列のまま(`provider` と同じ理由 — 列挙の検査は門であって読み込みでは
-  // ない、ADR 0097 決定3)。値の集合は ADR 0110 の3ティア。
-  // nullish: 値の無い `tier:` の1行(YAML では null)で registry 読み取り全体を
-  // 倒さない —— 空白だけの値と同じく「書かれていない」として扱う。
-  tier: z.string().nullish(),
   icon: z
     .string()
     .refine(isSingleTwemojiGrapheme, {
@@ -860,30 +815,11 @@ export function splitFrontmatter(raw: string): { frontmatter: string; body: stri
   return match ? { frontmatter: match[1]!, body: match[2]! } : null;
 }
 
-/** 空白だけ・null・キー不在をまとめて「書かれていない」とする(登録の門が
- *  かつて `normalizeAdvisor` で行っていた正規化を、両方の門が同じ判定に至る
- *  よう parse の側に1つだけ置いた)。 */
-function isWritten(value: unknown): boolean {
-  return value !== undefined && value !== null && String(value).trim() !== "";
-}
-
-const RETIRED_FIELDS = ["model", "effort", "advisor"];
-
-/** agent.md に残っている退役フィールド。`model` / `effort` は実行設定へ移り
- *  (ADR 0110 決定1)、トップレベルの `advisor` は entry の性質になった(ADR 0116
- *  決定2)—— どれも黙って無視すると「書いたのに効かない値」になるので、門が名前を
- *  挙げて拒否する。スキーマは looseObject なので、値の形を問わず読み込みは倒れない。 */
-function retiredExecutionFields(raw: unknown): string[] {
-  const meta = (raw ?? {}) as Record<string, unknown>;
-  return RETIRED_FIELDS.filter((name) => isWritten(meta[name]));
-}
-
-/** schema に無いキー(issue #2694)。値ではなく**キーの存在**で数える。退役フィールドは名前で
- *  除く —— 値が空なら退役にも数えない(`isWritten`)が、未知キーにもしない。 */
+/** schema に無いキー(issue #2694)。値ではなく**キーの存在**で数える。 */
 function unknownFrontmatterFields(raw: unknown): string[] {
   const meta = (raw ?? {}) as Record<string, unknown>;
   const topLevel = Object.keys(meta).filter(
-    (key) => !Object.hasOwn(agentFrontmatterSchema.shape, key) && !RETIRED_FIELDS.includes(key),
+    (key) => !Object.hasOwn(agentFrontmatterSchema.shape, key),
   );
   const inEntries = (Array.isArray(meta.provider) ? meta.provider : [])
     .flatMap((entry) => (typeof entry === "object" && entry !== null ? Object.keys(entry) : []))
@@ -911,8 +847,6 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     authority: meta.authority,
     description: meta.description,
     provider: normalizeProviderEntries(meta.provider),
-    tier: isWritten(meta.tier) ? (meta.tier as string) : undefined,
-    retiredFields: retiredExecutionFields(parsed),
     unknownFields: unknownFrontmatterFields(parsed),
     icon: meta.icon,
     skills: meta.skills,

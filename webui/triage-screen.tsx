@@ -298,7 +298,7 @@ function TpAddTierAmendment({ proposed, onChange }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
       <Input label="Name" mono value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-        placeholder="a lowercase letter, then a-z 0-9 - _ — agent.md writes it as its tier" />
+        placeholder="a lowercase letter, then a-z 0-9 - _" />
       <Select label="Position" value={String(draft.position)}
         options={Array.from({ length: tiers.length + 1 }, (_, p) => ({ value: String(p), label: tierPositionLabel(tiers, p) }))}
         onChange={(e) => setDraft({ ...draft, position: Number(e.target.value) })} />

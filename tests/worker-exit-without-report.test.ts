@@ -434,7 +434,7 @@ async function bootWithAdapter(
     watchdog: WATCHDOG,
     // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }] }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: runtime,
     workerAdapter: (deps) => withHealthyUsage(opensCheckoutAtWorkspace(build(deps), deps.db, at), deps.clock),

@@ -62,7 +62,6 @@ export function proposalTierNames(db: Db, proposal: QuestionProposal): QuestionP
   const name = (id: TierId) => tierNameOf(db, id);
   const row = <R extends { tier: TierId }>(r: R) => ({ ...r, tier: name(r.tier) });
   const neighbour = (n: TierNeighbour | null) => n && { name: name(n.id), description: n.description };
-  if (proposal.kind === "registry") return { ...proposal, to: name(proposal.to), pin: { tier: name(proposal.pin.tier), rows: proposal.pin.rows.map(row) } };
   if (proposal.kind === "memory") return proposal;
   switch (proposal.op) {
     case "row": {
@@ -75,6 +74,8 @@ export function proposalTierNames(db: Db, proposal: QuestionProposal): QuestionP
       return { ...proposal, tier: name(proposal.tier) };
     case "interview":
       return { ...proposal, tier: name(proposal.tier), pin: { rows: proposal.pin.rows.map(row) } };
+    case "agent_tier":
+      return { ...proposal, to: name(proposal.to), pin: { tier: name(proposal.pin.tier), rows: proposal.pin.rows.map(row) } };
     default:
       return proposal;
   }

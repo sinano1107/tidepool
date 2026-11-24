@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { z } from "zod";
 import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
-import { type AgentAdmin, AgentTierMismatchError, agentTierChangeMessage, agentViewProviders, RegistryLogUnreadableError, type TierApproval } from "./agent-create.js";
+import { type AgentAdmin, type AgentView, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import { recordedAnswer } from "./board-call-usage.js";
 import type { BoardStatePath } from "./board-state.js";
@@ -21,22 +21,18 @@ import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin, getEvent, latestEventId, listEventsOfKinds, type TaskScopedPayload } from "./events.js";
 import {
   type AddTierAmendment,
-  agentTierChangedPayload,
   applyExecutionSettingsChange,
   assertTierRunnableFor,
   composeRoutingRow,
   type ExecutionSettingsChange,
   type InterviewAmendment,
-  inTierRenameWindow,
+  type ListAgents,
   parseAddTierAmendment,
   parseAgentTierAmendment,
   parseInterviewAmendment,
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
   type RoutingRowChange,
-  registryPinChanges,
-  settleProposalAsApplied,
-  undeclaredTier,
 } from "./execution-setting.js";
 import { assertGhVersion, GhVersionError, ghRefusalText } from "./gh-cli-version.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
@@ -70,7 +66,6 @@ import {
 import { questionKindOf } from "./question-kind.js";
 import { placeHasRepository } from "./recorded-place.js";
 import type { Harness, RegistryAvailabilityCheck } from "./registry.js";
-import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
@@ -118,7 +113,6 @@ import {
   presentTask,
   QuestionClosedError,
   type RegisterTaskInput,
-  type RegistryProposal,
   registerTask,
   retireLandingDecisions,
   retryInterviewRoot,
@@ -130,7 +124,7 @@ import {
   unsettledOpenersOf,
 } from "./tasks.js";
 import { type FailedTeardownCheck, teardownStep, type UnclosedSessionCheck } from "./teardown.js";
-import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
+import { proposalTierNames, type Tier, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
@@ -601,8 +595,8 @@ export interface SubmitAnswerDeps {
    *  持たない盤面(回収を待っている slot が存在しない)。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
   quarantineChecks?: QuarantineChecks;
-  /** registry の agent 一覧と tier の書き込み(issue #920): tier の提案への approve が使う。Absent → registry の無い盤面。 */
-  agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier" | "tierApproval">>;
+  /** registry の agent 一覧: agent の段の提案への approve が agent の存在を読む(ADR 0410 決定4)。Absent → registry の無い盤面。 */
+  agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
   /** memory の提案の approve が candidate の宛先を照合する(ADR 0173 決定2)。Absent → registry の無い盤面。 */
   agentRegistered?: (name: string) => boolean;
   defaultAgentName?: string;
@@ -1572,67 +1566,25 @@ function assertMergeQuestionNotReplaced(db: Db, question: Task): void {
   if (mergeQuestionWasReplaced(db, question)) throw new DomainError("question closed — read the replacement merge question before answering");
 }
 
-/** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて
- *  いれば question を observed で決着させて null を返し、下げ先に行が無い・push できないなら question は open のまま回答を断る。
- *  崩れた pin の読みは、承認の commit が registry にあれば適用済み、改名の窓なら open のまま断る、どちらでもなければ stale(ADR 0401 決定6)。
- *  返り値は着地した commit。 */
-async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposal: RegistryProposal, to: Tier, now: () => Date): Promise<string | null> {
-  const { list, changeTier } = deps.agentAdmin ?? {};
-  if (!list || !changeTier) throw new DomainError("no registry configured — cannot change the agent's tier");
-  const stale = () => {
-    settleQuestionAsObserved(
-      deps.db,
-      questionId,
-      { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "registry", changed: ["agent_tier"], observed_event_id: null },
-      now(),
-    );
-    return null;
-  };
-  // ADR 0401 決定6: 承認の commit が registry にあれば、記録の前に盤面が死んだ適用 —— stale でなく適用済みとして閉じる
-  // log が読めなければ承認の有無が分からないので、stale と読まずに question を開いたまま断る
-  const applied = () => {
-    let approval: TierApproval | undefined;
-    try {
-      approval = deps.agentAdmin?.tierApproval?.(proposal.agent, questionId);
-    } catch (err) {
-      if (err instanceof RegistryLogUnreadableError) throw new DomainError(err.message);
-      throw err;
-    }
-    if (approval) settleProposalAsApplied(deps.db, questionId, proposal, approval, now());
-    return approval !== undefined;
-  };
-  // ADR 0401 決定6: 改名の窓の間は照合せず、question を開いたまま断る —— stale と刻めば適用できる提案を決定が読む誤った記録で閉じる。
-  // 改名の再実行を名指す文は agent の解決にだけ出す
-  const refuseInRenameWindow = (tier: string | undefined) => {
-    if (tier !== undefined && inTierRenameWindow(tier, tierNames(deps.db))) throw new DomainError(undeclaredTier(proposal.agent, tier));
-  };
-  // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
-  const agent = list().find((a) => a.name === proposal.agent);
-  if (registryPinChanges(proposal, agent, liveTierRows(deps.db)).length) {
-    if (applied()) return null;
-    refuseInRenameWindow(agent?.tier);
-    return stale();
-  }
-  const assertLandable = (providers: string[]) => assertTierRunnableFor(deps.db, proposal.agent, providers, to);
-  assertLandable(agentViewProviders(agent!));
+/** agent の段の提案の approve の前の照合(ADR 0410 決定4): registry を読んで agent の存在だけを確かめる。消えていれば question を stale
+ *  (changed null —— pin が名指したものが無い)で閉じて null、読めなければ回答を断る(question は開いたまま)。在れば下げ先の走れる行を
+ *  確かめ(spec #916 B)、回答の transaction の書き込みが読む一覧を返す —— transaction の中で registry を読み直さない。 */
+function agentTierApproval(deps: SubmitAnswerDeps, questionId: string, agent: string, to: Tier, now: () => Date): ListAgents | null {
+  const list = deps.agentAdmin?.list;
+  if (!list) throw new DomainError("no registry configured — cannot set the agent's default tier");
+  let agents: AgentView[];
   try {
-    return await changeTier({
-      name: proposal.agent,
-      expectTier: tierNameOf(deps.db, proposal.pin.tier),
-      to,
-      assertLandable,
-      message: agentTierChangeMessage(proposal.agent, to, questionId),
-    });
+    agents = list();
   } catch (err) {
-    // fetch の後の registry に着地済みの承認がありうるので探し直す
-    if (err instanceof AgentTierMismatchError) {
-      if (applied()) return null;
-      refuseInRenameWindow(err.actual);
-      return stale();
-    }
-    if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
-    throw err;
+    throw new DomainError(`the registry could not be read to check that agent ${agent} still exists: ${err instanceof Error ? err.message : String(err)}`);
   }
+  const found = agents.find((a) => a.name === agent && !a.builtin);
+  if (!found) {
+    settleQuestionAsObserved(deps.db, questionId, { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "routing", changed: null, observed_event_id: null }, now());
+    return null;
+  }
+  assertTierRunnableFor(deps.db, agent, agentViewProviders(found), to);
+  return () => agents;
 }
 
 /** 回答の入力 schema。HTTP と管理 MCP の両方の扉がこれを使い、扉ごとの食い違いを作らない(issue #1310)。 */
@@ -1683,7 +1635,7 @@ export async function submitAnswer(
     else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "add_tier") amended = parseAddTierAmendment(amendment);
     else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "tier_description") amended = { description: parseTierDescriptionAmendment(amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "interview") amended = parseInterviewAmendment(proposal, amendment);
-    else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(tierNames(deps.db), proposal, amendment) };
+    else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "agent_tier") amended = { to: parseAgentTierAmendment(tierNames(deps.db), proposal, amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
     else throw new DomainError("only an approve answer to a routing row, add-tier, tier description, Interview, agent tier, or memory proposal with a candidate takes an amendment");
   }
@@ -1698,6 +1650,8 @@ export async function submitAnswer(
   let notice: string | undefined;
   // 回答の書き込みと同じ transaction で撃つ Quarantine の受理の段(ADR 0385 決定3・6)
   let withAnswer: ((questionId: string) => void) | undefined;
+  // agent の段の提案の approve が回答の transaction で書く registry の一覧(ADR 0410 決定4)
+  let approvedAgents: ListAgents | undefined;
   // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3、
   // 断る回答は ADR 0394 決定5)。merge も断りも選択肢が名指す行為なので、どれも回答した人間の名義(ADR 0400 決定1・3)
   let rootRecord: { root: string; payload: TaskScopedPayload } | undefined;
@@ -1932,20 +1886,11 @@ export async function submitAnswer(
         break;
       }
       case "proposal":
-        // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
-        if (proposal?.kind === "registry" && answers[0] === "approve") {
-          const to = (amended as { to: Tier } | undefined)?.to ?? proposal.to;
-          const registryCommit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, to, now);
-          // 前提が崩れていれば question は観測で閉じた —— merge の観測決着と同じ 200 + 印で返す(ADR 0265 決定7)
-          if (registryCommit === null) return presentAnswered(deps, task);
-          // registry が変わった事実は回答が残るかに依らず真 —— 回答の transaction の外で、commit の直後に刻む(ADR 0288 決定3)
-          appendEvent(deps.db, {
-            taskId: null,
-            actorId: HUMAN_ACTOR_ID,
-            origin,
-            payload: agentTierChangedPayload(proposal, to, task.id, registryCommit),
-            at: now(),
-          });
+        if (proposal?.kind === "routing" && proposal.op === "agent_tier" && answers[0] === "approve") {
+          const listed = agentTierApproval(deps, task.id, proposal.agent, (amended as { to: Tier } | undefined)?.to ?? proposal.to, now);
+          // agent が消えていれば question は観測で閉じた —— merge の観測決着と同じ 200 + 印で返す(ADR 0265 決定7)
+          if (listed === null) return presentAnswered(deps, task);
+          approvedAgents = listed;
         }
         break;
       case "intake":
@@ -2023,8 +1968,11 @@ export async function submitAnswer(
               ? { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, amended as RoutingRowChange | undefined) }
               : proposal.op === "tier_description"
                 ? { setting: "edit_tier", name: proposal.tier, description: (amended as { description: string } | undefined)?.description ?? proposal.description }
-                : { setting: "learner_promoted", value: proposal.op === "promote" };
-          applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
+                : proposal.op === "agent_tier"
+                  ? { setting: "agent_tier", agent: proposal.agent, tier: (amended as { to: Tier } | undefined)?.to ?? proposal.to }
+                  : { setting: "learner_promoted", value: proposal.op === "promote" };
+          // ADR 0410 決定4: agent の既定ティアも回答と同じ transaction で書く
+          applyExecutionSettingsChange(deps.db, change, origin, now(), task.id, approvedAgents);
         }
       }
       // The decision log line on the question states why promotion was given up (the root holds only `landing_declined`).

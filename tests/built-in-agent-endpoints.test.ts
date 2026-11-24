@@ -1,7 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { createAgent, deleteAgent, listAgentViews, updateAgent } from "../src/agent-create.js";
 import { loadRegistry, ownEntry, type RegistrySource } from "../src/registry.js";
-import { seedTierNames } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -26,7 +25,7 @@ You are my fugu.
 async function bootWithRegistry(files: Record<string, string> = {}): Promise<Tidepool> {
   const dir = await makeRegistry(files);
   const registry: RegistrySource = { dir, mode: "purely-local" };
-  const deps = { registry, tiers: () => seedTierNames };
+  const deps = { registry };
   const load = () => loadRegistry(dir, "purely-local");
   return bootTidepool({
     workerId: "deckhand",

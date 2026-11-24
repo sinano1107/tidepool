@@ -53,7 +53,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, seedTierNames, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote, } from "./git-http-remote.js";
 import {
   CLEAN_LANDING_INTAKE,
@@ -144,7 +144,7 @@ it("shadow が消えて組み込みに落ちた work のキューの PR は、�
   recordPrOpenedOutsideConvergence(db, work, 1, clock.now(), { authority: { merge: "auto_if_ci_green" } });
   const registry = loadRegistry(await makeRegistry(), "purely-local");
   let resolveAuthority = (assignee: string | null, taskType: TaskType): AuthorityProfile =>
-    resolveExecutionAgent(registry, "tako", assignee, seedTierNames, taskType).profile;
+    resolveExecutionAgent(registry, "tako", assignee, taskType).profile;
   const landing = createLanding({
     defaultAgentName: "tako",
     db,

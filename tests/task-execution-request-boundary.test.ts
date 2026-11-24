@@ -199,7 +199,6 @@ description: Default agent
 version: 1.0.0
 authority: standard
 provider: anthropic
-tier: economy
 skills:
   - "*"
 ---

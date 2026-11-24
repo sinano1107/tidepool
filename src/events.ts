@@ -1,14 +1,14 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
+import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields, MemoryJudgmentItem } from "./memory.js";
 import type { Provider } from "./provider.js";
 import type { PrMergeQuestionContent } from "./question-kind.js";
 import type { RoutingJudgmentItem, RoutingObject } from "./routing-review.js";
 import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
-import type { Tier, TierId } from "./tier.js";
+import type { TierId } from "./tier.js";
 
 /** 行の拒否の証拠の種類: Provider が id を 404 で断った(ADR 0184 決定3)/ CLI の版が model の最低版に
  *  届かない(result 行の `api_error_code: claude_code_version_too_old`、ADR 0187 決定1)。 */
@@ -675,10 +675,11 @@ export type EventPayload =
   // 行・advisor の上限・Provider 順位・優先順位の既定)を変えた操作イベント。
   // `origin` がどの手から入ったか(webui / mcp)を機械記録する(GLOSSARY.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
-  // tier_id = 種を置いた行の追加(`seed`)だけ: 足した行の段の id(ADR 0273 決定7)。
+  // tier_id = 種を置いた行の追加(`seed`)だけ: 足した行の段の id(ADR 0273 決定7)。agent の既定ティアは段を id だけで持つ(null は解除、ADR 0410 決定3)。
   | ({ kind: "execution_settings_changed"; question_id?: string } & (
-      | Exclude<ExecutionSettingsChange, { setting: "row" }>
+      | Exclude<ExecutionSettingsChange, { setting: "row" | "agent_tier" }>
       | (Extract<ExecutionSettingsChange, { setting: "row" }> & { tier_id?: TierId })
+      | { setting: "agent_tier"; agent: string; tier_id: TierId | null }
     ))
   // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
@@ -699,21 +700,15 @@ export type EventPayload =
   | { kind: "memory_proposal_stale"; question_id: string; entry_id: number; observed_event_id: number }
   // ADR 0150 決定1 / issue #918: pin した表の行が変わった / 消えた(changed = 崩れた欄、null = 行の削除)ので、盤面が routing の
   // 提案 question を観測で決着させた(決着させた question に帰属)。observed_event_id = その execution_settings_changed の id。
-  // registry の提案(issue #920)は、approve 時 / due 判定時に registry の現在値と照合して崩れた pin も決着させる —— registry の変更は
-  // 盤面の event ではないので、そのとき observed_event_id は null。
+  // agent の段の提案(ADR 0410 決定4)は、承認時 / due 判定時に agent が registry から消えていれば changed null で決着させる —— registry の
+  // 変更は盤面の event ではないので、そのとき observed_event_id は null。
   | {
       kind: "routing_proposal_stale";
       question_id: string;
-      proposal_kind: "routing" | "registry";
-      changed: ReturnType<typeof routingPinChanges> | ReturnType<typeof registryPinChanges>;
+      proposal_kind: "routing";
+      changed: ReturnType<typeof routingPinChanges>;
       observed_event_id: number | null;
     }
-  // issue #920: agent の tier の提案への approve が registry の main へ commit した(盤面スコープ)。registry_commit = 着地した commit。
-  // ADR 0150 決定1 が新設しないとした「registry 変更の event」ではない —— 盤面自身の書き込みの記録で、row の approve の execution_settings_changed と同じ位置。
-  | { kind: "agent_tier_changed"; agent: string; from: Tier; to: Tier; question_id: string; registry_commit: string }
-  // ADR 0401 決定6: 承認の commit(`(question <id>)` を名指す盤面の commit)が registry にあり記録の無い registry の提案を、盤面が
-  // 適用済みとして観測で閉じた(閉じた question に帰属)。人間の回答・修正値は残らない。registry_commit = その commit。
-  | { kind: "routing_proposal_applied"; question_id: string; registry_commit: string }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // ヒットごとの落ちた理由(`hits`、null = 返した)、read は求めた id のうち本文を返さなかった無効化済みの理由と見える後継
   // (ADR 0167 決定4。returned_ids はたどった先の id)。event id は tool 結果に載り、Precedent の
@@ -865,7 +860,6 @@ const BOARD_SCOPED_KINDS = [
   "memory_index_rebuilt",
   "memory_settings_changed",
   "meta_review_settings_changed",
-  "agent_tier_changed",
   "response_truncated",
   "baseline_restored",
   "lost_refs_accepted",

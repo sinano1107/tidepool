@@ -71,7 +71,6 @@ export type SettledByObservation =
   | "task_branch_lost_observed"
   | "quarantine_released"
   | "routing_proposal_stale"
-  | "routing_proposal_applied"
   | "memory_proposal_stale";
 
 /** done の work の行の着地の状態(ADR 0265 決定7、src/landing.ts の landingState)。WebUI の札の文言表がこれで欠けを落とす。 */
@@ -111,11 +110,11 @@ export interface BoardTask extends QueueTask {
   registrant?: string;
   purpose: string;
   question_items: Array<{ title: string; detail?: string; options: string[]; recommendation?: string }> | null;
-  /** 提案 question の種別(ADR 0120 決定4 / ADR 0150 決定2 / ADR 0152 決定2)。routing の行の提案(op row)と段の追加(op add_tier)、registry の tier の提案、
+  /** 提案 question の種別(ADR 0120 決定4 / ADR 0150 決定2 / ADR 0152 決定2)。routing の行の提案(op row)と段の追加(op add_tier)、agent の段の提案(op agent_tier)、
    *  段の説明の提案(op tier_description)、Interview の提案(op interview、仮説・測る仕事・対象の effort・実環境)、memory の approve / consolidate のうち `candidate_id` を持つもの(その文言、Exemplar なら注釈 list ——
-   *  種別は画面が candidate から引く)は approve に修正値を添えられる。registry の tier の提案の `pin.tier` は下げ先の選択肢の上端(ADR 0200 決定4)。 */
+   *  種別は画面が candidate から引く)は approve に修正値を添えられる。agent の段の提案の `pin.tier` は下げ先の選択肢の上端(ADR 0200 決定4)。 */
   question_proposal: {
-    kind: "memory" | "routing" | "registry";
+    kind: "memory" | "routing";
     op: string;
     candidate_id?: number;
     /** op tier_description は段の名前、op add_tier は足す段(名前・説明・位置)—— 後者は修正値の欄の初期値(issue #1439)。 */
@@ -423,12 +422,15 @@ export interface WireContract {
       systemPrompt: string;
       authority: string;
       provider: string;
+      /** 盤面の既定ティア(ADR 0410 決定1)。無い = 盤面既定で走る。 */
       tier?: string;
       advisor: boolean;
       skills: string[];
       builtin?: true;
       shadowsBuiltIn?: true;
     }>;
+    /** registry に無い名前の既定ティアの行(孤児、ADR 0410 決定5)。 */
+    orphanTiers: ReadonlyArray<{ agent: string; tier: string }>;
     authorityProfiles: string[];
     providers: readonly Option[];
   };
@@ -466,6 +468,8 @@ export interface WireContract {
     providers: readonly Option[];
     /** 盤面の段の一覧、順序どおり(ADR 0200 決定1・3)。 */
     tiers: ReadonlyArray<{ name: string; description: string }>;
+    /** agent の既定ティアの行(ADR 0410 決定1)、registry から消えた agent の行も載る。 */
+    agentTiers: ReadonlyArray<{ agent: string; tier: string }>;
     priorities: readonly string[];
     advisorCeilings: readonly AdvisorCeiling[];
   };

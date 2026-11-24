@@ -58,7 +58,6 @@ import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupSt
 import { liveSession, type TeardownAction } from "./teardown.js";
 
 
-import { tierNames } from "./tier.js";
 import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { type SpawnFailure, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
@@ -1518,7 +1517,7 @@ export class CodexWorker implements WorkerAdapter {
     );
     const agent = resolveAgentOrQuarantine(
       this.options.db,
-      (name) => resolveExecutionAgent(registry, this.options.agent, name, tierNames(this.options.db), task.type),
+      (name) => resolveExecutionAgent(registry, this.options.agent, name, task.type),
       assignee,
       this.options.clock.now(),
       stopped,

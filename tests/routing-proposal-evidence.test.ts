@@ -8,7 +8,7 @@ import { proposeRoutingChange } from "../src/routing-review.js";
 import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
 import { readTiers, tierIdOf } from "../src/tier.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
-import { DECKHAND_AGENT, decomposedChild, examineeRootId, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, deckhandOnTier, decomposedChild, examineeRootId, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の提案の根拠は op の対象が決める母集団の部分集合で、検査・組・引用の外は盤面が母集団から組む(ADR 0302、issue #2485)の
  *  ドメイン層。昇格 / 降格の detail は tests/learner-promotion-evidence.test.ts、MCP の inputSchema はサーバ境界の各テストが言う。 */
@@ -18,6 +18,7 @@ const SOL = { provider: "openai" as const, model: "gpt-5.6-sol", effort: "high" 
 
 function board() {
   const db = openDb(":memory:");
+  deckhandOnTier(db, at);
   registerMetaReview(db, "routing", at);
   const review = listBoard(db).find((task) => task.meta_review_subject === "routing")!.id;
   const propose = (input: Omit<Parameters<typeof proposeRoutingChange>[2], "rationale">) =>
@@ -29,14 +30,14 @@ function board() {
  *  行の今の段で走る既定どおりの session は harness の rowSession。 */
 function session(
   db: Db,
-  options: { row?: RowKey; tier?: string; workspace?: string; agent?: string; source?: "task" | "agent"; writer?: readonly [string, "webui" | "mcp"] } = {},
+  options: { row?: RowKey; tier?: string; workspace?: string; agent?: string; source?: "task" | "agent" | "board"; writer?: readonly [string, "webui" | "mcp"] } = {},
 ): number {
   const { row = OPUS_ROW, tier = "standard", workspace = "reef", agent = "deckhand", source = "task", writer = HUMAN_WEBUI } = options;
   const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace }, at, ...writer).id;
   return spawnOn(db, task, { row, tier, agent, source });
 }
 
-function spawnOn(db: Db, taskId: string, { row = OPUS_ROW, tier = "standard", agent = "deckhand", source = "task" }: { row?: RowKey; tier?: string; agent?: string; source?: "task" | "agent" } = {}): number {
+function spawnOn(db: Db, taskId: string, { row = OPUS_ROW, tier = "standard", agent = "deckhand", source = "task" }: { row?: RowKey; tier?: string; agent?: string; source?: "task" | "agent" | "board" } = {}): number {
   return appendEvent(db, {
     taskId,
     actorId: agent,
@@ -152,7 +153,7 @@ it("段を足す提案の根拠は、移す行の今の段にある全行のそ�
   }
 });
 
-it("agent の段の提案の根拠は、その agent の段の出所が agent で今の宣言の段で走った本番 session に限り(組は session の軸から出所・agent・段を落とした組)、review 側の session・他の agent の session・出所が task の session・宣言と別の段で走った session を拒む", () => {
+it("agent の段の提案の根拠は、その agent の段の出所が agent で盤面で今走る段で走った本番 session に限り(組は session の軸から出所・agent・段を落とした組)、review 側の session・他の agent の session・出所が task の session・走る段と別の段で走った session を拒む", () => {
   const { db, review, propose } = board();
   const reviewSide = spawnOn(db, review, { source: "agent" });
   const scout = session(db, { agent: "scout", source: "agent" });
@@ -165,27 +166,45 @@ it("agent の段の提案の根拠は、その agent の段の出所が agent �
   expect(() => proposeWith([reviewSide])).toThrow(`evidence ${reviewSide} is a session of a task of type review`);
   expect(() => proposeWith([scout])).toThrow(`evidence ${scout} is not a worker_spawned event of deckhand`);
   expect(() => proposeWith([requested])).toThrow(`evidence ${requested} took its tier from task, not from deckhand's default tier`);
-  expect(() => proposeWith([frontier])).toThrow(`evidence ${frontier} ran in tier frontier, not in standard, the current declared tier of deckhand`);
+  expect(() => proposeWith([frontier])).toThrow(`evidence ${frontier} ran in tier frontier, not in standard, the tier deckhand now runs on`);
   const { question_id } = proposeWith([standard]);
 
   const lines = detailLines(db, question_id);
   for (const line of [
     "Evidence: 1 cited worker session(s), one line per row, workspace, writer:",
     `- row ${OPUS}, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, standard)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `All production sessions of deckhand whose tier came from its default tier, in its current declared tier standard: 2 in 2 line(s), 1 cited; lines not cited: row ${OPUS}, workspace lagoon, writer human: 1.`,
+    `All production sessions of deckhand whose tier came from its default tier, in the tier it now runs on, standard: 2 in 2 line(s), 1 cited; lines not cited: row ${OPUS}, workspace lagoon, writer human: 1.`,
   ]) {
     expect(lines).toContain(line);
   }
 });
 
-it("agent の宣言の段を下げた後は、下げる前の宣言の段で走った session を agent の段の提案の根拠に引けない", () => {
-  const { db, review } = board();
+it("agent の既定ティアを下げた後は、下げる前の段で走った session を agent の段の提案の根拠に引けない(ADR 0307 決定2 / ADR 0410)", () => {
+  const { db, propose } = board();
   const earlier = session(db, { tier: "frontier", source: "agent" });
-  const proposeAt = (tier: string, to: string) =>
-    proposeRoutingChange(db, review, { op: "agent_tier", agent: "deckhand", to, evidence: [earlier], rationale: "r" }, "auditor", at, () => [{ ...DECKHAND_AGENT, tier }]);
+  deckhandOnTier(db, at, "frontier");
+  expect(() => propose({ op: "agent_tier", agent: "deckhand", to: "standard", evidence: [earlier] })).not.toThrow();
+  deckhandOnTier(db, at, "standard");
+  expect(() => propose({ op: "agent_tier", agent: "deckhand", to: "economy", evidence: [earlier] })).toThrow(`evidence ${earlier} ran in tier frontier, not in standard, the tier deckhand now runs on`);
+});
 
-  expect(() => proposeAt("frontier", "standard")).not.toThrow();
-  expect(() => proposeAt("standard", "economy")).toThrow(`evidence ${earlier} ran in tier frontier, not in standard, the current declared tier of deckhand`);
+it("既定ティアの無い agent は盤面既定で走り、根拠は床を agent の既定ティアが決めた episode だけなので、盤面既定と同じ段を設定して走った後に外した agent だけが盤面既定から下げる提案を立てられる(ADR 0410 決定2)", () => {
+  const { db, propose } = board();
+  applyExecutionSettingsChange(db, { setting: "default_tier", value: "standard" }, "webui", at);
+  const fromBoard = session(db, { source: "board" });
+  const fromAgent = session(db, { source: "agent" });
+  applyExecutionSettingsChange(db, { setting: "agent_tier", agent: "deckhand", tier: null }, "webui", at);
+  expect(() => propose({ op: "agent_tier", agent: "deckhand", to: "economy", evidence: [fromBoard] })).toThrow(`evidence ${fromBoard} took its tier from board, not from deckhand's default tier`);
+  const { question_id } = propose({ op: "agent_tier", agent: "deckhand", to: "economy", evidence: [fromAgent] });
+  expect(getTask(db, question_id)!.question_proposal).toMatchObject({ kind: "routing", op: "agent_tier", agent: "deckhand", to: tierIdOf(db, "economy"), pin: { tier: tierIdOf(db, "standard") } });
+});
+
+it("組み込みの agent への段の提案は、走る review / Interview の段を別の規則が決めることを名指して断られる(ADR 0410 決定6)", () => {
+  const { db, review } = board();
+  const evidence = session(db, { agent: "fugu", source: "agent" });
+  expect(() =>
+    proposeRoutingChange(db, review, { op: "agent_tier", agent: "fugu", to: "economy", evidence: [evidence], rationale: "r" }, "auditor", at, () => [{ ...DECKHAND_AGENT, name: "fugu", builtin: true }]),
+  ).toThrow("agent fugu is built-in: the tier its reviews and Interviews run on is decided by the review tier and the Interview rules, not by an agent default tier");
 });
 
 it("段の説明の提案の根拠は、説明が最後に変わった後にその段で走った出所 task の session に限り(位置だけの編集と改名は範囲を切らない)、組は session の軸から出所と段を落とした組(task の書き手を含む)で、書き手が人間の task も数える", () => {

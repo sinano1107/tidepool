@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
-import { agentTierChangeMessage, type CreateAgentInput, tierRenameMessage } from "../src/agent-create.js";
+import type { CreateAgentInput } from "../src/agent-create.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -65,7 +65,7 @@ it("Codex の実測した required MCP 起動失敗は合成された口を通�
   const t = await bootTidepool({
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     openaiUsage: healthyOpenai,
-    taskExecutionCandidates: (task) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
+    taskExecutionCandidates: (task) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }] }, task),
     workerAdapter: (deps) => {
       const worker = new CodexWorker({ ...buildCodexWorkerOptions(board, deps), boardCall: closedCodexSkillsCall() });
       // scheduler の準備は task の checkout を開いてから spawn する(ADR 0356 決定2)。この盤面は workspace を追跡しないので、
@@ -657,7 +657,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.resolveAuthority?.("fugu", "review")).toBeDefined();
   expect(() => options.resolveAuthority?.("fugu", "work")).toThrow(InvalidAgentDefinitionError);
   // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
-  // agent は tier を書いていないので盤面既定の行になる。
+  // agent は既定ティアを盤面に持たないので盤面既定の行になる(ADR 0410 決定2)。
   expect(options.taskExecutionCandidates({ assignee: "deckhand", interview_target_id: null } as any)).toMatchObject([
     { provider: "anthropic", model: "claude-sonnet-5-5" },
   ]);
@@ -728,7 +728,7 @@ it("agentDefinitionFailure は pickup と同じ解決で定義の不成立を理
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
   const failure = options.agentDefinitionFailure!;
 
-  expect(failure("broken")).toMatch(/^unknown tier "nonexistent"/);
+  expect(failure("broken")).toMatch(/^agent\.md has keys it does not accept: tier\./);
   expect(failure("orphan")).toBe('unknown authority profile "missing"');
   expect(failure("deckhand")).toBeUndefined();
   // 登録の門の口は意味を変えない —— 壊れた定義の agent もエントリはある
@@ -757,38 +757,6 @@ it("agentDefinitionFailure は schema に無いキーが残る定義を戻った
     cwd: registryDir,
   });
   expect(failure("typo")).toBeUndefined();
-});
-
-/** ADR 0401 決定6: 段の改名の registry の commit の後に盤面が死ぬと、agent.md の tier だけが新しい名前になる。改名の再実行を
- *  名指す文は agent を解決するとき(pickup・解除検査が通る1本)だけに出し、作成・編集の扉の拒否には出さない。 */
-it("盤面の段でない tier の agent の解決は改名の再実行を名指し、旧い名前は registry の改名の commit から引けたときだけ —— 扉の拒否には出さない(ADR 0401 決定6)", async () => {
-  const tiered = (tier: string) => agentMd("anthropic").replace("skills: []\n", `tier: ${tier}\nskills: []\n`);
-  const registryDir = await makeRegistry({ "agents/crab.md": tiered("standard"), "agents/typo.md": tiered("nonexistent") });
-  writeFileSync(join(registryDir, "agents/crab.md"), tiered("mid"));
-  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", tierRenameMessage("standard", "mid")], { cwd: registryDir });
-  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
-  const failure = options.agentDefinitionFailure!;
-
-  expect(failure("crab")).toBe(
-    'unknown tier "mid" (expected one of the board\'s tiers: economy / standard / frontier). The registry commit "rename tier standard to mid" renamed tier standard to mid in the registry, but the board stopped before renaming its own tier; re-run the rename of tier standard to mid to finish it',
-  );
-  expect(failure("typo")).toBe(
-    'unknown tier "nonexistent" (expected one of the board\'s tiers: economy / standard / frontier). If a tier rename to nonexistent reached the registry but the board stopped before renaming its own tier, re-run that rename (the board\'s tier to nonexistent) to finish it; otherwise declare one of the board\'s tiers',
-  );
-  const input = { name: "shrimp", authority: "standard", provider: "anthropic", description: "d", skills: [], systemPrompt: "p", tier: "mid" };
-  for (const door of [() => options.agentAdmin!.create!(input), () => options.agentAdmin!.update!({ ...input, name: "crab" })]) {
-    await expect(door()).rejects.toThrow('unknown tier "mid"');
-    await expect(door()).rejects.not.toThrow(/re-run/);
-  }
-});
-
-it("合成 root の tierApproval は、承認の書き込みが registry に打った commit を同じ綴りで引き、下げ先と sha を返す(ADR 0401 決定6)", async () => {
-  const registryDir = await makeRegistry({ "agents/crab.md": agentMd("anthropic").replace("skills: []\n", "tier: standard\nskills: []\n") });
-  const { agentAdmin } = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
-
-  const sha = await agentAdmin!.changeTier!({ name: "crab", expectTier: "standard", to: "economy", assertLandable: () => {}, message: agentTierChangeMessage("crab", "economy", "q-7") });
-
-  expect(agentAdmin!.tierApproval!("crab", "q-7")).toEqual({ commit: sha, to: "economy" });
 });
 
 // ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは

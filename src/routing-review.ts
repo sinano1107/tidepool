@@ -3,12 +3,13 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { type EventOrigin, type EventPayload, type EventRow, getEvent, listEventsOfKinds } from "./events.js";
 import {
+  agentRunningTier,
   assertPosition,
   assertRowFits,
   assertTierDescription,
   assertTierName,
   assertTierRunnableFor,
-  boardDefaultTier,
+  builtInAgentHasNoTier,
   composeRoutingRow,
   type ExecutionSettingTable,
   loadExecutionSettingTable,
@@ -17,7 +18,6 @@ import {
   type RowKey,
   readExecutionSettings,
   rowName,
-  undeclaredTier,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import {
@@ -41,6 +41,7 @@ import {
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
+  type AgentTierProposal,
   assertInterviewFields,
   getTask,
   getTextAuthor,
@@ -48,7 +49,6 @@ import {
   type InterviewProposal,
   type InterviewTarget,
   listChildren,
-  type RegistryProposal,
   type RoutingAddTierProposal,
   type RoutingProposal,
   registerTask,
@@ -248,8 +248,8 @@ function cellRows(db: Db, window: MetaReviewWindow) {
   return { cells, rows };
 }
 
-/** 過去の routing / registry の提案(spec #916 C): 提案、回答(question_answered の答え・修正値・コメント)、observed の理由
- *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
+/** 過去の routing の提案(spec #916 C): 提案、回答(question_answered の答え・修正値・コメント)、observed の理由
+ *  (routing_proposal_stale)。agent の段の提案の適用も、ほかの提案と同じく回答が示す(ADR 0410 決定4)。提案の表は持たず question と
  *  event から組む。verb は窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。window を渡すと、回答か
  *  陳腐化の event がその窓 `(after, upTo]` にある提案だけ(材料の節の決着した提案、ADR 0180 追記 #1239)。 */
 function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
@@ -258,24 +258,21 @@ function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
       `SELECT t.id, t.question_proposal,
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'routing_proposal_stale') AS stale,
-         (SELECT payload FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = t.id) AS applied,
-         (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind IN ('question_answered', 'routing_proposal_stale', 'routing_proposal_applied')) AS settled_id
-       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') IN ('routing', 'registry') ORDER BY t.rowid`,
+         (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind IN ('question_answered', 'routing_proposal_stale')) AS settled_id
+       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'routing' ORDER BY t.rowid`,
     )
-    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null; settled_id: number | null }>;
+    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; settled_id: number | null }>;
   const settled = rows.filter(({ settled_id }) => !window || inWindow(settled_id, window));
   return settled.map((row) => {
     const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
     const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);
-    const applied = row.applied === null ? null : (JSON.parse(row.applied) as Extract<EventPayload, { kind: "agent_tier_changed" }>);
     return {
       question_id: row.id,
-      proposal: proposalTierNames(db, JSON.parse(row.question_proposal) as RoutingProposal | RegistryProposal),
+      proposal: proposalTierNames(db, JSON.parse(row.question_proposal) as RoutingProposal),
       answer: answered?.answers[0]?.answer ?? null,
       amendment: answered?.amendment ?? null,
       comment: answered?.comment ?? null,
       observed: stale && { changed: stale.changed, observed_event_id: stale.observed_event_id },
-      ...(applied && { applied: { registry_commit: applied.registry_commit, from: applied.from, to: applied.to } }),
     };
   });
 }
@@ -297,9 +294,10 @@ const itemName = (item: { row: Parameters<typeof rowName>[0] } | { agent: string
 
 /** 提案が写す対象(ADR 0278 決定5): op で写す —— `row` / `add_tier` は動かす行、`agent_tier` は agent、`tier_description` は段、
  *  `promote` / `demote` は学習器、`interview` は根拠 session が走った行(pin の行)。完了の被覆と修理子の対象の門が共有する。 */
-function proposalObjects(proposal: RoutingProposal | RegistryProposal): RoutingObject[] {
-  if (proposal.kind === "registry") return [{ agent: proposal.agent }];
+function proposalObjects(proposal: RoutingProposal): RoutingObject[] {
   switch (proposal.op) {
+    case "agent_tier":
+      return [{ agent: proposal.agent }];
     case "row":
     case "add_tier":
       return [{ row: proposal.row }];
@@ -317,11 +315,11 @@ function proposalObjects(proposal: RoutingProposal | RegistryProposal): RoutingO
 
 /** この review の提案 question が判断済みにする対象。 */
 const proposedObjects = (db: Db, reviewId: string): RoutingObject[] =>
-  listChildren(db, reviewId).flatMap(({ question_proposal: p }) => (p?.kind === "routing" || p?.kind === "registry" ? proposalObjects(p) : []));
+  listChildren(db, reviewId).flatMap(({ question_proposal: p }) => (p?.kind === "routing" ? proposalObjects(p) : []));
 
 /** routing_repair の提案の門(ADR 0279 決定4): 提案が写す対象(proposalObjects)は、修理子が運ぶ判断の行が名指す対象だけ。段は
  *  名前でなく id で突き合わせる —— 名前は生きている段の中でだけ一意で、退役した段の名前は後から別の段が取れる。拒否文は今の名前で名指す。 */
-function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal | RegistryProposal): void {
+function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal): void {
   const key = (object: RoutingObject) => ("tier_id" in object ? `tier_id ${object.tier_id}` : itemName(object));
   const named = new Set(repairJudgments(db, repairId, "routing").map(key));
   const outside = proposalObjects(proposal).find((object) => !named.has(key(object)));
@@ -335,11 +333,12 @@ function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal 
  *  Codex の `enabled_tools` が読み、MCP の登録も同じこの判定で登録する。 */
 export const routingRepairVerbs = (db: Db, taskId: string): string[] => (repairJudgments(db, taskId, "routing").length === 0 ? [] : [...ROUTING_META_REVIEW_VERBS]);
 
-/** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
- *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない —— 段の説明の最後の変更と同じ読み)、学習器は昇格 / 降格。 */
+/** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は既定ティアの
+ *  設定と解除(人間の直接の変更も提案の適用も、ADR 0410 決定8)、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない —— 段の説明の
+ *  最後の変更と同じ読み)、学習器は昇格 / 降格。 */
 function actedSince(db: Db, recordId: number, injectedTiers: Iterable<TierId>): RoutingObject[] {
-  const acted = listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }): RoutingObject[] => {
-    if (p.kind === "agent_tier_changed") return [{ agent: p.agent }];
+  const acted = listEventsOfKinds(db, ["execution_settings_changed"], { after: recordId }).flatMap(({ payload: p }): RoutingObject[] => {
+    if (p.setting === "agent_tier") return [{ agent: p.agent }];
     if (p.setting === "row") return [{ row: p.row }, ...(p.key ? [{ row: p.key }] : [])];
     if (p.setting === "delete_row") return [{ row: p }];
     return p.setting === "learner_promoted" ? [{ learner: true }] : [];
@@ -411,7 +410,7 @@ function judgmentItems(
     if (row && !rows.has(rowName(row))) rows.set(rowName(row), { row: { provider: row.provider, model: row.model, effort: row.effort }, tier: row.tier });
   }
   const { groups } = parts.allocations;
-  const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent)?.below !== undefined);
+  const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
   const agents = new Set([...groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])), ...objected.flatMap((o) => ("agent" in o ? [o.agent] : []))].filter(lowerable));
   // 生きている段の行そのものを集めるので、集計(名前)と判断の行(id)の重なりは Set が畳む
   const live = liveTierRows(db);
@@ -498,31 +497,26 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
 }
 
 /** registry の agent の、段の提案が読む欄(AgentView も registry の定義も持つ)。 */
-export type RegistryAgent = { name: string; tier?: string; builtin?: boolean };
+export type RegistryAgent = { name: string; builtin?: boolean };
 
-/** agent の今の段(書いていなければ盤面既定)と、その1段下(ADR 0150 決定5)。「1段下」は盤面の一覧の順序(ADR 0200 決定4)で、
- *  一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。書いた段が盤面の段でなければ(改名の窓、
- *  ADR 0401 決定6)段の位置が無いので全体が undefined —— 最下位と読まない。 */
-function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } | undefined {
+/** agent が実際に走る段(既定ティア、無ければ盤面既定 —— ADR 0410 決定2)と、その1段下(ADR 0150 決定5)。「1段下」は盤面の一覧の順序
+ *  (ADR 0200 決定4)で、一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。 */
+function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } {
   const tiers = tierNames(db);
-  const from = agent.tier ?? boardDefaultTier(db);
-  const at = tiers.indexOf(from);
-  return at === -1 ? undefined : { from, below: tiers[at - 1] };
+  const from = agentRunningTier(db, agent.name);
+  return { from, below: tiers[tiers.indexOf(from) - 1] };
 }
 
-/** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど
- *  1段下へ。下げ先に agent の entry の行が無ければ下げた agent は skipped になるので断る。根拠はその agent の worker_spawned で、
- *  pin の行はそれらが走った表の行の現在値。 */
-function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?: string; to?: Tier; evidence?: number[] }): [RegistryProposal, string[]] {
+/** agent の段の提案の門と pin(issue #920 / spec #916 B・C / ADR 0410 決定2・4): 組み込みでない agent を、実際に走る段(既定ティア、無ければ
+ *  盤面既定)のちょうど1段下へ。下げ先に agent の entry の行が無ければ下げた agent は skipped になるので断る。根拠はその agent の
+ *  worker_spawned で、pin は走る段と、根拠が走った表の行の現在値。 */
+function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?: string; to?: Tier; evidence?: number[] }): [AgentTierProposal, string[]] {
   const { agent: name, to, evidence } = input;
   if (name === undefined || whyBlank(name) || to === undefined || whyBlank(to) || !evidence?.length) throw new DomainError("op agent_tier names the agent, the target tier (to) and at least one evidence worker_spawned event id");
   const agent = agents.find((a) => a.name === name);
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
-  if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
-  const step = tierStep(db, agent);
-  // 盤面既定の段は生きているので、段が無いのは agent が書いた段のとき
-  if (!step) throw new DomainError(`${undeclaredTier(name, agent.tier!)} (${tierNames(db).join(", ")}), so it has no step to lower from`);
-  const { from, below } = step;
+  if (agent.builtin) throw new DomainError(builtInAgentHasNoTier(name));
+  const { from, below } = tierStep(db, agent);
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   assertTierRunnableFor(db, name, agentViewProviders(agent), to);
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
@@ -532,16 +526,15 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
     db,
     evidence,
     productionPopulation(db, { agent: name, "tier source": "agent", tier: agentGeneration(db, name, from) }),
-    `production sessions of ${name} whose tier came from its default tier, in its current declared tier ${from}`,
+    `production sessions of ${name} whose tier came from its default tier, in the tier it now runs on, ${from}`,
   );
-  const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
+  const rows = new Map<string, AgentTierProposal["pin"]["rows"][number]>();
   for (const e of cited) {
     const row = tableRowOf(table, e);
     if (!row) throw new DomainError(`evidence ${e.worker_spawned_event_id} ran on ${rowName(e.cell)}, which is no longer in the execution-setting table`);
     rows.set(`${row.provider}/${row.model}/${row.effort}`, { provider: row.provider, model: row.model, tier: tierIdOf(db, row.tier), effort: row.effort });
   }
-  // agent が tier を書いていれば from はその値(書いていなければ盤面既定の段)
-  return [{ kind: "registry", op: "agent_tier", agent: name, to: tierIdOf(db, to), pin: { tier: tierIdOf(db, from), rows: [...rows.values()] }, evidence }, lines];
+  return [{ kind: "routing", op: "agent_tier", agent: name, to: tierIdOf(db, to), pin: { tier: tierIdOf(db, from), rows: [...rows.values()] }, evidence }, lines];
 }
 
 /** 段を足す提案の隣の段の pin: id と説明(issue #1436)。 */
@@ -777,9 +770,9 @@ function rowGeneration(db: Db, table: ExecutionSettingTable): Condition<RoutingE
   return [(e) => e.tier_id === tierIdOf(db, rowOf(e).tier), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${rowOf(e).tier}, the current tier of ${rowName(rowOf(e))}`];
 }
 
-/** agent の世代(ADR 0307 決定2): agent の今の宣言の段で走ったか —— 出所が agent の session は宣言の段で走る(ADR 0210 決定1)。 */
+/** agent の世代(ADR 0307 決定2 / ADR 0410 帰結): agent が盤面で実際に走る段で走ったか —— 出所が agent の session は既定ティアで走る(ADR 0210 決定1)。 */
 function agentGeneration(db: Db, agent: string, from: Tier): Condition<RoutingEpisode> {
-  return [(e) => e.tier_id === tierIdOf(db, from), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${from}, the current declared tier of ${agent}`];
+  return [(e) => e.tier_id === tierIdOf(db, from), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${from}, the tier ${agent} now runs on`];
 }
 
 /** 学習器でない op の detail の根拠の節(ADR 0302 決定3): 組ごとに件数・task id・outcome の内訳・配分評価の allocation × cause の件数と
@@ -863,13 +856,13 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
  *  agent_tier なら (agent, tier) と根拠の行、tier_description なら説明のいまの文面、add_tier なら移す行の全欄と隣の段、interview なら根拠の行の全欄。
  *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
  *  根拠(worker_spawned の event id)は全 op で必須で、op の対象が決める母集団に入るかの検査と detail の根拠の節は盤面が組む(ADR 0302)。
- *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。`assertWorkspaceKnown` は interview の実環境が
+ *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る —— 暗黙の agent は既定ティアを持てない、ADR 0140 決定3)。`assertWorkspaceKnown` は interview の実環境が
  *  registry にあるかの検査(approve の時点でも確かめ直す、ADR 0258 決定4)。 */
 export function proposeRoutingChange(
   db: Db,
   metaReviewId: string,
   input: {
-    op: (RoutingProposal | RegistryProposal)["op"];
+    op: RoutingProposal["op"];
     row?: { provider: string; model: string; effort: string | null };
     change?: unknown;
     agent?: string;
@@ -903,7 +896,7 @@ export function proposeRoutingChange(
   // 修理子の提案は修理子の名で人間に出す(ADR 0279 決定4)
   const byRepair = getTask(db, metaReviewId)?.type === "routing_repair";
   const proposer = byRepair ? "The routing repair" : "The routing meta-review";
-  let proposal: RoutingProposal | RegistryProposal;
+  let proposal: RoutingProposal;
   let title: string;
   let diff: string[];
   let purpose: string;
@@ -943,18 +936,18 @@ export function proposeRoutingChange(
       "Approve writes the new description, with your amendment (one line) if you give one; reject leaves the description as it is.";
   } else if (input.op === "agent_tier") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op agent_tier takes no row and no change");
-    if (!agents) throw new DomainError("this board has no registry, so there is no agent definition to change");
+    if (!agents) throw new DomainError("this board has no registry, so its agent has no default tier to lower");
     const [lowered, evidenceLines] = agentTierProposal(db, agents(), input);
     proposal = lowered;
-    const { agent, to, pin } = proposalTierNames(db, lowered) as RegistryProposal<Tier>;
+    const { agent, to, pin } = proposalTierNames(db, lowered) as AgentTierProposal<Tier>;
     title = `Lower agent ${agent}'s tier: ${pin.tier} -> ${to}`;
     diff = [
-      `Agent ${agent} (registry definition), default tier: ${pin.tier} -> ${to}`,
+      `Agent ${agent}, the tier it runs on (its default tier on the board, or the board's default tier if it has none): ${pin.tier} -> ${to}`,
       `Rows the evidence ran on (pinned): ${pin.rows.map((r) => `${rowName(r)} (${r.tier})`).join(", ")}`,
       ...evidenceLines,
     ];
     purpose =
-      `${proposer} proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, ` +
+      `${proposer} proposes lowering an agent's default tier by one step. Approve sets the new tier as the agent's default tier on the board, ` +
       "with your amendment (any lower tier) if you give one; reject leaves the agent as it is.";
   } else if (input.op === "add_tier") {
     if (input.change !== undefined) throw new DomainError("op add_tier takes no change");

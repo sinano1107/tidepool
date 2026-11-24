@@ -117,7 +117,7 @@ it.each([
       taskExecutionCandidates: (task) =>
         executionSettingsFor(
           db,
-          { provider: AGENTS[task.assignee!]!.map((name) => ({ name, advisor: false })), tier: undefined },
+          { provider: AGENTS[task.assignee!]!.map((name) => ({ name, advisor: false })) },
           task,
         ),
     });
@@ -179,7 +179,7 @@ it.each([
       taskExecutionCandidates: (task) =>
         executionSettingsFor(
           db,
-          { provider: AGENTS[task.assignee!]!.map((name) => ({ name, advisor: false })), tier: undefined },
+          { provider: AGENTS[task.assignee!]!.map((name) => ({ name, advisor: false })) },
           task,
         ),
     });
@@ -376,7 +376,7 @@ it("task branch と保護ブランチの両方で .claude が symlink なら (cl
   const workspace = await workspaceWithSymlinkedClaude("pair-symlink");
   const booted = await bootClaudeOn(workspace, {
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t!.db, { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t!.db, { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }] }, task),
   });
   t = booted.t;
   const claude = queueWork(t, "Claude work", workspace.name);

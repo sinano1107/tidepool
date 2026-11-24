@@ -5,51 +5,33 @@ import {
 } from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, UnknownAgentError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
+const tako = {
+  name: "tako",
+  version: "1",
+  authority: "standard",
+  provider: "anthropic",
+  skills: ["*"],
+  description: "General agent",
+  icon: "🐙",
+  advisor: false,
+  unknownFields: [],
+  systemPrompt: "You are Tako.",
+};
+
 it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往復で返す(issue #71)", async () => {
-  t = await bootTidepool({
-    agentAdmin: {
-      list: () => [
-        {
-          name: "tako",
-          version: "1",
-          authority: "standard",
-          provider: "anthropic",
-          skills: ["*"],
-          description: "General agent",
-          icon: "🐙",
-          advisor: false,
-          retiredFields: [], unknownFields: [],
-          systemPrompt: "You are Tako.",
-        },
-      ],
-      authorityProfiles: () => ["standard", "restricted"],
-    },
-  });
+  t = await bootTidepool({ agentAdmin: { list: () => [tako], authorityProfiles: () => ["standard", "restricted"] } });
 
   const res = await api(t.baseUrl, "GET", "/api/agents");
 
   expect(res.status).toBe(200);
   expect(res.json).toEqual({
-    agents: [
-      {
-        name: "tako",
-        version: "1",
-        authority: "standard",
-        provider: "anthropic",
-        skills: ["*"],
-        description: "General agent",
-        icon: "🐙",
-        tier: undefined,
-        advisor: false,
-        retiredFields: [], unknownFields: [],
-        systemPrompt: "You are Tako.",
-      },
-    ],
+    agents: [tako],
+    orphanTiers: [],
     authorityProfiles: ["standard", "restricted"],
     // provider 選択肢(値+表示ラベル)もサーバ供給 — WebUI が PROVIDER_VALUES を
     // 直書きして静かに drift するのを防ぐ(authorityOptions と同じ配線)
@@ -59,6 +41,45 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
       { value: "openai", label: "openai — Codex models, OpenAI billing" },
     ],
   });
+});
+
+it("agent の一覧は HTTP も MCP の list_agents も盤面の既定ティアを添え、registry から消えた agent の行を孤児として返す(ADR 0410 決定5)", async () => {
+  const registry = [tako, { ...tako, name: "kimi" }];
+  t = await bootTidepool({ agentAdmin: { list: () => registry } });
+  for (const [agent, tier] of [["tako", "standard"], ["kimi", "frontier"]]) {
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "agent_tier", agent, tier })).status).toBe(200);
+  }
+  registry.pop();
+
+  expect((await api(t.baseUrl, "GET", "/api/agents")).json).toMatchObject({ agents: [{ ...tako, tier: "standard" }], orphanTiers: [{ agent: "kimi", tier: "frontier" }] });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const listed = (await client.callTool({ name: "list_agents", arguments: {} })) as { content: Array<{ text: string }> };
+    expect(JSON.parse(listed.content[0]!.text)).toMatchObject({
+      agents: [{ ...tako, tier: "standard" }],
+      orphan_tiers: [{ agent: "kimi", tier: "frontier" }],
+    });
+  } finally {
+    await client.close();
+  }
+});
+
+it("agent の作成・更新は HTTP でも MCP でも tier を受けず、400 / toolError で断る(ADR 0410 決定3)", async () => {
+  const written: unknown[] = [];
+  t = await bootTidepool({ agentAdmin: { create: async (input) => void written.push(input), update: async (input) => void written.push(input) } });
+  const body = { authority: "standard", provider: "anthropic", skills: ["*"], description: "d", systemPrompt: "p", tier: "frontier" };
+  expect((await api(t.baseUrl, "POST", "/api/agents", { ...body, name: "tako" })).status).toBe(400);
+  expect((await api(t.baseUrl, "PATCH", "/api/agents/tako", body)).status).toBe(400);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { systemPrompt: system_prompt, ...fields } = body;
+    for (const name of ["create_agent", "update_agent"]) {
+      expect(((await client.callTool({ name, arguments: { ...fields, system_prompt, name: "tako" } })) as { isError?: boolean }).isError).toBe(true);
+    }
+  } finally {
+    await client.close();
+  }
+  expect(written).toEqual([]);
 });
 
 it("GET /api/agents は registry 未設定なら 503", async () => {
@@ -81,7 +102,6 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
     provider: "anthropic",
     skills: ["*"],
     description: "Updated description",
-    tier: "frontier",
     advisor: true,
     systemPrompt: "You are Tako, updated.",
   });
@@ -95,7 +115,6 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
       provider: "anthropic",
       skills: ["*"],
       description: "Updated description",
-      tier: "frontier",
       advisor: true,
       systemPrompt: "You are Tako, updated.",
     },

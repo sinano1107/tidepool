@@ -520,7 +520,7 @@ function TpAddTierAmendment({ proposed, onChange }) {
       mono: true,
       value: draft.name,
       onChange: (e) => setDraft({ ...draft, name: e.target.value }),
-      placeholder: "a lowercase letter, then a-z 0-9 - _ \u2014 agent.md writes it as its tier"
+      placeholder: "a lowercase letter, then a-z 0-9 - _"
     }
   ), /* @__PURE__ */ React.createElement(
     Select,
@@ -1737,7 +1737,6 @@ function agentDraftOf(agent) {
     systemPrompt: agent.systemPrompt,
     authority: agent.authority,
     provider: agent.provider,
-    tier: agent.tier ?? "",
     advisor: agent.advisor,
     // GET /api/agents already returns skills (ADR 0025)
     skills: agent.skills
@@ -1749,7 +1748,6 @@ const NEW_AGENT_DRAFT = {
   systemPrompt: "",
   authority: "",
   provider: "",
-  tier: "",
   advisor: false,
   skills: ["@workspace"]
 };
@@ -1759,24 +1757,20 @@ function agentBody(d) {
     description: TidepoolRules.normalizeText(d.description),
     provider: d.provider,
     icon: d.icon.trim() || void 0,
-    tier: d.tier || void 0,
     advisor: d.advisor || void 0,
     skills: d.skills,
     systemPrompt: d.systemPrompt
   };
 }
 function agentDraftDirty(d, base) {
-  return d.icon !== base.icon || TidepoolRules.normalizeText(d.description) !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.tier !== base.tier || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
+  return d.icon !== base.icon || TidepoolRules.normalizeText(d.description) !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
 }
 const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is required" };
 function tierOptions(tiers, blank = "board default") {
   return [{ value: "", label: blank }, ...tiers.map((tier) => ({ value: tier.name, label: `${tier.name} \u2014 ${tier.description}` }))];
 }
-function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded }) {
+function AgentFields({ draft, set, authorityOptions, providerOptions, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
-  const shownTiers = executionSettingsFailed ? [] : tiers;
-  const tierChoices = tierOptions(shownTiers);
-  if (draft.tier && !shownTiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1794,7 +1788,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, exe
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierChoices, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), executionSettingsFailed && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "tier options unavailable \u2014 board default still works, and a tier already set is kept."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
     Checkbox,
     {
       label: "advisor \u2014 this agent may consult a stronger model at decision points",
@@ -1803,7 +1797,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, exe
     }
   ), executionSettingsFailed ? /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "board advisor ceiling unavailable") : advisorCeiling && /* @__PURE__ */ React.createElement("p", { "data-testid": "agent-advisor-ceiling", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, advisorCeiling === "off" ? "board advisor ceiling: off \u2014 the advisor is not used on this board" : `board advisor ceiling: ${advisorCeiling} \u2014 the advisor is at most ${advisorCeiling === "fable_then_opus" ? "fable, opus while the Fable window is throttled" : advisorCeiling}; a main model above it runs without one`)), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
-function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
@@ -1859,7 +1853,6 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, executi
       set,
       authorityOptions: authorityProfiles,
       providerOptions,
-      tiers,
       executionSettingsFailed,
       advisorCeiling,
       hostSkills,
@@ -3168,7 +3161,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       value: draft.judgementTier,
       onChange: (e) => setDraft({ ...draft, judgementTier: e.target.value })
     }
-  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for work tasks that request none, and review priority orders every review task: quality = rank then price, cost = price then rank. advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one. default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for work tasks that request none, and review priority orders every review task: quality = rank then price, cost = price then rank. advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one. default tier is the tier of tasks that request none and whose agent has no default tier, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -3179,6 +3172,59 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       onCancel: () => edit.close()
     }
   ))));
+}
+function AgentTiersCard({ settings, agents, orphans, say, onSaved, edit }) {
+  const { Button, Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const id = "board:agent-tiers";
+  const open = edit.isOpen(id);
+  const own = agents.filter((agent) => !agent.builtin);
+  const current = Object.fromEntries(own.map((agent) => [agent.name, agent.tier ?? ""]));
+  const [draft, setDraft] = React.useState(current);
+  const [busy, setBusy] = React.useState(false);
+  const changes = own.filter((agent) => draft[agent.name] !== current[agent.name]).map((agent) => ({ setting: "agent_tier", agent: agent.name, tier: draft[agent.name] || null }));
+  useDirtySignal(edit, open, changes.length > 0);
+  const send = async (list, title) => {
+    setBusy(true);
+    try {
+      for (const change of list) await api("/api/settings/execution", change);
+      say("success", title, `${list.length} agent${list.length === 1 ? "" : "s"} updated`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say("danger", "agent default tier refused", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "agent-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "agents' default tiers")), !open && own.map((agent) => /* @__PURE__ */ React.createElement(FieldRow, { key: agent.name, label: agent.name, kind: agent.tier ? "mono" : "unset", value: agent.tier ?? "", unsetLabel: "board default" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, own.map((agent) => /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      key: agent.name,
+      label: agent.name,
+      options: tierOptions(settings.tiers),
+      value: draft[agent.name] ?? "",
+      onChange: (e) => setDraft({ ...draft, [agent.name]: e.target.value })
+    }
+  )), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the tier an agent runs on when its task requests none. board default runs it on the board's default tier."), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      dirty: changes.length > 0,
+      ok: true,
+      busy,
+      saveLabel: "Save default tiers",
+      onSave: () => send(changes, "default tiers saved"),
+      onCancel: () => edit.close()
+    }
+  )), orphans.map((row) => /* @__PURE__ */ React.createElement("div", { key: row.agent, "data-testid": "agent-tier-orphan", style: { display: "flex", gap: 12, alignItems: "baseline", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, row.agent), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flex: 1 } }, row.tier, " \u2014 not in the registry"), /* @__PURE__ */ React.createElement(
+    Button,
+    {
+      variant: "ghost",
+      size: "sm",
+      disabled: busy,
+      "aria-label": `remove ${row.agent}'s default tier`,
+      onClick: () => send([{ setting: "agent_tier", agent: row.agent, tier: null }], "orphaned default tier removed")
+    },
+    "Remove"
+  )))));
 }
 function tierPositionLabel(tiers, p) {
   return p === 0 ? tiers[0] ? `lowest \u2014 below ${tiers[0].name}` : "lowest" : p === tiers.length ? `highest \u2014 above ${tiers[p - 1].name}` : `between ${tiers[p - 1].name} and ${tiers[p].name}`;
@@ -3235,7 +3281,7 @@ function TiersCard({ settings, say, onSaved, edit }) {
       mono: true,
       value: draft.name,
       onChange: (e) => setDraft({ ...draft, name: e.target.value }),
-      placeholder: "a lowercase letter, then a-z 0-9 - _ \u2014 agent.md writes it as its tier"
+      placeholder: "a lowercase letter, then a-z 0-9 - _"
     }
   ), /* @__PURE__ */ React.createElement(
     Select,
@@ -3465,7 +3511,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     }
   ), dialog);
 }
-function NewAgentForm({ authorityProfiles, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
@@ -3511,7 +3557,6 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, executionSett
       set,
       authorityOptions: authorityCreateOptions,
       providerOptions,
-      tiers,
       executionSettingsFailed,
       advisorCeiling,
       hostSkills,
@@ -3720,10 +3765,12 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   const [authorityProfiles, setAuthorityProfiles] = React.useState([]);
   const [providerOptions, setProviderOptions] = React.useState([]);
   const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
+  const [orphanTiers, setOrphanTiers] = React.useState([]);
   const loadAgents = async () => {
     try {
       const res = await api("GET /api/agents");
       setAgents(res.agents);
+      setOrphanTiers(res.orphanTiers);
       setAuthorityProfiles(res.authorityProfiles);
       setProviderOptions([...res.providers]);
     } catch {
@@ -3858,7 +3905,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           agent: rec,
           authorityProfiles,
           providerOptions,
-          tiers: executionSettings?.tiers ?? [],
           executionSettingsFailed,
           advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
@@ -3873,7 +3919,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         {
           authorityProfiles,
           providerOptions,
-          tiers: executionSettings?.tiers ?? [],
           executionSettingsFailed,
           advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
@@ -3992,7 +4037,19 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsetsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "provider pace offsets", says: paceOffsetsUnavailable }) : providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "execution settings", says: executionSettingsUnavailable }) : executionSettings && /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), (haltedRefires || haltedRefiresFailed) && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), (responseFloors || responseFloorsFailed) && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), !executionSettingsFailed && executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "memory", says: memorySettingsUnavailable }) : memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), (displayLanguageLoaded || displayLanguageFailed) && // the focus waits for every card above: one that loads later would push the entry back out of view.
+    ), paceOffsetsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "provider pace offsets", says: paceOffsetsUnavailable }) : providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "execution settings", says: executionSettingsUnavailable }) : executionSettings && /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), (haltedRefires || haltedRefiresFailed) && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), (responseFloors || responseFloorsFailed) && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), !executionSettingsFailed && executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), agents && !agentsUnavailable && /* @__PURE__ */ React.createElement(
+      AgentTiersCard,
+      {
+        settings: executionSettings,
+        agents,
+        orphans: orphanTiers,
+        say,
+        edit,
+        onSaved: async () => {
+          await Promise.all([loadExecutionSettings(), loadAgents()]);
+        }
+      }
+    ), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "memory", says: memorySettingsUnavailable }) : memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), (displayLanguageLoaded || displayLanguageFailed) && // the focus waits for every card above: one that loads later would push the entry back out of view.
     // An unreadable display language reads as English: no translation, no original field — never '', which
     // is not 'English' and would translate every entry (issue #1686)
     /* @__PURE__ */ React.createElement(
@@ -4082,7 +4139,6 @@ const SETTLED_BY_OBSERVATION_COPY = {
   task_branch_lost_observed: "observed \xB7 task branch lost",
   quarantine_released: "observed \xB7 quarantine lifted",
   routing_proposal_stale: "observed \xB7 routing proposal stale",
-  routing_proposal_applied: "observed \xB7 routing proposal applied",
   memory_proposal_stale: "observed \xB7 memory proposal stale"
 };
 const LANDING_STATE_COPY = {
@@ -4232,7 +4288,7 @@ ${q.room_rca_choice.description}` : q.purpose,
         workspace: q.question_proposal.workspace
       }
     },
-    ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier", amendBelow: q.question_proposal.pin && "tier" in q.question_proposal.pin ? q.question_proposal.pin.tier : void 0 },
+    ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "agent_tier" && { amendable: "agent_tier", amendBelow: q.question_proposal.pin && "tier" in q.question_proposal.pin ? q.question_proposal.pin.tier : void 0 },
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
     // 理由必須の選択肢は盤面の `needs_comment` 注釈が答える(ADR 0179 決定4)

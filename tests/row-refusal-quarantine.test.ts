@@ -71,7 +71,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
   t = await bootTidepool({
     workspace,
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }] }, task),
     openaiUsage: healthyOpenai,
     modelProbes: options.modelProbes,
     watchdog: options.watchdog,
@@ -260,7 +260,7 @@ async function bootOpenai(probe: (now: () => Date) => Promise<CodexAppServerProb
   t = await bootTidepool({
     workspace: await makeWorkspace("tidepool"),
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }] }, task),
     openaiUsage: probe,
   });
   // Interview の root は判断の段以上で走る(ADR 0273 決定6)—— 種の frontier の openai 行は一覧に無いので、判断の段を economy に下ろす
@@ -699,7 +699,7 @@ it("一覧に無い openai の対象の target_refused が書けなければ対�
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
     onPickupStopped: () => {},
-    taskExecutionCandidates: (task) => executionSettingsFor(db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
+    taskExecutionCandidates: (task) => executionSettingsFor(db, { provider: [{ name: "openai", advisor: false }] }, task),
     openaiUsage: listingProbe(MEASURED_OPENAI_MODELS),
   });
   onTestFinished(() => {

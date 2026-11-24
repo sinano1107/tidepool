@@ -6,7 +6,6 @@ import {
   type Registry,
   UnknownAgentError,
 } from "../src/registry.js";
-import { seedTierNames } from "./fakes.js";
 
 function makeRegistry(
   agents: Record<string, {
@@ -14,9 +13,7 @@ function makeRegistry(
     provider?: string;
     providers?: string[];
     entries?: { name: string; advisor?: boolean }[];
-    tier?: string;
     skills?: string[];
-    retiredFields?: string[];
     unknownFields?: string[];
   }>,
 ): Registry {
@@ -31,8 +28,6 @@ function makeRegistry(
           authority: a.authority,
           description: `${name} agent`,
           provider: normalizeProviderEntries(a.entries ?? a.providers ?? a.provider ?? "anthropic"),
-          tier: a.tier,
-          retiredFields: a.retiredFields ?? [],
           unknownFields: a.unknownFields ?? [],
           skills: a.skills ?? ["*"],
           systemPrompt: `You are ${name}.`,
@@ -49,7 +44,7 @@ function makeRegistry(
 describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解決)", () => {
   it("taskAssignee が null のとき、盤面既定の agent 名で解決する", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard" } });
-    const resolved = resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work");
+    const resolved = resolveExecutionAgent(registry, "deckhand", null, "work");
     expect(resolved.name).toBe("deckhand");
     expect(resolved.definition.name).toBe("deckhand");
     expect(resolved.profile.name).toBe("standard");
@@ -60,20 +55,20 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
       deckhand: { authority: "standard" },
       navigator: { authority: "standard" },
     });
-    const resolved = resolveExecutionAgent(registry, "deckhand", "navigator", seedTierNames, "work");
+    const resolved = resolveExecutionAgent(registry, "deckhand", "navigator", "work");
     expect(resolved.name).toBe("navigator");
   });
 
   it("Object.prototype 由来のキー(toString 等)は未登録 agent 名として UnknownAgentError を投げる(issue #69)", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard" } });
-    expect(() => resolveExecutionAgent(registry, "deckhand", "toString", seedTierNames, "work")).toThrow(
+    expect(() => resolveExecutionAgent(registry, "deckhand", "toString", "work")).toThrow(
       UnknownAgentError,
     );
   });
 
   it("本当に toString という名前で登録された agent は従来どおり解決される(issue #69: false positive を起こさない)", () => {
     const registry = makeRegistry({ toString: { authority: "standard" } });
-    const resolved = resolveExecutionAgent(registry, "toString", null, seedTierNames, "work");
+    const resolved = resolveExecutionAgent(registry, "toString", null, "work");
     expect(resolved.name).toBe("toString");
     expect(resolved.definition.name).toBe("toString");
     expect(resolved.profile.name).toBe("standard");
@@ -81,7 +76,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
 
   it("authority が Object.prototype 由来のキー(toString 等)を指す定義は unknown authority profile として拒否される(issue #69)", () => {
     const registry = makeRegistry({ deckhand: { authority: "toString" } });
-    expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
+    expect(() => resolveExecutionAgent(registry, "deckhand", null, "work")).toThrow(
       new InvalidAgentDefinitionError("deckhand", 'unknown authority profile "toString"'),
     );
   });
@@ -89,7 +84,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
   it("registry に無い authority profile を名指す定義は InvalidAgentDefinitionError を投げ、quarantine すべき agent 名と profile 名を運ぶ(issue #1648)", () => {
     const registry = makeRegistry({ deckhand: { authority: "ghost" } });
     try {
-      resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work");
+      resolveExecutionAgent(registry, "deckhand", null, "work");
       expect.unreachable();
     } catch (err) {
       expect(err).toBeInstanceOf(InvalidAgentDefinitionError);
@@ -100,9 +95,9 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
 
   it("registry に存在しない agent 名は UnknownAgentError を投げる", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard" } });
-    expect(() => resolveExecutionAgent(registry, "deckhand", "ghost", seedTierNames, "work")).toThrow(UnknownAgentError);
+    expect(() => resolveExecutionAgent(registry, "deckhand", "ghost", "work")).toThrow(UnknownAgentError);
     try {
-      resolveExecutionAgent(registry, "deckhand", "ghost", seedTierNames, "work");
+      resolveExecutionAgent(registry, "deckhand", "ghost", "work");
       expect.unreachable();
     } catch (err) {
       expect(err).toBeInstanceOf(UnknownAgentError);
@@ -113,7 +108,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
   it("provider が列挙にない定義は InvalidAgentDefinitionError を投げ、quarantine すべき agent 名を運ぶ(ADR 0097 決定1)", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard", provider: "moonshto" } });
     try {
-      resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work");
+      resolveExecutionAgent(registry, "deckhand", null, "work");
       expect.unreachable();
     } catch (err) {
       expect(err).toBeInstanceOf(InvalidAgentDefinitionError);
@@ -125,7 +120,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     const registry = makeRegistry({
       deckhand: { authority: "standard", entries: [{ name: "moonshot", advisor: true }] },
     });
-    expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
+    expect(() => resolveExecutionAgent(registry, "deckhand", null, "work")).toThrow(
       InvalidAgentDefinitionError,
     );
   });
@@ -144,7 +139,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
         skills: [],
       },
     });
-    expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
+    expect(() => resolveExecutionAgent(registry, "deckhand", null, "work")).toThrow(
       InvalidAgentDefinitionError,
     );
   });
@@ -160,7 +155,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
         skills: [],
       },
     });
-    expect(resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work").definition.provider).toEqual([
+    expect(resolveExecutionAgent(registry, "deckhand", null, "work").definition.provider).toEqual([
       { name: "anthropic", advisor: true },
       { name: "openai", advisor: false },
     ]);
@@ -168,7 +163,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
 
   it("moonshot でも advisor を持たない定義は従来どおり解決される", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard", provider: "moonshot" } });
-    const resolved = resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work");
+    const resolved = resolveExecutionAgent(registry, "deckhand", null, "work");
     expect(resolved.definition.provider).toEqual([{ name: "moonshot", advisor: false }]);
   });
 
@@ -176,47 +171,23 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     const registry = makeRegistry({
       deckhand: { authority: "standard", entries: [{ name: "anthropic", advisor: true }] },
     });
-    expect(resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work").definition.provider).toEqual([
+    expect(resolveExecutionAgent(registry, "deckhand", null, "work").definition.provider).toEqual([
       { name: "anthropic", advisor: true },
     ]);
-  });
-
-  it("退役したピン留め(model / effort / 旧綴りの advisor)が残る定義は pickup 解決で拒否され、その agent 名の quarantine に落ちる(ADR 0110 決定1)", () => {
-    const registry = makeRegistry({
-      deckhand: { authority: "standard", retiredFields: ["model", "effort"] },
-    });
-    expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
-      InvalidAgentDefinitionError,
-    );
   });
 
   it("schema に無いキーが残る定義も pickup 解決で拒否され、その agent 名の quarantine に落ちる(issue #2694)", () => {
     const registry = makeRegistry({
       deckhand: { authority: "standard", unknownFields: ["providers"] },
     });
-    const resolve = () => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work");
+    const resolve = () => resolveExecutionAgent(registry, "deckhand", null, "work");
     expect(resolve).toThrow(InvalidAgentDefinitionError);
     expect(resolve).toThrow("agent deckhand: agent.md has keys it does not accept: providers.");
   });
 
-  it("列挙にないティアも同じ門で拒否される(ADR 0110 決定1 — 読み込みは倒さない)", () => {
-    const registry = makeRegistry({ deckhand: { authority: "standard", tier: "luxury" } });
-    expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
-      InvalidAgentDefinitionError,
-    );
-    expect(() =>
-      resolveExecutionAgent(makeRegistry({ deckhand: { authority: "standard", tier: "frontier" } }), "deckhand", null, seedTierNames, "work"),
-    ).not.toThrow();
-  });
-
-  // ADR 0401 決定6: 段の門で落ちた解決にだけ改名の出口を添える —— 後の門も落ちる定義でも段の理由と出口は消えない
-  it("盤面の段でない tier は、後の門(advisor)も落ちる定義でも段の理由と改名の出口を返し、先の門で落ちれば出口を添えない", () => {
-    const later = makeRegistry({ deckhand: { authority: "standard", tier: "mid", entries: [{ name: "moonshot", advisor: true }] } });
-    expect(() => resolveExecutionAgent(later, "deckhand", null, seedTierNames, "work")).toThrow(
-      /unknown tier "mid".*If a tier rename to mid reached the registry/,
-    );
-    const earlier = makeRegistry({ deckhand: { authority: "standard", tier: "mid", retiredFields: ["model"] } });
-    expect(() => resolveExecutionAgent(earlier, "deckhand", null, seedTierNames, "work")).toThrow(/no longer carries the execution setting/);
-    expect(() => resolveExecutionAgent(earlier, "deckhand", null, seedTierNames, "work")).not.toThrow(/rename/);
+  // ADR 0410 の配備: agent.md に段の行が残る agent は pickup で quarantine に入り、文面が `tier` キーを名指す
+  it("段の行が残る定義は pickup 解決で tier キーを名指して拒否される(ADR 0410 決定1)", () => {
+    const registry = makeRegistry({ deckhand: { authority: "standard", unknownFields: ["tier"] } });
+    expect(() => resolveExecutionAgent(registry, "deckhand", null, "work")).toThrow("agent deckhand: agent.md has keys it does not accept: tier.");
   });
 });

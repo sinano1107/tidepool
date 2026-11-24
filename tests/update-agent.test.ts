@@ -1,12 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentTierMismatchError, agentTierChangeMessage, changeAgentTier, findTierApproval, RegistryLogUnreadableError, renameAgentTiers, renamedTierFrom, tierRenameMessage, updateAgent } from "../src/agent-create.js";
+import { updateAgent } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
 import { InvalidAgentDefinitionError, loadRegistry, UnknownAgentError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { seedTierNames } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
 
 // 管理の扉は読めない registry の止まりを盤面の db に立てる(ADR 0403 決定5)—— ここの registry はどれも読めるので、何も書かれない
@@ -39,7 +36,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
         skills: ["@workspace"],
         systemPrompt: "You are Deckhand, rewritten.",
       },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const agent = loadRegistry(registryDir, "purely-local").agents.deckhand;
@@ -50,8 +47,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       provider: [{ name: "anthropic", advisor: false }],
       description: "Rewritten description",
       icon: "🦀",
-      tier: undefined,
-      retiredFields: [], unknownFields: [],
+      unknownFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
     });
@@ -68,7 +64,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
     await updateAgent(
       { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab!.version).toBe("4");
@@ -81,7 +77,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
     await updateAgent(
       { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab!.version).toBe("1");
@@ -102,7 +98,7 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
         skills: ["@workspace"],
         systemPrompt: "You are Deckhand, rewritten.",
       },
-      { db, registry: { dir: registryDir, mode: "remote-backed" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "remote-backed" } },
     );
 
     expect(loadRegistry(registryDir, "remote-backed").agents.deckhand?.description).toBe(
@@ -128,7 +124,7 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
           skills: ["@workspace"],
           systemPrompt: "You are Deckhand, rewritten.",
         },
-        { db, registry: { dir: registryDir, mode: "remote-backed" }, tiers: () => seedTierNames },
+        { db, registry: { dir: registryDir, mode: "remote-backed" } },
       ),
     ).rejects.toThrow(RegistryPushFailedError);
 
@@ -154,7 +150,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         skills: ["*"],
         systemPrompt: "p",
       },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({
@@ -175,7 +171,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
 
     await updateAgent(
       { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const written = git(registryDir, "show", "main:agents/crab.md");
@@ -188,6 +184,8 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
   it.each([
     ["schema に無いキー", "mcp_servers:\n  - github\n", "mcp_servers"],
     ["退役フィールド", "model: opus\n", "model:"],
+    // ADR 0410 の配備: agent.md に残った段の行は、フォームで保存し直せば落ちる
+    ["agent の段の行", "tier: frontier\n", "tier:"],
   ])("%s が残る定義は実効フィールドが同じ再送でも書き直して commit し、version を進める", async (_kind, line, key) => {
     const registryDir = await makeMainRegistry({
       "agents/crab.md": `---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\n${line}---\np\n`,
@@ -196,12 +194,12 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
 
     await updateAgent(
       { name: "crab", authority: "standard", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "main")).not.toBe(before);
     expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain(key);
-    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", unknownFields: [], retiredFields: [] });
+    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", unknownFields: [] });
   });
 
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {
@@ -218,7 +216,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await updateAgent(same, { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames });
+    await updateAgent(same, { db, registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.version).toBe("0.3.1");
@@ -238,7 +236,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         systemPrompt:
           "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.\n",
       },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -260,7 +258,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
         systemPrompt:
           "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.",
       },
-      { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+      { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toMatchObject({
@@ -277,7 +275,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
     await expect(
       updateAgent(
         { name: "deckhand", authority: "standard", provider: "moonshto", description: "d", skills: ["*"], systemPrompt: "p" },
-        { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+        { db, registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -290,7 +288,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
     await expect(
       updateAgent(
         { name: "deckhand", authority: "standard", provider: "moonshot", advisor: true, description: "d", skills: ["*"], systemPrompt: "p" },
-        { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+        { db, registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -306,7 +304,7 @@ describe("updateAgent: authority 検証(issue #70 — 編集でも既存プロ�
     await expect(
       updateAgent(
         { name: "deckhand", authority: "no-such-profile", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
-        { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+        { db, registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -321,157 +319,10 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
     await expect(
       updateAgent(
         { name: "ghost", authority: "standard", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
-        { db, registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames },
+        { db, registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAgentError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.ghost).toBeUndefined();
-  });
-});
-
-describe("changeAgentTier: tier の提案の承認が registry へ書く口(issue #920)", () => {
-  const TIERED = `---
-# hand-written comment stays
-description: Crab
-version: 0.3.1
-authority: standard
-tier: standard
-provider: anthropic
-skills:
-  - "*"
----
-You are Crab.
-`;
-
-  it("agent 定義の tier と version の行だけを書き換えた commit を着地させ、その sha を返す", async () => {
-    const registryDir = await makeMainRegistry({ "agents/crab.md": TIERED });
-    const before = git(registryDir, "rev-parse", "HEAD");
-
-    const sha = await changeAgentTier(
-      { name: "crab", expectTier: "standard", to: "economy", assertLandable: () => {}, message: "lower agent crab's tier to economy (question q-1)" },
-      { db, registry: { dir: registryDir, mode: "purely-local" } },
-    );
-
-    expect(sha).toBe(git(registryDir, "rev-parse", "main"));
-    expect(git(registryDir, "log", "-1", "--format=%s", sha)).toBe("lower agent crab's tier to economy (question q-1)");
-    const changed = git(registryDir, "diff", "--unified=0", before, sha)
-      .split("\n")
-      .filter((line) => /^[-+][^-+]/.test(line));
-    expect(changed).toEqual(["-version: 0.3.1", '+version: "0.3.2"', "-tier: standard", "+tier: economy"]);
-    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ tier: "economy", version: "0.3.2" });
-  });
-
-  it("registry の tier が期待値と違えば AgentTierMismatchError で、commit を積まない", async () => {
-    const registryDir = await makeMainRegistry({ "agents/crab.md": TIERED });
-    const before = git(registryDir, "rev-parse", "HEAD");
-
-    await expect(
-      changeAgentTier(
-        { name: "crab", expectTier: "frontier", to: "standard", assertLandable: () => {}, message: "m" },
-        { db, registry: { dir: registryDir, mode: "purely-local" } },
-      ),
-    ).rejects.toThrow(AgentTierMismatchError);
-    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-  });
-
-  it("下げ先の検査は fetch の後の定義の provider で呼ばれ、断れば commit を積まない", async () => {
-    const registryDir = await makeMainRegistry({ "agents/crab.md": TIERED });
-    const before = git(registryDir, "rev-parse", "HEAD");
-    const seen: string[][] = [];
-    const assertLandable = (providers: string[]) => {
-      seen.push(providers);
-      throw new Error("no row at economy");
-    };
-
-    await expect(
-      changeAgentTier({ name: "crab", expectTier: "standard", to: "economy", assertLandable, message: "m" }, { db, registry: { dir: registryDir, mode: "purely-local" } }),
-    ).rejects.toThrow("no row at economy");
-    expect(seen).toEqual([["anthropic"]]);
-    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-  });
-});
-
-describe("renameAgentTiers: 段の改名が registry の agent.md の tier を書き換える口(ADR 0200 決定2 / issue #1422)", () => {
-  const agentAt = (name: string, tier: string) => `---
-description: ${name}
-# hand-written comment stays
-version: 0.3.1
-authority: standard
-tier: ${tier}
-provider: anthropic
-skills:
-  - "*"
----
-You are ${name}.
-`;
-
-  it("旧い名前を tier に書いた agent だけを、tier と version の行だけ書き換えて、リモートの main へ1つの commit で着地させる", async () => {
-    const { registryDir, publish } = await makeRemoteBackedRegistry();
-    publish("agents/crab.md", agentAt("crab", "standard"), "add crab");
-    publish("agents/shrimp.md", agentAt("shrimp", "standard"), "add shrimp");
-    const before = publish("agents/lobster.md", agentAt("lobster", "frontier"), "add lobster");
-
-    await renameAgentTiers({ from: "standard", to: "mid", message: "rename tier standard to mid" }, { db, registry: { dir: registryDir, mode: "remote-backed" } });
-
-    const remoteMain = git(registryDir, "rev-parse", "refs/remotes/origin/main");
-    expect(git(registryDir, "rev-parse", `${remoteMain}~1`)).toBe(before);
-    expect(git(registryDir, "log", "-1", "--format=%s", remoteMain)).toBe("rename tier standard to mid");
-    const changed = git(registryDir, "diff", "--unified=0", before, remoteMain)
-      .split("\n")
-      .filter((line) => /^[-+][^-+]/.test(line));
-    const oneAgent = ["-version: 0.3.1", '+version: "0.3.2"', "-tier: standard", "+tier: mid"];
-    expect(changed).toEqual([...oneAgent, ...oneAgent]);
-    expect(git(registryDir, "diff", "--name-only", before, remoteMain).split("\n")).toEqual(["agents/crab.md", "agents/shrimp.md"]);
-  });
-
-  it("push が失敗すると RegistryPushFailedError で、リモートの main は動かない", async () => {
-    const { registryDir, publish } = await makeRemoteBackedRegistry();
-    const before = publish("agents/crab.md", agentAt("crab", "standard"), "add crab");
-    rejectRegistryPushes(registryDir);
-
-    await expect(
-      renameAgentTiers({ from: "standard", to: "mid", message: "m" }, { db, registry: { dir: registryDir, mode: "remote-backed" } }),
-    ).rejects.toThrow(RegistryPushFailedError);
-    expect(git(git(registryDir, "config", "remote.origin.url"), "rev-parse", "main")).toBe(before);
-  });
-});
-
-describe("registry の log の探索: 盤面の tier の書き込みの commit を同じ綴りで引き直す(ADR 0401 決定6)", () => {
-  const agentAt = (name: string, tier: string) =>
-    `---\ndescription: ${name}\nversion: "1"\nauthority: standard\ntier: ${tier}\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are ${name}.\n`;
-  const local = (dir: string) => ({ dir, mode: "purely-local" as const });
-
-  it("承認の commit は question id を名指すものだけが見つかり、下げ先と sha を返す —— (question 12) は (question 123) に当たらない", async () => {
-    const registryDir = await makeMainRegistry({ "agents/crab.md": agentAt("crab", "frontier") });
-    const deps = { db, registry: local(registryDir) };
-    const lower = (expectTier: string, to: string, questionId: string) =>
-      changeAgentTier({ name: "crab", expectTier, to, assertLandable: () => {}, message: agentTierChangeMessage("crab", to, questionId) }, deps);
-
-    const first = await lower("frontier", "standard", "123");
-    expect(findTierApproval(local(registryDir), "crab", "12")).toBeUndefined();
-    const second = await lower("standard", "economy", "12");
-
-    expect(findTierApproval(local(registryDir), "crab", "12")).toEqual({ commit: second, to: "economy" });
-    expect(findTierApproval(local(registryDir), "crab", "123")).toEqual({ commit: first, to: "standard" });
-    expect(findTierApproval(local(registryDir), "shrimp", "12")).toBeUndefined();
-  });
-
-  it("agent.md を最後に変えた commit が段の改名ならその旧い名前を引き、後の手編集があれば引かない", async () => {
-    const registryDir = await makeMainRegistry({ "agents/crab.md": agentAt("crab", "standard") });
-
-    await renameAgentTiers({ from: "standard", to: "mid", message: tierRenameMessage("standard", "mid") }, { db, registry: local(registryDir) });
-
-    expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBe("standard");
-    expect(renamedTierFrom(local(registryDir), "crab", "id")).toBeUndefined();
-    expect(renamedTierFrom(local(registryDir), "crab", "top")).toBeUndefined();
-    writeFileSync(join(registryDir, "agents/crab.md"), agentAt("crab", "mid").replace("You are", "Hand-edited, you are"));
-    git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", "hand edit");
-    expect(renamedTierFrom(local(registryDir), "crab", "mid")).toBeUndefined();
-  });
-
-  it("git が読めなければ、承認の探索は見つからないと区別して投げ、改名の探索は条件つきの文へ落ちる", () => {
-    const missing = local("/nonexistent/registry");
-    expect(() => findTierApproval(missing, "crab", "12")).toThrow(RegistryLogUnreadableError);
-    expect(renamedTierFrom(missing, "crab", "mid")).toBeUndefined();
   });
 });

@@ -78,7 +78,6 @@ import type {
   StopBehaviorDraftInput,
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
-import { SEED_TIERS } from "../src/tier.js";
 import { TranscriptStore, workerPromptRecord } from "../src/transcript-store.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
@@ -1249,9 +1248,6 @@ export function containerHarness(
 export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): ProcessContainers {
   return new ProcessContainers(passthroughContainerRuntime(spawn));
 }
-
-/** 種の盤面の段の名前(順序どおり)—— 盤面を持たずに定義の門を通すテストが渡す一覧。 */
-export const seedTierNames = SEED_TIERS.map((tier) => tier.name);
 
 /** registry が assignee を解決できない2つの形(agent 名の quarantine の入口が受ける型)。
  *  入口ごとのテストがこの表で両方を回す。 */

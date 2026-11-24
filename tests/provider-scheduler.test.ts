@@ -436,7 +436,7 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
 async function advisorTaskUnderFableWindow(ceiling: string) {
   t = await bootTidepool({
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: true }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: true }] }, task),
   });
   t.db.prepare("UPDATE execution_defaults SET advisor_ceiling = ?").run(ceiling);
   // 扉を通さない(扉の登録は pickup の契機 —— ADR 0119 決定2 —— で、usage を仕込む前に走る)
@@ -495,7 +495,7 @@ it("候補の解決が定義違反で倒れても queue の読み口は 200 を�
       }
       return executionSettingsFor(
         t.db,
-        { provider: [{ name: "anthropic", advisor: false }], tier: undefined },
+        { provider: [{ name: "anthropic", advisor: false }] },
         task,
       );
     },
@@ -533,7 +533,7 @@ function boardWithEntries(agents: Record<string, string[]>): Parameters<typeof b
     taskExecutionCandidates: (task) =>
       executionSettingsFor(
         t.db,
-        { provider: (agents[task.assignee ?? ""] ?? ["anthropic"]).map((name) => ({ name, advisor: false })), tier: undefined },
+        { provider: (agents[task.assignee ?? ""] ?? ["anthropic"]).map((name) => ({ name, advisor: false })) },
         task,
       ),
   };

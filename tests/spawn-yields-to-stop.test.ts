@@ -167,7 +167,7 @@ async function bootWithAdapter(
     ...board,
     watchdog: WATCHDOG,
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }] }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     workerAdapter: (deps) => withHealthyUsage(opensCheckoutAtWorkspace(build(deps), deps.db, at), deps.clock),

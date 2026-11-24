@@ -402,6 +402,7 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
     expect(createAgent).toHaveBeenCalledWith({ ...agentFields, systemPrompt: system_prompt });
     expect(readToolPayload(await client.callTool({ name: "list_agents", arguments: {} }))).toEqual({
       agents: [],
+      orphan_tiers: [],
       authority_profiles: ["standard"],
     });
     expect(readToolPayload(await client.callTool({ name: "update_agent", arguments: agent }))).toEqual({});

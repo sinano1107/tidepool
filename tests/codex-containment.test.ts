@@ -761,7 +761,7 @@ it("the public queue and answer routes expose a durable Harness-scoped stop with
     taskExecutionCandidates: (task) =>
       executionSettingsFor(
         tidepool.db,
-        { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }], tier: undefined },
+        { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }] },
         task,
       ),
     harnessContainment: async (harness) =>
