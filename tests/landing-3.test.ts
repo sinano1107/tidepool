@@ -1868,6 +1868,19 @@ it("根の導出の読みが例外に落ちても、その根に答えている�
   expect(promotionFailures(pr.db, pr.work.id)).toEqual([]);
 });
 
+// ADR 0241 決定6: 根ごとの catch の question も、根の workspace の Quarantine が抱えていれば重ねず、verdict はその Quarantine になる
+it("根の導出の読みが例外に落ちても、その根の workspace の Quarantine が開いていれば question を立てず、verdict はその Quarantine を名乗る", async () => {
+  const c = await pushedRoot("landing-per-root-catch-quarantined");
+  quarantineWorkspace(c.db, c.workspace.name, new Error("repair the checkout"), c.clock.now());
+  failRootDerivationRead(c.db);
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({
+    kind: "quarantined",
+    error: `workspace "${c.workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
+  expect(promotionFailures(c.db, c.work.id)).toEqual([]);
+});
+
 const REGISTRY_STOPPED = "the registry is unavailable, so landing is stopped; answer the registry question first, then answer this one again";
 
 /** 読めない registry を読む盤面の1点 —— 呼ぶたびに registryUnreadable を立て(開いていれば重ねず)、読み込みの例外を投げる。 */

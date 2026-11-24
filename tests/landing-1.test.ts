@@ -2065,6 +2065,38 @@ it("lineage が読めない完了 work は、その根の失敗として失敗 q
   expect(promotionFailures(db, child.id)).toHaveLength(1);
 });
 
+// ADR 0241 決定6: lineage が読めない根の失敗 question も、workspace の Quarantine が抱えていれば重ねない
+it.each([true, false])("基準の行を持つ workspace で lineage が読めない根は、Quarantine が開いていれば(%s)失敗 question を立てずその Quarantine で止まり、無ければ1つ立てる", async (quarantine) => {
+  const { workspace } = await makeLandingWorkspace("landing-lineage-unreadable-quarantined");
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient() });
+  const parent = landingWork(db, clock);
+  seedTaskBranch(db, workspace, parent.id);
+  git(workspace.path, "branch", "-D", `task/${parent.id}`);
+  const child = attachUnsettledChild(db, clock, parent.id);
+  git(workspace.path, "branch", `task/${child.id}`);
+  // 出元 repo の記録を持つ子 —— 記録の比較(ADR 0399 決定3)を通って lineage の失敗に届く
+  recordDeclaredRepo(db, child.id, workspace);
+  finish(db, clock, child);
+  finish(db, clock, parent);
+  // 基準の行が無ければ、この名前の Quarantine の間は最初の撮りを待つ(ADR 0373 決定13 追記)
+  await leaveBaseline(db, workspace);
+  if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+
+  const verdict = await convergeOn(landing, child.id);
+
+  if (quarantine) {
+    expect(verdict).toEqual({
+      kind: "quarantined",
+      error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+    });
+    expect(promotionFailures(db, child.id)).toEqual([]);
+  } else {
+    expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+    expect(promotionFailures(db, child.id)).toHaveLength(1);
+  }
+});
+
 it("完了した親のタスクブランチが失われて死んでいれば、子は帰り先なしで着地の根にならず失敗 question も立たず、他の根は着地する(ADR 0380 決定3)", async () => {
   const { workspace } = await makeLandingWorkspace("landing-lineage-lost-parent");
   const { db, clock } = await openBoard();
