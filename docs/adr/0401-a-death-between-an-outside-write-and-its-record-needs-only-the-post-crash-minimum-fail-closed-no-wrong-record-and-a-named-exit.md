@@ -53,7 +53,7 @@ DB の記録を1つの同期区間で書く。await を挟まない区間が防�
 reject の回答(#3636)、祖先の cancel の3つを落としていた。経路の表は #3635 のコメントに置く。
 
 - **registry の提案の question は、承認の commit を registry に問うてからでないと閉じない。** 周期の照合、approve と reject の回答、表の
-  書き口の hook、祖先の cancel(直接 cancel と failure / premise_breach の abandon)のどれで閉じるときも、`(question <id>)` を名指す commit があれば適用済みとして
+  書き口の hook、祖先の cancel(直接 cancel と failure の abandon)のどれで閉じるときも、`(question <id>)` を名指す commit があれば適用済みとして
   閉じる。reject の回答は approve と同じく適用済みの印で返し、tier がもう動いたことを言う —— 却下と刻めば、適用された承認を決定が読む誤った
   記録で閉じる(決定1 の (2))。
 - **問えなければ閉じない。** registry の log が読めないとき、照合(周期と表の書き口の hook)はその回は閉じず、回答と cancel は断る。cancel を
