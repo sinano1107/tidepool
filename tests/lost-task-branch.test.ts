@@ -15,7 +15,7 @@ import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import { boardRefWriter, LostTaskBranchPresentError, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, removeReleasedTaskCheckoutsOn, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, settleReviews, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, rememberFixtureHeadRepos, settleReviews, WORKER_SPAWNED } from "./harness.js";
 import { attachUnsettledChild, commitThroughTaskCheckout, completeThroughTaskCheckout, finish, landingWork, openBoard, promotionFailures } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -1542,11 +1542,16 @@ function duringNextPrCreation(c: RemoteBoard, during: () => Promise<unknown>): (
 
 it("収束の回の途中で give-up が通った根は、同じ回で撃たれない —— 根ごとに着地の終わりの述語を読み直す(ADR 0407 決定1)", async () => {
   const c = await remoteBoard("given-up-mid-pass");
+  // ADR 0407 決定2 追記(#3732): 着地中の workspace の give-up は拒まれる —— 回の途中で通るのは別の workspace の give-up なので、失う根はそこに置く
+  const { workspace: other } = await makeLandingWorkspace("given-up-mid-pass-other");
+  rememberFixtureHeadRepos(c.db);
+  c.landing = createLanding({ defaultAgentName: "tako", db: c.db, clock: c.clock, workspace: c.workspace, resolveWorkspace: (name) => (name === other.name ? other : c.workspace), github: c.github });
+  const elsewhere = { ...c, workspace: other };
   const first = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "first.txt", "first\n");
-  const lost = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "lost.txt", "lost\n");
+  const lost = await completeThroughTaskCheckout(c.db, c.clock, other, landingWork(c.db, c.clock, other.name), "lost.txt", "lost\n");
   const outcome = duringNextPrCreation(c, () => {
-    loseByHand(c, lost);
-    return giveUpOnRemote(c);
+    loseByHand(elsewhere, lost);
+    return giveUpOnRemote(elsewhere);
   });
 
   const { result: verdicts, reads } = await gitReadsOf([lost.id], () => c.landing.converge());
@@ -1574,6 +1579,86 @@ it("収束が根の PR を作っている間(push から記録まで)は処理�
   expect(String(outcome())).toContain(`the board is opening the PR of task ${root.id} right now — answer again in a moment`);
   expect(lostEvents(c.db)).toEqual([]);
   expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeDefined();
+
+  await giveUpOnRemote(c);
+
+  expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeUndefined();
+  expect(taskBranchLostInForce(c.db, root.id)).toBeDefined();
+});
+
+/** 収束が次に PR の状態を読む要求の最中(読んだ後、返す前)に `during` を1度走らせ、その結果(通れば undefined、拒まれればその error)を返す口。 */
+function duringNextPrStateRead(c: RemoteBoard, during: () => Promise<unknown>): () => unknown {
+  const read = c.github.getPullRequestState.bind(c.github);
+  let outcome: unknown = "not run";
+  let pending: (() => Promise<unknown>) | undefined = during;
+  c.github.getPullRequestState = async (ref) => {
+    const state = await read(ref);
+    const act = pending;
+    pending = undefined;
+    if (act) outcome = await act().then(() => undefined, (err: unknown) => err);
+    return state;
+  };
+  return () => outcome;
+}
+
+const landingRefusal = (c: RemoteBoard, root: Task) => `the board is landing task ${root.id} in workspace ${c.workspace.name} right now — answer again in a moment`;
+
+it.each([
+  ["open", false],
+  ["merged", true],
+] as const)("収束が記録済みの PR(%s)の根を着地させている間は、印の無い await の中でも、その workspace の give-up は何も書かずに拒まれる —— 着地が終われば通る(ADR 0407 決定2 追記、#3732)", async (state, merged) => {
+  const c = await remoteBoard(`give-up-while-landing-${state}`);
+  const root = await prRootWithUnpushedCommit(c);
+  if (merged) c.github.scriptMergedOutside(1);
+  const outcome = duringNextPrStateRead(c, () => {
+    loseByHand(c, root, true);
+    return giveUpOnRemote(c);
+  });
+
+  await c.landing.converge();
+
+  expect(outcome()).toBeInstanceOf(DomainError);
+  expect(String(outcome())).toContain(landingRefusal(c, root));
+  expect(lostEvents(c.db)).toEqual([]);
+  expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeDefined();
+  expect(promotionFailures(c.db, root.id)).toEqual([]);
+
+  await giveUpOnRemote(c);
+
+  expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeUndefined();
+  expect(taskBranchLostInForce(c.db, root.id)).toBeDefined();
+});
+
+it("着地中の根の子孫だけを失わせる give-up も、その workspace の着地中は拒まれる(ADR 0407 決定2 追記、#3732)", async () => {
+  const c = await remoteBoard("give-up-descendant-while-landing");
+  const root = await prRootWithUnpushedCommit(c);
+  // 未決着の子は根の着地を塞ぐ(`landingBlock`)ので、着地がその読みを越えた後の await の中で付けて失わせる
+  let child!: Task;
+  const outcome = duringNextPrStateRead(c, async () => {
+    child = attachUnsettledChild(c.db, c.clock, root.id);
+    await commitThroughTaskCheckout(c.db, c.clock, c.workspace, child, "child.txt", "never merged back\n");
+    loseByHand(c, child);
+    return giveUpOnRemote(c);
+  });
+
+  await c.landing.converge();
+
+  expect(String(outcome())).toContain(landingRefusal(c, root));
+  expect(lostEvents(c.db)).toEqual([]);
+
+  await giveUpOnRemote(c);
+
+  expect(taskBranchLostInForce(c.db, child.id)).toBeDefined();
+});
+
+it("着地が止まって抜けても(ref の比較が workspace を Quarantine に入れる)、着地中は残らず、続く give-up は通る(ADR 0407 決定2 追記、#3732)", async () => {
+  const c = await remoteBoard("give-up-after-stopped-landing");
+  const root = await prRootWithUnpushedCommit(c);
+  loseByHand(c, root, true);
+
+  const verdicts = await c.landing.converge();
+
+  expect(verdicts.find(({ taskId }) => taskId === root.id)?.verdict).toMatchObject({ kind: "quarantined" });
 
   await giveUpOnRemote(c);
 

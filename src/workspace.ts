@@ -3599,8 +3599,8 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  `giveUpAnswer`(give-up に答えている workspace の Quarantine の `question`、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
  *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒し、
  *  失われた task を指す開いた着地の question とキューの行を引退させる(ADR 0375 決定1・4・9、ADR 0407 決定2 —— 着地の終わりは失われた event から読み、
- *  記録は書かない)。その transaction の直前の同じ同期区間で `refuseIfMarked` を失われる task に当て、処理中の印があれば何も書かずに拒む
- *  (ADR 0407 決定2、ADR 0288 決定2 と同じ形)。give-up で失われた ref が無ければ、
+ *  記録は書かない)。その transaction の直前の同じ同期区間で `refuseIfMarked` を失われる task に当て、処理中の印があるか収束がこの workspace の根を
+ *  着地させていれば何も書かずに拒む(ADR 0407 決定2 とその追記、ADR 0288 決定2 と同じ形)。give-up で失われた ref が無ければ、
  *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(
   db: Db,

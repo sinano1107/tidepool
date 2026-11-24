@@ -621,8 +621,9 @@ export interface QuarantineCheckDeps {
   githubAuth?: GitHubAuth;
   /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
    *  盤面の外での merge を観測する。ADR 0407 決定2: 失われた ref の give-up は、失われる task のどれかに処理中の印(`isMarked`)が
-   *  付いていれば何も書かずに拒む。Absent → 観測せず(キューの PR は着地待ちに数えられる)、印も読まない。 */
-  landing?: Pick<Landing, "observeAutoMergeOutcomes" | "isMarked">;
+   *  付いているか、収束がその workspace の根を着地させている(`landingRootIn`、#3732)間は、何も書かずに拒む。Absent → 観測せず(キューの PR は
+   *  着地待ちに数えられる)、印も着地中も読まない。 */
+  landing?: Pick<Landing, "observeAutoMergeOutcomes" | "isMarked" | "landingRootIn">;
   /** 盤面の固定点(ADR 0040 の状態パスと ADR 0377 決定3 の registry clone)。workspace の受理が撃つ pickup の述語が名前の場所との
    *  交差を拒む。Absent → 守る固定点を持たない盤面で、項は並ぶが何も拒まない。 */
   boardState?: BoardStatePath[];
@@ -827,6 +828,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       refuseIfMarked: (lostTaskIds: string[]) => {
         const refusal = inFlightRefusalOf(deps.db, deps.landing, lostTaskIds);
         if (refusal) throw new Error(refusal);
+        // ADR 0407 決定2 追記(#3732): 着地は根の workspace の task ブランチを読む —— 失われる task が根でなくても、その workspace の着地中は拒む
+        const landing = deps.landing?.landingRootIn(value);
+        if (landing) throw new Error(`the board is landing task ${landing} in workspace ${value} right now — answer again in a moment`);
       },
     };
     const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), lacking, giveUpAnswer || undefined)) : [];

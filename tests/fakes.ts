@@ -103,6 +103,9 @@ export const unusedLanding: Landing = {
   isMarked() {
     return false;
   },
+  landingRootIn() {
+    return undefined;
+  },
   async stop() {},
 };
 
