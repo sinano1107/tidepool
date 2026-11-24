@@ -977,6 +977,38 @@ it("done の後に作業台を消せなければ、完了は通って task は d
   expect(notice?.endsWith(exit)).toBe(true);
 });
 
+// ADR 0401 決定1 の (3): `done` を書いた後は作業台の在り処を読み直さない —— 消えた作業台は消せた作業台と同じに終える(#3778)
+it("done の後に作業台のディレクトリが消えていても、完了は投げずに task は done、notice は無い", async () => {
+  const b = await board("complete-vanished");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  await prepareHumanWork(b.db, b.ws, h, "complete", { workspacesBaseDir: b.base, now: () => b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name });
+
+  const notice = completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {
+    completeTask(b.db, getTask(b.db, h.id)!, FULL_HANDOFF, HUMAN_ACTOR_ID, b.clock.now(), "webui");
+    rmSync(path, { recursive: true, force: true });
+  });
+
+  expect([notice, getTask(b.db, h.id)!.status]).toEqual([undefined, "done"]);
+});
+
+// ADR 0401 決定1 の (3): 消えた判定は `.git` でなくディレクトリの有無 —— 残ったディレクトリを消せたかのように黙らない(#3778)
+it("done の後に作業台の .git だけが消えていれば、完了は投げずに task は done、notice は作業台を読めずに残したことと在り処を言う", async () => {
+  const b = await board("complete-git-vanished");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  await prepareHumanWork(b.db, b.ws, h, "complete", { workspacesBaseDir: b.base, now: () => b.clock.now(), resolveRegistered: undefined, defaultWorkspaceName: b.ws.name });
+
+  const notice = completeHumanWork(b.db, b.ws, getTask(b.db, h.id)!, b.base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, b.clock.now(), () => {
+    completeTask(b.db, getTask(b.db, h.id)!, FULL_HANDOFF, HUMAN_ACTOR_ID, b.clock.now(), "webui");
+    rmSync(join(path, ".git"), { recursive: true, force: true });
+  });
+
+  expect(notice?.startsWith(`completed. The board could not read the workbench at ${path} (`)).toBe(true);
+  expect(notice?.endsWith("), so it is kept.")).toBe(true);
+  expect([getTask(b.db, h.id)!.status, existsSync(path)]).toEqual(["done", true]);
+});
+
 it("done の後に作業台に stash が残っていれば、作業台を残してそれを言う —— text C7 ではない(pin C11)", async () => {
   const b = await board("complete-kept-stash");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });

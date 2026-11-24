@@ -1999,7 +1999,8 @@ const workbenchGone = (at: string, target: string, verb: string) =>
  *  の今の値を含む —— C2a、未 commit —— C2d)、帰り先(系譜で決まる。根は保護ブランチ)へ clean に merge できる(C2b。できなければ帰り先の値を
  *  作業台に引き、作業台が無ければ `task_work_started` を書かずに開く)。ref は await を挟まずに読むので、最後の await の後に動いた ref も見る。
  *  拒否は task に何も書かない。`done` の後の merge back の失敗は積み残しで、後始末と同じく workspace の Quarantine を立てる。`done` では
- *  作業台を消す —— 読んだ後に tip が動いていれば残し、text C7 を返す。消せなければそう言う文を返す。 */
+ *  作業台を消す —— 読んだ後に tip が動いていれば残し、text C7 を返す。消せなければそう言う文を返す。ディレクトリがもう無ければ、消せたときと同じく
+ *  文を返さない。 */
 export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, base: string, caller: Answerer, now: Date, finish: () => void): string | undefined {
   const target = taskBranch(task.id);
   const ref = `refs/heads/${target}`;
@@ -2009,8 +2010,8 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   if (refusal) throw refusal;
   const unfinished = teardownUnfinishedUnder(db, task.id);
   if (unfinished) throw new DomainError(`task ${unfinished.id} "${unfinished.title}" under this task is still being torn down — complete again once it has finished.`);
-  const hasWorkbench = placeHasRepository(at);
-  if (!hasWorkbench && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
+  const place = workbenchOnDisk(named, at);
+  if (!place && hasStartedWork(db, task.id)) throw new DomainError(workbenchGone(at, target, "complete"));
   const assertMerges = (tip: string, repo: WorkspaceConfig) => {
     if (isAncestor(repo, returnSha, tip) || writeMergeTree(repo, returnSha, tip) !== undefined) return;
     const conflict = `${target} does not merge cleanly into '${returnName}'.`;
@@ -2026,8 +2027,7 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
   };
   let taken: { tip: string; commit: string } | undefined;
   try {
-    if (hasWorkbench) {
-      const place = workbenchPlace(named, realpathSync(at));
+    if (place) {
       taken = repointingOnRefusal(named, place.path, () =>
         takeInWorkbench(db, named, place, target, undefined, { workbenchBase: base, entry: "complete_task", answerer: caller, now: () => now }, {
           humanWork: { again: "complete again", gone: workbenchGone(at, target, "complete") },
@@ -2049,8 +2049,10 @@ export function completeHumanWork(db: Db, named: WorkspaceConfig, task: Task, ba
       quarantineWorkspace(db, named.name, err, now);
     }
   }
-  if (!hasWorkbench) return undefined;
-  return removeDoneWorkbench(named, workbenchPlace(named, realpathSync(at)), target, taken?.tip);
+  // ADR 0401 決定1 の (3): `done` の後は在り処を読み直さない —— 取り込みの前に読んだ作業台を使い回す。読み直せば作業台が消えたときに記録を
+  // 書いた後で素の例外を投げ、扉は出口の文でなく例外を見せる
+  if (!place) return undefined;
+  return removeDoneWorkbench(named, place, target, taken?.tip);
 }
 
 /** ADR 0390 決定1〜3: 系譜の帰り先 `lineage`(`lineageTaskBranch` の値)のタスクブランチの持ち主が解放を負う間の拒否 —— 根(帰り先が
@@ -2121,11 +2123,14 @@ export function takeInHumanWork(db: Db, named: WorkspaceConfig, task: Task, base
 /** 読んだ後に作業台へ届いた commit を取り込まずに作業台を残した、と言う文。 */
 const notTakenInKept = (path: string) => `Commits reached the workbench at ${path} after the board read it and were not taken in; the workbench is kept.`;
 
-/** spec #3273 group C: `done` の後に人間担当の work 自身の作業台を読み直し、取り込んだ tip のまま人間の作業が残っていなければ消す。
+/** spec #3273 group C: `done` の後に人間担当の work 自身の作業台の中身を読み直し(在り処は取り込みの前に読んだ `place` のまま)、取り込んだ
+ *  tip のまま人間の作業が残っていなければ消す。ディレクトリがもう無ければ、判定せずに消せたときと同じく文を返さない。
  *  tip が読んだものから動いていれば(取り込まなかったときは `task/<H>` に含まれなくなっていれば)残して text C7、ほかに残っているもの
  *  (stash、書く先に無い commit を持つ branch、HEAD の位置、未 commit の変更)や読めない作業台も残して、それを言う。消せない作業台も
  *  そう言う(`removeWrittenWorkbench`)。`done` の後なので拒まない。 */
 function removeDoneWorkbench(named: WorkspaceConfig, place: UntrustedCheckout, target: string, takenTip: string | undefined): string | undefined {
+  // ADR 0401 決定1 の (3): 消えた作業台は消せたのと同じに終える。`.git` だけ消えてディレクトリが残れば、判定に進んで読めずに残したと言う
+  if (!existsSync(place.path)) return undefined;
   let judged: { moved: boolean; left: string[] };
   try {
     judged = judgeWorkbench(named, place, target, { boardMove: true }, (owner, read, workbench) => ({
