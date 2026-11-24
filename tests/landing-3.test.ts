@@ -2209,8 +2209,8 @@ it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠け、タ�
 
   await expect(refused).rejects.toThrow(DomainError);
   await expect(refused).rejects.toThrow(question.question_landing_tip!);
+  await expect(refused).rejects.toThrow("this question asked about, has already landed");
   await expect(refused).rejects.toThrow("answer `merge`");
-  await expect(refused).rejects.toThrow("after the question");
   expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
@@ -2235,7 +2235,7 @@ it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠け、タ�
 it("問うた tip を持たない local merge question でも、タスクブランチが着地の後に記録だけ欠けていれば hold は merge を名指して断る", async () => {
   const local = await landLocally("local-hold-without-asked-tip");
   const { db, work, question } = local;
-  await landFfWithoutRecord(local);
+  landFfWithoutRecord(local);
   // 読めずに立った question(ADR 0403 決定1)の形を直接作る
   db.prepare("UPDATE tasks SET question_landing_tip = NULL WHERE id = ?").run(question.id);
 

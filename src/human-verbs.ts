@@ -1724,10 +1724,8 @@ export async function submitAnswer(
           } catch {}
           if (landed !== undefined) {
             const branch = taskBranch(kind.task_id);
-            throw new DomainError(
-              `cannot hold: ${kind.tip === null ? branch : `${kind.tip}, the tip of ${branch} this question asked about,`} has already landed on ${landed.branch} as ${landed.sha} — ` +
-                `answer \`merge\` to record the landing; \`merge\` lands ${branch} as it is when you answer, with any commit that reached it after the question.`,
-            );
+            const subject = kind.tip === null ? branch : `${kind.tip}, the tip of ${branch} this question asked about,`;
+            throw new DomainError(`cannot hold: ${subject} has already landed on ${landed.branch} as ${landed.sha} — answer \`merge\` to record the landing.`);
           }
           // ADR 0289 決定3 / ADR 0394 決定5: hold が断るのは question が問うた時点の内容
           rootRecord = { root: kind.task_id, payload: landingDeclined(task.id, kind) };
