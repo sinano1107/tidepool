@@ -11,7 +11,7 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason, fr
       className="tp-queue-item"
       data-front={flash ? '' : undefined}
       style={{
-        display: 'flex', alignItems: 'center', gap: 12,
+        display: 'flex', flexWrap: skipped ? 'wrap' : undefined, alignItems: 'center', gap: 12, rowGap: 2,
         padding: '10px 18px',
         border: skipped ? '1px dashed var(--rock-3)' : 'none',
         boxShadow: skipped ? 'none' : 'var(--shadow-card)',
@@ -24,10 +24,9 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason, fr
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', background: frontInserted ? 'var(--surface-card)' : 'var(--tide-1)', borderRadius: 'var(--radius-full)', padding: '2px 8px', flexShrink: 0 }}>{position}</span>
       <IdChip id={id} />
       {/* the title's flex-basis is 0%, so it absorbs no shrink at all — without
-          a floor a long skipReason squeezes it to zero width (issue #219) */}
+          a floor the labels beside it squeeze it to zero width (issue #219) */}
       <span style={{ flex: 1, minWidth: 80, fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
       {task.risk && <RiskFlag />}
-      {skipped && <span title={skipReason} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{skipReason ? `skipped · ${skipReason}` : 'skipped'}</span>}
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
       <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
       {onFront && (
@@ -46,6 +45,14 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason, fr
             borderRadius: 'var(--radius-full)', padding: '4px 10px', cursor: 'pointer', flexShrink: 0,
           }}
         >↑</button>
+      )}
+      {/* the skip label drops to its own row, as the queue slot row's meta does (issue #396) — after the
+          button in DOM order so only it (flexBasis 100%) wraps. At 375px the first row has ~16px left,
+          so inline even a bare `skipped` was cut (ADR 0102's two-row fallback, issue #3703) */}
+      {skipped && (
+        <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>
+          {skipReason ? `skipped · ${skipReason}` : 'skipped'}
+        </span>
       )}
     </div>
   );

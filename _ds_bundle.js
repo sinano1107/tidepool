@@ -255,8 +255,10 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
       "data-front": flash ? "" : void 0,
       style: {
         display: "flex",
+        flexWrap: skipped ? "wrap" : void 0,
         alignItems: "center",
         gap: 12,
+        rowGap: 2,
         padding: "10px 18px",
         border: skipped ? "1px dashed var(--rock-3)" : "none",
         boxShadow: skipped ? "none" : "var(--shadow-card)",
@@ -270,7 +272,6 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
     /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id }),
     /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 80, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
     task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
-    skipped && /* @__PURE__ */ React.createElement("span", { title: skipReason, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped"),
     frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
     /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
     onFront && // the head row's button is "run now" (tide fill, immediate-poll
@@ -297,7 +298,8 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
         }
       },
       "\u2191"
-    )
+    ),
+    skipped && /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped")
   );
 }
 Object.assign(__ds_scope, { QueueItem });
