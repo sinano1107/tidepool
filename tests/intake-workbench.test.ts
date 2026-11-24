@@ -457,6 +457,15 @@ it("shallow な名前の場所では作業台を作らず、open_workbench は�
   expect(existsSync(workbenchPath(base, { workspace: ws.name }))).toBe(false);
 });
 
+// ADR 0414 決定4: shallow の確かめは1コマンドなので最初の撮りより前 —— 拒んだ扉は基準の行を残さない
+it("shallow な名前の場所で拒んだ open_workbench は基準の行を残さない(ADR 0414 決定4)", async () => {
+  const ws = await makeShallowWorkspace("intake-shallow-baseline");
+  const db = openDb(":memory:");
+
+  await expect(openHumanContentWorkbench(db, ws, await tempDir("tidepool-workbenches-"), CALLER, () => new Date(), { resolveRegistered: undefined })).rejects.toThrow(DomainError);
+  expect(holdsBaseline(db, ws.name)).toBe(false);
+});
+
 it("保護ブランチの閉包が読めない名前の場所では作業台を作らず、open_workbench は名前の場所と読めない object を名指して拒む(ADR 0411 決定5)", async () => {
   let blob = "";
   const b = await board("intake-unreadable-closure", (ws) => {

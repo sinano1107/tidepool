@@ -337,6 +337,23 @@ it("古い履歴にだけある blob が欠けた名前の場所の pickup は�
   expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
 });
 
+// ADR 0414 決定1・2: task の checkout を先に作り、通ってから固定を書く —— 名前の場所の側で落ちた pickup は固定も checkout も残さない
+it("古い履歴にだけある blob が欠けた名前の場所の pickup は、名前の場所の Quarantine で止まり、task/<id> の ref・task_branch_created・task の checkout を残さない(ADR 0414 決定1・2)", async () => {
+  const named = await makeWorkspace("task-checkout-missing-before-fixing");
+  db = openDb(":memory:");
+  withHistoryOnlyBlob(named);
+  const blob = git(named.path, "rev-parse", "HEAD~1:old.txt");
+  rmSync(join(named.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  const task = register();
+  const base = await tempDir("tidepool-task-checkouts-");
+
+  expect(await scheduledPickup(named, base)).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", named.name)?.purpose).toContain(blob);
+  expect(git(named.path, "for-each-ref", `refs/heads/task/${task.id}`)).toBe("");
+  expect(listEvents(db, task.id).filter((e) => e.kind === "task_branch_created")).toEqual([]);
+  expect(existsSync(join(base, task.id))).toBe(false);
+});
+
 // ADR 0411 決定1・5: 完了の門は閉包の全部を `index-pack --strict` で読むので、同じ検査を pickup の複製に当てる —— 履歴に fsck の警告を持つ
 // 名前の場所は、どの task の門でも checkout の故障になる前に、名前の場所の側で止まる
 it("履歴に `index-pack --strict` が拒む object を持つ名前の場所の pickup は、その object を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定1・5)", async () => {
