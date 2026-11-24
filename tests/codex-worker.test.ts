@@ -75,6 +75,7 @@ import {
   quarantineQuestion,
   recordCheckoutAtWorkspace,
   routingJudgmentRepairTask,
+  seedZeroPaddedTree,
   sessionId,
   stubHostEnvDecoys,
   type Tidepool,
@@ -1071,6 +1072,20 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(f.failures).toEqual([{ error_code: null, message: expect.stringMatching(/^the board could not prepare the throwaway checkout of main for the Codex skill check; the worker was not spawned \(no fail-open\): /) }]);
       expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
       expect(f.appServer).toHaveLength(2);
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+    });
+
+    it("2段目の checkout の strict な fetch が名前の場所の保護ブランチの履歴で落ちれば、task を責めず名前の場所の Quarantine で止め、作りかけを残さない(ADR 0411 追記・決定3・7)", async () => {
+      const onPickupStopped = vi.fn();
+      const f = await onBoard({ taskCheckout: await taskCheckoutWithSkill(), appServer: answerSkillsFromDisk, onPickupStopped });
+      seedZeroPaddedTree({ name: "named", path: f.workspace }, "refs/heads/main");
+
+      await f.start(f.value);
+
+      expect(f.failures).toEqual([]);
+      expect(onPickupStopped).toHaveBeenCalledWith(f.value.id, expect.anything(), expect.objectContaining({ kind: "pickup_stopped" }));
+      expect(openQuarantineValues(f.db, "workspace")).toHaveLength(1);
+      expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
       expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
     });
 

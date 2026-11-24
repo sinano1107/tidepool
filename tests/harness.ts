@@ -811,17 +811,14 @@ export function lockDirInside(workbench: string): void {
 export const notRemoved = (settled: string, at: string) => [`${settled} The board could not remove the workbench at ${at} (`, "); remove what is left of it by hand."] as const;
 
 /** 名前の場所 `named` の README.md の blob の loose を外し(`corrupt` なら zlib でない byte に置く)、worker が同じ中身の `copy.txt` を
- *  `checkout` で commit する —— 新しい root tree が blob を直に指し、worker は名前の場所に無い blob を自前の store に持つ(task の checkout は
- *  複製で受け取った pack に、借りる作業台は `git add` が書く loose に)。
- *  借りる作業台では、門の pack は除外(名前の場所の ref から届く)で blob を入れない。blob の id を返す。 */
+ *  `checkout` で commit する —— 新しい root tree が blob を直に指す。checkout(task の checkout も作業台も)は閉包を全部持つ複製なので、
+ *  blob を複製で受け取った自前の store に持つ(ADR 0411 決定1・2)。blob の id を返す。 */
 export function newTreePointsAtDamagedNamedBlob(named: string, checkout: string, damage: "missing" | "corrupt" = "missing"): { blob: string } {
   const blob = git(named, "rev-parse", "HEAD:README.md");
   const loose = (repo: string) => join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2));
   rmSync(loose(named));
   commitWork(checkout, "copy.txt", "workspace\n");
-  // 借りる checkout では名前の場所に無いので loose を書き、借りない checkout では自分の store だけで読める
-  if (existsSync(join(checkout, ".git", "objects", "info", "alternates"))) expect(existsSync(loose(checkout))).toBe(true);
-  else git(checkout, "cat-file", "-e", blob);
+  git(checkout, "cat-file", "-e", blob);
   if (damage === "corrupt") writeFileSync(loose(named), "not zlib");
   return { blob };
 }
@@ -832,7 +829,7 @@ export function seedZeroPaddedTree(ws: WorkspaceConfig, ref = "refs/heads/main")
   const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws.path, input: "kept\n" }).toString().trim();
   const entry = Buffer.concat([Buffer.from("0100644 kept.txt\0"), Buffer.from(blob, "hex")]);
   const sub = execFileSync("git", ["hash-object", "-t", "tree", "--literally", "-w", "--stdin"], { cwd: ws.path, input: entry }).toString().trim();
-  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${git(ws.path, "ls-tree", "HEAD")}\n040000 tree ${sub}\tsub\n` }).toString().trim();
+  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${[git(ws.path, "ls-tree", "HEAD"), `040000 tree ${sub}\tsub`].filter(Boolean).join("\n")}\n` }).toString().trim();
   git(ws.path, "update-ref", ref, git(ws.path, "commit-tree", root, "-p", "HEAD", "-m", "zero-padded sub"));
   if (ref === "refs/heads/main") git(ws.path, "reset", "--hard", "--quiet");
   return blob;
@@ -1113,6 +1110,16 @@ export function tempDirSync(prefix: string): string {
 export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
   const path = await tempDir(`tidepool-${name}-`);
   return initWorkspaceCheckout(path, name);
+}
+
+/** purely-local の shallow な名前の場所 `name` —— 2 commit の workspace を depth 1 で clone し、origin を外したもの(ADR 0411 決定5)。 */
+export async function makeShallowWorkspace(name: string): Promise<WorkspaceConfig> {
+  const source = await makeWorkspace(`${name}-source`);
+  commitWork(source.path, "more.txt", "more\n");
+  const path = join(await tempDir(`tidepool-${name}-`), "named");
+  git(source.path, "clone", "--quiet", "--depth=1", `file://${source.path}`, path);
+  git(path, "remote", "remove", "origin");
+  return { ...source, name, path };
 }
 
 /** `shimGit` が記録した git の呼び出し1回ぶん。`alternates` は `--git-dir` の repo の `objects/info/alternates`。 */

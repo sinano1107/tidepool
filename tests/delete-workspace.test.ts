@@ -12,10 +12,10 @@ import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
-import { completionTreePaths, holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace } from "../src/workspace.js";
+import { completionTreePaths, holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
 import { unusedLanding } from "./fakes.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, withHistoryOnlyBlob } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -330,9 +330,10 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
   vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
   /** registry に登録した purely-local の workspace に `open_workbench` を撃った盤面。 */
-  async function openedWorkbench() {
+  async function openedWorkbench(seed?: (ws: WorkspaceConfig) => void) {
     const db = openDb(":memory:");
     const ws = await makeWorkspace("intake");
+    seed?.(ws);
     const base = await tempDir("tidepool-workbenches-");
     const registryDir = await makeRegistry({ "workspaces.yaml": `${ws.name}:\n  path: ${ws.path}\n` });
     git(registryDir, "branch", "-M", "main");
@@ -346,9 +347,14 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
       awaitingLandingTaskIds: [],
       db,
     });
-    const close = () =>
-      submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, workspace: ws, workspacesDir: base }, question, ["close"], undefined, () => new Date(), "webui");
-    return { db, ws, registryDir, question, workbench, deps, close };
+    const answer = (option: string, asked = question) =>
+      submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, workspace: ws, workspacesDir: base }, asked, [option], undefined, () => new Date(), "webui");
+    const close = () => answer("close");
+    const reopen = async () => {
+      await openHumanContentWorkbench(db, ws, base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, () => new Date(), { resolveRegistered: undefined });
+      return getTask(db, openIntakeQuestionId(db, ws.name)!)!;
+    };
+    return { db, ws, registryDir, question, workbench, deps, close, answer, reopen };
   }
 
   it("intake question が開いている間は、未決着の理由に `close` の手を足して拒む", async () => {
@@ -416,10 +422,39 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     expect(existsSync(o.workbench)).toBe(true);
   });
 
-  it.each(["missing", "corrupt"] as const)("作業台の未取り込みの commit が名前の場所で読めない blob を指せば、作業台を消せとは言わず名前の場所を名指して拒み、作業台を残す —— %s", async (damage) => {
+  // #3589: 作業台は閉包を全部持つ複製 —— 名前の場所の履歴にだけある blob を作業台は自前に持ち、検証は名前の場所の損傷と混ざらない(ADR 0411 決定2・4)
+  it.each(["missing", "corrupt"] as const)("作業台の未取り込みの commit が名前の場所の履歴にだけある blob を復元していて、その blob が名前の場所で %s でも、削除の扉は作業台を読めないとは言わず取り込むよう言い、取り込めば削除が通る(ADR 0411 決定2・4、#3589)", async (damage) => {
+    const o = await openedWorkbench(withHistoryOnlyBlob);
+    await o.close();
+    git(o.workbench, "checkout", "--quiet", "HEAD~1", "--", "old.txt");
+    git(o.workbench, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "restore old.txt");
+    const blob = git(o.workbench, "rev-parse", "HEAD:old.txt");
+    const loose = join(o.ws.path, ".git", "objects", blob.slice(0, 2), blob.slice(2));
+    rmSync(loose);
+    if (damage === "corrupt") writeFileSync(loose, "not zlib");
+
+    await expect(deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps())).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      message:
+        `workspace "${o.ws.name}" cannot be deleted: the workbench at ${o.workbench} holds work that main does not have — ` +
+        "take it in (`open_workbench`, then `take in`) or remove the workbench by hand first",
+      reasons: [{ code: "human_content_workbench", workbench: o.workbench, branch: "main" }],
+    });
+
+    await o.answer("take in", await o.reopen());
+    await deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
+    expect(existsSync(o.workbench)).toBe(false);
+  });
+
+  it("名前の場所の値との比較が名前の場所の欠けで落ちれば、作業台を消せとは言わず名前の場所を名指して拒み、作業台を残す(ADR 0411 決定2・3)", async () => {
     const o = await openedWorkbench();
     await o.close();
-    newTreePointsAtDamagedNamedBlob(o.ws.path, o.workbench, damage);
+    commitWork(o.workbench, "notes.txt", "the human's\n");
+    // 名前の場所の main が作業台の tip の閉包に無い commit を2つ積み、古いほうを欠く —— 作業台の tip が main に含まれるかを比べる手が読む
+    commitWork(o.ws.path, "first.txt", "first\n");
+    const first = git(o.ws.path, "rev-parse", "HEAD");
+    commitWork(o.ws.path, "second.txt", "second\n");
+    rmSync(join(o.ws.path, ".git", "objects", first.slice(0, 2), first.slice(2)));
 
     const refused = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
 
