@@ -1,5 +1,7 @@
 # 状態変化が commit されなければ偽になる記録は、その状態変化と同じ transaction で書く —— 呼び出し側が外側の transaction で包む
 
+**Status 追記: 決定の例に挙げた `agent_tier_changed` は無くなった —— agent の既定ティアの変更は `execution_settings_changed` で、承認と同じ transaction で書く([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md) 決定3・4、2026-11-24、issue #3758)。**
+
 2026-11-23 の triage → grilling(族の根 issue #3689)で決定。盤面には、状態変化(回答・決着・キューから外す)を1つの transaction で
 commit し、対になる記録(決定ログの行・後始末の印・判断行)を、その後の別の文で書く形があった。間で throw するかプロセスが落ちると、
 状態変化だけが残る。点で直すたびに別の場所で見つかった(#1935 → #2025 → #3555)。domain の helper が自前の transaction で commit

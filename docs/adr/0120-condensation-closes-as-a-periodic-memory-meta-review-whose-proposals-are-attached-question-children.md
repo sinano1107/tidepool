@@ -1,5 +1,7 @@
 # Condensation は周期の memory meta-review で閉じ、提案は付帯子の question として人間へ届く
 
+**Status 追記: 決定の「registry diff(#583)は種別の追加になる」の registry diff は無くなった —— agent の既定ティアの引き下げは盤面設定の diff になった([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md) 決定4、2026-11-24、issue #3758)。**
+
 **Status 追記: 決定1 の起草は停止の帰責からも走る(ADR 0310 決定4)** —— RCA は材料の停止を指して書き、`preference` は理由の文言から。
 
 **Status 追記: 決定2 の周期は2回目から数え、主題の初回は人間が起こす(ADR 0300)** —— 前回の無い初回を本 ADR は書いておらず、材料1件の次の poll で登録されていた。足る材料かの判断は人間に置く(2026-10-22 の grilling、issue #2437)。

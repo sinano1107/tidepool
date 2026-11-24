@@ -1,5 +1,7 @@
 # 回答は書き込みの時点で question が開いているときだけ書く —— 盤面が merge 中の merge question はどの回答も拒む
 
+**Status 追記: 書き込みの前に await をはさむ種類から registry の提案の approve が外れ、決定3 の例(commit の直後に `agent_tier_changed` を刻む)は対象を失う —— agent の既定ティアの承認は回答と同じ transaction で盤面に書く([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md) 決定4、2026-11-24、issue #3758)。**
+
 **Status 追記: 決定2 の「merge question を閉じうる経路は、観測のほかは `hold` 回答だけ」に3つ目が足される —— 昇格失敗の question への「end landing」回答が、同じ根の開いた merge question を PR の観測を刻まずに引退させる。印の付いた根ではこの回答を拒むので、印の後に merge question を閉じる経路は増えない([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定6、2026-11-23、issue #3604)。**
 
 **Status 追記: 決定2「印の前」の同期の区間で読み直すのは question の status だけでなく着地の門(`landingBlock`、ADR 0092 決定5)も —— gh が非同期になって窓が毎回開き(ADR 0330 決定1)、await 中に出た異議を越えて merge した(#2734)**
