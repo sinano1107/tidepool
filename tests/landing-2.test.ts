@@ -1381,7 +1381,7 @@ it.each([
 });
 
 // ADR 0394 決定1・3: 外の部分は sha と種類の組で比べる —— 問うた時の種類のまま執行すると、寄り道を通さずに内容の落ちた head を merge する
-it("盤面が push していない head と問うた sha が、取り込みの後に内容が落ちた head と読めれば、「merge」は拒まれ、作業台を開いて立て直した question を名指す", async () => {
+it("盤面の記録に無い head と問うた sha が、取り込みの後に内容が落ちた head と読めれば、「merge」は拒まれ、作業台を開いて立て直した question を名指す", async () => {
   const c = await pushedRoot("outside-head-reads-rewritten-after-intake", { pr: "recorded", merge: "auto_if_ci_green" });
   const head = await pushOutsideBoard(c.workspace, c.work.id);
   await c.landing.tick("auto_merge");

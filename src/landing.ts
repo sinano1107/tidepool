@@ -472,7 +472,7 @@ export function conflictedPrRoute(prNumber: number, workspace: WorkspaceConfig, 
 
 /** ADR 0387 決定1・2: 盤面の記録に無い head の question の本文と `merge` の拒否文が共有する句。ADR 0401 決定3: push の後・記録の前に
  *  盤面が落ちると盤面自身の push もこの head になるので、誰が push したかを断定せず、その場合もありうると言う(`ownPush`)。 */
-const notPushedText = {
+const unrecordedHeadText = {
   subject: (prNumber: number, head: string, headRef?: PrHeadRef) => `PR #${prNumber}'s head ${head}${headLocation(headRef)} holds commits not in the board's push record`,
   noRecord: (prNumber: number) => `, and the board has no record of what it pushed to PR #${prNumber}`,
   onGitHub: "review the PR's commits on GitHub",
@@ -482,11 +482,11 @@ const notPushedText = {
 
 /** ADR 0387 決定1: 盤面の記録に無い head の、推奨 hold の merge question の本文 —— 盤面の知らない commit があることと、
  *  それを見るコマンド。最後に push した値が無ければ、比べる起点が無いことを言う。 */
-const notPushedQuestionBody = (task: Task, prNumber: number, { head, headRef }: PrDiff, lastPushed: string | undefined) =>
-  `"${task.title}": ${notPushedText.subject(prNumber, head, headRef)}` +
+const unrecordedHeadQuestionBody = (task: Task, prNumber: number, { head, headRef }: PrDiff, lastPushed: string | undefined) =>
+  `"${task.title}": ${unrecordedHeadText.subject(prNumber, head, headRef)}` +
   (lastPushed === undefined
-    ? `${notPushedText.noRecord(prNumber)} — ${notPushedText.onGitHub}.${notPushedText.ownPush} Merge, or hold?`
-    : ` — the board last pushed ${lastPushed}. See them with ${notPushedText.log(lastPushed, head)}.${notPushedText.ownPush} Merge, or hold?`);
+    ? `${unrecordedHeadText.noRecord(prNumber)} — ${unrecordedHeadText.onGitHub}.${unrecordedHeadText.ownPush} Merge, or hold?`
+    : ` — the board's last recorded push is ${lastPushed}. See them with ${unrecordedHeadText.log(lastPushed, head)}.${unrecordedHeadText.ownPush} Merge, or hold?`);
 
 /** spec #3273 text A4c: 外の push が落とした内容の、推奨 hold の merge question の本文。 */
 const outsidePushQuestionBody = (task: Task, prNumber: number, outside: OutsidePush, headRef?: PrHeadRef) =>
@@ -1160,7 +1160,7 @@ function askMerge(
 ): string {
   const { head, headRef } = observed;
   const outsideBody = origin.kind === "rewritten" ? outsidePushQuestionBody(task, pr, origin.outside, headRef)
-    : origin.kind === "not_pushed" ? notPushedQuestionBody(task, pr, observed, origin.lastPushed) : undefined;
+    : origin.kind === "not_pushed" ? unrecordedHeadQuestionBody(task, pr, observed, origin.lastPushed) : undefined;
   if (outsideBody === undefined && prompt === undefined) throw new Error("a merge question must say why it was raised");
   // ADR 0394 決定1: 外の head を先に言い、CI や面の変化は後ろに添える。
   const purpose = outsideBody === undefined ? `${prompt!.detail} ${prompt!.question}`
@@ -1206,7 +1206,7 @@ export function refuseUnaskedHead(
   const replaced = asked !== answeredQuestion;
   const closing = replaced ? ` This question is closed — question ${asked} now asks about this head; answer \`merge\` there to merge it.` : "";
   const lastPushed = origin.kind === "rewritten" ? origin.outside.lastPushed : origin.lastPushed;
-  const subject = notPushedText.subject(prNumber, head, headRef);
+  const subject = unrecordedHeadText.subject(prNumber, head, headRef);
   let commits: string[] | undefined;
   if (lastPushed !== undefined) {
     try {
@@ -1215,23 +1215,24 @@ export function refuseUnaskedHead(
       // 最後に push した値か head が手元に無い —— 列挙できない
     }
   }
-  const log = lastPushed === undefined ? "" : notPushedText.log(lastPushed, head);
+  const log = lastPushed === undefined ? "" : unrecordedHeadText.log(lastPushed, head);
   const more = commits !== undefined && commits.length > LISTED_COMMITS ? `; and ${commits.length - LISTED_COMMITS} more — see them with ${log}` : "";
   const listed = commits === undefined || commits.length === 0 ? "" : `${commits.slice(0, LISTED_COMMITS).join("; ")}${more}`;
   if (origin.kind === "rewritten") {
     // 作業台の手順が答える question を名指すので、閉じたことだけを添える
-    // ADR 0376 Status 追記(#3605): 盤面の push は判じた head の fast-forward だけなので、書き換えは記録の前に落ちた盤面自身の push ではない —— `ownPush` は添えない
+    // ADR 0376 決定7: 盤面は最後に push した値を欠く head には押さず、Status 追記(#3605): 押すときも判じた head の fast-forward だけ ——
+    // 書き換えは記録の前に落ちた盤面自身の push ではないので、`ownPush` は添えない
     return `${refuseOutsidePushOnce(workspace, workbenchBase, root.id, prNumber, origin.outside, headRef, replaced ? asked : undefined)}` +
       `${listed === "" ? "" : ` These commits on it are not in the board's push record: ${listed}.`}` +
       `${replaced ? ` This question is closed — question ${asked} now asks about this head.` : ""}`;
   }
   if (lastPushed === undefined) {
-    return `${subject}${notPushedText.noRecord(prNumber)}, so it cannot list them — ${notPushedText.onGitHub}.${notPushedText.ownPush}${closing}`;
+    return `${subject}${unrecordedHeadText.noRecord(prNumber)}, so it cannot list them — ${unrecordedHeadText.onGitHub}.${unrecordedHeadText.ownPush}${closing}`;
   }
   if (listed === "") {
-    return `${subject} (the board last pushed ${lastPushed}), and it could not list them here — see them with ${log} in your own clone.${notPushedText.ownPush}${closing}`;
+    return `${subject} (the board's last recorded push is ${lastPushed}), and it could not list them here — see them with ${log} in your own clone.${unrecordedHeadText.ownPush}${closing}`;
   }
-  return `${subject} (the board last pushed ${lastPushed}): ${listed}.${notPushedText.ownPush}${closing}`;
+  return `${subject} (the board's last recorded push is ${lastPushed}): ${listed}.${unrecordedHeadText.ownPush}${closing}`;
 }
 
 /** ADR 0227 決定2: check 未報告を pending と同じに待つ猶予。猶予は head ごとで、起点は盤面がその head を知った

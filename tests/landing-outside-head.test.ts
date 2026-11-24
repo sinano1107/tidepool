@@ -45,7 +45,7 @@ const IN_FLIGHT = "PR #1 is being merged or pushed to by the board right now —
 
 /** 盤面の知らない commit の、推奨 hold の merge question の本文。 */
 const outsideHeadBody = (head: string, lastPushed: string) =>
-  `"ship": PR #1's head ${head} holds commits not in the board's push record — the board last pushed ${lastPushed}. ` +
+  `"ship": PR #1's head ${head} holds commits not in the board's push record — the board's last recorded push is ${lastPushed}. ` +
   `See them with \`git log ${lastPushed}..${head}\`. The board may have pushed them itself and stopped before recording the push. Merge, or hold?`;
 
 const UNREADABLE_PATHS = "\n\nThe board could not compare this PR head with the protected branch to check which paths require a human merge.";
@@ -139,7 +139,7 @@ const answerMerge = (pr: Awaited<ReturnType<typeof openPushedPr>>) =>
 /** 盤面の知らない commit を列挙し、立て直した question を名指す拒否文(ADR 0394 決定3)。`commits` は新しい順の
  *  [sha, `pushOutsideBoard` が書いた file]。 */
 const listedRefusal = (head: string, lastPushed: string, commits: Array<[string, string]>, replacement: string) =>
-  `PR #1's head ${head} holds commits not in the board's push record (the board last pushed ${lastPushed}): ` +
+  `PR #1's head ${head} holds commits not in the board's push record (the board's last recorded push is ${lastPushed}): ` +
   `${commits.map(([sha, file]) => `${sha} add ${file}`).join("; ")}. The board may have pushed them itself and stopped before recording the push. ` +
   `This question is closed — question ${replacement} now asks about this head; answer \`merge\` there to merge it.`;
 
