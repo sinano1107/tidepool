@@ -330,7 +330,7 @@ describe("createWorkspace: register モード(issue #57)", () => {
     const before = git(registryDir, "rev-parse", "HEAD");
     const deps = await makeDeps(registryDir);
     const upstream = (await makeWorkspace("register-shallow-upstream")).path;
-    git(upstream, "commit", "--allow-empty", "-m", "second");
+    git(upstream, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "second");
     const checkout = join(await tempDir("tidepool-shallow-"), "checkout");
     git(upstream, "clone", "--quiet", "--depth", "1", `file://${upstream}`, checkout);
 
