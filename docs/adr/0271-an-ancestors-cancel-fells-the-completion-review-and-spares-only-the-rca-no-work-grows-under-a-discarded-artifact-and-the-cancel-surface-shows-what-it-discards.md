@@ -6,7 +6,7 @@
 
 **Status 追記: 決定4 の括弧「(agent が実行したもの)」は「ブランチに成果を持つもの」に替わる —— agent が実行した done の work に加えて、タスクブランチ(`task_branch_created`)を持つ人間担当の done の work も見せる([ADR 0374](0374-a-human-assigned-work-has-a-task-branch-its-completion-door-takes-the-workbench-tip-in-and-fires-the-merge-back-and-a-human-root-always-lands-through-a-merge-question.md) 決定17、2026-11-15、issue #3178)。**
 
-**Status 追記: 決定3 の cascade の前に、扉(直接 cancel と failure の abandon)は範囲の registry の提案に承認の commit を問い、registry に載ったものは倒さず適用済みとして閉じる。問えなければ cancel を断る([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 追記、2026-11-24、issue #3635)。**
+**Status 追記: 決定3 の cascade の前に、扉(直接 cancel と failure / premise_breach の abandon)は範囲の registry の提案に承認の commit を問い、registry に載ったものは倒さず適用済みとして閉じる。問えなければ cancel を断る([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 追記、2026-11-24、issue #3635)。**
 
 2026-10-17 の grilling(issue #2152)で決定。ADR 0268 決定4 で cancel の cascade が review の付帯子を残すようになり、
 abandon / 直接 cancel された祖先の下の **done の子に付いた完了時レビュー** も残る。実測(#2152 のコメント)で、残った review は
