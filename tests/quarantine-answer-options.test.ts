@@ -1084,6 +1084,57 @@ it("在る object の読みに stderr が付いても(alternates の先が無い
   db.close();
 });
 
+// #3752: `log -g` は開けない段を exit 0 のまま落とし、その段は keep-around に持たれずに reflog と一緒に消えていた
+it.each(["restore the baseline", GIVE_UP])("refs/stash の途中の件が手元で在るか無いか分からない(alternates の先が無い)`%s` は T3 で拒み、refs/stash も reflog も keep-around も書かない(ADR 0373 決定4、ADR 0409 決定4、text T3)", async (text) => {
+  const { ws, db, question } = await quarantinedWorkspace("restore-stash-middle-unknown");
+  for (const body of ["first\n", "second\n", "third\n"]) {
+    writeFileSync(join(ws.path, "README.md"), body);
+    git(ws.path, "stash", "push", "-q");
+  }
+  const middle = git(ws.path, "stash", "list", "--format=%H").split("\n")[1]!;
+  rmSync(join(ws.path, ".git", "objects", middle.slice(0, 2), middle.slice(2)));
+  const reflog = join(ws.path, ".git", "logs", "refs", "stash");
+  const [refsBefore, reflogBefore, comparisonBefore] = [refsOf(ws), readFileSync(reflog, "utf8"), await nextComparison(db, ws)];
+  breakAlternates(ws);
+
+  await expect(answer(db, ws, text)).rejects.toThrow(cannotTell(middle, ws.path));
+
+  rmSync(join(ws.path, ".git", "objects", "info", "alternates"));
+  expect(readFileSync(reflog, "utf8")).toBe(reflogBefore);
+  await expectNothingWritten(db, ws, question, refsBefore, comparisonBefore);
+  db.close();
+});
+
+// 空の reflog を git は読めない reflog と同じ「is empty」で言う —— 各件を並べられないので、T3 の形で拒む
+it("refs/stash の reflog を git が空と言う `restore the baseline` は、reflog を名指して何も書かずに拒む(ADR 0373 決定4、ADR 0409 決定4)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("restore-stash-reflog-empty");
+  for (const body of ["first\n", "second\n"]) {
+    writeFileSync(join(ws.path, "README.md"), body);
+    git(ws.path, "stash", "push", "-q");
+  }
+  git(ws.path, "reflog", "expire", "--expire=now", "refs/stash");
+  const [refsBefore, comparisonBefore] = [refsOf(ws), await nextComparison(db, ws)];
+
+  expect(await refusal(answer(db, ws, "restore the baseline"))).toBe(
+    `could not read the reflog of refs/stash in ${ws.path} (fatal: log for refs/stash is empty). Nothing was written; fix what git reports there, then answer again.`,
+  );
+
+  await expectNothingWritten(db, ws, question, refsBefore, comparisonBefore);
+  db.close();
+});
+
+it("reflog の無い refs/stash(update-ref で作った)の `restore the baseline` は今の値だけを refs/keep-around/<sha> に持って通る(ADR 0373 決定4)", async () => {
+  const { ws, db } = await quarantinedWorkspace("restore-stash-without-reflog");
+  const head = git(ws.path, "rev-parse", "HEAD");
+  git(ws.path, "update-ref", "refs/stash", head);
+
+  await answer(db, ws, "restore the baseline");
+
+  expect(git(ws.path, "for-each-ref", "refs/stash")).toBe("");
+  expect(restoredEvents(db)[0]!.kept).toEqual([{ ref: "refs/stash", sha: head }]);
+  db.close();
+});
+
 it("中身だけ壊れて header は読める loose は在ると読む —— 戻す先がそれだけの give-up は、失われた ref が無いとして B4a で拒まれる(ADR 0409 帰結、ADR 0398 決定3 の外からの損傷)", async () => {
   const { ws, db } = await quarantinedWorkspace("give-up-body-corrupt-loose");
   // 圧縮の効かない 200 kB —— header は file の先頭で inflate でき、末尾だけを壊す

@@ -1,8 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { git, localGitEnv } from "../src/git.js";
+import { git, localGitEnv, stashEntries } from "../src/git.js";
 import { loadRegistry } from "../src/registry.js";
 import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
@@ -119,4 +119,64 @@ it("`git()` の local path の fetch は転送の床の下でも成功する", a
   git(target.path, "fetch", "--quiet", source.path, sha);
 
   expect(fixtureGit(target.path, "cat-file", "-t", sha)).toBe("commit");
+});
+
+/** `path` に3段の stash を積み、新しい順の sha を返す。 */
+function stashThree(path: string): string[] {
+  for (const body of ["first\n", "second\n", "third\n"]) {
+    writeFileSync(join(path, "README.md"), body);
+    fixtureGit(path, "stash", "push", "-q");
+  }
+  return fixtureGit(path, "stash", "list", "--format=%H").split("\n");
+}
+
+it("`stashEntries` は途中の段の object が無くても reflog の全段を新しい順に並べ、件数で止まる(ADR 0373 決定4、#3752)", async () => {
+  const ws = await makeWorkspace("stash-entries-missing");
+  const entries = stashThree(ws.path);
+  rmSync(join(ws.path, ".git", "objects", entries[1]!.slice(0, 2), entries[1]!.slice(2)));
+
+  expect(stashEntries(ws.path)).toEqual(entries);
+});
+
+// 一番古い件の old 値が 0 でないとき、git は件数と同じ番号 `@{N}` にその old 値を返す —— 消した件の sha を足さない
+it("`stashEntries` は `--rewrite` なしで一番古い件を消した reflog でも、残った件だけを並べる", async () => {
+  const ws = await makeWorkspace("stash-entries-deleted-oldest");
+  const entries = stashThree(ws.path);
+  fixtureGit(ws.path, "reflog", "delete", "refs/stash@{2}");
+
+  expect(stashEntries(ws.path)).toEqual(entries.slice(0, 2));
+});
+
+it("`stashEntries` は ambient の LC_ALL が git の文を訳す locale でも件の数の終わりを読む", async ({ skip }) => {
+  const ws = await makeWorkspace("stash-entries-translated");
+  const entries = stashThree(ws.path);
+  const LOCALE = "de_DE.UTF-8";
+  const probe = spawnSync("git", ["rev-parse", "--verify", "refs/stash@{9}"], { cwd: ws.path, env: { ...process.env, LC_ALL: LOCALE } });
+  if (probe.stderr.toString().startsWith("fatal:")) skip(`this git does not translate its messages into ${LOCALE}`);
+  vi.stubEnv("LC_ALL", LOCALE);
+
+  expect(stashEntries(ws.path)).toEqual(entries);
+});
+
+it("`stashEntries` は reflog の無い refs/stash(update-ref で作った)では今の値だけを返す", async () => {
+  const ws = await makeWorkspace("stash-entries-no-reflog");
+  const head = fixtureGit(ws.path, "rev-parse", "HEAD");
+  fixtureGit(ws.path, "update-ref", "refs/stash", head);
+
+  expect(stashEntries(ws.path)).toEqual([head]);
+});
+
+it("`stashEntries` は refs/stash が無ければ空を返す", async () => {
+  const ws = await makeWorkspace("stash-entries-absent");
+
+  expect(stashEntries(ws.path)).toEqual([]);
+});
+
+// 空の reflog は読めない reflog(権限の無い file)と同じ「is empty」で git が言う —— 件数の終わりと取り違えて短いリストを返さない
+it("`stashEntries` は件数を越えた以外の reflog の読みの失敗を投げる", async () => {
+  const ws = await makeWorkspace("stash-entries-unreadable");
+  stashThree(ws.path);
+  fixtureGit(ws.path, "reflog", "expire", "--expire=now", "--all");
+
+  expect(() => stashEntries(ws.path)).toThrow("log for refs/stash is empty");
 });

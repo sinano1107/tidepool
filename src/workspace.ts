@@ -51,6 +51,7 @@ import {
   readCheckoutRemote,
   type SparsePolicy,
   stagingHostStep,
+  stashEntries,
   type WorktreeChange,
   WorktreeStatusError,
   withBoardGit,
@@ -3521,8 +3522,14 @@ function isSha(value: string): boolean {
 /** ADR 0373 決定4: 書き戻しが `ref` の今の値 `value` から keep-around に持ちうる sha —— symref の行(HEAD を含む)は名前なので持たず、`refs/stash` は reflog の各件。 */
 function keepAroundCandidates(workspace: WorkspaceConfig, ref: string, value: string): string[] {
   if (!isSha(value)) return [];
-  // reflog の無い refs/stash(update-ref で作った)でも今の値は持つ
-  return [...new Set([value, ...(ref === "refs/stash" ? git(workspace.path, "log", "-g", "--format=%H", ref).split("\n").filter(Boolean) : [])])];
+  if (ref !== "refs/stash") return [value];
+  try {
+    return stashEntries(workspace.path);
+  } catch (err) {
+    // ADR 0409 決定4: 並べられない件は在るか無いか分からない sha と同じ —— 書かずに拒み、text T3 の形で reflog を名指す
+    const reported = String((err as { stderr?: unknown }).stderr ?? "").trim() || String(err);
+    throw new Error(`could not read the reflog of refs/stash in ${workspace.path} (${reported}). Nothing was written; fix what git reports there, then answer again.`, { cause: err });
+  }
 }
 
 /** ADR 0409 決定4: 戻す先と keep-around に持ちうる値のすべてを手元で読む。1つでも在るか無いか分からなければ、何も書かずに拒む(text T3)。
