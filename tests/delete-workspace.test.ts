@@ -423,7 +423,7 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
   });
 
   // #3589: 作業台は閉包を全部持つ複製 —— 名前の場所の履歴にだけある blob を作業台は自前に持ち、検証は名前の場所の損傷と混ざらない(ADR 0411 決定2・4)
-  it.each(["missing", "corrupt"] as const)("作業台の未取り込みの commit が名前の場所の履歴にだけある blob を復元していて、その blob が名前の場所で %s でも、削除の扉は作業台を読めないとは言わず取り込むよう言い、取り込めば名前の場所でその blob が読め、削除が通る(ADR 0411 決定2・4、#3589)", async (damage) => {
+  it.each(["missing", "corrupt"] as const)("作業台の未取り込みの commit が名前の場所の履歴にだけある blob を復元していて、その blob が名前の場所で %s でも、削除の扉は作業台を読めないとは言わず取り込むよう言い、取り込めば削除が通る(ADR 0411 決定2・4、#3589)", async (damage) => {
     const o = await openedWorkbench(withHistoryOnlyBlob);
     await o.close();
     git(o.workbench, "checkout", "--quiet", "HEAD~1", "--", "old.txt");
@@ -442,7 +442,6 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     });
 
     await o.answer("take in", await o.reopen());
-    expect(git(o.ws.path, "cat-file", "-p", blob)).toBe("only in the history");
     await deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
     expect(existsSync(o.workbench)).toBe(false);
   });

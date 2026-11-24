@@ -30,7 +30,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
+import { commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, prepareAtPickup, quarantineQuestion, seedZeroPaddedTree, sessionId, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
@@ -1195,6 +1195,37 @@ it("書き始めたのに作業台が disk から消えた H と、書く先の 
   rmSync(path, { recursive: true, force: true });
   expect(await takeIn(b, h)).toEqual(gone);
   expect(untouched(b, h)).toEqual(before);
+});
+
+it("拒否の後の `board/*` の引き直しが名前の場所の側で落ちれば、拒否の文は `board/*` の merge を言ったまま、`board/*` が消えた理由を足し、何も書かない(ADR 0411 決定5)", async () => {
+  const b = await board("take-in-refused-strict");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  await completedAgentChild(b, h, "child.txt", "child\n");
+  // 盤面の口で `side` を置く —— 取り込みの準備の基準の比較には当たらない
+  seedZeroPaddedTree(b.ws, "refs/heads/side");
+  const side = git(b.ws.path, "rev-parse", "side");
+  git(b.ws.path, "update-ref", "-d", "refs/heads/side");
+  boardRefWriter(b.db, b.ws)("refs/heads/side", side, () => git(b.ws.path, "update-ref", "refs/heads/side", side));
+  const before = untouched(b, h);
+
+  const result = await takeIn(b, h);
+
+  expect(result).toEqual(refused(expect.stringMatching(new RegExp(`^task/${h.id} has moved on since your tip [\\s\\S]*then take in again\\. workspace ${b.ws.name}: the board cannot give the named workspace's branches to the workbench as \`board/\\*\``))));
+  expect(git(path, "for-each-ref", "refs/heads/board/")).toBe("");
+  expect(untouched(b, h)).toEqual(before);
+});
+
+it("shallow な名前の場所の start_work は作業台を開かず、名前の場所を名指して `git fetch --unshallow` を言い、答え直しを誘わない(ADR 0411 決定5)", async () => {
+  const ws = await makeShallowWorkspace("start-work-shallow");
+  const b: Board = { db: openDb(":memory:"), clock: new FakeClock(), ws, base: await tempDir("tidepool-task-checkouts-") };
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+
+  const result = await startWork(b, h);
+
+  expect(result).toEqual(refused(expect.stringMatching(new RegExp(`^cannot start work: workspace ${ws.name}: ${ws.path} is a shallow clone [\\s\\S]*\`git fetch --unshallow\`\\.$`))));
+  expect(!result.ok && result.failure.error).not.toContain("again");
+  expect(existsSync(humanWorkbench(b, h))).toBe(false);
 });
 
 it("拒まれた take_in_work は task に何も書かない: tip が task/<H> の今の値を欠く(text C2a)・未 commit の変更がある(text C2d)—— 子孫の後始末が済んでいなくても通る(pin C6)", async () => {

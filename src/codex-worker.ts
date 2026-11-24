@@ -62,6 +62,7 @@ import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRe
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { type SpawnFailure, type WorkerAdapter, type WorkerExit, type WorkerExitClassification, workerBaseEnv } from "./worker.js";
 import {
+  NamedPlaceFetchError,
   protectedBranch,
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -1654,6 +1655,12 @@ export class CodexWorker implements WorkerAdapter {
             });
           } catch (error) {
             if (!live()) return removeTaskTemp();
+            // ADR 0411 追記 / 決定3: 保護ブランチの閉包を名前の場所から受け取れない —— pickup の strict な検査と同じく名前の場所の Quarantine で止め、task を責めない
+            if (!opened && error instanceof NamedPlaceFetchError) {
+              removeTaskTemp();
+              stopped(quarantineWorkspace(this.options.db, named.name, error, this.options.clock.now()));
+              return;
+            }
             const failed = opened ? SKILL_CHECK_FAILED : `the board could not prepare the throwaway checkout of ${protectedBranch(named)} for the Codex skill check`;
             spawnFailed({ error_code: null, message: `${failed}; the worker was not spawned (no fail-open): ${String(error)}` });
             return;

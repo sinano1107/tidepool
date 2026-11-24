@@ -815,7 +815,7 @@ export function seedZeroPaddedTree(ws: WorkspaceConfig, ref = "refs/heads/main")
   const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws.path, input: "kept\n" }).toString().trim();
   const entry = Buffer.concat([Buffer.from("0100644 kept.txt\0"), Buffer.from(blob, "hex")]);
   const sub = execFileSync("git", ["hash-object", "-t", "tree", "--literally", "-w", "--stdin"], { cwd: ws.path, input: entry }).toString().trim();
-  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${git(ws.path, "ls-tree", "HEAD")}\n040000 tree ${sub}\tsub\n` }).toString().trim();
+  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${[git(ws.path, "ls-tree", "HEAD"), `040000 tree ${sub}\tsub`].filter(Boolean).join("\n")}\n` }).toString().trim();
   git(ws.path, "update-ref", ref, git(ws.path, "commit-tree", root, "-p", "HEAD", "-m", "zero-padded sub"));
   if (ref === "refs/heads/main") git(ws.path, "reset", "--hard", "--quiet");
   return blob;
@@ -1096,6 +1096,16 @@ export function tempDirSync(prefix: string): string {
 export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
   const path = await tempDir(`tidepool-${name}-`);
   return initWorkspaceCheckout(path, name);
+}
+
+/** purely-local の shallow な名前の場所 `name` —— 2 commit の workspace を depth 1 で clone し、origin を外したもの(ADR 0411 決定5)。 */
+export async function makeShallowWorkspace(name: string): Promise<WorkspaceConfig> {
+  const source = await makeWorkspace(`${name}-source`);
+  commitWork(source.path, "more.txt", "more\n");
+  const path = join(await tempDir(`tidepool-${name}-`), "named");
+  git(source.path, "clone", "--quiet", "--depth=1", `file://${source.path}`, path);
+  git(path, "remote", "remove", "origin");
+  return { ...source, name, path };
 }
 
 /** `shimGit` が記録した git の呼び出し1回ぶん。`alternates` は `--git-dir` の repo の `objects/info/alternates`。 */

@@ -15,16 +15,18 @@ import {
   holdsBaseline,
   openHumanContentWorkbench,
   openIntakeQuestionId,
+  outsideCommitsStop,
   quarantineWorkspace,
   recordTaskCheckoutTip,
   releaseWorkspace,
+  stopContainmentPair,
   takeWorkspaceInFlightKey,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withHistoryOnlyBlob, withLooseSub, withPushDuringWrap } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withHistoryOnlyBlob, withLooseSub, withPushDuringWrap } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -148,9 +150,9 @@ it("open_workbench は (workspace, 保護ブランチ) の作業台を開いて 
   expect(git(b.workbench(), "rev-parse", "main")).toBe(tip);
 });
 
-// pin A13: question が開いていて作業台が disk にあれば、2度目は作業台に何もしない —— 人間の作業が何も無い作業台も作り直さない
-// (作業台に足した remote が残る)
-it("question が開いていて作業台が disk にあれば、2度目の open_workbench は作業台に触れず question も立てない", async () => {
+// pin A13: question が開いていて作業台が disk にあれば、2度目は `board/*` を引き直すだけ(ADR 0371 決定7: 開くたびに引き直す)—— 人間の作業が
+// 何も無い作業台も作り直さない(作業台に足した remote が残る)
+it("question が開いていて作業台が disk にあれば、2度目の open_workbench は `board/*` の引き直しのほかは作業台を変えず question も立てない", async () => {
   const b = await board();
   await b.open();
   const q = b.question();
@@ -436,7 +438,7 @@ it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も w
   expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
 });
 
-/** `b.open()` の拒否が名前の場所を名指し、開き直しも作業台を消すことも誘わないことを確かめる。 */
+/** 作業台を開く扉(`openHumanContentWorkbench`)の拒否が名前の場所を名指し、開き直しも作業台を消すことも誘わないことを確かめる。 */
 async function expectNamedPlaceRefusal(opening: Promise<unknown>, ws: WorkspaceConfig, ...named: string[]) {
   await expect(opening).rejects.toThrow(DomainError);
   await expect(opening).rejects.toThrow(new RegExp(`^workspace ${ws.name}: `));
@@ -447,11 +449,7 @@ async function expectNamedPlaceRefusal(opening: Promise<unknown>, ws: WorkspaceC
 
 // ADR 0411 決定5: 閉包が読めない名前の場所からは作業台を作れない —— 開く扉は名前の場所を名指して拒み、作りかけを残さない
 it("shallow な名前の場所では作業台を作らず、open_workbench は名前の場所が shallow であることと `git fetch --unshallow` を言って拒む(ADR 0411 決定5)", async () => {
-  const source = await makeWorkspace("intake-shallow-source");
-  commitWork(source.path, "more.txt", "more\n");
-  const ws = { ...source, name: "intake-shallow", path: join(await tempDir("tidepool-shallow-"), "named") };
-  git(source.path, "clone", "--quiet", "--depth=1", `file://${source.path}`, ws.path);
-  git(ws.path, "remote", "remove", "origin");
+  const ws = await makeShallowWorkspace("intake-shallow");
   const db = openDb(":memory:");
   const base = await tempDir("tidepool-workbenches-");
 
@@ -479,6 +477,40 @@ it("名前の場所の branch が strict な検査を通らない object を持�
   });
 
   await expectNamedPlaceRefusal(b.open(), b.ws, git(b.ws.path, "rev-parse", "side:sub"), "zeroPaddedFilemode");
+  // ADR 0382 決定5: 開けなかったと言う扉の後に、今作った作業台を残さない
+  expect(existsSync(workbenchPath(b.base, { workspace: b.ws.name }))).toBe(false);
+});
+
+// ADR 0411 決定3: 引き直しの段B(受け取った値を作業台の中で `board/*` へ移す)の失敗は作業台の側 —— 名前の場所を名指さず、`board/*` も消さない
+it("人間の linked worktree が `board/main` に居て引き直しが作業台の中で落ちれば、open_workbench は名前の場所を責めず今の文で拒み、`board/*` を残す", async () => {
+  const b = await board("intake-linked-board");
+  await b.open();
+  commitWork(b.workbench(), "notes.txt", "the human's\n");
+  await b.answer("close");
+  git(b.workbench(), "worktree", "add", "--quiet", join(await tempDir("tidepool-linked-"), "linked"), "board/main");
+  const old = git(b.workbench(), "rev-parse", "board/main");
+  commitWork(b.ws.path, "moved.txt", "moved\n");
+
+  const opening = b.open();
+  await expect(opening).rejects.toThrow(/^the board could not open the workbench \([\s\S]*\); open it again\.$/);
+  await expect(opening).rejects.not.toThrow(`workspace ${b.ws.name}:`);
+  expect(git(b.workbench(), "rev-parse", "board/main")).toBe(old);
+  expect(git(b.workbench(), "for-each-ref", "refs/tidepool-incoming/")).toBe("");
+});
+
+it("shallow な名前の場所では、封じ込めの組の停止の道も外の commit の停止も作業台を開けず、名前の場所を名指して開き直しを誘わない(ADR 0411 決定5)", async () => {
+  const ws = await makeShallowWorkspace("intake-shallow-doors");
+  const base = await tempDir("tidepool-workbenches-");
+  const shallow = `workspace ${ws.name}: ${ws.path} is a shallow clone`;
+
+  const stop = stopContainmentPair(openDb(":memory:"), "claude-code", ws, "the pair's reason", base, new Date(0));
+  expect(stop.reason).toMatch(new RegExp(`^the pair's reason\\. ${shallow}[\\s\\S]*\`git fetch --unshallow\`\\.$`));
+
+  git(ws.path, "branch", "task/t1");
+  const head = git(ws.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "outside");
+  const outside = outsideCommitsStop({ ...ws, head_repo: "https://github.com/example/repo.git" }, base, "t1", head)!;
+  expect(outside.message).toContain(`(${head}). ${shallow}`);
+  expect(outside.message).not.toContain("again");
 });
 
 it("取り込みの後の `board/*` の引き直しが strict な検査で落ちれば、作業台に古い `board/*` を残さず応答がそれを言い、次の open_workbench は名前の場所を名指して拒む", async () => {
@@ -508,7 +540,7 @@ it("拒否の後の `board/*` の引き直しが strict な検査で落ちれば
   await expectNamedPlaceRefusal(b.open(), b.ws, git(b.ws.path, "rev-parse", "side:sub"));
 });
 
-it.each(["misnamed", "missing"] as const)("作業台の中だけの故障(%s の object)は今どおり作業台の故障として取り込みを拒み、名前の場所を名指さない(ADR 0411 決定2・3)", async (fault) => {
+it.each(["misnamed", "missing"] as const)("作業台の中だけの故障(%s の object)は作業台の故障として取り込みを拒み、名前の場所を名指さない(ADR 0411 決定2・3)", async (fault) => {
   const b = await board(`intake-own-${fault}`);
   await b.open();
   commitWork(b.workbench(), "notes.txt", "the human's\n");
