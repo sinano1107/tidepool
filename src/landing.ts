@@ -455,6 +455,10 @@ function lacksContentOf({ lastPushed, droppedBranches, unpushedBranches }: Outsi
 /** 盤面がその PR に in-flight 印を持つ(merge しているか、push して記録するまでの)間の回答の拒否文(ADR 0236 決定3 / ADR 0387 決定4)。 */
 export const prInFlightRefusal = (prNumber: number) => `PR #${prNumber} is being merged or pushed to by the board right now — answer again in a moment`;
 
+/** 収束が workspace の根を着地させている間の give-up の拒否文(ADR 0407 決定2 追記、#3732)。 */
+export const landingInWorkspaceRefusal = (rootId: string, workspace: string) =>
+  `the board is landing task ${rootId} in workspace ${workspace} right now — answer again in a moment`;
+
 /** 処理中の印を持つ task への回答の拒否文(ADR 0236 決定3・ADR 0399 決定6・ADR 0407 決定2)、印が無ければ undefined。PR をまだ記録して
  *  いない根(収束が作っている途中)は task を名指す。 */
 export function inFlightRefusalOf(db: Db, landing: Pick<Landing, "isMarked"> | undefined, taskIds: string[]): string | undefined {
@@ -841,6 +845,9 @@ export interface Landing {
   takeInFlightMark(rootId: string): (() => void) | null;
   /** 根に印が付いているかを読むだけ —— 執行しない回答が印の付いた根の PR を拒むための口(ADR 0288 決定2)。 */
   isMarked(rootId: string): boolean;
+  /** 収束がその workspace の根を着地させている間(根ごとの着地の入口から出口まで)、その根の id。読むだけ —— give-up の受理が拒むための口
+   *  (ADR 0407 決定2 追記、#3732)。 */
+  landingRootIn(workspace: string): string | undefined;
   /** 盤面の停止(issue #1851): 以後の `converge()` は回を始めず空を返し、走っている回と列に入った回の終わりで解ける。
    *  回の失敗では reject しない。 */
   stop(): Promise<void>;
@@ -1525,6 +1532,8 @@ export function createLanding(deps: LandingDeps): Landing {
   const inFlight = new Map<string, "write" | "auto_merge_read">();
   // ADR 0399 決定2: 鍵は PR を開いた根の id —— 登録し直した名前では、別の根が同じ番号の PR を持ちうる
   const isMarked = (rootId: string) => inFlight.has(rootId);
+  // ADR 0407 決定2 追記(#3732): 収束が今着地させている根の id を、根の workspace の名前で。印(ADR 0236)とは別に持ち、印の読み手は読まない
+  const landingIn = new Map<string, string>();
   const takeInFlightMark = (rootId: string, purpose: "write" | "auto_merge_read" = "write") => {
     if (inFlight.has(rootId)) return null;
     inFlight.set(rootId, purpose);
@@ -2079,7 +2088,15 @@ export function createLanding(deps: LandingDeps): Landing {
         });
       try {
         const root = landingRootOf(deps.db, resolve, id, (workspace) => protectedBranchRef(checked(workspace)), stopRootIfRefsMoved);
-        const verdict = root && (await landRoot(root, answering, outcome));
+        // ADR 0407 決定2 追記(#3732): 根ごとの着地の入口から出口まで、根の workspace を着地中と持つ —— 印の無い await の間の give-up を拒む
+        const landingWorkspace = root && quietlyResolved(root.task)?.name;
+        if (landingWorkspace) landingIn.set(landingWorkspace, id);
+        let verdict: LandingVerdict | undefined;
+        try {
+          verdict = root && (await landRoot(root, answering, outcome));
+        } finally {
+          if (landingWorkspace) landingIn.delete(landingWorkspace);
+        }
         if (verdict) record(verdict);
       } catch (error) {
         if (error instanceof RootStopped) {
@@ -2381,6 +2398,7 @@ export function createLanding(deps: LandingDeps): Landing {
     },
     isMarked,
     takeInFlightMark,
+    landingRootIn: (workspace) => landingIn.get(workspace),
   };
   return landing;
 }
