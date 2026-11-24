@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の「pin が崩れれば観測として決着させる」に例外が2つ入る —— 承認の適用(`(question <id>)` を名指す盤面の commit)が registry に届いた後に盤面が落ちた提案は、古くなったでなく適用済みとして閉じる。tier の改名が途中で止まり、agent の `tier` が生きた名前でない間は照合しない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定6、2026-11-22、issue #3515)。**
 
+**Status 追記: registry の提案では決定1 の決着に3つ目の例外が入る —— 承認の commit の有無を registry に問えなければ閉じない。表の書き口の hook が照合する根拠の行・段の順序の pin は、周期の照合と tier の提案の approve も照合する([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 追記、2026-11-24、issue #3635)。**
+
 **Status 追記: 決定6 / 追記2 の approve が登録するのは type `interview` の root で、修正値の purpose は仮説と測る仕事の2欄になった(ADR 0273 決定2・9)**(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
 **Status 追記: 決定7 の `review_tier = frontier` は ADR 0200 決定4 で置き換え** —— 周期 meta-review は振り返り Board call と同じ盤面設定が指す段で登録する。routing の提案には「段の説明の書き換え」と「段を足して行を移す」が加わる(ADR 0200 決定7・8)。

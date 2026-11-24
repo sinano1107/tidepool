@@ -46,3 +46,21 @@ DB の記録を1つの同期区間で書く。await を挟まない区間が防�
 - 限界: B9 の文は、同じ名前に先に開いた Quarantine の dedupe と、他の名前の Quarantine による最初の撮りの止めで隠れうる。
 - 「床」(ADR 0033 / 0038)とは別の語である —— 床は worker の保証と残余の既定を指す。
 - Status 追記: ADR 0150 決定1、ADR 0231 決定4、ADR 0243、ADR 0289、ADR 0351 決定5、ADR 0378 決定10、ADR 0387、ADR 0391 帰結、ADR 0394 決定5。
+
+## 追記(2026-11-24 の triage、issue #3635)
+
+決定6 を、stale と読む箇所の列挙から、registry の提案の question を閉じる経路のすべてに当たる性質に改める。列挙は、表の書き口の hook(#3635)、
+reject の回答(#3636)、祖先の cancel の3つを落としていた。経路の表は #3635 のコメントに置く。
+
+- **registry の提案の question は、承認の commit を registry に問うてからでないと閉じない。** 周期の照合、approve と reject の回答、表の
+  書き口の hook、祖先の cancel(直接 cancel と failure の abandon)のどれで閉じるときも、`(question <id>)` を名指す commit があれば適用済みとして
+  閉じる。reject の回答は approve と同じく適用済みの印で返し、tier がもう動いたことを言う —— 却下と刻めば、適用された承認を決定が読む誤った
+  記録で閉じる(決定1 の (2))。
+- **問えなければ閉じない。** registry の log が読めないとき、照合(周期と表の書き口の hook)はその回は閉じず、回答と cancel は断る。cancel を
+  断るのは fail-closed の側で、log が読めないのは registry の clone が壊れたときに限られ、そのとき盤面は registry が読めない停止を既に立てている。
+- **祖先の cancel は、扉で範囲の registry の提案に先に問い、適用済みを閉じてから倒す。** 既に起きた registry の変更は計画と一緒に死なない
+  —— ADR 0271 決定3 の線(仕事の宛先が親の生死に依らないものだけ残す)と同じ読み。
+- **表の書き口の hook が照合するのは表の側の pin(根拠の行・段の順序)だけ。** `observed_event_id` はその pin を崩した表の event を名指す
+  欄なので、registry の側の崩れはこの経路では閉じない。hook が見送った表の側の pin は、周期の照合と approve の回答も照合する —— hook だけが
+  照合する形のままだと、見送った提案を根拠の崩れたまま approve できる。
+- Status 追記: ADR 0150 決定1、ADR 0271 決定3。
