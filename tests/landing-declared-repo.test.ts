@@ -1,10 +1,10 @@
 import { rmSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
-import { createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
+import { assertLandingRefs, createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { registerTask, type Task } from "../src/tasks.js";
-import { declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig } from "../src/workspace.js";
+import { DeclaredRepoMismatchError, declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig, withRememberedRepoCheck } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
   commitWork,
@@ -193,6 +193,22 @@ it.each([
   stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
 });
 
+// #3700: 削除の扉で基準の行も消えた名前を、await の間に別の path の別の repo で登録し直す。await の後は `assertLandingRefs` より前の行き先の読み
+// (`workspaceNetworkDestination`)が path の変化を見て先に止めるので、この test が固定するのは結果(根の止まり、workspace の Quarantine なし、
+// ADR 0399 決定5)で、`assertLandingRefs` の素の投げ直しの行ではない —— その行は下の domain の test が固定する
+it.each([
+  ["PR の状態を読む前", "getPullRequestState"],
+  ["push の準備", "preparePush"],
+] as const)("%sの await の間に扉で名前を削除し、別の path の別の repo の checkout に登録し直しても、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async (_, method) => {
+  const { db, github, old, declared, root } = await reRegisteredDuringAwait(holdBefore(method), async () => {
+    const { workspace } = await makeRemoteBackedWorkspace("reef-elsewhere");
+    return { workspace, between: () => {} };
+  });
+
+  expect([github.pushes, github.requests]).toEqual([[], []]);
+  stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
+});
+
 /** 旧い repo で拾われ PR #1 を開いた done の根を残し、`reef` を扉で purely-local の checkout(`moved`)に登録し直した盤面。 */
 async function reRegisteredPurelyLocal(moved: (old: WorkspaceConfig, root: Task) => Promise<{ workspace: WorkspaceConfig; between?: () => void }>) {
   const { db, clock } = await openBoard();
@@ -253,4 +269,22 @@ it("面接室の受験者は、面接室で拾われても宣言の repo を記�
   await prepareAtPickup(db, room, examinee!, { workspacesBaseDir: base });
 
   expect(declaredRepoDisagreement(db, examinee!.id, room)).toMatch(/no record/);
+});
+
+// ADR 0399 決定5・7: 基準の行の無い名前の最初の撮りの前の項が、登録し直しで根の比較に落ちたら、その名前の Quarantine でなく根の止まり。
+// #3699 の後は catch の外の宛先の読み直しが同じ同期区間で先に投げるので、この test が固定するのは結果で、catch の素の投げ直しの行ではない
+it("基準の行の無い名前の着地の前の比較で、覚えた repo の項が path の変化を見て根の比較に落ちると、DeclaredRepoMismatchError がそのまま出て workspace の Quarantine は立たない", async () => {
+  const { db, clock } = await openBoard();
+  const reef = await makeWorkspace("reef");
+  const declared = new DeclaredRepoMismatchError("task/t-1 cannot be carried: the board recorded repo acme/old for it, but workspace reef now declares repo acme/new.");
+  const workspace = withRememberedRepoCheck(db, { ...reef, checkDeclaredRepo: () => { throw declared; } }, () => clock.now(), () => ({ ...reef, path: `${reef.path}-moved` }));
+
+  let thrown: unknown;
+  try {
+    assertLandingRefs(db, workspace, undefined, undefined, clock.now());
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBe(declared);
+  expect(openQuarantineQuestion(db, "workspace", reef.name)).toBeUndefined();
 });

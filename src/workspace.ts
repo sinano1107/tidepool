@@ -330,10 +330,15 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
   return path === undefined ? undefined : { name: rootId, path };
 }
 
-/** ADR 0329 決定10: 落ちた項の説明と場所を pickup / 解除で共有する。 */
+/** ADR 0329 決定10: 落ちた項の説明と場所を pickup / 解除で共有する。作るのは `of` だけ。 */
 export class PickupGateError extends Error {
-  constructor(readonly place: WorkspaceConfig, cause: unknown, describe?: string) {
+  private constructor(readonly place: WorkspaceConfig, cause: unknown, describe?: string) {
     super(`${cause instanceof Error ? cause.message : String(cause)}${describe ? `\n\nThe check that failed: ${describe}` : ""}`, { cause });
+  }
+
+  /** ADR 0399 決定5: 根の記録と宣言の食い違いは場所の失敗でなく根の止まり —— 包まずにそのまま返し、どの呼び手にも素で届く。 */
+  static of(place: WorkspaceConfig, cause: unknown, describe?: string): PickupGateError | DeclaredRepoMismatchError {
+    return cause instanceof DeclaredRepoMismatchError ? cause : new PickupGateError(place, cause, describe);
   }
 }
 
@@ -344,7 +349,7 @@ export class PickupGateError extends Error {
  *  無ければ規約の番地。面接室には場所の項とこの task の (task, 面接室) の項を撃つ(ADR 0329 決定4 の Status 追記)。
  *  読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
  *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
- *  最初に落ちた場所で `PickupGateError` を投げる。 */
+ *  最初に落ちた場所で `PickupGateError` を投げる(根の記録と宣言の食い違いは素の `DeclaredRepoMismatchError`、ADR 0399 決定5)。 */
 export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: () => Date, fixedPoints?: BoardStatePath[], live?: () => boolean) {
   workspace = withRememberedRepoCheck(db, workspace, now);
   // ADR 0386 決定4: 面接室の項は解除の門・本文と同じ並び —— 受験者の (task, 面接室) の項だけは場所の項より先
@@ -370,14 +375,12 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
       checks.push({ place, predicates: list });
     } catch (err) {
       if (err instanceof PickupGateError) throw err;
-      throw new PickupGateError(place, err);
+      throw PickupGateError.of(place, err);
     }
   }
   return checks;
 }
 
-/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き込みは口(ADR 0351 決定3)で、
- *  鍵は項の場所の名前。 */
 /** spec #3273 の受理の順の前半(ADR 0329 決定14): 名前に掛かる前半の項 → 名前の場所の clean(`clean` のとき)。workspace の Quarantine の
  *  受理と、同じ条件で merge back を撃ち直す積み残しの retry(ADR 0371 決定10)が掛ける。 */
 export async function checkAcceptanceFirstHalf(place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
@@ -393,11 +396,13 @@ export function fireBeforeOpenPredicates(place: WorkspaceConfig, predicates: Pic
     try {
       predicate.check();
     } catch (err) {
-      throw new PickupGateError(place, err, predicate.describe);
+      throw PickupGateError.of(place, err, predicate.describe);
     }
   }
 }
 
+/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き込みは口(ADR 0351 決定3)で、
+ *  鍵は項の場所の名前。 */
 export async function firePickupPredicates(
   db: Db,
   place: WorkspaceConfig,
@@ -421,7 +426,7 @@ export async function firePickupPredicates(
     try {
       await predicate.check(fire);
     } catch (err) {
-      throw new PickupGateError(predicate.place, err, predicate.describe);
+      throw PickupGateError.of(predicate.place, err, predicate.describe);
     }
   }
 }
@@ -635,7 +640,7 @@ function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspaces
   } catch (err) {
     // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
     if (role === undefined || err instanceof CheckoutHostError) throw err;
-    throw new PickupGateError(named, err, itemOf(named));
+    throw PickupGateError.of(named, err, itemOf(named));
   }
   // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
   const reads = roomsReadBy(db, task).map((room) => {
@@ -670,7 +675,7 @@ function openReadCheckout(at: string, room: WorkspaceConfig, head: string | unde
       git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", room.path, `${head}:refs/heads/main`);
       git(path, "read-tree", "-u", "--reset", "HEAD");
     } catch (err) {
-      throw new PickupGateError(room, err, describe);
+      throw PickupGateError.of(room, err, describe);
     }
   }
   return { name: room.name, path };
@@ -2859,7 +2864,7 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
   // `info/exclude` を永久の quarantine にしない
   const changes = ownWorktreeStatus(workspace.path);
   if (changes.length > 0) {
-    throw new PickupGateError(workspace, new Error(
+    throw PickupGateError.of(workspace, new Error(
       `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process wrote them after the board moved the checkout.${discardUncommitted()}`,
     ));
   }
@@ -2870,7 +2875,7 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
       prepareRefBaseline(db, read.place, board);
     } catch (err) {
       if (err instanceof FirstCaptureRefusedError || err instanceof FirstCaptureRegistryReadError) throw err;
-      throw new PickupGateError(read.place, err);
+      throw PickupGateError.of(read.place, err);
     }
     await firePickupPredicates(db, read.place, read.predicates, "after-open", board);
     if (board.live?.() === false) return;
@@ -2963,8 +2968,8 @@ function prepareRefBaseline(db: Db, workspace: WorkspaceConfig, board: { resolve
  *  基準の行が無い名前は、pickup が開く前に掛ける項(固定点 `fixedPoints` との交差を含む)を撃ってから `prepareRefBaseline` で最初の
  *  撮りをする(ADR 0383 決定2 の Status 追記 / ADR 0399 決定7 —— 最初に触れる入口はどれも同じ項を通る。ADR 0373 決定13 の確認は
  *  `prepareRefBaseline` が掛ける)。項は同期で撃ち、撮るまで await を挟まない。落ちた項は `PickupGateError`(覚えた repo の食い違いは
- *  自分で Quarantine を立てる `WorkspaceRepoMismatchError` のまま)。撮れない間は、止めている Quarantine を持つ
- *  `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
+ *  自分で Quarantine を立てる `WorkspaceRepoMismatchError` のまま、根の記録と宣言の食い違いは素の `DeclaredRepoMismatchError`)。
+ *  撮れない間は、止めている Quarantine を持つ `FirstCaptureRefusedError` を投げる(決定13 追記の待ち)。 */
 export function compareRefsBeforeLanding(
   db: Db,
   workspace: WorkspaceConfig,
