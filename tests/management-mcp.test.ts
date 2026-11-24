@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { BuiltInAgentNotEditableError } from "../src/agent-create.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
+import { ShallowRepositoryError } from "../src/pickup-predicates.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
@@ -511,6 +512,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
         if (input.name === "no-repo-access") throw new RepoAccessMissingError("grant it with: gh api -X PUT ...");
         if (input.name === "leftover") throw new LeftoverWorkspaceStateError(input.name, "Put the entry back");
         if (input.name === "credential") throw new RepoCredentialError("the repository https://github.com/a/b carries a credential in its URL.");
+        if (input.name === "shallow") throw new ShallowRepositoryError("/work/shallow");
         throw new Error("registry remote unavailable");
       },
       update: async () => {
@@ -585,6 +587,15 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
     expect(credential.isError).toBe(true);
     expect(credential.content[0].text).toContain("carries a credential");
     expect(credential.content[0].text).not.toContain("registry upstream error");
+
+    // ADR 0411 決定5: shallow の拒否は `git fetch --unshallow` で直せる入力の問題で、盤面の故障に畳まない
+    const shallow: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "shallow", mode: "register", path: "/work/shallow" },
+    });
+    expect(shallow.isError).toBe(true);
+    expect(shallow.content[0].text).toContain("git fetch --unshallow");
+    expect(shallow.content[0].text).not.toContain("registry upstream error");
 
     const upstream: any = await client.callTool({
       name: "create_workspace",

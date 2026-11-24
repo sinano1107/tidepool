@@ -9,6 +9,7 @@ import { appendEvent, listEvents } from "../src/events.js";
 import { CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, finishTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
+  boardRefWriter,
   completionTreeGateApplies,
   completionTreePaths,
   NamedPlaceFetchError,
@@ -33,6 +34,8 @@ import {
   quarantineQuestion,
   STAGING_FAILURES,
   seedTaskBranch,
+  withHistoryOnlyBlob,
+  withLooseSub,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -931,16 +934,13 @@ function forgedLooseAtNamedTree(ws: WorkspaceConfig, checkout: string): string {
   expect(existsSync(looseObject(ws.path, tree))).toBe(true);
   const nowhere = "1".repeat(40);
   const forged = treeEntry("100644", "a.txt", nowhere);
+  // 複製は tree を pack で受け取る —— 偽の loose をその隣に置く
+  mkdirSync(join(checkout, ".git", "objects", tree.slice(0, 2)), { recursive: true });
   rmSync(looseObject(checkout, tree), { force: true });
   writeFileSync(looseObject(checkout, tree), deflateSync(Buffer.concat([Buffer.from(`tree ${forged.length}\0`), forged])));
   commitLiteralRoot(checkout, [treeEntry("100644", "README.md", git(checkout, "rev-parse", "HEAD:README.md")), treeEntry("40000", "sub", tree), treeEntry("100644", "z.txt", nowhere)]);
   return nowhere;
 }
-
-const withLooseSub = (named: WorkspaceConfig) => {
-  mkdirSync(join(named.path, "sub"));
-  commitWork(named.path, "sub/a.txt", "a\n");
-};
 
 // #3588: 借りない写しの中の検証が落ちれば checkout の故障 —— 名前の場所の object と混ざらない(ADR 0411 決定3)
 it("worker が名前の場所の tree の id に偽の loose を書き新しい root tree がどこにも無い id を直に指せば、完了の門は task の checkout の故障で拒み、名前の場所の側にしない(ADR 0411 決定1・3、#3588)", async () => {
@@ -1110,37 +1110,41 @@ it("集合の blob の名前の場所の loose が集合の別の blob の中身
   }
 });
 
-/** pickup の前に名前の場所の履歴にだけ `old.txt` を残す(足して消す)。 */
-const withHistoryOnlyBlob = (named: WorkspaceConfig) => {
-  commitWork(named.path, "old.txt", "only in the history\n");
-  git(named.path, "rm", "--quiet", "old.txt");
-  git(named.path, "commit", "--quiet", "-m", "drop old.txt");
-};
-
 // #3589: 名前の場所の履歴にだけある blob を worker が復元する形 —— 検証は借りない写しの中で済み、運んだ後の確かめが閉包の全部を入れ直す(ADR 0411 決定1・4)
-it.each([
-  { stage: "完了の門", damage: "missing" },
-  { stage: "完了の門", damage: "corrupt" },
-  { stage: "未決着の解放", damage: "missing" },
-  { stage: "未決着の解放", damage: "corrupt" },
-] as const)("名前の場所の履歴にだけある blob が名前の場所で $damage でも、worker がそれを復元すれば $stage は通り、名前の場所でその blob が読める(ADR 0411 決定1・4、#3589)", async ({ stage, damage }) => {
+/** 名前の場所の履歴にだけある `old.txt` の blob を名前の場所で `damage` の形にする。blob の id を返す。 */
+function damagedHistoryOnlyBlob(ws: WorkspaceConfig, damage: "missing" | "corrupt"): string {
+  const blob = git(ws.path, "rev-parse", "HEAD~1:old.txt");
+  rmSync(looseObject(ws.path, blob));
+  if (damage === "corrupt") writeFileSync(looseObject(ws.path, blob), "not zlib");
+  return blob;
+}
+
+it.each(["missing", "corrupt"] as const)("名前の場所の履歴にだけある blob が名前の場所で %s でも、worker がそれを復元して commit すれば完了の門は通り、名前の場所でその blob が読める(ADR 0411 決定1・4、#3589)", async (damage) => {
   const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
   try {
-    const blob = git(ws.path, "rev-parse", "HEAD~1:old.txt");
-    rmSync(looseObject(ws.path, blob));
-    if (damage === "corrupt") writeFileSync(looseObject(ws.path, blob), "not zlib");
+    const blob = damagedHistoryOnlyBlob(ws, damage);
+    commitWork(place.path, "old.txt", "only in the history\n");
 
-    if (stage === "完了の門") {
-      commitWork(place.path, "old.txt", "only in the history\n");
-      const tip = gateFetch(db, place, task);
-      expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
-    } else {
-      writeFileSync(join(place.path, "old.txt"), "only in the history\n");
-      releaseWorkspace(db, place, task, NOW);
-      expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
-      expect(existsSync(place.path)).toBe(false);
-    }
+    const tip = gateFetch(db, place, task);
 
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "cat-file", "-p", blob)).toBe("only in the history");
+  } finally {
+    db.close();
+  }
+});
+
+it.each(["missing", "corrupt"] as const)("名前の場所の履歴にだけある blob が名前の場所で %s でも、worker がそれを WIP で復元すれば未決着の解放は通って checkout を消し、名前の場所でその blob が読める(ADR 0411 決定1・4、#3589)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
+  try {
+    const blob = damagedHistoryOnlyBlob(ws, damage);
+    writeFileSync(join(place.path, "old.txt"), "only in the history\n");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
+    expect(existsSync(place.path)).toBe(false);
     expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
     expect(git(ws.path, "cat-file", "-p", blob)).toBe("only in the history");
   } finally {
@@ -1185,6 +1189,45 @@ it("運ぶ前に名前の場所で壊れた tip の閉包の object は守る: �
     expect(git(ws.path, "rev-parse", `task/${task.id}:copy.txt`)).toBe(blob);
     expect(existsSync(place.path)).toBe(false);
     expect(git(ws.path, "cat-file", "-p", blob)).toBe("workspace");
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0411 決定5: shallow な名前の場所は pickup で止まるが、登録済みの shallow な workspace の merge back は止めない —— merge-tree の隔離 view は
+// shallow の境界を引き継ぐ。session の途中で名前の場所が shallow になった形で、pickup を通らずに merge back へ届かせる
+it("名前の場所が shallow でも、完了した子の merge back は分かれた帰り先へ merge-tree で通る(ADR 0411 決定5 / ADR 0356 決定5)", async () => {
+  const db = openDb(":memory:");
+  const ws = await makeWorkspace("shallow-merge-back");
+  try {
+    const root = git(ws.path, "rev-parse", "HEAD");
+    commitWork(ws.path, "base.txt", "base\n");
+    const base = git(ws.path, "rev-parse", "HEAD");
+    const parent = registerTask(db, { type: "work", title: "parent", purpose: "why", completion_criteria: "done" }, NOW, ...HUMAN_WEBUI);
+    seedTaskBranch(db, ws, parent.id, "main");
+    const registered = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", NOW)!;
+    const place = await prepareAtPickup(db, ws, task);
+    commitWork(place.path, "child.txt", "child work\n");
+    gateFetch(db, place, task);
+    completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+    // 帰り先が盤面の口を通って進む —— merge back は早送りでなく merge-tree
+    const parentRef = `refs/heads/task/${parent.id}`;
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws.path, input: "parent\n" }).toString().trim();
+    const tree = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${git(ws.path, "ls-tree", parentRef)}\n100644 blob ${blob}\tparent.txt\n` }).toString().trim();
+    const moved = git(ws.path, "commit-tree", tree, "-p", parentRef, "-m", "parent moved on");
+    boardRefWriter(db, ws)(parentRef, moved, () => git(ws.path, "update-ref", parentRef, moved));
+    // 名前の場所を shallow にする: 共通の祖先を境界にし、その親の commit を消す
+    writeFileSync(join(ws.path, ".git", "shallow"), `${base}\n`);
+    rmSync(looseObject(ws.path, root));
+
+    releaseAfterCompletion(db, place, getTask(db, task.id)!);
+
+    expect(git(ws.path, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expect(git(ws.path, "show", `${parentRef}:parent.txt`)).toBe("parent");
+    expect(git(ws.path, "show", `${parentRef}:child.txt`)).toBe("child work");
+    expect(git(ws.path, "rev-parse", `${parentRef}^1`)).toBe(moved);
   } finally {
     db.close();
   }

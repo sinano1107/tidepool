@@ -59,42 +59,56 @@ function expectHooksAndSigningInactive(hooks: string): void {
 }
 
 // 旧: タスクブランチが名前の場所で checkout されていて、catch-up は worktree をその tip に追従させた
-it.each([false, true])("catch-up advances the task branch ref in the named place without moving its HEAD or worktree (shallow: %s, ADR 0356 決定1・5 / ADR 0411 決定5)", async (shallow) => {
-  const source = await makeWorkspace("gate-catch-up");
-  const ws = { ...source };
-  if (shallow) {
-    commitWork(source.path, "shallow-base.txt", "the fork point\n");
-    ws.path = await tempDir("gate-catch-up-shallow-");
-    git(source.path, "clone", "--depth=1", `file://${source.path}`, ws.path);
-    git(ws.path, "remote", "remove", "origin");
-  }
+/** `catchUpTaskBranch` の後、名前の場所の HEAD と作業ツリーは動かず、タスクブランチは main と task の両方の内容を持つ。 */
+async function expectCaughtUp(db: Db, ws: WorkspaceConfig, taskId: string): Promise<void> {
+  const head = git(ws.path, "rev-parse", "HEAD");
+
+  catchUpTaskBranch(db, ws, taskId, await tempDir("tidepool-task-checkouts-"));
+
+  expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+  expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  expect(git(ws.path, "rev-parse", "HEAD")).toBe(head);
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
+  expect(existsSync(join(ws.path, "task.txt"))).toBe(false);
+  expect(git(ws.path, "show", `task/${taskId}:upstream.txt`)).toBe("from main");
+  expect(git(ws.path, "show", `task/${taskId}:task.txt`)).toBe("from the task");
+}
+
+it("catch-up advances the task branch ref in the named place without moving its HEAD or worktree (ADR 0356 決定1・5)", async () => {
+  const ws = await makeWorkspace("gate-catch-up");
   const db = openDb(":memory:");
   try {
     const task = work(db, "catch up");
     git(ws.path, "branch", `task/${task.id}`);
     commitWork(ws.path, "upstream.txt", "from main\n");
-    if (shallow) {
-      // ADR 0411 決定5: shallow な名前の場所は pickup で止まる。登録済みの shallow な workspace には pickup を通らない人間の扉が届くので、
-      // merge-tree の隔離 view は shallow の境界を引き継ぐ —— task の commit は名前の場所で直に積む
-      git(ws.path, "checkout", "--quiet", `task/${task.id}`);
-      commitWork(ws.path, "task.txt", "from the task\n");
-      git(ws.path, "checkout", "--quiet", "main");
-    } else {
-      const place = await prepareAtPickup(db, ws, task);
-      commitWork(place.path, "task.txt", "from the task\n");
-      releaseWorkspace(db, place, task, NOW);
-    }
-    const head = git(ws.path, "rev-parse", "HEAD");
+    const place = await prepareAtPickup(db, ws, task);
+    commitWork(place.path, "task.txt", "from the task\n");
+    releaseWorkspace(db, place, task, NOW);
 
-    catchUpTaskBranch(db, ws, task.id, await tempDir("tidepool-task-checkouts-"));
+    await expectCaughtUp(db, ws, task.id);
+  } finally {
+    db.close();
+  }
+});
 
-    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
-    expect(git(ws.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
-    expect(git(ws.path, "rev-parse", "HEAD")).toBe(head);
-    expect(git(ws.path, "status", "--porcelain")).toBe("");
-    expect(existsSync(join(ws.path, "task.txt"))).toBe(false);
-    expect(git(ws.path, "show", `task/${task.id}:upstream.txt`)).toBe("from main");
-    expect(git(ws.path, "show", `task/${task.id}:task.txt`)).toBe("from the task");
+// ADR 0411 決定5: shallow な名前の場所は pickup で止まる。登録済みの shallow な workspace には pickup を通らない人間の扉が届くので、
+// merge-tree の隔離 view は shallow の境界を引き継ぐ —— task の commit は名前の場所で直に積む
+it("catch-up on a shallow named place carries the shallow boundary into merge-tree's isolated view (ADR 0356 決定5 / ADR 0411 決定5)", async () => {
+  const source = await makeWorkspace("gate-catch-up");
+  commitWork(source.path, "shallow-base.txt", "the fork point\n");
+  const ws = { ...source, path: await tempDir("gate-catch-up-shallow-") };
+  git(source.path, "clone", "--depth=1", `file://${source.path}`, ws.path);
+  git(ws.path, "remote", "remove", "origin");
+  const db = openDb(":memory:");
+  try {
+    const task = work(db, "catch up");
+    git(ws.path, "branch", `task/${task.id}`);
+    commitWork(ws.path, "upstream.txt", "from main\n");
+    git(ws.path, "checkout", "--quiet", `task/${task.id}`);
+    commitWork(ws.path, "task.txt", "from the task\n");
+    git(ws.path, "checkout", "--quiet", "main");
+
+    await expectCaughtUp(db, ws, task.id);
   } finally {
     db.close();
   }

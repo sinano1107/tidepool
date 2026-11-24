@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -87,11 +85,10 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
   });
 });
 
-/** task の checkout がその名前の場所から開き(alternates を持たない複製、ADR 0411 決定1)タスクブランチに乗り、名前の場所の HEAD は main のまま。 */
+/** task の checkout がタスクブランチに乗り、そのタスクブランチは名前の場所にあり、名前の場所の HEAD は main のまま。 */
 function expectRunsFrom(named: WorkspaceConfig, taskId: string): void {
   const checkout = checkoutOf(t.db, taskId);
   expect(git(checkout, "symbolic-ref", "--short", "HEAD")).toBe(`task/${taskId}`);
-  expect(existsSync(join(checkout, ".git", "objects", "info", "alternates"))).toBe(false);
   expect(git(named.path, "rev-parse", "--verify", `task/${taskId}`)).not.toBe("");
   expect(git(named.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 }

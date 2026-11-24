@@ -23,7 +23,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, WORKER_SPAWNED, withPushDuringWrap } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withLooseSub, withPushDuringWrap } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -435,28 +435,22 @@ it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も w
   expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
 });
 
-/** 名前の場所の main に `sub/kept.txt` を、mode を 0 で詰めた tree(読めるが `index-pack --strict` の fsck が落とす)で置く。blob の id を返す。 */
-function seedZeroPaddedTree(ws: WorkspaceConfig): string {
-  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: ws.path, input: "kept by the human\n" }).toString().trim();
-  const entry = Buffer.concat([Buffer.from("0100644 kept.txt\0"), Buffer.from(blob, "hex")]);
-  const sub = execFileSync("git", ["hash-object", "-t", "tree", "--literally", "-w", "--stdin"], { cwd: ws.path, input: entry }).toString().trim();
-  const root = execFileSync("git", ["mktree"], { cwd: ws.path, input: `${git(ws.path, "ls-tree", "HEAD")}\n040000 tree ${sub}\tsub\n` }).toString().trim();
-  git(ws.path, "update-ref", "refs/heads/main", git(ws.path, "commit-tree", root, "-p", "HEAD", "-m", "zero-padded sub"));
-  git(ws.path, "reset", "--hard", "--quiet");
-  return blob;
-}
-
 // 作業台は名前の場所の objects を借りる(ADR 0411 決定2 の実装 #3763 まで)—— task の checkout から移した形(#3734)
 it("作業台が自前の store に写した名前の場所の object の入れ直しの pack を index-pack --strict が落とせば、取り込みは名前の場所の側で拒み、理由が欠けた object を名指す(ADR 0388 決定2)", async () => {
   let blob = "";
+  // 保護ブランチの外の `side` に置く —— `board()` の task の pickup は保護ブランチの閉包だけを複製し、strict な検査に当たらない(ADR 0411 決定5)
   const b = await board("intake-strict-reinsert", (ws) => {
-    blob = seedZeroPaddedTree(ws);
+    blob = seedZeroPaddedTree(ws, "refs/heads/side");
   });
   await b.open();
+  // 人間が作業台で `side` の tree をそのまま持つ merge commit を積む(`git merge` は tree を書き直して mode の詰めを消す)—— 作業台は名前の場所の
+  // objects を借りるので、取り込みの pack は名前の場所の ref から届く `side` の閉包を入れない
+  const side = git(b.ws.path, "rev-parse", "side");
+  git(b.workbench(), "update-ref", "refs/heads/main", git(b.workbench(), "commit-tree", `${side}^{tree}`, "-p", "HEAD", "-p", side, "-m", "take side"));
+  git(b.workbench(), "reset", "--hard", "--quiet");
   // `-l` の無い repack は借りている object を自前の pack に写す —— 名前の場所の tree も blob も作業台の store に入る
   git(b.workbench(), "repack", "-a", "-d", "--quiet");
   rmSync(join(b.ws.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
-  commitWork(b.workbench(), "more.txt", "more\n");
   const unchanged = b.unchanged();
 
   await expect(b.answer("take in")).rejects.toThrow(new RegExp(`workspace ${b.ws.name}:[\\s\\S]*${blob}[\\s\\S]*zeroPaddedFilemode`));
@@ -465,8 +459,7 @@ it("作業台が自前の store に写した名前の場所の object の入れ�
 
 it("作業台が借りている tree の id に壊れた loose を書けば、自前の object を数える手が落ち、取り込みは名前の場所でなく作業台の故障で拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const b = await board("intake-borrowed-tree", (ws) => {
-    mkdirSync(join(ws.path, "sub"));
-    commitWork(ws.path, "sub/a.txt", "a\n");
+    withLooseSub(ws);
     // 名前の場所は tree を pack に持つ —— 取り込みの検証は pack を先に引いて作業台の loose を読まない
     git(ws.path, "repack", "-a", "-d", "--quiet");
   });

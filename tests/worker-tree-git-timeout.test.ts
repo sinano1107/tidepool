@@ -381,7 +381,10 @@ it.each([
   );
   vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
   try {
-    expect(() => recordTaskCheckoutTip(db, place, task.id)).toThrow(NamedPlaceFetchError);
+    const failure = thrown(() => recordTaskCheckoutTip(db, place, task.id));
+    expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+    // 主語は上限に当たった手が読んだ名前の場所 —— worker の tree ではない
+    expect(failure).toHaveProperty("message", expect.stringContaining(`does not read whole in the named workspace: \`git pack-objects\` on the named workspace ${named.name} did not finish within 1 s`));
   } finally {
     vi.unstubAllEnvs();
   }

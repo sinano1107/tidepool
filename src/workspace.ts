@@ -491,7 +491,10 @@ function interviewRoomOf(db: Db, task: Pick<Task, "id" | "type" | "interview_tar
 /** 読む場所を実体の綴りで —— sandbox の読みの path と cwd・root に渡す在り処が同じ綴りになる(issue #1954)。 */
 const inRealSpelling = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place, path: safeRealpath(place.path) });
 
-/** 名前の場所の objects の実体の綴り —— 盤面の写しと作業台が借りる先。 */
+/** 名前の場所の objects の実体の綴り。借りる先は作業台と封じ込めの検査の使い捨ての checkout(どちらも #3763 まで)、作業台の tip を検証する
+ *  盤面所有の写し、運んだ後の確かめの使い捨ての repo、出題の写しの検証後の写し。symlink を解くのは、alternates と確かめが張る loose の dir への
+ *  symlink を登録の綴りの link に依らせないため —— sandbox の読みの path と綴りを揃える理由(ADR 0356 決定2)は ADR 0411 決定1 で無くなった。
+ *  引けなければ素の失敗で、呼び手が名前の場所の側として扱う。 */
 function namedObjects(named: WorkspaceConfig): string {
   return realpathSync(git(named.path, "rev-parse", "--path-format=absolute", "--git-path", "objects"));
 }
@@ -555,7 +558,10 @@ function makeCheckout({ at, named, from = named.path, source, branch, borrow, de
   // `branch` が未生の main(init の current branch)でも fetch できるよう --update-head-ok
   // ADR 0364 決定2・3: 盤面所有の写しから読む人間の byte は `fetchFromBoardCopy` と同じく有界
   const boundedOnBoardCopy = from === named.path ? git : workerRepoGit;
-  boundedOnBoardCopy(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", from, `${source}:refs/heads/${branch}`);
+  // ADR 0411 決定1・5: 複製は閉包の全部を受け取る —— 完了の門と同じ strict な fsck(warning も拒む)を受け取るときに当て、門で checkout の故障に
+  // なる object を名前の場所の側で止める。借りる checkout は閉包を受け取らないので当てない(#3763)
+  const fsck = borrow ? [] : ["-c", "fetch.fsckObjects=true"];
+  boundedOnBoardCopy(path, "-c", "core.logAllRefUpdates=false", ...fsck, "fetch", ...FETCH_FLAGS, "--update-head-ok", from, `${source}:refs/heads/${branch}`);
   // alternates 越しの fetch は objects の欠けを見ないので、欠けた blob で落ちる plumbing で tree を出す(porcelain の checkout は黙って欠く)
   git(path, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
   boundedOnBoardCopy(path, "read-tree", "-u", "--reset", "HEAD");
@@ -566,7 +572,7 @@ function makeCheckout({ at, named, from = named.path, source, branch, borrow, de
 type ThrowawayCheckout = { path: string; remove: () => void };
 
 /** ADR 0379 決定2: 封じ込めの検査が列挙させる使い捨ての checkout —— task の checkout と同じ作り手で、同じ基点の下に、名前の場所の objects を
- *  借りて作る。名前の場所には何も書かない。`from` は `source` を引く repo(既定は名前の場所)。作れなければ作りかけを残さず投げる。 */
+ *  借りて作る(ADR 0411 決定7 の複製は #3763 まで)。名前の場所には何も書かない。`from` は `source` を引く repo(既定は名前の場所)。作れなければ作りかけを残さず投げる。 */
 function openThrowawayCheckout(named: WorkspaceConfig, base: string, source: string, from?: string): ThrowawayCheckout {
   const at = CHECKOUT_LAYOUT.containmentCheck.at(base);
   const remove = () => removeBoardCheckout(at, CHECKOUT_LAYOUT.containmentCheck.parents);
@@ -1024,7 +1030,7 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
   const first = unreadable();
   if (first === undefined) return;
   // ADR 0411 決定4(#3735): 上限超過は損傷を見つけたことにならない —— 入れ直しの pack を名前の場所に足さずに拒む
-  if (first instanceof WorkerTreeGitTimeoutError) throw fail(first.message, first);
+  if (first instanceof WorkerTreeGitTimeoutError) throw fail(first.about(`the named workspace ${named.name}`), first);
   verifyOwnObjects(from, own, ids);
   let reinsertFailure: unknown;
   try {
@@ -2747,10 +2753,11 @@ export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfi
     // ADR 0399 決定5: a stopped task should not leave the new registration's first baseline behind.
     if (!holdsBaseline(db, workspace.name)) workspaceNetworkDestination(workspace);
   }
+  // ADR 0411 決定5: task の checkout は閉包を全部持つ複製 —— shallow な名前の場所は、基準の比較か最初の撮り・origin の fetch・タスクブランチの
+  // 作成・checkout の作成より前に止める
+  assertNotShallow(workspace.path);
   await preparePickupPlace(db, workspace, task, board);
   if (board.live?.() === false) return;
-  // ADR 0411 決定5: task の checkout は閉包を全部持つ複製 —— shallow な名前の場所は何も書く前に止める
-  assertNotShallow(workspace.path);
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
   const now = board.now();
   fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);

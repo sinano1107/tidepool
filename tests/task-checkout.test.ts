@@ -9,9 +9,9 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { completionTreePaths, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
+import { completionTreePaths, holdsBaseline, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch } from "./harness.js";
+import { checkoutTaskBranch, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // task の checkout(ADR 0356): work / review の worker は名前の場所でなく、pickup ごとに作って解放で消す自分の repo で走る。
@@ -21,14 +21,15 @@ const NOW = new Date("2026-11-07T00:00:00.000Z");
 let db: Db;
 afterEach(() => db?.close());
 
-function register(type: "work" | "review" = "work", parent_id?: string): Task {
+function register(type: "work" | "review" | "memory_repair" = "work", parent_id?: string): Task {
   return registerTask(db, { type, title: type, purpose: "why", completion_criteria: "done", parent_id }, NOW, ...HUMAN_WEBUI);
 }
 
-async function pickedUp(name: string, type: "work" | "review" = "work") {
+async function pickedUp(name: string, type: "work" | "review" | "memory_repair" = "work") {
   const named = await makeWorkspace(name);
   db = openDb(":memory:");
-  const task = register(type);
+  // 修理子は親の下にだけ登録できる
+  const task = type === "memory_repair" ? register(type, register().id) : register(type);
   const place = await prepareAtPickup(db, named, task);
   return { named, task, place, branch: `task/${task.id}` };
 }
@@ -326,10 +327,8 @@ it("pickup の fetch が名前の場所の objects の破損で落ちれば名�
 it("古い履歴にだけある blob が欠けた名前の場所の pickup は、その blob を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定5)", async () => {
   const named = await makeWorkspace("task-checkout-old-history-missing");
   db = openDb(":memory:");
-  commitWork(named.path, "old.txt", "only in the history\n");
-  const blob = git(named.path, "rev-parse", "HEAD:old.txt");
-  git(named.path, "rm", "--quiet", "old.txt");
-  git(named.path, "commit", "--quiet", "-m", "drop old.txt");
+  withHistoryOnlyBlob(named);
+  const blob = git(named.path, "rev-parse", "HEAD~1:old.txt");
   rmSync(join(named.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
   const task = register();
 
@@ -338,7 +337,25 @@ it("古い履歴にだけある blob が欠けた名前の場所の pickup は�
   expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
 });
 
-it("shallow な名前の場所の pickup は、shallow であることと `git fetch --unshallow` を言う名前の場所の Quarantine で止まり、タスクブランチを作らない(ADR 0411 決定5)", async () => {
+// ADR 0411 決定1・5: 完了の門は閉包の全部を `index-pack --strict` で読むので、同じ検査を pickup の複製に当てる —— 履歴に fsck の警告を持つ
+// 名前の場所は、どの task の門でも checkout の故障になる前に、名前の場所の側で止まる
+it("履歴に `index-pack --strict` が拒む object を持つ名前の場所の pickup は、その object を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定1・5)", async () => {
+  const named = await makeWorkspace("task-checkout-strict-history");
+  db = openDb(":memory:");
+  seedZeroPaddedTree(named);
+  const tree = git(named.path, "rev-parse", "HEAD:sub");
+  git(named.path, "rm", "-r", "--quiet", "sub");
+  git(named.path, "commit", "--quiet", "-m", "drop sub");
+  const task = register();
+
+  expect(await scheduledPickup(named, await tempDir("tidepool-task-checkouts-"))).toEqual([]);
+  const purpose = quarantineQuestion(db, "workspace", named.name)?.purpose;
+  expect(purpose).toContain(tree);
+  expect(purpose).toContain("zeroPaddedFilemode");
+  expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
+});
+
+it("shallow な名前の場所の pickup は、shallow であることと `git fetch --unshallow` を言う名前の場所の Quarantine で止まり、基準の撮りもタスクブランチも作らない(ADR 0411 決定5)", async () => {
   const upstream = await makeWorkspace("task-checkout-shallow-upstream");
   commitWork(upstream.path, "second.txt", "second\n");
   const named: WorkspaceConfig = { name: "task-checkout-shallow", path: join(await tempDir("tidepool-shallow-"), "named") };
@@ -353,6 +370,7 @@ it("shallow な名前の場所の pickup は、shallow であることと `git f
   expect(purpose).toContain("git fetch --unshallow");
   expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
   expect(() => git(named.path, "rev-parse", "--verify", `refs/heads/task/${task.id}`)).toThrow();
+  expect(holdsBaseline(db, named.name)).toBe(false);
 });
 
 it("登録前から名前の場所の info/exclude が隠す人間のファイルは、休止の clean 検査を落とさない —— 名前の場所は自分の git で読む(ADR 0356 決定3)", async () => {
@@ -450,7 +468,7 @@ it("review は lineage の fork 元から名前の場所に作った task/<revie
   expect(git(named.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 });
 
-it.each(["work", "review"] as const)("%s の task の checkout は alternates を持たず tip の閉包を自分の store だけで解き、Claude と Codex の sandbox は名前の場所の objects を開かない(ADR 0411 決定1)", async (type) => {
+it.each(["work", "review", "memory_repair"] as const)("%s の task の checkout は alternates を持たず tip の閉包を自分の store だけで解き、Claude と Codex の sandbox は名前の場所の objects を開かない(ADR 0411 決定1)", async (type) => {
   const { named, place } = await pickedUp(`task-checkout-posture-${type}`, type);
   const objects = objectsOf(named);
   expect(existsSync(join(place.path, ".git", "objects", "info", "alternates"))).toBe(false);
