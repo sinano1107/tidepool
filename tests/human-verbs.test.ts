@@ -33,7 +33,7 @@ import {
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, recordDeclaredRepo, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, heldInPrepareMerge, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -1367,12 +1367,7 @@ it.each([
   ["付帯子", "1 attached child task(s) unsettled"],
 ])("merge 回答の merge の準備(token と gh の版)の await 中に%sが出たら、merge せず question は開いたままで印を放す", async (block, reason) => {
   const { work, question, github, landing, answer } = escalatedMergeQuestion();
-  const gate = awaitWindow();
-  const prepareMerge = github.prepareMerge.bind(github);
-  github.prepareMerge = async (ref) => {
-    await gate.hold();
-    return prepareMerge(ref);
-  };
+  const gate = heldInPrepareMerge(github);
   const first = answer();
   await gate.entered;
   if (block === "異議") {
@@ -1394,6 +1389,20 @@ it.each([
   expect(release).not.toBeNull();
   release!();
   await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
+});
+
+// ADR 0394 決定2 / ADR 0288 決定2: 印は待ちの前に取る —— 準備を待つ間も他の執行・回答は印に当たる
+it("merge 回答は merge の準備(token と gh の版)を待つ間も印を持ち、待ちが明けると merge する", async () => {
+  const { work, github, landing, answer } = escalatedMergeQuestion();
+  const gate = heldInPrepareMerge(github);
+  const first = answer();
+  await gate.entered;
+
+  expect(landing.takeInFlightMark(work.id)).toBeNull();
+  gate.open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
 });
 
 it("merge 回答の PR の読み取りの await の間に「hold」が通った merge question への merge 回答は、merge せずに拒まれる", async () => {

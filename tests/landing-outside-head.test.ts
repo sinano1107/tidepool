@@ -5,7 +5,7 @@ import { DomainError } from "../src/domain-error.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { getTask, listBoard } from "../src/tasks.js";
-import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeGitHubClient, fakeHead, heldInPrepareMerge } from "./fakes.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeLandingWorkspace } from "./harness.js";
 import {
   afterEachPush,
@@ -272,6 +272,26 @@ it("無人 merge の執行中に収束が書き換えを読んでも、merge が
   expect(c.github.mergedHeads).toEqual([pushed]);
   expect(boardEvents(c.db, c.work.id, "pr_merged")).toHaveLength(1);
   expect(mergeQuestions(c.db)).toEqual([]);
+});
+
+// ADR 0394 決定2 / ADR 0288 決定2: 執行の印("write")は merge の準備の待ちの前に取る —— 待ちの間に収束は問わない
+it("無人 merge の準備を待つ間に収束が書き換えを読んでも、question を立てない", async () => {
+  const c = await pushedRoot("rewrite-during-auto-merge-prepare", { pr: "recorded", commits: 2, merge: "auto_if_ci_green" });
+  expect(await convergeOn(c.landing, c.work.id)).toMatchObject({ form: "open_pull_request_updated" });
+  const pushed = forkHead(c.workspace, c.work.id);
+  const window = heldInPrepareMerge(c.github);
+  const tick = c.landing.tick("auto_merge");
+  await window.entered;
+  try {
+    await commitThroughTaskCheckout(c.db, c.clock, c.workspace, c.work, "another-repair.txt", "fixed\n");
+    await pushOutsideBoard(c.workspace, c.work.id, git(c.workspace.path, "rev-parse", `${pushed}~1`));
+    await convergeOn(c.landing, c.work.id);
+
+    expect(mergeQuestions(c.db)).toEqual([]);
+  } finally {
+    window.open();
+    await tick;
+  }
 });
 
 it("着地の面が question 側へ変わった PR の外から進んだ head に立った question への最初の「merge」は、question が問うた head として拒まれずに merge する", async () => {

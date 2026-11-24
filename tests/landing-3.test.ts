@@ -43,7 +43,7 @@ import {
   type WorkspaceConfig,
   writeBoardRefs,
 } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, heldInPrepareMerge, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   CLEAN_LANDING_INTAKE,
   checkoutTaskBranch,
@@ -1199,17 +1199,6 @@ it("PR の head の fetch を待つ間に修理が巻き戻されたら、merge 
   expect(pr.github.merged).toEqual([]);
 });
 
-/** merge の準備(token と gh の版)の await で止める窓 —— 止まっている間に門・ref・内容を動かす題材。 */
-function heldInPrepareMerge(github: FakeGitHubClient) {
-  const window = awaitWindow();
-  const prepareMerge = github.prepareMerge.bind(github);
-  github.prepareMerge = async (ref) => {
-    await window.hold();
-    return prepareMerge(ref);
-  };
-  return window;
-}
-
 // ADR 0330 決定1・4: 縛りの読みは prepare の待ちの後の、gh を撃つ同期区間の1箇所 —— 待ちの間に閉じた門を越えて merge しない
 it.each(["異議", "付帯子"] as const)("無人 merge の準備の await 中に%sが出たら、merge せず pr_merged を刻まない", async (block) => {
   const { db, clock, github, work, landing } = await openPushedPr(`auto-merge-gate-closes-in-prepare-${block === "異議" ? "objection" : "child"}`, "auto_if_ci_green");
@@ -1226,6 +1215,37 @@ it.each(["異議", "付帯子"] as const)("無人 merge の準備の await 中�
   } else {
     attachUnsettledChild(db, clock, work.id);
   }
+  window.open();
+  await ticking;
+
+  expect(github.merged).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([]);
+});
+
+it("無人 merge の準備の await 中に別の ref が動いたら、merge せず pr_merged を刻まず workspace の Quarantine で止まる", async () => {
+  const { db, github, work, workspace, landing } = await openPushedPr("auto-merge-ref-moves-in-prepare", "auto_if_ci_green");
+  await leaveBaseline(db, workspace);
+  const window = heldInPrepareMerge(github);
+
+  const ticking = landing.tick("auto_merge");
+  await window.entered;
+  const tagged = git(workspace.path, "rev-parse", "HEAD");
+  git(workspace.path, "tag", "intruder");
+  window.open();
+  await ticking;
+
+  expect(github.merged).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`now: ${tagged} refs/tags/intruder`);
+});
+
+it("無人 merge の準備の await 中に修理が決着してタスクブランチへ merge back されたら、積み残しで merge せず pr_merged を刻まない", async () => {
+  const { db, clock, github, work, workspace, landing } = await openPushedPr("auto-merge-left-behind-in-prepare", "auto_if_ci_green");
+  const window = heldInPrepareMerge(github);
+
+  const ticking = landing.tick("auto_merge");
+  await window.entered;
+  tearDownRepair(db, clock, workspace, await settleRepairNotMergedBack(db, clock, workspace, work.id));
   window.open();
   await ticking;
 

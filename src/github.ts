@@ -375,14 +375,17 @@ export class GhCliClient implements GitHubClient {
     });
   }
 
-  /** 宣言の repo への `-R` を取る `gh`(`gh pr`・`gh issue`)はここを通る。`-R` を取らない `gh api` は `warmDeclaredRepo` と `run` を
-   *  直に使う(`findPullRequestByHead`)。どちらも上限は `spawn` の1箇所で効く(ADR 0330 決定4)。宣言の repo の token を温め(ADR 0378 決定1)、
-   *  `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(ADR 0330 決定1)。
-   *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
-   *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
+  /** 宣言の repo への `-R` を取る `gh`(`gh pr`・`gh issue`)はここを通る。merge だけは `prepareMerge` が `prepareGh` を直に使い、撃つのを
+   *  呼び手の同期区間まで遅らせる。 */
   private async gh(workspace: WorkspaceConfig, args: string[]): Promise<string> {
+    return (await this.prepareGh(workspace, args))();
+  }
+
+  /** 宣言の repo の token を温め(ADR 0378 決定1)、版を読み、`args` の後ろに残りの引数と `-R` を足して撃つ関数を返す。 */
+  private async prepareGh(workspace: WorkspaceConfig, args: string[]): Promise<(...rest: string[]) => Promise<string>> {
     const repo = await this.warmDeclaredRepo(workspace, `gh ${args[0]} ${args[1]}`);
-    return this.run([...args, "-R", repo], repo, workspace);
+    const fire = await this.prepareSpawn(repo, workspace);
+    return (...rest) => fire([...args, ...rest, "-R", repo]);
   }
 
   /** The declared repo, with its token warmed. */
@@ -392,14 +395,22 @@ export class GhCliClient implements GitHubClient {
     return repo;
   }
 
-  /** ADR 0402 決定2: every call reads gh's version first; the read awaits, so it sits before the spawn's synchronous section. */
+  /** `-R` を取らない `gh api`(`repositoryParent`・`forkPrCredentialSettings`・`findPullRequestByHead`)はここを直に使う。 */
   private async run(args: string[], repo: string, workspace?: WorkspaceConfig): Promise<string> {
+    return (await this.prepareSpawn(repo, workspace))(args);
+  }
+
+  /** Every gh call goes through here and then `spawn`: ADR 0402 決定2's version gate sits in this one place, read first; it
+   *  awaits, so it sits before the spawn's synchronous section. */
+  private async prepareSpawn(repo: string, workspace?: WorkspaceConfig): Promise<(args: string[]) => Promise<string>> {
     await assertGhVersion(this.readGhVersion, this.ghVersion);
-    return this.spawn(args, repo, workspace);
+    return (args) => this.spawn(args, repo, workspace);
   }
 
   /** ADR 0330 決定1・4 / ADR 0399 決定3: recheck the destination in the same synchronous section as spawning `gh` — nothing
-   *  here awaits before the spawn. */
+   *  here awaits before the spawn. `gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(決定1)。上限はこの1箇所で効く
+   *  (決定4)。上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
+   *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
   private spawn(args: string[], repo: string, workspace?: WorkspaceConfig): Promise<string> {
     if (workspace && workspaceNetworkDestination(workspace)?.key !== repo) throw new Error(`workspace ${workspace.name}'s GitHub destination changed while acquiring its token`);
     const cwd = workspace?.path;
@@ -511,9 +522,8 @@ export class GhCliClient implements GitHubClient {
   }
 
   async prepareMerge({ workspace, number }: PrRef): Promise<(head: string) => Promise<void>> {
-    const repo = await this.warmDeclaredRepo(workspace, "gh pr merge");
-    await assertGhVersion(this.readGhVersion, this.ghVersion);
-    return async (head) => void (await this.spawn(["pr", "merge", String(number), "--merge", "--match-head-commit", head, "-R", repo], repo, workspace));
+    const fire = await this.prepareGh(workspace, ["pr", "merge", String(number), "--merge", "--match-head-commit"]);
+    return async (head) => void (await fire(head));
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {

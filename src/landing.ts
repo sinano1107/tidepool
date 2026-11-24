@@ -2290,7 +2290,8 @@ export function createLanding(deps: LandingDeps): Landing {
             });
           };
           const merging = origin.kind === "pushed" && ciPrompt === undefined && ci === "success" && content !== null && content.left.length === 0;
-          // merge する回の縛りの読みは prepare の後の同期区間の1箇所だけ —— ここで重ねて読まない(ADR 0330 決定4)
+          // merge する回の縛りの読みは prepare の後の同期区間にある(ADR 0330 決定1)—— ここでの stop はその読みと同じものの二重になるので
+          // merge する回は読まない。merge しない回の stop は question と取り下げの縛りの読みとして残る
           await actIfGateOpen(() => !merging && stop(askSurface) ? true : null, async () => {
             // ADR 0394 決定1 / ADR 0387 決定1: 外の head は CI の色を待たずに問う。
             if (origin.kind !== "pushed" || ciPrompt !== undefined) {
@@ -2301,18 +2302,19 @@ export function createLanding(deps: LandingDeps): Landing {
             // ADR 0394 決定2 / ADR 0288 決定2: 読みの間と違い、merge の執行中は収束が question を立てない。
             inFlight.set(task_id, "write");
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
+            const stoppedBeforeMerge = Symbol("stopped before merge");
             const failure = await github.prepareMerge(ref).then(
-              (merge) => actIfGateOpen(() => {
+              (merge) => actIfGateOpen<null, typeof stoppedBeforeMerge>(() => {
                 // ADR 0330 決定1・4: token と版を待つ間の変化は、gh の起動と同じ同期区間のこの1箇所で読む
                 workspaceNetworkDestination(workspace);
                 assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
-                return stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head) ? true : null;
+                return stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head) ? stoppedBeforeMerge : null;
               }, () => merge(head).then(() => null)),
             ).catch((error: unknown) => {
               if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError || error instanceof GhVersionError) throw error;
               return error instanceof Error ? error.message : String(error);
             });
-            if (failure === true) return;
+            if (failure === stoppedBeforeMerge) return;
             if (failure === null) {
               retire(task_id, { kind: "pr_merged", pr_number }, deps.clock.now());
               return;

@@ -910,6 +910,17 @@ export function afterCiRead(github: FakeGitHubClient, change: () => void | Promi
   };
 }
 
+/** merge の準備(token と gh の版)の await で止める窓 —— 止まっている間に門・ref・内容・登録を動かす題材。 */
+export function heldInPrepareMerge(github: FakeGitHubClient) {
+  const window = awaitWindow();
+  const prepareMerge = github.prepareMerge.bind(github);
+  github.prepareMerge = async (ref) => {
+    await window.hold();
+    return prepareMerge(ref);
+  };
+  return window;
+}
+
 /** GitHub が merge を受け付けた後、応答が盤面に返る前で hold に止める。止まっている間、PR はもう MERGED を返す。 */
 export function holdAfterMerge(github: FakeGitHubClient, hold: () => Promise<void>): void {
   const prepareMerge = github.prepareMerge.bind(github);

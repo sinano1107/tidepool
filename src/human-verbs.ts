@@ -1808,6 +1808,9 @@ export async function submitAnswer(
             workspaceNetworkDestination(mergeWorkspace);
           };
           const github = deps.github;
+          // 比べられなかった head の拒否文(ADR 0242 決定3、#1854)
+          const couldNotCompare = (head: string, err: unknown) =>
+            `cannot merge: could not compare PR #${mergePr}'s head ${head} with the task's content — ${err instanceof Error ? err.message : String(err)}`;
           const readAndCompare = async () => {
             const lastPushed = lastPushedHead(deps.db, kind.task_id);
             assertMergeRepo();
@@ -1838,10 +1841,7 @@ export async function submitAnswer(
             ).catch((err) => {
               if (err instanceof WorkspaceRepoMismatchError || err instanceof DeclaredRepoMismatchError || err instanceof LandingRefCheckError || err instanceof QuestionClosedError) throw err;
               assertMergeRepo();
-              throw new DomainError(
-                `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
-                  (err instanceof Error ? err.message : String(err)),
-              );
+              throw new DomainError(couldNotCompare(pr.head, err));
             });
             return { pr, ...content };
           };
@@ -1850,6 +1850,9 @@ export async function submitAnswer(
           // spec #3273 text A10: push の後の拒否は、取り込みと push が済んだことを言う
           let pushed = "";
           const refuse = (message: string) => new DomainError(withNotice(`${pushed}${message}`, notice));
+          const refuseIfLeftBehind = (carried: string[]) => {
+            if (carried.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `PR #${mergePr}`));
+          };
           // ADR 0394 決定3: question が問うていない外の部分は、書き手で立て直して拒む。question が開いていると読んだ同期区間で立て直すので、
           // 同時に走るもう一方の回答は question closed で拒まれる(ADR 0387 Status 追記 (1) を記録を足さずに保つ)
           const refuseUnasked = (origin: Exclude<PrHeadOrigin, { kind: "pushed" }>) => {
@@ -1877,7 +1880,7 @@ export async function submitAnswer(
             // ADR 0394 決定3: 寄り道の後は外の部分が無しのときだけ通す —— 同じ書き換えへ戻されても拒む(#3485)
             if (head.kind !== "pushed") throw refuseUnasked(head);
           }
-          if (left.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `PR #${mergePr}`));
+          refuseIfLeftBehind(left);
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
           if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, kind.task_id, pr.head, now())) {
             throw refuse(
@@ -1888,8 +1891,9 @@ export async function submitAnswer(
           if (pr.ci !== "success" && pr.ci !== "unreported") {
             throw refuse(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
           }
-          // ADR 0236 決定2・3 / ADR 0394 決定2: 印は merge の準備の待ちの前に同期で取り、取れなければ拒む(question は開いたまま)。
-          // 印はこの関数が返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い。印は finally が放す
+          // ADR 0236 決定2・3: 印は merge の準備の待ちの前に同期で取り、取れなければ拒む(question は開いたまま)。待ちの間も印を持つので、
+          // 収束はその間に push も question の立て直しもしない(ADR 0394 決定2 の書き手 / ADR 0288 決定2 の印の後)。印はこの関数が
+          // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い。印は finally が放す
           mark.release = deps.landing.takeInFlightMark(kind.task_id);
           if (!mark.release) throw new DomainError(beingMerged);
           // External merge precedes the persisted answer. Failure leaves the question open.
@@ -1913,9 +1917,9 @@ export async function submitAnswer(
             try {
               leftNow = contentLeftBehindLocally(deps.db, mergeWorkspace, kind.task_id, pr.head);
             } catch (err) {
-              throw refuse(`cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ${err instanceof Error ? err.message : String(err)}`);
+              throw refuse(couldNotCompare(pr.head, err));
             }
-            if (leftNow.length > 0) throw refuse(leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `PR #${mergePr}`));
+            refuseIfLeftBehind(leftNow);
             return null;
           }, () => merge(pr.head).catch(mergeFailed));
           rootRecord = { root: kind.task_id, payload: { kind: "pr_merged", pr_number: mergePr } };
