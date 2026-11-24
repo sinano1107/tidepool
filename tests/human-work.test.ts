@@ -992,6 +992,26 @@ it("done の後に作業台に stash が残っていれば、作業台を残し�
   expect([getTask(b.db, h.id)!.status, git(b.ws.path, "show", `task/${h.id}:mine.txt`), existsSync(path)]).toEqual(["done", "mine", true]);
 });
 
+// #3752: 開けない段を数えずに作業台を消すと、その stash は取り消せない形で失われる
+it("done の後に作業台の stash の途中の段の object が作業台に無くても、作業台を残して stash が残っていると言う", async () => {
+  const b = await board("complete-kept-stash-missing-entry");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  git(path, "update-ref", "--create-reflog", "-m", "at the bottom", "refs/stash", "HEAD");
+  writeFileSync(join(path, "mine.txt"), "parked\n");
+  git(path, "stash");
+  const middle = git(path, "rev-parse", "refs/stash");
+  git(path, "update-ref", "-m", "on top", "refs/stash", "HEAD");
+  rmSync(join(path, ".git", "objects", middle.slice(0, 2), middle.slice(2)));
+
+  const done = await complete(b, h);
+
+  expect(done.ok && done.value.notice).toBe(
+    `completed. The workbench at ${path} is kept: the stash holds commits that task/${h.id} does not have — merge them into task/${h.id}, or delete them. The task is done, so nothing enters through it.`,
+  );
+  expect([getTask(b.db, h.id)!.status, existsSync(path)]).toEqual(["done", true]);
+});
+
 it("cancel は取り込まず、ブランチも作業台も動かさない(pin C11、ADR 0374 決定11)", async () => {
   const b = await board("cancel-keeps");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });

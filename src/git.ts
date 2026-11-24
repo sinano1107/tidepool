@@ -48,6 +48,26 @@ export function gitAnswers(ask: () => unknown): boolean {
 export const isAncestor = (repo: { path: string }, ancestor: string, descendant: string, readGit = git): boolean =>
   gitAnswers(() => readGit(repo.path, "merge-base", "--is-ancestor", ancestor, descendant));
 
+/** ADR 0373 決定4 / ADR 0382 決定2: `refs/stash` の今の値と reflog の各段の sha(新しい順)—— 段を1つずつ `rev-parse` して object を開かない
+ *  (`log -g` / `reflog show` は開けない段を黙って落とす、#3752)。件数を越えたと git が言うまで回し、ほかの失敗は投げる。`refs/stash` が
+ *  無ければ空、reflog が無ければ(update-ref で作った)今の値だけ —— そのとき `@{0}` が落ちるのを読めなさと取り違えない。
+ *  shortcut: 段ごとに git を1度起こす —— stash が数百段に積まれて遅くなれば reflog を1度で読む口に替える。 */
+export function stashEntries(cwd: string, readGit = git): string[] {
+  let top = "";
+  if (!gitAnswers(() => (top = readGit(cwd, "rev-parse", "--verify", "--quiet", "refs/stash")))) return [];
+  if (!gitAnswers(() => readGit(cwd, "reflog", "exists", "refs/stash"))) return [top];
+  const entries = new Set([top]);
+  for (let n = 0; ; n++) {
+    try {
+      entries.add(readGit(cwd, "rev-parse", "--verify", `refs/stash@{${n}}`));
+    } catch (err) {
+      // 空の reflog と読めない reflog を git は同じ「is empty」で言うので、それは件数の終わりに数えない
+      if (/^fatal: log for '.*' only has \d+ entries$/m.test(String((err as { stderr?: unknown }).stderr ?? ""))) return [...entries];
+      throw err;
+    }
+  }
+}
+
 /** ADR 0378 決定4: read the configured origin before applying insteadOf. */
 export function readOriginConfig(readGit: (args: string[]) => Buffer): string | undefined {
   return readConfig(readGit, ["remote.origin.url"]);

@@ -114,6 +114,38 @@ it.each<[string, (b: Board) => void, "keyed" | "keyless" | "none", ReturnType<ty
     ["the stash holds commits that task/parent does not have"],
   ],
   [
+    // #3752: `reflog show` は開けない段を exit 0 のまま落とし、残る段がどれも書く先に入っていれば `nothing` と判定していた
+    "stash の途中の段の object が作業台に無くても、その段を残っている作業に数える",
+    ({ at }) => {
+      git(at, "update-ref", "--create-reflog", "-m", "at the bottom", "refs/stash", TARGET);
+      writeFileSync(join(at, "parent.txt"), "stashed\n");
+      git(at, "stash", "--quiet");
+      const middle = git(at, "rev-parse", "refs/stash");
+      git(at, "update-ref", "-m", "on top", "refs/stash", TARGET);
+      rmSync(join(at, ".git", "objects", middle.slice(0, 2), middle.slice(2)));
+    },
+    "keyed",
+    "refuse",
+    ["the stash holds commits that task/parent does not have"],
+  ],
+  [
+    "stash のどの段も書く先に入っていれば数えない",
+    ({ at }) => {
+      git(at, "update-ref", "--create-reflog", "-m", "at the bottom", "refs/stash", `${TARGET}~1`);
+      git(at, "update-ref", "-m", "on top", "refs/stash", TARGET);
+    },
+    "keyed",
+    "nothing",
+    [],
+  ],
+  [
+    "reflog の無い refs/stash(update-ref で作った)はその値を判定する",
+    ({ at }) => git(at, "update-ref", "refs/stash", `board/${CARRIED}`),
+    "keyed",
+    "refuse",
+    ["the stash holds commits that task/parent does not have"],
+  ],
+  [
     "書く先の branch が無く、別の名前の branch に人間の commit がある",
     ({ at }) => {
       commitWork(at, "notes.txt", "renamed away\n");

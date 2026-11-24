@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { boardViewStatus, CheckoutUnreadableError, git, gitAnswers, isAncestor, workerRepoGit } from "./git.js";
+import { boardViewStatus, CheckoutUnreadableError, git, gitAnswers, isAncestor, stashEntries, workerRepoGit } from "./git.js";
 
 // 作業台(Workbench)の鍵・持ち主・寿命の判定を1か所に置く(ADR 0382、#3352 の追記 1〜3)。入口は判定を自分で書かず、これを呼ぶ。
 
@@ -92,7 +92,7 @@ export function humanWorkLeft(read: WorkbenchRead): string[] {
     .map((line) => line.split(" ") as [string, string])
     .filter(([, ref]) => ref !== `refs/heads/${target}` && !ref.startsWith(`refs/heads/${BOARD_BRANCHES}/`))
     // stash は reflog の段ごとに1つ —— `refs/stash` は一番上の段しか指さない
-    .filter(([sha, ref]) => (ref === "refs/stash" ? onWorkbench(at, () => workerRepoGit(at, "reflog", "show", "--format=%H", "refs/stash")).split("\n") : [sha]).some((commit) => !inTarget(read, commit)))
+    .filter(([sha, ref]) => (ref === "refs/stash" ? onWorkbench(at, () => stashEntries(at, workerRepoGit)) : [sha]).some((commit) => !inTarget(read, commit)))
     .map(([, ref]) => (ref === "refs/stash" ? "the stash" : ref.slice("refs/heads/".length)));
   if (strays.length > 0) left.push(`${strays.join(", ")} ${strays.length > 1 ? "hold" : "holds"} commits that ${target} does not have — merge them into ${target}, or delete them`);
   return left;
