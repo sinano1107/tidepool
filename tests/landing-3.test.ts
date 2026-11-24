@@ -12,6 +12,7 @@ import {
   contentLeftBehindLocally,
   createLanding,
   landingState,
+  registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
@@ -2221,7 +2222,7 @@ it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠け、タ�
   const { workspace, db, clock, work } = local;
   const landed = await land(local);
   commitOutOfBand(workspace, `task/${work.id}`);
-  await expect(answerLocalMerge(local)).rejects.toThrow("answer the quarantine question");
+  quarantineWorkspace(db, workspace.name, new Error("task branch moved outside the board"), clock.now());
   const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
   await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace }) }, quarantine, [RESTORE_THE_BASELINE], undefined, () => clock.now(), "webui");
 
@@ -2231,15 +2232,34 @@ it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠け、タ�
   expect(boardEvents(db, work.id, "local_merge_executed").map(({ payload }) => payload)).toEqual([{ kind: "local_merge_executed", sha: landed }]);
 });
 
+// ADR 0401 追記(#3647): merge は今のタスクブランチ、hold は問うた tip で判定する —— question の間に修理が merge back してから着地し記録の前に死んだ根で、
+// merge は修理を運んだ着地を刻み、hold は問うた tip が載ったので断る
+it.each(LANDINGS_WITHOUT_RECORD)("question の間に修理が merge back されてから %s で着地し記録だけ欠けた local merge question は、hold を merge を名指して断り、merge は修理を運んだ着地を local_merge_executed として1件刻む", async (_form, land) => {
+  const local = await landLocally("local-merge-repaired-then-landed");
+  const { workspace, db, work, question } = local;
+  await mergeBackRepair(local);
+  expect(git(workspace.path, "rev-parse", `task/${work.id}`)).not.toBe(question.question_landing_tip);
+  const landed = await land(local);
+
+  const refused = answerLocalMerge(local, "hold");
+  await expect(refused).rejects.toThrow("answer `merge`");
+  expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
+
+  await answerLocalMerge(local);
+
+  expect(boardEvents(db, work.id, "local_merge_executed").map(({ payload }) => payload)).toEqual([{ kind: "local_merge_executed", sha: landed }]);
+});
+
 // ADR 0401 追記(#3647) / ADR 0403 決定1: 問うた tip が無い question は今のタスクブランチで判定する —— 無いことを「判定しない」と読まない
 it("問うた tip を持たない local merge question でも、タスクブランチが着地の後に記録だけ欠けていれば hold は merge を名指して断る", async () => {
   const local = await landLocally("local-hold-without-asked-tip");
-  const { db, work, question } = local;
+  const { db, clock, work } = local;
   landFfWithoutRecord(local);
-  // 読めずに立った question(ADR 0403 決定1)の形を直接作る
-  db.prepare("UPDATE tasks SET question_landing_tip = NULL WHERE id = ?").run(question.id);
+  // 読めずに立った question(ADR 0403 決定1)は tip を持たない —— 登録の既定値
+  registerLocalMergeQuestion(db, getTask(db, work.id)!, "land it", clock.now());
+  const withoutTip = openLocalMergeQuestions(db, work.id).find((q) => q.question_landing_tip === null)!;
 
-  await expect(answerLocalMerge(local, "hold")).rejects.toThrow("answer `merge`");
+  await expect(answerLocalMerge(local, "hold", withoutTip)).rejects.toThrow("answer `merge`");
 
   expect(boardEvents(db, work.id, "landing_declined")).toEqual([]);
 });
