@@ -10,7 +10,7 @@ import { whyInvalidRegistryName } from "../src/registry-name.js";
 import { buildSandboxSettings } from "../src/sandbox.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
-import { refValues, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig } from "../src/workspace.js";
+import { refValues, releaseWorkspace, runPlaceReadPaths, type WorkspaceConfig, withProtectedTipCheckout } from "../src/workspace.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, prepareAtPickup, quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 import { answer, type Board, boardWithParent, type Conflicted, childOf, completedChild, conflicted, resolveInWorkbench } from "./workbench-fixture.js";
@@ -54,6 +54,17 @@ it("作業台は空の template から作った git repo で hook を持たず `
   const other = registerTask(c.db, { type: "work", title: "other", purpose: "why", completion_criteria: "done" }, c.clock.now(), ...HUMAN_WEBUI);
   const place = await prepareAtPickup(c.db, c.ws, other, { workspacesBaseDir: c.base });
   expect(() => git(place.path, "config", "receive.denyCurrentBranch")).toThrow();
+});
+
+it("作業台も封じ込めの検査の使い捨ての checkout も名前の場所の objects を借りず、書く先の閉包を自分の store だけで解く(ADR 0411 決定2・7)", async () => {
+  const c = await conflicted();
+  const own = (checkout: string) => {
+    expect(existsSync(join(checkout, ".git", "objects", "info", "alternates"))).toBe(false);
+    return git(checkout, "rev-list", "--objects", "--missing=print", "HEAD").split("\n").filter((line) => line.startsWith("?"));
+  };
+
+  expect(own(c.workbench())).toEqual([]);
+  expect(await withProtectedTipCheckout(c.ws, c.base, async (path) => own(path))).toEqual([]);
 });
 
 it("作業台の番地はどの worker の sandbox の読み書きの root にも入らず、workspace の名前・task の checkout・読み専用の checkout・面接室のどれの番地にもならない(pin A2)", async () => {
