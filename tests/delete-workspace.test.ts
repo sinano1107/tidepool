@@ -427,7 +427,7 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     const o = await openedWorkbench(withHistoryOnlyBlob);
     await o.close();
     git(o.workbench, "checkout", "--quiet", "HEAD~1", "--", "old.txt");
-    git(o.workbench, "commit", "--quiet", "-m", "restore old.txt");
+    git(o.workbench, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "restore old.txt");
     const blob = git(o.workbench, "rev-parse", "HEAD:old.txt");
     const loose = join(o.ws.path, ".git", "objects", blob.slice(0, 2), blob.slice(2));
     rmSync(loose);
