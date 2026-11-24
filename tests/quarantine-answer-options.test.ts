@@ -1085,7 +1085,7 @@ it("在る object の読みに stderr が付いても(alternates の先が無い
 });
 
 // #3752: `log -g` は開けない段を exit 0 のまま落とし、その段は keep-around に持たれずに reflog と一緒に消えていた
-it.each(["restore the baseline", GIVE_UP])("refs/stash の途中の段が alternates の先にだけある `%s` は T3 で拒み、refs/stash も reflog も keep-around も書かない(ADR 0373 決定4、ADR 0409 決定4、text T3)", async (text) => {
+it.each(["restore the baseline", GIVE_UP])("refs/stash の途中の件が手元で在るか無いか分からない(alternates の先が無い)`%s` は T3 で拒み、refs/stash も reflog も keep-around も書かない(ADR 0373 決定4、ADR 0409 決定4、text T3)", async (text) => {
   const { ws, db, question } = await quarantinedWorkspace("restore-stash-middle-unknown");
   for (const body of ["first\n", "second\n", "third\n"]) {
     writeFileSync(join(ws.path, "README.md"), body);
@@ -1101,6 +1101,24 @@ it.each(["restore the baseline", GIVE_UP])("refs/stash の途中の段が altern
 
   rmSync(join(ws.path, ".git", "objects", "info", "alternates"));
   expect(readFileSync(reflog, "utf8")).toBe(reflogBefore);
+  await expectNothingWritten(db, ws, question, refsBefore, comparisonBefore);
+  db.close();
+});
+
+// 空の reflog を git は読めない reflog と同じ「is empty」で言う —— 各件を並べられないので、T3 の形で拒む
+it("refs/stash の reflog を git が空と言う `restore the baseline` は、reflog を名指して何も書かずに拒む(ADR 0373 決定4、ADR 0409 決定4)", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("restore-stash-reflog-empty");
+  for (const body of ["first\n", "second\n"]) {
+    writeFileSync(join(ws.path, "README.md"), body);
+    git(ws.path, "stash", "push", "-q");
+  }
+  git(ws.path, "reflog", "expire", "--expire=now", "refs/stash");
+  const [refsBefore, comparisonBefore] = [refsOf(ws), await nextComparison(db, ws)];
+
+  expect(await refusal(answer(db, ws, "restore the baseline"))).toBe(
+    `could not read the reflog of refs/stash in ${ws.path} (fatal: log for refs/stash is empty). Nothing was written; fix what git reports there, then answer again.`,
+  );
+
   await expectNothingWritten(db, ws, question, refsBefore, comparisonBefore);
   db.close();
 });

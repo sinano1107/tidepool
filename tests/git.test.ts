@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -134,6 +134,26 @@ it("`stashEntries` は途中の段の object が無くても reflog の全段を
   const ws = await makeWorkspace("stash-entries-missing");
   const entries = stashThree(ws.path);
   rmSync(join(ws.path, ".git", "objects", entries[1]!.slice(0, 2), entries[1]!.slice(2)));
+
+  expect(stashEntries(ws.path)).toEqual(entries);
+});
+
+// 一番古い件の old 値が 0 でないとき、git は件数と同じ番号 `@{N}` にその old 値を返す —— 消した件の sha を足さない
+it("`stashEntries` は `--rewrite` なしで一番古い件を消した reflog でも、残った件だけを並べる", async () => {
+  const ws = await makeWorkspace("stash-entries-deleted-oldest");
+  const entries = stashThree(ws.path);
+  fixtureGit(ws.path, "reflog", "delete", "refs/stash@{2}");
+
+  expect(stashEntries(ws.path)).toEqual(entries.slice(0, 2));
+});
+
+it("`stashEntries` は ambient の LC_ALL が git の文を訳す locale でも件の数の終わりを読む", async ({ skip }) => {
+  const ws = await makeWorkspace("stash-entries-translated");
+  const entries = stashThree(ws.path);
+  const LOCALE = "de_DE.UTF-8";
+  const probe = spawnSync("git", ["rev-parse", "--verify", "refs/stash@{9}"], { cwd: ws.path, env: { ...process.env, LC_ALL: LOCALE } });
+  if (probe.stderr.toString().startsWith("fatal:")) skip(`this git does not translate its messages into ${LOCALE}`);
+  vi.stubEnv("LC_ALL", LOCALE);
 
   expect(stashEntries(ws.path)).toEqual(entries);
 });

@@ -48,22 +48,24 @@ export function gitAnswers(ask: () => unknown): boolean {
 export const isAncestor = (repo: { path: string }, ancestor: string, descendant: string, readGit = git): boolean =>
   gitAnswers(() => readGit(repo.path, "merge-base", "--is-ancestor", ancestor, descendant));
 
-/** ADR 0373 決定4 / ADR 0382 決定2: `refs/stash` の今の値と reflog の各段の sha(新しい順)—— 段を1つずつ `rev-parse` して object を開かない
- *  (`log -g` / `reflog show` は開けない段を黙って落とす、#3752)。件数を越えたと git が言うまで回し、ほかの失敗は投げる。`refs/stash` が
- *  無ければ空、reflog が無ければ(update-ref で作った)今の値だけ —— そのとき `@{0}` が落ちるのを読めなさと取り違えない。
- *  shortcut: 段ごとに git を1度起こす —— stash が数百段に積まれて遅くなれば reflog を1度で読む口に替える。 */
+/** ADR 0373 決定4 / ADR 0382 決定2: `refs/stash` の今の値と reflog の各件の sha(新しい順)—— 1件ずつ `rev-parse` して object を開かない
+ *  (`log -g` / `reflog show` は開けない件を黙って落とす、#3752)。reflog の件の数を越えたと git が言うまで回し、ほかの失敗は投げる。
+ *  `refs/stash` が無ければ空、reflog が無ければ(update-ref で作った)今の値だけ —— そのとき `@{0}` が落ちるのを読めなさと取り違えない。
+ *  shortcut: 1件ごとに git を1度起こす —— stash が数百件に積まれて遅くなれば reflog を1度で読む口に替える。 */
 export function stashEntries(cwd: string, readGit = git): string[] {
   let top = "";
   if (!gitAnswers(() => (top = readGit(cwd, "rev-parse", "--verify", "--quiet", "refs/stash")))) return [];
   if (!gitAnswers(() => readGit(cwd, "reflog", "exists", "refs/stash"))) return [top];
-  const entries = new Set([top]);
+  const entries: string[] = [];
   for (let n = 0; ; n++) {
     try {
-      entries.add(readGit(cwd, "rev-parse", "--verify", `refs/stash@{${n}}`));
+      entries.push(readGit(cwd, "rev-parse", "--verify", `refs/stash@{${n}}`));
     } catch (err) {
-      // 空の reflog と読めない reflog を git は同じ「is empty」で言うので、それは件数の終わりに数えない
-      if (/^fatal: log for '.*' only has \d+ entries$/m.test(String((err as { stderr?: unknown }).stderr ?? ""))) return [...entries];
-      throw err;
+      // 空の reflog と読めない reflog を git は同じ「is empty」で言うので、それは件の数の終わりに数えない
+      const count = /^fatal: log for '.*' only has (\d+) entries$/m.exec(String((err as { stderr?: unknown }).stderr ?? ""))?.[1];
+      if (count === undefined) throw err;
+      // 一番古い件の old 値が 0 でなければ(`--rewrite` なしの delete や expire の後)、git は `@{件の数}` にその old 値を返す
+      return [...new Set([top, ...entries.slice(0, Number(count))])];
     }
   }
 }
@@ -354,6 +356,8 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     HOME: process.env.HOME,
     ...TIDEPOOL_GIT_IDENTITY_ENV,
     ...env,
+    // 盤面は git の文を読み分ける(`only has N entries` など)—— LC_ALL が訳す locale でも英語で言わせる
+    LANGUAGE: "en",
     GIT_ALLOW_PROTOCOL: "file",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
