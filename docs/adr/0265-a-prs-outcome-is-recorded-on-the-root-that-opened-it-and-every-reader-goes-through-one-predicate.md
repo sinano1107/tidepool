@@ -1,5 +1,7 @@
 # PR の決着は PR を開いた根に刻み、読み手は1本の述語を通る —— `external` の根は内容で終わり、読めなければ止まる
 
+**Status 追記: 決定6 の告知(判断行)は、走らない子の id と件数を言わなくなる —— 書く条件は「根の下に終わっていない子がある」で、git を読まない。どの子がなぜ走らないかは、キューの行と子の詳細が毎回導いて言う。人間が着地を終えた根にも同じ告知を書く([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定1〜3、2026-11-24、issue #3703)。**
+
 **Status 追記: 決定7 の8つ目の状態「ブランチが失われて終了」(`branch_lost`)は、終わりの記録(`landing_ended_branch_lost`、廃止)でなく、効いている失われた event を持つ死んだ(透明でない)`done` の work から導く。根かどうかは問わない([ADR 0407](0407-a-task-whose-branch-is-lost-reads-as-landing-ended-no-ending-record-is-written-and-the-give-up-closes-its-landing-questions-with-the-lost-event.md) 帰結、2026-11-23、issue #3582)。**
 
 **Status 追記: 決定7 の着地の状態は9つになる —— 8つに、人間が昇格失敗の question に「end landing」と答えて着地を終えた PR の根(`landing_ended_pr_left`)の「人間が着地を終えた」(`pr_left`)を足す。ブランチが失われて終えた記録の次に導く。同じ回答はキューの行を外し、開いた merge question を PR の観測を刻まずに閉じる —— 決定2 の観測で閉じた question の印は、根の決着が無いので出ない。決定6 の塞ぎと直接 cancel の範囲は、この根にも同じ1本で当たる([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定5・6、2026-11-23、issue #3604)。**
