@@ -1,5 +1,7 @@
 # task は自分の中身が向かう repo を覚え、根を指す記録は根の id で持ち、食い違った根だけを止める
 
+**Status 追記: 決定5 の食い違いの question を無人 merge の tick・外の merge の走査・無人 merge の観測が立てるとき、根の workspace の Quarantine や registry の止まりが開いていても立てる —— ADR 0241 決定6 の「失敗 question を重ねない」の対象ではない。tick は workspace の Quarantine 単独では止まらない(ADR 0370 決定1 / ADR 0289 決定2)ので、その根を止めているのは食い違いで、信号はこの question しか持たない。伏せると、tick がその根だけを理由を言わずに読まなくなり、Quarantine に答えても食い違いは残る。出口の「この根の着地を終える」は Quarantine が開いたままでも受理され、Quarantine の受理は question の有無で変わらない。収束は今のまま —— 収束では Quarantine が根を実際に止める(ADR 0241 決定3)ので、Quarantine の verdict を返し、受理の後の収束が問う。別の昇格失敗 question が開いた根は収束が撃たないので、その根の食い違いを問うのは tick だけである(2026-11-25、issue #3791)。**
+
 **Status 追記: 名前の場所の ref の比較器(ADR 0370 決定1)も、比べる前に根の記録と今の宣言を比べる —— 決定3 の「行き先を読むたびに」を ref の比較へ広げる。比べるのは比較器で、呼び手は宣言の読み直しと比較を対にしない。比べ直しは比較の失敗を workspace の Quarantine に変える所(ADR 0403 決定4)の外に置き、食い違いは決定5 のとおり根だけを止める。元は #3699 —— 呼び手が対を手で組む形では、安全な箇所の理由が呼び手から見えず、#3680 の review が欠陥と読んだ(2026-11-24、issue #3699)。**
 
 **Status 追記: 決定6 の「この根の着地を終える」の回答は、根の下に終わっていない子があれば、回答と同じ transaction で盤面名義の告知(判断行)を根に書く。出口は cancel だけを言う。塞がれた子の行の理由は、閉じた PR と区別した種類を持つ([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定2・3、2026-11-24、issue #3703)。**
