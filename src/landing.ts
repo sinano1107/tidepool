@@ -470,21 +470,23 @@ export function conflictedPrRoute(prNumber: number, workspace: WorkspaceConfig, 
     "then answer `merge`: the board refuses it, listing the commits you pushed, and closes this question — answer `merge` on the new question it names to merge.";
 }
 
-/** ADR 0387 決定1・2: 盤面が push していない head の question の本文と `merge` の拒否文が共有する句。 */
+/** ADR 0387 決定1・2: 盤面の記録に無い head の question の本文と `merge` の拒否文が共有する句。ADR 0401 決定3: push の後・記録の前に
+ *  盤面が落ちると盤面自身の push もこの head になるので、誰が push したかを断定せず、その場合もありうると言う(`ownPush`)。 */
 const notPushedText = {
-  subject: (prNumber: number, head: string, headRef?: PrHeadRef) => `PR #${prNumber}'s head ${head}${headLocation(headRef)} holds commits the board did not push`,
+  subject: (prNumber: number, head: string, headRef?: PrHeadRef) => `PR #${prNumber}'s head ${head}${headLocation(headRef)} holds commits not in the board's push record`,
   noRecord: (prNumber: number) => `, and the board has no record of what it pushed to PR #${prNumber}`,
   onGitHub: "review the PR's commits on GitHub",
   log: (lastPushed: string, head: string) => `\`git log ${lastPushed}..${head}\``,
+  ownPush: " The board may have pushed them itself and stopped before recording the push.",
 };
 
-/** ADR 0387 決定1: 盤面が push していない head の、推奨 hold の merge question の本文 —— 盤面の知らない commit があることと、
+/** ADR 0387 決定1: 盤面の記録に無い head の、推奨 hold の merge question の本文 —— 盤面の知らない commit があることと、
  *  それを見るコマンド。最後に push した値が無ければ、比べる起点が無いことを言う。 */
 const notPushedQuestionBody = (task: Task, prNumber: number, { head, headRef }: PrDiff, lastPushed: string | undefined) =>
   `"${task.title}": ${notPushedText.subject(prNumber, head, headRef)}` +
   (lastPushed === undefined
-    ? `${notPushedText.noRecord(prNumber)} — ${notPushedText.onGitHub}. Merge, or hold?`
-    : ` — the board last pushed ${lastPushed}. See them with ${notPushedText.log(lastPushed, head)}. Merge, or hold?`);
+    ? `${notPushedText.noRecord(prNumber)} — ${notPushedText.onGitHub}.${notPushedText.ownPush} Merge, or hold?`
+    : ` — the board last pushed ${lastPushed}. See them with ${notPushedText.log(lastPushed, head)}.${notPushedText.ownPush} Merge, or hold?`);
 
 /** spec #3273 text A4c: 外の push が落とした内容の、推奨 hold の merge question の本文。 */
 const outsidePushQuestionBody = (task: Task, prNumber: number, outside: OutsidePush, headRef?: PrHeadRef) =>
@@ -1218,17 +1220,18 @@ export function refuseUnaskedHead(
   const listed = commits === undefined || commits.length === 0 ? "" : `${commits.slice(0, LISTED_COMMITS).join("; ")}${more}`;
   if (origin.kind === "rewritten") {
     // 作業台の手順が答える question を名指すので、閉じたことだけを添える
+    // ADR 0376 Status 追記(#3605): 盤面の push は判じた head の fast-forward だけなので、書き換えは記録の前に落ちた盤面自身の push ではない —— `ownPush` は添えない
     return `${refuseOutsidePushOnce(workspace, workbenchBase, root.id, prNumber, origin.outside, headRef, replaced ? asked : undefined)}` +
-      `${listed === "" ? "" : ` The board did not push these commits on it: ${listed}.`}` +
+      `${listed === "" ? "" : ` These commits on it are not in the board's push record: ${listed}.`}` +
       `${replaced ? ` This question is closed — question ${asked} now asks about this head.` : ""}`;
   }
   if (lastPushed === undefined) {
-    return `${subject}${notPushedText.noRecord(prNumber)}, so it cannot list them — ${notPushedText.onGitHub}.${closing}`;
+    return `${subject}${notPushedText.noRecord(prNumber)}, so it cannot list them — ${notPushedText.onGitHub}.${notPushedText.ownPush}${closing}`;
   }
   if (listed === "") {
-    return `${subject} (the board last pushed ${lastPushed}), and it could not list them here — see them with ${log} in your own clone.${closing}`;
+    return `${subject} (the board last pushed ${lastPushed}), and it could not list them here — see them with ${log} in your own clone.${notPushedText.ownPush}${closing}`;
   }
-  return `${subject} (the board last pushed ${lastPushed}): ${listed}.${closing}`;
+  return `${subject} (the board last pushed ${lastPushed}): ${listed}.${notPushedText.ownPush}${closing}`;
 }
 
 /** ADR 0227 決定2: check 未報告を pending と同じに待つ猶予。猶予は head ごとで、起点は盤面がその head を知った

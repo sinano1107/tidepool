@@ -915,7 +915,7 @@ it("盤面の外の head が check 未報告なら、merge 回答は拒否の前
 
   // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる。盤面の push していない head は question が
   // 問うていないので、最初の回答は question を立て直して拒まれ、以後の回答は立て直した question に答える(ADR 0394 決定3)
-  await expect(answerAt(6)).rejects.toThrow("holds commits the board did not push");
+  await expect(answerAt(6)).rejects.toThrow("holds commits not in the board's push record");
   await expect(answerAt(6)).rejects.toThrow("have not reported yet");
   await expect(answerAt(10)).rejects.toThrow("have not reported yet");
   expect(observed()).toEqual([
