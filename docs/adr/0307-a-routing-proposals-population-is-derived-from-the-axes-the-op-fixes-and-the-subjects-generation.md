@@ -1,5 +1,7 @@
 # routing の提案の母集団は、op が固定する軸 = 対象の今の値 と、対象の種類の世代から導く —— 表のセルに語を写さない
 
+**Status 追記: 決定2 の agent の世代「agent の今の宣言の段」は、盤面が持つ agent の実際に走る段になる([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md) 決定1・4、2026-11-24、issue #3758)。**
+
 2026-10-23 の triage / grilling(issue #2542、#2523 / #2524 の族の根)で決定。ADR 0302 の op ごとの表は決定1・2 から導いたものとして
 書かれたが、各セルは他の ADR / CONTEXT.md が持つ語を写して言い直したもので、写しは元と別に動く。鍵の列は ADR 0306 で「session の
 6 軸から対象が固定する軸を落とす」導出に置き換わり、母集団の列は手書きのまま残った。全行を元と照合したところ、`row` / `add_tier` /

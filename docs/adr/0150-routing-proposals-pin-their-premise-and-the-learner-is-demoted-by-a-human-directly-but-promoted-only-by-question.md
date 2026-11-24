@@ -1,5 +1,7 @@
 # routing の提案は前提を pin して人間の編集に道を譲り、学習器の降格は人間が直接、昇格は question だけで行う
 
+**Status 追記: 決定5 は撤回 —— agent の既定ティアを下げる提案は盤面の routing の提案で、承認は registry に書かない。決定1 の registry の提案の例外(この下の2つの Status 追記)は対象を失う([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md) 決定4、2026-11-24、issue #3758)。**
+
 **Status 追記: 決定1 の「pin が崩れれば観測として決着させる」に例外が2つ入る —— 承認の適用(`(question <id>)` を名指す盤面の commit)が registry に届いた後に盤面が落ちた提案は、古くなったでなく適用済みとして閉じる。tier の改名が途中で止まり、agent の `tier` が生きた名前でない間は照合しない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 決定6、2026-11-22、issue #3515)。**
 
 **Status 追記: registry の提案では決定1 の決着に3つ目の例外が入る —— 承認の commit の有無を registry に問えなければ閉じない。表の書き口の hook が照合する根拠の行・段の順序の pin は、周期の照合と tier の提案の approve も照合する([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 追記、2026-11-24、issue #3635)。**

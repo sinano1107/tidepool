@@ -1,5 +1,7 @@
 # ティアは盤面が持つ順序付きの段の一覧で、段の定義は説明が持ち、advisor は段を読まない
 
+**Status 追記: 決定2 の「agent.md の `tier` は名前で書き、改名は registry へ commit する」と、追記の「registry の agent.md の `tier` が名指していない」削除条件は撤回 —— agent の既定ティアは盤面が持つので改名で切れず、削除は既定ティアに指されている段(孤児を含む)を断る([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md) 決定1・5、2026-11-24、issue #3758)。**
+
 **Status 追記: 決定4 の盤面の判断の段は、ADR 0273 決定6 で Interview の root と監査が走る段の下限の片方になった** —— 走る段は判断の段と測る段の高い方(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
 **Status 追記: 決定6 のフラグと「要るのは最上位だけ」は ADR 0208 で置き換え** —— advisor の上限は盤面設定の選択(`off` / `sonnet` / `opus` / `fable` / 窓で `opus` に下がる `fable`)で、既定は `off`。上限より上の main には advisor を付けず、adapter は系列ごとに「上限の alias が受ける世代の上限」を持つ。

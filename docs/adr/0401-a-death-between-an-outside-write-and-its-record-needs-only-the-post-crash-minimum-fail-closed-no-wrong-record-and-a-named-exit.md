@@ -1,5 +1,7 @@
 # 盤面の外への書き込みと記録の間の死は、落ちた後の最低線だけを満たす —— fail-closed・決定が読む誤った記録を残さない・出口を名指す
 
+**Status 追記: 決定6 と追記(2026-11-24)は段について対象を失う —— agent の既定ティアは盤面が持ち、段を下げる承認と段の改名は registry に書かない([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md)、2026-11-24、issue #3758)。**
+
 2026-11-22 の grilling(族の根 issue #3515)で決定。盤面は、外への書き込み(checkout の git、出元 repo への push、registry の commit)と盤面
 DB の記録を1つの同期区間で書く。await を挟まない区間が防ぐのは交差であって、process の死ではない。この grilling は、死の後で盤面が
 自動で収束させる形を2つ設計し、反証で2つとも捨てた。族の件ごとの今の挙動、外への書き込み51件の表、反証の記録は #3515 のコメントに置く。
