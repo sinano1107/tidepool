@@ -29,3 +29,9 @@
 決定1 の後、完了の門と未決着の解放の検証は、tip の閉包全体を `index-pack --strict` に掛ける。fsck の warning も拒む検査で、名前の場所の ref から届く閉包はもう除外されない。そのため、名前の場所の履歴に fsck の warning に当たる object(mode を 0 埋めした古い tree など)が1つでもあると、pickup は通るのに、すべての task が task の checkout の故障で落ちる。worker には直せず、記録は worker を責める(#3734 の ponytail-review で実測)。
 
 決定5 の条件に「branch の閉包が strict の検査を通ること」を足す。pickup で task の checkout を作るとき、作った複製の閉包に同じ strict の検査を1度撃つ。落ちれば、その object を名指す名前の場所の Quarantine で止まる。帰責は段で決まる(決定3)。名前の場所の履歴が理由の失敗は、checkout の故障になる前に名前の場所の側で止まる。そうした repo を盤面で使えるようにするか(fsck の個別の msg-id を warn に戻すか)は #3128 が持つ。
+
+## 追記(2026-11-24 の実装、issue #3763)
+
+決定2 で作業台を複製にすると、作業台は名前の場所の branch を `board/*` として fetch で受け取る(ADR 0371 決定7)。この fetch に strict の検査が無いと、書く先でない branch(人間が `git merge board/<x>` する相手)の履歴にある fsck の warning に当たる object が作業台に届く。人間が盤面の拒否文どおりに merge すると、借りない写しの中の検証(決定3 の段1)が落ちて作業台の故障になり、workspace の削除の扉は作業台を手で消せと言う —— #3589 と同じ害である(#3763 の試作で実測)。借りる形では、名前の場所の ref から届く閉包を除外していたので起きなかった。
+
+決定5 の条件を、作業台が `board/*` として受け取る branch すべてに広げる。`board/*` の fetch にも task の checkout と同じ strict の検査を当て、落ちれば名前の場所を名指して拒む(決定3 の運ぶ段の帰責)。書く先でない branch に1つでもそうした object があれば、その workspace では作業台を開けない —— 決定5 の「branch の閉包」より厳しい。名前の場所の履歴が理由の失敗は、人間が作業台で merge する前に名前の場所の側で止まる。そうした repo を盤面で使えるようにするかは、今どおり #3128 が持つ。
