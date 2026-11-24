@@ -9,6 +9,8 @@ type QueueScreenTask = NonNullable<import('../design-system/components/board/Que
   /** 子が open なので枠が飛ばす行(行の位置は保たれる)。 */
   blocked?: boolean;
   skipped?: boolean;
+  /** skipped の後に出す理由 —— 塞ぐ根の種類だけ(ADR 0413 決定3・4)。 */
+  skipReason?: string;
   frontInserted?: boolean;
   flash?: boolean;
 };
@@ -17,7 +19,10 @@ interface QueueScreenDrag {
   index: number;
   projected: number;
   startY: number;
+  /** 引く行の高さ + gap —— 他の行が空けるずれ。 */
   shift: number;
+  /** 押した時点の各行の上端と高さ(tasks の順)。skipped の行は2段で高さが違うので、行き先は行数でなく位置で決める。 */
+  rects: { top: number; height: number }[];
 }
 interface TpQueueListProps {
   tasks: QueueScreenTask[];
@@ -89,7 +94,11 @@ function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
     const el = itemEls.current.get(id);
     if (!el) return;
     e.preventDefault();
-    const d = { id, index, projected: index, startY: e.clientY, shift: el.getBoundingClientRect().height + gap };
+    const rects = tasks.map((t) => {
+      const r = itemEls.current.get(t.id)!.getBoundingClientRect();
+      return { top: r.top, height: r.height };
+    });
+    const d = { id, index, projected: index, startY: e.clientY, shift: rects[index]!.height + gap, rects };
     drag.current = d;
     setDraggingId(id);
     el.style.zIndex = '5';
@@ -101,14 +110,22 @@ function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
     const onMove = (ev: PointerEvent) => {
       const dy = ev.clientY - d.startY;
       el.style.transform = `translateY(${dy}px) scale(1.02)`;
-      const p = Math.max(0, Math.min(tasks.length - 1, Math.round(d.index + dy / d.shift)));
+      // 引く行の進む側の縁が越えた行の中点の数だけ動く(等しい高さなら、従来の半行で1つ動く閾値と同じ)
+      const self = d.rects[d.index]!;
+      const mid = (r: { top: number; height: number }) => r.top + r.height / 2;
+      const p = dy >= 0
+        ? d.index + d.rects.filter((r, j) => j > d.index && mid(r) < self.top + self.height + dy).length
+        : d.index - d.rects.filter((r, j) => j < d.index && mid(r) > self.top + dy).length;
       if (p !== d.projected) { d.projected = p; applyShifts(d); }
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
-      const settle = (d.projected - d.index) * d.shift;
+      // 落ちる位置の行が空けた場所へ —— 下へは、その行の下端に引く行の下端を揃える
+      const self = d.rects[d.index]!;
+      const target = d.rects[d.projected]!;
+      const settle = d.projected > d.index ? target.top + target.height - self.height - self.top : target.top - self.top;
       el.style.transition = 'transform 300ms var(--ease-tidal), filter 300ms var(--ease-tidal)';
       el.style.transform = settle ? `translateY(${settle}px)` : '';
       el.style.filter = '';
@@ -154,7 +171,7 @@ function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
              — every other row's button is pure reordering, color-coded distinctly so the two never look alike.
              isHead is an id match against the true queue head, not a position computation: the triage
              preview renders this same list without a headId, and a position match would crown its first row. */}
-          <QueueItem position={i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
+          <QueueItem position={i + 1} task={t} skipped={t.skipped} skipReason={t.skipReason} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>

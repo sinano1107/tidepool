@@ -35,6 +35,16 @@ const LANDING_STATE_COPY = {
   branch_lost: 'landing · ended — the task branch was lost',
   pr_left: 'landing · ended by a human — the PR was left as it is',
 } satisfies Record<import('../src/wire-contract').LandingState, string>;
+/** 塞ぐ根に塞がれた行の理由(ADR 0413 決定3・4)—— 文言は画面が持つ(ADR 0102 決定5)。種類を足して文言を足さないと typecheck が落ちる。 */
+const BLOCKING_ROOT_REASON_COPY = {
+  pr_closed: 'PR closed',
+  landing_ended: 'landing ended',
+} satisfies Record<NonNullable<import('../src/wire-contract').QueueTask['blocking_root']>['kind'], string>;
+/** 塞ぐ根に塞がれた task の詳細の文(ADR 0413 決定3)。`root` は根の id のチップ。種類を足して文を足さないと typecheck が落ちる。 */
+const BLOCKING_ROOT_DETAIL_COPY = {
+  pr_closed: (pr: number, root: React.ReactNode) => <>Will not run: PR #{pr} of {root} was closed outside the board. Reopen the PR on GitHub and merge it — once its content reaches the protected branch, this task runs and lands as a root of its own. Or cancel this task.</>,
+  landing_ended: (pr: number, root: React.ReactNode) => <>Will not run: landing of {root} was ended with PR #{pr} left as it was. Cancel this task; register the work again if it is still wanted.</>,
+} satisfies Record<NonNullable<import('../src/wire-contract').QueueTask['blocking_root']>['kind'], (pr: number, root: React.ReactNode) => React.ReactNode>;
 /** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
 type AppIcons = Record<string, string | undefined>;
 /** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
@@ -338,9 +348,10 @@ function mapData(
       id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
-      // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
-      // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)。盤面全体の停止はスロット行が1回で言う
+      // 行に現れるのは資源単位の停止 — workspace / agent の quarantine と
+      // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)と、塞ぐ根(理由つき、ADR 0413 決定3)。盤面全体の停止はスロット行が1回で言う
       skipped: t.status === 'skipped',
+      skipReason: t.blocking_root && BLOCKING_ROOT_REASON_COPY[t.blocking_root.kind],
       frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
   const openChildren: Record<string, number> = {};
@@ -635,7 +646,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   onStop: () => void;
   onClose: () => void;
 }) {
-  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
   // Interview の root の面接室の在り処と出題の head、受験者の checkout の在り処は詳細だけが運ぶ(ADR 0273 決定1・3 / ADR 0276 決定1 / ADR 0082)
   const [interview, setInterview] = React.useState<{ room: string; head: string } | null>(null);
@@ -643,14 +654,18 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   const [humanStops, setHumanStops] = React.useState<WireContract['GET /api/tasks/:id']['human_stops']>([]);
   // ADR 0374 決定2: 開いている作業台の在り処と、そこへ移るコマンドと clone の remote に足すコマンド
   const [workbench, setWorkbench] = React.useState<{ path: string; commands: string[] } | null>(null);
+  // ADR 0413 決定3: この task を走らせない根 —— 詳細だけが運ぶ
+  const [blockingRoot, setBlockingRoot] = React.useState<WireContract['GET /api/tasks/:id']['blocking_root'] | null>(null);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
     setHumanStops([]);
     setWorkbench(null);
+    setBlockingRoot(null);
     api('GET /api/tasks/:id', { params: { id: task.id } })
       .then((full) => {
         setHumanStops(full.human_stops);
+        setBlockingRoot(full.blocking_root ?? null);
         if (full.workbench) setWorkbench({ path: full.workbench, commands: full.workbench_commands ?? [] });
         if (task.type === 'interview') setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' });
         else if (task.interview_root_id != null) setCheckout(full.examinee_checkout ?? 'not opened yet');
@@ -666,6 +681,11 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
       {humanStops.map((row) => <p key={row.id} style={meta}>stopped by human · {row.reason}{row.cause && ` · ${row.cause}: ${row.evidence}`}</p>)}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
+      {blockingRoot && (
+        <p style={{ ...meta, color: 'var(--text-secondary)' }} data-testid="blocking-root">
+          {BLOCKING_ROOT_DETAIL_COPY[blockingRoot.kind](blockingRoot.pr_number, <IdChip id={blockingRoot.task_id} style={{ display: 'inline-block', verticalAlign: 'bottom' }} />)}
+        </p>
+      )}
       {workbench && <>
         <p style={meta}>workbench: {workbench.path}</p>
         {workbench.commands.map((command) => (

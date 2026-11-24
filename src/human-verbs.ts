@@ -43,7 +43,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, landingInWorkspaceRefusal, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, announceBlockingRoot, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, landingInWorkspaceRefusal, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -799,7 +799,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 受験者は task の checkout で走り、名前に掛かる checkout を持たない(ADR 0356 決定1)。clean は repo があるときだけ
     await refuseOnError(async () => {
       try {
-        await checkAcceptanceFirstHalf(target, all, repoPresent);
+        await checkAcceptanceFirstHalf(deps.db, target, all, repoPresent);
       } catch (err) {
         if (!cancelRcas) throw err;
         const message = err instanceof Error ? err.message : String(err);
@@ -1973,6 +1973,8 @@ export async function submitAnswer(
           payload: rootRecord.payload,
           at: now(),
         });
+        // ADR 0413 決定2: 着地を終えた根の下に未決着の子があれば、盤面名義の告知を同じ transaction で(ADR 0405 決定2)。応答の notice には足さない
+        if (rootRecord.payload.kind === "landing_ended_pr_left") announceBlockingRoot(deps.db, rootRecord.root, now());
       }
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);

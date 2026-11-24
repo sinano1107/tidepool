@@ -1,7 +1,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { GhCliClient } from "../src/github.js";
@@ -13,7 +13,7 @@ import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, regis
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, heldInPrepareMerge, holdAfterMerge } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
+import { checkoutTaskBranch, commitWork, failEventInsert, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
 import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, type RegisteredReef, recordPrOpenedOutsideConvergence, registeredReef, reRegister } from "./landing-fixture.js";
 import { setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -398,6 +398,36 @@ it("merge 中の印が付いた根への「end landing」は拒まれ、根の�
   expect(landingState(db, getTask(db, root.id)!)).toBe("auto_merge_queue");
 });
 
+// ADR 0413 決定2: 人間が着地を終えた根にも、根の下に未決着の子があれば盤面名義の告知を回答と同じ transaction で書く(ADR 0405 決定2)
+const ENDED_NOTICE =
+  "Landing of this task was ended with PR #1 left as it was. Tasks under it that return to its branch will not run " +
+  "— the queue marks them skipped. Cancel them; register the work again if it is still wanted.";
+
+it("根の下に未決着の子があれば、「end landing」の回答は盤面名義の告知を根に1行書き、出口は cancel だけを言う", async () => {
+  const { db, clock, root, answerFailure } = await reefWithPr("auto_if_ci_green");
+  attachUnsettledChild(db, clock, root.id);
+  registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+
+  const answered = await answerFailure("end landing");
+
+  expect(answered).not.toHaveProperty("notice");
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual([
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: ENDED_NOTICE } },
+  ]);
+});
+
+it("「end landing」の告知が書けなければ回答ごと巻き戻り、根の着地は終わらず question も開いたまま", async () => {
+  const { db, clock, root, answerFailure } = await reefWithPr("auto_if_ci_green");
+  attachUnsettledChild(db, clock, root.id);
+  registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+  failEventInsert(db, "decision_logged");
+
+  await expect(answerFailure("end landing")).rejects.toThrow("decision_logged write failed");
+
+  expect(boardEvents(db, root.id, "landing_ended_pr_left")).toEqual([]);
+  expect(promotionFailures(db, root.id).map((task) => task.status)).toEqual(["todo"]);
+});
+
 it("食い違い以外で止まった PR の根(修理の push が拒まれた)は、断念も着地を終える出口も出す(ADR 0241 決定3 / ADR 0399 決定5)", async () => {
   const { db, clock, reef, root, github, landing, answerFailure } = await reefWithPr("escalate");
   await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), root, "repair.txt", "repair\n");
@@ -432,7 +462,7 @@ it("別の checkout で登録し直した名前でも、着地を終えた根の
 
   await answerFailure("end landing");
 
-  expect(blockingRootOf(db, reef.resolve)(getTask(db, child.id)!)).toEqual({ task_id: root.id, pr_number: 1 });
+  expect(blockingRootOf(db, reef.resolve)(getTask(db, child.id)!)).toEqual({ task_id: root.id, pr_number: 1, kind: "landing_ended" });
   expect(nextSlotTask(db, "reef", undefined, undefined, undefined, undefined, blockingRootOf(db, reef.resolve))).toBeUndefined();
 });
 

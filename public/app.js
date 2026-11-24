@@ -268,7 +268,11 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     const el = itemEls.current.get(id);
     if (!el) return;
     e.preventDefault();
-    const d = { id, index, projected: index, startY: e.clientY, shift: el.getBoundingClientRect().height + gap };
+    const rects = tasks.map((t) => {
+      const r = itemEls.current.get(t.id).getBoundingClientRect();
+      return { top: r.top, height: r.height };
+    });
+    const d = { id, index, projected: index, startY: e.clientY, shift: rects[index].height + gap, rects };
     drag.current = d;
     setDraggingId(id);
     el.style.zIndex = "5";
@@ -280,7 +284,9 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     const onMove = (ev) => {
       const dy = ev.clientY - d.startY;
       el.style.transform = `translateY(${dy}px) scale(1.02)`;
-      const p = Math.max(0, Math.min(tasks.length - 1, Math.round(d.index + dy / d.shift)));
+      const self = d.rects[d.index];
+      const mid = (r) => r.top + r.height / 2;
+      const p = dy >= 0 ? d.index + d.rects.filter((r, j) => j > d.index && mid(r) < self.top + self.height + dy).length : d.index - d.rects.filter((r, j) => j < d.index && mid(r) > self.top + dy).length;
       if (p !== d.projected) {
         d.projected = p;
         applyShifts(d);
@@ -290,7 +296,9 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      const settle = (d.projected - d.index) * d.shift;
+      const self = d.rects[d.index];
+      const target = d.rects[d.projected];
+      const settle = d.projected > d.index ? target.top + target.height - self.height - self.top : target.top - self.top;
       el.style.transition = "transform 300ms var(--ease-tidal), filter 300ms var(--ease-tidal)";
       el.style.transform = settle ? `translateY(${settle}px)` : "";
       el.style.filter = "";
@@ -330,7 +338,7 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
         opacity: t.blocked ? 0.55 : void 0
       }
     },
-    /* @__PURE__ */ React.createElement(QueueItem, { position: i + 1, task: t, skipped: t.skipped, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
+    /* @__PURE__ */ React.createElement(QueueItem, { position: i + 1, task: t, skipped: t.skipped, skipReason: t.skipReason, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
   )));
 }
 function FailureRow({ label, line, meta }) {
@@ -4167,6 +4175,14 @@ const LANDING_STATE_COPY = {
   branch_lost: "landing \xB7 ended \u2014 the task branch was lost",
   pr_left: "landing \xB7 ended by a human \u2014 the PR was left as it is"
 };
+const BLOCKING_ROOT_REASON_COPY = {
+  pr_closed: "PR closed",
+  landing_ended: "landing ended"
+};
+const BLOCKING_ROOT_DETAIL_COPY = {
+  pr_closed: (pr, root) => /* @__PURE__ */ React.createElement(React.Fragment, null, "Will not run: PR #", pr, " of ", root, " was closed outside the board. Reopen the PR on GitHub and merge it \u2014 once its content reaches the protected branch, this task runs and lands as a root of its own. Or cancel this task."),
+  landing_ended: (pr, root) => /* @__PURE__ */ React.createElement(React.Fragment, null, "Will not run: landing of ", root, " was ended with PR #", pr, " left as it was. Cancel this task; register the work again if it is still wanted.")
+};
 class ApiError extends Error {
   status;
   detail;
@@ -4353,9 +4369,10 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     assigneeIcon: t.assignee ? icons[t.assignee] : void 0,
     risk: !!t.risk_flag,
     blocked: t.status === "blocked",
-    // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
-    // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)。盤面全体の停止はスロット行が1回で言う
+    // 行に現れるのは資源単位の停止 — workspace / agent の quarantine と
+    // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)と、塞ぐ根(理由つき、ADR 0413 決定3)。盤面全体の停止はスロット行が1回で言う
     skipped: t.status === "skipped",
+    skipReason: t.blocking_root && BLOCKING_ROOT_REASON_COPY[t.blocking_root.kind],
     frontInserted: RECENT_FRONTS.has(t.id),
     flash: RECENT_FRONTS.has(t.id)
   }));
@@ -4587,19 +4604,22 @@ function completionReviewLine(task) {
   return `review \u2192 ${task.review_by?.length ? task.review_by.join(", ") : "board auditor"}`;
 }
 function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose }) {
-  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
   const [interview, setInterview] = React.useState(null);
   const [checkout, setCheckout] = React.useState(null);
   const [humanStops, setHumanStops] = React.useState([]);
   const [workbench, setWorkbench] = React.useState(null);
+  const [blockingRoot, setBlockingRoot] = React.useState(null);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
     setHumanStops([]);
     setWorkbench(null);
+    setBlockingRoot(null);
     api("GET /api/tasks/:id", { params: { id: task.id } }).then((full) => {
       setHumanStops(full.human_stops);
+      setBlockingRoot(full.blocking_root ?? null);
       if (full.workbench) setWorkbench({ path: full.workbench, commands: full.workbench_commands ?? [] });
       if (task.type === "interview") setInterview({ room: full.interview_room ?? "not opened yet", head: full.posed_head ?? "not posed yet" });
       else if (task.interview_root_id != null) setCheckout(full.examinee_checkout ?? "not opened yet");
@@ -4607,7 +4627,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), blockingRoot && /* @__PURE__ */ React.createElement("p", { style: { ...meta, color: "var(--text-secondary)" }, "data-testid": "blocking-root" }, BLOCKING_ROOT_DETAIL_COPY[blockingRoot.kind](blockingRoot.pr_number, /* @__PURE__ */ React.createElement(IdChip, { id: blockingRoot.task_id, style: { display: "inline-block", verticalAlign: "bottom" } }))), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
     navigator.clipboard?.writeText(command).catch(() => {
     });
   } }, "Copy")))), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));

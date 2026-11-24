@@ -92,8 +92,9 @@ export interface QueueTask {
   assignee: string | null;
   risk_flag: number;
   issue_live_state?: "live" | "stale" | "unavailable";
-  /** キューの読み口だけ: この行を skipped にしている根と PR —— 盤面の外で閉じた PR の根(ADR 0265 決定6)か、人間が着地を終えた根(ADR 0399 決定6)。 */
-  blocking_root?: { task_id: string; pr_number: number };
+  /** この行を skipped にしている根と PR と塞ぎの種類 —— 盤面の外で閉じた PR の根(ADR 0265 決定6)か、人間が着地を終えた根(ADR 0399 決定6)。
+   *  キューの行と task 詳細(保存された status が todo の task)が持つ(ADR 0413 決定3)。 */
+  blocking_root?: { task_id: string; pr_number: number; kind: "pr_closed" | "landing_ended" };
 }
 
 /** 盤面の行と task 詳細が共有する欄。 */

@@ -25,9 +25,16 @@ export function registryUnreadablePickupBlocked(
   );
 }
 
-/** 盤面全体の registry の止まりが開いているか —— 収束と poll の catch が、自分の question・計測・行を足さない判定(ADR 0403 決定5)。 */
+/** 盤面全体の registry の止まりが開いているか —— 収束と poll の catch が、自分の question・計測・行を足さない判定(ADR 0403 決定5)。
+ *  読みが投げたら log に出して「開いていない」に倒す —— 呼び手は自分の question・計測・行を足し、失敗は人間に届く。
+ *  投げ返すと poll の失敗の行も根ごとの question も立たず、黙って止まる(#3711)。 */
 export function registryUnreadableOpen(db: Db): boolean {
-  return openQuarantineQuestion(db, "registryUnreadable", null) !== undefined;
+  try {
+    return openQuarantineQuestion(db, "registryUnreadable", null) !== undefined;
+  } catch (error) {
+    console.error("[registry] could not read whether the registry stop is open; treating it as not open:", error);
+    return false;
+  }
 }
 
 /** 盤面の registry の読み込み(YAML・schema・git)の失敗の1つの型。文は止まりを名指し、`reason` は読み込みの失敗そのもの。 */

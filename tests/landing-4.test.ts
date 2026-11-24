@@ -2899,7 +2899,7 @@ it("着地の比較: キューとタスクの表示の読み(閉じた根に塞�
   const { workspace, db, work, child } = await blockingRootWithStrandedChild("landing-compare-views");
   git(workspace.path, "tag", "intruder");
 
-  expect(blockingRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1 });
+  expect(blockingRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1, kind: "pr_closed" });
   expect(landingState(db, getTask(db, work.id)!)).toBe("close_observed");
 
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
@@ -2909,7 +2909,7 @@ it("着地の比較: キューとタスクの表示の読みは、基準の行�
   const { workspace, db, work, child } = await blockingRootWithStrandedChild("landing-compare-views-rowless");
   dropWorkspaceState(db, workspace.name);
 
-  expect(blockingRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1 });
+  expect(blockingRootOf(db, () => workspace)(child)).toEqual({ task_id: work.id, pr_number: 1, kind: "pr_closed" });
 
   expect(holdsBaseline(db, workspace.name)).toBe(false);
 });
