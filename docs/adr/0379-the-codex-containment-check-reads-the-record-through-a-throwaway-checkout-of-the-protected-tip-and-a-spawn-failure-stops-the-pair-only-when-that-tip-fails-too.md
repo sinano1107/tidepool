@@ -1,5 +1,7 @@
 # Codex の封じ込めの検査は記録を読む —— 保護ブランチの tip を使い捨ての checkout に展開して列挙させ、spawn の検査は2段で組の停止と task の失敗を分ける
 
+**Status 追記: 決定2 の「objects は名前の場所から借り」は置き換わる —— task の checkout が複製になったので、使い捨ての checkout も同じ作り方の複製で作る([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定1・7、2026-11-24、issue #3734)。**
+
 **Status 追記: purely-local の封じ込めの回答は、取り込む tree を保護ブランチへ書く前に検査し、通った tip だけを取り込む。「取り込んでから検査する」は、ref を書いた後に検査するという意味ではない。Claude の組は取り込みの手順の中で隠せない形を読み、書く前に拒む。Codex の組は作業台の tip の使い捨ての checkout を検査し、検査の間に tip が動けば拒んで何も書かない(issue #3289)。**
 
 2026-11-13 の wayfinder(map #3178、ticket #3206)で決定。(codex, workspace) の組の検査は、spawn では task の checkout を、組の question への
