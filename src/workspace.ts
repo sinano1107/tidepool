@@ -1650,7 +1650,8 @@ export function takeInOutsideHead(db: Db, workspace: WorkspaceConfig, taskId: st
 }
 
 /** 入口に固有の検査。`approved` は書く先の値として使う ADR 0103 の突き合わせが認めた値(その後に動いた値は CAS が拒む)。`otherTasks` は
- *  ADR 0382 決定4: 数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)。`humanContent` は
+ *  ADR 0382 決定4 と追記(#3769): どの入口も宣言する、数える task の範囲と、その task の commit を持つ tip の拒否文(ブランチと作業台の在り処を受ける)、
+ *  入力の tip のほかに数えない値。`humanContent` は
  *  人間自身の内容の入口(`take in`)—— 盤面の手が無く、人間しか書けない path を通し、書き込む tree が隠せない形を持てば拒む。
  *  `admit` は tip がこの入口のものと判ったときだけ掛ける入口の条件(拒むなら投げる)。`checkedTip` は書く前に組の検査を通した tip で、
  *  読んだ tip がこれでなければ拒む(ADR 0371 決定6)。 */

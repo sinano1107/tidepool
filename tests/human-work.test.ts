@@ -1147,6 +1147,8 @@ it("人間担当の work の完了は、帰り先に merge back の届いた兄�
   const h = work(b, "write it myself", { parent_id: root.id, assignee: HUMAN_ACTOR_ID });
   const path = await startedWithCommit(b, h);
   const sibling = await completedAgentChild(b, root, "sibling.txt", "sibling\n");
+  // 帰り先は次の兄弟の後の値 —— tip が帰り先の今の値を丸ごと含まなくても、届いた兄弟の commit は数えない
+  await completedAgentChild(b, root, "later.txt", "later\n");
   const landed = await completedHumanRoot(b, "landed");
   const landing = createLanding({ defaultAgentName: "tako", db: b.db, clock: b.clock, workspace: b.ws, github: null, resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" as const }) });
   await landing.converge();
@@ -1161,6 +1163,29 @@ it("人間担当の work の完了は、帰り先に merge back の届いた兄�
 
   expect((await complete(b, h)).ok).toBe(true);
   expect(["sibling.txt", "landed.txt", "unlanded.txt", "mine.txt"].map((file) => git(b.ws.path, "show", `task/${root.id}:${file}`))).toEqual(["sibling", "landed", "unlanded", "mine"]);
+});
+
+it("H 自身の作業台で子の merge back の conflict を受けた tip が別の根のブランチも merge していれば、回答は書きかけの commit も落ちると言って拒まれ何も書かない(ADR 0382 追記、#3769)", async () => {
+  const b = await board("child-conflict-carries-other-root");
+  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+  const path = await startedWithCommit(b, h);
+  const a = await completedHumanRoot(b, "a");
+  const first = await pickedAgentChild(b, h);
+  const second = await pickedAgentChild(b, h);
+  await finishAgentChild(b, first, "work.txt", "first\n");
+  await finishAgentChild(b, second, "work.txt", "second\n");
+  git(path, "merge", "--no-edit", `board/task/${h.id}`);
+  git(path, "merge", "--no-edit", `board/task/${a.id}`);
+  expect(() => git(path, "merge", `board/task/${second.task.id}`)).toThrow();
+  writeFileSync(join(path, "work.txt"), "first\nsecond\n");
+  git(path, "commit", "-am", "resolve");
+  const before = nothingWritten(b, h);
+
+  await expect(answer(b)).rejects.toThrow(
+    `${carriesWork(path, `task/${a.id}`)} Start task/${h.id} in the workbench over with \`git reset --hard board/task/${h.id}\` — this drops your merge and your own commits ` +
+      `not taken in yet there too — then merge only \`board/task/${second.task.id}\`, resolve its conflict again and answer again.`,
+  );
+  expect(nothingWritten(b, h)).toEqual(before);
 });
 
 it("非根の H が帰り先 task/<P> を merge した書きかけを持つ作業台で、子の merge back の conflict を受けて答えた回答は通る —— H の帰り先の commit を数えない(ADR 0382 追記、#3769)", async () => {

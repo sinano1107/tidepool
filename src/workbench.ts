@@ -98,7 +98,7 @@ export function humanWorkLeft(read: WorkbenchRead): string[] {
   return left;
 }
 
-/** ADR 0382 決定4: 作業台の tip が持つ、`excluded`(書く先の今の値と答えている task の tip)のどれにも無い commit を含む task のブランチ ——
+/** ADR 0382 決定4 と追記(#3769): 作業台の tip が持つ、`excluded`(入口の入力の tip と、入口が足す帰り先・保護ブランチの今の値)のどれにも無い commit を含む task のブランチ ——
  *  数えるブランチ(名前 → sha)は呼び手が渡す。tip の commit は盤面所有の検証済みの写し `verified` の中で数え(ADR 0371 決定4 —— 人間の
  *  commit は名前の場所にまだ無い)、task のブランチに載るものだけを名前の場所 `named` に1度問う(そこにはある)。
  *  shortcut: 数えるブランチの sha を argv で渡す —— 1つの workspace の task が数千を超えて argv の上限に近づけば `--stdin` で渡す。 */
