@@ -172,8 +172,9 @@ it("PR の head を取る token の await の間に扉で別の repo へ登録�
   stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
 });
 
-// #3700: 削除の扉は基準の行も消すので、別の path で登録し直した名前は await の後、行き先の読みでも最初の撮りの前の項でも path の変化を見て
-// 根の比較に落ちる —— どちらが先でも、その名前の Quarantine でなく根の止まりになる(ADR 0399 決定5・7)
+// #3700: 削除の扉で基準の行も消えた名前を、await の間に別の path の別の repo で登録し直す。await の後は `assertLandingRefs` より前の行き先の読み
+// (`workspaceNetworkDestination`)が path の変化を見て先に止めるので、この test が固定するのは結果(根の止まり、workspace の Quarantine なし、
+// ADR 0399 決定5)で、`assertLandingRefs` の素の投げ直しの行ではない —— その行は下の domain の test が固定する
 it.each([
   ["PR の状態を読む前", "getPullRequestState"],
   ["push の準備", "preparePush"],

@@ -381,8 +381,6 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
   return checks;
 }
 
-/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き込みは口(ADR 0351 決定3)で、
- *  鍵は項の場所の名前。 */
 /** spec #3273 の受理の順の前半(ADR 0329 決定14): 名前に掛かる前半の項 → 名前の場所の clean(`clean` のとき)。workspace の Quarantine の
  *  受理と、同じ条件で merge back を撃ち直す積み残しの retry(ADR 0371 決定10)が掛ける。 */
 export async function checkAcceptanceFirstHalf(place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
@@ -403,6 +401,8 @@ export function fireBeforeOpenPredicates(place: WorkspaceConfig, predicates: Pic
   }
 }
 
+/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、token の鮮度だけは呼び手が決める。後半の書き込みは口(ADR 0351 決定3)で、
+ *  鍵は項の場所の名前。 */
 export async function firePickupPredicates(
   db: Db,
   place: WorkspaceConfig,
