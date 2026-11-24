@@ -268,7 +268,11 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     const el = itemEls.current.get(id);
     if (!el) return;
     e.preventDefault();
-    const d = { id, index, projected: index, startY: e.clientY, shift: el.getBoundingClientRect().height + gap };
+    const rects = tasks.map((t) => {
+      const r = itemEls.current.get(t.id).getBoundingClientRect();
+      return { top: r.top, height: r.height };
+    });
+    const d = { id, index, projected: index, startY: e.clientY, shift: rects[index].height + gap, rects };
     drag.current = d;
     setDraggingId(id);
     el.style.zIndex = "5";
@@ -280,7 +284,9 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     const onMove = (ev) => {
       const dy = ev.clientY - d.startY;
       el.style.transform = `translateY(${dy}px) scale(1.02)`;
-      const p = Math.max(0, Math.min(tasks.length - 1, Math.round(d.index + dy / d.shift)));
+      const self = d.rects[d.index];
+      const mid = (r) => r.top + r.height / 2;
+      const p = dy >= 0 ? d.index + d.rects.filter((r, j) => j > d.index && mid(r) < self.top + self.height + dy).length : d.index - d.rects.filter((r, j) => j < d.index && mid(r) > self.top + dy).length;
       if (p !== d.projected) {
         d.projected = p;
         applyShifts(d);
@@ -290,7 +296,9 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      const settle = (d.projected - d.index) * d.shift;
+      const self = d.rects[d.index];
+      const target = d.rects[d.projected];
+      const settle = d.projected > d.index ? target.top + target.height - self.height - self.top : target.top - self.top;
       el.style.transition = "transform 300ms var(--ease-tidal), filter 300ms var(--ease-tidal)";
       el.style.transform = settle ? `translateY(${settle}px)` : "";
       el.style.filter = "";
@@ -4171,6 +4179,10 @@ const BLOCKING_ROOT_REASON_COPY = {
   pr_closed: "PR closed",
   landing_ended: "landing ended"
 };
+const BLOCKING_ROOT_DETAIL_COPY = {
+  pr_closed: (pr, root) => /* @__PURE__ */ React.createElement(React.Fragment, null, "Will not run: PR #", pr, " of ", root, " was closed outside the board. Reopen the PR on GitHub and merge it \u2014 once its content reaches the protected branch, this task runs and lands as a root of its own. Or cancel this task."),
+  landing_ended: (pr, root) => /* @__PURE__ */ React.createElement(React.Fragment, null, "Will not run: landing of ", root, " was ended with PR #", pr, " left as it was. Cancel this task; register the work again if it is still wanted.")
+};
 class ApiError extends Error {
   status;
   detail;
@@ -4615,7 +4627,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), blockingRoot && /* @__PURE__ */ React.createElement("p", { style: { ...meta, color: "var(--text-secondary)" }, "data-testid": "blocking-root" }, blockingRoot.kind === "pr_closed" ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Will not run: PR #", blockingRoot.pr_number, " of ", /* @__PURE__ */ React.createElement(IdChip, { id: blockingRoot.task_id, style: { display: "inline-block", verticalAlign: "bottom" } }), " was closed outside the board. Reopen the PR on GitHub and merge it \u2014 once its content reaches the protected branch, this task runs and lands as a root of its own. Or cancel this task.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Will not run: landing of ", /* @__PURE__ */ React.createElement(IdChip, { id: blockingRoot.task_id, style: { display: "inline-block", verticalAlign: "bottom" } }), " was ended with PR #", blockingRoot.pr_number, " left as it was. Cancel this task; register the work again if it is still wanted.")), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), blockingRoot && /* @__PURE__ */ React.createElement("p", { style: { ...meta, color: "var(--text-secondary)" }, "data-testid": "blocking-root" }, BLOCKING_ROOT_DETAIL_COPY[blockingRoot.kind](blockingRoot.pr_number, /* @__PURE__ */ React.createElement(IdChip, { id: blockingRoot.task_id, style: { display: "inline-block", verticalAlign: "bottom" } }))), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
     navigator.clipboard?.writeText(command).catch(() => {
     });
   } }, "Copy")))), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));

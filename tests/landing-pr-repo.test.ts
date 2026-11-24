@@ -398,12 +398,12 @@ it("merge 中の印が付いた根への「end landing」は拒まれ、根の�
   expect(landingState(db, getTask(db, root.id)!)).toBe("auto_merge_queue");
 });
 
-// ADR 0413 決定2: 人間が着地を終えた根にも、根の下に終わっていない子があれば盤面名義の告知を回答と同じ transaction で書く(ADR 0405 決定2)
+// ADR 0413 決定2: 人間が着地を終えた根にも、根の下に未決着の子があれば盤面名義の告知を回答と同じ transaction で書く(ADR 0405 決定2)
 const ENDED_NOTICE =
   "Landing of this task was ended with PR #1 left as it was. Tasks under it that return to its branch will not run " +
   "— the queue marks them skipped. Cancel them; register the work again if it is still wanted.";
 
-it("根の下に終わっていない子があれば、「end landing」の回答は盤面名義の告知を根に1行書き、出口は cancel だけを言う", async () => {
+it("根の下に未決着の子があれば、「end landing」の回答は盤面名義の告知を根に1行書き、出口は cancel だけを言う", async () => {
   const { db, clock, root, answerFailure } = await reefWithPr("auto_if_ci_green");
   attachUnsettledChild(db, clock, root.id);
   registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());

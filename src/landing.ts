@@ -19,6 +19,7 @@ import { type AuthorityProfile, isUnresolvableAgentError, type MergeDial } from 
 import { registryUnreadableOpen } from "./registry-unreadable.js";
 import { repositoryLabel } from "./repo-access.js";
 import { treeDeltaEntries } from "./sandbox.js";
+import { unsettledSql } from "./task-status.js";
 import {
   ancestorsSql,
   type BlockingRoot,
@@ -597,12 +598,16 @@ export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOS
   return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
 }
 
-/** ADR 0265 決定6 / ADR 0399 決定6: 子を塞ぐ根の PR と塞ぎの種類(ADR 0413 決定3)—— 盤面の外で閉じた PR か、人間が着地を終えた根の PR。
- *  閉じた決着が先。どちらでもなければ undefined。 */
-function blockingRootPr(db: Db, root: Pick<Task, "id" | "pr_number">): Omit<BlockingRoot, "task_id"> | undefined {
-  const outcome = rootPrOutcome(db, root.id);
-  if (outcome?.state === "CLOSED") return { pr_number: outcome.prNumber, kind: "pr_closed" };
+/** ADR 0399 決定6: 人間が着地を終えた根の塞ぎ。終えられるのは PR を記録した根だけ(ADR 0399 決定5、出口は `pr_number` のある根にだけ出る)。 */
+function endedLanding(db: Db, root: Pick<Task, "id" | "pr_number">): Omit<BlockingRoot, "task_id"> | undefined {
   return latestEventOfTask(db, root.id, "landing_ended_pr_left") && root.pr_number !== null ? { pr_number: root.pr_number, kind: "landing_ended" } : undefined;
+}
+
+/** ADR 0265 決定6 / ADR 0399 決定6: この根が子に課す塞ぎ —— PR と種類(ADR 0413 決定3)。盤面の外で閉じた PR か、人間が着地を終えた根の PR で、
+ *  閉じた決着が先。どちらでもなければ undefined。 */
+function rootBlocking(db: Db, root: Pick<Task, "id" | "pr_number">): Omit<BlockingRoot, "task_id"> | undefined {
+  const outcome = rootPrOutcome(db, root.id);
+  return outcome?.state === "CLOSED" ? { pr_number: outcome.prNumber, kind: "pr_closed" } : endedLanding(db, root);
 }
 
 const BLOCKING_ROOT_NOTICE: Record<BlockingRoot["kind"], (prNumber: number) => string> = {
@@ -615,14 +620,16 @@ const BLOCKING_ROOT_NOTICE: Record<BlockingRoot["kind"], (prNumber: number) => s
     "— the queue marks them skipped. Cancel them; register the work again if it is still wanted.",
 };
 
-/** 塞ぐ根の告知(ADR 0265 決定6 / ADR 0413 決定1・2): 根の下に終わっていない子(question を除く、走っているものを含む)があれば、
+/** 塞ぐ根の告知(ADR 0265 決定6 / ADR 0413 決定1・2): 根の下に未決着の子(question を除く、走っているものを含む)があれば、
  *  盤面名義の判断行を根に1行。子を数えず git を読まない —— どの子がなぜ走らないかはキューの行と子の詳細が毎回導く。
- *  呼び手は根の決着を刻む transaction の中で呼ぶ(ADR 0405 決定2)。 */
-export function announceBlockingRoot(db: Db, rootId: string, kind: BlockingRoot["kind"], prNumber: number, now: Date): void {
-  const unfinished = db
-    .prepare(`${subtreeSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND type <> 'question' AND status IN ('todo', 'in_progress') LIMIT 1`)
+ *  PR と種類は呼び手が同じ transaction で刻んだ根の決着(閉じた観測か `landing_ended_pr_left`)から読む(ADR 0405 決定2)。 */
+export function announceBlockingRoot(db: Db, rootId: string, now: Date): void {
+  const root = getTask(db, rootId)!;
+  const blocking = rootBlocking(db, root);
+  const unsettled = db
+    .prepare(`${subtreeSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND type <> 'question' AND ${unsettledSql("status")} LIMIT 1`)
     .get(rootId);
-  if (unfinished) logDecision(db, getTask(db, rootId)!, BLOCKING_ROOT_NOTICE[kind](prNumber), BOARD_ACTOR_ID, now, "board");
+  if (blocking && unsettled) logDecision(db, root, BLOCKING_ROOT_NOTICE[blocking.kind](blocking.pr_number), BOARD_ACTOR_ID, now, "board");
 }
 
 /** 根に塞がれた子(ADR 0265 決定6)の唯一の述語: lineage の帰り先を辿ると盤面の外で閉じた PR の根(人間が着地を終えた根も、ADR 0399 決定6)のブランチに行き着き、
@@ -639,9 +646,9 @@ export function blockingRootOf(db: Db, resolve: WorkspaceResolver | undefined): 
       ancestors.push(ancestor);
       id = ancestor.parent_id;
     }
-    if (task.type === "question" || !resolve || !ancestors.some((a) => blockingRootPr(db, a) !== undefined)) return null;
-    const ended = ancestors.find((a) => latestEventOfTask(db, a.id, "landing_ended_pr_left"));
-    const endedBlock = ended && { task_id: ended.id, pr_number: ended.pr_number!, kind: "landing_ended" as const };
+    if (task.type === "question" || !resolve || !ancestors.some((a) => rootBlocking(db, a) !== undefined)) return null;
+    const ended = ancestors.find((a) => endedLanding(db, a));
+    const endedBlock = ended && { task_id: ended.id, ...endedLanding(db, ended)! };
     try {
       const workspace = resolve(derivedWorkspace(db, task));
       if (endedBlock && !taskBranchExists(workspace, endedBlock.task_id)) return endedBlock;
@@ -650,7 +657,7 @@ export function blockingRootOf(db: Db, resolve: WorkspaceResolver | undefined): 
         const branch = lineageTaskBranch(db, workspace, current, base);
         const target = ancestors.find((a) => taskBranch(a.id) === branch);
         if (!target) return null;
-        const blocking = blockingRootPr(db, target);
+        const blocking = rootBlocking(db, target);
         if (blocking !== undefined) return taskHasContentToLand(workspace, target.id, base) ? { task_id: target.id, ...blocking } : null;
         current = target;
       }
@@ -1473,13 +1480,13 @@ export function createLanding(deps: LandingDeps): Landing {
   const retire = (taskId: string, payload: Parameters<typeof retireAutoMerge>[2], now: Date) =>
     deps.db.transaction(() => {
       retireAutoMerge(deps.db, taskId, payload, now);
-      if (payload.kind === OBSERVED.CLOSED) announceBlockingRoot(deps.db, taskId, "pr_closed", payload.pr_number, now);
+      if (payload.kind === OBSERVED.CLOSED) announceBlockingRoot(deps.db, taskId, now);
     })();
   /** merge question を観測で閉じる(`settleMergeQuestionAsObserved`)。閉じた観測を根に刻んだなら判断行も流す。 */
   const settleObserved = (question: Pick<OpenMergeQuestion, "id" | "root" | "pr_number">, kind: ReturnType<typeof prOutcomeKind>, now: Date) =>
     deps.db.transaction(() => {
       const root = settleMergeQuestionAsObserved(deps.db, question, kind, now);
-      if (root !== null && kind === OBSERVED.CLOSED) announceBlockingRoot(deps.db, root, "pr_closed", question.pr_number, now);
+      if (root !== null && kind === OBSERVED.CLOSED) announceBlockingRoot(deps.db, root, now);
     })();
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: deps.clock.now() });

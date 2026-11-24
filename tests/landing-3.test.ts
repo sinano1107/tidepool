@@ -270,16 +270,16 @@ it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
-// ADR 0265 決定6 / ADR 0413 決定1: 閉じた根の付帯子は cancel せず、観測の時点で根の下に終わっていない子があれば、盤面名義の判断行が
+// ADR 0265 決定6 / ADR 0413 決定1: 閉じた根の付帯子は cancel せず、観測の時点で根の下に未決着の子があれば、盤面名義の判断行が
 // 閉じた PR と出口2つを言う。子を数えず git を読まない —— どの子がなぜ走らないかはキューの行と子の詳細が言う
 const CLOSED_NOTICE =
   "PR #1 was closed outside the board. Tasks under it that return to its branch will not run until its content reaches the protected branch " +
   "— the queue marks them skipped. To go on, reopen the PR on GitHub and merge it. To stop, cancel them.";
 const closedNotice = [{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: CLOSED_NOTICE } }];
 
-it("遅い走査が外で閉じたと観測した根の下に終わっていない子があれば、盤面名義の判断行が1行だけ流れ、PR と出口2つを言い、子の id を言わない", async () => {
+it("遅い走査が外で閉じたと観測した根の下に未決着の子があれば、盤面名義の判断行が1行だけ流れ、PR と出口2つを言い、子の id を言わない", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce");
-  const child = attachUnsettledChild(db, clock, root.id);
+  attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
 
   await landing.tick("outside_merge");
@@ -287,10 +287,9 @@ it("遅い走査が外で閉じたと観測した根の下に終わっていな�
   await landing.converge();
 
   expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
-  expect(CLOSED_NOTICE).not.toContain(child.id);
 });
 
-it("名前の場所の git が読めなくても、閉じた観測は根の下の終わっていない子の告知を書く", async () => {
+it("名前の場所の git が読めなくても、閉じた観測は根の下の未決着の子の告知を書く", async () => {
   const { db, clock, github, landing, root, workspace } = await escalatedRootWithOpenedPr("landing-scan-closed-announce-unreadable");
   attachUnsettledChild(db, clock, root.id);
   github.scriptClosedOutside(1);
@@ -306,7 +305,7 @@ it("名前の場所の git が読めなくても、閉じた観測は根の下�
   expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
 });
 
-it("根の下の終わっていない子が走っている1件だけでも、閉じた観測は告知を書く", async () => {
+it("根の下の未決着の子が走っている1件だけでも、閉じた観測は告知を書く", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce-running");
   pickupTask(db, attachUnsettledChild(db, clock, root.id), "worker", clock.now());
   github.scriptClosedOutside(1);
@@ -371,7 +370,7 @@ it("遅い走査が閉じた PR を観測しても、告知の判断行が書け
   expect(boardEvents(db, root.id, "decision_logged")).toEqual(closedNotice);
 });
 
-it("遅い走査が外で閉じたと観測した根の下に終わっていない子が無ければ —— 終わった子だけなら —— 判断行は流れない", async () => {
+it("遅い走査が外で閉じたと観測した根の下に未決着の子が無ければ —— 決着した子だけなら —— 判断行は流れない", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
   cancelTaskDirectly(db, attachUnsettledChild(db, clock, root.id), null, clock.now(), {}, "webui");
   github.scriptClosedOutside(1);

@@ -1969,10 +1969,8 @@ export async function submitAnswer(
           payload: rootRecord.payload,
           at: now(),
         });
-        // ADR 0413 決定2: 着地を終えた根の下に終わっていない子があれば、盤面名義の告知を同じ transaction で(ADR 0405 決定2)。応答の notice には足さない
-        if (rootRecord.payload.kind === "landing_ended_pr_left") {
-          announceBlockingRoot(deps.db, rootRecord.root, "landing_ended", getTask(deps.db, rootRecord.root)!.pr_number!, now());
-        }
+        // ADR 0413 決定2: 着地を終えた根の下に未決着の子があれば、盤面名義の告知を同じ transaction で(ADR 0405 決定2)。応答の notice には足さない
+        if (rootRecord.payload.kind === "landing_ended_pr_left") announceBlockingRoot(deps.db, rootRecord.root, now());
       }
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);

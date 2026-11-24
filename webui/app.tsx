@@ -40,6 +40,11 @@ const BLOCKING_ROOT_REASON_COPY = {
   pr_closed: 'PR closed',
   landing_ended: 'landing ended',
 } satisfies Record<NonNullable<import('../src/wire-contract').QueueTask['blocking_root']>['kind'], string>;
+/** 塞ぐ根に塞がれた task の詳細の文(ADR 0413 決定3)。`root` は根の id のチップ。種類を足して文を足さないと typecheck が落ちる。 */
+const BLOCKING_ROOT_DETAIL_COPY = {
+  pr_closed: (pr: number, root: React.ReactNode) => <>Will not run: PR #{pr} of {root} was closed outside the board. Reopen the PR on GitHub and merge it — once its content reaches the protected branch, this task runs and lands as a root of its own. Or cancel this task.</>,
+  landing_ended: (pr: number, root: React.ReactNode) => <>Will not run: landing of {root} was ended with PR #{pr} left as it was. Cancel this task; register the work again if it is still wanted.</>,
+} satisfies Record<NonNullable<import('../src/wire-contract').QueueTask['blocking_root']>['kind'], (pr: number, root: React.ReactNode) => React.ReactNode>;
 /** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
 type AppIcons = Record<string, string | undefined>;
 /** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
@@ -678,9 +683,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
       {blockingRoot && (
         <p style={{ ...meta, color: 'var(--text-secondary)' }} data-testid="blocking-root">
-          {blockingRoot.kind === 'pr_closed'
-            ? <>Will not run: PR #{blockingRoot.pr_number} of <IdChip id={blockingRoot.task_id} style={{ display: 'inline-block', verticalAlign: 'bottom' }} /> was closed outside the board. Reopen the PR on GitHub and merge it — once its content reaches the protected branch, this task runs and lands as a root of its own. Or cancel this task.</>
-            : <>Will not run: landing of <IdChip id={blockingRoot.task_id} style={{ display: 'inline-block', verticalAlign: 'bottom' }} /> was ended with PR #{blockingRoot.pr_number} left as it was. Cancel this task; register the work again if it is still wanted.</>}
+          {BLOCKING_ROOT_DETAIL_COPY[blockingRoot.kind](blockingRoot.pr_number, <IdChip id={blockingRoot.task_id} style={{ display: 'inline-block', verticalAlign: 'bottom' }} />)}
         </p>
       )}
       {workbench && <>

@@ -255,10 +255,8 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
       "data-front": flash ? "" : void 0,
       style: {
         display: "flex",
-        flexWrap: skipped ? "wrap" : void 0,
-        alignItems: "center",
-        gap: 12,
-        rowGap: 2,
+        flexDirection: "column",
+        gap: 2,
         padding: "10px 18px",
         border: skipped ? "1px dashed var(--rock-3)" : "none",
         boxShadow: skipped ? "none" : "var(--shadow-card)",
@@ -267,14 +265,7 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
         ...style
       }
     },
-    draggable && /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", "data-testid": "queue-drag-handle", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"),
-    /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", background: frontInserted ? "var(--surface-card)" : "var(--tide-1)", borderRadius: "var(--radius-full)", padding: "2px 8px", flexShrink: 0 } }, position),
-    /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id }),
-    /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 80, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
-    task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
-    frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
-    /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
-    onFront && // the head row's button is "run now" (tide fill, immediate-poll
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12 } }, draggable && /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", "data-testid": "queue-drag-handle", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", background: frontInserted ? "var(--surface-card)" : "var(--tide-1)", borderRadius: "var(--radius-full)", padding: "2px 8px", flexShrink: 0 } }, position), /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id }), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 80, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title), task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null), frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"), /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }), onFront && // the head row's button is "run now" (tide fill, immediate-poll
     // trigger); every other row is pure reordering — same tide hue so
     // both read as "the queue action," but outlined instead of filled
     // so it never reads as disabled (unlike a neutral/rock treatment,
@@ -298,8 +289,8 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
         }
       },
       "\u2191"
-    ),
-    skipped && /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped")
+    )),
+    skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped")
   );
 }
 Object.assign(__ds_scope, { QueueItem });
