@@ -120,6 +120,15 @@ import {
 export const HOURLY = 60 * 60 * 1000;
 /** 成功を挟まず続く poll の失敗・issue 展開の一時的失敗が question になるまで(ADR 0294 決定2 / ADR 0328 決定3): 一過性は秒〜1分で消える。 */
 const FAILURE_QUESTION_AFTER = 10 * 60 * 1000;
+/** poll が受けた例外の本文。`String()` で文字にできない値(null prototype の object など)でも投げない —— poll の失敗の後始末は投げない(ADR 0294 決定1)。 */
+const pollFailureMessage = (err: unknown): string => {
+  if (err instanceof Error) return err.message;
+  try {
+    return String(err);
+  } catch {
+    return Object.prototype.toString.call(err);
+  }
+};
 
 /** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
  *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
@@ -431,7 +440,7 @@ export function startScheduler(deps: {
     // ADR 0403 決定5: registry の止まりが開いていれば、その故障を行にも計測にも数えない —— question は止まりが持つ
     if (registryUnreadableOpen(db)) return;
     const now = clock.now();
-    lastPollFailure = { at: now.toISOString(), message: err instanceof Error ? err.message : String(err) };
+    lastPollFailure = { at: now.toISOString(), message: pollFailureMessage(err) };
     streak = { first: streak?.first ?? lastPollFailure, count: (streak?.count ?? 0) + 1 };
     const { first, count } = streak;
     if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER) return;
@@ -1165,7 +1174,7 @@ export function startScheduler(deps: {
     } catch (err) {
       succeeded = false;
       pollFailed(err);
-      return { outcome: "threw", message: err instanceof Error ? err.message : String(err) };
+      return { outcome: "threw", message: pollFailureMessage(err) };
     } finally {
       inFlight = false;
       if (succeeded) pollSucceeded();
@@ -1180,14 +1189,21 @@ export function startScheduler(deps: {
   }
 
   let stopped = false;
-  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)
-  let polling: Promise<unknown> = Promise.resolve();
+  // 走っている poll の終わり。収束の回はこれを待つ(`idle`、ADR 0241 決定5)。
+  // 待つのは終わりで結果ではない —— reject は log に出して飲む。飲まなければ一度の reject を以後の `idle` がすべて受け取り、
+  // 収束と pickup が再起動まで止まる(#3711)
+  let polling: Promise<void> = Promise.resolve();
+  const loggedEnd = (run: Promise<unknown>): Promise<void> =>
+    run.then(
+      () => undefined,
+      (err: unknown) => console.error("[scheduler] poll rejected; the next trigger polls again:", err),
+    );
   function pollNow(): void {
     // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。
     // 収束を待つ間に盤面が止まれば、閉じた DB を読まない
     void converge().then(() => {
       if (stopped || inFlight) return;
-      polling = poll();
+      polling = loggedEnd(poll());
       return polling;
     }).catch((err) => {
       console.error("[scheduler] pickup trigger failed:", err);
@@ -1211,7 +1227,7 @@ export function startScheduler(deps: {
       // 待つ間に契機の poll が走り出していれば、その promise を置き換えない —— `idle` が走っている poll を見失う(`pollNow` と同じ判定)
       if (inFlight) return IN_FLIGHT;
       const rerun = poll();
-      polling = rerun;
+      polling = loggedEnd(rerun);
       return rerun;
     },
     lastIssueExpansionFailure: () => issueStreak?.latest,
