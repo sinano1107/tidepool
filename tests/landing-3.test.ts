@@ -16,6 +16,7 @@ import {
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
+import { discardUncommitted } from "../src/pickup-predicates.js";
 import { openQuarantineValues, RESTORE_THE_BASELINE } from "../src/quarantine.js";
 import { type AuthorityProfile, type MergeDial, } from "../src/registry.js";
 import { loadRegistryOrStop, RegistryUnreadableError } from "../src/registry-unreadable.js";
@@ -1595,10 +1596,7 @@ it("積み残しの retry は、名前の場所に未 commit の変更があれ�
   const root = git(workspace.path, "rev-parse", `task/${work.id}`);
 
   await expect(answerPromotion(db, clock, landing, workspace, leftover!, "retry")).rejects.toThrow(
-    new DomainError(
-      `workspace ${workspace.name} still has uncommitted changes. Discard them with \`git reset --hard\` then \`git clean -fd\` until ` +
-        "`git status --porcelain` is empty (`git clean -ffd` for a nested repository, `git worktree remove --force <path>` for a linked worktree inside the tree).",
-    ),
+    new DomainError(`workspace ${workspace.name} still has uncommitted changes.${discardUncommitted()}`),
   );
 
   expect(git(workspace.path, "rev-parse", `task/${work.id}`)).toBe(root);

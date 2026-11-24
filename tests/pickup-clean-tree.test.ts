@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -179,6 +179,10 @@ it("読む実環境と他の面接室には tree の clean 検査を当てない
 
 it("出口が名指す捨てる操作は、sparse の pin の下で cone の外に足されたファイルも捨てて tree を clean にする(ADR 0401 決定7, #3614)", async () => {
   const workspace = await makeWorkspace("discard-under-sparse-pin");
+  mkdirSync(join(workspace.path, "d"));
+  writeFileSync(join(workspace.path, "d", "hidden"), "hidden by the pin\n");
+  git(workspace.path, "add", "d/hidden");
+  git(workspace.path, "commit", "-m", "tracked outside the cone");
   const from = git(workspace.path, "rev-parse", "HEAD");
   mkdirSync(join(workspace.path, "n"));
   writeFileSync(join(workspace.path, "n", "new"), "outside the cone\n");
@@ -189,6 +193,7 @@ it("出口が名指す捨てる操作は、sparse の pin の下で cone の外�
   // 本物の index に skip-worktree の bit が残り、n/new が staged になる
   boardReadTree(workspace.path, from, to, { pattern: "/*\n!/*/\n", cone: true });
   expect(git(workspace.path, "status", "--porcelain")).toBe("A  n/new");
+  expect(existsSync(join(workspace.path, "d", "hidden"))).toBe(false);
 
   // 文から操作を読むので、文と働きがずれない
   const commands = [...discardUncommitted().matchAll(/`git [^`]+`/g)].slice(0, 2).map(([command]) => command.slice(1, -1));
@@ -196,4 +201,6 @@ it("出口が名指す捨てる操作は、sparse の pin の下で cone の外�
   for (const command of commands) git(workspace.path, ...command.split(" ").slice(1));
 
   expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
+  // --ignore-skip-worktree-bits なら pin が隠す file を書き出す —— 捨てる操作は pin の外を木に戻さない
+  expect(existsSync(join(workspace.path, "d", "hidden"))).toBe(false);
 });
