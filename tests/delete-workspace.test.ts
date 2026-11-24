@@ -390,10 +390,7 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     const parent = dirname(o.workbench);
     chmodSync(parent, 0o555);
     try {
-      const failed = deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps());
-
-      await expect(failed).rejects.toThrow();
-      await expect(failed).rejects.not.toMatchObject({ name: "DeletionBlockedError" });
+      await expect(deleteWorkspace({ name: o.ws.name, confirm: true }, o.deps())).rejects.toMatchObject({ code: "EACCES" });
     } finally {
       chmodSync(parent, 0o755);
     }
