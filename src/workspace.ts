@@ -385,7 +385,7 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
  *  受理と、同じ条件で merge back を撃ち直す積み残しの retry(ADR 0371 決定10)が掛ける。 */
 export async function checkAcceptanceFirstHalf(db: Db, place: WorkspaceConfig, predicates: PickupPredicate[], clean: boolean): Promise<void> {
   fireBeforeOpenPredicates(place, predicates);
-  if (clean) verifyWorkspaceClean(place, db);
+  if (clean) verifyWorkspaceClean(db, place);
 }
 
 /** 開く前の項は同期で撃てる —— 同期の呼び手(着地の最初の撮り、ADR 0399 決定7)も await を挟まずに pickup と同じ項を撃つ。 */
@@ -2858,7 +2858,7 @@ type PickupPreparation = PickupPrep & {
  *  origin の保護ブランチの fetch)。`start_work` と人間担当の work の完了も同じ準備を通す(ADR 0374 決定2・6)。 */
 async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task, board: PickupPreparation): Promise<void> {
   // ADR 0401 決定7: 比較が予告中の行を畳む前に読む —— 畳んだ後は途中で止まった移動の証拠が残らない
-  const note = stalledCheckoutMoveNote(db, workspace);
+  const stalledMoveNote = stalledCheckoutMoveNote(db, workspace);
   prepareRefBaseline(db, workspace, board);
   const rootId = interviewRootIdOf(db, task);
   // ADR 0351 決定5: 走る名前の場所だけ、後半が書く前に休止中の変更を読む。shadow の例外は無い。
@@ -2867,7 +2867,7 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
   const changes = ownWorktreeStatus(workspace.path);
   if (changes.length > 0) {
     throw PickupGateError.of(workspace, new Error(
-      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process ${note ? "may have written" : "wrote"} them after the board moved the checkout.${note}${discardUncommitted()}`,
+      `workspace ${workspace.name} has uncommitted changes while resting: ${describeChanges(changes, "\n")} — a process ${stalledMoveNote ? "may have written" : "wrote"} them after the board moved the checkout.${stalledMoveNote}${discardUncommitted()}`,
     ));
   }
   for (const read of board.reads ?? []) {
@@ -2919,6 +2919,13 @@ function symrefValue(target: string): string {
 /** 基準の行の値が symref なら指し先、そうでなければ undefined(`symrefValue` の逆)。 */
 function symrefTarget(value: string): string | undefined {
   return value.startsWith("symref=") ? value.slice("symref=".length) : undefined;
+}
+
+/** 書き込み後の HEAD の tip: HEAD の値、symref なら指し先の値。値の出所は呼び手が決める。 */
+function tipAfter(valueAfter: (ref: string) => string): string {
+  const head = valueAfter("HEAD");
+  const target = symrefTarget(head);
+  return target === undefined ? head : valueAfter(target);
 }
 
 /** 基準の HEAD 行の値: 指し先、detached なら sha。`symbolic-ref -q` の非零は 1 が detached で、他は道具の失敗。 */
@@ -3648,7 +3655,7 @@ export function restoreBaseline(
         `If these are lost for good, answer \`${GIVE_UP_THE_LOST_REFS}\`.`,
     );
   }
-  if (targets.size > 0) verifyWorkspaceClean(workspace, db);
+  if (targets.size > 0) verifyWorkspaceClean(db, workspace);
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => keepable.get(ref)!.filter((sha) => present.get(sha)).map((sha) => ({ ref, sha })));
   if (giveUp) {
     giveUpAnswer.refuseIfMarked(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
@@ -3692,10 +3699,7 @@ export function restoreBaseline(
     ...restores.filter(([ref]) => ref === "HEAD"),
     ...restores.filter(([ref, value]) => last(ref) && ref !== "HEAD" && value === ""),
   ]);
-  const valueAfter = (ref: string) => writes.get(ref) ?? current.get(ref) ?? "";
-  const headAfter = valueAfter("HEAD");
-  const headAfterTarget = symrefTarget(headAfter);
-  const tipAfter = headAfterTarget === undefined ? headAfter : valueAfter(headAfterTarget);
+  const tipRestored = tipAfter((ref) => writes.get(ref) ?? current.get(ref) ?? "");
   const tipBefore = readRef(workspace, "HEAD");
   const written = new Set<string>();
   try {
@@ -3710,7 +3714,7 @@ export function restoreBaseline(
           written.add(ref);
         }
       };
-      if (tipBefore !== "" && isSha(tipAfter)) writeWithWorktree(db, workspace, tipBefore, tipAfter, write);
+      if (tipBefore !== "" && isSha(tipRestored)) writeWithWorktree(db, workspace, tipBefore, tipRestored, write);
       else write();
     });
   } finally {
@@ -3862,7 +3866,7 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
  *  a clean tree — dirty, or not even a usable git repository — is treated
  *  the same, fail-closed, same posture as the pickup's resting check on the
  *  named place (ADR 0351 決定5). */
-export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db): void {
+export function verifyWorkspaceClean(db: Db, workspace: WorkspaceConfig): void {
   assertOwnGitDirectory(workspace.path);
   let status: WorktreeChange[];
   try {
@@ -3875,23 +3879,26 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig, db?: Db): void 
     );
   }
   if (status.length > 0) {
-    throw new Error(`workspace ${workspace.name} still has uncommitted changes.${db ? stalledCheckoutMoveNote(db, workspace) : ""}${discardUncommitted()}`);
+    throw new Error(`workspace ${workspace.name} still has uncommitted changes.${stalledCheckoutMoveNote(db, workspace)}${discardUncommitted()}`);
   }
 }
 
 /** ADR 0401 決定7 (#3199): 予告中の行が HEAD の tip を今の tip から動かすなら、盤面自身の checkout の移動が `read-tree` の後 ref を書く
- *  前に止まったかもしれない —— その目標を名指す注記。tip は `restoreBaseline` の `tipAfter` と同じ計算で、checkout されていない ref の
- *  予告(`task/<id>` の作成)は木を動かさないので注記しない。 */
+ *  前に止まったかもしれない —— その目標を名指す注記。HEAD から tip を辿る道は `restoreBaseline` と同じ `tipAfter` で、値は予告の行の
+ *  目標(再予告で3値以上なら最後の値 —— `writeBoardRefs` が足す)、予告の無い行は今の値。checkout されていない ref の予告
+ *  (`task/<id>` の作成)は木を動かさないので注記しない。 */
 function stalledCheckoutMoveNote(db: Db, workspace: WorkspaceConfig): string {
   const baseline = refValues(storedRefs(db, workspace.name));
   if (![...baseline.values()].some((value) => baselineValues(value).length > 1)) return "";
-  const valueAfter = (ref: string) => baselineValues(baseline.get(ref))[1] ?? readCheckoutValue(workspace, ref);
-  const head = valueAfter("HEAD");
-  const headTarget = symrefTarget(head);
-  const target = headTarget === undefined ? head : valueAfter(headTarget);
+  const target = tipAfter((ref) => {
+    const values = baselineValues(baseline.get(ref));
+    return values.length > 1 ? values.at(-1)! : readCheckoutValue(workspace, ref);
+  });
   if (!isSha(target) || target === readRef(workspace, "HEAD")) return "";
-  return ` The board's own checkout move may have stopped part-way: its target is ${target}. If \`git diff --cached ${target}\` prints nothing, ` +
-    "that is what happened — do not commit them.";
+  // 木ごと比べる: index だけ(`--cached`)では移動の上に書かれた未 stage の変更が通り、続く捨てる操作に消される。read-tree が足した file は
+  // index に載るので `??` には出ない
+  return ` The board's own checkout move may have stopped part-way: its target is ${target}. If \`git diff ${target}\` prints nothing and ` +
+    "`git status --porcelain` shows no `??` line, that is what happened — do not commit them.";
 }
 
 /** ADR 0137 決定3: the open Confirmation question is the only state. */
