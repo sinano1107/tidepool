@@ -10,7 +10,7 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { blockingRootOf, createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, heldInPrepareMerge, holdAfterMerge } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, failEventInsert, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
@@ -122,6 +122,43 @@ it("無人 merge の観測は登録し直した repo の同じ番号の PR を�
 
   expect(github.stateChecks).toEqual([]);
   expectStopped(fixture);
+});
+
+// ADR 0399 決定5 の追記(#3791): tick は workspace の Quarantine 単独では止まらない(ADR 0370 決定1)ので、その根を止めているのは食い違いで、
+// 信号はこの question しか持たない —— ADR 0241 決定6 の「重ねない」の対象ではない。伏せると tick はその根だけを黙って読まなくなる
+it.each(["auto_if_ci_green", "escalate"] as const)("workspace の Quarantine が開いていても、tick は食い違った %s の根を問い、「end landing」は受理される", async (merge) => {
+  const { db, clock, old, moved, root, landing, move, answerFailure } = await reefWithPr(merge);
+  await move();
+  quarantineWorkspace(db, "reef", new Error("a ref moved out of band"), clock.now());
+
+  await landing.tick(merge === "escalate" ? "outside_merge" : "auto_merge");
+
+  const [failure, ...repeated] = promotionFailures(db, root.id);
+  expect(repeated).toEqual([]);
+  expect(failure?.purpose).toContain(`recorded repo ${old.repo}`);
+  expect(failure?.purpose).toContain(`now declares repo ${moved.repo}`);
+
+  await answerFailure("end landing");
+
+  expect(landingState(db, getTask(db, root.id)!)).toBe("pr_left");
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeDefined();
+});
+
+// 別の昇格失敗 question が開いた根を収束は撃たない(ADR 0403 決定3)—— その根の食い違いを問うのは tick だけで、断念を出さない
+// question(決定5)が届かなければ、断念した根はキューに残ったまま誰にも問われない
+it("別の昇格失敗 question が開いた根の食い違いは、収束が問わず、tick が問う", async () => {
+  const { db, clock, moved, root, landing, move } = await reefWithPr("auto_if_ci_green");
+  registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+  await move();
+
+  await landing.converge();
+  expect(promotionFailures(db, root.id).map(({ purpose }) => purpose)).toEqual([expect.stringContaining("push rejected")]);
+
+  await landing.tick("auto_merge");
+  expect(promotionFailures(db, root.id).map(({ purpose }) => purpose)).toEqual([
+    expect.stringContaining("push rejected"),
+    expect.stringContaining(`now declares repo ${moved.repo}`),
+  ]);
 });
 
 it("登録し直した名前で旧い根への merge の回答は、PR を読む前に両方の repo を名指して拒む", async () => {

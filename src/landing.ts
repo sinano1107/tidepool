@@ -1454,7 +1454,8 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 根の workspace の Quarantine を読む1つの所。開いていれば根はその Quarantine の verdict で止まる(ADR 0241 決定6)。 */
   const quarantinedRoot = (workspaceName: string | undefined) =>
     workspaceName !== undefined && workspaceNeedsHuman(deps.db, workspaceName) ? quarantined("workspace", workspaceName) : undefined;
-  /** 収束が根の question を立てる道はすべてこの判定を通る(tick の側の `stopForRepoMismatch` はこの外)。止まりがすでに信号を持って
+  /** 収束が根の question を立てる道はすべてこの判定を通る。tick の側の `stopForRepoMismatch` はこの外 —— tick は workspace の Quarantine
+   *  単独では止まらず(ADR 0370 決定1)、その根を止めているのは食い違いで、信号はその question しか持たない(ADR 0399 決定5 の追記)。止まりがすでに信号を持って
    *  いれば question を重ねない(ADR 0241 決定6)—— workspace の Quarantine は根の verdict として返り(答えている回答はその verdict で
    *  拒まれる、ADR 0241 決定5)、registry の止まりは verdict を変えない(ADR 0403 決定5)。回答が答えている回(`attended`)も立てない ——
    *  回答は拒否文で知る(ADR 0403 決定3)。止まりが無ければ undefined を返し、呼び手は自分の verdict を返す。 */
