@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { completeThroughHumanDoor, quarantineChecks, startWorkThroughHumanDoor, submitAnswer, takeInWorkThroughHumanDoor } from "../src/human-verbs.js";
-import { blockingRootOf, contentLeftBehindLocally, createLanding, type Landing, landingState, prInFlightRefusal, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, contentLeftBehindLocally, createLanding, type Landing, landingInWorkspaceRefusal, landingState, prInFlightRefusal, registerLocalMergeQuestion, registerPrPromotionFailureQuestion, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
@@ -15,8 +15,8 @@ import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import { boardRefWriter, LostTaskBranchPresentError, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, removeReleasedTaskCheckoutsOn, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, rememberFixtureHeadRepos, settleReviews, WORKER_SPAWNED } from "./harness.js";
-import { attachUnsettledChild, commitThroughTaskCheckout, completeThroughTaskCheckout, finish, landingWork, openBoard, promotionFailures } from "./landing-fixture.js";
+import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, settleReviews, WORKER_SPAWNED } from "./harness.js";
+import { attachUnsettledChild, commitThroughTaskCheckout, completeThroughTaskCheckout, failPrepareOnce, finish, landingWork, openBoard, promotionFailures } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 // 失われたタスクブランチを系譜が記録で読む(ADR 0375 決定1・2、ADR 0380 決定1・3、spec #3273 group H、#3297)。domain 層の釘(ADR 0107)。
@@ -1358,11 +1358,13 @@ it("失われた event の無い解放済みの checkout は今どおり消え�
 
 type RemoteBoard = { db: Db; clock: FakeClock; workspace: WorkspaceConfig; github: FakeGitHubClient; landing: Landing };
 
-async function remoteBoard(name: string): Promise<RemoteBoard> {
+/** `others`: 同じ盤面のほかの workspace(先に `makeLandingWorkspace` で作る)—— 収束はその名前の task をそこへ解決する。 */
+async function remoteBoard(name: string, others: WorkspaceConfig[] = []): Promise<RemoteBoard> {
   const { workspace } = await makeLandingWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  return { db, clock, workspace, github, landing: createLanding({ defaultAgentName: "tako", db, clock, workspace, github }) };
+  const resolveWorkspace = others.length > 0 ? (named: string | null) => others.find((other) => other.name === named) ?? workspace : undefined;
+  return { db, clock, workspace, github, landing: createLanding({ defaultAgentName: "tako", db, clock, workspace, resolveWorkspace, github }) };
 }
 
 /** setup のみ: 盤面の口で `task/<id>` を消し、give-up と同じ `task_branch_lost` を消した tip で刻む。 */
@@ -1526,30 +1528,30 @@ function giveUpOnRemote(c: RemoteBoard) {
   );
 }
 
-/** 収束が次に PR を作る要求の最中(作成を返す前)に `during` を1度走らせ、その結果(通れば undefined、拒まれればその error)を返す口。 */
-function duringNextPrCreation(c: RemoteBoard, during: () => Promise<unknown>): () => unknown {
-  const create = c.github.createPullRequest.bind(c.github);
+/** 収束が次に GitHub の `call`(PR の作成か PR の状態の読み)を呼ぶ要求の最中(呼んで返す前)に `during` を1度走らせ、その結果(通れば
+ *  undefined、拒まれればその error)を返す口。 */
+function duringNext(c: RemoteBoard, call: "createPullRequest" | "getPullRequestState", during: () => Promise<unknown>): () => unknown {
+  const github = c.github as unknown as Record<typeof call, (...args: unknown[]) => Promise<unknown>>;
+  const original = github[call].bind(c.github);
   let outcome: unknown = "not run";
   let pending: (() => Promise<unknown>) | undefined = during;
-  c.github.createPullRequest = async (input) => {
+  github[call] = async (...args) => {
     const act = pending;
     pending = undefined;
     if (act) outcome = await act().then(() => undefined, (err: unknown) => err);
-    return create(input);
+    return original(...args);
   };
   return () => outcome;
 }
 
 it("収束の回の途中で give-up が通った根は、同じ回で撃たれない —— 根ごとに着地の終わりの述語を読み直す(ADR 0407 決定1)", async () => {
-  const c = await remoteBoard("given-up-mid-pass");
   // ADR 0407 決定2 追記(#3732): 着地中の workspace の give-up は拒まれる —— 回の途中で通るのは別の workspace の give-up なので、失う根はそこに置く
   const { workspace: other } = await makeLandingWorkspace("given-up-mid-pass-other");
-  rememberFixtureHeadRepos(c.db);
-  c.landing = createLanding({ defaultAgentName: "tako", db: c.db, clock: c.clock, workspace: c.workspace, resolveWorkspace: (name) => (name === other.name ? other : c.workspace), github: c.github });
+  const c = await remoteBoard("given-up-mid-pass", [other]);
   const elsewhere = { ...c, workspace: other };
   const first = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "first.txt", "first\n");
   const lost = await completeThroughTaskCheckout(c.db, c.clock, other, landingWork(c.db, c.clock, other.name), "lost.txt", "lost\n");
-  const outcome = duringNextPrCreation(c, () => {
+  const outcome = duringNext(c, "createPullRequest", () => {
     loseByHand(elsewhere, lost);
     return giveUpOnRemote(elsewhere);
   });
@@ -1568,7 +1570,7 @@ it("収束の回の途中で give-up が通った根は、同じ回で撃たれ�
 it("収束が根の PR を作っている間(push から記録まで)は処理中の印を持ち、その根を失わせる give-up は何も書かずに拒まれる —— 作り終えた後の give-up は通る(ADR 0407 決定2、ADR 0236)", async () => {
   const c = await remoteBoard("give-up-during-pr-creation");
   const root = await completeThroughTaskCheckout(c.db, c.clock, c.workspace, landingWork(c.db, c.clock), "root.txt", "root\n");
-  const outcome = duringNextPrCreation(c, () => {
+  const outcome = duringNext(c, "createPullRequest", () => {
     loseByHand(c, root, true);
     return giveUpOnRemote(c);
   });
@@ -1586,22 +1588,7 @@ it("収束が根の PR を作っている間(push から記録まで)は処理�
   expect(taskBranchLostInForce(c.db, root.id)).toBeDefined();
 });
 
-/** 収束が次に PR の状態を読む要求の最中(読んだ後、返す前)に `during` を1度走らせ、その結果(通れば undefined、拒まれればその error)を返す口。 */
-function duringNextPrStateRead(c: RemoteBoard, during: () => Promise<unknown>): () => unknown {
-  const read = c.github.getPullRequestState.bind(c.github);
-  let outcome: unknown = "not run";
-  let pending: (() => Promise<unknown>) | undefined = during;
-  c.github.getPullRequestState = async (ref) => {
-    const state = await read(ref);
-    const act = pending;
-    pending = undefined;
-    if (act) outcome = await act().then(() => undefined, (err: unknown) => err);
-    return state;
-  };
-  return () => outcome;
-}
-
-const landingRefusal = (c: RemoteBoard, root: Task) => `the board is landing task ${root.id} in workspace ${c.workspace.name} right now — answer again in a moment`;
+const landingRefusal = (c: RemoteBoard, root: Task) => landingInWorkspaceRefusal(root.id, c.workspace.name);
 
 it.each([
   ["open", false],
@@ -1610,7 +1597,7 @@ it.each([
   const c = await remoteBoard(`give-up-while-landing-${state}`);
   const root = await prRootWithUnpushedCommit(c);
   if (merged) c.github.scriptMergedOutside(1);
-  const outcome = duringNextPrStateRead(c, () => {
+  const outcome = duringNext(c, "getPullRequestState", () => {
     loseByHand(c, root, true);
     return giveUpOnRemote(c);
   });
@@ -1634,7 +1621,7 @@ it("着地中の根の子孫だけを失わせる give-up も、その workspace
   const root = await prRootWithUnpushedCommit(c);
   // 未決着の子は根の着地を塞ぐ(`landingBlock`)ので、着地がその読みを越えた後の await の中で付けて失わせる
   let child!: Task;
-  const outcome = duringNextPrStateRead(c, async () => {
+  const outcome = duringNext(c, "getPullRequestState", async () => {
     child = attachUnsettledChild(c.db, c.clock, root.id);
     await commitThroughTaskCheckout(c.db, c.clock, c.workspace, child, "child.txt", "never merged back\n");
     loseByHand(c, child);
@@ -1664,4 +1651,44 @@ it("着地が止まって抜けても(ref の比較が workspace を Quarantine 
 
   expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeUndefined();
   expect(taskBranchLostInForce(c.db, root.id)).toBeDefined();
+});
+
+it("着地が想定外の例外で抜けても、着地中は残らず、続く give-up は通る(ADR 0407 決定2 追記、#3732)", async () => {
+  const c = await remoteBoard("give-up-after-thrown-landing");
+  const root = await prRootWithUnpushedCommit(c);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  // PR の状態の読みが落ち、その失敗の question の登録も1回だけ落ちる —— 着地は根ごとの catch へ例外で抜ける
+  c.github.getPullRequestState = async () => {
+    failPrepareOnce(c.db, "INSERT INTO tasks", "the board hit a bug");
+    throw new Error("GitHub is unreachable");
+  };
+
+  const verdicts = await c.landing.converge();
+
+  expect(verdicts.find(({ taskId }) => taskId === root.id)?.verdict).toMatchObject({ kind: "failed", reason: "landing_failed" });
+
+  loseByHand(c, root, true);
+  await giveUpOnRemote(c);
+
+  expect(quarantineQuestion(c.db, "workspace", c.workspace.name)).toBeUndefined();
+  expect(taskBranchLostInForce(c.db, root.id)).toBeDefined();
+});
+
+it("別の workspace の根を着地させている間の give-up は通る(ADR 0407 決定2 追記、#3732)", async () => {
+  const { workspace: other } = await makeLandingWorkspace("give-up-elsewhere-while-landing-other");
+  const c = await remoteBoard("give-up-elsewhere-while-landing", [other]);
+  const elsewhere = { ...c, workspace: other };
+  await prRootWithUnpushedCommit(c);
+  const unfinished = landingWork(c.db, c.clock, other.name);
+  await commitThroughTaskCheckout(c.db, c.clock, other, unfinished, "unfinished.txt", "not landed\n");
+  const outcome = duringNext(c, "getPullRequestState", () => {
+    loseByHand(elsewhere, unfinished);
+    return giveUpOnRemote(elsewhere);
+  });
+
+  await c.landing.converge();
+
+  expect(outcome()).toBeUndefined();
+  expect(quarantineQuestion(c.db, "workspace", other.name)).toBeUndefined();
+  expect(taskBranchLostInForce(c.db, unfinished.id)).toBeDefined();
 });

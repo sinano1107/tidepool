@@ -453,6 +453,10 @@ function lacksContentOf({ lastPushed, droppedBranches, unpushedBranches }: Outsi
 /** 盤面がその PR に in-flight 印を持つ(merge しているか、push して記録するまでの)間の回答の拒否文(ADR 0236 決定3 / ADR 0387 決定4)。 */
 export const prInFlightRefusal = (prNumber: number) => `PR #${prNumber} is being merged or pushed to by the board right now — answer again in a moment`;
 
+/** 収束が workspace の根を着地させている間の give-up の拒否文(ADR 0407 決定2 追記、#3732)。 */
+export const landingInWorkspaceRefusal = (rootId: string, workspace: string) =>
+  `the board is landing task ${rootId} in workspace ${workspace} right now — answer again in a moment`;
+
 /** 処理中の印を持つ task への回答の拒否文(ADR 0236 決定3・ADR 0399 決定6・ADR 0407 決定2)、印が無ければ undefined。PR をまだ記録して
  *  いない根(収束が作っている途中)は task を名指す。 */
 export function inFlightRefusalOf(db: Db, landing: Pick<Landing, "isMarked"> | undefined, taskIds: string[]): string | undefined {

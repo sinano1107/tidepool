@@ -43,7 +43,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, assertLandingRefs, blockingRootOf, checkPrMergeContent, conflictedPrRoute, contentLeftBehindLocally, inFlightRefusalOf, type Landing, LandingRefCheckError, type LandingVerdict, landingBlock, landingDeclined, landingInWorkspaceRefusal, lastPushedHead, observePrHead, type PrHeadOrigin, prInFlightRefusal, type RootVerdict, refuseUnaskedHead, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { CANCEL_THE_RCAS, conventionCheckoutPath, interviewOwnerOf, isRemoteBacked, namePickupPredicates, type PickupPredicate, protectedBranch, readHeadOf } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -825,12 +825,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0407 決定2: 処理中の印を持つ task のキューの行と question を片づけると印の行為と競る —— `end landing` と同じ形で拒む
     const giveUpAnswer = giveUp && {
       question: openQuarantineQuestion(deps.db, "workspace", value)!.id,
-      refuseIfMarked: (lostTaskIds: string[]) => {
+      refuseIfInFlight: (lostTaskIds: string[]) => {
         const refusal = inFlightRefusalOf(deps.db, deps.landing, lostTaskIds);
         if (refusal) throw new Error(refusal);
         // ADR 0407 決定2 追記(#3732): 着地は根の workspace の task ブランチを読む —— 失われる task が根でなくても、その workspace の着地中は拒む
-        const landing = deps.landing?.landingRootIn(value);
-        if (landing) throw new Error(`the board is landing task ${landing} in workspace ${value} right now — answer again in a moment`);
+        const landingRoot = deps.landing?.landingRootIn(value);
+        if (landingRoot) throw new Error(landingInWorkspaceRefusal(landingRoot, value));
       },
     };
     const kept = restore ? await refuseOnError(() => restoreBaseline(deps.db, target, clock.now(), lacking, giveUpAnswer || undefined)) : [];

@@ -3599,7 +3599,7 @@ export async function fetchLostTargets(db: Db, place: WorkspaceConfig, auth: Git
  *  `giveUpAnswer`(give-up に答えている workspace の Quarantine の `question`、ADR 0373 決定5): object の無い ref は拒まずに今の値で基準に入れ(ref が無ければ
  *  行を消す。失われた `task/<id>` は今の値を keep-around へ移して ref と行を消す —— ADR 0392 決定1)、`lost_refs_accepted` と失われた `task/<id>` ごとの `task_branch_lost` を書き戻しより先に残し、同じ transaction で付帯子を倒し、
  *  失われた task を指す開いた着地の question とキューの行を引退させる(ADR 0375 決定1・4・9、ADR 0407 決定2 —— 着地の終わりは失われた event から読み、
- *  記録は書かない)。その transaction の直前の同じ同期区間で `refuseIfMarked` を失われる task に当て、処理中の印があるか収束がこの workspace の根を
+ *  記録は書かない)。その transaction の直前の同じ同期区間で `refuseIfInFlight` を失われる task に当て、処理中の印があるか収束がこの workspace の根を
  *  着地させていれば何も書かずに拒む(ADR 0407 決定2 とその追記、ADR 0288 決定2 と同じ形)。give-up で失われた ref が無ければ、
  *  今の checkout に保護ブランチが無ければ、何も書かずに拒む。 */
 export function restoreBaseline(
@@ -3607,7 +3607,7 @@ export function restoreBaseline(
   workspace: WorkspaceConfig,
   now: Date,
   lacking?: ReadonlySet<string>,
-  giveUpAnswer?: { question: string; refuseIfMarked: (lostTaskIds: string[]) => void },
+  giveUpAnswer?: { question: string; refuseIfInFlight: (lostTaskIds: string[]) => void },
 ): KeptValue[] {
   const giveUp = giveUpAnswer !== undefined;
   // ADR 0409 決定4: 読みは最初の書き込みと B4a・B3・B4b のどの拒否よりも前に全部済ませる —— 分からない sha が残る間は取り消せない側へ案内しない
@@ -3649,7 +3649,7 @@ export function restoreBaseline(
   if (targets.size > 0) verifyWorkspaceClean(workspace);
   const kept: KeptValue[] = [...targets.keys()].flatMap((ref) => keepable.get(ref)!.filter((sha) => present.get(sha)).map((sha) => ({ ref, sha })));
   if (giveUp) {
-    giveUpAnswer.refuseIfMarked(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
+    giveUpAnswer.refuseIfInFlight(lost.flatMap(([ref]) => lostTask(ref)?.id ?? []));
     db.transaction(() => {
       // 記録が git の書き込みより先でよいのは、失われたと数えるのが基準の sha の object の不在で、ref の今の値を読まないから —— 書き戻しの前に
       // 落ちても記録は偽にならない。失われた `task/<id>` の行をここで消すので、人間の値で残った ref は違反のまま、次に通る回答は
