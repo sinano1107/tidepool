@@ -1,17 +1,21 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import type { Db } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { GhCliClient } from "../src/github.js";
+import { HEAD_REPO_REMOTE } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { blockingRootOf, createLanding, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, heldInPrepareMerge, holdAfterMerge } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
-import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, recordPrOpenedOutsideConvergence, registeredReef } from "./landing-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, type RegisteredReef, recordPrOpenedOutsideConvergence, registeredReef, reRegister } from "./landing-fixture.js";
+import { setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -430,4 +434,75 @@ it("別の checkout で登録し直した名前でも、着地を終えた根の
 
   expect(blockingRootOf(db, reef.resolve)(getTask(db, child.id)!)).toEqual({ task_id: root.id, pr_number: 1 });
   expect(nextSlotTask(db, "reef", undefined, undefined, undefined, undefined, blockingRootOf(db, reef.resolve))).toBeUndefined();
+});
+
+/** PR の無い根の PR 作成で、`createPullRequest` が宣言を読んで PR を作った後の await(本物では作成の応答待ち)で1回止める盤面。
+ *  `during` はその窓の間の人間の手。merge dial は PR を読まない(既定)ので、作成の後に宣言を読み直すのは比較器だけ。 */
+async function heldAfterPrCreated(during: (fixture: { db: Db; reef: RegisteredReef; old: WorkspaceConfig }) => Promise<void> | void) {
+  const { db, clock } = await openBoard();
+  const { workspace: old } = await makeLandingWorkspace("reef-old");
+  const reef = await registeredReef(old);
+  giveHeadRepo(db, reef, old.head_repo!);
+  const github = new FakeGitHubClient();
+  const root = landingWork(db, clock, "reef");
+  await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), root, "feature.txt", "ready\n");
+  const done = finish(db, clock, root);
+  const window = awaitWindow();
+  const original = github.createPullRequest.bind(github);
+  // FakeGitHubClient は宣言を同期で読む —— 窓は本物の順(宣言を読んだ後の await)に合わせて、元の呼び出しが返った後に置く
+  github.createPullRequest = async (input) => {
+    const created = await original(input);
+    await window.hold();
+    return created;
+  };
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
+  const converging = landing.converge();
+  await window.entered;
+  const door = await Promise.resolve(during({ db, reef, old })).then(() => undefined, (error: unknown) => error);
+  window.open();
+  const [verdict, ...rest] = await converging;
+  expect(rest).toEqual([]);
+  return { db, old, root: done, github, verdict: verdict!.verdict, door };
+}
+
+it("PR を作る応答を待つ間に registry の path: を同じ repo の clone へ手で書き換え古い checkout を消すと、根だけが path の変更で止まり、作った PR は記録されている(ADR 0399 決定3・5)", async () => {
+  const { db, root, verdict, door } = await heldAfterPrCreated(async ({ reef, old }) => {
+    const clone = join(await tempDir("reef-clone-"), "reef");
+    git(old.path, "clone", "--quiet", old.path, clone);
+    git(clone, "remote", "set-url", "origin", old.repo!);
+    git(clone, "remote", "add", HEAD_REPO_REMOTE, old.head_repo!);
+    setWorkspaceEntry(reef.registryDir, "reef", "path", clone);
+    rmSync(old.path, { recursive: true, force: true });
+  });
+
+  expect(door).toBeUndefined();
+  expect(verdict.kind).toBe("failed");
+  const [failure, ...rest] = promotionFailures(db, root.id);
+  expect(rest).toEqual([]);
+  expect(failure?.purpose).toContain("the registered checkout path changed during the operation");
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+  expect(getTask(db, root.id)?.pr_number).toBe(1);
+});
+
+it("PR を作る応答を待つ間に registry の path: と repo: を別の checkout へ手で書き換えると、repo: の手編集として workspace で止まり、作った PR は記録されている(ADR 0378 決定6)", async () => {
+  const { workspace: other } = await makeLandingWorkspace("reef-new");
+  const { db, root, verdict, door } = await heldAfterPrCreated(({ reef, old }) => {
+    setWorkspaceEntry(reef.registryDir, "reef", "path", other.path);
+    setWorkspaceEntry(reef.registryDir, "reef", "repo", other.repo!);
+    rmSync(old.path, { recursive: true, force: true });
+  });
+
+  expect(door).toBeUndefined();
+  expect(verdict.kind).toBe("quarantined");
+  expect(getTask(db, openQuarantineQuestion(db, "workspace", "reef")!.id)!.purpose).toContain(`its registry entry now says ${other.repo}`);
+  expect(getTask(db, root.id)?.pr_number).toBe(1);
+});
+
+it("PR を作る応答を待つ間の削除の扉は、着地を待つ根を数えて拒み、根は作った PR で着地する", async () => {
+  const { workspace: moved } = await makeLandingWorkspace("reef-new");
+  const { db, root, verdict, door } = await heldAfterPrCreated(({ db, reef }) => reRegister(db, reef, moved));
+
+  expect(door).toMatchObject({ reasons: [{ code: "tasks_awaiting_landing", task_ids: [root.id] }] });
+  expect(verdict).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+  expect(getTask(db, root.id)?.pr_number).toBe(1);
 });

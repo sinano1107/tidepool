@@ -1797,7 +1797,6 @@ export async function submitAnswer(
                 compareRefs: () => {
                   // ADR 0288 決定4: 待つ間に観測で閉じた回答は、比較で止める前に決着を返す。
                   assertQuestionOpen();
-                  assertMergeRepo();
                   assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, deps.boardState, now());
                 },
               },
@@ -1874,7 +1873,6 @@ export async function submitAnswer(
           await actIfGateOpen(() => {
             assertQuestionOpen();
             assertLandingAllowed(deps.db, kind.task_id);
-            assertMergeRepo();
             assertLandingRefs(deps.db, mergeWorkspace, deps.resolveWorkspace, deps.boardState, now());
             let leftNow: string[];
             try {

@@ -1336,8 +1336,9 @@ it("最初の「merge」の拒否の後に記録済みの PR の head がまた�
   const [replacement] = listBoard(c.db).filter((q) => q.question_pending_merge_pr === 1);
   expect(replacement!.id).not.toBe(asked.id);
   expect(getTask(c.db, asked.id)?.status).toBe("done");
+  expect(refusal).not.toContain("did not push"); // ADR 0401 決定3
   expect(refusal).toBe(
-    `${textA4b(c, moved, c.target, replacement!.id)} The board did not push these commits on it: ${moved} add outside-again.txt. ` +
+    `${textA4b(c, moved, c.target, replacement!.id)} These commits on it are not in the board's push record: ${moved} add outside-again.txt. ` +
       `This question is closed — question ${replacement!.id} now asks about this head.`,
   );
   expect(git(c.workbench(), "rev-parse", `board/origin/${c.target}`)).toBe(moved);
@@ -1380,12 +1381,12 @@ it.each([
 });
 
 // ADR 0394 決定1・3: 外の部分は sha と種類の組で比べる —— 問うた時の種類のまま執行すると、寄り道を通さずに内容の落ちた head を merge する
-it("盤面が push していない head と問うた sha が、取り込みの後に内容が落ちた head と読めれば、「merge」は拒まれ、作業台を開いて立て直した question を名指す", async () => {
+it("盤面の記録に無い head と問うた sha が、取り込みの後に内容が落ちた head と読めれば、「merge」は拒まれ、作業台を開いて立て直した question を名指す", async () => {
   const c = await pushedRoot("outside-head-reads-rewritten-after-intake", { pr: "recorded", merge: "auto_if_ci_green" });
   const head = await pushOutsideBoard(c.workspace, c.work.id);
   await c.landing.tick("auto_merge");
   const asked = listBoard(c.db).find((q) => q.question_pending_merge_pr === 1)!;
-  expect(asked.purpose).toContain(`PR #1's head ${head} holds commits the board did not push`);
+  expect(asked.purpose).toContain(`PR #1's head ${head} holds commits not in the board's push record`);
   await convergeOn(c.landing, c.work.id);
   const [failure] = promotionFailures(c.db, c.work.id);
   c.mergeInWorkbench();
@@ -1431,7 +1432,7 @@ it("作業台で merge した後の「merge」の寄り道で収束が head を�
   expect(replacement!.id).not.toBe(asked.id);
   expect(getTask(c.db, asked.id)?.status).toBe("done");
   expect(refusal).toBe(
-    `${textA4b(c, moved, c.target, replacement!.id)} The board did not push these commits on it: ${moved} add outside-again.txt. ` +
+    `${textA4b(c, moved, c.target, replacement!.id)} These commits on it are not in the board's push record: ${moved} add outside-again.txt. ` +
       `This question is closed — question ${replacement!.id} now asks about this head.`,
   );
   c.expectNothingCarried();

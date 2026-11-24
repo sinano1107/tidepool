@@ -45,8 +45,8 @@ const IN_FLIGHT = "PR #1 is being merged or pushed to by the board right now —
 
 /** 盤面の知らない commit の、推奨 hold の merge question の本文。 */
 const outsideHeadBody = (head: string, lastPushed: string) =>
-  `"ship": PR #1's head ${head} holds commits the board did not push — the board last pushed ${lastPushed}. ` +
-  `See them with \`git log ${lastPushed}..${head}\`. Merge, or hold?`;
+  `"ship": PR #1's head ${head} holds commits not in the board's push record — the board's last recorded push is ${lastPushed}. ` +
+  `See them with \`git log ${lastPushed}..${head}\`. The board may have pushed them itself and stopped before recording the push. Merge, or hold?`;
 
 const UNREADABLE_PATHS = "\n\nThe board could not compare this PR head with the protected branch to check which paths require a human merge.";
 
@@ -139,8 +139,8 @@ const answerMerge = (pr: Awaited<ReturnType<typeof openPushedPr>>) =>
 /** 盤面の知らない commit を列挙し、立て直した question を名指す拒否文(ADR 0394 決定3)。`commits` は新しい順の
  *  [sha, `pushOutsideBoard` が書いた file]。 */
 const listedRefusal = (head: string, lastPushed: string, commits: Array<[string, string]>, replacement: string) =>
-  `PR #1's head ${head} holds commits the board did not push (the board last pushed ${lastPushed}): ` +
-  `${commits.map(([sha, file]) => `${sha} add ${file}`).join("; ")}. ` +
+  `PR #1's head ${head} holds commits not in the board's push record (the board's last recorded push is ${lastPushed}): ` +
+  `${commits.map(([sha, file]) => `${sha} add ${file}`).join("; ")}. The board may have pushed them itself and stopped before recording the push. ` +
   `This question is closed — question ${replacement} now asks about this head; answer \`merge\` there to merge it.`;
 
 /** PR #1 の開いている merge question。 */
@@ -198,6 +198,8 @@ it("キューにいる PR の merge question が開いたまま外から進ん�
   await pr.landing.tick("auto_merge");
 
   expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([outsideHeadBody(head, lastPushed)]);
+  // ADR 0401 決定3: 記録に無い head は盤面自身の push でもありうるので、文面は誰が push したかを断定しない
+  expect(openQuestion(pr).purpose).not.toContain("did not push");
   expect(getTask(pr.db, original.id)).toEqual({ ...original, status: "done" });
   const replacement = openQuestion(pr);
   expect(boardEvents(pr.db, pr.work.id, "pr_merge_question_replaced")).toEqual([
@@ -323,6 +325,7 @@ it("CI 赤の question が開いた後に外から進んだ head への「merge�
   const refusal = await answerMerge(pr);
   const asked = openQuestion(pr);
   expect(refusal).toBe(listedRefusal(first, lastPushed, [[first, "outside.txt"]], asked.id));
+  expect(refusal).not.toContain("did not push"); // ADR 0401 決定3
   expect(getTask(pr.db, ciRed.id)?.status).toBe("done");
   expect(mergeQuestions(pr.db).map(({ purpose }) => purpose)).toEqual([outsideHeadBody(first, lastPushed)]);
   expect(pr.github.merged).toEqual([]);
@@ -367,7 +370,7 @@ it("conflict and outside-head questions name the branch GitHub reports for an ol
   expect(openQuestion(pr).purpose).toContain(`merge main into ${headRef.branch} in your own clone and push it to head repo ${headRef.repo}`);
   const outside = await pushOutsideBoard(pr.workspace, pr.work.id);
 
-  expect(await answerMerge(pr)).toContain(`PR #1's head ${outside} (${headRef.branch} on head repo ${headRef.repo}) holds commits the board did not push`);
+  expect(await answerMerge(pr)).toContain(`PR #1's head ${outside} (${headRef.branch} on head repo ${headRef.repo}) holds commits not in the board's push record`);
   expect(openQuestion(pr).purpose).toContain(`${headRef.branch} on head repo ${headRef.repo}`);
 });
 

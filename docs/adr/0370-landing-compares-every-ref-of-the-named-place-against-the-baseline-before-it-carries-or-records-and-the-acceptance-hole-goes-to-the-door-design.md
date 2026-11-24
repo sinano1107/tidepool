@@ -1,5 +1,7 @@
 # 着地は運ぶ前と記録を書く前に名前の場所の全 ref を基準と比べる —— 受理が見せていない移動を受け入れる穴は、人間の内容の扉の設計に渡す
 
+**Status 追記: 決定1 の例外「取り残された子の告知は比べずに書く」は対象が無くなる —— 告知は ref を読まなくなった([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定1、2026-11-24、issue #3703)。**
+
 **Status 追記: 決定1 の比較が git の失敗で読めないときも、根ごとの失敗ではなく、その workspace の Quarantine で止まる。立てるのは ref 検査そのもので、2つの merge の tick も同じである([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定4、2026-11-23、issue #3554)。**
 
 **Status 追記: 決定1 の例外「hold・断念の head の記録は比べずに書く」は、回答の時点から question を立てる時点へ移る —— 断った内容は question を立てた時点の tip で、それは着地で運ぶ値ではなく人間に見せたものの記録なので、基準と比べずにタスクブランチの値を読む(昇格失敗の question は ref 検査の失敗からも立つので、比べると読めない)([ADR 0394](0394-a-merge-question-carries-what-it-asks-about-an-answer-executes-only-on-that-and-a-hold-or-abandon-declines-that-through-one-record.md) Consequences、2026-11-21、issue #3402)。**

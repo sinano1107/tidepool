@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
 import { assertLandingRefs, createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
@@ -100,15 +101,19 @@ it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ�
 });
 
 /** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に、同じ checkout の origin を別の repo へ向けて
- *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`elsewhere` なら別の path の checkout(別の repo)へ登録し直す。
- *  `hold` は収束に足す材料を返せる。 */
+ *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`hold` は収束に足す材料を返せる。`target` は登録し直す先と
+ *  削除の後の人間の手を差し替える。 */
 async function reRegisteredDuringAwait(
   hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> },
-  { elsewhere = false } = {},
+  target?: (old: WorkspaceConfig) => Promise<{ workspace: WorkspaceConfig; between: () => void }>,
 ) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeLandingWorkspace("reef-old");
   const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
+  const { workspace: declared, between } = (await target?.(old)) ?? {
+    workspace: { ...old, repo: other.repo },
+    between: () => git(old.path, "remote", "set-url", "origin", other.repo!),
+  };
   const reef = await registeredReef(old);
   giveHeadRepo(db, reef, old.head_repo!);
   const github = new FakeGitHubClient();
@@ -123,11 +128,10 @@ async function reRegisteredDuringAwait(
 
   const converging = landing.converge();
   await window.entered;
-  if (elsewhere) await reRegister(db, reef, other);
-  else await reRegister(db, reef, { ...old, repo: other.repo }, () => git(old.path, "remote", "set-url", "origin", other.repo!));
+  await reRegister(db, reef, declared, between);
   window.open();
   await converging;
-  return { db, github, old, other, root: done, head };
+  return { db, github, old, other, declared, root: done, head };
 }
 
 /** `method` の呼び出しを、本物の token の await に当たる所で1回止める。 */
@@ -172,6 +176,23 @@ it("PR の head を取る token の await の間に扉で別の repo へ登録�
   stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
 });
 
+// 釘(#3699): 保護ブランチの写しの読み直し(`refreshProtectedBranch`)の token の await。窓に入らなければ `reRegisteredDuringAwait` は進まない
+it.each([
+  ["new path and repo, old checkout removed", async (old: WorkspaceConfig) => {
+    const { workspace } = await makeLandingWorkspace("reef-new");
+    return { workspace, between: () => rmSync(old.path, { recursive: true, force: true }) };
+  }],
+  ["same path, repo swapped", undefined],
+] as const)("merge 済みの根が保護ブランチの写しを読み直す token の await の間に扉で登録し直すと(%s)、根だけが記録と今の宣言を名指して止まる(ADR 0399 決定5)", async (_, target) => {
+  const { db, old, declared, root } = await reRegisteredDuringAwait((github) => {
+    github.scriptMergedOutside(1);
+    const { window, githubAuth } = fetchHeldAtToken();
+    return { ...window, deps: { githubAuth } };
+  }, target);
+
+  stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
+});
+
 // #3700: 削除の扉で基準の行も消えた名前を、await の間に別の path の別の repo で登録し直す。await の後は `assertLandingRefs` より前の行き先の読み
 // (`workspaceNetworkDestination`)が path の変化を見て先に止めるので、この test が固定するのは結果(根の止まり、workspace の Quarantine なし、
 // ADR 0399 決定5)で、`assertLandingRefs` の素の投げ直しの行ではない —— その行は下の domain の test が固定する
@@ -179,10 +200,13 @@ it.each([
   ["PR の状態を読む前", "getPullRequestState"],
   ["push の準備", "preparePush"],
 ] as const)("%sの await の間に扉で名前を削除し、別の path の別の repo の checkout に登録し直しても、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async (_, method) => {
-  const { db, github, old, other, root } = await reRegisteredDuringAwait(holdBefore(method), { elsewhere: true });
+  const { db, github, old, declared, root } = await reRegisteredDuringAwait(holdBefore(method), async () => {
+    const { workspace } = await makeRemoteBackedWorkspace("reef-elsewhere");
+    return { workspace, between: () => {} };
+  });
 
   expect([github.pushes, github.requests]).toEqual([[], []]);
-  stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
+  stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
 });
 
 /** 旧い repo で拾われ PR #1 を開いた done の根を残し、`reef` を扉で purely-local の checkout(`moved`)に登録し直した盤面。 */
@@ -247,7 +271,8 @@ it("面接室の受験者は、面接室で拾われても宣言の repo を記�
   expect(declaredRepoDisagreement(db, examinee!.id, room)).toMatch(/no record/);
 });
 
-// ADR 0399 決定5・7: 基準の行の無い名前の最初の撮りの前の項が、登録し直しで根の比較に落ちたら、その名前の Quarantine でなく根の止まり
+// ADR 0399 決定5・7: 基準の行の無い名前の最初の撮りの前の項が、登録し直しで根の比較に落ちたら、その名前の Quarantine でなく根の止まり。
+// #3699 の後は catch の外の宛先の読み直しが同じ同期区間で先に投げるので、この test が固定するのは結果で、catch の素の投げ直しの行ではない
 it("基準の行の無い名前の着地の前の比較で、覚えた repo の項が path の変化を見て根の比較に落ちると、DeclaredRepoMismatchError がそのまま出て workspace の Quarantine は立たない", async () => {
   const { db, clock } = await openBoard();
   const reef = await makeWorkspace("reef");

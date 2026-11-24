@@ -1,11 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { CheckoutUnreadableError } from "../src/git.js";
-import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
+import { boardReadTree, CheckoutUnreadableError } from "../src/git.js";
+import { checkoutPickupPredicates, discardUncommitted } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
-import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
 import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -175,4 +175,32 @@ it("読む実環境と他の面接室には tree の clean 検査を当てない
   expect(git(place.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${root.id}`);
   expect(git(room.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
   for (const { place } of reads) expect(readFileSync(join(place.path, "reading.txt"), "utf8")).toBe("read-only place\n");
+});
+
+it("出口が名指す捨てる操作は、sparse の pin の下で cone の外に足されたファイルも捨てて tree を clean にする(ADR 0401 決定7, #3614)", async () => {
+  const workspace = await makeWorkspace("discard-under-sparse-pin");
+  mkdirSync(join(workspace.path, "d"));
+  writeFileSync(join(workspace.path, "d", "hidden"), "hidden by the pin\n");
+  git(workspace.path, "add", "d/hidden");
+  git(workspace.path, "commit", "-m", "tracked outside the cone");
+  const from = git(workspace.path, "rev-parse", "HEAD");
+  mkdirSync(join(workspace.path, "n"));
+  writeFileSync(join(workspace.path, "n", "new"), "outside the cone\n");
+  git(workspace.path, "add", "n/new");
+  git(workspace.path, "commit", "-m", "outside the cone");
+  const to = git(workspace.path, "rev-parse", "HEAD");
+  git(workspace.path, "reset", "-q", "--hard", from);
+  // 本物の index に skip-worktree の bit が残り、n/new が staged になる
+  boardReadTree(workspace.path, from, to, { pattern: "/*\n!/*/\n", cone: true });
+  expect(git(workspace.path, "status", "--porcelain")).toBe("A  n/new");
+  expect(existsSync(join(workspace.path, "d", "hidden"))).toBe(false);
+
+  // 文から操作を読むので、文と働きがずれない
+  const commands = [...discardUncommitted().matchAll(/`git [^`]+`/g)].slice(0, 2).map(([command]) => command.slice(1, -1));
+  expect(commands).toHaveLength(2);
+  for (const command of commands) git(workspace.path, ...command.split(" ").slice(1));
+
+  expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
+  // --ignore-skip-worktree-bits なら pin が隠す file を書き出す —— 捨てる操作は pin の外を木に戻さない
+  expect(existsSync(join(workspace.path, "d", "hidden"))).toBe(false);
 });

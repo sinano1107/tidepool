@@ -277,7 +277,9 @@ function workspaceQuarantinedMessage(name: string): string {
 /** ADR 0370 決定1: 基準と違う ref は着地を止め、workspace の Quarantine を立てる。最初の撮りを待つ場合は、すでに止めている
  *  Quarantine の question を名指す(ADR 0373 決定13 追記)。最初の撮りの前の開く前の項(`fixedPoints` との交差を含む)に落ちた名前も
  *  workspace の Quarantine を立てる(ADR 0399 決定7)。git の失敗で ref が読めない checkout も同じく Quarantine を立てる(ADR 0403 決定4)。
- *  項が根の記録と宣言の食い違いに落ちたときだけは立てず、`DeclaredRepoMismatchError` のまま投げる(ADR 0399 決定5)。 */
+ *  ADR 0399 決定3・5: 比べる前に、渡された workspace が持つ確かめで登録を確かめ直す(素の workspace は確かめを持たない)—— 呼び手が
+ *  await の後かを覚えなくても、その間の登録し直しを古い宣言で名前の場所を比べた workspace の Quarantine にせず、根の止まりにする。
+ *  項が根の記録と宣言の食い違いに落ちたときも立てず、`DeclaredRepoMismatchError` のまま投げる(ADR 0399 決定5)。 */
 export function assertLandingRefs(
   db: Db,
   workspace: WorkspaceConfig,
@@ -285,6 +287,8 @@ export function assertLandingRefs(
   fixedPoints: BoardStatePath[] | undefined,
   now: Date,
 ): void {
+  // ADR 0399 追記(#3699): 下の catch の外 —— 中に置くと、根だけを止める食い違いが workspace の Quarantine になる
+  workspaceNetworkDestination(workspace);
   try {
     compareRefsBeforeLanding(db, workspace, { resolveRegistered, fixedPoints, now });
   } catch (error) {
@@ -474,21 +478,23 @@ export function conflictedPrRoute(prNumber: number, workspace: WorkspaceConfig, 
     "then answer `merge`: the board refuses it, listing the commits you pushed, and closes this question — answer `merge` on the new question it names to merge.";
 }
 
-/** ADR 0387 決定1・2: 盤面が push していない head の question の本文と `merge` の拒否文が共有する句。 */
-const notPushedText = {
-  subject: (prNumber: number, head: string, headRef?: PrHeadRef) => `PR #${prNumber}'s head ${head}${headLocation(headRef)} holds commits the board did not push`,
+/** ADR 0387 決定1・2: 盤面の記録に無い head の question の本文と `merge` の拒否文が共有する句。ADR 0401 決定3: push の後・記録の前に
+ *  盤面が落ちると盤面自身の push もこの head になるので、誰が push したかを断定せず、その場合もありうると言う(`ownPush`)。 */
+const unrecordedHeadText = {
+  subject: (prNumber: number, head: string, headRef?: PrHeadRef) => `PR #${prNumber}'s head ${head}${headLocation(headRef)} holds commits not in the board's push record`,
   noRecord: (prNumber: number) => `, and the board has no record of what it pushed to PR #${prNumber}`,
   onGitHub: "review the PR's commits on GitHub",
   log: (lastPushed: string, head: string) => `\`git log ${lastPushed}..${head}\``,
+  ownPush: " The board may have pushed them itself and stopped before recording the push.",
 };
 
-/** ADR 0387 決定1: 盤面が push していない head の、推奨 hold の merge question の本文 —— 盤面の知らない commit があることと、
+/** ADR 0387 決定1: 盤面の記録に無い head の、推奨 hold の merge question の本文 —— 盤面の知らない commit があることと、
  *  それを見るコマンド。最後に push した値が無ければ、比べる起点が無いことを言う。 */
-const notPushedQuestionBody = (task: Task, prNumber: number, { head, headRef }: PrDiff, lastPushed: string | undefined) =>
-  `"${task.title}": ${notPushedText.subject(prNumber, head, headRef)}` +
+const unrecordedHeadQuestionBody = (task: Task, prNumber: number, { head, headRef }: PrDiff, lastPushed: string | undefined) =>
+  `"${task.title}": ${unrecordedHeadText.subject(prNumber, head, headRef)}` +
   (lastPushed === undefined
-    ? `${notPushedText.noRecord(prNumber)} — ${notPushedText.onGitHub}. Merge, or hold?`
-    : ` — the board last pushed ${lastPushed}. See them with ${notPushedText.log(lastPushed, head)}. Merge, or hold?`);
+    ? `${unrecordedHeadText.noRecord(prNumber)} — ${unrecordedHeadText.onGitHub}.${unrecordedHeadText.ownPush} Merge, or hold?`
+    : ` — the board's last recorded push is ${lastPushed}. See them with ${unrecordedHeadText.log(lastPushed, head)}.${unrecordedHeadText.ownPush} Merge, or hold?`);
 
 /** spec #3273 text A4c: 外の push が落とした内容の、推奨 hold の merge question の本文。 */
 const outsidePushQuestionBody = (task: Task, prNumber: number, outside: OutsidePush, headRef?: PrHeadRef) =>
@@ -1162,7 +1168,7 @@ function askMerge(
 ): string {
   const { head, headRef } = observed;
   const outsideBody = origin.kind === "rewritten" ? outsidePushQuestionBody(task, pr, origin.outside, headRef)
-    : origin.kind === "not_pushed" ? notPushedQuestionBody(task, pr, observed, origin.lastPushed) : undefined;
+    : origin.kind === "not_pushed" ? unrecordedHeadQuestionBody(task, pr, observed, origin.lastPushed) : undefined;
   if (outsideBody === undefined && prompt === undefined) throw new Error("a merge question must say why it was raised");
   // ADR 0394 決定1: 外の head を先に言い、CI や面の変化は後ろに添える。
   const purpose = outsideBody === undefined ? `${prompt!.detail} ${prompt!.question}`
@@ -1208,7 +1214,7 @@ export function refuseUnaskedHead(
   const replaced = asked !== answeredQuestion;
   const closing = replaced ? ` This question is closed — question ${asked} now asks about this head; answer \`merge\` there to merge it.` : "";
   const lastPushed = origin.kind === "rewritten" ? origin.outside.lastPushed : origin.lastPushed;
-  const subject = notPushedText.subject(prNumber, head, headRef);
+  const subject = unrecordedHeadText.subject(prNumber, head, headRef);
   let commits: string[] | undefined;
   if (lastPushed !== undefined) {
     try {
@@ -1217,22 +1223,24 @@ export function refuseUnaskedHead(
       // 最後に push した値か head が手元に無い —— 列挙できない
     }
   }
-  const log = lastPushed === undefined ? "" : notPushedText.log(lastPushed, head);
+  const log = lastPushed === undefined ? "" : unrecordedHeadText.log(lastPushed, head);
   const more = commits !== undefined && commits.length > LISTED_COMMITS ? `; and ${commits.length - LISTED_COMMITS} more — see them with ${log}` : "";
   const listed = commits === undefined || commits.length === 0 ? "" : `${commits.slice(0, LISTED_COMMITS).join("; ")}${more}`;
   if (origin.kind === "rewritten") {
     // 作業台の手順が答える question を名指すので、閉じたことだけを添える
+    // ADR 0376 決定7: 盤面は最後に push した値を欠く head には押さず、Status 追記(#3605): 押すときも判じた head の fast-forward だけ ——
+    // 書き換えは記録の前に落ちた盤面自身の push ではないので、`ownPush` は添えない
     return `${refuseOutsidePushOnce(workspace, workbenchBase, root.id, prNumber, origin.outside, headRef, replaced ? asked : undefined)}` +
-      `${listed === "" ? "" : ` The board did not push these commits on it: ${listed}.`}` +
+      `${listed === "" ? "" : ` These commits on it are not in the board's push record: ${listed}.`}` +
       `${replaced ? ` This question is closed — question ${asked} now asks about this head.` : ""}`;
   }
   if (lastPushed === undefined) {
-    return `${subject}${notPushedText.noRecord(prNumber)}, so it cannot list them — ${notPushedText.onGitHub}.${closing}`;
+    return `${subject}${unrecordedHeadText.noRecord(prNumber)}, so it cannot list them — ${unrecordedHeadText.onGitHub}.${unrecordedHeadText.ownPush}${closing}`;
   }
   if (listed === "") {
-    return `${subject} (the board last pushed ${lastPushed}), and it could not list them here — see them with ${log} in your own clone.${closing}`;
+    return `${subject} (the board's last recorded push is ${lastPushed}), and it could not list them here — see them with ${log} in your own clone.${unrecordedHeadText.ownPush}${closing}`;
   }
-  return `${subject} (the board last pushed ${lastPushed}): ${listed}.${closing}`;
+  return `${subject} (the board's last recorded push is ${lastPushed}): ${listed}.${unrecordedHeadText.ownPush}${closing}`;
 }
 
 /** ADR 0227 決定2: check 未報告を pending と同じに待つ猶予。猶予は head ごとで、起点は盤面がその head を知った
@@ -1627,12 +1635,6 @@ export function createLanding(deps: LandingDeps): Landing {
       // ADR 0399 決定3: この根の push・PR の作成・PR の読みは、行き先を読むたびに根の記録を今の宣言と比べる
       workspace = checkedRoot(workspace, task.id);
       const remoteBacked = isRemoteBacked(workspace);
-      /** await の後の名前の場所の比較(ADR 0370 決定1)。ADR 0399 決定3・5: その前に根の記録を今の宣言と比べる —— await の間の
-       *  登録し直しを、古い宣言で名前の場所を比べた workspace の Quarantine にせず、その根の止まりにする。 */
-      const recheckAfterAwait = () => {
-        workspaceNetworkDestination(workspace);
-        stopRootIfRefsMoved(workspace);
-      };
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
       const afterPush = (landed: LandingVerdict, pushed: string): LandingVerdict => {
         stopRootIfRefsMoved(workspace);
@@ -1667,9 +1669,9 @@ export function createLanding(deps: LandingDeps): Landing {
         const predicates = namePickupPredicates(deps.db, workspace.name, workspace, workbenchBase, deps.boardState);
         const firstHalf = () => checkAcceptanceFirstHalf(workspace, predicates, true);
         ctx.outcome.kept.push(
-          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, recheckAfterAwait)),
+          ...(await redoMergeBacks(deps.db, workspace, deps.workspace?.name, deps.githubAuth, ctx.intake, { root: task.id, firstHalf }, () => stopRootIfRefsMoved(workspace))),
         );
-        recheckAfterAwait();
+        stopRootIfRefsMoved(workspace);
       }
       const outcome = rootPrOutcome(deps.db, task.id);
       const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
@@ -1772,7 +1774,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const closed = closedMergeAnswer();
         if (closed) return closed;
         // head の読みと token の await の後、fetch が交渉用の ref を読む前・取り込み・追いつき・tip の読みの前(ADR 0370 決定1)
-        recheckAfterAwait();
+        stopRootIfRefsMoved(workspace);
         try {
           fetch?.();
         } catch (error) {
@@ -1860,7 +1862,7 @@ export function createLanding(deps: LandingDeps): Landing {
           const closed = closedMergeAnswer();
           if (closed) return closed;
           // ADR 0370 決定1: 準備の await の間に動いた ref があれば、確かめた sha も運ばない —— 比較と push を同じ同期区間に置く
-          recheckAfterAwait();
+          stopRootIfRefsMoved(workspace);
           const block = landingBlock(deps.db, task.id);
           if (block) {
             recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
@@ -2011,7 +2013,7 @@ export function createLanding(deps: LandingDeps): Landing {
           const fetching = openedPr?.base?.branch === protectedBranch(workspace) && COMMIT_OID.test(openedPr.base.sha) && COMMIT_OID.test(openedPr.head)
             ? prepareFetchCommitIfMissing(deps.db, workspace, openedPr.head, deps.githubAuth, now) : undefined;
           const fetch = fetching && (await fetching.catch(unreadable));
-          recheckAfterAwait();
+          stopRootIfRefsMoved(workspace);
           try {
             fetch?.();
           } catch (error) {
@@ -2285,10 +2287,7 @@ export function createLanding(deps: LandingDeps): Landing {
               ? await checkPrMergeContent(deps.db, workspace, task_id, { number: pr_number, head, base: pr.base, lastPushed }, {
                 auth: deps.githubAuth,
                 now,
-                compareRefs: () => {
-                  workspaceNetworkDestination(workspace);
-                  assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
-                },
+                compareRefs: () => assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now()),
               }).catch((error) => {
                 if (error instanceof WorkspaceRepoMismatchError || error instanceof DeclaredRepoMismatchError || error instanceof LandingRefCheckError) throw error;
                 return null;
@@ -2327,7 +2326,6 @@ export function createLanding(deps: LandingDeps): Landing {
             const failure = await github.prepareMerge(ref).then(
               (merge) => actIfGateOpen<null, typeof stoppedBeforeMerge>(() => {
                 // ADR 0330 決定1・4: token と版を待つ間の変化は、gh の起動と同じ同期区間のこの1箇所で読む
-                workspaceNetworkDestination(workspace);
                 assertLandingRefs(deps.db, workspace, deps.resolveWorkspace, deps.boardState, deps.clock.now());
                 return stop(askSurface) || hasContentLeftBehind(deps.db, workspace, task_id, head) ? stoppedBeforeMerge : null;
               }, () => merge(head).then(() => null)),
