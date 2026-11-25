@@ -132,6 +132,21 @@ it("ref が読めないままの回答は git の文つきで拒まれて Quaran
   expect(() => assertRememberedHeadRepo(db, workspace, NOW)).not.toThrow();
 });
 
+it("出元 repo の remote が宣言と食い違ったままの回答は、その文つきで拒まれ、写しを消さず、変更は終わらないまま残る", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootMidChange("unfinished-head-repo-answer-remote");
+  await convergeOn(landing, work.id);
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  const before = copies(workspace);
+  const elsewhere = await tempDir("tidepool-elsewhere-fork-");
+  git(workspace.path, "remote", "set-url", "head-repo", elsewhere);
+
+  await expect(answerWorkspaceQuarantine({ db, clock, workspace, landing }, question)).rejects.toThrow(`its checkout's 'head-repo' remote is ${elsewhere}`);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.id).toBe(question.id);
+  expect(copies(workspace)).toBe(before);
+  expect(() => assertRememberedHeadRepo(db, workspace, NOW)).toThrow(UnfinishedHeadRepoChangeError);
+});
+
 it("外す予告 [fork, 無し] が残り宣言が無い workspace は行き先の読みで止まって外す変更を言い、回答で写しが消えて変更が終わる", async () => {
   const { workspace: given } = await makeLandingWorkspace("unfinished-head-repo-removal");
   const { db, clock } = await openBoard();

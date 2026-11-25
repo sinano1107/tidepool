@@ -802,7 +802,7 @@ export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceC
 }
 
 /** `reef` に出元 repo を足す。設定の扉(updateWorkspace)は GitHub の owner/name しか受けず fixture の local path を通せないので、扉が書く
- *  もの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)。 */
+ *  もの —— 覚えた値の予告・registry の宣言・畳み・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)。 */
 export function giveHeadRepo(db: Db, reef: RegisteredReef, headRepo: string): void {
   announceHeadRepo(db, reef.resolve("reef"), headRepo);
   setWorkspaceEntry(reef.registryDir, "reef", "head_repo", headRepo);
