@@ -208,10 +208,10 @@ function readSandboxFailure(observed: StreamObservation, parsed: Record<string, 
  *  Besides the last result line and the facts the live caller acts on, the
  *  session's advisor (issue #33), its model swaps and refusals (ADR 0215) and
  *  its subagents' models (issue #2432). These last are needed at exit and none
- *  survives on the result line: the consultations, failed calls and refusals
- *  happen in assistant lines, the swaps, subagent launches and the main model's
- *  resolved id on system lines, the subagents' resolved models on tool_result
- *  lines. */
+ *  survives on the result line: the consultations, failed calls and synthetic
+ *  refusal lines happen in assistant lines, the swaps, refusal notices, subagent
+ *  launches and the main model's resolved id on system lines, the subagents'
+ *  resolved models on tool_result lines. */
 interface StreamObservation {
   /** issue #32: the latest accepted `result` line, for usage/cost at exit. */
   lastResult: StreamResultEvent | null;
