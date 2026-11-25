@@ -1,5 +1,5 @@
 
-import { appendFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -30,6 +30,7 @@ import {
   announceHeadRepo,
   assertRememberedHeadRepo,
   buildWorkspaceResolver,
+  finishHeadRepoChange,
   protectedBranch,
   recordDeclaredRepo,
   recordHeadRepo,
@@ -673,8 +674,14 @@ export const unreadableRefsRefusal = (workspace: Pick<WorkspaceConfig, "name">) 
   );
 
 /** ref を読む git が exit 128 で落ちる checkout にする —— `rev-parse --verify --quiet` も「無い」(exit 1)とは答えない。 */
-export const breakPackedRefs = (workspace: WorkspaceConfig) =>
+export const breakPackedRefs = (workspace: Pick<WorkspaceConfig, "path">) =>
   appendFileSync(join(workspace.path, ".git", "packed-refs"), "not a packed ref\n");
+
+/** `breakPackedRefs` の行を取り除いて直す。 */
+export function repairPackedRefs(workspace: Pick<WorkspaceConfig, "path">): void {
+  const packed = join(workspace.path, ".git", "packed-refs");
+  writeFileSync(packed, readFileSync(packed, "utf8").replace("not a packed ref\n", ""));
+}
 
 // ADR 0289 決定2: ローカル着地の merge 回答も同じ述語で拒み、比べる相手はローカルのタスクブランチ
 /** purely-local の workspace で W を pickup して commit し、完了の後始末で休止位置へ戻し、収束が local merge question を立てた盤面。
@@ -801,9 +808,10 @@ export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceC
 }
 
 /** `reef` に出元 repo を足す。設定の扉(updateWorkspace)は GitHub の owner/name しか受けず fixture の local path を通せないので、扉が書く
- *  もの —— 覚えた値の予告・registry の宣言・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)。 */
+ *  もの —— 覚えた値の予告・registry の宣言・畳み・覚えた値の確かめ —— を扉の順で置く(checkout の remote は fixture が置いた)。 */
 export function giveHeadRepo(db: Db, reef: RegisteredReef, headRepo: string): void {
   announceHeadRepo(db, reef.resolve("reef"), headRepo);
   setWorkspaceEntry(reef.registryDir, "reef", "head_repo", headRepo);
+  finishHeadRepoChange(db, reef.resolve("reef"));
   assertRememberedHeadRepo(db, reef.resolve("reef"), new Date());
 }

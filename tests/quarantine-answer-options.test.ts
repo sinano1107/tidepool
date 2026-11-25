@@ -10,10 +10,10 @@ import { discardUncommitted } from "../src/pickup-predicates.js";
 import { repositoryLabel } from "../src/repo-access.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
-import { announceHeadRepo, assertRememberedHeadRepo, boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { assertRememberedHeadRepo, boardRefWriter, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, rememberFixtureHeadRepos, restedInterviewRoom, shimGit } from "./harness.js";
+import { announceAndFinishHeadRepo, commitWork, dropBoardBeforeFold, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, rememberFixtureHeadRepos, restedInterviewRoom, shimGit } from "./harness.js";
 import { fetchHeldAtToken } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -982,7 +982,7 @@ it("remote-backed: 出元 repo で取れなかったタスクブランチの sha
   await shimGit({ route: [ws.repo, workspace.repo!] });
   await shimGit({ route: [ws.head_repo, fork] });
   const { db, task, question } = await quarantined(ws, (db) => {
-    announceHeadRepo(db, ws, ws.head_repo);
+    announceAndFinishHeadRepo(db, ws, ws.head_repo);
     assertRememberedHeadRepo(db, ws, NOW);
   });
   const lost = loseRef(db, ws, `refs/heads/task/${task.id}`);

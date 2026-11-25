@@ -67,6 +67,7 @@ import {
   assertRememberedRepo,
   dropWorkspaceState,
   entryCheckoutPath,
+  finishHeadRepoChange,
   holdsBaseline,
   holdsWorkspaceState,
   humanContentWorkbenchLeft,
@@ -406,10 +407,17 @@ function pointHeadRemote(path: string, url: string | undefined): void {
 }
 
 /** ADR 0395 決定2 with ADR 0391 決定1〜3's order: announce `[before, next]`, then the remote and the registry commit with no await in
- *  between; the check folds the row once the declaration and the remote agree. A death midway leaves a row the check folds by itself
- *  (before the registry commit: back, once the remote is put back as its mismatch text says; after it: forward). */
+ *  between; the door folds the row once the declaration and the remote agree (ADR 0415 決定1). A death midway leaves a row the check
+ *  folds back by itself (before the registry commit, once the remote is put back as its mismatch text says) or stops the workspace on
+ *  (after it, ADR 0415 決定2). A failed fold here only fails the door: the next destination read stops the workspace (ADR 0415 決定4). */
 function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined, now: () => Date, commit: () => void): void {
   const { name, path } = workspace;
+  const foldThenCheck = (declaration: WorkspaceConfig) => {
+    finishHeadRepoChange(db, declaration);
+    assertRememberedHeadRepo(db, declaration, now());
+  };
+  // ADR 0415 決定1: removal folds first too — its announcement forgets the old fork, so a rollback would keep that fork's copies
+  finishHeadRepoChange(db, workspace);
   // setting does not pass over a head repo edited outside the door (ADR 0373 決定13 の線); removal moves to the closed side and is
   // the exit the check's texts name, so it is not gated (#3560)
   if (next !== undefined) assertRememberedHeadRepo(db, workspace, now());
@@ -420,7 +428,7 @@ function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefi
     commit();
   } catch (err) {
     const failures: unknown[] = [];
-    for (const step of [() => pointHeadRemote(path, before), () => assertRememberedHeadRepo(db, workspace, now())]) {
+    for (const step of [() => pointHeadRemote(path, before), () => foldThenCheck(workspace)]) {
       try {
         step();
       } catch (failure) {
@@ -433,7 +441,7 @@ function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefi
     }
     throw err;
   }
-  assertRememberedHeadRepo(db, { ...workspace, head_repo: next }, now());
+  foldThenCheck({ ...workspace, head_repo: next });
 }
 
 /** A payload carrying dangerous values arrived without `confirm` (issue #57,
