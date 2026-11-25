@@ -621,27 +621,53 @@ export const withProtectedTipCheckout = <T>(named: WorkspaceConfig, base: string
 /** ADR 0356 決定2: pickup ごとに task の checkout を作る。番地は基点 + task id + pickup の event id(ADR 0353 と同じ鍵)なので、
  *  前の session が残した checkout は動かさず再利用もしない。どの type でもタスクブランチだけを引いた複製で、閉包を全部持つ(ADR 0411 決定1)
  *  —— Interview の役は兄弟の答案を見ない。閉包が読めない名前の場所では fetch が落ち、呼び手の quarantine へ(ADR 0411 決定5)。root の番地は面接室
- *  (基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。開いた event は repo ができた後に書く(ADR 0329)。 */
-function openTaskCheckout(db: Db, named: WorkspaceConfig, task: Task, workspacesBaseDir: string, now: Date): void {
+ *  (基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。開いた event は repo ができた後に書く(ADR 0329)。
+ *  ADR 0414 決定1・2: 面接室の外の task は checkout を作ってから固定(`fixing.fix`)を書き、作れないか固定が落ちれば checkout を消す。 */
+function openTaskCheckout(
+  db: Db,
+  named: WorkspaceConfig,
+  task: Task,
+  workspacesBaseDir: string,
+  now: Date,
+  fixing: { fix: (forkSource: string | undefined) => void; defaultWorkspaceName: string | undefined },
+): void {
   const pickup = latestEventOfTask(db, task.id, "task_picked_up");
   if (!pickup) throw new Error(`task ${task.id} has no pickup to key its task checkout`);
   const role = interviewRole(db, task);
   const at = CHECKOUT_LAYOUT.task.at(workspacesBaseDir, role === "root" ? `${task.id}.checkout` : task.id, pickup.id);
   const branch = taskBranch(task.id);
-  // ADR 0386 決定1: 面接室で走る task は、面接室が提供するもの(ブランチを立てた後なのでそのブランチ)を fetch する
-  const provision = role === undefined ? undefined : roomProvisionOf(db, task, named.name);
+  const description = `the task checkout of ${task.id}`;
   // 面接室が提供するものの閉包は pickup の門の (task, 面接室) の項が先に確かめている。門の後に面接室で rev を読む・fetch する・tree を
   // 展開するのに落ちたら、この checkout でも下の読み専用の checkout でも、fetch 元の面接室の性質としてその task の項の文で面接室の名前で
   // 止まる(ADR 0386 決定3 / ADR 0276 決定3)
   const itemOf = (room: WorkspaceConfig) => taskRoomPickupPredicates(db, [task], room.name, workspacesBaseDir)[0]?.describe;
   let path: string;
-  try {
-    const source = provision ? providedRev(named, provision) : `refs/heads/${branch}`;
-    path = makeCheckout({ at, named, source, branch, description: `the task checkout of ${task.id}` });
-  } catch (err) {
-    // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
-    if (role === undefined || err instanceof CheckoutHostError) throw err;
-    throw PickupGateError.of(named, err, itemOf(named));
+  if (role === undefined) {
+    // ADR 0414 決定1・2: 複製を先に作り、通ってから固定を書く —— 固定が書く `task/<id>` は checkout が受け取った commit
+    const { source, forkSource } = copySourceBeforeFixing(db, named, task, () => now, fixing.defaultWorkspaceName);
+    try {
+      path = makeCheckout({ at, named, source, branch, description });
+      fixing.fix(forkSource);
+    } catch (err) {
+      try {
+        removeBoardCheckout(at, CHECKOUT_LAYOUT.task.parents);
+      } catch {
+        // 作れなかった理由を消さない
+      }
+      throw err;
+    }
+  } else {
+    // ADR 0386 決定1: 面接室で走る task は、面接室が提供するもの(ブランチを立てた後なのでそのブランチ)を fetch する —— 固定が先(ADR 0414 の
+    // 範囲の外、#3834)
+    fixing.fix(undefined);
+    const provision = roomProvisionOf(db, task, named.name);
+    try {
+      path = makeCheckout({ at, named, source: provision ? providedRev(named, provision) : `refs/heads/${branch}`, branch, description });
+    } catch (err) {
+      // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
+      if (err instanceof CheckoutHostError) throw err;
+      throw PickupGateError.of(named, err, itemOf(named));
+    }
   }
   // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
   const reads = roomsReadBy(db, task).map((room) => {
@@ -1257,8 +1283,8 @@ function judgeWorkbench<T>(
 
 /** ADR 0411 決定2・5: 作業台は書く先の閉包を全部持つ複製 —— 閉包を受け取れない名前の場所(shallow を含む)からは作らず、名前の場所の側として
  *  拒む。番地を作れない・受け取った後に tree を展開できないのは、host と作業台の側の失敗のまま。 */
-function makeWorkbench(named: WorkspaceConfig, at: string, target: string): string {
-  const unreadable = (cause: unknown) => namedClosureUnreadable(named, target, "the workbench", cause);
+function makeWorkbench(named: WorkspaceConfig, at: string, target: string, { source, branch }: CopySource = { source: `refs/heads/${target}`, branch: target }): string {
+  const unreadable = (cause: unknown) => namedClosureUnreadable(named, branch, "the workbench", cause);
   try {
     // shallow な名前の場所からの fetch は境界の ref を黙って拒み(git 2.47 の実測)、作りかけが別の git の失敗で落ちる —— 先に名指す
     try {
@@ -1267,11 +1293,24 @@ function makeWorkbench(named: WorkspaceConfig, at: string, target: string): stri
       throw unreadable(cause);
     }
     const config = { "receive.denyCurrentBranch": "updateInstead" };
-    return makeCheckout({ at, named, source: `refs/heads/${target}`, branch: target, description: `the workbench for ${target}`, config, fetchFailure: unreadable });
+    return makeCheckout({ at, named, source, branch: target, description: `the workbench for ${target}`, config, fetchFailure: unreadable });
   } catch (err) {
     // ADR 0382 決定5: 作りかけを残さない —— 書く先の branch まで着いた作りかけは作業ツリーが tip と違い、人間の作業と見分けられずに残り続ける
     rmSync(at, { recursive: true, force: true, maxRetries: 3 });
     throw err;
+  }
+}
+
+/** ADR 0414 決定4: 作業台を開く扉が準備(基準の比較か最初の撮り)より前に撃つ shallow の確かめ —— 文は作業台を作る手の名前の場所の側の拒否と
+ *  同じ(ADR 0411 決定5、`head` が文の頭)。git が答えない名前の場所は今どおり準備が扱う(決定5)。前から disk にある作業台 `workbench` の
+ *  `board/*` は、名前の場所の側で落ちた引き直し(`repointBoardRefs` の段A)と同じく消す。 */
+function refuseShallowBeforePreparation(named: WorkspaceConfig, workbench: string, head = ""): void {
+  try {
+    assertNotShallow(named.path);
+  } catch (cause) {
+    if (!(cause instanceof ShallowRepositoryError)) return;
+    if (placeHasRepository(workbench)) deleteRefs(workbench, `refs/heads/${BOARD_BRANCHES}/`);
+    throw new DomainError(`${head}workspace ${named.name}: ${cause.message}`);
   }
 }
 
@@ -1299,13 +1338,14 @@ const stderrOf = (cause: unknown) => String((cause as { stderr?: unknown } | nul
 /** 落ちた git の文 —— stderr があればそれ(command line は object を名指さない)、無ければ失敗の文。 */
 const gitFailureText = (cause: unknown) => stderrOf(cause).trim() || (cause instanceof Error ? cause.message : String(cause));
 
-/** ADR 0382 決定3・5: 人間担当の work 自身の作業台 (workspace, `task/<H>`) を開く —— 作り直さず、disk に repo が無いときだけ `task/<H>` から
- *  作る(取り込んでいない commit は戻らない、ADR 0374 決定2)。開くたびに `board/*` を引き直す。返すのは実体の綴りの在り処と、今作ったか。 */
-function openHumanWorkWorkbench(named: WorkspaceConfig, base: string, target: string): { path: string; opened: boolean } {
+/** ADR 0382 決定3・5: 人間担当の work 自身の作業台 (workspace, `task/<H>`) を開く —— 作り直さず、disk に repo が無いときだけ `copy` から作る。
+ *  既定は `task/<H>`(取り込んでいない commit は戻らない、ADR 0374 決定2)、最初の `start_work` は固定より前に読む fork 元の commit
+ *  (ADR 0414 決定2)。開くたびに `board/*` を引き直す。返すのは実体の綴りの在り処と、今作ったか。 */
+function openHumanWorkWorkbench(named: WorkspaceConfig, base: string, target: string, copy?: CopySource): { path: string; opened: boolean } {
   const at = workbenchAt(named, base, target);
   const opened = !placeHasRepository(at);
   if (opened) rmSync(at, { recursive: true, force: true, maxRetries: 3 });
-  const path = opened ? makeWorkbench(named, at, target) : realpathSync(at);
+  const path = opened ? makeWorkbench(named, at, target, copy) : realpathSync(at);
   repointOpened(named, path, opened);
   return { path, opened };
 }
@@ -1821,8 +1861,8 @@ export async function openHumanContentWorkbench(
   if (isRemoteBacked(withRememberedRepoCheck(db, workspace, now))) {
     throw new DomainError(`workspace ${workspace.name} is remote-backed, so ${branch} is changed on origin.${originRoute(workspace)}`);
   }
-  if (!holdsBaseline(db, workspace.name)) await captureFirstBaseline(db, workspace, { ...board, now });
   const at = CHECKOUT_LAYOUT.workbench.at(base, workspace, branch);
+  if (!holdsBaseline(db, workspace.name)) await captureFirstBaseline(db, workspace, at, { ...board, now });
   let question = openIntakeQuestionId(db, workspace.name);
   let opened: { path: string; owner: WorkbenchOwner };
   try {
@@ -1886,13 +1926,17 @@ function firstCaptureHold(db: Db, name: string): FirstCaptureHold | undefined {
 /** ADR 0383 決定1・2: 基準の行の無い名前の `open_workbench` は、pickup の最初の撮りと同じ準備を通ってから撮る —— 基準の行を持つ名前の
  *  Quarantine が開いている間の待ち(ADR 0373 決定13 追記。この名前自身の Quarantine の間も pickup と同じく進まない)、pickup が開く前に
  *  掛ける項、決定13 の確認と全撮り(`prepareRefBaseline`)。判定は pickup と同じ関数が持つ。落ちれば止めた Quarantine を名指して拒み
- *  (text C1a の形)、作業台も question も開かない。registry が読めない落ち方は Quarantine を立てず、その理由を言う。 */
+ *  (text C1a の形)、作業台も question も開かない。registry が読めない落ち方は Quarantine を立てず、その理由を言う。Quarantine の待ちの後、撮る前に
+ *  shallow な名前の場所を拒む(ADR 0414 決定4、`workbench` は開く作業台の番地)。 */
 async function captureFirstBaseline(
   db: Db,
   workspace: WorkspaceConfig,
+  workbench: string,
   board: { resolveRegistered: WorkspaceResolver | undefined; fixedPoints?: BoardStatePath[]; now: () => Date },
 ): Promise<void> {
   refuseWhileHeld(db, workspace.name, "open a workbench");
+  // ADR 0414 決定4: shallow の確かめは撮るより前 —— 拒んだ扉は基準の行を残さない
+  refuseShallowBeforePreparation(workspace, workbench);
   const { now } = board;
   const named = withRememberedRepoCheck(db, workspace, now);
   await preparedOrRefused(db, workspace, "open a workbench", { now }, async () => {
@@ -1991,11 +2035,12 @@ export async function prepareHumanWork(db: Db, workspace: WorkspaceConfig, task:
   });
 }
 
-/** ADR 0374 決定2・3: 書き始める(`start_work`)—— 準備を通してから1つの固定の瞬間(自分の空の列、タスクブランチを持たない未決着の work の
- *  祖先を上から、その時点の系譜から `task/<H>`。各 task の列・ref・event は一緒に書く)、作業台を開いて `task_work_started` を残す。2回目
- *  以降は同じ在り処を返して `board/*` を引き直し、disk から消えた作業台は `task/<H>` から開き直す。名前の場所の作業ツリーも HEAD も
- *  動かさない。固定の失敗は準備の失敗と同じに扱う(pickup はタスクブランチの作成の失敗も同じ Quarantine にする)。作業台を開けない失敗は
- *  名前の場所を止めずに拒む。返すのは作業台の在り処。ADR 0390 決定1・2: 準備の後の同じ同期区間で、系譜の帰り先の持ち主が解放を負えば
+/** ADR 0374 決定2・3: 書き始める(`start_work`)—— shallow の確かめと準備を通し、作業台を開いて(`board/*` の受け取りまで)から1つの固定の
+ *  瞬間(自分の空の列、タスクブランチを持たない未決着の work の祖先を上から、その時点の系譜から `task/<H>`。各 task の列・ref・event は
+ *  一緒に書く)、`board/*` を引き直して `task_work_started` を残す(順は ADR 0414 決定1〜4)。2回目以降は同じ在り処を返して `board/*` を
+ *  引き直し、disk から消えた作業台は `task/<H>` から開き直す。名前の場所の作業ツリーも HEAD も動かさない。固定の失敗は準備の失敗と同じに
+ *  扱い(pickup はタスクブランチの作成の失敗も同じ Quarantine にする)、この呼び出しが作った作業台を消す。作業台を開けない失敗は名前の場所を
+ *  止めずに拒む。返すのは作業台の在り処。ADR 0390 決定1・2: 準備の後の同じ同期区間で、系譜の帰り先の持ち主が解放を負えば
  *  何も書かずに拒む(系譜を読む git の失敗は固定の失敗と同じに扱う)。 */
 export async function startHumanWork(
   db: Db,
@@ -2007,18 +2052,41 @@ export async function startHumanWork(
   recheck: () => Task,
 ): Promise<string> {
   const verb = "start work";
+  const target = taskBranch(task.id);
+  const couldNotOpen = (err: unknown) => new DomainError(`cannot ${verb}: ${couldNotOpenWorkbench(err, "start work again", { subject: "the board" })}`);
+  // ADR 0414 決定4: shallow の確かめは Quarantine の待ちの後、準備(基準の比較か最初の撮り)より前 —— pickup と同じ順。完了と取り込みが
+  // 共有する準備には入れない(shallow になった名前の場所にも今どおり届く、#3788)
+  refuseWhileHeld(db, workspace.name, verb);
+  refuseShallowBeforePreparation(workspace, workbenchAt(workspace, board.workspacesBaseDir, target), `cannot ${verb}: `);
   await prepareHumanWork(db, workspace, task, verb, board);
   task = recheck();
   let refusal: DomainError | undefined;
+  let workbench: { path: string; opened: boolean } | undefined;
   await preparedOrRefused(db, workspace, verb, board, async () => {
     // ADR 0390 決定2: createTaskBranch まで await は無い。系譜を読む git の失敗は Quarantine に畳み、拒否はこの外で投げる(中で投げても畳まれる)
     refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task, board.now), verb);
     if (refusal) return;
+    // ADR 0414 決定1・2: 作業台(`board/*` の受け取りまで)を先に作り、通ってから固定を書く —— 名前の場所の側で落ちる扉は固定を何も書かない
+    const copy = copySourceBeforeFixing(db, workspace, task, board.now, board.defaultWorkspaceName);
+    try {
+      workbench = openHumanWorkWorkbench(workspace, board.workspacesBaseDir, target, copy);
+    } catch (err) {
+      // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)。
+      // 名前の場所の側の拒否はその文のまま(ADR 0411 決定5)、Quarantine にしない
+      refusal = couldNotOpen(err);
+      return;
+    }
     const now = board.now();
     try {
       fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
-      createTaskBranch(db, workspace, task, now, filledFrom(db, task));
+      createTaskBranch(db, workspace, task, now, { filledFrom: filledFrom(db, task), forkSource: copy.forkSource });
     } catch (err) {
+      // ADR 0414 決定2: この呼び出しが作った作業台だけ消す —— 前から disk にある作業台は人間の commit を持ちうる
+      try {
+        if (workbench.opened) rmSync(workbench.path, { recursive: true, force: true, maxRetries: 3 });
+      } catch {
+        // 固定が落ちた理由を消さない
+      }
       if (!(err instanceof LostTaskBranchPresentError)) throw err;
       // ADR 0392 決定2: ref の持ち主(祖先のこともある)の failure question(出口は cancel)で止め、workspace の Quarantine に畳まない
       const owner = getTask(db, err.taskId)!;
@@ -2027,12 +2095,12 @@ export async function startHumanWork(
     }
   });
   if (refusal) throw refusal;
-  // 作業台を開けないのは人間が壊した作業台か host の事情 —— 名前の場所を止めず、開き直しを案内する(text C2b の開けない形と同じ)
-  let path: string;
+  const { path, opened } = workbench!;
+  // ADR 0414 決定3: 固定の後に `task/<H>` と固定した祖先のブランチを `board/*` へ足す —— ここで落ちるのは作業台と host の側だけで、今の「開けない」拒否
   try {
-    path = openHumanWorkWorkbench(workspace, board.workspacesBaseDir, taskBranch(task.id)).path;
+    repointOpened(workspace, path, opened);
   } catch (err) {
-    throw new DomainError(`cannot start work: ${couldNotOpenWorkbench(err, "start work again", { subject: "the board" })}`);
+    throw couldNotOpen(err);
   }
   if (!hasStartedWork(db, task.id)) appendEvent(db, { taskId: task.id, ...caller, at: board.now(), payload: { kind: "task_work_started" } });
   return path;
@@ -2501,8 +2569,8 @@ function writeMergeTree(
   try {
     // ADR 0356 決定5: merge-tree can run a repository's custom merge driver even though it leaves the worktree alone.
     return withBoardGit(workspace.path, (view, gitDir) => {
-      // ADR 0411 決定5: pickup・登録・作業台は shallow な名前の場所を拒むが、解放の merge back(session の途中で shallow になった名前の場所)と
-      // 追いつき(`catchUpTaskBranch`)はまだ届く —— 隔離 view に shallow の境界を引き継ぐ
+      // pickup・登録・作業台は shallow な名前の場所を拒む(ADR 0411 決定5)。解放の merge back(session の途中で shallow になった名前の場所)と
+      // 追いつき(`catchUpTaskBranch`)はまだ届く(#3788)—— 隔離 view に shallow の境界を引き継ぐ
       const shallow = git(workspace.path, "rev-parse", "--path-format=absolute", "--git-path", "shallow");
       if (existsSync(shallow)) writeFileSync(join(gitDir, "shallow"), readFileSync(shallow));
       return view(["merge-tree", "--write-tree", leftTip!, rightTip!]).trim();
@@ -2590,11 +2658,16 @@ const transparentToLineage = (type: TaskType): boolean => carriesReadOnly(type) 
 function fixUnstartedAncestors(db: Db, workspace: WorkspaceConfig, task: Task, defaultWorkspaceName: string | undefined, now: Date): void {
   if (transparentToLineage(task.type)) return;
   for (const ancestor of ancestorsFromTop(db, task)) {
-    const name = ancestor.workspace ?? nearestFilledAncestor(db, ancestor.parent_id)?.workspace ?? defaultWorkspaceName;
-    const unfixed =
-      name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) && !hasTaskBranchInForce(db, ancestor.id);
-    if (unfixed) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, filledFrom(db, ancestor));
+    const name = fixedAncestorName(db, workspace, ancestor, defaultWorkspaceName);
+    if (name) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, { filledFrom: filledFrom(db, ancestor) });
   }
+}
+
+/** ADR 0372 決定3: 同じ固定の瞬間に `workspace` で固定する祖先なら、列に書く名前(導出の値)。固定しない祖先なら undefined。 */
+function fixedAncestorName(db: Db, workspace: WorkspaceConfig, ancestor: Task, defaultWorkspaceName: string | undefined): string | undefined {
+  const name = ancestor.workspace ?? nearestFilledAncestor(db, ancestor.parent_id)?.workspace ?? defaultWorkspaceName;
+  const unfixed = name === workspace.name && ancestor.type === "work" && !isSettled(ancestor.status) && !hasTaskBranchInForce(db, ancestor.id);
+  return unfixed ? name : undefined;
 }
 
 /** ADR 0372 決定2 の `column_filled_from`: 空の列を固定が埋める出所 —— 列が埋まった最も近い祖先の id、無ければ `default`。列が埋まって
@@ -2604,9 +2677,11 @@ function filledFrom(db: Db, task: Pick<Task, "workspace" | "parent_id">): string
 }
 
 /** ADR 0380 決定3: 帰り先なし —— 数える祖先に、効いている失われた event を持ち透明でない祖先がいる(死んだ祖先。間に無事な祖先を挟んでも)。
- *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。 */
-export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">): Task | undefined {
-  return transparentToLineage(task.type) ? undefined : lostAncestorsNotTransparent(db, workspace.name, task)[0]?.ancestor;
+ *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。
+ *  ADR 0414 決定2: 固定の前の読み(`beforeFixing`)では、同じ瞬間の固定が作り直す未決着の祖先は帰り先を奪わない。 */
+export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">, { beforeFixing = false } = {}): Task | undefined {
+  if (transparentToLineage(task.type)) return undefined;
+  return lostAncestorsNotTransparent(db, workspace.name, task).find(({ ancestor }) => !beforeFixing || isSettled(ancestor.status))?.ancestor;
 }
 
 /** spec #3273 group H(pin C21): 失われたタスクブランチ `branch` で人間の扉が拒む文。`recreate` は `start_work` の固定が作り直せる
@@ -2624,8 +2699,15 @@ export function resolveTaskBranchLineage(
   task: Pick<Task, "type" | "parent_id">,
   /** 保護ブランチの ref か、ref を読むときに覚えた repo を確かめる clock(ADR 0404 決定6)。 */
   protectedRefOrClock: string | (() => Date),
-  /** 最初の ref の読みの直前に1度だけ呼ぶ(着地の比較、ADR 0370 決定1)。ref を読まない lineage では呼ばない。 */
-  beforeRefRead?: () => void,
+  {
+    beforeRefRead,
+    beforeFixing,
+  }: {
+    /** 最初の ref の読みの直前に1度だけ呼ぶ(着地の比較、ADR 0370 決定1)。ref を読まない lineage では呼ばない。 */
+    beforeRefRead?: () => void;
+    /** 同じ瞬間の固定がまだ書かれていない読み(ADR 0414 決定2)—— 固定の導出が最後に当てる既定。 */
+    beforeFixing?: { defaultWorkspaceName: string | undefined };
+  } = {},
 ): { branch: string | undefined; outlivedForkSource: boolean; noReturn?: true } {
   const readingRefs = () => {
     beforeRefRead?.();
@@ -2647,10 +2729,12 @@ export function resolveTaskBranchLineage(
     };
   }
 
-  if (noReturnAncestor(db, workspace, task)) return { branch: undefined, outlivedForkSource: false, noReturn: true };
+  // ADR 0414 決定2: 固定の前の読みは、固定した後と同じ答えを返す —— 作り直す失われた祖先は下の読みが飛ばし(作り直す値はそこまでの候補と
+  // 同じ commit)、ref を書いて event の前に落ちた祖先(ADR 0329 決定2)は固定が採る ref の値で数える
+  if (noReturnAncestor(db, workspace, task, { beforeFixing: beforeFixing !== undefined })) return { branch: undefined, outlivedForkSource: false, noReturn: true };
   let candidate: string | undefined;
   let outlivedForkSource = false;
-  for (const ancestor of countedAncestors(db, workspace.name, task)) {
+  for (const ancestor of lineageAncestors(db, workspace, task, beforeFixing)) {
     // ADR 0380 決定3: 残る失われた祖先は透明 —— git を当てずに系譜から外す
     if (taskBranchLostInForce(db, ancestor.id)) continue;
     const branch = taskBranch(ancestor.id);
@@ -2665,6 +2749,17 @@ export function resolveTaskBranchLineage(
     else if (!effect.historyConverged) outlivedForkSource = true;
   }
   return { branch: candidate, outlivedForkSource };
+}
+
+/** ADR 0372 決定4: 系譜に数える祖先(`countedAncestors`)。固定の前の読み(ADR 0414 決定2)では、同じ瞬間の固定が採る祖先 —— 固定する祖先で、
+ *  失われていない `task/<id>` が名前の場所に在る —— も上から数える。 */
+function lineageAncestors(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "parent_id">, beforeFixing?: { defaultWorkspaceName: string | undefined }): Task[] {
+  const counted = countedAncestors(db, workspace.name, task);
+  if (!beforeFixing) return counted;
+  const ids = new Set(counted.map(({ id }) => id));
+  const adopted = (ancestor: Task) =>
+    fixedAncestorName(db, workspace, ancestor, beforeFixing.defaultWorkspaceName) !== undefined && !taskBranchLostInForce(db, ancestor.id) && taskBranchExists(workspace, ancestor.id);
+  return ancestorsFromTop(db, task).filter((ancestor) => ids.has(ancestor.id) || adopted(ancestor));
 }
 
 /** ADR 0053: the nearest work branch in the task's live lineage, or undefined —— the protected branch is the bottom of that lineage, or it has
@@ -2747,21 +2842,40 @@ export class LostTaskBranchPresentError extends Error {
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task, now: () => Date): string {
   if (interviewRole(db, task) !== undefined) return roomForkSource(db, workspace, task);
-  const base = exactProtectedBranchRef(withRememberedRepoCheck(db, workspace, now));
-  const lineage = resolveTaskBranchLineage(db, workspace, task, base);
+  return lineageForkSource(db, workspace, task, now).sha;
+}
+
+/** 系譜から切る fork 元(ADR 0053)—— 読んだ branch の名前(祖先のタスクブランチか保護ブランチ)とその commit。`beforeFixing` は
+ *  `resolveTaskBranchLineage` と同じ。 */
+function lineageForkSource(db: Db, workspace: WorkspaceConfig, task: Task, now: () => Date, beforeFixing?: { defaultWorkspaceName: string | undefined }): { branch: string; sha: string } {
+  const checked = withRememberedRepoCheck(db, workspace, now);
+  const base = exactProtectedBranchRef(checked);
+  const lineage = resolveTaskBranchLineage(db, workspace, task, base, { beforeFixing });
   // ADR 0380 決定3: 帰り先なしの task の fork 元は問われない(spec #3273 group H)—— 保護ブランチから切らない
   if (lineage.noReturn) throw new Error(`task ${task.id} has no branch to return to: a task branch in its lineage was lost`);
-  const source = lineage.branch ?? base;
-  return git(workspace.path, "rev-parse", `${source}^{commit}`);
+  return { branch: lineage.branch ?? protectedBranch(checked), sha: git(workspace.path, "rev-parse", `${lineage.branch ?? base}^{commit}`) };
+}
+
+/** ADR 0414 決定2: 固定より前に作る複製(作業台・task の checkout)の元 `source` —— タスクブランチを持つ task はそのブランチ、無ければ固定より
+ *  前に読む fork 元の commit。`branch` は元を読んだ branch(閉包を受け取れない拒否が名指す)。`forkSource` は固定が `task/<id>` に書く commit
+ *  (複製が受け取った値)で、タスクブランチを持つ task には無い。 */
+type CopySource = { source: string; branch: string; forkSource?: string };
+
+function copySourceBeforeFixing(db: Db, named: WorkspaceConfig, task: Task, now: () => Date, defaultWorkspaceName: string | undefined): CopySource {
+  const own = taskBranch(task.id);
+  if (taskBranchExists(named, task.id)) return { source: `refs/heads/${own}`, branch: own };
+  const { branch, sha } = lineageForkSource(db, named, task, now, { defaultWorkspaceName });
+  return { source: sha, branch, forkSource: sha };
 }
 
 /** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。
  *  ADR 0372 決定2: ref を書いた後に `task_branch_created` を残す。`filledFrom` は同じ固定が空の列に `task.workspace` を書くときの出所で、
- *  列と event は1つの transaction で書く。ADR 0329 決定2 と同じく、ref を書いて event の前に落ちた作成は次の作成が event だけ足して通す。 */
-function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, filledFrom?: string): void {
+ *  列と event は1つの transaction で書く。ADR 0329 決定2 と同じく、ref を書いて event の前に落ちた作成は次の作成が event だけ足して通す。
+ *  `forkSource` は複製が先に受け取った fork 元の commit(ADR 0414 決定2)—— 無ければここで読む。 */
+function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { filledFrom, forkSource }: { filledFrom?: string; forkSource?: string } = {}): void {
   const ref = `refs/heads/${taskBranch(task.id)}`;
   if (!taskBranchExists(workspace, task.id)) {
-    const source = taskForkSource(db, workspace, task, () => now);
+    const source = forkSource ?? taskForkSource(db, workspace, task, () => now);
     boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
   } else if (hasTaskBranchInForce(db, task.id)) return;
   // ADR 0392 決定2: 失われた event が効いているのに在る ref は、クラッシュ後の回復と読まず採らずに止まる(give-up の後は届かない状態)
@@ -2908,9 +3022,13 @@ export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfi
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
   const now = board.now();
-  fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
-  createTaskBranch(db, workspace, task, now);
-  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, now);
+  openTaskCheckout(db, workspace, task, board.workspacesBaseDir, now, {
+    defaultWorkspaceName: board.defaultWorkspaceName,
+    fix: (forkSource) => {
+      fixUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now);
+      createTaskBranch(db, workspace, task, now, { forkSource });
+    },
+  });
 }
 
 type PickupPreparation = PickupPrep & {

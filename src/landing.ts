@@ -768,7 +768,7 @@ function landingRootOf(
   try {
     // ADR 0370 決定1: 収束だけが、lineage が ref を読む直前に比べる —— 表示と扉の読みは比べない
     const resolved = workspace;
-    const lineage = resolveTaskBranchLineage(db, resolved, task, readBase(resolved), compareBeforeLineage && (() => compareBeforeLineage(resolved)));
+    const lineage = resolveTaskBranchLineage(db, resolved, task, readBase(resolved), { beforeRefRead: compareBeforeLineage && (() => compareBeforeLineage(resolved)) });
     // ADR 0380 決定3: 帰り先なしは「自分が根」と別の答え —— 着地の根に数えない
     return lineage.branch || lineage.noReturn ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
   } catch (lineageError) {
