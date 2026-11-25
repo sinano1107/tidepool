@@ -16,6 +16,8 @@
 
 **Status 追記: 決定7 は merge dial を問わない —— 文は無人 merge キューの行を前提に書かれているが、キューの行も merge question も持たない `external` の根でも、収束は同じ推奨 hold の merge question を立てる。問いは head についてで、誰が merge するかについてではない。`merge` と答えれば盤面が取り込んで push し、PR も merge する(回答は dial を読まない)。merge を盤面の外に保つなら `hold` のまま、落とされた commit を origin へ push し直す(2026-11-16、spec #3273 の seam の確認、ユーザー確認済み)。**
 
+**Status 追記: 決定7 の merge question を立てる直前の読み直しは profile → 門 → workspace の Quarantine である —— head を読む間に Quarantine が開いた根には立てず、根はその Quarantine の verdict で止まる(ADR 0241 決定6)。門と Quarantine は、収束の主経路や push の直前と同じ1つの読みを通す(ADR 0370 決定1)。外の push は次の収束が GitHub の head からまた見つけるので、Quarantine が閉じた後に question が立つ。registry の止まりはこの読み直しに足さない —— 重複を避ける判定は失敗の境界だけに置く(ADR 0403 決定5)(2026-11-25、issue #3844)。**
+
 2026-11-13〜14 の wayfinder(map #3178、ticket #3203・#3233・#3205、決定9 は #3190)で決定。外の push が origin の `task/<root>` を進めると、
 盤面の push は force 無しなので拒まれ、PR 昇格失敗 question の `retry` は同じ理由で落ち、`merge` の回答はその question を名指して拒む ——
 2つの question が互いを指して閉じない(実 GitHub の盤面で再現、#3250)。盤面が GitHub の head を local のタスクブランチへ入れる経路は無い。
