@@ -1571,6 +1571,34 @@ export const answerExec = (exec: ExecFn): ExecFn =>
     "answer",
   );
 
+/** 差し替え先が無いまま終わった拒否に CLI が合成する root の assistant 行(ADR 0416 決定2)。固定版 2.1.286 の binary の読みで、
+ *  実物は未観測(#1614)。top-level の欄の並びは CLI の実物の合成行(fixture worker-session-cap-429.stream.jsonl)と同じ。
+ *  `stop_details` の中の鍵は API の素通しで、対話モードの保存 transcript(2.1.294)で見た形。`category` を省くと鍵ごと無い。 */
+export const syntheticRefusalLine = (id: string, category?: string | null) => ({
+  type: "assistant",
+  message: {
+    diagnostics: null,
+    id,
+    container: null,
+    model: "<synthetic>",
+    role: "assistant",
+    stop_details: { type: "refusal", ...(category !== undefined && { category }), explanation: "…" },
+    stop_reason: "refusal",
+    stop_sequence: "",
+    type: "message",
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    content: [{ type: "text", text: "API Error: …" }],
+    context_management: null,
+  },
+  parent_tool_use_id: null,
+  session_id: "…",
+  uuid: "…",
+  timestamp: "…",
+  error: "invalid_request",
+  request_id: "req_…",
+  is_api_error_message: true,
+});
+
 /** Answer-fetching Board call stdout: init and the whole final result, one JSON object per line. */
 export const boardCallStream = (result: object) =>
   [JSON.stringify({ type: "system", subtype: "init" }), JSON.stringify({ type: "result", ...result })].join("\n");

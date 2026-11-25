@@ -161,6 +161,32 @@ it("CLI が差し替えた model は、見出し付きで1回ずつ `from → to
   expect(await purposeOf("plain")).not.toContain("swapped in");
 });
 
+it("拒否は差し替えの節の後ろに件数と分類を1行で載り、分類の無い拒否はそうと書かれ、拒否が無ければ節ごと出ない(ADR 0416 決定3)", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const refused = queueWork(t, "refused");
+  const plain = queueWork(t, "plain");
+  await t.clock.advance(HOUR);
+
+  t.worker.exitWith(refused.id, {
+    ...QUIET_EXIT,
+    model_swaps: [{ from: "claude-fable-5-1", to: "claude-opus-4-8", scope: "session", category: "cyber" }],
+    refusals: [null, "cyber"],
+  });
+  await settle();
+  t.worker.exitWith(plain.id, { ...QUIET_EXIT, refusals: [] });
+  await settle();
+
+  const purposeOf = async (title: string) =>
+    (await exitedWithoutReport()).find((q: any) => q.title === `worker exited without reporting: ${title}`).purpose;
+  expect(await purposeOf("refused")).toBe(
+    `the worker for task "refused" (${refused.id}) exited (exit code 0) without a final report — ` +
+      "it did not complete, decompose, or escalate. No self-report is possible." +
+      "\n\nmodels swapped in by the CLI:\nclaude-fable-5-1 → claude-opus-4-8" +
+      "\n\nresponses stopped by the provider's safeguards: 2 (no category reported, cyber)" + RETRY_OR_ABANDON,
+  );
+  expect(await purposeOf("plain")).not.toContain("safeguards");
+});
+
 it("CLI が失敗を報告しなかった exit の文面は、その節を持たない(ADR 0188)", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const task = queueWork(t, "quiet");
@@ -272,6 +298,8 @@ const SECTIONS =
   "\n\nerror reported by the CLI:\nAPI error status 529: overloaded" +
   "\n\nstderr tail:\nwarn: retrying request";
 
+const REFUSAL_SECTION = "\n\nresponses stopped by the provider's safeguards: 1 (no category reported)";
+
 const RETRY_OR_ABANDON =
   '\n\n"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. "abandon" cancels this task and its remaining work.';
 
@@ -303,6 +331,23 @@ it("畳み込み停止のあとの exit が持つ最後の発話・CLI の失敗
   expect(question.purpose).toBe(RECLAIMED_PURPOSE + SECTIONS + RETRY_OR_ABANDON);
 });
 
+it("回収済み観測の question にも、exit の拒否の節が載る(ADR 0416 決定3)", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "refused then killed");
+  t.containers.hold(task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // 畳み込み停止
+
+  t.worker.exitWith(task.id, { ...TALKATIVE_EXIT, refusals: [null] });
+  await settle();
+  await t.clock.advance(30 * MIN); // 強制回収
+  t.containers.fireEmpty(String(sessionId(t.db, task.id)));
+  await settle();
+
+  const [question] = await watchdogKilled();
+  expect(question.purpose).toBe(RECLAIMED_PURPOSE + SECTIONS + REFUSAL_SECTION + RETRY_OR_ABANDON);
+});
+
 it("exit が来ないまま回収 timeout に落ちた question は節を持たない", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const task = queueWork(t, "never exits");
@@ -330,6 +375,22 @@ it("root は exit したが容器が空にならず回収 timeout に落ちた q
 
   const [question] = await watchdogKilled();
   expect(question.purpose).toBe(TIMEOUT_PURPOSE + SECTIONS + RETRY_OR_ABANDON);
+});
+
+it("回収 timeout に落ちた question にも、exit の拒否の節が載る(ADR 0416 決定3)", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "refused and leaves a grandchild");
+  t.containers.hold(task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // 畳み込み停止
+
+  t.worker.exitWith(task.id, { ...TALKATIVE_EXIT, refusals: [null] });
+  await settle();
+  await t.clock.advance(30 * MIN); // 強制回収
+  await t.clock.advance(5 * MIN); // 回収 timeout
+
+  const [question] = await watchdogKilled();
+  expect(question.purpose).toBe(TIMEOUT_PURPOSE + SECTIONS + REFUSAL_SECTION + RETRY_OR_ABANDON);
 });
 
 it("watchdog に殺されて retry された run の question に、前の run の exit は載らない", async () => {

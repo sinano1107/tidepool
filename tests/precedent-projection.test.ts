@@ -259,6 +259,12 @@ it("差し替えの行(system/model_refusal_fallback)は「知っていて捨て
   expect(project({ transcriptLines: [...transcriptLines(), swap] }).lines).toMatchObject({ ignored: 7, unknown: 0 });
 });
 
+it("CLI の通知の行(system/informational)は「知っていて捨てる行」で、未知に数えない(ADR 0416 決定3)", () => {
+  // 1段目の拒否の通知の実物(2.1.286、`-p` stream-json、2026-11-25、VM、#1615)。逐語
+  const notice = '{"type":"system","subtype":"informational","content":"Sonnet 5.5\'s safeguards stopped the response above · continuing once with that noted","level":"notice","uuid":"58544d22-17dc-4145-a0ab-413d7cc0216e","session_id":"297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7"}';
+  expect(project({ transcriptLines: [...transcriptLines(), notice] }).lines).toMatchObject({ ignored: 7, unknown: 0 });
+});
+
 it("未知の行だけの transcript は tool 呼び出し 0 件 + unrecognized_format になる(黙って空にならない)", () => {
   const episode = project({
     events: fixtureEvents().filter((e) => e.id === 5),

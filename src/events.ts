@@ -564,9 +564,10 @@ export type EventPayload =
       /** ADR 0215 決定3: stream で観測した差し替え、出た順。`scope: "local"` も載る。常に置き、無ければ `[]`。
        *  消費の報告と独立に worker_exited の直下に残す(ADR 0317 決定1)。 */
       model_swaps: ModelSwap[];
-      /** ADR 0215 決定3: root の assistant 行の拒否(`stop_reason: "refusal"`)の `stop_details.category`、
-       *  出た順、`message.id` ごとに1つ(1 message は block ごとに複数行に割れる)。null は分類の無い拒否。
-       *  同じ model で続いた拒否も数える。subagent の行は数えない。常に置き、無ければ `[]`。 */
+      /** ADR 0215 決定3 / ADR 0416 決定1・2: root の拒否の分類、出た順。同じ model で続いた1段目の拒否は CLI の通知の行から
+       *  読み、通知1行が分類 null の1件。差し替え先が無いまま終わった拒否は CLI が合成する assistant 行の
+       *  `stop_details.category`(無ければ null)で、`message.id` ごとに1つ —— この行は固定版 binary の読みで未観測(#1614)。
+       *  subagent の拒否は数えない。常に置き、無ければ `[]`。 */
       refusals: (string | null)[];
       usage: TokenUsage & {
         /** ADR 0094 決定2: the CLI result line's per-model `modelUsage` carried

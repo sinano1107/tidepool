@@ -203,13 +203,27 @@ export function isRootAssistant(parsed: Record<string, unknown> | null): parsed 
   return parsed?.type === "assistant" && parsed.parent_tool_use_id == null;
 }
 
-/** root(`isRootAssistant`)の assistant 行の拒否(ADR 0215 決定3)。
- *  `id` は `message.id` —— 1 message は block ごとに複数行に割れるので、数える側が重複を除く。
- *  `category` は `stop_details.category` の逐語で、無ければ null。 */
+/** 差し替え先が無いまま終わった拒否に CLI が合成する root の assistant 行(`message.model: "<synthetic>"`)の拒否
+ *  (ADR 0215 決定3 / ADR 0416 決定2)。固定版 2.1.286 の binary の読みで、実物は未観測(#1614)。
+ *  `id` は `message.id` —— 数える側が重複を除く。`category` は `stop_details.category` の逐語で、無ければ null。
+ *  同じ model で続いた1段目の拒否はこの行に現れない —— `isRefusalNotice` が読む。 */
 export function readRootRefusal(parsed: Record<string, unknown> | null): { id: unknown; category: string | null } | null {
   if (!isRootAssistant(parsed)) return null;
   const message = parsed.message as { id?: unknown; stop_reason?: unknown; stop_details?: { category?: unknown } } | undefined;
   if (message?.stop_reason !== "refusal") return null;
   const category = message.stop_details?.category;
   return { id: message.id, category: typeof category === "string" ? category : null };
+}
+
+/** 1段目の拒否(同じ model で続いた拒否)の CLI の通知の行か(ADR 0416 決定1)。拒否された応答は stream に流れず、分類も載らない。
+ *  `informational` は拒否と無関係の通知にも使われるので、`level` と CLI の定数の文の末尾で読む(先頭は model の表示名で変わる)。
+ *  通知は `message.id` を持たないので、数える側は1行を1件にする。 */
+export function isRefusalNotice(parsed: Record<string, unknown> | null): boolean {
+  return (
+    parsed?.type === "system" &&
+    parsed.subtype === "informational" &&
+    parsed.level === "notice" &&
+    typeof parsed.content === "string" &&
+    parsed.content.endsWith("safeguards stopped the response above · continuing once with that noted")
+  );
 }

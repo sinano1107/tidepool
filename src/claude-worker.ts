@@ -2212,7 +2212,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0309: Claude の分類は解決済み。束は読み手の出力の転送で、帰結は exit を受けた盤面が決める(ADR 0338 決定2)
       // 本番は常に `onWorkerExited` を配線する(ADR 0043 の釘)。else は盤面の一撃を持たない構成のため
       if (this.options.onWorkerExited) {
-        this.options.onWorkerExited(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, {
+        const { model_swaps, refusals } = fields;
+        this.options.onWorkerExited(task.id, { ...exit, ...(model_swaps.length > 0 && { model_swaps }), ...(refusals.length > 0 && { refusals }) }, {
           sessionId,
           workerSpawnedEventId: spawnedEventId,
           turnRan: streamObserved.turnRan,

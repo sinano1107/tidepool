@@ -6,6 +6,7 @@ import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } 
 import { type AdvisorRecord, type EventPayload, type ModelSwap, type RowRefusalCause, swapsMain } from "./events.js";
 import { ownEntry } from "./registry.js";
 import {
+  isRefusalNotice,
   isRootAssistant,
   readAdvisorOutcomes,
   readInitModel,
@@ -235,8 +236,8 @@ interface StreamObservation {
   mainModel: string | null;
   /** ADR 0215: `worker_exited.model_swaps` as it will be written. */
   modelSwaps: ModelSwap[];
-  /** ADR 0215: `worker_exited.refusals` keyed by `message.id` — one message splits into
-   *  several assistant lines, one per block, so a refusal counts once per id. */
+  /** ADR 0215 / ADR 0416 決定1: `worker_exited.refusals` in stream order. A synthetic refusal line is keyed by
+   *  `message.id` and counts once per id; a refusal notice has no id and gets a key of its own. */
   refusals: Map<unknown, string | null>;
   /** issue #2432: the subagents seen on the stream, keyed by `tool_use_id`, with the resolved
    *  model observed for each — null while none has been. An unpairable id gets a key of its own. */
@@ -387,6 +388,7 @@ export function observeClaudeLine(observed: StreamObservation, parsed: Record<st
   if (resolved) observed.subagents.set(resolved.id ?? {}, resolved.model);
   const refusal = readRootRefusal(parsed);
   if (refusal && !observed.refusals.has(refusal.id)) observed.refusals.set(refusal.id, refusal.category);
+  if (isRefusalNotice(parsed)) observed.refusals.set({}, null);
 }
 
 /** 観測 → `worker_exited` の stream 由来の欄。live の settle と起動時の復旧が同じこれを呼ぶ(ADR 0316 決定1)。 */

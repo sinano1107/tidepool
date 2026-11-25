@@ -100,7 +100,8 @@ interface WatchRecord {
 
 /** exit が持っていた逐語 —— worker の最後の発話、CLI が報告した失敗の文、stderr 末尾 ——
  *  を見出し付きでこの順に連結する。空の欄は節ごと出さない(ADR 0188 / 0189 / 0191)。
- *  使用量を読み直せなかった exit だけ、CLI の失敗の文の後ろに1行添える(ADR 0261 決定6)。 */
+ *  使用量を読み直せなかった exit だけ、CLI の失敗の文の後ろに1行添える(ADR 0261 決定6)。
+ *  差し替えと拒否の節は末尾に並ぶ(ADR 0215 決定5 / ADR 0416 決定3)。 */
 function exitSections(exit: WorkerExit | undefined): string {
   return (
     (exit?.last_message ? `\n\nlast message from the worker:\n${exit.last_message}` : "") +
@@ -111,6 +112,9 @@ function exitSections(exit: WorkerExit | undefined): string {
     (exit?.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : "") +
     (exit?.model_swaps?.length
       ? `\n\nmodels swapped in by the CLI:\n${exit.model_swaps.map((s) => `${s.from} → ${s.to}`).join("\n")}`
+      : "") +
+    (exit?.refusals?.length
+      ? `\n\nresponses stopped by the provider's safeguards: ${exit.refusals.length} (${exit.refusals.map((c) => c ?? "no category reported").join(", ")})`
       : "")
   );
 }
