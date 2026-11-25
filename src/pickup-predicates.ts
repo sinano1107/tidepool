@@ -271,7 +271,7 @@ export function roomProvisionOf(db: Db, task: Task, rootId: string): RoomProvisi
 }
 
 /** 面接室が今その task に提供する rev: ブランチがあればそれ、無ければ切る元か読む head。項はこれの閉包を門の時点で検査し、準備はブランチを
- *  立てた後にこれを fetch する。 */
+ *  立てる前にこれ(ブランチが無ければ切る元を面接室で解いた commit)を fetch し、受け取った commit にブランチを立てる(ADR 0414 決定7)。 */
 export function providedRev(room: WorkspaceConfig, { branch, source }: RoomProvision): string {
   return branch !== undefined && branchExists(room, branch) ? `refs/heads/${branch}` : source(room);
 }

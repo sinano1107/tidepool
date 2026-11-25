@@ -35,7 +35,7 @@ import {
 } from "../src/workspace.js";
 import { FakeAttributionClient, FakeClock, noRetrospectiveCalls, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, restedInterviewRoom, sessionId } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, restedInterviewRoom, seedZeroPaddedTree, sessionId } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、root と受験者の task の checkout(ADR 0356 決定1・2 / ADR 0276)。
@@ -1582,5 +1582,126 @@ it("面接室ごと消えて root が生きていれば、最初に落ちる項�
   expect(refused).toMatch(new RegExp(`The check that failed: every object reachable from .*of the examinee ${examinees[0]!.id}`));
   expect(refused).toMatch(new RegExp(`still open the interview room ${root.id} after this answer — cancel the Interview ${root.id} first, then answer \`${CANCEL_THE_RCAS}\` again\\.`));
   expect(getTask(db, rca.id)!.status).toBe("todo");
+  db.close();
+});
+
+// ADR 0414 決定6〜8: pickup が作る複製(面接室で走る task の checkout と、どの役でも読み専用の checkout)を全部作ってから固定を書く ——
+// 門の項は object が在るかしか見ないので、壊れた object を持つ面接室でも門は通り、準備の fetch が落ちる。落ちた pickup は固定も複製も残さない
+
+/** 面接室の loose object を読めない byte で上書きする —— 在るので門の (task, 面接室) の項は通る。 */
+function corruptObject(room: WorkspaceConfig, oid: string): void {
+  chmodSync(looseObject(room, oid), 0o644);
+  writeFileSync(looseObject(room, oid), "garbage");
+}
+
+const branchCreated = (db: Db, taskId: string) => listEvents(db, taskId).filter((e) => e.kind === "task_branch_created");
+
+it("出題の head の blob が壊れた面接室の受験者の pickup は、門を通っても準備がその受験者の項の文つきで面接室の名前で止まり、面接室に task/<id>・task_branch_created・受験者の checkout の番地を残さない(ADR 0414 決定6〜8)", async () => {
+  const db = openDb(":memory:");
+  const { root, room, head, examinees, base } = await posedInRoom(db);
+  const [examinee] = examinees as [Task];
+  corruptObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
+  await pickupGate(db, room, examinee, base, () => NOW);
+
+  const failed = await pickUp(db, examinee, room, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`The check that failed: ${taskRoomPickupPredicates(db, [examinee], root.id, base)[0]!.describe}`);
+  expect(git(room.path, "for-each-ref", `refs/heads/task/${examinee.id}`)).toBe("");
+  expect(branchCreated(db, examinee.id)).toEqual([]);
+  expect(existsSync(join(base, examinee.id))).toBe(false);
+  db.close();
+});
+
+// ブランチの無い受験者の checkout は出題の head を sha で fetch する —— 固定が立てる task/<id> はその受け取った commit
+it("受験者の初回の pickup は、面接室の task/<id> を受験者の checkout が受け取った HEAD と同じ commit(出題の head)に立てる(ADR 0414 決定2・7)", async () => {
+  const db = openDb(":memory:");
+  const { room, head, examinees, base } = await posedInRoom(db);
+  const [examinee] = examinees as [Task];
+
+  const place = await pickUp(db, examinee, room, base);
+
+  expect([git(room.path, "rev-parse", `task/${examinee.id}`), git(place.path, "rev-parse", "HEAD")]).toEqual([head, head]);
+  db.close();
+});
+
+// warning の形は root が持つ: 受験者の面接室で最初の撮りの後に ref を足すか動かすと、fetch より前に RefsMovedError で止まる(#3834 の実測)
+it("面接室を開いた直後に保護ブランチへ strict な検査だけが拒む tree が置かれた root の最初の pickup は、門を通っても準備が `zeroPaddedFilemode` を名指して面接室の名前で止まり、面接室に task/<id>・task_branch_created・root の checkout の番地を残さない(ADR 0414 決定6〜8)", async () => {
+  const db = openDb(":memory:");
+  const workspace = await makeWorkspace("root-strict-room");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  const room = recordedInterviewRoom(db, root.id)!;
+  const base = dirname(room.path);
+  seedZeroPaddedTree(room);
+  await pickupGate(db, workspace, root, base, () => NOW);
+
+  const failed = await prepareAtPickup(db, room, root, { real: workspace, workspacesBaseDir: base }).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain("zeroPaddedFilemode");
+  expect((failed as PickupGateError).message).toContain(`The check that failed: ${taskRoomPickupPredicates(db, [root], root.id, base)[0]!.describe}`);
+  expect(git(room.path, "for-each-ref", `refs/heads/task/${root.id}`)).toBe("");
+  expect(branchCreated(db, root.id)).toEqual([]);
+  expect(existsSync(join(base, `${root.id}.checkout`))).toBe(false);
+  db.close();
+});
+
+/** 鍵 `key` の下にある task の checkout の番地(pickup の event id)。 */
+const checkoutAddresses = (base: string, key: string) => (existsSync(join(base, key)) ? readdirSync(join(base, key)) : []);
+
+it("解放した受験者の再 pickup は、面接室のタスクブランチの blob が壊れて準備が面接室の名前で止まると、新しい pickup の番地を残さず task_branch_created も増えない(ADR 0414 決定6・8)", async () => {
+  const db = openDb(":memory:");
+  const { root, room, examinees, base } = await posedInRoom(db);
+  const [examinee] = examinees as [Task];
+  const place = await pickUp(db, examinee, room, base);
+  commitWork(place.path, "answer.txt", "a committed step\n");
+  releaseWorkspace(db, place, examinee, NOW);
+  corruptObject(room, git(room.path, "rev-parse", `task/${examinee.id}:answer.txt`));
+  const before = { addresses: checkoutAddresses(base, examinee.id), created: branchCreated(db, examinee.id) };
+  await pickupGate(db, room, examinee, base, () => NOW);
+
+  const failed = await pickUp(db, examinee, room, base).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect({ addresses: checkoutAddresses(base, examinee.id), created: branchCreated(db, examinee.id) }).toEqual(before);
+  db.close();
+});
+
+it("作業を commit して解放した root の再 pickup は、面接室のタスクブランチの blob が壊れて準備が面接室の名前で止まると、新しい pickup の番地を残さず task_branch_created も増えない(ADR 0414 決定6・8)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, place } = await pickedRoot(db, "root-repickup-corrupt");
+  commitWork(place.path, "draft.txt", "half composed\n");
+  releaseWorkspace(db, place, root, NOW);
+  corruptObject(room, git(room.path, "rev-parse", `task/${root.id}:draft.txt`));
+  const before = { addresses: checkoutAddresses(base, `${root.id}.checkout`), created: branchCreated(db, root.id) };
+  await pickupGate(db, workspace, root, base, () => NOW);
+
+  const failed = await prepareAtPickup(db, room, root, { real: workspace, workspacesBaseDir: base }).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect({ addresses: checkoutAddresses(base, `${root.id}.checkout`), created: branchCreated(db, root.id) }).toEqual(before);
+  db.close();
+});
+
+it("出題の head の blob が壊れた面接室を読む監査の pickup は、門を通っても準備がその監査の項の文つきで面接室の名前で止まり、実環境に task/<id>・task_branch_created を残さず、task の checkout の番地も読み専用の checkout の番地も残さない(ADR 0414 決定6・8)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, room, base, head, audit } = await auditStanding(db);
+  corruptObject(room, git(room.path, "rev-parse", `${head}:probe.txt`));
+  await pickupGate(db, workspace, audit, base, () => NOW);
+
+  const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(PickupGateError);
+  expect((failed as PickupGateError).place.name).toBe(root.id);
+  expect((failed as PickupGateError).message).toContain(`The check that failed: ${taskRoomPickupPredicates(db, [audit], root.id, base)[0]!.describe}`);
+  expect(git(workspace.path, "for-each-ref", `refs/heads/task/${audit.id}`)).toBe("");
+  expect(branchCreated(db, audit.id)).toEqual([]);
+  expect(existsSync(join(base, audit.id))).toBe(false);
+  expect(existsSync(join(base, `${audit.id}.reads`))).toBe(false);
   db.close();
 });

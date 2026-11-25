@@ -622,7 +622,8 @@ export const withProtectedTipCheckout = <T>(named: WorkspaceConfig, base: string
  *  前の session が残した checkout は動かさず再利用もしない。どの type でもタスクブランチだけを引いた複製で、閉包を全部持つ(ADR 0411 決定1)
  *  —— Interview の役は兄弟の答案を見ない。閉包が読めない名前の場所では fetch が落ち、呼び手の quarantine へ(ADR 0411 決定5)。root の番地は面接室
  *  (基点 + root id)の外 —— 面接室の内側に checkout を置かない(ADR 0276 決定1)。開いた event は repo ができた後に書く(ADR 0329)。
- *  ADR 0414 決定1・2: 面接室の外の task は checkout を作ってから固定(`fixing.fix`)を書き、作れないか固定が落ちれば checkout を消す。 */
+ *  ADR 0414 決定1・2・6: どの役でも task の checkout と読み専用の checkout を全部作ってから固定(`fixing.fix`)を書き、作れないか固定が
+ *  落ちればこの呼び出しが作った checkout を全部消す。 */
 function openTaskCheckout(
   db: Db,
   named: WorkspaceConfig,
@@ -641,39 +642,37 @@ function openTaskCheckout(
   // 展開するのに落ちたら、この checkout でも下の読み専用の checkout でも、fetch 元の面接室の性質としてその task の項の文で面接室の名前で
   // 止まる(ADR 0386 決定3 / ADR 0276 決定3)
   const itemOf = (room: WorkspaceConfig) => taskRoomPickupPredicates(db, [task], room.name, workspacesBaseDir)[0]?.describe;
+  // ADR 0414 決定1・2・6: 複製(task の checkout と読み専用の checkout 全部)を先に作り、通ってから固定を書く —— 固定が書く `task/<id>` は
+  // checkout が受け取った commit。解けない切る元は番地を作る前に投げる(決定7)
+  const { source, forkSource } = role === undefined ? copySourceBeforeFixing(db, named, task, () => now, fixing.defaultWorkspaceName) : roomCopySource(db, named, task);
+  const readRooms = roomsReadBy(db, task).map((room) => ({ room, at: CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name), parents: CHECKOUT_LAYOUT.read.parents }));
   let path: string;
-  if (role === undefined) {
-    // ADR 0414 決定1・2: 複製を先に作り、通ってから固定を書く —— 固定が書く `task/<id>` は checkout が受け取った commit
-    const { source, forkSource } = copySourceBeforeFixing(db, named, task, () => now, fixing.defaultWorkspaceName);
+  let reads: ReadCheckout[];
+  try {
     try {
       path = makeCheckout({ at, named, source, branch, description });
-      fixing.fix(forkSource);
     } catch (err) {
+      // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
+      if (role === undefined || err instanceof CheckoutHostError) throw err;
+      throw PickupGateError.of(named, err, itemOf(named));
+    }
+    // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
+    reads = readRooms.map(({ room, at: readAt }) => {
+      const read = roomProvisionOf(db, task, room.name);
+      return openReadCheckout(readAt, room, read && providedRev(room, read), task.id, itemOf(room));
+    });
+    fixing.fix(forkSource);
+  } catch (err) {
+    // 作りかけも番地で消す(読み専用の checkout は fetch の前に番地を作る)
+    for (const copy of [{ at, parents: CHECKOUT_LAYOUT.task.parents }, ...readRooms]) {
       try {
-        removeBoardCheckout(at, CHECKOUT_LAYOUT.task.parents);
+        removeBoardCheckout(copy.at, copy.parents);
       } catch {
         // 作れなかった理由を消さない
       }
-      throw err;
     }
-  } else {
-    // ADR 0386 決定1: 面接室で走る task は、面接室が提供するもの(ブランチを立てた後なのでそのブランチ)を fetch する —— 固定が先(ADR 0414 の
-    // 範囲の外、#3834)
-    fixing.fix(undefined);
-    const provision = roomProvisionOf(db, task, named.name);
-    try {
-      path = makeCheckout({ at, named, source: provision ? providedRev(named, provision) : `refs/heads/${branch}`, branch, description });
-    } catch (err) {
-      // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
-      if (err instanceof CheckoutHostError) throw err;
-      throw PickupGateError.of(named, err, itemOf(named));
-    }
+    throw err;
   }
-  // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
-  const reads = roomsReadBy(db, task).map((room) => {
-    const read = roomProvisionOf(db, task, room.name);
-    return openReadCheckout(CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name), room, read && providedRev(room, read), task.id, itemOf(room));
-  });
   appendEvent(db, {
     taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: now,
     payload: {
@@ -2910,6 +2909,14 @@ function lineageForkSource(db: Db, workspace: WorkspaceConfig, task: Task, now: 
  *  前に読む fork 元の commit。`branch` は元を読んだ branch(閉包を受け取れない拒否が名指す)。`forkSource` は固定が `task/<id>` に書く commit
  *  (複製が受け取った値)で、タスクブランチを持つ task には無い。 */
 type CopySource = { source: string; branch: string; forkSource?: string };
+
+/** ADR 0414 決定7: 面接室で走る task(受験者・root)の複製の元は面接室が提供するもの(ADR 0386 決定1)—— タスクブランチがあればそれ、
+ *  無ければ切る元を面接室で解いた commit で、固定はそれを `task/<id>` に書く。解けなければ `roomForkSource` の文で投げる。 */
+function roomCopySource(db: Db, room: WorkspaceConfig, task: Task): Omit<CopySource, "branch"> {
+  if (taskBranchExists(room, task.id)) return { source: `refs/heads/${taskBranch(task.id)}` };
+  const sha = roomForkSource(db, room, task);
+  return { source: sha, forkSource: sha };
+}
 
 function copySourceBeforeFixing(db: Db, named: WorkspaceConfig, task: Task, now: () => Date, defaultWorkspaceName: string | undefined): CopySource {
   const own = taskBranch(task.id);
