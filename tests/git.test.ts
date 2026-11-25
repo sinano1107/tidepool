@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { git, localGitEnv, stashEntries } from "../src/git.js";
@@ -170,6 +170,79 @@ it("`stashEntries` は refs/stash が無ければ空を返す", async () => {
   const ws = await makeWorkspace("stash-entries-absent");
 
   expect(stashEntries(ws.path)).toEqual([]);
+});
+
+/** `path` の refs/stash の reflog の file(古い順の行)。 */
+const stashLog = (path: string) => join(path, ".git", "logs", "refs", "stash");
+
+// git は壊れた行を警告だけで(一番古い行なら何も言わずに)飛ばし、件の数を少なく言う —— 行の数と合わなければ短いリストを返さない(#3826)
+it.each([
+  ["途中の行を garbage に", 1, () => "garbage"],
+  ["途中の行を sha の途中で切る", 1, (line: string) => line.slice(0, 20)],
+  ["一番新しい行を garbage に", 2, () => "garbage"],
+  ["一番新しい行を sha の途中で切る", 2, (line: string) => line.slice(0, 20)],
+  ["一番古い行を garbage に", 0, () => "garbage"],
+  ["一番古い行を sha の途中で切る", 0, (line: string) => line.slice(0, 20)],
+])("`stashEntries` は reflog の%sと投げ、reflog の file を名指す", async (_case, index, broken) => {
+  const ws = await makeWorkspace("stash-entries-broken-line");
+  stashThree(ws.path);
+  const lines = readFileSync(stashLog(ws.path), "utf8").split("\n");
+  lines[index] = broken(lines[index]!);
+  writeFileSync(stashLog(ws.path), lines.join("\n"));
+
+  expect(() => stashEntries(ws.path)).toThrow(`the reflog of refs/stash at ${stashLog(ws.path)} has 3 lines but git reads 2 entries`);
+});
+
+it("`stashEntries` は `--rewrite` なしで途中の件を消した reflog では投げず、残った件をすべて並べる", async () => {
+  const ws = await makeWorkspace("stash-entries-deleted-middle");
+  const entries = stashThree(ws.path);
+  fixtureGit(ws.path, "reflog", "delete", "refs/stash@{1}");
+
+  expect(stashEntries(ws.path)).toEqual([entries[0], entries[2]]);
+});
+
+// reftable の reflog は file を持たない —— 行の数を取れないので今日の読みのまま(#3826 は reftable の破損を守らない)
+it("`stashEntries` は reftable の repo の健全な stash を新しい順に並べる", async ({ skip }) => {
+  const path = join(await tempDir("tidepool-stash-entries-reftable-"), "repo");
+  const init = spawnSync("git", ["init", "--quiet", "--ref-format=reftable", path]);
+  if (init.status !== 0) skip(`this git cannot init a reftable repo: ${init.stderr.toString().trim()}`);
+  writeFileSync(join(path, "README.md"), "base\n");
+  fixtureGit(path, "add", "README.md");
+  fixtureGit(path, "commit", "--quiet", "-m", "base");
+  const entries = stashThree(path);
+
+  expect(stashEntries(path)).toEqual(entries);
+});
+
+// git は FIFO の reflog を「無い」と答える。盤面が開けば読みが止まる —— 開かずに投げる
+it("`stashEntries` は reflog の file が通常のファイルでない(FIFO)とき、止まらずに投げる", async () => {
+  const ws = await makeWorkspace("stash-entries-fifo");
+  stashThree(ws.path);
+  rmSync(stashLog(ws.path));
+  execFileSync("mkfifo", [stashLog(ws.path)]);
+
+  expect(() => stashEntries(ws.path)).toThrow(`the reflog of refs/stash at ${stashLog(ws.path)} is not a regular file`);
+});
+
+it("`stashEntries` は refs/stash の ref が無く reflog だけ残るとき、空を返さずに投げる", async () => {
+  const ws = await makeWorkspace("stash-entries-reflog-only");
+  stashThree(ws.path);
+  rmSync(join(ws.path, ".git", "refs", "stash"));
+
+  expect(() => stashEntries(ws.path)).toThrow(`refs/stash is absent but its reflog remains at ${stashLog(ws.path)}`);
+});
+
+// 壊れた ref を git は stderr の警告だけで「no」(exit 1)と答える —— reflog の無い refs/stash でも「stash は無い」と読まない
+it.each([
+  ["ref の file が garbage", (path: string) => writeFileSync(join(path, ".git", "refs", "stash"), "garbage\n"), "ignoring broken ref refs/stash"],
+  ["ref の file が 0 byte", (path: string) => writeFileSync(join(path, ".git", "refs", "stash"), ""), "ignoring broken ref refs/stash"],
+  ["行き先の無い symref", (path: string) => fixtureGit(path, "symbolic-ref", "refs/stash", "refs/heads/nowhere"), "ignoring dangling symref refs/stash"],
+])("`stashEntries` は refs/stash が%sのとき、空を返さずに投げる", async (_case, breakRef, says) => {
+  const ws = await makeWorkspace("stash-entries-broken-ref");
+  fixtureGit(ws.path, "update-ref", "refs/stash", "HEAD");
+  breakRef(ws.path);
+
+  expect(() => stashEntries(ws.path)).toThrow(says);
 });
 
 // 空の reflog は読めない reflog(権限の無い file)と同じ「is empty」で git が言う —— 件数の終わりと取り違えて短いリストを返さない

@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { boardViewStatus, CheckoutUnreadableError, git, gitAnswers, isAncestor, stashEntries, workerRepoGit } from "./git.js";
+import { boardViewStatus, CheckoutUnreadableError, git, gitAnswers, gitListing, isAncestor, ListingUnreadableError, stashEntries, workerRepoGit } from "./git.js";
 
 // 作業台(Workbench)の鍵・持ち主・寿命の判定を1か所に置く(ADR 0382、#3352 の追記 1〜3)。入口は判定を自分で書かず、これを呼ぶ。
 
@@ -86,14 +86,19 @@ export function humanWorkLeft(read: WorkbenchRead): string[] {
     if (boardViewStatus(at, tip, read.verified).length > 0) left.push(`it has uncommitted changes — commit them on ${target} or discard them`);
     if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
   }
-  const strays = onWorkbench(at, () => workerRepoGit(at, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/stash"))
+  // #3826: for-each-ref は壊れた packed-refs の行を何も言わずに飛ばすが、show-ref は落ちる —— パターンは名前の末尾で照合するので
+  // 付けずに全部を並べ、壊れた tag や remote の ref でも拒む
+  let refs = "";
+  onWorkbench(at, () => gitAnswers(() => (refs = gitListing(at, ["show-ref"], true))));
+  const strays = refs
     .split("\n")
     .filter(Boolean)
     .map((line) => line.split(" ") as [string, string])
-    .filter(([, ref]) => ref !== `refs/heads/${target}` && !ref.startsWith(`refs/heads/${BOARD_BRANCHES}/`))
-    // stash は reflog の段ごとに1つ —— `refs/stash` は一番上の段しか指さない
-    .filter(([sha, ref]) => (ref === "refs/stash" ? onWorkbench(at, () => stashEntries(at, workerRepoGit)) : [sha]).some((commit) => !inTarget(read, commit)))
-    .map(([, ref]) => (ref === "refs/stash" ? "the stash" : ref.slice("refs/heads/".length)));
+    .filter(([, ref]) => ref.startsWith("refs/heads/") && ref !== `refs/heads/${target}` && !ref.startsWith(`refs/heads/${BOARD_BRANCHES}/`))
+    .filter(([sha]) => !inTarget(read, sha))
+    .map(([, ref]) => ref.slice("refs/heads/".length));
+  // stash は reflog の段ごとに1つ —— `refs/stash` は一番上の段しか指さず、壊れていれば show-ref に出ない
+  if (onWorkbench(at, () => stashEntries(at, true)).some((commit) => !inTarget(read, commit))) strays.push("the stash");
   if (strays.length > 0) left.push(`${strays.join(", ")} ${strays.length > 1 ? "hold" : "holds"} commits that ${target} does not have — merge them into ${target}, or delete them`);
   return left;
 }
@@ -130,12 +135,12 @@ export function workbenchAnswer(at: string, ...args: string[]): string | undefin
 
 /** ADR 0382 決定2: 読めない作業台はどの入口でも拒む —— 判定が作業台そのものに撃つ git の失敗を作業台の読みの失敗(`WorkbenchGitError`)にし、
  *  開く扉と削除の扉が同じ手で作業台を名指す。git が終了コードを返さない失敗(上限超過、起こせない git)は型のまま。述語の「no」は内側の
- *  `gitAnswers` が答えにする。 */
+ *  `gitAnswers` が答えにする。git が件を落とした並び(`ListingUnreadableError`、#3826)も作業台の読みの失敗にする。 */
 function onWorkbench<T>(at: string, read: () => T): T {
   try {
     return read();
   } catch (cause) {
-    if (typeof (cause as { status?: unknown } | null)?.status !== "number") throw cause;
+    if (typeof (cause as { status?: unknown } | null)?.status !== "number" && !(cause instanceof ListingUnreadableError)) throw cause;
     throw new WorkbenchGitError(at, cause instanceof Error ? cause.message : String(cause), { cause });
   }
 }

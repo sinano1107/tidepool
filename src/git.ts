@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { WORKER_TREE_GIT_TIMEOUT_MS, WorkerTreeGitTimeoutError } from "./worker-tree-git-timeout.js";
@@ -50,25 +50,42 @@ export const isAncestor = (repo: { path: string }, ancestor: string, descendant:
 
 /** ADR 0373 決定4 / ADR 0382 決定2: `refs/stash` の今の値と reflog の各件の sha(新しい順)—— 1件ずつ `rev-parse` して object を開かない
  *  (`log -g` / `reflog show` は開けない件を黙って落とす、#3752)。reflog の件の数を越えたと git が言うまで回し、ほかの失敗は投げる。
- *  `refs/stash` が無ければ空、reflog が無ければ(update-ref で作った)今の値だけ —— そのとき `@{0}` が落ちるのを読めなさと取り違えない。
+ *  ref も reflog も無ければ空、reflog が無ければ(update-ref で作った)今の値だけ —— そのとき `@{0}` が落ちるのを読めなさと取り違えない。
+ *  並べるか投げるかのどちらかで、git が件を落とした短い並びは返さない(#3826)。`bounded` は作業台の読みを `workerRepoGit` の上限で撃つ。
  *  shortcut: 1件ごとに git を1度起こす —— stash が数百件に積まれて遅くなれば reflog を1度で読む口に替える。 */
-export function stashEntries(cwd: string, readGit = git): string[] {
+export function stashEntries(cwd: string, bounded = false): string[] {
+  const readGit = (...args: string[]) => gitListing(cwd, args, bounded);
+  const log = resolve(cwd, readGit("rev-parse", "--git-path", "logs/refs/stash"));
+  const file = lstatSync(log, { throwIfNoEntry: false });
+  // #3826: FIFO などは開けば読みが止まり、git は「reflog が無い」と答える —— git にも盤面にも開かせずに投げる
+  if (file && !file.isFile()) throw new ListingUnreadableError(`the reflog of refs/stash at ${log} is not a regular file`);
   let top = "";
-  if (!gitAnswers(() => (top = readGit(cwd, "rev-parse", "--verify", "--quiet", "refs/stash")))) return [];
-  if (!gitAnswers(() => readGit(cwd, "reflog", "exists", "refs/stash"))) return [top];
+  const hasRef = gitAnswers(() => (top = readGit("rev-parse", "--verify", "--quiet", "refs/stash")));
+  const hasLog = gitAnswers(() => readGit("reflog", "exists", "refs/stash"));
+  // stash の pop・drop・clear は最後の件で ref と reflog を一緒に消す —— reflog だけ残るのは壊れた ref(#3826)
+  if (!hasRef && (file || hasLog)) throw new ListingUnreadableError(`refs/stash is absent but its reflog remains at ${log}`);
+  if (!hasRef) return [];
+  if (!hasLog) return [top];
   const entries: string[] = [];
   for (let n = 0; ; n++) {
     try {
-      entries.push(readGit(cwd, "rev-parse", "--verify", `refs/stash@{${n}}`));
+      entries.push(readGit("rev-parse", "--verify", `refs/stash@{${n}}`));
     } catch (err) {
       // 空の reflog と読めない reflog を git は同じ「is empty」で言うので、それは件の数の終わりに数えない
       const count = /^fatal: log for '.*' only has (\d+) entries$/m.exec(String((err as { stderr?: unknown }).stderr ?? ""))?.[1];
       if (count === undefined) throw err;
+      // #3826: git は壊れた行を飛ばして件の数を少なく言う(一番古い行なら警告も無い)—— 警告の文でなく file の行の数と比べる
+      // reflog が在るのに file が無いのは reftable —— 行の数は取れない
+      const lines = file && readFileSync(log, "utf8").split("\n").filter(Boolean).length;
+      if (file && lines !== Number(count)) throw new ListingUnreadableError(`the reflog of refs/stash at ${log} has ${lines} lines but git reads ${count} entries`);
       // 一番古い件の old 値が 0 でなければ(`--rewrite` なしの delete や expire の後)、git は `@{件の数}` にその old 値を返す
       return [...new Set([top, ...entries.slice(0, Number(count))])];
     }
   }
 }
+
+/** #3826: git が件を落としたか数えられなかった —— 並びは短いので、答えにしない。 */
+export class ListingUnreadableError extends Error {}
 
 /** ADR 0378 決定4: read the configured origin before applying insteadOf. */
 export function readOriginConfig(readGit: (args: string[]) => Buffer): string | undefined {
@@ -409,27 +426,46 @@ const runOptions = (cwd: string, env: NodeJS.ProcessEnv | undefined, input: stri
   stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] as ("ignore" | "pipe")[],
 });
 
+// ADR 0334: Node's timeout kills only the parent git, so it runs in its own process group and `throwTimedOut` also
+// reaches a child (`upload-pack`, a git blocked in `open()`). SIGTERM so git removes its lock files
+const timeoutOptions = (timeout: number | undefined) => timeout !== undefined && { timeout, killSignal: "SIGTERM" as const, detached: true };
+
+/** A call `timeoutOptions` bounded ran out: kill its process group and name `bound`. */
+function throwTimedOut(err: unknown, pid: number | undefined, stderr: Buffer | string | undefined, args: string[], bound: number): never {
+  try {
+    if (pid) process.kill(-pid, "SIGTERM");
+  } catch {
+    // the group has already exited
+  }
+  throw new WorkerTreeGitTimeoutError(subcommandOf(args), bound, stderr?.toString().split("\n")[0]?.trim() ?? "", { cause: err });
+}
+
 /** `timeout` kills the call; `bound` is the limit its expiry names (the stage's, when the call ran on what remained of it). */
 function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, timeout?: number, bound = timeout): Buffer {
   try {
-    return execFileSync("git", args, {
-      ...runOptions(cwd, env, input),
-      // ADR 0334: Node's timeout kills only the parent git, so it runs in its own process group and the kill below also
-      // reaches a child (`upload-pack`, a git blocked in `open()`). SIGTERM so git removes its lock files
-      ...(timeout !== undefined && { timeout, killSignal: "SIGTERM" as const, detached: true }),
-    });
+    return execFileSync("git", args, { ...runOptions(cwd, env, input), ...timeoutOptions(timeout) });
   } catch (err) {
     const { code, pid, stderr } = err as NodeJS.ErrnoException & { pid?: number; stderr?: Buffer };
-    if (timeout !== undefined && code === "ETIMEDOUT") {
-      try {
-        if (pid) process.kill(-pid, "SIGTERM");
-      } catch {
-        // the group has already exited
-      }
-      throw new WorkerTreeGitTimeoutError(subcommandOf(args), bound ?? timeout, stderr?.toString().split("\n")[0]?.trim() ?? "", { cause: err });
-    }
+    if (timeout !== undefined && code === "ETIMEDOUT") throwTimedOut(err, pid, stderr, args, bound ?? timeout);
     rethrowNamingMissingCwd(err, cwd, args);
   }
+}
+
+/** #3826: git that lists refs or reflog entries skips one it cannot read with only a warning on stderr, its exit still 0 (or 1, a
+ *  predicate's "no"), so this read looks at stderr whatever the exit and throws on that warning — the one place that matches its words.
+ *  A non-zero exit throws like `git`; `bounded` bounds the call like `workerRepoGit` (ADR 0357 決定1). */
+export function gitListing(cwd: string, args: string[], bounded = false): string {
+  const timeout = bounded ? WORKER_TREE_GIT_TIMEOUT_MS : undefined;
+  const result = spawnSync("git", args, { ...runOptions(cwd, undefined, undefined), ...timeoutOptions(timeout) });
+  const stderr = result.stderr?.toString() ?? "";
+  if (result.error) {
+    if (timeout !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") throwTimedOut(result.error, result.pid, stderr, args, timeout);
+    rethrowNamingMissingCwd(result.error, cwd, args);
+  }
+  const skipped = /^warning: ignoring (?:broken ref|dangling symref) .*$/m.exec(stderr)?.[0];
+  if (skipped) throw new ListingUnreadableError(`git skipped a ref it cannot read (${skipped})`);
+  if (result.status !== 0) throw Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr });
+  return result.stdout.toString().trim();
 }
 
 /** ADR 0357 決定1: the one runner for the git the board runs on a worker's tree or repo, bounded by one constant. ADR 0364 決定3: a call

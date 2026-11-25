@@ -3743,7 +3743,7 @@ function keepAroundCandidates(workspace: WorkspaceConfig, ref: string, value: st
     return stashEntries(workspace.path);
   } catch (err) {
     // ADR 0409 決定4: 並べられない件は在るか無いか分からない sha と同じ —— 書かずに拒み、text T3 の形で reflog を名指す
-    const reported = String((err as { stderr?: unknown }).stderr ?? "").trim() || String(err);
+    const reported = String((err as { stderr?: unknown }).stderr ?? "").trim() || (err instanceof Error ? err.message : String(err));
     throw new Error(`could not read the reflog of refs/stash in ${workspace.path} (${reported}). Nothing was written; fix what git reports there, then answer again.`, { cause: err });
   }
 }

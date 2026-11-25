@@ -1123,6 +1123,30 @@ it("refs/stash の reflog を git が空と言う `restore the baseline` は、r
   db.close();
 });
 
+// git は壊れた行を飛ばして件の数を少なく言う(#3826)—— 何が合わなかったかと reflog の file を名指し、失った sha の唯一の手がかり(1つ新しい
+// 行の old 値)を消す `reflog expire --rewrite` は勧めない
+it("refs/stash の reflog の途中の行が壊れた `restore the baseline` は、行の数と git の件の数を載せて reflog の file を名指し、何も書かずに拒む", async () => {
+  const { ws, db, question } = await quarantinedWorkspace("restore-stash-reflog-broken-line");
+  for (const body of ["first\n", "second\n", "third\n"]) {
+    writeFileSync(join(ws.path, "README.md"), body);
+    git(ws.path, "stash", "push", "-q");
+  }
+  const log = join(ws.path, ".git", "logs", "refs", "stash");
+  const lines = readFileSync(log, "utf8").split("\n");
+  lines[1] = "garbage";
+  writeFileSync(log, lines.join("\n"));
+  const [refsBefore, comparisonBefore] = [refsOf(ws), await nextComparison(db, ws)];
+
+  const reason = await refusal(answer(db, ws, "restore the baseline"));
+
+  expect(reason).toBe(
+    `could not read the reflog of refs/stash in ${ws.path} (the reflog of refs/stash at ${log} has 3 lines but git reads 2 entries). Nothing was written; fix what git reports there, then answer again.`,
+  );
+  expect(reason).not.toContain("--rewrite");
+  await expectNothingWritten(db, ws, question, refsBefore, comparisonBefore);
+  db.close();
+});
+
 it("reflog の無い refs/stash(update-ref で作った)の `restore the baseline` は今の値だけを refs/keep-around/<sha> に持って通る(ADR 0373 決定4)", async () => {
   const { ws, db } = await quarantinedWorkspace("restore-stash-without-reflog");
   const head = git(ws.path, "rev-parse", "HEAD");

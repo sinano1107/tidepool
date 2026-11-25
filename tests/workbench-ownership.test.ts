@@ -1,7 +1,7 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { type WorkbenchCarried, type WorkbenchOwner, workbenchOwner } from "../src/workbench.js";
+import { humanWorkLeft, type WorkbenchCarried, WorkbenchGitError, type WorkbenchOwner, workbenchOwner } from "../src/workbench.js";
 import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -186,4 +186,58 @@ it("書く先の branch の無い作りかけは、盤面の手の無い入口�
     kind: "refuse",
     reason: `the workbench at ${b.at} has no task/parent branch, so the board cannot tell what to take in. Open it again, then answer again.`,
   });
+});
+
+/** 作業台に書く先に無い commit を持つ branch `aside` を作る(書く先を checkout したまま)。名前は `refs/heads` の先頭に並ぶ ——
+ *  packed-refs の壊れた行を、for-each-ref はそれが探す範囲の頭にあるときだけ黙って飛ばす。 */
+function strayAside(at: string) {
+  git(at, "checkout", "--quiet", "-b", "aside");
+  commitWork(at, "fix.txt", "on a side branch\n");
+  git(at, "checkout", "--quiet", TARGET);
+}
+
+/** 作業台に stash を1段積む。 */
+function stashOne(at: string) {
+  writeFileSync(join(at, "parent.txt"), "stashed\n");
+  git(at, "stash", "--quiet");
+}
+
+// git は壊れた ref を並べずに(packed-refs の行なら何も言わずに)飛ばす —— 人間の commit が残っていても「残っていない」と答えない(#3826)
+it.each<[string, (at: string) => void]>([
+  [
+    "loose の branch の ref file が壊れた",
+    (at) => {
+      strayAside(at);
+      writeFileSync(join(at, ".git", "refs", "heads", "aside"), "garbage\n");
+    },
+  ],
+  [
+    "packed-refs の branch の行が壊れた",
+    (at) => {
+      strayAside(at);
+      git(at, "pack-refs", "--all");
+      const packed = join(at, ".git", "packed-refs");
+      writeFileSync(packed, readFileSync(packed, "utf8").replace(/^.* refs\/heads\/aside$/m, "garbage"));
+    },
+  ],
+  [
+    "refs/stash の ref file が壊れた",
+    (at) => {
+      stashOne(at);
+      writeFileSync(join(at, ".git", "refs", "stash"), "garbage\n");
+    },
+  ],
+  [
+    "refs/stash の ref が無く reflog だけ残る",
+    (at) => {
+      stashOne(at);
+      rmSync(join(at, ".git", "refs", "stash"));
+    },
+  ],
+])("`humanWorkLeft` は%s作業台を、作業台の読みの失敗として拒む", async (_case, breakRefs) => {
+  const b = await board();
+  breakRefs(b.at);
+  const targetSha = git(b.named, "rev-parse", TARGET);
+
+  expect(() => humanWorkLeft({ at: b.at, target: TARGET, targetSha, tip: targetSha, verified: b.at })).toThrow(WorkbenchGitError);
 });
