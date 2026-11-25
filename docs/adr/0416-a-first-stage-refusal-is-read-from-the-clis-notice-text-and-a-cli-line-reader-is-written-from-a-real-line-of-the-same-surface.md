@@ -3,8 +3,8 @@
 2026-11-25 の triage → grilling(issue #1615)で決定。ADR 0215 決定3 は「拒否そのもの(同じ model で続いた1段目も)」を
 分類の逐語で記録すると決め、読み手は root の assistant 行の `message.stop_reason: "refusal"` を見ていた。その形は対話モードの
 保存 transcript(2.1.294)で見たもので、`-p` の stream-json でも同じだと仮定していた。固定版 2.1.286 の worker で1段目の拒否が
-起き(#3809 の測定の途中)、仮定は外れた: stream-json の assistant 行は content block ごとの途中経過で、`stop_reason` は
-どの行でも null である(repo の実物の fixture もすべてそうだった)。拒否された応答は stream に流れず、出るのは
+起き(#3809 の測定の途中)、仮定は外れた: stream-json の assistant 行のうち API の応答から流れる行は content block ごとの
+途中経過で、`stop_reason` は null である(repo の実物の fixture もそうだった)。値を持つのは CLI が合成した行だけである。拒否された応答は stream に流れず、出るのは
 `system/informational` の通知1行と合成の user 行だけで、分類は載らない。記録には何も残らず、worker が報告なく exit したとき
 人間に届いたのは `last_message` の散文だけだった。実物の行と binary の読みは #1615 のコメントに置く。
 
@@ -40,4 +40,4 @@
   変わらない —— 1段目の拒否は分類 null の1件になる。
 - 版を上げるときは `docs/claude-cli-version-bump.md` の「Not covered」に従い、決定1 の文面を新しい binary で確かめ直す。
 - 未観測のまま残るもの(差し替え先が無い拒否の行、差し替えの行の全欄、`--max-turns 1` の Board call での1段目の続行)の
-  照合は #3854 が持つ。
+  照合は、差し替え先が無い拒否の行を #1614 が、残りを #3854 が持つ。

@@ -122,13 +122,14 @@ two are left to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 �
   the refusal or the swap is missing from the record and nothing stops.
 
   One part can be checked without a refusal. The board recognises a first refusal by the text of
-  the CLI's notice, so confirm the new binary still contains it — the count must not be 0:
+  the CLI's notice, so confirm the new binary still contains both halves of it — neither count may
+  be 0 (the `·` between them is escaped in the binary, so they are searched separately):
 
   ```bash
-  limactl shell tidepool -- bash -lc 'grep -a -c "safeguards stopped the response above" ~/.local/share/claude/versions/<new version>'
+  limactl shell tidepool -- bash -lc 'B=~/.local/share/claude/versions/<new version>; grep -a -c "safeguards stopped the response above" $B; grep -a -c "continuing once with that noted" $B'
   ```
 
-  If it is 0, find the new wording of the notice in the binary and change the reader and its
+  If either is 0, find the new wording of the notice in the binary and change the reader and its
   fixture in the same PR as the pin.
 
 ## 6. Open the PR that changes the pinned version
