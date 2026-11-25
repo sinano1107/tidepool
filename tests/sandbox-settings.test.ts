@@ -723,6 +723,9 @@ describe("盤面 verb deny hook の挙動(issue #378)", () => {
 describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 0139 / issue #793)", () => {
   // 期待値は独立した literal — ブロックまるごと置くので、キーが増えれば落ちる
   // (ベンダー既定の意味論に依存する床なので、黙って広がってはならない)。
+  // `allowUnixSockets` / `allowAllUnixSockets` が無いことも、この照合が守る床の1つ。CLI は自分の
+  // messaging socket を task temp(allow の内側)に置き、`CLAUDE_CODE_MESSAGING_SOCKET` / `_TOKEN` を
+  // Bash の子にも渡す。sandbox の中から connect できないのは unix socket の既定の拒否だけによる(#3809 の実測)。
   it("どちらのプロファイルも未許可 egress を閉じ、loopback listen を共有し、deny には何も入れない", () => {
     for (const taskType of ["work", "review"] as const) {
       expect(
