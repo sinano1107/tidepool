@@ -2058,11 +2058,12 @@ it("別の ref が動いた workspace のローカル着地は、Quarantine を�
 it("基準どおりの ref を持つ workspace の Quarantine はローカル着地の merge 回答を拒まない", async () => {
   const local = await landLocally("local-merge-open-quarantine");
   const { workspace, db, clock, work } = local;
+  const before = git(workspace.path, "rev-parse", "main");
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
 
   await expect(answerLocalMerge(local)).resolves.toMatchObject({ status: "done" });
 
-  expect(git(workspace.path, "rev-parse", "main")).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", "main").split(" ").slice(1)).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
 });
 
@@ -2164,16 +2165,18 @@ it("ローカル着地の hold 回答は question を立てた後に task ブラ
 
 type LocalLanding = Awaited<ReturnType<typeof landLocally>>;
 
-/** ADR 0401 決定4 の死: 根 W を保護ブランチへ ff で着地させ、回答の記録は刻まない(question は開いたまま)。W を持ち込んだ commit(W の tip)を返す。 */
-function landFfWithoutRecord({ db, workspace, work, base }: LocalLanding): string {
+/** ADR 0401 決定4 の死: 旧い保護ブランチの直系の根 W を保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。W を持ち込んだ
+ *  merge commit を返す —— ff できる形でも、着地は (旧値, W の tip) の merge commit(ADR 0418 決定1)。 */
+function landDirectWithoutRecord({ db, workspace, work, base }: LocalLanding): string {
+  const before = git(workspace.path, "rev-parse", "main");
   const { landed } = mergeTaskToProtected(db, workspace, work.id, { ...CLEAN_LANDING_INTAKE, workbenchBase: base });
-  expect(landed).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", landed).split(" ").slice(1)).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
   return landed;
 }
 
-/** ADR 0401 決定4 の死: 別の根を先に着地させてから根 W を非 ff で保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。
+/** ADR 0401 決定4 の死: 別の根を先に着地させてから根 W を保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。
  *  W を持ち込んだ merge commit を返す。 */
-async function landNonFfWithoutRecord(local: LocalLanding): Promise<string> {
+async function landAfterAnotherWithoutRecord(local: LocalLanding): Promise<string> {
   const { db, clock, workspace, work, base } = local;
   const other = landingWork(db, clock, workspace.name);
   const place = await prepareAtPickup(db, workspace, other);
@@ -2187,8 +2190,8 @@ async function landNonFfWithoutRecord(local: LocalLanding): Promise<string> {
 }
 
 const LANDINGS_WITHOUT_RECORD: Array<[form: string, land: (local: LocalLanding) => string | Promise<string>]> = [
-  ["ff", landFfWithoutRecord],
-  ["非 ff", landNonFfWithoutRecord],
+  ["旧い保護ブランチの直系", landDirectWithoutRecord],
+  ["別の根の後", landAfterAnotherWithoutRecord],
 ];
 
 // ADR 0401 決定4: 保護ブランチを動かした後・記録の前に死んだローカル着地の答え直し —— merge は何も書かずに持ち込んだ commit の執行を刻み、
@@ -2227,7 +2230,7 @@ it.each(LANDINGS_WITHOUT_RECORD)("%s の着地の後に記録だけ欠けた loc
 it("task のブランチが無ければ、着地の後に記録だけ欠けた local merge question への hold は今までどおり断念を刻む", async () => {
   const local = await landLocally("local-hold-branch-gone");
   const { workspace, db, work } = local;
-  await landNonFfWithoutRecord(local);
+  await landAfterAnotherWithoutRecord(local);
   git(workspace.path, "branch", "-D", `task/${work.id}`);
 
   await answerLocalMerge(local, "hold");
@@ -2291,7 +2294,7 @@ it.each(LANDINGS_WITHOUT_RECORD)("question の間に修理が merge back され�
 it("問うた tip を持たない local merge question でも、タスクブランチが着地の後に記録だけ欠けていれば hold は merge を名指して断る", async () => {
   const local = await landLocally("local-hold-without-asked-tip");
   const { db, clock, work } = local;
-  landFfWithoutRecord(local);
+  landDirectWithoutRecord(local);
   // 読めずに立った question(ADR 0403 決定1)は tip を持たない —— 登録の既定値
   registerLocalMergeQuestion(db, getTask(db, work.id)!, "land it", clock.now());
   const withoutTip = openLocalMergeQuestions(db, work.id).find((q) => q.question_landing_tip === null)!;

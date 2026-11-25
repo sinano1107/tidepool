@@ -1018,8 +1018,8 @@ function settlePrPromotionQuestionsAsObserved(
 }
 
 /** ADR 0053 decision 3: a purely-local root completion cannot be promoted to a PR, so
- *  the board asks whether to land its task branch on the protected branch (a fast-forward,
- *  or a catch-up merge commit — ADR 0103) or hold it there — a hold declines only the content of that moment, and
+ *  the board asks whether to land its task branch on the protected branch (always a merge commit whose first parent is
+ *  the old protected value — ADR 0418 決定1) or hold it there — a hold declines only the content of that moment, and
  *  the question is asked again once the content changes (ADR 0289 決定3). The task id names the root whose
  *  local branch waits; a PR merge question names its root in its own column (ADR 0399 決定2). */
 export function registerLocalMergeQuestion(
