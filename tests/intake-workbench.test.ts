@@ -8,6 +8,7 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
+import { createLanding } from "../src/landing.js";
 import { quarantineStops } from "../src/quarantine.js";
 import { cancelTaskDirectly, completeTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
@@ -27,6 +28,7 @@ import {
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withHistoryOnlyBlob, withLooseSub, withPushDuringWrap } from "./harness.js";
+import { completeThroughTaskCheckout, convergeOn } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -749,6 +751,26 @@ it("take in は cancel した親の下の done の子のブランチを merge �
   await b.answer("take in");
 
   expect(git(b.ws.path, "show", "main:child.txt")).toBe("child.txt");
+});
+
+// ADR 0382 追記(#3825): cancel 済みの task のブランチの merge を通しても、系譜がその task を飛ばして根になった下の done の子は中身を運ばない ——
+// 子の中身は merge back で cancel 済みの親のブランチにあり、取り込みで保護ブランチに入っている
+it("cancel した親のブランチを take in した後、根になった下の done の子は nothing_to_land で終わり、question を立てず保護ブランチを動かさない", async () => {
+  const b = await board();
+  const registered = registerTask(b.db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: b.parent.id }, b.clock.now(), ...HUMAN_WEBUI);
+  const child = await completeThroughTaskCheckout(b.db, b.clock, b.ws, registered, "child.txt", "child\n");
+  cancelTaskDirectly(b.db, getTask(b.db, b.parent.id)!, null, b.clock.now(), {}, "webui");
+  const landing = createLanding({ defaultAgentName: "tako", db: b.db, clock: b.clock, workspace: b.ws, github: null });
+  expect(await convergeOn(landing, child.id)).toBeUndefined();
+  await b.open();
+  git(b.workbench(), "merge", "--no-edit", `board/task/${b.parent.id}`);
+  await b.answer("take in");
+  const main = git(b.ws.path, "rev-parse", "refs/heads/main");
+  const tasks = () => listBoard(b.db).map(({ id }) => id);
+  const before = tasks();
+
+  expect(await convergeOn(landing, child.id)).toEqual({ kind: "nothing_to_land", base: "main" });
+  expect([git(b.ws.path, "rev-parse", "refs/heads/main"), tasks()]).toEqual([main, before]);
 });
 
 // pin A14: purely-local であることは答えるときに確かめ直す(text A8d)
