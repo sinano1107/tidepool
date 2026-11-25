@@ -40,6 +40,7 @@ import { workbenchPath } from "../src/workbench.js";
 import {
   announceHeadRepo,
   dropWorkspaceState,
+  finishHeadRepoChange,
   holdsBaseline,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
@@ -2448,6 +2449,7 @@ it("着地の比較: 基準の行が無い workspace は最初の撮りをして
   const { workspace, db, github, landing, work } = await doneRootWithBaseline("landing-compare-first-capture");
   dropWorkspaceState(db, workspace.name);
   announceHeadRepo(db, workspace, workspace.head_repo);
+  finishHeadRepoChange(db, workspace);
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
   expect(holdsBaseline(db, workspace.name)).toBe(true);
@@ -2538,6 +2540,7 @@ it("着地の比較: 行の無い名前自身の Quarantine の間は最初の�
   const { workspace, db, clock, github, landing, work } = await doneRootWithBaseline("landing-compare-own-quarantine");
   dropWorkspaceState(db, workspace.name);
   announceHeadRepo(db, workspace, workspace.head_repo);
+  finishHeadRepoChange(db, workspace);
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });
@@ -2559,6 +2562,7 @@ async function rowlessRootWithForeignOrigin(name: string) {
   const { workspace, db } = root;
   dropWorkspaceState(db, workspace.name);
   announceHeadRepo(db, workspace, workspace.head_repo);
+  finishHeadRepoChange(db, workspace);
   const other = await tempDir(`tidepool-${name}-other-`);
   git(other, "clone", "--bare", workspace.repo!, ".");
   git(workspace.path, "remote", "set-url", "origin", other);
@@ -2600,6 +2604,7 @@ it("着地の比較: 行の無い名前の場所が盤面の固定点と重な�
   const { workspace, db, clock, github, work } = await doneRootWithBaseline("landing-compare-first-capture-fixed-point");
   dropWorkspaceState(db, workspace.name);
   announceHeadRepo(db, workspace, workspace.head_repo);
+  finishHeadRepoChange(db, workspace);
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, boardState: overlappingFixedPoint(workspace) });
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });

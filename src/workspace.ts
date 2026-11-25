@@ -3317,13 +3317,44 @@ function agreedHeadRepo(values: (string | null)[], declared: string | undefined)
 }
 
 /** ADR 0391 決定1 の形を出元 repo に: the update door announces `[before, next]` before it touches the checkout or the registry,
- *  so a door that dies midway leaves a row the check folds by itself. `before` is the remembered value the current declaration
- *  agrees with, else the remembered one — a declaration edited outside the door never becomes `before`. The row is made when the
- *  workspace has none yet. */
+ *  so a door that dies midway leaves a row the check folds back by itself, or stops the workspace on forward (ADR 0415 決定2).
+ *  `before` is the remembered value the current declaration agrees with, else the remembered one — a declaration edited outside the
+ *  door never becomes `before`. The row is made when the workspace has none yet. */
 export function announceHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined): void {
   const values = readRememberedHeadRepo(db, workspace.name);
   const before = values[agreedHeadRepo(values, workspace.head_repo)] ?? values[0] ?? null;
   writeRememberedHeadRepo(db, workspace.name, JSON.stringify([before, next ?? null]));
+}
+
+/** ADR 0415 決定1: an announced row the declaration agrees with on its "next" side, another repo than "before" — folding it may delete
+ *  the old fork's copies. */
+function unfinishedHeadRepoChange(values: (string | null)[], agreed: number, declared: string | undefined): boolean {
+  return values.length > 1 && agreed > 0 && !sameRepository(values[0] ?? undefined, declared);
+}
+
+/** ADR 0415 決定2: the check met a head repo change the door did not finish, and has already stopped the workspace. */
+export class UnfinishedHeadRepoChangeError extends WorkspaceRepoMismatchError {}
+
+/** ADR 0415 決定1・3: the fold that may delete copies — only the update door and the workspace Quarantine's acceptance call it. Once
+ *  the checkout's head repo remote agrees with the declaration, it deletes the copies and keeps the "next" value. Whether it folded. */
+export function finishHeadRepoChange(db: Db, workspace: WorkspaceConfig): boolean {
+  const { name, head_repo: declared } = workspace;
+  const values = readRememberedHeadRepo(db, name);
+  const agreed = agreedHeadRepo(values, declared);
+  if (!unfinishedHeadRepoChange(values, agreed, declared)) return false;
+  assertHeadRemoteMatchesDeclaration(workspace);
+  // ADR 0376 決定3 / ADR 0395 決定2: copies belong to the old fork until this change is committed.
+  const prefix = remoteTrackingRef("", HEAD_REPO_REMOTE);
+  const refs = [...new Set([
+    ...git(workspace.path, "for-each-ref", "--format=%(refname)", prefix).split("\n").filter(Boolean),
+    ...[...refValues(storedRefs(db, name)).keys()].filter((ref) => ref.startsWith(prefix)),
+  ])];
+  if (refs.length > 0) writeBoardRefs(db, workspace, refs.map((ref) => [ref, ""]), () => {
+    for (const ref of refs) git(workspace.path, "update-ref", "--no-deref", "-d", ref);
+  });
+  const value = values[agreed]!;
+  writeRememberedHeadRepo(db, name, value === null ? null : JSON.stringify(value));
+  return true;
 }
 
 /** ADR 0395 決定2: the declared head repo must be the one the door remembered — compared on every destination decision and in the
@@ -3333,21 +3364,18 @@ export function assertRememberedHeadRepo(db: Db, workspace: WorkspaceConfig, now
   const { name, head_repo: declared } = workspace;
   const values = readRememberedHeadRepo(db, name);
   const agreed = agreedHeadRepo(values, declared);
+  if (unfinishedHeadRepoChange(values, agreed, declared)) {
+    // ADR 0415 決定2: a reader neither folds nor touches a ref — it stops the workspace once; an answer or the door finishes the change
+    const reason = declared === undefined
+      ? `workspace ${name}'s removal of head repo ${repositoryLabel(values[0]!)} is not finished. Answer, and the board deletes the checkout's copies from it and finishes the removal; or set the head repo again in the workspace settings.`
+      : `workspace ${name}'s change of head repo to ${repositoryLabel(declared)} is not finished. Answer, and the board deletes the checkout's copies from the previous head repo and finishes the change; or put the head repo back or clear it in the workspace settings.`;
+    // Workspace Quarantine adds its own punctuation after the reason.
+    quarantineWorkspace(db, name, reason.slice(0, -1), now);
+    throw new UnfinishedHeadRepoChangeError(reason);
+  }
   if (agreed >= 0) {
-    // ADR 0391 決定3: fold only once the checkout's head repo remote agrees too
-    if (values.length > 1) {
-      if (agreed > 0 && !sameRepository(values[0] ?? undefined, declared)) {
-        assertHeadRemoteMatchesDeclaration(workspace);
-        // ADR 0376 決定3 / ADR 0395 決定2: copies belong to the old fork until this change is committed.
-        const prefix = remoteTrackingRef("", HEAD_REPO_REMOTE);
-        const refs = [...new Set([
-          ...git(workspace.path, "for-each-ref", "--format=%(refname)", prefix).split("\n").filter(Boolean),
-          ...[...refValues(storedRefs(db, name)).keys()].filter((ref) => ref.startsWith(prefix)),
-        ])];
-        if (refs.length > 0) writeBoardRefs(db, workspace, refs.map((ref) => [ref, ""]), () => {
-          for (const ref of refs) git(workspace.path, "update-ref", "--no-deref", "-d", ref);
-        });
-      } else if (!remoteAgrees(assertHeadRemoteMatchesDeclaration, workspace)) return;
+    // ADR 0391 決定3 / ADR 0415 決定1: a fold that only writes the row needs no human, once the checkout's head repo remote agrees too
+    if (values.length > 1 && remoteAgrees(assertHeadRemoteMatchesDeclaration, workspace)) {
       const value = values[agreed]!;
       writeRememberedHeadRepo(db, name, value === null ? null : JSON.stringify(value));
     }

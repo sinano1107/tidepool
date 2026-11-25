@@ -13,7 +13,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
-import { announceHeadRepo, announcePublishedRepo, assertRememberedRepo, boardRefWriter, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
+import { announceHeadRepo, announcePublishedRepo, assertRememberedRepo, boardRefWriter, finishHeadRepoChange, pickupGate, recordTaskCheckoutTip, refreshProtectedBranch, resolveExecutionWorkspace, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
@@ -163,8 +163,9 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     onTestFinished(() => { db.close(); });
     git(workspace.path, "remote", "add", "head-repo", HEAD);
     const declared = { ...workspace, head_repo: "acme/fork" };
-    // 扉の書き方: 予告してから checkout と registry を書き、検査が畳む(ADR 0391 決定1・3)
+    // 扉の書き方: 予告してから checkout と registry を書き、扉が畳む(ADR 0391 決定1・3、ADR 0415 決定1)
     announceHeadRepo(db, workspace, "acme/fork");
+    finishHeadRepoChange(db, declared);
     expect(workspaceNetworkDestination(withRememberedRepoCheck(db, declared, () => NOW))?.url).toBe(workspace.repo);
     const calls = await shimGit();
     const reason = `workspace ${workspace.name} was given head repo acme/fork, ${tail}`;
@@ -183,6 +184,7 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     const declared = { ...workspace, head_repo: "acme/fork" };
     git(workspace.path, "remote", "add", "head-repo", "git@GitHub.com:Acme/FORK");
     announceHeadRepo(db, workspace, "acme/fork");
+    finishHeadRepoChange(db, declared);
     const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
     const base = await tempDir("tidepool-destination-checkouts-");
     await expect(pickupGate(db, declared, task, base, () => NOW)).resolves.toBeDefined();
@@ -209,6 +211,7 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     onTestFinished(() => { db.close(); });
     git(workspace.path, "remote", "add", "head-repo", HEAD);
     announceHeadRepo(db, workspace, "acme/fork");
+    finishHeadRepoChange(db, { ...workspace, head_repo: "acme/fork" });
     const declared = withRememberedRepoCheck(db, { ...workspace, head_repo: "acme/fork" }, () => NOW);
     const taskCheckout = { ...declared, path: await tempDir("tidepool-head-task-checkout-"), namedPlace: declared };
     const destinations = (place: typeof declared) => [workspaceNetworkDestination(place), workspaceHeadRepoDestination(place)].map((destination) => destination?.url);
@@ -227,6 +230,7 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
     git(workspace.path, "remote", "add", "head-repo", HEAD);
     announceHeadRepo(db, workspace, "acme/fork");
     const declared = { ...workspace, head_repo: "acme/fork" };
+    finishHeadRepoChange(db, declared);
     const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
 
     await expect(pickupGate(db, declared, task, await tempDir("tidepool-destination-checkouts-"), () => NOW)).resolves.toBeDefined();
@@ -240,10 +244,12 @@ describe("覚えた出元 repo(ADR 0395 決定2)", () => {
   it("scheduler は出元 repo の remote の食い違いを修理の文で workspace の Quarantine にする", async ({ onTestFinished }) => {
     const workspace = { ...(await makeWorkspace("scheduler-head-repointed")), repo: "https://github.com/acme/widget", head_repo: "acme/fork" };
     git(workspace.path, "remote", "add", "origin", workspace.repo);
-    git(workspace.path, "remote", "add", "head-repo", "https://github.com/acme/elsewhere.git");
+    git(workspace.path, "remote", "add", "head-repo", "https://github.com/acme/fork.git");
     const db = openDb(":memory:");
     onTestFinished(() => { db.close(); });
     announceHeadRepo(db, workspace, "acme/fork");
+    finishHeadRepoChange(db, workspace);
+    git(workspace.path, "remote", "set-url", "head-repo", "https://github.com/acme/elsewhere.git");
     const task = registerTask(db, { type: "work", title: "next pickup", purpose: "p", completion_criteria: "c", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
     const clock = new FakeClock();
     const worker = new ScriptedWorker(clock);
@@ -528,6 +534,7 @@ it("teardown uses the declared repository and landing uses its fork after origin
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
   announceHeadRepo(db, declared.workspace, workspace.head_repo);
+  finishHeadRepoChange(db, workspace);
   const clock = new FakeClock();
   const slot = new Slot();
   const registered = registerTask(db, { type: "work", title: "work to land", purpose: "p", completion_criteria: "c", workspace: workspace.name }, clock.now(), ...HUMAN_WEBUI);

@@ -97,6 +97,7 @@ import {
   assertRememberedHeadRepo,
   boardRefWriter,
   commitRoomCopy,
+  finishHeadRepoChange,
   holdsBaseline,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
@@ -1246,6 +1247,7 @@ export async function makeLandingWorkspace(name: string) {
 export function rememberFixtureHeadRepos(db: Db): void {
   for (const workspace of landingWorkspaces) {
     announceHeadRepo(db, workspace, workspace.head_repo);
+    finishHeadRepoChange(db, workspace);
     assertRememberedHeadRepo(db, workspace, new Date(0));
   }
 }

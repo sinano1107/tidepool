@@ -30,6 +30,7 @@ import {
   announceHeadRepo,
   assertRememberedHeadRepo,
   buildWorkspaceResolver,
+  finishHeadRepoChange,
   protectedBranch,
   recordDeclaredRepo,
   recordHeadRepo,
@@ -805,5 +806,6 @@ export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceC
 export function giveHeadRepo(db: Db, reef: RegisteredReef, headRepo: string): void {
   announceHeadRepo(db, reef.resolve("reef"), headRepo);
   setWorkspaceEntry(reef.registryDir, "reef", "head_repo", headRepo);
+  finishHeadRepoChange(db, reef.resolve("reef"));
   assertRememberedHeadRepo(db, reef.resolve("reef"), new Date());
 }

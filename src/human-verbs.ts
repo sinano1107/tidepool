@@ -144,6 +144,7 @@ import {
   containmentWorkbenchNotTakenIn,
   DeclaredRepoMismatchError,
   fetchLostTargets,
+  finishHeadRepoChange,
   firePickupPredicates,
   type HumanWorkPreparation,
   INTAKE_OPTIONS,
@@ -757,6 +758,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         if (!restore || !(err instanceof RefsMovedError)) throw err;
       }
     });
+    // ADR 0415 決定3: 受理が終わっていない出元 repo の変更を畳む —— 検査を通さない比較の後、検査つきの項より前。落ちれば回答ごと拒む
+    const finished = await refuseOnError(() => finishHeadRepoChange(deps.db, target));
     const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     // ADR 0386 決定4: 項は pickup の門・本文と同じ並び
     const predicates = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
@@ -873,7 +876,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0369 決定7: checkout の削除は merge back の後 —— 消せずに拒んでも、次の回答が消し直す
     await refuseNamingKept(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
     // spec #3273 text B11: 外した値ごとに1行
-    const notices = [...kept.map(keptValueNotice), ...keptWorkbenches, ...keptCheckouts];
+    const notices = [
+      ...(finished ? [`The board finished the head repo change of workspace ${value} and deleted its checkout's copies from the previous head repo.`] : []),
+      ...kept.map(keptValueNotice),
+      ...keptWorkbenches,
+      ...keptCheckouts,
+    ];
     const notice = notices.length > 0 ? notices.join("\n") : undefined;
     if (!unopened && !cancelRcas) return notice === undefined ? undefined : { notice };
     return {

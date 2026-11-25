@@ -1,13 +1,23 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth, workspaceHeadRepoDestination } from "../src/github-auth.js";
+import { quarantineChecks } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { compareRefsBeforeLanding, resolveExecutionWorkspace, withRememberedRepoCheck, workspaceProtectionReader } from "../src/workspace.js";
+import {
+  announceHeadRepo,
+  assertRememberedHeadRepo,
+  compareRefsBeforeLanding,
+  resolveExecutionWorkspace,
+  UnfinishedHeadRepoChangeError,
+  withRememberedRepoCheck,
+  workspaceProtectionReader,
+} from "../src/workspace.js";
 import {
   HeadRepoTaskBranchesNotSentError,
   listWorkspaceViews,
@@ -18,7 +28,7 @@ import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, quarantineQuestion, shimGit } from "./harness.js";
 import { answerPromotion, convergeOn, finish, landingWork, promotionFailures } from "./landing-fixture.js";
-import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, rejectRegistryPushes, setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -607,6 +617,60 @@ describe("updateWorkspace: タスクブランチを出元 repo へ送る", { tim
     expect(entry().head_repo).toBeUndefined();
     expect(copies()).toBe(`refs/remotes/origin/main ${sha}`);
     compareRefsBeforeLanding(deps.db, workspace, { resolveRegistered: undefined, now: now() });
+  });
+
+  // ADR 0415 決定2・3: 扉が registry の commit まで書いて死んだ変更は、行き先の読みが止め、扉で外せば畳まれる
+  it.each([
+    ["外す", undefined],
+    ["前の値へ戻す", "acme/fork"],
+  ] as const)("終わっていない変更で止まっている間に扉で出元 repo を%sと、変更が畳まれ、行き先の検査が通る", async (_, value) => {
+    const { deps, workspace, set, copies } = await headRepoBoard();
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    announceHeadRepo(deps.db, { ...workspace, head_repo: "acme/fork" }, "another/fork");
+    git(workspace.path, "remote", "set-url", "head-repo", "https://github.com/another/fork.git");
+    setWorkspaceEntry(deps.registry.dir, "lagoon", "head_repo", "another/fork");
+    expect(() => assertRememberedHeadRepo(deps.db, { ...workspace, head_repo: "another/fork" }, new Date())).toThrow(UnfinishedHeadRepoChangeError);
+
+    const door = updateWorkspace({ name: "lagoon", head_repo: value ?? "", confirm: true }, deps);
+
+    // 戻した fork では分岐した task/aaa がまた送れない —— 宣言は保存される
+    if (value) await expect(door).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    else await door;
+    if (!value) expect(copies()).not.toContain("refs/remotes/head-repo/");
+    expect(() => assertRememberedHeadRepo(deps.db, { ...workspace, head_repo: value }, new Date())).not.toThrow();
+  });
+
+  // ADR 0415 決定4: 扉の最後の畳みが落ちても扉は Quarantine を立てない —— 止めるのは次の行き先の読みで、回答が変更を終える
+  it("扉の最後の畳みが落ちると、扉は Quarantine を立てずにエラーを返し、次の行き先の読みが止め、回答が変更を終える", async () => {
+    const { deps, workspace, entry, set, copies } = await headRepoBoard();
+    await expect(set()).rejects.toBeInstanceOf(HeadRepoTaskBranchesNotSentError);
+    expect(copies()).toContain("refs/remotes/head-repo/");
+    deps.github.scriptRepositoryParent("another/fork", "acme/lagoon");
+    // 回答の後半の項が origin と出元 repo を網で読む
+    const origin = await tempDir("tidepool-lagoon-origin-");
+    git(origin, "clone", "--quiet", "--bare", workspace.path, ".");
+    const replacement = await tempDir("tidepool-replacement-fork-");
+    git(replacement, "init", "--quiet", "--bare", "-b", "main");
+    await shimGit({ route: [workspace.repo, origin] });
+    await shimGit({ route: ["https://github.com/another/fork.git", replacement] });
+    const packed = join(workspace.path, ".git", "packed-refs");
+    await writeFile(packed, "not a packed ref\n", { flag: "a" });
+
+    await expect(updateWorkspace({ name: "lagoon", head_repo: "another/fork", confirm: true }, deps)).rejects.toThrow("not a packed ref");
+
+    expect(entry().head_repo).toBe("another/fork");
+    expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeUndefined();
+
+    await writeFile(packed, readFileSync(packed, "utf8").replace("not a packed ref\n", ""));
+    const declared = { ...workspace, head_repo: "another/fork" };
+    expect(() => workspaceHeadRepoDestination(withRememberedRepoCheck(deps.db, declared, () => new Date()))).toThrow(UnfinishedHeadRepoChangeError);
+    expect(quarantineQuestion(deps.db, "workspace", "lagoon")).toBeDefined();
+
+    const accept = quarantineChecks({ quarantineResolvers: {}, db: deps.db, workspace: declared }).workspace!;
+    await expect(accept("lagoon", "repaired by hand", "webui")).resolves.toMatchObject({ notice: expect.stringContaining("finished the head repo change of workspace lagoon") });
+
+    expect(copies()).not.toContain("refs/remotes/head-repo/");
+    expect(() => assertRememberedHeadRepo(deps.db, declared, new Date())).not.toThrow();
   });
 
   // ADR 0376 決定6 / ADR 0395 Status 追記(#3605): 扉は写しのあるタスクブランチを送らないので、収束が text D2 で止めた巻き戻しを上書きしない
