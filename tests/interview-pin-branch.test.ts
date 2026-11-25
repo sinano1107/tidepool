@@ -1708,7 +1708,7 @@ it("task の checkout と読み専用の checkout を作った後に固定が拒
   const db = openDb(":memory:");
   const { workspace, base, audit, place } = await auditPickedUp(db);
   releaseWorkspace(db, place, audit, NOW);
-  // 失われた event が効いているのに在る `task/<id>` —— 固定(`createTaskBranch`)が拒む
+  // 失われた event が効いているのに在る `task/<id>` —— 固定の瞬間(`fixTaskAndUnstartedAncestors`)が拒む
   appendEvent(db, { taskId: audit.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: git(workspace.path, "rev-parse", `task/${audit.id}`) }, at: NOW });
   const addresses = () => [checkoutAddresses(base, audit.id), checkoutAddresses(base, `${audit.id}.reads`)];
   const before = addresses();

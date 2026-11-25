@@ -2115,7 +2115,7 @@ export async function startHumanWork(
   let refusal: DomainError | undefined;
   let workbench: { path: string; opened: boolean } | undefined;
   await preparedOrRefused(db, workspace, verb, board, async () => {
-    // ADR 0390 決定2: createTaskBranch まで await は無い。系譜を読む git の失敗は Quarantine に畳み、拒否はこの外で投げる(中で投げても畳まれる)
+    // ADR 0390 決定2: 固定の瞬間(`fixTaskAndUnstartedAncestors`)まで await は無い。系譜を読む git の失敗は Quarantine に畳み、拒否はこの外で投げる(中で投げても畳まれる)
     refusal = returnOwnerRefusal(db, workspace, lineageTaskBranch(db, workspace, task, board.now), verb);
     if (refusal) return;
     // ADR 0414 決定1・2: 作業台(`board/*` の受け取りまで)を先に作り、通ってから固定を書く —— 名前の場所の側で落ちる扉は固定を何も書かない
@@ -2720,15 +2720,12 @@ function fixTaskAndUnstartedAncestors(
   // ADR 0392 決定2: 失われた event が効いているのに在る ref は、クラッシュ後の回復と読まず採らずに止まる(give-up の後は届かない状態)
   for (const member of [...ancestors, task]) {
     const ref = `refs/heads/${taskBranch(member.id)}`;
-    if (taskBranchExists(workspace, member.id) && !hasTaskBranchInForce(db, member.id) && taskBranchLostInForce(db, member.id)) {
+    if (taskBranchLostInForce(db, member.id) && taskBranchExists(workspace, member.id)) {
       throw new LostTaskBranchPresentError(member.id, ref, git(workspace.path, "rev-parse", ref));
     }
   }
-  // 名前と列の出所は書く時に読む —— 上で埋めた祖先の列が下の出所になる(ADR 0372 決定2)
-  for (const ancestor of ancestors) {
-    const name = fixedAncestorName(db, workspace, ancestor, defaultWorkspaceName);
-    if (name) createTaskBranch(db, workspace, { ...ancestor, workspace: name }, now, { filledFrom: filledFrom(db, ancestor) });
-  }
+  // 列の出所だけは書く時に読む —— 上で埋めた祖先の列が下の祖先の出所になる(ADR 0372 決定1・3)
+  for (const ancestor of ancestors) createTaskBranch(db, workspace, { ...ancestor, workspace: workspace.name }, now, { filledFrom: filledFrom(db, ancestor) });
   createTaskBranch(db, workspace, task, now, { filledFrom: fillOwnColumn ? filledFrom(db, task) : undefined, forkSource });
 }
 
