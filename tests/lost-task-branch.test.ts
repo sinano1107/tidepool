@@ -34,9 +34,9 @@ vi.mock("../src/git.js", async (importOriginal) => {
       return actual.git(cwd, ...args);
     },
     // ADR 0409 決定2: 手元の object の読みは stderr を取る runner を通る
-    gitReporting: (cwd: string, args: string[], input: string, env: NodeJS.ProcessEnv) => {
-      gitCalls.push(args);
-      return actual.gitReporting(cwd, args, input, env);
+    gitReporting: (...call: Parameters<typeof actual.gitReporting>) => {
+      gitCalls.push(call[1]);
+      return actual.gitReporting(...call);
     },
   };
 });
