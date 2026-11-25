@@ -19,8 +19,9 @@
 2. **差し替え先が無い拒否は、CLI が合成した assistant 行で読む。** 既存の読み手(root の assistant 行の `stop_reason:
    "refusal"` と `stop_details.category`)を残す。固定版の binary の読みでは、この終わり方でだけ CLI が `message.model:
    "<synthetic>"` の行を `stop_reason: "refusal"` つきで流す。実物は未観測である。
-3. **報告なき exit の failure question 文に、拒否の1行を足す。** 差し替えの1行(ADR 0215 決定5)と同じ並びで、件数と分類を
-   載せる。同じ task を retry すれば同じ内容でまた止まりうるので、retry か abandon かを決める人間の材料になる。Precedent は
+3. **failure question 文に、拒否の1行を足す。** 差し替えの1行(ADR 0215 決定5)と同じ並びで、件数と分類を載せる。出るのは
+   差し替えの1行が出る文面すべて —— 報告なき exit の文と、Watchdog が時間上限で止めた task の文である(ADR 0215 決定5 は
+   前者だけを名指すが、実装は exit の逐語を載せる文面すべてに出している)。同じ task を retry すれば同じ内容でまた止まりうるので、retry か abandon かを決める人間の材料になる。Precedent は
    `informational` を「知っていて捨てる行」に足す(差し替えの行と同じ扱い)。
 4. **CLI の行の読み手は、同じ面(`-p` の stream-json)の実物の行から書く。** 別の面(対話モードの保存 transcript など)で見た形
    からは書かない。実物が無い読み手は、固定版 binary の読みであることを読み手と fixture に明記する —— binary の読みは実測では
