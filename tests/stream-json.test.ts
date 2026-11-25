@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseStreamLine, readInitAutoMemoryPath, readInitMcpServers } from "../src/stream-json.js";
+import { collectRefusal, parseStreamLine, readInitAutoMemoryPath, readInitMcpServers } from "../src/stream-json.js";
+import { syntheticRefusalLine } from "./fakes.js";
 
 /** ADR 0108 決定2: 封じ込めの3つ目の問いが MCP 軸で見るのは init 行の
  *  `mcp_servers[].name` であって `tools` の `mcp__` 接頭辞ではない — サーバは
@@ -75,5 +76,39 @@ describe("readInitAutoMemoryPath", () => {
     expect(readInitAutoMemoryPath(init({ memory_paths: { auto: { dir: "/x" } } }))).toBe('{"dir":"/x"}');
     expect(readInitAutoMemoryPath(init({ memory_paths: "/x" }))).toBe('"/x"');
     expect(readInitAutoMemoryPath(init({ memory_paths: null }))).toBe("null");
+  });
+});
+
+/** root の拒否の数え方(ADR 0215 決定3 / ADR 0416 決定1・2)。worker session と Board call はこれを呼ぶだけ。 */
+describe("collectRefusal", () => {
+  // 1段目の拒否の通知の実物(2.1.286、`-p` stream-json、2026-11-25、VM、#1615)。逐語
+  const notice = { type: "system", subtype: "informational", content: "Sonnet 5.5's safeguards stopped the response above · continuing once with that noted", level: "notice", uuid: "58544d22-17dc-4145-a0ab-413d7cc0216e", session_id: "297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7" };
+  const collect = (...lines: object[]) => {
+    const refusals = new Map<unknown, string | null>();
+    for (const line of lines) collectRefusal(refusals, parseStreamLine(JSON.stringify(line)));
+    return [...refusals.values()];
+  };
+
+  it("1段目の拒否の通知は分類 null の1件(ADR 0416 決定1)", () => {
+    expect(collect(notice)).toEqual([null]);
+  });
+
+  it("level が notice でない、または文面の末尾が違う informational の行は数えない(ADR 0416 決定1)", () => {
+    expect(collect({ ...notice, level: "info" }, { ...notice, content: "Sonnet 5.5's safeguards stopped the response above" })).toEqual([]);
+  });
+
+  it("合成の拒否行は message.id ごとに1つで、分類の無い行は null、subagent の行は数えない(ADR 0215 決定3 / ADR 0416 決定2)", () => {
+    expect(
+      collect(
+        syntheticRefusalLine("a", "cyber"),
+        syntheticRefusalLine("a", "cyber"),
+        { ...syntheticRefusalLine("sub", "bio"), parent_tool_use_id: "toolu_task" },
+        syntheticRefusalLine("b"),
+      ),
+    ).toEqual(["cyber", null]);
+  });
+
+  it("通知と合成の拒否行は出た順に並び、通知は1行ごとに1件で重複を除かない(ADR 0416 決定1・2)", () => {
+    expect(collect(notice, syntheticRefusalLine("a", "cyber"), notice)).toEqual([null, "cyber", null]);
   });
 });

@@ -28,10 +28,11 @@ export function workerBaseEnv(temp?: string): NodeJS.ProcessEnv {
 }
 
 /** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。
- *  `model_swaps` は `worker_exited.model_swaps` の写し(ADR 0215 決定5)で、差し替えが無ければ欠ける —— event 側と違い
- *  常には置かない(読み手は文面の節だけ)。 */
+ *  `model_swaps` / `refusals` は `worker_exited` の同名の欄の写し(ADR 0215 決定5 / ADR 0416 決定3)で、無ければ欠ける ——
+ *  event 側と違い常には置かない(読み手は文面の節だけ)。 */
 export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, "exit_code" | "signal" | "stderr_tail" | "reported_error" | "last_message" | "usage_recheck"> & {
   model_swaps?: ModelSwap[];
+  refusals?: (string | null)[];
 };
 
 /** 非同期の出所が1度に解決する exit の事実(ADR 0348 決定4)。 */

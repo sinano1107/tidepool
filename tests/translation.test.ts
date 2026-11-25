@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
-import { BOARD_CALL_USAGE, boardCallStream, CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
+import { BOARD_CALL_USAGE, boardCallStream, CLI_ENVELOPE_USAGE, FakeTranslationClient, syntheticRefusalLine } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -144,7 +144,7 @@ it.each([0, 7])("翻訳の答えと id 不一致の失敗も stream の観測を
   const db = await freshDb();
   const stdout = [
     JSON.stringify({ type: "system", subtype: "model_refusal_fallback", original_model: "haiku", fallback_model: "raw target", api_refusal_category: "raw category" }),
-    JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { id: "refused", stop_reason: "refusal", stop_details: { category: "raw category" } } }),
+    JSON.stringify(syntheticRefusalLine("refused", "raw category")),
     boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ items: [{ id, text: "訳文" }] }) }),
   ].join("\n");
   const client = new ClaudeTranslationClient({ exec: async () => stdout });

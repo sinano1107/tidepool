@@ -4,7 +4,7 @@ import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
-import { answerExec, boardCallStream, CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
+import { answerExec, boardCallStream, CLI_ENVELOPE_USAGE, syntheticRefusalLine, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
 
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
 const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
@@ -23,9 +23,10 @@ it.each([true, false])("answer calls disable prompt caching with reasoning %s", 
   if (!reasoning) expect(observed?.MAX_THINKING_TOKENS).toBe("0");
 });
 
-// Synthetic pinned-CLI stream shapes; natural Board call refusal is unobserved (#1615).
+// 差し替えの行の作り物。Board call での実物は未観測(#3854)
 const swap = { type: "system", subtype: "model_refusal_fallback", original_model: "claude-sonnet-5-5", fallback_model: "claude-opus-4-8", api_refusal_category: "category one" };
-const refusal = (id: string, category: string | null) => ({ type: "assistant", parent_tool_use_id: null, message: { id, stop_reason: "refusal", stop_details: { category } } });
+// 1段目の拒否の通知の実物(2.1.286、`-p` stream-json、2026-11-25、VM、#1615)。逐語
+const notice = { type: "system", subtype: "informational", content: "Sonnet 5.5's safeguards stopped the response above · continuing once with that noted", level: "notice", uuid: "58544d22-17dc-4145-a0ab-413d7cc0216e", session_id: "297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7" };
 const stream = (...lines: object[]) => lines.map((line) => JSON.stringify(line)).join("\n");
 
 it("stream の差し替えと root 拒否を逐語・出た順で返し、同じ message.id の拒否は1つ、最後の result の usage を採る", async () => {
@@ -33,11 +34,11 @@ it("stream の差し替えと root 拒否を逐語・出た順で返し、同じ
     { type: "system", subtype: "init" },
     { type: "result", result: '{"ok":false}', ...CLI_ENVELOPE_USAGE, total_cost_usd: 99 },
     swap,
-    refusal("first", "verbatim category"),
-    refusal("first", "duplicate block"),
-    { ...refusal("subagent", "ignored"), parent_tool_use_id: "tool" },
+    syntheticRefusalLine("first", "verbatim category"),
+    syntheticRefusalLine("first", "duplicate block"),
+    { ...syntheticRefusalLine("subagent", "ignored"), parent_tool_use_id: "tool" },
     { ...swap, original_model: "claude-opus-4-8", fallback_model: "verbatim model", scope: "local", api_refusal_category: null },
-    refusal("second", null),
+    syntheticRefusalLine("second", null),
     { type: "result", result: '{"ok":true}', ...CLI_ENVELOPE_USAGE },
     { type: "system", subtype: "unrelated" },
   );
@@ -51,9 +52,14 @@ it("stream の差し替えと root 拒否を逐語・出た順で返し、同じ
   });
 });
 
+it("1段目の拒否の通知は答えの refusals に分類 null で載る(ADR 0416 決定1・2)", async () => {
+  const stdout = stream(notice, { type: "result", result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
+  await expect(runClaudeBoardCallJson(call(async () => stdout), schema)).resolves.toMatchObject({ refusals: [null] });
+});
+
 it("usage を運ぶ失敗は schema 不一致・is_error・非ゼロ終了とも stream の観測を保つ", async () => {
   for (const result of ['{"ok":1}', "not json", "CLI failed"]) {
-    const stdout = stream({ type: "result", ...CLI_ENVELOPE_USAGE, total_cost_usd: 99, result: '{"ok":true}' }, swap, refusal("refused", "raw category"), { type: "result", ...CLI_ENVELOPE_USAGE, result, is_error: result === "CLI failed" });
+    const stdout = stream({ type: "result", ...CLI_ENVELOPE_USAGE, total_cost_usd: 99, result: '{"ok":true}' }, swap, syntheticRefusalLine("refused", "raw category"), { type: "result", ...CLI_ENVELOPE_USAGE, result, is_error: result === "CLI failed" });
     const exited = Object.assign(new Error("exited"), { stdout: Buffer.from(stdout) });
     for (const exec of [async () => stdout, async () => { throw exited; }]) {
       const err = await runClaudeBoardCallJson(call(exec), schema).catch((error: unknown) => error);

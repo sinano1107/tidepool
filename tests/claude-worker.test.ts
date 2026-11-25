@@ -64,6 +64,7 @@ import {
   recordPrompt,
   ScriptedWorker,
   specRecordingCall,
+  syntheticRefusalLine,
 } from "./fakes.js";
 import { failEventInsert, failTeardownMark, failWorkerExited, fireWrites, GIT_FIXTURE_TEST_TIMEOUT, git, HOST_ENV_DECOYS, HUMAN_WEBUI, makeWorkspace, opensCheckoutAtWorkspace, openTestInterviewCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, prepareAtPickup, quarantineQuestion, recordCheckoutAtWorkspace, sessionId, stubHostEnvDecoys, WORKER_SPAWNED } from "./harness.js";
 import { breakRegistry, FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -4775,41 +4776,43 @@ describe("advisor capability (issue #33)", () => {
       expect(exits[0]?.model_swaps).toEqual(exitFieldsOf(db, "task-swaps")?.model_swaps);
     });
 
-    // #1523 の grilling の session で観測した1段目の形: 1 message が block ごとに3行に割れ、3本とも refusal
-    const refusalLine = (id: string, block: unknown, over: Record<string, unknown> = {}) =>
-      `${JSON.stringify({
-        type: "assistant",
-        message: {
-          model: "claude-fable-5-1",
-          id,
-          stop_reason: "refusal",
-          stop_details: { type: "refusal", category: "cyber", explanation: "This request triggered restrictions on violative cyber content." },
-          content: [block],
-          ...over,
-        },
-        parent_tool_use_id: null,
-      })}\n`;
+    // 差し替え先が無い拒否の合成行(binary の読みで未観測、#1614 —— syntheticRefusalLine)
+    const refusalLine = (id: string, category?: string | null) => `${JSON.stringify(syntheticRefusalLine(id, category))}\n`;
 
-    it("root の拒否は message.id ごとに1つ、分類を出た順に worker_exited.refusals へ載せ、subagent の拒否は数えない(決定3)", async () => {
+    it("root の拒否は message.id ごとに1つ、分類を出た順に worker_exited.refusals へ載せ、subagent の拒否は数えない(ADR 0215 決定3)", async () => {
       const { start, processes, emitExit, db } = await makeWorker();
       start("task-refusals");
       await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
-      processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "thinking", thinking: "" }));
-      processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "text", text: "Let me check" }));
-      processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "tool_use", id: "toolu_01", name: "Bash", input: {} }));
-      processes[0]!.stdout.write(
-        `${JSON.stringify({
-          type: "assistant",
-          message: { model: "claude-fable-5-1", id: "msg_sub", stop_reason: "refusal", stop_details: { category: "bio" }, content: [] },
-          parent_tool_use_id: "toolu_task",
-        })}\n`,
-      );
-      processes[0]!.stdout.write(refusalLine("msg_02", { type: "text", text: "again" }, { stop_details: { type: "refusal" } }));
+      processes[0]!.stdout.write(refusalLine("8a2d6b7e-1f40-4c39-b5e2-9d0f3a6c4b21", "cyber"));
+      processes[0]!.stdout.write(refusalLine("8a2d6b7e-1f40-4c39-b5e2-9d0f3a6c4b21", "cyber"));
+      processes[0]!.stdout.write(`${JSON.stringify({ ...syntheticRefusalLine("msg_sub", "bio"), parent_tool_use_id: "toolu_task" })}\n`);
+      processes[0]!.stdout.write(refusalLine("c41e9f02-7b3d-4e8a-9f61-2d5b0a8c7e13"));
       processes[0]!.stdout.write(swapLine());
       processes[0]!.stdout.write(resultLine());
       emitExit(0, null);
       expect(exitFieldsOf(db, "task-refusals")?.refusals).toEqual(["cyber", null]);
+    });
+
+    // 1段目の拒否の実物(2.1.286、`-p` stream-json、2026-11-25、VM、#1615)。逐語で、1行目の thinking の signature だけ省いた。
+    // 止められた応答(stop_reason: null)、通知、合成の user 行の順
+    const FIRST_STAGE_REFUSAL = [
+      `{"type":"assistant","message":{"model":"claude-sonnet-5-5","id":"msg_011ChNzQv43VT5qkCRf8Fxkn","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"<omitted>"}],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":2,"cache_creation_input_tokens":1296,"cache_read_input_tokens":30309,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1296},"output_tokens":3,"service_tier":"standard","inference_geo":"global","speed":"standard"},"input_transformations":[],"diagnostics":null,"context_management":null},"parent_tool_use_id":null,"session_id":"297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7","uuid":"59c43a3d-8a12-48fe-85e3-acfa03b40d80","timestamp":"2026-11-25T04:09:45.759Z","request_id":"req_011ChNzQuucJ5RrJ33Fod6Gh"}`,
+      `{"type":"system","subtype":"informational","content":"Sonnet 5.5's safeguards stopped the response above · continuing once with that noted","level":"notice","uuid":"58544d22-17dc-4145-a0ab-413d7cc0216e","session_id":"297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7"}`,
+      `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier — this is not a tool or API error. The rest of it was withheld, and tool calls in it that had not finished did not run. Do not produce that content again, even reworded."}]},"parent_tool_use_id":null,"session_id":"297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7","uuid":"d21a293d-ec0e-42a7-92da-92372fedd449","timestamp":"2026-11-25T04:09:45.765Z","isSynthetic":true}`,
+    ];
+
+    it("1段目の拒否の通知の行は分類 null の拒否1件として worker_exited.refusals に載り、報告なき exit の文面へ写しで渡る(ADR 0416 決定1・3)", async () => {
+      const exits: WorkerExit[] = [];
+      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit, facts) => { exits.push(exit); fireWrites(facts); } });
+      start("task-first-stage");
+      await vi.waitFor(() => expect(processes).toHaveLength(1));
+      processes[0]!.stdout.write(initLine("claude-sonnet-5-5"));
+      for (const line of FIRST_STAGE_REFUSAL) processes[0]!.stdout.write(`${line}\n`);
+      processes[0]!.stdout.write(resultLine());
+      emitExit(0, null);
+      expect(exitFieldsOf(db, "task-first-stage")?.refusals).toEqual([null]);
+      expect(exits[0]?.refusals).toEqual([null]);
     });
 
     it("差し替えも拒否も無い session でも model_swaps と refusals は空の列で置かれる", async () => {
@@ -4829,7 +4832,7 @@ describe("advisor capability (issue #33)", () => {
       start("task-swap-killed");
       await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
-      processes[0]!.stdout.write(refusalLine("msg_01", { type: "text", text: "no" }));
+      processes[0]!.stdout.write(refusalLine("8a2d6b7e-1f40-4c39-b5e2-9d0f3a6c4b21", "cyber"));
       processes[0]!.stdout.write(swapLine());
       emitExit(null, "SIGKILL");
       expect(exitFieldsOf(db, "task-swap-killed").usage).toBeNull();

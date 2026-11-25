@@ -13,7 +13,7 @@ import { Slot } from "../src/slot.js";
 import { parseStreamLine } from "../src/stream-json.js";
 import { listBoard, pickupTask, registerTask } from "../src/tasks.js";
 import { runTeardownSteps, sessionCloseSteps } from "../src/teardown.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, syntheticRefusalLine } from "./fakes.js";
 import { HUMAN_WEBUI, QUIET_EXIT, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -205,7 +205,7 @@ const CLAUDE_STREAM = [
   JSON.stringify({ type: "system", subtype: "init", model: "claude-sonnet-5" }),
   JSON.stringify({ type: "system", subtype: "model_refusal_fallback", original_model: "claude-sonnet-5", fallback_model: "claude-haiku-5", scope: "local", api_refusal_category: "cyber" }),
   JSON.stringify({ type: "assistant", message: { content: [{ type: "server_tool_use", id: "s1", name: "advisor", input: {} }, { type: "advisor_tool_result", tool_use_id: "s1", content: { type: "advisor_redacted_result" } }] } }),
-  JSON.stringify({ type: "assistant", message: { id: "m1", stop_reason: "refusal", stop_details: { category: "cyber" }, content: [] } }),
+  JSON.stringify(syntheticRefusalLine("m1", "cyber")),
   JSON.stringify({ type: "assistant", message: { model: "claude-sonnet-5", content: [{ type: "text", text: "parser done" }] } }),
   JSON.stringify({ type: "result", is_error: true, api_error_status: 500, result: "Overloaded" }),
   CLAUDE_RESULT,
