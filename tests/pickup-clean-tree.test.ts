@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { boardReadTree, CheckoutUnreadableError } from "../src/git.js";
 import { checkoutPickupPredicates, discardUncommitted } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
+import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
 import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
 import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
 
@@ -131,6 +132,39 @@ it("面接室の保護ブランチの時点で gitlink があり root が触っ�
 
   expect(git(room.path, "rev-parse", `${head}:mod`)).toBe(git(room.path, "rev-parse", `${protectedHead}:mod`));
   expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
+});
+
+// #3814: 出題の写しの stage と callback は面接室の objects を借りて読む。面接室の側の損傷を root の worktree の故障(`pose_probe` が
+// 「作業ツリーを直せ」と拒む型)や worker の git の時間切れ(root の回収)として刻まない —— 型の無い失敗は面接室の側の拒みに落ちる
+it.each([
+  ["commit", "missing"],
+  ["commit", "corrupt"],
+  ["tree", "missing"],
+  ["tree", "corrupt"],
+] as const)("面接室の保護ブランチの親の %s が %s なら、出題の写しは root の worktree の故障にせず ref も書かない(#3814)", async (object, damage) => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-damaged-parent"));
+  commitWork(place.path, "probe.txt", "the environment\n");
+  // root の tip の閉包の外へ進める —— 親の commit と tree は面接室の loose にしか無い
+  commitWork(room.path, "room-only.txt", "only in the room\n");
+  const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
+  const id = git(room.path, "rev-parse", object === "commit" ? protectedHead : `${protectedHead}^{tree}`);
+  const loose = join(room.path, ".git", "objects", id.slice(0, 2), id.slice(2));
+  rmSync(loose);
+  if (damage === "corrupt") writeFileSync(loose, "not zlib");
+
+  const failure = (() => {
+    try {
+      commitRoomCopy(db, place, root.id);
+    } catch (err) {
+      return err;
+    }
+  })();
+
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).not.toBeInstanceOf(CheckoutUnreadableError);
+  expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
+  expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
+  expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
 });
 
 // ADR 0365 決定3: 出題の写しも盤面の view —— worktree の入れ子の repo は gitlink の値を供給しない
