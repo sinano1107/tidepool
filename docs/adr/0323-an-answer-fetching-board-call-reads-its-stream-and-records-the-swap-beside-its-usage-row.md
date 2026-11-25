@@ -2,6 +2,8 @@
 
 **Status 追記: 帰結の「`use` と `created_at` で寄せる」は近い時刻で寄せる**(2026-11-23、issue #3525)。`board_calls.created_at` は応答を受けて行を書く瞬間の時刻になり、帰責の event の時刻と一致しなくなった(ADR 0404 決定7)。
 
+**Status 追記 2: 決定2・3 の拒否の読み方は [ADR 0416](0416-a-first-stage-refusal-is-read-from-the-clis-notice-text-and-a-cli-line-reader-is-written-from-a-real-line-of-the-same-surface.md) 決定1・2 に従う(issue #1615)** —— 1段目の拒否は CLI の通知の文面で読み、`refusals` の列に分類 null の1件として残す。列の形は変わらない。
+
 2026-10-28 の triage → grilling(issue #2661、#2658 の副産物)で決定。#2551 の stop 8 の帰責 Board call は、Provider が内容を拒み CLI が
 `claude-fable-5-1` を `claude-opus-4-8` に替えて答えていた(CLI 自身の session transcript で観測)。`board_calls` の行は pin の model と
 2つの model の合計の usage を持ち、差し替えの事実をどこにも言えなかった。固定版 2.1.286 の headless の loop を binary で読むと、

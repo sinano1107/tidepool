@@ -109,13 +109,27 @@ limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/b
 The Codex rows of this canary and of the interview-room canary are read in
 [Raising the pinned Codex CLI version](codex-cli-version-bump.md).
 
-**Not covered.** Two surfaces cannot be reproduced on demand, so they are unverified. Both are left
-to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 決定5):
+**Not covered.** Three surfaces cannot be reproduced on demand, so they are unverified. The first
+two are left to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 決定5):
 
 - The 429 envelope: a usage-cap interruption (ADR 0104).
 - The version-too-old refusal envelope (`api_error_code: claude_code_version_too_old`): a model
   that needs a CLI newer than the pinned version is usually not available at the time of the bump.
   If the field disappears, the session falls to an unreported exit (ADR 0145).
+- The refusal lines (ADR 0215, ADR 0416): the notice of a first refusal, the
+  `system/model_refusal_fallback` line of a model swap, and the synthetic assistant line of a
+  refusal with no model to swap to. A refusal cannot be triggered on purpose. If a shape changes,
+  the refusal or the swap is missing from the record and nothing stops.
+
+  One part can be checked without a refusal. The board recognises a first refusal by the text of
+  the CLI's notice, so confirm the new binary still contains it — the count must not be 0:
+
+  ```bash
+  limactl shell tidepool -- bash -lc 'grep -a -c "safeguards stopped the response above" ~/.local/share/claude/versions/<new version>'
+  ```
+
+  If it is 0, find the new wording of the notice in the binary and change the reader and its
+  fixture in the same PR as the pin.
 
 ## 6. Open the PR that changes the pinned version
 

@@ -4,6 +4,8 @@
 
 **Status 追記 2: 決定1〜3 は答えを取りに行く Board call にも当たる([ADR 0323](0323-an-answer-fetching-board-call-reads-its-stream-and-records-the-swap-beside-its-usage-row.md)、issue #2661)** —— 止める env は Board call の env からも消し、runner は stream を読んで差し替えと拒否を `board_calls` の行の列に逐語で残す。usage の無い呼び出しで観測した差し替えは残さない(ADR 0317 との違い)。
 
+**Status 追記 3: 決定3 の拒否の読み方と決定5 の「差し替えの1行を足すだけ」は [ADR 0416](0416-a-first-stage-refusal-is-read-from-the-clis-notice-text-and-a-cli-line-reader-is-written-from-a-real-line-of-the-same-surface.md) で改めた(issue #1615)** —— `-p` の stream-json の assistant 行は `stop_reason` を載せず、1段目の拒否は CLI の通知の文面で読んで分類 null の1件として残す。報告なき exit の failure question 文には拒否の1行も載る。帰結の「fixture は実物待ち」のうち、1段目の拒否は実物が来た。差し替えの行の全欄と、差し替え先が無い拒否の行は未観測のまま。
+
 2026-10-08 の grilling(issue #1523)で決定。#1425 の VM 実測(CLI 2.1.286)で、Fable の応答が Provider の safeguard に止められ、
 CLI が `system/model_refusal_fallback` を出して以降を `claude-opus-4-8` で続けた session を1本見た。盤面はこの行を読まず、
 `worker_spawned` の pin(Fable の行)の実績として学習器に数え、advisor の分離判定も走っていない model と比べていた。固定版の
