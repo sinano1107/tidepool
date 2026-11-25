@@ -134,6 +134,13 @@ it("面接室の保護ブランチの時点で gitlink があり root が触っ�
   expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
 });
 
+/** 面接室の loose `id` を消す(`missing`)か、zlib でない byte に置き換える(`corrupt`)。 */
+function damageLoose(repo: string, id: string, damage: "missing" | "corrupt"): void {
+  const loose = join(repo, ".git", "objects", id.slice(0, 2), id.slice(2));
+  rmSync(loose);
+  if (damage === "corrupt") writeFileSync(loose, "not zlib");
+}
+
 // #3814: 出題の写しの callback は面接室にしか無い保護ブランチの親を読む。親の commit・tree の損傷は root の worktree の故障(`pose_probe` が
 // 「作業ツリーを直せ」と拒む型)にも worker の git の時間切れ(root の回収)にもならない —— 型の無い失敗は面接室の側の拒みに落ちる。
 // worktree が再現する面接室の tree(前の出題の写し)の破損は下の固定が扱う
@@ -148,10 +155,7 @@ it.each([
   // root の tip の閉包の外へ進める —— 親の commit と tree は面接室の loose にしか無い
   commitWork(room.path, "room-only.txt", "only in the room\n");
   const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
-  const id = git(room.path, "rev-parse", object === "commit" ? protectedHead : `${protectedHead}^{tree}`);
-  const loose = join(room.path, ".git", "objects", id.slice(0, 2), id.slice(2));
-  rmSync(loose);
-  if (damage === "corrupt") writeFileSync(loose, "not zlib");
+  damageLoose(room.path, git(room.path, "rev-parse", object === "commit" ? protectedHead : `${protectedHead}^{tree}`), damage);
 
   const failure = (() => {
     try {
@@ -167,13 +171,6 @@ it.each([
   expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
   expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
 });
-
-/** 面接室の loose `id` を消す(`missing`)か、zlib でない byte に置き換える(`corrupt`)。 */
-function damageLoose(repo: string, id: string, damage: "missing" | "corrupt"): void {
-  const loose = join(repo, ".git", "objects", id.slice(0, 2), id.slice(2));
-  rmSync(loose);
-  if (damage === "corrupt") writeFileSync(loose, "not zlib");
-}
 
 // ADR 0412 決定1・2(#3814): 出題の写しの stage は面接室の objects を借りない —— worktree が前の写しの tree を再現しても stage は自前で書き、
 // 面接室の tree の破損は面接室への fetch が読んで落ちる。欠けなら stage が書いた tree が運ばれる

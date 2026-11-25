@@ -28,6 +28,6 @@
 
 ## 追記(2026-11-25 の実装、issue #3814)
 
-出題の写し(ADR 0273 決定3)も、決定1・2 の「task の checkout を読む view」に入る —— root の task の checkout を読む。出題の写しは stage の前に写しへ面接室の objects を借りさせていたので、git が alternates を推移的に辿り、worktree が面接室にだけある tree / blob を再現すると `add -A` / `write-tree` がそれを書かずに借りた。面接室のその object の破損は stage の中で落ち、root の worktree の故障として刻まれた。解放の WIP と同じく、借りは `write-tree` の後(親を読む手の前)に置く。
+出題の写し(ADR 0273 決定3)も、決定1・2 の「task の checkout を読む view」に入る —— root の task の checkout を読む。出題の写しは stage の前に写しへ面接室の objects を借りさせていたので、git が alternates を推移的に辿り、worktree が面接室にだけある tree / blob を再現すると `add -A` / `write-tree` がそれを書かずに借りた。面接室のその object の破損は stage の中で落ち、root の worktree の故障として刻まれた。解放の WIP と同じく、借りは `write-tree` の後(親を読む手の前)に置く。前の写しと同じ秒・同じ worktree・同じ親の出題し直しは前の写しと同じ commit になり、面接室から借りて書かないので運ぶものも確かめる自前の object も無い —— 面接室のその写しの object の損傷は見つけない(ADR 0398 決定3 の限界)。
 
 決定2 の不変条件(`add -A` / `write-tree` は名前の場所の object を読まない)は、呼び出しの順序だけでなく stage の入口で強制する: stage の view が借りる repo が `objects/info/alternates` を持てば、view を作らず worktree を読む前に止まる。盤面の不変条件の破れなので型を付けず、worker の故障にも host の失敗にも数えない。実測は #3814。

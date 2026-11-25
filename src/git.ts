@@ -263,7 +263,8 @@ type RecordedAhead = { ref: string; at: string };
 
 /** ADR 0367 決定1: stage in a temporary board-owned repo, where the gitlink check can reject the tree before it travels.
  *  The tree is available for `use` while that repo is open. ADR 0412 決定2・3: `head` is the worker's tip in `objectsFrom`; with
- *  `ahead`, the paths the view excludes take the ref's entries. */
+ *  `ahead`, the paths the view excludes take the ref's entries. ADR 0412 決定2: an `objectsFrom` with `objects/info/alternates` throws an
+ *  untyped Error before the worktree is read —— borrow the named place's objects inside `use`, after the stage. */
 export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string, use: (tree: string, gitDir: string) => T, exclude: string[] = [], ahead?: RecordedAhead): T {
   // ADR 0412 決定3: ref の entry は名前の場所の側の段で読む(tree だけ、blob は読まない)—— 失敗は型の無いまま投げる
   const recorded = ahead ? git(ahead.at, "--no-replace-objects", "ls-tree", "-r", "-z", ahead.ref).split("\0").filter(Boolean) : [];

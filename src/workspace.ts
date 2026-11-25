@@ -499,7 +499,7 @@ function interviewRoomOf(db: Db, task: Pick<Task, "id" | "type" | "interview_tar
 const inRealSpelling = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place, path: safeRealpath(place.path) });
 
 /** 名前の場所の objects の実体の綴り。借りる先は盤面所有の写しだけ —— 作業台の tip の検証後の写し(ADR 0411 決定2)、運んだ後の確かめの
- *  使い捨ての repo、出題の写しの検証後の写し。symlink を解くのは、alternates と確かめが張る loose の dir への
+ *  使い捨ての repo、出題の写しの検証後の写しと、ref が tip より先にある解放の WIP の検証後の写し(どちらも stage の後、ADR 0412 決定2)。symlink を解くのは、alternates と確かめが張る loose の dir への
  *  symlink を登録の綴りの link に依らせないため —— sandbox の読みの path と綴りを揃える理由(ADR 0356 決定2)は ADR 0411 決定1 で無くなった。
  *  引けなければ素の失敗で、呼び手が名前の場所の側として扱う。 */
 function namedObjects(named: WorkspaceConfig): string {
@@ -920,6 +920,13 @@ function initBoardCopy(repo: string, format: string, borrowed: string[] = []): v
 
 /** 盤面所有の bare repo `repo` に objects を `borrowed` の順に借りさせる。 */
 const borrowObjects = (repo: string, borrowed: string[]) => writeFileSync(join(repo, "objects", "info", "alternates"), `${borrowed.join("\n")}\n`);
+
+/** ADR 0412 決定2: `boardWriteTree` の callback の中(add と write-tree の後)で、親を読む commit-tree と fetch のために検証済みの写し `verified` に
+ *  名前の場所の objects を借りさせる。objects を引けなければ素の失敗(名前の場所の側)、alternates を書けなければ host の失敗。 */
+function borrowNamedAfterStage(verified: string, named: WorkspaceConfig): void {
+  const objects = namedObjects(named);
+  stagingHostStep(() => borrowObjects(verified, [objects]));
+}
 
 /** 信じない checkout の tip を検証済みの写しに読んだもの: tip、写し(`verified`)、写しの ref、checkout の自前の object の写し(`own` ——
  *  運んだ後の確かめが数え、入れ直しがそこから組む、ADR 0388 決定1・2)。 */
@@ -2629,11 +2636,10 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   const room = place.namedPlace;
   return withVerifiedUntrustedTip(untrustedTaskCheckout(place), taskBranch(taskId), ({ tip, verified }) => {
     const parent = git(room.path, "rev-parse", protectedBranchRef(room));
-    const objects = namedObjects(room);
     const exclude = boardViewExcludes(db, place, taskId, tip, verified);
     return boardWriteTree(place.path, tip, verified, (tree, repo) => {
-      // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。ADR 0412 決定2: stage の後に、写しの親を読むために面接室の objects を借りる
-      stagingHostStep(() => borrowObjects(verified, [objects]));
+      // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。写しの親は面接室にだけある
+      borrowNamedAfterStage(verified, room);
       // ADR 0365 決定2: 受験者が populate できない gitlink を足す・進める tree は、面接室へ運ぶ前に拒む。
       const gitlinks = gitlinkChanges(diffTreeEntries(repo, `${parent}^{tree}`, tree, { workerTree: true }));
       if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
@@ -4431,9 +4437,8 @@ function bringTaskCheckout(
         return boardWriteTree(checkout, tip, verified, (tree, repo) => {
           if (tree === baseTree) return base;
           if (ahead) {
-            // ADR 0412 決定2: 親の ref は名前の場所にだけある —— add と write-tree の後に写しに借りさせる(commit-tree と fetch が読む)
-            const objects = namedObjects(namedPlace);
-            stagingHostStep(() => borrowObjects(verified, [objects]));
+            // 親の ref は名前の場所にだけある
+            borrowNamedAfterStage(verified, namedPlace);
           }
           return fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit", { checkout, noun: TASK_CHECKOUT });
         }, exclude, ahead ? { ref: base, at: namedPlace.path } : undefined);
