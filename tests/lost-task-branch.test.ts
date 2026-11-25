@@ -1343,6 +1343,53 @@ it("失われた event が効いたまま `task/<H>` が在れば、`start_work`
   expect(questions[0]!.purpose).toContain(`refs/heads/task/${h.id} is at ${value}`);
 });
 
+/** G(自分の commit)の下に `titles` の鎖(それぞれ commit)を作って全部 give-up で失わせ、鎖の `task/<id>` だけ失われた event の効いたまま
+ *  在る —— G は同じ固定で作り直す祖先。鎖は上から。 */
+async function lostAncestorAboveLostButPresent<T extends string[]>(name: string, ...titles: T) {
+  const b = await board(name);
+  // G に自分の commit を持たせる —— tip が main のままだと give-up が G を失われたと数えない
+  const g = await commitThrough(b, work(b, "G"), "g.txt");
+  const chain: Task[] = [];
+  for (const title of titles) chain.push(await commitThrough(b, work(b, title, { parent_id: (chain.at(-1) ?? g).id }), `${title}.txt`));
+  await giveUp(b, g.id, ...chain.map(({ id }) => id));
+  for (const { id } of chain) lostButPresent(b, id);
+  return { b, g, chain: chain as { [K in keyof T]: Task }, gCreated: createdShas(b, g) };
+}
+
+/** 拒んだ扉が上の祖先 G について何も書いていない —— `task/<G>` が無く、`task_branch_created` が増えず、失われた event が効いたまま。 */
+function nothingWrittenFor(b: Board, g: Task, gCreated: string[]) {
+  expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${g.id}`)).toBe("");
+  expect(createdShas(b, g)).toEqual(gCreated);
+  expect(taskBranchLostInForce(b.db, g.id)).toBeDefined();
+}
+
+it("下の祖先 P で拒む `start_work` は、上で作り直すはずの祖先 G の ref・`task_branch_created` を書かず、G の失われた event は効いたまま(ADR 0414 決定9)", async () => {
+  const { b, g, chain: [p], gCreated } = await lostAncestorAboveLostButPresent("lost-present-below-start-work", "P");
+  const h = work(b, "write it myself", { parent_id: p.id, assignee: HUMAN_ACTOR_ID });
+
+  expect(await startWorkThroughHumanDoor(doorDeps(b), h.id, () => b.clock.now(), "webui")).toMatchObject({
+    ok: false,
+    failure: { error: expect.stringContaining(`the task branch of task ${p.id} was recorded lost`) },
+  });
+
+  nothingWrittenFor(b, g, gCreated);
+});
+
+it("下の祖先 P で拒む pickup の準備は、上で作り直すはずの祖先 G の ref・`task_branch_created` を書かず、G の失われた event は効いたまま(ADR 0414 決定9)", async () => {
+  const { b, g, chain: [p], gCreated } = await lostAncestorAboveLostButPresent("lost-present-below-pickup", "P");
+  const c = work(b, "C", { parent_id: p.id });
+
+  await expect(pickUp(b, c)).rejects.toMatchObject({ taskId: p.id });
+
+  nothingWrittenFor(b, g, gCreated);
+});
+
+it("失われた event が効いたまま ref が在る祖先が上下に2つあれば、固定の拒否が名指す持ち主は上の祖先(ADR 0414 決定9)", async () => {
+  const { b, chain: [upper, lower] } = await lostAncestorAboveLostButPresent("lost-present-two-ancestors", "upper", "lower");
+
+  await expect(pickUp(b, work(b, "C", { parent_id: lower.id }))).rejects.toMatchObject({ taskId: upper.id });
+});
+
 it("失われた event の無い解放済みの checkout は今どおり消え、残したことを刻まない(ADR 0369 決定7、ADR 0393 決定1)", async () => {
   const b = await board("released-removed");
   const task = work(b, "task");
