@@ -189,7 +189,7 @@ it("書く先の branch の無い作りかけは、盤面の手の無い入口�
 });
 
 /** 作業台に書く先に無い commit を持つ branch `aside` を作る(書く先を checkout したまま)。名前は `refs/heads` の先頭に並ぶ ——
- *  packed-refs の壊れた行を、for-each-ref はそれが探す範囲の頭にあるときだけ黙って飛ばす。 */
+ *  2.47.0 では、packed-refs の壊れた行を for-each-ref が黙って飛ばしたのは、それが探す範囲の頭にあるときだった。 */
 function strayAside(at: string) {
   git(at, "checkout", "--quiet", "-b", "aside");
   commitWork(at, "fix.txt", "on a side branch\n");

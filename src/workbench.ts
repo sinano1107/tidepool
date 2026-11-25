@@ -86,8 +86,8 @@ export function humanWorkLeft(read: WorkbenchRead): string[] {
     if (boardViewStatus(at, tip, read.verified).length > 0) left.push(`it has uncommitted changes — commit them on ${target} or discard them`);
     if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
   }
-  // #3826: for-each-ref は壊れた packed-refs の行を何も言わずに飛ばすが、show-ref は落ちる —— パターンは名前の末尾で照合するので
-  // 付けずに全部を並べ、壊れた tag や remote の ref でも拒む
+  // #3826: for-each-ref は壊れた packed-refs の行を、探す範囲の頭にあると何も言わずに飛ばす(2.47.0 で測った)。show-ref はどの位置でも
+  // 落ちる —— パターンは名前の末尾で照合するので付けずに全部を並べ、壊れた tag や remote の ref でも読めない作業台として拒む
   let refs = "";
   onWorkbench(at, () => gitAnswers(() => (refs = gitListing(at, ["show-ref"], true))));
   const strays = refs

@@ -65,6 +65,7 @@ export function stashEntries(cwd: string, bounded = false): string[] {
   // stash の pop・drop・clear は最後の件で ref と reflog を一緒に消す —— reflog だけ残るのは壊れた ref(#3826)
   if (!hasRef && (file || hasLog)) throw new ListingUnreadableError(`refs/stash is absent but its reflog remains at ${log}`);
   if (!hasRef) return [];
+  if (!hasLog && file) throw new ListingUnreadableError(`git reads no reflog of refs/stash, but ${log} is there`);
   if (!hasLog) return [top];
   const entries: string[] = [];
   for (let n = 0; ; n++) {
@@ -462,8 +463,9 @@ export function gitListing(cwd: string, args: string[], bounded = false): string
     if (timeout !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") throwTimedOut(result.error, result.pid, stderr, args, timeout);
     rethrowNamingMissingCwd(result.error, cwd, args);
   }
-  const skipped = /^warning: ignoring (?:broken ref|dangling symref) .*$/m.exec(stderr)?.[0];
-  if (skipped) throw new ListingUnreadableError(`git skipped a ref it cannot read (${skipped})`);
+  // 述語の「no」(exit 1)が stderr に何か言えば、それは答えでなく読めなかったもの
+  const skipped = /^warning: ignoring (?:broken ref|dangling symref) .*$/m.exec(stderr)?.[0] ?? (result.status === 1 ? stderr.trim() : "");
+  if (skipped) throw new ListingUnreadableError(`git could not read a ref (${skipped})`);
   if (result.status !== 0) throw Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr });
   return result.stdout.toString().trim();
 }
